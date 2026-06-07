@@ -1,0 +1,19 @@
+# Secrets — EVE SSO credentials. NEVER commit.
+.env
+.env.*
+
+# Runtime data: data/sde.db holds character OAuth access/refresh tokens (in the Docker
+# volume in prod; the local file is a placeholder). Never commit.
+data/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Scratch / local artifacts
+request.json
+*.tar.gz
+.DS_Store

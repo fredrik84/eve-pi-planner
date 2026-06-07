@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EVE PI Planner</title>
+  <link rel="icon" href="/favicon.ico?v=4" sizes="any">
+  <link rel="icon" type="image/png" href="/favicon.png?v=4">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=4">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="EVE PI Planner">
+  <meta property="og:title" content="EVE PI Planner">
+  <meta property="og:description" content="Plan your EVE Online Planetary Industry production chains.">
+  <meta property="og:image" content="https://eve-pi.failed.name/og-image.png?v=4">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:image" content="https://eve-pi.failed.name/og-image.png?v=4">
+  <link rel="stylesheet" href="/style.css?v=71">
+</head>
+<body>
+  <header>
+    <button class="nav-toggle" id="navToggle" onclick="toggleSidebar()" title="Toggle menu" aria-label="Toggle menu">☰</button>
+    <div class="header-brand">
+      <img class="header-logo" src="/logo-64.png?v=4" alt="EVE PI" width="32" height="32">
+      <h1>EVE PI</h1>
+      <span>Production-chain &amp; factory planner</span>
+    </div>
+    <div class="header-actions" id="headerActions"></div>
+  </header>
+
+  <div class="app-layout">
+    <aside class="sidebar" id="sidebar">
+      <nav class="sidebar-nav">
+        <button class="tab active" data-tab="planner"><span class="nav-ico">PI</span><span class="nav-lbl">PI Planner</span></button>
+        <button class="tab" data-tab="planetary"><span class="nav-ico">PP</span><span class="nav-lbl">Planetary Planning</span></button>
+        <button class="tab" data-tab="layout"><span class="nav-ico">FL</span><span class="nav-lbl">Factory Layout</span></button>
+        <button class="tab" data-tab="planetdb"><span class="nav-ico">DB</span><span class="nav-lbl">Planet DB</span></button>
+        <button class="tab" data-tab="characters"><span class="nav-ico">CH</span><span class="nav-lbl">Characters</span></button>
+        <button class="tab" data-tab="admin" id="adminNavTab" style="display:none"><span class="nav-ico">AD</span><span class="nav-lbl">Admin</span></button>
+      </nav>
+    </aside>
+
+  <main>
+
+    <!-- ── Tab: PI Planner ─────────────────────────────────────────────────── -->
+    <div id="tab-planner" class="tab-panel">
+
+      <div class="input-grid">
+        <div class="input-col">
+          <label for="inv">Inventory</label>
+          <textarea id="inv" placeholder="Biomass&#9;202 993&#9;Basic Commodities - Tier 1&#9;...&#10;Electrolytes&#9;374 053&#9;..."></textarea>
+        </div>
+        <div class="input-col">
+          <label for="orderText">Order to fill <span class="label-hint">(optional — paste desired quantities)</span></label>
+          <textarea id="orderText" placeholder="Miniature Electronics    12804&#10;Viral Agent    813&#10;Hermetic Membranes    802&#10;..."></textarea>
+        </div>
+      </div>
+
+      <div class="btn-row">
+        <button id="analyzeBtn" onclick="analyze()">Analyze</button>
+        <button id="optimizeBtn" onclick="optimize()">Optimize</button>
+        <label class="factories-label" for="factories" title="How many facilities to split the producible quantity across (per-factory workload + duration). A manual split count — not the same as the Planetary Planning throughput rate.">Factories</label>
+        <input type="number" id="factories" value="15" min="1" max="500" class="factories-input" oninput="updateFactorySplit()">
+        <button id="copyBtn" onclick="copyLink()" style="display:none">Copy link</button>
+        <span id="status"></span>
+      </div>
+
+      <div class="inv-summary" id="invSummary">
+        <h3>Recognized inventory</h3>
+        <div class="inv-pills" id="invPills"></div>
+      </div>
+
+      <!-- Optimize results -->
+      <div class="opt-section" id="optSection" style="display:none">
+        <div class="opt-header">
+          <span class="opt-title">Optimization Plan</span>
+          <span class="opt-stats" id="optStats"></span>
+        </div>
+
+        <div id="optWarnings"></div>
+
+        <table id="optTable">
+          <thead>
+            <tr>
+              <th style="width:22%">Item</th>
+              <th style="width:6%">Tier</th>
+              <th style="width:10%">Produce</th>
+              <th style="width:10%">Order</th>
+              <th style="width:8%">Fill</th>
+              <th style="width:10%">Sell/unit</th>
+              <th style="width:12%">Revenue</th>
+            </tr>
+          </thead>
+          <tbody id="optBody"></tbody>
+        </table>
+
+        <div class="leftover-section" id="leftoverSection" style="display:none">
+          <div class="leftover-header">Leftover inventory</div>
+          <div class="inv-pills" id="leftoverPills"></div>
+        </div>
+      </div>
+
+      <!-- Analyze results -->
+      <div class="results-section" id="resultsSection" style="display:none">
+        <div class="tier-block" id="p2Block">
+          <div class="tier-header">
+            <span class="tier-badge badge-p2">P2</span>
+            <h2>Refined Commodities</h2>
+            <span class="tier-count" id="p2Count"></span>
+          </div>
+          <table id="p2Table">
+            <thead>
+              <tr>
+                <th style="width:20%">Item</th>
+                <th style="width:10%">Max Output</th>
+                <th style="width:10%">Sell/unit</th>
+                <th style="width:12%">Total ISK</th>
+                <th style="width:14%">Bottleneck</th>
+                <th>Inputs Consumed</th>
+                <th style="width:4%"></th>
+              </tr>
+            </thead>
+            <tbody id="p2Body"></tbody>
+          </table>
+        </div>
+
+        <div class="tier-block" id="p3Block">
+          <div class="tier-header">
+            <span class="tier-badge badge-p3">P3</span>
+            <h2>Specialized Commodities</h2>
+            <span class="tier-count" id="p3Count"></span>
+          </div>
+          <table id="p3Table">
+            <thead>
+              <tr>
+                <th style="width:20%">Item</th>
+                <th style="width:10%">Max Output</th>
+                <th style="width:10%">Sell/unit</th>
+                <th style="width:12%">Total ISK</th>
+                <th style="width:14%">Bottleneck</th>
+                <th>Inputs Consumed</th>
+                <th style="width:4%"></th>
+              </tr>
+            </thead>
+            <tbody id="p3Body"></tbody>
+          </table>
+        </div>
+
+        <div class="tier-block" id="p4Block">
+          <div class="tier-header">
+            <span class="tier-badge badge-p4">P4</span>
+            <h2>Advanced Commodities</h2>
+            <span class="tier-count" id="p4Count"></span>
+          </div>
+          <table id="p4Table">
+            <thead>
+              <tr>
+                <th style="width:20%">Item</th>
+                <th style="width:10%">Max Output</th>
+                <th style="width:10%">Sell/unit</th>
+                <th style="width:12%">Total ISK</th>
+                <th style="width:14%">Bottleneck</th>
+                <th>Inputs Consumed</th>
+                <th style="width:4%"></th>
+              </tr>
+            </thead>
+            <tbody id="p4Body"></tbody>
+          </table>
+        </div>
+
+        <div class="price-note">Prices: Jita 5th-percentile sell orders via Fuzzworks · cached 15 min · sorted by total ISK</div>
+      </div>
+
+      <div class="factory-section" id="factorySection" style="display:none">
+        <div class="factory-header">Factory split — <span id="factoryCountLabel">15</span> factories</div>
+        <table id="factoryTable">
+          <thead id="factoryHead"></thead>
+          <tbody id="factoryBody"></tbody>
+        </table>
+      </div>
+
+    </div><!-- /tab-planner -->
+
+
+    <!-- ── Tab: Planetary Planning ─────────────────────────────────────────── -->
+    <div id="tab-planetary" class="tab-panel" style="display:none">
+
+      <!-- Wizard progress -->
+      <div class="wiz-bar">
+        <div class="wiz-steps">
+          <span class="wiz-dot active" id="wizDot1">1 · Setup</span>
+          <span class="wiz-sep">›</span>
+          <span class="wiz-dot" id="wizDot2">2 · Systems</span>
+          <span class="wiz-sep">›</span>
+          <span class="wiz-dot" id="wizDot3">3 · Plan</span>
+        </div>
+      </div>
+
+      <!-- ── Step 1: Setup ─────────────────────────────────────────────────── -->
+      <div id="wizPage1">
+
+        <div class="pp-setup-layout">
+
+          <div id="ppProfilesBar" class="pp-profile-dropdown-bar" style="display:none">
+            <span class="pp-profile-dropdown-label">Profile</span>
+            <select id="ppProfileSelect" class="pp-profile-select"></select>
+            <button class="pp-profile-action-btn" onclick="ppLoadSelectedProfile()">Load</button>
+            <button class="pp-profile-action-btn" onclick="wizardSaveProfile()">Save</button>
+            <button class="pp-profile-action-btn pp-profile-del-btn" onclick="ppDeleteSelectedProfile()">Delete</button>
+          </div>
+
+          <section class="pp-card">
+            <div class="pp-card-title">Production Target</div>
+            <div class="pp-target-form">
+              <label class="pp-label" for="targetProduct">Product</label>
+              <input type="text" id="targetProduct" class="pp-text-input"
+                     list="productList" placeholder="Type to search…" autocomplete="off"
+                     oninput="onProductChange()">
+              <datalist id="productList"></datalist>
+
+              <label class="pp-label" for="targetOverprod">Overproduction %</label>
+              <input type="number" id="targetOverprod" value="10" min="-99" max="500" class="pp-num-input"
+                     title="Target overproduction %. 10% means extractors produce 10% more P0 than factories need. Negative = extractors can't keep up.">
+
+              <label class="pp-label" for="targetSystems">Systems</label>
+              <input type="number" id="targetSystems" value="1" min="1" max="3" class="pp-num-input"
+                     title="Preferred number of systems to spread across (1–3)" oninput="ppToggleMaxJumps()">
+
+              <label class="pp-label" for="targetMaxJumps" id="targetMaxJumpsLabel" style="display:none"
+                     title="Prefer system combinations clustered within this many jumps (less hauling). 0 = same constellation only; raise it if no adjacent combo covers your P0s.">Max jumps</label>
+              <input type="number" id="targetMaxJumps" value="1" min="0" max="5" class="pp-num-input" style="display:none"
+                     title="Prefer system combinations within this many jumps of each other.">
+
+              <label class="pp-label pp-label-check" for="targetUseExisting">
+                <input type="checkbox" id="targetUseExisting">
+                Use existing planets
+              </label>
+              <span></span>
+            </div>
+          </section>
+
+          <section class="pp-card" id="ppBasketCard" style="display:none">
+            <div class="pp-card-title">Basket Components
+              <span class="pp-card-hint">— tick a part to buy/import it instead of producing it (frees planets)</span>
+            </div>
+            <div id="ppBasketList" class="pp-basket-list"></div>
+          </section>
+
+          <section class="pp-card" id="ppMfgCard" style="display:none">
+            <div class="pp-card-title">Manufacturing Efficiency
+              <span class="pp-card-hint">— material only (build time ignored). ME stretches blocks from the same PI output.</span>
+            </div>
+            <div class="pp-mfg-row">
+              <label class="pp-role-field-label">Structure</label>
+              <select id="mfgStructure" title="Fuel blocks are manufactured in an Engineering Complex (Raitaru/Azbel/Sotiyo), each giving a flat 1% material bonus. Refineries (Athanor/Tatara) do reactions, not fuel-block manufacturing.">
+                <option value="0">NPC station / none (0%)</option>
+                <option value="1" selected>Engineering Complex — Raitaru / Azbel / Sotiyo (1%)</option>
+              </select>
+              <label class="pp-role-field-label">ME rig</label>
+              <select id="mfgRig" title="Standup M-Set Structure Manufacturing Material Efficiency rig — this is the one that covers fuel blocks. T1 = −2%, T2 = −2.4% base, before the security multiplier.">
+                <option value="none">None</option>
+                <option value="t1">T1 (−2%)</option>
+                <option value="t2">T2 (−2.4%)</option>
+              </select>
+              <label class="pp-role-field-label">Space</label>
+              <select id="mfgSpace" title="Rig bonus × system security: ×1 high-sec, ×1.9 low-sec, ×2.1 null/WH. 'Auto' reads the security of your factory system from the SDE; override if your structure is elsewhere.">
+                <option value="auto" selected>Auto (from system)</option>
+                <option value="high">High-sec ×1</option>
+                <option value="low">Low-sec ×1.9</option>
+                <option value="null">Null / WH ×2.1</option>
+              </select>
+              <label class="pp-role-field-label">Blueprint ME %</label>
+              <input type="number" id="mfgBpme" value="10" min="0" max="10" step="1"
+                     title="Researched blueprint Material Efficiency (ME 0-10 = 0-10%). Defaults to 10 (a fully researched BPO).">
+              <span class="pp-mfg-eff" id="mfgEff"></span>
+            </div>
+          </section>
+
+          <section class="pp-card" id="ppRolesCard" style="display:none">
+            <div class="pp-card-title" onclick="ppToggleRoles()" style="cursor:pointer">Character Roles
+              <span class="pp-card-hint" id="ppRolesHint">— defaults applied</span>
+              <span class="pp-collapse-toggle" id="ppRolesToggle">▼</span>
+            </div>
+            <div id="ppRolesBody" class="pp-collapsible-body collapsed">
+              <div id="ppRolesList" class="pp-roles-list"></div>
+            </div>
+          </section>
+
+          <section class="pp-card" id="ppLocationCard" style="display:none">
+            <div class="pp-card-title" onclick="ppToggleLocation()" style="cursor:pointer">
+              Constellation Filter
+              <span class="pp-card-hint">— pick a region, then its constellations</span>
+              <span class="pp-collapse-toggle" id="ppLocationToggle">▼</span>
+              <button class="pp-add-btn" onclick="event.stopPropagation(); ppSelectAllConstellations(true)">All</button>
+              <button class="pp-add-btn" onclick="event.stopPropagation(); ppSelectAllConstellations(false)">None</button>
+            </div>
+            <div id="ppLocationBody" class="pp-collapsible-body collapsed">
+              <div id="ppRegionFilter" class="pp-region-filter"></div>
+              <div class="pp-const-heading">Constellations <span class="pp-card-hint">(constellation names, not systems)</span></div>
+              <div id="ppConstellationList" class="pp-const-list pp-const-list-wide"></div>
+            </div>
+          </section>
+
+          <button class="wiz-find-btn" id="ppFindSystemsBtn" onclick="wizardFindSystems()">Find Systems →</button>
+
+        </div><!-- /pp-setup-layout -->
+      </div><!-- /wizPage1 -->
+
+
+      <!-- ── Step 2: System Recommendations ────────────────────────────────── -->
+      <div id="wizPage2" style="display:none">
+        <div class="wiz-page-nav">
+          <button class="wiz-back-btn" onclick="wizardGo(1)">← Back</button>
+          <span class="wiz-page-title" id="wizTitle2">System Recommendations</span>
+        </div>
+        <div id="wizRecsContent"></div>
+      </div><!-- /wizPage2 -->
+
+
+      <!-- ── Step 3: Final Plan ─────────────────────────────────────────────── -->
+      <div id="wizPage3" style="display:none">
+        <div class="wiz-page-nav">
+          <button class="wiz-back-btn" onclick="wizardGo(2)">← Systems</button>
+          <span class="wiz-page-title" id="wizTitle3">Allocation Plan</span>
+          <div class="wiz-nav-actions">
+            <button class="wiz-action-btn" id="wizShareBtn" onclick="wizardShare(false)" title="Shareable link with all names and locations removed">Share (anon)</button>
+            <button class="wiz-action-btn wiz-action-warn" id="wizShareFullBtn" onclick="wizardShare(true)" title="Full link with your characters, systems and planets — only for people you trust">Share full…</button>
+            <button class="wiz-action-btn" id="wizSaveProfileBtn" onclick="wizardSaveProfile()">Save as profile</button>
+          </div>
+        </div>
+        <div id="wizPlanContent" class="pp-card"></div>
+      </div><!-- /wizPage3 -->
+
+    </div><!-- /tab-planetary -->
+
+
+    <!-- ── Tab: Planet DB ─────────────────────────────────────────────────────── -->
+    <div id="tab-planetdb" class="tab-panel" style="display:none">
+
+      <div class="pp-layout">
+        <div class="pp-main" style="grid-column: 1 / -1; max-width: 100%;">
+
+          <section class="pp-card">
+            <div class="pp-card-title">Planet Database
+              <span class="pp-card-hint">— paste from spreadsheet or add manually</span>
+              <button class="pp-add-btn" id="ppImportBtn" onclick="showPlanetImport()">Import</button>
+              <button class="pp-add-btn pp-clear-btn" onclick="clearPlanets()">Clear all</button>
+            </div>
+            <div class="pp-planet-search-row">
+              <input id="planetSearch" class="pp-planet-search" autocomplete="off"
+                     placeholder="Filter by system, planet type, constellation or region…"
+                     oninput="filterPlanetsDebounced()">
+              <span id="planetSearchCount" class="pp-card-hint"></span>
+            </div>
+            <div id="planetDbContent">
+              <div class="pp-empty">No planets in database. Import your remote-sensing data to get started.</div>
+            </div>
+          </section>
+
+        </div>
+      </div>
+
+      <!-- Planet import modal -->
+      <div id="ppImportModal" class="pp-modal" style="display:none">
+        <div class="pp-modal-box">
+          <div class="pp-modal-title">Import Planet Data
+            <button class="pp-modal-close" onclick="closePlanetImport()">✕</button>
+          </div>
+          <pre id="ppImportHint" class="pp-modal-hint" style="font-family:monospace;font-size:11px;white-space:pre-wrap"></pre>
+          <textarea id="ppImportText" class="pp-import-ta" placeholder="Paste tab-separated data here..."></textarea>
+          <div class="pp-modal-actions">
+            <button id="ppImportSubmitBtn" onclick="submitPlanetImport()">Import</button>
+            <button class="pp-cancel-btn" onclick="closePlanetImport()">Cancel</button>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /tab-planetdb -->
+
+    <!-- ── Tab: Characters ───────────────────────────────────────────────────── -->
+    <div id="tab-characters" class="tab-panel" style="display:none">
+      <div class="pp-chars-page">
+        <section class="pp-card">
+          <div class="pp-card-title">Characters
+            <button class="pp-add-btn" id="esiLoginBtn" onclick="esiLogin()">+ Add via ESI</button>
+            <button class="pp-add-btn" id="ppRefreshBtn" onclick="refreshAllPlanets(this)">Refresh</button>
+          </div>
+          <div id="characterList" class="pp-char-list">
+            <div class="pp-empty">No characters added yet.</div>
+          </div>
+        </section>
+      </div>
+    </div><!-- /tab-characters -->
+
+    <!-- ── Tab: Factory Layout ─────────────────────────────────────────────────── -->
+    <div id="tab-layout" class="tab-panel" style="display:none">
+      <div class="layout-page">
+        <section class="layout-controls">
+          <div class="layout-field layout-search-field">
+            <label>Add products (P1–P4)</label>
+            <input id="layoutSearch" placeholder="Type to search, click results to add…" autocomplete="off"
+                   oninput="onLayoutSearch()" onfocus="onLayoutSearch()"
+                   onblur="setTimeout(hideLayoutResults, 150)"
+                   onkeydown="if(event.key==='Enter')addLayoutTop(); else if(event.key==='Escape')hideLayoutResults()">
+            <div id="layoutResults" class="layout-results" style="display:none"></div>
+          </div>
+          <div class="layout-field">
+            <label>Planet</label>
+            <select id="layoutPlanetType">
+              <option value="Barren">Barren</option>
+              <option value="Temperate">Temperate</option>
+              <option value="Lava">Lava</option>
+              <option value="Plasma">Plasma</option>
+              <option value="Gas">Gas</option>
+              <option value="Ice">Ice</option>
+              <option value="Oceanic">Oceanic</option>
+              <option value="Storm">Storm</option>
+            </select>
+          </div>
+          <div class="layout-field">
+            <label>Presets</label>
+            <button id="layoutFuelBtn" class="layout-btn" type="button" onclick="addFuelBlockLayout()"
+                    title="Add the four fuel-block factory components (Coolant, Mechanical Parts, Enriched Uranium, Robotics)">+ Fuel blocks</button>
+          </div>
+          <a id="layoutBundleBtn" class="layout-btn layout-bundle-btn" href="#" download style="display:none">Download all (.zip)</a>
+          <span id="layoutStatus" class="layout-status"></span>
+        </section>
+
+        <div id="layoutPlanets" class="layout-planets"></div>
+      </div>
+    </div><!-- /tab-layout -->
+
+    <!-- ── Tab: Admin (admins only) ────────────────────────────────────────────── -->
+    <div id="tab-admin" class="tab-panel" style="display:none">
+      <div class="admin-page">
+
+        <section class="pp-card admin-section">
+          <div class="pp-card-title">Custom baskets</div>
+          <div class="admin-hint">A basket is a named set of PI products + quantities. Any logged-in user can plan a basket in Planetary Planning, exactly like the built-in Fuel Blocks. Components must be P1–P4.</div>
+          <div id="basketList" class="admin-list"></div>
+          <div class="basket-editor">
+            <div class="basket-editor-title" id="basketEditorTitle">New basket</div>
+            <div class="basket-fields">
+              <label>Name<input id="basketName" class="bug-input" maxlength="60" placeholder="e.g. Athanor Fuel Mix" autocomplete="off"></label>
+              <label>Run size<input id="basketRunSize" type="number" min="1" value="1" class="bug-input basket-num"></label>
+              <label>Unit label<input id="basketUnitLabel" class="bug-input basket-num" value="sets" maxlength="20"></label>
+            </div>
+            <div class="basket-add-item">
+              <input id="basketItemSearch" placeholder="Add a P1–P4 component…" autocomplete="off"
+                     oninput="onBasketItemSearch()" onfocus="onBasketItemSearch()"
+                     onblur="setTimeout(hideBasketItemResults,150)">
+              <div id="basketItemResults" class="layout-results" style="display:none"></div>
+            </div>
+            <div id="basketItems" class="basket-items"></div>
+            <div class="basket-editor-actions">
+              <button id="basketSaveBtn" onclick="saveBasket()">Save basket</button>
+              <button class="pp-cancel-btn" onclick="resetBasketEditor()">Clear</button>
+              <span id="basketStatus" class="bug-status-msg"></span>
+            </div>
+          </div>
+        </section>
+
+        <section class="pp-card admin-section">
+          <div class="pp-card-title">Admin users</div>
+          <div class="admin-hint">Admins can manage baskets, read bug reports, and add/remove other admins. Matching is by EVE character name (SSO-verified, globally unique).</div>
+          <div class="admin-add-row">
+            <input id="adminNameInput" class="bug-input" maxlength="60" placeholder="Character name" autocomplete="off">
+            <button onclick="addAdmin()">Add admin</button>
+            <span id="adminAddStatus" class="bug-status-msg"></span>
+          </div>
+          <div id="adminList" class="admin-list"></div>
+        </section>
+
+        <section class="pp-card admin-section">
+          <div class="pp-card-title">Bug reports <span id="bugAdminCounts" class="bug-admin-counts"></span></div>
+          <div class="bug-admin-filters">
+            <button class="bug-filter active" data-status="" onclick="filterBugs('', this)">All</button>
+            <button class="bug-filter" data-status="open" onclick="filterBugs('open', this)">Open</button>
+            <button class="bug-filter" data-status="complete" onclick="filterBugs('complete', this)">Complete</button>
+            <button class="bug-filter" data-status="ignored" onclick="filterBugs('ignored', this)">Ignored</button>
+          </div>
+          <div id="bugAdminList" class="bug-admin-list"></div>
+        </section>
+
+      </div>
+    </div><!-- /tab-admin -->
+
+  </main>
+  </div><!-- /app-layout -->
+
+  <footer class="site-footer">
+    Enjoying eve-pi-planner? In-game ISK donations to the corp
+    <strong>Eve PI Planner [EVPI]</strong> help keep the server running. Fly safe o7
+  </footer>
+
+  <!-- Bug report modal (submit) -->
+  <div id="bugModal" class="pp-modal" style="display:none">
+    <div class="pp-modal-box">
+      <div class="pp-modal-title">Report a bug
+        <button class="pp-modal-close" onclick="closeBugModal()">✕</button>
+      </div>
+      <div class="pp-modal-hint">Found something broken or off? Let me know — include what you did and what happened.</div>
+      <input id="bugTitle" class="bug-input" maxlength="200" placeholder="Title — short summary" autocomplete="off">
+      <textarea id="bugDesc" class="bug-textarea" maxlength="5000" placeholder="Description — steps, what you expected, what happened…"></textarea>
+      <div class="pp-modal-actions">
+        <button id="bugSubmitBtn" onclick="submitBug()">Submit</button>
+        <button class="pp-cancel-btn" onclick="closeBugModal()">Cancel</button>
+        <span id="bugStatus" class="bug-status-msg"></span>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js?v=19"></script>
+  <script src="/planetary.js?v=91"></script>
+</body>
+</html>

@@ -1,0 +1,708 @@
+"""
+EVE SSO OAuth 2.0 integration.
+
+Required env vars:
+  EVE_CLIENT_ID      — from https://developers.eveonline.com
+  EVE_CLIENT_SECRET  — from https://developers.eveonline.com
+  EVE_CALLBACK_URL   — must match the registered callback (default: https://eve-pi.failed.name/auth/callback)
+
+Scopes requested:
+  esi-skills.read_skills.v1
+  esi-planets.manage_planets.v1
+"""
+
+import os
+import secrets
+import sqlite3
+from datetime import datetime, timedelta, timezone
+
+import httpx
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Response
+from fastapi.responses import HTMLResponse, RedirectResponse
+
+from app.sde import get_connection
+
+router = APIRouter()
+
+CLIENT_ID     = os.environ.get("EVE_CLIENT_ID", "")
+CLIENT_SECRET = os.environ.get("EVE_CLIENT_SECRET", "")
+CALLBACK_URL  = os.environ.get("EVE_CALLBACK_URL", "https://eve-pi.failed.name/auth/callback")
+
+SCOPES = "esi-skills.read_skills.v1 esi-planets.manage_planets.v1 esi-planets.read_customs_offices.v1"
+
+EVE_AUTH_URL  = "https://login.eveonline.com/v2/oauth/authorize"
+EVE_TOKEN_URL = "https://login.eveonline.com/v2/oauth/token"
+ESI_BASE      = "https://esi.evetech.net/latest"
+
+# Skill type IDs relevant to Planetary Industry
+SKILL_IDS = {
+    2495: "interplanetary_consolidation",  # +1 planet per level
+    2505: "command_center_upgrades",       # command center tier
+    2406: "planetology",                   # remote sensing range
+    2403: "advanced_planetology",          # remote sensing precision
+}
+
+# P0 resource type IDs → display names
+P0_TYPE_NAMES = {
+    2268: "Aqueous Liquids",
+    2305: "Autotrophs",
+    2267: "Base Metals",
+    2288: "Carbon Compounds",
+    2287: "Complex Organisms",
+    2307: "Felsic Magma",
+    2272: "Heavy Metals",
+    2309: "Ionic Solutions",
+    2073: "Microorganisms",
+    2310: "Noble Gas",
+    2270: "Noble Metals",
+    2306: "Non-CS Crystals",
+    2286: "Planktic Colonies",
+    2311: "Reactive Gas",
+    2308: "Suspended Plasma",
+}
+
+# In-memory CSRF state store (sufficient for single-server personal tool)
+_pending: dict[str, str] = {}
+
+# Active session tokens → (character_id, context_id)
+_sessions: dict[str, tuple[int, int]] = {}
+_sessions_loaded = False
+
+
+def _load_sessions():
+    global _sessions_loaded
+    if _sessions_loaded:
+        return
+    _sessions_loaded = True
+    try:
+        con = get_connection()
+        rows = con.execute("SELECT token, character_id, context_id FROM pp_sessions").fetchall()
+        con.close()
+        for r in rows:
+            _sessions[r["token"]] = (r["character_id"], r["context_id"] or 0)
+    except Exception:
+        pass
+
+
+def _save_session(token: str, character_id: int, context_id: int):
+    _sessions[token] = (character_id, context_id)
+    try:
+        con = get_connection()
+        con.execute(
+            "INSERT OR REPLACE INTO pp_sessions (token, character_id, context_id, created_at) VALUES (?,?,?,?)",
+            (token, character_id, context_id, datetime.now(timezone.utc).isoformat()),
+        )
+        con.commit()
+        con.close()
+    except Exception:
+        pass
+
+
+def _delete_session(token: str):
+    _sessions.pop(token, None)
+    try:
+        con = get_connection()
+        con.execute("DELETE FROM pp_sessions WHERE token=?", (token,))
+        con.commit()
+        con.close()
+    except Exception:
+        pass
+
+
+def _is_configured() -> bool:
+    return bool(CLIENT_ID and CLIENT_SECRET)
+
+
+def ensure_char_tables():
+    con = get_connection()
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS solar_systems (
+            system_id INTEGER PRIMARY KEY,
+            name      TEXT NOT NULL
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_ss_name ON solar_systems(name COLLATE NOCASE)")
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS pp_user_contexts (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL
+        )
+    """)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS pp_characters (
+            character_id   INTEGER PRIMARY KEY,
+            character_name TEXT    NOT NULL,
+            access_token   TEXT    NOT NULL DEFAULT '',
+            refresh_token  TEXT    NOT NULL DEFAULT '',
+            token_expiry   TEXT,
+            interplanetary_consolidation INTEGER DEFAULT 0,
+            command_center_upgrades      INTEGER DEFAULT 0,
+            planetology                  INTEGER DEFAULT 0,
+            advanced_planetology         INTEGER DEFAULT 0,
+            context_id     INTEGER
+        )
+    """)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS pp_char_planets (
+            character_id    INTEGER NOT NULL,
+            planet_id       INTEGER NOT NULL,
+            planet_type     TEXT    NOT NULL,
+            solar_system_id INTEGER,
+            upgrade_level   INTEGER DEFAULT 0,
+            num_pins        INTEGER DEFAULT 0,
+            is_extractor    INTEGER DEFAULT 0,
+            p0_type_id      INTEGER,
+            p0_name         TEXT,
+            planet_num      INTEGER,
+            PRIMARY KEY (character_id, planet_id)
+        )
+    """)
+    try:
+        con.execute("ALTER TABLE pp_char_planets ADD COLUMN planet_num INTEGER")
+    except Exception:
+        pass
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS pp_sessions (
+            token        TEXT    PRIMARY KEY,
+            character_id INTEGER NOT NULL,
+            context_id   INTEGER NOT NULL DEFAULT 0,
+            created_at   TEXT    NOT NULL
+        )
+    """)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS pp_admins (
+            character_name TEXT PRIMARY KEY COLLATE NOCASE,
+            added_by       TEXT,
+            added_at       TEXT
+        )
+    """)
+    # Schema migrations for existing deployments
+    for col, tbl in [("context_id", "pp_characters"), ("context_id", "pp_sessions")]:
+        try:
+            con.execute(f"ALTER TABLE {tbl} ADD COLUMN {col} INTEGER")
+        except Exception:
+            pass
+    # Migrate existing characters/sessions to context 1
+    unscoped = con.execute(
+        "SELECT COUNT(*) FROM pp_characters WHERE context_id IS NULL"
+    ).fetchone()[0]
+    if unscoped > 0:
+        con.execute(
+            "INSERT OR IGNORE INTO pp_user_contexts (id, created_at) VALUES (1, ?)",
+            (datetime.now(timezone.utc).isoformat(),),
+        )
+        con.execute("UPDATE pp_characters SET context_id = 1 WHERE context_id IS NULL")
+        con.execute("UPDATE pp_sessions SET context_id = 1 WHERE context_id IS NULL OR context_id = 0")
+    con.commit()
+    con.close()
+
+
+def _get_valid_token(character_id: int) -> str | None:
+    """Return a valid access token, refreshing if expired."""
+    con = get_connection()
+    row = con.execute(
+        "SELECT access_token, refresh_token, token_expiry FROM pp_characters WHERE character_id=?",
+        (character_id,),
+    ).fetchone()
+    con.close()
+    if not row:
+        return None
+    expiry = row["token_expiry"] or ""
+    now = datetime.now(timezone.utc).isoformat()
+    if expiry > now:
+        return row["access_token"]
+    return _refresh_token(character_id, row["refresh_token"])
+
+
+def _roman_to_int(s: str) -> int | None:
+    vals = {'I': 1, 'V': 5, 'X': 10, 'L': 50}
+    s = s.upper().strip()
+    if not s or not all(c in vals for c in s):
+        return None
+    result, prev = 0, 0
+    for c in reversed(s):
+        v = vals[c]
+        result += v if v >= prev else -v
+        prev = v
+    return result if result > 0 else None
+
+
+def _fetch_planets(character_id: int, access_token: str) -> None:
+    """Fetch planet list + pin details from ESI, store in pp_char_planets."""
+    try:
+        headers = {"Authorization": f"Bearer {access_token}"}
+        with httpx.Client() as client:
+            resp = client.get(
+                f"{ESI_BASE}/characters/{character_id}/planets/",
+                headers=headers,
+                timeout=10,
+            )
+            resp.raise_for_status()
+            planet_list = resp.json()
+
+        # Resolve any new solar_system_id → name via ESI universe/names
+        sys_ids = list({p.get("solar_system_id") for p in planet_list if p.get("solar_system_id")})
+        if sys_ids:
+            try:
+                nr = httpx.post(
+                    f"{ESI_BASE}/universe/names/?datasource=tranquility",
+                    json=sys_ids, timeout=10,
+                )
+                nr.raise_for_status()
+                ss_con = get_connection()
+                for item in nr.json():
+                    if item.get("category") == "solar_system":
+                        ss_con.execute("INSERT OR IGNORE INTO solar_systems VALUES (?,?)",
+                                       (item["id"], item["name"]))
+                ss_con.commit()
+                ss_con.close()
+            except Exception:
+                pass
+
+        con = get_connection()
+        con.execute("DELETE FROM pp_char_planets WHERE character_id=?", (character_id,))
+
+        with httpx.Client() as client:
+            for planet in planet_list:
+                planet_id       = planet["planet_id"]
+                planet_type     = planet.get("planet_type", "").capitalize()
+                solar_system_id = planet.get("solar_system_id")
+                upgrade_level   = planet.get("upgrade_level", 0)
+                num_pins        = planet.get("num_pins", 0)
+
+                is_extractor = 0
+                p0_type_id   = None
+                p0_name      = None
+                planet_num   = None
+                try:
+                    pr = client.get(
+                        f"{ESI_BASE}/characters/{character_id}/planets/{planet_id}/",
+                        headers=headers,
+                        timeout=10,
+                    )
+                    pr.raise_for_status()
+                    for pin in pr.json().get("pins", []):
+                        ext = pin.get("extractor_details")
+                        if ext:
+                            is_extractor = 1
+                            p0_type_id   = ext.get("product_type_id")
+                            p0_name      = P0_TYPE_NAMES.get(p0_type_id)
+                            break
+                except Exception:
+                    pass
+
+                # Fetch planet name to derive in-system ordinal (e.g. "01B-88 VIII" → 8)
+                try:
+                    pinfo = client.get(
+                        f"{ESI_BASE}/universe/planets/{planet_id}/",
+                        timeout=10,
+                    )
+                    pinfo.raise_for_status()
+                    pname = pinfo.json().get("name", "")
+                    last_word = pname.strip().split()[-1] if pname.strip() else ""
+                    planet_num = _roman_to_int(last_word)
+                except Exception:
+                    pass
+
+                con.execute("""
+                    INSERT OR REPLACE INTO pp_char_planets
+                        (character_id, planet_id, planet_type, solar_system_id,
+                         upgrade_level, num_pins, is_extractor, p0_type_id, p0_name,
+                         planet_num)
+                    VALUES (?,?,?,?,?,?,?,?,?,?)
+                """, (character_id, planet_id, planet_type, solar_system_id,
+                      upgrade_level, num_pins, is_extractor, p0_type_id, p0_name,
+                      planet_num))
+
+        con.commit()
+        con.close()
+    except Exception:
+        pass
+
+
+# ── OAuth endpoints ───────────────────────────────────────────────────────────
+
+@router.get("/auth/login")
+def esi_login():
+    if not _is_configured():
+        return HTMLResponse(
+            "<h2>ESI not configured</h2>"
+            "<p>Set <code>EVE_CLIENT_ID</code> and <code>EVE_CLIENT_SECRET</code> "
+            "in <code>.env</code> and redeploy.</p>"
+            "<p><a href='/'>Back</a></p>",
+            status_code=503,
+        )
+    state = secrets.token_urlsafe(16)
+    _pending[state] = "ok"
+    scope_enc = SCOPES.replace(" ", "%20")
+    url = (
+        f"{EVE_AUTH_URL}?response_type=code"
+        f"&client_id={CLIENT_ID}"
+        f"&redirect_uri={CALLBACK_URL}"
+        f"&scope={scope_enc}"
+        f"&state={state}"
+    )
+    return RedirectResponse(url)
+
+
+@router.get("/auth/callback")
+def esi_callback(
+    code: str = Query(...),
+    state: str = Query(...),
+    response: Response = None,
+    pp_session: str = Cookie(default=None),
+):
+    if state not in _pending:
+        raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
+    _pending.pop(state)
+
+    # Exchange code for tokens
+    with httpx.Client() as client:
+        tok = client.post(
+            EVE_TOKEN_URL,
+            data={"grant_type": "authorization_code", "code": code,
+                  "redirect_uri": CALLBACK_URL},
+            auth=(CLIENT_ID, CLIENT_SECRET),
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            timeout=10,
+        )
+    tok.raise_for_status()
+    token_data = tok.json()
+
+    access_token  = token_data["access_token"]
+    refresh_token = token_data["refresh_token"]
+    expires_in    = token_data.get("expires_in", 1199)
+    expiry = (datetime.now(timezone.utc) + timedelta(seconds=expires_in)).isoformat()
+
+    # Decode character ID from JWT subject (no full verify — we just got it from EVE)
+    import base64, json as _json
+    payload_b64 = access_token.split(".")[1]
+    payload_b64 += "=" * (4 - len(payload_b64) % 4)
+    payload = _json.loads(base64.urlsafe_b64decode(payload_b64))
+    sub = payload.get("sub", "")  # "CHARACTER:EVE:12345678"
+    character_id = int(sub.split(":")[-1])
+    character_name = payload.get("name", str(character_id))
+
+    skills = _fetch_skills(character_id, access_token)
+
+    ensure_char_tables()
+    _load_sessions()
+    con = get_connection()
+
+    # Resolve context_id:
+    # 1. Character already in DB with a context → keep it
+    existing = con.execute(
+        "SELECT context_id FROM pp_characters WHERE character_id=?", (character_id,)
+    ).fetchone()
+    if existing and existing["context_id"]:
+        context_id = existing["context_id"]
+    # 2. Caller already has a valid session → add character to that context
+    elif pp_session and pp_session in _sessions:
+        _, context_id = _sessions[pp_session]
+    # 3. New user → create a fresh context
+    else:
+        cur = con.execute(
+            "INSERT INTO pp_user_contexts (created_at) VALUES (?)",
+            (datetime.now(timezone.utc).isoformat(),),
+        )
+        context_id = cur.lastrowid
+        con.commit()
+
+    con.execute("""
+        INSERT OR REPLACE INTO pp_characters
+            (character_id, character_name, access_token, refresh_token, token_expiry,
+             interplanetary_consolidation, command_center_upgrades, planetology,
+             advanced_planetology, context_id)
+        VALUES (?,?,?,?,?,?,?,?,?,?)
+    """, (
+        character_id, character_name, access_token, refresh_token, expiry,
+        skills.get("interplanetary_consolidation", 0),
+        skills.get("command_center_upgrades", 0),
+        skills.get("planetology", 0),
+        skills.get("advanced_planetology", 0),
+        context_id,
+    ))
+    con.commit()
+    con.close()
+
+    _fetch_planets(character_id, access_token)
+
+    # Create session token and persist it
+    session_token = secrets.token_urlsafe(32)
+    _save_session(session_token, character_id, context_id)
+
+    html_response = HTMLResponse("""
+        <html><body>
+        <p>Character added. This window will close.</p>
+        <script>
+          if (window.opener) { window.opener.postMessage('esi-done','*'); window.close(); }
+          else { location.href = '/'; }
+        </script>
+        </body></html>
+    """)
+    # Set session cookie (httponly, secure in prod via HTTPS proxy)
+    html_response.set_cookie(
+        "pp_session", session_token,
+        httponly=True, samesite="lax", max_age=86400 * 30,
+    )
+    return html_response
+
+
+@router.get("/auth/logout")
+def esi_logout(pp_session: str = Cookie(default=None)):
+    if pp_session:
+        _delete_session(pp_session)
+    resp = RedirectResponse("/")
+    resp.delete_cookie("pp_session")
+    return resp
+
+
+# ── Session check (used by other routers) ────────────────────────────────────
+
+def require_context(pp_session: str = Cookie(default=None)) -> int:
+    """FastAPI dependency: return context_id or raise 401."""
+    _load_sessions()
+    if pp_session and pp_session in _sessions:
+        return _sessions[pp_session][1]
+    raise HTTPException(status_code=401, detail="Not authenticated — please log in via EVE SSO")
+
+
+def require_session(pp_session: str = Cookie(default=None)) -> int:
+    """FastAPI dependency: return character_id or raise 401."""
+    _load_sessions()
+    if pp_session and pp_session in _sessions:
+        return _sessions[pp_session][0]
+    raise HTTPException(status_code=401, detail="Not authenticated — please log in via EVE SSO")
+
+
+def session_character_id(pp_session: str = Cookie(default=None)) -> int | None:
+    """Returns character_id or None (no exception)."""
+    _load_sessions()
+    if pp_session and pp_session in _sessions:
+        return _sessions[pp_session][0]
+    return None
+
+
+def session_context_id(pp_session: str = Cookie(default=None)) -> int | None:
+    """Returns context_id or None (no exception)."""
+    _load_sessions()
+    if pp_session and pp_session in _sessions:
+        return _sessions[pp_session][1]
+    return None
+
+
+# Permanent bootstrap admins (lowercase), un-removable via the UI. Additional admins are
+# stored in the pp_admins table and managed from the Admin tab. EVE names are globally
+# unique and SSO-verified, so a name match proves ownership.
+ADMIN_CHARACTERS = {"ekaoni"}
+
+
+def ensure_admin_table():
+    """Create pp_admins if missing (also created by ensure_char_tables; this lets the admin
+    endpoints stand alone, matching the ensure_bugs_table/ensure_basket_tables pattern)."""
+    con = get_connection()
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS pp_admins (
+            character_name TEXT PRIMARY KEY COLLATE NOCASE,
+            added_by       TEXT,
+            added_at       TEXT
+        )
+    """)
+    con.commit()
+    con.close()
+
+
+def _db_admin_names() -> set[str]:
+    """Lowercased admin names from pp_admins (empty on any failure)."""
+    try:
+        con = get_connection()
+        rows = con.execute("SELECT character_name FROM pp_admins").fetchall()
+        con.close()
+        return {(r["character_name"] or "").lower() for r in rows}
+    except Exception:
+        return set()
+
+
+def is_admin(pp_session: str = Cookie(default=None)) -> bool:
+    """True if the session's account owns a character with an admin name (bootstrap set
+    or the pp_admins table)."""
+    _load_sessions()
+    info = _sessions.get(pp_session) if pp_session else None
+    if not info:
+        return False
+    context_id = info[1]
+    con = get_connection()
+    rows = con.execute(
+        "SELECT character_name FROM pp_characters WHERE context_id=?", (context_id,)
+    ).fetchall()
+    con.close()
+    admin_names = ADMIN_CHARACTERS | _db_admin_names()
+    return any((r["character_name"] or "").lower() in admin_names for r in rows)
+
+
+def require_admin(pp_session: str = Cookie(default=None)) -> int:
+    """FastAPI dependency: return context_id for admins, else raise 403."""
+    if not is_admin(pp_session):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return _sessions[pp_session][1]
+
+
+# ── ESI helpers ───────────────────────────────────────────────────────────────
+
+def _fetch_skills(character_id: int, access_token: str) -> dict[str, int]:
+    try:
+        with httpx.Client() as client:
+            resp = client.get(
+                f"{ESI_BASE}/characters/{character_id}/skills/",
+                headers={"Authorization": f"Bearer {access_token}"},
+                timeout=10,
+            )
+        resp.raise_for_status()
+        skill_data = resp.json()
+        result: dict[str, int] = {}
+        for s in skill_data.get("skills", []):
+            field = SKILL_IDS.get(s["skill_id"])
+            if field:
+                result[field] = s.get("trained_skill_level", 0)
+        return result
+    except Exception:
+        return {}
+
+
+def _refresh_token(character_id: int, refresh_token: str) -> str | None:
+    """Exchange refresh token for new access token. Returns new access token or None."""
+    try:
+        with httpx.Client() as client:
+            resp = client.post(
+                EVE_TOKEN_URL,
+                data={"grant_type": "refresh_token", "refresh_token": refresh_token},
+                auth=(CLIENT_ID, CLIENT_SECRET),
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                timeout=10,
+            )
+        resp.raise_for_status()
+        data = resp.json()
+        new_access  = data["access_token"]
+        new_refresh = data["refresh_token"]
+        expiry = (datetime.now(timezone.utc) + timedelta(seconds=data.get("expires_in", 1199))).isoformat()
+
+        con = get_connection()
+        con.execute(
+            "UPDATE pp_characters SET access_token=?, refresh_token=?, token_expiry=? WHERE character_id=?",
+            (new_access, new_refresh, expiry, character_id),
+        )
+        con.commit()
+        con.close()
+        return new_access
+    except Exception:
+        return None
+
+
+# ── Character API ─────────────────────────────────────────────────────────────
+
+@router.get("/api/characters")
+def list_characters(pp_session: str = Cookie(default=None)):
+    ensure_char_tables()
+    _load_sessions()
+    session_info = _sessions.get(pp_session) if pp_session else None
+    session_char   = session_info[0] if session_info else None
+    context_id     = session_info[1] if session_info else None
+
+    con = get_connection()
+    if context_id:
+        rows = con.execute("""
+            SELECT character_id, character_name, token_expiry,
+                   interplanetary_consolidation, command_center_upgrades,
+                   planetology, advanced_planetology
+            FROM pp_characters WHERE context_id=? ORDER BY character_name
+        """, (context_id,)).fetchall()
+    else:
+        rows = []
+
+    planet_rows = con.execute("""
+        SELECT character_id, planet_type, is_extractor, p0_name, upgrade_level
+        FROM pp_char_planets
+    """).fetchall()
+    con.close()
+
+    char_planets: dict[int, list] = {}
+    for p in planet_rows:
+        cid = p["character_id"]
+        char_planets.setdefault(cid, []).append({
+            "planet_type":   p["planet_type"],
+            "is_extractor":  bool(p["is_extractor"]),
+            "p0_name":       p["p0_name"],
+            "upgrade_level": p["upgrade_level"],
+        })
+
+    now = datetime.now(timezone.utc).isoformat()
+    chars = []
+    for r in rows:
+        expiry = r["token_expiry"] or ""
+        token_ok = expiry > now if expiry else False
+        chars.append({
+            "character_id":   r["character_id"],
+            "name":           r["character_name"],
+            "token_ok":       token_ok,
+            "max_planets":    1 + r["interplanetary_consolidation"],
+            "ccu":            r["command_center_upgrades"],
+            "planetology":    r["planetology"],
+            "adv_planetology":r["advanced_planetology"],
+            "planets":        char_planets.get(r["character_id"], []),
+        })
+    return {
+        "characters": chars,
+        "configured": _is_configured(),
+        "logged_in":  session_char is not None,
+        "session_character_id": session_char,
+        "is_admin":   is_admin(pp_session),
+    }
+
+
+@router.delete("/api/characters/{character_id}")
+def remove_character(character_id: int, context_id: int = Depends(require_context)):
+    ensure_char_tables()
+    con = get_connection()
+    con.execute("DELETE FROM pp_characters WHERE character_id=? AND context_id=?",
+                (character_id, context_id))
+    con.execute("DELETE FROM pp_char_planets WHERE character_id=?", (character_id,))
+    con.commit()
+    con.close()
+    return {"removed": character_id}
+
+
+@router.post("/api/characters/{character_id}/refresh-planets")
+def refresh_char_planets(character_id: int, context_id: int = Depends(require_context)):
+    con = get_connection()
+    ok = con.execute(
+        "SELECT 1 FROM pp_characters WHERE character_id=? AND context_id=?",
+        (character_id, context_id),
+    ).fetchone()
+    con.close()
+    if not ok:
+        raise HTTPException(status_code=403, detail="Character not in your context")
+    token = _get_valid_token(character_id)
+    if not token:
+        raise HTTPException(status_code=400, detail="No valid token for character")
+    # Re-fetch skills too. Skills (CCU, interplanetary consolidation, planetology) were only
+    # written at add-time, so characters added before a skill column existed keep a stale 0
+    # until refreshed. Only overwrite when the fetch actually returned data — a transient ESI
+    # failure returns {} and must not wipe good values to 0.
+    skills = _fetch_skills(character_id, token)
+    if skills:
+        con = get_connection()
+        con.execute(
+            "UPDATE pp_characters SET interplanetary_consolidation=?, command_center_upgrades=?, "
+            "planetology=?, advanced_planetology=? WHERE character_id=?",
+            (
+                skills.get("interplanetary_consolidation", 0),
+                skills.get("command_center_upgrades", 0),
+                skills.get("planetology", 0),
+                skills.get("advanced_planetology", 0),
+                character_id,
+            ),
+        )
+        con.commit()
+        con.close()
+    _fetch_planets(character_id, token)
+    return {"ok": True, "skills_updated": bool(skills)}
