@@ -2201,7 +2201,7 @@ async function onLayoutTabOpen() {
 
 function _saveLayoutState() {
   try {
-    const slim = _layoutSel.map(e => ({ type_id: e.type_id, name: e.name, tier: e.tier, planet: e.planet, launchpads: e.launchpads, count: e.count || 1 }));
+    const slim = _layoutSel.map(e => ({ type_id: e.type_id, name: e.name, tier: e.tier, planet: e.planet, launchpads: e.launchpads, count: e.count || 1, cc: e.cc || 5 }));
     localStorage.setItem(_LAYOUT_LS_KEY, JSON.stringify(slim));
   } catch (e) { /* ignore */ }
 }
@@ -2213,7 +2213,7 @@ async function _restoreLayoutState() {
   _layoutSel = saved.map(s => ({
     key: 'k' + Math.random().toString(36).slice(2, 8),
     type_id: s.type_id, name: s.name, tier: s.tier,
-    planet: s.planet, launchpads: s.launchpads, count: s.count ?? null, data: null, error: null,
+    planet: s.planet, launchpads: s.launchpads, count: s.count ?? null, cc: s.cc || 5, data: null, error: null,
   }));
   renderLayoutSelections();
   await Promise.all(_layoutSel.map(_fetchLayout));
@@ -2273,6 +2273,7 @@ async function addLayoutById(typeId) {
     key: 'k' + Date.now() + Math.random().toString(36).slice(2, 6),
     type_id: prod.type_id, name: prod.name, tier: prod.tier,
     planet: document.getElementById('layoutPlanetType').value,
+    cc: parseInt(document.getElementById('layoutCcu')?.value, 10) || 5,
     launchpads: prod.tier === 1 ? 1 : 3, count: null, data: null, error: null,
   };
   _layoutSel.push(entry);
@@ -2287,7 +2288,7 @@ async function _fetchLayout(entry) {
   try {
     const resp = await fetch('/api/layout', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type_id: entry.type_id, planet_type: entry.planet, launchpads: entry.launchpads, count: entry.count == null ? null : entry.count }),
+      body: JSON.stringify({ type_id: entry.type_id, planet_type: entry.planet, launchpads: entry.launchpads, count: entry.count == null ? null : entry.count, cc_level: entry.cc || 5 }),
     });
     if (!resp.ok) { const e = await resp.json().catch(() => ({})); throw new Error(e.detail || resp.status); }
     entry.data = await resp.json();
@@ -2352,8 +2353,11 @@ function _resourcesLine(res) {
 }
 
 function _layoutBundleUrl() {
-  const toks = _layoutSel.map(e => `${e.type_id}:${e.launchpads}:${e.count || 1}`).join(',');
-  return `/api/layout/bundle?type_ids=${encodeURIComponent(toks)}`;
+  // token: tid:lp:count:cc:ptype — include planet type + CC so the zip matches each card
+  // (previously omitted, so "Download all" silently generated everything at Barren/CC5).
+  const toks = _layoutSel.map(e =>
+    `${e.type_id}:${e.launchpads}:${e.count || 1}:${e.cc || 5}:${e.planet}`).join(',');
+  return `/api/layout/bundle?type_ids=${encodeURIComponent(toks)}&expand=0`;
 }
 
 function renderLayoutSelections() {
@@ -2390,15 +2394,17 @@ function renderLayoutCard(entry) {
     const others = (s.valid_planets || []).filter(x => x !== s.planet_type);
     info = `
       <div class="layout-card-line">${outStr} · extracts <b>${_esc(s.extracts)}</b> · ${s.heads} heads</div>
-      <div class="layout-card-meta">planet: ${_esc(s.planet_type)}${others.length ? ' · also: ' + others.map(_esc).join(', ') : ''}</div>`;
+      <div class="layout-card-meta">planet: ${_esc(s.planet_type)} · <b>CC${entry.cc || 5}</b>${others.length ? ' · also: ' + others.map(_esc).join(', ') : ''}</div>`;
   } else {
     const imports = s.imports.map(i => `${_esc(i.name)} <b>${i.per_hour}/hr</b>`).join(', ');
     info = `
-      <div class="layout-card-line">${outStr} · ${(s.buffer_m3 / 1000).toLocaleString()} km³ buffer · planet: ${_esc(s.planet_type)}</div>
+      <div class="layout-card-line">${outStr} · ${(s.buffer_m3 / 1000).toLocaleString()} km³ buffer · planet: ${_esc(s.planet_type)} · <b>CC${entry.cc || 5}</b></div>
       <div class="layout-card-meta">${_esc(s.imports_label)}: ${imports}</div>`;
   }
-  const url = `/api/layout/download?type_id=${entry.type_id}&planet_type=${encodeURIComponent(s.planet_type)}&launchpads=${entry.launchpads}&count=${entry.count || 1}`;
+  const url = `/api/layout/download?type_id=${entry.type_id}&planet_type=${encodeURIComponent(s.planet_type)}&launchpads=${entry.launchpads}&count=${entry.count || 1}&cc_level=${entry.cc || 5}`;
   const countLabel = isExtractor ? 'Factories' : (entry.tier === 2 ? 'Factories' : 'Chains');
+  const ccSel = `<label title="Command Center level — fewer facilities fit at lower levels">CC
+    <select onchange="changeLayoutCcu('${entry.key}', this.value)">${[5,4,3,2,1].map(n => `<option value="${n}"${n === (entry.cc || 5) ? ' selected' : ''}>${n}</option>`).join('')}</select></label>`;
   return `
     <div class="layout-card">
       ${head}
@@ -2413,16 +2419,39 @@ function renderLayoutCard(entry) {
         </div>
       </div>
       <div class="layout-card-controls">
-        ${isExtractor ? '<span></span>' : `<label title="Max that fits the command center: ${s.max_count}">${countLabel} <input type="number" min="1" max="99" value="${entry.count || 1}"
+        ${isExtractor ? '' : `<label title="Max that fits the command center: ${s.max_count}">${countLabel} <input type="number" min="1" max="99" value="${entry.count || 1}"
           onchange="changeLayoutCount('${entry.key}', this.value)"
           onwheel="_layoutWheelCount(event, this, '${entry.key}')"><span class="layout-max">/${s.max_count}</span></label>`}
         <label>Launchpads <input type="number" min="1" max="8" value="${entry.launchpads}"
           onchange="changeLayoutLaunchpads('${entry.key}', this.value)"
           onwheel="_layoutWheelLp(event, this, '${entry.key}')"></label>
+        ${ccSel}
         <a class="layout-btn" href="${url}" download>Download .json</a>
         <button class="layout-btn" onclick="copyLayoutEntry('${entry.key}', this)">Copy JSON</button>
       </div>
     </div>`;
+}
+
+// Global Command Center selector: re-apply that level to every card (a "set all"),
+// re-resolving the max facilities that fit at the new level.
+async function applyGlobalCcu() {
+  const cc = Math.max(1, Math.min(5, parseInt(document.getElementById('layoutCcu').value, 10) || 5));
+  if (!_layoutSel.length) return;
+  for (const e of _layoutSel) { e.cc = cc; e.count = null; }
+  _saveLayoutState();
+  renderLayoutSelections();              // show "Generating…" immediately
+  await Promise.all(_layoutSel.map(_fetchLayout));
+  renderLayoutSelections();
+}
+
+async function changeLayoutCcu(key, val) {
+  const entry = _layoutSel.find(e => e.key === key);
+  if (!entry) return;
+  entry.cc = Math.max(1, Math.min(5, parseInt(val, 10) || 5));
+  entry.count = null;   // re-resolve max that fits at the new CC level
+  _saveLayoutState();
+  await _fetchLayout(entry);
+  renderLayoutSelections();
 }
 
 async function changeLayoutCount(key, val) {

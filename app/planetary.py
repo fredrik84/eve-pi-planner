@@ -142,13 +142,15 @@ class LayoutRequest(BaseModel):
     planet_type: str = "Barren"
     launchpads: Optional[int] = None   # None → per-tier default (3 factory / 1 extractor)
     count: Optional[int] = None         # production units on the planet; None → max that fits
+    cc_level: Optional[int] = None      # command-centre level 1–5; None → CMD_CTR_LEVEL (5)
 
 
 @router.post("/api/layout")
 def factory_layout(req: LayoutRequest):
     from app.layout import generate_layout
     try:
-        return generate_layout(req.type_id, req.planet_type, req.launchpads, req.count)
+        return generate_layout(req.type_id, req.planet_type, req.launchpads, req.count,
+                               cc_level=req.cc_level)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -159,13 +161,14 @@ def _safe_filename(name: str) -> str:
 
 
 @router.get("/api/layout/download")
-def download_layout(type_id: int, planet_type: str = "Barren", launchpads: Optional[int] = None, count: int = 1):
+def download_layout(type_id: int, planet_type: str = "Barren", launchpads: Optional[int] = None,
+                    count: int = 1, cc_level: Optional[int] = None):
     """Return a single planet template as a downloadable .json attachment."""
     import json
     from fastapi import Response
     from app.layout import generate_layout
     try:
-        result = generate_layout(type_id, planet_type, launchpads, count)
+        result = generate_layout(type_id, planet_type, launchpads, count, cc_level=cc_level)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     tmpl = result["planets"][0]["template"]

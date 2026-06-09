@@ -1300,12 +1300,18 @@ a.plan-action-btn { text-decoration: none; display: inline-block; }
 .layout-max { color: #4a5470; font-size: 10px; }
 /* controls bar pinned to the bottom of every card → aligns across the row */
 .layout-card-controls {
-  display: grid; grid-template-columns: 1fr 1fr; gap: 8px; align-items: center;
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
   margin-top: 12px; padding-top: 12px; border-top: 1px solid #1f2533;
 }
 .layout-card-controls label { font-size: 11px; color: #6a7390; display: flex; align-items: center; gap: 6px; }
-.layout-card-controls input { width: 52px; background: #0f1219; color: #c8cdd8; border: 1px solid #2a3142; border-radius: 4px; padding: 4px 6px; font-size: 12px; }
-.layout-card-controls .layout-btn { text-align: center; }
+.layout-card-controls input, .layout-card-controls select {
+  background: #0f1219; color: #c8cdd8; border: 1px solid #2a3142; border-radius: 4px;
+  padding: 4px 6px; font-size: 12px;
+}
+.layout-card-controls input { width: 52px; }
+.layout-card-controls select { width: 56px; }
+/* The two action buttons share a full row below the compact controls. */
+.layout-card-controls .layout-btn { flex: 1 1 calc(50% - 4px); text-align: center; }
 
 /* searchable add box with persistent results */
 .layout-search-field { position: relative; }
