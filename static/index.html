@@ -14,7 +14,7 @@
   <meta property="og:image" content="https://eve-pi.failed.name/og-image.png?v=4">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:image" content="https://eve-pi.failed.name/og-image.png?v=4">
-  <link rel="stylesheet" href="/style.css?v=71">
+  <link rel="stylesheet" href="/style.css?v=77">
 </head>
 <body>
   <header>
@@ -34,6 +34,7 @@
         <button class="tab" data-tab="planetary"><span class="nav-ico">PP</span><span class="nav-lbl">Planetary Planning</span></button>
         <button class="tab" data-tab="layout"><span class="nav-ico">FL</span><span class="nav-lbl">Factory Layout</span></button>
         <button class="tab" data-tab="planetdb"><span class="nav-ico">DB</span><span class="nav-lbl">Planet DB</span></button>
+        <button class="tab" data-tab="contribute"><span class="nav-ico">?</span><span class="nav-lbl">Contribute</span></button>
         <button class="tab" data-tab="characters"><span class="nav-ico">CH</span><span class="nav-lbl">Characters</span></button>
         <button class="tab" data-tab="admin" id="adminNavTab" style="display:none"><span class="nav-ico">AD</span><span class="nav-lbl">Admin</span></button>
       </nav>
@@ -217,9 +218,8 @@
                      oninput="onProductChange()">
               <datalist id="productList"></datalist>
 
-              <label class="pp-label" for="targetOverprod">Overproduction %</label>
-              <input type="number" id="targetOverprod" value="10" min="-99" max="500" class="pp-num-input"
-                     title="Target overproduction %. 10% means extractors produce 10% more P0 than factories need. Negative = extractors can't keep up.">
+              <!-- Overproduction % moved to the Plan step (editable there, recalculates live). -->
+              <input type="hidden" id="targetOverprod" value="10">
 
               <label class="pp-label" for="targetSystems">Systems</label>
               <input type="number" id="targetSystems" value="1" min="1" max="3" class="pp-num-input"
@@ -376,6 +376,112 @@
 
     </div><!-- /tab-planetdb -->
 
+    <!-- ── Tab: Contribute ─────────────────────────────────────────────────────── -->
+    <div id="tab-contribute" class="tab-panel" style="display:none">
+      <div class="pp-layout">
+        <div class="pp-main" style="grid-column: 1 / -1; max-width: 100%;">
+
+          <section class="pp-card">
+            <div class="pp-card-title">How can I contribute?
+              <span class="pp-card-hint">— help grow the shared planet database</span>
+            </div>
+            <div class="contrib">
+
+              <p class="contrib-lead">
+                The planner is only as good as its planet data. Every system, planet and
+                P0 <strong>resource density</strong> comes from players reading the numbers in-game
+                and importing them. The <strong>Planet DB</strong> is a single shared,
+                global database — anything you import helps everyone planning in those systems.
+                Right now the maintainer has seeded the systems they fly; as more people use
+                the tool, user-contributed data is how we cover the rest of New Eden.
+              </p>
+
+              <h3 class="contrib-h">1. Read a planet's resource density in EVE</h3>
+              <p>
+                No scanning ship needed — you can do this <strong>while docked</strong>. But for the
+                numbers to be accurate two things matter: <strong>be in the system</strong> you're
+                surveying (accuracy drops the further away you are), and train
+                <strong>Remote Sensing</strong> as high as you can — low skill or distance gives
+                rough readings, so the best data comes from a high-skill character on-site.
+              </p>
+              <ol class="contrib-steps">
+                <li>Be in (or as close as possible to) the target system, then open
+                    <strong>Agency → Resource Harvesting → Planets → Planetary Industry</strong>.</li>
+                <li>Select the <strong>system</strong> you want to survey, then choose a <strong>planet</strong>.</li>
+                <li>The planet's P0 resources are listed. <strong>Hover over each one</strong> and read the
+                    tooltip — <code>Resource Density: 37%</code>. That percentage (<strong>37</strong>) is
+                    the value we want.</li>
+                <li>Record the density for <em>each</em> of the planet's five P0 resources. Nothing needs to
+                    be placed on the planet — just note the numbers and move on.</li>
+              </ol>
+
+              <h3 class="contrib-h">2. Build a spreadsheet</h3>
+              <p>
+                Put one planet per row in a spreadsheet (Google Sheets, Excel, anything that copies as
+                tab- or comma-separated text). You need a <strong>header row</strong>, a
+                <strong>System</strong> column, a <strong>Planet</strong> column, and then
+                <strong>one column per P0 resource</strong> holding the density percentage you read in-game
+                (just the number, e.g. <code>37</code>). Leave a cell blank or 0 if that resource isn't present.
+              </p>
+              <ul class="contrib-notes">
+                <li><strong>Constellation</strong> and <strong>Type</strong> columns are optional —
+                    the constellation is filled in from the system name, and the planet type is inferred
+                    from <em>which</em> P0 resources the row fills (each planet type has a unique five-resource set).</li>
+                <li>P0 column headers are matched by name and are case/spacing-insensitive
+                    (e.g. <code>Microorganisms</code> = <code>Micro Organisms</code>,
+                    <code>Aqueous Liquid</code> = <code>Aqueous Liquids</code>).</li>
+              </ul>
+
+              <p>Example (tab- or comma-separated):</p>
+              <pre class="contrib-code">System    Planet    Aqueous Liquids    Base Metals    Carbon Compounds    Microorganisms    Noble Metals
+0-U2M4    4         82                 64             71                  90                55
+0-U2M4    6         0                  77             0                   48                88
+PVF-N9    3         95                 60             80                  100               40</pre>
+
+              <p class="contrib-note-block">
+                The 15 recognised P0 resources are:
+                <code>Aqueous Liquids</code>, <code>Autotrophs</code>, <code>Base Metals</code>,
+                <code>Carbon Compounds</code>, <code>Complex Organisms</code>, <code>Felsic Magma</code>,
+                <code>Heavy Metals</code>, <code>Ionic Solutions</code>, <code>Microorganisms</code>,
+                <code>Noble Gas</code>, <code>Noble Metals</code>, <code>Non-CS Crystals</code>,
+                <code>Planktic Colonies</code>, <code>Reactive Gas</code>, <code>Suspended Plasma</code>.
+                Each planet type yields exactly five of these.
+              </p>
+
+              <h3 class="contrib-h">3. Submit it for review</h3>
+              <ol class="contrib-steps">
+                <li>You must be <strong>logged in</strong> (add a character via ESI on the Characters tab)
+                    to submit data.</li>
+                <li>Go to the <strong>Planet DB</strong> tab and click <strong>Import</strong>.</li>
+                <li>Copy your whole spreadsheet — including the header row — and paste it into the box,
+                    then click <strong>Import</strong>.</li>
+                <li>Your data goes into a <strong>review queue</strong> — it doesn't change the live
+                    database yet. An admin checks it and approves it before it appears for everyone.
+                    You'll see how many planets you submitted, plus warnings for any rows that couldn't
+                    be parsed (fix those and re-submit).</li>
+              </ol>
+
+              <p class="contrib-note-block">
+                Why review? The Planet DB is shared by everyone, so we don't let just anyone change
+                existing planets — bad or accidental data would break other people's plans. New planets
+                and corrections both go through an admin first. <strong>Admins</strong> can import
+                directly, and approving a submission adds new planets or updates existing ones. Updates
+                <em>merge</em>: a blank cell keeps the current value, so you only need to fill in the
+                resources you actually re-measured.
+              </p>
+
+              <p class="contrib-thanks">
+                That's it — once an admin approves, your data is available to everyone. Thank you for
+                contributing, and fly safe o7
+              </p>
+
+            </div>
+          </section>
+
+        </div>
+      </div>
+    </div><!-- /tab-contribute -->
+
     <!-- ── Tab: Characters ───────────────────────────────────────────────────── -->
     <div id="tab-characters" class="tab-panel" style="display:none">
       <div class="pp-chars-page">
@@ -432,6 +538,12 @@
     <!-- ── Tab: Admin (admins only) ────────────────────────────────────────────── -->
     <div id="tab-admin" class="tab-panel" style="display:none">
       <div class="admin-page">
+
+        <section class="pp-card admin-section">
+          <div class="pp-card-title">Planet submissions <span id="psubCount" class="bug-admin-counts"></span></div>
+          <div class="admin-hint">Planet data contributed by non-admins waits here for review. <strong>Approve</strong> writes it to the shared Planet DB — new planets are added and existing ones are updated (blank cells keep the current value, so a sparse paste never wipes good data). <strong>Reject</strong> discards it. Nothing reaches the live database until you approve.</div>
+          <div id="planetSubList" class="bug-admin-list"></div>
+        </section>
 
         <section class="pp-card admin-section">
           <div class="pp-card-title">Custom baskets</div>
@@ -510,6 +622,6 @@
   </div>
 
   <script src="/app.js?v=19"></script>
-  <script src="/planetary.js?v=91"></script>
+  <script src="/planetary.js?v=97"></script>
 </body>
 </html>

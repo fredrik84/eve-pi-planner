@@ -197,9 +197,68 @@ function openBugAdmin() { switchTab('admin'); }  // bug reports now live in the 
 // ── Admin tab ───────────────────────────────────────────────────────────────────
 function onAdminTabOpen() {
   if (!_isAdmin) { switchTab('planetary'); return; }
+  loadPlanetSubmissions();
   loadBugs();
   loadAdmins();
   loadBasketsAdmin();
+}
+
+async function loadPlanetSubmissions() {
+  const list = document.getElementById('planetSubList');
+  if (!list) return;
+  list.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span>Loading…</div>';
+  try {
+    const resp = await fetch('/api/planet-submissions?status=pending');
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    renderPlanetSubmissions(data.submissions || []);
+  } catch (e) {
+    list.innerHTML = `<div class="pp-empty">Failed to load: ${_esc(e.message)}</div>`;
+  }
+}
+
+function renderPlanetSubmissions(subs) {
+  const cEl = document.getElementById('psubCount');
+  if (cEl) cEl.textContent = subs.length ? `${subs.length} pending` : '';
+  const list = document.getElementById('planetSubList');
+  if (!subs.length) { list.innerHTML = '<div class="pp-empty">No pending submissions.</div>'; return; }
+  list.innerHTML = subs.map(s => {
+    const when = (s.created_at || '').replace('T', ' ').slice(0, 16);
+    const newN = s.planets.filter(p => !p.exists).length;
+    const ovN  = s.planets.filter(p => p.exists).length;
+    const chips = s.planets.map(p =>
+      `<span class="psub-chip ${p.exists ? 'psub-chip-ov' : 'psub-chip-new'}" `
+      + `title="${p.exists ? 'updates existing planet (blank cells keep current values)' : 'new planet'}">`
+      + `${_esc(p.system)} P${p.planet_num} · ${_esc(p.planet_type)}</span>`).join('');
+    return `<div class="bug-item">
+      <div class="bug-item-head">
+        <span class="bug-item-title">${s.planet_count} planet${s.planet_count === 1 ? '' : 's'}</span>
+        <span class="bug-item-meta">${_esc(s.submitter_name || '?')} · ${_esc(when)}</span>
+      </div>
+      <div class="psub-summary">${newN} new · ${ovN} update</div>
+      <div class="psub-chips">${chips}</div>
+      <div class="bug-item-actions">
+        <button class="bug-act bug-act-done" onclick="reviewPlanetSubmission(${s.id},'approve')">Approve all</button>
+        <button class="bug-act bug-act-ignore" onclick="reviewPlanetSubmission(${s.id},'reject')">Reject all</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function reviewPlanetSubmission(id, action) {
+  if (action === 'reject' && !confirm('Reject and discard this submission?')) return;
+  try {
+    const resp = await fetch(`/api/planet-submissions/${id}/${action}`, { method: 'POST' });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
+    if (action === 'approve') {
+      if (data.errors && data.errors.length)
+        alert(`Imported ${data.imported}, skipped ${data.skipped}.\n\nWarnings:\n` + data.errors.join('\n'));
+      if (typeof loadPlanets === 'function') loadPlanets(true);
+      if (typeof loadConstellations === 'function') loadConstellations();
+    }
+    loadPlanetSubmissions();
+  } catch (e) { alert('Failed: ' + e.message); }
 }
 
 async function loadAdmins() {
@@ -832,13 +891,21 @@ async function submitPlanetImport() {
     });
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
-    if (data.errors && data.errors.length)
-      alert(`Imported ${data.imported}, skipped ${data.skipped}.\n\nWarnings:\n` + data.errors.join('\n'));
-    closePlanetImport();
-    await loadPlanets(true);
-    loadConstellations();
+    const warn = (data.errors && data.errors.length) ? '\n\nWarnings:\n' + data.errors.join('\n') : '';
     const importBtn = document.getElementById('ppImportBtn');
-    importBtn.textContent = `✓ ${data.imported}`;
+    if (data.queued) {
+      // Non-admin: held for admin review, nothing written to the live DB yet.
+      alert(`Thanks! ${data.submitted} planet${data.submitted === 1 ? '' : 's'} submitted for review. `
+            + `An admin will approve them before they appear in the Planet DB.` + warn);
+      importBtn.textContent = `✓ submitted`;
+      closePlanetImport();
+    } else {
+      if (warn) alert(`Imported ${data.imported}, skipped ${data.skipped}.${warn}`);
+      closePlanetImport();
+      await loadPlanets(true);
+      loadConstellations();
+      importBtn.textContent = `✓ ${data.imported}`;
+    }
     setTimeout(() => importBtn.textContent = 'Import', 2500);
   } catch (e) {
     alert('Import failed: ' + e.message);
@@ -854,7 +921,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // Wheel-scroll support for number inputs
-  ['targetOverprod', 'targetSystems', 'targetMaxJumps'].forEach(id => {
+  ['targetSystems', 'targetMaxJumps'].forEach(id => {
     const el = document.getElementById(id);
     if (!el) return;
     el.addEventListener('wheel', e => {
@@ -1042,7 +1109,8 @@ function renderRoles(configs, typeId) {
     <span class="pp-setall-label">Set all</span>
     <select class="pp-setall-planets" title="Plan every character with this many planets">${_planetOpts(6)}</select><span class="pp-role-unit">pl</span>
     ${fb ? `<select class="pp-setall-ccu" title="Plan every character at this Command Center level">${_ccuOpts(5)}</select><span class="pp-role-unit">CC</span>` : ''}
-    <button class="pp-setall-apply" type="button">Apply</button>`;
+    <button class="pp-setall-apply" type="button">Apply</button>
+    <button class="pp-setall-reset" type="button" title="Reset every character back to their trained values (planets${fb ? ' and Command Center level' : ''}, all extractor-capable)">Reset to characters</button>`;
   bar.querySelector('.pp-setall-apply').addEventListener('click', () => {
     const pv = bar.querySelector('.pp-setall-planets').value;
     const cv = fb ? bar.querySelector('.pp-setall-ccu').value : null;
@@ -1051,6 +1119,19 @@ function renderRoles(configs, typeId) {
       if (ps) { ps.value = pv; _markWhatif(ps); }
       const cs = row.querySelector('.pp-role-ccu');
       if (cs && cv != null) cs.value = cv;
+    });
+    scheduleRoleSave(typeId);
+  });
+  // Reset every row to the character's own trained values (planets = trained max, CC = the
+  // ESI/trained level, factory-only off). This clears all per-character overrides.
+  bar.querySelector('.pp-setall-reset').addEventListener('click', () => {
+    list.querySelectorAll('.pp-role-row').forEach(row => {
+      const ps = row.querySelector('.pp-role-planets');
+      if (ps) { ps.value = ps.dataset.realMax; _markWhatif(ps); }
+      const cs = row.querySelector('.pp-role-ccu');
+      if (cs) cs.value = cs.dataset.def;              // back to the character's CC level
+      const fc = row.querySelector('.pp-role-fac-cb');
+      if (fc) fc.checked = false;
     });
     scheduleRoleSave(typeId);
   });
@@ -1584,7 +1665,9 @@ function renderRecommendations(data) {
 
 // ── Step 3: Final Plan ────────────────────────────────────────────────────────
 
-function renderFinalPlan(data) {
+let _overprodTimer = null;  // debounce for the live overproduction control
+
+function renderFinalPlan(data, opts = {}) {
   const content = document.getElementById('wizPlanContent');
 
   // Stats bar
@@ -1627,10 +1710,12 @@ function renderFinalPlan(data) {
           <span class="plan-stat-lbl">P0/cycle per ext · ${s.total_extractors} ext</span>
         </div>`;
     }
+    const targetOverprod = parseInt((document.getElementById('targetOverprod') || {}).value);
+    const opVal = Number.isNaN(targetOverprod) ? 10 : targetOverprod;
     statsHtml = `
       <div class="plan-stats-bar">
-        <div class="plan-stat" title="Baseline overproduction at 48k P0/cycle per extractor — matches your target input. 'max' = factories quality-adjusted extraction can fully supply.">
-          <span class="plan-stat-val ${s.overproduction_pct < 0 ? 'plan-stat-warn' : 'plan-stat-ok'}">${s.overproduction_pct >= 0 ? '+' : ''}${s.overproduction_pct}% overprod</span>
+        <div class="plan-stat plan-stat-edit" title="Target overproduction % — edit and the plan recalculates. 10% means extractors produce 10% more P0 than factories need. Negative = extractors can't keep up. Reported baseline: ${s.overproduction_pct >= 0 ? '+' : ''}${s.overproduction_pct}%.">
+          <span class="plan-stat-val ${s.overproduction_pct < 0 ? 'plan-stat-warn' : 'plan-stat-ok'}"><input type="number" id="planOverprodInput" class="plan-overprod-input" value="${opVal}" min="-99" max="500" step="5">% overprod</span>
           <span class="plan-stat-lbl">${s.factories} factories${s.max_supportable_factories != null ? ' · max ' + s.max_supportable_factories : ''}</span>
         </div>
         <div class="plan-stat">
@@ -1872,10 +1957,35 @@ function renderFinalPlan(data) {
       }
     });
   }
+  const opInput = content.querySelector('#planOverprodInput');
+  if (opInput) {
+    const applyOverprod = () => {
+      let v = parseInt(opInput.value);
+      if (Number.isNaN(v)) return;
+      v = Math.max(-99, Math.min(500, v));
+      const store = document.getElementById('targetOverprod');
+      if (store && parseInt(store.value) === v) return;  // unchanged → skip re-run
+      if (store) store.value = v;
+      _rerunPlan();
+    };
+    opInput.addEventListener('change', applyOverprod);
+    opInput.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); applyOverprod(); } });
+    // Wheel adjusts in steps of 5 but only re-plans once the user pauses (debounced) —
+    // re-running on every tick refetched and re-rendered, which made the page jump.
+    opInput.addEventListener('wheel', e => {
+      e.preventDefault();
+      const cur = parseInt(opInput.value) || 0;
+      opInput.value = Math.max(-99, Math.min(500, cur + (e.deltaY < 0 ? 5 : -5)));
+      clearTimeout(_overprodTimer);
+      _overprodTimer = setTimeout(applyOverprod, 150);
+    }, { passive: false });
+  }
   const shopBtn = content.querySelector('#ppShoppingListBtn');
   if (shopBtn) shopBtn.addEventListener('click', () => renderShoppingList(data));
 
-  content.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  // Only scroll into view on the first render of a plan, not on in-place re-runs
+  // (re-running from the overprod / factory controls otherwise jumps the page).
+  if (opts.scroll !== false) content.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 function _buildShoppingList(data) {
@@ -1956,7 +2066,7 @@ async function _rerunPlan(overrides = {}) {
     const data = await resp.json();
     if (!resp.ok || data.error) throw new Error(data.error || `HTTP ${resp.status}`);
     _wiz.lastPlanData = data;
-    renderFinalPlan(data);
+    renderFinalPlan(data, { scroll: false });
   } catch (e) { alert('Re-run failed: ' + e.message); }
 }
 

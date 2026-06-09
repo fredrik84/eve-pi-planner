@@ -5,11 +5,11 @@ Planetary Planning — planet database and allocation.
 import sqlite3
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Cookie, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.sde import get_connection
-from app.esi import require_context
+from app.esi import require_context, is_admin, require_admin
 
 router = APIRouter()
 
@@ -79,6 +79,19 @@ def ensure_tables():
             solar_system_id INTEGER,
             {p0_ddl}
             UNIQUE(system, planet_num)
+        )
+    """)
+    # Pending planet-data contributions from non-admins, held for admin review.
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS pp_planet_submissions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            context_id INTEGER NOT NULL,
+            submitter_name TEXT NOT NULL DEFAULT '',
+            raw_text TEXT NOT NULL,
+            planet_count INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            reviewed_at TEXT
         )
     """)
     # Add solar_system_id if upgrading from older schema
@@ -214,12 +227,14 @@ class ImportRequest(BaseModel):
     text: str
 
 
-@router.post("/api/planets/import")
-def import_planets(req: ImportRequest, context_id: int = Depends(require_context)):
-    ensure_tables()
-    lines = [l for l in req.text.strip().splitlines() if l.strip()]
+def _parse_planet_rows(text: str, con) -> tuple[list[dict], int, list[str]]:
+    """Parse pasted spreadsheet text into planet rows WITHOUT writing anything.
+    Returns (rows, skipped, errors); each row is a dict ready for _write_planet_rows.
+    `con` is read-only here (only for the optional system_geo constellation map)."""
+    rows: list[dict] = []
+    lines = [l for l in text.strip().splitlines() if l.strip()]
     if not lines:
-        raise HTTPException(status_code=400, detail="No data provided")
+        return rows, 0, []
 
     # ── Detect format ────────────────────────────────────────────────────────
     # Split first line; if it contains recognisable P0 header names → column-map mode.
@@ -246,9 +261,7 @@ def import_planets(req: ImportRequest, context_id: int = Depends(require_context
     use_column_map = bool(p0_header_map)  # True if header row had P0 column names
     data_start = 1 if (use_column_map or "system" in structural_map) else 0
 
-    con = get_connection()
-    cur = con.cursor()
-    imported = skipped = 0
+    skipped = 0
     errors: list[str] = []
 
     # system → constellation (auto-fill when the constellation column is absent)
@@ -339,23 +352,151 @@ def import_planets(req: ImportRequest, context_id: int = Depends(require_context
                     except ValueError:
                         pass
 
-        all_cols = ["system", "planet_num", "planet_type", "constellation"] + P0_COLUMNS
-        placeholders = ", ".join("?" * len(all_cols))
-        values = [system, planet_num, ptype_key, constel] + [p0_vals[c] for c in P0_COLUMNS]
+        row = {"system": system, "planet_num": planet_num,
+               "planet_type": ptype_key, "constellation": constel}
+        row.update(p0_vals)
+        rows.append(row)
 
+    return rows, skipped, errors
+
+
+def _write_planet_rows(con, rows: list[dict]) -> tuple[int, int]:
+    """Upsert parsed planet rows into pp_planets, **merging** rather than overwriting: a new
+    planet is inserted, an existing one is updated only where the incoming value is non-blank.
+    A 0/blank P0 cell keeps the current value (so a sparse paste can't wipe good data); a blank
+    constellation keeps the current one. Caller is responsible for authorisation.
+    Returns (imported, skipped) — imported counts rows inserted *or* updated."""
+    cur = con.cursor()
+    all_cols = ["system", "planet_num", "planet_type", "constellation"] + P0_COLUMNS
+    placeholders = ", ".join("?" * len(all_cols))
+    set_parts = [
+        "planet_type = excluded.planet_type",
+        "constellation = CASE WHEN excluded.constellation != '' "
+        "THEN excluded.constellation ELSE pp_planets.constellation END",
+    ] + [
+        f"{c} = CASE WHEN excluded.{c} != 0 THEN excluded.{c} ELSE pp_planets.{c} END"
+        for c in P0_COLUMNS
+    ]
+    sql = (f"INSERT INTO pp_planets ({', '.join(all_cols)}) VALUES ({placeholders}) "
+           f"ON CONFLICT(system, planet_num) DO UPDATE SET {', '.join(set_parts)}")
+    imported = skipped = 0
+    for row in rows:
+        values = [row["system"], row["planet_num"], row["planet_type"], row["constellation"]] \
+                 + [row.get(c, 0) for c in P0_COLUMNS]
         try:
-            cur.execute(
-                f"INSERT OR REPLACE INTO pp_planets ({', '.join(all_cols)}) VALUES ({placeholders})",
-                values,
-            )
+            cur.execute(sql, values)
             imported += 1
-        except sqlite3.Error as e:
-            errors.append(str(e))
+        except sqlite3.Error:
             skipped += 1
+    return imported, skipped
 
+
+def _submitter_name(con, context_id: int) -> str:
+    r = con.execute(
+        "SELECT character_name FROM pp_characters WHERE context_id=? LIMIT 1", (context_id,)
+    ).fetchone()
+    return (r["character_name"] if r else "") or ""
+
+
+@router.post("/api/planets/import")
+def import_planets(req: ImportRequest,
+                   pp_session: str = Cookie(default=None),
+                   context_id: int = Depends(require_context)):
+    """Admins write straight to the shared Planet DB. Everyone else's paste is held in
+    pp_planet_submissions for an admin to review — nothing touches the live DB until then."""
+    ensure_tables()
+    con = get_connection()
+    rows, skipped, errors = _parse_planet_rows(req.text, con)
+    if not rows and skipped == 0 and not errors:
+        con.close()
+        raise HTTPException(status_code=400, detail="No data provided")
+
+    if is_admin(pp_session):
+        imported, wskip = _write_planet_rows(con, rows)
+        con.commit()
+        con.close()
+        return {"queued": False, "imported": imported,
+                "skipped": skipped + wskip, "errors": errors[:10]}
+
+    # Non-admin → queue for review. Store the original paste; it's re-parsed on approval.
+    if rows:
+        con.execute(
+            "INSERT INTO pp_planet_submissions (context_id, submitter_name, raw_text, "
+            "planet_count, status) VALUES (?,?,?,?, 'pending')",
+            (context_id, _submitter_name(con, context_id), req.text, len(rows)),
+        )
+        con.commit()
+    con.close()
+    return {"queued": True, "submitted": len(rows), "skipped": skipped, "errors": errors[:10]}
+
+
+@router.get("/api/planet-submissions")
+def list_planet_submissions(status: str = "pending", _: int = Depends(require_admin)):
+    """Admin: list planet-data submissions awaiting review, each with a parsed preview
+    of its planets flagged new vs overwrite (against the current live Planet DB)."""
+    ensure_tables()
+    con = get_connection()
+    subs = con.execute(
+        "SELECT id, submitter_name, raw_text, planet_count, status, created_at "
+        "FROM pp_planet_submissions WHERE status=? ORDER BY created_at DESC, id DESC",
+        (status,),
+    ).fetchall()
+    existing = {(r["system"], r["planet_num"]) for r in
+                con.execute("SELECT system, planet_num FROM pp_planets")}
+    out = []
+    for s in subs:
+        rows, _skip, _err = _parse_planet_rows(s["raw_text"], con)
+        planets = [{
+            "system": r["system"], "planet_num": r["planet_num"],
+            "planet_type": r["planet_type"],
+            "exists": (r["system"], r["planet_num"]) in existing,
+        } for r in rows]
+        out.append({
+            "id": s["id"], "submitter_name": s["submitter_name"],
+            "planet_count": s["planet_count"], "status": s["status"],
+            "created_at": s["created_at"], "planets": planets,
+        })
+    con.close()
+    return {"submissions": out}
+
+
+@router.post("/api/planet-submissions/{sub_id}/approve")
+def approve_planet_submission(sub_id: int, _: int = Depends(require_admin)):
+    """Admin: apply a submission to the live Planet DB (insert new / overwrite existing)."""
+    ensure_tables()
+    con = get_connection()
+    s = con.execute(
+        "SELECT raw_text FROM pp_planet_submissions WHERE id=? AND status='pending'", (sub_id,)
+    ).fetchone()
+    if not s:
+        con.close()
+        raise HTTPException(status_code=404, detail="Submission not found or already reviewed")
+    rows, skipped, errors = _parse_planet_rows(s["raw_text"], con)
+    imported, wskip = _write_planet_rows(con, rows)
+    con.execute(
+        "UPDATE pp_planet_submissions SET status='approved', reviewed_at=CURRENT_TIMESTAMP WHERE id=?",
+        (sub_id,),
+    )
     con.commit()
     con.close()
-    return {"imported": imported, "skipped": skipped, "errors": errors[:10]}
+    return {"approved": True, "imported": imported, "skipped": skipped + wskip, "errors": errors[:10]}
+
+
+@router.post("/api/planet-submissions/{sub_id}/reject")
+def reject_planet_submission(sub_id: int, _: int = Depends(require_admin)):
+    """Admin: discard a submission without touching the Planet DB."""
+    ensure_tables()
+    con = get_connection()
+    n = con.execute(
+        "UPDATE pp_planet_submissions SET status='rejected', reviewed_at=CURRENT_TIMESTAMP "
+        "WHERE id=? AND status='pending'",
+        (sub_id,),
+    ).rowcount
+    con.commit()
+    con.close()
+    if not n:
+        raise HTTPException(status_code=404, detail="Submission not found or already reviewed")
+    return {"rejected": True}
 
 
 @router.delete("/api/planets")

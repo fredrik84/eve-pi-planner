@@ -420,6 +420,26 @@ The Planet DB (`pp_planets`) is a single **global, shared** table (no `context_i
 `app.esi`), which 401s without a valid `pp_session`. Everything else (`pp_characters`,
 `pp_profiles`, `pp_shares`, `pp_plan_config`) is per-`context_id` and session-gated.
 
+**Contribution review queue (`pp_planet_submissions`).** Only **admins** write to `pp_planets`
+directly. `POST /api/planets/import` branches on `esi.is_admin(pp_session)`: admins →
+`_write_planet_rows` (live, **merging upsert** — `INSERT … ON CONFLICT(system, planet_num) DO
+UPDATE` with `CASE WHEN excluded.col != 0` per P0 so a blank/0 cell keeps the current value and
+a sparse paste never wipes good data; returns `{queued:false,...}`); everyone else →
+the paste is stored verbatim in `pp_planet_submissions` (status `pending`) and nothing touches
+the live DB (`{queued:true, submitted:N}`). Parsing was split out of `import_planets` into
+`_parse_planet_rows(text, con) -> (rows, skipped, errors)` (no writes) + `_write_planet_rows(con, rows)`
+so both the direct path and approval reuse it. Admin review endpoints (admin-gated via
+`require_admin`): `GET /api/planet-submissions?status=pending` (re-parses each `raw_text` for a
+preview, flags each planet `exists` new-vs-overwrite against live `pp_planets`),
+`POST /api/planet-submissions/{id}/approve` (re-parses + `_write_planet_rows`, marks `approved`),
+`POST /api/planet-submissions/{id}/reject` (marks `rejected`, no write). UI: a **Planet
+submissions** section at the top of the Admin tab (`loadPlanetSubmissions`/`renderPlanetSubmissions`/
+`reviewPlanetSubmission` in `planetary.js`, new/overwrite chips); `submitPlanetImport` handles the
+`queued` response ("submitted for review" vs "imported"). A **Contribute** tab
+(`#tab-contribute`, static, no JS hook — `switchTab` is generic) documents remote sensing (Agency →
+Resource Harvesting → Planets → Planetary Industry, hover a P0 → `Resource Density: %`), the
+spreadsheet format, and the review flow.
+
 ## Profiles & shares
 
 Both persist plan inputs. When adding a new `PlanRequest` field that a user sets, wire it into **all three**: `pp_profiles` column (+ `ProfileSave` model + save/list SQL), the share payload, and the frontend save/restore.

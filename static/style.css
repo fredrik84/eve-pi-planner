@@ -463,6 +463,53 @@ tr:hover td { background: #181d2a; }
   text-align: center;
 }
 
+/* ── Contribute tab ─────────────────────────────────────────────── */
+.contrib { padding: 16px 20px 22px; color: #b4bdd4; font-size: 13px; line-height: 1.65; max-width: 820px; }
+.contrib p { margin: 0 0 12px; }
+.contrib-lead { color: #c8d0e6; }
+.contrib-h {
+  margin: 22px 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #a8c8ff;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+}
+.contrib-steps, .contrib-notes { margin: 0 0 12px; padding-left: 22px; }
+.contrib-steps li, .contrib-notes li { margin-bottom: 7px; }
+.contrib strong { color: #d6deef; font-weight: 600; }
+.contrib em { color: #8a93ad; }
+.contrib code {
+  background: #1a2030;
+  border: 1px solid #232b3e;
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-size: 12px;
+  color: #9fc4ff;
+}
+.contrib-code {
+  background: #0f121b;
+  border: 1px solid #232b3e;
+  border-radius: 6px;
+  padding: 12px 14px;
+  margin: 0 0 14px;
+  font-size: 12px;
+  color: #c8d0e6;
+  overflow-x: auto;
+  white-space: pre;
+  line-height: 1.5;
+}
+.contrib-note-block {
+  background: #12141d;
+  border-left: 3px solid #2a3a4a;
+  padding: 10px 14px;
+  border-radius: 0 6px 6px 0;
+  font-size: 12px;
+  color: #8a93ad;
+}
+.contrib-note-block code { font-size: 11px; }
+.contrib-thanks { margin-top: 18px; color: #8a93ad; font-style: italic; }
+
 .pp-loading {
   padding: 24px 14px;
   color: #6a7390;
@@ -585,6 +632,9 @@ tr:hover td { background: #181d2a; }
 .pp-setall-apply { background: #1f3350; border: 1px solid #335; color: #bcd; cursor: pointer;
   border-radius: 4px; padding: 2px 10px; font-size: 11px; }
 .pp-setall-apply:hover { background: #28456a; }
+.pp-setall-reset { margin-left: auto; background: none; border: 1px solid #2a3242; color: #8a93a8;
+  cursor: pointer; border-radius: 4px; padding: 2px 10px; font-size: 11px; }
+.pp-setall-reset:hover { background: #181d29; color: #c8d2e6; border-color: #3a4456; box-shadow: none; }
 .pp-role-ext::placeholder { color: #2a3048; }
 
 /* Constellation filter card */
@@ -800,6 +850,17 @@ tr:hover td { background: #181d2a; }
 .bug-badge-open { background: #1e3348; color: #6aa0e0; }
 .bug-badge-complete { background: #1c3324; color: #6ac08a; }
 .bug-badge-ignored { background: #24262c; color: #8a94a8; }
+
+/* Planet submissions (Admin tab review queue) */
+.psub-summary { color: #8a93a8; font-size: 11px; margin: 6px 0 4px; }
+.psub-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 8px; }
+.psub-chip {
+  font-size: 11px; padding: 2px 8px; border-radius: 3px;
+  border: 1px solid #2a3142; background: #161b27; color: #9aa6bc;
+}
+.psub-chip-new { border-color: #25503a; color: #6ac08a; }
+.psub-chip-ov  { border-color: #5a4520; color: #d6a44a; }
+
 .pp-text-input::placeholder { color: #3d4255; }
 
 .pp-clear-btn { color: #7a4040 !important; border-color: #3a2020 !important; }
@@ -911,6 +972,14 @@ tr:hover td { background: #181d2a; }
 .plan-stat-lbl { font-size: 10px; color: #3a4460; text-transform: uppercase; letter-spacing: 0.6px; margin-top: 2px; }
 .plan-stat-ok   { color: #5ecf80; }
 .plan-stat-warn { color: #c88040; }
+.plan-stat-edit .plan-stat-val { display: inline-flex; align-items: baseline; gap: 3px; }
+.plan-overprod-input { width: 3em; background: #141f14; border: 1px solid #2a4030; border-radius: 4px;
+  color: inherit; font: inherit; font-size: 16px; font-weight: 600; text-align: right; padding: 1px 6px; }
+.plan-overprod-input:focus { outline: none; border-color: #5ecf80; }
+/* Hide native spinners (they crowd the digits); change via scroll wheel, typing, or ↑/↓ keys */
+.plan-overprod-input::-webkit-inner-spin-button,
+.plan-overprod-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.plan-overprod-input { -moz-appearance: textfield; appearance: textfield; }
 
 /* Fuel-block basket headline */
 .plan-fb-headline { display: flex; align-items: baseline; gap: 12px; padding: 12px 18px 4px; }
