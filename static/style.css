@@ -882,14 +882,14 @@ tr:hover td { background: #181d2a; }
 .plan-product-name { font-size: 15px; font-weight: 600; color: #a8c8ff; }
 .plan-summary { font-size: 11px; color: #4a5470; }
 
-.plan-req-row { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 14px 12px; border-bottom: 1px solid #1c2030; }
+.plan-req-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 14px 12px; border-bottom: 1px solid #1c2030; }
+.plan-req-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.8px; color: #3a4460; font-weight: 600; margin-right: 4px; }
 .plan-req-pill {
   background: #1a2838; border: 1px solid #2a4060;
   border-radius: 12px; padding: 3px 10px;
   font-size: 11px; color: #7aa8cc;
 }
 .plan-req-pill em { color: #a8c8ff; font-style: normal; font-weight: 600; }
-.plan-req-dim { opacity: 0.55; }
 
 .plan-warning { margin: 8px 14px; padding: 6px 10px; background: #2a1a10; border: 1px solid #5a3020; border-radius: 4px; font-size: 12px; color: #e08050; }
 

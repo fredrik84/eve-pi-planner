@@ -1749,12 +1749,16 @@ function renderFinalPlan(data, opts = {}) {
       </div>`;
   }
 
-  // P1 requirement pills
+  // P1 requirement pills. relative_qty can be a long float (e.g. 60.9187392) — round to
+  // at most one decimal (dropping trailing .0) so the pills stay readable. Opacity scales
+  // with demand (brighter = needs more extractor planets) so the row reads at a glance.
+  const _fmtQty = v => (Math.round(v * 10) / 10).toString();
   const maxQty = Math.max(...data.p1_requirements.map(r => r.relative_qty));
   const reqPills = data.p1_requirements.map(r => {
-    const dim = r.relative_qty < maxQty ? ' plan-req-dim' : '';
-    const tip = r.p0_name ? `${r.p0_name} → ${r.p1_name}` : r.p1_name;
-    return `<span class="plan-req-pill${dim}" title="${tip}">${r.p1_name} <em>×${r.relative_qty}</em></span>`;
+    const op = maxQty > 0 ? (0.5 + 0.5 * (r.relative_qty / maxQty)).toFixed(2) : 1;
+    const chain = r.p0_name ? `${r.p0_name} → ${r.p1_name}` : r.p1_name;
+    const tip = `${chain} · relative extractor demand ${_fmtQty(r.relative_qty)} (brighter = more extractor planets)`;
+    return `<span class="plan-req-pill" style="opacity:${op}" title="${tip}">${r.p1_name} <em>×${_fmtQty(r.relative_qty)}</em></span>`;
   }).join('');
 
   const totalFreeSlots = (data.assignments || []).reduce((s, a) => s + (a.free_planets || 0), 0);
@@ -1987,7 +1991,10 @@ function renderFinalPlan(data, opts = {}) {
     ${fbHtml}
     ${facSysHtml}
     ${facTypeHtml}
-    <div class="plan-req-row">${reqPills}</div>
+    <div class="plan-req-row">
+      <span class="plan-req-label" title="Each P1 input and its relative extractor-planet demand (×). The split drives how many extractor planets go to each material — brighter pills need more.">P1 inputs · × = relative extractors</span>
+      ${reqPills}
+    </div>
     ${unmetHtml}
     ${unplacedFacHtml}
     <div class="plan-section-title">Character Assignment</div>
