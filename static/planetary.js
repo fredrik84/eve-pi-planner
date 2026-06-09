@@ -1964,9 +1964,10 @@ function renderFinalPlan(data, opts = {}) {
         <tbody>${lineRows}</tbody>
       </table>` : ''}
       ${importHtml}`;
-    // Build templates from the ACTUAL placements so each factory's command-centre level
-    // and planet type (→ diameter → fit) match where it landed. Distinct (type, ptype, cc)
-    // combos → one token `tid:::cc:ptype` each (lp/count blank = per-tier defaults).
+    // Build templates from the ACTUAL placements so each planet's command-centre level +
+    // planet type match the toon hosting it. Factories are tagged by the factory toon's CCU;
+    // extractors by the EXTRACTOR toon's CCU (a mixed CC5/CC4 fleet then gets the right CC for
+    // each). Token `tid:::cc:ptype`; expand=0 since we list the extractor templates explicitly.
     const combos = new Map();
     for (const a of (data.assignments || [])) {
       for (const f of (a.factory_assignments || [])) {
@@ -1974,12 +1975,20 @@ function renderFinalPlan(data, opts = {}) {
         if (!tid) continue;
         const ptype = f.planet_type && f.planet_type !== 'Any' ? f.planet_type : 'Barren';
         const cc = f.ccu || data.stats?.plan_cc || 5;
-        combos.set(`${tid}|${ptype}|${cc}`, `${tid}:::${cc}:${ptype}`);
+        combos.set(`f|${tid}|${ptype}|${cc}`, `${tid}:::${cc}:${ptype}`);
+      }
+      // One P0→P1 extractor template per (P1, this toon's CCU); planet type from the slot.
+      const ecc = a.effective_ccu || data.stats?.plan_cc || 5;
+      for (const e of (a.extractors || [])) {
+        const p1 = e.p1_type_id;
+        if (!p1) continue;
+        const ept = e.best_planet_type || (e.planet_types && e.planet_types[0]) || '';
+        combos.set(`e|${p1}|${ecc}|${ept}`, `${p1}:::${ecc}${ept ? ':' + ept : ''}`);
       }
     }
     const toks = [...combos.values()].join(',')
       || lines.map(l => l.type_id).join(',');  // fallback: unscaled, if no placements
-    templatesHref = toks ? `/api/layout/bundle?type_ids=${encodeURIComponent(toks)}&expand=1` : '';
+    templatesHref = toks ? `/api/layout/bundle?type_ids=${encodeURIComponent(toks)}&expand=0` : '';
   }
 
   content.innerHTML = `

@@ -59,15 +59,28 @@ the bundle token format is `id[:lp[:count[:cc[:planet_type]]]]` (`/api/layout/bu
 `planetary.py`, backwards compatible). `cc`/`planet_type` pass through to `generate_layout`,
 which already honours `cc_level` (CPU/PG budget) and `PLANET_DIAM[planet_type]` (bigger
 planet → longer links → fewer facilities fit), so each factory's template matches the
-**actual command-centre level and planet** it lands on. Zip filenames are tagged `…_CC{n}`
-to keep variants distinct. The fuel-block frontend builds tokens from the real placements
-(distinct `(product type_id, planet_type, ccu)` from `factory_assignments`, where each `f`
-carries `ccu` + `planet_type`); `expand=1` ships the whole P0→P1 chain scaled to the same CC
-(`bundle_templates(cc_level=, planet_type=)` → `generate_extractor_layout(cc_level=)`, which
-**shrinks to fit** — drops basic factories then extractor heads as the CC budget tightens;
-the factory takes the chosen planet type, each extractor keeps its P0's planet type). A
-genuinely impossible combo (e.g. Storm Ø30000 at CC1) still
-overflows the grid — that's the physical reason B/T is the default.
+**actual command-centre level and planet** of the toon hosting it. Zip filenames are tagged
+`…_CC{n}` to keep variants distinct. The fuel-block frontend builds tokens from the real
+placements with **`expand=0`** and lists factory + extractor templates explicitly: factory
+tokens from `factory_assignments` (distinct `(product type_id, planet_type, f.ccu)`), and one
+extractor token per `(p1_type_id, a.effective_ccu, best_planet_type)` from each assignment's
+`extractors` — so a mixed CC5/CC4 fleet gets each extractor tagged at the **extractor toon's**
+CCU, not the factory's (the old `expand=1` path leaked the factory CC onto extractors). The
+P1→P0 planet type comes from the slot's `best_planet_type`.
+
+**Extractor template = always 10 heads; basics scale.** `generate_extractor_layout` keeps all
+10 extractor heads (full P0 extraction, matching the planner's flat 48k P0/cycle model) and
+scales **only** the basic (P1) factory count down to fit a lower CC (8→6→3→1 at CC5→4→3→1).
+`generate_layout` passes `cc_level` into the tier-1 path (it previously dropped it, so extractor
+templates always came out CC5). **Factory** planets still scale by CC — the packed facility
+count (`component_factory_rate`/`_packed_rate` → `generate_layout` `max_count`) drops at lower
+CC, so the planner places more factory planets. A genuinely impossible combo (e.g. Storm Ø30000
+at CC1) still overflows the grid — that's the physical reason B/T is the default.
+
+**Per-character CCU** defaults to each toon's real ESI Command Center Upgrades skill
+(`command_center_upgrades`, skill id 2505, fetched in `esi.py`); `_build_char_list` uses the
+config override if set, else the ESI skill (≥1), else 5. The Setup→Character Roles CCU dropdown
+is a what-if override, not the source of truth.
 
 ### Factory Layout generator (`app/layout.py`)
 

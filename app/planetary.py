@@ -195,7 +195,9 @@ def download_bundle(type_ids: str, expand: int = 0):
         parts = tok.split(":")
         tid = int(parts[0])
         lp = int(parts[1]) if len(parts) > 1 and parts[1] else None
-        cnt = int(parts[2]) if len(parts) > 2 and parts[2] else 1
+        # Blank count → None so generate_layout packs the MAX facilities that fit (a full
+        # factory). Defaulting to 1 here produced single-facility "corrupted" templates.
+        cnt = int(parts[2]) if len(parts) > 2 and parts[2] else None
         cc = int(parts[3]) if len(parts) > 3 and parts[3] else None
         ptype = parts[4] if len(parts) > 4 and parts[4] else "Barren"
         tokens.append((tid, lp, cnt, cc, ptype))

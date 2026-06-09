@@ -597,8 +597,8 @@ def generate_extractor_layout(p1_id: int, planet_type: str = "Barren", launchpad
                               heads: int = EXTRACTOR_HEADS, n_basic: int = EXTRACTOR_BASICS,
                               cc_level: Optional[int] = None) -> dict:
     """One importable P0→P1 extractor template for a chosen P1 product. `cc_level` sets the
-    command-centre level (CPU/PG budget); a lower level shrinks the template (fewer basic
-    factories, then fewer extractor heads) so it still fits. Defaults to CMD_CTR_LEVEL."""
+    command-centre level (CPU/PG budget); all 10 extractor heads are always kept, and only the
+    basic (P1) factory count is scaled down to fit a lower level. Defaults to CMD_CTR_LEVEL."""
     pi_data = load_pi_data()
     types = pi_data["types"]
     sch = pi_data["schematics"][p1_id]
@@ -622,14 +622,13 @@ def generate_extractor_layout(p1_id: int, planet_type: str = "Barren", launchpad
         b["template"]["CmdCtrLv"] = cc
         return b
 
-    # Shrink to the command-centre budget: drop basic factories first, then extractor heads.
+    # Keep all 10 extractor heads (full P0 extraction); scale ONLY the basic (P1) factories
+    # down to fit the command-centre budget. A lower-CC planet thus extracts the same P0 but
+    # converts fewer P1 on-site — so the planner places more such extractor planets.
     heads, n_basic = max(1, heads), max(1, n_basic)
     built = _build(heads, n_basic)
-    while compute_resources(built["template"], struct)["over"] and (n_basic > 1 or heads > 1):
-        if n_basic > 1:
-            n_basic -= 1
-        else:
-            heads -= 1
+    while n_basic > 1 and compute_resources(built["template"], struct)["over"]:
+        n_basic -= 1
         built = _build(heads, n_basic)
     t = built["template"]
     planet = {
@@ -717,7 +716,7 @@ def generate_layout(product_id: int, planet_type: str = "Barren",
     launchpads = max(1, min(MAX_LAUNCHPADS, int(launchpads)))
 
     if tier == 1:
-        return generate_extractor_layout(product_id, planet_type, launchpads=launchpads)
+        return generate_extractor_layout(product_id, planet_type, launchpads=launchpads, cc_level=cc)
 
     if tier == 4 and planet_type not in P4_PLANET_TYPES:
         planet_type = "Barren"   # High-Tech Production Plant is Barren/Temperate only
