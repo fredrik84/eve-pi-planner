@@ -961,6 +961,15 @@ tr:hover td { background: #181d2a; }
 .plan-fac-sys-select.plan-fac-sys-warn { border-color: #6a4020; color: #cf8050; }
 .plan-fac-sys-input { background: #141f14; border: 1px solid #2a4030; color: #5ecf80; font-size: 12px; padding: 2px 6px; border-radius: 4px; width: 120px; }
 .plan-fac-sys-shortage { font-size: 11px; color: #a06030; }
+.plan-fac-type-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 14px; }
+.plan-ptype-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.plan-ptype-chip { background: #141f14; border: 1px solid #2a4030; color: #5a8070; font-size: 11px;
+  font-weight: 500; padding: 2px 9px; border-radius: 10px; cursor: pointer; transition: background 0.15s, color 0.15s, border-color 0.15s; }
+.plan-ptype-chip:hover { background: #1a2e1a; color: #6aaf80; border-color: #3a6040; }
+.plan-ptype-chip.plan-ptype-on { background: #1a3020; border-color: #3a8050; color: #5ecf80; }
+.plan-ptype-chip.plan-ptype-empty { opacity: 0.4; }
+.plan-ptype-chip.plan-ptype-empty.plan-ptype-on { opacity: 0.7; border-style: dashed; }
+.plan-ptype-shortage { margin-top: 6px; }
 .plan-fac-label { color: #5a8070 !important; font-style: italic; }
 .plan-ext-no-planet { font-size: 11px; color: #7a4030; font-style: italic; }
 

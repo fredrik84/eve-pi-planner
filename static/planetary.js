@@ -64,6 +64,7 @@ let _wiz = {
   factorySystem: '',    // override for factory system ('' = auto)
   factoryCharIds: [],   // if non-empty, only these character IDs do factories
   importComponents: [], // fuel-block component type_ids to buy/import, not produce
+  factoryPlanetTypes: ['Barren', 'Temperate'], // allowed factory planet types (fuel block)
 };
 
 let _fbBom = null;   // cached fuel-block basket components (from /api/fuelblock-bom)
@@ -1279,6 +1280,8 @@ async function _applyProfile(profile) {
   _wiz.chosenSystems = [];
   _wiz.factorySystem = profile.factory_system || '';
   _wiz.factoryCharIds = profile.factory_character_ids || [];
+  _wiz.factoryPlanetTypes = (profile.factory_planet_types && profile.factory_planet_types.length)
+    ? profile.factory_planet_types : ['Barren', 'Temperate'];
   _wiz.lastRecsData = null;
   _wiz.lastPlanData = null;
   if (isFuelBlock) await _loadProductConfig(FUEL_BLOCK_TYPE_ID, FUEL_BLOCK_LABEL);
@@ -1303,6 +1306,7 @@ async function wizardSaveProfile() {
     factory_system: _wiz.factorySystem || '',
     factory_output_per_hour: _factoryRate(),
     factory_character_ids: _wiz.factoryCharIds || [],
+    factory_planet_types: _wiz.factoryPlanetTypes || ['Barren', 'Temperate'],
   };
   try {
     const resp = await fetch('/api/profiles', {
@@ -1348,6 +1352,7 @@ async function wizardShare(includeDetails = false) {
     cs: _wiz.chosenSystems,
     cc: getSelectedConstellations(),
     ic: _wiz.importComponents || [],  // fuel-block imported component ids
+    fpt: _wiz.factoryPlanetTypes || ['Barren', 'Temperate'],  // allowed factory planet types
     mfg: _wiz.fuelblock ? _mfgRaw() : null,  // manufacturing ME selects (raw, for restore)
     plan: _wiz.lastPlanData || null,
   };
@@ -1428,6 +1433,8 @@ async function _restoreFromPayload(payload) {
   const _frEl = document.getElementById('targetFactoryRate');  // field removed; guard
   if (_frEl) _frEl.value = payload.fr ?? '';
   _wiz.factoryCharIds = payload.fc || [];
+  _wiz.factoryPlanetTypes = (payload.fpt && payload.fpt.length)
+    ? payload.fpt : ['Barren', 'Temperate'];
   if (payload.cc && payload.cc.length) {
     _applyConstellationSelection(payload.cc);
   }
@@ -1473,6 +1480,7 @@ function _planRequest(systemNames) {
     factory_character_ids: _wiz.factoryCharIds || [],
   };
   if (_wiz.fuelblock) {
+    body.factory_planet_types = _wiz.factoryPlanetTypes || ['Barren', 'Temperate'];
     if (_wiz.basketId) {
       // Custom production basket: no racial block type, no manufacturing ME, no import toggles.
       body.basket_id = _wiz.basketId;
@@ -1751,13 +1759,20 @@ function renderFinalPlan(data, opts = {}) {
   const unmetHtml = data.unassigned && data.unassigned.length
     ? `<div class="plan-warning">${data.unassigned.length} extractor slot${data.unassigned.length > 1 ? 's' : ''} unassigned — ${totalFreeSlots >= data.unassigned.length ? 'no suitable planet type available for these P0 types' : 'not enough character planet slots'}.</div>`
     : '';
+  // Allowed factory planet types → compact abbr for option labels ("B/T", "B/T/L") and a
+  // readable name list for prose warnings; single-product defaults to Barren/Temperate.
+  const facPtypes = (data.factory_planet_types && data.factory_planet_types.length)
+    ? data.factory_planet_types : ['Barren', 'Temperate'];
+  const typeAbbr = facPtypes.map(t => t[0]).join('/');
+  const typeNames = facPtypes.join('/');
+
   const totalUnplacedFac = data.assignments.reduce((s, a) =>
     s + (a.factory_assignments || []).filter(f => f.unplaced).length, 0);
   const unplacedFacHtml = totalUnplacedFac
-    ? `<div class="plan-warning">${totalUnplacedFac} factory slot${totalUnplacedFac !== 1 ? 's' : ''} unplaced — not enough Barren/Temperate planets in chosen system. Check character ext config if unexpected.</div>`
+    ? `<div class="plan-warning">${totalUnplacedFac} factory slot${totalUnplacedFac !== 1 ? 's' : ''} unplaced — not enough ${typeNames} planets in chosen system. Check character ext config if unexpected.</div>`
     : '';
 
-  // Factory system selector — dropdown from same-constellation systems with B/T counts
+  // Factory system selector — dropdown of systems with their allowed-planet-type counts.
   let facSysHtml = '';
   {
     const opts = data.factory_system_options || [];
@@ -1770,7 +1785,7 @@ function renderFinalPlan(data, opts = {}) {
     const optHtml = [...optSystems.entries()].map(([s, cnt]) => {
       const sel = s === data.factory_system ? ' selected' : '';
       const label = cnt != null
-        ? `${s}  (${cnt} B/T${cnt < needed ? ' ⚠' : ''})`
+        ? `${s}  (${cnt} ${typeAbbr}${cnt < needed ? ' ⚠' : ''})`
         : s;
       return `<option value="${_esc(s)}"${sel}>${_esc(label)}</option>`;
     }).join('');
@@ -1787,8 +1802,37 @@ function renderFinalPlan(data, opts = {}) {
         <input class="plan-fac-sys-input" id="factorySysInput" type="text"
                placeholder="System name" style="display:none">
         <span class="plan-fac-sys-need">${needed} planet${needed !== 1 ? 's' : ''} needed</span>
-        ${unplacedFac ? `<span class="plan-fac-sys-shortage">${unplacedFac} slot${unplacedFac !== 1 ? 's' : ''} unplaced — scan more Barren/Temperate planets in this system</span>` : ''}
+        ${unplacedFac ? `<span class="plan-fac-sys-shortage">${unplacedFac} slot${unplacedFac !== 1 ? 's' : ''} unplaced — scan more ${typeNames} planets in this system</span>` : ''}
       </div>`;
+  }
+
+  // Factory planet-type chips (fuel-block only) — choose which planet types factories use.
+  // Barren/Temperate are smallest (least power-grid/link footprint), so they're the default.
+  let facTypeHtml = '';
+  if (data.fuelblock) {
+    const ALL_TYPES = ['Barren', 'Temperate', 'Lava', 'Plasma', 'Gas', 'Ice', 'Oceanic', 'Storm'];
+    const available = data.available_planet_types || [];
+    const chosen = new Set(data.factory_planet_types || _wiz.factoryPlanetTypes || ['Barren', 'Temperate']);
+    // Show all standard types; grey out ones with no planets in the chosen systems.
+    const chips = ALL_TYPES.map(t => {
+      const has = available.includes(t);
+      const on = chosen.has(t);
+      const cls = `plan-ptype-chip${on ? ' plan-ptype-on' : ''}${has ? '' : ' plan-ptype-empty'}`;
+      const title = has ? `Allow factories on ${t} planets`
+                        : `No ${t} planets in the chosen system(s)`;
+      return `<button type="button" class="${cls}" data-ptype="${t}" title="${title}">${t}</button>`;
+    }).join('');
+    const unpinned = data.factory_planets_unpinned || 0;
+    const sysLabel = data.factory_system ? ` in ${_esc(data.factory_system)}` : '';
+    const shortageHtml = unpinned ? `
+      <div class="plan-warning plan-ptype-shortage">${unpinned} factory planet${unpinned !== 1 ? 's' : ''} couldn't be placed${sysLabel} — only ${[...chosen].join('/')} allowed and there aren't enough.
+        Enable more planet types above, pick a system with more planets, or scan more.</div>` : '';
+    facTypeHtml = `
+      <div class="plan-fac-type-bar">
+        <span class="plan-fac-sys-label">Factory planet types</span>
+        <div class="plan-ptype-chips" id="factoryTypeChips">${chips}</div>
+      </div>
+      ${shortageHtml}`;
   }
 
   // Character assignments
@@ -1914,8 +1958,22 @@ function renderFinalPlan(data, opts = {}) {
         <tbody>${lineRows}</tbody>
       </table>` : ''}
       ${importHtml}`;
-    const facIds = lines.map(l => l.type_id).join(',');
-    templatesHref = facIds ? `/api/layout/bundle?type_ids=${facIds}&expand=1` : '';
+    // Build templates from the ACTUAL placements so each factory's command-centre level
+    // and planet type (→ diameter → fit) match where it landed. Distinct (type, ptype, cc)
+    // combos → one token `tid:::cc:ptype` each (lp/count blank = per-tier defaults).
+    const combos = new Map();
+    for (const a of (data.assignments || [])) {
+      for (const f of (a.factory_assignments || [])) {
+        const tid = f.product && f.product.type_id;
+        if (!tid) continue;
+        const ptype = f.planet_type && f.planet_type !== 'Any' ? f.planet_type : 'Barren';
+        const cc = f.ccu || data.stats?.plan_cc || 5;
+        combos.set(`${tid}|${ptype}|${cc}`, `${tid}:::${cc}:${ptype}`);
+      }
+    }
+    const toks = [...combos.values()].join(',')
+      || lines.map(l => l.type_id).join(',');  // fallback: unscaled, if no placements
+    templatesHref = toks ? `/api/layout/bundle?type_ids=${encodeURIComponent(toks)}&expand=1` : '';
   }
 
   content.innerHTML = `
@@ -1926,6 +1984,7 @@ function renderFinalPlan(data, opts = {}) {
     ${statsHtml}
     ${fbHtml}
     ${facSysHtml}
+    ${facTypeHtml}
     <div class="plan-req-row">${reqPills}</div>
     ${unmetHtml}
     ${unplacedFacHtml}
@@ -1955,6 +2014,25 @@ function renderFinalPlan(data, opts = {}) {
       if (e.key === 'Enter' && facInput.value.trim()) {
         _rerunWithFactorySystem(facInput.value.trim());
       }
+    });
+  }
+  const typeChips = content.querySelector('#factoryTypeChips');
+  if (typeChips) {
+    typeChips.addEventListener('click', e => {
+      const btn = e.target.closest('.plan-ptype-chip');
+      if (!btn) return;
+      const t = btn.dataset.ptype;
+      const cur = new Set(_wiz.factoryPlanetTypes || ['Barren', 'Temperate']);
+      if (cur.has(t)) {
+        if (cur.size === 1) return;  // keep at least one type selected
+        cur.delete(t);
+      } else {
+        cur.add(t);
+      }
+      // Preserve a stable order matching the chip row.
+      const ORDER = ['Barren', 'Temperate', 'Lava', 'Plasma', 'Gas', 'Ice', 'Oceanic', 'Storm'];
+      _wiz.factoryPlanetTypes = ORDER.filter(x => cur.has(x));
+      _rerunPlan();
     });
   }
   const opInput = content.querySelector('#planOverprodInput');

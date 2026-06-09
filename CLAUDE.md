@@ -33,6 +33,39 @@ extracted to de-duplicate the two run functions (~150 lines of copy-paste).
 
 (The old `planner_v1.py` pre-refactor backup has been deleted.)
 
+**Factory planet-type filter.** `FuelBlockPlanRequest.factory_planet_types` (None →
+`DEFAULT_FACTORY_PLANET_TYPES = ["Barren","Temperate"]`, the smallest planets / least link
++ power-grid footprint) restricts where factory planets are placed. `_factory_candidates`
+(in `planner.py`, shared) takes `allowed_types=[...]` (the old `only_bt=True` =
+`["Barren","Temperate"]`); it filters the pool **and** the per-system option counts, Barren
+first. The no-DB-planet fallback in `_assign_fuelblock_factories` tags slots with the first
+allowed type (was `"Any"`) so templates get a concrete type/diameter. The plan result
+echoes `factory_planet_types` (chosen) + `available_planet_types` (distinct types actually
+in the chosen systems, via `_available_factory_planet_types`). Fuel-block lines are P1–P3
+so any type physically works; **P4 stays Barren/Temperate** (single-product planner keeps
+`only_bt=True`, and `generate_layout` coerces P4 anyway). UI: plan-step chip row
+(`#factoryTypeChips`, `_wiz.factoryPlanetTypes`, live `_rerunPlan`), greyed for types with
+no planets, can't deselect the last. Persisted in profiles (`factory_planet_types` column)
++ shares (`fpt`). **Shortage warning:** factory planets that can't get a real planet of the
+allowed types in the factory system are tagged with the fallback type + `planet_num=None`
+(they do NOT count toward `unplaced_factories`, which is the separate "ran out of character
+*slots*" case). The result reports `factory_planets_unpinned` (count of `planet_num=None`
+factory assignments when `best_fac_system` is set); the UI shows a `.plan-ptype-shortage`
+warning under the chips that clears when the user widens the planet types (more real planets
+become available → unpinned drops to 0).
+
+**CCU + planet-size scaled templates.** The PI Templates (.zip) was hardcoded to CC5; now
+the bundle token format is `id[:lp[:count[:cc[:planet_type]]]]` (`/api/layout/bundle` in
+`planetary.py`, backwards compatible). `cc`/`planet_type` pass through to `generate_layout`,
+which already honours `cc_level` (CPU/PG budget) and `PLANET_DIAM[planet_type]` (bigger
+planet → longer links → fewer facilities fit), so each factory's template matches the
+**actual command-centre level and planet** it lands on. Zip filenames are tagged `…_CC{n}`
+to keep variants distinct. The fuel-block frontend builds tokens from the real placements
+(distinct `(product type_id, planet_type, ccu)` from `factory_assignments`, where each `f`
+carries `ccu` + `planet_type`); `expand=1` still ships the P0→P1 chain (kept at default CC —
+extractors are small). A genuinely impossible combo (e.g. Storm Ø30000 at CC1) still
+overflows the grid — that's the physical reason B/T is the default.
+
 ### Factory Layout generator (`app/layout.py`)
 
 Separate feature from the multi-character planner. Pick any product **P1–P4** and get

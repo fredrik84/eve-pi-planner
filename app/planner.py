@@ -697,6 +697,7 @@ def ensure_profile_tables():
             ("factory_output_per_hour","REAL"),
             ("factory_character_ids",  "TEXT NOT NULL DEFAULT '[]'"),
             ("max_jumps",              "INTEGER NOT NULL DEFAULT 1"),
+            ("factory_planet_types",   "TEXT NOT NULL DEFAULT '[]'"),
         ]:
             if col not in cols:
                 try:
@@ -719,6 +720,7 @@ class ProfileSave(BaseModel):
     factory_output_per_hour: Optional[float] = None
     factory_character_ids: list[int] = []
     max_jumps: int = 1
+    factory_planet_types: list[str] = []
 
 
 @router.get("/api/profiles")
@@ -730,7 +732,8 @@ def list_profiles(pp_session: str = Cookie(default=None)):
     con = get_connection()
     rows = con.execute(
         "SELECT id, name, type_id, type_name, overproduction_pct, preferred_systems, "
-        "constellations, use_existing, factory_system, factory_output_per_hour, factory_character_ids, max_jumps "
+        "constellations, use_existing, factory_system, factory_output_per_hour, factory_character_ids, max_jumps, "
+        "factory_planet_types "
         "FROM pp_profiles WHERE context_id=? ORDER BY name",
         (context_id,),
     ).fetchall()
@@ -741,7 +744,8 @@ def list_profiles(pp_session: str = Cookie(default=None)):
          "use_existing":            bool(r["use_existing"]),
          "factory_system":          r["factory_system"] or "",
          "factory_output_per_hour": r["factory_output_per_hour"],
-         "factory_character_ids":   _json.loads(r["factory_character_ids"] or "[]")}
+         "factory_character_ids":   _json.loads(r["factory_character_ids"] or "[]"),
+         "factory_planet_types":    _json.loads(r["factory_planet_types"] or "[]")}
         for r in rows
     ]}
 
@@ -754,12 +758,13 @@ def save_profile(req: ProfileSave, context_id: int = Depends(require_context)):
         INSERT OR REPLACE INTO pp_profiles
             (context_id, name, type_id, type_name, overproduction_pct, preferred_systems,
              constellations, use_existing, factory_system, factory_output_per_hour,
-             factory_character_ids, max_jumps)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             factory_character_ids, max_jumps, factory_planet_types)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (context_id, req.name, req.type_id, req.type_name, req.overproduction_pct,
           req.preferred_systems, _json.dumps(req.constellations),
           1 if req.use_existing else 0, req.factory_system or "",
-          req.factory_output_per_hour, _json.dumps(req.factory_character_ids), req.max_jumps))
+          req.factory_output_per_hour, _json.dumps(req.factory_character_ids), req.max_jumps,
+          _json.dumps(req.factory_planet_types)))
     con.commit()
     con.close()
     return {"ok": True}
@@ -1497,12 +1502,21 @@ def _fetch_planets_and_recs(con, all_p0_names, req, types, p1_info_raw):
     return p0_planet_lists, p0_planet_lists_global, best_ptypes, sys_recs
 
 
-def _factory_candidates(con, req, only_bt: bool):
+def _factory_candidates(con, req, only_bt: bool = False, allowed_types: list[str] | None = None):
     """Factory-planet DB candidates + per-system options for the UI picker.
-    only_bt restricts to Barren/Temperate (single-product B/T factories); when False
-    any planet type qualifies (fuel-block P1/P2/P3 lines run on any planet).
-    Returns (fac_pool, factory_system_options, sys_fac_capacity)."""
-    type_clause = "planet_type IN ('Barren','Temperate')"
+    `allowed_types` restricts the pool to those planet types (Barren first in the
+    placement order); pass e.g. ['Barren','Temperate'] for the fuel-block default. When
+    None, any planet type qualifies. `only_bt=True` is shorthand for the B/T restriction
+    (single-product factories). Returns (fac_pool, factory_system_options, sys_fac_capacity)."""
+    if only_bt and allowed_types is None:
+        allowed_types = ["Barren", "Temperate"]
+    # Build the planet_type IN (...) restriction (None → unrestricted)
+    if allowed_types:
+        type_clause = "planet_type IN ({})".format(",".join("?" * len(allowed_types)))
+        type_params = list(allowed_types)
+    else:
+        type_clause, type_params = "", []
+
     fac_filter, fac_params = "", []
     fac_systems = list({*req.chosen_systems, req.factory_system}) if req.factory_system else list(req.chosen_systems)
     if fac_systems:
@@ -1512,9 +1526,10 @@ def _factory_candidates(con, req, only_bt: bool):
         fac_filter = " AND constellation IN ({})".format(",".join("?" * len(req.constellations)))
         fac_params = list(req.constellations)
 
-    if only_bt:
+    if type_clause:
         where = f"WHERE {type_clause}{fac_filter}"
         order = "ORDER BY CASE planet_type WHEN 'Barren' THEN 0 ELSE 1 END, system, planet_num"
+        fac_params = type_params + fac_params
     else:
         where = f"WHERE 1=1{fac_filter}"
         order = "ORDER BY system, planet_num"
@@ -1538,12 +1553,12 @@ def _factory_candidates(con, req, only_bt: bool):
             chosen_consts = list(req.constellations)
         if chosen_consts:
             cc_ph = ",".join("?" * len(chosen_consts))
-            opt_type = f"{type_clause} AND " if only_bt else ""
+            opt_type = f"{type_clause} AND " if type_clause else ""
             fac_opts_rows = con.execute(
                 f"SELECT system, constellation, COUNT(*) as cnt FROM pp_planets "
                 f"WHERE {opt_type}constellation IN ({cc_ph}) "
                 f"GROUP BY system ORDER BY cnt DESC",
-                chosen_consts,
+                type_params + chosen_consts,
             ).fetchall()
             factory_system_options = [
                 {"system": r["system"], "constellation": r["constellation"], "count": r["cnt"]}

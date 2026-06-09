@@ -178,14 +178,15 @@ def download_layout(type_id: int, planet_type: str = "Barren", launchpads: Optio
 def download_bundle(type_ids: str, expand: int = 0):
     """
     Return a ZIP of templates for one or more products (comma-separated `type_ids`).
-    With expand=1, each product also includes the P0→P1 extractor templates for its
-    whole chain (used by the planner's 'all templates' download). Launchpads default
-    per tier (3 factory / 1 extractor).
+    Each token is `id[:launchpads[:count[:cc[:planet_type]]]]` — the optional `cc`
+    (command-centre level 1–5) and `planet_type` scale the factory template to where it
+    actually lands (a lower CC fits fewer facilities; a larger planet → longer links →
+    more grid). With expand=1, each product also includes the P0→P1 extractor templates
+    for its whole chain. Launchpads default per tier (3 factory / 1 extractor).
     """
     import io, json, zipfile
     from fastapi import Response
     from app.layout import generate_layout, bundle_templates
-    # each token is "id", "id:launchpads" or "id:launchpads:count"
     tokens = []
     for tok in type_ids.split(","):
         tok = tok.strip()
@@ -195,29 +196,46 @@ def download_bundle(type_ids: str, expand: int = 0):
         tid = int(parts[0])
         lp = int(parts[1]) if len(parts) > 1 and parts[1] else None
         cnt = int(parts[2]) if len(parts) > 2 and parts[2] else 1
-        tokens.append((tid, lp, cnt))
+        cc = int(parts[3]) if len(parts) > 3 and parts[3] else None
+        ptype = parts[4] if len(parts) > 4 and parts[4] else "Barren"
+        tokens.append((tid, lp, cnt, cc, ptype))
     if not tokens:
         raise HTTPException(status_code=400, detail="no type_ids given")
     items: list[tuple] = []
     seen: set[str] = set()
     try:
-        for tid, lp, cnt in tokens:
+        for tid, lp, cnt, cc, ptype in tokens:
             if expand:
-                pairs = bundle_templates(tid)
+                # P0→P1 chain stays at default CC/type (small footprint); only the top
+                # factory product is scaled to the host CC + planet type.
+                pairs = []
+                for name, tmpl in bundle_templates(tid):
+                    pairs.append((name, tmpl))
+                top = generate_layout(tid, planet_type=ptype, launchpads=lp, count=cnt, cc_level=cc)
+                pairs[0] = (top["planets"][0]["name"], top["planets"][0]["template"])
             else:
-                r = generate_layout(tid, launchpads=lp, count=cnt)
+                r = generate_layout(tid, planet_type=ptype, launchpads=lp, count=cnt, cc_level=cc)
                 pairs = [(r["planets"][0]["name"], r["planets"][0]["template"])]
             for name, tmpl in pairs:
-                if name not in seen:
-                    seen.add(name)
+                # Disambiguate per (planet type, CC) variants so they don't collide in the zip.
+                key = f"{name}|CC{tmpl.get('CmdCtrLv', 5)}"
+                if key not in seen:
+                    seen.add(key)
                     items.append((name, tmpl))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        used: set[str] = set()
         for name, tmpl in items:
-            z.writestr(_safe_filename(name) + ".json", json.dumps(tmpl))
+            fname = f"{_safe_filename(name)}_CC{tmpl.get('CmdCtrLv', 5)}"
+            # Guard against any residual filename collision.
+            base, n = fname, 2
+            while fname in used:
+                fname = f"{base}_{n}"; n += 1
+            used.add(fname)
+            z.writestr(fname + ".json", json.dumps(tmpl))
     buf.seek(0)
     return Response(content=buf.read(), media_type="application/zip",
                     headers={"Content-Disposition": 'attachment; filename="pi_templates.zip"'})

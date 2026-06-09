@@ -37,6 +37,31 @@ from app.planner import (
 
 router = APIRouter()
 
+# Default factory planet types: Barren/Temperate are the smallest planets with the
+# smallest link/power-grid footprint, so factory templates fit most easily there.
+DEFAULT_FACTORY_PLANET_TYPES = ["Barren", "Temperate"]
+
+
+def _available_factory_planet_types(con, req) -> list[str]:
+    """Distinct planet types present in the factory-system/constellation scope, so the UI
+    can offer only types that actually have planets to place factories on."""
+    where, params = "", []
+    fac_systems = list({*req.chosen_systems, req.factory_system}) if req.factory_system \
+        else list(req.chosen_systems)
+    if fac_systems:
+        where = "WHERE system IN ({})".format(",".join("?" * len(fac_systems)))
+        params = fac_systems
+    elif req.constellations:
+        where = "WHERE constellation IN ({})".format(",".join("?" * len(req.constellations)))
+        params = list(req.constellations)
+    try:
+        rows = con.execute(
+            f"SELECT DISTINCT planet_type FROM pp_planets {where} ORDER BY planet_type", params
+        ).fetchall()
+        return [r["planet_type"] for r in rows if r["planet_type"]]
+    except Exception:
+        return []
+
 
 class FuelBlockPlanRequest(BaseModel):
     """Multi-product target: the whole fuel-block basket (FUEL_BLOCK_BOM). Same
@@ -53,6 +78,9 @@ class FuelBlockPlanRequest(BaseModel):
     basket_id: int | None = None  # None = built-in fuel block; else a custom basket (pp_baskets)
     block_type: str = "Oxygen"  # cosmetic — PI side identical across racial blocks
     import_components: list[int] = []  # component type_ids to buy/import instead of produce
+    # Allowed factory planet types (None → Barren/Temperate: smallest planets, least
+    # link/power-grid footprint). Fuel-block lines are P1–P3 so any type physically works.
+    factory_planet_types: list[str] | None = None
     # Manufacturing material efficiency (material only — build time ignored). Factors stack
     # MULTIPLICATIVELY: Engineering Complex hull (1%), the Structure Manufacturing ME rig
     # (T1 −2% / T2 −2.4% base × security multiplier), and blueprint ME. The rig's security
@@ -190,12 +218,14 @@ def _assign_fuelblock_factories(
     char_nonfac: dict[int, list],
     req,
     has_system_name: bool,
+    fallback_planet_type: str = "Barren",
 ) -> int:
     """Place the per-line factory planets across characters, tagging each with its
-    component product. Fuel-block factories are P1/P2/P3 → they run on ANY planet
-    type, so (unlike the single-product B/T machinery) any free planet qualifies.
-    Mutates assignments; returns the number of factory planets that couldn't be
-    placed (out of slots)."""
+    component product. Fuel-block factories are P1/P2/P3 → they run on any of the chosen
+    factory planet types (the pool is already restricted to those). When no concrete DB
+    planet is available, the slot is tagged with `fallback_planet_type` (the first chosen
+    type) so the generated template still has a real planet type/diameter.
+    Mutates assignments; returns the number of factory planets that couldn't be placed."""
     # Expand the per-line counts into a tagged queue (clusters same-component planets).
     queue: list[dict] = []
     for line in factory_lines:
@@ -258,9 +288,10 @@ def _assign_fuelblock_factories(
                         "is_existing": False, "is_replace": False, "is_new": True,
                         "product": comp,
                     })
-                else:  # any-planet factory with no concrete DB planet to pin
+                else:  # no concrete DB planet to pin — tag with the first chosen type
                     fac_assigns.append({
-                        "system": best_fac_system, "planet_num": None, "planet_type": "Any",
+                        "system": best_fac_system, "planet_num": None,
+                        "planet_type": fallback_planet_type,
                         "is_existing": False, "is_replace": False, "is_new": True,
                         "product": comp,
                     })
@@ -380,11 +411,17 @@ def _run_fuelblock_plan(req: "FuelBlockPlanRequest", context_id: int) -> dict:
     p0_planet_lists, p0_planet_lists_global, best_ptypes, sys_recs = _fetch_planets_and_recs(
         con, all_p0_names, req, types, p1_info_raw)
 
-    # Factory candidates: ANY planet type (fuel-block lines are P1/P2/P3).
+    # Factory candidates restricted to the chosen planet types (default Barren/Temperate:
+    # smallest footprint). Fuel-block lines are P1/P2/P3, so any type physically works.
+    allowed_types = req.factory_planet_types or list(DEFAULT_FACTORY_PLANET_TYPES)
     fac_pool, factory_system_options, sys_fac_capacity = _factory_candidates(
-        con, req, only_bt=False)
+        con, req, allowed_types=allowed_types)
     for rec in sys_recs:
         rec["factory_capacity"] = {s: sys_fac_capacity.get(s, 0) for s in rec["systems_needed"]}
+
+    # Planet types actually present in the factory scope, so the UI can show which are
+    # selectable (and grey out types with no planets in the chosen systems/constellations).
+    available_planet_types = _available_factory_planet_types(con, req)
 
     con.close()
 
@@ -435,6 +472,7 @@ def _run_fuelblock_plan(req: "FuelBlockPlanRequest", context_id: int) -> dict:
     unplaced_factories = _assign_fuelblock_factories(
         assignments, char_list, factory_lines, factory_shares, auto_mode,
         fac_pool, best_fac_system, char_nonfac, req, has_system_name,
+        fallback_planet_type=allowed_types[0] if allowed_types else "Barren",
     )
 
     # Realised factory output: each placed factory planet runs at its host character's
@@ -475,6 +513,15 @@ def _run_fuelblock_plan(req: "FuelBlockPlanRequest", context_id: int) -> dict:
     all_assignments = sorted(assignments, key=lambda a: a["character_name"])
     total_extractors = sum(len(a["extractors"]) for a in all_assignments)
     total_factory_planets = sum(a["factory_planets"] for a in all_assignments)
+
+    # Factory planets that wanted a real planet in the factory system but couldn't get one
+    # of the allowed types (tagged with the fallback type, planet_num=None). This is the
+    # "too few factory planets" shortage — it clears when the user widens the planet types
+    # (or scans more planets). Only meaningful when a concrete factory system was chosen.
+    factory_planets_unpinned = sum(
+        1 for a in all_assignments for f in a.get("factory_assignments", [])
+        if f.get("planet_num") is None
+    ) if best_fac_system else 0
 
     quality_vals = [
         slot["quality_pct"] for a in all_assignments for slot in a["extractors"]
@@ -529,6 +576,9 @@ def _run_fuelblock_plan(req: "FuelBlockPlanRequest", context_id: int) -> dict:
         "factory_character_ids": req.factory_character_ids,
         "factory_system":        best_fac_system,
         "factory_system_options": factory_system_options,
+        "factory_planet_types":  allowed_types,
+        "available_planet_types": available_planet_types,
+        "factory_planets_unpinned": factory_planets_unpinned,
         "factory_planets_needed": total_factory_planets,
         "factory_planets_by_system": [
             {"system": s, "count": c, "type": "Any"}
