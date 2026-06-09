@@ -565,21 +565,24 @@ def _chain_p1s(product_id: int, pi_data: dict) -> list[int]:
     return sorted(found)
 
 
-def bundle_templates(product_id: int) -> list[tuple]:
+def bundle_templates(product_id: int, cc_level: Optional[int] = None,
+                     planet_type: Optional[str] = None) -> list[tuple]:
     """
     All templates needed to produce `product_id`, as (name, template) pairs:
     the factory template for the product itself, plus one P0→P1 extractor template
     for every distinct P1 the chain consumes. For a P1 product it's just the extractor.
-    Launchpads default per tier (3 factory / 1 extractor).
+    `cc_level` scales every template to that command-centre level (the factory and its
+    extractors); `planet_type` applies to the factory only — each extractor keeps the
+    planet type its P0 is harvested on. Launchpads default per tier (3 factory / 1 extractor).
     """
     pi_data = load_pi_data()
     tier = pi_data["types"][product_id].get("pi_tier")
     out: list[tuple] = []
-    main = generate_layout(product_id)
+    main = generate_layout(product_id, planet_type=planet_type or "Barren", cc_level=cc_level)
     out.append((main["planets"][0]["name"], main["planets"][0]["template"]))
     if tier and tier >= 2:
         for p1 in _chain_p1s(product_id, pi_data):
-            ex = generate_extractor_layout(p1)
+            ex = generate_extractor_layout(p1, cc_level=cc_level)
             out.append((ex["planets"][0]["name"], ex["planets"][0]["template"]))
     return out
 
@@ -591,8 +594,11 @@ def _p0_planets(p0_name: str) -> list[str]:
 
 
 def generate_extractor_layout(p1_id: int, planet_type: str = "Barren", launchpads: int = 1,
-                              heads: int = EXTRACTOR_HEADS, n_basic: int = EXTRACTOR_BASICS) -> dict:
-    """One importable P0→P1 extractor template for a chosen P1 product."""
+                              heads: int = EXTRACTOR_HEADS, n_basic: int = EXTRACTOR_BASICS,
+                              cc_level: Optional[int] = None) -> dict:
+    """One importable P0→P1 extractor template for a chosen P1 product. `cc_level` sets the
+    command-centre level (CPU/PG budget); a lower level shrinks the template (fewer basic
+    factories, then fewer extractor heads) so it still fits. Defaults to CMD_CTR_LEVEL."""
     pi_data = load_pi_data()
     types = pi_data["types"]
     sch = pi_data["schematics"][p1_id]
@@ -608,8 +614,23 @@ def generate_extractor_layout(p1_id: int, planet_type: str = "Barren", launchpad
     struct["planet_type_id"] = r["type_id"] if r else None
     con.close()
 
-    built = build_extractor_template(p1_id, planet_type, struct, pi_data, heads, n_basic,
-                                     n_launchpads=max(1, min(MAX_LAUNCHPADS, launchpads)))
+    cc = CMD_CTR_LEVEL if cc_level is None else max(1, min(5, int(cc_level)))
+    lp = max(1, min(MAX_LAUNCHPADS, launchpads))
+
+    def _build(h, nb):
+        b = build_extractor_template(p1_id, planet_type, struct, pi_data, h, nb, n_launchpads=lp)
+        b["template"]["CmdCtrLv"] = cc
+        return b
+
+    # Shrink to the command-centre budget: drop basic factories first, then extractor heads.
+    heads, n_basic = max(1, heads), max(1, n_basic)
+    built = _build(heads, n_basic)
+    while compute_resources(built["template"], struct)["over"] and (n_basic > 1 or heads > 1):
+        if n_basic > 1:
+            n_basic -= 1
+        else:
+            heads -= 1
+        built = _build(heads, n_basic)
     t = built["template"]
     planet = {
         "id": 1, "name": built["name"],

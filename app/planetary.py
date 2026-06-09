@@ -206,13 +206,9 @@ def download_bundle(type_ids: str, expand: int = 0):
     try:
         for tid, lp, cnt, cc, ptype in tokens:
             if expand:
-                # P0→P1 chain stays at default CC/type (small footprint); only the top
-                # factory product is scaled to the host CC + planet type.
-                pairs = []
-                for name, tmpl in bundle_templates(tid):
-                    pairs.append((name, tmpl))
-                top = generate_layout(tid, planet_type=ptype, launchpads=lp, count=cnt, cc_level=cc)
-                pairs[0] = (top["planets"][0]["name"], top["planets"][0]["template"])
+                # Scale the whole chain to the host CC: the factory takes the chosen planet
+                # type, each P0→P1 extractor keeps the planet type its P0 grows on.
+                pairs = bundle_templates(tid, cc_level=cc, planet_type=ptype)
             else:
                 r = generate_layout(tid, planet_type=ptype, launchpads=lp, count=cnt, cc_level=cc)
                 pairs = [(r["planets"][0]["name"], r["planets"][0]["template"])]

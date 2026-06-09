@@ -62,8 +62,11 @@ planet → longer links → fewer facilities fit), so each factory's template ma
 **actual command-centre level and planet** it lands on. Zip filenames are tagged `…_CC{n}`
 to keep variants distinct. The fuel-block frontend builds tokens from the real placements
 (distinct `(product type_id, planet_type, ccu)` from `factory_assignments`, where each `f`
-carries `ccu` + `planet_type`); `expand=1` still ships the P0→P1 chain (kept at default CC —
-extractors are small). A genuinely impossible combo (e.g. Storm Ø30000 at CC1) still
+carries `ccu` + `planet_type`); `expand=1` ships the whole P0→P1 chain scaled to the same CC
+(`bundle_templates(cc_level=, planet_type=)` → `generate_extractor_layout(cc_level=)`, which
+**shrinks to fit** — drops basic factories then extractor heads as the CC budget tightens;
+the factory takes the chosen planet type, each extractor keeps its P0's planet type). A
+genuinely impossible combo (e.g. Storm Ø30000 at CC1) still
 overflows the grid — that's the physical reason B/T is the default.
 
 ### Factory Layout generator (`app/layout.py`)
