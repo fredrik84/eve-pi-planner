@@ -128,7 +128,9 @@ def _compute_fuelblock_budget(
     """
     factory_comps = [c for c in components if c["is_factory"]]
     kk = 48_000 * 24
-    op = 1 + op_pct / 100
+    # Overproduction: extractors must supply op× the P1 need. Clamped to ≥1 (0%) — negative
+    # overproduction only over-builds factories the extractors can't feed, collapsing output.
+    op = max(1.0, 1 + op_pct / 100)
     sum_p1 = sum(basket_p1_reqs.values())
 
     rate_of: dict[int, float] = {}
@@ -181,7 +183,10 @@ def _compute_fuelblock_budget(
         for nfac in range(f_lo, max(f_lo, f_hi) + 1):
             cnt = _alloc(nfac)
             fac_b = _fac_baskets(cnt)
-            ext_b = (N - nfac) * kk / (sum_p1 * 150) if sum_p1 > 0 else float("inf")
+            # Extractor-supplied baskets/day. Overproduction (op) makes each basket need op×
+            # the P1 extraction, so the same extractor slots sustain fewer factory baskets —
+            # shifting the optimal split toward more extractors (extractors overproduce).
+            ext_b = (N - nfac) * kk / (sum_p1 * 150 * op) if sum_p1 > 0 else float("inf")
             blocks = min(fac_b, ext_b)
             if blocks > best_blocks:
                 best_blocks, factories_total, counts = blocks, nfac, cnt
@@ -597,7 +602,7 @@ def _run_fuelblock_plan(req: "FuelBlockPlanRequest", context_id: int) -> dict:
             "avg_quality_pct":          avg_quality_pct,
             "avg_p0_per_cycle":         avg_p0_per_cycle,
             "actual_p0_per_day":        round(_actual_p0_per_day),
-            "overproduction_pct":       req.overproduction_pct,
+            "overproduction_pct":       max(0, req.overproduction_pct),
             "plan_cc":                  plan_cc,
             "ccu_mixed":                len({c["effective_ccu"] for c in char_list}) > 1,
             "material_efficiency_pct":  effective_me_pct,

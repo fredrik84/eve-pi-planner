@@ -1719,11 +1719,13 @@ function renderFinalPlan(data, opts = {}) {
         </div>`;
     }
     const targetOverprod = parseInt((document.getElementById('targetOverprod') || {}).value);
-    const opVal = Number.isNaN(targetOverprod) ? 10 : targetOverprod;
+    // Clamp to ≥0: negative overproduction just builds factories the extractors can't feed
+    // (output collapses), so it's never useful.
+    const opVal = Number.isNaN(targetOverprod) ? 10 : Math.max(0, targetOverprod);
     statsHtml = `
       <div class="plan-stats-bar">
-        <div class="plan-stat plan-stat-edit" title="Target overproduction % — edit and the plan recalculates. 10% means extractors produce 10% more P0 than factories need. Negative = extractors can't keep up. Reported baseline: ${s.overproduction_pct >= 0 ? '+' : ''}${s.overproduction_pct}%.">
-          <span class="plan-stat-val ${s.overproduction_pct < 0 ? 'plan-stat-warn' : 'plan-stat-ok'}"><input type="number" id="planOverprodInput" class="plan-overprod-input" value="${opVal}" min="-99" max="500" step="5">% overprod</span>
+        <div class="plan-stat plan-stat-edit" title="Target overproduction % — edit and the plan recalculates. 10% means extractors produce 10% more P0 than factories need. Reported baseline: ${s.overproduction_pct >= 0 ? '+' : ''}${s.overproduction_pct}%.">
+          <span class="plan-stat-val ${s.overproduction_pct < 0 ? 'plan-stat-warn' : 'plan-stat-ok'}"><input type="number" id="planOverprodInput" class="plan-overprod-input" value="${opVal}" min="0" max="500" step="5">% overprod</span>
           <span class="plan-stat-lbl">${s.factories} factories${s.max_supportable_factories != null ? ' · max ' + s.max_supportable_factories : ''}</span>
         </div>
         <div class="plan-stat">
@@ -2040,7 +2042,8 @@ function renderFinalPlan(data, opts = {}) {
     const applyOverprod = () => {
       let v = parseInt(opInput.value);
       if (Number.isNaN(v)) return;
-      v = Math.max(-99, Math.min(500, v));
+      v = Math.max(0, Math.min(500, v));
+      if (parseInt(opInput.value) !== v) opInput.value = v;  // reflect the clamp in the field
       const store = document.getElementById('targetOverprod');
       if (store && parseInt(store.value) === v) return;  // unchanged → skip re-run
       if (store) store.value = v;
@@ -2053,7 +2056,7 @@ function renderFinalPlan(data, opts = {}) {
     opInput.addEventListener('wheel', e => {
       e.preventDefault();
       const cur = parseInt(opInput.value) || 0;
-      opInput.value = Math.max(-99, Math.min(500, cur + (e.deltaY < 0 ? 5 : -5)));
+      opInput.value = Math.max(0, Math.min(500, cur + (e.deltaY < 0 ? 5 : -5)));
       clearTimeout(_overprodTimer);
       _overprodTimer = setTimeout(applyOverprod, 150);
     }, { passive: false });
