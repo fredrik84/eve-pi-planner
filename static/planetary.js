@@ -68,6 +68,7 @@ let _wiz = {
   factoryPlanetTypes: ['Barren', 'Temperate'], // allowed factory planet types (fuel block)
   splitMode: 'off',     // off | on — split-extraction (reuse planets → more factories)
   distMode: 'stability', // stability (count ∝ need/density) | need (∝ need)
+  minDensity: 0,        // ignore planets thinner than this % (plan + system recs); 0 = off
 };
 
 let _fbBom = null;   // cached fuel-block basket components (from /api/fuelblock-bom)
@@ -1375,6 +1376,8 @@ async function _applyProfile(profile) {
   else if (prod) document.getElementById('targetProduct').value = prod.name;
   document.getElementById('targetOverprod').value = profile.overproduction_pct ?? 10;
   document.getElementById('targetSystems').value = profile.preferred_systems;
+  const _mdEl = document.getElementById('targetMinDensity');
+  if (_mdEl) _mdEl.value = _wiz.minDensity || 0;
   const _mjEl = document.getElementById('targetMaxJumps');
   if (_mjEl) _mjEl.value = profile.max_jumps ?? 1;
   ppToggleMaxJumps();
@@ -1391,6 +1394,7 @@ async function _applyProfile(profile) {
     ? profile.factory_planet_types : ['Barren', 'Temperate'];
   _wiz.splitMode = (profile.split_mode && profile.split_mode !== 'off') ? 'on' : 'off';
   _wiz.distMode = (profile.distribution_mode === 'need') ? 'need' : 'stability';
+  _wiz.minDensity = parseInt(profile.min_density_pct) || 0;
   _wiz.lastRecsData = null;
   _wiz.lastPlanData = null;
   if (isFuelBlock) await _loadProductConfig(FUEL_BLOCK_TYPE_ID, FUEL_BLOCK_LABEL);
@@ -1421,6 +1425,7 @@ async function wizardSaveProfile() {
     factory_planet_types: _wiz.factoryPlanetTypes || ['Barren', 'Temperate'],
     split_mode: _wiz.splitMode || 'off',
     distribution_mode: _wiz.distMode || 'stability',
+    min_density_pct: _wiz.minDensity || 0,
   };
   try {
     const resp = await fetch('/api/profiles', {
@@ -1469,6 +1474,7 @@ async function wizardShare(includeDetails = false) {
     fpt: _wiz.factoryPlanetTypes || ['Barren', 'Temperate'],  // allowed factory planet types
     sx: _wiz.splitMode || 'off',  // split-extraction mode
     dm: _wiz.distMode || 'stability',  // distribution method
+    mdp: _wiz.minDensity || 0,  // min planet density % cap
     mfg: _wiz.fuelblock ? _mfgRaw() : null,  // manufacturing ME selects (raw, for restore)
     bk: _wiz.basketId ? _basketSnapshot(_wiz.basketId) : null,  // basket def for shared (private) baskets
     plan: _wiz.lastPlanData || null,
@@ -1561,6 +1567,7 @@ async function _restoreFromPayload(payload) {
     ? payload.fpt : ['Barren', 'Temperate'];
   _wiz.splitMode = (payload.sx && payload.sx !== 'off') ? 'on' : 'off';
   _wiz.distMode = (payload.dm === 'need') ? 'need' : 'stability';
+  _wiz.minDensity = parseInt(payload.mdp) || 0;
   if (payload.cc && payload.cc.length) {
     _applyConstellationSelection(payload.cc);
   }
@@ -1606,6 +1613,7 @@ function _planRequest(systemNames) {
     factory_character_ids: _wiz.factoryCharIds || [],
     split_mode:            _wiz.splitMode || 'off',
     distribution_mode:     _wiz.distMode || 'stability',
+    min_density_pct:       _wiz.minDensity || 0,
   };
   if (_wiz.fuelblock) {
     body.factory_planet_types = _wiz.factoryPlanetTypes || ['Barren', 'Temperate'];
@@ -2118,6 +2126,14 @@ function renderFinalPlan(data, opts = {}) {
           <span class="plan-split-seg">${distBtns}</span>
           <span class="plan-stat-lbl">distribution</span>
         </div>`;
+    // Density cap: ignore planets thinner than this %. Caps extractors on thin deposits
+    // (fewer planets, a little residual) and is most useful in Stability mode.
+    const minDens = _wiz.minDensity || 0;
+    const minDensHtml = `
+        <div class="plan-stat plan-stat-edit" title="Ignore planets thinner than this % — in the plan AND the system suggestions. Stops piling extractors onto thin deposits (e.g. a low-density gas) at the cost of a little residual on resources that then can't reach their need. 0 = use any planet that has the resource.">
+          <span class="plan-stat-val"><input type="number" id="planMinDensityInput" class="plan-overprod-input" value="${minDens}" min="0" max="100" step="5">% min density</span>
+          <span class="plan-stat-lbl">cap thin deposits</span>
+        </div>`;
     statsHtml = `
       <div class="plan-stats-bar">
         <div class="plan-stat plan-stat-edit" title="Target overproduction % — edit and the plan recalculates. 10% means extractors produce 10% more P0 than factories need. Reported baseline: ${s.overproduction_pct >= 0 ? '+' : ''}${s.overproduction_pct}%.">
@@ -2147,6 +2163,7 @@ function renderFinalPlan(data, opts = {}) {
           <span class="plan-stat-lbl">refill / factory (${s.factory_launchpads_assumed} LP)</span>
         </div>` : ''}
         ${distStatHtml}
+        ${minDensHtml}
         ${splitStatHtml}
         ${p0StatHtml}
       </div>`;
@@ -2478,6 +2495,23 @@ function renderFinalPlan(data, opts = {}) {
       _rerunPlan();
     });
   }
+  const mdInput = content.querySelector('#planMinDensityInput');
+  if (mdInput) {
+    const applyMinDensity = () => {
+      let v = parseInt(mdInput.value);
+      if (Number.isNaN(v)) return;
+      v = Math.max(0, Math.min(100, v));
+      if (parseInt(mdInput.value) !== v) mdInput.value = v;
+      if ((_wiz.minDensity || 0) === v) return;  // unchanged → skip re-run
+      _wiz.minDensity = v;
+      const setup = document.getElementById('targetMinDensity');
+      if (setup) setup.value = v;  // keep the setup field (used by Find Systems) in sync
+      _rerunPlan();
+    };
+    mdInput.addEventListener('change', applyMinDensity);
+    mdInput.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); applyMinDensity(); } });
+  }
+
   const opInput = content.querySelector('#planOverprodInput');
   if (opInput) {
     const applyOverprod = () => {

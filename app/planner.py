@@ -131,8 +131,12 @@ def _fetch_p0_planets(
     p0_names: list[str], con,
     constellations: list[str],
     systems: list[str] | None = None,
+    min_density: int = 0,
 ) -> dict[str, list[dict]]:
-    """Return {p0_name: [planets sorted by value DESC]}."""
+    """Return {p0_name: [planets sorted by value DESC]}. Planets thinner than `min_density`%
+    are excluded (the density cap), so the planner can't pile extractors onto deposits it isn't
+    worth setting up — at the cost of some residual on resources that then can't reach their need."""
+    thresh = max(0.01, float(min_density or 0))
     result: dict[str, list[dict]] = {}
     where_extra = ""
     params_base: list = []
@@ -150,8 +154,8 @@ def _fetch_p0_planets(
         try:
             rows = con.execute(
                 f"SELECT system, planet_num, planet_type, {col} as value "
-                f"FROM pp_planets WHERE {col}>0{where_extra} ORDER BY {col} DESC",
-                params_base,
+                f"FROM pp_planets WHERE {col}>=?{where_extra} ORDER BY {col} DESC",
+                [thresh] + params_base,
             ).fetchall()
             result[name] = [dict(r) for r in rows]
         except Exception:
@@ -165,7 +169,9 @@ def _system_recommendations(
     systems: list[str] | None = None,
     preferred_systems: int = 1,
     max_jumps: int = 1,
+    min_density: int = 0,
 ) -> list:
+    thresh = max(0.01, float(min_density or 0))  # density cap: a planet must beat this to count
     needed_cols = {name: _p0_col(name) for name in p0_names}
     needed_cols = {k: v for k, v in needed_cols.items() if v}
     if not needed_cols:
@@ -197,7 +203,7 @@ def _system_recommendations(
             sys_data[sname] = {"constellation": row["constellation"] or "?", "p0": {}}
         for p0_name, col in needed_cols.items():
             v = row[col] or 0
-            if v > 0:
+            if v >= thresh:
                 ex = sys_data[sname]["p0"].get(p0_name)
                 if not ex or v > ex["value"]:
                     sys_data[sname]["p0"][p0_name] = {
@@ -493,6 +499,7 @@ class PlanRequest(BaseModel):
     max_jumps: int = 1  # prefer system combos clustered within this many jumps (0–5)
     split_mode: str = "off"  # off | on — split-extraction (consolidate freed planets → factories)
     distribution_mode: str = "stability"  # stability (count ∝ need/density) | need (∝ need)
+    min_density_pct: int = 0  # ignore planets thinner than this %, in the plan AND the recs (0 = off)
 
 
 def _norm_dist_mode(v) -> str:
@@ -713,6 +720,7 @@ def ensure_profile_tables():
             ("factory_planet_types",   "TEXT NOT NULL DEFAULT '[]'"),
             ("split_mode",             "TEXT NOT NULL DEFAULT 'off'"),
             ("distribution_mode",      "TEXT NOT NULL DEFAULT 'stability'"),
+            ("min_density_pct",        "INTEGER NOT NULL DEFAULT 0"),
         ]:
             if col not in cols:
                 try:
@@ -738,6 +746,7 @@ class ProfileSave(BaseModel):
     factory_planet_types: list[str] = []
     split_mode: str = "off"
     distribution_mode: str = "stability"
+    min_density_pct: int = 0
 
 
 @router.get("/api/profiles")
@@ -750,7 +759,7 @@ def list_profiles(pp_session: str = Cookie(default=None)):
     rows = con.execute(
         "SELECT id, name, type_id, type_name, overproduction_pct, preferred_systems, "
         "constellations, use_existing, factory_system, factory_output_per_hour, factory_character_ids, max_jumps, "
-        "factory_planet_types, split_mode, distribution_mode "
+        "factory_planet_types, split_mode, distribution_mode, min_density_pct "
         "FROM pp_profiles WHERE context_id=? ORDER BY name",
         (context_id,),
     ).fetchall()
@@ -764,7 +773,8 @@ def list_profiles(pp_session: str = Cookie(default=None)):
          "factory_character_ids":   _json.loads(r["factory_character_ids"] or "[]"),
          "factory_planet_types":    _json.loads(r["factory_planet_types"] or "[]"),
          "split_mode":              r["split_mode"] or "off",
-         "distribution_mode":       r["distribution_mode"] or "stability"}
+         "distribution_mode":       r["distribution_mode"] or "stability",
+         "min_density_pct":         r["min_density_pct"] or 0}
         for r in rows
     ]}
 
@@ -777,14 +787,15 @@ def save_profile(req: ProfileSave, context_id: int = Depends(require_context)):
         INSERT OR REPLACE INTO pp_profiles
             (context_id, name, type_id, type_name, overproduction_pct, preferred_systems,
              constellations, use_existing, factory_system, factory_output_per_hour,
-             factory_character_ids, max_jumps, factory_planet_types, split_mode, distribution_mode)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             factory_character_ids, max_jumps, factory_planet_types, split_mode, distribution_mode,
+             min_density_pct)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (context_id, req.name, req.type_id, req.type_name, req.overproduction_pct,
           req.preferred_systems, _json.dumps(req.constellations),
           1 if req.use_existing else 0, req.factory_system or "",
           req.factory_output_per_hour, _json.dumps(req.factory_character_ids), req.max_jumps,
           _json.dumps(req.factory_planet_types), _norm_split_mode(req.split_mode),
-          _norm_dist_mode(req.distribution_mode)))
+          _norm_dist_mode(req.distribution_mode), max(0, min(100, int(req.min_density_pct or 0)))))
     con.commit()
     con.close()
     return {"ok": True}
@@ -1894,10 +1905,13 @@ def _build_p1_info_raw(p1_demand: dict, p1_to_p0: dict, types: dict):
 def _fetch_planets_and_recs(con, all_p0_names, req, types, p1_info_raw):
     """Fetch the scoped + global P0 planet lists, the best planet type per P0, and the
     system recommendations (annotated with p1_name). Shared by both plan paths."""
+    _min_density = getattr(req, "min_density_pct", 0) or 0
     p0_planet_lists = _fetch_p0_planets(
         all_p0_names, con, constellations=req.constellations,
         systems=req.chosen_systems if req.chosen_systems else None,
+        min_density=_min_density,
     )
+    # Global list (for existing colonies you already run) ignores the cap — you keep those.
     p0_planet_lists_global = _fetch_p0_planets(all_p0_names, con, [], None)
     best_ptypes = {
         name: (planets[0]["planet_type"] if planets else None)
@@ -1908,11 +1922,13 @@ def _fetch_planets_and_recs(con, all_p0_names, req, types, p1_info_raw):
         sys_recs = _system_recommendations(
             all_p0_names, con, constellations=None,
             systems=req.chosen_systems, preferred_systems=len(req.chosen_systems),
+            min_density=_min_density,
         )
     else:
         sys_recs = _system_recommendations(
             all_p0_names, con, constellations=req.constellations or None,
             preferred_systems=req.preferred_systems, max_jumps=req.max_jumps,
+            min_density=_min_density,
         )
 
     p0_to_p1_name = {p0_name: types.get(p1_id, {}).get("name", "?")

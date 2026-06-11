@@ -104,6 +104,7 @@ class FuelBlockPlanRequest(BaseModel):
     bp_me_pct: float = 0.0
     split_mode: str = "off"  # off | conservative | aggressive — split-extraction consolidation
     distribution_mode: str = "stability"  # stability (count ∝ need/density) | need (∝ need)
+    min_density_pct: int = 0  # ignore planets thinner than this %, in the plan AND the recs (0 = off)
 
 
 def _system_security(system: str | None):
