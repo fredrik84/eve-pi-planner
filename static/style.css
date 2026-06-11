@@ -934,8 +934,8 @@ tr:hover td { background: #181d2a; }
   background: #1c1428; border: 1px solid #2e2040; border-radius: 3px; padding: 0 4px; }
 .plan-split-plus { color: #5a4a70; margin: 0 4px; font-size: 11px; }
 /* split-mode segmented control in the stats bar */
-.plan-split-seg { display: inline-flex; gap: 0; border: 1px solid #2e2040; border-radius: 5px; overflow: hidden; }
-.plan-split-btn { background: #141020; color: #7a6a90; border: none; border-right: 1px solid #2e2040;
+.plan-split-seg { display: inline-flex; gap: 0; border: 1px solid #2e2040; border-radius: 5px; overflow: hidden; flex: 0 0 auto; }
+.plan-split-btn { background: #141020; color: #7a6a90; border: none; border-right: 1px solid #2e2040; white-space: nowrap;
   font-size: 11px; padding: 2px 8px; cursor: pointer; }
 .plan-split-btn:last-child { border-right: none; }
 .plan-split-btn:hover { background: #1c1630; color: #a888c8; }
@@ -1022,12 +1022,13 @@ tr:hover td { background: #181d2a; }
 .plan-ext-no-planet { font-size: 11px; color: #7a4030; font-style: italic; }
 
 /* Plan stats bar */
-.plan-stats-bar { display: flex; gap: 0; border-bottom: 1px solid #1c2030; }
-.plan-stat { display: flex; flex-direction: column; align-items: flex-start; padding: 10px 18px; border-right: 1px solid #1a1e2a; }
+.plan-stats-bar { display: flex; flex-wrap: wrap; gap: 0; border-bottom: 1px solid #1c2030; }
+.plan-stat { display: flex; flex-direction: column; align-items: flex-start; padding: 10px 14px;
+  border-right: 1px solid #1a1e2a; border-top: 1px solid #1a1e2a; margin-top: -1px; flex: 0 0 auto; }
 .plan-stat:last-child { border-right: none; }
-.plan-stat-val { font-size: 16px; font-weight: 600; color: #a8c8ff; font-family: 'Consolas', monospace; }
+.plan-stat-val { font-size: 16px; font-weight: 600; color: #a8c8ff; font-family: 'Consolas', monospace; white-space: nowrap; }
 .plan-stat-dim { color: #6a7390; }
-.plan-stat-lbl { font-size: 10px; color: #3a4460; text-transform: uppercase; letter-spacing: 0.6px; margin-top: 2px; }
+.plan-stat-lbl { font-size: 10px; color: #3a4460; text-transform: uppercase; letter-spacing: 0.6px; margin-top: 2px; white-space: nowrap; }
 .plan-stat-ok   { color: #5ecf80; }
 .plan-stat-warn { color: #c88040; }
 .plan-stat-edit .plan-stat-val { display: inline-flex; align-items: baseline; gap: 3px; }
