@@ -1026,6 +1026,13 @@ tr:hover td { background: #181d2a; }
 .plan-stat { display: flex; flex-direction: column; align-items: flex-start; padding: 10px 14px;
   border-right: 1px solid #1a1e2a; border-top: 1px solid #1a1e2a; margin-top: -1px; flex: 0 0 auto; }
 .plan-stat:last-child { border-right: none; }
+/* Settings row: the interactive controls (overprod, distribution, min density, split),
+   separated from the read-only result stats above. */
+.plan-settings-bar { align-items: stretch; background: #0e0b16; }
+.plan-settings-bar .plan-stat:last-child { border-right: none; }
+.plan-settings-tag { display: flex; align-items: center; padding: 0 14px; flex: 0 0 auto;
+  border-right: 1px solid #1a1e2a; font-size: 10px; font-weight: 600; letter-spacing: 1px;
+  text-transform: uppercase; color: #5a4a78; }
 .plan-stat-val { font-size: 16px; font-weight: 600; color: #a8c8ff; font-family: 'Consolas', monospace; white-space: nowrap; }
 .plan-stat-dim { color: #6a7390; }
 .plan-stat-lbl { font-size: 10px; color: #3a4460; text-transform: uppercase; letter-spacing: 0.6px; margin-top: 2px; white-space: nowrap; }

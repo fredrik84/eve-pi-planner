@@ -2136,10 +2136,6 @@ function renderFinalPlan(data, opts = {}) {
         </div>`;
     statsHtml = `
       <div class="plan-stats-bar">
-        <div class="plan-stat plan-stat-edit" title="Target overproduction % — edit and the plan recalculates. 10% means extractors produce 10% more P0 than factories need. Reported baseline: ${s.overproduction_pct >= 0 ? '+' : ''}${s.overproduction_pct}%.">
-          <span class="plan-stat-val ${s.overproduction_pct < 0 ? 'plan-stat-warn' : 'plan-stat-ok'}"><input type="number" id="planOverprodInput" class="plan-overprod-input" value="${opVal}" min="0" max="500" step="5">% overprod</span>
-          <span class="plan-stat-lbl">${s.factories} factories${s.max_supportable_factories != null ? ' · max ' + s.max_supportable_factories : ''}</span>
-        </div>
         <div class="plan-stat">
           <span class="plan-stat-val">${s.products_per_day.toLocaleString()}</span>
           <span class="plan-stat-lbl">${data.fuelblock ? 'fuel blocks/day' : 'units/day'}</span>
@@ -2162,10 +2158,17 @@ function renderFinalPlan(data, opts = {}) {
           <span class="plan-stat-val">${_fmtHours(s.factory_refill_hours)}</span>
           <span class="plan-stat-lbl">refill / factory (${s.factory_launchpads_assumed} LP)</span>
         </div>` : ''}
+        ${p0StatHtml}
+      </div>
+      <div class="plan-stats-bar plan-settings-bar">
+        <span class="plan-settings-tag">Settings</span>
+        <div class="plan-stat plan-stat-edit" title="Target overproduction % — edit and the plan recalculates. 10% means extractors produce 10% more P0 than factories need. Reported baseline: ${s.overproduction_pct >= 0 ? '+' : ''}${s.overproduction_pct}%.">
+          <span class="plan-stat-val ${s.overproduction_pct < 0 ? 'plan-stat-warn' : 'plan-stat-ok'}"><input type="number" id="planOverprodInput" class="plan-overprod-input" value="${opVal}" min="0" max="500" step="5">% overprod</span>
+          <span class="plan-stat-lbl">${s.factories} factories${s.max_supportable_factories != null ? ' · max ' + s.max_supportable_factories : ''}</span>
+        </div>
         ${distStatHtml}
         ${minDensHtml}
         ${splitStatHtml}
-        ${p0StatHtml}
       </div>`;
   }
 
