@@ -170,12 +170,21 @@ def _system_recommendations(
     preferred_systems: int = 1,
     max_jumps: int = 1,
     min_density: int = 0,
+    p0_needs: dict[str, float] | None = None,
 ) -> list:
     thresh = max(0.01, float(min_density or 0))  # density cap: a planet must beat this to count
     needed_cols = {name: _p0_col(name) for name in p0_names}
     needed_cols = {k: v for k, v in needed_cols.items() if v}
     if not needed_cols:
         return []
+    # Depth-aware scoring: a system's quality for a P0 is the average density of the *top-K*
+    # planets it offers (K scales with that resource's demand), not just the single richest.
+    # So a high-need resource (e.g. Reactive Gas) backed by one rich planet + a thin tail no
+    # longer ranks like one with several rich planets — the planner would otherwise need many
+    # thin colonies to cover the demand. Falls back to flat per-P0 weight if needs aren't given.
+    DEPTH_PER_NEED = 3
+    needs = {n: max(0.0, float((p0_needs or {}).get(n, 1.0))) for n in p0_names}
+    depth_k = {n: max(1, round(needs[n] * DEPTH_PER_NEED)) for n in p0_names}
 
     col_list = ", ".join(needed_cols.values())
     col_filter = " OR ".join(f"{col}>0" for col in needed_cols.values())
@@ -200,10 +209,11 @@ def _system_recommendations(
     for row in rows:
         sname = row["system"]
         if sname not in sys_data:
-            sys_data[sname] = {"constellation": row["constellation"] or "?", "p0": {}}
+            sys_data[sname] = {"constellation": row["constellation"] or "?", "p0": {}, "vals": {}}
         for p0_name, col in needed_cols.items():
             v = row[col] or 0
             if v >= thresh:
+                sys_data[sname]["vals"].setdefault(p0_name, []).append(v)
                 ex = sys_data[sname]["p0"].get(p0_name)
                 if not ex or v > ex["value"]:
                     sys_data[sname]["p0"][p0_name] = {
@@ -211,14 +221,25 @@ def _system_recommendations(
                     }
 
     def merge(sys_names):
-        merged = {}
+        merged, vals = {}, {}
         for sname in sys_names:
             for p0_name, info in sys_data[sname]["p0"].items():
                 if p0_name not in merged or info["value"] > merged[p0_name]["value"]:
                     merged[p0_name] = {**info, "system": sname}
-        return merged
+            for p0_name, vlist in sys_data[sname]["vals"].items():
+                vals.setdefault(p0_name, []).extend(vlist)
+        for vlist in vals.values():
+            vlist.sort(reverse=True)
+        return merged, vals
 
-    def make_result(sys_names, merged):
+    def _depth_density(p0_name, vals):
+        """Mean density of the top-K planets for this resource (K ∝ its demand); missing
+        depth counts as 0, so a shallow pool for a high-need resource scores low."""
+        k = depth_k.get(p0_name, 1)
+        top = (vals.get(p0_name) or [])[:k]
+        return sum(top) / k if k else 0.0
+
+    def make_result(sys_names, merged, vals):
         covered = [n for n in p0_names if n in merged]
         first_const = sys_data[sys_names[0]]["constellation"]
         same_const = all(sys_data[s]["constellation"] == first_const for s in sys_names)
@@ -226,6 +247,7 @@ def _system_recommendations(
             "constellation": first_const, "same_constellation": same_const,
             "coverage": len(covered), "total_p0": len(p0_names),
             "score": sum(d["value"] for d in merged.values()),
+            "depth_score": sum(needs[n] * _depth_density(n, vals) for n in covered),
             "systems_needed": sorted(sys_names),
             "missing": [n for n in p0_names if n not in merged],
             "assignments": [
@@ -291,14 +313,14 @@ def _system_recommendations(
         return (len(comp) == len(members), (max(ds) if ds else None))
 
     def add(sys_names):
-        m = merge(sys_names)
+        m, vals = merge(sys_names)
         if not any(n in m for n in p0_names):
             return
         key = tuple(sorted(sys_names))
         if key in seen:
             return
         seen.add(key)
-        r = make_result(list(sys_names), m)
+        r = make_result(list(sys_names), m, vals)
         within, diam = combo_jumps(list(sys_names))
         r["within_jumps"], r["jumps"] = within, diam
         results.append(r)
@@ -316,12 +338,15 @@ def _system_recommendations(
                     add([s1, s2, s3])
 
     # Coverage first (must supply the P0s); then prefer neighbouring clusters; then
-    # closeness to the requested system count; then tightness; then richness.
+    # closeness to the requested system count; then tightness; then need-weighted depth
+    # richness (a system with rich planets at the depth each resource needs beats one that's
+    # only rich at the very top), with flat best-planet richness as the final tiebreak.
     results.sort(key=lambda r: (
         -r["coverage"],
         0 if r["within_jumps"] else 1,
         abs(len(r["systems_needed"]) - pref),
         r["jumps"] if r["jumps"] is not None else 99,
+        -r["depth_score"],
         -r["score"],
     ))
     return results[:top_n]
@@ -1331,6 +1356,94 @@ def _assign_extractors(
     return remaining
 
 
+def _absorb_remaining(
+    assignments: list[dict],
+    char_list: list[dict],
+    remaining: list[dict],
+    p0_planet_lists: dict,
+    char_nonfac: dict[int, list],
+    p1_info: list[dict],
+    density_est: dict[str, float] | None,
+    has_system_name: bool,
+    factory_avoid_cids: set[int] | None = None,
+    factory_avoid: set[tuple] | None = None,
+) -> list[dict]:
+    """Re-target genuinely-unplaceable extractor slots onto a free reachable planet of a
+    *different* P0, so a usable planet slot isn't left dangling.
+
+    A min-density cap can make a thin-deposit P0 (e.g. Reactive Gas) unplaceable for a
+    character that still has spare extractor capacity and could colonise a richer planet.
+    Rather than report the slot as unassigned, grow the most under-produced *placeable* P0
+    there (density-weighted deficit) — minimal added residual, and the planet gets used.
+    Mutates assignments; returns the slots that still can't be placed anywhere."""
+    if not remaining:
+        return remaining
+    infos = [i for i in p1_info if i.get("p0_name")]
+    if not infos:
+        return remaining
+    dens = density_est or {}
+    total_rel = sum(i["relative_qty"] for i in infos) or 1
+
+    def _q(name):
+        return max(0.05, dens.get(name, 1.0))
+
+    prod = {i["p0_name"]: 0.0 for i in infos}
+    for asgn in assignments:
+        for e in asgn["extractors"]:
+            n = e.get("p0_name")
+            if n in prod:
+                prod[n] += _q(n)
+
+    def deficit(name, rel):
+        tp = sum(prod.values()) or 1
+        return rel / total_rel - prod[name] / tp
+
+    for asgn, char in zip(assignments, char_list):
+        if asgn["factory_only"] or not remaining:
+            continue
+        free = char["computed_ext_cap"] - len(asgn["extractors"])
+        if free <= 0:
+            continue
+        cid = char["character_id"]
+        nonfac_keys: set[tuple] = set()
+        if has_system_name:
+            nonfac_keys = {
+                (p.get("system_name"), p.get("planet_num"))
+                for p in char_nonfac.get(cid, [])
+                if p.get("system_name") and p.get("planet_num") is not None
+            }
+        if factory_avoid_cids and cid in factory_avoid_cids and factory_avoid:
+            nonfac_keys |= factory_avoid
+        restricted = (
+            {name: [p for p in planets if (p["system"], p["planet_num"]) not in nonfac_keys]
+             for name, planets in p0_planet_lists.items()}
+            if nonfac_keys else p0_planet_lists
+        )
+        while free > 0 and remaining:
+            placeable = [i for i in infos
+                         if _can_add_p0(asgn["extractors"], i["p0_name"], restricted)]
+            if not placeable:
+                break
+            best = max(placeable, key=lambda i: deficit(i["p0_name"], i["relative_qty"]))
+            remaining.pop()
+            asgn["extractors"].append({
+                "p0_type_id":       best["p0_type_id"],
+                "p0_name":          best["p0_name"],
+                "p1_type_id":       best["p1_type_id"],
+                "p1_name":          best["p1_name"],
+                "planet_types":     best["planet_types"],
+                "best_planet_type": best["best_planet_type"],
+                "relative_qty":     best["relative_qty"],
+                "is_extra":         True,
+                "is_existing":      False,
+                "is_replace":       False,
+                "is_absorbed":      True,
+            })
+            prod[best["p0_name"]] += _q(best["p0_name"])
+            free -= 1
+    return remaining
+
+
 def _attach_extractor_planet_details(
     assignments: list[dict],
     char_list: list[dict],
@@ -1918,17 +2031,24 @@ def _fetch_planets_and_recs(con, all_p0_names, req, types, p1_info_raw):
         for name, planets in p0_planet_lists.items()
     }
 
+    # Per-P0 demand weight (relative_qty) so recommendations score depth by how much of each
+    # resource the recipe actually needs.
+    p0_needs: dict[str, float] = {}
+    for _p1_id, qty, _p0_id, p0_name in p1_info_raw:
+        if p0_name:
+            p0_needs[p0_name] = p0_needs.get(p0_name, 0.0) + float(qty)
+
     if req.chosen_systems:
         sys_recs = _system_recommendations(
             all_p0_names, con, constellations=None,
             systems=req.chosen_systems, preferred_systems=len(req.chosen_systems),
-            min_density=_min_density,
+            min_density=_min_density, p0_needs=p0_needs,
         )
     else:
         sys_recs = _system_recommendations(
             all_p0_names, con, constellations=req.constellations or None,
             preferred_systems=req.preferred_systems, max_jumps=req.max_jumps,
-            min_density=_min_density,
+            min_density=_min_density, p0_needs=p0_needs,
         )
 
     p0_to_p1_name = {p0_name: types.get(p1_id, {}).get("name", "?")
@@ -2162,6 +2282,14 @@ def _run_extractor_pipeline(
         req, p0_planet_lists, has_planet_db, has_system_name, p1_info,
         factory_avoid_cids=factory_avoid_cids, factory_avoid=factory_avoid,
     )
+    # When a min-density cap makes a thin P0 unplaceable, absorb the dangling slot onto a
+    # free reachable planet of another resource instead of leaving the planet slot wasted.
+    if has_planet_db and remaining and getattr(req, "min_density_pct", 0):
+        remaining = _absorb_remaining(
+            assignments, char_list, remaining, p0_planet_lists, char_nonfac_ext,
+            p1_info, density_est, has_system_name,
+            factory_avoid_cids=factory_avoid_cids, factory_avoid=factory_avoid,
+        )
     _attach_extractor_planet_details(
         assignments, char_list, char_nonfac, char_nonfac_ext,
         p0_planet_lists, p0_planet_lists_global, req, auto_mode,
