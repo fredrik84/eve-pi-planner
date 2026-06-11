@@ -11,7 +11,10 @@ from fastapi import APIRouter, Cookie, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.sde import get_connection, load_pi_data
-from app.esi import require_admin, ADMIN_CHARACTERS, ensure_admin_table, _sessions, _load_sessions
+from app.esi import (
+    require_admin, require_context, is_admin, session_context_id,
+    ADMIN_CHARACTERS, ensure_admin_table, _sessions, _load_sessions,
+)
 
 router = APIRouter()
 
@@ -20,18 +23,41 @@ router = APIRouter()
 BASKET_CONFIG_BASE = 2_000_000_000
 
 
+_NEW_BASKETS_DDL = """
+    CREATE TABLE IF NOT EXISTS pp_baskets (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        name       TEXT NOT NULL,
+        run_size   INTEGER DEFAULT 1,
+        unit_label TEXT DEFAULT 'sets',
+        context_id INTEGER,            -- NULL = global (admin-owned); else private to a context
+        created_by TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+"""
+
+
 def ensure_basket_tables():
+    """Create the basket tables, migrating the original schema (global `name UNIQUE`, no
+    `context_id`) to the private-basket schema. The old table-level UNIQUE on name is
+    rebuilt away so two users can own a same-named private basket; uniqueness is now scoped
+    per owner via the (IFNULL(context_id,-1), name) index (globals share the -1 bucket)."""
     con = get_connection()
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS pp_baskets (
-            id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            name       TEXT NOT NULL UNIQUE,
-            run_size   INTEGER DEFAULT 1,
-            unit_label TEXT DEFAULT 'sets',
-            created_by TEXT,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
+    has_table = con.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='pp_baskets'"
+    ).fetchone()
+    if has_table:
+        cols = {r["name"] for r in con.execute("PRAGMA table_info(pp_baskets)")}
+        if "context_id" not in cols:
+            # Rebuild: drops the legacy global UNIQUE(name); existing baskets become global.
+            con.execute("ALTER TABLE pp_baskets RENAME TO pp_baskets_old")
+            con.execute(_NEW_BASKETS_DDL)
+            con.execute(
+                "INSERT INTO pp_baskets (id, name, run_size, unit_label, context_id, created_by, created_at) "
+                "SELECT id, name, run_size, unit_label, NULL, created_by, created_at FROM pp_baskets_old"
+            )
+            con.execute("DROP TABLE pp_baskets_old")
+    else:
+        con.execute(_NEW_BASKETS_DDL)
     con.execute("""
         CREATE TABLE IF NOT EXISTS pp_basket_items (
             basket_id INTEGER NOT NULL,
@@ -40,6 +66,10 @@ def ensure_basket_tables():
             PRIMARY KEY (basket_id, type_id)
         )
     """)
+    con.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS ix_baskets_owner_name "
+        "ON pp_baskets (IFNULL(context_id, -1), name)"
+    )
     con.commit()
     con.close()
 
@@ -69,19 +99,23 @@ class BasketSave(BaseModel):
     run_size: int = 1
     unit_label: str = "sets"
     items: list[BasketItem]
+    make_global: bool = False  # admin-only; ignored for non-admins (basket stays private)
 
 
-def _basket_dict(con, row, types) -> dict:
+def _basket_dict(con, row, types, ctx: int | None = None) -> dict:
     items = con.execute(
         "SELECT type_id, qty FROM pp_basket_items WHERE basket_id=? ORDER BY type_id",
         (row["id"],),
     ).fetchall()
+    owner = row["context_id"]
     return {
         "id":             row["id"],
         "name":           row["name"],
         "run_size":       row["run_size"] or 1,
         "unit_label":     row["unit_label"] or "sets",
         "config_type_id": BASKET_CONFIG_BASE + row["id"],
+        "global":         owner is None,
+        "owned":          owner is not None and owner == ctx,
         "items": [
             {
                 "type_id": it["type_id"],
@@ -95,13 +129,23 @@ def _basket_dict(con, row, types) -> dict:
 
 
 @router.get("/api/baskets")
-def list_baskets():
-    """Public — the planner wizard lists baskets as selectable targets."""
+def list_baskets(pp_session: str = Cookie(default=None)):
+    """Public — lists global baskets to everyone, plus the caller's own private baskets."""
     ensure_basket_tables()
+    ctx = session_context_id(pp_session)
     types = load_pi_data()["types"]
     con = get_connection()
-    rows = con.execute("SELECT * FROM pp_baskets ORDER BY name").fetchall()
-    out = [_basket_dict(con, r, types) for r in rows]
+    if ctx is not None:
+        rows = con.execute(
+            "SELECT * FROM pp_baskets WHERE context_id IS NULL OR context_id=? "
+            "ORDER BY context_id IS NULL DESC, name",
+            (ctx,),
+        ).fetchall()
+    else:
+        rows = con.execute(
+            "SELECT * FROM pp_baskets WHERE context_id IS NULL ORDER BY name"
+        ).fetchall()
+    out = [_basket_dict(con, r, types, ctx) for r in rows]
     con.close()
     return {"baskets": out}
 
@@ -135,19 +179,49 @@ def _write_items(con, basket_id: int, items: list[tuple[int, float]]):
     )
 
 
+def _name_clash(con, name: str, owner: int | None, exclude_id: int | None = None) -> bool:
+    """True if another basket in the same scope (same owner, or both global) has this name."""
+    if owner is None:
+        sql = "SELECT 1 FROM pp_baskets WHERE name=? AND context_id IS NULL"
+        params: tuple = (name,)
+    else:
+        sql = "SELECT 1 FROM pp_baskets WHERE name=? AND context_id=?"
+        params = (name, owner)
+    if exclude_id is not None:
+        sql += " AND id<>?"
+        params = params + (exclude_id,)
+    return con.execute(sql, params).fetchone() is not None
+
+
+def _basket_for_edit(con, basket_id: int, ctx: int, admin: bool):
+    """Return the basket row the caller may edit/delete, else raise 404/403. Owners edit
+    their own private baskets; admins edit global (NULL-context) baskets."""
+    row = con.execute("SELECT * FROM pp_baskets WHERE id=?", (basket_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Basket not found")
+    owner = row["context_id"]
+    if owner is not None and owner == ctx:
+        return row
+    if owner is None and admin:
+        return row
+    raise HTTPException(status_code=403, detail="You can only edit your own baskets")
+
+
 @router.post("/api/baskets")
-def create_basket(req: BasketSave, _: int = Depends(require_admin),
+def create_basket(req: BasketSave, ctx: int = Depends(require_context),
                   pp_session: str = Cookie(default=None)):
     name, items = _validate_basket(req)
     ensure_basket_tables()
+    owner = None if (req.make_global and is_admin(pp_session)) else ctx
     con = get_connection()
-    if con.execute("SELECT 1 FROM pp_baskets WHERE name=?", (name,)).fetchone():
+    if _name_clash(con, name, owner):
         con.close()
-        raise HTTPException(status_code=400, detail="A basket with that name already exists")
+        raise HTTPException(status_code=400, detail="You already have a basket with that name")
     cur = con.execute(
-        "INSERT INTO pp_baskets (name, run_size, unit_label, created_by, created_at) VALUES (?,?,?,?,?)",
+        "INSERT INTO pp_baskets (name, run_size, unit_label, context_id, created_by, created_at) "
+        "VALUES (?,?,?,?,?,?)",
         (name, req.run_size, (req.unit_label or "sets").strip() or "sets",
-         _session_char_name(pp_session), datetime.now(timezone.utc).isoformat()),
+         owner, _session_char_name(pp_session), datetime.now(timezone.utc).isoformat()),
     )
     bid = cur.lastrowid
     _write_items(con, bid, items)
@@ -157,16 +231,15 @@ def create_basket(req: BasketSave, _: int = Depends(require_admin),
 
 
 @router.put("/api/baskets/{basket_id}")
-def update_basket(basket_id: int, req: BasketSave, _: int = Depends(require_admin)):
+def update_basket(basket_id: int, req: BasketSave, ctx: int = Depends(require_context),
+                  pp_session: str = Cookie(default=None)):
     name, items = _validate_basket(req)
     ensure_basket_tables()
     con = get_connection()
-    if not con.execute("SELECT 1 FROM pp_baskets WHERE id=?", (basket_id,)).fetchone():
+    row = _basket_for_edit(con, basket_id, ctx, is_admin(pp_session))
+    if _name_clash(con, name, row["context_id"], exclude_id=basket_id):
         con.close()
-        raise HTTPException(status_code=404, detail="Basket not found")
-    if con.execute("SELECT 1 FROM pp_baskets WHERE name=? AND id<>?", (name, basket_id)).fetchone():
-        con.close()
-        raise HTTPException(status_code=400, detail="A basket with that name already exists")
+        raise HTTPException(status_code=400, detail="You already have a basket with that name")
     con.execute(
         "UPDATE pp_baskets SET name=?, run_size=?, unit_label=? WHERE id=?",
         (name, req.run_size, (req.unit_label or "sets").strip() or "sets", basket_id),
@@ -178,16 +251,15 @@ def update_basket(basket_id: int, req: BasketSave, _: int = Depends(require_admi
 
 
 @router.delete("/api/baskets/{basket_id}")
-def delete_basket(basket_id: int, _: int = Depends(require_admin)):
+def delete_basket(basket_id: int, ctx: int = Depends(require_context),
+                  pp_session: str = Cookie(default=None)):
     ensure_basket_tables()
     con = get_connection()
-    cur = con.execute("DELETE FROM pp_baskets WHERE id=?", (basket_id,))
+    _basket_for_edit(con, basket_id, ctx, is_admin(pp_session))
+    con.execute("DELETE FROM pp_baskets WHERE id=?", (basket_id,))
     con.execute("DELETE FROM pp_basket_items WHERE basket_id=?", (basket_id,))
     con.commit()
-    changed = cur.rowcount
     con.close()
-    if not changed:
-        raise HTTPException(status_code=404, detail="Basket not found")
     return {"ok": True}
 
 

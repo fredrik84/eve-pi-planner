@@ -178,7 +178,7 @@ def download_layout(type_id: int, planet_type: str = "Barren", launchpads: Optio
 
 
 @router.get("/api/layout/bundle")
-def download_bundle(type_ids: str, expand: int = 0):
+def download_bundle(type_ids: str = "", expand: int = 0, splits: str = ""):
     """
     Return a ZIP of templates for one or more products (comma-separated `type_ids`).
     Each token is `id[:launchpads[:count[:cc[:planet_type]]]]` — the optional `cc`
@@ -186,10 +186,13 @@ def download_bundle(type_ids: str, expand: int = 0):
     actually lands (a lower CC fits fewer facilities; a larger planet → longer links →
     more grid). With expand=1, each product also includes the P0→P1 extractor templates
     for its whole chain. Launchpads default per tier (3 factory / 1 extractor).
+
+    `splits` is a comma-list of two-ECU extractor tokens `p1a:p1b:headsA:headsB[:cc[:ptype]]`
+    (from a split-extraction plan) — each becomes one importable split planet template.
     """
     import io, json, zipfile
     from fastapi import Response
-    from app.layout import generate_layout, bundle_templates
+    from app.layout import generate_layout, bundle_templates, generate_split_extractor_layout
     tokens = []
     for tok in type_ids.split(","):
         tok = tok.strip()
@@ -204,8 +207,21 @@ def download_bundle(type_ids: str, expand: int = 0):
         cc = int(parts[3]) if len(parts) > 3 and parts[3] else None
         ptype = parts[4] if len(parts) > 4 and parts[4] else "Barren"
         tokens.append((tid, lp, cnt, cc, ptype))
-    if not tokens:
-        raise HTTPException(status_code=400, detail="no type_ids given")
+    split_tokens = []
+    for tok in splits.split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        p = tok.split(":")
+        if len(p) < 4:
+            continue
+        split_tokens.append((
+            int(p[0]), int(p[1]), int(p[2]), int(p[3]),
+            int(p[4]) if len(p) > 4 and p[4] else None,
+            p[5] if len(p) > 5 and p[5] else "Barren",
+        ))
+    if not tokens and not split_tokens:
+        raise HTTPException(status_code=400, detail="no type_ids or splits given")
     items: list[tuple] = []
     seen: set[str] = set()
     try:
@@ -223,6 +239,14 @@ def download_bundle(type_ids: str, expand: int = 0):
                 if key not in seen:
                     seen.add(key)
                     items.append((name, tmpl))
+        for p1a, p1b, ha, hb, cc, ptype in split_tokens:
+            r = generate_split_extractor_layout(p1a, p1b, heads_a=ha, heads_b=hb,
+                                                planet_type=ptype, cc_level=cc)
+            name, tmpl = r["planets"][0]["name"], r["planets"][0]["template"]
+            key = f"{name}|CC{tmpl.get('CmdCtrLv', 5)}"
+            if key not in seen:
+                seen.add(key)
+                items.append((name, tmpl))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

@@ -491,6 +491,13 @@ class PlanRequest(BaseModel):
     factory_output_per_hour: Optional[float] = None  # override SDE rate; use 0.5 for P4
     factory_character_ids: list[int] = []  # if set, only these chars do factories
     max_jumps: int = 1  # prefer system combos clustered within this many jumps (0–5)
+    split_mode: str = "off"  # off | on — split-extraction (consolidate freed planets → factories)
+
+
+def _norm_split_mode(v) -> str:
+    # Single on/off toggle now. Legacy "conservative"/"aggressive" both map to "on" (the
+    # consolidate-then-reinvest behaviour); only "off"/blank stays off.
+    return "off" if (not v or v == "off") else "on"
 
 
 # ── Profiles / shares ─────────────────────────────────────────────────────────
@@ -698,6 +705,7 @@ def ensure_profile_tables():
             ("factory_character_ids",  "TEXT NOT NULL DEFAULT '[]'"),
             ("max_jumps",              "INTEGER NOT NULL DEFAULT 1"),
             ("factory_planet_types",   "TEXT NOT NULL DEFAULT '[]'"),
+            ("split_mode",             "TEXT NOT NULL DEFAULT 'off'"),
         ]:
             if col not in cols:
                 try:
@@ -721,6 +729,7 @@ class ProfileSave(BaseModel):
     factory_character_ids: list[int] = []
     max_jumps: int = 1
     factory_planet_types: list[str] = []
+    split_mode: str = "off"
 
 
 @router.get("/api/profiles")
@@ -733,7 +742,7 @@ def list_profiles(pp_session: str = Cookie(default=None)):
     rows = con.execute(
         "SELECT id, name, type_id, type_name, overproduction_pct, preferred_systems, "
         "constellations, use_existing, factory_system, factory_output_per_hour, factory_character_ids, max_jumps, "
-        "factory_planet_types "
+        "factory_planet_types, split_mode "
         "FROM pp_profiles WHERE context_id=? ORDER BY name",
         (context_id,),
     ).fetchall()
@@ -745,7 +754,8 @@ def list_profiles(pp_session: str = Cookie(default=None)):
          "factory_system":          r["factory_system"] or "",
          "factory_output_per_hour": r["factory_output_per_hour"],
          "factory_character_ids":   _json.loads(r["factory_character_ids"] or "[]"),
-         "factory_planet_types":    _json.loads(r["factory_planet_types"] or "[]")}
+         "factory_planet_types":    _json.loads(r["factory_planet_types"] or "[]"),
+         "split_mode":              r["split_mode"] or "off"}
         for r in rows
     ]}
 
@@ -758,13 +768,13 @@ def save_profile(req: ProfileSave, context_id: int = Depends(require_context)):
         INSERT OR REPLACE INTO pp_profiles
             (context_id, name, type_id, type_name, overproduction_pct, preferred_systems,
              constellations, use_existing, factory_system, factory_output_per_hour,
-             factory_character_ids, max_jumps, factory_planet_types)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             factory_character_ids, max_jumps, factory_planet_types, split_mode)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (context_id, req.name, req.type_id, req.type_name, req.overproduction_pct,
           req.preferred_systems, _json.dumps(req.constellations),
           1 if req.use_existing else 0, req.factory_system or "",
           req.factory_output_per_hour, _json.dumps(req.factory_character_ids), req.max_jumps,
-          _json.dumps(req.factory_planet_types)))
+          _json.dumps(req.factory_planet_types), _norm_split_mode(req.split_mode)))
     con.commit()
     con.close()
     return {"ok": True}
@@ -775,6 +785,84 @@ def delete_profile(profile_id: int, context_id: int = Depends(require_context)):
     ensure_profile_tables()
     con = get_connection()
     con.execute("DELETE FROM pp_profiles WHERE id=? AND context_id=?", (profile_id, context_id))
+    con.commit()
+    con.close()
+    return {"ok": True}
+
+
+# ── Saved plan snapshots (for the PI Planner refill distribution tool) ─────────
+# A snapshot is the computed plan's factory→P1 distribution, stored per context so a player
+# can split stacks into their factories without re-running the wizard. Stored server-side
+# (cross-device) and named; the frontend also keeps a localStorage copy of the last build.
+
+def ensure_plan_snapshot_table():
+    con = get_connection()
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS pp_plan_snapshots (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            context_id INTEGER NOT NULL,
+            name       TEXT NOT NULL,
+            snapshot   TEXT NOT NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(context_id, name)
+        )
+    """)
+    con.commit()
+    con.close()
+
+
+class PlanSnapshotSave(BaseModel):
+    name: str
+    snapshot: dict
+
+
+@router.post("/api/plan-snapshots")
+def save_plan_snapshot(req: PlanSnapshotSave, context_id: int = Depends(require_context)):
+    from fastapi import HTTPException
+    from datetime import datetime, timezone
+    name = (req.name or "").strip()[:80]
+    if not name:
+        raise HTTPException(status_code=400, detail="Plan name is required")
+    ensure_plan_snapshot_table()
+    con = get_connection()
+    con.execute(
+        "INSERT OR REPLACE INTO pp_plan_snapshots (context_id, name, snapshot, created_at) "
+        "VALUES (?,?,?,?)",
+        (context_id, name, _json.dumps(req.snapshot), datetime.now(timezone.utc).isoformat()),
+    )
+    con.commit()
+    con.close()
+    return {"ok": True}
+
+
+@router.get("/api/plan-snapshots")
+def list_plan_snapshots(pp_session: str = Cookie(default=None)):
+    context_id = session_context_id(pp_session)
+    if not context_id:
+        return {"snapshots": []}
+    ensure_plan_snapshot_table()
+    con = get_connection()
+    rows = con.execute(
+        "SELECT id, name, snapshot, created_at FROM pp_plan_snapshots WHERE context_id=? ORDER BY name",
+        (context_id,),
+    ).fetchall()
+    con.close()
+    out = []
+    for r in rows:
+        try:
+            snap = _json.loads(r["snapshot"])
+        except Exception:
+            snap = {}
+        out.append({"id": r["id"], "name": r["name"], "created_at": r["created_at"],
+                    "factories": snap.get("factories", [])})
+    return {"snapshots": out}
+
+
+@router.delete("/api/plan-snapshots/{snap_id}")
+def delete_plan_snapshot(snap_id: int, context_id: int = Depends(require_context)):
+    ensure_plan_snapshot_table()
+    con = get_connection()
+    con.execute("DELETE FROM pp_plan_snapshots WHERE id=? AND context_id=?", (snap_id, context_id))
     con.commit()
     con.close()
     return {"ok": True}
@@ -1283,6 +1371,297 @@ def _attach_extractor_planet_details(
                     slot["planet_type"] = planet["planet_type"]
                     slot["quality_pct"] = round(planet["value"])
                     char_used.add((planet["system"], planet["planet_num"]))
+
+
+# ── Split-extraction consolidation (opt-in) ──────────────────────────────────────
+#
+# A planet can host TWO extractor control units, splitting its 10-head budget between two
+# P0 deposits and feeding two Basic Industry lines → two P1s. This pass merges pairs of a
+# *single* character's one-P0 extractor planets into one such split planet when the two P0s
+# can be drawn from one physical planet, freeing a planet slot.
+#
+# Feasibility is accounted in PLANET-units (10 heads = 1 planet), the SAME quality-agnostic
+# 48k-baseline the slot budget uses — so a conservative split preserves exactly the baseline
+# production the non-split plan targeted (quality shortfalls, which the planner already
+# surfaces separately, are neither created nor hidden here). Conservative commits a merge
+# only when every P0 still meets its baseline planet-need with ≤10 heads (minimal heads to
+# cover each leg's deficit, leftover heads spread as buffer); aggressive packs into 10 heads
+# even when that underfills a leg (heads ∝ need). Per-leg quality is recorded for display and
+# the P0/day stat; head counts are guidance — actual yield depends on heatmap placement +
+# depletion, which is not a static number.
+_PU_PER_PLANET_DAY = 4_800 * 24    # P0/day from one extractor head at 100% richness (stats only)
+_PLANET_P0_PER_DAY = 48_000 * 24   # P0/day from a full 10-head planet at 100% richness
+
+
+def _slot_planet_type(e: dict) -> str | None:
+    return e.get("planet_type") or e.get("existing_ptype") or e.get("replace_ptype") or e.get("best_planet_type")
+
+
+def _ext_leg_qualities(extractors: list[dict]) -> list[int]:
+    """Quality values for averaging, expanding a split planet into its two legs."""
+    out: list[int] = []
+    for e in extractors:
+        if e.get("split"):
+            out += [leg["quality_pct"] for leg in e.get("legs", []) if leg.get("quality_pct") is not None]
+        elif e.get("quality_pct") is not None:
+            out.append(e["quality_pct"])
+    return out
+
+
+def _ext_actual_p0_per_day(extractors: list[dict]) -> float:
+    """Quality-adjusted P0/day, counting a split leg as heads × quality (not a full planet)."""
+    total = 0.0
+    for e in extractors:
+        if e.get("split"):
+            for leg in e.get("legs", []):
+                total += leg.get("heads", 0) * leg.get("quality_pct", 100) / 100.0 * _PU_PER_PLANET_DAY
+        else:
+            total += e.get("quality_pct", 100) / 100.0 * 48_000 * 24
+    return total
+
+
+def _consolidate_split_extractors(
+    assignments: list[dict],
+    p0_need_pu: dict[str, float],
+    p0_planet_lists: dict,
+    mode: str,
+) -> tuple[int, int]:
+    """Merge compatible single-P0 extractor planets on each character into split planets.
+
+    p0_need_pu: required production units per P0 name (1 pu = one head @ 100% richness).
+    Returns (split_planets, planets_saved). Mutates `assignments` in place: a merged pair
+    becomes one entry with `split=True` and a `legs` list. No-op for mode 'off'."""
+    if mode == "off":
+        return 0, 0
+
+    # (system, planet_num) -> richness value, per P0, to read a host planet's quality for the
+    # *other* leg's resource.
+    rich_idx: dict[str, dict[tuple, float]] = {}
+    for p0, planets in p0_planet_lists.items():
+        rich_idx[p0] = {(p["system"], p["planet_num"]): p["value"] for p in planets}
+
+    def _host_quality(p0_name: str, system: str, planet_num) -> float | None:
+        v = rich_idx.get(p0_name, {}).get((system, planet_num))
+        return round(v) if v is not None else None
+
+    # Current production per P0 in planet-units (one extractor planet = 1.0, quality-agnostic).
+    pu_out: dict[str, float] = {}
+    for a in assignments:
+        for e in a["extractors"]:
+            if e.get("split") or not e.get("p0_name") or e.get("quality_pct") is None:
+                continue
+            pu_out[e["p0_name"]] = pu_out.get(e["p0_name"], 0.0) + 1.0
+
+    # Effective floor per P0: never drop below its fair-share baseline, and never reduce a P0
+    # that the plan already places BELOW its share (a scarce type, capped by planet count) —
+    # for those the floor is what's already there, so a split can't shed it.
+    eff_need = {p0: min(p0_need_pu.get(p0, 0.0), cur) for p0, cur in pu_out.items()}
+
+    def _need(p0):  # required planet-units (floor)
+        return eff_need.get(p0, 0.0)
+
+    splits = 0
+    for a in assignments:
+        progress = True
+        while progress:
+            progress = False
+            plain = [
+                e for e in a["extractors"]
+                if not e.get("split") and e.get("p0_name") and e.get("quality_pct") is not None
+                and e.get("system") and e.get("planet_num") is not None
+            ]
+            merged = None
+            for i in range(len(plain)):
+                for j in range(i + 1, len(plain)):
+                    A, B = plain[i], plain[j]
+                    if A["p0_name"] == B["p0_name"]:
+                        continue
+                    host = _pick_split_host(A, B, _host_quality)
+                    if not host:
+                        continue
+                    leg = _solve_split_heads(A, B, host, pu_out, _need, mode)
+                    if not leg:
+                        continue
+                    merged = (A, B, host, leg)
+                    break
+                if merged:
+                    break
+            if not merged:
+                continue
+
+            A, B, host, (headsA, headsB, qA_host, qB_host) = merged
+            # Roll production back for the two dedicated planets (−1.0 each), forward for the
+            # split legs (heads/10 of a planet each).
+            pu_out[A["p0_name"]] = pu_out.get(A["p0_name"], 0.0) - 1.0 + headsA / 10.0
+            pu_out[B["p0_name"]] = pu_out.get(B["p0_name"], 0.0) - 1.0 + headsB / 10.0
+
+            split_entry = {
+                "split":       True,
+                "system":      host["system"],
+                "planet_num":  host["planet_num"],
+                "planet_type": host["planet_type"],
+                "is_existing": bool(host.get("is_existing")),
+                "legs": [
+                    {
+                        "p0_type_id": A["p0_type_id"], "p0_name": A["p0_name"],
+                        "p1_type_id": A["p1_type_id"], "p1_name": A["p1_name"],
+                        "best_planet_type": A.get("best_planet_type"),
+                        "heads": headsA, "quality_pct": qA_host,
+                    },
+                    {
+                        "p0_type_id": B["p0_type_id"], "p0_name": B["p0_name"],
+                        "p1_type_id": B["p1_type_id"], "p1_name": B["p1_name"],
+                        "best_planet_type": B.get("best_planet_type"),
+                        "heads": headsB, "quality_pct": qB_host,
+                    },
+                ],
+            }
+            # Replace A in place; drop B. (Order within the list is cosmetic.)
+            idxA = a["extractors"].index(A)
+            a["extractors"][idxA] = split_entry
+            a["extractors"].remove(B)
+            splits += 1
+            progress = True
+
+    # Merging frees planet slots → refresh each character's free-slot count so the display (and
+    # any reinvestment pass) sees the reclaimed capacity.
+    if splits:
+        for a in assignments:
+            a["free_planets"] = max(
+                0, a.get("effective_planets", 0) - len(a["extractors"]) - a.get("factory_planets", 0))
+    return splits, splits
+
+
+def _reinvest_freed_planets(assignments, p1_info, p0_planet_lists, fac_db_planets,
+                            best_fac_system, ext_slots, factories,
+                            make_factory_product=None) -> tuple[int, int]:
+    """Aggressive reinvestment: fill the planet slots freed by split-consolidation with extra
+    factory + extractor planets (in the plan's equilibrium ext:fac ratio) so reclaimed
+    overproduction capacity produces MORE rather than just leaving fewer planets in use.
+    Concrete planets are placed so the per-character view stays consistent.
+
+    make_factory_product: optional callable → a {type_id, name} dict tagging each reinvested
+    factory to a production line (fuel-block/basket), or None for the single-product planner
+    (factory assignments carry no per-line product). Returns (added_factories, added_extractors);
+    the caller rescales throughput from the new totals."""
+    total_free = sum(max(0, a.get("free_planets", 0)) for a in assignments)
+    P = ext_slots + factories
+    if total_free <= 0 or P <= 0:
+        return 0, 0
+    want_fac = round(total_free * factories / P)  # split freed slots by the ext:fac equilibrium
+
+    total_rel = sum(i["relative_qty"] for i in p1_info) or 1
+    info_by_p0 = {i["p0_name"]: i for i in p1_info}
+    supply = {i["p0_name"]: 0.0 for i in p1_info}
+    target = {i["p0_name"]: P * i["relative_qty"] / total_rel for i in p1_info}
+    for a in assignments:
+        for e in a["extractors"]:
+            if e.get("split"):
+                for leg in e["legs"]:
+                    if leg["p0_name"] in supply:
+                        supply[leg["p0_name"]] += leg["heads"] / 10.0
+            elif e.get("p0_name") in supply:
+                supply[e["p0_name"]] += 1.0
+
+    fac_pool = [p for p in fac_db_planets if (not best_fac_system or p["system"] == best_fac_system)]
+    added_fac = added_ext = 0
+    for a in assignments:
+        free = max(0, a.get("free_planets", 0))
+        if free <= 0:
+            continue
+        used = {(e.get("system"), e.get("planet_num")) for e in a["extractors"]}
+        used |= {(f.get("system"), f.get("planet_num")) for f in a.get("factory_assignments", [])}
+        while free > 0:
+            placed = False
+            if added_fac < want_fac:  # owe a factory slot, and a B/T planet is free for this char
+                cand = next((p for p in fac_pool if (p["system"], p["planet_num"]) not in used), None)
+                product = make_factory_product() if (cand and make_factory_product) else None
+                if cand and (product is not None or make_factory_product is None):
+                    fa = {
+                        "system": cand["system"], "planet_num": cand["planet_num"],
+                        "planet_type": cand["planet_type"], "is_new": True, "reinvest": True,
+                    }
+                    if product is not None:
+                        fa["product"] = product
+                    a.setdefault("factory_assignments", []).append(fa)
+                    a["factory_planets"] = a.get("factory_planets", 0) + 1
+                    used.add((cand["system"], cand["planet_num"]))
+                    added_fac += 1
+                    free -= 1
+                    placed = True
+            if not placed:  # extractor of the most under-supplied P0 with a reachable free planet
+                for p0 in sorted(supply, key=lambda n: supply[n] - target[n]):
+                    inf = info_by_p0[p0]
+                    cand = next((p for p in p0_planet_lists.get(p0, [])
+                                 if (p["system"], p["planet_num"]) not in used), None)
+                    if cand:
+                        a["extractors"].append({
+                            "p0_type_id": inf["p0_type_id"], "p0_name": p0,
+                            "p1_type_id": inf["p1_type_id"], "p1_name": inf["p1_name"],
+                            "planet_types": inf["planet_types"], "best_planet_type": inf["best_planet_type"],
+                            "relative_qty": inf["relative_qty"], "is_existing": False, "is_replace": False,
+                            "reinvest": True, "system": cand["system"], "planet_num": cand["planet_num"],
+                            "planet_type": cand["planet_type"], "quality_pct": round(cand["value"]),
+                        })
+                        used.add((cand["system"], cand["planet_num"]))
+                        supply[p0] += 1.0
+                        added_ext += 1
+                        free -= 1
+                        placed = True
+                        break
+            if not placed:
+                break  # nothing else fits on this character's remaining free slots
+        a["free_planets"] = free
+    return added_fac, added_ext
+
+
+def _pick_split_host(A: dict, B: dict, host_quality) -> dict | None:
+    """Choose which of the two planets can host both resources. Prefer A's planet if its
+    type also yields B (and we know B's richness there), else B's planet for A. Returns a
+    host dict {system, planet_num, planet_type, qA, qB, is_existing} or None."""
+    ptA, ptB = _slot_planet_type(A), _slot_planet_type(B)
+    # A's planet hosting B?
+    if ptA and ptA in _P0_PLANET_TYPES.get(B["p0_name"], []):
+        qB = host_quality(B["p0_name"], A["system"], A["planet_num"])
+        if qB is not None:
+            return {"system": A["system"], "planet_num": A["planet_num"], "planet_type": ptA,
+                    "qA": A["quality_pct"], "qB": qB, "is_existing": A.get("is_existing")}
+    # B's planet hosting A?
+    if ptB and ptB in _P0_PLANET_TYPES.get(A["p0_name"], []):
+        qA = host_quality(A["p0_name"], B["system"], B["planet_num"])
+        if qA is not None:
+            return {"system": B["system"], "planet_num": B["planet_num"], "planet_type": ptB,
+                    "qA": qA, "qB": B["quality_pct"], "is_existing": B.get("is_existing")}
+    return None
+
+
+def _solve_split_heads(A, B, host, pu_out, need, mode) -> tuple | None:
+    """Allocate the 10-head budget across the two legs, OUTPUT-PRESERVING for both modes:
+    returns (headsA, headsB, qA, qB) only if the legs can cover each P0's floor within 10
+    heads, else None. (Aggressive's extra value is reinvesting the freed planet, not
+    underproducing here.) qA/qB are the host planet's richness per leg."""
+    qA, qB = host["qA"], host["qB"]
+    if qA <= 0 or qB <= 0:
+        return None
+    # Planet-units left for each P0 once its dedicated planet (1.0) is removed.
+    outA_without = pu_out.get(A["p0_name"], 0.0) - 1.0
+    outB_without = pu_out.get(B["p0_name"], 0.0) - 1.0
+    defA = max(0.0, need(A["p0_name"]) - outA_without)  # planet-units the split leg must supply
+    defB = max(0.0, need(B["p0_name"]) - outB_without)
+    # Heads to cover each deficit (10 heads = 1 planet; ≥1 so it's a genuine two-resource planet).
+    headsA = max(1, ceil(defA * 10.0))
+    headsB = max(1, ceil(defB * 10.0))
+    if headsA + headsB > 10:
+        return None
+    # Spread leftover heads as buffer, proportional to relative demand.
+    spare = 10 - headsA - headsB
+    if spare > 0:
+        relA = A.get("relative_qty", 1) or 1
+        relB = B.get("relative_qty", 1) or 1
+        addA = round(spare * relA / (relA + relB))
+        headsA += addA
+        headsB += spare - addA
+    return headsA, headsB, qA, qB
 
 
 def _assign_factory_planets_to_chars(
@@ -1888,14 +2267,59 @@ def _run_plan(req: PlanRequest, context_id: int) -> dict:
         fac_db_planets, best_fac_system, char_nonfac, req, has_system_name,
     )
 
+    # Optional split-extraction consolidation (opt-in via split_mode).
+    split_mode = _norm_split_mode(req.split_mode)
+    split_planets = planets_saved = 0
+    if split_mode != "off":
+        _total_rel = sum(i["relative_qty"] for i in p1_info) or 1
+        # True baseline planet-units needed per P0 = factory P0 consumption / a full planet's
+        # daily output (48k/cycle × 24). p0_per_day is what the factories actually eat (NOT the
+        # over-extracted amount), so the difference vs placed planets is the reclaimable slack.
+        p0_need_pu: dict[str, float] = {}
+        for i in p1_info:
+            p0_need_pu[i["p0_name"]] = (
+                p0_need_pu.get(i["p0_name"], 0.0)
+                + (p0_per_day * i["relative_qty"] / _total_rel) / _PLANET_P0_PER_DAY)
+        split_planets, planets_saved = _consolidate_split_extractors(
+            assignments, p0_need_pu, p0_planet_lists, split_mode)
+        if planets_saved > 0:  # always reinvest freed planets into more production
+            added_fac, _added_ext = _reinvest_freed_planets(
+                assignments, p1_info, p0_planet_lists, fac_db_planets,
+                best_fac_system, ext_slots, factories)
+            if added_fac:
+                factories += added_fac
+                products_per_day = round(prod_per_factory_day * factories)
+                p0_per_day = round(sum(frac * products_per_day * 150 for frac in p1_fracs.values()))
+                isk_per_day = round(products_per_day * sell_price, 2)
+                total_p1_per_day = products_per_day * sum(p1_fracs.values())
+                p1_m3_per_factory_day = (total_p1_per_day * _P1_VOLUME / factories) if factories else 0.0
+                factory_refill_hours = (
+                    round(factory_buffer_m3 / (p1_m3_per_factory_day / 24), 1)
+                    if p1_m3_per_factory_day > 0 else None)
+
     all_assignments = sorted(assignments, key=lambda a: a["character_name"])
     total_extractors = sum(len(a["extractors"]) for a in all_assignments)
     total_factory_planets = sum(a["factory_planets"] for a in all_assignments)
 
-    quality_vals = [
-        slot["quality_pct"] for a in all_assignments for slot in a["extractors"]
-        if slot.get("quality_pct") is not None
-    ]
+    # P1 delivery split: every factory planet makes the final product and imports its full P1
+    # set, so each P1 splits EVENLY across the placed factory planets. `share` lets the UI turn
+    # a pasted P1 stack into whole-unit amounts to drop at each factory.
+    _fac_list = [f for a in all_assignments for f in a.get("factory_assignments", [])
+                 if not f.get("unplaced")]
+    _nfac = len(_fac_list)
+    if _nfac:
+        _prod_name = types.get(req.type_id, {}).get("name", "?")
+        _p1_in = sorted(
+            ({"p1_type_id": pid, "p1_name": types.get(pid, {}).get("name", "?"),
+              "share": 1.0 / _nfac, "share_pct": round(100.0 / _nfac)}
+             for pid in p1_fracs),
+            key=lambda x: x["p1_name"])
+        for f in _fac_list:
+            f.setdefault("product", {"type_id": req.type_id, "name": _prod_name})
+            f["p1_inputs"] = [dict(p) for p in _p1_in]
+
+    # Stat aggregation expands split planets into their two legs (each leg = heads × quality).
+    quality_vals = [q for a in all_assignments for q in _ext_leg_qualities(a["extractors"])]
     avg_quality_pct = round(sum(quality_vals) / len(quality_vals)) if quality_vals else None
     avg_p0_per_cycle = round(avg_quality_pct / 100 * 48000) if avg_quality_pct else None
     required_avg_p0_per_cycle = (
@@ -1904,8 +2328,7 @@ def _run_plan(req: PlanRequest, context_id: int) -> dict:
     _baseline_p0_per_day = total_extractors * 48_000 * 24
     overproduction_pct = round((_baseline_p0_per_day / p0_per_day - 1) * 100) if p0_per_day > 0 else 0
     _actual_p0_per_day = sum(
-        slot.get("quality_pct", 100) / 100 * 48_000 * 24
-        for a in all_assignments for slot in a["extractors"]
+        _ext_actual_p0_per_day(a["extractors"]) for a in all_assignments
     )
     max_supportable_factories = int(_actual_p0_per_day / p0_per_factory_day) if p0_per_factory_day > 0 else 0
 
@@ -1945,6 +2368,9 @@ def _run_plan(req: PlanRequest, context_id: int) -> dict:
             "avg_quality_pct":          avg_quality_pct,
             "avg_p0_per_cycle":         avg_p0_per_cycle,
             "required_avg_p0_per_cycle": required_avg_p0_per_cycle,
+            "split_mode":               split_mode,
+            "split_planets":            split_planets,
+            "planets_saved":            planets_saved,
         },
     }
 

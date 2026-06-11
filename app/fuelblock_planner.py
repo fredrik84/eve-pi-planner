@@ -21,15 +21,21 @@ from app.sde import load_pi_data, get_connection
 from app.market import fetch_prices
 from app.esi import require_context
 from app.planner import (
+    _PLANET_P0_PER_DAY,
     _build_char_list,
     _build_p0_p1_maps,
     _build_p1_info,
     _build_p1_info_raw,
     _compute_factory_shares,
+    _consolidate_split_extractors,
+    _ext_actual_p0_per_day,
+    _ext_leg_qualities,
     _factory_candidates,
     _fetch_planets_and_recs,
     _load_char_planet_config,
+    _norm_split_mode,
     _pick_factory_system,
+    _reinvest_freed_planets,
     _run_extractor_pipeline,
     _set_computed_ext_cap,
     ensure_plan_tables,
@@ -76,6 +82,10 @@ class FuelBlockPlanRequest(BaseModel):
     factory_character_ids: list[int] = []
     max_jumps: int = 1
     basket_id: int | None = None  # None = built-in fuel block; else a custom basket (pp_baskets)
+    # Self-contained basket snapshot carried by a shared plan link, so a recipient who can't
+    # see the (possibly private) basket can still re-run/tweak it. Shape:
+    # {name, run_size, unit_label, items:[{type_id, qty}]}. Takes precedence over basket_id.
+    inline_basket: dict | None = None
     block_type: str = "Oxygen"  # cosmetic — PI side identical across racial blocks
     import_components: list[int] = []  # component type_ids to buy/import instead of produce
     # Allowed factory planet types (None → Barren/Temperate: smallest planets, least
@@ -90,6 +100,7 @@ class FuelBlockPlanRequest(BaseModel):
     rig_tier: str = "none"   # none | t1 | t2
     rig_space: str = "auto"  # auto | high | low | null
     bp_me_pct: float = 0.0
+    split_mode: str = "off"  # off | conservative | aggressive — split-extraction consolidation
 
 
 def _system_security(system: str | None):
@@ -320,9 +331,31 @@ def _resolve_target_basket(req: "FuelBlockPlanRequest", pi_data: dict):
     missing/empty. meta keys: is_fuelblock, config_type_id, run_size, unit_label, name,
     effective_me_pct, mfg (None for custom), block_price_id (None for custom)."""
     types = pi_data["types"]
+    from app.admin import BASKET_CONFIG_BASE
+
+    # A self-contained snapshot from a shared link wins over basket_id — the recipient may
+    # not be able to see the original (private) basket, and a bare basket_id could even
+    # resolve to a *different* basket the viewer happens to own.
+    if req.inline_basket and req.inline_basket.get("items"):
+        ib = req.inline_basket
+        all_components = fuelblocks.resolve_basket_components(
+            [{"type_id": it["type_id"], "qty": it["qty"]} for it in ib["items"]], pi_data)
+        for c in all_components:
+            c["base_qty"] = c["qty"]  # no ME for custom baskets
+        meta = {
+            "is_fuelblock":     False,
+            "config_type_id":   BASKET_CONFIG_BASE + (req.basket_id or 0),
+            "run_size":         ib.get("run_size") or 1,
+            "unit_label":       ib.get("unit_label") or "sets",
+            "name":             ib.get("name") or "Basket",
+            "effective_me_pct": 0.0,
+            "mfg":              None,
+            "block_price_id":   None,
+        }
+        return all_components, meta
 
     if req.basket_id:
-        from app.admin import ensure_basket_tables, BASKET_CONFIG_BASE
+        from app.admin import ensure_basket_tables
         ensure_basket_tables()
         con = get_connection()
         brow = con.execute("SELECT * FROM pp_baskets WHERE id=?", (req.basket_id,)).fetchone()
@@ -377,6 +410,111 @@ def _resolve_target_basket(req: "FuelBlockPlanRequest", pi_data: dict):
         "block_price_id":   _block_ids.get(req.block_type.lower()),
     }
     return all_components, meta
+
+
+def _reinvest_fuelblock_greedy(assignments, factory_lines, line_units, line_planets, bom_qty,
+                               fac_pool, best_fac_system, p0_planet_lists, p1_info, ext_slots,
+                               ccu_by_cid, pi_data, sum_p1, types):
+    """Honest aggressive reinvestment for a basket plan: place each planet freed by split-
+    consolidation where it raises the realised basket rate most — a factory on the weakest
+    production line while factory capacity is the limit, else an extractor of the most
+    under-supplied P0 while extraction is the limit. More blocks come ONLY from real extra
+    factories (capped by available planets). Mutates assignments/line_units/line_planets;
+    returns the new ext_slots."""
+    pool = [p for p in fac_pool if (not best_fac_system or p["system"] == best_fac_system)]
+    state = []
+    for a in assignments:
+        free = max(0, a.get("effective_planets", 0) - len(a["extractors"]) - a.get("factory_planets", 0))
+        if free > 0:
+            used = {(e.get("system"), e.get("planet_num")) for e in a["extractors"]}
+            used |= {(f.get("system"), f.get("planet_num")) for f in a.get("factory_assignments", [])}
+            state.append({"a": a, "free": free, "used": used, "ccu": ccu_by_cid.get(a["character_id"], 5)})
+    if not state:
+        return ext_slots
+
+    info_by_p0 = {i["p0_name"]: i for i in p1_info}
+    total_rel = sum(i["relative_qty"] for i in p1_info) or 1
+    supply = {i["p0_name"]: 0.0 for i in p1_info}
+    weight = {i["p0_name"]: i["relative_qty"] / total_rel for i in p1_info}
+    for a in assignments:
+        for e in a["extractors"]:
+            if e.get("split"):
+                for leg in e["legs"]:
+                    if leg["p0_name"] in supply:
+                        supply[leg["p0_name"]] += leg["heads"] / 10.0
+            elif e.get("p0_name") in supply:
+                supply[e["p0_name"]] += 1.0
+
+    def fac_baskets():
+        vals = [line_units[t] / bom_qty[t] for t in line_units if bom_qty.get(t)]
+        return min(vals) if vals else float("inf")
+
+    def ext_baskets():
+        return ext_slots * 48_000 * 24 / (sum_p1 * 150) if sum_p1 > 0 else 0.0
+
+    def place_factory():
+        cands = [l for l in factory_lines if bom_qty.get(l["type_id"], 0) > 0]
+        wl = min(cands, key=lambda l: line_units[l["type_id"]] / bom_qty[l["type_id"]], default=None)
+        if not wl:
+            return False
+        tid = wl["type_id"]
+        for s in state:
+            if s["free"] <= 0:
+                continue
+            cand = next((p for p in pool if (p["system"], p["planet_num"]) not in s["used"]), None)
+            if not cand:
+                continue
+            rate = fuelblocks.component_factory_rate(tid, pi_data, cc_level=s["ccu"])
+            s["a"].setdefault("factory_assignments", []).append({
+                "system": cand["system"], "planet_num": cand["planet_num"],
+                "planet_type": cand["planet_type"], "is_new": True, "reinvest": True,
+                "product": {"type_id": tid, "name": types.get(tid, {}).get("name", "?")},
+                "ccu": s["ccu"], "rate_per_hour": round(rate, 2),
+            })
+            s["a"]["factory_planets"] = s["a"].get("factory_planets", 0) + 1
+            s["used"].add((cand["system"], cand["planet_num"]))
+            s["free"] -= 1
+            line_units[tid] = line_units.get(tid, 0.0) + rate * 24
+            line_planets[tid] = line_planets.get(tid, 0) + 1
+            return True
+        return False
+
+    def place_extractor():
+        nonlocal ext_slots
+        for s in state:
+            if s["free"] <= 0:
+                continue
+            for p0 in sorted(supply, key=lambda n: supply[n] - weight[n] * max(ext_slots, 1)):
+                inf = info_by_p0[p0]
+                cand = next((p for p in p0_planet_lists.get(p0, [])
+                             if (p["system"], p["planet_num"]) not in s["used"]), None)
+                if not cand:
+                    continue
+                s["a"]["extractors"].append({
+                    "p0_type_id": inf["p0_type_id"], "p0_name": p0,
+                    "p1_type_id": inf["p1_type_id"], "p1_name": inf["p1_name"],
+                    "planet_types": inf["planet_types"], "best_planet_type": inf["best_planet_type"],
+                    "relative_qty": inf["relative_qty"], "is_existing": False, "is_replace": False,
+                    "reinvest": True, "system": cand["system"], "planet_num": cand["planet_num"],
+                    "planet_type": cand["planet_type"], "quality_pct": round(cand["value"]),
+                })
+                s["used"].add((cand["system"], cand["planet_num"]))
+                s["free"] -= 1
+                supply[p0] += 1.0
+                ext_slots += 1
+                return True
+        return False
+
+    for _ in range(sum(s["free"] for s in state)):
+        if fac_baskets() <= ext_baskets():
+            if not place_factory() and not place_extractor():
+                break
+        else:
+            if not place_extractor() and not place_factory():
+                break
+    for s in state:
+        s["a"]["free_planets"] = s["free"]
+    return ext_slots
 
 
 def _run_fuelblock_plan(req: "FuelBlockPlanRequest", context_id: int) -> dict:
@@ -480,11 +618,27 @@ def _run_fuelblock_plan(req: "FuelBlockPlanRequest", context_id: int) -> dict:
         fallback_planet_type=allowed_types[0] if allowed_types else "Barren",
     )
 
+    # Optional split-extraction consolidation (opt-in via split_mode). Operates on the
+    # combined per-P0 demand vector, same planet-unit baseline as the single-product path.
+    split_mode = _norm_split_mode(req.split_mode)
+    split_planets = planets_saved = 0
+    bom_qty = {c["type_id"]: c["qty"] for c in components}
+    if split_mode != "off":
+        _total_rel = sum(i["relative_qty"] for i in p1_info) or 1
+        # True baseline planet-units per P0 = factory P0 consumption / a full planet's daily
+        # output (the over-extracted surplus above this is what splitting can reclaim).
+        p0_need_pu: dict[str, float] = {}
+        for i in p1_info:
+            p0_need_pu[i["p0_name"]] = (
+                p0_need_pu.get(i["p0_name"], 0.0)
+                + (p0_per_day * i["relative_qty"] / _total_rel) / _PLANET_P0_PER_DAY)
+        split_planets, planets_saved = _consolidate_split_extractors(
+            assignments, p0_need_pu, p0_planet_lists, split_mode)
+
     # Realised factory output: each placed factory planet runs at its host character's
     # effective CCU, so with mixed command-centre levels the per-line throughput (and
     # the sustainable basket rate) reflect where the planets actually landed.
     ccu_by_cid = {c["character_id"]: c["effective_ccu"] for c in char_list}
-    bom_qty = {c["type_id"]: c["qty"] for c in components}
     line_units: dict[int, float] = {l["type_id"]: 0.0 for l in factory_lines}
     line_planets: dict[int, int] = {l["type_id"]: 0 for l in factory_lines}
     for a in assignments:
@@ -496,6 +650,13 @@ def _run_fuelblock_plan(req: "FuelBlockPlanRequest", context_id: int) -> dict:
             f["rate_per_hour"] = round(rate, 2)
             line_units[tid] = line_units.get(tid, 0.0) + rate * 24
             line_planets[tid] = line_planets.get(tid, 0) + 1
+    # Split on: honestly fill the planets freed by consolidation with real factory/extractor
+    # planets (more blocks come only from more factories — no idle freed planets).
+    if planets_saved > 0:
+        ext_slots = _reinvest_fuelblock_greedy(
+            assignments, factory_lines, line_units, line_planets, bom_qty, fac_pool,
+            best_fac_system, p0_planet_lists, p1_info, ext_slots, ccu_by_cid, pi_data,
+            sum(basket_p1.values()), types)
     for l in factory_lines:
         t = l["type_id"]
         l["count"] = line_planets.get(t, 0)
@@ -511,6 +672,7 @@ def _run_fuelblock_plan(req: "FuelBlockPlanRequest", context_id: int) -> dict:
         baskets_per_day = realized_baskets
         fuel_blocks_per_day = round(baskets_per_day * meta["run_size"])
         p0_per_day = round(baskets_per_day * _sum_p1 * 150)
+        factories_total = sum(l["count"] for l in factory_lines)
     # Per-line production needed (effective, ME-adjusted) to feed the manufactured blocks.
     for l in factory_lines:
         l["need_per_day"] = round(baskets_per_day * bom_qty.get(l["type_id"], 0))
@@ -518,6 +680,39 @@ def _run_fuelblock_plan(req: "FuelBlockPlanRequest", context_id: int) -> dict:
     all_assignments = sorted(assignments, key=lambda a: a["character_name"])
     total_extractors = sum(len(a["extractors"]) for a in all_assignments)
     total_factory_planets = sum(a["factory_planets"] for a in all_assignments)
+
+    # P1 delivery shares: factories import P1 and chain internally, so a factory planet's P1
+    # demand = its output rate × the P1 trace of the component it makes. Several components can
+    # pull the SAME P1 (pooled), so for each P1 we report what fraction of the pool each factory
+    # planet should get — collect a batch of that P1, split it by these %. Rate-based, so the
+    # shares are batch-size-independent (no per-day numbers).
+    _per_unit_cache: dict[int, dict[int, float]] = {}
+    p1_pool: dict[int, float] = {}
+    for a in all_assignments:
+        for f in a.get("factory_assignments", []):
+            prod = f.get("product")
+            out_rate = f.get("rate_per_hour") or 0
+            if not prod or out_rate <= 0:
+                continue
+            tid = prod["type_id"]
+            if tid not in _per_unit_cache:
+                _per_unit_cache[tid] = fuelblocks.compute_basket_p1_reqs(
+                    [{"type_id": tid, "qty": 1}], pi_data)
+            demand = {p1: q * out_rate for p1, q in _per_unit_cache[tid].items()}
+            f["_p1_demand"] = demand
+            for p1, q in demand.items():
+                p1_pool[p1] = p1_pool.get(p1, 0.0) + q
+    for a in all_assignments:
+        for f in a.get("factory_assignments", []):
+            demand = f.pop("_p1_demand", None)
+            if not demand:
+                continue
+            f["p1_inputs"] = sorted(
+                ({"p1_type_id": p1, "p1_name": types.get(p1, {}).get("name", "?"),
+                  "share": (q / p1_pool[p1]) if p1_pool.get(p1) else 0.0,
+                  "share_pct": round(q / p1_pool[p1] * 100) if p1_pool.get(p1) else 0}
+                 for p1, q in demand.items()),
+                key=lambda x: -x["share"])
 
     # Factory planets that wanted a real planet in the factory system but couldn't get one
     # of the allowed types (tagged with the fallback type, planet_num=None). This is the
@@ -528,29 +723,26 @@ def _run_fuelblock_plan(req: "FuelBlockPlanRequest", context_id: int) -> dict:
         if f.get("planet_num") is None
     ) if best_fac_system else 0
 
-    quality_vals = [
-        slot["quality_pct"] for a in all_assignments for slot in a["extractors"]
-        if slot.get("quality_pct") is not None
-    ]
+    quality_vals = [q for a in all_assignments for q in _ext_leg_qualities(a["extractors"])]
     avg_quality_pct = round(sum(quality_vals) / len(quality_vals)) if quality_vals else None
     avg_p0_per_cycle = round(avg_quality_pct / 100 * 48000) if avg_quality_pct else None
-    _actual_p0_per_day = sum(
-        slot.get("quality_pct", 100) / 100 * 48_000 * 24
-        for a in all_assignments for slot in a["extractors"]
-    )
+    _actual_p0_per_day = sum(_ext_actual_p0_per_day(a["extractors"]) for a in all_assignments)
 
-    # ISK estimate (best-effort). Fuel block → its sell price × blocks/day. Custom basket
-    # has no single final product → summed market value of the produced components/day.
+    # ISK estimate (best-effort). The plan only produces the PI components, so value the output
+    # as the daily market value of those produced components (what you'd get selling the PI you
+    # make). A FINISHED fuel block sells for much more, but also needs ice products + racial
+    # isotopes we don't produce — so block_gross is reported separately, not as the headline.
+    block_gross_isk_per_day = None
     if meta["is_fuelblock"]:
         _bid = meta["block_price_id"]
-        unit_price = fetch_prices([_bid]).get(_bid, 0.0) if _bid else 0.0
-        isk_per_day = round(fuel_blocks_per_day * unit_price, 2)
-        sell_price = round(unit_price, 2)
+        block_price = fetch_prices([_bid]).get(_bid, 0.0) if _bid else 0.0
+        block_gross_isk_per_day = round(fuel_blocks_per_day * block_price, 2)
+        sell_price = round(block_price, 2)  # finished-block Jita price (reference)
     else:
-        _prices = fetch_prices([c["type_id"] for c in components])
-        isk_per_day = round(sum(baskets_per_day * c["qty"] * _prices.get(c["type_id"], 0.0)
-                                for c in components), 2)
         sell_price = 0.0
+    _prices = fetch_prices([c["type_id"] for c in components])
+    isk_per_day = round(sum(baskets_per_day * c["qty"] * _prices.get(c["type_id"], 0.0)
+                            for c in components), 2)
 
     result = {
         "fuelblock":             True,
@@ -596,6 +788,7 @@ def _run_fuelblock_plan(req: "FuelBlockPlanRequest", context_id: int) -> dict:
             "factories":                factories_total,
             "products_per_day":         fuel_blocks_per_day,
             "isk_per_day":              isk_per_day,
+            "block_gross_isk_per_day":  block_gross_isk_per_day,
             "sell_price":               sell_price,
             "p0_per_day":               p0_per_day,
             "total_extractors":         total_extractors,
@@ -606,6 +799,9 @@ def _run_fuelblock_plan(req: "FuelBlockPlanRequest", context_id: int) -> dict:
             "plan_cc":                  plan_cc,
             "ccu_mixed":                len({c["effective_ccu"] for c in char_list}) > 1,
             "material_efficiency_pct":  effective_me_pct,
+            "split_mode":               split_mode,
+            "split_planets":            split_planets,
+            "planets_saved":            planets_saved,
         },
     }
     if meta["mfg"]:

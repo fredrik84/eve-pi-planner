@@ -547,6 +547,138 @@ def build_extractor_template(p1_id: int, planet_type: str, struct: dict, pi_data
     }
 
 
+def build_split_extractor_template(p1a_id: int, p1b_id: int, planet_type: str, struct: dict,
+                                   pi_data: dict, heads_a: int, heads_b: int,
+                                   n_basic_a: int, n_basic_b: int, n_launchpads: int = 1) -> dict:
+    """Split P0→P1 extractor planet: TWO Extractor Control Units sharing one storage hub and
+    launchpad, each with its own head count + Basic Industry line, producing two P1s. The host
+    planet type must yield both P0s. Mirrors build_extractor_template's hub/ring topology."""
+    types = pi_data["types"]
+    scha, schb = pi_data["schematics"][p1a_id], pi_data["schematics"][p1b_id]
+    p0a, p0a_qty, p1a_out = scha["inputs"][0]["type_id"], scha["inputs"][0]["quantity"], scha["output_qty"]
+    p0b, p0b_qty, p1b_out = schb["inputs"][0]["type_id"], schb["inputs"][0]["quantity"], schb["output_qty"]
+
+    pins: list[dict] = [{"H": 0, "S": None, "T": struct["storage"],
+                         "La": _CENTER_LAT, "Lo": _CENTER_LON}]   # storage hub = pin 1
+    hub = 1
+
+    def _ecu_line(heads, p0_id, p1_id, n_basic):
+        ecu = len(pins) + 1
+        pins.append({"H": heads, "S": p0_id, "T": struct["ecu"]})
+        basics = []
+        for _ in range(n_basic):
+            pins.append({"H": 0, "S": p1_id, "T": struct["basic_if"]})
+            basics.append(len(pins))
+        return ecu, basics
+
+    ecu_a, basics_a = _ecu_line(heads_a, p0a, p1a_id, n_basic_a)
+    ecu_b, basics_b = _ecu_line(heads_b, p0b, p1b_id, n_basic_b)
+    lps = []
+    for _ in range(max(1, n_launchpads)):
+        pins.append({"H": 0, "S": None, "T": struct["launchpad"]})
+        lps.append(len(pins))
+
+    ring = [ecu_a] + basics_a + [ecu_b] + basics_b + lps
+    radius = max(0.0145, MIN_SEP / (2 * math.sin(math.pi / max(2, len(ring)))))
+    for k, pin in enumerate(ring):
+        la, lo = _to_latlon(radius, 2 * math.pi * k / len(ring))
+        pins[pin - 1]["La"], pins[pin - 1]["Lo"] = la, lo
+
+    links = [{"S": hub, "D": p, "Lv": 0} for p in ring]
+    routes = [
+        {"P": [ecu_a, hub], "Q": n_basic_a * p0a_qty, "T": p0a},   # extraction A → storage
+        {"P": [ecu_b, hub], "Q": n_basic_b * p0b_qty, "T": p0b},   # extraction B → storage
+    ]
+    for b in basics_a:
+        routes.append({"P": [hub, b], "Q": p0a_qty, "T": p0a})
+        routes.append({"P": [b, hub, lps[0]], "Q": p1a_out, "T": p1a_id})
+    for b in basics_b:
+        routes.append({"P": [hub, b], "Q": p0b_qty, "T": p0b})
+        routes.append({"P": [b, hub, lps[0]], "Q": p1b_out, "T": p1b_id})
+
+    _enforce_min_sep(pins)
+    for p in pins:
+        p["La"], p["Lo"] = round(p["La"], 5), round(p["Lo"], 5)
+    cmt = f"Split: {types[p1a_id]['name']} + {types[p1b_id]['name']} ({planet_type})"
+    return {
+        "template": {"CmdCtrLv": CMD_CTR_LEVEL, "Cmt": cmt, "Diam": PLANET_DIAM.get(planet_type, 8000.0),
+                     "Pln": struct["planet_type_id"], "P": pins, "L": links, "R": routes},
+        "name": cmt, "n_basic_a": n_basic_a, "n_basic_b": n_basic_b,
+        "heads_a": heads_a, "heads_b": heads_b, "n_launchpads": len(lps),
+    }
+
+
+def generate_split_extractor_layout(p1a_id: int, p1b_id: int, heads_a: int = 5, heads_b: int = 5,
+                                    planet_type: str = "Barren", launchpads: int = 1,
+                                    cc_level: Optional[int] = None) -> dict:
+    """One importable two-ECU (split) extractor template producing P1 A and P1 B on a single
+    planet. The planet type is coerced to one that yields BOTH P0s. Basic-factory counts start
+    proportional to each line's heads and shrink to fit the command-centre CPU/PG budget; if it
+    still doesn't fit at 1+1 basics the result is flagged over_budget (a CC too low to host two
+    ECUs)."""
+    pi_data = load_pi_data()
+    types = pi_data["types"]
+    p0a_name = types[pi_data["schematics"][p1a_id]["inputs"][0]["type_id"]]["name"]
+    p0b_name = types[pi_data["schematics"][p1b_id]["inputs"][0]["type_id"]]["name"]
+    both = sorted(set(_p0_planets(p0a_name)) & set(_p0_planets(p0b_name)))
+    if both and planet_type not in both:
+        planet_type = both[0]
+
+    con = get_connection()
+    struct = _structure_ids(con, planet_type)
+    r = con.execute("SELECT type_id FROM types WHERE name=?", (f"Planet ({planet_type})",)).fetchone()
+    struct["planet_type_id"] = r["type_id"] if r else None
+    con.close()
+
+    cc = CMD_CTR_LEVEL if cc_level is None else max(1, min(5, int(cc_level)))
+    lp = max(1, min(MAX_LAUNCHPADS, launchpads))
+    ha, hb = max(1, int(heads_a)), max(1, int(heads_b))
+    nba = max(1, round(EXTRACTOR_BASICS * ha / EXTRACTOR_HEADS))
+    nbb = max(1, round(EXTRACTOR_BASICS * hb / EXTRACTOR_HEADS))
+
+    def _build(a, b):
+        t = build_split_extractor_template(p1a_id, p1b_id, planet_type, struct, pi_data, ha, hb,
+                                           a, b, n_launchpads=lp)
+        t["template"]["CmdCtrLv"] = cc
+        return t
+
+    built = _build(nba, nbb)
+    while (nba > 1 or nbb > 1) and compute_resources(built["template"], struct)["over"]:
+        if nba >= nbb and nba > 1:
+            nba -= 1
+        elif nbb > 1:
+            nbb -= 1
+        else:
+            nba = max(1, nba - 1)
+        built = _build(nba, nbb)
+
+    t = built["template"]
+    res = compute_resources(t, struct)
+    planet = {
+        "id": 1, "name": built["name"], "facilities_by_tier": {1: nba + nbb},
+        "structures": {"ECU": 2, "storage": 1, "launchpad": built["n_launchpads"],
+                       "basic factory": nba + nbb},
+        "pins": len(t["P"]), "links": len(t["L"]), "routes": len(t["R"]),
+        "resources": res, "over_budget": res["over"], "template": t,
+    }
+    sa, sb = pi_data["schematics"][p1a_id], pi_data["schematics"][p1b_id]
+    summary = {
+        "kind": "split-extractor", "planet_type": planet_type, "valid_planets": both,
+        "launchpads": built["n_launchpads"], "buffer_m3": built["n_launchpads"] * 10000,
+        "lines": [
+            {"product_id": p1a_id, "product_name": types[p1a_id]["name"], "extracts": p0a_name,
+             "heads": ha, "basics": nba,
+             "product_per_hour": round(nba * sa["output_qty"] * 3600.0 / sa["cycle_time"], 1)},
+            {"product_id": p1b_id, "product_name": types[p1b_id]["name"], "extracts": p0b_name,
+             "heads": hb, "basics": nbb,
+             "product_per_hour": round(nbb * sb["output_qty"] * 3600.0 / sb["cycle_time"], 1)},
+        ],
+        "imports_label": (f"Two ECUs in-game: {ha} heads on {p0a_name}, {hb} heads on {p0b_name} "
+                          f"(actual yield varies with hotspot placement)"),
+    }
+    return {"summary": summary, "planets": [planet]}
+
+
 def _chain_p1s(product_id: int, pi_data: dict) -> list[int]:
     """All distinct P1 type ids consumed anywhere in a product's chain."""
     types = pi_data["types"]

@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Response
+from pydantic import BaseModel
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app.sde import get_connection
@@ -159,6 +160,13 @@ def ensure_char_tables():
     """)
     try:
         con.execute("ALTER TABLE pp_char_planets ADD COLUMN planet_num INTEGER")
+    except Exception:
+        pass
+    try:
+        # Synthetic "dummy" characters (no ESI token / colonies) added manually so a player
+        # needn't log every alt in. is_dummy=1; their character_id is negative to avoid
+        # colliding with real EVE ids. They contribute planet slots + CCU only.
+        con.execute("ALTER TABLE pp_characters ADD COLUMN is_dummy INTEGER DEFAULT 0")
     except Exception:
         pass
     con.execute("""
@@ -532,8 +540,11 @@ def is_admin(pp_session: str = Cookie(default=None)) -> bool:
         return False
     context_id = info[1]
     con = get_connection()
+    # Only real, SSO-verified characters count — a dummy character is just a typed-in name and
+    # must never confer admin (otherwise anyone could add a dummy named after an admin).
     rows = con.execute(
-        "SELECT character_name FROM pp_characters WHERE context_id=?", (context_id,)
+        "SELECT character_name FROM pp_characters "
+        "WHERE context_id=? AND COALESCE(is_dummy, 0) = 0", (context_id,)
     ).fetchall()
     con.close()
     admin_names = ADMIN_CHARACTERS | _db_admin_names()
@@ -613,8 +624,8 @@ def list_characters(pp_session: str = Cookie(default=None)):
         rows = con.execute("""
             SELECT character_id, character_name, token_expiry,
                    interplanetary_consolidation, command_center_upgrades,
-                   planetology, advanced_planetology
-            FROM pp_characters WHERE context_id=? ORDER BY character_name
+                   planetology, advanced_planetology, COALESCE(is_dummy, 0) AS is_dummy
+            FROM pp_characters WHERE context_id=? ORDER BY COALESCE(is_dummy,0), character_name
         """, (context_id,)).fetchall()
     else:
         rows = []
@@ -639,11 +650,13 @@ def list_characters(pp_session: str = Cookie(default=None)):
     chars = []
     for r in rows:
         expiry = r["token_expiry"] or ""
-        token_ok = expiry > now if expiry else False
+        is_dummy = bool(r["is_dummy"])
+        token_ok = True if is_dummy else (expiry > now if expiry else False)
         chars.append({
             "character_id":   r["character_id"],
             "name":           r["character_name"],
             "token_ok":       token_ok,
+            "is_dummy":       is_dummy,
             "max_planets":    1 + r["interplanetary_consolidation"],
             "ccu":            r["command_center_upgrades"],
             "planetology":    r["planetology"],
@@ -669,6 +682,90 @@ def remove_character(character_id: int, context_id: int = Depends(require_contex
     con.commit()
     con.close()
     return {"removed": character_id}
+
+
+# ── Dummy (synthetic) characters ─────────────────────────────────────────────
+# Let a player who won't log every alt in add placeholder toons that contribute planet
+# slots + a CCU level to the plan. They carry no ESI token and no colonies; the planner
+# picks them up by context_id exactly like real characters. is_admin ignores them.
+
+class DummyCreate(BaseModel):
+    count: int = 1
+    max_planets: int = 6        # 1–6 (→ interplanetary_consolidation = max_planets − 1)
+    ccu: int = 5               # 1–5 command-centre level
+    name_prefix: str = "Alt"
+
+
+class DummyEdit(BaseModel):
+    name: str | None = None
+    max_planets: int | None = None
+    ccu: int | None = None
+
+
+def _clamp(v, lo, hi, default):
+    try:
+        return max(lo, min(hi, int(v)))
+    except (TypeError, ValueError):
+        return default
+
+
+@router.post("/api/characters/dummy")
+def add_dummy_characters(req: DummyCreate, context_id: int = Depends(require_context)):
+    ensure_char_tables()
+    count = _clamp(req.count, 1, 100, 1)
+    mp = _clamp(req.max_planets, 1, 6, 6)
+    ccu = _clamp(req.ccu, 1, 5, 5)
+    prefix = (req.name_prefix or "Alt").strip()[:40] or "Alt"
+    con = get_connection()
+    # Globally unique negative ids (below any existing id) so synthetic chars never collide
+    # with real EVE character ids (always positive).
+    row = con.execute("SELECT MIN(character_id) AS m FROM pp_characters").fetchone()
+    next_id = min(0, row["m"] or 0) - 1
+    # Number new dummies after the count this context already has, so names stay readable.
+    have = con.execute(
+        "SELECT COUNT(*) AS c FROM pp_characters WHERE context_id=? AND COALESCE(is_dummy,0)=1",
+        (context_id,),
+    ).fetchone()["c"]
+    created = []
+    for i in range(count):
+        name = f"{prefix} {have + i + 1}"
+        con.execute(
+            "INSERT INTO pp_characters (character_id, character_name, interplanetary_consolidation, "
+            "command_center_upgrades, context_id, is_dummy) VALUES (?,?,?,?,?,1)",
+            (next_id, name, mp - 1, ccu, context_id),
+        )
+        created.append(next_id)
+        next_id -= 1
+    con.commit()
+    con.close()
+    return {"created": created, "count": len(created)}
+
+
+@router.put("/api/characters/dummy/{character_id}")
+def edit_dummy_character(character_id: int, req: DummyEdit,
+                         context_id: int = Depends(require_context)):
+    ensure_char_tables()
+    con = get_connection()
+    row = con.execute(
+        "SELECT 1 FROM pp_characters WHERE character_id=? AND context_id=? AND COALESCE(is_dummy,0)=1",
+        (character_id, context_id),
+    ).fetchone()
+    if not row:
+        con.close()
+        raise HTTPException(status_code=404, detail="Dummy character not found")
+    sets, params = [], []
+    if req.name is not None and req.name.strip():
+        sets.append("character_name=?"); params.append(req.name.strip()[:60])
+    if req.max_planets is not None:
+        sets.append("interplanetary_consolidation=?"); params.append(_clamp(req.max_planets, 1, 6, 6) - 1)
+    if req.ccu is not None:
+        sets.append("command_center_upgrades=?"); params.append(_clamp(req.ccu, 1, 5, 5))
+    if sets:
+        params += [character_id, context_id]
+        con.execute(f"UPDATE pp_characters SET {', '.join(sets)} WHERE character_id=? AND context_id=?", params)
+        con.commit()
+    con.close()
+    return {"ok": True}
 
 
 @router.post("/api/characters/{character_id}/refresh-planets")

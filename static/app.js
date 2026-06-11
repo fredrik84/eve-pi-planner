@@ -444,6 +444,7 @@ function renderFactorySplit(plan) {
 function switchTab(name) {
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
   document.querySelectorAll('.tab-panel').forEach(p => p.style.display = p.id === 'tab-' + name ? '' : 'none');
+  if (name === 'planner' && typeof onPlannerTabOpen === 'function') onPlannerTabOpen();
   if (name === 'planetary' && typeof onPlanetaryTabOpen === 'function') onPlanetaryTabOpen();
   if (name === 'planetdb' && typeof onPlanetDbTabOpen === 'function') onPlanetDbTabOpen();
   if (name === 'layout' && typeof onLayoutTabOpen === 'function') onLayoutTabOpen();

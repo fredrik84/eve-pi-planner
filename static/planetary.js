@@ -58,6 +58,7 @@ let _wiz = {
   productName: '',
   fuelblock: false,     // true for any multi-product basket target (fuel block OR custom)
   basketId: null,       // custom basket id (null = built-in fuel block)
+  inlineBasket: null,   // basket snapshot from a shared link when the basket isn't ours
   lastRecsData: null,   // /api/plan result from step 2 (no chosen_systems)
   lastPlanData: null,   // /api/plan result from step 3 (with chosen_systems)
   chosenSystems: [],
@@ -65,6 +66,7 @@ let _wiz = {
   factoryCharIds: [],   // if non-empty, only these character IDs do factories
   importComponents: [], // fuel-block component type_ids to buy/import, not produce
   factoryPlanetTypes: ['Barren', 'Temperate'], // allowed factory planet types (fuel block)
+  splitMode: 'off',     // off | on — split-extraction (reuse planets → more factories)
 };
 
 let _fbBom = null;   // cached fuel-block basket components (from /api/fuelblock-bom)
@@ -83,6 +85,16 @@ function _basketIdFor(name) {
 const BASKET_CONFIG_BASE = 2000000000;
 const _basketIdFromTid = tid => (tid > BASKET_CONFIG_BASE ? tid - BASKET_CONFIG_BASE : null);
 const _basketById = id => _baskets.find(b => b.id === id) || null;
+// Self-contained basket definition embedded in a share link so a recipient who can't see
+// the (private) basket can still re-run/tweak the plan.
+function _basketSnapshot(id) {
+  const b = _basketById(id);
+  if (!b) return null;
+  return {
+    name: b.name, run_size: b.run_size, unit_label: b.unit_label,
+    items: b.items.map(i => ({ type_id: i.type_id, qty: i.qty })),
+  };
+}
 
 function wizardGo(n) {
   _wiz.step = n;
@@ -156,6 +168,8 @@ function renderHeaderSession(loggedIn, chars, sessionCharId) {
     + `<span class="header-session">${name} · <a href="/auth/logout" class="header-logout">Log out</a></span>`;
   const navTab = document.getElementById('adminNavTab');
   if (navTab) navTab.style.display = _isAdmin ? '' : 'none';
+  const mb = document.getElementById('manageBasketsBtn');
+  if (mb) mb.style.display = loggedIn ? '' : 'none';   // user-owned baskets need a login
 }
 
 // ── Bug reporting ─────────────────────────────────────────────────────────────
@@ -201,7 +215,6 @@ function onAdminTabOpen() {
   loadPlanetSubmissions();
   loadBugs();
   loadAdmins();
-  loadBasketsAdmin();
 }
 
 async function loadPlanetSubmissions() {
@@ -304,23 +317,50 @@ async function removeAdmin(name) {
   } catch (e) { alert('Failed: ' + e.message); }
 }
 
-// ── Custom baskets (admin) ────────────────────────────────────────────────────
+// ── Production baskets (user-owned + global) ──────────────────────────────────
+// Any logged-in user can create private baskets (visible only to them). Admins also
+// manage the shared global baskets via the "Make global" toggle. The manager lives in a
+// modal (#basketModal) reachable from the product step and the Admin tab.
 let _basketEditId = null;            // null = creating a new basket
 let _basketEditItems = [];           // [{type_id, name, tier, qty}]
 
-async function loadBasketsAdmin() {
+// A basket is editable by this account if it's the account's own private basket, or it's
+// a global basket and the account is an admin.
+const _basketEditable = b => b.owned || (b.global && _isAdmin);
+
+function openBasketModal() {
+  const m = document.getElementById('basketModal');
+  if (!m) return;
+  m.style.display = 'flex';
+  const gr = document.getElementById('basketGlobalRow');
+  if (gr) gr.style.display = _isAdmin ? '' : 'none';   // only admins can publish globals
+  resetBasketEditor();
+  loadBasketManager();
+}
+function closeBasketModal() {
+  const m = document.getElementById('basketModal');
+  if (m) m.style.display = 'none';
+}
+
+async function loadBasketManager() {
   await _refreshBaskets();           // keeps the wizard picker in sync too
   const el = document.getElementById('basketList');
   if (!el) return;
-  if (!_baskets.length) { el.innerHTML = '<div class="pp-empty">No baskets yet.</div>'; }
-  else el.innerHTML = _baskets.map(b => {
+  if (!_baskets.length) { el.innerHTML = '<div class="pp-empty">No baskets yet — create one below.</div>'; return; }
+  el.innerHTML = _baskets.map(b => {
     const items = b.items.map(i => `${_esc(i.name)}×${i.qty}`).join(', ');
+    const badge = b.global
+      ? '<span class="basket-tag basket-tag-global">global</span>'
+      : (b.owned ? '<span class="basket-tag basket-tag-mine">mine</span>' : '');
+    const actions = _basketEditable(b)
+      ? `<button class="bug-act" onclick="editBasket(${b.id})">Edit</button>
+         <button class="bug-act bug-act-ignore" onclick="deleteBasket(${b.id}, '${_esc(b.name).replace(/'/g, "\\'")}')">Delete</button>`
+      : '';
     return `<div class="basket-row">
       <div class="basket-row-head">
-        <span class="admin-name">${_esc(b.name)}</span>
+        <span class="admin-name">${_esc(b.name)}</span>${badge}
         <span class="admin-meta">run ${b.run_size} · ${_esc(b.unit_label)}</span>
-        <button class="bug-act" onclick="editBasket(${b.id})">Edit</button>
-        <button class="bug-act bug-act-ignore" onclick="deleteBasket(${b.id}, '${_esc(b.name).replace(/'/g, "\\'")}')">Delete</button>
+        ${actions}
       </div>
       <div class="basket-row-items">${_esc(items)}</div>
     </div>`;
@@ -336,6 +376,8 @@ function resetBasketEditor() {
   document.getElementById('basketUnitLabel').value = 'sets';
   document.getElementById('basketItemSearch').value = '';
   document.getElementById('basketStatus').textContent = '';
+  const g = document.getElementById('basketGlobal');
+  if (g) g.checked = false;
   renderBasketEditorItems();
 }
 
@@ -349,6 +391,8 @@ function editBasket(id) {
   document.getElementById('basketRunSize').value = b.run_size;
   document.getElementById('basketUnitLabel').value = b.unit_label;
   document.getElementById('basketStatus').textContent = '';
+  const g = document.getElementById('basketGlobal');
+  if (g) g.checked = !!b.global;       // editing a global keeps it global (admin only)
   renderBasketEditorItems();
   document.getElementById('basketName').scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
@@ -402,27 +446,29 @@ async function saveBasket() {
     .map(it => ({ type_id: it.type_id, qty: it.qty }));
   if (!name) { status.textContent = 'Name required'; return; }
   if (!items.length) { status.textContent = 'Add at least one component'; return; }
+  const g = document.getElementById('basketGlobal');
+  const make_global = !!(g && g.checked && _isAdmin);
   status.textContent = 'Saving…';
   try {
     const url = _basketEditId ? `/api/baskets/${_basketEditId}` : '/api/baskets';
     const resp = await fetch(url, {
       method: _basketEditId ? 'PUT' : 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, run_size, unit_label, items }),
+      body: JSON.stringify({ name, run_size, unit_label, items, make_global }),
     });
     if (!resp.ok) throw new Error((await resp.json()).detail || `HTTP ${resp.status}`);
     resetBasketEditor();
-    loadBasketsAdmin();
+    loadBasketManager();
   } catch (e) { status.textContent = e.message; }
 }
 
 async function deleteBasket(id, name) {
-  if (!confirm(`Delete basket "${name}"? Users will no longer be able to plan it.`)) return;
+  if (!confirm(`Delete basket "${name}"? It will no longer be selectable in the planner.`)) return;
   try {
     const resp = await fetch(`/api/baskets/${id}`, { method: 'DELETE' });
     if (!resp.ok) throw new Error((await resp.json()).detail || `HTTP ${resp.status}`);
     if (_basketEditId === id) resetBasketEditor();
-    loadBasketsAdmin();
+    loadBasketManager();
   } catch (e) { alert('Failed: ' + e.message); }
 }
 function filterBugs(status, btn) {
@@ -483,6 +529,8 @@ async function setBugStatus(id, status) {
 function renderCharacters(chars, loggedIn) {
   const list = document.getElementById('characterList');
   list.innerHTML = '';
+  const dummyCard = document.getElementById('dummyCharCard');
+  if (dummyCard) dummyCard.style.display = loggedIn ? '' : 'none';
 
   const addBtn     = document.getElementById('esiLoginBtn');
   const refreshBtn = document.getElementById('ppRefreshBtn');
@@ -522,7 +570,28 @@ function renderCharacters(chars, loggedIn) {
 
   chars.forEach(c => {
     const row = document.createElement('div');
-    row.className = 'pp-char-row';
+    row.className = 'pp-char-row' + (c.is_dummy ? ' pp-char-dummy' : '');
+    if (c.is_dummy) {
+      const mpOpts = [1, 2, 3, 4, 5, 6].map(n => `<option${n === c.max_planets ? ' selected' : ''}>${n}</option>`).join('');
+      const ccuOpts = [1, 2, 3, 4, 5].map(n => `<option${n === c.ccu ? ' selected' : ''}>${n}</option>`).join('');
+      row.innerHTML = `
+        <div class="pp-char-header">
+          <span class="pp-char-name"><span class="pp-char-dummy-badge" title="Placeholder character — no ESI, contributes planet slots + CCU only">placeholder</span> ${_esc(c.name)}</span>
+          <button class="pp-char-del" title="Remove placeholder" data-id="${c.character_id}">✕</button>
+        </div>
+        <div class="pp-char-meta">
+          <label class="pp-dummy-field">planets <select data-f="max_planets">${mpOpts}</select></label>
+          <label class="pp-dummy-field">CCU <select data-f="ccu">${ccuOpts}</select></label>
+        </div>`;
+      row.querySelectorAll('select[data-f]').forEach(sel =>
+        sel.addEventListener('change', () => editDummyField(c.character_id, sel.dataset.f, parseInt(sel.value))));
+      row.querySelector('.pp-char-del').addEventListener('click', async () => {
+        await fetch(`/api/characters/${c.character_id}`, { method: 'DELETE' });
+        loadCharacters();
+      });
+      list.appendChild(row);
+      return;
+    }
     const tokenDot = c.token_ok
       ? '<span title="Token valid" style="color:#5ecf80;font-size:10px">●</span>'
       : '<span title="Token expired — re-add character" style="color:#e06060;font-size:10px">●</span>';
@@ -559,9 +628,45 @@ function renderCharacters(chars, loggedIn) {
   });
 }
 
+async function addDummyCharacters(btn) {
+  const count = parseInt(document.getElementById('dummyCount').value) || 1;
+  const max_planets = parseInt(document.getElementById('dummyMaxPlanets').value) || 6;
+  const ccu = parseInt(document.getElementById('dummyCcu').value) || 5;
+  const name_prefix = (document.getElementById('dummyPrefix').value || 'Alt').trim() || 'Alt';
+  const status = document.getElementById('dummyStatus');
+  status.textContent = 'Adding…';
+  btn.disabled = true;
+  try {
+    const resp = await fetch('/api/characters/dummy', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ count, max_planets, ccu, name_prefix }),
+    });
+    if (!resp.ok) throw new Error((await resp.json()).detail || `HTTP ${resp.status}`);
+    const d = await resp.json();
+    status.textContent = `Added ${d.count}`;
+    await loadCharacters();
+  } catch (e) {
+    status.textContent = e.message;
+  } finally {
+    btn.disabled = false;
+    setTimeout(() => { status.textContent = ''; }, 2500);
+  }
+}
+
+async function editDummyField(id, field, value) {
+  const body = {}; body[field] = value;
+  try {
+    await fetch(`/api/characters/dummy/${id}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  } catch (e) { /* best-effort; reload reflects truth */ }
+  loadCharacters();
+}
+
 async function refreshAllPlanets(btn) {
   const chars = document.querySelectorAll('.pp-char-del');
-  const ids = Array.from(chars).map(b => parseInt(b.dataset.id));
+  const ids = Array.from(chars).map(b => parseInt(b.dataset.id)).filter(id => id > 0);  // skip placeholders
   btn.textContent = `Refreshing 0/${ids.length}…`;
   btn.disabled = true;
   for (let i = 0; i < ids.length; i++) {
@@ -1020,7 +1125,7 @@ async function renderBasketToggles() {
   const card = document.getElementById('ppBasketCard');
   const list = document.getElementById('ppBasketList');
   const mfg = document.getElementById('ppMfgCard');
-  const builtinFb = _wiz.fuelblock && !_wiz.basketId;
+  const builtinFb = _wiz.fuelblock && !_wiz.basketId && !_wiz.inlineBasket;
   if (mfg) mfg.style.display = builtinFb ? '' : 'none';
   if (builtinFb) initMfgInputs();
   if (!builtinFb) { card.style.display = 'none'; return; }
@@ -1055,10 +1160,11 @@ async function onProductChange() {
   if (!typeId) {
     card.style.display = 'none';
     document.getElementById('ppBasketCard').style.display = 'none';
-    _wiz.typeId = null; _wiz.fuelblock = false; _wiz.basketId = null;
+    _wiz.typeId = null; _wiz.fuelblock = false; _wiz.basketId = null; _wiz.inlineBasket = null;
     return;
   }
   _wiz.basketId = _basketIdFor(name);
+  _wiz.inlineBasket = null;  // a manual pick always resolves a real (or built-in) basket
   _wiz.fuelblock = (typeId === FUEL_BLOCK_TYPE_ID || _wiz.basketId != null);
   _wiz.importComponents = [];  // fresh selection — produce everything by default
   await _loadProductConfig(typeId, name);
@@ -1282,6 +1388,7 @@ async function _applyProfile(profile) {
   _wiz.factoryCharIds = profile.factory_character_ids || [];
   _wiz.factoryPlanetTypes = (profile.factory_planet_types && profile.factory_planet_types.length)
     ? profile.factory_planet_types : ['Barren', 'Temperate'];
+  _wiz.splitMode = (profile.split_mode && profile.split_mode !== 'off') ? 'on' : 'off';
   _wiz.lastRecsData = null;
   _wiz.lastPlanData = null;
   if (isFuelBlock) await _loadProductConfig(FUEL_BLOCK_TYPE_ID, FUEL_BLOCK_LABEL);
@@ -1307,6 +1414,7 @@ async function wizardSaveProfile() {
     factory_output_per_hour: _factoryRate(),
     factory_character_ids: _wiz.factoryCharIds || [],
     factory_planet_types: _wiz.factoryPlanetTypes || ['Barren', 'Temperate'],
+    split_mode: _wiz.splitMode || 'off',
   };
   try {
     const resp = await fetch('/api/profiles', {
@@ -1353,7 +1461,9 @@ async function wizardShare(includeDetails = false) {
     cc: getSelectedConstellations(),
     ic: _wiz.importComponents || [],  // fuel-block imported component ids
     fpt: _wiz.factoryPlanetTypes || ['Barren', 'Temperate'],  // allowed factory planet types
+    sx: _wiz.splitMode || 'off',  // split-extraction mode
     mfg: _wiz.fuelblock ? _mfgRaw() : null,  // manufacturing ME selects (raw, for restore)
+    bk: _wiz.basketId ? _basketSnapshot(_wiz.basketId) : null,  // basket def for shared (private) baskets
     plan: _wiz.lastPlanData || null,
   };
   try {
@@ -1409,15 +1519,22 @@ async function _tryRestoreFromHash() {
 }
 
 async function _restoreFromPayload(payload) {
-  const basket = _basketById(_basketIdFromTid(payload.tid));
+  const tidBasketId = _basketIdFromTid(payload.tid);
   const isFuelBlock = payload.tid === FUEL_BLOCK_TYPE_ID;
-  const isFB = isFuelBlock || basket != null;
+  const isBasket = tidBasketId != null;
+  const localBasket = isBasket ? _basketById(tidBasketId) : null;
+  // If the basket isn't one we can see, fall back to the embedded snapshot (shared link).
+  const snapshot = (isBasket && !localBasket && payload.bk) ? payload.bk : null;
+  const isFB = isFuelBlock || isBasket;
+  const basketName = localBasket ? localBasket.name : (snapshot ? snapshot.name : 'Basket');
   const prod = isFuelBlock
     ? { type_id: FUEL_BLOCK_TYPE_ID, name: FUEL_BLOCK_LABEL }
-    : (basket ? { type_id: payload.tid, name: basket.name } : _ppProducts.find(p => p.type_id === payload.tid));
+    : (isBasket ? { type_id: payload.tid, name: basketName }
+                : _ppProducts.find(p => p.type_id === payload.tid));
   if (!prod) return;
   _wiz.fuelblock = isFB;
-  _wiz.basketId = basket ? basket.id : null;
+  _wiz.basketId = localBasket ? localBasket.id : null;   // don't send a stale id we can't resolve
+  _wiz.inlineBasket = snapshot;                          // re-run uses the embedded basket instead
   _wiz.importComponents = isFuelBlock ? (payload.ic || []) : [];
   if (isFuelBlock && payload.mfg) {
     try { localStorage.setItem('ppMfg', JSON.stringify(payload.mfg)); _mfgWired = false; } catch (e) {}
@@ -1435,6 +1552,7 @@ async function _restoreFromPayload(payload) {
   _wiz.factoryCharIds = payload.fc || [];
   _wiz.factoryPlanetTypes = (payload.fpt && payload.fpt.length)
     ? payload.fpt : ['Barren', 'Temperate'];
+  _wiz.splitMode = (payload.sx && payload.sx !== 'off') ? 'on' : 'off';
   if (payload.cc && payload.cc.length) {
     _applyConstellationSelection(payload.cc);
   }
@@ -1478,12 +1596,16 @@ function _planRequest(systemNames) {
     chosen_systems:        systemNames || [],
     factory_system:        _wiz.factorySystem || '',
     factory_character_ids: _wiz.factoryCharIds || [],
+    split_mode:            _wiz.splitMode || 'off',
   };
   if (_wiz.fuelblock) {
     body.factory_planet_types = _wiz.factoryPlanetTypes || ['Barren', 'Temperate'];
     if (_wiz.basketId) {
       // Custom production basket: no racial block type, no manufacturing ME, no import toggles.
       body.basket_id = _wiz.basketId;
+    } else if (_wiz.inlineBasket) {
+      // Shared link whose basket we can't see — re-run from the embedded snapshot.
+      body.inline_basket = _wiz.inlineBasket;
     } else {
       body.block_type = 'Oxygen';
       body.import_components = _wiz.importComponents || [];
@@ -1675,6 +1797,239 @@ function renderRecommendations(data) {
 
 let _overprodTimer = null;  // debounce for the live overproduction control
 
+// One planet hosting two extractors (split P1 production). Shows both P0→P1 legs with their
+// recommended head split + per-leg quality. Head counts are guidance only (see tooltip).
+function _splitExtRow(e) {
+  const ptype = e.planet_type || '?';
+  const sysHtml = e.system
+    ? `<span class="plan-ext-sys">${e.system} P${e.planet_num}</span>`
+    : `<span class="plan-ext-no-planet">no planet in system</span>`;
+  const legHtml = (e.legs || []).map(l => {
+    const q = l.quality_pct;
+    const qc = q == null ? '' : (q >= 80 ? 'plan-qual-ok' : q >= 50 ? '' : 'plan-qual-low');
+    const qHtml = q == null ? '' : `<span class="plan-ext-qual ${qc}">${q}</span>`;
+    return `<span class="plan-split-leg"><span class="plan-ext-p1">${_esc(l.p1_name || '?')}</span><span class="plan-split-heads" title="${l.heads}/10 extractor heads (guidance — actual yield varies with heatmap placement and depletion)">${l.heads}h</span>${qHtml}</span>`;
+  }).join('<span class="plan-split-plus">+</span>');
+  return `<div class="plan-ext-row plan-ext-split">
+    <span class="plan-ext-tag plan-ext-split-tag" title="Split planet: two extractor control units share this planet's 10 heads, feeding two P1 lines. Head counts are a recommended split — real extraction depends on heatmap placement and depletes over time.">split</span>${_ptypeSpan(ptype)}${sysHtml}<span class="plan-ext-arrow">→</span>${legHtml}</div>`;
+}
+
+function setSplitMode(mode) {
+  _wiz.splitMode = (mode && mode !== 'off') ? 'on' : 'off';
+  _rerunPlan();
+}
+
+// ── P1 stack splitter (PI Planner tab, driven by a saved plan) ─────────────────
+// You collect stacks of P1 from extractors; this tells you exactly how many units of each to
+// drop at each factory planet so a stack splits across the factories that consume it. Plans
+// built in Planetary Planning are snapshotted to localStorage and listed in the PI Planner tab.
+let _p1Stacks = {};        // type_id -> qty on hand (parsed from the paste textarea)
+let _p1PasteText = '';     // raw textarea content, persisted across plan selects / re-renders
+let _p1NameToTid = {};     // lowercase P1 name -> type_id, for parsing the paste
+const _PLAN_SNAP_KEY = 'ppPlanSnapshots';
+
+function _loadPlanSnapshots() {
+  try { return JSON.parse(localStorage.getItem(_PLAN_SNAP_KEY) || '[]'); } catch (e) { return []; }
+}
+
+function _buildPlanSnapshot(data) {
+  const factories = [];
+  for (const a of (data.assignments || []))
+    for (const f of (a.factory_assignments || []))
+      if (f.p1_inputs && f.p1_inputs.length && f.system)  // placed factories only
+        factories.push({
+          loc: `${a.character_name} · ${f.system}${f.planet_num != null ? ' P' + f.planet_num : ''}`,
+          product: f.product ? f.product.name : 'Factory',
+          p1_inputs: f.p1_inputs.map(p => ({ p1_type_id: p.p1_type_id, p1_name: p.p1_name, share: p.share })),
+        });
+  return factories.length ? { name: (data.product && data.product.name) || 'Plan', factories } : null;
+}
+
+// localStorage keeps the last-built plan per product (a quick, unsaved fallback). Explicit
+// saves go server-side via savePlanForRefills (cross-device, named).
+function _storePlanSnapshot(data) {
+  const snap = _buildPlanSnapshot(data);
+  if (!snap) return;
+  const entry = { id: 'local:' + snap.name, name: snap.name, savedAt: Date.now(), factories: snap.factories, local: true };
+  let snaps = _loadPlanSnapshots().filter(s => s.name !== snap.name);
+  snaps.unshift(entry);
+  try { localStorage.setItem(_PLAN_SNAP_KEY, JSON.stringify(snaps.slice(0, 8))); } catch (e) {}
+}
+
+async function savePlanForRefills() {
+  const data = _wiz.lastPlanData;
+  const snap = data && _buildPlanSnapshot(data);
+  if (!snap) { alert('No placed factories in this plan to save.'); return; }
+  if (!_loggedIn) {
+    alert('Log in to save plans across devices.\n\nYour last plan is already kept in this browser, so it\'s in the PI Planner tab without re-running the wizard.');
+    return;
+  }
+  const name = prompt('Save this plan as:', snap.name);
+  if (!name || !name.trim()) return;
+  snap.name = name.trim();
+  const btn = document.getElementById('savePlanBtn');
+  try {
+    const resp = await fetch('/api/plan-snapshots', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: snap.name, snapshot: snap }),
+    });
+    if (!resp.ok) throw new Error((await resp.json()).detail || `HTTP ${resp.status}`);
+    if (btn) { const t = btn.textContent; btn.textContent = '✓ Saved'; setTimeout(() => { btn.textContent = t; }, 2000); }
+  } catch (e) { alert('Save failed: ' + e.message); }
+}
+
+async function deletePlanSnapshot(srvId) {
+  if (!confirm('Delete this saved plan?')) return;
+  try { await fetch(`/api/plan-snapshots/${srvId}`, { method: 'DELETE' }); } catch (e) {}
+  const el = document.getElementById('planDistSection');
+  if (el) el.dataset.sel = '';
+  renderPlanDistribution();
+}
+
+// Called when the PI Planner tab opens (wired in app.js switchTab).
+function onPlannerTabOpen() { renderPlanDistribution(); }
+
+function onPlanDistSelect(id) {
+  const el = document.getElementById('planDistSection');
+  if (el) el.dataset.sel = id;
+  renderPlanDistribution();
+}
+
+async function renderPlanDistribution() {
+  const el = document.getElementById('planDistSection');
+  if (!el) return;
+  let server = [];
+  try { server = (await (await fetch('/api/plan-snapshots')).json()).snapshots || []; } catch (e) {}
+  const serverNames = new Set(server.map(s => s.name));
+  // Server-saved plans (named, cross-device) first, then any unsaved last-built ones from this browser.
+  const snaps = [
+    ...server.map(s => ({ id: 'srv:' + s.id, srvId: s.id, name: s.name, factories: s.factories, saved: true })),
+    ..._loadPlanSnapshots().filter(s => !serverNames.has(s.name)),
+  ];
+  if (!snaps.length) {
+    el.innerHTML = `<div class="plan-section-title">Split P1 stacks into plan factories</div>
+      <div class="pp-card"><div class="admin-hint">Build a plan in <b>Planetary Planning</b> and hit <b>Save plan</b> — it'll appear here so you can paste your P1 stacks and see exactly how many units to drop at each factory (no need to re-run the wizard).</div></div>`;
+    return;
+  }
+  const snap = snaps.find(s => String(s.id) === el.dataset.sel) || snaps[0];
+  const opts = snaps.map(s =>
+    `<option value="${s.id}"${s.id === snap.id ? ' selected' : ''}>${_esc(s.name)}${s.saved ? '' : ' · this browser (unsaved)'}</option>`).join('');
+  const delBtn = snap.saved
+    ? `<button class="pp-profile-action-btn pp-profile-del-btn" onclick="deletePlanSnapshot(${snap.srvId})" title="Delete this saved plan">Delete</button>` : '';
+  // P1 name → type_id (for parsing the pasted inventory — the textarea is the single input).
+  const p1s = {};
+  snap.factories.forEach(f => f.p1_inputs.forEach(p => { p1s[p.p1_type_id] = p.p1_name; }));
+  _p1NameToTid = {};
+  Object.keys(p1s).forEach(tid => { _p1NameToTid[p1s[tid].toLowerCase()] = tid; });
+
+  // Group factory planets by what they make. Robust to older snapshots without a `product`
+  // field (fall back to grouping by P1 signature), and columns = the UNION of P1s the group
+  // consumes, so every needed P1 shows up.
+  const groups = {};
+  snap.factories.forEach(f => {
+    const key = f.product || ('sig:' + f.p1_inputs.map(p => p.p1_type_id).slice().sort((a, b) => a - b).join(','));
+    if (!groups[key]) groups[key] = { title: f.product || '', facs: [] };
+    groups[key].facs.push(f);
+  });
+  const tables = Object.keys(groups).map(key => {
+    const g = groups[key];
+    const colMap = {};
+    g.facs.forEach(f => f.p1_inputs.forEach(p => { colMap[p.p1_type_id] = p.p1_name; }));
+    const cols = Object.keys(colMap).sort((a, b) => colMap[a].localeCompare(colMap[b])).map(id => ({ id: id, name: colMap[id] }));
+    const title = `${g.title || cols.map(c => c.name).join(' + ')} · ${g.facs.length} planet${g.facs.length !== 1 ? 's' : ''}`;
+    const head = `<tr><th>${_esc(title)}</th>${cols.map(c => `<th>${_esc(c.name)}</th>`).join('')}</tr>`;
+    const body = g.facs.map(f => {
+      const byId = {}; f.p1_inputs.forEach(p => { byId[p.p1_type_id] = p; });
+      const cells = cols.map(c => {
+        const p = byId[c.id];
+        return p
+          ? `<td><b class="p1-amt" data-p1="${p.p1_type_id}" data-share="${p.share}" onclick="copyP1Amount(this)" title="Click to copy this number">–</b></td>`
+          : '<td class="p1-cell-na">·</td>';
+      }).join('');
+      return `<tr><td class="p1-dist-loc">${_esc(f.loc || f.label || '?')}</td>${cells}</tr>`;
+    }).join('');
+    return `<table class="p1-dist-table"><thead>${head}</thead><tbody>${body}</tbody></table>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div class="plan-section-title">Split P1 stacks into plan factories</div>
+    <div class="pp-card">
+      <div class="plan-dist-head">
+        <label class="p1-dist-field">Plan<select class="p1-dist-input" onchange="onPlanDistSelect(this.value)">${opts}</select></label>
+        ${delBtn}
+        <div class="admin-hint" style="flex:1;margin:0">Paste your P1 inventory below (or type lines). The tables fill with the exact whole-unit count to drop at each factory planet — edit a line to change an amount.</div>
+      </div>
+      <textarea class="p1-dist-paste" rows="5" placeholder="Paste P1 inventory — one 'Name &lt;tab or spaces&gt; qty' per line, e.g.\nPrecious Metals  18000\nElectrolytes  14000" oninput="onP1StackPaste(this.value)">${_esc(_p1PasteText || '')}</textarea>
+      <div class="plan-dist-tables">${tables}</div>
+    </div>`;
+  el.dataset.sel = snap.id;
+  updateP1Distribution();
+}
+
+// Parse one EVE-inventory line into [name, qty] or null. Mirrors app/pi.py parse_inventory:
+// handles tab- or 2+-space columns, "Name | Qty | Category" (qty 2nd) AND "Name | Category |
+// Qty" (qty 3rd), space/comma thousands separators, and a single-space "Name 1234" fallback.
+function _parseInventoryLine(line) {
+  line = line.trim();
+  if (!line) return null;
+  let parts = line.includes('\t') ? line.split('\t') : line.split(/ {2,}/);
+  if (parts.length < 2) {
+    const m = line.match(/^(.+?)\s+(\d[\d,\s]*)\s*$/);
+    if (!m) return null;
+    parts = [m[1].trim(), m[2].trim()];
+  }
+  const name = parts[0].trim();
+  const col1 = parts[1].trim();
+  let qtyStr;
+  if (/^[\d\s,]+$/.test(col1) && /\d/.test(col1)) qtyStr = col1;   // Format A (qty in col 2)
+  else if (parts.length >= 3) qtyStr = parts[2].trim();           // Format B (category col 2)
+  else return null;
+  const qty = parseInt(qtyStr.replace(/[^\d]/g, ''), 10) || 0;
+  return (qty > 0 && name) ? [name, qty] : null;
+}
+
+// The paste textarea is the single input — re-parse the whole thing each edit (so changing or
+// removing a line updates live), matching names against the selected plan's P1s.
+function onP1StackPaste(text) {
+  _p1PasteText = text;
+  _p1Stacks = {};
+  for (const line of text.split('\n')) {
+    const parsed = _parseInventoryLine(line);
+    if (!parsed) continue;
+    const tid = _p1NameToTid[parsed[0].toLowerCase()];
+    if (tid) _p1Stacks[tid] = parsed[1];
+  }
+  updateP1Distribution();
+}
+
+// Click a filled cell to copy its integer (no commas) — ready to paste into EVE quantity fields.
+function copyP1Amount(el) {
+  if (!el.classList.contains('p1-amt-set')) return;
+  const n = el.textContent.replace(/[^\d]/g, '');
+  if (!n) return;
+  const done = () => { el.classList.add('p1-amt-copied'); setTimeout(() => el.classList.remove('p1-amt-copied'), 600); };
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(n).then(done).catch(done);
+  else done();
+}
+
+// Distribute each entered stack across the factory planets that consume that P1, whole units
+// summing exactly to the stack (largest-remainder). No stack → show the % share.
+function updateP1Distribution() {
+  const byP1 = {};
+  document.querySelectorAll('.p1-amt').forEach(el => { (byP1[el.dataset.p1] = byP1[el.dataset.p1] || []).push(el); });
+  for (const tid in byP1) {
+    const els = byP1[tid];
+    const stack = _p1Stacks[tid] || 0;
+    if (!stack) { els.forEach(el => { el.textContent = '–'; el.classList.remove('p1-amt-set'); }); continue; }
+    const raw = els.map(el => stack * (parseFloat(el.dataset.share) || 0));
+    const amt = raw.map(Math.floor);
+    let rem = stack - amt.reduce((a, b) => a + b, 0);
+    const order = raw.map((v, i) => [v - amt[i], i]).sort((a, b) => b[0] - a[0]);
+    for (let k = 0; k < rem && k < order.length; k++) amt[order[k][1]]++;
+    els.forEach((el, i) => { el.textContent = amt[i].toLocaleString(); el.classList.add('p1-amt-set'); });
+  }
+}
+
 function renderFinalPlan(data, opts = {}) {
   const content = document.getElementById('wizPlanContent');
 
@@ -1722,6 +2077,20 @@ function renderFinalPlan(data, opts = {}) {
     // Clamp to ≥0: negative overproduction just builds factories the extractors can't feed
     // (output collapses), so it's never useful.
     const opVal = Number.isNaN(targetOverprod) ? 10 : Math.max(0, targetOverprod);
+    // Split-extraction toggle: reuse a planet for two P0s (2 ECUs sharing the 10 heads), then
+    // turn the freed planets into more factories. Single on/off.
+    const splitOn = ((_wiz.splitMode || s.split_mode || 'off') !== 'off');
+    const splitBtns = [['off', 'Off'], ['on', 'On']].map(
+      ([v, l]) => `<button type="button" class="plan-split-btn${(v === 'on') === splitOn ? ' plan-split-on' : ''}" onclick="setSplitMode('${v}')">${l}</button>`
+    ).join('');
+    const savedLbl = (s.split_planets > 0)
+      ? `${s.split_planets} split → ${s.planets_saved} planet${s.planets_saved !== 1 ? 's' : ''} reinvested`
+      : (splitOn ? 'no overproduction slack to reclaim' : 'reuse planets → more factories');
+    const splitStatHtml = `
+        <div class="plan-stat plan-split-ctrl" title="Split P1 production: where two P0s share a planet type, host both on one planet (2 ECUs sharing the 10-head budget → two P1 lines). The planets this frees are reinvested into more factory planets — so output rises only by what those real extra factories produce (it needs overproduction slack to reclaim; with none, nothing to split). Head counts on split planets are guidance — real yield varies with hotspot placement and depletion.">
+          <span class="plan-split-seg">${splitBtns}</span>
+          <span class="plan-stat-lbl">split planets · ${savedLbl}</span>
+        </div>`;
     statsHtml = `
       <div class="plan-stats-bar">
         <div class="plan-stat plan-stat-edit" title="Target overproduction % — edit and the plan recalculates. 10% means extractors produce 10% more P0 than factories need. Reported baseline: ${s.overproduction_pct >= 0 ? '+' : ''}${s.overproduction_pct}%.">
@@ -1732,19 +2101,25 @@ function renderFinalPlan(data, opts = {}) {
           <span class="plan-stat-val">${s.products_per_day.toLocaleString()}</span>
           <span class="plan-stat-lbl">${data.fuelblock ? 'fuel blocks/day' : 'units/day'}</span>
         </div>
-        <div class="plan-stat">
+        <div class="plan-stat" title="${data.fuelblock ? 'Daily Jita-sell value of the PI components you actually produce. A finished fuel block is worth more but also needs ice products + racial isotopes you do NOT produce here.' : 'Daily Jita-sell value of the product.'}">
           <span class="plan-stat-val">${_fmtIsk(s.isk_per_day)}</span>
-          <span class="plan-stat-lbl">ISK/day</span>
+          <span class="plan-stat-lbl">ISK/day${data.fuelblock ? ' (PI)' : ''}</span>
         </div>
+        ${data.fuelblock && s.block_gross_isk_per_day ? `
+        <div class="plan-stat" title="Gross Jita-sell value of ${s.products_per_day.toLocaleString()} finished fuel blocks/day. Requires buying/producing the ice products + racial isotopes (not modelled here), so it is NOT your PI profit.">
+          <span class="plan-stat-val plan-stat-dim">${_fmtIsk(s.block_gross_isk_per_day)}</span>
+          <span class="plan-stat-lbl">block gross · needs ice</span>
+        </div>` : `
         <div class="plan-stat">
           <span class="plan-stat-val">${_fmtIsk(s.sell_price)}</span>
           <span class="plan-stat-lbl">sell/unit</span>
-        </div>
+        </div>`}
         ${s.factory_refill_hours ? `
         <div class="plan-stat" title="How long a factory planet's P1 input buffer lasts before you must refill it (assumes ${s.factory_launchpads_assumed} launchpads = ${(s.factory_launchpads_assumed*10).toLocaleString()}k m³ of P1; ~${s.factory_input_m3_day.toLocaleString()} m³/day consumed per factory). Add storage facilities to extend it.">
           <span class="plan-stat-val">${_fmtHours(s.factory_refill_hours)}</span>
           <span class="plan-stat-lbl">refill / factory (${s.factory_launchpads_assumed} LP)</span>
         </div>` : ''}
+        ${splitStatHtml}
         ${p0StatHtml}
       </div>`;
   }
@@ -1845,6 +2220,7 @@ function renderFinalPlan(data, opts = {}) {
   const assignHtml = data.assignments.map(a => {
     if (!a.extractors.length && !a.factory_planets) return '';
     const extractorRows = a.extractors.map(e => {
+      if (e.split) return _splitExtRow(e);
       const ptype = e.is_existing
         ? (e.planet_type || e.existing_ptype || '?')
         : (e.planet_type || e.best_planet_type || (e.planet_types && e.planet_types[0]) || '?');
@@ -1991,6 +2367,25 @@ function renderFinalPlan(data, opts = {}) {
     templatesHref = toks ? `/api/layout/bundle?type_ids=${encodeURIComponent(toks)}&expand=0` : '';
   }
 
+  // Split-extraction planets → one two-ECU template each (p1a:p1b:headsA:headsB:cc:ptype),
+  // appended to whichever bundle URL was built above (single-product or fuel-block).
+  if (templatesHref) {
+    const splitCombos = new Map();
+    for (const a of (data.assignments || [])) {
+      const ecc = a.effective_ccu || data.stats?.plan_cc || 5;
+      for (const e of (a.extractors || [])) {
+        if (!e.split || !e.legs || e.legs.length < 2) continue;
+        const [la, lb] = e.legs;
+        if (!la.p1_type_id || !lb.p1_type_id) continue;
+        const pt = e.planet_type || 'Barren';
+        splitCombos.set(`${la.p1_type_id}|${lb.p1_type_id}|${la.heads}|${lb.heads}|${ecc}|${pt}`,
+          `${la.p1_type_id}:${lb.p1_type_id}:${la.heads}:${lb.heads}:${ecc}:${pt}`);
+      }
+    }
+    const splitToks = [...splitCombos.values()].join(',');
+    if (splitToks) templatesHref += `&splits=${encodeURIComponent(splitToks)}`;
+  }
+
   content.innerHTML = `
     <div class="plan-header">
       <span class="plan-product-name">${data.product.name}</span>
@@ -2010,10 +2405,12 @@ function renderFinalPlan(data, opts = {}) {
     <div class="plan-assignments">${assignHtml}</div>
     ${p0SummaryHtml}
     <div class="plan-actions-bar">
+      <button class="plan-action-btn" id="savePlanBtn" onclick="savePlanForRefills()" title="Save this plan so you can split P1 stacks into its factories from the PI Planner tab — no need to re-run the wizard at refill time.">Save plan</button>
       <button class="plan-action-btn" id="ppShoppingListBtn">Command Centers</button>
       ${templatesHref ? `<a class="plan-action-btn" href="${templatesHref}" download>PI Templates (.zip)</a>` : ''}
     </div>
   `;
+  _storePlanSnapshot(data);  // make this plan's factory distribution available in the PI Planner tab
   const facSelect = content.querySelector('#factorySysSelect');
   const facInput  = content.querySelector('#factorySysInput');
   if (facSelect) {

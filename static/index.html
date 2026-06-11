@@ -14,7 +14,7 @@
   <meta property="og:image" content="https://eve-pi.failed.name/og-image.png?v=4">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:image" content="https://eve-pi.failed.name/og-image.png?v=4">
-  <link rel="stylesheet" href="/style.css?v=82">
+  <link rel="stylesheet" href="/style.css?v=90">
 </head>
 <body>
   <header>
@@ -179,6 +179,9 @@
         </table>
       </div>
 
+      <!-- P1 stack → factory distribution from a saved Planetary Planning plan (filled by planetary.js) -->
+      <div id="planDistSection" class="plan-dist-wrap"></div>
+
     </div><!-- /tab-planner -->
 
 
@@ -217,6 +220,9 @@
                      list="productList" placeholder="Type to search…" autocomplete="off"
                      oninput="onProductChange()">
               <datalist id="productList"></datalist>
+              <button type="button" id="manageBasketsBtn" class="pp-profile-action-btn"
+                      style="display:none" onclick="openBasketModal()"
+                      title="Create your own multi-product baskets (private to your account)">My baskets…</button>
 
               <!-- Overproduction % moved to the Plan step (editable there, recalculates live). -->
               <input type="hidden" id="targetOverprod" value="10">
@@ -494,6 +500,23 @@ PVF-N9    3         95                 60             80                  100   
             <div class="pp-empty">No characters added yet.</div>
           </div>
         </section>
+
+        <section class="pp-card" id="dummyCharCard" style="display:none">
+          <div class="pp-card-title">Add placeholder characters</div>
+          <div class="admin-hint">Have alts you don't want to log in? Add placeholder toons that contribute planet slots + a command-centre level to plans, without ESI. They mix in with your real characters; set per-product roles in Setup as usual. (Placeholders never grant admin.)</div>
+          <div class="dummy-add-row">
+            <label>How many<input id="dummyCount" type="number" min="1" max="100" value="1" class="bug-input dummy-num"></label>
+            <label>Max planets<select id="dummyMaxPlanets" class="bug-input dummy-num">
+              <option>1</option><option>2</option><option>3</option><option>4</option><option>5</option><option selected>6</option>
+            </select></label>
+            <label>CCU<select id="dummyCcu" class="bug-input dummy-num">
+              <option>1</option><option>2</option><option>3</option><option>4</option><option selected>5</option>
+            </select></label>
+            <label>Name prefix<input id="dummyPrefix" class="bug-input" maxlength="40" value="Alt" autocomplete="off"></label>
+            <button onclick="addDummyCharacters(this)">Add</button>
+            <span id="dummyStatus" class="bug-status-msg"></span>
+          </div>
+        </section>
       </div>
     </div><!-- /tab-characters -->
 
@@ -556,29 +579,9 @@ PVF-N9    3         95                 60             80                  100   
         </section>
 
         <section class="pp-card admin-section">
-          <div class="pp-card-title">Custom baskets</div>
-          <div class="admin-hint">A basket is a named set of PI products + quantities. Any logged-in user can plan a basket in Planetary Planning, exactly like the built-in Fuel Blocks. Components must be P1–P4.</div>
-          <div id="basketList" class="admin-list"></div>
-          <div class="basket-editor">
-            <div class="basket-editor-title" id="basketEditorTitle">New basket</div>
-            <div class="basket-fields">
-              <label>Name<input id="basketName" class="bug-input" maxlength="60" placeholder="e.g. Athanor Fuel Mix" autocomplete="off"></label>
-              <label>Run size<input id="basketRunSize" type="number" min="1" value="1" class="bug-input basket-num"></label>
-              <label>Unit label<input id="basketUnitLabel" class="bug-input basket-num" value="sets" maxlength="20"></label>
-            </div>
-            <div class="basket-add-item">
-              <input id="basketItemSearch" placeholder="Add a P1–P4 component…" autocomplete="off"
-                     oninput="onBasketItemSearch()" onfocus="onBasketItemSearch()"
-                     onblur="setTimeout(hideBasketItemResults,150)">
-              <div id="basketItemResults" class="layout-results" style="display:none"></div>
-            </div>
-            <div id="basketItems" class="basket-items"></div>
-            <div class="basket-editor-actions">
-              <button id="basketSaveBtn" onclick="saveBasket()">Save basket</button>
-              <button class="pp-cancel-btn" onclick="resetBasketEditor()">Clear</button>
-              <span id="basketStatus" class="bug-status-msg"></span>
-            </div>
-          </div>
+          <div class="pp-card-title">Production baskets</div>
+          <div class="admin-hint">A basket is a named set of PI products + quantities, planned like the built-in Fuel Blocks. Any logged-in user creates private baskets (visible only to them); admins also publish <strong>global</strong> baskets available to everyone. Components must be P1–P4.</div>
+          <button onclick="openBasketModal()">Manage baskets…</button>
         </section>
 
         <section class="pp-card admin-section">
@@ -614,6 +617,40 @@ PVF-N9    3         95                 60             80                  100   
     <strong>Eve PI Planner [EVPI]</strong> help keep the server running. Fly safe o7
   </footer>
 
+  <!-- Production basket manager (user-owned + admin globals) -->
+  <div id="basketModal" class="pp-modal" style="display:none">
+    <div class="pp-modal-box pp-modal-box-wide">
+      <div class="pp-modal-title">My production baskets
+        <button class="pp-modal-close" onclick="closeBasketModal()">✕</button>
+      </div>
+      <div class="pp-modal-hint">A basket is a named set of PI products + quantities you can plan like the built-in Fuel Blocks. Your baskets are private to your account. Components must be P1–P4.</div>
+      <div id="basketList" class="admin-list"></div>
+      <div class="basket-editor">
+        <div class="basket-editor-title" id="basketEditorTitle">New basket</div>
+        <div class="basket-fields">
+          <label>Name<input id="basketName" class="bug-input" maxlength="60" placeholder="e.g. Athanor Fuel Mix" autocomplete="off"></label>
+          <label>Run size<input id="basketRunSize" type="number" min="1" value="1" class="bug-input basket-num"></label>
+          <label>Unit label<input id="basketUnitLabel" class="bug-input basket-num" value="sets" maxlength="20"></label>
+        </div>
+        <label id="basketGlobalRow" class="basket-global-row" style="display:none">
+          <input type="checkbox" id="basketGlobal"> Make global (visible to all users)
+        </label>
+        <div class="basket-add-item">
+          <input id="basketItemSearch" placeholder="Add a P1–P4 component…" autocomplete="off"
+                 oninput="onBasketItemSearch()" onfocus="onBasketItemSearch()"
+                 onblur="setTimeout(hideBasketItemResults,150)">
+          <div id="basketItemResults" class="layout-results" style="display:none"></div>
+        </div>
+        <div id="basketItems" class="basket-items"></div>
+        <div class="basket-editor-actions">
+          <button id="basketSaveBtn" onclick="saveBasket()">Save basket</button>
+          <button class="pp-cancel-btn" onclick="resetBasketEditor()">Clear</button>
+          <span id="basketStatus" class="bug-status-msg"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Bug report modal (submit) -->
   <div id="bugModal" class="pp-modal" style="display:none">
     <div class="pp-modal-box">
@@ -631,7 +668,7 @@ PVF-N9    3         95                 60             80                  100   
     </div>
   </div>
 
-  <script src="/app.js?v=19"></script>
-  <script src="/planetary.js?v=107"></script>
+  <script src="/app.js?v=20"></script>
+  <script src="/planetary.js?v=120"></script>
 </body>
 </html>
