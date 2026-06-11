@@ -28,6 +28,7 @@ from app.planner import (
     _build_p1_info_raw,
     _compute_factory_shares,
     _consolidate_split_extractors,
+    _density_estimate,
     _ext_actual_p0_per_day,
     _ext_leg_qualities,
     _factory_candidates,
@@ -600,10 +601,15 @@ def _run_fuelblock_plan(req: "FuelBlockPlanRequest", context_id: int) -> dict:
 
     has_planet_db = any(v for v in p0_planet_lists.values())
 
+    # Density-aware distribution: thinner-deposit P0s get more extractors so each P1 lands in
+    # the basket ratio (less leftover from one input under-performing).
+    density_est = _density_estimate(p1_info, p0_planet_lists, ext_slots, has_planet_db)
+
     assignments, remaining, char_nonfac = _run_extractor_pipeline(
         req, char_list, p1_info, ext_slots, needed_at_baseline,
         p0_planet_lists, p0_planet_lists_global, has_planet_db, has_system_name,
         auto_mode, assignment_extra=lambda c: {"effective_ccu": c["effective_ccu"]},
+        density_est=density_est,
     )
 
     # Pick best factory system (most candidate planets among chosen/all).
@@ -765,6 +771,7 @@ def _run_fuelblock_plan(req: "FuelBlockPlanRequest", context_id: int) -> dict:
         "p1_requirements":       p1_info,
         "total_extractors_base": round(sum(q for _, q in sorted_p1)),
         "ext_slots":             ext_slots,
+        "density_est":           density_est,
         "assignments":           all_assignments,
         "unassigned":            remaining,
         "unplaced_factories":    unplaced_factories,

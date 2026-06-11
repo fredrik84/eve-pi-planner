@@ -1012,21 +1012,53 @@ def _compute_slot_budget(
     return ext_slots, factories, _compute_factory_shares(char_list, factories, auto_mode, per_char_fac_cap, preferred_cids), auto_mode, p0_per_factory_day
 
 
+def _density_estimate(p1_info, p0_planet_lists, ext_slots, has_planet_db) -> dict[str, float]:
+    """Per-P0 achievable density as a fraction of a full bar (1.0 = 100% ≈ 48k/cycle), taken from
+    the richest planets that P0 would actually use. A resource on thinner deposits produces less
+    per extractor, so it needs proportionally MORE extractors to keep production in the recipe
+    ratio — which minimises leftover P1 from one input under-performing."""
+    if not has_planet_db:
+        return {info["p0_name"]: 1.0 for info in p1_info}
+    total_rel = sum(info["relative_qty"] for info in p1_info) or 1
+    est: dict[str, float] = {}
+    for info in p1_info:
+        name = info["p0_name"]
+        planets = p0_planet_lists.get(name, [])
+        if not planets:
+            est[name] = 1.0
+            continue
+        base_n = max(1, round(ext_slots * info["relative_qty"] / total_rel))  # ~planets it'd use
+        top = planets[:base_n]
+        est[name] = max(0.05, sum(p["value"] for p in top) / len(top) / 100.0)
+    return est
+
+
 def _build_need_list(
     p1_info: list[dict],
     ext_slots: int,
     needed_at_baseline: int,
     p0_caps: dict[str, int],
     scarcity_bonus: dict[str, float],
+    density_est: dict[str, float] | None = None,
 ) -> list[dict]:
-    """Build Bresenham-ordered list of extractor slots to fill."""
-    total_rel = sum(info["relative_qty"] for info in p1_info) or 1
+    """Build Bresenham-ordered list of extractor slots to fill.
+
+    With density_est, each P0's slot weight is scaled UP when its planets are thin
+    (relative_qty / density), so a low-density input gets more extractors and production lands in
+    the recipe ratio despite uneven planet quality — minimising leftover P1. Without it, weight =
+    relative_qty (the original need-proportional behaviour)."""
+    if density_est:
+        weight = {info["p0_name"]: info["relative_qty"] / max(0.05, density_est.get(info["p0_name"], 1.0))
+                  for info in p1_info}
+    else:
+        weight = {info["p0_name"]: info["relative_qty"] for info in p1_info}
+    total_w = sum(weight.values()) or 1
     accum = {info["p0_name"]: 0.0 for info in p1_info}
     p0_counts = {info["p0_name"]: 0 for info in p1_info}
     need_list = []
     for i in range(ext_slots):
         for info in p1_info:
-            accum[info["p0_name"]] += info["relative_qty"] / total_rel
+            accum[info["p0_name"]] += weight[info["p0_name"]] / total_w
         capped = [inf for inf in p1_info if p0_counts[inf["p0_name"]] < p0_caps[inf["p0_name"]]]
         pool = capped if capped else p1_info
         best = max(pool, key=lambda inf: accum[inf["p0_name"]] + scarcity_bonus[inf["p0_name"]])
@@ -2020,6 +2052,7 @@ def _run_extractor_pipeline(
     req, char_list, p1_info, ext_slots, needed_at_baseline,
     p0_planet_lists, p0_planet_lists_global, has_planet_db, has_system_name,
     auto_mode, assignment_extra=None, factory_avoid_cids=None, factory_avoid=None,
+    density_est=None,
 ):
     """Shared extractor-assignment core. Builds the per-character candidate views, the
     P0 slot caps and the Bresenham need list, then runs the two-pass extractor
@@ -2080,7 +2113,7 @@ def _run_extractor_pipeline(
     } if has_planet_db else {info["p0_name"]: 1 for info in p1_info}
     scarcity_bonus = {name: 0.01 / n for name, n in _p0_planet_n.items()}
 
-    need_list = _build_need_list(p1_info, ext_slots, needed_at_baseline, p0_caps, scarcity_bonus)
+    need_list = _build_need_list(p1_info, ext_slots, needed_at_baseline, p0_caps, scarcity_bonus, density_est)
 
     char_spare_planets: dict[int, list] = {c["character_id"]: list(c["planets"]) for c in char_list}
     assignments = [
@@ -2250,10 +2283,15 @@ def _run_plan(req: PlanRequest, context_id: int) -> dict:
                 if share >= _per_char_fac_cap
             }
 
+    # Density-aware distribution: give thinner-deposit resources more extractors so production
+    # lands in the recipe ratio (less leftover P1 from one input under-performing).
+    density_est = _density_estimate(p1_info, p0_planet_lists, ext_slots, has_planet_db)
+
     assignments, remaining, char_nonfac = _run_extractor_pipeline(
         req, char_list, p1_info, ext_slots, needed_at_baseline,
         p0_planet_lists, p0_planet_lists_global, has_planet_db, has_system_name,
         auto_mode, factory_avoid_cids=_factory_avoid_cids, factory_avoid=_factory_avoid,
+        density_est=density_est,
     )
 
     # Pick best factory system
@@ -2337,6 +2375,7 @@ def _run_plan(req: PlanRequest, context_id: int) -> dict:
         "p1_requirements":       p1_info,
         "total_extractors_base": sum(q for _, q in sorted_p1),
         "ext_slots":             ext_slots,
+        "density_est":           density_est,
         "assignments":           all_assignments,
         "unassigned":            remaining,
         "system_recommendations": sys_recs,
@@ -2401,7 +2440,11 @@ async def debug_plan(request: "Request", pp_session: str = Cookie(default=None))
         req = PlanRequest(**{k: v for k, v in body.items() if k in PlanRequest.model_fields})
         result = _run_plan(req, context_id)
     p1_reqs = result.get("p1_requirements", [])
-    total_rel = sum(r["relative_qty"] for r in p1_reqs) or 1
+    # Density-aware target: weight = need / density (thinner deposits get more extractors). Falls
+    # back to pure need when no density data, matching the planner's own distribution.
+    _dens = result.get("density_est") or {}
+    _w = {r["p0_name"]: r["relative_qty"] / max(0.05, _dens.get(r["p0_name"], 1.0)) for r in p1_reqs}
+    total_rel = sum(_w.values()) or 1
     ext_slots = result.get("ext_slots", 0)
     actual: dict[str, int] = {}
     out_of_system: list[dict] = []
@@ -2422,7 +2465,7 @@ async def debug_plan(request: "Request", pp_session: str = Cookie(default=None))
     distribution, all_pass = [], True
     for r in sorted(p1_reqs, key=lambda x: -x["relative_qty"]):
         p0 = r["p0_name"]
-        expected_f = ext_slots * r["relative_qty"] / total_rel
+        expected_f = ext_slots * _w[p0] / total_rel
         got = actual.get(p0, 0)
         delta = got - expected_f
         # Under-allocation is only a bug when there are still unassigned slots.

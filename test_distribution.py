@@ -190,22 +190,24 @@ def run_case(base_url: str, case: dict) -> bool:
         for o in real_oos:
             print(f"    {o['character']:30s}  {o['p0']:25s}  {o['system']} P{o['planet_num']}")
 
-    # ── Overproduction priority check ───────────────────────────────────────
-    # Extra slots (beyond baseline) should prefer:
-    #   1. rel=2 types (they run out first)
-    #   2. lowest-yielding planets (improve the weakest link)
-    # We check: no rel=1 type got more slots than any rel=2 type at same ext_slots.
-    rel2 = [d for d in distribution if d["rel"] == 2]
-    rel1 = [d for d in distribution if d["rel"] == 1]
-    if rel2 and rel1:
-        min_rel2 = min(d["actual"] for d in rel2)
-        max_rel1 = max(d["actual"] for d in rel1)
-        if max_rel1 > min_rel2:
-            print(f"\n  OVERPROD WARNING: a rel=1 type ({max_rel1}) got more slots than "
-                  f"a rel=2 type ({min_rel2})")
-            overall_pass = False
-        else:
-            print(f"\n  Overproduction priority OK  (min rel=2: {min_rel2}, max rel=1: {max_rel1})")
+    # ── Production balance (density-aware) ──────────────────────────────────
+    # Slots now track need ÷ density: a thin-deposit resource gets MORE extractors so its
+    # production lands in the recipe ratio (minimising leftover P1). So the old "rel=2 always
+    # ≥ rel=1" rule no longer holds — correctness is the per-P0 expected/actual deltas above
+    # (already folded into result["pass"], where `expected` is the density-aware target).
+    # Here we just surface production coverage = actual × density ÷ need: tight ⇒ no resource is
+    # the volatile bottleneck. We DON'T fail on a wide spread — that's a planet-supply limit
+    # (not enough rich planets for a resource), not a distribution bug.
+    dens = result.get("density_est") or {}
+    cov = [(d["p0_name"], d["actual"] * dens.get(d["p0_name"], 1.0) / d["rel"])
+           for d in distribution if d["rel"]]
+    if cov:
+        lo = min(c for _, c in cov)
+        hi = max(c for _, c in cov)
+        spread = (hi - lo) / hi if hi else 0.0
+        note = "planet-capped (a resource can't get enough rich planets)" if spread > 0.4 else "balanced"
+        print(f"\n  Production coverage (actual × density ÷ need): {lo:.2f}–{hi:.2f}  "
+              f"spread {spread * 100:.0f}%  ({note})")
 
     # ── Per-character summary ───────────────────────────────────────────────
     print(f"\n  Character assignments:")
