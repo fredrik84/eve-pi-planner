@@ -12,7 +12,7 @@ Optimize a player's EVE Online Planetary Industry (PI) setup across multiple cha
 - `_compute_slot_budget` → factory count + `_compute_factory_shares`
 - `_build_need_list` → Bresenham-ordered extractor slots
 - `_assign_extractors` → Pass 1 (existing) → swap → Pass 2 → post-swap; calls `_run_swap_pass`
-- `_attach_extractor_planet_details` → maps slots to concrete planets + quality
+- `_attach_extractor_planet_details` → pins existing colonies per-char, then maps new slots to concrete planets + quality via `_waterfill_new_slots` (lever 1: per-character regret assignment — places the slot with the largest best-vs-next-best gap first, so a resource whose only alternative is a thin planet wins a shared planet type over one with a good fallback; order-independent, quality-optimal per char)
 - `_assign_factory_planets_to_chars` → factory planet placement + overflow
 - `_max_matching` / `_max_matching_slots` / `_can_add_p0` → bipartite feasibility (a slot with a committed planet is pinned to it)
 

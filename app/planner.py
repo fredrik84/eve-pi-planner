@@ -1444,6 +1444,66 @@ def _absorb_remaining(
     return remaining
 
 
+def _waterfill_new_slots(
+    new_slots: list[tuple],
+    char_used_map: dict[int, set],
+    nonfac_occ_map: dict[int, set],
+    p0_planet_lists: dict,
+) -> None:
+    """Lever 1 — per-character planet assignment that gives each shared planet to the
+    resource that needs it most.
+
+    Picking planets in a fixed resource order hands a planet type's richest planets to
+    whichever resource is processed first — *systematically* across every character — so
+    when two P0s share a planet type the loser is starved onto thin planets (e.g. Complex
+    Organisms dropping to quality 3 while a co-resource sits on the shared 61). This pass
+    runs a regret heuristic per character: repeatedly place the slot with the largest gap
+    between its best and next-best still-free planet, so a resource whose alternative is
+    catastrophic (61 → 3) claims the shared planet over one whose alternative is fine
+    (61 → 60). Per-character planet uniqueness is respected; planets still reuse freely
+    across different characters. Mutates the slot dicts in place."""
+    by_char: dict[int, list] = {}
+    for cid, slot in new_slots:
+        if slot.get("p0_name"):
+            by_char.setdefault(cid, []).append(slot)
+
+    for cid, slots in by_char.items():
+        used = char_used_map[cid]
+        occ = nonfac_occ_map.get(cid, set())
+
+        def candidates(slot):
+            # Free planets first (value-descending), factory-reserved planets only as a
+            # last resort — matching the old soft-avoid, so extraction doesn't poach a
+            # factory planet while a free one exists.
+            free, soft = [], []
+            for p in p0_planet_lists.get(slot.get("p0_name"), []):
+                k = (p["system"], p["planet_num"])
+                if k in used:
+                    continue
+                (soft if k in occ else free).append(p)
+            return free + soft
+
+        pending = list(slots)
+        while pending:
+            choice = None  # (regret, slot, planet)
+            for slot in pending:
+                cands = candidates(slot)
+                if not cands:
+                    continue
+                regret = cands[0]["value"] - (cands[1]["value"] if len(cands) > 1 else 0)
+                if choice is None or regret > choice[0]:
+                    choice = (regret, slot, cands[0])
+            if choice is None:
+                break  # no remaining slot can be placed for this character
+            _, slot, pl = choice
+            slot["system"] = pl["system"]
+            slot["planet_num"] = pl["planet_num"]
+            slot["planet_type"] = pl["planet_type"]
+            slot["quality_pct"] = round(pl["value"])
+            used.add((pl["system"], pl["planet_num"]))
+            pending.remove(slot)
+
+
 def _attach_extractor_planet_details(
     assignments: list[dict],
     char_list: list[dict],
@@ -1456,7 +1516,14 @@ def _attach_extractor_planet_details(
     factory_avoid_cids: set[int] | None = None,
     factory_avoid: set[tuple] | None = None,
 ) -> None:
-    """Attach system/planet_num/quality_pct to each extractor slot. Mutates assignments."""
+    """Attach system/planet_num/quality_pct to each extractor slot. Mutates assignments.
+
+    Existing (already-built) colonies are pinned to their real planets per character;
+    new slots are then placed by a global need-balanced water-fill (_waterfill_new_slots,
+    lever 1) so resources sharing a planet type don't get starved onto thin planets."""
+    char_used_map: dict[int, set] = {}
+    nonfac_occ_map: dict[int, set] = {}
+    new_slots_global: list[tuple] = []
     for asgn, char in zip(assignments, char_list):
         actual_ext = len(asgn["extractors"])
         cid = char["character_id"]
@@ -1483,60 +1550,53 @@ def _attach_extractor_planet_details(
         def _priority(slot):
             return -1 if (slot.get("is_existing") and not req.chosen_systems) else _avail(slot)
 
-        for slot in sorted(asgn["extractors"], key=_priority):
+        nonfac_occupied = {
+            (p.get("system_name"), p.get("planet_num"))
+            for p in char_nonfac_ext.get(cid, [])
+            if p.get("system_name") and p.get("planet_num") is not None
+        }
+        # Factory chars needing all B/T keep those planets free for factories.
+        if factory_avoid_cids and cid in factory_avoid_cids and factory_avoid:
+            nonfac_occupied = nonfac_occupied | factory_avoid
+
+        # Pass 1: pin existing (already-built) colonies to their real planets; defer the
+        # new slots to the global need-balanced water-fill below.
+        for slot in sorted([s for s in asgn["extractors"] if s.get("is_existing")], key=_priority):
             p0_name = slot.get("p0_name")
             if not p0_name:
                 continue
-            if slot.get("is_existing"):
-                actual_sys = slot.get("actual_system") or ""
-                actual_num = slot.get("actual_planet_num")
-                if actual_sys and actual_num is not None and (actual_sys, actual_num) not in char_used:
-                    slot["system"] = actual_sys
-                    slot["planet_num"] = actual_num
-                    char_used.add((actual_sys, actual_num))
-                    pp_entry = next(
-                        (p for p in p0_planet_lists_global.get(p0_name, [])
-                         if p["system"] == actual_sys and p["planet_num"] == actual_num),
-                        None,
-                    )
-                    if pp_entry:
-                        slot["quality_pct"] = round(pp_entry["value"])
-                else:
-                    src = p0_planet_lists if req.chosen_systems else p0_planet_lists_global
-                    planet = next(
-                        (p for p in src.get(p0_name, []) if (p["system"], p["planet_num"]) not in char_used),
-                        None,
-                    )
-                    if planet:
-                        slot["system"] = planet["system"]
-                        slot["planet_num"] = planet["planet_num"]
-                        slot["quality_pct"] = round(planet["value"])
-                        char_used.add((planet["system"], planet["planet_num"]))
-            else:
-                planets = p0_planet_lists.get(p0_name, [])
-                nonfac_occupied = {
-                    (p.get("system_name"), p.get("planet_num"))
-                    for p in char_nonfac_ext.get(cid, [])
-                    if p.get("system_name") and p.get("planet_num") is not None
-                }
-                # Factory chars needing all B/T keep those planets free for factories.
-                if factory_avoid_cids and cid in factory_avoid_cids and factory_avoid:
-                    nonfac_occupied = nonfac_occupied | factory_avoid
-                planet = next(
-                    (p for p in planets
-                     if (p["system"], p["planet_num"]) not in char_used
-                     and (p["system"], p["planet_num"]) not in nonfac_occupied),
+            actual_sys = slot.get("actual_system") or ""
+            actual_num = slot.get("actual_planet_num")
+            if actual_sys and actual_num is not None and (actual_sys, actual_num) not in char_used:
+                slot["system"] = actual_sys
+                slot["planet_num"] = actual_num
+                char_used.add((actual_sys, actual_num))
+                pp_entry = next(
+                    (p for p in p0_planet_lists_global.get(p0_name, [])
+                     if p["system"] == actual_sys and p["planet_num"] == actual_num),
                     None,
-                ) or next(
-                    (p for p in planets if (p["system"], p["planet_num"]) not in char_used),
+                )
+                if pp_entry:
+                    slot["quality_pct"] = round(pp_entry["value"])
+            else:
+                src = p0_planet_lists if req.chosen_systems else p0_planet_lists_global
+                planet = next(
+                    (p for p in src.get(p0_name, []) if (p["system"], p["planet_num"]) not in char_used),
                     None,
                 )
                 if planet:
                     slot["system"] = planet["system"]
                     slot["planet_num"] = planet["planet_num"]
-                    slot["planet_type"] = planet["planet_type"]
                     slot["quality_pct"] = round(planet["value"])
                     char_used.add((planet["system"], planet["planet_num"]))
+
+        char_used_map[cid] = char_used
+        nonfac_occ_map[cid] = nonfac_occupied
+        for slot in asgn["extractors"]:
+            if not slot.get("is_existing") and slot.get("p0_name"):
+                new_slots_global.append((cid, slot))
+
+    _waterfill_new_slots(new_slots_global, char_used_map, nonfac_occ_map, p0_planet_lists)
 
 
 # ── Split-extraction consolidation (opt-in) ──────────────────────────────────────
