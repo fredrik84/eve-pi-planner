@@ -492,6 +492,12 @@ class PlanRequest(BaseModel):
     factory_character_ids: list[int] = []  # if set, only these chars do factories
     max_jumps: int = 1  # prefer system combos clustered within this many jumps (0–5)
     split_mode: str = "off"  # off | on — split-extraction (consolidate freed planets → factories)
+    distribution_mode: str = "stability"  # stability (count ∝ need/density) | need (∝ need)
+
+
+def _norm_dist_mode(v) -> str:
+    # Default to density-aware "stability"; only "need" opts back to pure need-proportional.
+    return "need" if v == "need" else "stability"
 
 
 def _norm_split_mode(v) -> str:
@@ -706,6 +712,7 @@ def ensure_profile_tables():
             ("max_jumps",              "INTEGER NOT NULL DEFAULT 1"),
             ("factory_planet_types",   "TEXT NOT NULL DEFAULT '[]'"),
             ("split_mode",             "TEXT NOT NULL DEFAULT 'off'"),
+            ("distribution_mode",      "TEXT NOT NULL DEFAULT 'stability'"),
         ]:
             if col not in cols:
                 try:
@@ -730,6 +737,7 @@ class ProfileSave(BaseModel):
     max_jumps: int = 1
     factory_planet_types: list[str] = []
     split_mode: str = "off"
+    distribution_mode: str = "stability"
 
 
 @router.get("/api/profiles")
@@ -742,7 +750,7 @@ def list_profiles(pp_session: str = Cookie(default=None)):
     rows = con.execute(
         "SELECT id, name, type_id, type_name, overproduction_pct, preferred_systems, "
         "constellations, use_existing, factory_system, factory_output_per_hour, factory_character_ids, max_jumps, "
-        "factory_planet_types, split_mode "
+        "factory_planet_types, split_mode, distribution_mode "
         "FROM pp_profiles WHERE context_id=? ORDER BY name",
         (context_id,),
     ).fetchall()
@@ -755,7 +763,8 @@ def list_profiles(pp_session: str = Cookie(default=None)):
          "factory_output_per_hour": r["factory_output_per_hour"],
          "factory_character_ids":   _json.loads(r["factory_character_ids"] or "[]"),
          "factory_planet_types":    _json.loads(r["factory_planet_types"] or "[]"),
-         "split_mode":              r["split_mode"] or "off"}
+         "split_mode":              r["split_mode"] or "off",
+         "distribution_mode":       r["distribution_mode"] or "stability"}
         for r in rows
     ]}
 
@@ -768,13 +777,14 @@ def save_profile(req: ProfileSave, context_id: int = Depends(require_context)):
         INSERT OR REPLACE INTO pp_profiles
             (context_id, name, type_id, type_name, overproduction_pct, preferred_systems,
              constellations, use_existing, factory_system, factory_output_per_hour,
-             factory_character_ids, max_jumps, factory_planet_types, split_mode)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             factory_character_ids, max_jumps, factory_planet_types, split_mode, distribution_mode)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (context_id, req.name, req.type_id, req.type_name, req.overproduction_pct,
           req.preferred_systems, _json.dumps(req.constellations),
           1 if req.use_existing else 0, req.factory_system or "",
           req.factory_output_per_hour, _json.dumps(req.factory_character_ids), req.max_jumps,
-          _json.dumps(req.factory_planet_types), _norm_split_mode(req.split_mode)))
+          _json.dumps(req.factory_planet_types), _norm_split_mode(req.split_mode),
+          _norm_dist_mode(req.distribution_mode)))
     con.commit()
     con.close()
     return {"ok": True}
@@ -2283,9 +2293,11 @@ def _run_plan(req: PlanRequest, context_id: int) -> dict:
                 if share >= _per_char_fac_cap
             }
 
-    # Density-aware distribution: give thinner-deposit resources more extractors so production
-    # lands in the recipe ratio (less leftover P1 from one input under-performing).
-    density_est = _density_estimate(p1_info, p0_planet_lists, ext_slots, has_planet_db)
+    # Distribution method (user-selectable): "stability" gives thinner-deposit resources more
+    # extractors so production lands in the recipe ratio (less leftover P1); "need" is the
+    # original need-proportional split. density_est=None → _build_need_list uses pure need.
+    density_est = (_density_estimate(p1_info, p0_planet_lists, ext_slots, has_planet_db)
+                   if _norm_dist_mode(req.distribution_mode) == "stability" else None)
 
     assignments, remaining, char_nonfac = _run_extractor_pipeline(
         req, char_list, p1_info, ext_slots, needed_at_baseline,
@@ -2410,6 +2422,7 @@ def _run_plan(req: PlanRequest, context_id: int) -> dict:
             "split_mode":               split_mode,
             "split_planets":            split_planets,
             "planets_saved":            planets_saved,
+            "distribution_mode":        _norm_dist_mode(req.distribution_mode),
         },
     }
 

@@ -67,6 +67,7 @@ let _wiz = {
   importComponents: [], // fuel-block component type_ids to buy/import, not produce
   factoryPlanetTypes: ['Barren', 'Temperate'], // allowed factory planet types (fuel block)
   splitMode: 'off',     // off | on — split-extraction (reuse planets → more factories)
+  distMode: 'stability', // stability (count ∝ need/density) | need (∝ need)
 };
 
 let _fbBom = null;   // cached fuel-block basket components (from /api/fuelblock-bom)
@@ -1389,6 +1390,7 @@ async function _applyProfile(profile) {
   _wiz.factoryPlanetTypes = (profile.factory_planet_types && profile.factory_planet_types.length)
     ? profile.factory_planet_types : ['Barren', 'Temperate'];
   _wiz.splitMode = (profile.split_mode && profile.split_mode !== 'off') ? 'on' : 'off';
+  _wiz.distMode = (profile.distribution_mode === 'need') ? 'need' : 'stability';
   _wiz.lastRecsData = null;
   _wiz.lastPlanData = null;
   if (isFuelBlock) await _loadProductConfig(FUEL_BLOCK_TYPE_ID, FUEL_BLOCK_LABEL);
@@ -1418,6 +1420,7 @@ async function wizardSaveProfile() {
     factory_character_ids: _wiz.factoryCharIds || [],
     factory_planet_types: _wiz.factoryPlanetTypes || ['Barren', 'Temperate'],
     split_mode: _wiz.splitMode || 'off',
+    distribution_mode: _wiz.distMode || 'stability',
   };
   try {
     const resp = await fetch('/api/profiles', {
@@ -1465,6 +1468,7 @@ async function wizardShare(includeDetails = false) {
     ic: _wiz.importComponents || [],  // fuel-block imported component ids
     fpt: _wiz.factoryPlanetTypes || ['Barren', 'Temperate'],  // allowed factory planet types
     sx: _wiz.splitMode || 'off',  // split-extraction mode
+    dm: _wiz.distMode || 'stability',  // distribution method
     mfg: _wiz.fuelblock ? _mfgRaw() : null,  // manufacturing ME selects (raw, for restore)
     bk: _wiz.basketId ? _basketSnapshot(_wiz.basketId) : null,  // basket def for shared (private) baskets
     plan: _wiz.lastPlanData || null,
@@ -1556,6 +1560,7 @@ async function _restoreFromPayload(payload) {
   _wiz.factoryPlanetTypes = (payload.fpt && payload.fpt.length)
     ? payload.fpt : ['Barren', 'Temperate'];
   _wiz.splitMode = (payload.sx && payload.sx !== 'off') ? 'on' : 'off';
+  _wiz.distMode = (payload.dm === 'need') ? 'need' : 'stability';
   if (payload.cc && payload.cc.length) {
     _applyConstellationSelection(payload.cc);
   }
@@ -1600,6 +1605,7 @@ function _planRequest(systemNames) {
     factory_system:        _wiz.factorySystem || '',
     factory_character_ids: _wiz.factoryCharIds || [],
     split_mode:            _wiz.splitMode || 'off',
+    distribution_mode:     _wiz.distMode || 'stability',
   };
   if (_wiz.fuelblock) {
     body.factory_planet_types = _wiz.factoryPlanetTypes || ['Barren', 'Temperate'];
@@ -1819,6 +1825,11 @@ function _splitExtRow(e) {
 
 function setSplitMode(mode) {
   _wiz.splitMode = (mode && mode !== 'off') ? 'on' : 'off';
+  _rerunPlan();
+}
+
+function setDistMode(mode) {
+  _wiz.distMode = (mode === 'need') ? 'need' : 'stability';
   _rerunPlan();
 }
 
@@ -2097,6 +2108,16 @@ function renderFinalPlan(data, opts = {}) {
           <span class="plan-split-seg">${splitBtns}</span>
           <span class="plan-stat-lbl">split planets · ${savedLbl}</span>
         </div>`;
+    // Distribution method: how extractor counts are split across resources.
+    const distMode = (_wiz.distMode || s.distribution_mode || 'stability');
+    const distBtns = [['stability', 'Stability'], ['need', 'Match need']].map(
+      ([v, l]) => `<button type="button" class="plan-split-btn${v === distMode ? ' plan-split-on' : ''}" onclick="setDistMode('${v}')">${l}</button>`
+    ).join('');
+    const distStatHtml = `
+        <div class="plan-stat plan-split-ctrl" title="Distribution method. Stability: each resource gets extractors ∝ need ÷ its planet density, so a thin-deposit input gets more extractors and production lands in the recipe ratio (minimal leftover P1, no single volatile bottleneck). Match need: the original split, extractors ∝ recipe need only (assumes uniform density).">
+          <span class="plan-split-seg">${distBtns}</span>
+          <span class="plan-stat-lbl">distribution</span>
+        </div>`;
     statsHtml = `
       <div class="plan-stats-bar">
         <div class="plan-stat plan-stat-edit" title="Target overproduction % — edit and the plan recalculates. 10% means extractors produce 10% more P0 than factories need. Reported baseline: ${s.overproduction_pct >= 0 ? '+' : ''}${s.overproduction_pct}%.">
@@ -2125,6 +2146,7 @@ function renderFinalPlan(data, opts = {}) {
           <span class="plan-stat-val">${_fmtHours(s.factory_refill_hours)}</span>
           <span class="plan-stat-lbl">refill / factory (${s.factory_launchpads_assumed} LP)</span>
         </div>` : ''}
+        ${distStatHtml}
         ${splitStatHtml}
         ${p0StatHtml}
       </div>`;

@@ -32,6 +32,7 @@ from app.planner import (
     _ext_actual_p0_per_day,
     _ext_leg_qualities,
     _factory_candidates,
+    _norm_dist_mode,
     _fetch_planets_and_recs,
     _load_char_planet_config,
     _norm_split_mode,
@@ -102,6 +103,7 @@ class FuelBlockPlanRequest(BaseModel):
     rig_space: str = "auto"  # auto | high | low | null
     bp_me_pct: float = 0.0
     split_mode: str = "off"  # off | conservative | aggressive — split-extraction consolidation
+    distribution_mode: str = "stability"  # stability (count ∝ need/density) | need (∝ need)
 
 
 def _system_security(system: str | None):
@@ -601,9 +603,10 @@ def _run_fuelblock_plan(req: "FuelBlockPlanRequest", context_id: int) -> dict:
 
     has_planet_db = any(v for v in p0_planet_lists.values())
 
-    # Density-aware distribution: thinner-deposit P0s get more extractors so each P1 lands in
-    # the basket ratio (less leftover from one input under-performing).
-    density_est = _density_estimate(p1_info, p0_planet_lists, ext_slots, has_planet_db)
+    # Distribution method (user-selectable): "stability" gives thinner-deposit P0s more
+    # extractors so each P1 lands in the basket ratio (less leftover); "need" = original split.
+    density_est = (_density_estimate(p1_info, p0_planet_lists, ext_slots, has_planet_db)
+                   if _norm_dist_mode(req.distribution_mode) == "stability" else None)
 
     assignments, remaining, char_nonfac = _run_extractor_pipeline(
         req, char_list, p1_info, ext_slots, needed_at_baseline,
@@ -809,6 +812,7 @@ def _run_fuelblock_plan(req: "FuelBlockPlanRequest", context_id: int) -> dict:
             "split_mode":               split_mode,
             "split_planets":            split_planets,
             "planets_saved":            planets_saved,
+            "distribution_mode":        _norm_dist_mode(req.distribution_mode),
         },
     }
     if meta["mfg"]:
