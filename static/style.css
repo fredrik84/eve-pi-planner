@@ -945,24 +945,23 @@ tr:hover td { background: #181d2a; }
 .plan-fac-imports b { color: #a8c8ff; font-weight: 600; }
 .plan-fac-imports b.p1-amt-set { color: #5ecf80; }
 /* P1 stack splitter */
-.p1-dist-card { padding: 12px 14px; }
-.p1-dist-paste { width: 100%; box-sizing: border-box; background: #0d0f14; border: 1px solid #1b2030; border-radius: 4px;
-  color: #c8cdd8; font-size: 12px; padding: 6px 8px; margin: 8px 0; resize: vertical; font-family: inherit; }
-.p1-dist-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px 12px; }
-.p1-dist-field { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: #8a93a8; }
-.p1-dist-input { background: #0d0f14; border: 1px solid #1b2030; border-radius: 4px; color: #c8cdd8; font-size: 13px; padding: 4px 7px; }
-.plan-dist-head { display: flex; align-items: flex-end; gap: 14px; flex-wrap: wrap; margin-bottom: 4px; }
-.plan-dist-tables { margin-top: 14px; display: flex; flex-direction: column; gap: 16px; overflow-x: auto; }
-.p1-dist-table { border-collapse: collapse; font-size: 12px; width: auto; }
-.p1-dist-table th { text-align: right; padding: 5px 12px; color: #8a93a8; font-weight: 600; border-bottom: 1px solid #232a3a; white-space: nowrap; }
-.p1-dist-table th:first-child { text-align: left; color: #a8c8ff; }
-.p1-dist-table td { padding: 4px 12px; text-align: right; border-bottom: 1px solid #161b28; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.p1-dist-table tbody tr:hover td { background: #161b28; }
-.p1-dist-loc { text-align: left !important; color: #c8cdd8; }
-.p1-dist-table .p1-amt { color: #46506a; font-weight: 600; }              /* dash (no stack) */
-.p1-dist-table .p1-amt.p1-amt-set { color: #5ecf80; cursor: pointer; }    /* whole-unit count — click to copy */
-.p1-dist-table .p1-amt.p1-amt-set:hover { text-decoration: underline; }
-.p1-dist-table .p1-amt.p1-amt-copied { color: #fff; background: #2c7a45; border-radius: 3px; padding: 0 3px; }
+/* Refill split (PI Planner) — driven by the shared inventory paste; matches the analyze tables. */
+.dist-block { margin-top: 8px; }
+.dist-block .tier-header { flex-wrap: wrap; }
+.dist-plan-select { background: #1c2030; border: 1px solid #1b2030; border-radius: 4px; color: #c8cdd8; font-size: 13px; padding: 4px 8px; }
+.dist-hint { font-size: 12px; color: #6a7390; margin-bottom: 16px; }
+.dist-hint b { color: #a8b4cc; }
+.plan-dist-tables { display: flex; flex-direction: column; gap: 22px; }
+.dist-line { overflow-x: auto; }
+.dist-line-head { display: flex; align-items: baseline; gap: 10px; font-size: 13px; color: #a8b4cc; margin-bottom: 8px; }
+.dist-line-count { font-size: 11px; color: #6a7390; }
+/* .p1-dist-table inherits the base table look (dark card, uppercase th); only numbers differ. */
+.p1-dist-table th.dist-num, .p1-dist-table td.dist-num { text-align: right; font-variant-numeric: tabular-nums; }
+.p1-dist-loc { color: #c8cdd8; }
+.p1-amt { color: #46506a; font-weight: 600; }                 /* dash (no inventory entered) */
+.p1-amt.p1-amt-set { color: #5ecf80; cursor: pointer; }       /* whole-unit count — click to copy */
+.p1-amt.p1-amt-set:hover { text-decoration: underline; }
+.p1-amt.p1-amt-copied { color: #fff; background: #2c7a45; border-radius: 3px; padding: 0 4px; }
 .p1-cell-na { color: #2a3142; }
 .plan-fac-only-badge { font-size: 10px; background: #141c30; color: #4a68aa; border: 1px solid #1e2a40; border-radius: 3px; padding: 1px 5px; margin-left: 6px; vertical-align: middle; }
 .plan-fac-toggle-btn { font-size: 10px; background: #0e1820; color: #3a5070; border: 1px solid #1e2840; border-radius: 3px; padding: 1px 6px; margin-left: 6px; vertical-align: middle; cursor: pointer; transition: background 0.12s, color 0.12s, border-color 0.12s; }

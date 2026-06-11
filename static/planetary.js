@@ -1399,7 +1399,10 @@ async function _applyProfile(profile) {
 
 async function wizardSaveProfile() {
   if (!_wiz.typeId) { alert('No product selected.'); return; }
-  const name = prompt('Profile name:');
+  // Suggest a name from what's being planned: the product/basket, plus the region if chosen.
+  const base = (_wiz.productName || 'Plan').replace(/\s*\(basket\)\s*$/i, '');
+  const region = (typeof _ppRegion !== 'undefined' && _ppRegion) ? ' · ' + _ppRegion : '';
+  const name = prompt('Profile name:', base + region);
   if (!name || !name.trim()) return;
   const payload = {
     name: name.trim(),
@@ -1823,9 +1826,8 @@ function setSplitMode(mode) {
 // You collect stacks of P1 from extractors; this tells you exactly how many units of each to
 // drop at each factory planet so a stack splits across the factories that consume it. Plans
 // built in Planetary Planning are snapshotted to localStorage and listed in the PI Planner tab.
-let _p1Stacks = {};        // type_id -> qty on hand (parsed from the paste textarea)
-let _p1PasteText = '';     // raw textarea content, persisted across plan selects / re-renders
-let _p1NameToTid = {};     // lowercase P1 name -> type_id, for parsing the paste
+let _p1Stacks = {};        // type_id -> qty on hand (parsed from the shared inventory textarea)
+let _p1NameToTid = {};     // lowercase P1 name -> type_id, for parsing the inventory
 const _PLAN_SNAP_KEY = 'ppPlanSnapshots';
 
 function _loadPlanSnapshots() {
@@ -1931,39 +1933,42 @@ async function renderPlanDistribution() {
     if (!groups[key]) groups[key] = { title: f.product || '', facs: [] };
     groups[key].facs.push(f);
   });
+  // One table per product, styled like the analyze tables above (same dark-card look) so the
+  // tab reads as one tool fed by the single inventory paste at the top.
   const tables = Object.keys(groups).map(key => {
     const g = groups[key];
     const colMap = {};
     g.facs.forEach(f => f.p1_inputs.forEach(p => { colMap[p.p1_type_id] = p.p1_name; }));
     const cols = Object.keys(colMap).sort((a, b) => colMap[a].localeCompare(colMap[b])).map(id => ({ id: id, name: colMap[id] }));
-    const title = `${g.title || cols.map(c => c.name).join(' + ')} · ${g.facs.length} planet${g.facs.length !== 1 ? 's' : ''}`;
-    const head = `<tr><th>${_esc(title)}</th>${cols.map(c => `<th>${_esc(c.name)}</th>`).join('')}</tr>`;
+    const head = `<thead><tr><th>Factory planet</th>${cols.map(c => `<th class="dist-num">${_esc(c.name)}</th>`).join('')}</tr></thead>`;
     const body = g.facs.map(f => {
       const byId = {}; f.p1_inputs.forEach(p => { byId[p.p1_type_id] = p; });
       const cells = cols.map(c => {
         const p = byId[c.id];
         return p
-          ? `<td><b class="p1-amt" data-p1="${p.p1_type_id}" data-share="${p.share}" onclick="copyP1Amount(this)" title="Click to copy this number">–</b></td>`
-          : '<td class="p1-cell-na">·</td>';
+          ? `<td class="dist-num"><b class="p1-amt" data-p1="${p.p1_type_id}" data-share="${p.share}" onclick="copyP1Amount(this)" title="Click to copy this number">–</b></td>`
+          : '<td class="dist-num p1-cell-na">·</td>';
       }).join('');
       return `<tr><td class="p1-dist-loc">${_esc(f.loc || f.label || '?')}</td>${cells}</tr>`;
     }).join('');
-    return `<table class="p1-dist-table"><thead>${head}</thead><tbody>${body}</tbody></table>`;
+    return `<div class="dist-line">
+        <div class="dist-line-head">${_esc(g.title || cols.map(c => c.name).join(' + '))}<span class="dist-line-count">${g.facs.length} planet${g.facs.length !== 1 ? 's' : ''}</span></div>
+        <table class="p1-dist-table">${head}<tbody>${body}</tbody></table>
+      </div>`;
   }).join('');
 
   el.innerHTML = `
-    <div class="plan-section-title">Split P1 stacks into plan factories</div>
-    <div class="pp-card">
-      <div class="plan-dist-head">
-        <label class="p1-dist-field">Plan<select class="p1-dist-input" onchange="onPlanDistSelect(this.value)">${opts}</select></label>
+    <div class="tier-block dist-block">
+      <div class="tier-header">
+        <h2>Refill split</h2>
+        <select class="dist-plan-select" onchange="onPlanDistSelect(this.value)">${opts}</select>
         ${delBtn}
-        <div class="admin-hint" style="flex:1;margin:0">Paste your P1 inventory below (or type lines). The tables fill with the exact whole-unit count to drop at each factory planet — edit a line to change an amount.</div>
       </div>
-      <textarea class="p1-dist-paste" rows="5" placeholder="Paste P1 inventory — one 'Name &lt;tab or spaces&gt; qty' per line, e.g.\nPrecious Metals  18000\nElectrolytes  14000" oninput="onP1StackPaste(this.value)">${_esc(_p1PasteText || '')}</textarea>
+      <div class="dist-hint">Splits the P1 in your <b>inventory above</b> across this plan's factories — drop the green number at each planet. Click a number to copy it.</div>
       <div class="plan-dist-tables">${tables}</div>
     </div>`;
   el.dataset.sel = snap.id;
-  updateP1Distribution();
+  syncRefillFromInventory();  // fill the tables from the shared inventory paste at the top
 }
 
 // Parse one EVE-inventory line into [name, qty] or null. Mirrors app/pi.py parse_inventory:
@@ -1988,12 +1993,13 @@ function _parseInventoryLine(line) {
   return (qty > 0 && name) ? [name, qty] : null;
 }
 
-// The paste textarea is the single input — re-parse the whole thing each edit (so changing or
-// removing a line updates live), matching names against the selected plan's P1s.
-function onP1StackPaste(text) {
-  _p1PasteText = text;
+// The PI Planner's single inventory paste (#inv) drives the refill split too — re-parse it
+// (matching P1 names against the selected plan) and refresh the tables. Called on every #inv
+// edit (wired in app.js) and after the section renders.
+function syncRefillFromInventory() {
+  const inv = document.getElementById('inv');
   _p1Stacks = {};
-  for (const line of text.split('\n')) {
+  for (const line of (inv ? inv.value : '').split('\n')) {
     const parsed = _parseInventoryLine(line);
     if (!parsed) continue;
     const tid = _p1NameToTid[parsed[0].toLowerCase()];

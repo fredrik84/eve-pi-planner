@@ -474,6 +474,10 @@ document.addEventListener('DOMContentLoaded', () => {
 document.getElementById('inv').addEventListener('keydown', e => {
   if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) analyze();
 });
+// The single inventory paste also drives the refill split below (shared input).
+document.getElementById('inv').addEventListener('input', () => {
+  if (typeof syncRefillFromInventory === 'function') syncRefillFromInventory();
+});
 
 window.addEventListener('DOMContentLoaded', loadFromHash);
 
