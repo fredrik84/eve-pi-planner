@@ -1224,6 +1224,22 @@ tr:hover td { background: #181d2a; }
   gap: 8px;
   padding: 0 0 14px;
 }
+/* Saved plans (refill snapshots) — foldable list on the planning first page */
+.pp-saved-bar { padding: 0 0 14px; }
+.pp-saved-fold { border: 1px solid #1c2030; border-radius: 6px; background: #0e0b16; }
+.pp-saved-fold > summary { cursor: pointer; padding: 9px 13px; font-size: 12px; font-weight: 600;
+  color: #8a94ac; list-style: none; user-select: none; }
+.pp-saved-fold > summary::-webkit-details-marker { display: none; }
+.pp-saved-fold > summary::before { content: '▸'; display: inline-block; margin-right: 8px; color: #5a4a78; }
+.pp-saved-fold[open] > summary::before { content: '▾'; }
+.pp-saved-fold > summary:hover { color: #b8c2d8; }
+.pp-saved-list { padding: 2px 8px 8px; display: flex; flex-direction: column; gap: 2px; }
+.pp-saved-row { display: flex; align-items: center; gap: 10px; padding: 6px 6px;
+  border-top: 1px solid #161a26; }
+.pp-saved-row:first-child { border-top: none; }
+.pp-saved-name { font-size: 13px; color: #c8d2e6; font-weight: 600; flex: 0 1 auto; }
+.pp-saved-meta { font-size: 11px; color: #5a6478; flex: 1 1 auto; }
+.pp-saved-actions { display: flex; gap: 6px; flex: 0 0 auto; }
 .pp-profile-dropdown-label {
   font-size: 11px;
   text-transform: uppercase;

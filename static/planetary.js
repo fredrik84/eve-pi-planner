@@ -124,6 +124,7 @@ async function onPlanetaryTabOpen() {
   loadCharacters();
   loadConstellations();
   ppToggleMaxJumps();
+  renderSavedPlansBar();
   await _tryRestoreFromHash();
 }
 
@@ -1857,6 +1858,65 @@ function _loadPlanSnapshots() {
   try { return JSON.parse(localStorage.getItem(_PLAN_SNAP_KEY) || '[]'); } catch (e) { return []; }
 }
 
+// Merged saved plans: server-saved (named, cross-device) first, then any unsaved last-built
+// ones from this browser. Shared by the refill view and the page-1 "Saved plans" list.
+async function _fetchAllSnapshots() {
+  let server = [];
+  try { server = (await (await fetch('/api/plan-snapshots')).json()).snapshots || []; } catch (e) {}
+  const serverNames = new Set(server.map(s => s.name));
+  return [
+    ...server.map(s => ({ id: 'srv:' + s.id, srvId: s.id, name: s.name, factories: s.factories, consumption: s.consumption || {},
+                          products_per_day: s.products_per_day, isk_per_day: s.isk_per_day, unit_label: s.unit_label, saved: true })),
+    ..._loadPlanSnapshots().filter(s => !serverNames.has(s.name)),
+  ];
+}
+
+// Page-1 "Saved plans" list (Planetary Planning). Lists the refill snapshots so you can jump
+// straight to refilling one without going through the PI Planner tab.
+async function renderSavedPlansBar() {
+  const el = document.getElementById('ppSavedPlansBar');
+  if (!el) return;
+  const snaps = await _fetchAllSnapshots();
+  if (!snaps.length) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  el.style.display = '';
+  const rows = snaps.map(s => {
+    const nfac = (s.factories || []).length;
+    const ppd = s.products_per_day;
+    const meta = `${nfac} factor${nfac === 1 ? 'y' : 'ies'}`
+      + (ppd ? ` · ${Number(ppd).toLocaleString()} ${_esc(s.unit_label || 'units')}/day` : '');
+    const del = `<button class="pp-profile-action-btn pp-profile-del-btn" onclick="deleteSavedPlan('${s.id}','${s.srvId || ''}')">Delete</button>`;
+    return `<div class="pp-saved-row">
+        <span class="pp-saved-name">${_esc(s.name)}${s.saved ? '' : ' · this browser'}</span>
+        <span class="pp-saved-meta">${meta}</span>
+        <span class="pp-saved-actions">
+          <button class="pp-profile-action-btn" onclick="openSavedPlanRefill('${s.id}')">Refill</button>
+          ${del}
+        </span>
+      </div>`;
+  }).join('');
+  el.innerHTML = `<details class="pp-saved-fold"><summary>Saved plans (${snaps.length})</summary>
+      <div class="pp-saved-list">${rows}</div></details>`;
+}
+
+// Open a saved plan straight in the refill tool (PI Planner → Refill a plan, that plan selected).
+function openSavedPlanRefill(id) {
+  const sect = document.getElementById('planDistSection');
+  if (sect) sect.dataset.sel = id;
+  if (typeof switchTab === 'function') switchTab('planner');
+  if (typeof setPiMode === 'function') setPiMode('refill');
+}
+
+async function deleteSavedPlan(id, srvId) {
+  if (!confirm('Delete this saved plan?')) return;
+  if (srvId) {
+    try { await fetch(`/api/plan-snapshots/${srvId}`, { method: 'DELETE' }); } catch (e) {}
+  } else {
+    try { localStorage.setItem(_PLAN_SNAP_KEY, JSON.stringify(_loadPlanSnapshots().filter(s => s.id !== id))); } catch (e) {}
+  }
+  renderSavedPlansBar();
+  if (document.getElementById('planDistSection')) renderPlanDistribution();
+}
+
 function _buildPlanSnapshot(data) {
   const factories = [];
   for (const a of (data.assignments || []))
@@ -1890,7 +1950,7 @@ function _buildPlanSnapshot(data) {
 function _storePlanSnapshot(data) {
   const snap = _buildPlanSnapshot(data);
   if (!snap) return;
-  const entry = { id: 'local:' + snap.name, name: snap.name, savedAt: Date.now(), factories: snap.factories, local: true };
+  const entry = { ...snap, id: 'local:' + snap.name, savedAt: Date.now(), local: true };
   let snaps = _loadPlanSnapshots().filter(s => s.name !== snap.name);
   snaps.unshift(entry);
   try { localStorage.setItem(_PLAN_SNAP_KEY, JSON.stringify(snaps.slice(0, 8))); } catch (e) {}
@@ -1915,6 +1975,7 @@ async function savePlanForRefills() {
     });
     if (!resp.ok) throw new Error((await resp.json()).detail || `HTTP ${resp.status}`);
     if (btn) { const t = btn.textContent; btn.textContent = '✓ Saved'; setTimeout(() => { btn.textContent = t; }, 2000); }
+    renderSavedPlansBar();  // keep the page-1 list current
   } catch (e) { alert('Save failed: ' + e.message); }
 }
 
@@ -1956,15 +2017,7 @@ function onPlanDistSelect(id) {
 async function renderPlanDistribution() {
   const el = document.getElementById('planDistSection');
   if (!el) return;
-  let server = [];
-  try { server = (await (await fetch('/api/plan-snapshots')).json()).snapshots || []; } catch (e) {}
-  const serverNames = new Set(server.map(s => s.name));
-  // Server-saved plans (named, cross-device) first, then any unsaved last-built ones from this browser.
-  const snaps = [
-    ...server.map(s => ({ id: 'srv:' + s.id, srvId: s.id, name: s.name, factories: s.factories, consumption: s.consumption || {},
-                          products_per_day: s.products_per_day, isk_per_day: s.isk_per_day, unit_label: s.unit_label, saved: true })),
-    ..._loadPlanSnapshots().filter(s => !serverNames.has(s.name)),
-  ];
+  const snaps = await _fetchAllSnapshots();
   if (!snaps.length) {
     el.innerHTML = `<div class="plan-section-title">Split P1 stacks into plan factories</div>
       <div class="pp-card"><div class="admin-hint">Build a plan in <b>Planetary Planning</b> and hit <b>Save plan</b> — it'll appear here so you can paste your P1 stacks and see exactly how many units to drop at each factory (no need to re-run the wizard).</div></div>`;
