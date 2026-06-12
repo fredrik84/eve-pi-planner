@@ -1447,18 +1447,10 @@ async function wizardSaveProfile() {
 // Once a share is consumed (loaded or created), skip re-restoration for this session.
 let _shareConsumed = false;
 
-async function wizardShare(includeDetails = false) {
-  if (!_wiz.typeId) return;
-  if (includeDetails && !confirm(
-      'This full link embeds your character names, systems and planets. Anyone it is '
-      + 'forwarded to could use in-game locator agents to find and camp you.\n\n'
-      + 'Only send it to people you trust. Continue?')) return;
-  const btnId = includeDetails ? 'wizShareFullBtn' : 'wizShareBtn';
-  const btn = document.getElementById(btnId);
-  const label = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = 'Sharing…';
-  const payload = {
+// Encode the current wizard state + computed plan into the v2 share/restore payload.
+// Shared by Share links AND the auto-persist that restores your plan on refresh.
+function _buildPlanPayload() {
+  return {
     v: 2,
     tid: _wiz.typeId,
     pn: _wiz.productName,
@@ -1480,6 +1472,28 @@ async function wizardShare(includeDetails = false) {
     bk: _wiz.basketId ? _basketSnapshot(_wiz.basketId) : null,  // basket def for shared (private) baskets
     plan: _wiz.lastPlanData || null,
   };
+}
+
+// Keep the last computed plan in localStorage so a page refresh lands you back on it
+// (no re-run needed). Restored by _tryRestoreLastPlan when there's no share link.
+function _persistLastPlan() {
+  try {
+    if (_wiz.typeId && _wiz.lastPlanData) localStorage.setItem('ppLastPlan', JSON.stringify(_buildPlanPayload()));
+  } catch (e) {}
+}
+
+async function wizardShare(includeDetails = false) {
+  if (!_wiz.typeId) return;
+  if (includeDetails && !confirm(
+      'This full link embeds your character names, systems and planets. Anyone it is '
+      + 'forwarded to could use in-game locator agents to find and camp you.\n\n'
+      + 'Only send it to people you trust. Continue?')) return;
+  const btnId = includeDetails ? 'wizShareFullBtn' : 'wizShareBtn';
+  const btn = document.getElementById(btnId);
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Sharing…';
+  const payload = _buildPlanPayload();
   try {
     const resp = await fetch('/api/pp-shares', {
       method: 'POST',
@@ -1513,7 +1527,7 @@ async function _tryRestoreFromHash() {
     if (m) shareId = decodeURIComponent(m[1]);
   }
   if (!shareId && location.hash.startsWith('#s=')) shareId = location.hash.slice(3);
-  if (!shareId) return;
+  if (!shareId) { await _tryRestoreLastPlan(); return; }
   try {
     const resp = await fetch(`/api/pp-shares/${shareId}`);
     if (!resp.ok) return;
@@ -1530,6 +1544,19 @@ async function _tryRestoreFromHash() {
       }
     }
   } catch (e) { console.error('Failed to load share:', e); }
+}
+
+// Restore the last plan from localStorage on a fresh page load (no share link). One-shot per
+// load so navigating back to the tab mid-session doesn't yank you off whatever you're editing.
+let _autoRestoreDone = false;
+async function _tryRestoreLastPlan() {
+  if (_autoRestoreDone || _shareConsumed) return;
+  _autoRestoreDone = true;
+  let payload = null;
+  try { payload = JSON.parse(localStorage.getItem('ppLastPlan') || 'null'); } catch (e) { return; }
+  if (!payload || !payload.tid || !payload.plan) return;
+  _shareConsumed = true;  // reuse the share guard so a share link (if any) doesn't double-restore
+  try { await _restoreFromPayload(payload); } catch (e) { console.error('Restore last plan failed:', e); }
 }
 
 async function _restoreFromPayload(payload) {
@@ -2737,6 +2764,8 @@ function renderFinalPlan(data, opts = {}) {
   // Only scroll into view on the first render of a plan, not on in-place re-runs
   // (re-running from the overprod / factory controls otherwise jumps the page).
   if (opts.scroll !== false) content.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+  _persistLastPlan();  // remember this plan so a refresh lands back on it
 }
 
 function _buildShoppingList(data) {
