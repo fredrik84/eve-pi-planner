@@ -14,7 +14,7 @@
   <meta property="og:image" content="https://eve-pi.failed.name/og-image.png?v=4">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:image" content="https://eve-pi.failed.name/og-image.png?v=4">
-  <link rel="stylesheet" href="/style.css?v=94">
+  <link rel="stylesheet" href="/style.css?v=95">
 </head>
 <body>
   <header>
@@ -56,19 +56,26 @@
       </div>
 
       <div id="piModeBuild" class="pi-mode-panel">
-      <div class="input-col">
-        <label for="orderText">Order to fill <span class="label-hint">(optional — paste desired quantities)</span></label>
-        <textarea id="orderText" placeholder="Miniature Electronics    12804&#10;Viral Agent    813&#10;Hermetic Membranes    802&#10;..."></textarea>
-      </div>
-
       <div class="btn-row">
-        <button id="analyzeBtn" onclick="analyze()">Analyze</button>
-        <button id="optimizeBtn" onclick="optimize()">Optimize</button>
+        <button id="analyzeBtn" onclick="analyze()" title="Show every P2/P3/P4 commodity you can build right now from the inventory above (ignores the order box).">Analyze inventory</button>
         <label class="factories-label" for="factories" title="How many facilities to split the producible quantity across (per-factory workload + duration). A manual split count — not the same as the Planetary Planning throughput rate.">Factories</label>
         <input type="number" id="factories" value="15" min="1" max="500" class="factories-input" oninput="updateFactorySplit()">
         <button id="copyBtn" onclick="copyLink()" style="display:none">Copy link</button>
         <span id="status"></span>
       </div>
+
+      <details class="pi-order-fold">
+        <summary>Optimize for a specific order <span class="pi-fold-hint">— fill exact quantities instead of just listing what's buildable</span></summary>
+        <div class="pi-order-fold-body">
+          <div class="input-col">
+            <label for="orderText">Order to fill <span class="label-hint">(paste desired quantities)</span></label>
+            <textarea id="orderText" placeholder="Miniature Electronics    12804&#10;Viral Agent    813&#10;Hermetic Membranes    802&#10;..."></textarea>
+          </div>
+          <div class="btn-row">
+            <button id="optimizeBtn" onclick="optimize()">Optimize order</button>
+          </div>
+        </div>
+      </details>
 
       <div class="inv-summary" id="invSummary">
         <h3>Recognized inventory</h3>
