@@ -980,6 +980,7 @@ tr:hover td { background: #181d2a; }
 .dist-days .dist-days-val { color: #5ecf80; font-size: 15px; }
 .dist-days .dist-days-warn { color: #c88040; font-size: 15px; }
 .dist-days .dist-days-hint { color: #5a6478; font-style: italic; }
+.dist-days .dist-days-miss { color: #8a6a40; font-size: 12px; }
 .plan-dist-tables { display: flex; flex-direction: column; gap: 22px; }
 .dist-line { overflow-x: auto; }
 .dist-line-head { display: flex; align-items: baseline; gap: 10px; font-size: 13px; color: #a8b4cc; margin-bottom: 8px; }

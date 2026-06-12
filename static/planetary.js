@@ -1868,10 +1868,11 @@ function _buildPlanSnapshot(data) {
         });
   if (!factories.length) return null;
   // Per-P1 daily consumption (units/day at full factory rate) so the refill tool can show how
-  // many days of production a pasted P1 stash would sustain.
-  const consumption = {};
-  for (const r of (data.p1_requirements || []))
-    if (r.units_per_day != null) consumption[r.p1_type_id] = r.units_per_day;
+  // long a pasted P1 stash lasts before a refill. Stored with names so the readout is
+  // self-contained (no cross-lookup needed).
+  const consumption = (data.p1_requirements || [])
+    .filter(r => r.units_per_day != null)
+    .map(r => ({ p1_type_id: r.p1_type_id, p1_name: r.p1_name, units_per_day: r.units_per_day }));
   return { name: (data.product && data.product.name) || 'Plan', factories, consumption };
 }
 
@@ -2086,34 +2087,47 @@ function updateP1Distribution() {
   _updateRefillDays();
 }
 
-// How many days of production the pasted P1 would sustain: the factories eat each P1 at
-// units_per_day (full rate), so the run lasts until the P1 you have proportionally least of
-// runs out (every P1 is required). Needs a plan saved after the consumption field shipped.
+// Normalise the snapshot's consumption (new = list with names; legacy = {tid: units}) to
+// [{tid, name, perDay}] so the readout is robust to either format.
+function _planConsumptionItems() {
+  const c = _planConsumption;
+  if (Array.isArray(c))
+    return c.filter(x => x.units_per_day > 0)
+            .map(x => ({ tid: String(x.p1_type_id), name: x.p1_name, perDay: x.units_per_day }));
+  return Object.keys(c || {}).filter(t => c[t] > 0)
+          .map(t => ({ tid: t, name: _p1TidToName[t] || ('P1 ' + t), perDay: c[t] }));
+}
+
+// How long the P1 you pasted lasts before you must refill the factories: each P1 is eaten at
+// units_per_day (full rate), so the run lasts until the pasted input you have least of (relative
+// to its consumption) runs out. Computed over what you actually pasted.
 function _updateRefillDays() {
   const el = document.getElementById('refillDays');
   if (!el) return;
-  const tids = Object.keys(_planConsumption).filter(t => _planConsumption[t] > 0);
-  if (!tids.length) {  // older snapshot saved before this feature — prompt a re-save
-    el.innerHTML = `<span class="dist-days-hint">Re-save this plan in Planetary Planning to see how many days of production your P1 covers.</span>`;
+  const items = _planConsumptionItems();
+  if (!items.length) {  // older snapshot saved before this feature — prompt a re-save
+    el.innerHTML = `<span class="dist-days-hint">Re-save this plan in Planetary Planning to see how long your P1 lasts before a refill.</span>`;
     return;
   }
-  const anyPasted = tids.some(t => (_p1Stacks[t] || 0) > 0);
-  if (!anyPasted) {  // consumption known, just nothing pasted yet → tell the user it's here
-    el.innerHTML = `<span class="dist-days-hint">Paste your P1 in the Inventory box above to see how many days of production it covers.</span>`;
+  const pasted = items.filter(it => (_p1Stacks[it.tid] || 0) > 0);
+  if (!pasted.length) {  // nothing relevant pasted yet → tell the user it's here
+    el.innerHTML = `<span class="dist-days-hint">Paste your P1 in the Inventory box above to see how long it lasts before a refill.</span>`;
     return;
   }
   let minDays = Infinity, binding = null;
-  for (const t of tids) {
-    const d = (_p1Stacks[t] || 0) / _planConsumption[t];
-    if (d < minDays) { minDays = d; binding = t; }
+  for (const it of pasted) {
+    const d = _p1Stacks[it.tid] / it.perDay;
+    if (d < minDays) { minDays = d; binding = it; }
   }
-  const bName = _esc(_p1TidToName[binding] || 'a P1');
   const fmt = n => n >= 10 ? Math.round(n).toLocaleString() : (Math.round(n * 10) / 10);
-  if (minDays <= 0) {
-    el.innerHTML = `<b class="dist-days-warn">0 days</b> — no <b>${bName}</b> in your paste (every P1 is required).`;
-  } else {
-    el.innerHTML = `≈ <b class="dist-days-val">${fmt(minDays)} day${minDays >= 1.95 ? 's' : ''}</b> of production at full rate — first to run out: <b>${bName}</b>.`;
-  }
+  const dayWord = (Math.round(minDays * 10) / 10) === 1 ? 'day' : 'days';
+  // Required inputs you didn't paste — they'd cap the run too, so flag them.
+  const missing = items.filter(it => !((_p1Stacks[it.tid] || 0) > 0));
+  const missNames = missing.length <= 3 ? ` (${missing.map(m => _esc(m.name)).join(', ')})` : '';
+  const missNote = missing.length
+    ? ` <span class="dist-days-miss">· ${missing.length} plan input${missing.length > 1 ? 's' : ''} not pasted${missNames}</span>`
+    : '';
+  el.innerHTML = `With what you pasted: ≈ <b class="dist-days-val">${fmt(minDays)} ${dayWord}</b> before a refill — <b>${_esc(binding.name)}</b> runs out first.${missNote}`;
 }
 
 function renderFinalPlan(data, opts = {}) {
