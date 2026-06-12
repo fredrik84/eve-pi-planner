@@ -901,7 +901,10 @@ def list_plan_snapshots(pp_session: str = Cookie(default=None)):
             snap = {}
         out.append({"id": r["id"], "name": r["name"], "created_at": r["created_at"],
                     "factories": snap.get("factories", []),
-                    "consumption": snap.get("consumption", {})})
+                    "consumption": snap.get("consumption", {}),
+                    "products_per_day": snap.get("products_per_day"),
+                    "isk_per_day": snap.get("isk_per_day"),
+                    "unit_label": snap.get("unit_label", "units")})
     return {"snapshots": out}
 
 

@@ -1850,6 +1850,7 @@ let _p1Stacks = {};        // type_id -> qty on hand (parsed from the shared inv
 let _p1NameToTid = {};     // lowercase P1 name -> type_id, for parsing the inventory
 let _p1TidToName = {};     // type_id -> P1 name, for the "days of production" readout
 let _planConsumption = {}; // type_id -> units/day the plan's factories eat (full rate)
+let _planMeta = {};        // selected plan's production rate + sell value, for the refill stats bar
 const _PLAN_SNAP_KEY = 'ppPlanSnapshots';
 
 function _loadPlanSnapshots() {
@@ -1873,7 +1874,15 @@ function _buildPlanSnapshot(data) {
   const consumption = (data.p1_requirements || [])
     .filter(r => r.units_per_day != null)
     .map(r => ({ p1_type_id: r.p1_type_id, p1_name: r.p1_name, units_per_day: r.units_per_day }));
-  return { name: (data.product && data.product.name) || 'Plan', factories, consumption };
+  const st = data.stats || {};
+  return {
+    name: (data.product && data.product.name) || 'Plan',
+    factories, consumption,
+    // Production rate + daily sell value so the refill view can show units made and ISK over a run.
+    products_per_day: st.products_per_day,
+    isk_per_day: st.isk_per_day,
+    unit_label: data.fuelblock ? (st.unit_label || 'fuel blocks') : 'units',
+  };
 }
 
 // localStorage keeps the last-built plan per product (a quick, unsaved fallback). Explicit
@@ -1952,7 +1961,8 @@ async function renderPlanDistribution() {
   const serverNames = new Set(server.map(s => s.name));
   // Server-saved plans (named, cross-device) first, then any unsaved last-built ones from this browser.
   const snaps = [
-    ...server.map(s => ({ id: 'srv:' + s.id, srvId: s.id, name: s.name, factories: s.factories, consumption: s.consumption || {}, saved: true })),
+    ...server.map(s => ({ id: 'srv:' + s.id, srvId: s.id, name: s.name, factories: s.factories, consumption: s.consumption || {},
+                          products_per_day: s.products_per_day, isk_per_day: s.isk_per_day, unit_label: s.unit_label, saved: true })),
     ..._loadPlanSnapshots().filter(s => !serverNames.has(s.name)),
   ];
   if (!snaps.length) {
@@ -1972,6 +1982,8 @@ async function renderPlanDistribution() {
   Object.keys(p1s).forEach(tid => { _p1NameToTid[p1s[tid].toLowerCase()] = tid; });
   _p1TidToName = p1s;
   _planConsumption = snap.consumption || {};  // only on plans saved after this feature shipped
+  _planMeta = { productsPerDay: snap.products_per_day || 0, iskPerDay: snap.isk_per_day || 0,
+                unitLabel: snap.unit_label || 'units' };
 
   // Group factory planets by what they make. Robust to older snapshots without a `product`
   // field (fall back to grouping by P1 signature), and columns = the UNION of P1s the group
@@ -2119,15 +2131,28 @@ function _updateRefillDays() {
     const d = _p1Stacks[it.tid] / it.perDay;
     if (d < minDays) { minDays = d; binding = it; }
   }
+  const m = _planMeta || {};
+  const unitsMade = Math.round((m.productsPerDay || 0) * minDays);
+  const sellValue = (m.iskPerDay || 0) * minDays;
   const fmt = n => n >= 10 ? Math.round(n).toLocaleString() : (Math.round(n * 10) / 10);
   const dayWord = (Math.round(minDays * 10) / 10) === 1 ? 'day' : 'days';
+  const tiles = [
+    `<div class="refill-stat"><span class="refill-stat-val">${fmt(minDays)} ${dayWord}</span>
+       <span class="refill-stat-lbl">before refill · ${_esc(binding.name)} first</span></div>`,
+  ];
+  if (m.productsPerDay)
+    tiles.push(`<div class="refill-stat"><span class="refill-stat-val">${unitsMade.toLocaleString()}</span>
+       <span class="refill-stat-lbl">${_esc(m.unitLabel || 'units')} produced</span></div>`);
+  if (m.iskPerDay)
+    tiles.push(`<div class="refill-stat"><span class="refill-stat-val">${_fmtIsk(sellValue)}</span>
+       <span class="refill-stat-lbl">sell value of the run</span></div>`);
   // Required inputs you didn't paste — they'd cap the run too, so flag them.
   const missing = items.filter(it => !((_p1Stacks[it.tid] || 0) > 0));
-  const missNames = missing.length <= 3 ? ` (${missing.map(m => _esc(m.name)).join(', ')})` : '';
+  const missNames = missing.length <= 3 ? ` (${missing.map(x => _esc(x.name)).join(', ')})` : '';
   const missNote = missing.length
-    ? ` <span class="dist-days-miss">· ${missing.length} plan input${missing.length > 1 ? 's' : ''} not pasted${missNames}</span>`
+    ? `<div class="refill-stat-note">${missing.length} plan input${missing.length > 1 ? 's' : ''} not pasted${missNames} — they'd cap the run too.</div>`
     : '';
-  el.innerHTML = `With what you pasted: ≈ <b class="dist-days-val">${fmt(minDays)} ${dayWord}</b> before a refill — <b>${_esc(binding.name)}</b> runs out first.${missNote}`;
+  el.innerHTML = `<div class="refill-stats-bar">${tiles.join('')}</div>${missNote}`;
 }
 
 function renderFinalPlan(data, opts = {}) {

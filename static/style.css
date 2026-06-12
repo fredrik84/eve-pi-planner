@@ -976,11 +976,16 @@ tr:hover td { background: #181d2a; }
 .dist-hint b { color: #a8b4cc; }
 .dist-days { font-size: 13px; color: #8a94ac; margin-bottom: 16px; min-height: 1em; }
 .dist-days:empty { margin-bottom: 0; }
-.dist-days b { color: #c8d2e6; }
-.dist-days .dist-days-val { color: #5ecf80; font-size: 15px; }
-.dist-days .dist-days-warn { color: #c88040; font-size: 15px; }
 .dist-days .dist-days-hint { color: #5a6478; font-style: italic; }
-.dist-days .dist-days-miss { color: #8a6a40; font-size: 12px; }
+/* Refill stats bar: days before refill · units produced · sell value of the run */
+.refill-stats-bar { display: flex; flex-wrap: wrap; gap: 0; border: 1px solid #1c2030;
+  border-radius: 8px; overflow: hidden; background: #0e0b16; }
+.refill-stat { display: flex; flex-direction: column; align-items: flex-start; padding: 9px 16px;
+  border-right: 1px solid #1a1e2a; flex: 0 0 auto; }
+.refill-stat:last-child { border-right: none; }
+.refill-stat-val { font-size: 17px; font-weight: 600; color: #5ecf80; font-family: 'Consolas', monospace; white-space: nowrap; }
+.refill-stat-lbl { font-size: 10px; color: #5a6478; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 3px; white-space: nowrap; }
+.refill-stat-note { font-size: 11.5px; color: #8a6a40; margin-top: 7px; }
 .plan-dist-tables { display: flex; flex-direction: column; gap: 22px; }
 .dist-line { overflow-x: auto; }
 .dist-line-head { display: flex; align-items: baseline; gap: 10px; font-size: 13px; color: #a8b4cc; margin-bottom: 8px; }
