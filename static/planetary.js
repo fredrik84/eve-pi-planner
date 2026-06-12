@@ -2226,8 +2226,8 @@ function renderFinalPlan(data, opts = {}) {
         ${prodTile}
         ${iskTile}
         ${data.fuelblock && s.block_gross_isk_per_day ? `
-        <div class="plan-stat" title="Gross Jita-sell value of ${s.products_per_day.toLocaleString()} finished fuel blocks/day. Requires buying/producing the ice products + racial isotopes (not modelled here), so it is NOT your PI profit.">
-          <span class="plan-stat-val plan-stat-dim">${_fmtIsk(s.block_gross_isk_per_day)}</span>
+        <div class="plan-stat" title="Gross Jita-sell value of ${(supLim ? s.effective_products_per_day : s.products_per_day).toLocaleString()} finished fuel blocks/day. Requires buying/producing the ice products + racial isotopes (not modelled here), so it is NOT your PI profit.">
+          <span class="plan-stat-val plan-stat-dim">${_fmtIsk(supLim ? s.block_gross_isk_per_day * s.supply_ratio : s.block_gross_isk_per_day)}</span>
           <span class="plan-stat-lbl">block gross · needs ice</span>
         </div>` : `
         <div class="plan-stat">

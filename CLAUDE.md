@@ -311,8 +311,12 @@ ratio `p0_per_day` uses). It reports `supply_ratio` (capped 0–1), `bottleneck_
 `_actual_p0_per_day / p0_per_day` would). Only computed when planet quality data exists (else
 actual defaults to baseline → ratio 1 → no discount). UI (`renderFinalPlan`): when
 `supply_limited`, the units/day + ISK/day tiles show the effective number in amber with
-"N% fed, capped by <resource>" and the if-fully-fed figure in the tooltip. NOT yet wired into
-the fuel-block planner (`_run_fuelblock_plan`) or the OG share meta — both still show nominal.
+"N% fed, capped by <resource>" and the if-fully-fed figure in the tooltip. The **fuel-block
+planner** (`_run_fuelblock_plan`) reports the same fields (binding resource caps blocks/day;
+the block-gross tile is discounted by `supply_ratio` in the UI too). The OG share meta still
+shows nominal. Each P1 requirement also carries `units_per_day` (= products/day × P1-per-
+product) — the refill tool (`_buildPlanSnapshot` → snapshot `consumption` map) uses it to show
+"≈ N days of production" from a pasted P1 stash (min over P1 of have ÷ units_per_day).
 
 ### Factory-planet refill cadence (plan stat)
 

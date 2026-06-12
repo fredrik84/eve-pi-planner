@@ -30,6 +30,7 @@ from app.planner import (
     _consolidate_split_extractors,
     _density_estimate,
     _ext_actual_p0_per_day,
+    _actual_p0_per_day_by_p0,
     _ext_leg_qualities,
     _factory_candidates,
     _norm_dist_mode,
@@ -754,6 +755,36 @@ def _run_fuelblock_plan(req: "FuelBlockPlanRequest", context_id: int) -> dict:
     isk_per_day = round(sum(baskets_per_day * c["qty"] * _prices.get(c["type_id"], 0.0)
                             for c in components), 2)
 
+    # Per-P1 daily consumption (units/day at full rate) for the refill "days of production"
+    # readout; relative_qty in p1_info is the per-basket P1 quantity.
+    for info in p1_info:
+        info["units_per_day"] = round(baskets_per_day * info["relative_qty"])
+
+    # Supply-limited throughput: fuel_blocks_per_day assumes 100% factory uptime, but the binding
+    # resource (lowest actual quality-adjusted P0/day ÷ P0/day needed) caps the real rate. Mirrors
+    # the single-product planner; see CLAUDE.md "Supply-limited throughput".
+    supply_ratio = 1.0
+    bottleneck_p0 = None
+    if avg_quality_pct is not None and fuel_blocks_per_day > 0:
+        actual_by_p0: dict = {}
+        for a in all_assignments:
+            for n, v in _actual_p0_per_day_by_p0(a["extractors"]).items():
+                actual_by_p0[n] = actual_by_p0.get(n, 0.0) + v
+        needed_by_p0: dict = {}
+        for info in p1_info:
+            if info.get("p0_name"):
+                needed_by_p0[info["p0_name"]] = needed_by_p0.get(info["p0_name"], 0.0) + info["units_per_day"] * 150
+        for n, need in needed_by_p0.items():
+            if need <= 0:
+                continue
+            r = actual_by_p0.get(n, 0.0) / need
+            if r < supply_ratio:
+                supply_ratio, bottleneck_p0 = r, n
+        supply_ratio = max(0.0, min(1.0, supply_ratio))
+    supply_limited = supply_ratio < 0.995
+    effective_products_per_day = round(fuel_blocks_per_day * supply_ratio)
+    effective_isk_per_day = round(isk_per_day * supply_ratio, 2)
+
     result = {
         "fuelblock":             True,
         "block_type":            req.block_type if meta["is_fuelblock"] else None,
@@ -798,6 +829,11 @@ def _run_fuelblock_plan(req: "FuelBlockPlanRequest", context_id: int) -> dict:
             "unit_label":               meta["unit_label"],
             "factories":                factories_total,
             "products_per_day":         fuel_blocks_per_day,
+            "supply_limited":           supply_limited,
+            "supply_ratio":             round(supply_ratio, 3),
+            "effective_products_per_day": effective_products_per_day,
+            "effective_isk_per_day":    effective_isk_per_day,
+            "bottleneck_p0":            bottleneck_p0,
             "isk_per_day":              isk_per_day,
             "block_gross_isk_per_day":  block_gross_isk_per_day,
             "sell_price":               sell_price,
