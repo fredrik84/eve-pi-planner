@@ -1907,8 +1907,26 @@ async function deletePlanSnapshot(srvId) {
   renderPlanDistribution();
 }
 
+// PI Planner has two tools fed by the one inventory paste: "Find buildable stuff"
+// (analyze/optimize) and "Refill a plan" (split P1 stacks into a saved plan's factories).
+// A mode switch keeps them apart so pasting doesn't dump every table at once.
+let _piMode = (() => { try { return localStorage.getItem('piMode') || 'build'; } catch (e) { return 'build'; } })();
+
+function setPiMode(mode) {
+  _piMode = (mode === 'refill') ? 'refill' : 'build';
+  const build = document.getElementById('piModeBuild');
+  const refill = document.getElementById('piModeRefill');
+  if (build) build.style.display = _piMode === 'build' ? '' : 'none';
+  if (refill) refill.style.display = _piMode === 'refill' ? '' : 'none';
+  const bb = document.getElementById('modeBuildBtn'), rb = document.getElementById('modeRefillBtn');
+  if (bb) bb.classList.toggle('active', _piMode === 'build');
+  if (rb) rb.classList.toggle('active', _piMode === 'refill');
+  try { localStorage.setItem('piMode', _piMode); } catch (e) {}
+  if (_piMode === 'refill') renderPlanDistribution();  // (re)build tables + sync from inventory
+}
+
 // Called when the PI Planner tab opens (wired in app.js switchTab).
-function onPlannerTabOpen() { renderPlanDistribution(); }
+function onPlannerTabOpen() { setPiMode(_piMode); }
 
 function onPlanDistSelect(id) {
   const el = document.getElementById('planDistSection');

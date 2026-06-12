@@ -944,6 +944,14 @@ tr:hover td { background: #181d2a; }
 .plan-fac-imports { font-size: 10px; color: #6a7390; padding: 0 0 3px 26px; line-height: 1.4; }
 .plan-fac-imports b { color: #a8c8ff; font-weight: 600; }
 .plan-fac-imports b.p1-amt-set { color: #5ecf80; }
+/* PI Planner mode switch — two tools (Find buildable / Refill a plan) fed by one inventory paste. */
+.pi-shared-inv { margin-bottom: 4px; }
+.pi-mode-row { display: flex; gap: 8px; margin: 16px 0 6px; border-bottom: 1px solid #1c2030; padding-bottom: 12px; }
+.pi-mode-btn { flex: 0 0 auto; padding: 9px 20px; background: #141020; color: #8a7aa8;
+  border: 1px solid #2a2440; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; }
+.pi-mode-btn:hover { background: #1c1630; color: #b89cd8; }
+.pi-mode-btn.active { background: #2a1c44; color: #d8b8f8; border-color: #5a3a88; }
+
 /* P1 stack splitter */
 /* Refill split (PI Planner) — driven by the shared inventory paste; matches the analyze tables. */
 .dist-block { margin-top: 8px; }
