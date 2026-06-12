@@ -296,6 +296,24 @@ For SHPC (P4), a single factory produces approximately **0.5 units/hour** (accou
 
 - **Comma gotcha:** `parseFloat("0,5")` returns `0` in JS. `_factoryRate()` (now returns null since the field is gone) handled `,`→`.`; keep using it if the override field is ever re-added.
 
+### Supply-limited throughput (plan stat)
+
+`products_per_day` = `prod_per_factory_day × factories` — it assumes the factories stay
+**fed at 100%**. When extraction can't keep a resource supplied (thin planets, an
+over-aggressive `min_density_pct`, or too few extractor planets) the real output is lower.
+`_run_plan` finds the **binding resource** = the one with the lowest `actual P0/day extracted
+÷ P0/day the recipe needs` (`_actual_p0_per_day_by_p0` per resource — handles split legs;
+need per P0 = `p1_fracs[pid] × products_per_day × 150`, the same 150 P0/P1 basic-industry
+ratio `p0_per_day` uses). It reports `supply_ratio` (capped 0–1), `bottleneck_p0`,
+`supply_limited` (ratio < 0.995), and `effective_products_per_day` /
+`effective_isk_per_day` = nominal × ratio. The bottleneck is **per-resource, not aggregate**
+— an over-produced resource can't mask a starved one (which the aggregate
+`_actual_p0_per_day / p0_per_day` would). Only computed when planet quality data exists (else
+actual defaults to baseline → ratio 1 → no discount). UI (`renderFinalPlan`): when
+`supply_limited`, the units/day + ISK/day tiles show the effective number in amber with
+"N% fed, capped by <resource>" and the if-fully-fed figure in the tooltip. NOT yet wired into
+the fuel-block planner (`_run_fuelblock_plan`) or the OG share meta — both still show nominal.
+
 ### Factory-planet refill cadence (plan stat)
 
 `_run_plan` reports `factory_refill_hours` — how long a factory planet's P1 input buffer
