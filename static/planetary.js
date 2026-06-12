@@ -1918,9 +1918,9 @@ function setPiMode(mode) {
   const refill = document.getElementById('piModeRefill');
   if (build) build.style.display = _piMode === 'build' ? '' : 'none';
   if (refill) refill.style.display = _piMode === 'refill' ? '' : 'none';
-  const bb = document.getElementById('modeBuildBtn'), rb = document.getElementById('modeRefillBtn');
-  if (bb) bb.classList.toggle('active', _piMode === 'build');
-  if (rb) rb.classList.toggle('active', _piMode === 'refill');
+  // Highlight the active sidebar sub-item (both share data-tab="planner").
+  document.querySelectorAll('.tab[data-pimode]').forEach(b =>
+    b.classList.toggle('active', b.dataset.pimode === _piMode));
   try { localStorage.setItem('piMode', _piMode); } catch (e) {}
   if (_piMode === 'refill') renderPlanDistribution();  // (re)build tables + sync from inventory
 }

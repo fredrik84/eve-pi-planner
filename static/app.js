@@ -459,7 +459,11 @@ function toggleSidebar() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => switchTab(t.dataset.tab)));
+  document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
+    switchTab(t.dataset.tab);
+    // PI Planner sub-items (Find Buildables / Refill a plan) carry a data-pimode.
+    if (t.dataset.pimode && typeof setPiMode === 'function') setPiMode(t.dataset.pimode);
+  }));
   if (localStorage.getItem('navCollapsed') === '1') document.body.classList.add('nav-collapsed');
   // A planetary share link (/s/<id> path or the id injected by the server route) is a
   // one-shot "open this plan" intent → land on the plan once. _tryRestoreFromHash then

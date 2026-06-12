@@ -94,6 +94,14 @@ header .header-brand span { color: #6a7390; font-size: 12px; }
 .nav-ico { display: none; flex: 0 0 22px; text-align: center; font-weight: 700; font-size: 11px; letter-spacing: 0; }
 .nav-lbl { white-space: nowrap; overflow: hidden; }
 
+/* PI Planner nav group: a section header + two sub-items (Find Buildables / Refill a plan). */
+.nav-group { display: flex; flex-direction: column; gap: 2px; }
+.nav-group-hd { display: flex; align-items: center; gap: 11px; padding: 9px 13px 3px;
+  color: #4a5470; font-size: 10px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; }
+.sidebar .tab-sub { padding-left: 30px; font-size: 12.5px; }
+body.nav-collapsed .nav-group-hd { display: none; }
+body.nav-collapsed .sidebar .tab-sub { padding-left: 0; }
+
 /* collapsed = narrow icon rail */
 body.nav-collapsed .sidebar { flex-basis: 56px; width: 56px; padding: 16px 8px; }
 body.nav-collapsed .nav-lbl { display: none; }
@@ -944,13 +952,9 @@ tr:hover td { background: #181d2a; }
 .plan-fac-imports { font-size: 10px; color: #6a7390; padding: 0 0 3px 26px; line-height: 1.4; }
 .plan-fac-imports b { color: #a8c8ff; font-weight: 600; }
 .plan-fac-imports b.p1-amt-set { color: #5ecf80; }
-/* PI Planner mode switch — two tools (Find buildable / Refill a plan) fed by one inventory paste. */
-.pi-shared-inv { margin-bottom: 4px; }
-.pi-mode-row { display: flex; gap: 8px; margin: 16px 0 6px; border-bottom: 1px solid #1c2030; padding-bottom: 12px; }
-.pi-mode-btn { flex: 0 0 auto; padding: 9px 20px; background: #141020; color: #8a7aa8;
-  border: 1px solid #2a2440; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; }
-.pi-mode-btn:hover { background: #1c1630; color: #b89cd8; }
-.pi-mode-btn.active { background: #2a1c44; color: #d8b8f8; border-color: #5a3a88; }
+/* PI Planner tools (Find Buildables / Refill a plan) are selected from the sidebar; both
+   are fed by the one inventory paste at the top of the tab. */
+.pi-shared-inv { margin-bottom: 14px; }
 
 /* "Optimize for a specific order" — folded away by default; Analyze is the primary action. */
 .pi-order-fold { margin: 0 0 14px; border: 1px solid #1c2030; border-radius: 6px; background: #0e0b16; }
