@@ -2093,9 +2093,15 @@ function _updateRefillDays() {
   const el = document.getElementById('refillDays');
   if (!el) return;
   const tids = Object.keys(_planConsumption).filter(t => _planConsumption[t] > 0);
-  if (!tids.length) { el.innerHTML = ''; return; }  // older snapshot, no consumption data
+  if (!tids.length) {  // older snapshot saved before this feature — prompt a re-save
+    el.innerHTML = `<span class="dist-days-hint">Re-save this plan in Planetary Planning to see how many days of production your P1 covers.</span>`;
+    return;
+  }
   const anyPasted = tids.some(t => (_p1Stacks[t] || 0) > 0);
-  if (!anyPasted) { el.innerHTML = ''; return; }    // nothing relevant pasted yet
+  if (!anyPasted) {  // consumption known, just nothing pasted yet → tell the user it's here
+    el.innerHTML = `<span class="dist-days-hint">Paste your P1 in the Inventory box above to see how many days of production it covers.</span>`;
+    return;
+  }
   let minDays = Infinity, binding = null;
   for (const t of tids) {
     const d = (_p1Stacks[t] || 0) / _planConsumption[t];
