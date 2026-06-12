@@ -1848,6 +1848,8 @@ function setDistMode(mode) {
 // built in Planetary Planning are snapshotted to localStorage and listed in the PI Planner tab.
 let _p1Stacks = {};        // type_id -> qty on hand (parsed from the shared inventory textarea)
 let _p1NameToTid = {};     // lowercase P1 name -> type_id, for parsing the inventory
+let _p1TidToName = {};     // type_id -> P1 name, for the "days of production" readout
+let _planConsumption = {}; // type_id -> units/day the plan's factories eat (full rate)
 const _PLAN_SNAP_KEY = 'ppPlanSnapshots';
 
 function _loadPlanSnapshots() {
@@ -1864,7 +1866,13 @@ function _buildPlanSnapshot(data) {
           product: f.product ? f.product.name : 'Factory',
           p1_inputs: f.p1_inputs.map(p => ({ p1_type_id: p.p1_type_id, p1_name: p.p1_name, share: p.share })),
         });
-  return factories.length ? { name: (data.product && data.product.name) || 'Plan', factories } : null;
+  if (!factories.length) return null;
+  // Per-P1 daily consumption (units/day at full factory rate) so the refill tool can show how
+  // many days of production a pasted P1 stash would sustain.
+  const consumption = {};
+  for (const r of (data.p1_requirements || []))
+    if (r.units_per_day != null) consumption[r.p1_type_id] = r.units_per_day;
+  return { name: (data.product && data.product.name) || 'Plan', factories, consumption };
 }
 
 // localStorage keeps the last-built plan per product (a quick, unsaved fallback). Explicit
@@ -1943,7 +1951,7 @@ async function renderPlanDistribution() {
   const serverNames = new Set(server.map(s => s.name));
   // Server-saved plans (named, cross-device) first, then any unsaved last-built ones from this browser.
   const snaps = [
-    ...server.map(s => ({ id: 'srv:' + s.id, srvId: s.id, name: s.name, factories: s.factories, saved: true })),
+    ...server.map(s => ({ id: 'srv:' + s.id, srvId: s.id, name: s.name, factories: s.factories, consumption: s.consumption || {}, saved: true })),
     ..._loadPlanSnapshots().filter(s => !serverNames.has(s.name)),
   ];
   if (!snaps.length) {
@@ -1961,6 +1969,8 @@ async function renderPlanDistribution() {
   snap.factories.forEach(f => f.p1_inputs.forEach(p => { p1s[p.p1_type_id] = p.p1_name; }));
   _p1NameToTid = {};
   Object.keys(p1s).forEach(tid => { _p1NameToTid[p1s[tid].toLowerCase()] = tid; });
+  _p1TidToName = p1s;
+  _planConsumption = snap.consumption || {};  // only on plans saved after this feature shipped
 
   // Group factory planets by what they make. Robust to older snapshots without a `product`
   // field (fall back to grouping by P1 signature), and columns = the UNION of P1s the group
@@ -2003,6 +2013,7 @@ async function renderPlanDistribution() {
         ${delBtn}
       </div>
       <div class="dist-hint">Splits the P1 in your <b>inventory above</b> across this plan's factories — drop the green number at each planet. Click a number to copy it.</div>
+      <div class="dist-days" id="refillDays"></div>
       <div class="plan-dist-tables">${tables}</div>
     </div>`;
   el.dataset.sel = snap.id;
@@ -2071,6 +2082,31 @@ function updateP1Distribution() {
     const order = raw.map((v, i) => [v - amt[i], i]).sort((a, b) => b[0] - a[0]);
     for (let k = 0; k < rem && k < order.length; k++) amt[order[k][1]]++;
     els.forEach((el, i) => { el.textContent = amt[i].toLocaleString(); el.classList.add('p1-amt-set'); });
+  }
+  _updateRefillDays();
+}
+
+// How many days of production the pasted P1 would sustain: the factories eat each P1 at
+// units_per_day (full rate), so the run lasts until the P1 you have proportionally least of
+// runs out (every P1 is required). Needs a plan saved after the consumption field shipped.
+function _updateRefillDays() {
+  const el = document.getElementById('refillDays');
+  if (!el) return;
+  const tids = Object.keys(_planConsumption).filter(t => _planConsumption[t] > 0);
+  if (!tids.length) { el.innerHTML = ''; return; }  // older snapshot, no consumption data
+  const anyPasted = tids.some(t => (_p1Stacks[t] || 0) > 0);
+  if (!anyPasted) { el.innerHTML = ''; return; }    // nothing relevant pasted yet
+  let minDays = Infinity, binding = null;
+  for (const t of tids) {
+    const d = (_p1Stacks[t] || 0) / _planConsumption[t];
+    if (d < minDays) { minDays = d; binding = t; }
+  }
+  const bName = _esc(_p1TidToName[binding] || 'a P1');
+  const fmt = n => n >= 10 ? Math.round(n).toLocaleString() : (Math.round(n * 10) / 10);
+  if (minDays <= 0) {
+    el.innerHTML = `<b class="dist-days-warn">0 days</b> — no <b>${bName}</b> in your paste (every P1 is required).`;
+  } else {
+    el.innerHTML = `≈ <b class="dist-days-val">${fmt(minDays)} day${minDays >= 1.95 ? 's' : ''}</b> of production at full rate — first to run out: <b>${bName}</b>.`;
   }
 }
 

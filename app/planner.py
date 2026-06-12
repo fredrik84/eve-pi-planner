@@ -900,7 +900,8 @@ def list_plan_snapshots(pp_session: str = Cookie(default=None)):
         except Exception:
             snap = {}
         out.append({"id": r["id"], "name": r["name"], "created_at": r["created_at"],
-                    "factories": snap.get("factories", [])})
+                    "factories": snap.get("factories", []),
+                    "consumption": snap.get("consumption", {})})
     return {"snapshots": out}
 
 
@@ -2630,6 +2631,12 @@ def _run_plan(req: PlanRequest, context_id: int) -> dict:
     supply_limited = supply_ratio < 0.995
     effective_products_per_day = round(products_per_day * supply_ratio)
     effective_isk_per_day = round(effective_products_per_day * sell_price, 2)
+
+    # Per-P1 daily consumption (units/day the factories eat at full rate) = products_per_day ×
+    # P1-units-per-product. Lets the PI Planner refill tool turn a pasted P1 stash into "days of
+    # production it would sustain".
+    for info in p1_info:
+        info["units_per_day"] = round(products_per_day * p1_fracs.get(info["p1_type_id"], 0))
 
     return {
         "product":               {"type_id": req.type_id, "name": types.get(req.type_id, {}).get("name", "?")},

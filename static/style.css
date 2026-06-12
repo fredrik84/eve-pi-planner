@@ -972,8 +972,13 @@ tr:hover td { background: #181d2a; }
 .dist-block { margin-top: 8px; }
 .dist-block .tier-header { flex-wrap: wrap; }
 .dist-plan-select { background: #1c2030; border: 1px solid #1b2030; border-radius: 4px; color: #c8cdd8; font-size: 13px; padding: 4px 8px; }
-.dist-hint { font-size: 12px; color: #6a7390; margin-bottom: 16px; }
+.dist-hint { font-size: 12px; color: #6a7390; margin-bottom: 12px; }
 .dist-hint b { color: #a8b4cc; }
+.dist-days { font-size: 13px; color: #8a94ac; margin-bottom: 16px; min-height: 1em; }
+.dist-days:empty { margin-bottom: 0; }
+.dist-days b { color: #c8d2e6; }
+.dist-days .dist-days-val { color: #5ecf80; font-size: 15px; }
+.dist-days .dist-days-warn { color: #c88040; font-size: 15px; }
 .plan-dist-tables { display: flex; flex-direction: column; gap: 22px; }
 .dist-line { overflow-x: auto; }
 .dist-line-head { display: flex; align-items: baseline; gap: 10px; font-size: 13px; color: #a8b4cc; margin-bottom: 8px; }
