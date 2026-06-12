@@ -1813,6 +1813,7 @@ function renderRecommendations(data) {
 // ── Step 3: Final Plan ────────────────────────────────────────────────────────
 
 let _overprodTimer = null;  // debounce for the live overproduction control
+let _minDensTimer = null;   // debounce for the live min-density control
 
 // One planet hosting two extractors (split P1 production). Shows both P0→P1 legs with their
 // recommended head split + per-leg quality. Head counts are guidance only (see tooltip).
@@ -2536,6 +2537,14 @@ function renderFinalPlan(data, opts = {}) {
     };
     mdInput.addEventListener('change', applyMinDensity);
     mdInput.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); applyMinDensity(); } });
+    // Wheel adjusts in steps of 5, debounced (same as overprod) — native spinners are hidden.
+    mdInput.addEventListener('wheel', e => {
+      e.preventDefault();
+      const cur = parseInt(mdInput.value) || 0;
+      mdInput.value = Math.max(0, Math.min(100, cur + (e.deltaY < 0 ? 5 : -5)));
+      clearTimeout(_minDensTimer);
+      _minDensTimer = setTimeout(applyMinDensity, 150);
+    }, { passive: false });
   }
 
   const opInput = content.querySelector('#planOverprodInput');
