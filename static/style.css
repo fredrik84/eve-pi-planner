@@ -978,6 +978,8 @@ tr:hover td { background: #181d2a; }
 .dist-days:empty { margin-bottom: 0; }
 .dist-days .dist-days-hint { color: #5a6478; font-style: italic; }
 /* Refill stats bar: days before refill · units produced · sell value of the run */
+.refill-lead { font-size: 13px; color: #8a94ac; margin-bottom: 9px; }
+.refill-lead b { color: #c8d2e6; }
 .refill-stats-bar { display: flex; flex-wrap: wrap; gap: 0; border: 1px solid #1c2030;
   border-radius: 8px; overflow: hidden; background: #0e0b16; }
 .refill-stat { display: flex; flex-direction: column; align-items: flex-start; padding: 9px 16px;

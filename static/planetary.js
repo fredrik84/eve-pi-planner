@@ -2136,9 +2136,10 @@ function _updateRefillDays() {
   const sellValue = (m.iskPerDay || 0) * minDays;
   const fmt = n => n >= 10 ? Math.round(n).toLocaleString() : (Math.round(n * 10) / 10);
   const dayWord = (Math.round(minDays * 10) / 10) === 1 ? 'day' : 'days';
+  const lead = `<div class="refill-lead">With what you pasted, <b>${_esc(binding.name)}</b> runs out first.</div>`;
   const tiles = [
     `<div class="refill-stat"><span class="refill-stat-val">${fmt(minDays)} ${dayWord}</span>
-       <span class="refill-stat-lbl">before refill · ${_esc(binding.name)} first</span></div>`,
+       <span class="refill-stat-lbl">before refill</span></div>`,
   ];
   if (m.productsPerDay)
     tiles.push(`<div class="refill-stat"><span class="refill-stat-val">${unitsMade.toLocaleString()}</span>
@@ -2146,13 +2147,17 @@ function _updateRefillDays() {
   if (m.iskPerDay)
     tiles.push(`<div class="refill-stat"><span class="refill-stat-val">${_fmtIsk(sellValue)}</span>
        <span class="refill-stat-lbl">sell value of the run</span></div>`);
+  // Older snapshot without the production rate → tell the user how to get the extra tiles.
+  const rateNote = (!m.productsPerDay && !m.iskPerDay)
+    ? `<div class="refill-stat-note">Re-save this plan in Planetary Planning to also see units produced &amp; sell value.</div>`
+    : '';
   // Required inputs you didn't paste — they'd cap the run too, so flag them.
   const missing = items.filter(it => !((_p1Stacks[it.tid] || 0) > 0));
   const missNames = missing.length <= 3 ? ` (${missing.map(x => _esc(x.name)).join(', ')})` : '';
   const missNote = missing.length
     ? `<div class="refill-stat-note">${missing.length} plan input${missing.length > 1 ? 's' : ''} not pasted${missNames} — they'd cap the run too.</div>`
     : '';
-  el.innerHTML = `<div class="refill-stats-bar">${tiles.join('')}</div>${missNote}`;
+  el.innerHTML = `${lead}<div class="refill-stats-bar">${tiles.join('')}</div>${rateNote}${missNote}`;
 }
 
 function renderFinalPlan(data, opts = {}) {
