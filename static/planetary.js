@@ -1893,7 +1893,8 @@ async function _fetchAllSnapshots() {
   const serverNames = new Set(server.map(s => s.name));
   return [
     ...server.map(s => ({ id: 'srv:' + s.id, srvId: s.id, name: s.name, factories: s.factories, consumption: s.consumption || {},
-                          products_per_day: s.products_per_day, isk_per_day: s.isk_per_day, unit_label: s.unit_label, saved: true })),
+                          products_per_day: s.products_per_day, isk_per_day: s.isk_per_day, unit_label: s.unit_label,
+                          hasPayload: !!s.has_payload, saved: true })),
     ..._loadPlanSnapshots().filter(s => !serverNames.has(s.name)),
   ];
 }
@@ -1912,10 +1913,14 @@ async function renderSavedPlansBar() {
     const meta = `${nfac} factor${nfac === 1 ? 'y' : 'ies'}`
       + (ppd ? ` · ${Number(ppd).toLocaleString()} ${_esc(s.unit_label || 'units')}/day` : '');
     const del = `<button class="pp-profile-action-btn pp-profile-del-btn" onclick="deleteSavedPlan('${s.id}','${s.srvId || ''}')">Delete</button>`;
+    const open = s.hasPayload
+      ? `<button class="pp-profile-action-btn" onclick="openSavedPlanFull('${s.srvId || ''}')" title="Reopen the full allocation plan">Open plan</button>`
+      : '';
     return `<div class="pp-saved-row">
         <span class="pp-saved-name">${_esc(s.name)}${s.saved ? '' : ' · this browser'}</span>
         <span class="pp-saved-meta">${meta}</span>
         <span class="pp-saved-actions">
+          ${open}
           <button class="pp-profile-action-btn" onclick="openSavedPlanRefill('${s.id}')">Refill</button>
           ${del}
         </span>
@@ -1923,6 +1928,20 @@ async function renderSavedPlansBar() {
   }).join('');
   el.innerHTML = `<details class="pp-saved-fold"><summary>Saved plans (${snaps.length})</summary>
       <div class="pp-saved-list">${rows}</div></details>`;
+}
+
+// Reopen a saved plan as the full allocation view (Planetary Planning → Plan step). Pulls the
+// stored v2 payload and restores it the same way a share link does.
+async function openSavedPlanFull(srvId) {
+  if (!srvId) return;
+  let payload = null;
+  try { payload = (await (await fetch(`/api/plan-snapshots/${srvId}`)).json()).payload; } catch (e) {}
+  if (!payload || !payload.plan) {
+    alert('This saved plan has no stored plan view — re-save it (Save plan) to enable Open.');
+    return;
+  }
+  if (typeof switchTab === 'function') switchTab('planetary');
+  await _restoreFromPayload(payload);
 }
 
 // Open a saved plan straight in the refill tool (PI Planner → Refill a plan, that plan selected).
@@ -1994,6 +2013,7 @@ async function savePlanForRefills() {
   const name = prompt('Save this plan as:', snap.name);
   if (!name || !name.trim()) return;
   snap.name = name.trim();
+  snap.payload = _buildPlanPayload();  // full plan so it can be reopened (not just refilled)
   const btn = document.getElementById('savePlanBtn');
   try {
     const resp = await fetch('/api/plan-snapshots', {

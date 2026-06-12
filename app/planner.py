@@ -904,8 +904,32 @@ def list_plan_snapshots(pp_session: str = Cookie(default=None)):
                     "consumption": snap.get("consumption", {}),
                     "products_per_day": snap.get("products_per_day"),
                     "isk_per_day": snap.get("isk_per_day"),
-                    "unit_label": snap.get("unit_label", "units")})
+                    "unit_label": snap.get("unit_label", "units"),
+                    "has_payload": bool(snap.get("payload"))})
     return {"snapshots": out}
+
+
+@router.get("/api/plan-snapshots/{snap_id}")
+def get_plan_snapshot(snap_id: int, pp_session: str = Cookie(default=None)):
+    """Return one snapshot's stored full-plan payload (for reopening the whole plan view).
+    Kept out of the list response so listing stays light."""
+    context_id = session_context_id(pp_session)
+    if not context_id:
+        return {"payload": None}
+    ensure_plan_snapshot_table()
+    con = get_connection()
+    row = con.execute(
+        "SELECT snapshot FROM pp_plan_snapshots WHERE id=? AND context_id=?",
+        (snap_id, context_id),
+    ).fetchone()
+    con.close()
+    if not row:
+        return {"payload": None}
+    try:
+        snap = _json.loads(row["snapshot"])
+    except Exception:
+        snap = {}
+    return {"payload": snap.get("payload")}
 
 
 @router.delete("/api/plan-snapshots/{snap_id}")
