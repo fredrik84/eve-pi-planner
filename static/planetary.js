@@ -2158,16 +2158,37 @@ function renderFinalPlan(data, opts = {}) {
           <span class="plan-stat-val"><input type="number" id="planMinDensityInput" class="plan-overprod-input" value="${minDens}" min="0" max="100" step="5">% min density</span>
           <span class="plan-stat-lbl">cap thin deposits</span>
         </div>`;
-    statsHtml = `
-      <div class="plan-stats-bar">
-        <div class="plan-stat">
+    // Supply-limited throughput: products/day assumes 100% factory uptime, but when extraction
+    // can't keep a resource fed the factories run slow. The server reports the binding ratio +
+    // bottleneck; show the real output with the "if fully fed" figure as context.
+    const supLim = s.supply_limited && s.effective_products_per_day != null;
+    const fedPct = Math.round((s.supply_ratio != null ? s.supply_ratio : 1) * 100);
+    const unitLbl = data.fuelblock ? 'fuel blocks/day' : 'units/day';
+    const iskTip = data.fuelblock
+      ? 'Daily Jita-sell value of the PI components you actually produce. A finished fuel block is worth more but also needs ice products + racial isotopes you do NOT produce here.'
+      : 'Daily Jita-sell value of the product.';
+    const prodTile = supLim
+      ? `<div class="plan-stat" title="Real output. The extractors can only keep ${_esc(s.bottleneck_p0 || 'a resource')} fed to ${fedPct}% of what the factories need, so the whole chain runs at ${fedPct}%. ${s.products_per_day.toLocaleString()} is the 'if fully fed' figure — raise extraction for ${_esc(s.bottleneck_p0 || 'it')} (min density, more extractor planets, or richer systems) to close the gap.">
+          <span class="plan-stat-val plan-stat-warn">${s.effective_products_per_day.toLocaleString()}</span>
+          <span class="plan-stat-lbl">${unitLbl} · ${fedPct}% fed, capped by ${_esc(s.bottleneck_p0 || 'extraction')}</span>
+        </div>`
+      : `<div class="plan-stat" title="Daily output assuming the factories stay fed (extraction meets the recipe need).">
           <span class="plan-stat-val">${s.products_per_day.toLocaleString()}</span>
-          <span class="plan-stat-lbl">${data.fuelblock ? 'fuel blocks/day' : 'units/day'}</span>
-        </div>
-        <div class="plan-stat" title="${data.fuelblock ? 'Daily Jita-sell value of the PI components you actually produce. A finished fuel block is worth more but also needs ice products + racial isotopes you do NOT produce here.' : 'Daily Jita-sell value of the product.'}">
+          <span class="plan-stat-lbl">${unitLbl}</span>
+        </div>`;
+    const iskTile = supLim
+      ? `<div class="plan-stat" title="Daily Jita-sell value at the supply-limited output (${fedPct}% fed). ${_fmtIsk(s.isk_per_day)} is the if-fully-fed value.">
+          <span class="plan-stat-val plan-stat-warn">${_fmtIsk(s.effective_isk_per_day)}</span>
+          <span class="plan-stat-lbl">ISK/day${data.fuelblock ? ' (PI)' : ''} · extractor-limited</span>
+        </div>`
+      : `<div class="plan-stat" title="${iskTip}">
           <span class="plan-stat-val">${_fmtIsk(s.isk_per_day)}</span>
           <span class="plan-stat-lbl">ISK/day${data.fuelblock ? ' (PI)' : ''}</span>
-        </div>
+        </div>`;
+    statsHtml = `
+      <div class="plan-stats-bar">
+        ${prodTile}
+        ${iskTile}
         ${data.fuelblock && s.block_gross_isk_per_day ? `
         <div class="plan-stat" title="Gross Jita-sell value of ${s.products_per_day.toLocaleString()} finished fuel blocks/day. Requires buying/producing the ice products + racial isotopes (not modelled here), so it is NOT your PI profit.">
           <span class="plan-stat-val plan-stat-dim">${_fmtIsk(s.block_gross_isk_per_day)}</span>

@@ -1646,6 +1646,23 @@ def _ext_actual_p0_per_day(extractors: list[dict]) -> float:
     return total
 
 
+def _actual_p0_per_day_by_p0(extractors: list[dict]) -> dict[str, float]:
+    """Quality-adjusted P0/day broken out per resource (P0 name), so the planner can find
+    which resource is the binding extraction bottleneck (its actual vs the recipe need)."""
+    out: dict[str, float] = {}
+    for e in extractors:
+        if e.get("split"):
+            for leg in e.get("legs", []):
+                n = leg.get("p0_name")
+                if n:
+                    out[n] = out.get(n, 0.0) + leg.get("heads", 0) * leg.get("quality_pct", 100) / 100.0 * _PU_PER_PLANET_DAY
+        else:
+            n = e.get("p0_name")
+            if n:
+                out[n] = out.get(n, 0.0) + e.get("quality_pct", 100) / 100.0 * 48_000 * 24
+    return out
+
+
 def _consolidate_split_extractors(
     assignments: list[dict],
     p0_need_pu: dict[str, float],
@@ -2586,6 +2603,34 @@ def _run_plan(req: PlanRequest, context_id: int) -> dict:
     )
     max_supportable_factories = int(_actual_p0_per_day / p0_per_factory_day) if p0_per_factory_day > 0 else 0
 
+    # Supply-limited throughput: products_per_day above assumes 100% factory uptime, but when the
+    # extractors can't keep a resource fed the factories run slow. The binding resource is the one
+    # with the lowest (actual P0/day extracted ÷ P0/day the recipe needs); the factories can only
+    # run at that fraction, so the *real* output is products_per_day × that ratio. Only computed
+    # when we have planet quality data (else actual defaults to baseline → no discount).
+    supply_ratio = 1.0
+    bottleneck_p0 = None
+    if avg_quality_pct is not None and products_per_day > 0:
+        actual_by_p0: dict[str, float] = {}
+        for a in all_assignments:
+            for n, v in _actual_p0_per_day_by_p0(a["extractors"]).items():
+                actual_by_p0[n] = actual_by_p0.get(n, 0.0) + v
+        needed_by_p0: dict[str, float] = {}
+        for info in p1_info:
+            pid, p0n = info.get("p1_type_id"), info.get("p0_name")
+            if p0n and pid in p1_fracs:
+                needed_by_p0[p0n] = needed_by_p0.get(p0n, 0.0) + p1_fracs[pid] * products_per_day * 150
+        for n, need in needed_by_p0.items():
+            if need <= 0:
+                continue
+            r = actual_by_p0.get(n, 0.0) / need
+            if r < supply_ratio:
+                supply_ratio, bottleneck_p0 = r, n
+        supply_ratio = max(0.0, min(1.0, supply_ratio))
+    supply_limited = supply_ratio < 0.995
+    effective_products_per_day = round(products_per_day * supply_ratio)
+    effective_isk_per_day = round(effective_products_per_day * sell_price, 2)
+
     return {
         "product":               {"type_id": req.type_id, "name": types.get(req.type_id, {}).get("name", "?")},
         "p1_requirements":       p1_info,
@@ -2613,6 +2658,11 @@ def _run_plan(req: PlanRequest, context_id: int) -> dict:
             "overproduction_pct":       overproduction_pct,
             "max_supportable_factories": max_supportable_factories,
             "products_per_day":         products_per_day,
+            "supply_limited":           supply_limited,
+            "supply_ratio":             round(supply_ratio, 3),
+            "effective_products_per_day": effective_products_per_day,
+            "effective_isk_per_day":    effective_isk_per_day,
+            "bottleneck_p0":            bottleneck_p0,
             "factory_refill_hours":     factory_refill_hours,
             "factory_input_m3_day":     round(p1_m3_per_factory_day),
             "factory_launchpads_assumed": _FACTORY_LAUNCHPADS,
