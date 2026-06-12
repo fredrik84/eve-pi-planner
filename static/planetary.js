@@ -2134,15 +2134,20 @@ function renderFinalPlan(data, opts = {}) {
           <span class="plan-split-seg">${splitBtns}</span>
           <span class="plan-stat-lbl">split planets · ${savedLbl}</span>
         </div>`;
-    // Distribution method: how extractor counts are split across resources.
+    // Distribution method: how extractor counts are split across resources. Each button gets
+    // its own tooltip (one combined title on the wrapper was unreadable and ambiguous).
     const distMode = (_wiz.distMode || s.distribution_mode || 'stability');
+    const distTips = {
+      stability: 'Stability — extractors ∝ need ÷ planet density. A thin-deposit input gets MORE extractors so every resource lands in the recipe ratio: minimal leftover P1, no single thin resource bottlenecking the chain. (Default.)',
+      need: 'Match need — extractors ∝ recipe need only, assuming uniform planet density. Simpler and fewer planets, but thin deposits underproduce and leave leftover P1.',
+    };
     const distBtns = [['stability', 'Stability'], ['need', 'Match need']].map(
-      ([v, l]) => `<button type="button" class="plan-split-btn${v === distMode ? ' plan-split-on' : ''}" onclick="setDistMode('${v}')">${l}</button>`
+      ([v, l]) => `<button type="button" class="plan-split-btn${v === distMode ? ' plan-split-on' : ''}" onclick="setDistMode('${v}')" title="${distTips[v]}">${l}</button>`
     ).join('');
     const distStatHtml = `
-        <div class="plan-stat plan-split-ctrl" title="Distribution method. Stability: each resource gets extractors ∝ need ÷ its planet density, so a thin-deposit input gets more extractors and production lands in the recipe ratio (minimal leftover P1, no single volatile bottleneck). Match need: the original split, extractors ∝ recipe need only (assumes uniform density).">
+        <div class="plan-stat plan-split-ctrl">
           <span class="plan-split-seg">${distBtns}</span>
-          <span class="plan-stat-lbl">distribution</span>
+          <span class="plan-stat-lbl">distribution · hover a mode</span>
         </div>`;
     // Density cap: ignore planets thinner than this %. Caps extractors on thin deposits
     // (fewer planets, a little residual) and is most useful in Stability mode.
