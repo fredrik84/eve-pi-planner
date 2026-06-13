@@ -1468,6 +1468,7 @@ function _buildPlanPayload() {
     sx: _wiz.splitMode || 'off',  // split-extraction mode
     dm: _wiz.distMode || 'stability',  // distribution method
     mdp: _wiz.minDensity || 0,  // min planet density % cap
+    xns: !!_wiz.extractorNoStorage,  // storage-less extractor templates
     mfg: _wiz.fuelblock ? _mfgRaw() : null,  // manufacturing ME selects (raw, for restore)
     bk: _wiz.basketId ? _basketSnapshot(_wiz.basketId) : null,  // basket def for shared (private) baskets
     plan: _wiz.lastPlanData || null,
@@ -1596,6 +1597,8 @@ async function _restoreFromPayload(payload) {
   _wiz.splitMode = (payload.sx && payload.sx !== 'off') ? 'on' : 'off';
   _wiz.distMode = (payload.dm === 'need') ? 'need' : 'stability';
   _wiz.minDensity = parseInt(payload.mdp) || 0;
+  _wiz.extractorNoStorage = !!payload.xns;
+  { const _ns = document.getElementById('targetNoStorage'); if (_ns) _ns.checked = _wiz.extractorNoStorage; }
   if (payload.cc && payload.cc.length) {
     _applyConstellationSelection(payload.cc);
   }
@@ -1642,6 +1645,7 @@ function _planRequest(systemNames) {
     split_mode:            _wiz.splitMode || 'off',
     distribution_mode:     _wiz.distMode || 'stability',
     min_density_pct:       _wiz.minDensity || 0,
+    extractor_no_storage:  !!_wiz.extractorNoStorage,
   };
   if (_wiz.fuelblock) {
     body.factory_planet_types = _wiz.factoryPlanetTypes || ['Barren', 'Temperate'];
@@ -2730,6 +2734,8 @@ function renderFinalPlan(data, opts = {}) {
     const splitToks = [...splitCombos.values()].join(',');
     if (splitToks) templatesHref += `&splits=${encodeURIComponent(splitToks)}`;
   }
+  // Storage-less extractors (buffer P0 in the launchpad) — applies to every extractor template.
+  if (templatesHref && _wiz.extractorNoStorage) templatesHref += '&no_storage=1';
 
   content.innerHTML = `
     <div class="plan-header">

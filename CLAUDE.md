@@ -77,6 +77,19 @@ count (`component_factory_rate`/`_packed_rate` → `generate_layout` `max_count`
 CC, so the planner places more factory planets. A genuinely impossible combo (e.g. Storm Ø30000
 at CC1) still overflows the grid — that's the physical reason B/T is the default.
 
+**Storage-less extractor option + P0-led names.** `build_extractor_template(no_storage=)` /
+`generate_extractor_layout` / `generate_layout` / `bundle_templates` / `fitted_extractor_basics` all
+take `no_storage`: the launchpad becomes the hub (buffers the bursty P0 + exports P1) instead of a
+separate Storage Facility — one fewer structure (~700 PG freed), so a big/low-CC planet fits another
+basic (and the 10th head powers on), at the cost of a smaller P0 buffer. Wired as
+`PlanRequest.extractor_no_storage` (feeds the basics cap via `_basics_factor(..., no_storage)`) and
+the **PI Templates bundle** (`/api/layout/bundle?...&no_storage=1`, also `/api/layout`
+`LayoutRequest.no_storage`). UI: "Storage-less extractors" checkbox in the Setup card
+(`targetNoStorage`, `_wiz.extractorNoStorage`), persisted in shares/auto-restore (`xns`), NOT in
+profiles (no DB column) and NOT yet a checkbox in the Factory Layout tab. Extractor template `Cmt`
+(in-game name + zip filename) now leads with the **P0** you select for hotspots, then the P1:
+`"Felsic Magma → Silicon (Lava)"` (was `"P0→P1 Silicon extractor"`); split planets too.
+
 **On-planet refining cap (basics/8).** An extractor planet's P1 output isn't just extraction — its
 Basic Industry Facilities convert P0→P1, and 8 basics = full conversion of a 100%-quality planet
 (the 48k baseline). Fewer basics fit on a low-CC or big planet (`fitted_extractor_basics(type, cc)`

@@ -506,12 +506,15 @@ def build_flat_p2_template(product_id: int, n_fac: int, struct: dict,
 
 
 def build_extractor_template(p1_id: int, planet_type: str, struct: dict, pi_data: dict,
-                             heads: int, n_basic: int, n_launchpads: int = 1) -> dict:
+                             heads: int, n_basic: int, n_launchpads: int = 1,
+                             no_storage: bool = False) -> dict:
     """
-    P0→P1 extractor planet: a storage hub at centre, surrounded by an Extractor Control
-    Unit (extracting the P0), `n_basic` Basic Industry Facilities (making the P1) and the
-    launchpad(s), all linked to the hub. P0 flows ECU→storage→factories; P1 flows
-    factory→storage→launchpad.
+    P0→P1 extractor planet: a hub at centre, surrounded by an Extractor Control Unit
+    (extracting the P0), `n_basic` Basic Industry Facilities (making the P1) and the
+    launchpad(s), all linked to the hub. P0 flows ECU→hub→factories; P1 flows factory→hub→
+    launchpad. The hub is a Storage Facility by default; with `no_storage` the launchpad is
+    the hub instead (buffers the bursty P0 + exports P1) — one fewer structure, freeing ~700 PG
+    so a big/low-CC planet fits another basic, at the cost of a smaller P0 buffer.
     """
     types = pi_data["types"]
     sch = pi_data["schematics"][p1_id]
@@ -519,8 +522,9 @@ def build_extractor_template(p1_id: int, planet_type: str, struct: dict, pi_data
     p0_qty = sch["inputs"][0]["quantity"]
     p1_out = sch["output_qty"]
 
-    pins: list[dict] = [{"H": 0, "S": None, "T": struct["storage"],
-                         "La": _CENTER_LAT, "Lo": _CENTER_LON}]   # storage hub = pin 1
+    hub_role = "launchpad" if no_storage else "storage"
+    pins: list[dict] = [{"H": 0, "S": None, "T": struct[hub_role],
+                         "La": _CENTER_LAT, "Lo": _CENTER_LON}]   # hub = pin 1
     hub = 1
     ecu_pin = len(pins) + 1
     pins.append({"H": heads, "S": p0_id, "T": struct["ecu"]})     # ECU: heads + P0
@@ -528,27 +532,35 @@ def build_extractor_template(p1_id: int, planet_type: str, struct: dict, pi_data
     for _ in range(n_basic):
         pins.append({"H": 0, "S": p1_id, "T": struct["basic_if"]})
         basics.append(len(pins))
-    lps = []
-    for _ in range(max(1, n_launchpads)):
+    # Launchpads: when no_storage the hub IS the first launchpad; add the rest on the ring.
+    lps = [hub] if no_storage else []
+    extra_lps = (n_launchpads - 1) if no_storage else n_launchpads
+    for _ in range(max(0, extra_lps)):
+        pins.append({"H": 0, "S": None, "T": struct["launchpad"]})
+        lps.append(len(pins))
+    if not lps:                                                   # storage mode needs ≥1 launchpad
         pins.append({"H": 0, "S": None, "T": struct["launchpad"]})
         lps.append(len(pins))
 
-    ring = [ecu_pin] + basics + lps
+    ring = [ecu_pin] + basics + [p for p in lps if p != hub]
     radius = max(0.0145, MIN_SEP / (2 * math.sin(math.pi / max(2, len(ring)))))
     for k, pin in enumerate(ring):
         la, lo = _to_latlon(radius, 2 * math.pi * k / len(ring))
         pins[pin - 1]["La"], pins[pin - 1]["Lo"] = la, lo
 
+    export_lp = lps[0]                                            # hub launchpad when no_storage
     links = [{"S": hub, "D": p, "Lv": 0} for p in ring]
-    routes = [{"P": [ecu_pin, hub], "Q": n_basic * p0_qty, "T": p0_id}]   # extraction → storage
+    routes = [{"P": [ecu_pin, hub], "Q": n_basic * p0_qty, "T": p0_id}]   # extraction → hub
     for b in basics:
-        routes.append({"P": [hub, b], "Q": p0_qty, "T": p0_id})           # storage → factory (P0)
-        routes.append({"P": [b, hub, lps[0]], "Q": p1_out, "T": p1_id})   # factory → launchpad (P1)
+        routes.append({"P": [hub, b], "Q": p0_qty, "T": p0_id})          # hub → factory (P0)
+        p1_path = [b, hub] if export_lp == hub else [b, hub, export_lp]
+        routes.append({"P": p1_path, "Q": p1_out, "T": p1_id})           # factory → launchpad (P1)
 
     _enforce_min_sep(pins)
     for p in pins:
         p["La"], p["Lo"] = round(p["La"], 5), round(p["Lo"], 5)
-    cmt = f"P0→P1 {types[p1_id]['name']} extractor ({planet_type})"
+    # Lead with the P0 — that's what you search/select in-game to find hotspots — then the P1.
+    cmt = f"{types[p0_id]['name']} → {types[p1_id]['name']} ({planet_type})"
     return {
         "template": {"CmdCtrLv": CMD_CTR_LEVEL, "Cmt": cmt, "Diam": PLANET_DIAM.get(planet_type, 8000.0),
                      "Pln": struct["planet_type_id"], "P": pins, "L": links, "R": routes},
@@ -609,7 +621,7 @@ def build_split_extractor_template(p1a_id: int, p1b_id: int, planet_type: str, s
     _enforce_min_sep(pins)
     for p in pins:
         p["La"], p["Lo"] = round(p["La"], 5), round(p["Lo"], 5)
-    cmt = f"Split: {types[p1a_id]['name']} + {types[p1b_id]['name']} ({planet_type})"
+    cmt = f"Split: {types[p0a]['name']} + {types[p0b]['name']} ({planet_type})"
     return {
         "template": {"CmdCtrLv": CMD_CTR_LEVEL, "Cmt": cmt, "Diam": PLANET_DIAM.get(planet_type, 8000.0),
                      "Pln": struct["planet_type_id"], "P": pins, "L": links, "R": routes},
@@ -708,7 +720,7 @@ def _chain_p1s(product_id: int, pi_data: dict) -> list[int]:
 
 
 def bundle_templates(product_id: int, cc_level: Optional[int] = None,
-                     planet_type: Optional[str] = None) -> list[tuple]:
+                     planet_type: Optional[str] = None, no_storage: bool = False) -> list[tuple]:
     """
     All templates needed to produce `product_id`, as (name, template) pairs:
     the factory template for the product itself, plus one P0→P1 extractor template
@@ -720,11 +732,12 @@ def bundle_templates(product_id: int, cc_level: Optional[int] = None,
     pi_data = load_pi_data()
     tier = pi_data["types"][product_id].get("pi_tier")
     out: list[tuple] = []
-    main = generate_layout(product_id, planet_type=planet_type or "Barren", cc_level=cc_level)
+    main = generate_layout(product_id, planet_type=planet_type or "Barren", cc_level=cc_level,
+                           no_storage=no_storage)
     out.append((main["planets"][0]["name"], main["planets"][0]["template"]))
     if tier and tier >= 2:
         for p1 in _chain_p1s(product_id, pi_data):
-            ex = generate_extractor_layout(p1, cc_level=cc_level)
+            ex = generate_extractor_layout(p1, cc_level=cc_level, no_storage=no_storage)
             out.append((ex["planets"][0]["name"], ex["planets"][0]["template"]))
     return out
 
@@ -737,7 +750,7 @@ def _p0_planets(p0_name: str) -> list[str]:
 
 def generate_extractor_layout(p1_id: int, planet_type: str = "Barren", launchpads: int = 1,
                               heads: int = EXTRACTOR_HEADS, n_basic: int = EXTRACTOR_BASICS,
-                              cc_level: Optional[int] = None) -> dict:
+                              cc_level: Optional[int] = None, no_storage: bool = False) -> dict:
     """One importable P0→P1 extractor template for a chosen P1 product. `cc_level` sets the
     command-centre level (CPU/PG budget); all 10 extractor heads are always kept, and only the
     basic (P1) factory count is scaled down to fit a lower level. Defaults to CMD_CTR_LEVEL."""
@@ -760,7 +773,8 @@ def generate_extractor_layout(p1_id: int, planet_type: str = "Barren", launchpad
     lp = max(1, min(MAX_LAUNCHPADS, launchpads))
 
     def _build(h, nb):
-        b = build_extractor_template(p1_id, planet_type, struct, pi_data, h, nb, n_launchpads=lp)
+        b = build_extractor_template(p1_id, planet_type, struct, pi_data, h, nb, n_launchpads=lp,
+                                     no_storage=no_storage)
         b["template"]["CmdCtrLv"] = cc
         return b
 
@@ -797,15 +811,16 @@ def generate_extractor_layout(p1_id: int, planet_type: str = "Barren", launchpad
 _FITTED_BASICS_CACHE: dict[tuple, int] = {}
 
 
-def fitted_extractor_basics(planet_type: str, cc: int) -> int:
+def fitted_extractor_basics(planet_type: str, cc: int, no_storage: bool = False) -> int:
     """How many Basic Industry Facilities fit alongside the 10 extractor heads on this planet
     type at this command-centre level (power-grid limited). 8 basics = full conversion of a
     100%-quality planet's extraction; fewer (low CC, or a big planet whose head spokes eat the
-    grid) means the planet refines less P1 on-site. Cached (≤ 8 types × 5 CC). Builds the
-    template directly (no planet-type coercion) — the basic-facility cost is recipe-independent,
-    so any P1 schematic gives the right count for the planet type."""
+    grid) means the planet refines less P1 on-site. `no_storage` drops the storage hub (buffer in
+    the launchpad), freeing ~700 PG so another basic often fits. Cached (≤ 8 types × 5 CC × 2).
+    Builds the template directly (no planet-type coercion) — the basic-facility cost is
+    recipe-independent, so any P1 schematic gives the right count for the planet type."""
     cc = max(1, min(5, int(cc)))
-    key = (planet_type, cc)
+    key = (planet_type, cc, no_storage)
     if key in _FITTED_BASICS_CACHE:
         return _FITTED_BASICS_CACHE[key]
     n = EXTRACTOR_BASICS
@@ -819,7 +834,8 @@ def fitted_extractor_basics(planet_type: str, cc: int) -> int:
         con.close()
 
         def _build(nb):
-            b = build_extractor_template(p1_id, planet_type, struct, pi_data, EXTRACTOR_HEADS, nb, n_launchpads=1)
+            b = build_extractor_template(p1_id, planet_type, struct, pi_data, EXTRACTOR_HEADS, nb,
+                                         n_launchpads=1, no_storage=no_storage)
             b["template"]["CmdCtrLv"] = cc
             return b
 
@@ -872,7 +888,7 @@ def default_launchpads(tier: int) -> int:
 
 def generate_layout(product_id: int, planet_type: str = "Barren",
                     launchpads: Optional[int] = None, count: Optional[int] = None,
-                    cc_level: Optional[int] = None) -> dict:
+                    cc_level: Optional[int] = None, no_storage: bool = False) -> dict:
     """
     Generate ONE importable template for the product (you replicate it across as many
     planets as you want — every planet is identical):
@@ -897,7 +913,8 @@ def generate_layout(product_id: int, planet_type: str = "Barren",
     launchpads = max(1, min(MAX_LAUNCHPADS, int(launchpads)))
 
     if tier == 1:
-        return generate_extractor_layout(product_id, planet_type, launchpads=launchpads, cc_level=cc)
+        return generate_extractor_layout(product_id, planet_type, launchpads=launchpads, cc_level=cc,
+                                         no_storage=no_storage)
 
     if tier == 4 and planet_type not in P4_PLANET_TYPES:
         planet_type = "Barren"   # High-Tech Production Plant is Barren/Temperate only

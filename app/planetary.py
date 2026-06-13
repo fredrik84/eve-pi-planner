@@ -143,6 +143,7 @@ class LayoutRequest(BaseModel):
     launchpads: Optional[int] = None   # None → per-tier default (3 factory / 1 extractor)
     count: Optional[int] = None         # production units on the planet; None → max that fits
     cc_level: Optional[int] = None      # command-centre level 1–5; None → CMD_CTR_LEVEL (5)
+    no_storage: bool = False            # extractor: buffer in launchpad, no storage hub (frees PG)
 
 
 @router.post("/api/layout")
@@ -150,7 +151,7 @@ def factory_layout(req: LayoutRequest):
     from app.layout import generate_layout
     try:
         return generate_layout(req.type_id, req.planet_type, req.launchpads, req.count,
-                               cc_level=req.cc_level)
+                               cc_level=req.cc_level, no_storage=req.no_storage)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -178,7 +179,7 @@ def download_layout(type_id: int, planet_type: str = "Barren", launchpads: Optio
 
 
 @router.get("/api/layout/bundle")
-def download_bundle(type_ids: str = "", expand: int = 0, splits: str = ""):
+def download_bundle(type_ids: str = "", expand: int = 0, splits: str = "", no_storage: int = 0):
     """
     Return a ZIP of templates for one or more products (comma-separated `type_ids`).
     Each token is `id[:launchpads[:count[:cc[:planet_type]]]]` — the optional `cc`
@@ -229,9 +230,10 @@ def download_bundle(type_ids: str = "", expand: int = 0, splits: str = ""):
             if expand:
                 # Scale the whole chain to the host CC: the factory takes the chosen planet
                 # type, each P0→P1 extractor keeps the planet type its P0 grows on.
-                pairs = bundle_templates(tid, cc_level=cc, planet_type=ptype)
+                pairs = bundle_templates(tid, cc_level=cc, planet_type=ptype, no_storage=bool(no_storage))
             else:
-                r = generate_layout(tid, planet_type=ptype, launchpads=lp, count=cnt, cc_level=cc)
+                r = generate_layout(tid, planet_type=ptype, launchpads=lp, count=cnt, cc_level=cc,
+                                    no_storage=bool(no_storage))
                 pairs = [(r["planets"][0]["name"], r["planets"][0]["template"])]
             for name, tmpl in pairs:
                 # Disambiguate per (planet type, CC) variants so they don't collide in the zip.

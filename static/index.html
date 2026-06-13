@@ -264,6 +264,13 @@
                 Use existing planets
               </label>
               <span></span>
+
+              <label class="pp-label pp-label-check" for="targetNoStorage"
+                     title="Extractor templates buffer the extracted P0 in the launchpad instead of a separate storage facility — one fewer structure (~700 PG), so a big or low-CC planet fits another basic (better refining) and the 10th head powers on. Smaller buffer, so collect a little more often.">
+                <input type="checkbox" id="targetNoStorage" onchange="_wiz.extractorNoStorage = this.checked; _rerunPlan && _wiz.lastPlanData && _rerunPlan()">
+                Storage-less extractors
+              </label>
+              <span></span>
             </div>
           </section>
 
@@ -692,6 +699,6 @@ PVF-N9    3         95                 60             80                  100   
   </div>
 
   <script src="/app.js?v=22"></script>
-  <script src="/planetary.js?v=148"></script>
+  <script src="/planetary.js?v=149"></script>
 </body>
 </html>

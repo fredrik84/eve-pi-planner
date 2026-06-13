@@ -106,6 +106,7 @@ class FuelBlockPlanRequest(BaseModel):
     split_mode: str = "off"  # off | conservative | aggressive — split-extraction consolidation
     distribution_mode: str = "stability"  # stability (count ∝ need/density) | need (∝ need)
     min_density_pct: int = 0  # ignore planets thinner than this %, in the plan AND the recs (0 = off)
+    extractor_no_storage: bool = False  # extractor template buffers P0 in the launchpad (no storage hub)
 
 
 def _system_security(system: str | None):
@@ -738,7 +739,8 @@ def _run_fuelblock_plan(req: "FuelBlockPlanRequest", context_id: int) -> dict:
     avg_quality_pct = round(sum(quality_vals) / len(quality_vals)) if quality_vals else None
     avg_p0_per_cycle = round(avg_quality_pct / 100 * 48000) if avg_quality_pct else None
     _asgn_cc = lambda a: int(a.get("effective_ccu") or a.get("ccu") or 5)  # CC for the basics cap
-    _actual_p0_per_day = sum(_ext_actual_p0_per_day(a["extractors"], _asgn_cc(a)) for a in all_assignments)
+    _nost = bool(getattr(req, "extractor_no_storage", False))
+    _actual_p0_per_day = sum(_ext_actual_p0_per_day(a["extractors"], _asgn_cc(a), _nost) for a in all_assignments)
 
     # ISK estimate (best-effort). The plan only produces the PI components, so value the output
     # as the daily market value of those produced components (what you'd get selling the PI you
@@ -769,7 +771,7 @@ def _run_fuelblock_plan(req: "FuelBlockPlanRequest", context_id: int) -> dict:
     if avg_quality_pct is not None and fuel_blocks_per_day > 0:
         actual_by_p0: dict = {}
         for a in all_assignments:
-            for n, v in _actual_p0_per_day_by_p0(a["extractors"], _asgn_cc(a)).items():
+            for n, v in _actual_p0_per_day_by_p0(a["extractors"], _asgn_cc(a), _nost).items():
                 actual_by_p0[n] = actual_by_p0.get(n, 0.0) + v
         needed_by_p0: dict = {}
         for info in p1_info:
