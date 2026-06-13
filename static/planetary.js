@@ -1740,7 +1740,7 @@ function _productTypeId(name) {
 }
 
 function _ptypeSpan(t) {
-  return t ? `<span class="${PP_TYPE_CLASS[t] || ''}">${t}</span>` : '';
+  return t ? `<span class="plan-ptype ${PP_TYPE_CLASS[t] || ''}">${t}</span>` : '';
 }
 
 function _fmtIsk(v) {

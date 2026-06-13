@@ -933,14 +933,20 @@ tr:hover td { background: #181d2a; }
 .plan-view-btn:hover { background: #1c1630; color: #a888c8; }
 .plan-view-btn.plan-view-on { background: #2a1c40; color: #c89ce8; }
 
-/* Grouped-by-system layout: each character's planets split into a column per system */
-.plan-char-syscols { display: flex; flex-wrap: wrap; gap: 10px 22px; align-items: flex-start; }
-.plan-char-syscol { display: flex; flex-direction: column; gap: 3px; min-width: 200px; }
+/* Grouped-by-system layout: each character's planets split into fixed-width columns per system,
+   sub-fields aligned (tag / planet number / name line up across every row). */
+.plan-char-syscols { display: grid; grid-template-columns: repeat(auto-fill, 300px); gap: 12px 16px; align-items: start; }
+.plan-char-syscol { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .plan-char-syshdr { display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 700;
   color: #c8d8f0; letter-spacing: 0.4px; margin-bottom: 3px; padding-bottom: 3px; border-bottom: 1px solid #1c2030; }
 .plan-char-syshdr.plan-sys-title-warn { color: #c88040; }
 .plan-char-syshdr-free { color: #4a5470; font-weight: 600; }
 .plan-char-sysn { margin-left: auto; font-size: 10px; font-weight: 500; color: #5a6478; }
+.plan-char-syscol .plan-ext-row { gap: 5px; }
+.plan-char-syscol .plan-ext-tag { flex: 0 0 auto; min-width: 50px; text-align: center; }
+.plan-char-syscol .plan-ptype   { flex: 0 0 auto; min-width: 58px; }
+.plan-char-syscol .plan-ext-sys { flex: 0 0 auto; min-width: 24px; text-align: right; }
+.plan-char-syscol .plan-ext-p1 { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .plan-sys-fac { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px;
   color: #5ab4e6; background: #0e2030; border: 1px solid #1c3a4a; border-radius: 4px; padding: 1px 5px; }
 .plan-ext-row { display: flex; align-items: center; gap: 6px; font-size: 12px; }
