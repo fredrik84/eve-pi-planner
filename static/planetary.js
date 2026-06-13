@@ -2326,11 +2326,15 @@ function _updateRefillDays() {
   const m = _planMeta || {};
   const unitsMade = Math.round((m.productsPerDay || 0) * minDays);
   const sellValue = (m.iskPerDay || 0) * minDays;
-  const fmt = n => n >= 10 ? Math.round(n).toLocaleString() : (Math.round(n * 10) / 10);
-  const dayWord = (Math.round(minDays * 10) / 10) === 1 ? 'day' : 'days';
+  // Show days normally, but drop to hours when it's under a day (otherwise it rounds to "0 days").
+  const _dur = days => {
+    if (days >= 1) { const d = days >= 10 ? Math.round(days) : Math.round(days * 10) / 10; return `${d.toLocaleString()} ${d === 1 ? 'day' : 'days'}`; }
+    const h = days * 24, hr = h >= 10 ? Math.round(h) : Math.round(h * 10) / 10;
+    return `${hr.toLocaleString()} ${hr === 1 ? 'hour' : 'hours'}`;
+  };
   const lead = `<div class="refill-lead">With what you pasted, <b>${_esc(binding.name)}</b> runs out first.</div>`;
   const tiles = [
-    `<div class="refill-stat"><span class="refill-stat-val">${fmt(minDays)} ${dayWord}</span>
+    `<div class="refill-stat"><span class="refill-stat-val">${_dur(minDays)}</span>
        <span class="refill-stat-lbl">before refill</span></div>`,
   ];
   if (m.productsPerDay)
