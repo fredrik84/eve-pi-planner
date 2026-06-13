@@ -559,7 +559,7 @@ PVF-N9    3         95                 60             80                  100   
           <div class="pp-card-title">Setup vs Plan
             <span class="pp-analyze-pick"><span class="pp-profile-dropdown-label">Plan</span>
               <select id="analyzePlanSelect" class="pp-profile-select" onchange="renderAnalysis()"></select></span>
-            <button class="pp-add-btn" onclick="onAnalyzeTabOpen()" title="Re-scan colonies and reload plans">Reload</button>
+            <button class="pp-add-btn" onclick="rescanAndAnalyze(this)" title="Pull fresh colony data from ESI and recompute against the plan">Rescan colonies</button>
           </div>
           <div id="analyzeContent" class="pp-analyze-content">
             <div class="admin-hint">Compares what your characters' colonies actually produce (from ESI, live rates) against a saved plan's required P1 — so you can see what's under- or over-performing.</div>
@@ -721,6 +721,6 @@ PVF-N9    3         95                 60             80                  100   
   </div>
 
   <script src="/app.js?v=22"></script>
-  <script src="/planetary.js?v=162"></script>
+  <script src="/planetary.js?v=163"></script>
 </body>
 </html>

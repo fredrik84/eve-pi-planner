@@ -2105,6 +2105,25 @@ function _renderAnalyzePlans() {
   if (prev !== '' && _analyzeSnaps[prev]) sel.value = prev;
 }
 
+// Pull fresh colony data from ESI (re-scans each real character's planets → rebuilds sim_state),
+// then re-render. This is what actually updates the production rates; the plain reopen only re-reads
+// the DB. Used by the tab's "Rescan colonies" button.
+async function rescanAndAnalyze(btn) {
+  const ids = (_ppCharsData || []).filter(c => !c.is_dummy && c.character_id > 0).map(c => c.character_id);
+  if (!ids.length) { await onAnalyzeTabOpen(); return; }
+  const orig = btn ? btn.textContent : '';
+  if (btn) btn.disabled = true;
+  let failed = 0;
+  for (let i = 0; i < ids.length; i++) {
+    if (btn) btn.textContent = `Rescanning ${i + 1}/${ids.length}…`;
+    try { const r = await fetch(`/api/characters/${ids[i]}/refresh-planets`, { method: 'POST' }); if (!r.ok) failed++; }
+    catch (e) { failed++; }
+  }
+  if (btn) { btn.textContent = orig || 'Rescan colonies'; btn.disabled = false; }
+  await onAnalyzeTabOpen();
+  if (failed) alert(`${failed} of ${ids.length} character${ids.length !== 1 ? 's' : ''} could not be rescanned — usually an expired ESI token (red dot in Characters).`);
+}
+
 // Paint instantly from cache (colony data + snapshots are usually warm from the Planetary tab),
 // then refresh in the background — no need to hit Reload to see anything.
 async function onAnalyzeTabOpen() {
