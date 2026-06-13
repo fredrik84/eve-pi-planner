@@ -333,6 +333,12 @@ def _fetch_planets(character_id: int, access_token: str) -> None:
                                 if (_types.get(t, {}).get("pi_tier") or 0) == _max_tier}
                 products_json = _json.dumps(
                     [{"type_id": t, "name": n} for t, n in products.items()]) if products else None
+                # Keep only the highest-tier items in the pads — that's the finished product
+                # sitting in the launchpad to haul out; lower tiers are inputs/intermediates.
+                if pads:
+                    _pad_max = max((_types.get(t, {}).get("pi_tier") or 0) for t in pads)
+                    pads = {t: a for t, a in pads.items()
+                            if (_types.get(t, {}).get("pi_tier") or 0) == _pad_max}
                 pads_json = _json.dumps(sorted(
                     [{"type_id": t, "name": _types.get(t, {}).get("name") or f"#{t}", "amount": a}
                      for t, a in pads.items()],
