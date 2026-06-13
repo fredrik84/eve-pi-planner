@@ -2065,6 +2065,18 @@ async function deleteSavedPlan(id, srvId) {
 // factories eat at full rate). Answers "am I extracting/producing enough to keep this plan's
 // factories refilled?" with headline stats + per-P1 bars.
 let _analyzeSnaps = [];
+let _refillCfg = { lp: 3, sf: 3 };   // factory P1 buffer: launchpads + storage facilities (std SHPC build)
+let _anPerFacM3 = 0;                  // per-factory P1 consumption (m³/day), set during render
+
+// Live-update the refill interval when the buffer inputs change — no full re-render (keeps focus).
+function _setRefillCfg(field, val) {
+  _refillCfg[field] = Math.max(0, Math.min(20, parseInt(val) || 0));
+  const m3 = _refillCfg.lp * 10000 + _refillCfg.sf * 12000;
+  const buf = document.getElementById('anRefillBuf');
+  if (buf) buf.textContent = m3.toLocaleString() + ' m³';
+  const days = _anPerFacM3 ? m3 / _anPerFacM3 : 0;
+  document.querySelectorAll('.an-refill-days').forEach(e => e.textContent = _dur(days));
+}
 
 // Show days normally, but drop to hours when it's under a day (otherwise it rounds to "0 days").
 function _dur(days) {
@@ -2227,31 +2239,36 @@ function renderAnalysis() {
   stats += stat(String(snap.factories_count || (snap.factories || []).length), 'Factory planets', '');
   stats += `</div>`;
 
-  // Refill cadence: how long between maintenance runs (empty extractors → top up factory launchpads).
-  // The hard limit is the factory side: its P1 buffer (3 launchpads = 30,000 m³) drains in
-  // factory_refill_hours at the consumption rate. Show the arithmetic — buffer ÷ consumption — so the
-  // number is transparent (a full 30,000 m³ load lasts only ~refillDays because a factory eats a lot
-  // of P1/day). Over-producing doesn't help: you can't fit more than 30,000 m³ in 3 LPs.
+  // Refill cadence: how long between maintenance runs (empty extractors → top up the factory's P1
+  // buffer). Consumption is fixed and solid (P1/day per factory); the interval = the factory's P1
+  // buffer ÷ that. The buffer is the part that varies by build, so it's user-set: launchpads (10,000
+  // m³) + storage facilities (12,000 m³). The standard SHPC factory is 3 LP + 3 storage ≈ 66,000 m³.
   let proj = '';
-  if (refillDays) {
+  {
     const nfac = snap.factories_count || (snap.factories || []).length || 0;
     const totP1 = Array.isArray(snap.consumption)
       ? snap.consumption.reduce((a, c) => a + (c.units_per_day || 0), 0)
       : Object.values(snap.consumption || {}).reduce((a, v) => a + (v || 0), 0);
     const perFacUnits = nfac ? totP1 / nfac : 0;
-    const perFacM3 = perFacUnits * 0.38;
-    const perStorage = refillDays * 12000 / 30000;   // a Storage Facility adds 12,000 m³
-    const cells = [
-      stat(_dur(refillDays), 'between refills · 3 LP / 30,000 m³', 'an-ok'),
-      perFacUnits ? stat(`${Math.round(perFacUnits).toLocaleString()} <span class="an-of">P1/day</span>`,
-                         `each factory eats ~${Math.round(perFacM3).toLocaleString()} m³/day`, '') : '',
-      nfac ? stat(String(nfac), 'factories to service', '') : '',
-    ].join('');
-    proj = `<div class="an-proj">`
-      + `<div class="an-proj-h">Refill run — empty extractors & top up factories every <b>${_dur(refillDays)}</b></div>`
-      + `<div class="an-stats">${cells}</div>`
-      + `<div class="an-legend">A factory's 3 launchpads hold 30,000 m³ (~79,000 P1) but it burns ~${Math.round(perFacM3).toLocaleString()} m³/day, so a full load lasts only ~${_dur(refillDays)} — and 30,000 m³ is the cap for 3 LPs, so over-producing can't stretch it. The interval grows only with more on-planet buffer: each extra 12,000 m³ Storage Facility ≈ +${_dur(perStorage)}. If your deployed factories already carry extra storage, your real interval is longer than this 3-LP figure.</div>`
-      + `</div>`;
+    _anPerFacM3 = perFacUnits * 0.38;     // stashed so the buffer inputs can recompute without re-render
+    if (perFacUnits) {
+      const bufM3 = _refillCfg.lp * 10000 + _refillCfg.sf * 12000;
+      const days = _anPerFacM3 ? bufM3 / _anPerFacM3 : 0;
+      const cells = [
+        stat(`<span class="an-refill-days">${_dur(days)}</span>`, 'between refills', 'an-ok'),
+        stat(`${Math.round(perFacUnits).toLocaleString()} <span class="an-of">P1/day</span>`, `each factory eats ~${Math.round(_anPerFacM3).toLocaleString()} m³/day`, ''),
+        nfac ? stat(String(nfac), 'factories to service', '') : '',
+      ].join('');
+      proj = `<div class="an-proj">`
+        + `<div class="an-proj-h">Refill run — empty extractors & top up factories every <b class="an-refill-days">${_dur(days)}</b></div>`
+        + `<div class="an-refill-cfg">P1 buffer / factory: `
+        + `<input type="number" min="0" max="20" value="${_refillCfg.lp}" oninput="_setRefillCfg('lp', this.value)"> launchpads `
+        + `+ <input type="number" min="0" max="20" value="${_refillCfg.sf}" oninput="_setRefillCfg('sf', this.value)"> storage facilities `
+        + `= <b id="anRefillBuf">${bufM3.toLocaleString()} m³</b></div>`
+        + `<div class="an-stats">${cells}</div>`
+        + `<div class="an-legend">Consumption is fixed: each factory burns ~${Math.round(_anPerFacM3).toLocaleString()} m³/day of P1, so the interval is just buffer ÷ that. Over-producing doesn't change it — only how much P1 the factory can hold. Set the buffer to match your build (the standard SHPC factory is 3 LP + 3 storage ≈ 66,000 m³ ≈ 7.5 days). Extractors fill their own launchpads at a similar pace, so empty them on the same trip.</div>`
+        + `</div>`;
+    }
   }
 
   const barRows = rows.map(r => {

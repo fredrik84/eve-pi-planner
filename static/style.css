@@ -1626,3 +1626,6 @@ a.plan-action-btn { text-decoration: none; display: inline-block; }
 .an-suggest-move .an-suggest-h { color: #e0c84a; }
 .an-proj { margin: 4px 0 16px; }
 .an-proj-h { font-size: 12px; color: #8b93a6; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 6px; }
+.an-refill-cfg { font-size: 13px; color: #8b93a6; margin: 2px 0 10px; }
+.an-refill-cfg input { width: 48px; background: #11151f; border: 1px solid #2a3142; color: #e6e9ef; border-radius: 5px; padding: 3px 6px; font-size: 13px; }
+.an-refill-cfg b { color: #c8cdd8; }
