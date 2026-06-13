@@ -11,6 +11,7 @@ Scopes requested:
   esi-planets.manage_planets.v1
 """
 
+import json as _json
 import os
 import secrets
 import sqlite3
@@ -162,6 +163,11 @@ def ensure_char_tables():
         con.execute("ALTER TABLE pp_char_planets ADD COLUMN planet_num INTEGER")
     except Exception:
         pass
+    for _col in ("products TEXT", "pad_contents TEXT"):  # JSON: factory outputs + stored items
+        try:
+            con.execute(f"ALTER TABLE pp_char_planets ADD COLUMN {_col}")
+        except Exception:
+            pass
     try:
         # Synthetic "dummy" characters (no ESI token / colonies) added manually so a player
         # needn't log every alt in. is_dummy=1; their character_id is negative to avoid
@@ -267,6 +273,16 @@ def _fetch_planets(character_id: int, access_token: str) -> None:
             except Exception:
                 pass
 
+        # SDE lookups: schematic_id → produced type, and type_id → name (for factory products
+        # and what's stored in the launchpads/storage).
+        try:
+            from app.sde import load_pi_data
+            _pi = load_pi_data()
+            _types = _pi["types"]
+            _sch_to_out = {v["schematic_id"]: out for out, v in _pi["schematics"].items()}
+        except Exception:
+            _types, _sch_to_out = {}, {}
+
         con = get_connection()
         con.execute("DELETE FROM pp_char_planets WHERE character_id=?", (character_id,))
 
@@ -282,6 +298,8 @@ def _fetch_planets(character_id: int, access_token: str) -> None:
                 p0_type_id   = None
                 p0_name      = None
                 planet_num   = None
+                products: dict[int, str] = {}   # output type_id → name (factory pins)
+                pads: dict[int, int] = {}       # stored item type_id → total amount
                 try:
                     pr = client.get(
                         f"{ESI_BASE}/characters/{character_id}/planets/{planet_id}/",
@@ -295,9 +313,24 @@ def _fetch_planets(character_id: int, access_token: str) -> None:
                             is_extractor = 1
                             p0_type_id   = ext.get("product_type_id")
                             p0_name      = P0_TYPE_NAMES.get(p0_type_id)
-                            break
+                        sch = pin.get("schematic_id") or (pin.get("factory_details") or {}).get("schematic_id")
+                        if sch:
+                            out = _sch_to_out.get(sch)
+                            if out:
+                                products[out] = _types.get(out, {}).get("name") or f"#{out}"
+                        for cnt in (pin.get("contents") or []):
+                            tid, amt = cnt.get("type_id"), cnt.get("amount", 0) or 0
+                            if tid and amt:
+                                pads[tid] = pads.get(tid, 0) + amt
                 except Exception:
                     pass
+
+                products_json = _json.dumps(
+                    [{"type_id": t, "name": n} for t, n in products.items()]) if products else None
+                pads_json = _json.dumps(sorted(
+                    [{"type_id": t, "name": _types.get(t, {}).get("name") or f"#{t}", "amount": a}
+                     for t, a in pads.items()],
+                    key=lambda x: -x["amount"])) if pads else None
 
                 # Fetch planet name to derive in-system ordinal (e.g. "01B-88 VIII" → 8)
                 try:
@@ -316,11 +349,11 @@ def _fetch_planets(character_id: int, access_token: str) -> None:
                     INSERT OR REPLACE INTO pp_char_planets
                         (character_id, planet_id, planet_type, solar_system_id,
                          upgrade_level, num_pins, is_extractor, p0_type_id, p0_name,
-                         planet_num)
-                    VALUES (?,?,?,?,?,?,?,?,?,?)
+                         planet_num, products, pad_contents)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
                 """, (character_id, planet_id, planet_type, solar_system_id,
                       upgrade_level, num_pins, is_extractor, p0_type_id, p0_name,
-                      planet_num))
+                      planet_num, products_json, pads_json))
 
         con.commit()
         con.close()
@@ -625,7 +658,8 @@ def list_characters(pp_session: str = Cookie(default=None)):
             SELECT character_id, character_name, token_expiry,
                    interplanetary_consolidation, command_center_upgrades,
                    planetology, advanced_planetology, COALESCE(is_dummy, 0) AS is_dummy
-            FROM pp_characters WHERE context_id=? ORDER BY COALESCE(is_dummy,0), character_name
+            FROM pp_characters WHERE context_id=?
+            ORDER BY COALESCE(is_dummy,0), character_name COLLATE NOCASE
         """, (context_id,)).fetchall()
     else:
         rows = []
@@ -633,14 +667,15 @@ def list_characters(pp_session: str = Cookie(default=None)):
     try:
         planet_rows = con.execute("""
             SELECT cp.character_id, cp.planet_type, cp.is_extractor, cp.p0_name, cp.upgrade_level,
-                   cp.planet_num, cp.num_pins, COALESCE(ss.name, '') AS system_name
+                   cp.planet_num, cp.num_pins, cp.products, cp.pad_contents,
+                   COALESCE(ss.name, '') AS system_name
             FROM pp_char_planets cp
             LEFT JOIN solar_systems ss ON ss.system_id = cp.solar_system_id
         """).fetchall()
     except Exception:  # no geo table → no system names
         planet_rows = con.execute("""
             SELECT character_id, planet_type, is_extractor, p0_name, upgrade_level,
-                   planet_num, num_pins, '' AS system_name
+                   planet_num, num_pins, products, pad_contents, '' AS system_name
             FROM pp_char_planets
         """).fetchall()
     con.close()
@@ -648,6 +683,14 @@ def list_characters(pp_session: str = Cookie(default=None)):
     char_planets: dict[int, list] = {}
     for p in planet_rows:
         cid = p["character_id"]
+        try:
+            products = _json.loads(p["products"]) if p["products"] else []
+        except Exception:
+            products = []
+        try:
+            pads = _json.loads(p["pad_contents"]) if p["pad_contents"] else []
+        except Exception:
+            pads = []
         char_planets.setdefault(cid, []).append({
             "planet_type":   p["planet_type"],
             "is_extractor":  bool(p["is_extractor"]),
@@ -656,6 +699,8 @@ def list_characters(pp_session: str = Cookie(default=None)):
             "system":        p["system_name"],
             "planet_num":    p["planet_num"],
             "num_pins":      p["num_pins"],
+            "products":      products,
+            "pads":          pads,
         })
 
     now = datetime.now(timezone.utc).isoformat()

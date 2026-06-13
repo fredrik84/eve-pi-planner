@@ -570,7 +570,14 @@ tr:hover td { background: #181d2a; }
 .pp-pl-row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
 .pp-pl-loc { flex: 0 0 auto; min-width: 116px; color: #c8cdd8; font-family: 'Consolas', monospace; font-size: 11px; }
 .pp-pl-extract { color: #9ec89e; }
+.pp-pl-build { color: #a8c0e0; }
 .pp-pl-factory { color: #8a94ac; }
+/* "In pads" stored-materials summary */
+.pp-char-pads { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; padding: 0 0 8px;
+  font-size: 11px; color: #8a94ac; }
+.pp-char-pads-lbl { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; color: #56607a; }
+.pp-pad-item { white-space: nowrap; }
+.pp-pad-item b { color: #c8d2e6; font-family: 'Consolas', monospace; font-weight: 600; }
 .pp-pl-cc { margin-left: auto; font-size: 10px; color: #56607a; }
 .pp-pl-empty { font-size: 12px; color: #56607a; font-style: italic; padding: 6px 0; }
 /* placeholder (dummy) characters */

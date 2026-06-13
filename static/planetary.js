@@ -612,9 +612,12 @@ function renderCharacters(chars, loggedIn) {
     const planetRows = planets.length
       ? [...planets].sort(_byloc).map(p => {
           const loc = `${p.system ? _esc(p.system) + ' ' : ''}${p.planet_num != null ? 'P' + p.planet_num : ''}`.trim() || '—';
+          const builds = (p.products || []).map(x => _esc(x.name)).join(', ');
           const what = p.is_extractor
             ? `<span class="pp-pl-extract">→ ${_esc(p.p0_name || '?')}</span>`
-            : `<span class="pp-pl-factory">factory${p.num_pins ? ' · ' + p.num_pins + ' pins' : ''}</span>`;
+            : (builds
+                ? `<span class="pp-pl-build">→ ${builds}</span>`
+                : `<span class="pp-pl-factory">factory${p.num_pins ? ' · ' + p.num_pins + ' pins' : ''}</span>`);
           const cc = p.upgrade_level ? `<span class="pp-pl-cc" title="Command center level">CC${p.upgrade_level}</span>` : '';
           return `<div class="pp-pl-row"><span class="pp-pl-loc">${loc}</span>${_ptypeSpan(p.planet_type)}${what}${cc}</div>`;
         }).join('')
@@ -631,6 +634,15 @@ function renderCharacters(chars, loggedIn) {
         ${c.adv_planetology != null ? `<span title="Advanced Planetology skill">Adv ${c.adv_planetology}</span>` : ''}
       </div>`;
 
+    // Aggregate what's sitting in the launchpads/storage across all this toon's planets.
+    const padTotals = {};
+    planets.forEach(p => (p.pads || []).forEach(it => { padTotals[it.name] = (padTotals[it.name] || 0) + it.amount; }));
+    const padEntries = Object.entries(padTotals).sort((a, b) => b[1] - a[1]);
+    const padsHtml = padEntries.length
+      ? `<div class="pp-char-pads"><span class="pp-char-pads-lbl">In pads</span>${
+          padEntries.map(([n, a]) => `<span class="pp-pad-item"><b>${a.toLocaleString()}</b> ${_esc(n)}</span>`).join('')}</div>`
+      : '';
+
     row.innerHTML = `
       <details class="pp-char-fold">
         <summary class="pp-char-header">
@@ -640,6 +652,7 @@ function renderCharacters(chars, loggedIn) {
         </summary>
         <div class="pp-char-body">
           ${stats}
+          ${padsHtml}
           <div class="pp-char-planet-list">${planetRows}</div>
         </div>
       </details>`;
