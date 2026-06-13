@@ -1854,7 +1854,10 @@ function _splitExtRow(e) {
     const q = l.quality_pct;
     const qc = q == null ? '' : (q >= 80 ? 'plan-qual-ok' : q >= 50 ? '' : 'plan-qual-low');
     const qHtml = q == null ? '' : `<span class="plan-ext-qual ${qc}">${q}</span>`;
-    return `<span class="plan-split-leg"><span class="plan-ext-p1">${_esc(l.p1_name || '?')}</span><span class="plan-split-heads" title="${l.heads}/10 extractor heads (guidance — actual yield varies with heatmap placement and depletion)">${l.heads}h</span>${qHtml}</span>`;
+    const name = l.p0_name
+      ? `<span class="plan-ext-p0col">${_esc(l.p0_name)}</span><span class="plan-ext-p1sub"> → ${_esc(l.p1_name || '?')}</span>`
+      : _esc(l.p1_name || '?');
+    return `<span class="plan-split-leg"><span class="plan-ext-p1">${name}</span><span class="plan-split-heads" title="${l.heads}/10 extractor heads (guidance — actual yield varies with heatmap placement and depletion)">${l.heads}h</span>${qHtml}</span>`;
   }).join('<span class="plan-split-plus">+</span>');
   return `<div class="plan-ext-row plan-ext-split">
     <span class="plan-ext-tag plan-ext-split-tag" title="Split planet: two extractor control units share this planet's 10 heads, feeding two P1 lines. Head counts are a recommended split — real extraction depends on heatmap placement and depletes over time.">split</span>${_ptypeSpan(ptype)}${sysHtml}<span class="plan-ext-arrow">→</span>${legHtml}</div>`;
@@ -2522,7 +2525,11 @@ function renderFinalPlan(data, opts = {}) {
       : `<span class="plan-ext-no-planet">no planet in system</span>`;
     const qualHtml = e.quality_pct !== undefined
       ? `<span class="plan-ext-qual ${e.quality_pct >= 80 ? 'plan-qual-ok' : e.quality_pct >= 50 ? '' : 'plan-qual-low'}">${e.quality_pct}</span>` : '';
-    return `<div class="plan-ext-row">${tag}${_ptypeSpan(ptype)}${loc}<span class="plan-ext-arrow">→</span><span class="plan-ext-p1">${e.p1_name || '?'}</span>${qualHtml}</div>`;
+    // Show the P0 you extract (what you place heads on) → the P1 it makes (for templates).
+    const chain = e.p0_name
+      ? `<span class="plan-ext-p0col">${e.p0_name}</span><span class="plan-ext-p1sub"> → ${e.p1_name || '?'}</span>`
+      : (e.p1_name || '?');
+    return `<div class="plan-ext-row">${tag}${_ptypeSpan(ptype)}${loc}<span class="plan-ext-arrow">→</span><span class="plan-ext-p1" title="${e.p0_name ? e.p0_name + ' → ' : ''}${e.p1_name || '?'}">${chain}</span>${qualHtml}</div>`;
   };
   const _facHtml = (f, showSys) => {
     const tag = f.is_existing

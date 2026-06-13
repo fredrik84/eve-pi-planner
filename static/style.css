@@ -971,6 +971,8 @@ tr:hover td { background: #181d2a; }
 .plan-ext-p0 { color: #8a9ab4; }
 .plan-ext-arrow { color: #252e40; font-size: 10px; }
 .plan-ext-p1 { color: #c8cdd8; }
+.plan-ext-p0col { color: #c8cdd8; }      /* the P0 you extract — the thing you place heads on */
+.plan-ext-p1sub { color: #566074; }      /* → P1 it becomes (for template matching) */
 /* split-extraction: one planet, two P0 legs */
 .plan-ext-split-tag { background: #221630; color: #b886e0; border: 1px solid #3a2450; }
 .plan-ext-split { background: rgba(120, 80, 180, 0.06); border-radius: 4px; }
