@@ -614,7 +614,7 @@ function renderCharacters(chars, loggedIn) {
           const loc = `${p.system ? _esc(p.system) + ' ' : ''}${p.planet_num != null ? 'P' + p.planet_num : ''}`.trim() || '—';
           const builds = (p.products || []).map(x => _esc(x.name)).join(', ');
           const what = p.is_extractor
-            ? `<span class="pp-pl-extract">→ ${_esc(p.p0_name || '?')}</span>`
+            ? `<span class="pp-pl-extract">→ ${_esc(p.p0_name || '?')}</span>${builds ? `<span class="pp-pl-build"> → ${builds}</span>` : ''}`
             : (builds
                 ? `<span class="pp-pl-build">→ ${builds}</span>`
                 : `<span class="pp-pl-factory">factory${p.num_pins ? ' · ' + p.num_pins + ' pins' : ''}</span>`);
