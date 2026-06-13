@@ -688,7 +688,7 @@ def _run_fuelblock_plan(req: "FuelBlockPlanRequest", context_id: int) -> dict:
     for l in factory_lines:
         l["need_per_day"] = round(baskets_per_day * bom_qty.get(l["type_id"], 0))
 
-    all_assignments = sorted(assignments, key=lambda a: a["character_name"])
+    all_assignments = sorted(assignments, key=lambda a: a["character_name"].lower())
     total_extractors = sum(len(a["extractors"]) for a in all_assignments)
     total_factory_planets = sum(a["factory_planets"] for a in all_assignments)
 

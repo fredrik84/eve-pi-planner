@@ -2263,6 +2263,11 @@ function _updateRefillDays() {
 function renderFinalPlan(data, opts = {}) {
   const content = document.getElementById('wizPlanContent');
 
+  // Order characters case-insensitively (so "ekaoni" doesn't sort below "Enbe"); also fixes
+  // older saved/restored plans without a re-run.
+  if (Array.isArray(data.assignments))
+    data.assignments.sort((a, b) => (a.character_name || '').toLowerCase().localeCompare((b.character_name || '').toLowerCase()));
+
   // Stats bar
   let statsHtml = '';
   if (data.stats) {

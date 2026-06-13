@@ -2596,7 +2596,7 @@ def _run_plan(req: PlanRequest, context_id: int) -> dict:
                     round(factory_buffer_m3 / (p1_m3_per_factory_day / 24), 1)
                     if p1_m3_per_factory_day > 0 else None)
 
-    all_assignments = sorted(assignments, key=lambda a: a["character_name"])
+    all_assignments = sorted(assignments, key=lambda a: a["character_name"].lower())
     total_extractors = sum(len(a["extractors"]) for a in all_assignments)
     total_factory_planets = sum(a["factory_planets"] for a in all_assignments)
 
