@@ -92,12 +92,13 @@ def colony_sim_state(detail: dict, pi_data: dict) -> dict | None:
 
     outputs = []
     for out, f in lines.items():
-        ext_p0 = ext_rate.get(f["input_type"], 0.0)              # P0 supplied per sec
-        cap_p0 = f["count"] * f["input_qty"] / f["cycle_time"]   # P0 the factories can chew per sec
-        used_p0 = min(ext_p0, cap_p0)                            # binding feed
-        rate = used_p0 * f["output_qty"] / f["input_qty"]        # product per sec
-        # Output lands in the launchpad in whole cycle batches (all running facilities deliver at
-        # once), so production is quantised to count × output_qty (e.g. 8 × 20 = 160).
+        # Launchpad fills at the FULL factory rate (all facilities running). Extraction sets only a
+        # long-run ceiling, but the decay curve front-loads extraction so storage buffers the
+        # facilities at full output for most of a program — matching the in-game launchpad, which
+        # accrues whole batches (count × output_qty, e.g. 8 × 20 = 160) every cycle. (Pure
+        # extraction-limiting under-counts; storage isn't modelled, so a long-starved colony can
+        # read a little high.)
+        rate = f["count"] * f["output_qty"] / f["cycle_time"]    # product per sec
         outputs.append({"type_id": out, "name": types.get(out, {}).get("name") or f"#{out}",
                         "tier": types.get(out, {}).get("pi_tier") or 1,
                         "base": base.get(out, 0.0), "rate": rate,
