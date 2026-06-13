@@ -2087,6 +2087,17 @@ function _setupProductionByP1() {
   return out;
 }
 
+// type_id(str) -> [{char, system, planet_num, perDay}] — every colony that outputs that material,
+// so rebalance suggestions can name the exact planet/character to move.
+function _setupPlanetsByMaterial() {
+  const idx = {};
+  (_ppCharsData || []).forEach(ch => (ch.planets || []).forEach(p => (p.production || []).forEach(o => {
+    const k = String(o.type_id);
+    (idx[k] = idx[k] || []).push({ char: ch.name, system: p.system, planet_num: p.planet_num, perDay: o.per_day || 0 });
+  })));
+  return idx;
+}
+
 function _snapNeedsByP1(snap) {
   const out = {};
   const c = snap && snap.consumption;
@@ -2200,6 +2211,18 @@ function renderAnalysis() {
   stats += stat(String(snap.factories_count || (snap.factories || []).length), 'Factory planets', '');
   stats += `</div>`;
 
+  // "If balanced" projection: at 100% fed (after rebalancing) the factories make the full target,
+  // so show cumulative output + value over a few horizons. Plain rate × days (continuous running,
+  // assuming you keep extractors cycled).
+  let proj = '';
+  if (snap.products_per_day) {
+    const ppd = Number(snap.products_per_day), ipd = Number(snap.isk_per_day || 0);
+    const cells = [[1, 'day'], [7, 'week'], [30, 'month']].map(([d, lbl]) =>
+      stat(`${Math.round(ppd * d).toLocaleString()} <span class="an-of">${unit}</span>`,
+           `per ${lbl}${ipd ? ' · ' + _fmtIsk(ipd * d) + ' ISK' : ''}`, '')).join('');
+    proj = `<div class="an-proj"><div class="an-proj-h">If balanced (100% fed) you'd produce</div><div class="an-stats">${cells}</div></div>`;
+  }
+
   const barRows = rows.map(r => {
     const surplus = r.have - r.need;
     const cls = r.ratio >= 0.995 ? 'an-bar-ok' : (r.ratio >= 0.85 ? 'an-bar-warn' : 'an-bar-bad');
@@ -2233,7 +2256,13 @@ function renderAnalysis() {
     .filter(s => s.spare >= 1)
     .sort((a, b) => b.spare - a.spare);
 
-  // Greedy: cover each short material from the biggest surpluses first.
+  // Specific colonies behind each surplus material, weakest-yield first (move the poorest, keep
+  // your best producers). Consumed as moves are assigned so two deficits don't claim the same one.
+  const planetIdx = _setupPlanetsByMaterial();
+  const pool = {};
+  surplus.forEach(s => { pool[s.t] = (planetIdx[s.t] || []).slice().sort((a, b) => a.perDay - b.perDay); });
+
+  // Greedy: cover each short material from the biggest surpluses first, naming exact colonies.
   const moves = [];
   deficits.forEach(d => {
     let need = d.planets;
@@ -2241,18 +2270,29 @@ function renderAnalysis() {
       if (need <= 0) break;
       if (s.spare <= 0) continue;
       const m = Math.min(need, s.spare);
+      const taken = (pool[s.t] || []).splice(0, m);
       s.spare -= m; need -= m;
-      moves.push({ from: s.name, to: d.name, n: m });
+      moves.push({ from: s.name, to: d.name, n: m, colonies: taken });
     }
     d.unmet = need;   // planets still short after all surpluses are used
   });
   const newBuilds = deficits.filter(d => d.unmet > 0);
   const leftover = surplus.filter(s => s.spare >= 1);
+  const movedTotal = moves.reduce((a, m) => a + m.n, 0);
+
+  const _colonyLi = (m) => {
+    const named = m.colonies.map(c => {
+      const where = c.system ? `${_esc(c.system)}${c.planet_num != null ? ' P' + c.planet_num : ''}` : 'a planet';
+      return `<li>Free <b>${_esc(c.char)}</b>'s <b>${_esc(m.from)}</b> colony at <b>${where}</b> <span class="an-sug-note">(${Math.round(c.perDay).toLocaleString()}/day)</span> → redeploy that slot to <b>${_esc(m.to)}</b></li>`;
+    });
+    const extra = m.n - m.colonies.length;   // safety: spare estimate exceeded named colonies
+    if (extra > 0) named.push(`<li>+ ${extra} more <b>${_esc(m.from)}</b> colon${extra === 1 ? 'y' : 'ies'} → <b>${_esc(m.to)}</b></li>`);
+    return named.join('');
+  };
 
   let suggest = '';
   if (moves.length) {
-    const li = moves.map(m => `<li>Move <b>${m.n}</b> <b>${_esc(m.from)}</b> planet${m.n === 1 ? '' : 's'} → <b>${_esc(m.to)}</b></li>`).join('');
-    suggest += `<div class="an-suggest an-suggest-move"><div class="an-suggest-h">Rebalance — redeploy ${moves.reduce((a, m) => a + m.n, 0)} colon${moves.reduce((a, m) => a + m.n, 0) === 1 ? 'y' : 'ies'}</div><ul>${li}</ul></div>`;
+    suggest += `<div class="an-suggest an-suggest-move"><div class="an-suggest-h">Rebalance — redeploy ${movedTotal} colon${movedTotal === 1 ? 'y' : 'ies'}</div><ul>${moves.map(_colonyLi).join('')}</ul></div>`;
   }
   if (newBuilds.length) {
     const li = newBuilds.map(d => `<li><b>${_esc(d.name)}</b> — still short <b>${Math.round(d.unmet * d.per).toLocaleString()}/day</b>: build <b>${d.unmet}</b> new extractor planet${d.unmet === 1 ? '' : 's'} <span class="an-sug-note">(no surplus to move)</span></li>`).join('');
@@ -2265,7 +2305,7 @@ function renderAnalysis() {
   if (!moves.length && !newBuilds.length)
     suggest = `<div class="an-suggest an-suggest-free"><div class="an-suggest-h">Balanced — every material this plan needs is covered${leftover.length ? ', with a little to spare' : ''}.</div></div>`;
 
-  el.innerHTML = head + stats
+  el.innerHTML = head + stats + proj
     + `<div class="an-legend">Producing (left) vs the plan’s daily need (right) per P1. A full green bar = factories stay fed; a short red bar is the bottleneck.</div>`
     + `<div class="an-bars">${barRows}</div>`
     + suggest;
