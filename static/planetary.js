@@ -2072,14 +2072,16 @@ function _dur(days) {
   return `${hr.toLocaleString()} ${hr === 1 ? 'hour' : 'hours'}`;
 }
 
-// type_id(str) -> {name, perDay} — every colony output rolled up (P1 for refiners, P0 for pure
-// extractors). The plan's needs pick which rows are relevant.
+// type_id(str) -> {name, perDay, planets} — every colony output rolled up (P1 for refiners, P0 for
+// pure extractors), with how many planets contribute (to size "add N planets" suggestions). The
+// plan's needs pick which rows are relevant.
 function _setupProductionByP1() {
   const out = {};
   (_ppCharsData || []).forEach(ch => (ch.planets || []).forEach(p => (p.production || []).forEach(o => {
     const k = String(o.type_id);
-    if (!out[k]) out[k] = { name: o.name, perDay: 0 };
+    if (!out[k]) out[k] = { name: o.name, perDay: 0, planets: 0 };
     out[k].perDay += o.per_day || 0;
+    out[k].planets += 1;
   })));
   return out;
 }
@@ -2170,9 +2172,47 @@ function renderAnalysis() {
       </div>`;
   }).join('');
 
+  // ── Suggested adjustments to hit the quota ──────────────────────────────────
+  // Size "add N planets" from the player's OWN average per-planet output of that P1 (honest to
+  // their planet quality); for a P1 they don't extract yet, fall back to the average across what
+  // they do produce.
+  const rates = needKeys.map(t => prod[t]).filter(p => p && p.planets > 0).map(p => p.perDay / p.planets);
+  const fallbackRate = rates.length ? rates.reduce((a, b) => a + b, 0) / rates.length : 7680;
+  const perPlanet = t => (prod[t] && prod[t].planets > 0) ? prod[t].perDay / prod[t].planets : fallbackRate;
+
+  const adds = [];
+  let totalAdd = 0;
+  rows.forEach(r => {
+    if (r.ratio >= 0.995) return;
+    const deficit = r.need - r.have;
+    const each = perPlanet(r.t);
+    const n = Math.max(1, Math.ceil(deficit / each));
+    totalAdd += n;
+    const none = !prod[r.t] || !prod[r.t].planets;
+    adds.push(`<li><b>${_esc(r.name)}</b> — short <b>${Math.round(deficit).toLocaleString()}/day</b>: add ~<b>${n}</b> extractor planet${n === 1 ? '' : 's'} <span class="an-sug-note">(≈${Math.round(each).toLocaleString()}/day each${none ? ', not extracted yet' : ''})</span></li>`);
+  });
+
+  const frees = [];
+  rows.forEach(r => {
+    if (r.ratio < 1.25) return;       // only flag a chunky surplus
+    const extra = r.have - r.need;
+    const each = perPlanet(r.t);
+    const n = Math.floor(extra / each);
+    if (n >= 1) frees.push(`<li><b>${_esc(r.name)}</b> — surplus <b>+${Math.round(extra).toLocaleString()}/day</b>: ~${n} planet${n === 1 ? '' : 's'} of slack you could redeploy</li>`);
+  });
+
+  let suggest = '';
+  if (adds.length)
+    suggest += `<div class="an-suggest an-suggest-fix"><div class="an-suggest-h">To meet the quota — add ~${totalAdd} extractor planet${totalAdd === 1 ? '' : 's'}</div><ul>${adds.join('')}</ul></div>`;
+  if (frees.length)
+    suggest += `<div class="an-suggest an-suggest-free"><div class="an-suggest-h">Spare capacity</div><ul>${frees.join('')}</ul></div>`;
+  if (!adds.length)
+    suggest = `<div class="an-suggest an-suggest-free"><div class="an-suggest-h">${frees.length ? 'Fed, with room to spare' : 'Balanced'} — every P1 this plan needs is covered.</div>${frees.length ? `<ul>${frees.join('')}</ul>` : ''}</div>`;
+
   el.innerHTML = head + stats
     + `<div class="an-legend">Producing (left) vs the plan’s daily need (right) per P1. A full green bar = factories stay fed; a short red bar is the bottleneck.</div>`
-    + `<div class="an-bars">${barRows}</div>`;
+    + `<div class="an-bars">${barRows}</div>`
+    + suggest;
 }
 
 function _buildPlanSnapshot(data) {

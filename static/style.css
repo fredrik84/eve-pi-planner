@@ -1610,3 +1610,14 @@ a.plan-action-btn { text-decoration: none; display: inline-block; }
   .an-row { grid-template-columns: 1fr; gap: 3px; }
   .an-row-nums { text-align: right; }
 }
+
+.an-suggest { margin-top: 14px; border-radius: 8px; padding: 12px 14px; border: 1px solid #1b2030; background: #161b28; }
+.an-suggest-fix  { border-color: #7a3036; background: #1f1416; }
+.an-suggest-free { border-color: #2a3a4a; background: #131a22; }
+.an-suggest-h { font-size: 13px; font-weight: 700; color: #e6e9ef; margin-bottom: 6px; }
+.an-suggest-fix .an-suggest-h  { color: #ef9aa2; }
+.an-suggest-free .an-suggest-h { color: #8fb4d6; }
+.an-suggest ul { margin: 0; padding-left: 18px; }
+.an-suggest li { font-size: 13px; color: #c8cdd8; margin: 3px 0; }
+.an-suggest li b { color: #fff; }
+.an-sug-note { color: #8b93a6; font-size: 12px; }
