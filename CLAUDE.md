@@ -480,6 +480,25 @@ so the Characters tab "In pads ~est" shows live-ish values (validated: Silicon 1
 in-game, ~6% high — ignores extraction decay, so a touch optimistic). Refresh re-anchors the
 checkpoint. Checkpoint tag before this: `checkpoint-before-pi-sim`.
 
+**Two rates per output.** Each `sim_state.outputs[]` carries `rate` AND `rate_sustained`:
+- `rate` = **full factory rate** (`count × output_qty / cycle_time`). The launchpad fills at this
+  because extraction decay front-loads P0 and storage buffers the facilities — matches the in-game
+  pad. Used by `project()` and the Characters-tab pad estimate.
+- `rate_sustained` = **long-run sustainable** = `min(factory rate, decayed-extraction refined)`.
+  Uses the **program-average** extraction, not the install-time peak. The right number for "can this
+  colony meet a daily quota" → the **Setup Analysis** tab uses it (via `list_characters` per-planet
+  `production` = `rate_sustained × 86400`). Falls back to `rate` for sim states scanned before it
+  existed → a Characters **refresh** is needed to populate it.
+
+**Extraction decay (`program_decay_factor`).** EVE extraction decays over a program; a flat
+`qty_per_cycle × cycles` overestimates the haul ~25% (verified). CCP's per-cycle yield (EVE dev
+docs, dogma attrs 1683/1687): `decayValue = qty_per_cycle/(1 + t·0.012)`, `t = program_seconds/900`
+(bar-units), plus a small bounded cosine-noise ripple (0.8 factor) that mostly cancels in a ratio.
+`t` depends only on elapsed time, so we use the closed-form decay average **`ln(1+0.012·T)/(0.012·T)`**
+(fraction of the peak rate the program sustains), clamped [0.3, 1.0]. ≈0.79 for a ~12 h program
+(matches the ~25% figure), ~0.3 for a 1–2-week program (long tails yield little). Computed per head
+program from `install_time`→`expiry_time`; 1.0 (no decay) when the length is unknown.
+
 ## Bug reporting (`app/bugs.py`, `pp_bugs` table)
 
 Any logged-in pilot can file a report; only admins read/triage them. **Admin = account owns

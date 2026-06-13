@@ -17,7 +17,33 @@ raw checkpoint contents.
 """
 from __future__ import annotations
 
+import math
 from datetime import datetime, timezone
+
+# EVE extraction decays over a program: a flat qty_per_cycle × cycles overestimates the real haul
+# by ~25% (community-verified). CCP's per-cycle yield (EVE developer docs, dogma attrs 1683/1687) is
+#   barWidth = cycle_time/900;  t = (cycle+0.5)·barWidth;  decayValue = qty_per_cycle/(1 + t·0.012)
+#   output   = barWidth · decayValue · (1 + 0.8·noise),  noise = max(mean of three cosines, 0)
+# The headline qty_per_cycle is the t≈0 (peak) value; the program AVERAGE relative to it is what a
+# colony actually sustains. Crucially `t` only depends on ELAPSED time (num_cycles·barWidth =
+# program_seconds/900), so the decay term has a clean closed-form mean — and the noise term is a
+# small (mostly cancelling) bounded ripple on top, so we use the analytic decay average:
+#   mean over [0,T] of 1/(1+0.012·t)  =  ln(1+0.012·T) / (0.012·T)
+# This lands at ~0.79 for a ~12 h program (matching the "~25% overestimate") and falls off for long
+# programs (a 2-week program's tail yields little) — the right "fraction of peak you sustain".
+_DECAY_FACTOR = 0.012
+
+
+def program_decay_factor(qty_per_cycle: float, cycle_time: float, num_cycles: int) -> float:
+    """Fraction of the install-time (peak) extraction rate a program sustains on average over its
+    life. 1.0 when the program length is unknown (no decay applied)."""
+    if num_cycles <= 1 or cycle_time <= 0:
+        return 1.0
+    t_max = (num_cycles * cycle_time) / 900.0      # CCP bar-units; = program_seconds / 900
+    k = _DECAY_FACTOR * t_max
+    if k <= 0:
+        return 1.0
+    return max(0.3, min(1.0, math.log(1 + k) / k))
 
 
 def _epoch(s: str | None) -> float | None:
@@ -39,7 +65,8 @@ def colony_sim_state(detail: dict, pi_data: dict) -> dict | None:
     schematics = pi_data["schematics"]
     sch_by_id = {v["schematic_id"]: out for out, v in schematics.items()}
 
-    ext_rate: dict[int, float] = {}     # P0 type_id -> extracted units/sec
+    ext_rate: dict[int, float] = {}     # P0 type_id -> peak extracted units/sec (install headline)
+    ext_rate_avg: dict[int, float] = {} # P0 type_id -> decay-averaged units/sec over the program
     ext_batch: dict[int, float] = {}    # P0 type_id -> extracted units per ECU cycle
     t0 = 0.0
     expiry: float | None = None
@@ -49,13 +76,19 @@ def colony_sim_state(detail: dict, pi_data: dict) -> dict | None:
         if ed and ed.get("product_type_id") and ed.get("cycle_time"):
             has_ecu = True
             p0 = ed["product_type_id"]
+            ct = ed["cycle_time"]
             _qpc = ed.get("qty_per_cycle", 0) or 0
-            ext_rate[p0] = ext_rate.get(p0, 0.0) + _qpc / ed["cycle_time"]
+            ext_rate[p0] = ext_rate.get(p0, 0.0) + _qpc / ct
+            # Program-average (decayed) extraction: needs the program length (install→expiry).
+            inst = _epoch(pin.get("install_time"))
+            ex = _epoch(pin.get("expiry_time"))
+            ncyc = int((ex - inst) / ct) if (inst and ex and ex > inst) else 0
+            dfac = program_decay_factor(_qpc, ct, ncyc)
+            ext_rate_avg[p0] = ext_rate_avg.get(p0, 0.0) + (_qpc * dfac) / ct
             ext_batch[p0] = ext_batch.get(p0, 0.0) + _qpc
             lcs = _epoch(pin.get("last_cycle_start"))
             if lcs:
                 t0 = max(t0, lcs)
-            ex = _epoch(pin.get("expiry_time"))
             if ex:
                 expiry = ex if expiry is None else max(expiry, ex)
     if not has_ecu:
@@ -97,10 +130,11 @@ def colony_sim_state(detail: dict, pi_data: dict) -> dict | None:
         # in-game launchpad, which accrues whole batches (count × output_qty, e.g. 8 × 20 = 160) every
         # cycle. Good for "what's in my pad now".
         # `rate_sustained` = the long-run SUSTAINABLE rate = min(factory capacity, extraction refined).
-        # A poor planet can't keep its factories fed, so over a full program it averages the (lower)
-        # extraction-limited rate. That's the right number for "can this colony meet a daily quota".
+        # Uses the DECAY-AVERAGED extraction (ext_rate_avg) so a poor or just-reset planet reports the
+        # rate it holds over the whole program, not the optimistic install-time peak. That's the right
+        # number for "can this colony meet a daily quota".
         rate = f["count"] * f["output_qty"] / f["cycle_time"]    # product per sec
-        ext_refined = ext_rate.get(f["input_type"], 0.0) * f["output_qty"] / (f["input_qty"] or 1)
+        ext_refined = ext_rate_avg.get(f["input_type"], 0.0) * f["output_qty"] / (f["input_qty"] or 1)
         rate_sustained = min(rate, ext_refined) if ext_refined > 0 else rate
         outputs.append({"type_id": out, "name": types.get(out, {}).get("name") or f"#{out}",
                         "tier": types.get(out, {}).get("pi_tier") or 1,
@@ -111,7 +145,8 @@ def colony_sim_state(detail: dict, pi_data: dict) -> dict | None:
         for p0, rate in ext_rate.items():
             outputs.append({"type_id": p0, "name": types.get(p0, {}).get("name") or f"#{p0}",
                             "tier": types.get(p0, {}).get("pi_tier") or 0,
-                            "base": base.get(p0, 0.0), "rate": rate, "rate_sustained": rate,
+                            "base": base.get(p0, 0.0), "rate": rate,
+                            "rate_sustained": ext_rate_avg.get(p0, rate),
                             "batch": ext_batch.get(p0, 0.0)})
     if not outputs or t0 <= 0:
         return None
