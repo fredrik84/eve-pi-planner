@@ -426,7 +426,7 @@ tr:hover td { background: #181d2a; }
 .pp-collapsible-body.collapsed { max-height: 0 !important; }
 .pp-collapse-toggle { cursor: pointer; user-select: none; color: #4a6888; font-size: 11px; margin-left: 8px; }
 .pp-collapse-toggle:hover { color: #8aa8c8; }
-.pp-chars-page { }
+.pp-chars-page { display: flex; flex-direction: column; gap: 18px; }
 
 .pp-card {
   background: linear-gradient(180deg, #151926, #12141d);
@@ -538,19 +538,41 @@ tr:hover td { background: #181d2a; }
 }
 @keyframes pp-spin { to { transform: rotate(360deg); } }
 
-.pp-char-list { padding: 8px; display: flex; flex-direction: column; gap: 6px; max-height: 58vh; overflow-y: auto; }
+.pp-char-list { padding: 8px; display: flex; flex-direction: column; gap: 6px; max-height: 74vh; overflow-y: auto; }
 .pp-char-row {
   background: #1c2030;
   border: 1px solid #1b2030;
   border-radius: 4px;
   font-size: 13px;
-  padding: 7px 10px;
+  overflow: hidden;
 }
+.pp-char-dummy { padding: 7px 10px; }
 .pp-char-header { display: flex; align-items: center; gap: 6px; }
 .pp-char-name { flex: 1; color: #c8cdd8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pp-char-meta { display: flex; align-items: center; gap: 8px; margin-top: 3px; }
 .pp-char-skill { font-size: 11px; color: #6a7390; white-space: nowrap; }
 .pp-char-del { background: none; border: none; color: #4a3030; cursor: pointer; padding: 0 2px; font-size: 14px; flex-shrink: 0; }
+.pp-char-del:hover { color: #e06060; }
+/* Foldable character: summary row + planet list / stats on expand */
+.pp-char-fold > summary { display: flex; align-items: center; gap: 8px; padding: 8px 10px; cursor: pointer;
+  list-style: none; user-select: none; }
+.pp-char-fold > summary::-webkit-details-marker { display: none; }
+.pp-char-fold > summary::before { content: '▸'; color: #5a6478; font-size: 10px; flex-shrink: 0; }
+.pp-char-fold[open] > summary::before { content: '▾'; }
+.pp-char-fold > summary:hover { background: rgba(90, 160, 230, 0.05); }
+.pp-char-fold .pp-char-name { flex: 0 1 auto; }
+.pp-char-summary { margin-left: auto; font-size: 11px; color: #6a7390; white-space: nowrap; }
+.pp-char-body { padding: 0 12px 10px 27px; }
+.pp-char-stats { display: flex; flex-wrap: wrap; gap: 4px 14px; padding: 7px 0; font-size: 11px; color: #8a94ac;
+  border-top: 1px solid #161a26; margin-bottom: 4px; }
+.pp-char-stats span { white-space: nowrap; }
+.pp-char-planet-list { display: flex; flex-direction: column; gap: 3px; }
+.pp-pl-row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.pp-pl-loc { flex: 0 0 auto; min-width: 116px; color: #c8cdd8; font-family: 'Consolas', monospace; font-size: 11px; }
+.pp-pl-extract { color: #9ec89e; }
+.pp-pl-factory { color: #8a94ac; }
+.pp-pl-cc { margin-left: auto; font-size: 10px; color: #56607a; }
+.pp-pl-empty { font-size: 12px; color: #56607a; font-style: italic; padding: 6px 0; }
 /* placeholder (dummy) characters */
 .pp-char-dummy { border-style: dashed; border-color: #2e2840; background: #181626; }
 .pp-char-dummy-badge { font-size: 9px; text-transform: uppercase; letter-spacing: 0.04em; color: #9a86c8;

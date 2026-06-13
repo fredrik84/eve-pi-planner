@@ -630,10 +630,19 @@ def list_characters(pp_session: str = Cookie(default=None)):
     else:
         rows = []
 
-    planet_rows = con.execute("""
-        SELECT character_id, planet_type, is_extractor, p0_name, upgrade_level
-        FROM pp_char_planets
-    """).fetchall()
+    try:
+        planet_rows = con.execute("""
+            SELECT cp.character_id, cp.planet_type, cp.is_extractor, cp.p0_name, cp.upgrade_level,
+                   cp.planet_num, cp.num_pins, COALESCE(ss.name, '') AS system_name
+            FROM pp_char_planets cp
+            LEFT JOIN solar_systems ss ON ss.system_id = cp.solar_system_id
+        """).fetchall()
+    except Exception:  # no geo table → no system names
+        planet_rows = con.execute("""
+            SELECT character_id, planet_type, is_extractor, p0_name, upgrade_level,
+                   planet_num, num_pins, '' AS system_name
+            FROM pp_char_planets
+        """).fetchall()
     con.close()
 
     char_planets: dict[int, list] = {}
@@ -644,6 +653,9 @@ def list_characters(pp_session: str = Cookie(default=None)):
             "is_extractor":  bool(p["is_extractor"]),
             "p0_name":       p["p0_name"],
             "upgrade_level": p["upgrade_level"],
+            "system":        p["system_name"],
+            "planet_num":    p["planet_num"],
+            "num_pins":      p["num_pins"],
         })
 
     now = datetime.now(timezone.utc).isoformat()

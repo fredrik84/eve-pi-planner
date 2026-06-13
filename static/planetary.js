@@ -598,31 +598,56 @@ function renderCharacters(chars, loggedIn) {
     const tokenDot = c.token_ok
       ? '<span title="Token valid" style="color:#5ecf80;font-size:10px">●</span>'
       : '<span title="Token expired — re-add character" style="color:#e06060;font-size:10px">●</span>';
-    const extractors = (c.planets || []).filter(p => p.is_extractor);
-    const factories  = (c.planets || []).filter(p => !p.is_extractor);
-    let planetTag = '';
-    if (c.planets && c.planets.length) {
-      const tooltip = extractors.map(p => `${p.planet_type}${p.p0_name ? ' → ' + p.p0_name : ''}`).join(', ')
-        + (factories.length ? ` · ${factories.length} fac` : '');
-      const parts = [];
-      if (extractors.length) parts.push(`${extractors.length} ext`);
-      if (factories.length)  parts.push(`${factories.length} fac`);
-      planetTag = `<span class="pp-char-planets" title="${tooltip}">${parts.join(' · ')}</span>`;
-    }
+    const planets    = c.planets || [];
+    const extractors = planets.filter(p => p.is_extractor);
+    const factories  = planets.filter(p => !p.is_extractor);
+    const used = planets.length;
+    const nP0  = new Set(extractors.map(p => p.p0_name).filter(Boolean)).size;
+    const nSys = new Set(planets.map(p => p.system).filter(Boolean)).size;
     const delHtml = loggedIn
       ? `<button class="pp-char-del" title="Remove character" data-id="${c.character_id}">✕</button>`
       : '';
-    row.innerHTML = `
-      <div class="pp-char-header">
-        <span class="pp-char-name">${tokenDot} ${c.name}</span>
-        ${delHtml}
-      </div>
-      <div class="pp-char-meta">
-        <span class="pp-char-skill" title="Max planets / CCU level">${c.max_planets} pl · CCU ${c.ccu}</span>
-        ${planetTag}
+
+    const _byloc = (a, b) => ((a.system || '~').localeCompare(b.system || '~')) || ((a.planet_num ?? 1e9) - (b.planet_num ?? 1e9));
+    const planetRows = planets.length
+      ? [...planets].sort(_byloc).map(p => {
+          const loc = `${p.system ? _esc(p.system) + ' ' : ''}${p.planet_num != null ? 'P' + p.planet_num : ''}`.trim() || '—';
+          const what = p.is_extractor
+            ? `<span class="pp-pl-extract">→ ${_esc(p.p0_name || '?')}</span>`
+            : `<span class="pp-pl-factory">factory${p.num_pins ? ' · ' + p.num_pins + ' pins' : ''}</span>`;
+          const cc = p.upgrade_level ? `<span class="pp-pl-cc" title="Command center level">CC${p.upgrade_level}</span>` : '';
+          return `<div class="pp-pl-row"><span class="pp-pl-loc">${loc}</span>${_ptypeSpan(p.planet_type)}${what}${cc}</div>`;
+        }).join('')
+      : '<div class="pp-pl-empty">No colonies scanned — set them up in-game, then hit Refresh.</div>';
+
+    const stats = `<div class="pp-char-stats">
+        <span title="Colonies in use / max planets">${used}/${c.max_planets} planets</span>
+        <span>${extractors.length} extractor${extractors.length !== 1 ? 's' : ''}</span>
+        <span>${factories.length} factor${factories.length !== 1 ? 'ies' : 'y'}</span>
+        ${nP0 ? `<span title="Distinct P0 resources extracted">${nP0} P0 type${nP0 !== 1 ? 's' : ''}</span>` : ''}
+        ${nSys ? `<span title="Distinct systems">${nSys} system${nSys !== 1 ? 's' : ''}</span>` : ''}
+        <span title="Command Center Upgrades level">CCU ${c.ccu}</span>
+        ${c.planetology != null ? `<span title="Planetology skill">Planetology ${c.planetology}</span>` : ''}
+        ${c.adv_planetology != null ? `<span title="Advanced Planetology skill">Adv ${c.adv_planetology}</span>` : ''}
       </div>`;
+
+    row.innerHTML = `
+      <details class="pp-char-fold">
+        <summary class="pp-char-header">
+          <span class="pp-char-name">${tokenDot} ${_esc(c.name)}</span>
+          <span class="pp-char-summary">${used} pl · ${extractors.length} ext · ${factories.length} fac</span>
+          ${delHtml}
+        </summary>
+        <div class="pp-char-body">
+          ${stats}
+          <div class="pp-char-planet-list">${planetRows}</div>
+        </div>
+      </details>`;
     if (loggedIn) {
-      row.querySelector('.pp-char-del').addEventListener('click', async () => {
+      const del = row.querySelector('.pp-char-del');
+      if (del) del.addEventListener('click', async (e) => {
+        e.preventDefault(); e.stopPropagation();
+        if (!confirm(`Remove ${c.name}?`)) return;
         await fetch(`/api/characters/${c.character_id}`, { method: 'DELETE' });
         loadCharacters();
       });
