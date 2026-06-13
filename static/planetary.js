@@ -2065,26 +2065,6 @@ async function deleteSavedPlan(id, srvId) {
 // factories eat at full rate). Answers "am I extracting/producing enough to keep this plan's
 // factories refilled?" with headline stats + per-P1 bars.
 let _analyzeSnaps = [];
-let _refillCfg = { lp: 3, sf: 0, out: null };   // factory P1 INPUT buffer (LP + storage) + real output/factory/day (null = plan's)
-let _anP1PerUnit = 0;    // P1 units consumed per finished product (e.g. 1,920 per SHPC), set during render
-let _anPlanOut = 0;      // the plan's assumed output per factory per day, set during render
-
-// Live-update the refill interval when the buffer / output inputs change — no full re-render (keeps focus).
-function _setRefillCfg(field, val) {
-  const v = parseFloat(val);
-  if (field === 'out') _refillCfg.out = (val === '' || isNaN(v)) ? null : Math.max(0, v);
-  else _refillCfg[field] = Math.max(0, Math.min(20, parseInt(val) || 0));
-  const m3 = _refillCfg.lp * 10000 + _refillCfg.sf * 12000;
-  const buf = document.getElementById('anRefillBuf');
-  if (buf) buf.textContent = m3.toLocaleString() + ' m³';
-  const out = _refillCfg.out != null ? _refillCfg.out : _anPlanOut;       // products/factory/day
-  const consM3 = out * _anP1PerUnit * 0.19;                              // m³ of P1 burned/factory/day
-  const days = consM3 ? m3 / consM3 : 0;
-  document.querySelectorAll('.an-refill-days').forEach(e => e.textContent = _dur(days));
-  const cons = document.getElementById('anRefillCons');
-  if (cons) cons.textContent = `${Math.round(out * _anP1PerUnit).toLocaleString()} P1/day · ~${Math.round(consM3).toLocaleString()} m³/day`;
-}
-
 // Show days normally, but drop to hours when it's under a day (otherwise it rounds to "0 days").
 function _dur(days) {
   if (days >= 1) { const d = days >= 10 ? Math.round(days) : Math.round(days * 10) / 10; return `${d.toLocaleString()} ${d === 1 ? 'day' : 'days'}`; }
@@ -2246,41 +2226,25 @@ function renderAnalysis() {
   stats += stat(String(snap.factories_count || (snap.factories || []).length), 'Factory planets', '');
   stats += `</div>`;
 
-  // Refill cadence = factory P1 buffer ÷ consumption. Consumption = (real output/factory/day) ×
-  // (P1 per product) × 0.19 m³. Both the buffer (launchpads + storage) and the real output rate are
-  // user-set, because the plan's 0.5/hr assumes a full-size factory — a smaller P2→P3 build produces
-  // (and so consumes) less, which is what stretches the interval, NOT extra storage.
+  // Refill cadence = factory P1 buffer (3 launchpads = 30,000 m³) ÷ consumption (P1/day × 0.19 m³).
   let proj = '';
   {
     const nfac = snap.factories_count || (snap.factories || []).length || 0;
     const totP1 = Array.isArray(snap.consumption)
       ? snap.consumption.reduce((a, c) => a + (c.units_per_day || 0), 0)
       : Object.values(snap.consumption || {}).reduce((a, v) => a + (v || 0), 0);
-    const ppd = Number(snap.products_per_day || 0);
-    _anP1PerUnit = ppd ? totP1 / ppd : 0;                 // P1 per finished product (e.g. 1,920 / SHPC)
-    _anPlanOut = nfac ? ppd / nfac : 0;                   // plan's assumed output / factory / day
-    if (_anP1PerUnit && _anPlanOut) {
-      const bufM3 = _refillCfg.lp * 10000 + _refillCfg.sf * 12000;
-      const out = _refillCfg.out != null ? _refillCfg.out : _anPlanOut;
-      const consM3 = out * _anP1PerUnit * 0.19;
-      const days = consM3 ? bufM3 / consM3 : 0;
+    const perFacP1 = nfac ? totP1 / nfac : 0;
+    const perFacM3 = perFacP1 * 0.19;
+    const days = perFacM3 ? 30000 / perFacM3 : 0;
+    if (perFacP1) {
       const cells = [
-        stat(`<span class="an-refill-days">${_dur(days)}</span>`, 'between refills', 'an-ok'),
-        stat(`<span id="anRefillCons">${Math.round(out * _anP1PerUnit).toLocaleString()} P1/day · ~${Math.round(consM3).toLocaleString()} m³/day</span>`, 'P1 burned / factory', ''),
+        stat(_dur(days), 'between refills · 3 LP', 'an-ok'),
+        stat(`${Math.round(perFacP1).toLocaleString()} <span class="an-of">P1/day</span>`, `~${Math.round(perFacM3).toLocaleString()} m³/day per factory`, ''),
         nfac ? stat(String(nfac), 'factories to service', '') : '',
       ].join('');
       proj = `<div class="an-proj">`
-        + `<div class="an-proj-h">Refill run — empty extractors & top up factories every <b class="an-refill-days">${_dur(days)}</b></div>`
-        + `<div class="an-refill-cfg">Output: `
-        + `<input type="number" min="0" step="0.5" value="${out}" oninput="_setRefillCfg('out', this.value)"> ${_esc(unit)}/factory/day `
-        + `<span class="an-sug-note">(plan assumes ${_anPlanOut.toLocaleString()})</span></div>`
-        + `<div class="an-refill-cfg">Buffer / factory: `
-        + `<input type="number" min="0" max="20" value="${_refillCfg.lp}" oninput="_setRefillCfg('lp', this.value)"> launchpads `
-        + `+ <input type="number" min="0" max="20" value="${_refillCfg.sf}" oninput="_setRefillCfg('sf', this.value)"> storage `
-        + `= <b id="anRefillBuf">${bufM3.toLocaleString()} m³</b></div>`
-        + `<div class="an-stats">${cells}</div>`
-        + `<div class="an-legend">Interval = buffer ÷ consumption. P1 is 0.19 m³, so at ${_anPlanOut.toLocaleString()} ${_esc(unit)}/factory/day a factory burns ~${Math.round(_anPlanOut * _anP1PerUnit * 0.19).toLocaleString()} m³/day → a 30,000 m³ (3 LP) load lasts ~${_dur(30000 / (_anPlanOut * _anP1PerUnit * 0.19))}. Adjust <b>Output</b> if your build runs a different rate. Extractors fill their own launchpads at a similar pace, so empty them on the same trip.</div>`
-        + `</div>`;
+        + `<div class="an-proj-h">Refill run — empty extractors & top up factories every <b>${_dur(days)}</b></div>`
+        + `<div class="an-stats">${cells}</div></div>`;
     }
   }
 
