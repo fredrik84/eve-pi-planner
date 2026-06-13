@@ -51,10 +51,16 @@ STRUCT_COST = {
     "launchpad": (3600, 700), "basic_if": (200, 800), "adv_if": (500, 700),
     "hitech_if": (1100, 400), "storage": (500, 700), "ecu": (400, 2600),
 }
-HEAD_COST = (110, 550)               # per extractor head (the ECU pin's "H")
+HEAD_COST = (110, 550)               # per extractor head (the ECU pin's "H") — flat part
 # A link of length l km costs (cpu, pg) = (15 + 0.2*l, 10 + 0.15*l).
 LINK_CPU_BASE, LINK_CPU_PER_KM = 15.0, 0.2
 LINK_PG_BASE, LINK_PG_PER_KM = 10.0, 0.15
+# Extractor heads connect to resource hotspots by spokes whose CPU/PG scales with distance, like
+# links. Hotspots spread across the planet, so on a big planet (Gas Ø40000, Storm Ø30000) heads
+# cost much more than the flat part — which is why 10 heads + a full basic line won't fit a large
+# planet at CC5 even though the flat model says it does. Model the average spoke as this planar
+# length × the planet radius (calibrated to a measured Gas CC5 build: ~835 PG with 9 heads).
+HEAD_SPOKE_PLANAR = 0.095
 
 
 def compute_resources(template: dict, struct: dict) -> dict:
@@ -64,6 +70,11 @@ def compute_resources(template: dict, struct: dict) -> dict:
     is an estimate); structures dominate and are exact. Links use the EVE formula on
     the raw lat/lon plane (EVE treats the surface as flat for placement)."""
     role_of = {tid: role for role, tid in struct.items() if role in STRUCT_COST}
+    radius = template.get("Diam", 8000.0) / 2.0
+    # Per-head cost = flat facility part + a distance-scaled spoke (bigger planet → costlier heads).
+    spoke_km = HEAD_SPOKE_PLANAR * radius
+    head_cpu = HEAD_COST[0] + LINK_CPU_PER_KM * spoke_km
+    head_pg = HEAD_COST[1] + LINK_PG_PER_KM * spoke_km
     cpu = pg = 0.0
     for p in template["P"]:
         role = role_of.get(p["T"])
@@ -73,8 +84,7 @@ def compute_resources(template: dict, struct: dict) -> dict:
         cpu += c; pg += g
         if role == "ecu":
             heads = p.get("H", 0) or 0
-            cpu += heads * HEAD_COST[0]; pg += heads * HEAD_COST[1]
-    radius = template.get("Diam", 8000.0) / 2.0
+            cpu += heads * head_cpu; pg += heads * head_pg
     for l in template["L"]:
         a, b = template["P"][l["S"] - 1], template["P"][l["D"] - 1]
         km = math.hypot(a["La"] - b["La"], a["Lo"] - b["Lo"]) * radius

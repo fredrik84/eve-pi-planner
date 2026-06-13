@@ -77,6 +77,16 @@ count (`component_factory_rate`/`_packed_rate` → `generate_layout` `max_count`
 CC, so the planner places more factory planets. A genuinely impossible combo (e.g. Storm Ø30000
 at CC1) still overflows the grid — that's the physical reason B/T is the default.
 
+**Heads cost PG by distance (planet size).** `HEAD_COST` is only the flat part; extractor heads
+attach to hotspots spread across the planet via spokes whose CPU/PG scale with distance like
+links. `compute_resources` adds `HEAD_SPOKE_PLANAR (0.095) × radius` km of spoke per head, so a
+big planet (Gas Ø40000, Storm Ø30000) makes each head far costlier — calibrated to a real Gas CC5
+build (~835 PG with 9 heads). Effect: on a Gas planet the template **drops a basic (8→7)** so all
+10 heads fit (18.5k/19k PG) instead of the old flat model claiming 10 heads + 8 basics fit (it
+didn't — you'd run out of PG on the 10th head in-game). Small planets (Ø6000–8000) are barely
+affected. This only changes the **exported template** (basic count), not the planner's flat 48k
+production model.
+
 **Per-character CCU** defaults to each toon's real ESI Command Center Upgrades skill
 (`command_center_upgrades`, skill id 2505, fetched in `esi.py`); `_build_char_list` uses the
 config override if set, else the ESI skill (≥1), else 5. The Setup→Character Roles CCU dropdown
