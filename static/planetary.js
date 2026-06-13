@@ -2078,7 +2078,7 @@ function _setRefillCfg(field, val) {
   const buf = document.getElementById('anRefillBuf');
   if (buf) buf.textContent = m3.toLocaleString() + ' m³';
   const out = _refillCfg.out != null ? _refillCfg.out : _anPlanOut;       // products/factory/day
-  const consM3 = out * _anP1PerUnit * 0.38;                              // m³ of P1 burned/factory/day
+  const consM3 = out * _anP1PerUnit * 0.19;                              // m³ of P1 burned/factory/day
   const days = consM3 ? m3 / consM3 : 0;
   document.querySelectorAll('.an-refill-days').forEach(e => e.textContent = _dur(days));
   const cons = document.getElementById('anRefillCons');
@@ -2247,7 +2247,7 @@ function renderAnalysis() {
   stats += `</div>`;
 
   // Refill cadence = factory P1 buffer ÷ consumption. Consumption = (real output/factory/day) ×
-  // (P1 per product) × 0.38 m³. Both the buffer (launchpads + storage) and the real output rate are
+  // (P1 per product) × 0.19 m³. Both the buffer (launchpads + storage) and the real output rate are
   // user-set, because the plan's 0.5/hr assumes a full-size factory — a smaller P2→P3 build produces
   // (and so consumes) less, which is what stretches the interval, NOT extra storage.
   let proj = '';
@@ -2262,7 +2262,7 @@ function renderAnalysis() {
     if (_anP1PerUnit && _anPlanOut) {
       const bufM3 = _refillCfg.lp * 10000 + _refillCfg.sf * 12000;
       const out = _refillCfg.out != null ? _refillCfg.out : _anPlanOut;
-      const consM3 = out * _anP1PerUnit * 0.38;
+      const consM3 = out * _anP1PerUnit * 0.19;
       const days = consM3 ? bufM3 / consM3 : 0;
       const cells = [
         stat(`<span class="an-refill-days">${_dur(days)}</span>`, 'between refills', 'an-ok'),
@@ -2279,7 +2279,7 @@ function renderAnalysis() {
         + `+ <input type="number" min="0" max="20" value="${_refillCfg.sf}" oninput="_setRefillCfg('sf', this.value)"> storage `
         + `= <b id="anRefillBuf">${bufM3.toLocaleString()} m³</b></div>`
         + `<div class="an-stats">${cells}</div>`
-        + `<div class="an-legend">Interval = buffer ÷ consumption. The plan assumes ${_anPlanOut.toLocaleString()} ${_esc(unit)}/factory/day (0.5/hr); set <b>Output</b> to your real figure — a smaller P2→P3 build makes (and burns) less, so a full 30,000 m³ (3 LP) load lasts longer. Extractors fill their own launchpads at a similar pace, so empty them on the same trip.</div>`
+        + `<div class="an-legend">Interval = buffer ÷ consumption. P1 is 0.19 m³, so at ${_anPlanOut.toLocaleString()} ${_esc(unit)}/factory/day a factory burns ~${Math.round(_anPlanOut * _anP1PerUnit * 0.19).toLocaleString()} m³/day → a 30,000 m³ (3 LP) load lasts ~${_dur(30000 / (_anPlanOut * _anP1PerUnit * 0.19))}. Adjust <b>Output</b> if your build runs a different rate. Extractors fill their own launchpads at a similar pace, so empty them on the same trip.</div>`
         + `</div>`;
     }
   }

@@ -2585,9 +2585,9 @@ def _run_plan(req: PlanRequest, context_id: int) -> dict:
     isk_per_day = round(products_per_day * sell_price, 2)
 
     # Refill cadence: factory planets import P1 into launchpads (the practical setup,
-    # matching the Factory Layout templates). P1 = 0.38 m³; assume 3 launchpads
+    # matching the Factory Layout templates). P1 = 0.19 m³; assume 3 launchpads
     # (30,000 m³) of input buffer. How long until that buffer empties?
-    _P1_VOLUME = 0.38
+    _P1_VOLUME = 0.19
     _FACTORY_LAUNCHPADS = 3
     total_p1_per_day = products_per_day * sum(p1_fracs.values())
     p1_m3_per_factory_day = (total_p1_per_day * _P1_VOLUME / factories) if factories else 0.0

@@ -357,9 +357,10 @@ product) — the refill tool (`_buildPlanSnapshot` → snapshot `consumption` ma
 ### Factory-planet refill cadence (plan stat)
 
 `_run_plan` reports `factory_refill_hours` — how long a factory planet's P1 input buffer
-lasts before a refill. Model: factory planets import **P1** (0.38 m³) into launchpads
+lasts before a refill. Model: factory planets import **P1** (**0.19 m³/unit** — verified
+in-game; do NOT use 0.38, that doubled consumption and halved the interval) into launchpads
 (assumes **3 launchpads = 30,000 m³**, matching the Factory Layout default); consumption
-= `products_per_day × Σ p1_fracs / factories × 0.38 m³`. Shown in the plan stats bar
+= `products_per_day × Σ p1_fracs / factories × 0.19 m³`. Shown in the plan stats bar
 ("refill / factory (3 LP)"); also `factory_input_m3_day`, `factory_launchpads_assumed`.
 
 ### Character config
