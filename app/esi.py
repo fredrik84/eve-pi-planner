@@ -325,6 +325,12 @@ def _fetch_planets(character_id: int, access_token: str) -> None:
                 except Exception:
                     pass
 
+                # Keep only the planet's highest-tier output (its end product) — the lower tiers
+                # are just intermediate steps in that planet's chain.
+                if products:
+                    _max_tier = max((_types.get(t, {}).get("pi_tier") or 0) for t in products)
+                    products = {t: n for t, n in products.items()
+                                if (_types.get(t, {}).get("pi_tier") or 0) == _max_tier}
                 products_json = _json.dumps(
                     [{"type_id": t, "name": n} for t, n in products.items()]) if products else None
                 pads_json = _json.dumps(sorted(
