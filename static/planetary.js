@@ -2599,8 +2599,9 @@ function renderFinalPlan(data, opts = {}) {
     const facBadge = a.factory_only ? `<span class="plan-fac-only-badge">factory only</span>` : '';
     const facToggle = `<button class="plan-fac-toggle-btn${isFacChar ? ' plan-fac-toggle-active' : ''}"
       onclick="toggleFactoryChar(${a.character_id})" title="${isFacChar ? 'Stop prioritising this character for factories' : 'Prioritise this character to host factories (still extracts on spare slots)'}">${isFacChar ? '★ factories' : 'host factories'}</button>`;
+    const isSel = _wiz.selectedChar === a.character_id;
     return `
-      <div class="plan-char-block">
+      <div class="plan-char-block${isSel ? ' plan-char-selected' : ''}" data-char-id="${a.character_id}" onclick="togglePlanChar(${a.character_id}, event)" title="Click to highlight this character while you set them up">
         <div class="plan-char-name">${a.character_name}${facBadge}${facToggle}<span class="plan-char-meta"> · ${a.effective_planets} pl · CCU ${a.ccu}</span></div>
         ${ccHtml}
         ${body}
@@ -2744,7 +2745,7 @@ function renderFinalPlan(data, opts = {}) {
         <button class="plan-view-btn${_grouped ? ' plan-view-on' : ''}" onclick="setPlanGroup('grouped')" title="Split each character's planets into a column per system (factory system first) — deploy one system at a time">Grouped by system</button>
       </span>
     </div>
-    <div class="plan-assignments">${assignHtml}</div>
+    <div class="plan-assignments${_wiz.selectedChar != null ? ' plan-has-selection' : ''}">${assignHtml}</div>
     ${p0SummaryHtml}
     <div class="plan-actions-bar">
       <button class="plan-action-btn" id="savePlanBtn" onclick="savePlanForRefills()" title="Save this plan so you can split P1 stacks into its factories from the PI Planner tab — no need to re-run the wizard at refill time.">Save plan</button>
@@ -2936,6 +2937,18 @@ async function _rerunPlan(overrides = {}) {
 async function _rerunWithFactorySystem(factorySystem) {
   _wiz.factorySystem = factorySystem;
   await _rerunPlan();
+}
+
+// Click a character block to highlight it (and dim the rest) while you set that toon up —
+// click again to clear. Toggles classes in place; no re-render. Ignores clicks on buttons.
+function togglePlanChar(id, ev) {
+  if (ev && ev.target.closest('button, a, input, select')) return;
+  const sel = _wiz.selectedChar === id ? null : id;
+  _wiz.selectedChar = sel;
+  document.querySelectorAll('.plan-char-block').forEach(b =>
+    b.classList.toggle('plan-char-selected', sel != null && Number(b.dataset.charId) === sel));
+  const wrap = document.querySelector('.plan-assignments');
+  if (wrap) wrap.classList.toggle('plan-has-selection', sel != null);
 }
 
 // Per-character planet layout: "flat" (one location-ordered list) or "grouped" (a column per
