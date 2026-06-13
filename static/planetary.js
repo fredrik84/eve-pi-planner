@@ -2497,79 +2497,103 @@ function renderFinalPlan(data, opts = {}) {
 
   // Character assignments
   const _facSys = data.factory_system || '';
-  const assignHtml = data.assignments.map(a => {
+
+  // Per-planet row HTML (shared by the by-character and by-system views).
+  const _extHtml = e => {
+    if (e.split) return _splitExtRow(e);
+    const ptype = e.is_existing
+      ? (e.planet_type || e.existing_ptype || '?')
+      : (e.planet_type || e.best_planet_type || (e.planet_types && e.planet_types[0]) || '?');
+    const over = e.is_extra ? ' plan-ext-over' : '';
+    const overMark = e.is_extra ? ' +' : '';
+    const tag = e.is_existing
+      ? `<span class="plan-ext-tag plan-ext-existing${over}">existing${overMark}</span>`
+      : e.is_replace
+        ? `<span class="plan-ext-tag plan-ext-replace${over}">replace${overMark}</span>`
+        : `<span class="plan-ext-tag plan-ext-new${over}">new${overMark}</span>`;
+    const sysHtml = e.system
+      ? `<span class="plan-ext-sys">${e.system} P${e.planet_num}</span>`
+      : `<span class="plan-ext-no-planet">no planet in system</span>`;
+    const qualHtml = e.quality_pct !== undefined
+      ? `<span class="plan-ext-qual ${e.quality_pct >= 80 ? 'plan-qual-ok' : e.quality_pct >= 50 ? '' : 'plan-qual-low'}">${e.quality_pct}</span>` : '';
+    return `<div class="plan-ext-row">${tag}${_ptypeSpan(ptype)}${sysHtml}<span class="plan-ext-arrow">→</span><span class="plan-ext-p1">${e.p1_name || '?'}</span>${qualHtml}</div>`;
+  };
+  const _facHtml = f => {
+    const tag = f.is_existing
+      ? `<span class="plan-ext-tag plan-ext-existing">existing</span>`
+      : f.is_replace
+        ? `<span class="plan-ext-tag plan-ext-replace">replace</span>`
+        : `<span class="plan-ext-tag plan-ext-new">new</span>`;
+    const sysHtml = f.system
+      ? `<span class="plan-ext-sys">${f.system}${f.planet_num != null ? ' P' + f.planet_num : ''}</span>`
+      : f.unplaced ? `<span class="plan-ext-no-planet">no factory planet in system</span>` : '';
+    const facLabel = f.product ? `${f.product.name}${f.ccu ? ' · CC' + f.ccu : ''}` : 'factory';
+    return `<div class="plan-ext-row">${tag}${_ptypeSpan(f.planet_type || 'Barren')}${sysHtml}<span class="plan-ext-arrow">→</span><span class="plan-ext-p1 plan-fac-label">${_esc(facLabel)}</span></div>`;
+  };
+
+  // Master list of placed planet rows (extractors + factories) keyed by location + character.
+  const _allRows = [];
+  data.assignments.forEach(a => {
+    a.extractors.forEach(e => _allRows.push({ charId: a.character_id, system: e.system || '', planet_num: e.planet_num, html: _extHtml(e) }));
+    (a.factory_assignments || []).forEach(f => _allRows.push({ charId: a.character_id, system: f.system || '', planet_num: f.planet_num, html: _facHtml(f) }));
+  });
+  const _sysKey = s => s || '￿';  // unplaced/no-system rows sort last
+  const _byNum = (x, y) => (x.planet_num == null ? 1e9 : x.planet_num) - (y.planet_num == null ? 1e9 : y.planet_num);
+  const _locSort = (x, y) => {
+    const fx = x.system && x.system === _facSys ? 0 : 1, fy = y.system && y.system === _facSys ? 0 : 1;
+    if (fx !== fy) return fx - fy;                            // factory-system planets on top
+    const c = _sysKey(x.system).localeCompare(_sysKey(y.system));
+    return c || _byNum(x, y);                                 // then system name, then planet number
+  };
+
+  // View A — by character (default): each toon's planets ordered by location.
+  const assignHtmlByChar = data.assignments.map(a => {
     if (!a.extractors.length && !a.factory_planets) return '';
-    // Each character's planets (extractors + factories) are ordered by location: planets in the
-    // factory system first (where you collect/deliver), then by system name, then planet number.
-    const planetRows = [];
-    a.extractors.forEach(e => {
-      let html;
-      if (e.split) {
-        html = _splitExtRow(e);
-      } else {
-        const ptype = e.is_existing
-          ? (e.planet_type || e.existing_ptype || '?')
-          : (e.planet_type || e.best_planet_type || (e.planet_types && e.planet_types[0]) || '?');
-        const over = e.is_extra ? ' plan-ext-over' : '';
-        const overMark = e.is_extra ? ' +' : '';
-        const tag = e.is_existing
-          ? `<span class="plan-ext-tag plan-ext-existing${over}">existing${overMark}</span>`
-          : e.is_replace
-            ? `<span class="plan-ext-tag plan-ext-replace${over}">replace${overMark}</span>`
-            : `<span class="plan-ext-tag plan-ext-new${over}">new${overMark}</span>`;
-        const sysHtml = e.system
-          ? `<span class="plan-ext-sys">${e.system} P${e.planet_num}</span>`
-          : `<span class="plan-ext-no-planet">no planet in system</span>`;
-        const qualHtml = e.quality_pct !== undefined
-          ? `<span class="plan-ext-qual ${e.quality_pct >= 80 ? 'plan-qual-ok' : e.quality_pct >= 50 ? '' : 'plan-qual-low'}">${e.quality_pct}</span>` : '';
-        html = `<div class="plan-ext-row">${tag}${_ptypeSpan(ptype)}${sysHtml}<span class="plan-ext-arrow">→</span><span class="plan-ext-p1">${e.p1_name || '?'}</span>${qualHtml}</div>`;
-      }
-      planetRows.push({ html, system: e.system || '', planet_num: e.planet_num });
-    });
-
-    (a.factory_assignments || []).forEach(f => {
-      const tag = f.is_existing
-        ? `<span class="plan-ext-tag plan-ext-existing">existing</span>`
-        : f.is_replace
-          ? `<span class="plan-ext-tag plan-ext-replace">replace</span>`
-          : `<span class="plan-ext-tag plan-ext-new">new</span>`;
-      const sysHtml = f.system
-        ? `<span class="plan-ext-sys">${f.system}${f.planet_num != null ? ' P' + f.planet_num : ''}</span>`
-        : f.unplaced ? `<span class="plan-ext-no-planet">no factory planet in system</span>` : '';
-      const facLabel = f.product
-        ? `${f.product.name}${f.ccu ? ' · CC' + f.ccu : ''}`
-        : 'factory';
-      const html = `<div class="plan-ext-row">${tag}${_ptypeSpan(f.planet_type || 'Barren')}${sysHtml}<span class="plan-ext-arrow">→</span><span class="plan-ext-p1 plan-fac-label">${_esc(facLabel)}</span></div>`;
-      planetRows.push({ html, system: f.system || '', planet_num: f.planet_num });
-    });
-
-    const _sysKey = s => s || '￿';  // unplaced/no-system rows sort last
-    planetRows.sort((x, y) => {
-      const fx = x.system && x.system === _facSys ? 0 : 1;
-      const fy = y.system && y.system === _facSys ? 0 : 1;
-      if (fx !== fy) return fx - fy;                         // factory-system planets on top
-      const c = _sysKey(x.system).localeCompare(_sysKey(y.system));
-      if (c) return c;                                       // then by system name
-      return (x.planet_num == null ? 1e9 : x.planet_num) - (y.planet_num == null ? 1e9 : y.planet_num);
-    });
-    const extractorRows = planetRows.map(r => r.html).join('');
-    const factoryRows = '';
-
+    const rows = _allRows.filter(r => r.charId === a.character_id).sort(_locSort).map(r => r.html).join('');
     const freeRows = Array.from({length: a.free_planets || 0}, () =>
-      `<div class="plan-ext-row"><span class="plan-ext-tag plan-ext-free">free</span><span class="plan-ext-p1 plan-free-label">available</span></div>`
-    ).join('');
-
+      `<div class="plan-ext-row"><span class="plan-ext-tag plan-ext-free">free</span><span class="plan-ext-p1 plan-free-label">available</span></div>`).join('');
     const isFacChar = (_wiz.factoryCharIds || []).includes(a.character_id);
-    const facBadge = a.factory_only
-      ? `<span class="plan-fac-only-badge">factory only</span>` : '';
+    const facBadge = a.factory_only ? `<span class="plan-fac-only-badge">factory only</span>` : '';
     const facToggle = `<button class="plan-fac-toggle-btn${isFacChar ? ' plan-fac-toggle-active' : ''}"
       onclick="toggleFactoryChar(${a.character_id})" title="${isFacChar ? 'Stop prioritising this character for factories' : 'Prioritise this character to host factories (still extracts on spare slots)'}">${isFacChar ? '★ factories' : 'host factories'}</button>`;
     return `
       <div class="plan-char-block">
         <div class="plan-char-name">${a.character_name}${facBadge}${facToggle}<span class="plan-char-meta"> · ${a.effective_planets} pl · CCU ${a.ccu}</span></div>
-        <div class="plan-char-extractors">${extractorRows}${factoryRows}${freeRows}</div>
+        <div class="plan-char-extractors">${rows}${freeRows}</div>
       </div>`;
   }).join('');
+
+  // View B — by system: one block per system (factory system first), planets in a column per
+  // character — a deploy checklist you can work stop by stop.
+  const _charName = {};
+  data.assignments.forEach(a => { _charName[a.character_id] = a.character_name; });
+  const _sysCol = (rows) => data.assignments
+    .filter(a => rows.some(r => r.charId === a.character_id))
+    .map(a => {
+      const cr = rows.filter(r => r.charId === a.character_id).sort(_byNum);
+      return `<div class="plan-sys-char"><div class="plan-sys-char-name">${_esc(a.character_name)} <span class="plan-sys-char-n">${cr.length}</span></div>${cr.map(r => r.html).join('')}</div>`;
+    }).join('');
+  const _systems = [...new Set(_allRows.filter(r => r.system).map(r => r.system))].sort((x, y) => {
+    const fx = x === _facSys ? 0 : 1, fy = y === _facSys ? 0 : 1;
+    return fx !== fy ? fx - fy : x.localeCompare(y);
+  });
+  const _sysBlocks = _systems.map(sys => {
+    const inSys = _allRows.filter(r => r.system === sys);
+    const facTag = sys === _facSys ? `<span class="plan-sys-fac">factory system</span>` : '';
+    return `<div class="plan-sys-block">
+        <div class="plan-sys-title">${_esc(sys)}${facTag}<span class="plan-sys-count">${inSys.length} planet${inSys.length !== 1 ? 's' : ''}</span></div>
+        <div class="plan-sys-chars">${_sysCol(inSys)}</div>
+      </div>`;
+  }).join('');
+  const _noSysRows = _allRows.filter(r => !r.system);
+  const _noSysBlock = _noSysRows.length
+    ? `<div class="plan-sys-block"><div class="plan-sys-title plan-sys-title-warn">No planet in system<span class="plan-sys-count">${_noSysRows.length}</span></div><div class="plan-sys-chars">${_sysCol(_noSysRows)}</div></div>`
+    : '';
+  const assignHtmlBySys = _sysBlocks + _noSysBlock;
+
+  if (_wiz.planView == null) { try { _wiz.planView = localStorage.getItem('ppPlanView') || 'char'; } catch (e) { _wiz.planView = 'char'; } }
+  const _planView = _wiz.planView === 'system' ? 'system' : 'char';
+  const assignHtml = _planView === 'system' ? assignHtmlBySys : assignHtmlByChar;
 
   // P0 summary: group extractor slots by P0 type
   const p0Map = {};
@@ -2702,8 +2726,13 @@ function renderFinalPlan(data, opts = {}) {
     </div>
     ${unmetHtml}
     ${unplacedFacHtml}
-    <div class="plan-section-title">Character Assignment</div>
-    <div class="plan-assignments">${assignHtml}</div>
+    <div class="plan-section-title">${_planView === 'system' ? 'Planets by system' : 'Character assignment'}
+      <span class="plan-view-toggle">
+        <button class="plan-view-btn${_planView === 'char' ? ' plan-view-on' : ''}" onclick="setPlanView('char')" title="Group planets under each character">By character</button>
+        <button class="plan-view-btn${_planView === 'system' ? ' plan-view-on' : ''}" onclick="setPlanView('system')" title="Group planets by system (factory system first) — a deploy checklist, stop by stop">By system</button>
+      </span>
+    </div>
+    <div class="plan-assignments${_planView === 'system' ? ' plan-assignments-sys' : ''}">${assignHtml}</div>
     ${p0SummaryHtml}
     <div class="plan-actions-bar">
       <button class="plan-action-btn" id="savePlanBtn" onclick="savePlanForRefills()" title="Save this plan so you can split P1 stacks into its factories from the PI Planner tab — no need to re-run the wizard at refill time.">Save plan</button>
@@ -2895,6 +2924,13 @@ async function _rerunPlan(overrides = {}) {
 async function _rerunWithFactorySystem(factorySystem) {
   _wiz.factorySystem = factorySystem;
   await _rerunPlan();
+}
+
+// Switch the plan-results layout between by-character and by-system (deploy checklist).
+function setPlanView(v) {
+  _wiz.planView = (v === 'system') ? 'system' : 'char';
+  try { localStorage.setItem('ppPlanView', _wiz.planView); } catch (e) {}
+  if (_wiz.lastPlanData) renderFinalPlan(_wiz.lastPlanData, { scroll: false });
 }
 
 async function toggleFactoryChar(charId) {
