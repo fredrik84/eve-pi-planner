@@ -2564,8 +2564,7 @@ function renderFinalPlan(data, opts = {}) {
       const systems = [...new Set(items.filter(i => i.system).map(i => i.system))].sort(_sysOrder);
       const cols = systems.map(sys => {
         const cr = items.filter(i => i.system === sys).sort(_byNum);
-        const facTag = sys === _facSys ? `<span class="plan-sys-fac">factory</span>` : '';
-        return `<div class="plan-char-syscol"><div class="plan-char-syshdr">${_esc(sys)}${facTag}<span class="plan-char-sysn">${cr.length}</span></div>${cr.map(i => _html(i, false)).join('')}</div>`;
+        return `<div class="plan-char-syscol"><div class="plan-char-syshdr">${_esc(sys)}<span class="plan-char-sysn">${cr.length}</span></div>${cr.map(i => _html(i, false)).join('')}</div>`;
       });
       const noSys = items.filter(i => !i.system);
       if (noSys.length)
