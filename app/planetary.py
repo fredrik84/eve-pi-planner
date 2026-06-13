@@ -163,13 +163,14 @@ def _safe_filename(name: str) -> str:
 
 @router.get("/api/layout/download")
 def download_layout(type_id: int, planet_type: str = "Barren", launchpads: Optional[int] = None,
-                    count: int = 1, cc_level: Optional[int] = None):
+                    count: int = 1, cc_level: Optional[int] = None, no_storage: int = 0):
     """Return a single planet template as a downloadable .json attachment."""
     import json
     from fastapi import Response
     from app.layout import generate_layout
     try:
-        result = generate_layout(type_id, planet_type, launchpads, count, cc_level=cc_level)
+        result = generate_layout(type_id, planet_type, launchpads, count, cc_level=cc_level,
+                                 no_storage=bool(no_storage))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     tmpl = result["planets"][0]["template"]

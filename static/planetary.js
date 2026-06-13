@@ -2991,11 +2991,25 @@ let _layoutTierMap = {};   // product type_id -> tier (for SVG colouring)
 let _layoutSel = [];       // [{key, type_id, name, tier, planet, launchpads, data, error}]
 
 const _LAYOUT_LS_KEY = 'layoutSelections';
+let _layoutNoStorage = (() => { try { return localStorage.getItem('layoutNoStorage') === '1'; } catch (e) { return false; } })();
 
 async function onLayoutTabOpen() {
   await loadPiProducts();
   _ppProducts.forEach(p => { _layoutTierMap[p.type_id] = p.tier; });
+  const ns = document.getElementById('layoutNoStorage');
+  if (ns) ns.checked = _layoutNoStorage;
   if (!_layoutSel.length) await _restoreLayoutState();
+  renderLayoutSelections();
+}
+
+// Storage-less extractors toggle (Factory Layout): buffer P0 in the launchpad, no storage hub.
+async function toggleLayoutNoStorage(checked) {
+  _layoutNoStorage = !!checked;
+  try { localStorage.setItem('layoutNoStorage', _layoutNoStorage ? '1' : '0'); } catch (e) {}
+  const btn = document.getElementById('layoutBundleBtn');
+  if (btn) btn.href = _layoutBundleUrl();
+  renderLayoutSelections();                     // show "Generating…" while extractors rebuild
+  await Promise.all(_layoutSel.filter(e => e.tier === 1).map(_fetchLayout));
   renderLayoutSelections();
 }
 
@@ -3088,7 +3102,7 @@ async function _fetchLayout(entry) {
   try {
     const resp = await fetch('/api/layout', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type_id: entry.type_id, planet_type: entry.planet, launchpads: entry.launchpads, count: entry.count == null ? null : entry.count, cc_level: entry.cc || 5 }),
+      body: JSON.stringify({ type_id: entry.type_id, planet_type: entry.planet, launchpads: entry.launchpads, count: entry.count == null ? null : entry.count, cc_level: entry.cc || 5, no_storage: _layoutNoStorage }),
     });
     if (!resp.ok) { const e = await resp.json().catch(() => ({})); throw new Error(e.detail || resp.status); }
     entry.data = await resp.json();
@@ -3157,7 +3171,7 @@ function _layoutBundleUrl() {
   // (previously omitted, so "Download all" silently generated everything at Barren/CC5).
   const toks = _layoutSel.map(e =>
     `${e.type_id}:${e.launchpads}:${e.count || 1}:${e.cc || 5}:${e.planet}`).join(',');
-  return `/api/layout/bundle?type_ids=${encodeURIComponent(toks)}&expand=0`;
+  return `/api/layout/bundle?type_ids=${encodeURIComponent(toks)}&expand=0${_layoutNoStorage ? '&no_storage=1' : ''}`;
 }
 
 function renderLayoutSelections() {
@@ -3201,7 +3215,7 @@ function renderLayoutCard(entry) {
       <div class="layout-card-line">${outStr} · ${(s.buffer_m3 / 1000).toLocaleString()} km³ buffer · planet: ${_esc(s.planet_type)} · <b>CC${entry.cc || 5}</b></div>
       <div class="layout-card-meta">${_esc(s.imports_label)}: ${imports}</div>`;
   }
-  const url = `/api/layout/download?type_id=${entry.type_id}&planet_type=${encodeURIComponent(s.planet_type)}&launchpads=${entry.launchpads}&count=${entry.count || 1}&cc_level=${entry.cc || 5}`;
+  const url = `/api/layout/download?type_id=${entry.type_id}&planet_type=${encodeURIComponent(s.planet_type)}&launchpads=${entry.launchpads}&count=${entry.count || 1}&cc_level=${entry.cc || 5}${(_layoutNoStorage && entry.tier === 1) ? '&no_storage=1' : ''}`;
   const countLabel = isExtractor ? 'Factories' : (entry.tier === 2 ? 'Factories' : 'Chains');
   const ccSel = `<label title="Command Center level — fewer facilities fit at lower levels">CC
     <select onchange="changeLayoutCcu('${entry.key}', this.value)">${[5,4,3,2,1].map(n => `<option value="${n}"${n === (entry.cc || 5) ? ' selected' : ''}>${n}</option>`).join('')}</select></label>`;
