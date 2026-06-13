@@ -1621,3 +1621,4 @@ a.plan-action-btn { text-decoration: none; display: inline-block; }
 .an-suggest li { font-size: 13px; color: #c8cdd8; margin: 3px 0; }
 .an-suggest li b { color: #fff; }
 .an-sug-note { color: #8b93a6; font-size: 12px; }
+.an-stat-val .an-of { font-size: 14px; color: #8b93a6; font-weight: 400; }

@@ -2151,11 +2151,22 @@ function renderAnalysis() {
       <div class="an-head-sub">Your colonies produce <b>${feedPct}%</b> of what “${_esc(snap.name)}” needs to stay fed${fed ? `, and refill the factories every <b>${refillDays ? _dur(refillDays) : '—'}</b>.` : ` — short on <b>${_esc(binding.name)}</b>.`}</div>
     </div>`;
 
+  // Achievable final output is throttled by the scarcest input: the factories can only run at the
+  // binding P1's feed ratio, so actual product/day (and its ISK) = target × feed ratio.
+  const feedRatio = Math.min(1, binding.ratio);
+  const unit = snap.unit_label || 'units';
   let stats = `<div class="an-stats">`;
   stats += stat(feedPct + '%', 'Plan fed at', fed ? 'an-ok' : 'an-bad');
+  if (snap.products_per_day) {
+    const target = Number(snap.products_per_day), actual = Math.round(target * feedRatio);
+    stats += stat(`${actual.toLocaleString()} <span class="an-of">/ ${target.toLocaleString()}</span>`,
+                  `${unit}/day · making / target`, fed ? 'an-ok' : 'an-bad');
+  }
+  if (snap.isk_per_day)
+    stats += stat(_fmtIsk(snap.isk_per_day * feedRatio),
+                  `ISK/day${fed ? '' : ' · ' + _fmtIsk(snap.isk_per_day) + ' if fed'}`, '');
   if (refillDays) stats += stat(_dur(refillDays), 'Refill cadence (3 LP)', '');
   stats += stat(String(snap.factories_count || (snap.factories || []).length), 'Factory planets', '');
-  if (snap.products_per_day) stats += stat(Number(snap.products_per_day).toLocaleString(), (snap.unit_label || 'units') + '/day if fed', '');
   stats += `</div>`;
 
   const barRows = rows.map(r => {
