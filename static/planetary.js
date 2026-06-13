@@ -639,7 +639,8 @@ function renderCharacters(chars, loggedIn) {
     planets.forEach(p => (p.pads || []).forEach(it => { padTotals[it.name] = (padTotals[it.name] || 0) + it.amount; }));
     const padEntries = Object.entries(padTotals).sort((a, b) => b[1] - a[1]);
     const padsHtml = padEntries.length
-      ? `<div class="pp-char-pads"><span class="pp-char-pads-lbl">In pads</span>${
+      ? `<div class="pp-char-pads" title="Estimated live launchpad contents — simulated forward from the last Refresh (ESI only reports a stale checkpoint, so this is computed like the in-game client does). Refresh to re-anchor.">
+          <span class="pp-char-pads-lbl">In pads <span class="pp-char-pads-est">~est</span></span>${
           padEntries.map(([n, a]) => `<span class="pp-pad-item"><b>${a.toLocaleString()}</b> ${_esc(n)}</span>`).join('')}</div>`
       : '';
 

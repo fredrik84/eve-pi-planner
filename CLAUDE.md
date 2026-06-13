@@ -465,6 +465,21 @@ warning, sends `anonymize:false`, stores real names — for trusted recipients o
 adding new plan fields that hold a system/constellation/character, add their key to the
 `_SHARE_*` sets or they will leak into anon shares.
 
+## PI colony forward-simulation (`app/pi_sim.py`)
+
+ESI's `GET /characters/{id}/planets/{planet_id}/` reports stored contents only as of the colony's
+last server checkpoint (`last_cycle_start`) — it does NOT stream live launchpad amounts; the
+in-game client (and tools like Rift) reproduce them by **simulating production forward** from the
+checkpoint. `pi_sim.colony_sim_state(detail, pi_data)` builds an aggregate-flow state from one
+planet's ESI detail: output rate = `min(extraction P0/sec, factory P0-capacity/sec)` converted via
+the schematic ratio; `project(state, now)` = checkpoint contents + rate × (min(now, program expiry)
+− checkpoint t0). Extractor planets only (ECU present); factory planets that import P1 can't be
+simulated (import schedule unknown) → fall back to the raw snapshot. Stored per planet in
+`pp_char_planets.sim_state` (JSON) at scan time; **`list_characters` projects it to request time**
+so the Characters tab "In pads ~est" shows live-ish values (validated: Silicon 1186 sim vs 1120
+in-game, ~6% high — ignores extraction decay, so a touch optimistic). Refresh re-anchors the
+checkpoint. Checkpoint tag before this: `checkpoint-before-pi-sim`.
+
 ## Bug reporting (`app/bugs.py`, `pp_bugs` table)
 
 Any logged-in pilot can file a report; only admins read/triage them. **Admin = account owns

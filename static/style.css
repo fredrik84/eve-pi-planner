@@ -576,6 +576,7 @@ tr:hover td { background: #181d2a; }
 .pp-char-pads { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; padding: 0 0 8px;
   font-size: 11px; color: #8a94ac; }
 .pp-char-pads-lbl { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; color: #56607a; }
+.pp-char-pads-est { color: #5a8aa0; font-weight: 600; }
 .pp-pad-item { white-space: nowrap; }
 .pp-pad-item b { color: #c8d2e6; font-family: 'Consolas', monospace; font-weight: 600; }
 .pp-pl-cc { margin-left: auto; font-size: 10px; color: #56607a; }

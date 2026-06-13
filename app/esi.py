@@ -163,7 +163,7 @@ def ensure_char_tables():
         con.execute("ALTER TABLE pp_char_planets ADD COLUMN planet_num INTEGER")
     except Exception:
         pass
-    for _col in ("products TEXT", "pad_contents TEXT"):  # JSON: factory outputs + stored items
+    for _col in ("products TEXT", "pad_contents TEXT", "sim_state TEXT"):  # JSON: outputs, stored items, sim state
         try:
             con.execute(f"ALTER TABLE pp_char_planets ADD COLUMN {_col}")
         except Exception:
@@ -298,6 +298,7 @@ def _fetch_planets(character_id: int, access_token: str) -> None:
                 p0_type_id   = None
                 p0_name      = None
                 planet_num   = None
+                _detail      = None
                 products: dict[int, str] = {}   # output type_id → name (factory pins)
                 pads: dict[int, int] = {}       # stored item type_id → total amount
                 try:
@@ -307,7 +308,8 @@ def _fetch_planets(character_id: int, access_token: str) -> None:
                         timeout=10,
                     )
                     pr.raise_for_status()
-                    for pin in pr.json().get("pins", []):
+                    _detail = pr.json()
+                    for pin in _detail.get("pins", []):
                         ext = pin.get("extractor_details")
                         if ext:
                             is_extractor = 1
@@ -344,6 +346,18 @@ def _fetch_planets(character_id: int, access_token: str) -> None:
                      for t, a in pads.items()],
                     key=lambda x: -x["amount"])) if pads else None
 
+                # Forward-simulation state — lets list_characters project the launchpad contents
+                # to request time (ESI's stored contents are a stale checkpoint; the colony keeps
+                # producing). Extractor planets only; factory imports fall back to the snapshot.
+                sim_state_json = None
+                if _detail:
+                    try:
+                        from app.pi_sim import colony_sim_state
+                        _sim = colony_sim_state(_detail, _pi)
+                        sim_state_json = _json.dumps(_sim) if _sim else None
+                    except Exception:
+                        sim_state_json = None
+
                 # Fetch planet name to derive in-system ordinal (e.g. "01B-88 VIII" → 8)
                 try:
                     pinfo = client.get(
@@ -361,11 +375,11 @@ def _fetch_planets(character_id: int, access_token: str) -> None:
                     INSERT OR REPLACE INTO pp_char_planets
                         (character_id, planet_id, planet_type, solar_system_id,
                          upgrade_level, num_pins, is_extractor, p0_type_id, p0_name,
-                         planet_num, products, pad_contents)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                         planet_num, products, pad_contents, sim_state)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """, (character_id, planet_id, planet_type, solar_system_id,
                       upgrade_level, num_pins, is_extractor, p0_type_id, p0_name,
-                      planet_num, products_json, pads_json))
+                      planet_num, products_json, pads_json, sim_state_json))
 
         con.commit()
         con.close()
@@ -679,7 +693,7 @@ def list_characters(pp_session: str = Cookie(default=None)):
     try:
         planet_rows = con.execute("""
             SELECT cp.character_id, cp.planet_type, cp.is_extractor, cp.p0_name, cp.upgrade_level,
-                   cp.planet_num, cp.num_pins, cp.products, cp.pad_contents,
+                   cp.planet_num, cp.num_pins, cp.products, cp.pad_contents, cp.sim_state,
                    COALESCE(ss.name, '') AS system_name
             FROM pp_char_planets cp
             LEFT JOIN solar_systems ss ON ss.system_id = cp.solar_system_id
@@ -687,7 +701,7 @@ def list_characters(pp_session: str = Cookie(default=None)):
     except Exception:  # no geo table → no system names
         planet_rows = con.execute("""
             SELECT character_id, planet_type, is_extractor, p0_name, upgrade_level,
-                   planet_num, num_pins, products, pad_contents, '' AS system_name
+                   planet_num, num_pins, products, pad_contents, sim_state, '' AS system_name
             FROM pp_char_planets
         """).fetchall()
     con.close()
@@ -699,10 +713,21 @@ def list_characters(pp_session: str = Cookie(default=None)):
             products = _json.loads(p["products"]) if p["products"] else []
         except Exception:
             products = []
+        # Pads: forward-simulate the colony to request time (matches the live in-game launchpad);
+        # fall back to the raw ESI checkpoint snapshot for planets we can't simulate.
+        pads = []
         try:
-            pads = _json.loads(p["pad_contents"]) if p["pad_contents"] else []
+            if p["sim_state"]:
+                from app.pi_sim import project
+                pads = [{"type_id": o["type_id"], "name": o["name"], "amount": o["amount"]}
+                        for o in project(_json.loads(p["sim_state"]))]
         except Exception:
             pads = []
+        if not pads:
+            try:
+                pads = _json.loads(p["pad_contents"]) if p["pad_contents"] else []
+            except Exception:
+                pads = []
         char_planets.setdefault(cid, []).append({
             "planet_type":   p["planet_type"],
             "is_extractor":  bool(p["is_extractor"]),
