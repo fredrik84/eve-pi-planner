@@ -138,6 +138,7 @@ function onPlanetDbTabOpen() {
 let _esiConfigured = false;
 let _loggedIn = false;
 let _isAdmin = false;
+let _ppCharsData = [];   // last /api/characters payload, for the Setup Analysis tab
 
 async function loadCharacters() {
   try {
@@ -146,6 +147,7 @@ async function loadCharacters() {
     _esiConfigured = data.configured;
     _loggedIn = data.logged_in || false;
     _isAdmin = data.is_admin || false;
+    _ppCharsData = data.characters || [];
     renderCharacters(data.characters || [], _loggedIn);
     renderHeaderSession(_loggedIn, data.characters || [], data.session_character_id);
     await loadProfiles();
@@ -1986,6 +1988,7 @@ async function _fetchAllSnapshots() {
   return [
     ...server.map(s => ({ id: 'srv:' + s.id, srvId: s.id, name: s.name, factories: s.factories, consumption: s.consumption || {},
                           products_per_day: s.products_per_day, isk_per_day: s.isk_per_day, unit_label: s.unit_label,
+                          factory_refill_hours: s.factory_refill_hours, factories_count: s.factories_count,
                           hasPayload: !!s.has_payload, saved: true })),
     ..._loadPlanSnapshots().filter(s => !serverNames.has(s.name)),
   ];
@@ -2055,6 +2058,123 @@ async function deleteSavedPlan(id, srvId) {
   if (document.getElementById('planDistSection')) renderPlanDistribution();
 }
 
+// ── Setup Analysis tab ───────────────────────────────────────────────────────
+// Maps what the player's colonies ACTUALLY produce per P1 (units/day from the ESI forward-sim,
+// summed across every character & planet) against a saved plan's required P1 (units/day the
+// factories eat at full rate). Answers "am I extracting/producing enough to keep this plan's
+// factories refilled?" with headline stats + per-P1 bars.
+let _analyzeSnaps = [];
+
+// Show days normally, but drop to hours when it's under a day (otherwise it rounds to "0 days").
+function _dur(days) {
+  if (days >= 1) { const d = days >= 10 ? Math.round(days) : Math.round(days * 10) / 10; return `${d.toLocaleString()} ${d === 1 ? 'day' : 'days'}`; }
+  const h = days * 24, hr = h >= 10 ? Math.round(h) : Math.round(h * 10) / 10;
+  return `${hr.toLocaleString()} ${hr === 1 ? 'hour' : 'hours'}`;
+}
+
+// type_id(str) -> {name, perDay} — every colony output rolled up (P1 for refiners, P0 for pure
+// extractors). The plan's needs pick which rows are relevant.
+function _setupProductionByP1() {
+  const out = {};
+  (_ppCharsData || []).forEach(ch => (ch.planets || []).forEach(p => (p.production || []).forEach(o => {
+    const k = String(o.type_id);
+    if (!out[k]) out[k] = { name: o.name, perDay: 0 };
+    out[k].perDay += o.per_day || 0;
+  })));
+  return out;
+}
+
+function _snapNeedsByP1(snap) {
+  const out = {};
+  const c = snap && snap.consumption;
+  if (Array.isArray(c)) c.forEach(x => { if (x.units_per_day > 0) out[String(x.p1_type_id)] = { name: x.p1_name, perDay: x.units_per_day }; });
+  else if (c) Object.keys(c).forEach(t => { if (c[t] > 0) out[t] = { name: 'P1 ' + t, perDay: c[t] }; });
+  return out;
+}
+
+async function onAnalyzeTabOpen() {
+  await loadCharacters();          // refresh the live production rates
+  try { _analyzeSnaps = await _fetchAllSnapshots(); } catch (e) { _analyzeSnaps = []; }
+  const sel = document.getElementById('analyzePlanSelect');
+  if (sel) {
+    const prev = sel.value;
+    sel.innerHTML = _analyzeSnaps.length
+      ? _analyzeSnaps.map((s, i) => `<option value="${i}">${_esc(s.name)}</option>`).join('')
+      : '<option value="">— no saved plans —</option>';
+    if (prev !== '' && _analyzeSnaps[prev]) sel.value = prev;
+  }
+  renderAnalysis();
+}
+
+function renderAnalysis() {
+  const el = document.getElementById('analyzeContent');
+  if (!el) return;
+  if (!_analyzeSnaps.length) {
+    el.innerHTML = `<div class="admin-hint">No saved plans yet. Build a plan in <b>Planetary Planning</b>, click <b>Save plan</b>, then come back here to check your in-game colonies against it.</div>`;
+    return;
+  }
+  const sel = document.getElementById('analyzePlanSelect');
+  const snap = _analyzeSnaps[parseInt(sel && sel.value, 10) || 0];
+  if (!snap) { el.innerHTML = ''; return; }
+  const needs = _snapNeedsByP1(snap);
+  const prod = _setupProductionByP1();
+  const needKeys = Object.keys(needs);
+
+  if (!Object.keys(prod).length) {
+    el.innerHTML = `<div class="admin-hint">No colony production data. Add your characters and refresh in the <b>Characters</b> tab (logged in with ESI access), then reload.</div>`;
+    return;
+  }
+  if (!needKeys.length) {
+    el.innerHTML = `<div class="admin-hint">This saved plan predates the per-P1 consumption data. Re-open it in Planetary Planning and <b>Save plan</b> again to enable the analysis.</div>`;
+    return;
+  }
+
+  // Per-P1 rows for exactly the P1 this plan consumes; worst-fed first.
+  const rows = needKeys.map(t => {
+    const need = needs[t].perDay;
+    const have = (prod[t] && prod[t].perDay) || 0;
+    const ratio = need > 0 ? have / need : (have > 0 ? Infinity : 1);
+    return { t, name: needs[t].name, have, need, ratio };
+  }).sort((a, b) => a.ratio - b.ratio);
+
+  const binding = rows[0];
+  const feedPct = Math.round(Math.min(1, binding.ratio) * 100);
+  const fed = binding.ratio >= 0.995;
+  const rh = snap.factory_refill_hours;
+  const refillDays = rh ? rh / 24 : null;
+
+  const stat = (val, lbl, cls) => `<div class="an-stat ${cls || ''}"><div class="an-stat-val">${val}</div><div class="an-stat-lbl">${lbl}</div></div>`;
+  const head = `<div class="an-headline ${fed ? 'an-ok' : 'an-bad'}">
+      <div class="an-head-word">${fed ? 'KEEPS UP' : 'FALLS BEHIND'}</div>
+      <div class="an-head-sub">Your colonies produce <b>${feedPct}%</b> of what “${_esc(snap.name)}” needs to stay fed${fed ? `, and refill the factories every <b>${refillDays ? _dur(refillDays) : '—'}</b>.` : ` — short on <b>${_esc(binding.name)}</b>.`}</div>
+    </div>`;
+
+  let stats = `<div class="an-stats">`;
+  stats += stat(feedPct + '%', 'Plan fed at', fed ? 'an-ok' : 'an-bad');
+  if (refillDays) stats += stat(_dur(refillDays), 'Refill cadence (3 LP)', '');
+  stats += stat(String(snap.factories_count || (snap.factories || []).length), 'Factory planets', '');
+  if (snap.products_per_day) stats += stat(Number(snap.products_per_day).toLocaleString(), (snap.unit_label || 'units') + '/day if fed', '');
+  stats += `</div>`;
+
+  const barRows = rows.map(r => {
+    const surplus = r.have - r.need;
+    const cls = r.ratio >= 0.995 ? 'an-bar-ok' : (r.ratio >= 0.85 ? 'an-bar-warn' : 'an-bar-bad');
+    const haveW = Math.max(2, Math.min(100, (r.have / r.need) * 100));
+    const delta = surplus >= 0
+      ? `<span class="an-pos">+${Math.round(surplus).toLocaleString()}/day</span>`
+      : `<span class="an-neg">${Math.round(surplus).toLocaleString()}/day</span>`;
+    return `<div class="an-row">
+        <div class="an-row-name">${_esc(r.name)}</div>
+        <div class="an-bar-track"><div class="an-bar-fill ${cls}" style="width:${haveW}%"></div></div>
+        <div class="an-row-nums"><span class="an-have">${Math.round(r.have).toLocaleString()}</span><span class="an-sep">/</span><span class="an-need">${Math.round(r.need).toLocaleString()}/day</span>${delta}</div>
+      </div>`;
+  }).join('');
+
+  el.innerHTML = head + stats
+    + `<div class="an-legend">Producing (left) vs the plan’s daily need (right) per P1. A full green bar = factories stay fed; a short red bar is the bottleneck.</div>`
+    + `<div class="an-bars">${barRows}</div>`;
+}
+
 function _buildPlanSnapshot(data) {
   const factories = [];
   for (const a of (data.assignments || []))
@@ -2080,6 +2200,9 @@ function _buildPlanSnapshot(data) {
     products_per_day: st.products_per_day,
     isk_per_day: st.isk_per_day,
     unit_label: data.fuelblock ? (st.unit_label || 'fuel blocks') : 'units',
+    // Refill cadence + factory count so the Setup Analysis tab can frame "refill every X days".
+    factory_refill_hours: st.factory_refill_hours,
+    factories_count: factories.length,
   };
 }
 
@@ -2326,12 +2449,6 @@ function _updateRefillDays() {
   const m = _planMeta || {};
   const unitsMade = Math.round((m.productsPerDay || 0) * minDays);
   const sellValue = (m.iskPerDay || 0) * minDays;
-  // Show days normally, but drop to hours when it's under a day (otherwise it rounds to "0 days").
-  const _dur = days => {
-    if (days >= 1) { const d = days >= 10 ? Math.round(days) : Math.round(days * 10) / 10; return `${d.toLocaleString()} ${d === 1 ? 'day' : 'days'}`; }
-    const h = days * 24, hr = h >= 10 ? Math.round(h) : Math.round(h * 10) / 10;
-    return `${hr.toLocaleString()} ${hr === 1 ? 'hour' : 'hours'}`;
-  };
   const lead = `<div class="refill-lead">With what you pasted, <b>${_esc(binding.name)}</b> runs out first.</div>`;
   const tiles = [
     `<div class="refill-stat"><span class="refill-stat-val">${_dur(minDays)}</span>

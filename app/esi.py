@@ -728,6 +728,18 @@ def list_characters(pp_session: str = Cookie(default=None)):
                 pads = _json.loads(p["pad_contents"]) if p["pad_contents"] else []
             except Exception:
                 pads = []
+        # Production rate (units/day) per output — reliable (from the extractor program config,
+        # not the stale stored volume). Used by the Analyze tab to map setup vs a plan's needs.
+        production = []
+        try:
+            if p["sim_state"]:
+                for o in (_json.loads(p["sim_state"]).get("outputs") or []):
+                    rate = o.get("rate", 0) or 0
+                    if rate > 0:
+                        production.append({"type_id": o["type_id"], "name": o["name"],
+                                           "per_day": round(rate * 86400)})
+        except Exception:
+            production = []
         char_planets.setdefault(cid, []).append({
             "planet_type":   p["planet_type"],
             "is_extractor":  bool(p["is_extractor"]),
@@ -738,6 +750,7 @@ def list_characters(pp_session: str = Cookie(default=None)):
             "num_pins":      p["num_pins"],
             "products":      products,
             "pads":          pads,
+            "production":    production,
         })
 
     now = datetime.now(timezone.utc).isoformat()

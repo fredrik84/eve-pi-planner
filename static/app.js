@@ -449,6 +449,7 @@ function switchTab(name) {
   if (name === 'planetdb' && typeof onPlanetDbTabOpen === 'function') onPlanetDbTabOpen();
   if (name === 'layout' && typeof onLayoutTabOpen === 'function') onLayoutTabOpen();
   if (name === 'characters' && typeof loadCharacters === 'function') loadCharacters();
+  if (name === 'analyze' && typeof onAnalyzeTabOpen === 'function') onAnalyzeTabOpen();
   if (name === 'admin' && typeof onAdminTabOpen === 'function') onAdminTabOpen();
   localStorage.setItem('activeTab', name);
 }

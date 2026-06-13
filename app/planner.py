@@ -906,6 +906,8 @@ def list_plan_snapshots(pp_session: str = Cookie(default=None)):
                     "products_per_day": snap.get("products_per_day"),
                     "isk_per_day": snap.get("isk_per_day"),
                     "unit_label": snap.get("unit_label", "units"),
+                    "factory_refill_hours": snap.get("factory_refill_hours"),
+                    "factories_count": snap.get("factories_count"),
                     "has_payload": bool(snap.get("payload"))})
     return {"snapshots": out}
 

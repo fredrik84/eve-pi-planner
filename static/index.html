@@ -14,7 +14,7 @@
   <meta property="og:image" content="https://eve-pi.failed.name/og-image.png?v=4">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:image" content="https://eve-pi.failed.name/og-image.png?v=4">
-  <link rel="stylesheet" href="/style.css?v=116">
+  <link rel="stylesheet" href="/style.css?v=117">
 </head>
 <body>
   <header>
@@ -36,6 +36,7 @@
           <button class="tab tab-sub" data-tab="planner" data-pimode="refill"><span class="nav-ico">RF</span><span class="nav-lbl">Refill a plan</span></button>
         </div>
         <button class="tab" data-tab="planetary"><span class="nav-ico">PP</span><span class="nav-lbl">Planetary Planning</span></button>
+        <button class="tab" data-tab="analyze"><span class="nav-ico">AN</span><span class="nav-lbl">Setup Analysis</span></button>
         <button class="tab" data-tab="layout"><span class="nav-ico">FL</span><span class="nav-lbl">Factory Layout</span></button>
         <button class="tab" data-tab="planetdb"><span class="nav-ico">DB</span><span class="nav-lbl">Planet DB</span></button>
         <button class="tab" data-tab="contribute"><span class="nav-ico">?</span><span class="nav-lbl">Contribute</span></button>
@@ -551,6 +552,22 @@ PVF-N9    3         95                 60             80                  100   
       </div>
     </div><!-- /tab-characters -->
 
+    <!-- ── Tab: Setup Analysis ─────────────────────────────────────────────────── -->
+    <div id="tab-analyze" class="tab-panel" style="display:none">
+      <div class="pp-chars-page">
+        <section class="pp-card">
+          <div class="pp-card-title">Setup vs Plan
+            <span class="pp-analyze-pick"><span class="pp-profile-dropdown-label">Plan</span>
+              <select id="analyzePlanSelect" class="pp-profile-select" onchange="renderAnalysis()"></select></span>
+            <button class="pp-add-btn" onclick="onAnalyzeTabOpen()" title="Re-scan colonies and reload plans">Reload</button>
+          </div>
+          <div id="analyzeContent" class="pp-analyze-content">
+            <div class="admin-hint">Compares what your characters' colonies actually produce (from ESI, live rates) against a saved plan's required P1 — so you can see what's under- or over-performing.</div>
+          </div>
+        </section>
+      </div>
+    </div><!-- /tab-analyze -->
+
     <!-- ── Tab: Factory Layout ─────────────────────────────────────────────────── -->
     <div id="tab-layout" class="tab-panel" style="display:none">
       <div class="layout-page">
@@ -704,6 +721,6 @@ PVF-N9    3         95                 60             80                  100   
   </div>
 
   <script src="/app.js?v=22"></script>
-  <script src="/planetary.js?v=158"></script>
+  <script src="/planetary.js?v=159"></script>
 </body>
 </html>
