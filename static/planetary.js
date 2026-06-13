@@ -710,12 +710,17 @@ async function refreshAllPlanets(btn) {
   const ids = Array.from(chars).map(b => parseInt(b.dataset.id)).filter(id => id > 0);  // skip placeholders
   btn.textContent = `Refreshing 0/${ids.length}…`;
   btn.disabled = true;
+  let failed = 0;
   for (let i = 0; i < ids.length; i++) {
     btn.textContent = `Refreshing ${i + 1}/${ids.length}…`;
-    await fetch(`/api/characters/${ids[i]}/refresh-planets`, { method: 'POST' });
+    try {
+      const resp = await fetch(`/api/characters/${ids[i]}/refresh-planets`, { method: 'POST' });
+      if (!resp.ok) failed++;
+    } catch (e) { failed++; }
   }
   btn.disabled = false;
   btn.textContent = 'Refresh';
+  if (failed) alert(`${failed} of ${ids.length} character${ids.length !== 1 ? 's' : ''} could not be refreshed — usually an expired token (red dot). Re-add those characters via ESI to renew access.`);
   loadCharacters();
 }
 
