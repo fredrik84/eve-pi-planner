@@ -2087,15 +2087,32 @@ function _setupProductionByP1() {
   return out;
 }
 
-// type_id(str) -> [{char, system, planet_num, perDay}] — every colony that outputs that material,
-// so rebalance suggestions can name the exact planet/character to move.
+// type_id(str) -> [{cid, char, system, planet_num, perDay}] — every colony that outputs that
+// material, so rebalance suggestions can name the exact planet/character to move.
 function _setupPlanetsByMaterial() {
   const idx = {};
   (_ppCharsData || []).forEach(ch => (ch.planets || []).forEach(p => (p.production || []).forEach(o => {
     const k = String(o.type_id);
-    (idx[k] = idx[k] || []).push({ char: ch.name, system: p.system, planet_num: p.planet_num, perDay: o.per_day || 0 });
+    (idx[k] = idx[k] || []).push({ cid: ch.character_id, char: ch.name, system: p.system, planet_num: p.planet_num, perDay: o.per_day || 0 });
   })));
   return idx;
+}
+
+// Placeability for the destination materials: which Planet-DB planets each character could actually
+// colonise for a given P1's P0 (reachable system, not already used). Fetched per plan, then the
+// rebalance moves only suggest a redeploy the character can physically make.
+let _placements = null;       // {type_id: {p0_name, by_char: {cid: [{system,planet_num,planet_type,richness}]}}}
+let _placementsKey = null;
+async function _ensurePlacements(typeIds) {
+  const key = typeIds.slice().sort().join(',');
+  if (_placementsKey === key) return;     // already loaded for this plan
+  _placementsKey = key;
+  try {
+    const r = await fetch('/api/analyze-placements', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                                       body: JSON.stringify({ type_ids: typeIds.map(Number) }) });
+    _placements = (await r.json()).placements || {};
+  } catch (e) { _placements = {}; }
+  renderAnalysis();   // re-render now that feasibility is known
 }
 
 function _snapNeedsByP1(snap) {
@@ -2211,20 +2228,29 @@ function renderAnalysis() {
   stats += `</div>`;
 
   // Refill cadence: how long between maintenance runs (empty extractors → top up factory launchpads).
-  // The hard limit is the factory side — its P1 buffer (the plan's 3 launchpads = 30,000 m³) drains in
-  // factory_refill_hours at the consumption rate. Over-producing P1 does NOT extend this (launchpad
-  // capacity is fixed; surplus just banks at the extractors); to go longer you add buffer (more
-  // launchpads/storage on the factory planets). Cadence scales linearly with buffer, so we show a few.
+  // The hard limit is the factory side: its P1 buffer (3 launchpads = 30,000 m³) drains in
+  // factory_refill_hours at the consumption rate. Show the arithmetic — buffer ÷ consumption — so the
+  // number is transparent (a full 30,000 m³ load lasts only ~refillDays because a factory eats a lot
+  // of P1/day). Over-producing doesn't help: you can't fit more than 30,000 m³ in 3 LPs.
   let proj = '';
   if (refillDays) {
-    const perLP = refillDays / 3;   // plan assumes a 3-launchpad (30,000 m³) buffer per factory
-    const cells = [3, 4, 5, 6].map(lp =>
-      stat(_dur(perLP * lp), `${lp} launchpads / factory`, lp === 3 ? 'an-ok' : '')).join('');
-    const nfac = snap.factories_count || (snap.factories || []).length;
+    const nfac = snap.factories_count || (snap.factories || []).length || 0;
+    const totP1 = Array.isArray(snap.consumption)
+      ? snap.consumption.reduce((a, c) => a + (c.units_per_day || 0), 0)
+      : Object.values(snap.consumption || {}).reduce((a, v) => a + (v || 0), 0);
+    const perFacUnits = nfac ? totP1 / nfac : 0;
+    const perFacM3 = perFacUnits * 0.38;
+    const perStorage = refillDays * 12000 / 30000;   // a Storage Facility adds 12,000 m³
+    const cells = [
+      stat(_dur(refillDays), 'between refills · 3 LP / 30,000 m³', 'an-ok'),
+      perFacUnits ? stat(`${Math.round(perFacUnits).toLocaleString()} <span class="an-of">P1/day</span>`,
+                         `each factory eats ~${Math.round(perFacM3).toLocaleString()} m³/day`, '') : '',
+      nfac ? stat(String(nfac), 'factories to service', '') : '',
+    ].join('');
     proj = `<div class="an-proj">`
-      + `<div class="an-proj-h">Refill run — visit every <b>${_dur(refillDays)}</b> to keep your ${nfac} factor${nfac === 1 ? 'y' : 'ies'} fed (3-launchpad buffer)</div>`
+      + `<div class="an-proj-h">Refill run — empty extractors & top up factories every <b>${_dur(refillDays)}</b></div>`
       + `<div class="an-stats">${cells}</div>`
-      + `<div class="an-legend">Each factory's launchpads hold ~${_dur(refillDays)} of feed — that's the hard limit, set by storage, not extraction. Over-producing doesn't push it out (the launchpads cap each fill); to stretch the interval, add launchpads/storage to the factory planets.</div>`
+      + `<div class="an-legend">A factory's 3 launchpads hold 30,000 m³ (~79,000 P1) but it burns ~${Math.round(perFacM3).toLocaleString()} m³/day, so a full load lasts only ~${_dur(refillDays)} — and 30,000 m³ is the cap for 3 LPs, so over-producing can't stretch it. The interval grows only with more on-planet buffer: each extra 12,000 m³ Storage Facility ≈ +${_dur(perStorage)}. If your deployed factories already carry extra storage, your real interval is longer than this 3-LP figure.</div>`
       + `</div>`;
   }
 
@@ -2261,47 +2287,71 @@ function renderAnalysis() {
     .filter(s => s.spare >= 1)
     .sort((a, b) => b.spare - a.spare);
 
-  // Specific colonies behind each surplus material, weakest-yield first (move the poorest, keep
-  // your best producers). Consumed as moves are assigned so two deficits don't claim the same one.
-  const planetIdx = _setupPlanetsByMaterial();
-  const pool = {};
-  surplus.forEach(s => { pool[s.t] = (planetIdx[s.t] || []).slice().sort((a, b) => a.perDay - b.perDay); });
+  // Validate placeability: ask the backend which planets each character could actually colonise for
+  // the short materials' P0 (reachable system, carries the P0, not already used). Re-renders when ready.
+  _ensurePlacements(needKeys);
 
-  // Greedy: cover each short material from the biggest surpluses first, naming exact colonies.
-  const moves = [];
+  // Specific colonies behind each surplus material, weakest-yield first (move the poorest, keep your
+  // best producers). A move is only valid if the freed colony's CHARACTER can place the short
+  // material somewhere reachable — so we pair surplus colonies with that char's free destination
+  // planets and consume both as we assign.
+  const planetIdx = _setupPlanetsByMaterial();
+  const spareLeft = {};
+  surplus.forEach(s => { spareLeft[s.t] = s.spare; });
+  const allSurplus = surplus
+    .flatMap(s => (planetIdx[s.t] || []).map(c => ({ ...c, fromName: s.name, fromT: s.t })))
+    .sort((a, b) => a.perDay - b.perDay);
+  const usedColony = new Set();
+  // Per-(short material, character) free destination planets, consumed as assigned.
+  const destPool = {};
+  if (_placements) Object.keys(_placements).forEach(t => {
+    destPool[t] = {};
+    Object.entries(_placements[t].by_char).forEach(([cid, arr]) => { destPool[t][cid] = arr.slice(); });
+  });
+  const p0Of = t => (_placements && _placements[t] && _placements[t].p0_name) || null;
+
+  const moves = [];        // {colony, fromName, to, dest|null}
   deficits.forEach(d => {
     let need = d.planets;
-    for (const s of surplus) {
-      if (need <= 0) break;
-      if (s.spare <= 0) continue;
-      const m = Math.min(need, s.spare);
-      const taken = (pool[s.t] || []).splice(0, m);
-      s.spare -= m; need -= m;
-      moves.push({ from: s.name, to: d.name, n: m, colonies: taken });
+    for (let i = 0; i < allSurplus.length && need > 0; i++) {
+      if (usedColony.has(i)) continue;
+      const c = allSurplus[i];
+      if (spareLeft[c.fromT] <= 0) continue;                 // can't free more of this material
+      let dest = null;
+      if (_placements) {
+        const dests = destPool[d.t] && destPool[d.t][String(c.cid)];
+        if (!dests || !dests.length) continue;               // this character can't place the short P0
+        dest = dests.shift();                                // claim that char's richest free planet
+      }
+      usedColony.add(i); spareLeft[c.fromT]--; need--;
+      moves.push({ colony: c, fromName: c.fromName, to: d.name, dest });
     }
-    d.unmet = need;   // planets still short after all surpluses are used
+    d.unmet = need;     // still short: no feasible surplus colony / no reachable free planet
   });
   const newBuilds = deficits.filter(d => d.unmet > 0);
-  const leftover = surplus.filter(s => s.spare >= 1);
-  const movedTotal = moves.reduce((a, m) => a + m.n, 0);
+  const leftover = surplus.filter(s => spareLeft[s.t] >= 1).map(s => ({ name: s.name, spare: spareLeft[s.t] }));
+  const movedTotal = moves.length;
 
-  const _colonyLi = (m) => {
-    const named = m.colonies.map(c => {
-      const where = c.system ? `${_esc(c.system)}${c.planet_num != null ? ' P' + c.planet_num : ''}` : 'a planet';
-      return `<li>Free <b>${_esc(c.char)}</b>'s <b>${_esc(m.from)}</b> colony at <b>${where}</b> <span class="an-sug-note">(${Math.round(c.perDay).toLocaleString()}/day)</span> → redeploy that slot to <b>${_esc(m.to)}</b></li>`;
-    });
-    const extra = m.n - m.colonies.length;   // safety: spare estimate exceeded named colonies
-    if (extra > 0) named.push(`<li>+ ${extra} more <b>${_esc(m.from)}</b> colon${extra === 1 ? 'y' : 'ies'} → <b>${_esc(m.to)}</b></li>`);
-    return named.join('');
+  const _moveLi = (m) => {
+    const c = m.colony;
+    const where = c.system ? `${_esc(c.system)}${c.planet_num != null ? ' P' + c.planet_num : ''}` : 'a planet';
+    const target = m.dest
+      ? ` → set up <b>${_esc(m.to)}</b> at <b>${_esc(m.dest.system)} P${m.dest.planet_num}</b> <span class="an-sug-note">(${_esc(m.dest.planet_type)}, richness ${m.dest.richness})</span>`
+      : ` → redeploy that slot to <b>${_esc(m.to)}</b>`;
+    return `<li>Free <b>${_esc(c.char)}</b>'s <b>${_esc(m.fromName)}</b> colony at <b>${where}</b> <span class="an-sug-note">(${Math.round(c.perDay).toLocaleString()}/day)</span>${target}</li>`;
   };
 
   let suggest = '';
   if (moves.length) {
-    suggest += `<div class="an-suggest an-suggest-move"><div class="an-suggest-h">Rebalance — redeploy ${movedTotal} colon${movedTotal === 1 ? 'y' : 'ies'}</div><ul>${moves.map(_colonyLi).join('')}</ul></div>`;
+    suggest += `<div class="an-suggest an-suggest-move"><div class="an-suggest-h">Rebalance — redeploy ${movedTotal} colon${movedTotal === 1 ? 'y' : 'ies'}</div><ul>${moves.map(_moveLi).join('')}</ul></div>`;
   }
   if (newBuilds.length) {
-    const li = newBuilds.map(d => `<li><b>${_esc(d.name)}</b> — still short <b>${Math.round(d.unmet * d.per).toLocaleString()}/day</b>: build <b>${d.unmet}</b> new extractor planet${d.unmet === 1 ? '' : 's'} <span class="an-sug-note">(no surplus to move)</span></li>`).join('');
-    suggest += `<div class="an-suggest an-suggest-fix"><div class="an-suggest-h">Net short — add capacity</div><ul>${li}</ul></div>`;
+    const li = newBuilds.map(d => {
+      const p0 = p0Of(d.t);
+      const why = _placements ? (p0 ? `no free ${_esc(p0)} planet reachable by a character with a spare colony` : 'no reachable planet free') : 'no surplus to move';
+      return `<li><b>${_esc(d.name)}</b> — still short <b>${Math.round(d.unmet * d.per).toLocaleString()}/day</b> (${d.unmet} planet${d.unmet === 1 ? '' : 's'}) <span class="an-sug-note">(${why})</span></li>`;
+    }).join('');
+    suggest += `<div class="an-suggest an-suggest-fix"><div class="an-suggest-h">Can't rebalance — still short</div><ul>${li}</ul></div>`;
   }
   if (leftover.length) {
     const li = leftover.map(s => `<li><b>${_esc(s.name)}</b> — <b>${s.spare}</b> planet${s.spare === 1 ? '' : 's'} still spare (nothing short needs them)</li>`).join('');

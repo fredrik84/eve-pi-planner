@@ -5,7 +5,7 @@ from fractions import Fraction
 from math import gcd, ceil
 from typing import Optional
 
-from fastapi import APIRouter, Cookie, Depends, Request
+from fastapi import APIRouter, Body, Cookie, Depends, Request
 from pydantic import BaseModel
 
 from app.sde import load_pi_data, get_connection
@@ -943,6 +943,63 @@ def delete_plan_snapshot(snap_id: int, context_id: int = Depends(require_context
     con.commit()
     con.close()
     return {"ok": True}
+
+
+@router.post("/api/analyze-placements")
+def analyze_placements(body: dict = Body(...), pp_session: str = Cookie(default=None)):
+    """For the given P1 type_ids, return — per real character — the Planet-DB planets that character
+    could actually colonise for that P1's P0: a planet carrying the P0, in a system the character
+    already operates in, not already occupied by them. Lets the Setup Analysis tab validate that a
+    suggested 'redeploy to X' move is physically placeable (and name the target planet)."""
+    context_id = session_context_id(pp_session)
+    if not context_id:
+        return {"placements": {}}
+    type_ids = [int(t) for t in (body.get("type_ids") or [])]
+    if not type_ids:
+        return {"placements": {}}
+    pi = load_pi_data()
+    types, sch = pi["types"], pi["schematics"]
+    con = get_connection()
+    rows = con.execute("""
+        SELECT cp.character_id AS cid, s.name AS system, cp.planet_num AS pn
+        FROM pp_char_planets cp
+        LEFT JOIN solar_systems s ON s.system_id = cp.solar_system_id
+        JOIN pp_characters c ON c.character_id = cp.character_id
+        WHERE c.context_id=? AND COALESCE(c.is_dummy,0)=0
+    """, (context_id,)).fetchall()
+    foot: dict[int, set] = {}   # cid -> systems the char operates in
+    occ: dict[int, set] = {}    # cid -> (system, planet_num) already colonised
+    for r in rows:
+        if not r["system"]:
+            continue
+        foot.setdefault(r["cid"], set()).add(r["system"])
+        occ.setdefault(r["cid"], set()).add((r["system"], r["pn"]))
+    out = {}
+    for tid in type_ids:
+        s = sch.get(tid) or {}
+        inputs = s.get("inputs") or []
+        if not inputs:
+            continue
+        p0_name = types.get(inputs[0]["type_id"], {}).get("name")
+        col = _p0_col(p0_name) if p0_name else None
+        if not col:
+            continue
+        # col comes from the fixed _NAME_TO_COL map → safe to interpolate.
+        planets = con.execute(
+            f'SELECT system, planet_num, planet_type, "{col}" AS r FROM pp_planets WHERE "{col}" > 0'
+        ).fetchall()
+        by_char = {}
+        for cid, systems in foot.items():
+            avail = [{"system": p["system"], "planet_num": p["planet_num"],
+                      "planet_type": p["planet_type"], "richness": round(p["r"] or 0)}
+                     for p in planets
+                     if p["system"] in systems and (p["system"], p["planet_num"]) not in occ.get(cid, set())]
+            avail.sort(key=lambda x: -x["richness"])
+            if avail:
+                by_char[str(cid)] = avail
+        out[str(tid)] = {"p0_name": p0_name, "by_char": by_char}
+    con.close()
+    return {"placements": out}
 
 
 # ── Planning algorithm helpers ────────────────────────────────────────────────
