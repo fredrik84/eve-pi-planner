@@ -2207,20 +2207,25 @@ function renderAnalysis() {
   if (snap.isk_per_day)
     stats += stat(_fmtIsk(snap.isk_per_day * feedRatio),
                   `ISK/day${fed ? '' : ' · ' + _fmtIsk(snap.isk_per_day) + ' if fed'}`, '');
-  if (refillDays) stats += stat(_dur(refillDays), 'Refill cadence (3 LP)', '');
   stats += stat(String(snap.factories_count || (snap.factories || []).length), 'Factory planets', '');
   stats += `</div>`;
 
-  // "If balanced" projection: at 100% fed (after rebalancing) the factories make the full target,
-  // so show cumulative output + value over a few horizons. Plain rate × days (continuous running,
-  // assuming you keep extractors cycled).
+  // Refill cadence: how long between maintenance runs (empty extractors → top up factory launchpads).
+  // The hard limit is the factory side — its P1 buffer (the plan's 3 launchpads = 30,000 m³) drains in
+  // factory_refill_hours at the consumption rate. Over-producing P1 does NOT extend this (launchpad
+  // capacity is fixed; surplus just banks at the extractors); to go longer you add buffer (more
+  // launchpads/storage on the factory planets). Cadence scales linearly with buffer, so we show a few.
   let proj = '';
-  if (snap.products_per_day) {
-    const ppd = Number(snap.products_per_day), ipd = Number(snap.isk_per_day || 0);
-    const cells = [[1, 'day'], [7, 'week'], [30, 'month']].map(([d, lbl]) =>
-      stat(`${Math.round(ppd * d).toLocaleString()} <span class="an-of">${unit}</span>`,
-           `per ${lbl}${ipd ? ' · ' + _fmtIsk(ipd * d) + ' ISK' : ''}`, '')).join('');
-    proj = `<div class="an-proj"><div class="an-proj-h">If balanced (100% fed) you'd produce</div><div class="an-stats">${cells}</div></div>`;
+  if (refillDays) {
+    const perLP = refillDays / 3;   // plan assumes a 3-launchpad (30,000 m³) buffer per factory
+    const cells = [3, 4, 5, 6].map(lp =>
+      stat(_dur(perLP * lp), `${lp} launchpads / factory`, lp === 3 ? 'an-ok' : '')).join('');
+    const nfac = snap.factories_count || (snap.factories || []).length;
+    proj = `<div class="an-proj">`
+      + `<div class="an-proj-h">Refill run — visit every <b>${_dur(refillDays)}</b> to keep your ${nfac} factor${nfac === 1 ? 'y' : 'ies'} fed (3-launchpad buffer)</div>`
+      + `<div class="an-stats">${cells}</div>`
+      + `<div class="an-legend">Each factory's launchpads hold ~${_dur(refillDays)} of feed — that's the hard limit, set by storage, not extraction. Over-producing doesn't push it out (the launchpads cap each fill); to stretch the interval, add launchpads/storage to the factory planets.</div>`
+      + `</div>`;
   }
 
   const barRows = rows.map(r => {
