@@ -734,7 +734,10 @@ def list_characters(pp_session: str = Cookie(default=None)):
         try:
             if p["sim_state"]:
                 for o in (_json.loads(p["sim_state"]).get("outputs") or []):
-                    rate = o.get("rate", 0) or 0
+                    # Sustainable (extraction-limited) rate — poor planets can't hold full factory
+                    # output, so this is the honest "units/day toward a quota". Falls back to the
+                    # launchpad rate for sim states scanned before rate_sustained existed.
+                    rate = o.get("rate_sustained", o.get("rate", 0)) or 0
                     if rate > 0:
                         production.append({"type_id": o["type_id"], "name": o["name"],
                                            "per_day": round(rate * 86400)})

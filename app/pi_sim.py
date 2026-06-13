@@ -92,23 +92,26 @@ def colony_sim_state(detail: dict, pi_data: dict) -> dict | None:
 
     outputs = []
     for out, f in lines.items():
-        # Launchpad fills at the FULL factory rate (all facilities running). Extraction sets only a
-        # long-run ceiling, but the decay curve front-loads extraction so storage buffers the
-        # facilities at full output for most of a program — matching the in-game launchpad, which
-        # accrues whole batches (count × output_qty, e.g. 8 × 20 = 160) every cycle. (Pure
-        # extraction-limiting under-counts; storage isn't modelled, so a long-starved colony can
-        # read a little high.)
+        # `rate` = the FULL factory rate (all facilities running). The launchpad fills at this rate
+        # because extraction decay front-loads P0 and storage buffers the facilities — it matches the
+        # in-game launchpad, which accrues whole batches (count × output_qty, e.g. 8 × 20 = 160) every
+        # cycle. Good for "what's in my pad now".
+        # `rate_sustained` = the long-run SUSTAINABLE rate = min(factory capacity, extraction refined).
+        # A poor planet can't keep its factories fed, so over a full program it averages the (lower)
+        # extraction-limited rate. That's the right number for "can this colony meet a daily quota".
         rate = f["count"] * f["output_qty"] / f["cycle_time"]    # product per sec
+        ext_refined = ext_rate.get(f["input_type"], 0.0) * f["output_qty"] / (f["input_qty"] or 1)
+        rate_sustained = min(rate, ext_refined) if ext_refined > 0 else rate
         outputs.append({"type_id": out, "name": types.get(out, {}).get("name") or f"#{out}",
                         "tier": types.get(out, {}).get("pi_tier") or 1,
-                        "base": base.get(out, 0.0), "rate": rate,
+                        "base": base.get(out, 0.0), "rate": rate, "rate_sustained": rate_sustained,
                         "batch": f["count"] * f["output_qty"]})
     if not outputs:
         # Pure extractor (no on-planet factories): the P0 itself piles up in the launchpad.
         for p0, rate in ext_rate.items():
             outputs.append({"type_id": p0, "name": types.get(p0, {}).get("name") or f"#{p0}",
                             "tier": types.get(p0, {}).get("pi_tier") or 0,
-                            "base": base.get(p0, 0.0), "rate": rate,
+                            "base": base.get(p0, 0.0), "rate": rate, "rate_sustained": rate,
                             "batch": ext_batch.get(p0, 0.0)})
     if not outputs or t0 <= 0:
         return None
