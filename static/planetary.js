@@ -2065,17 +2065,24 @@ async function deleteSavedPlan(id, srvId) {
 // factories eat at full rate). Answers "am I extracting/producing enough to keep this plan's
 // factories refilled?" with headline stats + per-P1 bars.
 let _analyzeSnaps = [];
-let _refillCfg = { lp: 3, sf: 3 };   // factory P1 buffer: launchpads + storage facilities (std SHPC build)
-let _anPerFacM3 = 0;                  // per-factory P1 consumption (m³/day), set during render
+let _refillCfg = { lp: 3, sf: 0, out: null };   // factory P1 INPUT buffer (LP + storage) + real output/factory/day (null = plan's)
+let _anP1PerUnit = 0;    // P1 units consumed per finished product (e.g. 1,920 per SHPC), set during render
+let _anPlanOut = 0;      // the plan's assumed output per factory per day, set during render
 
-// Live-update the refill interval when the buffer inputs change — no full re-render (keeps focus).
+// Live-update the refill interval when the buffer / output inputs change — no full re-render (keeps focus).
 function _setRefillCfg(field, val) {
-  _refillCfg[field] = Math.max(0, Math.min(20, parseInt(val) || 0));
+  const v = parseFloat(val);
+  if (field === 'out') _refillCfg.out = (val === '' || isNaN(v)) ? null : Math.max(0, v);
+  else _refillCfg[field] = Math.max(0, Math.min(20, parseInt(val) || 0));
   const m3 = _refillCfg.lp * 10000 + _refillCfg.sf * 12000;
   const buf = document.getElementById('anRefillBuf');
   if (buf) buf.textContent = m3.toLocaleString() + ' m³';
-  const days = _anPerFacM3 ? m3 / _anPerFacM3 : 0;
+  const out = _refillCfg.out != null ? _refillCfg.out : _anPlanOut;       // products/factory/day
+  const consM3 = out * _anP1PerUnit * 0.38;                              // m³ of P1 burned/factory/day
+  const days = consM3 ? m3 / consM3 : 0;
   document.querySelectorAll('.an-refill-days').forEach(e => e.textContent = _dur(days));
+  const cons = document.getElementById('anRefillCons');
+  if (cons) cons.textContent = `${Math.round(out * _anP1PerUnit).toLocaleString()} P1/day · ~${Math.round(consM3).toLocaleString()} m³/day`;
 }
 
 // Show days normally, but drop to hours when it's under a day (otherwise it rounds to "0 days").
@@ -2239,34 +2246,40 @@ function renderAnalysis() {
   stats += stat(String(snap.factories_count || (snap.factories || []).length), 'Factory planets', '');
   stats += `</div>`;
 
-  // Refill cadence: how long between maintenance runs (empty extractors → top up the factory's P1
-  // buffer). Consumption is fixed and solid (P1/day per factory); the interval = the factory's P1
-  // buffer ÷ that. The buffer is the part that varies by build, so it's user-set: launchpads (10,000
-  // m³) + storage facilities (12,000 m³). The standard SHPC factory is 3 LP + 3 storage ≈ 66,000 m³.
+  // Refill cadence = factory P1 buffer ÷ consumption. Consumption = (real output/factory/day) ×
+  // (P1 per product) × 0.38 m³. Both the buffer (launchpads + storage) and the real output rate are
+  // user-set, because the plan's 0.5/hr assumes a full-size factory — a smaller P2→P3 build produces
+  // (and so consumes) less, which is what stretches the interval, NOT extra storage.
   let proj = '';
   {
     const nfac = snap.factories_count || (snap.factories || []).length || 0;
     const totP1 = Array.isArray(snap.consumption)
       ? snap.consumption.reduce((a, c) => a + (c.units_per_day || 0), 0)
       : Object.values(snap.consumption || {}).reduce((a, v) => a + (v || 0), 0);
-    const perFacUnits = nfac ? totP1 / nfac : 0;
-    _anPerFacM3 = perFacUnits * 0.38;     // stashed so the buffer inputs can recompute without re-render
-    if (perFacUnits) {
+    const ppd = Number(snap.products_per_day || 0);
+    _anP1PerUnit = ppd ? totP1 / ppd : 0;                 // P1 per finished product (e.g. 1,920 / SHPC)
+    _anPlanOut = nfac ? ppd / nfac : 0;                   // plan's assumed output / factory / day
+    if (_anP1PerUnit && _anPlanOut) {
       const bufM3 = _refillCfg.lp * 10000 + _refillCfg.sf * 12000;
-      const days = _anPerFacM3 ? bufM3 / _anPerFacM3 : 0;
+      const out = _refillCfg.out != null ? _refillCfg.out : _anPlanOut;
+      const consM3 = out * _anP1PerUnit * 0.38;
+      const days = consM3 ? bufM3 / consM3 : 0;
       const cells = [
         stat(`<span class="an-refill-days">${_dur(days)}</span>`, 'between refills', 'an-ok'),
-        stat(`${Math.round(perFacUnits).toLocaleString()} <span class="an-of">P1/day</span>`, `each factory eats ~${Math.round(_anPerFacM3).toLocaleString()} m³/day`, ''),
+        stat(`<span id="anRefillCons">${Math.round(out * _anP1PerUnit).toLocaleString()} P1/day · ~${Math.round(consM3).toLocaleString()} m³/day</span>`, 'P1 burned / factory', ''),
         nfac ? stat(String(nfac), 'factories to service', '') : '',
       ].join('');
       proj = `<div class="an-proj">`
         + `<div class="an-proj-h">Refill run — empty extractors & top up factories every <b class="an-refill-days">${_dur(days)}</b></div>`
-        + `<div class="an-refill-cfg">P1 buffer / factory: `
+        + `<div class="an-refill-cfg">Output: `
+        + `<input type="number" min="0" step="0.5" value="${out}" oninput="_setRefillCfg('out', this.value)"> ${_esc(unit)}/factory/day `
+        + `<span class="an-sug-note">(plan assumes ${_anPlanOut.toLocaleString()})</span></div>`
+        + `<div class="an-refill-cfg">Buffer / factory: `
         + `<input type="number" min="0" max="20" value="${_refillCfg.lp}" oninput="_setRefillCfg('lp', this.value)"> launchpads `
-        + `+ <input type="number" min="0" max="20" value="${_refillCfg.sf}" oninput="_setRefillCfg('sf', this.value)"> storage facilities `
+        + `+ <input type="number" min="0" max="20" value="${_refillCfg.sf}" oninput="_setRefillCfg('sf', this.value)"> storage `
         + `= <b id="anRefillBuf">${bufM3.toLocaleString()} m³</b></div>`
         + `<div class="an-stats">${cells}</div>`
-        + `<div class="an-legend">Consumption is fixed: each factory burns ~${Math.round(_anPerFacM3).toLocaleString()} m³/day of P1, so the interval is just buffer ÷ that. Over-producing doesn't change it — only how much P1 the factory can hold. Set the buffer to match your build (the standard SHPC factory is 3 LP + 3 storage ≈ 66,000 m³ ≈ 7.5 days). Extractors fill their own launchpads at a similar pace, so empty them on the same trip.</div>`
+        + `<div class="an-legend">Interval = buffer ÷ consumption. The plan assumes ${_anPlanOut.toLocaleString()} ${_esc(unit)}/factory/day (0.5/hr); set <b>Output</b> to your real figure — a smaller P2→P3 build makes (and burns) less, so a full 30,000 m³ (3 LP) load lasts longer. Extractors fill their own launchpads at a similar pace, so empty them on the same trip.</div>`
         + `</div>`;
     }
   }
@@ -2299,26 +2312,25 @@ function renderAnalysis() {
                  planets: Math.max(1, Math.ceil((r.need - r.have) / perPlanet(r.t))) }))
     .sort((a, b) => b.planets - a.planets);
   const surplus = rows.filter(r => r.ratio >= 1.25)
-    .map(r => ({ name: r.name, t: r.t, per: perPlanet(r.t),
+    .map(r => ({ name: r.name, t: r.t, per: perPlanet(r.t), ratio: r.ratio,
                  spare: Math.floor((r.have - r.need) / perPlanet(r.t)) }))
     .filter(s => s.spare >= 1)
-    .sort((a, b) => b.spare - a.spare);
+    .sort((a, b) => b.ratio - a.ratio);   // most over-produced first → free those, keep scarcer ones
 
   // Validate placeability: ask the backend which planets each character could actually colonise for
   // the short materials' P0 (reachable system, carries the P0, not already used). Re-renders when ready.
   _ensurePlacements(needKeys);
 
-  // Specific colonies behind each surplus material, weakest-yield first (move the poorest, keep your
-  // best producers). A move is only valid if the freed colony's CHARACTER can place the short
-  // material somewhere reachable — so we pair surplus colonies with that char's free destination
-  // planets and consume both as we assign.
+  // Free colonies from the MOST over-produced material first (surplus is sorted by ratio), and within
+  // a material take the weakest colony (keep your best producers). A move is only valid if the freed
+  // colony's CHARACTER can place the short material somewhere reachable — so we pair surplus colonies
+  // with that char's free destination planets and consume both as we assign.
   const planetIdx = _setupPlanetsByMaterial();
   const spareLeft = {};
-  surplus.forEach(s => { spareLeft[s.t] = s.spare; });
-  const allSurplus = surplus
-    .flatMap(s => (planetIdx[s.t] || []).map(c => ({ ...c, fromName: s.name, fromT: s.t })))
-    .sort((a, b) => a.perDay - b.perDay);
-  const usedColony = new Set();
+  const colsByMat = {};
+  surplus.forEach(s => { spareLeft[s.t] = s.spare; colsByMat[s.t] = (planetIdx[s.t] || []).slice().sort((a, b) => a.perDay - b.perDay); });
+  const usedKey = new Set();
+  const ckey = c => `${c.cid}:${c.system}:${c.planet_num}`;
   // Per-(short material, character) free destination planets, consumed as assigned.
   const destPool = {};
   if (_placements) Object.keys(_placements).forEach(t => {
@@ -2330,18 +2342,20 @@ function renderAnalysis() {
   const moves = [];        // {colony, fromName, to, dest|null}
   deficits.forEach(d => {
     let need = d.planets;
-    for (let i = 0; i < allSurplus.length && need > 0; i++) {
-      if (usedColony.has(i)) continue;
-      const c = allSurplus[i];
-      if (spareLeft[c.fromT] <= 0) continue;                 // can't free more of this material
-      let dest = null;
-      if (_placements) {
-        const dests = destPool[d.t] && destPool[d.t][String(c.cid)];
-        if (!dests || !dests.length) continue;               // this character can't place the short P0
-        dest = dests.shift();                                // claim that char's richest free planet
+    for (const s of surplus) {                               // most over-produced material first
+      if (need <= 0) break;
+      for (const c of colsByMat[s.t]) {
+        if (need <= 0 || spareLeft[s.t] <= 0) break;
+        if (usedKey.has(ckey(c))) continue;
+        let dest = null;
+        if (_placements) {
+          const dests = destPool[d.t] && destPool[d.t][String(c.cid)];
+          if (!dests || !dests.length) continue;             // this character can't place the short P0
+          dest = dests.shift();                              // claim that char's richest free planet
+        }
+        usedKey.add(ckey(c)); spareLeft[s.t]--; need--;
+        moves.push({ colony: c, fromName: s.name, to: d.name, dest });
       }
-      usedColony.add(i); spareLeft[c.fromT]--; need--;
-      moves.push({ colony: c, fromName: c.fromName, to: d.name, dest });
     }
     d.unmet = need;     // still short: no feasible surplus colony / no reachable free planet
   });
