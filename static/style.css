@@ -1622,3 +1622,5 @@ a.plan-action-btn { text-decoration: none; display: inline-block; }
 .an-suggest li b { color: #fff; }
 .an-sug-note { color: #8b93a6; font-size: 12px; }
 .an-stat-val .an-of { font-size: 14px; color: #8b93a6; font-weight: 400; }
+.an-suggest-move { border-color: #6a5a1f; background: #1f1c12; }
+.an-suggest-move .an-suggest-h { color: #e0c84a; }

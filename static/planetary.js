@@ -2214,42 +2214,56 @@ function renderAnalysis() {
       </div>`;
   }).join('');
 
-  // ── Suggested adjustments to hit the quota ──────────────────────────────────
-  // Size "add N planets" from the player's OWN average per-planet output of that P1 (honest to
-  // their planet quality); for a P1 they don't extract yet, fall back to the average across what
-  // they do produce.
+  // ── Rebalance moves ─────────────────────────────────────────────────────────
+  // You can't change a planet's richness — you only learn it once deployed. What's actionable is
+  // moving a surplus colony onto a short material (1 colony slot = 1 move). Size everything in
+  // PLANETS off each material's own per-planet output (a P1 not extracted yet falls back to the
+  // average of what you do produce).
   const rates = needKeys.map(t => prod[t]).filter(p => p && p.planets > 0).map(p => p.perDay / p.planets);
   const fallbackRate = rates.length ? rates.reduce((a, b) => a + b, 0) / rates.length : 7680;
   const perPlanet = t => (prod[t] && prod[t].planets > 0) ? prod[t].perDay / prod[t].planets : fallbackRate;
 
-  const adds = [];
-  let totalAdd = 0;
-  rows.forEach(r => {
-    if (r.ratio >= 0.995) return;
-    const deficit = r.need - r.have;
-    const each = perPlanet(r.t);
-    const n = Math.max(1, Math.ceil(deficit / each));
-    totalAdd += n;
-    const none = !prod[r.t] || !prod[r.t].planets;
-    adds.push(`<li><b>${_esc(r.name)}</b> — short <b>${Math.round(deficit).toLocaleString()}/day</b>: add ~<b>${n}</b> extractor planet${n === 1 ? '' : 's'} <span class="an-sug-note">(≈${Math.round(each).toLocaleString()}/day each${none ? ', not extracted yet' : ''})</span></li>`);
-  });
+  const deficits = rows.filter(r => r.ratio < 0.995)
+    .map(r => ({ name: r.name, t: r.t, gap: r.need - r.have, per: perPlanet(r.t),
+                 planets: Math.max(1, Math.ceil((r.need - r.have) / perPlanet(r.t))) }))
+    .sort((a, b) => b.planets - a.planets);
+  const surplus = rows.filter(r => r.ratio >= 1.25)
+    .map(r => ({ name: r.name, t: r.t, per: perPlanet(r.t),
+                 spare: Math.floor((r.have - r.need) / perPlanet(r.t)) }))
+    .filter(s => s.spare >= 1)
+    .sort((a, b) => b.spare - a.spare);
 
-  const frees = [];
-  rows.forEach(r => {
-    if (r.ratio < 1.25) return;       // only flag a chunky surplus
-    const extra = r.have - r.need;
-    const each = perPlanet(r.t);
-    const n = Math.floor(extra / each);
-    if (n >= 1) frees.push(`<li><b>${_esc(r.name)}</b> — surplus <b>+${Math.round(extra).toLocaleString()}/day</b>: ~${n} planet${n === 1 ? '' : 's'} of slack you could redeploy</li>`);
+  // Greedy: cover each short material from the biggest surpluses first.
+  const moves = [];
+  deficits.forEach(d => {
+    let need = d.planets;
+    for (const s of surplus) {
+      if (need <= 0) break;
+      if (s.spare <= 0) continue;
+      const m = Math.min(need, s.spare);
+      s.spare -= m; need -= m;
+      moves.push({ from: s.name, to: d.name, n: m });
+    }
+    d.unmet = need;   // planets still short after all surpluses are used
   });
+  const newBuilds = deficits.filter(d => d.unmet > 0);
+  const leftover = surplus.filter(s => s.spare >= 1);
 
   let suggest = '';
-  if (adds.length)
-    suggest += `<div class="an-suggest an-suggest-fix"><div class="an-suggest-h">To meet the quota — add ~${totalAdd} extractor planet${totalAdd === 1 ? '' : 's'}</div><ul>${adds.join('')}</ul></div>`;
-  if (frees.length)
-    suggest += `<div class="an-suggest an-suggest-free"><div class="an-suggest-h">Spare capacity</div><ul>${frees.join('')}</ul></div>`;
-  if (!adds.length)
-    suggest = `<div class="an-suggest an-suggest-free"><div class="an-suggest-h">${frees.length ? 'Fed, with room to spare' : 'Balanced'} — every P1 this plan needs is covered.</div>${frees.length ? `<ul>${frees.join('')}</ul>` : ''}</div>`;
+  if (moves.length) {
+    const li = moves.map(m => `<li>Move <b>${m.n}</b> <b>${_esc(m.from)}</b> planet${m.n === 1 ? '' : 's'} → <b>${_esc(m.to)}</b></li>`).join('');
+    suggest += `<div class="an-suggest an-suggest-move"><div class="an-suggest-h">Rebalance — redeploy ${moves.reduce((a, m) => a + m.n, 0)} colon${moves.reduce((a, m) => a + m.n, 0) === 1 ? 'y' : 'ies'}</div><ul>${li}</ul></div>`;
+  }
+  if (newBuilds.length) {
+    const li = newBuilds.map(d => `<li><b>${_esc(d.name)}</b> — still short <b>${Math.round(d.unmet * d.per).toLocaleString()}/day</b>: build <b>${d.unmet}</b> new extractor planet${d.unmet === 1 ? '' : 's'} <span class="an-sug-note">(no surplus to move)</span></li>`).join('');
+    suggest += `<div class="an-suggest an-suggest-fix"><div class="an-suggest-h">Net short — add capacity</div><ul>${li}</ul></div>`;
+  }
+  if (leftover.length) {
+    const li = leftover.map(s => `<li><b>${_esc(s.name)}</b> — <b>${s.spare}</b> planet${s.spare === 1 ? '' : 's'} still spare (nothing short needs them)</li>`).join('');
+    suggest += `<div class="an-suggest an-suggest-free"><div class="an-suggest-h">Leftover surplus</div><ul>${li}</ul></div>`;
+  }
+  if (!moves.length && !newBuilds.length)
+    suggest = `<div class="an-suggest an-suggest-free"><div class="an-suggest-h">Balanced — every material this plan needs is covered${leftover.length ? ', with a little to spare' : ''}.</div></div>`;
 
   el.innerHTML = head + stats
     + `<div class="an-legend">Producing (left) vs the plan’s daily need (right) per P1. A full green bar = factories stay fed; a short red bar is the bottleneck.</div>`
