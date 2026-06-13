@@ -2000,6 +2000,7 @@ async function renderSavedPlansBar() {
   const el = document.getElementById('ppSavedPlansBar');
   if (!el) return;
   const snaps = await _fetchAllSnapshots();
+  _analyzeSnaps = snaps;   // warm the Setup Analysis cache so its tab paints instantly
   if (!snaps.length) { el.style.display = 'none'; el.innerHTML = ''; return; }
   el.style.display = '';
   const rows = snaps.map(s => {
@@ -2094,17 +2095,28 @@ function _snapNeedsByP1(snap) {
   return out;
 }
 
+function _renderAnalyzePlans() {
+  const sel = document.getElementById('analyzePlanSelect');
+  if (!sel) return;
+  const prev = sel.value;
+  sel.innerHTML = _analyzeSnaps.length
+    ? _analyzeSnaps.map((s, i) => `<option value="${i}">${_esc(s.name)}</option>`).join('')
+    : '<option value="">— no saved plans —</option>';
+  if (prev !== '' && _analyzeSnaps[prev]) sel.value = prev;
+}
+
+// Paint instantly from cache (colony data + snapshots are usually warm from the Planetary tab),
+// then refresh in the background — no need to hit Reload to see anything.
 async function onAnalyzeTabOpen() {
+  _renderAnalyzePlans();
+  if (_ppCharsData.length || _analyzeSnaps.length) renderAnalysis();
+  else {
+    const el = document.getElementById('analyzeContent');
+    if (el) el.innerHTML = '<div class="admin-hint">Loading your colonies and saved plans…</div>';
+  }
   await loadCharacters();          // refresh the live production rates
   try { _analyzeSnaps = await _fetchAllSnapshots(); } catch (e) { _analyzeSnaps = []; }
-  const sel = document.getElementById('analyzePlanSelect');
-  if (sel) {
-    const prev = sel.value;
-    sel.innerHTML = _analyzeSnaps.length
-      ? _analyzeSnaps.map((s, i) => `<option value="${i}">${_esc(s.name)}</option>`).join('')
-      : '<option value="">— no saved plans —</option>';
-    if (prev !== '' && _analyzeSnaps[prev]) sel.value = prev;
-  }
+  _renderAnalyzePlans();
   renderAnalysis();
 }
 
