@@ -618,8 +618,12 @@ function renderCharacters(chars, loggedIn) {
             : (builds
                 ? `<span class="pp-pl-build">→ ${builds}</span>`
                 : `<span class="pp-pl-factory">factory${p.num_pins ? ' · ' + p.num_pins + ' pins' : ''}</span>`);
+          // Estimated launchpad contents for this planet (simulated forward from the last scan).
+          const pad = (p.pads || []).length
+            ? `<span class="pp-pl-pad" title="Estimated launchpad contents — simulated forward from the last Refresh (ESI only reports a stale checkpoint).">${p.pads.map(x => `<b>${x.amount.toLocaleString()}</b> ${_esc(x.name)}`).join(' · ')}</span>`
+            : '';
           const cc = p.upgrade_level ? `<span class="pp-pl-cc" title="Command center level">CC${p.upgrade_level}</span>` : '';
-          return `<div class="pp-pl-row"><span class="pp-pl-loc">${loc}</span>${_ptypeSpan(p.planet_type)}${what}${cc}</div>`;
+          return `<div class="pp-pl-row"><span class="pp-pl-loc">${loc}</span>${_ptypeSpan(p.planet_type)}${what}${pad}${cc}</div>`;
         }).join('')
       : '<div class="pp-pl-empty">No colonies scanned — set them up in-game, then hit Refresh.</div>';
 
@@ -634,16 +638,6 @@ function renderCharacters(chars, loggedIn) {
         ${c.adv_planetology != null ? `<span title="Advanced Planetology skill">Adv ${c.adv_planetology}</span>` : ''}
       </div>`;
 
-    // Aggregate what's sitting in the launchpads/storage across all this toon's planets.
-    const padTotals = {};
-    planets.forEach(p => (p.pads || []).forEach(it => { padTotals[it.name] = (padTotals[it.name] || 0) + it.amount; }));
-    const padEntries = Object.entries(padTotals).sort((a, b) => b[1] - a[1]);
-    const padsHtml = padEntries.length
-      ? `<div class="pp-char-pads" title="Estimated live launchpad contents — simulated forward from the last Refresh (ESI only reports a stale checkpoint, so this is computed like the in-game client does). Refresh to re-anchor.">
-          <span class="pp-char-pads-lbl">In pads <span class="pp-char-pads-est">~est</span></span>${
-          padEntries.map(([n, a]) => `<span class="pp-pad-item"><b>${a.toLocaleString()}</b> ${_esc(n)}</span>`).join('')}</div>`
-      : '';
-
     row.innerHTML = `
       <details class="pp-char-fold">
         <summary class="pp-char-header">
@@ -653,7 +647,6 @@ function renderCharacters(chars, loggedIn) {
         </summary>
         <div class="pp-char-body">
           ${stats}
-          ${padsHtml}
           <div class="pp-char-planet-list">${planetRows}</div>
         </div>
       </details>`;

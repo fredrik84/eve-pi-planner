@@ -40,6 +40,7 @@ def colony_sim_state(detail: dict, pi_data: dict) -> dict | None:
     sch_by_id = {v["schematic_id"]: out for out, v in schematics.items()}
 
     ext_rate: dict[int, float] = {}     # P0 type_id -> extracted units/sec
+    ext_batch: dict[int, float] = {}    # P0 type_id -> extracted units per ECU cycle
     t0 = 0.0
     expiry: float | None = None
     has_ecu = False
@@ -48,7 +49,9 @@ def colony_sim_state(detail: dict, pi_data: dict) -> dict | None:
         if ed and ed.get("product_type_id") and ed.get("cycle_time"):
             has_ecu = True
             p0 = ed["product_type_id"]
-            ext_rate[p0] = ext_rate.get(p0, 0.0) + (ed.get("qty_per_cycle", 0) or 0) / ed["cycle_time"]
+            _qpc = ed.get("qty_per_cycle", 0) or 0
+            ext_rate[p0] = ext_rate.get(p0, 0.0) + _qpc / ed["cycle_time"]
+            ext_batch[p0] = ext_batch.get(p0, 0.0) + _qpc
             lcs = _epoch(pin.get("last_cycle_start"))
             if lcs:
                 t0 = max(t0, lcs)
@@ -93,15 +96,19 @@ def colony_sim_state(detail: dict, pi_data: dict) -> dict | None:
         cap_p0 = f["count"] * f["input_qty"] / f["cycle_time"]   # P0 the factories can chew per sec
         used_p0 = min(ext_p0, cap_p0)                            # binding feed
         rate = used_p0 * f["output_qty"] / f["input_qty"]        # product per sec
+        # Output lands in the launchpad in whole cycle batches (all running facilities deliver at
+        # once), so production is quantised to count × output_qty (e.g. 8 × 20 = 160).
         outputs.append({"type_id": out, "name": types.get(out, {}).get("name") or f"#{out}",
                         "tier": types.get(out, {}).get("pi_tier") or 1,
-                        "base": base.get(out, 0.0), "rate": rate})
+                        "base": base.get(out, 0.0), "rate": rate,
+                        "batch": f["count"] * f["output_qty"]})
     if not outputs:
         # Pure extractor (no on-planet factories): the P0 itself piles up in the launchpad.
         for p0, rate in ext_rate.items():
             outputs.append({"type_id": p0, "name": types.get(p0, {}).get("name") or f"#{p0}",
                             "tier": types.get(p0, {}).get("pi_tier") or 0,
-                            "base": base.get(p0, 0.0), "rate": rate})
+                            "base": base.get(p0, 0.0), "rate": rate,
+                            "batch": ext_batch.get(p0, 0.0)})
     if not outputs or t0 <= 0:
         return None
     return {"t0": t0, "expiry": expiry, "outputs": outputs}
@@ -120,7 +127,12 @@ def project(state: dict, now_ts: float | None = None) -> list[dict]:
     dt = max(0.0, end - t0)
     out = []
     for o in state["outputs"]:
-        amt = (o.get("base", 0) or 0) + (o.get("rate", 0) or 0) * dt
+        base = o.get("base", 0) or 0
+        produced = (o.get("rate", 0) or 0) * dt
+        batch = o.get("batch", 0) or 0
+        if batch > 0:
+            produced = (int(produced // batch)) * batch     # only whole cycle batches have landed
+        amt = base + produced
         if amt >= 1:
             out.append({"type_id": o["type_id"], "name": o["name"],
                         "tier": o.get("tier", 1), "amount": int(round(amt))})

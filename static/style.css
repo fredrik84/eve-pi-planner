@@ -572,14 +572,11 @@ tr:hover td { background: #181d2a; }
 .pp-pl-extract { color: #9ec89e; }
 .pp-pl-build { color: #a8c0e0; }
 .pp-pl-factory { color: #8a94ac; }
-/* "In pads" stored-materials summary */
-.pp-char-pads { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; padding: 0 0 8px;
-  font-size: 11px; color: #8a94ac; }
-.pp-char-pads-lbl { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; color: #56607a; }
-.pp-char-pads-est { color: #5a8aa0; font-weight: 600; }
-.pp-pad-item { white-space: nowrap; }
-.pp-pad-item b { color: #c8d2e6; font-family: 'Consolas', monospace; font-weight: 600; }
-.pp-pl-cc { margin-left: auto; font-size: 10px; color: #56607a; }
+.pp-pl-pad { margin-left: auto; font-size: 11px; color: #5a8aa0; white-space: nowrap;
+  background: #0e1a22; border: 1px solid #16303c; border-radius: 4px; padding: 1px 7px; }
+.pp-pl-pad b { color: #a8d0e0; font-family: 'Consolas', monospace; font-weight: 600; }
+.pp-pl-cc { font-size: 10px; color: #56607a; flex: 0 0 auto; margin-left: auto; }
+.pp-pl-row .pp-pl-pad + .pp-pl-cc { margin-left: 8px; }
 .pp-pl-empty { font-size: 12px; color: #56607a; font-style: italic; padding: 6px 0; }
 /* placeholder (dummy) characters */
 .pp-char-dummy { border-style: dashed; border-color: #2e2840; background: #181626; }
