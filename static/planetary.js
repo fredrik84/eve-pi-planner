@@ -2496,29 +2496,38 @@ function renderFinalPlan(data, opts = {}) {
   }
 
   // Character assignments
+  const _facSys = data.factory_system || '';
   const assignHtml = data.assignments.map(a => {
     if (!a.extractors.length && !a.factory_planets) return '';
-    const extractorRows = a.extractors.map(e => {
-      if (e.split) return _splitExtRow(e);
-      const ptype = e.is_existing
-        ? (e.planet_type || e.existing_ptype || '?')
-        : (e.planet_type || e.best_planet_type || (e.planet_types && e.planet_types[0]) || '?');
-      const over = e.is_extra ? ' plan-ext-over' : '';
-      const overMark = e.is_extra ? ' +' : '';
-      const tag = e.is_existing
-        ? `<span class="plan-ext-tag plan-ext-existing${over}">existing${overMark}</span>`
-        : e.is_replace
-          ? `<span class="plan-ext-tag plan-ext-replace${over}">replace${overMark}</span>`
-          : `<span class="plan-ext-tag plan-ext-new${over}">new${overMark}</span>`;
-      const sysHtml = e.system
-        ? `<span class="plan-ext-sys">${e.system} P${e.planet_num}</span>`
-        : `<span class="plan-ext-no-planet">no planet in system</span>`;
-      const qualHtml = e.quality_pct !== undefined
-        ? `<span class="plan-ext-qual ${e.quality_pct >= 80 ? 'plan-qual-ok' : e.quality_pct >= 50 ? '' : 'plan-qual-low'}">${e.quality_pct}</span>` : '';
-      return `<div class="plan-ext-row">${tag}${_ptypeSpan(ptype)}${sysHtml}<span class="plan-ext-arrow">→</span><span class="plan-ext-p1">${e.p1_name || '?'}</span>${qualHtml}</div>`;
-    }).join('');
+    // Each character's planets (extractors + factories) are ordered by location: planets in the
+    // factory system first (where you collect/deliver), then by system name, then planet number.
+    const planetRows = [];
+    a.extractors.forEach(e => {
+      let html;
+      if (e.split) {
+        html = _splitExtRow(e);
+      } else {
+        const ptype = e.is_existing
+          ? (e.planet_type || e.existing_ptype || '?')
+          : (e.planet_type || e.best_planet_type || (e.planet_types && e.planet_types[0]) || '?');
+        const over = e.is_extra ? ' plan-ext-over' : '';
+        const overMark = e.is_extra ? ' +' : '';
+        const tag = e.is_existing
+          ? `<span class="plan-ext-tag plan-ext-existing${over}">existing${overMark}</span>`
+          : e.is_replace
+            ? `<span class="plan-ext-tag plan-ext-replace${over}">replace${overMark}</span>`
+            : `<span class="plan-ext-tag plan-ext-new${over}">new${overMark}</span>`;
+        const sysHtml = e.system
+          ? `<span class="plan-ext-sys">${e.system} P${e.planet_num}</span>`
+          : `<span class="plan-ext-no-planet">no planet in system</span>`;
+        const qualHtml = e.quality_pct !== undefined
+          ? `<span class="plan-ext-qual ${e.quality_pct >= 80 ? 'plan-qual-ok' : e.quality_pct >= 50 ? '' : 'plan-qual-low'}">${e.quality_pct}</span>` : '';
+        html = `<div class="plan-ext-row">${tag}${_ptypeSpan(ptype)}${sysHtml}<span class="plan-ext-arrow">→</span><span class="plan-ext-p1">${e.p1_name || '?'}</span>${qualHtml}</div>`;
+      }
+      planetRows.push({ html, system: e.system || '', planet_num: e.planet_num });
+    });
 
-    const factoryRows = (a.factory_assignments || []).map(f => {
+    (a.factory_assignments || []).forEach(f => {
       const tag = f.is_existing
         ? `<span class="plan-ext-tag plan-ext-existing">existing</span>`
         : f.is_replace
@@ -2530,8 +2539,21 @@ function renderFinalPlan(data, opts = {}) {
       const facLabel = f.product
         ? `${f.product.name}${f.ccu ? ' · CC' + f.ccu : ''}`
         : 'factory';
-      return `<div class="plan-ext-row">${tag}${_ptypeSpan(f.planet_type || 'Barren')}${sysHtml}<span class="plan-ext-arrow">→</span><span class="plan-ext-p1 plan-fac-label">${_esc(facLabel)}</span></div>`;
-    }).join('');
+      const html = `<div class="plan-ext-row">${tag}${_ptypeSpan(f.planet_type || 'Barren')}${sysHtml}<span class="plan-ext-arrow">→</span><span class="plan-ext-p1 plan-fac-label">${_esc(facLabel)}</span></div>`;
+      planetRows.push({ html, system: f.system || '', planet_num: f.planet_num });
+    });
+
+    const _sysKey = s => s || '￿';  // unplaced/no-system rows sort last
+    planetRows.sort((x, y) => {
+      const fx = x.system && x.system === _facSys ? 0 : 1;
+      const fy = y.system && y.system === _facSys ? 0 : 1;
+      if (fx !== fy) return fx - fy;                         // factory-system planets on top
+      const c = _sysKey(x.system).localeCompare(_sysKey(y.system));
+      if (c) return c;                                       // then by system name
+      return (x.planet_num == null ? 1e9 : x.planet_num) - (y.planet_num == null ? 1e9 : y.planet_num);
+    });
+    const extractorRows = planetRows.map(r => r.html).join('');
+    const factoryRows = '';
 
     const freeRows = Array.from({length: a.free_planets || 0}, () =>
       `<div class="plan-ext-row"><span class="plan-ext-tag plan-ext-free">free</span><span class="plan-ext-p1 plan-free-label">available</span></div>`
