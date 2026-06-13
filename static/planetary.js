@@ -2559,6 +2559,19 @@ function renderFinalPlan(data, opts = {}) {
     const freeRows = Array.from({length: a.free_planets || 0}, () =>
       `<div class="plan-ext-row"><span class="plan-ext-tag plan-ext-free">free</span><span class="plan-ext-p1 plan-free-label">available</span></div>`).join('');
 
+    // Command Centers this toon needs, by planet type (one CC per colony) — for buying/hauling.
+    const ccCounts = {};
+    items.forEach(i => {
+      const pt = i.e ? (i.e.planet_type || i.e.best_planet_type || (i.e.planet_types && i.e.planet_types[0]))
+                     : (i.f.planet_type || 'Barren');
+      if (pt) ccCounts[pt] = (ccCounts[pt] || 0) + 1;
+    });
+    const ccHtml = Object.keys(ccCounts).length
+      ? `<div class="plan-char-cc"><span class="plan-char-cc-lbl">Command centers</span>${
+          Object.entries(ccCounts).sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0]))
+            .map(([t, n]) => `<span class="plan-cc-badge"><b>${n}×</b> ${_ptypeSpan(t)}</span>`).join('')}</div>`
+      : '';
+
     let body;
     if (_grouped) {
       const systems = [...new Set(items.filter(i => i.system).map(i => i.system))].sort(_sysOrder);
@@ -2584,6 +2597,7 @@ function renderFinalPlan(data, opts = {}) {
     return `
       <div class="plan-char-block">
         <div class="plan-char-name">${a.character_name}${facBadge}${facToggle}<span class="plan-char-meta"> · ${a.effective_planets} pl · CCU ${a.ccu}</span></div>
+        ${ccHtml}
         ${body}
       </div>`;
   }).join('');

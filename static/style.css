@@ -921,6 +921,11 @@ tr:hover td { background: #181d2a; }
 .plan-char-block:last-child { border-bottom: none; }
 .plan-char-name { font-size: 13px; color: #c8cdd8; font-weight: 500; margin-bottom: 6px; }
 .plan-char-name .plan-char-meta { font-size: 11px; color: #4a5470; font-weight: 400; }
+/* Per-character Command Center counts by planet type */
+.plan-char-cc { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; margin: 0 0 9px; font-size: 11px; }
+.plan-char-cc-lbl { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; color: #5a6478; }
+.plan-cc-badge { color: #8a94ac; }
+.plan-cc-badge b { color: #c8d2e6; font-family: 'Consolas', monospace; font-weight: 600; }
 
 .plan-char-extractors { display: flex; flex-direction: column; gap: 3px; }
 
