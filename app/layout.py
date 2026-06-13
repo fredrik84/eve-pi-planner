@@ -794,6 +794,45 @@ def generate_extractor_layout(p1_id: int, planet_type: str = "Barren", launchpad
     return {"summary": summary, "planets": [planet]}
 
 
+_FITTED_BASICS_CACHE: dict[tuple, int] = {}
+
+
+def fitted_extractor_basics(planet_type: str, cc: int) -> int:
+    """How many Basic Industry Facilities fit alongside the 10 extractor heads on this planet
+    type at this command-centre level (power-grid limited). 8 basics = full conversion of a
+    100%-quality planet's extraction; fewer (low CC, or a big planet whose head spokes eat the
+    grid) means the planet refines less P1 on-site. Cached (≤ 8 types × 5 CC). Builds the
+    template directly (no planet-type coercion) — the basic-facility cost is recipe-independent,
+    so any P1 schematic gives the right count for the planet type."""
+    cc = max(1, min(5, int(cc)))
+    key = (planet_type, cc)
+    if key in _FITTED_BASICS_CACHE:
+        return _FITTED_BASICS_CACHE[key]
+    n = EXTRACTOR_BASICS
+    try:
+        pi_data = load_pi_data()
+        p1_id = next(tid for tid, t in pi_data["types"].items() if t.get("pi_tier") == 1)
+        con = get_connection()
+        struct = _structure_ids(con, planet_type)
+        r = con.execute("SELECT type_id FROM types WHERE name=?", (f"Planet ({planet_type})",)).fetchone()
+        struct["planet_type_id"] = r["type_id"] if r else None
+        con.close()
+
+        def _build(nb):
+            b = build_extractor_template(p1_id, planet_type, struct, pi_data, EXTRACTOR_HEADS, nb, n_launchpads=1)
+            b["template"]["CmdCtrLv"] = cc
+            return b
+
+        built = _build(n)
+        while n > 1 and compute_resources(built["template"], struct)["over"]:
+            n -= 1
+            built = _build(n)
+    except Exception:
+        n = EXTRACTOR_BASICS
+    _FITTED_BASICS_CACHE[key] = n
+    return n
+
+
 def _p1_imports_per_factory(product_id: int, pi_data: dict) -> dict[int, float]:
     """P1 units/hour imported by one compact factory of this product."""
     types = pi_data["types"]

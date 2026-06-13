@@ -1662,21 +1662,38 @@ def _ext_leg_qualities(extractors: list[dict]) -> list[int]:
     return out
 
 
-def _ext_actual_p0_per_day(extractors: list[dict]) -> float:
-    """Quality-adjusted P0/day, counting a split leg as heads × quality (not a full planet)."""
+def _basics_factor(planet_type: str | None, cc: int) -> float:
+    """Fraction of full on-planet P1 refining the planet can actually do: 8 Basic Industry
+    Facilities fully convert a 100%-quality planet's extraction; fewer fit on a low-CC or big
+    planet (head spokes eat the grid), so it refines proportionally less P1 on-site. 1.0 if
+    unknown. A planet's effective P1 output is then min(quality, basics-factor) — whichever of
+    extraction richness or on-site refining is the bottleneck."""
+    if not planet_type:
+        return 1.0
+    try:
+        from app.layout import fitted_extractor_basics
+        return max(0.125, min(1.0, fitted_extractor_basics(planet_type, cc) / 8.0))
+    except Exception:
+        return 1.0
+
+
+def _ext_actual_p0_per_day(extractors: list[dict], cc: int = 5) -> float:
+    """Effective P0/day refined to P1, capped by on-planet basics (min of quality & basics
+    factor). Split legs are counted as heads × quality (the basics cap isn't modelled per leg)."""
     total = 0.0
     for e in extractors:
         if e.get("split"):
             for leg in e.get("legs", []):
                 total += leg.get("heads", 0) * leg.get("quality_pct", 100) / 100.0 * _PU_PER_PLANET_DAY
         else:
-            total += e.get("quality_pct", 100) / 100.0 * 48_000 * 24
+            eff = min(e.get("quality_pct", 100) / 100.0, _basics_factor(_slot_planet_type(e), cc))
+            total += eff * 48_000 * 24
     return total
 
 
-def _actual_p0_per_day_by_p0(extractors: list[dict]) -> dict[str, float]:
-    """Quality-adjusted P0/day broken out per resource (P0 name), so the planner can find
-    which resource is the binding extraction bottleneck (its actual vs the recipe need)."""
+def _actual_p0_per_day_by_p0(extractors: list[dict], cc: int = 5) -> dict[str, float]:
+    """Effective P0/day per resource (P0 name), capped by on-planet basics — so a resource sitting
+    on low-CC/big planets that can't refine all its P0 shows as the binding bottleneck."""
     out: dict[str, float] = {}
     for e in extractors:
         if e.get("split"):
@@ -1687,7 +1704,8 @@ def _actual_p0_per_day_by_p0(extractors: list[dict]) -> dict[str, float]:
         else:
             n = e.get("p0_name")
             if n:
-                out[n] = out.get(n, 0.0) + e.get("quality_pct", 100) / 100.0 * 48_000 * 24
+                eff = min(e.get("quality_pct", 100) / 100.0, _basics_factor(_slot_planet_type(e), cc))
+                out[n] = out.get(n, 0.0) + eff * 48_000 * 24
     return out
 
 
@@ -2374,6 +2392,7 @@ def _run_extractor_pipeline(
             "max_planets":       c["max_planets"],
             "effective_planets": c["effective_planets"],
             "ccu":               c["ccu"],
+            "effective_ccu":     c.get("effective_ccu"),  # for the on-planet basics refining cap
             "factory_only":      c["extractor_limit"] == 0,
             "extractor_limit":   c["extractor_limit"],
             "extractors":        [],
@@ -2458,7 +2477,7 @@ def _run_plan(req: PlanRequest, context_id: int) -> dict:
         char_planets.setdefault(p["character_id"], []).append(dict(p))
 
     p1_info = _build_p1_info(p1_info_raw, best_ptypes, types)
-    char_list = _build_char_list(char_rows, config_map, char_planets, with_ccu=False)
+    char_list = _build_char_list(char_rows, config_map, char_planets, with_ccu=True)
 
     # Factory planet capacity: max Barren/Temperate in the best candidate factory system.
     # Used to cap per-character factory shares so the planner doesn't assign more factories
@@ -2626,8 +2645,9 @@ def _run_plan(req: PlanRequest, context_id: int) -> dict:
     )
     _baseline_p0_per_day = total_extractors * 48_000 * 24
     overproduction_pct = round((_baseline_p0_per_day / p0_per_day - 1) * 100) if p0_per_day > 0 else 0
+    _asgn_cc = lambda a: int(a.get("effective_ccu") or a.get("ccu") or 5)  # CC for the basics cap
     _actual_p0_per_day = sum(
-        _ext_actual_p0_per_day(a["extractors"]) for a in all_assignments
+        _ext_actual_p0_per_day(a["extractors"], _asgn_cc(a)) for a in all_assignments
     )
     max_supportable_factories = int(_actual_p0_per_day / p0_per_factory_day) if p0_per_factory_day > 0 else 0
 
@@ -2641,7 +2661,7 @@ def _run_plan(req: PlanRequest, context_id: int) -> dict:
     if avg_quality_pct is not None and products_per_day > 0:
         actual_by_p0: dict[str, float] = {}
         for a in all_assignments:
-            for n, v in _actual_p0_per_day_by_p0(a["extractors"]).items():
+            for n, v in _actual_p0_per_day_by_p0(a["extractors"], _asgn_cc(a)).items():
                 actual_by_p0[n] = actual_by_p0.get(n, 0.0) + v
         needed_by_p0: dict[str, float] = {}
         for info in p1_info:

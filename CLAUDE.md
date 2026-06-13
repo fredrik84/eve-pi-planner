@@ -77,6 +77,19 @@ count (`component_factory_rate`/`_packed_rate` → `generate_layout` `max_count`
 CC, so the planner places more factory planets. A genuinely impossible combo (e.g. Storm Ø30000
 at CC1) still overflows the grid — that's the physical reason B/T is the default.
 
+**On-planet refining cap (basics/8).** An extractor planet's P1 output isn't just extraction — its
+Basic Industry Facilities convert P0→P1, and 8 basics = full conversion of a 100%-quality planet
+(the 48k baseline). Fewer basics fit on a low-CC or big planet (`fitted_extractor_basics(type, cc)`
+in layout.py, cached), so it refines proportionally less. The supply-limited throughput now uses
+**min(quality, basics-factor)** per slot (`_basics_factor` in planner.py; `_ext_actual_p0_per_day` /
+`_actual_p0_per_day_by_p0` take a `cc` arg) — whichever of extraction richness or on-site refining
+binds. Single-product `_build_char_list` switched to `with_ccu=True` and the assignment carries
+`effective_ccu` so the cap uses each toon's CC. First cut: this only adjusts the **reported
+effective output** (supply_ratio / effective_products_per_day), NOT the budget — the planner doesn't
+yet place *more* extractor planets to compensate. Split legs aren't capped (edge case). A possible
+mitigation that lifts the cap: drop the separate storage facility and buffer P0 in the launchpad
+(frees ~700 PG → often restores a basic on big planets) — not built.
+
 **Heads cost PG by distance (planet size).** `HEAD_COST` is only the flat part; extractor heads
 attach to hotspots spread across the planet via spokes whose CPU/PG scale with distance like
 links. `compute_resources` adds `HEAD_SPOKE_PLANAR (0.095) × radius` km of spoke per head, so a
