@@ -661,6 +661,54 @@ function renderCharacters(chars, loggedIn) {
     }
     list.appendChild(row);
   });
+  renderMaterialsSummary(chars);
+}
+
+// Roll up the (simulated) launchpad contents across every character → a "what I have on hand"
+// list, with one-click copy / send into the PI Planner inventory box.
+let _lastMaterials = [];
+function _aggregateMaterials(chars) {
+  const totals = {};
+  (chars || []).forEach(c => (c.planets || []).forEach(p => (p.pads || []).forEach(it => {
+    if (it.name && it.amount) totals[it.name] = (totals[it.name] || 0) + it.amount;
+  })));
+  return Object.entries(totals).sort((a, b) => b[1] - a[1]);  // [[name, amount], …]
+}
+function _materialsText(entries) { return entries.map(([n, a]) => `${n}\t${a}`).join('\n'); }
+
+function renderMaterialsSummary(chars) {
+  const el = document.getElementById('ppMaterialsSummary');
+  if (!el) return;
+  const entries = _aggregateMaterials(chars);
+  _lastMaterials = entries;
+  if (!entries.length) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  el.style.display = '';
+  el.innerHTML = `
+    <div class="pp-mat-head">
+      <span class="pp-mat-title">In launchpads <span class="pp-char-pads-est">~est</span>
+        <span class="pp-mat-sub">${entries.length} material${entries.length !== 1 ? 's' : ''}, all characters</span></span>
+      <span class="pp-mat-actions">
+        <button class="pp-add-btn" onclick="copyMaterials(this)" title="Copy as a tab-separated list to paste into the PI Planner inventory box">Copy</button>
+        <button class="pp-add-btn" onclick="sendMaterialsToPlanner()" title="Fill the PI Planner inventory box with this and switch there">Send to PI Planner →</button>
+      </span>
+    </div>
+    <div class="pp-mat-list">${entries.map(([n, a]) =>
+      `<span class="pp-mat-item"><b>${a.toLocaleString()}</b> ${_esc(n)}</span>`).join('')}</div>`;
+}
+
+function copyMaterials(btn) {
+  const txt = _materialsText(_lastMaterials);
+  if (!txt) return;
+  const done = () => { const t = btn.textContent; btn.textContent = '✓ Copied'; setTimeout(() => { btn.textContent = t; }, 1500); };
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(txt).then(done).catch(() => prompt('Copy:', txt));
+  else { prompt('Copy:', txt); }
+}
+
+function sendMaterialsToPlanner() {
+  const inv = document.getElementById('inv');
+  if (inv) inv.value = _materialsText(_lastMaterials);
+  if (typeof switchTab === 'function') switchTab('planner');
+  if (typeof syncRefillFromInventory === 'function') syncRefillFromInventory();
 }
 
 async function addDummyCharacters(btn) {
