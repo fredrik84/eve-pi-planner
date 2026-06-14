@@ -1146,7 +1146,8 @@ def dashboard(pp_session: str = Cookie(default=None)):
         SELECT c.character_name AS ch, cp.planet_num AS pn, s.name AS system,
                cp.is_extractor AS is_ext, cp.products AS products,
                cp.pad_inputs AS pad_inputs, cp.pad_contents AS pad_contents,
-               cp.issues AS issues, cp.sim_state AS sim_state, cp.scanned_at AS scanned_at
+               cp.issues AS issues, cp.sim_state AS sim_state,
+               cp.scanned_at AS scanned_at, cp.checkpoint_at AS checkpoint_at
         FROM pp_char_planets cp
         JOIN pp_characters c ON c.character_id = cp.character_id
         LEFT JOIN solar_systems s ON s.system_id = cp.solar_system_id
@@ -1182,10 +1183,12 @@ def dashboard(pp_session: str = Cookie(default=None)):
         if not fracs:
             continue
         fph24 = _effective_fph(tid, pi) * 24.0            # products/day for one factory
-        # Project the launchpad buffer forward from the scan: the factory keeps eating P1 between
-        # ESI updates, so subtract consumption since scanned_at (floored at 0). Makes fill % and
+        # Project the launchpad buffer forward: the factory keeps eating P1 between ESI updates,
+        # so subtract consumption since the colony CHECKPOINT (last_cycle_start — what the reported
+        # contents are actually "as of", not our fetch time), floored at 0. Makes fill % and
         # runtime tick down live instead of freezing on the last snapshot.
-        elapsed_h = max(0.0, (now - r["scanned_at"]) / 3600.0) if r["scanned_at"] else 0.0
+        anchor = r["checkpoint_at"] or r["scanned_at"]
+        elapsed_h = max(0.0, (now - anchor) / 3600.0) if anchor else 0.0
         snap = {it["type_id"]: it.get("amount", 0) for it in inputs}
         onhand = {pid: max(0.0, snap.get(pid, 0) - fph24 * frac / 24.0 * elapsed_h) for pid, frac in fracs.items()}
         tte_h = None                                      # hours until the binding input runs out
