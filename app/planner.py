@@ -1058,7 +1058,8 @@ def my_setup_plan(pp_session: str = Cookie(default=None)):
     con = get_connection()
     # Configured factory planets (non-extractor, with a top-tier product) for THIS account only.
     rows = con.execute("""
-        SELECT c.character_name AS ch, cp.planet_num AS pn, s.name AS system, cp.products AS products
+        SELECT c.character_name AS ch, cp.planet_num AS pn, s.name AS system,
+               cp.products AS products, cp.pad_inputs AS pad_inputs
         FROM pp_char_planets cp
         JOIN pp_characters c ON c.character_id = cp.character_id
         LEFT JOIN solar_systems s ON s.system_id = cp.solar_system_id
@@ -1067,20 +1068,27 @@ def my_setup_plan(pp_session: str = Cookie(default=None)):
     """, (context_id,)).fetchall()
     con.close()
 
-    # Group factory planets by their top product type_id.
+    # Group factory planets by their top product type_id. Each factory also carries input_m3 —
+    # the P1 already sitting in its launchpads (from pad_inputs, tier-1 only, 0.19 m³/unit) — so
+    # the Refill tool can top up only the space that's actually free.
     by_product: dict[int, dict] = {}
     for r in rows:
         try:
             prods = _json.loads(r["products"]) or []
         except Exception:
             prods = []
+        try:
+            _pin = _json.loads(r["pad_inputs"]) or []
+        except Exception:
+            _pin = []
+        input_m3 = round(sum((x.get("amount", 0) or 0) * 0.19 for x in _pin if (x.get("tier") or 0) == 1), 1)
         for p in prods:
             tid = p.get("type_id")
             if not tid:
                 continue
             g = by_product.setdefault(tid, {"name": p.get("name") or f"#{tid}", "factories": []})
             loc = f"{r['ch']} · {r['system'] or '?'}" + (f" P{r['pn']}" if r["pn"] is not None else "")
-            g["factories"].append({"loc": loc, "product": g["name"]})
+            g["factories"].append({"loc": loc, "product": g["name"], "input_m3": input_m3})
 
     plans = []
     for tid, g in by_product.items():

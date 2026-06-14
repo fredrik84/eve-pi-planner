@@ -2864,7 +2864,8 @@ async function renderPlanDistribution() {
       const loc = f.loc || f.label || '?';
       const shareByTid = {};
       f.p1_inputs.forEach(p => { shareByTid[String(p.p1_type_id)] = p.share; });
-      return { loc, char: _refillCharOf(loc), shareByTid, amt: {} };
+      return { loc, char: _refillCharOf(loc), shareByTid, amt: {},
+               inputM3: (typeof f.input_m3 === 'number') ? f.input_m3 : null };  // P1 already in the LP (live setups only)
     });
     return { title: g.title || cols.map(c => c.name).join(' + '), cols, facs };
   });
@@ -2878,7 +2879,7 @@ async function renderPlanDistribution() {
       </div>
       <div class="pp-card-body">
         <div class="dist-controls" id="refillControls"></div>
-        <div class="dist-hint">Splits the P1 in your <b>inventory above</b> across the plan's factories in recipe ratio — your scarcest input sets the fill level, capped by launchpad space (3 LP ≈ 30,000 m³). Drop the green number at each planet; click to copy.</div>
+        <div class="dist-hint">Tops up each factory's launchpads toward full (3 LP ≈ 30,000 m³) in recipe ratio, <b>counting the P1 already in them</b> — so you never overflow. <b>Summary</b> = one drop that fits every factory; <b>All planets</b> = each topped to its own free space. Limited by the P1 in your <b>inventory above</b>. Click a number to copy.</div>
         <div class="dist-days" id="refillDays"></div>
         <div class="plan-dist-tables" id="refillTables"></div>
       </div>
@@ -2907,8 +2908,8 @@ function _renderRefillControls() {
         </select></label>` : '';
   el.innerHTML = `${charSel}
     <div class="dist-view-toggle">
-      <button class="dist-view-btn${_refillView === 'summary' ? ' on' : ''}" onclick="_setRefillView('summary')" title="One row: the same per-factory amount for every factory">Summary</button>
-      <button class="dist-view-btn${_refillView === 'detailed' ? ' on' : ''}" onclick="_setRefillView('detailed')" title="A row per factory planet">All planets</button>
+      <button class="dist-view-btn${_refillView === 'summary' ? ' on' : ''}" onclick="_setRefillView('summary')" title="One uniform drop that fits every factory">Summary</button>
+      <button class="dist-view-btn${_refillView === 'detailed' ? ' on' : ''}" onclick="_setRefillView('detailed')" title="Each factory topped to its own free launchpad space">All planets</button>
     </div>`;
 }
 
@@ -2931,9 +2932,13 @@ function _renderRefillTables() {
     if (!facs.length) {
       body = `<tr><td class="p1-dist-loc" colspan="${g.cols.length + 1}"><span class="p1-cell-na">No factories for this character.</span></td></tr>`;
     } else if (summary) {
-      // Identical factories → one representative row (the first filtered factory's per-factory amounts).
-      const rep = facs[0];
-      body = `<tr><td class="p1-dist-loc">Each factory <span class="dist-line-count">× ${facs.length}</span></td>${g.cols.map(c => _amtCell(rep, c.id)).join('')}</tr>`;
+      // One row: the uniform top-up sized to the fullest factory, so the same drop fits every one.
+      const cells = g.cols.map(c => {
+        const v = _refillUniform[c.id];
+        return (v == null) ? '<td class="dist-num"><b class="p1-amt">–</b></td>'
+          : `<td class="dist-num"><b class="p1-amt p1-amt-set" onclick="copyP1Amount(this)" title="Click to copy">${v.toLocaleString()}</b></td>`;
+      }).join('');
+      body = `<tr><td class="p1-dist-loc">Each factory <span class="dist-line-count">× ${facs.length}</span></td>${cells}</tr>`;
     } else {
       body = facs.map(f => `<tr><td class="p1-dist-loc">${_esc(f.loc)}</td>${g.cols.map(c => _amtCell(f, c.id)).join('')}</tr>`).join('');
     }
@@ -2993,45 +2998,69 @@ function copyP1Amount(el) {
 
 // Distribute each entered stack across the factory planets that consume that P1, whole units
 // summing exactly to the stack (largest-remainder). No stack → show the % share.
-// Compute the refill split into the model, then render. The scarcest pasted input sets a fill
-// level (days the whole plan can run on your stock); each P1's column total = days × its daily
-// need, split across factories by share and FLOORED so identical factories all show the same
-// number (easy even drop; leftover units stay in your hangar). Capped by launchpad space
-// (3 LP ≈ 30,000 m³, via factory_refill_hours). The math runs over the FULL factory set, so the
-// display filter/summary never changes the numbers.
-const _P1_VOL_M3 = 0.19;                 // m³ per P1 unit (verified in-game)
+// Compute the refill top-up into the model, then render. Each factory's launchpads hold up to
+// 30,000 m³ of P1 (3 LP); we fill the FREE space (30,000 − what's already in, from inputM3) in
+// recipe ratio, capped by how much P1 you actually have (your pasted stock). Two readings:
+//   • per-factory (All planets view): top each factory to full given its own current contents.
+//   • uniform (Summary view): one amount sized to the FULLEST factory so none overflow.
+// Both floor to whole units; leftover stays in your hangar.
+const _P1_VOL_M3 = 0.19;                  // m³ per P1 unit (verified in-game)
+const _LP_CAP_M3 = 30000;                 // 3 launchpads of P1 input space
+let _refillUniform = {};                  // tid -> uniform per-factory amount (Summary view)
 function updateP1Distribution() {
   if (!_refillModel) return;
-  const items = _planConsumptionItems();          // [{tid, name, perDay}] — perDay = PLAN-total units/day
-  const count = Math.max(1, _planMeta.count || 1);
-  const perDayByTid = {}; items.forEach(it => { perDayByTid[String(it.tid)] = it.perDay; });
+  _refillUniform = {};
+  const items = _planConsumptionItems();          // perDay = PLAN-total units/day per P1
+  const perDay = {}; items.forEach(it => { perDay[String(it.tid)] = it.perDay; });
   const sumW = items.reduce((a, it) => a + it.perDay, 0);
   const haveWeights = items.length > 0 && sumW > 0;
 
-  // All (factory, share) pairs per P1 across the whole model — the global pool for the split.
-  const cells = {};
-  _refillModel.forEach(g => g.facs.forEach(fac => {
-    fac.amt = {};
-    Object.keys(fac.shareByTid).forEach(tid => { (cells[tid] = cells[tid] || []).push({ fac, share: fac.shareByTid[tid] }); });
+  const allFacs = [];
+  _refillModel.forEach(g => g.facs.forEach(f => {
+    f.amt = {};
+    f.availM3 = (f.inputM3 != null) ? Math.max(0, _LP_CAP_M3 - f.inputM3) : _LP_CAP_M3;  // free LP space
+    allFacs.push(f);
   }));
 
-  let days = Infinity;
-  if (haveWeights) {
-    let T = Infinity;
-    for (const tid in cells) { const w = perDayByTid[tid] || 0, s = _p1Stacks[tid] || 0; if (w > 0 && s > 0) T = Math.min(T, s / w); }
-    if (!isFinite(T)) T = 0;
-    const capDays = (_planMeta.refillHours > 0) ? _planMeta.refillHours / 24 : (30000 * count / (sumW * _P1_VOL_M3));
-    days = Math.min(T, capDays);
+  if (!haveWeights) {                              // no recipe data → plain split of each stack by share
+    const byTid = {};
+    allFacs.forEach(f => Object.keys(f.shareByTid).forEach(t => (byTid[t] = byTid[t] || []).push(f)));
+    for (const tid in byTid) {
+      const stack = _p1Stacks[tid] || 0, arr = byTid[tid];
+      let sh = arr.map(f => f.shareByTid[tid] || 0), ss = sh.reduce((a, b) => a + b, 0);
+      if (ss <= 0) { sh = arr.map(() => 1 / arr.length); ss = 1; }
+      arr.forEach((f, i) => { f.amt[tid] = stack ? Math.max(0, Math.floor(stack * sh[i] / ss)) : null; });
+      _refillUniform[tid] = stack ? Math.floor(stack / arr.length) : null;
+    }
+    _renderRefillTables(); _updateRefillDays(); return;
   }
 
-  for (const tid in cells) {
-    const arr = cells[tid], stack = _p1Stacks[tid] || 0, w = perDayByTid[tid] || 0;
-    if (!stack) { arr.forEach(c => { c.fac.amt[tid] = null; }); continue; }
-    const total = (haveWeights && w > 0) ? Math.min(stack, days * w) : stack;  // fallback: whole stack
-    let shares = arr.map(c => c.share), ssum = shares.reduce((a, b) => a + (b || 0), 0);
-    if (ssum <= 0) { shares = arr.map(() => 1 / arr.length); ssum = 1; }
-    arr.forEach((c, i) => { c.fac.amt[tid] = Math.max(0, Math.floor(total * shares[i] / ssum)); });
+  const tids = Object.keys(perDay);
+  const fvFrac = {}; tids.forEach(t => { fvFrac[t] = perDay[t] / sumW; });   // recipe share of P1 t (units = vol, same VOL)
+  const target = (availM3, tid) => (availM3 / _P1_VOL_M3) * fvFrac[tid];      // units of P1 t to fill `availM3` in ratio
+
+  // Per-factory: fill each factory's own free space; global scale so no P1 exceeds your stock.
+  let s = 1;
+  for (const tid of tids) {
+    const stack = _p1Stacks[tid] || 0;
+    let tot = 0; allFacs.forEach(f => { if (tid in f.shareByTid) tot += target(f.availM3, tid); });
+    if (tot > 0) s = Math.min(s, stack / tot);
   }
+  if (!(s >= 0)) s = 0;
+  allFacs.forEach(f => { for (const tid of tids) if (tid in f.shareByTid) f.amt[tid] = Math.max(0, Math.floor(s * target(f.availM3, tid))); });
+
+  // Uniform: size to the fullest factory (smallest free space) so the same drop fits every one.
+  const used = allFacs.filter(f => Object.keys(f.shareByTid).length);
+  const minAvail = used.length ? Math.min(...used.map(f => f.availM3)) : 0;
+  const n = used.length || 1;
+  let su = 1;
+  for (const tid of tids) {
+    const stack = _p1Stacks[tid] || 0, tot = target(minAvail, tid) * n;
+    if (tot > 0) su = Math.min(su, stack / tot);
+  }
+  if (!(su >= 0)) su = 0;
+  for (const tid of tids) _refillUniform[tid] = Math.max(0, Math.floor(su * target(minAvail, tid)));
+
   _renderRefillTables();
   _updateRefillDays();
 }
