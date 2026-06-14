@@ -2642,7 +2642,9 @@ async function renderPlanDistribution() {
   _p1TidToName = p1s;
   _planConsumption = snap.consumption || {};  // only on plans saved after this feature shipped
   _planMeta = { productsPerDay: snap.products_per_day || 0, iskPerDay: snap.isk_per_day || 0,
-                unitLabel: snap.unit_label || 'units' };
+                unitLabel: snap.unit_label || 'units',
+                count: snap.factories_count || (snap.factories ? snap.factories.length : 1),
+                refillHours: snap.factory_refill_hours || 0 };
 
   // Group factory planets by what they make. Robust to older snapshots without a `product`
   // field (fall back to grouping by P1 signature), and columns = the UNION of P1s the group
@@ -2685,7 +2687,7 @@ async function renderPlanDistribution() {
         ${delBtn}
       </div>
       <div class="pp-card-body">
-        <div class="dist-hint">Splits the P1 in your <b>inventory above</b> across this plan's factories — drop the green number at each planet. Click a number to copy it.</div>
+        <div class="dist-hint">A balanced recipe-ratio top-up for <b>each</b> factory — scaled to your scarcest P1 in the <b>inventory above</b> and capped at the launchpad space (3 LP ≈ 30,000 m³). Drop the green number at each planet; click to copy.</div>
         <div class="dist-days" id="refillDays"></div>
         <div class="plan-dist-tables">${tables}</div>
       </div>
@@ -2743,19 +2745,56 @@ function copyP1Amount(el) {
 
 // Distribute each entered stack across the factory planets that consume that P1, whole units
 // summing exactly to the stack (largest-remainder). No stack → show the % share.
+// Per-factory balanced top-up. Each factory of a product needs its P1 inputs in the recipe
+// ratio; we deliver `days` worth, where `days` = the scarcest pasted input ÷ its per-factory
+// daily need, capped by how much the factory's launchpads physically hold (3 LP ≈ 30,000 m³,
+// carried as factory_refill_hours). So the scarcest P1 sets the base and the heavier inputs
+// scale up automatically (e.g. SHPC: 6 inputs at X, 3 at 2X). NOT a split of your stack — it's
+// the per-factory load, so identical factories show identical numbers.
+const _P1_VOL_M3 = 0.19;                 // m³ per P1 unit (verified in-game)
 function updateP1Distribution() {
+  const items = _planConsumptionItems();          // [{tid, name, perDay}] — perDay = PLAN-total units/day
+  const count = Math.max(1, _planMeta.count || 1);
+  const wByTid = {};                              // per-factory daily need of each P1
+  items.forEach(it => { wByTid[String(it.tid)] = it.perDay / count; });
+  const sumW = items.reduce((a, it) => a + it.perDay / count, 0);   // per-factory P1 units/day (all inputs)
+
   const byP1 = {};
   document.querySelectorAll('.p1-amt').forEach(el => { (byP1[el.dataset.p1] = byP1[el.dataset.p1] || []).push(el); });
+
+  const setCells = (els, raw) => els.forEach((el, i) => {
+    el.textContent = Math.max(0, Math.round(raw[i])).toLocaleString(); el.classList.add('p1-amt-set'); });
+  const blankCells = els => els.forEach(el => { el.textContent = '–'; el.classList.remove('p1-amt-set'); });
+
+  if (!items.length || sumW <= 0) {               // older snapshot w/o consumption → old split-by-share
+    for (const tid in byP1) {
+      const els = byP1[tid], stack = _p1Stacks[tid] || 0;
+      if (!stack) { blankCells(els); continue; }
+      const raw = els.map(el => stack * (parseFloat(el.dataset.share) || 0));
+      const amt = raw.map(Math.floor);
+      let rem = stack - amt.reduce((a, b) => a + b, 0);
+      raw.map((v, i) => [v - amt[i], i]).sort((a, b) => b[0] - a[0])
+         .slice(0, Math.max(0, rem)).forEach(([, i]) => amt[i]++);
+      els.forEach((el, i) => { el.textContent = amt[i].toLocaleString(); el.classList.add('p1-amt-set'); });
+    }
+    _updateRefillDays(); return;
+  }
+
+  // days a factory can run on the pasted stock (scarcest input), capped by launchpad space.
+  let T = Infinity;
   for (const tid in byP1) {
-    const els = byP1[tid];
-    const stack = _p1Stacks[tid] || 0;
-    if (!stack) { els.forEach(el => { el.textContent = '–'; el.classList.remove('p1-amt-set'); }); continue; }
-    const raw = els.map(el => stack * (parseFloat(el.dataset.share) || 0));
-    const amt = raw.map(Math.floor);
-    let rem = stack - amt.reduce((a, b) => a + b, 0);
-    const order = raw.map((v, i) => [v - amt[i], i]).sort((a, b) => b[0] - a[0]);
-    for (let k = 0; k < rem && k < order.length; k++) amt[order[k][1]]++;
-    els.forEach((el, i) => { el.textContent = amt[i].toLocaleString(); el.classList.add('p1-amt-set'); });
+    const w = wByTid[tid] || 0, stack = _p1Stacks[tid] || 0;
+    if (w > 0 && stack > 0) T = Math.min(T, stack / w);
+  }
+  if (!isFinite(T)) T = 0;
+  const capDays = (_planMeta.refillHours > 0) ? _planMeta.refillHours / 24 : (30000 / (sumW * _P1_VOL_M3));
+  const days = Math.min(T, capDays);
+
+  for (const tid in byP1) {
+    const els = byP1[tid], w = wByTid[tid] || 0, stack = _p1Stacks[tid] || 0;
+    if (!stack || !w) { blankCells(els); continue; }
+    // share×count = the factory's size relative to its peers (1 for identical factories).
+    setCells(els, els.map(el => days * w * ((parseFloat(el.dataset.share) || (1 / count)) * count)));
   }
   _updateRefillDays();
 }
