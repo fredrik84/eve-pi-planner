@@ -1146,7 +1146,7 @@ def dashboard(pp_session: str = Cookie(default=None)):
         SELECT c.character_name AS ch, cp.planet_num AS pn, s.name AS system,
                cp.is_extractor AS is_ext, cp.products AS products,
                cp.pad_inputs AS pad_inputs, cp.pad_contents AS pad_contents,
-               cp.issues AS issues, cp.sim_state AS sim_state
+               cp.issues AS issues, cp.sim_state AS sim_state, cp.scanned_at AS scanned_at
         FROM pp_char_planets cp
         JOIN pp_characters c ON c.character_id = cp.character_id
         LEFT JOIN solar_systems s ON s.system_id = cp.solar_system_id
@@ -1154,6 +1154,7 @@ def dashboard(pp_session: str = Cookie(default=None)):
     """, (context_id,)).fetchall()
     con.close()
 
+    now = _time.time()
     VOL = 0.19           # m³ per PI unit (verified in-game)
     LP_M3 = 30000.0      # 3 launchpads of P1 input buffer
 
@@ -1181,7 +1182,12 @@ def dashboard(pp_session: str = Cookie(default=None)):
         if not fracs:
             continue
         fph24 = _effective_fph(tid, pi) * 24.0            # products/day for one factory
-        onhand = {it["type_id"]: it.get("amount", 0) for it in inputs}
+        # Project the launchpad buffer forward from the scan: the factory keeps eating P1 between
+        # ESI updates, so subtract consumption since scanned_at (floored at 0). Makes fill % and
+        # runtime tick down live instead of freezing on the last snapshot.
+        elapsed_h = max(0.0, (now - r["scanned_at"]) / 3600.0) if r["scanned_at"] else 0.0
+        snap = {it["type_id"]: it.get("amount", 0) for it in inputs}
+        onhand = {pid: max(0.0, snap.get(pid, 0) - fph24 * frac / 24.0 * elapsed_h) for pid, frac in fracs.items()}
         tte_h = None                                      # hours until the binding input runs out
         for pid, frac in fracs.items():
             need_per_h = fph24 * frac / 24.0
@@ -1226,7 +1232,6 @@ def dashboard(pp_session: str = Cookie(default=None)):
 
     # Colony warnings, grouped PER CHARACTER and counted (so a fleet of expiring extractors is one
     # "12 extractions expiring" line, not 12 rows). Stored scan-time kinds + a live expiry check.
-    now = _time.time()
     EXPIRING_WINDOW = 3 * 3600                     # 3h — short enough that 1-day cycles don't always trip
     by_char: dict[str, dict[str, list]] = {}      # char -> kind -> [planet labels]
     expiring: dict[str, int] = {}                 # char -> count (compacted into one global line)

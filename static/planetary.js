@@ -228,7 +228,7 @@ function renderDashboard(data) {
       <div class="pp-card-body"><div class="an-stats">${tiles}</div></div>
     </section>
     <section class="pp-card">
-      <div class="pp-card-title">Factories <span class="pp-card-hint">— launchpad fill &amp; time to empty (${facs.length})</span></div>
+      <div class="pp-card-title">Factories <span class="pp-card-hint">— launchpad fill &amp; time to empty, projected forward from your last rescan (${facs.length})</span></div>
       <div class="pp-card-body">
         ${facs.length ? '<div class="dash-fac-head"><span>Factory</span><span>Fill</span><span>%</span><span>Runs out</span><span>Run value</span></div>' : ''}
         <div class="dash-fac-list">${rows}</div>
