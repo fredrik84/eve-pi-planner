@@ -3533,6 +3533,9 @@ async function toggleFactoryChar(charId) {
 
 let _layoutTierMap = {};   // product type_id -> tier (for SVG colouring)
 let _layoutSel = [];       // [{key, type_id, name, tier, planet, launchpads, data, error}]
+// Factory (P2/P3) Advanced Industry Facilities run on any planet; P4 is Barren/Temperate
+// only; extractors are limited to the P0's valid_planets (from the summary).
+const _LAYOUT_PLANET_TYPES = ['Barren', 'Temperate', 'Lava', 'Plasma', 'Gas', 'Ice', 'Oceanic', 'Storm'];
 
 const _LAYOUT_LS_KEY = 'layoutSelections';
 let _layoutNoStorage = (() => { try { return localStorage.getItem('layoutNoStorage') === '1'; } catch (e) { return false; } })();
@@ -3651,6 +3654,9 @@ async function _fetchLayout(entry) {
     if (!resp.ok) { const e = await resp.json().catch(() => ({})); throw new Error(e.detail || resp.status); }
     entry.data = await resp.json();
     if (entry.data.summary && entry.data.summary.count != null) entry.count = entry.data.summary.count;  // resolve auto-max
+    // Sync to the planet the backend actually used (it coerces to a type that yields the P0,
+    // e.g. Reactive Gas → Gas), so the per-card selector, bundle and download all agree.
+    if (entry.data.summary && entry.data.summary.planet_type) entry.planet = entry.data.summary.planet_type;
     entry.error = null;
   } catch (e) { entry.error = String(e.message || e); }
 }
@@ -3763,6 +3769,16 @@ function renderLayoutCard(entry) {
   const countLabel = isExtractor ? 'Factories' : (entry.tier === 2 ? 'Factories' : 'Chains');
   const ccSel = `<label title="Command Center level — fewer facilities fit at lower levels">CC
     <select onchange="changeLayoutCcu('${entry.key}', this.value)">${[5,4,3,2,1].map(n => `<option value="${n}"${n === (entry.cc || 5) ? ' selected' : ''}>${n}</option>`).join('')}</select></label>`;
+  // Per-card planet picker: extractors are limited to the P0's valid planets; P4 to
+  // Barren/Temperate; P2/P3 run anywhere. Hidden when there's only one valid choice
+  // (e.g. Oxidizing Compound → Gas only).
+  const planetOpts = isExtractor ? (s.valid_planets || [s.planet_type])
+                   : entry.tier === 4 ? ['Barren', 'Temperate']
+                   : _LAYOUT_PLANET_TYPES;
+  const planetSel = planetOpts.length > 1
+    ? `<label title="${isExtractor ? 'Planet types that yield this P0' : 'Planet type for the factory'}">Planet
+        <select onchange="changeLayoutPlanet('${entry.key}', this.value)">${planetOpts.map(pt => `<option value="${pt}"${pt === s.planet_type ? ' selected' : ''}>${_esc(pt)}</option>`).join('')}</select></label>`
+    : '';
   return `
     <div class="layout-card">
       ${head}
@@ -3783,6 +3799,7 @@ function renderLayoutCard(entry) {
         <label>Launchpads <input type="number" min="1" max="8" value="${entry.launchpads}"
           onchange="changeLayoutLaunchpads('${entry.key}', this.value)"
           onwheel="_layoutWheelLp(event, this, '${entry.key}')"></label>
+        ${planetSel}
         ${ccSel}
         <a class="layout-btn" href="${url}" download>Download .json</a>
         <button class="layout-btn" onclick="copyLayoutEntry('${entry.key}', this)">Copy JSON</button>
@@ -3807,6 +3824,16 @@ async function changeLayoutCcu(key, val) {
   if (!entry) return;
   entry.cc = Math.max(1, Math.min(5, parseInt(val, 10) || 5));
   entry.count = null;   // re-resolve max that fits at the new CC level
+  _saveLayoutState();
+  await _fetchLayout(entry);
+  renderLayoutSelections();
+}
+
+async function changeLayoutPlanet(key, val) {
+  const entry = _layoutSel.find(e => e.key === key);
+  if (!entry) return;
+  entry.planet = val;
+  entry.count = null;   // planet diameter changes how many facilities fit → re-resolve max
   _saveLayoutState();
   await _fetchLayout(entry);
   renderLayoutSelections();

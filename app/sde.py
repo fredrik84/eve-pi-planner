@@ -8,6 +8,12 @@ DB_PATH = Path("data/sde.db")
 def get_connection() -> sqlite3.Connection:
     con = sqlite3.connect(str(DB_PATH))
     con.row_factory = sqlite3.Row
+    # WAL lets readers run concurrently with a single writer; busy_timeout makes a
+    # contended write wait instead of failing instantly with "database is locked";
+    # synchronous=NORMAL is safe under WAL and much faster on writes.
+    con.execute("PRAGMA journal_mode=WAL")
+    con.execute("PRAGMA busy_timeout=5000")
+    con.execute("PRAGMA synchronous=NORMAL")
     return con
 
 

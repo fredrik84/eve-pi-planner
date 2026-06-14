@@ -71,6 +71,7 @@ header .header-brand span { color: #6a7390; font-size: 12px; }
   background: #0d0f14;
   padding: 16px 10px; position: sticky; top: 0; align-self: flex-start;
   height: calc(100vh - 62px); overflow-y: auto;
+  display: flex; flex-direction: column;
   transition: flex-basis 0.18s ease, width 0.18s ease, padding 0.18s ease;
 }
 .sidebar-nav { display: flex; flex-direction: column; gap: 2px; }
@@ -1532,12 +1533,22 @@ a.plan-action-btn { text-decoration: none; display: inline-block; }
 .layout-svg .lp-cap { fill: #5a647e; font-size: 10px; }
 
 /* site footer (donation) */
-.site-footer {
-  margin: 32px auto 16px; padding: 14px 20px; max-width: 900px;
-  text-align: center; font-size: 13px; color: #8a93a8;
-  border-top: 1px solid #1b2030;
+/* Donation note pinned to the bottom of the sticky sidebar — always on screen,
+   no scrolling to the page foot to find it. */
+.sidebar-donate {
+  margin-top: auto; padding: 12px 13px 4px; border-top: 1px solid #1b2030;
+  font-size: 12px; color: #8a93a8; line-height: 1.5;
 }
-.site-footer strong { color: #ffce6b; font-weight: 700; }
+.sidebar-donate-hd {
+  font-size: 10px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase;
+  color: #6a7390; margin-bottom: 6px;
+}
+.sidebar-donate-txt strong { color: #ffce6b; font-weight: 700; }
+/* Compact heart shown only in the collapsed icon rail (hidden when expanded). */
+.sidebar-donate-ico { display: none; text-align: center; font-size: 16px; color: #ffce6b; padding: 4px 0; }
+body.nav-collapsed .sidebar-donate { padding: 12px 0 4px; }
+body.nav-collapsed .sidebar-donate-full { display: none; }
+body.nav-collapsed .sidebar-donate-ico { display: block; }
 
 /* ── Admin tab ──────────────────────────────────────────────────────────────── */
 .admin-page { max-width: 900px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; }
