@@ -2620,7 +2620,7 @@ function _extRuntimeCardHtml(n) {
       <div class="an-rt-h">Extraction runtime
         <span class="an-rt-sub">— run programs in whole-day multiples minus 30 min, so they end a little earlier each day for an easy same-time restart</span></div>
       <div class="an-rt-row">
-        <label class="an-rt-field">Run for <input id="extRtDays" type="number" min="1" max="14" value="${n}" oninput="_extRuntimeRecalc()"> day(s)</label>
+        <label class="an-rt-field">Run for <input id="extRtDays" type="number" min="1" max="14" value="${n}" oninput="_extRuntimeRecalc()" onwheel="_extRtWheel(event, this)"> day(s)</label>
         <div class="an-rt-dur">Set each extractor program to <b id="extRtDur">${_progDuration(n)}</b></div>
       </div>
       <div class="an-rt-proj" id="extRtProj">${_extRtProjection(n)}</div>
@@ -2632,6 +2632,12 @@ function _extRuntimeRecalc() {
   const n = Math.max(1, Math.min(14, parseInt(inp.value, 10) || 1));
   const dur = document.getElementById('extRtDur'); if (dur) dur.textContent = _progDuration(n);
   const pr = document.getElementById('extRtProj'); if (pr) pr.innerHTML = _extRtProjection(n);
+}
+// Scroll to change the runtime (same as the overprod / layout number fields).
+function _extRtWheel(e, input) {
+  e.preventDefault();
+  input.value = Math.max(1, Math.min(14, (parseInt(input.value, 10) || 1) + (e.deltaY < 0 ? 1 : -1)));
+  _extRuntimeRecalc();
 }
 
 function _buildPlanSnapshot(data) {

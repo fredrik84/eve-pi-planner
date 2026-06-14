@@ -1608,7 +1608,10 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .an-rt-row { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
 .an-rt-field { font-size: 13px; color: #c8cdd8; }
 .an-rt-field input { width: 56px; background: #11151f; border: 1px solid #2a3142; color: #e6e9ef;
-  border-radius: 5px; padding: 4px 6px; font-size: 14px; text-align: center; margin: 0 4px; outline: none; }
+  border-radius: 5px; padding: 4px 6px; font-size: 14px; text-align: center; margin: 0 4px; outline: none;
+  -moz-appearance: textfield; appearance: textfield; }
+.an-rt-field input::-webkit-inner-spin-button,
+.an-rt-field input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 .an-rt-field input:focus { border-color: #4ab8d6; }
 .an-rt-dur { font-size: 14px; color: #c8cdd8; }
 .an-rt-dur b { color: #6fe0c0; font-family: 'Consolas', monospace; font-size: 16px; }
