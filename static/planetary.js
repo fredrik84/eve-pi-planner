@@ -2585,9 +2585,10 @@ function renderAnalysis() {
   if (!moves.length && !newBuilds.length && !addFactories)
     suggest = `<div class="an-suggest an-suggest-free"><div class="an-suggest-h">Balanced — every material this plan needs is covered${leftover.length ? ', with a little to spare' : ''}.</div></div>`;
 
-  // Extraction-runtime advice (decay-aware recommendation, not a calculator) — see below.
+  // Extraction-runtime advice: longest program that keeps extraction above factory demand
+  // (+ safety buffer), anchored on the measured headroom and your detected current program.
   _extRt = { ppd: Number(snap.products_per_day) || 0, ipd: Number(snap.isk_per_day) || 0, unit };
-  const rtAdvice = _extRuntimeAdviceHtml();
+  const rtAdvice = _extRuntimeAdviceHtml(binding.ratio, _currentProgramDays());
 
   el.innerHTML = head + stats + proj
     + `<div class="an-legend">Producing (left) vs the plan’s daily need (right) per P1. A full green bar = factories stay fed; a short red bar is the bottleneck.</div>`
@@ -2622,18 +2623,47 @@ function _progDuration(days) {
   const d = Math.floor(total / 1440), h = Math.floor((total % 1440) / 60), m = total % 60;
   return [d ? d + 'd' : '', h ? h + 'h' : '', m ? m + 'm' : ''].filter(Boolean).join(' ');
 }
-// Solid, low-touch advice (not a calculator): one recommendation — run the longest program so
-// you restart least. EVE caps programs at 14 days; the average yield is lower than a short run
-// (extractors decay), which is the accepted cost of fewer interactions.
-function _extRuntimeAdviceHtml() {
-  if (!_extRt || !_extRt.ppd) return '';
-  const unit = _extRt.unit || 'units';
-  const maxL = _extRtLine(_EXT_MAX_DAYS);
-  const iskPart = maxL.isk ? ` · ≈ <b>${_fmtIsk(maxL.isk)}</b> ISK over the run` : '';
+// Representative current extraction-program length (median across the deployed extractors),
+// from ESI install→expiry. null if no colony data yet.
+function _currentProgramDays() {
+  const vals = [];
+  (_ppCharsData || []).forEach(ch => (ch.planets || []).forEach(p => {
+    if (p.is_extractor && p.program_days > 0) vals.push(p.program_days);
+  }));
+  if (!vals.length) return null;
+  vals.sort((a, b) => a - b);
+  return vals[Math.floor(vals.length / 2)];
+}
+
+// Solid, low-touch advice: the longest extractor program that keeps extraction above factory
+// demand (with a safety buffer). While extraction ≥ demand the factories stay fed, so final
+// output holds at the planned rate — a longer program only buys fewer restarts. Past the point
+// where the decaying average drops below demand, output starts falling.
+//   headroom = supply ÷ demand at the CURRENT program (the analysis "fed at" ratio, uncapped)
+//   curDays  = detected current program length (anchor for the decay)
+function _extRuntimeAdviceHtml(headroom, curDays) {
+  if (!_extRt || !_extRt.ppd || !headroom) return '';
+  const unit = _extRt.unit || 'units', ppd = Math.round(_extRt.ppd).toLocaleString();
+  const L0 = (curDays && curDays > 0) ? Math.round(curDays) : 2;
+  const effL0 = _extEff(L0);
+  const maxDayFor = m => { let b = 0; for (let d = 1; d <= _EXT_MAX_DAYS; d++) if (headroom * _extEff(d) / effL0 >= m) b = d; return b; };
+  const safe = maxDayFor(1.10), edge = maxDayFor(1.0);   // 10% buffer vs right at demand
+  let body;
+  if (safe >= 1) {
+    body = `<li>Run extractors for <b>${safe} day${safe === 1 ? '' : 's'}</b> — set each program to <b>${_progDuration(safe)}</b> (whole days − 30 min, so they all end together for one batched restart). Extraction stays ~10%+ over demand, so output holds at <b>${ppd}</b> ${_esc(unit)}/day with the fewest pickups.</li>`;
+    let ctx = (curDays && curDays > 0) ? `You're running ~${L0}-day programs now.` : `(Assumed a ~${L0}-day current program — rescan colonies to detect yours.)`;
+    if (curDays && curDays > 0) ctx += safe > L0 ? ` You can safely stretch to ${safe}.`
+                                  : safe < L0 ? ` That's <b>shorter</b> — your buffer doesn't cover ${L0} days with margin.`
+                                  : ` That's about where you are.`;
+    if (edge > safe) ctx += ` Pushing past ~${edge}d leaves no buffer and risks starving the factories.`;
+    body += `<li>${ctx}</li>`;
+  } else {
+    body = `<li>On ${(curDays && curDays > 0) ? `your ~${L0}-day programs` : `a ~${L0}-day program`}, extraction only covers about <b>${Math.round(headroom * 100)}%</b> of demand — at or under a safe margin. <b>Don't extend the program</b>; shorten it or add extraction (see above) before the factories fall behind.</li>`;
+  }
   return `<div class="an-suggest an-suggest-add">
       <div class="an-suggest-h">Extraction runtime</div>
-      <ul><li>Set every extractor program to <b>${_progDuration(_EXT_MAX_DAYS)}</b> — the ${_EXT_MAX_DAYS}-day max, minus 30 min so they all end at the same time for one batched restart. Fewest pickups; expect ≈ <b>${Math.round(maxL.avgDay).toLocaleString()}</b> ${_esc(unit)}/day on average${iskPart}.</li></ul>
-      <div class="an-sug-note">Average runs lower than a short program (extractors decay) — the cost of low-touch. Estimate; check against your in-game ECU.</div>
+      <ul>${body}</ul>
+      <div class="an-sug-note">Based on your measured headroom; extractor decay is an estimate — verify the first longer run against your in-game ECU.</div>
     </div>`;
 }
 

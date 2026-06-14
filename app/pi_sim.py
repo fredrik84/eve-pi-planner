@@ -43,6 +43,7 @@ def colony_sim_state(detail: dict, pi_data: dict) -> dict | None:
     ext_batch: dict[int, float] = {}    # P0 type_id -> extracted units per ECU cycle
     t0 = 0.0
     expiry: float | None = None
+    install: float | None = None
     has_ecu = False
     for pin in pins:
         ed = pin.get("extractor_details")
@@ -58,8 +59,14 @@ def colony_sim_state(detail: dict, pi_data: dict) -> dict | None:
             ex = _epoch(pin.get("expiry_time"))
             if ex:
                 expiry = ex if expiry is None else max(expiry, ex)
+            inst = _epoch(pin.get("install_time"))
+            if inst:
+                install = inst if install is None else min(install, inst)
     if not has_ecu:
         return None
+    # Full extraction-program length the player chose (install → expiry), in days — the anchor for
+    # the "how long can I run extractors" advice (the program's avg yield already reflects this).
+    program_days = (expiry - install) / 86400.0 if (expiry and install and expiry > install) else None
 
     # Basic/advanced factory lines on the planet, grouped by output product.
     lines: dict[int, dict] = {}
@@ -118,7 +125,7 @@ def colony_sim_state(detail: dict, pi_data: dict) -> dict | None:
                             "batch": ext_batch.get(p0, 0.0)})
     if not outputs or t0 <= 0:
         return None
-    return {"t0": t0, "expiry": expiry, "outputs": outputs}
+    return {"t0": t0, "expiry": expiry, "program_days": program_days, "outputs": outputs}
 
 
 def project(state: dict, now_ts: float | None = None) -> list[dict]:

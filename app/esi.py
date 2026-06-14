@@ -752,6 +752,12 @@ def list_characters(pp_session: str = Cookie(default=None)):
                                            "per_day": round(rate * 86400)})
         except Exception:
             production = []
+        program_days = None      # the extraction-program length the player set (install→expiry)
+        try:
+            if p["sim_state"]:
+                program_days = _json.loads(p["sim_state"]).get("program_days")
+        except Exception:
+            program_days = None
         char_planets.setdefault(cid, []).append({
             "planet_type":   p["planet_type"],
             "is_extractor":  bool(p["is_extractor"]),
@@ -763,6 +769,7 @@ def list_characters(pp_session: str = Cookie(default=None)):
             "products":      products,
             "pads":          pads,
             "production":    production,
+            "program_days":  program_days,
         })
 
     now = datetime.now(timezone.utc).isoformat()
