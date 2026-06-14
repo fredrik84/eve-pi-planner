@@ -2688,7 +2688,7 @@ async function renderPlanDistribution() {
         ${delBtn}
       </div>
       <div class="pp-card-body">
-        <div class="dist-hint">A balanced recipe-ratio top-up for <b>each</b> factory — scaled to your scarcest P1 in the <b>inventory above</b> and capped at the launchpad space (3 LP ≈ 30,000 m³). Drop the green number at each planet; click to copy.</div>
+        <div class="dist-hint">Splits the P1 in your <b>inventory above</b> across the plan's factories in recipe ratio — your scarcest input sets the fill level, capped by launchpad space (3 LP ≈ 30,000 m³). Drop the green number at each planet; click to copy.</div>
         <div class="dist-days" id="refillDays"></div>
         <div class="plan-dist-tables">${tables}</div>
       </div>
@@ -2746,56 +2746,54 @@ function copyP1Amount(el) {
 
 // Distribute each entered stack across the factory planets that consume that P1, whole units
 // summing exactly to the stack (largest-remainder). No stack → show the % share.
-// Per-factory balanced top-up. Each factory of a product needs its P1 inputs in the recipe
-// ratio; we deliver `days` worth, where `days` = the scarcest pasted input ÷ its per-factory
-// daily need, capped by how much the factory's launchpads physically hold (3 LP ≈ 30,000 m³,
-// carried as factory_refill_hours). So the scarcest P1 sets the base and the heavier inputs
-// scale up automatically (e.g. SHPC: 6 inputs at X, 3 at 2X). NOT a split of your stack — it's
-// the per-factory load, so identical factories show identical numbers.
+// Split the pasted P1 across the plan's factories IN RECIPE RATIO. The scarcest input sets the
+// fill level (a number of days the whole plan can run on your stock); each P1 column then
+// allocates `days × its-daily-need` and splits that across factories by their share — so per
+// factory the inputs stay in recipe ratio (e.g. SHPC: 6 inputs at X, 3 at 2X) while the totals
+// never exceed what you have. The fill level is capped by how much a factory's launchpads hold
+// (3 LP ≈ 30,000 m³, carried as factory_refill_hours).
 const _P1_VOL_M3 = 0.19;                 // m³ per P1 unit (verified in-game)
 function updateP1Distribution() {
   const items = _planConsumptionItems();          // [{tid, name, perDay}] — perDay = PLAN-total units/day
   const count = Math.max(1, _planMeta.count || 1);
-  const wByTid = {};                              // per-factory daily need of each P1
-  items.forEach(it => { wByTid[String(it.tid)] = it.perDay / count; });
-  const sumW = items.reduce((a, it) => a + it.perDay / count, 0);   // per-factory P1 units/day (all inputs)
+  const wByTid = {}; items.forEach(it => { wByTid[String(it.tid)] = it.perDay; });
+  const sumW = items.reduce((a, it) => a + it.perDay, 0);   // plan-total P1 units/day (all inputs)
 
   const byP1 = {};
   document.querySelectorAll('.p1-amt').forEach(el => { (byP1[el.dataset.p1] = byP1[el.dataset.p1] || []).push(el); });
 
-  const setCells = (els, raw) => els.forEach((el, i) => {
-    el.textContent = Math.max(0, Math.round(raw[i])).toLocaleString(); el.classList.add('p1-amt-set'); });
-  const blankCells = els => els.forEach(el => { el.textContent = '–'; el.classList.remove('p1-amt-set'); });
+  const blank = els => els.forEach(el => { el.textContent = '–'; el.classList.remove('p1-amt-set'); });
+  // Spread a column total across factory cells by share, integer remainder largest-fraction first.
+  const fill = (els, total) => {
+    const shares = els.map(el => parseFloat(el.dataset.share) || (1 / els.length));
+    const ssum = shares.reduce((a, b) => a + b, 0) || 1;
+    const raw = shares.map(s => total * s / ssum);
+    const amt = raw.map(Math.floor);
+    const rem = Math.round(total) - amt.reduce((a, b) => a + b, 0);
+    raw.map((v, i) => [v - amt[i], i]).sort((a, b) => b[0] - a[0])
+       .slice(0, Math.max(0, rem)).forEach(([, i]) => amt[i]++);
+    els.forEach((el, i) => { el.textContent = Math.max(0, amt[i]).toLocaleString(); el.classList.add('p1-amt-set'); });
+  };
 
-  if (!items.length || sumW <= 0) {               // older snapshot w/o consumption → old split-by-share
-    for (const tid in byP1) {
-      const els = byP1[tid], stack = _p1Stacks[tid] || 0;
-      if (!stack) { blankCells(els); continue; }
-      const raw = els.map(el => stack * (parseFloat(el.dataset.share) || 0));
-      const amt = raw.map(Math.floor);
-      let rem = stack - amt.reduce((a, b) => a + b, 0);
-      raw.map((v, i) => [v - amt[i], i]).sort((a, b) => b[0] - a[0])
-         .slice(0, Math.max(0, rem)).forEach(([, i]) => amt[i]++);
-      els.forEach((el, i) => { el.textContent = amt[i].toLocaleString(); el.classList.add('p1-amt-set'); });
-    }
+  if (!items.length || sumW <= 0) {               // older snapshot w/o consumption → plain split by share
+    for (const tid in byP1) { const s = _p1Stacks[tid] || 0; s ? fill(byP1[tid], s) : blank(byP1[tid]); }
     _updateRefillDays(); return;
   }
 
-  // days a factory can run on the pasted stock (scarcest input), capped by launchpad space.
+  // Fill level = days the whole plan runs on the scarcest pasted input, capped by launchpad space.
   let T = Infinity;
   for (const tid in byP1) {
     const w = wByTid[tid] || 0, stack = _p1Stacks[tid] || 0;
     if (w > 0 && stack > 0) T = Math.min(T, stack / w);
   }
   if (!isFinite(T)) T = 0;
-  const capDays = (_planMeta.refillHours > 0) ? _planMeta.refillHours / 24 : (30000 / (sumW * _P1_VOL_M3));
+  const capDays = (_planMeta.refillHours > 0) ? _planMeta.refillHours / 24 : (30000 * count / (sumW * _P1_VOL_M3));
   const days = Math.min(T, capDays);
 
   for (const tid in byP1) {
     const els = byP1[tid], w = wByTid[tid] || 0, stack = _p1Stacks[tid] || 0;
-    if (!stack || !w) { blankCells(els); continue; }
-    // share×count = the factory's size relative to its peers (1 for identical factories).
-    setCells(els, els.map(el => days * w * ((parseFloat(el.dataset.share) || (1 / count)) * count)));
+    if (!stack || !w) { blank(els); continue; }
+    fill(els, Math.min(stack, days * w));         // column total = days × daily need, never above stock
   }
   _updateRefillDays();
 }
