@@ -2101,6 +2101,7 @@ function _setupPlanetsByMaterial() {
 // colonise for a given P1's P0 (reachable system, not already used). Fetched per plan, then the
 // rebalance moves only suggest a redeploy the character can physically make.
 let _placements = null;       // {type_id: {p0_name, by_char: {cid: [{system,planet_num,planet_type,richness}]}}}
+let _factorySites = null;     // {cid: [{system, planet_num, planet_type}]} — free B/T planets for a new factory
 let _placementsKey = null;
 async function _ensurePlacements(typeIds) {
   const key = typeIds.slice().sort().join(',');
@@ -2109,8 +2110,10 @@ async function _ensurePlacements(typeIds) {
   try {
     const r = await fetch('/api/analyze-placements', { method: 'POST', headers: { 'Content-Type': 'application/json' },
                                                        body: JSON.stringify({ type_ids: typeIds.map(Number) }) });
-    _placements = (await r.json()).placements || {};
-  } catch (e) { _placements = {}; }
+    const j = await r.json();
+    _placements = j.placements || {};
+    _factorySites = j.factory_sites || {};
+  } catch (e) { _placements = {}; _factorySites = {}; }
   renderAnalysis();   // re-render now that feasibility is known
 }
 
@@ -2269,7 +2272,7 @@ function renderAnalysis() {
     if (perFacP1) {
       const cells = [
         stat(_dur(days), 'between refills · 3 LP', 'an-ok'),
-        stat(`${Math.round(perFacP1).toLocaleString()} <span class="an-of">P1/day</span>`, `~${Math.round(perFacM3).toLocaleString()} m³/day per factory`, ''),
+        stat(`~${Math.round(perFacM3).toLocaleString()} <span class="an-of">m³/day</span>`, 'of P1 per factory to haul', ''),
         nfac ? stat(String(nfac), 'factories to service', '') : '',
       ].join('');
       proj = `<div class="an-proj">`
@@ -2381,10 +2384,12 @@ function renderAnalysis() {
   // Supportable factories = current × the tightest input's ratio. Suggest converting the FACTORY
   // characters' own Barren/Temperate extractor colonies (of over-produced inputs) into factories.
   const curFac = snap.factories_count || (snap.factories || []).length || 0;
-  const supportable = Math.floor(curFac * binding.ratio);
+  // Round (not floor) the surplus headroom to whole factories so this agrees with the over-extraction
+  // tile: e.g. 22 SHPC of headroom = 1.83 factories → 2, not floor→1.
+  const extraFac = Math.round(curFac * (binding.ratio - 1));
+  const supportable = curFac + extraFac;
   let addFactories = '';
-  if (curFac && binding.ratio > 1.005 && supportable - curFac >= 1) {
-    const extraFac = supportable - curFac;
+  if (curFac && binding.ratio > 1.005 && extraFac >= 1) {
     const facChars = new Set((snap.factories || []).map(f => (f.loc || '').split(' · ')[0].trim()).filter(Boolean));
     const ratioOf = {}; surplus.forEach(s => { ratioOf[String(s.t)] = s.ratio; });
     const surplusTids = new Set(surplus.map(s => String(s.t)));
@@ -2396,16 +2401,38 @@ function renderAnalysis() {
         (p.production || []).forEach(o => {
           if (surplusTids.has(String(o.type_id)))
             cands.push({ char: ch.name, system: p.system, planet_num: p.planet_num, ptype: p.planet_type,
-                         mat: o.name, perDay: o.per_day || 0, ratio: ratioOf[String(o.type_id)] || 1 });
+                         mat: o.name, t: String(o.type_id), perDay: o.per_day || 0, ratio: ratioOf[String(o.type_id)] || 1 });
         });
       });
     });
     cands.sort((a, b) => b.ratio - a.ratio || a.perDay - b.perDay);
     const pick = cands.slice(0, extraFac);
-    const li = pick.map(c => `<li>On <b>${_esc(c.char)}</b>: convert <b>${_esc(c.system)} P${c.planet_num}</b> <span class="an-sug-note">(${_esc(c.ptype)}, extracting ${_esc(c.mat)})</span> → factory</li>`).join('');
+    const pn = snap.unit_label && snap.unit_label !== 'units' ? _esc(snap.unit_label) : '';
+    const facLabel = pn ? `${pn} factory` : 'factory';
+    // Convert over-produced B/T extractors first (named planet, also trims waste) — as a card like
+    // the rebalance moves: tear down the extractor → build a factory on the same planet.
+    const convLi = pick.map(c => {
+      const loc = `${_esc(c.system)} P${c.planet_num}`;
+      const rm = _moveSide('an-move-rm', 'tear down', loc, _matHtml(c.mat, c.t), _esc(c.ptype));
+      const add = _moveSide('an-move-add', 'build', loc, facLabel, 'same planet');
+      return `<li class="an-move"><div class="an-move-char">${_esc(c.char)}</div><div class="an-move-pair">${rm}<div class="an-move-arrow">→</div>${add}</div></li>`;
+    });
+    // …then name a free Barren/Temperate planet for the rest, preferring the system that already
+    // hosts factories so they cluster.
     const rest = extraFac - pick.length;
-    const restLi = rest > 0 ? `<li>+ ${rest} more on a free Barren/Temperate planet — keep them on your factory characters</li>` : '';
-    addFactories = `<div class="an-suggest an-suggest-add"><div class="an-suggest-h">Add factories — your inputs could feed ~${supportable} (${extraFac} more than ${curFac}), capped by ${_esc(binding.name)}</div><ul>${li}${restLi}</ul></div>`;
+    const facSystems = new Set((snap.factories || []).map(f => ((f.loc || '').split('·')[1] || '').trim().split(' ')[0]).filter(Boolean));
+    const nameToCid = {}; (_ppCharsData || []).forEach(c => { if (facChars.has(c.name)) nameToCid[c.name] = c.character_id; });
+    const sitePool = [];
+    Object.entries(nameToCid).forEach(([name, cid]) => ((_factorySites && _factorySites[String(cid)]) || []).forEach(p => sitePool.push({ char: name, ...p })));
+    sitePool.sort((a, b) => (facSystems.has(b.system) ? 1 : 0) - (facSystems.has(a.system) ? 1 : 0));
+    const restSites = sitePool.slice(0, rest);
+    const restLi = restSites.map(p => {
+      const add = _moveSide('an-move-add an-move-solo', 'build new', `${_esc(p.system)} P${p.planet_num}`, facLabel, `free ${_esc(p.planet_type)}`);
+      return `<li class="an-move"><div class="an-move-char">${_esc(p.char)}</div><div class="an-move-pair">${add}</div></li>`;
+    });
+    const stillRest = rest - restSites.length;
+    if (stillRest > 0) restLi.push(`<li class="an-move-note">+ ${stillRest} more — no free Barren/Temperate planet left on your factory characters (you'd need a new colony slot)</li>`);
+    addFactories = `<div class="an-suggest an-suggest-add"><div class="an-suggest-h">Add factories — your inputs could feed ~${supportable} (${extraFac} more than ${curFac}), capped by ${_esc(binding.name)}</div><ul>${convLi.join('')}${restLi.join('')}</ul></div>`;
   }
 
   let suggest = '';

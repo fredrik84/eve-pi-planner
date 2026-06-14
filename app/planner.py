@@ -1028,8 +1028,19 @@ def analyze_placements(body: dict = Body(...), pp_session: str = Cookie(default=
             if avail:
                 by_char[str(cid)] = avail
         out[str(tid)] = {"p0_name": p0_name, "by_char": by_char}
+    # Free Barren/Temperate planets each character could host a NEW factory on (any B/T planet works
+    # — factories don't need a specific P0). In the char's footprint, not already colonised.
+    bt = con.execute(
+        "SELECT system, planet_num, planet_type FROM pp_planets WHERE planet_type IN ('Barren','Temperate')"
+    ).fetchall()
+    factory_sites = {}
+    for cid, systems in foot.items():
+        free = [{"system": p["system"], "planet_num": p["planet_num"], "planet_type": p["planet_type"]}
+                for p in bt if p["system"] in systems and (p["system"], p["planet_num"]) not in occ.get(cid, set())]
+        if free:
+            factory_sites[str(cid)] = free
     con.close()
-    return {"placements": out}
+    return {"placements": out, "factory_sites": factory_sites}
 
 
 @router.get("/api/my-setup-plan")
