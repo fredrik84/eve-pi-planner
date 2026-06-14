@@ -148,7 +148,22 @@ async function onDashboardTabOpen() {
   }
 }
 
-function refreshDashboard(btn) { if (btn) btn.textContent = '…'; onDashboardTabOpen(); }
+// Pull FRESH colony data from ESI (re-scan every character), then repaint — so a just-filled
+// launchpad / new routes / expiry show up. (Plain re-read of stored data would change nothing.)
+async function refreshDashboard(btn) {
+  const ids = (_ppCharsData || []).filter(c => !c.is_dummy && c.character_id > 0).map(c => c.character_id);
+  if (!ids.length) { await onDashboardTabOpen(); return; }
+  if (btn) btn.disabled = true;
+  let failed = 0;
+  for (let i = 0; i < ids.length; i++) {
+    if (btn) btn.textContent = `Rescanning ${i + 1}/${ids.length}…`;
+    try { const r = await fetch(`/api/characters/${ids[i]}/refresh-planets`, { method: 'POST' }); if (!r.ok) failed++; }
+    catch (e) { failed++; }
+  }
+  if (typeof loadCharacters === 'function') await loadCharacters();   // refresh program lengths etc.
+  await onDashboardTabOpen();                                          // repaints with the new data
+  if (failed) alert(`${failed} of ${ids.length} character${ids.length !== 1 ? 's' : ''} could not be rescanned — usually an expired ESI token (red dot in Characters).`);
+}
 
 function _dashTile(val, lbl, cls) {
   return `<div class="an-stat"><div class="an-stat-val${cls ? ' ' + cls : ''}">${val}</div><div class="an-stat-lbl">${lbl}</div></div>`;
@@ -196,7 +211,7 @@ function renderDashboard(data) {
   el.innerHTML = issuesHtml + `
     <section class="pp-card">
       <div class="pp-card-title">Overview <span class="pp-card-hint">— your PI at a glance</span>
-        <button class="pp-add-btn" onclick="refreshDashboard(this)" title="Re-read your factories">Refresh</button>
+        <button class="pp-add-btn" onclick="refreshDashboard(this)" title="Pull fresh colony data from ESI">Rescan colonies</button>
       </div>
       <div class="pp-card-body"><div class="an-stats">${tiles}</div></div>
     </section>

@@ -375,21 +375,25 @@ def _fetch_planets(character_id: int, access_token: str) -> None:
                                 if (_types.get(t, {}).get("pi_tier") or 0) == _max_tier}
                 products_json = _json.dumps(
                     [{"type_id": t, "name": n} for t, n in products.items()]) if products else None
-                # Split launchpad contents: the highest tier is the finished product to haul out
-                # (pad_contents); the lower tiers are the imported inputs still buffered, which the
-                # dashboard uses to show how full / how long each factory will keep running.
+                # Split launchpad/pin contents into the planet's finished product (pad_contents) vs
+                # its lower-tier imported inputs still buffered (pad_inputs). Use the planet's
+                # PRODUCT tier from its schematics — NOT the max tier currently present — so a
+                # launchpad holding only freshly-loaded P1 inputs (no output yet) is still seen as
+                # inputs, not mistaken for the product.
+                _prod_tier = max((_types.get(t, {}).get("pi_tier") or 0) for t in products) if products else None
                 pad_inputs_json = None
                 if pads:
-                    _pad_max = max((_types.get(t, {}).get("pi_tier") or 0) for t in pads)
+                    if _prod_tier is None:   # no schematics (pure storage) → fall back to max present
+                        _prod_tier = max((_types.get(t, {}).get("pi_tier") or 0) for t in pads)
                     _inputs = {t: a for t, a in pads.items()
-                               if (_types.get(t, {}).get("pi_tier") or 0) < _pad_max}
+                               if (_types.get(t, {}).get("pi_tier") or 0) < _prod_tier}
                     if _inputs:
                         pad_inputs_json = _json.dumps(sorted(
                             [{"type_id": t, "name": _types.get(t, {}).get("name") or f"#{t}",
                               "amount": a, "tier": _types.get(t, {}).get("pi_tier") or 0}
                              for t, a in _inputs.items()], key=lambda x: -x["amount"]))
                     pads = {t: a for t, a in pads.items()
-                            if (_types.get(t, {}).get("pi_tier") or 0) == _pad_max}
+                            if (_types.get(t, {}).get("pi_tier") or 0) >= _prod_tier}
                 pads_json = _json.dumps(sorted(
                     [{"type_id": t, "name": _types.get(t, {}).get("name") or f"#{t}", "amount": a}
                      for t, a in pads.items()],
