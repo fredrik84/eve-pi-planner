@@ -2623,7 +2623,8 @@ async function renderPlanDistribution() {
   const saved = await _fetchAllSnapshots();
   let derived = [];
   try { derived = await _fetchSetupPlans(); } catch (e) {}
-  const snaps = [...saved, ...derived];
+  // Current setup first → it's the sensible default selection (your live factories) when present.
+  const snaps = [...derived, ...saved];
   if (!snaps.length) {
     el.innerHTML = `<div class="plan-section-title">Split P1 stacks into plan factories</div>
       <div class="pp-card"><div class="admin-hint">Build a plan in <b>Planetary Planning</b> and hit <b>Save plan</b> — or set up factories on your characters — and it'll appear here so you can paste your P1 stacks and see exactly how many units to drop at each factory.</div></div>`;
