@@ -2072,6 +2072,23 @@ function _dur(days) {
   return `${hr.toLocaleString()} ${hr === 1 ? 'hour' : 'hours'}`;
 }
 
+// Per-material drill-down: every colony producing a given output, weakest (underperforming) first.
+let _anExpanded = new Set();   // material type_ids whose planet breakdown is expanded
+function _planetsForMaterial(t) {
+  const out = [];
+  (_ppCharsData || []).forEach(ch => (ch.planets || []).forEach(p => (p.production || []).forEach(o => {
+    if (String(o.type_id) === String(t))
+      out.push({ char: ch.name, system: p.system, planet_num: p.planet_num, perDay: o.per_day || 0 });
+  })));
+  out.sort((a, b) => a.perDay - b.perDay);   // underperforming (lowest output) first
+  return out;
+}
+function _toggleMatDetail(t) {
+  t = String(t);
+  if (_anExpanded.has(t)) _anExpanded.delete(t); else _anExpanded.add(t);
+  renderAnalysis();
+}
+
 // type_id(str) -> {name, perDay, planets} — every colony output rolled up (P1 for refiners, P0 for
 // pure extractors), with how many planets contribute (to size "add N planets" suggestions). The
 // plan's needs pick which rows are relevant.
@@ -2288,10 +2305,21 @@ function renderAnalysis() {
     const delta = surplus >= 0
       ? `<span class="an-pos">+${Math.round(surplus).toLocaleString()}/day</span>`
       : `<span class="an-neg">${Math.round(surplus).toLocaleString()}/day</span>`;
-    return `<div class="an-row">
-        <div class="an-row-name">${_esc(r.name)}</div>
-        <div class="an-bar-track"><div class="an-bar-fill ${cls}" style="width:${haveW}%"></div></div>
-        <div class="an-row-nums"><span class="an-have">${Math.round(r.have).toLocaleString()}</span><span class="an-sep">/</span><span class="an-need">${Math.round(r.need).toLocaleString()}/day</span>${delta}</div>
+    const expanded = _anExpanded.has(String(r.t));
+    let detail = '';
+    if (expanded) {
+      const pls = _planetsForMaterial(r.t);
+      const items = pls.length
+        ? pls.map(p => `<div class="an-pd-row"><span class="an-pd-char">${_esc(p.char)}</span><span class="an-pd-loc">${p.system ? _esc(p.system) + (p.planet_num != null ? ' P' + p.planet_num : '') : '—'}</span><span class="an-pd-val">${Math.round(p.perDay).toLocaleString()}/day</span></div>`).join('')
+        : '<div class="an-pd-empty">No colony is producing this yet.</div>';
+      detail = `<div class="an-row-detail">${items}</div>`;
+    }
+    return `<div class="an-mat">
+        <div class="an-row an-row-click" onclick="_toggleMatDetail('${r.t}')">
+          <div class="an-row-name"><span class="an-row-caret">${expanded ? '▾' : '▸'}</span> ${_esc(r.name)}</div>
+          <div class="an-bar-track"><div class="an-bar-fill ${cls}" style="width:${haveW}%"></div></div>
+          <div class="an-row-nums"><span class="an-have">${Math.round(r.have).toLocaleString()}</span><span class="an-sep">/</span><span class="an-need">${Math.round(r.need).toLocaleString()}/day</span>${delta}</div>
+        </div>${detail}
       </div>`;
   }).join('');
 
