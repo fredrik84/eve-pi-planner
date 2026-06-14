@@ -2127,9 +2127,18 @@ function _renderAnalyzePlans() {
   if (!sel) return;
   const prev = sel.value;
   sel.innerHTML = _analyzeSnaps.length
-    ? _analyzeSnaps.map((s, i) => `<option value="${i}">${_esc(s.name)}</option>`).join('')
-    : '<option value="">— no saved plans —</option>';
+    ? _analyzeSnaps.map((s, i) => `<option value="${i}">${s.derived ? '◆ ' : ''}${_esc(s.name)}</option>`).join('')
+    : '<option value="">— no plans —</option>';
   if (prev !== '' && _analyzeSnaps[prev]) sel.value = prev;
+}
+
+// Derive a demand profile per product the player's deployed factories build (server-side from
+// the live colony scan), shaped like a saved snapshot so the Analyze comparison works unchanged.
+async function _fetchSetupPlans() {
+  try {
+    const plans = ((await (await fetch('/api/my-setup-plan')).json()).plans) || [];
+    return plans.map((p, i) => ({ ...p, id: 'setup:' + i, derived: true, saved: false, hasPayload: false }));
+  } catch (e) { return []; }
 }
 
 // Pull fresh colony data from ESI (re-scans each real character's planets → rebuilds sim_state),
@@ -2161,7 +2170,10 @@ async function onAnalyzeTabOpen() {
     if (el) el.innerHTML = '<div class="admin-hint">Loading your colonies and saved plans…</div>';
   }
   await loadCharacters();          // refresh the live production rates
-  try { _analyzeSnaps = await _fetchAllSnapshots(); } catch (e) { _analyzeSnaps = []; }
+  let saved = [], derived = [];
+  try { saved = await _fetchAllSnapshots(); } catch (e) {}
+  try { derived = await _fetchSetupPlans(); } catch (e) {}
+  _analyzeSnaps = [...derived, ...saved];   // your live setup first, then saved plans
   _renderAnalyzePlans();
   renderAnalysis();
 }
@@ -2170,7 +2182,7 @@ function renderAnalysis() {
   const el = document.getElementById('analyzeContent');
   if (!el) return;
   if (!_analyzeSnaps.length) {
-    el.innerHTML = `<div class="admin-hint">No saved plans yet. Build a plan in <b>Planetary Planning</b>, click <b>Save plan</b>, then come back here to check your in-game colonies against it.</div>`;
+    el.innerHTML = `<div class="admin-hint">Nothing to compare against yet. Either <b>set a recipe on a factory</b> in-game (then <b>Rescan colonies</b> to get a "Current setup" demand profile), or build a plan in <b>Planetary Planning</b> and <b>Save plan</b>.</div>`;
     return;
   }
   const sel = document.getElementById('analyzePlanSelect');
@@ -2202,6 +2214,14 @@ function renderAnalysis() {
   const fed = binding.ratio >= 0.995;
   const rh = snap.factory_refill_hours;
   const refillDays = rh ? rh / 24 : null;
+
+  // For a derived "Current setup" profile, show which factory planets it was built from so the
+  // user can confirm it reflects their real setup (and spot anything unexpected).
+  let builtFrom = '';
+  if (snap.derived && snap.factories && snap.factories.length) {
+    const items = snap.factories.map(f => `<li>${_esc(f.loc)}</li>`).join('');
+    builtFrom = `<details class="an-builtfrom"><summary>Demand from ${snap.factories.length} deployed factor${snap.factories.length === 1 ? 'y' : 'ies'} · your last scan</summary><ul>${items}</ul></details>`;
+  }
 
   const stat = (val, lbl, cls) => `<div class="an-stat ${cls || ''}"><div class="an-stat-val">${val}</div><div class="an-stat-lbl">${lbl}</div></div>`;
   const head = `<div class="an-headline ${fed ? 'an-ok' : 'an-bad'}">
@@ -2387,7 +2407,7 @@ function renderAnalysis() {
   if (!moves.length && !newBuilds.length && !addFactories)
     suggest = `<div class="an-suggest an-suggest-free"><div class="an-suggest-h">Balanced — every material this plan needs is covered${leftover.length ? ', with a little to spare' : ''}.</div></div>`;
 
-  el.innerHTML = head + stats + proj
+  el.innerHTML = head + builtFrom + stats + proj
     + `<div class="an-legend">Producing (left) vs the plan’s daily need (right) per P1. A full green bar = factories stay fed; a short red bar is the bottleneck.</div>`
     + `<div class="an-bars">${barRows}</div>`
     + suggest;

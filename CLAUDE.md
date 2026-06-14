@@ -496,6 +496,32 @@ checkpoint. Checkpoint tag before this: `checkpoint-before-pi-sim`.
   factor (tried via CCP's `1/(1+0.012·t)` curve, dogma attrs 1683/1687) under-counted every
   factory-limited colony and contradicted the in-game numbers — reverted.
 
+## Setup Analysis tab + "Current setup" demand (`/api/my-setup-plan`)
+
+The **Setup Analysis** tab compares **supply** (each colony's extractor `production`, P1/day from
+the sim — see above) against a plan's **demand** (`consumption`, P1/day a product's factories eat),
+showing per-P1 over/under, a refill cadence, and rebalance / add-factory suggestions. Demand comes
+from a saved plan snapshot **or** a **derived "Current setup" profile** built from the player's own
+deployed factories — so a player with PI already running gets the analysis with zero plan setup.
+
+`GET /api/my-setup-plan` (planner.py, session-scoped via `session_context_id`): groups the
+context's **configured non-extractor factory planets** (`pp_char_planets.is_extractor=0` with a
+non-empty `products` = highest-tier output) **by product**, and for each returns a snapshot-shaped
+profile — `consumption` (`_compute_p1_fracs(tid) × products_per_day`), `products_per_day`
+(`count × _effective_fph(tid) × 24`), `factory_refill_hours`, `factories[]` (real `char · system P#`
+locs), `unit_label`. **Strictly context-filtered** (join `pp_characters ON context_id`) — unscoped
+queries leak other accounts' factories. Frontend (`planetary.js`): `_fetchSetupPlans()` →
+prepended to `_analyzeSnaps` (marked `derived`, shown first with a ◆), and `renderAnalysis` adds a
+"built from" `<details>` of the factory locs so the user can verify/spot stale data.
+
+**Shared helpers** `_effective_fph(type_id, pi_data, override)` (P4 → 0.5/hr, else SDE rate) and
+`_factory_refill_hours(products_per_day, p1_fracs, factories)` (0.19 m³/unit, 3-LP buffer) were
+extracted from `_run_plan` so the planner and this endpoint can't drift (the 0.38→0.19 m³ fix would
+have been one line if they'd been shared from the start). **v1 uses the flat per-product rate** —
+it ignores CC level + planet size, so demand is over-stated for CC4 / big-planet factories; the v2
+path is to sum per-planet `component_factory_rate(product, pi_data, planet_type, ccu)` (fuelblocks.py)
+using each factory planet's stored `planet_type` + the character's `ccu`.
+
 ## Bug reporting (`app/bugs.py`, `pp_bugs` table)
 
 Any logged-in pilot can file a report; only admins read/triage them. **Admin = account owns

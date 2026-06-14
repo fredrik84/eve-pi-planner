@@ -509,6 +509,36 @@ def _compute_p1_fracs(target_type_id: int, pi_data) -> dict[int, float]:
     return {k: float(v) for k, v in trace(target_type_id, Fraction(1)).items()}
 
 
+# Factory P1 input buffer model (kept here so _run_plan and /api/my-setup-plan agree —
+# the 0.38→0.19 m³ fix would have been a one-liner if these had always been shared).
+_P1_VOLUME = 0.19            # m³ per P1 unit (verified in-game)
+_FACTORY_LAUNCHPADS = 3      # input-buffer launchpads assumed per factory (30,000 m³)
+
+
+def _effective_fph(type_id: int, pi_data, override: float | None = None) -> float:
+    """Per-factory output rate (units/hr). A P4 factory makes ~0.5/hr over its full P2→P3→P4
+    chain; the raw SDE rate only reflects the final step and over-counts P4 ~2×. P1–P3 use the
+    SDE rate. A positive override always wins."""
+    if override is not None and override > 0:
+        return float(override)
+    if pi_data["types"].get(type_id, {}).get("pi_tier") == 4:
+        return 0.5
+    sch = pi_data["schematics"].get(type_id) or {}
+    ct = sch.get("cycle_time") or 3600
+    return sch.get("output_qty", 1) * 3600.0 / ct
+
+
+def _factory_refill_hours(products_per_day: float, p1_fracs: dict, factories: int) -> float | None:
+    """Hours until a factory's 3-launchpad (30,000 m³) P1 input buffer empties at full
+    consumption. None if there are no factories / no consumption."""
+    if not factories:
+        return None
+    p1_m3_per_factory_day = products_per_day * sum(p1_fracs.values()) * _P1_VOLUME / factories
+    if p1_m3_per_factory_day <= 0:
+        return None
+    return round((_FACTORY_LAUNCHPADS * 10_000) / (p1_m3_per_factory_day / 24), 1)
+
+
 # ── Plan request model ────────────────────────────────────────────────────────
 
 class PlanRequest(BaseModel):
@@ -1000,6 +1030,73 @@ def analyze_placements(body: dict = Body(...), pp_session: str = Cookie(default=
         out[str(tid)] = {"p0_name": p0_name, "by_char": by_char}
     con.close()
     return {"placements": out}
+
+
+@router.get("/api/my-setup-plan")
+def my_setup_plan(pp_session: str = Cookie(default=None)):
+    """Derive a 'demand profile' per distinct product the player's DEPLOYED factories build,
+    shaped like a saved plan snapshot so the Setup Analysis tab can compare it against the
+    player's extractor production (supply). Strictly scoped to the session's context so a
+    player only ever sees their own factories."""
+    context_id = session_context_id(pp_session)
+    if not context_id:
+        return {"plans": []}
+    pi = load_pi_data()
+    types = pi["types"]
+    con = get_connection()
+    # Configured factory planets (non-extractor, with a top-tier product) for THIS account only.
+    rows = con.execute("""
+        SELECT c.character_name AS ch, cp.planet_num AS pn, s.name AS system, cp.products AS products
+        FROM pp_char_planets cp
+        JOIN pp_characters c ON c.character_id = cp.character_id
+        LEFT JOIN solar_systems s ON s.system_id = cp.solar_system_id
+        WHERE c.context_id = ? AND COALESCE(c.is_dummy, 0) = 0
+          AND cp.is_extractor = 0 AND cp.products IS NOT NULL AND cp.products != '[]'
+    """, (context_id,)).fetchall()
+    con.close()
+
+    # Group factory planets by their top product type_id.
+    by_product: dict[int, dict] = {}
+    for r in rows:
+        try:
+            prods = _json.loads(r["products"]) or []
+        except Exception:
+            prods = []
+        for p in prods:
+            tid = p.get("type_id")
+            if not tid:
+                continue
+            g = by_product.setdefault(tid, {"name": p.get("name") or f"#{tid}", "factories": []})
+            loc = f"{r['ch']} · {r['system'] or '?'}" + (f" P{r['pn']}" if r["pn"] is not None else "")
+            g["factories"].append({"loc": loc, "product": g["name"]})
+
+    plans = []
+    for tid, g in by_product.items():
+        count = len(g["factories"])
+        p1_fracs = _compute_p1_fracs(tid, pi)
+        if not p1_fracs:
+            continue  # not something that resolves to P1 inputs (shouldn't happen for ≥P2)
+        products_per_day = round(count * _effective_fph(tid, pi) * 24)
+        consumption = [
+            {"p1_type_id": pid, "p1_name": types.get(pid, {}).get("name") or f"#{pid}",
+             "units_per_day": round(products_per_day * frac)}
+            for pid, frac in p1_fracs.items()
+        ]
+        sell = fetch_prices([tid]).get(tid, 0.0)
+        plans.append({
+            "name": f"Current setup: {g['name']} (×{count})",
+            "consumption": consumption,
+            "products_per_day": products_per_day,
+            "isk_per_day": round(products_per_day * sell, 2) if sell else None,
+            "factories_count": count,
+            "factory_refill_hours": _factory_refill_hours(products_per_day, p1_fracs, count),
+            "unit_label": g["name"],
+            "factories": g["factories"],
+            "tier": types.get(tid, {}).get("pi_tier") or 0,
+        })
+    # Highest-tier / biggest operations first.
+    plans.sort(key=lambda x: (-x["tier"], -x["factories_count"]))
+    return {"plans": plans}
 
 
 # ── Planning algorithm helpers ────────────────────────────────────────────────
@@ -2553,18 +2650,9 @@ def _run_plan(req: PlanRequest, context_id: int) -> dict:
     else:
         _per_char_fac_cap = None
 
-    # Effective per-factory output rate (units/hr). A P4 factory produces ~0.5/hr over
-    # its full P2→P3→P4 chain; the raw SDE rate (output_qty × cycles) only reflects the
-    # final step and over-counts P4 by ~2×, making factory count and products/day
-    # disagree (e.g. 9 factories but 216/day, which really needs 18). For P1–P3 the SDE
-    # rate is correct. A user override always wins.
-    _tier = types.get(req.type_id, {}).get("pi_tier")
-    if req.factory_output_per_hour is not None and req.factory_output_per_hour > 0:
-        effective_fph = req.factory_output_per_hour
-    elif _tier == 4:
-        effective_fph = 0.5
-    else:
-        effective_fph = output_qty * 3600.0 / cycle_time
+    # Effective per-factory output rate (units/hr) — see _effective_fph (P4 → 0.5/hr to avoid
+    # the SDE's ~2× P4 over-count; SDE rate for P1–P3; user override wins).
+    effective_fph = _effective_fph(req.type_id, pi_data, req.factory_output_per_hour)
 
     # Compute slot budget
     ext_slots, factories, factory_shares, auto_mode, p0_per_factory_day = _compute_slot_budget(
@@ -2584,18 +2672,11 @@ def _run_plan(req: PlanRequest, context_id: int) -> dict:
     p0_per_day = round(sum(frac * products_per_day * 150 for frac in p1_fracs.values()))
     isk_per_day = round(products_per_day * sell_price, 2)
 
-    # Refill cadence: factory planets import P1 into launchpads (the practical setup,
-    # matching the Factory Layout templates). P1 = 0.19 m³; assume 3 launchpads
-    # (30,000 m³) of input buffer. How long until that buffer empties?
-    _P1_VOLUME = 0.19
-    _FACTORY_LAUNCHPADS = 3
+    # Refill cadence: factory planets import P1 into launchpads (matching the Factory Layout
+    # templates). See _factory_refill_hours (0.19 m³/unit, 3-launchpad buffer).
     total_p1_per_day = products_per_day * sum(p1_fracs.values())
     p1_m3_per_factory_day = (total_p1_per_day * _P1_VOLUME / factories) if factories else 0.0
-    factory_buffer_m3 = _FACTORY_LAUNCHPADS * 10_000
-    factory_refill_hours = (
-        round(factory_buffer_m3 / (p1_m3_per_factory_day / 24), 1)
-        if p1_m3_per_factory_day > 0 else None
-    )
+    factory_refill_hours = _factory_refill_hours(products_per_day, p1_fracs, factories)
     needed_at_baseline = ceil(p0_per_day / 48_000) if p0_per_day > 0 else sum(q for _, q in sorted_p1)
 
     has_planet_db = any(v for v in p0_planet_lists.values())
@@ -2672,9 +2753,7 @@ def _run_plan(req: PlanRequest, context_id: int) -> dict:
                 isk_per_day = round(products_per_day * sell_price, 2)
                 total_p1_per_day = products_per_day * sum(p1_fracs.values())
                 p1_m3_per_factory_day = (total_p1_per_day * _P1_VOLUME / factories) if factories else 0.0
-                factory_refill_hours = (
-                    round(factory_buffer_m3 / (p1_m3_per_factory_day / 24), 1)
-                    if p1_m3_per_factory_day > 0 else None)
+                factory_refill_hours = _factory_refill_hours(products_per_day, p1_fracs, factories)
 
     all_assignments = sorted(assignments, key=lambda a: a["character_name"].lower())
     total_extractors = sum(len(a["extractors"]) for a in all_assignments)
