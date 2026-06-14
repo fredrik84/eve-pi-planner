@@ -2622,25 +2622,18 @@ function _progDuration(days) {
   const d = Math.floor(total / 1440), h = Math.floor((total % 1440) / 60), m = total % 60;
   return [d ? d + 'd' : '', h ? h + 'h' : '', m ? m + 'm' : ''].filter(Boolean).join(' ');
 }
-// Solid advice (not a calculator): how long to run extractors. EVE programs cap at 14 days and
-// the average yield drops the longer you run, so recommend the max (fewest restarts) plus a
-// higher-average alternative, each with its expected average production.
+// Solid, low-touch advice (not a calculator): one recommendation — run the longest program so
+// you restart least. EVE caps programs at 14 days; the average yield is lower than a short run
+// (extractors decay), which is the accepted cost of fewer interactions.
 function _extRuntimeAdviceHtml() {
   if (!_extRt || !_extRt.ppd) return '';
-  const unit = _extRt.unit || 'units', fmt = v => Math.round(v).toLocaleString();
+  const unit = _extRt.unit || 'units';
   const maxL = _extRtLine(_EXT_MAX_DAYS);
-  let alt = 1;                                  // longest run still keeping ≥ ~60% of peak
-  for (let d = 1; d <= _EXT_MAX_DAYS; d++) if (_extEff(d) >= 0.6) alt = d;
-  const altL = _extRtLine(alt);
-  const items = [
-    `<li><b>Fewest restarts:</b> run the <b>${_EXT_MAX_DAYS}-day</b> max — set each program to <b>${_progDuration(_EXT_MAX_DAYS)}</b> (whole days − 30 min, so they end at the same time for an easy restart). Expect ≈ <b>${fmt(maxL.avgDay)}</b> ${_esc(unit)}/day on average (~${maxL.pct}% of peak — extractors slow down over a long program).</li>`,
-  ];
-  if (alt < _EXT_MAX_DAYS)
-    items.push(`<li><b>Higher average:</b> a <b>${alt}-day</b> run (<b>${_progDuration(alt)}</b>) keeps ~${altL.pct}% of peak — ≈ <b>${fmt(altL.avgDay)}</b> ${_esc(unit)}/day — if you'd rather keep throughput up than minimise logins.</li>`);
+  const iskPart = maxL.isk ? ` · ≈ <b>${_fmtIsk(maxL.isk)}</b> ISK over the run` : '';
   return `<div class="an-suggest an-suggest-add">
       <div class="an-suggest-h">Extraction runtime</div>
-      <ul>${items.join('')}</ul>
-      <div class="an-sug-note">Decay is an estimate — compare against your in-game ECU graph.</div>
+      <ul><li>Set every extractor program to <b>${_progDuration(_EXT_MAX_DAYS)}</b> — the ${_EXT_MAX_DAYS}-day max, minus 30 min so they all end at the same time for one batched restart. Fewest pickups; expect ≈ <b>${Math.round(maxL.avgDay).toLocaleString()}</b> ${_esc(unit)}/day on average${iskPart}.</li></ul>
+      <div class="an-sug-note">Average runs lower than a short program (extractors decay) — the cost of low-touch. Estimate; check against your in-game ECU.</div>
     </div>`;
 }
 
