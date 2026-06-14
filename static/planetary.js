@@ -148,24 +148,20 @@ async function onDashboardTabOpen() {
   }
 }
 
-// Global rescan (header button): pull FRESH colony data from ESI for every character, then
-// repaint the data-driven views — so a just-filled launchpad / new routes / expiry show up.
-// (A plain re-read of stored data would change nothing.)
+// Global rescan (header button): one server-side request rescans every character's colonies from
+// ESI, then we repaint the data-driven views. A single in-flight request survives the browser
+// throttling a backgrounded tab — the old per-character client loop would stall if you switched
+// windows mid-scan.
 async function rescanAll(btn) {
-  const ids = (_ppCharsData || []).filter(c => !c.is_dummy && c.character_id > 0).map(c => c.character_id);
   const orig = btn ? btn.textContent : '';
-  if (btn) btn.disabled = true;
-  let failed = 0;
-  for (let i = 0; i < ids.length; i++) {
-    if (btn) btn.textContent = `Rescanning ${i + 1}/${ids.length}…`;
-    try { const r = await fetch(`/api/characters/${ids[i]}/refresh-planets`, { method: 'POST' }); if (!r.ok) failed++; }
-    catch (e) { failed++; }
-  }
+  if (btn) { btn.disabled = true; btn.textContent = 'Rescanning…'; }
+  let res = null;
+  try { res = await (await fetch('/api/characters/refresh-all', { method: 'POST' })).json(); } catch (e) {}
   if (typeof loadCharacters === 'function') await loadCharacters();   // refresh _ppCharsData + header
   if (typeof onDashboardTabOpen === 'function') await onDashboardTabOpen();
   if (typeof renderAnalysis === 'function' && _analyzeSnaps.length) renderAnalysis();
   if (btn) { btn.disabled = false; btn.textContent = orig || 'Rescan'; }
-  if (failed) alert(`${failed} of ${ids.length} character${ids.length !== 1 ? 's' : ''} could not be rescanned — usually an expired ESI token (red dot in Characters).`);
+  if (res && res.failed) alert(`${res.failed} of ${res.total} character${res.total !== 1 ? 's' : ''} could not be rescanned — usually an expired ESI token (red dot in Characters).`);
 }
 
 function _dashTile(val, lbl, cls) {

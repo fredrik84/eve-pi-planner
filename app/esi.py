@@ -981,3 +981,37 @@ def refresh_char_planets(character_id: int, context_id: int = Depends(require_co
         con.close()
     _fetch_planets(character_id, token)
     return {"ok": True, "skills_updated": bool(skills)}
+
+
+@router.post("/api/characters/refresh-all")
+def refresh_all_planets(context_id: int = Depends(require_context)):
+    """Rescan every (real) character in the context server-side, in one request — so a slow
+    rescan isn't interrupted by the browser throttling a backgrounded tab mid-loop."""
+    con = get_connection()
+    rows = con.execute(
+        "SELECT character_id FROM pp_characters WHERE context_id=? AND COALESCE(is_dummy, 0) = 0",
+        (context_id,)).fetchall()
+    con.close()
+    ok = failed = 0
+    for r in rows:
+        cid = r[0]
+        token = _get_valid_token(cid)
+        if not token:
+            failed += 1
+            continue
+        try:
+            skills = _fetch_skills(cid, token)
+            if skills:
+                con = get_connection()
+                con.execute(
+                    "UPDATE pp_characters SET interplanetary_consolidation=?, command_center_upgrades=?, "
+                    "planetology=?, advanced_planetology=? WHERE character_id=?",
+                    (skills.get("interplanetary_consolidation", 0), skills.get("command_center_upgrades", 0),
+                     skills.get("planetology", 0), skills.get("advanced_planetology", 0), cid))
+                con.commit()
+                con.close()
+            _fetch_planets(cid, token)
+            ok += 1
+        except Exception:
+            failed += 1
+    return {"ok": ok, "failed": failed, "total": len(rows)}
