@@ -1205,8 +1205,9 @@ def dashboard(pp_session: str = Cookie(default=None)):
         # Product made since the checkpoint = rate × hours the factory was actually fed (it stops
         # once an input runs out). Feeds the rising "In pads now" so value flows inputs → product.
         prod_h = min(elapsed_h, tte_snap_h) if tte_snap_h is not None else 0.0
-        if prod_h > 0:
-            produced_by_tid[tid] = produced_by_tid.get(tid, 0.0) + fph24 * prod_h / 24.0
+        produced = fph24 * prod_h / 24.0 if prod_h > 0 else 0.0
+        if produced > 0:
+            produced_by_tid[tid] = produced_by_tid.get(tid, 0.0) + produced
         in_m3 = sum(onhand.get(pid, 0) * VOL for pid in fracs)
         makeable = min((onhand.get(pid, 0) / frac for pid, frac in fracs.items()), default=0)
         price = prices.get(tid, 0.0)
@@ -1215,13 +1216,18 @@ def dashboard(pp_session: str = Cookie(default=None)):
         total_run_value += run_value
         total_value_per_day += vpd
         soonest_h = tte_h if soonest_h is None else min(soonest_h, tte_h)
+        # Finished product ready to haul off THIS planet now: what's in the pad + what's been made
+        # since the checkpoint. The actionable per-planet figure (pairs with "runs out").
+        haul_units = round(sum((it.get("amount", 0) or 0) for it in pads) + produced)
+        haul_value = sum((it.get("amount", 0) or 0) * prices.get(it["type_id"], 0.0) for it in pads) + produced * price
         loc = f"{r['ch']} · {r['system'] or '?'}" + (f" P{r['pn']}" if r["pn"] is not None else "")
         factories.append({
             "loc": loc, "product": prod.get("name") or f"#{tid}",
             "tier": types.get(tid, {}).get("pi_tier") or 0,
+            "haul_units": haul_units, "haul_value": round(haul_value, 2),
             "fill_pct": round(min(100.0, in_m3 / LP_M3 * 100.0), 1),
             "hours_left": round(tte_h, 1),
-            "run_value": round(run_value, 2), "value_per_day": round(vpd, 2),
+            "value_per_day": round(vpd, 2),
         })
     factories.sort(key=lambda x: x["hours_left"])         # soonest to empty first
 

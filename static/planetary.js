@@ -208,7 +208,7 @@ function renderDashboard(data) {
       <div class="an-bar-track"><div class="an-bar-fill ${cls}" style="width:${Math.max(2, f.fill_pct)}%"></div></div>
       <div class="dash-fac-pct">${f.fill_pct}%</div>
       <div class="dash-fac-time${empty ? ' dash-fac-empty' : ''}">${empty ? 'empty' : _fmtHours(f.hours_left)}</div>
-      <div class="dash-fac-val">${f.run_value ? _fmtIsk(f.run_value) : '–'}</div>
+      <div class="dash-fac-val" title="${(f.haul_units || 0).toLocaleString()} ${_esc(f.product)} ready to haul">${f.haul_value ? _fmtIsk(f.haul_value) : '–'}</div>
     </div>`;
   }).join('') : '<div class="pp-empty">No factory planets found. Deploy factories, then refresh on the Characters tab.</div>';
   // Warnings only, grouped per character — a card that appears solely when something's amiss.
@@ -230,7 +230,7 @@ function renderDashboard(data) {
     <section class="pp-card">
       <div class="pp-card-title">Factories <span class="pp-card-hint">— launchpad fill &amp; time to empty, projected forward from your last rescan (${facs.length})</span></div>
       <div class="pp-card-body">
-        ${facs.length ? '<div class="dash-fac-head"><span>Factory</span><span>Fill</span><span>%</span><span>Runs out</span><span>Run value</span></div>' : ''}
+        ${facs.length ? '<div class="dash-fac-head"><span>Factory</span><span>Fill</span><span>%</span><span>Runs out</span><span>To haul</span></div>' : ''}
         <div class="dash-fac-list">${rows}</div>
       </div>
     </section>`;
