@@ -1633,10 +1633,6 @@ a.plan-action-btn { text-decoration: none; display: inline-block; }
 .an-suggest-add { border-color: #1f5a6b; background: #10202a; }
 .an-suggest-add .an-suggest-h { color: #4ab8d6; }
 
-.an-builtfrom { margin: 0 0 14px; font-size: 12px; color: #8b93a6; }
-.an-builtfrom summary { cursor: pointer; color: #8fb4d6; }
-.an-builtfrom ul { margin: 6px 0 0; padding-left: 18px; columns: 2; }
-.an-builtfrom li { margin: 2px 0; }
 
 /* Rebalance moves as scannable cards (character → tear down | build) */
 .an-suggest-move ul { list-style: none; padding-left: 0; margin: 0; }

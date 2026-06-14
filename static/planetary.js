@@ -2215,14 +2215,6 @@ function renderAnalysis() {
   const rh = snap.factory_refill_hours;
   const refillDays = rh ? rh / 24 : null;
 
-  // For a derived "Current setup" profile, show which factory planets it was built from so the
-  // user can confirm it reflects their real setup (and spot anything unexpected).
-  let builtFrom = '';
-  if (snap.derived && snap.factories && snap.factories.length) {
-    const items = snap.factories.map(f => `<li>${_esc(f.loc)}</li>`).join('');
-    builtFrom = `<details class="an-builtfrom"><summary>Demand from ${snap.factories.length} deployed factor${snap.factories.length === 1 ? 'y' : 'ies'} · your last scan</summary><ul>${items}</ul></details>`;
-  }
-
   const stat = (val, lbl, cls) => `<div class="an-stat ${cls || ''}"><div class="an-stat-val">${val}</div><div class="an-stat-lbl">${lbl}</div></div>`;
   const head = `<div class="an-headline ${fed ? 'an-ok' : 'an-bad'}">
       <div class="an-head-word">${fed ? 'KEEPS UP' : 'FALLS BEHIND'}</div>
@@ -2243,7 +2235,6 @@ function renderAnalysis() {
   if (snap.isk_per_day)
     stats += stat(_fmtIsk(snap.isk_per_day * feedRatio),
                   `ISK/day${fed ? '' : ' · ' + _fmtIsk(snap.isk_per_day) + ' if fed'}`, '');
-  stats += stat(String(snap.factories_count || (snap.factories || []).length), 'Factory planets', '');
   stats += `</div>`;
 
   // Refill cadence = factory P1 buffer (3 launchpads = 30,000 m³) ÷ consumption (P1/day × 0.19 m³).
@@ -2413,7 +2404,7 @@ function renderAnalysis() {
   if (!moves.length && !newBuilds.length && !addFactories)
     suggest = `<div class="an-suggest an-suggest-free"><div class="an-suggest-h">Balanced — every material this plan needs is covered${leftover.length ? ', with a little to spare' : ''}.</div></div>`;
 
-  el.innerHTML = head + builtFrom + stats + proj
+  el.innerHTML = head + stats + proj
     + `<div class="an-legend">Producing (left) vs the plan’s daily need (right) per P1. A full green bar = factories stay fed; a short red bar is the bottleneck.</div>`
     + `<div class="an-bars">${barRows}</div>`
     + suggest;
