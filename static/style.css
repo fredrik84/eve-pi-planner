@@ -1594,14 +1594,14 @@ a.plan-action-btn { text-decoration: none; display: inline-block; }
 
 .an-legend { font-size: 12px; color: #8b93a6; margin-bottom: 8px; }
 .an-bars { display: flex; flex-direction: column; gap: 8px; }
-.an-row { display: grid; grid-template-columns: 150px 1fr auto; align-items: center; gap: 12px; }
+.an-row { display: grid; grid-template-columns: 150px 1fr 230px; align-items: center; gap: 12px; }
 .an-row-name { font-size: 13px; color: #c8cdd8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .an-bar-track { height: 16px; background: #11151f; border: 1px solid #1b2030; border-radius: 5px; overflow: hidden; }
 .an-bar-fill { height: 100%; border-radius: 4px 0 0 4px; transition: width .25s; }
 .an-bar-ok   { background: linear-gradient(90deg, #1f6b46, #46d18a); }
 .an-bar-warn { background: linear-gradient(90deg, #8a6a1f, #e0b84a); }
 .an-bar-bad  { background: linear-gradient(90deg, #7a3036, #ef6b78); }
-.an-row-nums { font-size: 12px; color: #8b93a6; white-space: nowrap; }
+.an-row-nums { font-size: 12px; color: #8b93a6; white-space: nowrap; text-align: right; }
 .an-have { color: #e6e9ef; font-weight: 600; }
 .an-need { color: #8b93a6; }
 .an-sep  { color: #4a5266; margin: 0 3px; }
