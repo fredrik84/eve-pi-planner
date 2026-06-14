@@ -498,8 +498,13 @@ tr:hover td { background: #181d2a; }
 .pp-mat-title { font-size: 12px; font-weight: 600; color: #c8d2e6; }
 .pp-mat-sub { font-size: 10px; color: #56607a; font-weight: 400; text-transform: none; letter-spacing: 0; }
 .pp-mat-actions { margin-left: auto; display: flex; gap: 6px; }
-.pp-mat-list { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: #8a94ac; }
-.pp-mat-item { white-space: nowrap; }
+/* Aligned multi-column list — each P1 is a cell with the material name left and its
+   launchpad total right, so the numbers line up instead of running on as one wrapped line. */
+.pp-mat-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 1px 18px; font-size: 12px; }
+.pp-mat-item { display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+  padding: 3px 8px; border-radius: 4px; white-space: nowrap; color: #8a94ac; }
+.pp-mat-item:hover { background: #161b27; }
+.pp-mat-name { overflow: hidden; text-overflow: ellipsis; }
 .pp-mat-item b { color: #a8d0e0; font-family: 'Consolas', monospace; font-weight: 600; }
 
 .pp-char-list { padding: 8px; display: flex; flex-direction: column; gap: 6px; max-height: 74vh; overflow-y: auto; }

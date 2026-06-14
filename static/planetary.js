@@ -695,7 +695,7 @@ function renderMaterialsSummary(chars) {
       </span>
     </div>
     <div class="pp-mat-list">${entries.map(([n, a]) =>
-      `<span class="pp-mat-item"><b>${a.toLocaleString()}</b> ${_esc(n)}</span>`).join('')}</div>`;
+      `<span class="pp-mat-item"><span class="pp-mat-name">${_esc(n)}</span><b>${a.toLocaleString()}</b></span>`).join('')}</div>`;
 }
 
 function copyMaterials(btn) {
