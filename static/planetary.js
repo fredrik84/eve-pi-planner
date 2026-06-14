@@ -150,17 +150,33 @@ async function onDashboardTabOpen() {
 
 // Global rescan (header button): one server-side request rescans every character's colonies from
 // ESI, then we repaint the data-driven views. A single in-flight request survives the browser
-// throttling a backgrounded tab — the old per-character client loop would stall if you switched
-// windows mid-scan.
-async function rescanAll(btn) {
-  const orig = btn ? btn.textContent : '';
-  if (btn) { btn.disabled = true; btn.textContent = 'Rescanning…'; }
-  let res = null;
-  try { res = await (await fetch('/api/characters/refresh-all', { method: 'POST' })).json(); } catch (e) {}
+// throttling a backgrounded tab. `_rescanning` is a module flag so the button shows "Rescanning…"
+// (disabled) no matter which page you're on or how often the header re-renders — and a second
+// press is ignored. The server also rate-limits (429) so it can't be spammed.
+let _rescanning = false;
+function _setRescanUI() {
+  const b = document.getElementById('rescanBtn');
+  if (b) { b.disabled = _rescanning; b.textContent = _rescanning ? 'Rescanning…' : 'Rescan'; }
+}
+async function rescanAll() {
+  if (_rescanning) return;                 // already scanning → ignore repeat presses
+  _rescanning = true; _setRescanUI();
+  let res = null, cooldownMsg = null;
+  try {
+    const resp = await fetch('/api/characters/refresh-all', { method: 'POST' });
+    if (resp.status === 429) cooldownMsg = (await resp.json().catch(() => ({}))).detail || 'Rescanned recently — try again shortly';
+    else res = await resp.json().catch(() => null);
+  } catch (e) {}
+  _rescanning = false;
+  if (cooldownMsg) {                        // rate-limited: flash the message on the button, no repaint
+    const b = document.getElementById('rescanBtn');
+    if (b) { b.disabled = true; b.textContent = cooldownMsg; setTimeout(() => { b.disabled = false; b.textContent = 'Rescan'; }, 2500); }
+    return;
+  }
   if (typeof loadCharacters === 'function') await loadCharacters();   // refresh _ppCharsData + header
   if (typeof onDashboardTabOpen === 'function') await onDashboardTabOpen();
   if (typeof renderAnalysis === 'function' && _analyzeSnaps.length) renderAnalysis();
-  if (btn) { btn.disabled = false; btn.textContent = orig || 'Rescan'; }
+  _setRescanUI();
   if (res && res.failed) alert(`${res.failed} of ${res.total} character${res.total !== 1 ? 's' : ''} could not be rescanned — usually an expired ESI token (red dot in Characters).`);
 }
 
@@ -258,7 +274,7 @@ function renderHeaderSession(loggedIn, chars, sessionCharId) {
   const name = char ? char.name : 'Unknown';
   // Admin access is the sidebar "Admin" item now (no duplicate header button).
   el.innerHTML =
-    `<button class="header-bug-btn" onclick="rescanAll(this)" title="Re-scan every character's colonies from ESI">Rescan</button>`
+    `<button id="rescanBtn" class="header-bug-btn" onclick="rescanAll()" ${_rescanning ? 'disabled' : ''} title="Re-scan every character's colonies from ESI">${_rescanning ? 'Rescanning…' : 'Rescan'}</button>`
     + `<button class="header-bug-btn" onclick="openBugModal()">Report bug</button>`
     + `<span class="header-session">${name} · <a href="/auth/logout" class="header-logout">Log out</a></span>`;
   const navTab = document.getElementById('adminNavTab');

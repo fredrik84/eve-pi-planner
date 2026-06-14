@@ -15,6 +15,7 @@ import json as _json
 import os
 import secrets
 import sqlite3
+import time
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -983,10 +984,18 @@ def refresh_char_planets(character_id: int, context_id: int = Depends(require_co
     return {"ok": True, "skills_updated": bool(skills)}
 
 
+_last_rescan: dict[int, float] = {}      # context_id -> epoch of last bulk rescan
+_RESCAN_COOLDOWN = 60                     # seconds; ESI colony data barely changes faster than this
+
 @router.post("/api/characters/refresh-all")
 def refresh_all_planets(context_id: int = Depends(require_context)):
     """Rescan every (real) character in the context server-side, in one request — so a slow
-    rescan isn't interrupted by the browser throttling a backgrounded tab mid-loop."""
+    rescan isn't interrupted by the browser throttling a backgrounded tab mid-loop. Rate-limited
+    per context so it can't be spammed (each call hits ESI for every planet)."""
+    wait = _RESCAN_COOLDOWN - (time.time() - _last_rescan.get(context_id, 0))
+    if wait > 0:
+        raise HTTPException(status_code=429, detail=f"Rescanned recently — wait {int(wait) + 1}s before rescanning again")
+    _last_rescan[context_id] = time.time()
     con = get_connection()
     rows = con.execute(
         "SELECT character_id FROM pp_characters WHERE context_id=? AND COALESCE(is_dummy, 0) = 0",
