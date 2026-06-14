@@ -2336,10 +2336,42 @@ function renderAnalysis() {
     return `<li>Free <b>${_esc(c.char)}</b>'s <b>${_esc(m.fromName)}</b> colony at <b>${where}</b> <span class="an-sug-note">(${Math.round(c.perDay).toLocaleString()}/day)</span>${target}</li>`;
   };
 
+  // Over-producing every input? The surplus could feed MORE factories instead of being trimmed.
+  // Supportable factories = current × the tightest input's ratio. Suggest converting the FACTORY
+  // characters' own Barren/Temperate extractor colonies (of over-produced inputs) into factories.
+  const curFac = snap.factories_count || (snap.factories || []).length || 0;
+  const supportable = Math.floor(curFac * binding.ratio);
+  let addFactories = '';
+  if (curFac && binding.ratio > 1.005 && supportable - curFac >= 1) {
+    const extraFac = supportable - curFac;
+    const facChars = new Set((snap.factories || []).map(f => (f.loc || '').split(' · ')[0].trim()).filter(Boolean));
+    const ratioOf = {}; surplus.forEach(s => { ratioOf[String(s.t)] = s.ratio; });
+    const surplusTids = new Set(surplus.map(s => String(s.t)));
+    const cands = [];
+    (_ppCharsData || []).forEach(ch => {
+      if (!facChars.has(ch.name)) return;
+      (ch.planets || []).forEach(p => {
+        if (!p.is_extractor || !['Barren', 'Temperate'].includes(p.planet_type)) return;
+        (p.production || []).forEach(o => {
+          if (surplusTids.has(String(o.type_id)))
+            cands.push({ char: ch.name, system: p.system, planet_num: p.planet_num, ptype: p.planet_type,
+                         mat: o.name, perDay: o.per_day || 0, ratio: ratioOf[String(o.type_id)] || 1 });
+        });
+      });
+    });
+    cands.sort((a, b) => b.ratio - a.ratio || a.perDay - b.perDay);
+    const pick = cands.slice(0, extraFac);
+    const li = pick.map(c => `<li>On <b>${_esc(c.char)}</b>: convert <b>${_esc(c.system)} P${c.planet_num}</b> <span class="an-sug-note">(${_esc(c.ptype)}, extracting ${_esc(c.mat)})</span> → factory</li>`).join('');
+    const rest = extraFac - pick.length;
+    const restLi = rest > 0 ? `<li>+ ${rest} more on a free Barren/Temperate planet — keep them on your factory characters</li>` : '';
+    addFactories = `<div class="an-suggest an-suggest-add"><div class="an-suggest-h">Add factories — your inputs could feed ~${supportable} (${extraFac} more than ${curFac}), capped by ${_esc(binding.name)}</div><ul>${li}${restLi}</ul></div>`;
+  }
+
   let suggest = '';
   if (moves.length) {
     suggest += `<div class="an-suggest an-suggest-move"><div class="an-suggest-h">Rebalance — redeploy ${movedTotal} colon${movedTotal === 1 ? 'y' : 'ies'}</div><ul>${moves.map(_moveLi).join('')}</ul></div>`;
   }
+  if (addFactories) suggest += addFactories;
   if (newBuilds.length) {
     const li = newBuilds.map(d => {
       const p0 = p0Of(d.t);
@@ -2348,11 +2380,11 @@ function renderAnalysis() {
     }).join('');
     suggest += `<div class="an-suggest an-suggest-fix"><div class="an-suggest-h">Can't rebalance — still short</div><ul>${li}</ul></div>`;
   }
-  if (leftover.length) {
+  if (leftover.length && !addFactories) {
     const li = leftover.map(s => `<li><b>${_esc(s.name)}</b> — <b>${s.spare}</b> planet${s.spare === 1 ? '' : 's'} still spare (nothing short needs them)</li>`).join('');
     suggest += `<div class="an-suggest an-suggest-free"><div class="an-suggest-h">Leftover surplus</div><ul>${li}</ul></div>`;
   }
-  if (!moves.length && !newBuilds.length)
+  if (!moves.length && !newBuilds.length && !addFactories)
     suggest = `<div class="an-suggest an-suggest-free"><div class="an-suggest-h">Balanced — every material this plan needs is covered${leftover.length ? ', with a little to spare' : ''}.</div></div>`;
 
   el.innerHTML = head + stats + proj

@@ -1629,3 +1629,5 @@ a.plan-action-btn { text-decoration: none; display: inline-block; }
 .an-refill-cfg { font-size: 13px; color: #8b93a6; margin: 2px 0 10px; }
 .an-refill-cfg input { width: 48px; background: #11151f; border: 1px solid #2a3142; color: #e6e9ef; border-radius: 5px; padding: 3px 6px; font-size: 13px; }
 .an-refill-cfg b { color: #c8cdd8; }
+.an-suggest-add { border-color: #1f5a6b; background: #10202a; }
+.an-suggest-add .an-suggest-h { color: #4ab8d6; }
