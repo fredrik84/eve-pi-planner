@@ -573,6 +573,7 @@ def _norm_split_mode(v) -> str:
 
 import json as _json
 import secrets as _secrets
+import time as _time
 
 
 def ensure_share_table():
@@ -1136,7 +1137,8 @@ def dashboard(pp_session: str = Cookie(default=None)):
     rows = con.execute("""
         SELECT c.character_name AS ch, cp.planet_num AS pn, s.name AS system,
                cp.is_extractor AS is_ext, cp.products AS products,
-               cp.pad_inputs AS pad_inputs, cp.pad_contents AS pad_contents
+               cp.pad_inputs AS pad_inputs, cp.pad_contents AS pad_contents,
+               cp.issues AS issues, cp.sim_state AS sim_state
         FROM pp_char_planets cp
         JOIN pp_characters c ON c.character_id = cp.character_id
         LEFT JOIN solar_systems s ON s.system_id = cp.solar_system_id
@@ -1211,9 +1213,27 @@ def dashboard(pp_session: str = Cookie(default=None)):
             a["value"] = round(a["amount"] * prices.get(a["type_id"], 0.0), 2)
         top_pi = max(agg.values(), key=lambda a: (a["tier"], a["value"]))
 
+    # Colony warnings: stored structural/storage issues from the last scan, plus a live check on
+    # the extraction program's expiry. Only things that are actually amiss — empty when all good.
+    now = _time.time()
+    issues = []
+    for (r, prods, inputs, pads) in parsed:
+        loc = f"{r['ch']} · {r['system'] or '?'}" + (f" P{r['pn']}" if r["pn"] is not None else "")
+        for msg in _json.loads(r["issues"] or "[]"):
+            issues.append({"loc": loc, "msg": msg, "severity": "warn" if "full" in msg else "high"})
+        ss = _json.loads(r["sim_state"] or "null")
+        exp = ss.get("expiry") if isinstance(ss, dict) else None
+        if exp:
+            if exp < now:
+                issues.append({"loc": loc, "msg": "Extraction program expired — not extracting", "severity": "high"})
+            elif exp - now < 86400:
+                issues.append({"loc": loc, "msg": f"Extraction expires in {round((exp - now) / 3600)}h", "severity": "warn"})
+    issues.sort(key=lambda x: 0 if x["severity"] == "high" else 1)
+
     return {
         "logged_in": True,
         "factories": factories,
+        "issues": issues,
         "totals": {
             "factory_count": len(factories),
             "runtime_hours": round(soonest_h, 1) if soonest_h is not None else None,

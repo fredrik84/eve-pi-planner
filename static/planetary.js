@@ -182,7 +182,15 @@ function renderDashboard(data) {
       <div class="dash-fac-val">${f.run_value ? _fmtIsk(f.run_value) : '–'}</div>
     </div>`;
   }).join('') : '<div class="pp-empty">No factory planets found. Deploy factories, then refresh on the Characters tab.</div>';
-  el.innerHTML = `
+  // Warnings only — a card that appears solely when something's amiss (routes, full pads, expiry).
+  const issues = data.issues || [];
+  const issuesHtml = issues.length ? `
+    <section class="pp-card dash-issues">
+      <div class="pp-card-title">Needs attention <span class="pp-card-hint">— ${issues.length} issue${issues.length !== 1 ? 's' : ''} to fix</span></div>
+      <div class="pp-card-body">${issues.map(i =>
+        `<div class="dash-issue dash-issue-${i.severity === 'high' ? 'high' : 'warn'}"><span class="dash-issue-loc">${_esc(i.loc)}</span><span class="dash-issue-msg">${_esc(i.msg)}</span></div>`).join('')}</div>
+    </section>` : '';
+  el.innerHTML = issuesHtml + `
     <section class="pp-card">
       <div class="pp-card-title">Overview <span class="pp-card-hint">— your PI at a glance</span>
         <button class="pp-add-btn" onclick="refreshDashboard(this)" title="Re-read your factories">Refresh</button>

@@ -163,7 +163,7 @@ def ensure_char_tables():
         con.execute("ALTER TABLE pp_char_planets ADD COLUMN planet_num INTEGER")
     except Exception:
         pass
-    for _col in ("products TEXT", "pad_contents TEXT", "pad_inputs TEXT", "sim_state TEXT"):  # JSON: outputs, finished-product pads, imported-input pads, sim state
+    for _col in ("products TEXT", "pad_contents TEXT", "pad_inputs TEXT", "sim_state TEXT", "issues TEXT"):  # JSON: outputs, finished-product pads, imported-input pads, sim state, detected colony problems
         try:
             con.execute(f"ALTER TABLE pp_char_planets ADD COLUMN {_col}")
         except Exception:
@@ -239,6 +239,47 @@ def _roman_to_int(s: str) -> int | None:
         result += v if v >= prev else -v
         prev = v
     return result if result > 0 else None
+
+
+# Colony health check (run at scan, when we have the full pin/route detail). Returns a list of
+# short warning strings for anything amiss — wrong/missing routes and near-full storage. Empty
+# list = nothing to flag. (Expired/expiring programs are checked live in the dashboard instead,
+# since that's time-dependent.)
+_TIER_VOL = {0: 0.01, 1: 0.38, 2: 1.5, 3: 6.0, 4: 100.0}   # m³ per unit by PI tier (storage volume)
+def _struct_cap(name: str):
+    if "Launchpad" in name: return ("Launchpad", 10000.0)
+    if "Storage Facility" in name: return ("Storage", 12000.0)
+    if "Command Center" in name: return ("Command center", 500.0)
+    return None
+
+def _detect_colony_issues(detail: dict, types: dict) -> list[str]:
+    pins = detail.get("pins") or []
+    routes = detail.get("routes") or []
+    src = {r.get("source_pin_id") for r in routes}
+    dst = {r.get("destination_pin_id") for r in routes}
+    out, seen = [], set()
+    def add(msg):
+        if msg not in seen:
+            seen.add(msg); out.append(msg)
+    for pin in pins:
+        pid = pin.get("pin_id")
+        tname = (types.get(pin.get("type_id"), {}) or {}).get("name") or ""
+        if pin.get("extractor_details"):
+            if pid not in src:
+                add("Extractor head not routed — extracted P0 goes nowhere")
+        elif pin.get("schematic_id") or pin.get("factory_details"):
+            if pid not in dst:
+                add("Factory has no input route — it can't run")
+            elif pid not in src:
+                add("Factory output not routed — product is stuck")
+        cap = _struct_cap(tname)
+        if cap:
+            label, capacity = cap
+            vol = sum((c.get("amount", 0) or 0) * _TIER_VOL.get((types.get(c.get("type_id"), {}) or {}).get("pi_tier") or 0, 0.01)
+                      for c in (pin.get("contents") or []))
+            if capacity and vol >= 0.9 * capacity:
+                add(f"{label} ~{round(vol / capacity * 100)}% full — haul it before it backs up")
+    return out
 
 
 def _fetch_planets(character_id: int, access_token: str) -> None:
@@ -367,6 +408,14 @@ def _fetch_planets(character_id: int, access_token: str) -> None:
                     except Exception:
                         sim_state_json = None
 
+                issues_json = None       # colony health warnings (routes / near-full storage)
+                try:
+                    if _detail:
+                        _iss = _detect_colony_issues(_detail, _types)
+                        issues_json = _json.dumps(_iss) if _iss else None
+                except Exception:
+                    issues_json = None
+
                 # Fetch planet name to derive in-system ordinal (e.g. "01B-88 VIII" → 8)
                 try:
                     pinfo = client.get(
@@ -384,11 +433,11 @@ def _fetch_planets(character_id: int, access_token: str) -> None:
                     INSERT OR REPLACE INTO pp_char_planets
                         (character_id, planet_id, planet_type, solar_system_id,
                          upgrade_level, num_pins, is_extractor, p0_type_id, p0_name,
-                         planet_num, products, pad_contents, pad_inputs, sim_state)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                         planet_num, products, pad_contents, pad_inputs, sim_state, issues)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """, (character_id, planet_id, planet_type, solar_system_id,
                       upgrade_level, num_pins, is_extractor, p0_type_id, p0_name,
-                      planet_num, products_json, pads_json, pad_inputs_json, sim_state_json))
+                      planet_num, products_json, pads_json, pad_inputs_json, sim_state_json, issues_json))
 
         con.commit()
         con.close()
