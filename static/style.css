@@ -192,22 +192,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; box-shadow: none; }
 #status { font-size: 12px; color: #6a7390; }
 #status.error { color: #e06060; }
 
-/* ── Inventory summary ─────────────────────────────────────────────────────── */
-.inv-summary {
-  background: #141720;
-  border: 1px solid #1b2030;
-  border-radius: 6px;
-  padding: 14px 16px;
-  margin-bottom: 24px;
-  display: none;
-}
-.inv-summary h3 {
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.8px;
-  color: #6a7390;
-  margin-bottom: 10px;
-}
+/* ── Inventory pills ───────────────────────────────────────────────────────── */
 .inv-pills { display: flex; flex-wrap: wrap; gap: 6px; }
 .pill {
   background: #1c2030;
@@ -225,20 +210,8 @@ button:disabled { opacity: 0.4; cursor: not-allowed; box-shadow: none; }
 }
 .pill-warn span { color: #e0b070; }
 
-/* ── Optimize section ──────────────────────────────────────────────────────── */
-.opt-section { margin-bottom: 32px; }
-
-.opt-header {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  margin-bottom: 14px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid #1b2030;
-}
-.opt-title { font-size: 15px; font-weight: 600; color: #a8b4cc; }
-.opt-stats { font-size: 13px; color: #6ab06a; font-family: 'Consolas', monospace; }
-
+/* ── Optimize warnings (not-producible / optimizer errors) ─────────────────── */
+#optWarnings:not(:empty) { padding: 12px 14px 0; }
 .opt-warning {
   background: #201818;
   border: 1px solid #5a2a2a;
@@ -246,8 +219,9 @@ button:disabled { opacity: 0.4; cursor: not-allowed; box-shadow: none; }
   padding: 8px 14px;
   font-size: 12px;
   color: #e08070;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
+.opt-warning:last-child { margin-bottom: 0; }
 
 /* ── Tables ────────────────────────────────────────────────────────────────── */
 table {
@@ -327,18 +301,11 @@ tr:hover td { background: #181d2a; }
 }
 
 /* ── Tier blocks (analyze) ─────────────────────────────────────────────────── */
-.results-section { }
-.tier-block { margin-bottom: 32px; }
-.tier-header {
-  display: flex; align-items: center; gap: 12px;
-  margin-bottom: 12px;
-}
-.tier-header h2 { font-size: 15px; font-weight: 500; color: #a8b4cc; }
 .tier-count { font-size: 12px; color: #6a7390; }
 
 /* ── Leftover ──────────────────────────────────────────────────────────────── */
 .leftover-section {
-  margin-top: 20px;
+  margin: 16px 14px 14px;
   background: #141720;
   border: 1px solid #3a2a10;
   border-radius: 6px;
@@ -353,22 +320,6 @@ tr:hover td { background: #181d2a; }
 }
 
 /* ── Factory split ─────────────────────────────────────────────────────────── */
-.factory-section {
-  margin-top: 24px;
-  background: #141720;
-  border: 1px solid #1b2030;
-  border-radius: 6px;
-  overflow: hidden;
-}
-.factory-header {
-  background: #1c2030;
-  padding: 10px 14px;
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.8px;
-  color: #6a7390;
-  border-bottom: 1px solid #1b2030;
-}
 .fac-num {
   font-family: 'Consolas', monospace;
   user-select: all;
@@ -403,17 +354,17 @@ tr:hover td { background: #181d2a; }
 .pipe-val { color: #8a9ab4; }
 .pipe-val strong { color: #a8c8ff; }
 
-.split-btn {
+/* Secondary (tertiary-action) buttons — shared muted-blue look. Each rule below
+   keeps only its own colour/padding/margins. */
+.split-btn, .pp-add-btn, .header-bug-btn {
   background: #1a2838;
-  color: #6a88aa;
   border: 1px solid #2a3a4a;
   border-radius: 4px;
-  padding: 3px 8px;
-  font-size: 11px;
   cursor: pointer;
-  white-space: nowrap;
 }
-.split-btn:hover { background: #1e3348; color: #a8c8ff; }
+.split-btn:hover, .pp-add-btn:hover, .header-bug-btn:hover { background: #1e3348; color: #a8c8ff; }
+
+.split-btn { color: #6a88aa; padding: 3px 8px; font-size: 11px; white-space: nowrap; }
 
 /* ── Planetary Planning ─────────────────────────────────────────────────────── */
 .pp-layout { display: grid; grid-template-columns: 280px 1fr; gap: 20px; align-items: start; }
@@ -451,17 +402,7 @@ tr:hover td { background: #181d2a; }
 }
 .pp-card-hint { color: #3a4460; text-transform: none; letter-spacing: 0; font-size: 11px; font-weight: 400; flex: 1; }
 
-.pp-add-btn {
-  margin-left: auto;
-  background: #1a2838;
-  color: #6a88aa;
-  border: 1px solid #2a3a4a;
-  border-radius: 4px;
-  padding: 3px 10px;
-  font-size: 11px;
-  cursor: pointer;
-}
-.pp-add-btn:hover { background: #1e3348; color: #a8c8ff; }
+.pp-add-btn { margin-left: auto; color: #6a88aa; padding: 3px 10px; font-size: 11px; }
 .pp-add-btn + .pp-add-btn { margin-left: 0; }
 
 .pp-empty {
@@ -471,6 +412,18 @@ tr:hover td { background: #181d2a; }
   font-size: 13px;
   text-align: center;
 }
+
+/* A table that fills a card edge-to-edge — the card frame supplies the border + radius,
+   so the table drops its own (avoids a double-rounded box). */
+.pp-card > table, .pp-card-table { border: none; border-radius: 0; }
+/* Padded body for free-form card content (pills, notes, controls) that isn't a full-bleed table. */
+.pp-card-body { padding: 14px 16px; }
+/* Cards holding an absolutely-positioned popover (e.g. the Factory Layout search dropdown)
+   can't clip their overflow; round the title's top corners so it still reads as a card. */
+.pp-card-pop { overflow: visible; }
+.pp-card-pop > .pp-card-title { border-radius: 9px 9px 0 0; }
+/* Vertical card stack used by the PI Planner build/analyze results column. */
+.pi-stack { display: flex; flex-direction: column; gap: 16px; }
 
 /* ── Contribute tab ─────────────────────────────────────────────── */
 .contrib { padding: 16px 20px 22px; color: #b4bdd4; font-size: 13px; line-height: 1.65; max-width: 820px; }
@@ -619,30 +572,28 @@ tr:hover td { background: #181d2a; }
   color: #6a7390;
   white-space: nowrap;
 }
-.pp-select {
+/* Shared dark form-control base — bg/border/colour/focus are identical across these
+   inputs; each rule below only carries its unique radius/padding/width/etc. */
+.pp-select, .pp-num-input, .pp-text-input,
+.bug-input, .bug-textarea, .pp-import-ta {
   background: #0d0f14;
   border: 1px solid #1b2030;
-  border-radius: 4px;
   color: #c8cdd8;
-  font-size: 13px;
-  padding: 5px 8px;
   outline: none;
 }
-.pp-select:focus { border-color: #3d5a8a; }
+.pp-select:focus, .pp-num-input:focus, .pp-text-input:focus,
+.bug-input:focus, .bug-textarea:focus, .pp-import-ta:focus { border-color: #3d5a8a; }
+
+.pp-select { border-radius: 4px; font-size: 13px; padding: 5px 8px; }
 .pp-num-input {
-  background: #0d0f14;
-  border: 1px solid #1b2030;
   border-radius: 4px;
-  color: #c8cdd8;
   font-size: 13px;
   padding: 5px 10px;
-  outline: none;
   width: 80px;
   -moz-appearance: textfield;
 }
 .pp-num-input::-webkit-inner-spin-button,
 .pp-num-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
-.pp-num-input:focus { border-color: #3d5a8a; }
 .pp-run-btn {
   grid-column: 1 / -1;
   margin-top: 4px;
@@ -807,17 +758,12 @@ tr:hover td { background: #181d2a; }
 .pp-import-ta {
   width: 100%;
   height: 220px;
-  background: #0d0f14;
-  border: 1px solid #1b2030;
   border-radius: 5px;
-  color: #c8cdd8;
   font-family: 'Consolas', monospace;
   font-size: 12px;
   padding: 10px 12px;
   resize: vertical;
-  outline: none;
 }
-.pp-import-ta:focus { border-color: #3d5a8a; }
 .pp-modal-actions { display: flex; gap: 10px; }
 .pp-cancel-btn {
   background: #1c2030;
@@ -830,44 +776,13 @@ tr:hover td { background: #181d2a; }
 }
 .pp-cancel-btn:hover { background: #222838; color: #a8b4cc; }
 
-.pp-text-input {
-  background: #0d0f14;
-  border: 1px solid #1b2030;
-  border-radius: 4px;
-  color: #c8cdd8;
-  font-size: 13px;
-  padding: 5px 8px;
-  outline: none;
-  width: 100%;
-}
-.pp-text-input:focus { border-color: #3d5a8a; }
+.pp-text-input { border-radius: 4px; font-size: 13px; padding: 5px 8px; width: 100%; }
 
 /* ── Bug reporting ─────────────────────────────────────────────────────────── */
-.header-bug-btn {
-  background: #1a2838;
-  color: #8aa0c0;
-  border: 1px solid #2a3a4a;
-  border-radius: 4px;
-  padding: 5px 12px;
-  font-size: 12px;
-  cursor: pointer;
-  margin-right: 10px;
-}
-.header-bug-btn:hover { background: #1e3348; color: #a8c8ff; }
+.header-bug-btn { color: #8aa0c0; padding: 5px 12px; font-size: 12px; margin-right: 10px; }
 
-.bug-input, .bug-textarea {
-  width: 100%;
-  background: #0d0f14;
-  border: 1px solid #1b2030;
-  border-radius: 5px;
-  color: #c8cdd8;
-  font-size: 13px;
-  padding: 9px 12px;
-  outline: none;
-  font-family: inherit;
-}
+.bug-input, .bug-textarea { width: 100%; border-radius: 5px; font-size: 13px; padding: 9px 12px; font-family: inherit; }
 .bug-textarea { height: 160px; resize: vertical; line-height: 1.5; }
-.bug-input:focus, .bug-textarea:focus { border-color: #3d5a8a; }
 .bug-status-msg { font-size: 12px; color: #c8956a; align-self: center; }
 
 .pp-modal-box-wide { width: min(820px, 92vw); max-height: 86vh; }
@@ -1030,10 +945,6 @@ tr:hover td { background: #181d2a; }
 .plan-fac-imports { font-size: 10px; color: #6a7390; padding: 0 0 3px 26px; line-height: 1.4; }
 .plan-fac-imports b { color: #a8c8ff; font-weight: 600; }
 .plan-fac-imports b.p1-amt-set { color: #5ecf80; }
-/* PI Planner tools (Find Buildables / Refill a plan) are selected from the sidebar; both
-   are fed by the one inventory paste at the top of the tab. */
-.pi-shared-inv { margin-bottom: 14px; }
-
 /* "Optimize for a specific order" — folded away by default; Analyze is the primary action. */
 .pi-order-fold { margin: 0 0 14px; border: 1px solid #1c2030; border-radius: 6px; background: #0e0b16; }
 .pi-order-fold > summary { cursor: pointer; padding: 9px 14px; font-size: 13px; font-weight: 600;
@@ -1048,7 +959,6 @@ tr:hover td { background: #181d2a; }
 /* P1 stack splitter */
 /* Refill split (PI Planner) — driven by the shared inventory paste; matches the analyze tables. */
 .dist-block { margin-top: 8px; }
-.dist-block .tier-header { flex-wrap: wrap; }
 .dist-plan-select { background: #1c2030; border: 1px solid #1b2030; border-radius: 4px; color: #c8cdd8; font-size: 13px; padding: 4px 8px; }
 .dist-hint { font-size: 12px; color: #6a7390; margin-bottom: 12px; }
 .dist-hint b { color: #a8b4cc; }
@@ -1391,7 +1301,7 @@ tr:hover td { background: #181d2a; }
   gap: 16px;
   align-items: flex-end;
   flex-wrap: wrap;
-  margin-bottom: 22px;
+  padding: 14px 16px;
 }
 .layout-field { display: flex; flex-direction: column; gap: 5px; }
 .layout-field label { font-size: 11px; color: #6a7390; text-transform: uppercase; letter-spacing: 0.04em; }
@@ -1410,20 +1320,6 @@ tr:hover td { background: #181d2a; }
 .layout-check input { width: auto; min-width: 0; margin: 0; }
 .layout-status { font-size: 12px; color: #6a7390; }
 
-.layout-summary {
-  background: #141720;
-  border: 1px solid #1b2030;
-  border-radius: 8px;
-  padding: 16px 18px;
-  margin-bottom: 18px;
-}
-.layout-summary-head h2 { font-size: 18px; color: #c8cdd8; margin-bottom: 8px; }
-.layout-summary-stats { display: flex; gap: 20px; flex-wrap: wrap; font-size: 13px; color: #a8b4cc; }
-.layout-summary-stats b { color: #a8c8ff; }
-.layout-imports { margin-top: 12px; padding-top: 12px; border-top: 1px solid #1b2030; font-size: 12px; color: #9aa3ba; line-height: 1.7; }
-.layout-imports-label { color: #6a7390; text-transform: uppercase; font-size: 11px; letter-spacing: 0.04em; margin-right: 6px; }
-.layout-imports b { color: #c8cdd8; }
-
 .layout-tag {
   display: inline-block;
   font-size: 10px;
@@ -1438,22 +1334,13 @@ tr:hover td { background: #181d2a; }
 .layout-tag.tier-3 { background: #2a2a40; color: #a89aff; }
 .layout-tag.tier-4 { background: #3a2418; color: #ffb066; }
 
-.layout-logistics { margin-bottom: 22px; }
-.layout-logistics h3 { font-size: 14px; color: #a8b4cc; margin-bottom: 10px; }
-.layout-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-.layout-table th { text-align: left; color: #6a7390; font-weight: 600; padding: 6px 10px; border-bottom: 1px solid #1b2030; }
-.layout-table td { padding: 6px 10px; border-bottom: 1px solid #1c2030; color: #a8b4cc; vertical-align: top; }
-
 .layout-planets { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 @media (max-width: 820px) { .layout-planets { grid-template-columns: 1fr; } }
-.layout-card { background: #141720; border: 1px solid #1b2030; border-radius: 8px; padding: 14px; display: flex; flex-direction: column; }
-.layout-card-body { flex: 1 1 auto; }
-.layout-card-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 12px; }
-.layout-card-name { font-size: 14px; color: #c8cdd8; margin-left: 6px; }
-.layout-card-part { font-size: 11px; color: #6a7390; margin-left: 6px; }
-.layout-card-actions { display: flex; gap: 6px; }
-.layout-card-actions button { padding: 5px 10px; font-size: 11px; }
-.layout-card-body { display: flex; gap: 14px; align-items: center; }
+/* Factory Layout cards now share the .pp-card frame (gradient + 9px + shadow); these
+   rules only lay out the card's internals. */
+.layout-card-name { font-size: 14px; color: #c8cdd8; margin-left: 6px; text-transform: none; }
+.layout-card-x { margin-left: auto; }
+.layout-card-body { display: flex; gap: 14px; align-items: center; padding: 14px 16px; }
 .layout-card-info { font-size: 12px; color: #9aa3ba; line-height: 1.7; }
 .layout-card-info b { color: #a8c8ff; }
 .layout-card-structs { color: #c8cdd8; margin-bottom: 4px; }
@@ -1477,7 +1364,6 @@ a.plan-action-btn { text-decoration: none; display: inline-block; }
 .layout-card-x:hover { color: #e07a7a; background: none; }
 .layout-card-line { font-size: 12px; color: #c8cdd8; }
 .layout-card-line b { color: #a8c8ff; }
-.layout-x { color: #6a7390; font-size: 11px; }
 .layout-card-isk { font-size: 13px; color: #cfe0ff; margin-top: 4px; }
 .layout-card-isk b { color: #ffe08a; font-size: 14px; }
 .layout-card-isk.isk-neg b { color: #ff8a8a; }
@@ -1492,7 +1378,7 @@ a.plan-action-btn { text-decoration: none; display: inline-block; }
 /* controls bar pinned to the bottom of every card → aligns across the row */
 .layout-card-controls {
   display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
-  margin-top: 12px; padding-top: 12px; border-top: 1px solid #1f2533;
+  padding: 12px 16px; border-top: 1px solid #1f2533;
 }
 .layout-card-controls label { font-size: 11px; color: #6a7390; display: flex; align-items: center; gap: 6px; }
 .layout-card-controls input, .layout-card-controls select {
@@ -1528,9 +1414,6 @@ a.plan-action-btn { text-decoration: none; display: inline-block; }
 .layout-svg .lp-t2   { fill: #5ecf80; stroke: #1c3320; }
 .layout-svg .lp-t3   { fill: #a89aff; stroke: #2a2a40; }
 .layout-svg .lp-t4   { fill: #ffce6b; stroke: #5a4416; }
-.layout-svg .lp-count rect { fill: #1e3a5f; stroke: #3a6a9a; stroke-width: 1; }
-.layout-svg .lp-count text { fill: #cfe0ff; font-size: 13px; font-weight: 700; }
-.layout-svg .lp-cap { fill: #5a647e; font-size: 10px; }
 
 /* site footer (donation) */
 /* Donation note pinned to the bottom of the sticky sidebar — always on screen,

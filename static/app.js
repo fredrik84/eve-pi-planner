@@ -147,11 +147,17 @@ function renderOptimize(data) {
   const section = document.getElementById('optSection');
   section.style.display = 'block';
 
-  // Stats bar
-  const statsEl = document.getElementById('optStats');
-  const parts = [`Utilization: ${data.utilization}%`];
-  if (data.total_isk > 0) parts.push(`Revenue: ${fmtIsk(data.total_isk)} ISK`);
-  statsEl.textContent = parts.join(' · ');
+  // Stats tiles (matches the Planetary Planning / Setup Analysis aesthetic)
+  const statsBar = document.getElementById('optStatsBar');
+  const producedCount = (data.plan || []).filter(p => p.quantity > 0).length;
+  const tiles = [
+    `<div class="plan-stat"><span class="plan-stat-val">${data.utilization}%</span><span class="plan-stat-lbl">Utilization</span></div>`,
+  ];
+  if (data.total_isk > 0) tiles.push(
+    `<div class="plan-stat"><span class="plan-stat-val plan-stat-ok">${fmtIsk(data.total_isk)}</span><span class="plan-stat-lbl">Revenue (ISK)</span></div>`);
+  tiles.push(
+    `<div class="plan-stat"><span class="plan-stat-val">${producedCount}</span><span class="plan-stat-lbl">Items</span></div>`);
+  statsBar.innerHTML = tiles.join('');
 
   // Warnings
   const warnings = document.getElementById('optWarnings');

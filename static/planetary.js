@@ -1834,11 +1834,11 @@ function _ptypeSpan(t) {
   return t ? `<span class="plan-ptype ${PP_TYPE_CLASS[t] || ''}">${t}</span>` : '';
 }
 
+// Spaced ISK style ("12.3 K") — the B/M/K logic lives once in app.js's fmtIsk (global,
+// loaded first); only the sub-1k branch differs (keeps separators). NB: _iskFmt below is a
+// DIFFERENT compact style ("12k", no space, signed) used by the Factory Layout cards.
 function _fmtIsk(v) {
-  if (v >= 1e9) return (v / 1e9).toFixed(2) + ' B';
-  if (v >= 1e6) return (v / 1e6).toFixed(2) + ' M';
-  if (v >= 1e3) return (v / 1e3).toFixed(1) + ' K';
-  return v.toLocaleString();
+  return v >= 1e3 ? fmtIsk(v) : v.toLocaleString();
 }
 
 function _fmtHours(h) {
@@ -2672,16 +2672,18 @@ async function renderPlanDistribution() {
   }).join('');
 
   el.innerHTML = `
-    <div class="tier-block dist-block">
-      <div class="tier-header">
-        <h2>Refill split</h2>
+    <section class="pp-card dist-block">
+      <div class="pp-card-title">Refill split
+        <span class="pp-card-hint">— split your pasted P1 across a saved plan's factories</span>
         <select class="dist-plan-select" onchange="onPlanDistSelect(this.value)">${opts}</select>
         ${delBtn}
       </div>
-      <div class="dist-hint">Splits the P1 in your <b>inventory above</b> across this plan's factories — drop the green number at each planet. Click a number to copy it.</div>
-      <div class="dist-days" id="refillDays"></div>
-      <div class="plan-dist-tables">${tables}</div>
-    </div>`;
+      <div class="pp-card-body">
+        <div class="dist-hint">Splits the P1 in your <b>inventory above</b> across this plan's factories — drop the green number at each planet. Click a number to copy it.</div>
+        <div class="dist-days" id="refillDays"></div>
+        <div class="plan-dist-tables">${tables}</div>
+      </div>
+    </section>`;
   el.dataset.sel = snap.id;
   syncRefillFromInventory();  // fill the tables from the shared inventory paste at the top
 }
@@ -3736,15 +3738,13 @@ function renderLayoutSelections() {
 
 function renderLayoutCard(entry) {
   const head = `
-    <div class="layout-card-head">
-      <div>
-        <span class="layout-tag tier-${entry.tier}">P${entry.tier}</span>
-        <span class="layout-card-name">${_esc(entry.name)}</span>
-      </div>
+    <div class="pp-card-title">
+      <span class="layout-tag tier-${entry.tier}">P${entry.tier}</span>
+      <span class="layout-card-name">${_esc(entry.name)}</span>
       <button class="layout-card-x" title="Remove" onclick="removeLayout('${entry.key}')">✕</button>
     </div>`;
-  if (entry.error) return `<div class="layout-card">${head}<div class="layout-card-meta" style="color:#e07a7a">Error: ${_esc(entry.error)}</div></div>`;
-  if (!entry.data) return `<div class="layout-card">${head}<div class="layout-card-meta">Generating…</div></div>`;
+  if (entry.error) return `<div class="pp-card layout-card">${head}<div class="layout-card-body"><div class="layout-card-meta" style="color:#e07a7a">Error: ${_esc(entry.error)}</div></div></div>`;
+  if (!entry.data) return `<div class="pp-card layout-card">${head}<div class="layout-card-body"><div class="layout-card-meta">Generating…</div></div></div>`;
 
   const s = entry.data.summary, p = entry.data.planets[0];
   const isExtractor = s.kind === 'extractor';
@@ -3780,7 +3780,7 @@ function renderLayoutCard(entry) {
         <select onchange="changeLayoutPlanet('${entry.key}', this.value)">${planetOpts.map(pt => `<option value="${pt}"${pt === s.planet_type ? ' selected' : ''}>${_esc(pt)}</option>`).join('')}</select></label>`
     : '';
   return `
-    <div class="layout-card">
+    <div class="pp-card layout-card">
       ${head}
       <div class="layout-card-body">
         ${_layoutPreviewSvg(p.template)}

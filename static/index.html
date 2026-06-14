@@ -14,7 +14,7 @@
   <meta property="og:image" content="https://eve-pi.failed.name/og-image.png?v=4">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:image" content="https://eve-pi.failed.name/og-image.png?v=4">
-  <link rel="stylesheet" href="/style.css?v=137">
+  <link rel="stylesheet" href="/style.css?v=138">
 </head>
 <body>
   <header>
@@ -56,147 +56,160 @@
 
     <!-- ── Tab: PI Planner ─────────────────────────────────────────────────── -->
     <div id="tab-planner" class="tab-panel">
+     <div class="pi-stack">
 
-      <div class="input-col pi-shared-inv">
-        <label for="inv">Inventory <span class="label-hint">(paste from EVE — feeds both PI Planner tools)</span></label>
-        <textarea id="inv" placeholder="Biomass&#9;202 993&#9;Basic Commodities - Tier 1&#9;...&#10;Electrolytes&#9;374 053&#9;..."></textarea>
-      </div>
-
-      <div id="piModeBuild" class="pi-mode-panel">
-      <div class="btn-row">
-        <button id="analyzeBtn" onclick="analyze()" title="Show every P2/P3/P4 commodity you can build right now from the inventory above (ignores the order box).">Analyze inventory</button>
-        <label class="factories-label" for="factories" title="How many facilities to split the producible quantity across (per-factory workload + duration). A manual split count — not the same as the Planetary Planning throughput rate.">Factories</label>
-        <input type="number" id="factories" value="15" min="1" max="500" class="factories-input" oninput="updateFactorySplit()">
-        <button id="copyBtn" onclick="copyLink()" style="display:none">Copy link</button>
-        <span id="status"></span>
-      </div>
-
-      <details class="pi-order-fold">
-        <summary>Optimize for a specific order <span class="pi-fold-hint">— fill exact quantities instead of just listing what's buildable</span></summary>
-        <div class="pi-order-fold-body">
-          <div class="input-col">
-            <label for="orderText">Order to fill <span class="label-hint">(paste desired quantities)</span></label>
-            <textarea id="orderText" placeholder="Miniature Electronics    12804&#10;Viral Agent    813&#10;Hermetic Membranes    802&#10;..."></textarea>
-          </div>
-          <div class="btn-row">
-            <button id="optimizeBtn" onclick="optimize()">Optimize order</button>
-          </div>
+      <!-- Inventory paste — shared by both PI Planner tools -->
+      <section class="pp-card">
+        <div class="pp-card-title">Inventory
+          <span class="pp-card-hint">— paste from EVE; feeds both PI Planner tools</span>
         </div>
-      </details>
-
-      <div class="inv-summary" id="invSummary">
-        <h3>Recognized inventory</h3>
-        <div class="inv-pills" id="invPills"></div>
-      </div>
-
-      <!-- Optimize results -->
-      <div class="opt-section" id="optSection" style="display:none">
-        <div class="opt-header">
-          <span class="opt-title">Optimization Plan</span>
-          <span class="opt-stats" id="optStats"></span>
+        <div class="pp-card-body">
+          <textarea id="inv" placeholder="Biomass&#9;202 993&#9;Basic Commodities - Tier 1&#9;...&#10;Electrolytes&#9;374 053&#9;..."></textarea>
         </div>
+      </section>
 
-        <div id="optWarnings"></div>
+      <div id="piModeBuild" class="pi-mode-panel pi-stack">
 
-        <table id="optTable">
-          <thead>
-            <tr>
-              <th style="width:22%">Item</th>
-              <th style="width:6%">Tier</th>
-              <th style="width:10%">Produce</th>
-              <th style="width:10%">Order</th>
-              <th style="width:8%">Fill</th>
-              <th style="width:10%">Sell/unit</th>
-              <th style="width:12%">Revenue</th>
-            </tr>
-          </thead>
-          <tbody id="optBody"></tbody>
-        </table>
-
-        <div class="leftover-section" id="leftoverSection" style="display:none">
-          <div class="leftover-header">Leftover inventory</div>
-          <div class="inv-pills" id="leftoverPills"></div>
-        </div>
-      </div>
-
-      <!-- Analyze results -->
-      <div class="results-section" id="resultsSection" style="display:none">
-        <div class="tier-block" id="p2Block">
-          <div class="tier-header">
-            <span class="tier-badge badge-p2">P2</span>
-            <h2>Refined Commodities</h2>
-            <span class="tier-count" id="p2Count"></span>
+        <!-- Actions -->
+        <section class="pp-card">
+          <div class="pp-card-title">Find buildables
+            <span class="pp-card-hint">— what you can build right now from the inventory above</span>
           </div>
-          <table id="p2Table">
+          <div class="pp-card-body">
+            <div class="btn-row">
+              <button id="analyzeBtn" onclick="analyze()" title="Show every P2/P3/P4 commodity you can build right now from the inventory above (ignores the order box).">Analyze inventory</button>
+              <label class="factories-label" for="factories" title="How many facilities to split the producible quantity across (per-factory workload + duration). A manual split count — not the same as the Planetary Planning throughput rate.">Factories</label>
+              <input type="number" id="factories" value="15" min="1" max="500" class="factories-input" oninput="updateFactorySplit()">
+              <button id="copyBtn" onclick="copyLink()" style="display:none">Copy link</button>
+              <span id="status"></span>
+            </div>
+
+            <details class="pi-order-fold">
+              <summary>Optimize for a specific order <span class="pi-fold-hint">— fill exact quantities instead of just listing what's buildable</span></summary>
+              <div class="pi-order-fold-body">
+                <div class="input-col">
+                  <label for="orderText">Order to fill <span class="label-hint">(paste desired quantities)</span></label>
+                  <textarea id="orderText" placeholder="Miniature Electronics    12804&#10;Viral Agent    813&#10;Hermetic Membranes    802&#10;..."></textarea>
+                </div>
+                <div class="btn-row">
+                  <button id="optimizeBtn" onclick="optimize()">Optimize order</button>
+                </div>
+              </div>
+            </details>
+          </div>
+        </section>
+
+        <!-- Recognized inventory -->
+        <section class="pp-card" id="invSummary" style="display:none">
+          <div class="pp-card-title">Recognized inventory</div>
+          <div class="pp-card-body">
+            <div class="inv-pills" id="invPills"></div>
+          </div>
+        </section>
+
+        <!-- Optimize results -->
+        <section class="pp-card" id="optSection" style="display:none">
+          <div class="pp-card-title">Optimization plan</div>
+          <div id="optStatsBar" class="plan-stats-bar"></div>
+          <div id="optWarnings"></div>
+
+          <table id="optTable">
             <thead>
               <tr>
-                <th style="width:20%">Item</th>
-                <th style="width:10%">Max Output</th>
+                <th style="width:22%">Item</th>
+                <th style="width:6%">Tier</th>
+                <th style="width:10%">Produce</th>
+                <th style="width:10%">Order</th>
+                <th style="width:8%">Fill</th>
                 <th style="width:10%">Sell/unit</th>
-                <th style="width:12%">Total ISK</th>
-                <th style="width:14%">Bottleneck</th>
-                <th>Inputs Consumed</th>
-                <th style="width:4%"></th>
+                <th style="width:12%">Revenue</th>
               </tr>
             </thead>
-            <tbody id="p2Body"></tbody>
+            <tbody id="optBody"></tbody>
           </table>
-        </div>
 
-        <div class="tier-block" id="p3Block">
-          <div class="tier-header">
-            <span class="tier-badge badge-p3">P3</span>
-            <h2>Specialized Commodities</h2>
-            <span class="tier-count" id="p3Count"></span>
+          <div class="leftover-section" id="leftoverSection" style="display:none">
+            <div class="leftover-header">Leftover inventory</div>
+            <div class="inv-pills" id="leftoverPills"></div>
           </div>
-          <table id="p3Table">
-            <thead>
-              <tr>
-                <th style="width:20%">Item</th>
-                <th style="width:10%">Max Output</th>
-                <th style="width:10%">Sell/unit</th>
-                <th style="width:12%">Total ISK</th>
-                <th style="width:14%">Bottleneck</th>
-                <th>Inputs Consumed</th>
-                <th style="width:4%"></th>
-              </tr>
-            </thead>
-            <tbody id="p3Body"></tbody>
-          </table>
+        </section>
+
+        <!-- Analyze results -->
+        <div class="results-section pi-stack" id="resultsSection" style="display:none">
+          <section class="pp-card" id="p2Block">
+            <div class="pp-card-title">
+              <span class="tier-badge badge-p2">P2</span> Refined Commodities
+              <span class="pp-card-hint tier-count" id="p2Count"></span>
+            </div>
+            <table id="p2Table">
+              <thead>
+                <tr>
+                  <th style="width:20%">Item</th>
+                  <th style="width:10%">Max Output</th>
+                  <th style="width:10%">Sell/unit</th>
+                  <th style="width:12%">Total ISK</th>
+                  <th style="width:14%">Bottleneck</th>
+                  <th>Inputs Consumed</th>
+                  <th style="width:4%"></th>
+                </tr>
+              </thead>
+              <tbody id="p2Body"></tbody>
+            </table>
+          </section>
+
+          <section class="pp-card" id="p3Block">
+            <div class="pp-card-title">
+              <span class="tier-badge badge-p3">P3</span> Specialized Commodities
+              <span class="pp-card-hint tier-count" id="p3Count"></span>
+            </div>
+            <table id="p3Table">
+              <thead>
+                <tr>
+                  <th style="width:20%">Item</th>
+                  <th style="width:10%">Max Output</th>
+                  <th style="width:10%">Sell/unit</th>
+                  <th style="width:12%">Total ISK</th>
+                  <th style="width:14%">Bottleneck</th>
+                  <th>Inputs Consumed</th>
+                  <th style="width:4%"></th>
+                </tr>
+              </thead>
+              <tbody id="p3Body"></tbody>
+            </table>
+          </section>
+
+          <section class="pp-card" id="p4Block">
+            <div class="pp-card-title">
+              <span class="tier-badge badge-p4">P4</span> Advanced Commodities
+              <span class="pp-card-hint tier-count" id="p4Count"></span>
+            </div>
+            <table id="p4Table">
+              <thead>
+                <tr>
+                  <th style="width:20%">Item</th>
+                  <th style="width:10%">Max Output</th>
+                  <th style="width:10%">Sell/unit</th>
+                  <th style="width:12%">Total ISK</th>
+                  <th style="width:14%">Bottleneck</th>
+                  <th>Inputs Consumed</th>
+                  <th style="width:4%"></th>
+                </tr>
+              </thead>
+              <tbody id="p4Body"></tbody>
+            </table>
+          </section>
+
+          <div class="price-note">Prices: Jita 5th-percentile sell orders via Fuzzworks · cached 15 min · sorted by total ISK</div>
         </div>
 
-        <div class="tier-block" id="p4Block">
-          <div class="tier-header">
-            <span class="tier-badge badge-p4">P4</span>
-            <h2>Advanced Commodities</h2>
-            <span class="tier-count" id="p4Count"></span>
-          </div>
-          <table id="p4Table">
-            <thead>
-              <tr>
-                <th style="width:20%">Item</th>
-                <th style="width:10%">Max Output</th>
-                <th style="width:10%">Sell/unit</th>
-                <th style="width:12%">Total ISK</th>
-                <th style="width:14%">Bottleneck</th>
-                <th>Inputs Consumed</th>
-                <th style="width:4%"></th>
-              </tr>
-            </thead>
-            <tbody id="p4Body"></tbody>
+        <!-- Factory split -->
+        <section class="pp-card" id="factorySection" style="display:none">
+          <div class="pp-card-title">Factory split — <span id="factoryCountLabel">15</span> factories</div>
+          <table id="factoryTable">
+            <thead id="factoryHead"></thead>
+            <tbody id="factoryBody"></tbody>
           </table>
-        </div>
-
-        <div class="price-note">Prices: Jita 5th-percentile sell orders via Fuzzworks · cached 15 min · sorted by total ISK</div>
-      </div>
-
-      <div class="factory-section" id="factorySection" style="display:none">
-        <div class="factory-header">Factory split — <span id="factoryCountLabel">15</span> factories</div>
-        <table id="factoryTable">
-          <thead id="factoryHead"></thead>
-          <tbody id="factoryBody"></tbody>
-        </table>
-      </div>
+        </section>
 
       </div><!-- /piModeBuild -->
 
@@ -205,6 +218,7 @@
         <div id="planDistSection" class="plan-dist-wrap"></div>
       </div>
 
+     </div><!-- /pi-stack -->
     </div><!-- /tab-planner -->
 
 
@@ -577,7 +591,12 @@ PVF-N9    3         95                 60             80                  100   
 
     <!-- ── Tab: Factory Layout ─────────────────────────────────────────────────── -->
     <div id="tab-layout" class="tab-panel" style="display:none">
-      <div class="layout-page">
+      <div class="layout-page pi-stack">
+       <section class="pp-card pp-card-pop">
+        <div class="pp-card-title">Build templates
+          <span class="pp-card-hint">— add products, then tune each planet's command center, type &amp; launchpads</span>
+          <span id="layoutStatus" class="layout-status"></span>
+        </div>
         <section class="layout-controls">
           <div class="layout-field layout-search-field">
             <label>Add products (P1–P4)</label>
@@ -620,8 +639,8 @@ PVF-N9    3         95                 60             80                  100   
                     title="Add the four fuel-block factory components (Coolant, Mechanical Parts, Enriched Uranium, Robotics)">+ Fuel blocks</button>
           </div>
           <a id="layoutBundleBtn" class="layout-btn layout-bundle-btn" href="#" download style="display:none">Download all (.zip)</a>
-          <span id="layoutStatus" class="layout-status"></span>
         </section>
+       </section>
 
         <div id="layoutPlanets" class="layout-planets"></div>
       </div>
@@ -722,7 +741,7 @@ PVF-N9    3         95                 60             80                  100   
     </div>
   </div>
 
-  <script src="/app.js?v=22"></script>
-  <script src="/planetary.js?v=186"></script>
+  <script src="/app.js?v=23"></script>
+  <script src="/planetary.js?v=187"></script>
 </body>
 </html>
