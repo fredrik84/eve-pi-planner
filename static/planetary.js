@@ -2617,15 +2617,21 @@ function onPlanDistSelect(id) {
 async function renderPlanDistribution() {
   const el = document.getElementById('planDistSection');
   if (!el) return;
-  const snaps = await _fetchAllSnapshots();
+  // Saved plans + the live "Current setup" profiles derived from your deployed factories
+  // (same ones the Setup Analysis tab offers) — so you can refill what you actually run
+  // without first saving a plan. Derived plans are marked with a ◆ and can't be deleted.
+  const saved = await _fetchAllSnapshots();
+  let derived = [];
+  try { derived = await _fetchSetupPlans(); } catch (e) {}
+  const snaps = [...saved, ...derived];
   if (!snaps.length) {
     el.innerHTML = `<div class="plan-section-title">Split P1 stacks into plan factories</div>
-      <div class="pp-card"><div class="admin-hint">Build a plan in <b>Planetary Planning</b> and hit <b>Save plan</b> — it'll appear here so you can paste your P1 stacks and see exactly how many units to drop at each factory (no need to re-run the wizard).</div></div>`;
+      <div class="pp-card"><div class="admin-hint">Build a plan in <b>Planetary Planning</b> and hit <b>Save plan</b> — or set up factories on your characters — and it'll appear here so you can paste your P1 stacks and see exactly how many units to drop at each factory.</div></div>`;
     return;
   }
   const snap = snaps.find(s => String(s.id) === el.dataset.sel) || snaps[0];
   const opts = snaps.map(s =>
-    `<option value="${s.id}"${s.id === snap.id ? ' selected' : ''}>${_esc(s.name)}${s.saved ? '' : ' · this browser (unsaved)'}</option>`).join('');
+    `<option value="${s.id}"${String(s.id) === String(snap.id) ? ' selected' : ''}>${s.derived ? '◆ ' : ''}${_esc(s.name)}${(!s.saved && !s.derived) ? ' · this browser (unsaved)' : ''}</option>`).join('');
   const delBtn = snap.saved
     ? `<button class="pp-profile-action-btn pp-profile-del-btn" onclick="deletePlanSnapshot(${snap.srvId})" title="Delete this saved plan">Delete</button>` : '';
   // P1 name → type_id (for parsing the pasted inventory — the textarea is the single input).

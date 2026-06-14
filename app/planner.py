@@ -1095,6 +1095,16 @@ def my_setup_plan(pp_session: str = Cookie(default=None)):
             for pid, frac in p1_fracs.items()
         ]
         sell = fetch_prices([tid]).get(tid, 0.0)
+        # The `count` factories of a product are identical, so each draws an equal 1/count
+        # share of every P1 pool. Attaching p1_inputs lets the Refill tool split a pasted P1
+        # stash across these planets — same shape the saved-plan snapshots use.
+        share = (1.0 / count) if count else 0.0
+        fac_p1_inputs = [
+            {"p1_type_id": pid, "p1_name": types.get(pid, {}).get("name") or f"#{pid}", "share": share}
+            for pid in p1_fracs
+        ]
+        for f in g["factories"]:
+            f["p1_inputs"] = fac_p1_inputs
         plans.append({
             "name": f"Current setup: {g['name']} (×{count})",
             "consumption": consumption,
