@@ -2235,21 +2235,24 @@ function renderAnalysis() {
   if (snap.isk_per_day)
     stats += stat(_fmtIsk(snap.isk_per_day * feedRatio),
                   `ISK/day${fed ? '' : ' · ' + _fmtIsk(snap.isk_per_day) + ' if fed'}`, '');
-  // Over-extraction: P1/day you produce beyond what the factories can consume — wasted effort.
-  // Valued with each P1's sell price (carried on derived "Current setup" plans).
-  const priceOf = {};
-  if (Array.isArray(snap.consumption)) snap.consumption.forEach(c => { priceOf[String(c.p1_type_id)] = c.sell || 0; });
-  let surUnits = 0, surIsk = 0;
-  rows.forEach(r => { const s = r.have - r.need; if (s > 0) { surUnits += s; surIsk += s * (priceOf[r.t] || 0); } });
-  const totalNeed = rows.reduce((a, r) => a + r.need, 0);
-  if (surUnits > 0.02 * totalNeed) {
-    // Express the surplus P1 as end-product-equivalents (surplus ÷ P1-per-product), so it has a
-    // reference: "≈75 SHPC/day of P1 you extract but can't turn into product (wrong mix)".
-    const p1PerProduct = snap.products_per_day ? totalNeed / snap.products_per_day : 0;
-    const surProduct = p1PerProduct ? Math.round(surUnits / p1PerProduct) : 0;
-    const lead = surProduct >= 1 ? `≈${surProduct.toLocaleString()}` : `${Math.round(surUnits).toLocaleString()} P1`;
-    const iskpart = surIsk > 0 ? ` · ≈${_fmtIsk(surIsk)} ISK` : '';
-    stats += stat(lead, `${_esc(unit)}/day of P1 over-extracted${iskpart}`, 'an-warn');
+  // Surplus headroom in END-PRODUCT terms. The extra product the surplus could ACTUALLY become is
+  // capped by the LOWEST-overproduced input — you need every input in the right ratio, so total
+  // surplus mass badly overstates it (tons of spare Oxidizing is useless if Industrial Fibers has
+  // only ~22 SHPC of headroom). So we take the min over inputs of (surplus ÷ per-product need).
+  if (snap.products_per_day) {
+    let bind = null;
+    rows.forEach(r => {
+      const perProduct = r.need / snap.products_per_day;   // input units per 1 product
+      if (perProduct <= 0) return;
+      const hp = (r.have - r.need) / perProduct;           // surplus expressed as products
+      if (bind === null || hp < bind.hp) bind = { hp, name: r.name };
+    });
+    if (bind && bind.hp >= 1) {
+      const n = Math.round(bind.hp);
+      const iskPerProduct = (snap.isk_per_day || 0) / snap.products_per_day;
+      const iskpart = iskPerProduct > 0 ? ` · ≈${_fmtIsk(n * iskPerProduct)} ISK` : '';
+      stats += stat(`≈${n.toLocaleString()}`, `more ${_esc(unit)}/day your surplus could feed · capped by ${_esc(bind.name)}${iskpart}`, 'an-warn');
+    }
   }
   stats += `</div>`;
 
