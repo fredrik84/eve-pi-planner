@@ -2235,6 +2235,19 @@ function renderAnalysis() {
   if (snap.isk_per_day)
     stats += stat(_fmtIsk(snap.isk_per_day * feedRatio),
                   `ISK/day${fed ? '' : ' · ' + _fmtIsk(snap.isk_per_day) + ' if fed'}`, '');
+  // Over-extraction: P1/day you produce beyond what the factories can consume — wasted effort.
+  // Valued with each P1's sell price (carried on derived "Current setup" plans).
+  const priceOf = {};
+  if (Array.isArray(snap.consumption)) snap.consumption.forEach(c => { priceOf[String(c.p1_type_id)] = c.sell || 0; });
+  let surUnits = 0, surIsk = 0;
+  rows.forEach(r => { const s = r.have - r.need; if (s > 0) { surUnits += s; surIsk += s * (priceOf[r.t] || 0); } });
+  const totalNeed = rows.reduce((a, r) => a + r.need, 0);
+  if (surUnits > 0.02 * totalNeed) {
+    const val = surIsk > 0
+      ? `${Math.round(surUnits).toLocaleString()} <span class="an-of">≈${_fmtIsk(surIsk)} ISK</span>`
+      : Math.round(surUnits).toLocaleString();
+    stats += stat(val, 'P1/day over-extracted · the factories can’t use it', 'an-warn');
+  }
   stats += `</div>`;
 
   // Refill cadence = factory P1 buffer (3 launchpads = 30,000 m³) ÷ consumption (P1/day × 0.19 m³).
@@ -2329,7 +2342,7 @@ function renderAnalysis() {
           dest = dests.shift();                              // claim that char's richest free planet
         }
         usedKey.add(ckey(c)); spareLeft[s.t]--; need--;
-        moves.push({ colony: c, fromName: s.name, to: d.name, dest });
+        moves.push({ colony: c, fromName: s.name, fromT: s.t, to: d.name, toT: d.t, dest });
       }
     }
     d.unmet = need;     // still short: no feasible surplus colony / no reachable free planet
@@ -2338,17 +2351,22 @@ function renderAnalysis() {
   const leftover = surplus.filter(s => spareLeft[s.t] >= 1).map(s => ({ name: s.name, spare: spareLeft[s.t] }));
   const movedTotal = moves.length;
 
-  const _moveSide = (cls, tag, loc, mat, note) =>
+  // material label as "P0 → P1" (matching the plan), falling back to just P1 if the P0 isn't known.
+  const _matHtml = (p1name, t) => {
+    const p0 = p0Of(t);
+    return p0 ? `${_esc(p0)} <span class="an-move-p0arrow">→</span> ${_esc(p1name)}` : _esc(p1name);
+  };
+  const _moveSide = (cls, tag, loc, matHtml, note) =>
     `<div class="an-move-side ${cls}"><span class="an-move-tag">${tag}</span>`
     + (loc ? `<span class="an-move-loc">${loc}</span>` : '')
-    + `<span class="an-move-mat">${_esc(mat)}</span><span class="an-sug-note">${note}</span></div>`;
+    + `<span class="an-move-mat">${matHtml}</span><span class="an-sug-note">${note}</span></div>`;
   const _moveLi = (m) => {
     const c = m.colony;
     const fromLoc = c.system ? `${_esc(c.system)}${c.planet_num != null ? ' P' + c.planet_num : ''}` : '';
-    const rm = _moveSide('an-move-rm', 'tear down', fromLoc, m.fromName, `${Math.round(c.perDay).toLocaleString()}/day`);
+    const rm = _moveSide('an-move-rm', 'tear down', fromLoc, _matHtml(m.fromName, m.fromT), `${Math.round(c.perDay).toLocaleString()}/day`);
     const add = m.dest
-      ? _moveSide('an-move-add', 'build', `${_esc(m.dest.system)} P${m.dest.planet_num}`, m.to, `${_esc(m.dest.planet_type)} · ${m.dest.richness}`)
-      : _moveSide('an-move-add', 'build', '', m.to, 'on a free planet');
+      ? _moveSide('an-move-add', 'build', `${_esc(m.dest.system)} P${m.dest.planet_num}`, _matHtml(m.to, m.toT), `${_esc(m.dest.planet_type)} · ${m.dest.richness}`)
+      : _moveSide('an-move-add', 'build', '', _matHtml(m.to, m.toT), 'on a free planet');
     return `<li class="an-move"><div class="an-move-char">${_esc(c.char)}</div>`
       + `<div class="an-move-pair">${rm}<div class="an-move-arrow">→</div>${add}</div></li>`;
   };

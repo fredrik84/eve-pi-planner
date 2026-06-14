@@ -1649,3 +1649,6 @@ a.plan-action-btn { text-decoration: none; display: inline-block; }
 .an-move-mat { color: #c8cdd8; font-size: 12px; }
 .an-move-arrow { align-self: center; color: #5a6478; font-size: 18px; flex: 0 0 auto; }
 @media (max-width: 560px) { .an-move-arrow { transform: rotate(90deg); align-self: flex-start; } }
+.an-move-p0arrow { color: #5a6478; }
+.an-stat.an-warn { border-color: #8a6a1f; }
+.an-stat.an-warn .an-stat-val { color: #e0b84a; }

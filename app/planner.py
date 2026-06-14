@@ -1077,9 +1077,10 @@ def my_setup_plan(pp_session: str = Cookie(default=None)):
         if not p1_fracs:
             continue  # not something that resolves to P1 inputs (shouldn't happen for ≥P2)
         products_per_day = round(count * _effective_fph(tid, pi) * 24)
+        p1_prices = fetch_prices(list(p1_fracs.keys()))   # for valuing over-/under-extraction
         consumption = [
             {"p1_type_id": pid, "p1_name": types.get(pid, {}).get("name") or f"#{pid}",
-             "units_per_day": round(products_per_day * frac)}
+             "units_per_day": round(products_per_day * frac), "sell": round(p1_prices.get(pid, 0.0), 2)}
             for pid, frac in p1_fracs.items()
         ]
         sell = fetch_prices([tid]).get(tid, 0.0)
