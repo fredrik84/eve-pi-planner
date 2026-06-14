@@ -2048,6 +2048,9 @@ let _p1NameToTid = {};     // lowercase P1 name -> type_id, for parsing the inve
 let _p1TidToName = {};     // type_id -> P1 name, for the "days of production" readout
 let _planConsumption = {}; // type_id -> units/day the plan's factories eat (full rate)
 let _planMeta = {};        // selected plan's production rate + sell value, for the refill stats bar
+let _refillModel = null;   // [{title, cols:[{id,name}], facs:[{loc, char, shareByTid, amt}]}]
+let _refillView = (() => { try { return localStorage.getItem('refillView') || 'summary'; } catch (e) { return 'summary'; } })();
+let _refillChar = (() => { try { return localStorage.getItem('refillChar') || ''; } catch (e) { return ''; } })();
 const _PLAN_SNAP_KEY = 'ppPlanSnapshots';
 
 function _loadPlanSnapshots() {
@@ -2582,10 +2585,53 @@ function renderAnalysis() {
   if (!moves.length && !newBuilds.length && !addFactories)
     suggest = `<div class="an-suggest an-suggest-free"><div class="an-suggest-h">Balanced — every material this plan needs is covered${leftover.length ? ', with a little to spare' : ''}.</div></div>`;
 
-  el.innerHTML = head + stats + proj
+  // Extraction-runtime helper: turn a target runtime into the in-game program duration (whole
+  // days − 30 min for an easy same-time restart) + a projection. Suggested days come from the
+  // factory refill cadence — run extractors to match how often you'll reload the factories.
+  _extRt = { ppd: Number(snap.products_per_day) || 0, ipd: Number(snap.isk_per_day) || 0, unit };
+  const rtN = Math.max(1, Math.min(14, refillDays ? Math.floor(refillDays) : 1));
+  const rtCard = _extRuntimeCardHtml(rtN);
+
+  el.innerHTML = head + stats + rtCard + proj
     + `<div class="an-legend">Producing (left) vs the plan’s daily need (right) per P1. A full green bar = factories stay fed; a short red bar is the bottleneck.</div>`
     + `<div class="an-bars">${barRows}</div>`
     + suggest;
+}
+
+// ── Extraction-runtime helper (cadence + projection) ──────────────────────────
+let _extRt = null;   // {ppd, ipd, unit} of the currently-shown plan, for live recompute
+
+// Whole-day-multiple program duration minus 30 min headroom (so it ends a touch earlier each
+// day for a same-time restart). N days → "1d 23h 30m" (N=2), "23h 30m" (N=1).
+function _progDuration(days) {
+  const n = Math.max(1, Math.min(60, Math.round(days)));
+  const total = n * 24 * 60 - 30;
+  const d = Math.floor(total / 1440), h = Math.floor((total % 1440) / 60), m = total % 60;
+  return [d ? d + 'd' : '', h ? h + 'h' : '', m ? m + 'm' : ''].filter(Boolean).join(' ');
+}
+function _extRtProjection(n) {
+  if (!_extRt || !_extRt.ppd) return '';
+  const prods = Math.round(_extRt.ppd * n);
+  const iskPart = _extRt.ipd ? ` · ≈ <b>${_fmtIsk(_extRt.ipd * n)}</b> ISK` : '';
+  return `Over ~${n} day${n === 1 ? '' : 's'}: ≈ <b>${prods.toLocaleString()}</b> ${_esc(_extRt.unit || 'units')}${iskPart} once the chain fills.`;
+}
+function _extRuntimeCardHtml(n) {
+  return `<div class="an-rt">
+      <div class="an-rt-h">Extraction runtime
+        <span class="an-rt-sub">— run programs in whole-day multiples minus 30 min, so they end a little earlier each day for an easy same-time restart</span></div>
+      <div class="an-rt-row">
+        <label class="an-rt-field">Run for <input id="extRtDays" type="number" min="1" max="14" value="${n}" oninput="_extRuntimeRecalc()"> day(s)</label>
+        <div class="an-rt-dur">Set each extractor program to <b id="extRtDur">${_progDuration(n)}</b></div>
+      </div>
+      <div class="an-rt-proj" id="extRtProj">${_extRtProjection(n)}</div>
+    </div>`;
+}
+function _extRuntimeRecalc() {
+  const inp = document.getElementById('extRtDays');
+  if (!inp) return;
+  const n = Math.max(1, Math.min(14, parseInt(inp.value, 10) || 1));
+  const dur = document.getElementById('extRtDur'); if (dur) dur.textContent = _progDuration(n);
+  const pr = document.getElementById('extRtProj'); if (pr) pr.innerHTML = _extRtProjection(n);
 }
 
 function _buildPlanSnapshot(data) {
@@ -2722,54 +2768,103 @@ async function renderPlanDistribution() {
                 count: snap.factories_count || (snap.factories ? snap.factories.length : 1),
                 refillHours: snap.factory_refill_hours || 0 };
 
-  // Group factory planets by what they make. Robust to older snapshots without a `product`
-  // field (fall back to grouping by P1 signature), and columns = the UNION of P1s the group
-  // consumes, so every needed P1 shows up.
+  // Build a render model: one group per product, each with its P1 columns and factory rows
+  // (parsed character + per-P1 share). The split math (updateP1Distribution) runs over this model
+  // — independent of what's displayed — so the per-character filter / summary view can never skew
+  // the global split.
   const groups = {};
   snap.factories.forEach(f => {
     const key = f.product || ('sig:' + f.p1_inputs.map(p => p.p1_type_id).slice().sort((a, b) => a - b).join(','));
     if (!groups[key]) groups[key] = { title: f.product || '', facs: [] };
     groups[key].facs.push(f);
   });
-  // One table per product, styled like the analyze tables above (same dark-card look) so the
-  // tab reads as one tool fed by the single inventory paste at the top.
-  const tables = Object.keys(groups).map(key => {
+  _refillModel = Object.keys(groups).map(key => {
     const g = groups[key];
     const colMap = {};
-    g.facs.forEach(f => f.p1_inputs.forEach(p => { colMap[p.p1_type_id] = p.p1_name; }));
+    g.facs.forEach(f => f.p1_inputs.forEach(p => { colMap[String(p.p1_type_id)] = p.p1_name; }));
     const cols = Object.keys(colMap).sort((a, b) => colMap[a].localeCompare(colMap[b])).map(id => ({ id: id, name: colMap[id] }));
-    const head = `<thead><tr><th>Factory planet</th>${cols.map(c => `<th class="dist-num">${_esc(c.name)}</th>`).join('')}</tr></thead>`;
-    const body = g.facs.map(f => {
-      const byId = {}; f.p1_inputs.forEach(p => { byId[p.p1_type_id] = p; });
-      const cells = cols.map(c => {
-        const p = byId[c.id];
-        return p
-          ? `<td class="dist-num"><b class="p1-amt" data-p1="${p.p1_type_id}" data-share="${p.share}" onclick="copyP1Amount(this)" title="Click to copy this number">–</b></td>`
-          : '<td class="dist-num p1-cell-na">·</td>';
-      }).join('');
-      return `<tr><td class="p1-dist-loc">${_esc(f.loc || f.label || '?')}</td>${cells}</tr>`;
-    }).join('');
-    return `<div class="dist-line">
-        <div class="dist-line-head">${_esc(g.title || cols.map(c => c.name).join(' + '))}<span class="dist-line-count">${g.facs.length} planet${g.facs.length !== 1 ? 's' : ''}</span></div>
-        <table class="p1-dist-table">${head}<tbody>${body}</tbody></table>
-      </div>`;
-  }).join('');
+    const facs = g.facs.map(f => {
+      const loc = f.loc || f.label || '?';
+      const shareByTid = {};
+      f.p1_inputs.forEach(p => { shareByTid[String(p.p1_type_id)] = p.share; });
+      return { loc, char: _refillCharOf(loc), shareByTid, amt: {} };
+    });
+    return { title: g.title || cols.map(c => c.name).join(' + '), cols, facs };
+  });
 
   el.innerHTML = `
     <section class="pp-card dist-block">
       <div class="pp-card-title">Refill split
-        <span class="pp-card-hint">— split your pasted P1 across a saved plan's factories</span>
+        <span class="pp-card-hint">— split your pasted P1 across the plan's factories</span>
         <select class="dist-plan-select" onchange="onPlanDistSelect(this.value)">${opts}</select>
         ${delBtn}
       </div>
       <div class="pp-card-body">
+        <div class="dist-controls" id="refillControls"></div>
         <div class="dist-hint">Splits the P1 in your <b>inventory above</b> across the plan's factories in recipe ratio — your scarcest input sets the fill level, capped by launchpad space (3 LP ≈ 30,000 m³). Drop the green number at each planet; click to copy.</div>
         <div class="dist-days" id="refillDays"></div>
-        <div class="plan-dist-tables">${tables}</div>
+        <div class="plan-dist-tables" id="refillTables"></div>
       </div>
     </section>`;
   el.dataset.sel = snap.id;
-  syncRefillFromInventory();  // fill the tables from the shared inventory paste at the top
+  _renderRefillControls();
+  syncRefillFromInventory();  // compute amounts from the shared inventory paste, then render
+}
+
+// Character = the part of a factory loc before " · " (e.g. "Ekaoni · 0-U2M4 P6" → "Ekaoni").
+function _refillCharOf(loc) { return (loc.split(' · ')[0] || '').trim(); }
+function _setRefillChar(v) { _refillChar = v; try { localStorage.setItem('refillChar', v); } catch (e) {} _renderRefillTables(); }
+function _setRefillView(v) { _refillView = v; try { localStorage.setItem('refillView', v); } catch (e) {} _renderRefillControls(); _renderRefillTables(); }
+
+function _renderRefillControls() {
+  const el = document.getElementById('refillControls');
+  if (!el || !_refillModel) return;
+  const chars = [...new Set(_refillModel.flatMap(g => g.facs.map(f => f.char)))].filter(Boolean).sort();
+  if (_refillChar && !chars.includes(_refillChar)) _refillChar = '';   // stale selection
+  const total = _refillModel.reduce((a, g) => a + g.facs.length, 0);
+  const charSel = chars.length > 1
+    ? `<label class="dist-ctl">Character
+        <select onchange="_setRefillChar(this.value)">
+          <option value="">All characters (${total})</option>
+          ${chars.map(c => `<option value="${_esc(c)}"${c === _refillChar ? ' selected' : ''}>${_esc(c)}</option>`).join('')}
+        </select></label>` : '';
+  el.innerHTML = `${charSel}
+    <div class="dist-view-toggle">
+      <button class="dist-view-btn${_refillView === 'summary' ? ' on' : ''}" onclick="_setRefillView('summary')" title="One row: the same per-factory amount for every factory">Summary</button>
+      <button class="dist-view-btn${_refillView === 'detailed' ? ' on' : ''}" onclick="_setRefillView('detailed')" title="A row per factory planet">All planets</button>
+    </div>`;
+}
+
+// One P1 cell. undefined share → factory doesn't use this input (·); null amount → no stock yet (–).
+function _amtCell(fac, colId) {
+  if (!(colId in fac.shareByTid)) return '<td class="dist-num p1-cell-na">·</td>';
+  const v = fac.amt[colId];
+  if (v == null) return '<td class="dist-num"><b class="p1-amt">–</b></td>';
+  return `<td class="dist-num"><b class="p1-amt p1-amt-set" onclick="copyP1Amount(this)" title="Click to copy">${v.toLocaleString()}</b></td>`;
+}
+
+function _renderRefillTables() {
+  const host = document.getElementById('refillTables');
+  if (!host || !_refillModel) return;
+  const summary = _refillView !== 'detailed';
+  host.innerHTML = _refillModel.map(g => {
+    const facs = _refillChar ? g.facs.filter(f => f.char === _refillChar) : g.facs;
+    const head = `<thead><tr><th>${summary ? 'Per factory' : 'Factory planet'}</th>${g.cols.map(c => `<th class="dist-num">${_esc(c.name)}</th>`).join('')}</tr></thead>`;
+    let body;
+    if (!facs.length) {
+      body = `<tr><td class="p1-dist-loc" colspan="${g.cols.length + 1}"><span class="p1-cell-na">No factories for this character.</span></td></tr>`;
+    } else if (summary) {
+      // Identical factories → one representative row (the first filtered factory's per-factory amounts).
+      const rep = facs[0];
+      body = `<tr><td class="p1-dist-loc">Each factory <span class="dist-line-count">× ${facs.length}</span></td>${g.cols.map(c => _amtCell(rep, c.id)).join('')}</tr>`;
+    } else {
+      body = facs.map(f => `<tr><td class="p1-dist-loc">${_esc(f.loc)}</td>${g.cols.map(c => _amtCell(f, c.id)).join('')}</tr>`).join('');
+    }
+    return `<div class="dist-line">
+        <div class="dist-line-head">${_esc(g.title)}<span class="dist-line-count">${facs.length} planet${facs.length !== 1 ? 's' : ''}${_refillChar ? ' · ' + _esc(_refillChar) : ''}</span></div>
+        <table class="p1-dist-table">${head}<tbody>${body}</tbody></table>
+      </div>`;
+  }).join('');
 }
 
 // Parse one EVE-inventory line into [name, qty] or null. Mirrors app/pi.py parse_inventory:
@@ -2821,55 +2916,46 @@ function copyP1Amount(el) {
 
 // Distribute each entered stack across the factory planets that consume that P1, whole units
 // summing exactly to the stack (largest-remainder). No stack → show the % share.
-// Split the pasted P1 across the plan's factories IN RECIPE RATIO. The scarcest input sets the
-// fill level (a number of days the whole plan can run on your stock); each P1 column then
-// allocates `days × its-daily-need` and splits that across factories by their share — so per
-// factory the inputs stay in recipe ratio (e.g. SHPC: 6 inputs at X, 3 at 2X) while the totals
-// never exceed what you have. The fill level is capped by how much a factory's launchpads hold
-// (3 LP ≈ 30,000 m³, carried as factory_refill_hours).
+// Compute the refill split into the model, then render. The scarcest pasted input sets a fill
+// level (days the whole plan can run on your stock); each P1's column total = days × its daily
+// need, split across factories by share and FLOORED so identical factories all show the same
+// number (easy even drop; leftover units stay in your hangar). Capped by launchpad space
+// (3 LP ≈ 30,000 m³, via factory_refill_hours). The math runs over the FULL factory set, so the
+// display filter/summary never changes the numbers.
 const _P1_VOL_M3 = 0.19;                 // m³ per P1 unit (verified in-game)
 function updateP1Distribution() {
+  if (!_refillModel) return;
   const items = _planConsumptionItems();          // [{tid, name, perDay}] — perDay = PLAN-total units/day
   const count = Math.max(1, _planMeta.count || 1);
-  const wByTid = {}; items.forEach(it => { wByTid[String(it.tid)] = it.perDay; });
-  const sumW = items.reduce((a, it) => a + it.perDay, 0);   // plan-total P1 units/day (all inputs)
+  const perDayByTid = {}; items.forEach(it => { perDayByTid[String(it.tid)] = it.perDay; });
+  const sumW = items.reduce((a, it) => a + it.perDay, 0);
+  const haveWeights = items.length > 0 && sumW > 0;
 
-  const byP1 = {};
-  document.querySelectorAll('.p1-amt').forEach(el => { (byP1[el.dataset.p1] = byP1[el.dataset.p1] || []).push(el); });
+  // All (factory, share) pairs per P1 across the whole model — the global pool for the split.
+  const cells = {};
+  _refillModel.forEach(g => g.facs.forEach(fac => {
+    fac.amt = {};
+    Object.keys(fac.shareByTid).forEach(tid => { (cells[tid] = cells[tid] || []).push({ fac, share: fac.shareByTid[tid] }); });
+  }));
 
-  const blank = els => els.forEach(el => { el.textContent = '–'; el.classList.remove('p1-amt-set'); });
-  // Spread a column total across factory cells by share, FLOORED so identical factories all show
-  // the same number (drop one stack evenly, no odd cell to hunt for). The few leftover units from
-  // flooring just stay in your hangar.
-  const fill = (els, total) => {
-    const shares = els.map(el => parseFloat(el.dataset.share) || (1 / els.length));
-    const ssum = shares.reduce((a, b) => a + b, 0) || 1;
-    els.forEach((el, i) => {
-      el.textContent = Math.max(0, Math.floor(total * shares[i] / ssum)).toLocaleString();
-      el.classList.add('p1-amt-set');
-    });
-  };
-
-  if (!items.length || sumW <= 0) {               // older snapshot w/o consumption → plain split by share
-    for (const tid in byP1) { const s = _p1Stacks[tid] || 0; s ? fill(byP1[tid], s) : blank(byP1[tid]); }
-    _updateRefillDays(); return;
+  let days = Infinity;
+  if (haveWeights) {
+    let T = Infinity;
+    for (const tid in cells) { const w = perDayByTid[tid] || 0, s = _p1Stacks[tid] || 0; if (w > 0 && s > 0) T = Math.min(T, s / w); }
+    if (!isFinite(T)) T = 0;
+    const capDays = (_planMeta.refillHours > 0) ? _planMeta.refillHours / 24 : (30000 * count / (sumW * _P1_VOL_M3));
+    days = Math.min(T, capDays);
   }
 
-  // Fill level = days the whole plan runs on the scarcest pasted input, capped by launchpad space.
-  let T = Infinity;
-  for (const tid in byP1) {
-    const w = wByTid[tid] || 0, stack = _p1Stacks[tid] || 0;
-    if (w > 0 && stack > 0) T = Math.min(T, stack / w);
+  for (const tid in cells) {
+    const arr = cells[tid], stack = _p1Stacks[tid] || 0, w = perDayByTid[tid] || 0;
+    if (!stack) { arr.forEach(c => { c.fac.amt[tid] = null; }); continue; }
+    const total = (haveWeights && w > 0) ? Math.min(stack, days * w) : stack;  // fallback: whole stack
+    let shares = arr.map(c => c.share), ssum = shares.reduce((a, b) => a + (b || 0), 0);
+    if (ssum <= 0) { shares = arr.map(() => 1 / arr.length); ssum = 1; }
+    arr.forEach((c, i) => { c.fac.amt[tid] = Math.max(0, Math.floor(total * shares[i] / ssum)); });
   }
-  if (!isFinite(T)) T = 0;
-  const capDays = (_planMeta.refillHours > 0) ? _planMeta.refillHours / 24 : (30000 * count / (sumW * _P1_VOL_M3));
-  const days = Math.min(T, capDays);
-
-  for (const tid in byP1) {
-    const els = byP1[tid], w = wByTid[tid] || 0, stack = _p1Stacks[tid] || 0;
-    if (!stack || !w) { blank(els); continue; }
-    fill(els, Math.min(stack, days * w));         // column total = days × daily need, never above stock
-  }
+  _renderRefillTables();
   _updateRefillDays();
 }
 
