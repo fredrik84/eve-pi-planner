@@ -1212,22 +1212,26 @@ def dashboard(pp_session: str = Cookie(default=None)):
         for a in agg.values():
             a["value"] = round(a["amount"] * prices.get(a["type_id"], 0.0), 2)
         top_pi = max(agg.values(), key=lambda a: (a["tier"], a["value"]))
+    # Total market value of FINISHED product sitting in launchpads right now (haul & sell value),
+    # distinct from run value (what the current P1 inputs will still produce).
+    pads_value = round(sum((it.get("amount", 0) or 0) * prices.get(it["type_id"], 0.0) for it in pad_all), 2)
 
     # Colony warnings, grouped PER CHARACTER and counted (so a fleet of expiring extractors is one
     # "12 extractions expiring" line, not 12 rows). Stored scan-time kinds + a live expiry check.
     now = _time.time()
+    EXPIRING_WINDOW = 3 * 3600                     # 3h — short enough that 1-day cycles don't always trip
     by_char: dict[str, dict[str, list]] = {}      # char -> kind -> [planet labels]
+    expiring: dict[str, int] = {}                 # char -> count (compacted into one global line)
     for (r, prods, inputs, pads) in parsed:
         ch = r["ch"] or "?"
         loc = (r["system"] or "?") + (f" P{r['pn']}" if r["pn"] is not None else "")
         kinds = list(_json.loads(r["issues"] or "[]"))
         ss = _json.loads(r["sim_state"] or "null")
         exp = ss.get("expiry") if isinstance(ss, dict) else None
-        if exp:
-            if exp < now:
-                kinds.append("expired")
-            elif exp - now < 86400:
-                kinds.append("expiring")
+        if exp and exp < now:
+            kinds.append("expired")
+        elif exp and exp - now < EXPIRING_WINDOW:
+            expiring[ch] = expiring.get(ch, 0) + 1
         for k in kinds:
             by_char.setdefault(ch, {}).setdefault(k, []).append(loc)
 
@@ -1236,7 +1240,6 @@ def dashboard(pp_session: str = Cookie(default=None)):
         "ext_unrouted": ("high", "extractor not routed", "extractors not routed"),
         "fac_unfed":    ("high", "factory has no input route", "factories with no input route"),
         "fac_output":   ("high", "factory output not routed", "factory outputs not routed"),
-        "expiring":     ("warn", "extraction expiring within 24h", "extractions expiring within 24h"),
         "full":         ("warn", "launchpad/storage near full", "launchpads/storage near full"),
     }
     issues = []
@@ -1253,6 +1256,13 @@ def dashboard(pp_session: str = Cookie(default=None)):
         issues.append({"char": ch, "severity": "high" if any(i["severity"] == "high" for i in items) else "warn", "items": items})
     issues.sort(key=lambda c: 0 if c["severity"] == "high" else 1)
 
+    # All "expiring soon" extractors collapse into ONE line (these come in fleets and just need a cycle).
+    if expiring:
+        total = sum(expiring.values())
+        parts = ", ".join(f"{c} ×{n}" for c, n in sorted(expiring.items(), key=lambda x: -x[1]))
+        issues.append({"char": "Extractions expiring soon", "severity": "warn",
+                       "items": [{"severity": "warn", "msg": f"{total} extractor{'s' if total != 1 else ''} expiring within 3h — {parts}"}]})
+
     return {
         "logged_in": True,
         "factories": factories,
@@ -1260,6 +1270,7 @@ def dashboard(pp_session: str = Cookie(default=None)):
         "totals": {
             "factory_count": len(factories),
             "runtime_hours": round(soonest_h, 1) if soonest_h is not None else None,
+            "pads_value": pads_value,
             "current_run_value": round(total_run_value, 2),
             "value_per_day": round(total_value_per_day, 2),
         },

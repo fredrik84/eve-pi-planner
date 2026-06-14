@@ -148,11 +148,12 @@ async function onDashboardTabOpen() {
   }
 }
 
-// Pull FRESH colony data from ESI (re-scan every character), then repaint — so a just-filled
-// launchpad / new routes / expiry show up. (Plain re-read of stored data would change nothing.)
-async function refreshDashboard(btn) {
+// Global rescan (header button): pull FRESH colony data from ESI for every character, then
+// repaint the data-driven views — so a just-filled launchpad / new routes / expiry show up.
+// (A plain re-read of stored data would change nothing.)
+async function rescanAll(btn) {
   const ids = (_ppCharsData || []).filter(c => !c.is_dummy && c.character_id > 0).map(c => c.character_id);
-  if (!ids.length) { await onDashboardTabOpen(); return; }
+  const orig = btn ? btn.textContent : '';
   if (btn) btn.disabled = true;
   let failed = 0;
   for (let i = 0; i < ids.length; i++) {
@@ -160,8 +161,10 @@ async function refreshDashboard(btn) {
     try { const r = await fetch(`/api/characters/${ids[i]}/refresh-planets`, { method: 'POST' }); if (!r.ok) failed++; }
     catch (e) { failed++; }
   }
-  if (typeof loadCharacters === 'function') await loadCharacters();   // refresh program lengths etc.
-  await onDashboardTabOpen();                                          // repaints with the new data
+  if (typeof loadCharacters === 'function') await loadCharacters();   // refresh _ppCharsData + header
+  if (typeof onDashboardTabOpen === 'function') await onDashboardTabOpen();
+  if (typeof renderAnalysis === 'function' && _analyzeSnaps.length) renderAnalysis();
+  if (btn) { btn.disabled = false; btn.textContent = orig || 'Rescan'; }
   if (failed) alert(`${failed} of ${ids.length} character${ids.length !== 1 ? 's' : ''} could not be rescanned — usually an expired ESI token (red dot in Characters).`);
 }
 
@@ -181,10 +184,9 @@ function renderDashboard(data) {
   const runtime = (t.runtime_hours != null) ? _fmtHours(t.runtime_hours) : '—';
   const tiles = [
     _dashTile(runtime, 'Runtime left (soonest)'),
-    _dashTile(_fmtIsk(t.current_run_value || 0), 'Current run value'),
+    _dashTile(_fmtIsk(t.pads_value || 0), top ? `In pads now · top ${_esc(top.name)}` : 'In pads now'),
+    _dashTile(_fmtIsk(t.current_run_value || 0), 'Run value (from current inputs)'),
     _dashTile(_fmtIsk(t.value_per_day || 0), 'Value / day'),
-    _dashTile(top ? _fmtIsk(top.value || 0) : '—',
-              top ? `Top PI: ${_esc(top.name)} ×${(top.amount || 0).toLocaleString()}` : 'Top PI in launchpads'),
   ].join('');
   const rows = facs.length ? facs.map(f => {
     const cls = f.fill_pct >= 50 ? 'an-bar-ok' : f.fill_pct >= 20 ? 'an-bar-warn' : 'an-bar-bad';
@@ -210,9 +212,7 @@ function renderDashboard(data) {
     </section>` : '';
   el.innerHTML = issuesHtml + `
     <section class="pp-card">
-      <div class="pp-card-title">Overview <span class="pp-card-hint">— your PI at a glance</span>
-        <button class="pp-add-btn" onclick="refreshDashboard(this)" title="Pull fresh colony data from ESI">Rescan colonies</button>
-      </div>
+      <div class="pp-card-title">Overview <span class="pp-card-hint">— your PI at a glance · Rescan in the top bar pulls fresh data</span></div>
       <div class="pp-card-body"><div class="an-stats">${tiles}</div></div>
     </section>
     <section class="pp-card">
@@ -262,7 +262,8 @@ function renderHeaderSession(loggedIn, chars, sessionCharId) {
   const name = char ? char.name : 'Unknown';
   // Admin access is the sidebar "Admin" item now (no duplicate header button).
   el.innerHTML =
-    `<button class="header-bug-btn" onclick="openBugModal()">Report bug</button>`
+    `<button class="header-bug-btn" onclick="rescanAll(this)" title="Re-scan every character's colonies from ESI">Rescan</button>`
+    + `<button class="header-bug-btn" onclick="openBugModal()">Report bug</button>`
     + `<span class="header-session">${name} · <a href="/auth/logout" class="header-logout">Log out</a></span>`;
   const navTab = document.getElementById('adminNavTab');
   if (navTab) navTab.style.display = _isAdmin ? '' : 'none';
