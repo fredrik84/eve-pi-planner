@@ -2347,13 +2347,19 @@ function renderAnalysis() {
   const leftover = surplus.filter(s => spareLeft[s.t] >= 1).map(s => ({ name: s.name, spare: spareLeft[s.t] }));
   const movedTotal = moves.length;
 
+  const _moveSide = (cls, tag, loc, mat, note) =>
+    `<div class="an-move-side ${cls}"><span class="an-move-tag">${tag}</span>`
+    + (loc ? `<span class="an-move-loc">${loc}</span>` : '')
+    + `<span class="an-move-mat">${_esc(mat)}</span><span class="an-sug-note">${note}</span></div>`;
   const _moveLi = (m) => {
     const c = m.colony;
-    const where = c.system ? `${_esc(c.system)}${c.planet_num != null ? ' P' + c.planet_num : ''}` : 'a planet';
-    const target = m.dest
-      ? ` → set up <b>${_esc(m.to)}</b> at <b>${_esc(m.dest.system)} P${m.dest.planet_num}</b> <span class="an-sug-note">(${_esc(m.dest.planet_type)}, richness ${m.dest.richness})</span>`
-      : ` → redeploy that slot to <b>${_esc(m.to)}</b>`;
-    return `<li>Free <b>${_esc(c.char)}</b>'s <b>${_esc(m.fromName)}</b> colony at <b>${where}</b> <span class="an-sug-note">(${Math.round(c.perDay).toLocaleString()}/day)</span>${target}</li>`;
+    const fromLoc = c.system ? `${_esc(c.system)}${c.planet_num != null ? ' P' + c.planet_num : ''}` : '';
+    const rm = _moveSide('an-move-rm', 'tear down', fromLoc, m.fromName, `${Math.round(c.perDay).toLocaleString()}/day`);
+    const add = m.dest
+      ? _moveSide('an-move-add', 'build', `${_esc(m.dest.system)} P${m.dest.planet_num}`, m.to, `${_esc(m.dest.planet_type)} · ${m.dest.richness}`)
+      : _moveSide('an-move-add', 'build', '', m.to, 'on a free planet');
+    return `<li class="an-move"><div class="an-move-char">${_esc(c.char)}</div>`
+      + `<div class="an-move-pair">${rm}<div class="an-move-arrow">→</div>${add}</div></li>`;
   };
 
   // Over-producing every input? The surplus could feed MORE factories instead of being trimmed.

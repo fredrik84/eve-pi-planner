@@ -1637,3 +1637,19 @@ a.plan-action-btn { text-decoration: none; display: inline-block; }
 .an-builtfrom summary { cursor: pointer; color: #8fb4d6; }
 .an-builtfrom ul { margin: 6px 0 0; padding-left: 18px; columns: 2; }
 .an-builtfrom li { margin: 2px 0; }
+
+/* Rebalance moves as scannable cards (character → tear down | build) */
+.an-suggest-move ul { list-style: none; padding-left: 0; margin: 0; }
+.an-move { background: #161b28; border: 1px solid #2a2f40; border-radius: 6px; padding: 8px 10px; margin: 6px 0; }
+.an-move-char { font-weight: 700; color: #fff; font-size: 13px; margin-bottom: 6px; }
+.an-move-pair { display: flex; align-items: stretch; gap: 8px; flex-wrap: wrap; }
+.an-move-side { flex: 1 1 200px; display: flex; flex-direction: column; gap: 1px; padding: 6px 9px; border-radius: 5px; border-left: 3px solid; }
+.an-move-rm  { background: #1f1416; border-left-color: #ef6b78; }
+.an-move-add { background: #10211a; border-left-color: #46d18a; }
+.an-move-tag { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; }
+.an-move-rm .an-move-tag  { color: #ef9aa2; }
+.an-move-add .an-move-tag { color: #6fd6a0; }
+.an-move-loc { color: #fff; font-weight: 700; font-size: 13px; }
+.an-move-mat { color: #c8cdd8; font-size: 12px; }
+.an-move-arrow { align-self: center; color: #5a6478; font-size: 18px; flex: 0 0 auto; }
+@media (max-width: 560px) { .an-move-arrow { transform: rotate(90deg); align-self: flex-start; } }
