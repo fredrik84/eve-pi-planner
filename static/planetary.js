@@ -2243,10 +2243,13 @@ function renderAnalysis() {
   rows.forEach(r => { const s = r.have - r.need; if (s > 0) { surUnits += s; surIsk += s * (priceOf[r.t] || 0); } });
   const totalNeed = rows.reduce((a, r) => a + r.need, 0);
   if (surUnits > 0.02 * totalNeed) {
-    const val = surIsk > 0
-      ? `${Math.round(surUnits).toLocaleString()} <span class="an-of">≈${_fmtIsk(surIsk)} ISK</span>`
-      : Math.round(surUnits).toLocaleString();
-    stats += stat(val, 'P1/day over-extracted · the factories can’t use it', 'an-warn');
+    // Express the surplus P1 as end-product-equivalents (surplus ÷ P1-per-product), so it has a
+    // reference: "≈75 SHPC/day of P1 you extract but can't turn into product (wrong mix)".
+    const p1PerProduct = snap.products_per_day ? totalNeed / snap.products_per_day : 0;
+    const surProduct = p1PerProduct ? Math.round(surUnits / p1PerProduct) : 0;
+    const lead = surProduct >= 1 ? `≈${surProduct.toLocaleString()}` : `${Math.round(surUnits).toLocaleString()} P1`;
+    const iskpart = surIsk > 0 ? ` · ≈${_fmtIsk(surIsk)} ISK` : '';
+    stats += stat(lead, `${_esc(unit)}/day of P1 over-extracted${iskpart}`, 'an-warn');
   }
   stats += `</div>`;
 
