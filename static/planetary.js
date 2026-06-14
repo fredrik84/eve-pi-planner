@@ -2673,7 +2673,7 @@ function _currentProgramDays() {
 // buffer it, so it drops slower) — against the factory-demand line. Where the average crosses
 // demand is when, if you don't reseat, the factories start falling behind.
 function _extDecayGraphSvg(headroom, L0, safe, edge) {
-  const W = 480, H = 180, ml = 38, mr = 12, mt = 12, mb = 24, XMAX = _EXT_MAX_DAYS;
+  const W = 420, H = 132, ml = 30, mr = 10, mt = 10, mb = 18, XMAX = _EXT_MAX_DAYS;
   const x0 = ml, x1 = W - mr, y0 = mt, y1 = H - mb;
   const sx = d => x0 + (d / XMAX) * (x1 - x0);
   const sy = v => y0 + (1 - Math.max(0, Math.min(1, v))) * (y1 - y0);
