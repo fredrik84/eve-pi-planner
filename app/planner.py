@@ -1174,6 +1174,7 @@ def dashboard(pp_session: str = Cookie(default=None)):
     factories = []
     total_run_value = total_value_per_day = 0.0
     soonest_h = None
+    produced_by_tid: dict[int, float] = {}     # product made since checkpoint (projected up)
     for (r, prods, inputs, pads) in parsed:
         if r["is_ext"] or not prods:
             continue
@@ -1191,14 +1192,21 @@ def dashboard(pp_session: str = Cookie(default=None)):
         elapsed_h = max(0.0, (now - anchor) / 3600.0) if anchor else 0.0
         snap = {it["type_id"]: it.get("amount", 0) for it in inputs}
         onhand = {pid: max(0.0, snap.get(pid, 0) - fph24 * frac / 24.0 * elapsed_h) for pid, frac in fracs.items()}
-        tte_h = None                                      # hours until the binding input runs out
+        tte_h = tte_snap_h = None                         # runtime now / runtime from the checkpoint
         for pid, frac in fracs.items():
             need_per_h = fph24 * frac / 24.0
             if need_per_h <= 0:
                 continue
             h = onhand.get(pid, 0) / need_per_h
             tte_h = h if tte_h is None else min(tte_h, h)
+            hs = snap.get(pid, 0) / need_per_h
+            tte_snap_h = hs if tte_snap_h is None else min(tte_snap_h, hs)
         tte_h = tte_h or 0.0
+        # Product made since the checkpoint = rate × hours the factory was actually fed (it stops
+        # once an input runs out). Feeds the rising "In pads now" so value flows inputs → product.
+        prod_h = min(elapsed_h, tte_snap_h) if tte_snap_h is not None else 0.0
+        if prod_h > 0:
+            produced_by_tid[tid] = produced_by_tid.get(tid, 0.0) + fph24 * prod_h / 24.0
         in_m3 = sum(onhand.get(pid, 0) * VOL for pid in fracs)
         makeable = min((onhand.get(pid, 0) / frac for pid, frac in fracs.items()), default=0)
         price = prices.get(tid, 0.0)
@@ -1217,21 +1225,23 @@ def dashboard(pp_session: str = Cookie(default=None)):
         })
     factories.sort(key=lambda x: x["hours_left"])         # soonest to empty first
 
-    # Most valuable highest-tier PI sitting in launchpads (finished product to haul out).
-    top_pi = None
-    if pad_all:
-        agg = {}
-        for it in pad_all:
-            t = it["type_id"]
-            a = agg.setdefault(t, {"type_id": t, "name": it.get("name") or f"#{t}",
-                                   "tier": types.get(t, {}).get("pi_tier") or 0, "amount": 0})
-            a["amount"] += it.get("amount", 0)
-        for a in agg.values():
-            a["value"] = round(a["amount"] * prices.get(a["type_id"], 0.0), 2)
-        top_pi = max(agg.values(), key=lambda a: (a["tier"], a["value"]))
-    # Total market value of FINISHED product sitting in launchpads right now (haul & sell value),
-    # distinct from run value (what the current P1 inputs will still produce).
-    pads_value = round(sum((it.get("amount", 0) or 0) * prices.get(it["type_id"], 0.0) for it in pad_all), 2)
+    # Finished product in launchpads right now = the scan snapshot PLUS what's been produced since
+    # the checkpoint (projected up, mirroring the inputs draining down). Gives "In pads now" + top PI.
+    agg = {}
+    for it in pad_all:
+        t = it["type_id"]
+        a = agg.setdefault(t, {"type_id": t, "name": it.get("name") or f"#{t}",
+                               "tier": types.get(t, {}).get("pi_tier") or 0, "amount": 0.0})
+        a["amount"] += it.get("amount", 0) or 0
+    for t, units in produced_by_tid.items():
+        a = agg.setdefault(t, {"type_id": t, "name": types.get(t, {}).get("name") or f"#{t}",
+                               "tier": types.get(t, {}).get("pi_tier") or 0, "amount": 0.0})
+        a["amount"] += units
+    for a in agg.values():
+        a["amount"] = round(a["amount"])
+        a["value"] = round(a["amount"] * prices.get(a["type_id"], 0.0), 2)
+    top_pi = max(agg.values(), key=lambda a: (a["tier"], a["value"])) if agg else None
+    pads_value = round(sum(a["value"] for a in agg.values()), 2)
 
     # Colony warnings, grouped PER CHARACTER and counted (so a fleet of expiring extractors is one
     # "12 extractions expiring" line, not 12 rows). Stored scan-time kinds + a live expiry check.
