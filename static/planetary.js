@@ -2668,6 +2668,32 @@ function _currentProgramDays() {
 // where the decaying average drops below demand, output starts falling.
 //   headroom = supply ÷ demand at the CURRENT program (the analysis "fed at" ratio, uncapped)
 //   curDays  = detected current program length (anchor for the decay)
+// Line graph of extractor yield decline vs how long heads run before reseating. Two curves —
+// raw per-cycle yield (drops fast) and the running average the factories actually see (the pads
+// buffer it, so it drops slower) — against the factory-demand line. Where the average crosses
+// demand is when, if you don't reseat, the factories start falling behind.
+function _extDecayGraphSvg(headroom, L0, safe, edge) {
+  const W = 480, H = 180, ml = 38, mr = 12, mt = 12, mb = 24, XMAX = _EXT_MAX_DAYS;
+  const x0 = ml, x1 = W - mr, y0 = mt, y1 = H - mb;
+  const sx = d => x0 + (d / XMAX) * (x1 - x0);
+  const sy = v => y0 + (1 - Math.max(0, Math.min(1, v))) * (y1 - y0);
+  const demand = Math.max(0, Math.min(1, _extEff(L0) / headroom));
+  const path = fn => { let p = ''; for (let d = 0; d <= XMAX; d += 0.5) p += (d === 0 ? 'M' : 'L') + sx(d).toFixed(1) + ',' + sy(fn(d)).toFixed(1) + ' '; return p.trim(); };
+  const grid = [0, 0.5, 1].map(v => `<line x1="${x0}" y1="${sy(v).toFixed(1)}" x2="${x1}" y2="${sy(v).toFixed(1)}" class="g-grid"/><text x="${x0 - 4}" y="${(sy(v) + 3).toFixed(1)}" class="g-ylab">${v * 100 | 0}%</text>`).join('');
+  const xlab = [0, 7, 14].map(d => `<text x="${sx(d).toFixed(1)}" y="${H - 8}" class="g-xlab">${d}d</text>`).join('');
+  const zone = edge < XMAX ? `<rect x="${sx(edge).toFixed(1)}" y="${y0}" width="${(x1 - sx(edge)).toFixed(1)}" height="${(y1 - y0).toFixed(1)}" class="g-bad"/>` : '';
+  const mk = (d, cls, lbl) => (d >= 1 && d <= XMAX) ? `<line x1="${sx(d).toFixed(1)}" y1="${y0}" x2="${sx(d).toFixed(1)}" y2="${y1}" class="${cls}"/><text x="${sx(d).toFixed(1)}" y="${(y1 - 3).toFixed(1)}" class="g-mklab">${lbl}</text>` : '';
+  return `<svg class="ext-graph" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">
+      ${zone}${grid}${xlab}
+      <line x1="${x0}" y1="${sy(demand).toFixed(1)}" x2="${x1}" y2="${sy(demand).toFixed(1)}" class="g-demand"/>
+      <text x="${x1}" y="${(sy(demand) - 3).toFixed(1)}" class="g-dlab" text-anchor="end">factory demand</text>
+      <path d="${path(d => 1 / (1 + _EXT_DECAY_K * d * 24))}" class="g-inst"/>
+      <path d="${path(d => _extEff(d))}" class="g-avg"/>
+      ${mk(L0, 'g-now', 'now')}${mk(safe, 'g-pick', 'pick')}
+    </svg>
+    <div class="ext-graph-leg"><span><i class="g-k g-k-avg"></i>average fed to factories</span><span><i class="g-k g-k-inst"></i>raw per-cycle yield</span><span><i class="g-k g-k-demand"></i>demand</span></div>`;
+}
+
 function _extRuntimeAdviceHtml(headroom, curDays) {
   if (!_extRt || !_extRt.ppd || !headroom) return '';
   const unit = _extRt.unit || 'units', ppd = Math.round(_extRt.ppd).toLocaleString();
@@ -2703,6 +2729,7 @@ function _extRuntimeAdviceHtml(headroom, curDays) {
   return `<div class="an-suggest an-suggest-add">
       <div class="an-suggest-h">Extraction runtime</div>
       <div class="an-rt-pick">${pick} — set programs to <b>${_progDuration(safe)}</b>; output holds at <b>${ppd}</b> ${_esc(unit)}/day.</div>
+      ${_extDecayGraphSvg(headroom, L0, safe, edge)}
       <table class="an-rt-tbl">
         <thead><tr><th>Run</th><th>Program</th><th class="an-rt-num">Buffer</th><th></th></tr></thead>
         <tbody>${rows}</tbody>
