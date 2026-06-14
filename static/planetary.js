@@ -2585,21 +2585,34 @@ function renderAnalysis() {
   if (!moves.length && !newBuilds.length && !addFactories)
     suggest = `<div class="an-suggest an-suggest-free"><div class="an-suggest-h">Balanced — every material this plan needs is covered${leftover.length ? ', with a little to spare' : ''}.</div></div>`;
 
-  // Extraction-runtime helper: turn a target runtime into the in-game program duration (whole
-  // days − 30 min for an easy same-time restart) + a projection. Suggested days come from the
-  // factory refill cadence — run extractors to match how often you'll reload the factories.
+  // Extraction-runtime advice (decay-aware recommendation, not a calculator) — see below.
   _extRt = { ppd: Number(snap.products_per_day) || 0, ipd: Number(snap.isk_per_day) || 0, unit };
-  const rtN = Math.max(1, Math.min(14, refillDays ? Math.floor(refillDays) : 1));
-  const rtCard = _extRuntimeCardHtml(rtN);
+  const rtAdvice = _extRuntimeAdviceHtml();
 
-  el.innerHTML = head + stats + rtCard + proj
+  el.innerHTML = head + stats + proj
     + `<div class="an-legend">Producing (left) vs the plan’s daily need (right) per P1. A full green bar = factories stay fed; a short red bar is the bottleneck.</div>`
     + `<div class="an-bars">${barRows}</div>`
-    + suggest;
+    + suggest + rtAdvice;
 }
 
-// ── Extraction-runtime helper (cadence + projection) ──────────────────────────
+// ── Extraction-runtime helper (decay-aware recommendation) ────────────────────
 let _extRt = null;   // {ppd, ipd, unit} of the currently-shown plan, for live recompute
+// EVE extractors front-load yield and decay over the program (per-cycle ≈ peak/(1+k·t)). The
+// AVERAGE over a program of length L hours = peak · ln(1+k·L)/(k·L). k is the decay factor —
+// this is an ESTIMATE (validate against your in-game ECU graph); it's one constant to retune.
+const _EXT_DECAY_K = 0.012;   // per hour
+const _EXT_MAX_DAYS = 14;     // EVE extraction-program cap
+
+function _extEff(days) {       // average yield as a fraction of peak over a `days`-long program
+  const h = Math.max(0, days) * 24;
+  return h > 0 ? Math.log(1 + _EXT_DECAY_K * h) / (_EXT_DECAY_K * h) : 1;
+}
+function _extRtLine(n) {       // production figures for an n-day program (peak rate = plan rate)
+  const eff = _extEff(n), ppd = _extRt ? _extRt.ppd : 0;
+  const avgDay = ppd * eff;
+  return { eff, pct: Math.round(eff * 100), avgDay, total: avgDay * n,
+           isk: (_extRt && _extRt.ipd) ? _extRt.ipd * eff * n : 0 };
+}
 
 // Whole-day-multiple program duration minus 30 min headroom (so it ends a touch earlier each
 // day for a same-time restart). N days → "1d 23h 30m" (N=2), "23h 30m" (N=1).
@@ -2609,35 +2622,26 @@ function _progDuration(days) {
   const d = Math.floor(total / 1440), h = Math.floor((total % 1440) / 60), m = total % 60;
   return [d ? d + 'd' : '', h ? h + 'h' : '', m ? m + 'm' : ''].filter(Boolean).join(' ');
 }
-function _extRtProjection(n) {
+// Solid advice (not a calculator): how long to run extractors. EVE programs cap at 14 days and
+// the average yield drops the longer you run, so recommend the max (fewest restarts) plus a
+// higher-average alternative, each with its expected average production.
+function _extRuntimeAdviceHtml() {
   if (!_extRt || !_extRt.ppd) return '';
-  const prods = Math.round(_extRt.ppd * n);
-  const iskPart = _extRt.ipd ? ` · ≈ <b>${_fmtIsk(_extRt.ipd * n)}</b> ISK` : '';
-  return `Over ~${n} day${n === 1 ? '' : 's'}: ≈ <b>${prods.toLocaleString()}</b> ${_esc(_extRt.unit || 'units')}${iskPart} once the chain fills.`;
-}
-function _extRuntimeCardHtml(n) {
-  return `<div class="an-rt">
-      <div class="an-rt-h">Extraction runtime
-        <span class="an-rt-sub">— run programs in whole-day multiples minus 30 min, so they end a little earlier each day for an easy same-time restart</span></div>
-      <div class="an-rt-row">
-        <label class="an-rt-field">Run for <input id="extRtDays" type="number" min="1" max="14" value="${n}" oninput="_extRuntimeRecalc()" onwheel="_extRtWheel(event, this)"> day(s)</label>
-        <div class="an-rt-dur">Set each extractor program to <b id="extRtDur">${_progDuration(n)}</b></div>
-      </div>
-      <div class="an-rt-proj" id="extRtProj">${_extRtProjection(n)}</div>
+  const unit = _extRt.unit || 'units', fmt = v => Math.round(v).toLocaleString();
+  const maxL = _extRtLine(_EXT_MAX_DAYS);
+  let alt = 1;                                  // longest run still keeping ≥ ~60% of peak
+  for (let d = 1; d <= _EXT_MAX_DAYS; d++) if (_extEff(d) >= 0.6) alt = d;
+  const altL = _extRtLine(alt);
+  const items = [
+    `<li><b>Fewest restarts:</b> run the <b>${_EXT_MAX_DAYS}-day</b> max — set each program to <b>${_progDuration(_EXT_MAX_DAYS)}</b> (whole days − 30 min, so they end at the same time for an easy restart). Expect ≈ <b>${fmt(maxL.avgDay)}</b> ${_esc(unit)}/day on average (~${maxL.pct}% of peak — extractors slow down over a long program).</li>`,
+  ];
+  if (alt < _EXT_MAX_DAYS)
+    items.push(`<li><b>Higher average:</b> a <b>${alt}-day</b> run (<b>${_progDuration(alt)}</b>) keeps ~${altL.pct}% of peak — ≈ <b>${fmt(altL.avgDay)}</b> ${_esc(unit)}/day — if you'd rather keep throughput up than minimise logins.</li>`);
+  return `<div class="an-suggest an-suggest-add">
+      <div class="an-suggest-h">Extraction runtime</div>
+      <ul>${items.join('')}</ul>
+      <div class="an-sug-note">Decay is an estimate — compare against your in-game ECU graph.</div>
     </div>`;
-}
-function _extRuntimeRecalc() {
-  const inp = document.getElementById('extRtDays');
-  if (!inp) return;
-  const n = Math.max(1, Math.min(14, parseInt(inp.value, 10) || 1));
-  const dur = document.getElementById('extRtDur'); if (dur) dur.textContent = _progDuration(n);
-  const pr = document.getElementById('extRtProj'); if (pr) pr.innerHTML = _extRtProjection(n);
-}
-// Scroll to change the runtime (same as the overprod / layout number fields).
-function _extRtWheel(e, input) {
-  e.preventDefault();
-  input.value = Math.max(1, Math.min(14, (parseInt(input.value, 10) || 1) + (e.deltaY < 0 ? 1 : -1)));
-  _extRuntimeRecalc();
 }
 
 function _buildPlanSnapshot(data) {

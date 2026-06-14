@@ -1601,19 +1601,3 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .dist-view-btn:hover { background: #1c1630; color: #a888c8; }
 .dist-view-btn.on { background: #2a1c40; color: #c89ce8; }
 
-/* ── Extraction-runtime helper (Setup Analysis) ─────────────────────────────── */
-.an-rt { margin: 4px 0 16px; border-radius: 8px; padding: 12px 14px; border: 1px solid #1f5a6b; background: #10202a; }
-.an-rt-h { font-size: 13px; font-weight: 700; color: #4ab8d6; margin-bottom: 9px; }
-.an-rt-sub { font-size: 12px; font-weight: 400; color: #8b93a6; }
-.an-rt-row { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
-.an-rt-field { font-size: 13px; color: #c8cdd8; }
-.an-rt-field input { width: 56px; background: #11151f; border: 1px solid #2a3142; color: #e6e9ef;
-  border-radius: 5px; padding: 4px 6px; font-size: 14px; text-align: center; margin: 0 4px; outline: none;
-  -moz-appearance: textfield; appearance: textfield; }
-.an-rt-field input::-webkit-inner-spin-button,
-.an-rt-field input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
-.an-rt-field input:focus { border-color: #4ab8d6; }
-.an-rt-dur { font-size: 14px; color: #c8cdd8; }
-.an-rt-dur b { color: #6fe0c0; font-family: 'Consolas', monospace; font-size: 16px; }
-.an-rt-proj { font-size: 13px; color: #8b93a6; margin-top: 9px; }
-.an-rt-proj b { color: #c8d2e6; }
