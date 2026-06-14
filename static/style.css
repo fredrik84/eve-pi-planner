@@ -1660,8 +1660,8 @@ a.plan-action-btn { text-decoration: none; display: inline-block; }
 .an-row-click { cursor: pointer; border-radius: 5px; }
 .an-row-click:hover { background: rgba(90,160,230,0.05); }
 .an-row-caret { color: #5a6478; font-size: 9px; }
-.an-row-detail { margin: 1px 0 8px 14px; padding: 6px 12px; background: #11151f; border-left: 2px solid #2a3142; border-radius: 4px;
-  display: grid; grid-template-columns: auto auto auto; justify-content: start; gap: 2px 20px; font-size: 12px; }
+.an-row-detail { margin: 1px 0 8px 14px; padding: 8px 14px; background: #11151f; border-left: 2px solid #2a3142; border-radius: 4px;
+  display: grid; grid-template-columns: minmax(160px, auto) minmax(110px, auto) auto; justify-content: start; gap: 4px 40px; font-size: 12px; }
 .an-pd-row { display: contents; }
 .an-pd-char { color: #c8cdd8; white-space: nowrap; }
 .an-pd-loc { color: #8b93a6; white-space: nowrap; }
