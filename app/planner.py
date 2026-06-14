@@ -1213,22 +1213,45 @@ def dashboard(pp_session: str = Cookie(default=None)):
             a["value"] = round(a["amount"] * prices.get(a["type_id"], 0.0), 2)
         top_pi = max(agg.values(), key=lambda a: (a["tier"], a["value"]))
 
-    # Colony warnings: stored structural/storage issues from the last scan, plus a live check on
-    # the extraction program's expiry. Only things that are actually amiss — empty when all good.
+    # Colony warnings, grouped PER CHARACTER and counted (so a fleet of expiring extractors is one
+    # "12 extractions expiring" line, not 12 rows). Stored scan-time kinds + a live expiry check.
     now = _time.time()
-    issues = []
+    by_char: dict[str, dict[str, list]] = {}      # char -> kind -> [planet labels]
     for (r, prods, inputs, pads) in parsed:
-        loc = f"{r['ch']} · {r['system'] or '?'}" + (f" P{r['pn']}" if r["pn"] is not None else "")
-        for msg in _json.loads(r["issues"] or "[]"):
-            issues.append({"loc": loc, "msg": msg, "severity": "warn" if "full" in msg else "high"})
+        ch = r["ch"] or "?"
+        loc = (r["system"] or "?") + (f" P{r['pn']}" if r["pn"] is not None else "")
+        kinds = list(_json.loads(r["issues"] or "[]"))
         ss = _json.loads(r["sim_state"] or "null")
         exp = ss.get("expiry") if isinstance(ss, dict) else None
         if exp:
             if exp < now:
-                issues.append({"loc": loc, "msg": "Extraction program expired — not extracting", "severity": "high"})
+                kinds.append("expired")
             elif exp - now < 86400:
-                issues.append({"loc": loc, "msg": f"Extraction expires in {round((exp - now) / 3600)}h", "severity": "warn"})
-    issues.sort(key=lambda x: 0 if x["severity"] == "high" else 1)
+                kinds.append("expiring")
+        for k in kinds:
+            by_char.setdefault(ch, {}).setdefault(k, []).append(loc)
+
+    KIND = {                                       # severity, singular, plural
+        "expired":      ("high", "extraction program expired", "extraction programs expired"),
+        "ext_unrouted": ("high", "extractor not routed", "extractors not routed"),
+        "fac_unfed":    ("high", "factory has no input route", "factories with no input route"),
+        "fac_output":   ("high", "factory output not routed", "factory outputs not routed"),
+        "expiring":     ("warn", "extraction expiring within 24h", "extractions expiring within 24h"),
+        "full":         ("warn", "launchpad/storage near full", "launchpads/storage near full"),
+    }
+    issues = []
+    for ch in sorted(by_char):
+        items = []
+        for k, locs in by_char[ch].items():
+            sev, sg, pl = KIND.get(k, ("warn", k, k))
+            n = len(locs)
+            msg = f"{n} {sg if n == 1 else pl}"
+            if n <= 4:
+                msg += f" ({', '.join(locs)})"
+            items.append({"severity": sev, "msg": msg})
+        items.sort(key=lambda x: 0 if x["severity"] == "high" else 1)
+        issues.append({"char": ch, "severity": "high" if any(i["severity"] == "high" for i in items) else "warn", "items": items})
+    issues.sort(key=lambda c: 0 if c["severity"] == "high" else 1)
 
     return {
         "logged_in": True,

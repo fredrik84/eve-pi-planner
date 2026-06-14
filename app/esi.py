@@ -253,33 +253,32 @@ def _struct_cap(name: str):
     return None
 
 def _detect_colony_issues(detail: dict, types: dict) -> list[str]:
+    """Return a deduped list of issue KIND codes for this colony (the dashboard turns them into
+    per-character, counted warnings). Kinds: ext_unrouted, fac_unfed, fac_output, full."""
     pins = detail.get("pins") or []
     routes = detail.get("routes") or []
     src = {r.get("source_pin_id") for r in routes}
     dst = {r.get("destination_pin_id") for r in routes}
-    out, seen = [], set()
-    def add(msg):
-        if msg not in seen:
-            seen.add(msg); out.append(msg)
+    kinds = set()
     for pin in pins:
         pid = pin.get("pin_id")
         tname = (types.get(pin.get("type_id"), {}) or {}).get("name") or ""
         if pin.get("extractor_details"):
             if pid not in src:
-                add("Extractor head not routed — extracted P0 goes nowhere")
+                kinds.add("ext_unrouted")
         elif pin.get("schematic_id") or pin.get("factory_details"):
             if pid not in dst:
-                add("Factory has no input route — it can't run")
+                kinds.add("fac_unfed")
             elif pid not in src:
-                add("Factory output not routed — product is stuck")
+                kinds.add("fac_output")
         cap = _struct_cap(tname)
         if cap:
-            label, capacity = cap
+            _, capacity = cap
             vol = sum((c.get("amount", 0) or 0) * _TIER_VOL.get((types.get(c.get("type_id"), {}) or {}).get("pi_tier") or 0, 0.01)
                       for c in (pin.get("contents") or []))
             if capacity and vol >= 0.9 * capacity:
-                add(f"{label} ~{round(vol / capacity * 100)}% full — haul it before it backs up")
-    return out
+                kinds.add("full")
+    return list(kinds)
 
 
 def _fetch_planets(character_id: int, access_token: str) -> None:

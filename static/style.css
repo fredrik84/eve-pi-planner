@@ -1589,15 +1589,16 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .dash-fac-val  { font-family: 'Consolas', monospace; font-size: 12px; color: #e8c060; text-align: right; justify-self: end; }
 .dash-fac-empty { color: #a07040 !important; font-style: italic; }
 
-/* Dashboard "Needs attention" — warnings only, shown when something's amiss. */
-.dash-issues .pp-card-body { display: flex; flex-direction: column; gap: 6px; }
-.dash-issue { display: flex; gap: 12px; align-items: baseline; padding: 6px 10px;
-  border-radius: 5px; border-left: 3px solid; font-size: 13px; }
+/* Dashboard "Needs attention" — warnings only, grouped per character. */
+.dash-issues .pp-card-body { display: flex; flex-direction: column; gap: 8px; }
+.dash-issue { padding: 8px 11px; border-radius: 5px; border-left: 3px solid; }
 .dash-issue-high { background: #1f1416; border-left-color: #ef6b78; }
 .dash-issue-warn { background: #1f1c12; border-left-color: #e0b84a; }
-.dash-issue-loc { color: #fff; font-weight: 600; flex: 0 0 auto; min-width: 150px; }
-.dash-issue-msg { color: #c8cdd8; }
-@media (max-width: 560px) { .dash-issue { flex-direction: column; gap: 1px; } }
+.dash-issue-char { color: #fff; font-weight: 700; font-size: 13px; margin-bottom: 3px; }
+.dash-issue-items { margin: 0; padding-left: 18px; }
+.dash-issue-items li { font-size: 13px; margin: 2px 0; }
+.dash-il-high { color: #ef9aa2; }
+.dash-il-warn { color: #e0c07a; }
 
 /* ── Extraction-runtime advice (Setup Analysis) ─────────────────────────────── */
 .an-rt-pick { font-size: 13px; color: #c8d2e6; margin: 2px 0 9px; }
