@@ -1645,7 +1645,7 @@ a.plan-action-btn { text-decoration: none; display: inline-block; }
 .an-move-tag { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; }
 .an-move-rm .an-move-tag  { color: #ef9aa2; }
 .an-move-add .an-move-tag { color: #6fd6a0; }
-.an-move-loc { color: #fff; font-weight: 700; font-size: 13px; }
+.an-move-loc { color: #fff; font-weight: 700; font-size: 13px; display: inline-flex; align-items: center; }
 .an-move-mat { color: #c8cdd8; font-size: 12px; }
 .an-move-arrow { align-self: center; color: #5a6478; font-size: 18px; flex: 0 0 auto; }
 @media (max-width: 560px) { .an-move-arrow { transform: rotate(90deg); align-self: flex-start; } }
@@ -1666,4 +1666,4 @@ a.plan-action-btn { text-decoration: none; display: inline-block; }
 .an-pd-loc { color: #8b93a6; white-space: nowrap; }
 .an-pd-val { color: #e6e9ef; text-align: right; }
 .an-pd-empty { color: #8b93a6; font-size: 12px; }
-.an-cc-tag { display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: .03em; color: #cfe2f2; background: #1f3142; border: 1px solid #2f4a63; border-radius: 4px; padding: 1px 6px; margin-left: 6px; vertical-align: middle; white-space: nowrap; }
+.an-cc-tag { font-size: 10px; font-weight: 700; letter-spacing: .03em; color: #cfe2f2; background: #1f3142; border: 1px solid #2f4a63; border-radius: 4px; padding: 1px 6px; margin-left: 6px; white-space: nowrap; }
