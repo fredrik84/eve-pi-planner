@@ -450,6 +450,7 @@ function renderFactorySplit(plan) {
 function switchTab(name) {
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
   document.querySelectorAll('.tab-panel').forEach(p => p.style.display = p.id === 'tab-' + name ? '' : 'none');
+  if (name === 'dashboard' && typeof onDashboardTabOpen === 'function') onDashboardTabOpen();
   if (name === 'planner' && typeof onPlannerTabOpen === 'function') onPlannerTabOpen();
   if (name === 'planetary' && typeof onPlanetaryTabOpen === 'function') onPlanetaryTabOpen();
   if (name === 'planetdb' && typeof onPlanetDbTabOpen === 'function') onPlanetDbTabOpen();
@@ -480,6 +481,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const saved = localStorage.getItem('activeTab');
   if (hasPlanetaryShare) switchTab('planetary');
   else if (saved) switchTab(saved);
+  // Load session/character state on every page load so the header + Dashboard nav populate
+  // (and a logged-in player with no remembered tab lands on the Dashboard).
+  if (typeof loadCharacters === 'function') loadCharacters();
 });
 
 document.getElementById('inv').addEventListener('keydown', e => {

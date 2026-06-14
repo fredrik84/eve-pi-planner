@@ -163,7 +163,7 @@ def ensure_char_tables():
         con.execute("ALTER TABLE pp_char_planets ADD COLUMN planet_num INTEGER")
     except Exception:
         pass
-    for _col in ("products TEXT", "pad_contents TEXT", "sim_state TEXT"):  # JSON: outputs, stored items, sim state
+    for _col in ("products TEXT", "pad_contents TEXT", "pad_inputs TEXT", "sim_state TEXT"):  # JSON: outputs, finished-product pads, imported-input pads, sim state
         try:
             con.execute(f"ALTER TABLE pp_char_planets ADD COLUMN {_col}")
         except Exception:
@@ -335,10 +335,19 @@ def _fetch_planets(character_id: int, access_token: str) -> None:
                                 if (_types.get(t, {}).get("pi_tier") or 0) == _max_tier}
                 products_json = _json.dumps(
                     [{"type_id": t, "name": n} for t, n in products.items()]) if products else None
-                # Keep only the highest-tier items in the pads — that's the finished product
-                # sitting in the launchpad to haul out; lower tiers are inputs/intermediates.
+                # Split launchpad contents: the highest tier is the finished product to haul out
+                # (pad_contents); the lower tiers are the imported inputs still buffered, which the
+                # dashboard uses to show how full / how long each factory will keep running.
+                pad_inputs_json = None
                 if pads:
                     _pad_max = max((_types.get(t, {}).get("pi_tier") or 0) for t in pads)
+                    _inputs = {t: a for t, a in pads.items()
+                               if (_types.get(t, {}).get("pi_tier") or 0) < _pad_max}
+                    if _inputs:
+                        pad_inputs_json = _json.dumps(sorted(
+                            [{"type_id": t, "name": _types.get(t, {}).get("name") or f"#{t}",
+                              "amount": a, "tier": _types.get(t, {}).get("pi_tier") or 0}
+                             for t, a in _inputs.items()], key=lambda x: -x["amount"]))
                     pads = {t: a for t, a in pads.items()
                             if (_types.get(t, {}).get("pi_tier") or 0) == _pad_max}
                 pads_json = _json.dumps(sorted(
@@ -375,11 +384,11 @@ def _fetch_planets(character_id: int, access_token: str) -> None:
                     INSERT OR REPLACE INTO pp_char_planets
                         (character_id, planet_id, planet_type, solar_system_id,
                          upgrade_level, num_pins, is_extractor, p0_type_id, p0_name,
-                         planet_num, products, pad_contents, sim_state)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                         planet_num, products, pad_contents, pad_inputs, sim_state)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """, (character_id, planet_id, planet_type, solar_system_id,
                       upgrade_level, num_pins, is_extractor, p0_type_id, p0_name,
-                      planet_num, products_json, pads_json, sim_state_json))
+                      planet_num, products_json, pads_json, pad_inputs_json, sim_state_json))
 
         con.commit()
         con.close()

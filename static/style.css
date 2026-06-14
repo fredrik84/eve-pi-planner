@@ -1567,3 +1567,24 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .an-pd-val { color: #e6e9ef; text-align: right; white-space: nowrap; }
 .an-pd-empty { color: #8b93a6; grid-column: 1 / -1; }
 .an-cc-tag { font-size: 10px; font-weight: 700; letter-spacing: .03em; color: #cfe2f2; background: #1f3142; border: 1px solid #2f4a63; border-radius: 4px; padding: 1px 6px; margin-left: 6px; white-space: nowrap; }
+
+/* ── Dashboard ──────────────────────────────────────────────────────────────── */
+.dash-fac-head, .dash-fac-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 1.5fr) minmax(120px, 1fr) 52px 84px 110px;
+  align-items: center; gap: 14px;
+}
+.dash-fac-head { font-size: 9.5px; text-transform: uppercase; letter-spacing: .5px; color: #3a4460;
+  padding: 0 4px 6px; border-bottom: 1px solid #1a1f2c; }
+.dash-fac-head span { text-align: right; }
+.dash-fac-head span:first-child { text-align: left; }
+.dash-fac-row { padding: 8px 4px; border-bottom: 1px solid #161a26; }
+.dash-fac-row:last-child { border-bottom: none; }
+.dash-fac-row:hover { background: rgba(90,160,230,0.04); border-radius: 4px; }
+.dash-fac-id { min-width: 0; }
+.dash-fac-name { font-size: 13px; color: #c8d2e6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dash-fac-loc { font-size: 11px; color: #56607a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dash-fac-pct  { font-family: 'Consolas', monospace; font-size: 13px; font-weight: 600; color: #c8d2e6; text-align: right; justify-self: end; }
+.dash-fac-time { font-family: 'Consolas', monospace; font-size: 12px; color: #8a94ac; text-align: right; justify-self: end; }
+.dash-fac-val  { font-family: 'Consolas', monospace; font-size: 12px; color: #e8c060; text-align: right; justify-self: end; }
+.dash-fac-empty { color: #a07040 !important; font-style: italic; }

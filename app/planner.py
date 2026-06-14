@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from app.sde import load_pi_data, get_connection
 from app.planetary import PLANET_P0_MAP, _NAME_TO_COL
 from app.market import fetch_prices
-from app.esi import require_context, session_context_id
+from app.esi import require_context, session_context_id, ensure_char_tables
 
 router = APIRouter()
 
@@ -1119,6 +1119,109 @@ def my_setup_plan(pp_session: str = Cookie(default=None)):
     # Highest-tier / biggest operations first.
     plans.sort(key=lambda x: (-x["tier"], -x["factories_count"]))
     return {"plans": plans}
+
+
+@router.get("/api/dashboard")
+def dashboard(pp_session: str = Cookie(default=None)):
+    """Logged-in overview: per-factory launchpad fill %, time-to-empty and current-run value,
+    plus fleet totals (soonest refill, current-run value, value/day) and the most valuable
+    highest-tier PI sitting in launchpads. Strictly scoped to the session's own context."""
+    context_id = session_context_id(pp_session)
+    if not context_id:
+        return {"logged_in": False, "factories": [], "totals": {}, "top_pi": None}
+    ensure_char_tables()        # make sure the pad_inputs column exists before we read it
+    pi = load_pi_data()
+    types = pi["types"]
+    con = get_connection()
+    rows = con.execute("""
+        SELECT c.character_name AS ch, cp.planet_num AS pn, s.name AS system,
+               cp.is_extractor AS is_ext, cp.products AS products,
+               cp.pad_inputs AS pad_inputs, cp.pad_contents AS pad_contents
+        FROM pp_char_planets cp
+        JOIN pp_characters c ON c.character_id = cp.character_id
+        LEFT JOIN solar_systems s ON s.system_id = cp.solar_system_id
+        WHERE c.context_id = ? AND COALESCE(c.is_dummy, 0) = 0
+    """, (context_id,)).fetchall()
+    con.close()
+
+    VOL = 0.19           # m³ per PI unit (verified in-game)
+    LP_M3 = 30000.0      # 3 launchpads of P1 input buffer
+
+    parsed, price_tids, pad_all = [], set(), []
+    for r in rows:
+        prods = _json.loads(r["products"] or "[]")
+        inputs = _json.loads(r["pad_inputs"] or "[]")
+        pads = _json.loads(r["pad_contents"] or "[]")
+        parsed.append((r, prods, inputs, pads))
+        for p in prods:
+            price_tids.add(p["type_id"])
+        for it in pads:
+            pad_all.append(it); price_tids.add(it["type_id"])
+    prices = fetch_prices(list(price_tids)) if price_tids else {}
+
+    factories = []
+    total_run_value = total_value_per_day = 0.0
+    soonest_h = None
+    for (r, prods, inputs, pads) in parsed:
+        if r["is_ext"] or not prods:
+            continue
+        prod = prods[0]
+        tid = prod["type_id"]
+        fracs = _compute_p1_fracs(tid, pi)
+        if not fracs:
+            continue
+        fph24 = _effective_fph(tid, pi) * 24.0            # products/day for one factory
+        onhand = {it["type_id"]: it.get("amount", 0) for it in inputs}
+        tte_h = None                                      # hours until the binding input runs out
+        for pid, frac in fracs.items():
+            need_per_h = fph24 * frac / 24.0
+            if need_per_h <= 0:
+                continue
+            h = onhand.get(pid, 0) / need_per_h
+            tte_h = h if tte_h is None else min(tte_h, h)
+        tte_h = tte_h or 0.0
+        in_m3 = sum(onhand.get(pid, 0) * VOL for pid in fracs)
+        makeable = min((onhand.get(pid, 0) / frac for pid, frac in fracs.items()), default=0)
+        price = prices.get(tid, 0.0)
+        run_value = makeable * price
+        vpd = fph24 * price
+        total_run_value += run_value
+        total_value_per_day += vpd
+        soonest_h = tte_h if soonest_h is None else min(soonest_h, tte_h)
+        loc = f"{r['ch']} · {r['system'] or '?'}" + (f" P{r['pn']}" if r["pn"] is not None else "")
+        factories.append({
+            "loc": loc, "product": prod.get("name") or f"#{tid}",
+            "tier": types.get(tid, {}).get("pi_tier") or 0,
+            "fill_pct": round(min(100.0, in_m3 / LP_M3 * 100.0), 1),
+            "hours_left": round(tte_h, 1),
+            "run_value": round(run_value, 2), "value_per_day": round(vpd, 2),
+        })
+    factories.sort(key=lambda x: x["hours_left"])         # soonest to empty first
+
+    # Most valuable highest-tier PI sitting in launchpads (finished product to haul out).
+    top_pi = None
+    if pad_all:
+        agg = {}
+        for it in pad_all:
+            t = it["type_id"]
+            a = agg.setdefault(t, {"type_id": t, "name": it.get("name") or f"#{t}",
+                                   "tier": types.get(t, {}).get("pi_tier") or 0, "amount": 0})
+            a["amount"] += it.get("amount", 0)
+        for a in agg.values():
+            a["value"] = round(a["amount"] * prices.get(a["type_id"], 0.0), 2)
+        top_pi = max(agg.values(), key=lambda a: (a["tier"], a["value"]))
+
+    return {
+        "logged_in": True,
+        "factories": factories,
+        "totals": {
+            "factory_count": len(factories),
+            "runtime_hours": round(soonest_h, 1) if soonest_h is not None else None,
+            "current_run_value": round(total_run_value, 2),
+            "value_per_day": round(total_value_per_day, 2),
+        },
+        "top_pi": top_pi,
+    }
 
 
 # ── Planning algorithm helpers ────────────────────────────────────────────────

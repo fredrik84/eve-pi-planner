@@ -133,6 +133,71 @@ function onPlanetDbTabOpen() {
   loadPlanets();
 }
 
+// ── Dashboard (logged-in overview) ────────────────────────────────────────────
+let _dashLanded = false;   // auto-land on the dashboard once per page load (logged-in, no saved tab)
+
+async function onDashboardTabOpen() {
+  const el = document.getElementById('dashboardContent');
+  if (el && !el.dataset.loaded) el.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Loading overview…</div>';
+  try {
+    const data = await (await fetch('/api/dashboard')).json();
+    renderDashboard(data);
+    if (el) el.dataset.loaded = '1';
+  } catch (e) {
+    if (el) el.innerHTML = '<section class="pp-card"><div class="pp-card-body"><div class="pp-empty">Failed to load dashboard.</div></div></section>';
+  }
+}
+
+function refreshDashboard(btn) { if (btn) btn.textContent = '…'; onDashboardTabOpen(); }
+
+function _dashTile(val, lbl, cls) {
+  return `<div class="an-stat"><div class="an-stat-val${cls ? ' ' + cls : ''}">${val}</div><div class="an-stat-lbl">${lbl}</div></div>`;
+}
+
+function renderDashboard(data) {
+  const el = document.getElementById('dashboardContent');
+  if (!el) return;
+  if (!data || !data.logged_in) {
+    el.innerHTML = `<section class="pp-card"><div class="pp-card-title">Dashboard</div>
+      <div class="pp-card-body"><div class="pp-empty">Log in with ESI (Characters tab) to see your PI overview.</div></div></section>`;
+    return;
+  }
+  const t = data.totals || {}, facs = data.factories || [], top = data.top_pi;
+  const runtime = (t.runtime_hours != null) ? _fmtHours(t.runtime_hours) : '—';
+  const tiles = [
+    _dashTile(runtime, 'Runtime left (soonest)'),
+    _dashTile(_fmtIsk(t.current_run_value || 0), 'Current run value'),
+    _dashTile(_fmtIsk(t.value_per_day || 0), 'Value / day'),
+    _dashTile(top ? _fmtIsk(top.value || 0) : '—',
+              top ? `Top PI: ${_esc(top.name)} ×${(top.amount || 0).toLocaleString()}` : 'Top PI in launchpads'),
+  ].join('');
+  const rows = facs.length ? facs.map(f => {
+    const cls = f.fill_pct >= 50 ? 'an-bar-ok' : f.fill_pct >= 20 ? 'an-bar-warn' : 'an-bar-bad';
+    const empty = !f.hours_left;
+    return `<div class="dash-fac-row">
+      <div class="dash-fac-id"><div class="dash-fac-name">${_esc(f.product)}</div><div class="dash-fac-loc">${_esc(f.loc)}</div></div>
+      <div class="an-bar-track"><div class="an-bar-fill ${cls}" style="width:${Math.max(2, f.fill_pct)}%"></div></div>
+      <div class="dash-fac-pct">${f.fill_pct}%</div>
+      <div class="dash-fac-time${empty ? ' dash-fac-empty' : ''}">${empty ? 'empty' : _fmtHours(f.hours_left)}</div>
+      <div class="dash-fac-val">${f.run_value ? _fmtIsk(f.run_value) : '–'}</div>
+    </div>`;
+  }).join('') : '<div class="pp-empty">No factory planets found. Deploy factories, then refresh on the Characters tab.</div>';
+  el.innerHTML = `
+    <section class="pp-card">
+      <div class="pp-card-title">Overview <span class="pp-card-hint">— your PI at a glance</span>
+        <button class="pp-add-btn" onclick="refreshDashboard(this)" title="Re-read your factories">Refresh</button>
+      </div>
+      <div class="pp-card-body"><div class="an-stats">${tiles}</div></div>
+    </section>
+    <section class="pp-card">
+      <div class="pp-card-title">Factories <span class="pp-card-hint">— launchpad fill &amp; time to empty (${facs.length})</span></div>
+      <div class="pp-card-body">
+        ${facs.length ? '<div class="dash-fac-head"><span>Factory</span><span>Fill</span><span>%</span><span>Runs out</span><span>Run value</span></div>' : ''}
+        <div class="dash-fac-list">${rows}</div>
+      </div>
+    </section>`;
+}
+
 // ── ESI / Characters ──────────────────────────────────────────────────────────
 
 let _esiConfigured = false;
@@ -163,6 +228,8 @@ function renderHeaderSession(loggedIn, chars, sessionCharId) {
     el.innerHTML = _esiConfigured
       ? `<button class="header-login-btn" onclick="esiLogin()">Login</button>`
       : '';
+    const dt = document.getElementById('dashboardNavTab');
+    if (dt) dt.style.display = 'none';
     return;
   }
   const char = chars.find(c => c.character_id === sessionCharId);
@@ -173,6 +240,14 @@ function renderHeaderSession(loggedIn, chars, sessionCharId) {
     + `<span class="header-session">${name} · <a href="/auth/logout" class="header-logout">Log out</a></span>`;
   const navTab = document.getElementById('adminNavTab');
   if (navTab) navTab.style.display = _isAdmin ? '' : 'none';
+  const dashTab = document.getElementById('dashboardNavTab');
+  if (dashTab) dashTab.style.display = '';   // the overview is for logged-in players
+  // First load for a logged-in player with no remembered tab → land on the dashboard.
+  if (!_dashLanded) {
+    _dashLanded = true;
+    const isShare = window.__SHARE_ID__ || /^\/s\//.test(location.pathname);
+    if (!localStorage.getItem('activeTab') && !isShare && typeof switchTab === 'function') switchTab('dashboard');
+  }
   const mb = document.getElementById('manageBasketsBtn');
   if (mb) mb.style.display = loggedIn ? '' : 'none';   // user-owned baskets need a login
 }
@@ -2763,16 +2838,16 @@ function updateP1Distribution() {
   document.querySelectorAll('.p1-amt').forEach(el => { (byP1[el.dataset.p1] = byP1[el.dataset.p1] || []).push(el); });
 
   const blank = els => els.forEach(el => { el.textContent = '–'; el.classList.remove('p1-amt-set'); });
-  // Spread a column total across factory cells by share, integer remainder largest-fraction first.
+  // Spread a column total across factory cells by share, FLOORED so identical factories all show
+  // the same number (drop one stack evenly, no odd cell to hunt for). The few leftover units from
+  // flooring just stay in your hangar.
   const fill = (els, total) => {
     const shares = els.map(el => parseFloat(el.dataset.share) || (1 / els.length));
     const ssum = shares.reduce((a, b) => a + b, 0) || 1;
-    const raw = shares.map(s => total * s / ssum);
-    const amt = raw.map(Math.floor);
-    const rem = Math.round(total) - amt.reduce((a, b) => a + b, 0);
-    raw.map((v, i) => [v - amt[i], i]).sort((a, b) => b[0] - a[0])
-       .slice(0, Math.max(0, rem)).forEach(([, i]) => amt[i]++);
-    els.forEach((el, i) => { el.textContent = Math.max(0, amt[i]).toLocaleString(); el.classList.add('p1-amt-set'); });
+    els.forEach((el, i) => {
+      el.textContent = Math.max(0, Math.floor(total * shares[i] / ssum)).toLocaleString();
+      el.classList.add('p1-amt-set');
+    });
   };
 
   if (!items.length || sumW <= 0) {               // older snapshot w/o consumption → plain split by share
