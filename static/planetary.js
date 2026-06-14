@@ -2402,7 +2402,7 @@ function renderAnalysis() {
     const fromLoc = c.system ? `${_esc(c.system)}${c.planet_num != null ? ' P' + c.planet_num : ''}` : '';
     const rm = _moveSide('an-move-rm', 'tear down', fromLoc, _matHtml(m.fromName, m.fromT), `${Math.round(c.perDay).toLocaleString()}/day`);
     const add = m.dest
-      ? _moveSide('an-move-add', 'build', `${_esc(m.dest.system)} P${m.dest.planet_num}`, _matHtml(m.to, m.toT), `${_esc(m.dest.planet_type)} Command Center · ${m.dest.richness}%`)
+      ? _moveSide('an-move-add', 'build', `${_esc(m.dest.system)} P${m.dest.planet_num} <span class="an-cc-tag">${_esc(m.dest.planet_type)} CC</span>`, _matHtml(m.to, m.toT), `richness ${m.dest.richness}%`)
       : _moveSide('an-move-add', 'build', '', _matHtml(m.to, m.toT), 'on a free planet');
     return `<li class="an-move"><div class="an-move-char">${_esc(c.char)}</div>`
       + `<div class="an-move-pair">${rm}<div class="an-move-arrow">→</div>${add}</div></li>`;
@@ -2472,9 +2472,10 @@ function renderAnalysis() {
     }
 
     const cardLi = cards.map(c => {
-      const note = `pack a ${_esc(c.dest.planet_type)} Command Center${facSystems.has(c.dest.system) ? ' · with your factories' : ''}`;
+      const loc = `${_esc(c.dest.system)} P${c.dest.planet_num} <span class="an-cc-tag">${_esc(c.dest.planet_type)} CC</span>`;
+      const note = facSystems.has(c.dest.system) ? 'with your factories' : '';
       const build = _moveSide(c.teardown ? 'an-move-add' : 'an-move-add an-move-solo',
-                              c.teardown ? 'build factory' : 'build new', `${_esc(c.dest.system)} P${c.dest.planet_num}`, facLabel, note);
+                              c.teardown ? 'build factory' : 'build new', loc, facLabel, note);
       if (c.teardown) {
         const t = c.teardown;
         const rm = _moveSide('an-move-rm', 'free a slot', `${_esc(t.system)} P${t.planet_num}`, _matHtml(t.mat, t.t), `${_esc(t.ptype)} extractor`);
