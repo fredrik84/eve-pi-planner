@@ -1589,6 +1589,24 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .dash-fac-val  { font-family: 'Consolas', monospace; font-size: 12px; color: #e8c060; text-align: right; justify-self: end; }
 .dash-fac-empty { color: #a07040 !important; font-style: italic; }
 
+/* ── Extraction-runtime advice (Setup Analysis) ─────────────────────────────── */
+.an-rt-pick { font-size: 13px; color: #c8d2e6; margin: 2px 0 9px; }
+.an-rt-pick b { color: #6fe0c0; }
+.an-rt-tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
+.an-rt-tbl th { font-size: 9.5px; text-transform: uppercase; letter-spacing: .4px; color: #5a6b80;
+  text-align: left; padding: 3px 8px; border-bottom: 1px solid #1d3340; }
+.an-rt-tbl td { padding: 4px 8px; border-bottom: 1px solid #14222b; color: #b4c0d0; }
+.an-rt-tbl tr:last-child td { border-bottom: none; }
+.an-rt-num { text-align: right; }
+.an-rt-tbl td.an-rt-ok, .an-rt-tbl td.an-rt-warn, .an-rt-tbl td.an-rt-bad { text-align: right; font-family: 'Consolas', monospace; font-weight: 600; }
+.an-rt-mono { font-family: 'Consolas', monospace; color: #c8d2e6; }
+.an-rt-tag { color: #8b93a6; font-size: 11px; }
+.an-rt-row-rec td { background: #12302a; }
+.an-rt-row-rec .an-rt-tag { color: #6fe0c0; font-weight: 600; }
+.an-rt-ok { color: #46d18a; }
+.an-rt-warn { color: #e0b84a; }
+.an-rt-bad { color: #ef6b78; }
+
 /* ── Refill controls (character filter + summary toggle) ─────────────────────── */
 .dist-controls { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 10px; }
 .dist-ctl { font-size: 12px; color: #8a94ac; display: inline-flex; align-items: center; gap: 6px; }

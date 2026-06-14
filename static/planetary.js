@@ -2645,25 +2645,42 @@ function _extRuntimeAdviceHtml(headroom, curDays) {
   if (!_extRt || !_extRt.ppd || !headroom) return '';
   const unit = _extRt.unit || 'units', ppd = Math.round(_extRt.ppd).toLocaleString();
   const L0 = (curDays && curDays > 0) ? Math.round(curDays) : 2;
-  const effL0 = _extEff(L0);
-  const maxDayFor = m => { let b = 0; for (let d = 1; d <= _EXT_MAX_DAYS; d++) if (headroom * _extEff(d) / effL0 >= m) b = d; return b; };
-  const safe = maxDayFor(1.10), edge = maxDayFor(1.0);   // 10% buffer vs right at demand
-  let body;
-  if (safe >= 1) {
-    body = `<li>Run extractors for <b>${safe} day${safe === 1 ? '' : 's'}</b> — set each program to <b>${_progDuration(safe)}</b> (whole days − 30 min, so they all end together for one batched restart). Extraction stays ~10%+ over demand, so output holds at <b>${ppd}</b> ${_esc(unit)}/day with the fewest pickups.</li>`;
-    let ctx = (curDays && curDays > 0) ? `You're running ~${L0}-day programs now.` : `(Assumed a ~${L0}-day current program — rescan colonies to detect yours.)`;
-    if (curDays && curDays > 0) ctx += safe > L0 ? ` You can safely stretch to ${safe}.`
-                                  : safe < L0 ? ` That's <b>shorter</b> — your buffer doesn't cover ${L0} days with margin.`
-                                  : ` That's about where you are.`;
-    if (edge > safe) ctx += ` Pushing past ~${edge}d leaves no buffer and risks starving the factories.`;
-    body += `<li>${ctx}</li>`;
-  } else {
-    body = `<li>On ${(curDays && curDays > 0) ? `your ~${L0}-day programs` : `a ~${L0}-day program`}, extraction only covers about <b>${Math.round(headroom * 100)}%</b> of demand — at or under a safe margin. <b>Don't extend the program</b>; shorten it or add extraction (see above) before the factories fall behind.</li>`;
+  const detected = !!(curDays && curDays > 0), e0 = _extEff(L0);
+  const buffer = d => headroom * _extEff(d) / e0 - 1;     // extraction over demand at a d-day program
+  const maxDayFor = m => { let b = 0; for (let d = 1; d <= _EXT_MAX_DAYS; d++) if (buffer(d) >= m) b = d; return b; };
+  const safe = maxDayFor(0.10), edge = maxDayFor(0.0);    // ≥10% buffer vs right at demand
+
+  if (safe < 1) {   // can't keep any buffer even at the shortest program → under-supplied
+    return `<div class="an-suggest an-suggest-fix">
+        <div class="an-suggest-h">Extraction runtime</div>
+        <div class="an-rt-pick">Extraction covers only <b>${Math.round(headroom * 100)}%</b> of demand on ${detected ? `your ~${L0}-day` : `a ~${L0}-day`} program — under a safe margin.</div>
+        <ul><li>Shorten the program or add extraction (see above) before the factories fall behind.</li></ul>
+      </div>`;
   }
+
+  const start = Math.max(1, Math.min(L0, safe) - 1);
+  const end = Math.min(_EXT_MAX_DAYS, Math.max(edge + 1, safe + 2));
+  let rows = '';
+  for (let d = start; d <= end; d++) {
+    const b = buffer(d);
+    const pct = (b >= 0 ? '+' : '−') + Math.round(Math.abs(b) * 100) + '%';
+    const cls = b >= 0.10 ? 'an-rt-ok' : b >= 0 ? 'an-rt-warn' : 'an-rt-bad';
+    const tags = [];
+    if (d === safe) tags.push('recommended');
+    if (detected && d === L0) tags.push('now');
+    rows += `<tr class="${d === safe ? 'an-rt-row-rec' : ''}">`
+      + `<td>${d}d</td><td class="an-rt-mono">${_progDuration(d)}</td>`
+      + `<td class="${cls}">${pct}</td><td class="an-rt-tag">${tags.join(' · ')}</td></tr>`;
+  }
+  const pick = (detected && safe < L0) ? `Shorten to <b>${safe} day${safe === 1 ? '' : 's'}</b>` : `Run <b>${safe} day${safe === 1 ? '' : 's'}</b>`;
   return `<div class="an-suggest an-suggest-add">
       <div class="an-suggest-h">Extraction runtime</div>
-      <ul>${body}</ul>
-      <div class="an-sug-note">Based on your measured headroom; extractor decay is an estimate — verify the first longer run against your in-game ECU.</div>
+      <div class="an-rt-pick">${pick} — set programs to <b>${_progDuration(safe)}</b>; output holds at <b>${ppd}</b> ${_esc(unit)}/day.</div>
+      <table class="an-rt-tbl">
+        <thead><tr><th>Run</th><th>Program</th><th class="an-rt-num">Buffer</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div class="an-sug-note">Buffer = how far the program's average extraction sits above factory demand (below 0 = factories starve).${detected ? '' : ' Current length assumed 2d — rescan to detect yours.'} Decay is an estimate — verify against your in-game ECU.</div>
     </div>`;
 }
 
