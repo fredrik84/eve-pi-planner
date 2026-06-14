@@ -1601,18 +1601,18 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .dash-il-warn { color: #e0c07a; }
 
 /* ── Extraction-runtime advice (Setup Analysis) ─────────────────────────────── */
-.ext-graph { display: block; width: 100%; max-width: 420px; height: auto; background: #0c161c; border: 1px solid #163040; border-radius: 6px; margin: 2px 0 6px; }
+.ext-graph { display: block; width: 100%; max-width: 600px; height: auto; background: #0c161c; border: 1px solid #163040; border-radius: 6px; margin: 10px 0 6px; }
 .ext-graph .g-grid { stroke: #18313f; stroke-width: 1; }
-.ext-graph .g-ylab { fill: #5a7080; font-size: 8px; text-anchor: end; }
-.ext-graph .g-xlab { fill: #5a7080; font-size: 8px; text-anchor: middle; }
-.ext-graph .g-avg { fill: none; stroke: #46d18a; stroke-width: 1.6; }
-.ext-graph .g-inst { fill: none; stroke: #5a8fb0; stroke-width: 1.3; stroke-dasharray: 4 3; opacity: .85; }
-.ext-graph .g-demand { stroke: #e0b84a; stroke-width: 1; stroke-dasharray: 5 3; }
-.ext-graph .g-dlab { fill: #e0b84a; font-size: 8px; }
+.ext-graph .g-ylab { fill: #5a7080; font-size: 10px; text-anchor: end; }
+.ext-graph .g-xlab { fill: #5a7080; font-size: 10px; text-anchor: middle; }
+.ext-graph .g-avg { fill: none; stroke: #46d18a; stroke-width: 2; }
+.ext-graph .g-inst { fill: none; stroke: #5a8fb0; stroke-width: 1.5; stroke-dasharray: 4 3; opacity: .85; }
+.ext-graph .g-demand { stroke: #e0b84a; stroke-width: 1.2; stroke-dasharray: 5 3; }
+.ext-graph .g-dlab { fill: #e0b84a; font-size: 10px; }
 .ext-graph .g-bad { fill: #ef6b78; opacity: .09; }
-.ext-graph .g-now { stroke: #6aa0e0; stroke-width: 1; stroke-dasharray: 2 2; }
-.ext-graph .g-pick { stroke: #46d18a; stroke-width: 1; }
-.ext-graph .g-mklab { fill: #8b93a6; font-size: 7.5px; text-anchor: middle; }
+.ext-graph .g-now { stroke: #6aa0e0; stroke-width: 1.2; stroke-dasharray: 2 2; }
+.ext-graph .g-pick { stroke: #46d18a; stroke-width: 1.2; }
+.ext-graph .g-mklab { fill: #8b93a6; font-size: 9px; text-anchor: middle; }
 .ext-graph-leg { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11px; color: #8b93a6; margin: 0 0 9px; }
 .ext-graph-leg i { display: inline-block; width: 12px; height: 3px; vertical-align: middle; margin-right: 5px; border-radius: 2px; }
 .ext-graph-leg .g-k-avg { background: #46d18a; }

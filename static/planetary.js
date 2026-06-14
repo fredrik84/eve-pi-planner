@@ -2673,7 +2673,7 @@ function _currentProgramDays() {
 // buffer it, so it drops slower) — against the factory-demand line. Where the average crosses
 // demand is when, if you don't reseat, the factories start falling behind.
 function _extDecayGraphSvg(headroom, L0, safe, edge) {
-  const W = 420, H = 132, ml = 30, mr = 10, mt = 10, mb = 18, XMAX = _EXT_MAX_DAYS;
+  const W = 600, H = 190, ml = 40, mr = 14, mt = 14, mb = 26, XMAX = _EXT_MAX_DAYS;
   const x0 = ml, x1 = W - mr, y0 = mt, y1 = H - mb;
   const sx = d => x0 + (d / XMAX) * (x1 - x0);
   const sy = v => y0 + (1 - Math.max(0, Math.min(1, v))) * (y1 - y0);
@@ -2729,11 +2729,11 @@ function _extRuntimeAdviceHtml(headroom, curDays) {
   return `<div class="an-suggest an-suggest-add">
       <div class="an-suggest-h">Extraction runtime</div>
       <div class="an-rt-pick">${pick} — set programs to <b>${_progDuration(safe)}</b>; output holds at <b>${ppd}</b> ${_esc(unit)}/day.</div>
-      ${_extDecayGraphSvg(headroom, L0, safe, edge)}
       <table class="an-rt-tbl">
         <thead><tr><th>Run</th><th>Program</th><th class="an-rt-num">Buffer</th><th></th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
+      ${_extDecayGraphSvg(headroom, L0, safe, edge)}
       <div class="an-sug-note">Buffer = how far the program's average extraction sits above factory demand (below 0 = factories starve).${detected ? '' : ' Current length assumed 2d — rescan to detect yours.'} Decay is an estimate — verify against your in-game ECU.</div>
     </div>`;
 }
