@@ -555,6 +555,7 @@ tr:hover td { background: #181d2a; }
   border-radius: 4px;
   font-size: 13px;
   overflow: hidden;
+  flex-shrink: 0;   /* don't let the flex column compress an open foldout (clips its planet rows) */
 }
 .pp-char-dummy { padding: 7px 10px; }
 .pp-char-header { display: flex; align-items: center; gap: 6px; }
