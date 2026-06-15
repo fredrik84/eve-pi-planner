@@ -2793,6 +2793,7 @@ function _burndownSection(rows) {
       + `<div class="an-levers-lead">Every material this plan needs is covered — no shortage to chase. (Reseating a depleting colony still extends runtime, but nothing here is short.)</div></div>`;
 
   const P0_PER_P1 = 150;   // basic-industry ratio: 3000 P0 → 20 P1 per cycle. Heads show P0, so target in P0.
+  const toP0h = p1day => Math.round(p1day * P0_PER_P1 / 24);   // P1/day → P0/hour (the ECU's extraction rate)
   const groups = short.map(r => {
     const prods = _producersOf(r.t);              // weakest first
     const shortBy = Math.max(0, Math.round(r.need - r.have));
@@ -2800,8 +2801,8 @@ function _burndownSection(rows) {
       return `<div class="an-bd-group"><div class="an-bd-group-h">${_esc(r.name)} <span class="an-bd-group-sub">short ${shortBy.toLocaleString()}/day · no colony makes it — add one (Redeploy)</span></div></div>`;
     const numP = prods.length;
     const targetP1 = r.need / numP;               // the average each producer must hit to cover demand
-    const targetP0 = Math.round(targetP1 * P0_PER_P1);
-    const groupAvgP0 = Math.round((r.have / numP) * P0_PER_P1);
+    const targetP0 = toP0h(targetP1);
+    const groupAvgP0 = toP0h(r.have / numP);
     // How many of the weakest must reach that average to close the gap (the rest already carry their
     // share). Walk from the worst, summing each one's lift-to-average, until it covers the shortfall.
     let acc = 0, nNeed = 0;
@@ -2816,7 +2817,7 @@ function _burndownSection(rows) {
     const worst = prods.slice(0, _RESEAT_PER_P1);
     const rowsHtml = worst.map(c => {
       const loc = c.system ? `${_esc(c.system)}${c.planet_num != null ? ' P' + c.planet_num : ''}` : '';
-      const p0now = Math.round(c.perDay * P0_PER_P1);
+      const p0now = toP0h(c.perDay);
       const short_i = c.perDay < targetP1;
       const tag = (c.n >= 2 && c.decline >= 0.10)
         ? `<span class="an-bd-prod-tag an-bd-down">▼ ${Math.round(c.decline * 100)}% off best — reseat recovers it</span>`
@@ -2824,14 +2825,14 @@ function _burndownSection(rows) {
                     : `<span class="an-bd-prod-tag an-bd-flat">no history yet</span>`);
       return `<div class="an-bd-prod${short_i ? '' : ' an-bd-prod-ok'}">
           <span class="an-bd-prod-loc">${_esc(c.char)}${loc ? ' · ' + loc : ''}</span>
-          <span class="an-bd-prod-val">${p0now.toLocaleString()}<span class="an-bd-unit"> P0/day</span></span>
+          <span class="an-bd-prod-val">${p0now.toLocaleString()}<span class="an-bd-unit"> P0/hr</span></span>
           ${tag}
         </div>`;
     }).join('');
     const more = prods.length > worst.length ? `<div class="an-bd-more">+ ${prods.length - worst.length} more producing this</div>` : '';
     return `<div class="an-bd-group">
         <div class="an-bd-group-h">${_esc(r.name)} <span class="an-bd-group-sub">${Math.round(r.ratio * 100)}% fed · short ${shortBy.toLocaleString()}/day</span></div>
-        <div class="an-bd-target">Reseat ${nLabel} to <b>~${targetP0.toLocaleString()} P0/day</b> each to clear it <span class="an-bd-target-now">(group avg ${groupAvgP0.toLocaleString()} P0/day now)</span></div>
+        <div class="an-bd-target">Reseat ${nLabel} to <b>~${targetP0.toLocaleString()} P0/hr</b> each to clear it <span class="an-bd-target-now">(group avg ${groupAvgP0.toLocaleString()} P0/hr now)</span></div>
         <div class="an-bd-prod-list">${rowsHtml}</div>${more}
       </div>`;
   }).join('');
