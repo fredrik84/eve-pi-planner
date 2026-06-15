@@ -1955,15 +1955,13 @@ function _fmtIsk(v) {
   return v >= 1e3 ? fmtIsk(v) : v.toLocaleString();
 }
 
-// Readable duration: 2+ days → just days (3d); 1–2 days → days + hours (1d 7h);
-// 12–24h → just hours (18h); under 12h → hours + minutes (1h 42m).
+// Readable duration, FLOORED so it never overstates a "time left" (1d → days + hours, 12–24h →
+// hours, under 12h → hours + minutes): 61.5h → "2d 13h", 18.x → "18h", 1.7h → "1h 42m".
 function _fmtHours(h) {
   if (!(h > 0)) return '0m';
-  if (h >= 47.5) return Math.round(h / 24) + 'd';
-  if (h >= 23.5) { const r = Math.round(h - 24); return r ? `1d ${r}h` : '1d'; }
-  if (h >= 12) { const r = Math.round(h); return r >= 24 ? '1d' : r + 'h'; }
-  const hr = Math.floor(h), m = Math.round((h - hr) * 60);
-  if (m >= 60) return (hr + 1) + 'h';
+  if (h >= 24) { const d = Math.floor(h / 24), hr = Math.floor(h % 24); return hr ? `${d}d ${hr}h` : `${d}d`; }
+  if (h >= 12) return Math.floor(h) + 'h';
+  const hr = Math.floor(h), m = Math.floor((h % 1) * 60);
   return hr === 0 ? `${m}m` : (m ? `${hr}h ${m}m` : `${hr}h`);
 }
 
