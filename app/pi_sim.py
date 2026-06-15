@@ -125,7 +125,12 @@ def colony_sim_state(detail: dict, pi_data: dict) -> dict | None:
                             "batch": ext_batch.get(p0, 0.0)})
     if not outputs or t0 <= 0:
         return None
-    return {"t0": t0, "expiry": expiry, "program_days": program_days, "outputs": outputs}
+    # install = when the current program started; peak_p0_day = install extraction headline (sum of
+    # all heads' qty_per_cycle / cycle_time × 86400). Used to log a per-program yield sample so the
+    # tool can show the MEASURED yield trend across reseats (a single snapshot can't).
+    peak_p0_day = sum(ext_rate.values()) * 86400.0
+    return {"t0": t0, "expiry": expiry, "install": install, "program_days": program_days,
+            "peak_p0_day": peak_p0_day, "outputs": outputs}
 
 
 def project(state: dict, now_ts: float | None = None) -> list[dict]:

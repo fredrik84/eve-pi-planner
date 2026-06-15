@@ -176,6 +176,22 @@ def ensure_char_tables():
         con.execute("ALTER TABLE pp_characters ADD COLUMN is_dummy INTEGER DEFAULT 0")
     except Exception:
         pass
+    # Rolling per-colony yield samples: ONE row per extraction program (deduped by install_ts),
+    # capped at _YIELD_KEEP per colony. Lets the analysis show the MEASURED install-yield trend
+    # across reseats (a colony's hotspots deplete, so successive programs drift down unless you move
+    # the heads). Bounded storage: ≤ _YIELD_KEEP rows × colonies × users.
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS pp_colony_yield (
+            character_id INTEGER NOT NULL,
+            planet_id    INTEGER NOT NULL,
+            install_ts   REAL    NOT NULL,
+            p0_type_id   INTEGER,
+            peak_day     REAL,
+            prog_days    REAL,
+            scanned_ts   REAL,
+            PRIMARY KEY (character_id, planet_id, install_ts)
+        )
+    """)
     con.execute("""
         CREATE TABLE IF NOT EXISTS pp_sessions (
             token        TEXT    PRIMARY KEY,
@@ -318,6 +334,37 @@ def _storage_summary(detail: dict, sim: dict | None, types: dict) -> dict | None
         fill_h = sum((o.get("rate", 0) or 0) * 3600.0 * _TIER_VOL.get(o.get("tier") or 0, 0.01)
                      for o in (sim.get("outputs") or []))
     return {"vol_m3": round(min(best["vol"], best["cap"]), 1), "cap_m3": best["cap"], "fill_m3_h": round(fill_h, 2)}
+
+
+_YIELD_KEEP = 8     # programs of yield history kept per colony (bounded storage)
+def _record_yield_sample(con, character_id: int, planet_id: int, sim: dict | None, scan_ts: float) -> None:
+    """Log this colony's install-yield for the CURRENT program (deduped by install_ts), then prune to
+    the last _YIELD_KEEP programs. One row per reseat/restart — the measured trend the burn-down uses."""
+    try:
+        if not sim:
+            return
+        install = sim.get("install")
+        peak = sim.get("peak_p0_day")
+        if not install or not peak:
+            return
+        p0 = None
+        for o in (sim.get("outputs") or []):
+            if (o.get("tier") or 0) == 0:    # pure P0 output identifies the extracted resource
+                p0 = o.get("type_id"); break
+        con.execute(
+            "INSERT OR REPLACE INTO pp_colony_yield "
+            "(character_id, planet_id, install_ts, p0_type_id, peak_day, prog_days, scanned_ts) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (character_id, planet_id, float(install), p0, float(peak),
+             sim.get("program_days"), scan_ts))
+        # prune older programs beyond the cap (keep the newest _YIELD_KEEP by install_ts)
+        con.execute(
+            "DELETE FROM pp_colony_yield WHERE character_id=? AND planet_id=? AND install_ts NOT IN "
+            "(SELECT install_ts FROM pp_colony_yield WHERE character_id=? AND planet_id=? "
+            " ORDER BY install_ts DESC LIMIT ?)",
+            (character_id, planet_id, character_id, planet_id, _YIELD_KEEP))
+    except Exception:
+        pass
 
 
 def _fetch_planets(character_id: int, access_token: str) -> None:
@@ -500,6 +547,9 @@ def _fetch_planets(character_id: int, access_token: str) -> None:
                 """, (character_id, planet_id, planet_type, solar_system_id,
                       upgrade_level, num_pins, is_extractor, p0_type_id, p0_name,
                       planet_num, products_json, pads_json, pad_inputs_json, sim_state_json, issues_json, _scan_ts, checkpoint_at, storage_json))
+
+                if is_extractor and _sim:      # log a per-program yield sample for the trend/burn-down
+                    _record_yield_sample(con, character_id, planet_id, _sim, _scan_ts)
 
         con.commit()
         con.close()
@@ -825,7 +875,7 @@ def list_characters(pp_session: str = Cookie(default=None)):
 
     try:
         planet_rows = con.execute("""
-            SELECT cp.character_id, cp.planet_type, cp.is_extractor, cp.p0_name, cp.upgrade_level,
+            SELECT cp.character_id, cp.planet_id, cp.planet_type, cp.is_extractor, cp.p0_name, cp.upgrade_level,
                    cp.planet_num, cp.num_pins, cp.products, cp.pad_contents, cp.sim_state,
                    COALESCE(ss.name, '') AS system_name
             FROM pp_char_planets cp
@@ -833,10 +883,22 @@ def list_characters(pp_session: str = Cookie(default=None)):
         """).fetchall()
     except Exception:  # no geo table → no system names
         planet_rows = con.execute("""
-            SELECT character_id, planet_type, is_extractor, p0_name, upgrade_level,
+            SELECT character_id, planet_id, planet_type, is_extractor, p0_name, upgrade_level,
                    planet_num, num_pins, products, pad_contents, sim_state, '' AS system_name
             FROM pp_char_planets
         """).fetchall()
+    # Per-colony yield history (oldest→newest), for the measured-decline burn-down.
+    yield_hist: dict[tuple, list] = {}
+    try:
+        for y in con.execute("""
+            SELECT character_id, planet_id, install_ts, peak_day, prog_days, scanned_ts
+            FROM pp_colony_yield ORDER BY install_ts ASC
+        """).fetchall():
+            yield_hist.setdefault((y["character_id"], y["planet_id"]), []).append(
+                {"install": y["install_ts"], "peak": round(y["peak_day"] or 0),
+                 "prog_days": y["prog_days"], "ts": y["scanned_ts"]})
+    except Exception:
+        yield_hist = {}
     con.close()
 
     char_planets: dict[int, list] = {}
@@ -894,6 +956,7 @@ def list_characters(pp_session: str = Cookie(default=None)):
             "pads":          pads,
             "production":    production,
             "program_days":  program_days,
+            "yield_history": yield_hist.get((cid, p["planet_id"]), []),
         })
 
     now = datetime.now(timezone.utc).isoformat()

@@ -2614,27 +2614,32 @@ function renderAnalysis() {
     addFactories = `<div class="an-suggest an-suggest-add"><div class="an-suggest-h">Add factories — your inputs could feed ~${supportable} (${extraFac} more than ${curFac}), capped by ${_esc(binding.name)}</div><ul>${cardLi.join('')}</ul></div>`;
   }
 
-  let suggest = '';
+  // The rebalance section (specific colony moves) — hidden until the "Redeploy a CC" lever is opened.
+  let rebal = '';
   if (moves.length) {
-    suggest += `<div class="an-suggest an-suggest-move"><div class="an-suggest-h">Rebalance — redeploy ${movedTotal} colon${movedTotal === 1 ? 'y' : 'ies'}</div><ul>${moves.map(_moveLi).join('')}</ul></div>`;
+    rebal += `<div class="an-suggest an-suggest-move"><div class="an-suggest-h">Rebalance — redeploy ${movedTotal} colon${movedTotal === 1 ? 'y' : 'ies'}</div><ul>${moves.map(_moveLi).join('')}</ul></div>`;
   }
-  if (addFactories) suggest += addFactories;
   if (newBuilds.length) {
     const li = newBuilds.map(d => {
       const p0 = p0Of(d.t);
       const why = _placements ? (p0 ? `no free ${_esc(p0)} planet reachable by a character with a spare colony` : 'no reachable planet free') : 'no surplus to move';
       return `<li><b>${_esc(d.name)}</b> — still short <b>${Math.round(d.unmet * d.per).toLocaleString()}/day</b> (${d.unmet} planet${d.unmet === 1 ? '' : 's'}) <span class="an-sug-note">(${why})</span></li>`;
     }).join('');
-    suggest += `<div class="an-suggest an-suggest-fix"><div class="an-suggest-h">Can't rebalance — still short</div><ul>${li}</ul></div>`;
+    rebal += `<div class="an-suggest an-suggest-fix"><div class="an-suggest-h">Can't rebalance — still short</div><ul>${li}</ul></div>`;
   }
   if (leftover.length && !addFactories) {
     const li = leftover.map(s => `<li><b>${_esc(s.name)}</b> — <b>${s.spare}</b> planet${s.spare === 1 ? '' : 's'} still spare (nothing short needs them)</li>`).join('');
-    suggest += `<div class="an-suggest an-suggest-free"><div class="an-suggest-h">Leftover surplus</div><ul>${li}</ul></div>`;
+    rebal += `<div class="an-suggest an-suggest-free"><div class="an-suggest-h">Leftover surplus</div><ul>${li}</ul></div>`;
   }
   if (!moves.length && !newBuilds.length && !addFactories)
-    suggest = `<div class="an-suggest an-suggest-free"><div class="an-suggest-h">Balanced — every material this plan needs is covered${leftover.length ? ', with a little to spare' : ''}.</div></div>`;
-  // General levers (reseat heads / redeploy a CC) head the rebalance advice — clickable for detail.
-  suggest = _leverCards(binding.ratio, binding.name) + suggest;
+    rebal = `<div class="an-suggest an-suggest-free"><div class="an-suggest-h">Balanced — every material this plan needs is covered${leftover.length ? ', with a little to spare' : ''}.</div></div>`;
+
+  // Levers head the advice; each reveals its own section. Reseat → yield burn-down, Redeploy → the
+  // rebalance moves above. "Add factories" (a distinct surplus opportunity) always shows.
+  let suggest = _leverCards(binding.ratio, binding.name);
+  if (_anLeverOpen.has('reseat')) suggest += _burndownSection();
+  if (_anLeverOpen.has('redeploy')) suggest += rebal;
+  if (addFactories) suggest += addFactories;
 
   // Extraction-runtime advice: longest program that keeps extraction above factory demand
   // (+ safety buffer), anchored on the measured headroom and your detected current program.
@@ -2723,43 +2728,85 @@ function _extDecayGraphSvg(headroom, L0, safe, edge) {
 // when you reseat heads or restart programs. This note tells the user the two levers: reseat heads
 // (light touch — raises a colony's own peak, best aimed at the binding material) vs. redeploy a
 // command center (rebalances a material that stays short while others overflow).
-let _anLeverOpen = new Set();   // which advice levers ('reseat'/'redeploy') are expanded
+let _anLeverOpen = new Set();   // which advice levers ('reseat'/'redeploy') have their section shown
 function _toggleLever(k) {
   if (_anLeverOpen.has(k)) _anLeverOpen.delete(k); else _anLeverOpen.add(k);
   renderAnalysis();
 }
-// Two general levers for lifting yields / balancing the chain, shown at the head of the rebalance
-// advice. Each card is clickable to expand the why / how / when. `headroom`+`bindName` come from the
-// binding (worst-fed) P1 so the reseat card can name it when something's short.
+// Two levers heading the rebalance advice. Each card is a toggle: Reseat heads → the measured yield
+// burn-down (per-colony decline across programs); Redeploy a CC → the specific rebalance moves. Both
+// sections are hidden until the matching card is clicked. `headroom`/`bindName` come from the binding
+// (worst-fed) P1 so the reseat card can name it when something's short.
 function _leverCards(headroom, bindName) {
   const short = headroom < 0.995;
   const reseatTxt = (short && bindName)
-    ? `Move <b>${_esc(bindName)}</b>'s heads onto stronger hotspots, then rescan.`
-    : `Move extractor heads onto stronger hotspots, then rescan.`;
-  const reseatMore =
-      `<p><b>Why:</b> each extractor head sits on the planet's resource heatmap, and its yield decays as the program runs. Restarting onto the densest hotspots resets to a higher peak — no new colony needed.</p>`
-    + `<p><b>How:</b> open the colony → Extractor Control Unit → drag the heads onto the brightest concentrations (the in-game survey, not a stored density — we've found density doesn't track real yield), restart the program, then <b>Rescan colonies</b> here so the analysis picks up the new yield.</p>`
-    + `<p><b>Best for:</b> a material that's a little short, or squeezing a longer safe runtime out of the colonies you already have.</p>`;
-  const redeployMore =
-      `<p><b>Why:</b> one command center = one colony. If a P1 is structurally short while others overflow, reseating can't fix the ratio — you have to shift extraction onto the short P0.</p>`
-    + `<p><b>How:</b> tear down a colony on an over-produced material and drop a new command center on a planet that yields the short P0. The <b>Rebalance</b> moves below name specific colonies and destination planets to swap.</p>`
-    + `<p><b>Best for:</b> a material that stays short after reseating, with spare colonies sitting on surplus P0.</p>`;
-  const card = (key, cls, ico, ttl, tag, txt, more) => {
+    ? `Move <b>${_esc(bindName)}</b>'s heads onto stronger hotspots, then rescan — a fresh program pulls a higher peak.`
+    : `Move extractor heads onto stronger hotspots, then rescan — a fresh program pulls a higher peak.`;
+  const card = (key, cls, ico, ttl, tag, txt, hint) => {
     const open = _anLeverOpen.has(key);
     return `<div class="an-lever ${cls} an-lever-click${open ? ' an-lever-open' : ''}" onclick="_toggleLever('${key}')">
-        <div class="an-lever-top"><span class="an-lever-ico">${ico}</span><span class="an-lever-ttl">${ttl}</span><span class="an-lever-tag">${tag}</span><span class="an-lever-caret">${open ? '▾' : '▸'}</span></div>
+        <div class="an-lever-top"><span class="an-lever-ico">${ico}</span><span class="an-lever-ttl">${ttl}</span><span class="an-lever-tag">${tag}</span></div>
         <div class="an-lever-txt">${txt}</div>
-        ${open ? `<div class="an-lever-more">${more}</div>` : ''}
+        <div class="an-lever-cta">${open ? `Hide ${hint} ▴` : `Show ${hint} ▾`}</div>
       </div>`;
   };
   return `<div class="an-suggest an-suggest-levers">
       <div class="an-suggest-h">Lift yields &amp; balance</div>
-      <div class="an-levers-lead">Figures track your heads' placement at the last scan and decay as a program runs — so they shift when you reseat or restart. Two levers (tap for detail):</div>
+      <div class="an-levers-lead">Figures track your heads' placement at the last scan and decay as a program runs — so they shift when you reseat or restart. Two levers:</div>
       <div class="an-lever-row">
-        ${card('reseat', 'an-lever-a', '⟳', 'Reseat heads', 'low effort', reseatTxt + ' A fresh, well-placed program pulls a higher peak.', reseatMore)}
-        ${card('redeploy', 'an-lever-b', '⇄', 'Redeploy a CC', 'rebalance', "If a material stays short while others overflow, move a surplus colony's command center onto it.", redeployMore)}
+        ${card('reseat', 'an-lever-a', '⟳', 'Reseat heads', 'low effort', reseatTxt, 'yield burn-down')}
+        ${card('redeploy', 'an-lever-b', '⇄', 'Redeploy a CC', 'rebalance', "If a material stays short while others overflow, move a surplus colony's command center onto it.", 'rebalance moves')}
       </div>
     </div>`;
+}
+
+// ── Yield burn-down (measured decline across programs) ─────────────────────────
+// One sample per extraction program (logged at scan time, deduped by install). The trend is the
+// only way to tell "this colony's hotspots are depleting → reseat" from "it's just a thin planet"
+// (a thin planet is steady-low; a depleting one trends DOWN). Density-free, fleet-independent.
+function _decayingColonies() {
+  const out = [];
+  (_ppCharsData || []).forEach(ch => (ch.planets || []).forEach(p => {
+    if (!p.is_extractor) return;
+    const h = (p.yield_history || []).filter(s => s.peak > 0);
+    if (!h.length) return;
+    const peaks = h.map(s => s.peak);
+    const cur = peaks[peaks.length - 1], max = Math.max(...peaks);
+    out.push({ char: ch.name, system: p.system, planet_num: p.planet_num, p0: p.p0_name,
+               peaks, cur, max, n: peaks.length, decline: max > 0 ? (max - cur) / max : 0 });
+  }));
+  return out.sort((a, b) => b.decline - a.decline);
+}
+function _sparkline(vals) {
+  if (vals.length < 2)
+    return `<svg class="an-spark" viewBox="0 0 80 20" preserveAspectRatio="none"><line x1="1" y1="10" x2="79" y2="10" class="an-spark-flat"/></svg>`;
+  const min = Math.min(...vals), max = Math.max(...vals), rng = (max - min) || 1, n = vals.length;
+  const pts = vals.map((v, i) => `${(i / (n - 1) * 78 + 1).toFixed(1)},${(19 - (v - min) / rng * 18).toFixed(1)}`).join(' ');
+  const down = vals[n - 1] < vals[0] * 0.98;
+  return `<svg class="an-spark" viewBox="0 0 80 20" preserveAspectRatio="none"><polyline points="${pts}" class="${down ? 'an-spark-down' : 'an-spark-up'}"/></svg>`;
+}
+function _burndownSection() {
+  const cols = _decayingColonies();
+  const lead = `Measured install-yield across your recent extraction programs (one sample per reseat/restart). A line trending <b>down</b> means that colony's hotspots are depleting — reseat onto fresh ones. Steady-low is just a thin planet; leave it.`;
+  if (!cols.length)
+    return `<div class="an-suggest an-suggest-burndown"><div class="an-suggest-h">Yield burn-down</div>`
+      + `<div class="an-levers-lead">No yield samples logged yet — <b>Rescan</b> to record a baseline, then again after your next reseat to see the trend.</div></div>`;
+  const rows = cols.map(c => {
+    const loc = c.system ? `${_esc(c.system)}${c.planet_num != null ? ' P' + c.planet_num : ''}` : '';
+    const dpct = Math.round(c.decline * 100);
+    const cls = c.n < 2 ? 'an-bd-new' : (c.decline >= 0.15 ? 'an-bd-bad' : c.decline >= 0.05 ? 'an-bd-warn' : 'an-bd-ok');
+    const trend = c.n < 2 ? `<span class="an-bd-trend an-bd-flat">baseline · ${c.n} program</span>`
+      : (c.decline >= 0.05 ? `<span class="an-bd-trend an-bd-down">▼ ${dpct}% off peak</span>`
+                           : `<span class="an-bd-trend an-bd-steady">steady</span>`);
+    return `<div class="an-bd-row ${cls}">
+        <span class="an-bd-loc">${_esc(c.char)}${loc ? ' · ' + loc : ''}<span class="an-bd-p0">${_esc(c.p0 || '')}</span></span>
+        ${_sparkline(c.peaks)}
+        <span class="an-bd-val">${c.cur.toLocaleString()}<span class="an-bd-unit"> P0/day</span></span>
+        ${trend}
+      </div>`;
+  }).join('');
+  return `<div class="an-suggest an-suggest-burndown"><div class="an-suggest-h">Yield burn-down</div>`
+    + `<div class="an-levers-lead">${lead}</div><div class="an-bd-list">${rows}</div></div>`;
 }
 
 function _extRuntimeAdviceHtml(headroom, curDays) {

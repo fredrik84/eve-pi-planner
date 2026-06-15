@@ -1643,6 +1643,32 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .an-lever-more p { margin: 0 0 6px; }
 .an-lever-more p:last-child { margin-bottom: 0; }
 .an-lever-more b { color: #c8d2e6; }
+.an-lever-cta { margin-top: 7px; font-size: 11px; font-weight: 600; letter-spacing: .02em; }
+.an-lever-a .an-lever-cta { color: #6fe0c0; }
+.an-lever-b .an-lever-cta { color: #e0c06f; }
+.an-lever-open { filter: brightness(1.12); }
+
+/* Yield burn-down */
+.an-suggest-burndown .an-levers-lead { margin: 2px 0 10px; }
+.an-bd-list { display: flex; flex-direction: column; gap: 2px; }
+.an-bd-row { display: flex; align-items: center; gap: 10px; padding: 5px 8px; border-radius: 5px;
+  border-left: 2px solid #3a4a6a; background: rgba(58,74,106,.10); }
+.an-bd-bad { border-left-color: #c5564e; background: rgba(197,86,78,.10); }
+.an-bd-warn { border-left-color: #c7a44e; background: rgba(199,164,78,.09); }
+.an-bd-ok, .an-bd-new { border-left-color: #3f7d68; background: rgba(63,125,104,.08); }
+.an-bd-loc { flex: 1 1 auto; color: #c8d2e6; font-size: 12px; min-width: 0; }
+.an-bd-p0 { color: #8b93a6; font-size: 11px; margin-left: 7px; }
+.an-spark { width: 80px; height: 20px; flex: 0 0 auto; }
+.an-spark polyline { fill: none; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.an-spark-down { stroke: #e0876f; }
+.an-spark-up { stroke: #6fe0a0; }
+.an-spark-flat { stroke: #5a6378; stroke-width: 1; stroke-dasharray: 2 2; vector-effect: non-scaling-stroke; }
+.an-bd-val { flex: 0 0 auto; color: #c8d2e6; font-size: 12px; font-variant-numeric: tabular-nums; text-align: right; min-width: 92px; }
+.an-bd-unit { color: #8b93a6; font-size: 10px; }
+.an-bd-trend { flex: 0 0 auto; font-size: 11px; min-width: 96px; text-align: right; }
+.an-bd-down { color: #e0876f; }
+.an-bd-steady { color: #6fbf9a; }
+.an-bd-flat { color: #8b93a6; }
 .an-rt-tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
 .an-rt-tbl th { font-size: 9.5px; text-transform: uppercase; letter-spacing: .4px; color: #5a6b80;
   text-align: left; padding: 3px 8px; border-bottom: 1px solid #1d3340; }
