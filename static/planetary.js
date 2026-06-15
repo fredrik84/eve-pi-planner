@@ -2792,40 +2792,53 @@ function _burndownSection(rows) {
     return `<div class="an-suggest an-suggest-burndown"><div class="an-suggest-h">Reseat candidates</div>`
       + `<div class="an-levers-lead">Every material this plan needs is covered — no shortage to chase. (Reseating a depleting colony still extends runtime, but nothing here is short.)</div></div>`;
 
+  const P0_PER_P1 = 150;   // basic-industry ratio: 3000 P0 → 20 P1 per cycle. Heads show P0, so target in P0.
   const groups = short.map(r => {
-    const prods = _producersOf(r.t);
+    const prods = _producersOf(r.t);              // weakest first
     const shortBy = Math.max(0, Math.round(r.need - r.have));
     if (!prods.length)
       return `<div class="an-bd-group"><div class="an-bd-group-h">${_esc(r.name)} <span class="an-bd-group-sub">short ${shortBy.toLocaleString()}/day · no colony makes it — add one (Redeploy)</span></div></div>`;
+    const numP = prods.length;
+    const targetP1 = r.need / numP;               // the average each producer must hit to cover demand
+    const targetP0 = Math.round(targetP1 * P0_PER_P1);
+    const groupAvgP0 = Math.round((r.have / numP) * P0_PER_P1);
+    // How many of the weakest must reach that average to close the gap (the rest already carry their
+    // share). Walk from the worst, summing each one's lift-to-average, until it covers the shortfall.
+    let acc = 0, nNeed = 0;
+    for (const c of prods) {
+      if (c.perDay >= targetP1) break;            // at/above average — no lift needed here or beyond
+      acc += targetP1 - c.perDay; nNeed++;
+      if (acc >= shortBy) break;
+    }
+    nNeed = Math.min(numP, Math.max(1, nNeed));
+    const nLabel = nNeed >= numP ? `all ${numP} colonies` : `the weakest <b>${nNeed}</b> of ${numP} colonies`;
+
     const worst = prods.slice(0, _RESEAT_PER_P1);
-    // Target average for the weakest N: lifting just them by the whole shortfall closes the gap, so
-    // each needs to average (their current total + shortfall) / N. Compare to their current average.
-    const sumWorst = worst.reduce((a, c) => a + c.perDay, 0);
-    const curAvg = Math.round(sumWorst / worst.length);
-    const targetAvg = Math.round((sumWorst + shortBy) / worst.length);
     const rowsHtml = worst.map(c => {
       const loc = c.system ? `${_esc(c.system)}${c.planet_num != null ? ' P' + c.planet_num : ''}` : '';
+      const p0now = Math.round(c.perDay * P0_PER_P1);
+      const short_i = c.perDay < targetP1;
       const tag = (c.n >= 2 && c.decline >= 0.10)
         ? `<span class="an-bd-prod-tag an-bd-down">▼ ${Math.round(c.decline * 100)}% off best — reseat recovers it</span>`
         : (c.n >= 2 ? `<span class="an-bd-prod-tag an-bd-flat">steady — likely a thin spot</span>`
                     : `<span class="an-bd-prod-tag an-bd-flat">no history yet</span>`);
-      return `<div class="an-bd-prod">
+      return `<div class="an-bd-prod${short_i ? '' : ' an-bd-prod-ok'}">
           <span class="an-bd-prod-loc">${_esc(c.char)}${loc ? ' · ' + loc : ''}</span>
-          <span class="an-bd-prod-val">${Math.round(c.perDay).toLocaleString()}<span class="an-bd-unit">/day</span></span>
+          <span class="an-bd-prod-val">${p0now.toLocaleString()}<span class="an-bd-unit"> P0/day</span></span>
           ${tag}
         </div>`;
     }).join('');
     const more = prods.length > worst.length ? `<div class="an-bd-more">+ ${prods.length - worst.length} more producing this</div>` : '';
     return `<div class="an-bd-group">
         <div class="an-bd-group-h">${_esc(r.name)} <span class="an-bd-group-sub">${Math.round(r.ratio * 100)}% fed · short ${shortBy.toLocaleString()}/day</span></div>
-        <div class="an-bd-target">Bring the weakest ${worst.length} to <b>~${targetAvg.toLocaleString()}/day</b> each to clear it <span class="an-bd-target-now">(avg ${curAvg.toLocaleString()} now)</span></div>
+        <div class="an-bd-target">Reseat ${nLabel} to <b>~${targetP0.toLocaleString()} P0/day</b> each to clear it <span class="an-bd-target-now">(group avg ${groupAvgP0.toLocaleString()} P0/day now)</span></div>
         <div class="an-bd-prod-list">${rowsHtml}</div>${more}
       </div>`;
   }).join('');
 
   return `<div class="an-suggest an-suggest-burndown">
       <div class="an-suggest-h">Reseat for short materials</div>
-      <div class="an-levers-lead">You're short on <b>${short.map(r => _esc(r.name)).join('</b>, <b>')}</b>. These are the weakest colonies producing them — reseat their heads (worst first), then <b>Rescan</b>. "Off best" means it has measurably dropped, so a reseat recovers yield; "thin spot" won't gain much.</div>
+      <div class="an-levers-lead">You're short on <b>${short.map(r => _esc(r.name)).join('</b>, <b>')}</b>. Reseat the weakest colonies' heads to lift their <b>P0 extraction</b> (the rate the ECU shows as you place heads) toward the target, then <b>Rescan</b>. "Off best" = it has measurably dropped, so a reseat recovers it; "thin spot" won't gain much.</div>
       <div class="an-bd-groups">${groups}</div>
     </div>`;
 }

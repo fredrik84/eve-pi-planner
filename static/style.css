@@ -1659,6 +1659,7 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .an-bd-prod-list { display: flex; flex-direction: column; gap: 2px; }
 .an-bd-prod { display: flex; align-items: baseline; gap: 10px; padding: 5px 9px; border-radius: 5px;
   border-left: 2px solid #c7a44e; background: rgba(199,164,78,.07); }
+.an-bd-prod-ok { border-left-color: #3f7d68; background: rgba(63,125,104,.06); opacity: .72; }
 .an-bd-prod-loc { flex: 1 1 auto; color: #c8d2e6; font-size: 12px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .an-bd-prod-val { flex: 0 0 auto; color: #c8d2e6; font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; min-width: 78px; }
 .an-bd-unit { color: #8b93a6; font-size: 10px; font-weight: 400; }
