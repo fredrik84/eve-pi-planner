@@ -154,6 +154,8 @@ async function onDashboardTabOpen() {
 // (disabled) no matter which page you're on or how often the header re-renders — and a second
 // press is ignored. The server also rate-limits (429) so it can't be spammed.
 let _rescanning = false;
+let _dashCharIds = null;   // character_ids surfaced on the dashboard — set by renderDashboard; lets the
+                           // rescan button hit only the toons in view (usually just the factory owners)
 function _setRescanUI() {
   const b = document.getElementById('rescanBtn');
   if (b) { b.disabled = _rescanning; b.textContent = _rescanning ? 'Rescanning…' : 'Rescan'; }
@@ -162,8 +164,16 @@ async function rescanAll() {
   if (_rescanning) return;                 // already scanning → ignore repeat presses
   _rescanning = true; _setRescanUI();
   let res = null, cooldownMsg = null;
+  // On the dashboard, rescan only the characters it actually shows (a few factory owners) instead of
+  // the whole fleet. Other tabs (Characters/Analysis) cover every toon, so they still do a full rescan.
+  const onDash = localStorage.getItem('activeTab') === 'dashboard';
+  const scoped = (onDash && _dashCharIds && _dashCharIds.length) ? { character_ids: _dashCharIds } : null;
   try {
-    const resp = await fetch('/api/characters/refresh-all', { method: 'POST' });
+    const resp = await fetch('/api/characters/refresh-all', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(scoped || {}),
+    });
     if (resp.status === 429) cooldownMsg = (await resp.json().catch(() => ({}))).detail || 'Rescanned recently — try again shortly';
     else res = await resp.json().catch(() => null);
   } catch (e) {}
@@ -192,6 +202,7 @@ function renderDashboard(data) {
       <div class="pp-card-body"><div class="pp-empty">Log in with ESI (Characters tab) to see your PI overview.</div></div></section>`;
     return;
   }
+  _dashCharIds = Array.isArray(data.char_ids_in_view) ? data.char_ids_in_view : null;
   const t = data.totals || {}, facs = data.factories || [], top = data.top_pi;
   const runtime = (t.runtime_hours != null) ? _fmtHours(t.runtime_hours) : '—';
   const tiles = [

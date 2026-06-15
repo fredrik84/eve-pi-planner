@@ -295,14 +295,16 @@ def _struct_cap(name: str):
     return None
 
 def _storage_summary(detail: dict, sim: dict | None, types: dict) -> dict | None:
-    """Fullest launchpad/storage on the planet + how fast it's filling (the colony's output volume
+    """Fullest LAUNCHPAD on the planet + how fast it's filling (the colony's output volume
     per hour, from the sim). Lets the dashboard show "% full" and "~time to full". Only returned
     past 60% (below that it isn't worth flagging). The dashboard only acts on EXTRACTOR planets —
-    a factory's launchpads are meant to sit full of inputs and drain, so they're not flagged."""
+    a factory's launchpads are meant to sit full of inputs and drain, so they're not flagged.
+    Storage Facilities are intentionally ignored: a storage buffer sitting full is expected (it
+    isn't a factory input), so it's not an alert — only a full launchpad actually blocks export."""
     best = None
     for pin in (detail.get("pins") or []):
         cap = _struct_cap((types.get(pin.get("type_id"), {}) or {}).get("name") or "")
-        if not cap:
+        if not cap or cap[0] != "Launchpad":
             continue
         _, capacity = cap
         vol = sum((c.get("amount", 0) or 0) * _TIER_VOL.get((types.get(c.get("type_id"), {}) or {}).get("pi_tier") or 0, 0.01)
@@ -1043,20 +1045,28 @@ def refresh_char_planets(character_id: int, context_id: int = Depends(require_co
 _last_rescan: dict[int, float] = {}      # context_id -> epoch of last bulk rescan
 _RESCAN_COOLDOWN = 60                     # seconds; ESI colony data barely changes faster than this
 
+class _RefreshAllBody(BaseModel):
+    character_ids: list[int] | None = None   # None → whole fleet; set → only these (dashboard scopes to in-view chars)
+
 @router.post("/api/characters/refresh-all")
-def refresh_all_planets(context_id: int = Depends(require_context)):
-    """Rescan every (real) character in the context server-side, in one request — so a slow
-    rescan isn't interrupted by the browser throttling a backgrounded tab mid-loop. Rate-limited
-    per context so it can't be spammed (each call hits ESI for every planet)."""
+def refresh_all_planets(body: _RefreshAllBody | None = None, context_id: int = Depends(require_context)):
+    """Rescan (real) characters in the context server-side, in one request — so a slow rescan isn't
+    interrupted by the browser throttling a backgrounded tab mid-loop. Rate-limited per context so it
+    can't be spammed (each call hits ESI for every planet). When `character_ids` is given the rescan
+    is scoped to just those (the dashboard sends only the characters it actually shows — usually the
+    handful with factories — so it doesn't hit ESI for every pure-extractor toon)."""
     wait = _RESCAN_COOLDOWN - (time.time() - _last_rescan.get(context_id, 0))
     if wait > 0:
         raise HTTPException(status_code=429, detail=f"Rescanned recently — wait {int(wait) + 1}s before rescanning again")
     _last_rescan[context_id] = time.time()
+    want = set(body.character_ids) if body and body.character_ids else None
     con = get_connection()
     rows = con.execute(
         "SELECT character_id FROM pp_characters WHERE context_id=? AND COALESCE(is_dummy, 0) = 0",
         (context_id,)).fetchall()
     con.close()
+    if want is not None:                      # keep only requested ids, but never outside this context
+        rows = [r for r in rows if r[0] in want]
     ok = failed = 0
     for r in rows:
         cid = r[0]

@@ -1143,7 +1143,7 @@ def dashboard(pp_session: str = Cookie(default=None)):
     types = pi["types"]
     con = get_connection()
     rows = con.execute("""
-        SELECT c.character_name AS ch, cp.planet_num AS pn, s.name AS system,
+        SELECT c.character_name AS ch, c.character_id AS cid, cp.planet_num AS pn, s.name AS system,
                cp.is_extractor AS is_ext, cp.products AS products,
                cp.pad_inputs AS pad_inputs, cp.pad_contents AS pad_contents,
                cp.issues AS issues, cp.sim_state AS sim_state,
@@ -1174,6 +1174,8 @@ def dashboard(pp_session: str = Cookie(default=None)):
     prices = fetch_prices(list(price_tids)) if price_tids else {}
 
     factories = []
+    chars_in_view: set[int] = set()    # characters actually surfaced on the dashboard (factory tile or
+                                       # warning) — the rescan button scopes to these, not the whole fleet
     total_run_value = total_value_per_day = 0.0
     soonest_h = None
     produced_by_tid: dict[int, float] = {}     # product made since checkpoint (projected up)
@@ -1222,6 +1224,8 @@ def dashboard(pp_session: str = Cookie(default=None)):
         # since the checkpoint. The actionable per-planet figure (pairs with "runs out").
         haul_units = round(sum((it.get("amount", 0) or 0) for it in pads) + produced)
         haul_value = sum((it.get("amount", 0) or 0) * prices.get(it["type_id"], 0.0) for it in pads) + produced * price
+        if r["cid"] is not None:
+            chars_in_view.add(r["cid"])
         loc = f"{r['ch']} · {r['system'] or '?'}" + (f" P{r['pn']}" if r["pn"] is not None else "")
         factories.append({
             "loc": loc, "product": prod.get("name") or f"#{tid}",
@@ -1265,10 +1269,13 @@ def dashboard(pp_session: str = Cookie(default=None)):
         exp = ss.get("expiry") if isinstance(ss, dict) else None
         if exp and exp < now:
             expired[ch] = expired.get(ch, 0) + 1
+            if r["cid"] is not None: chars_in_view.add(r["cid"])
         elif exp and exp - now < EXPIRING_WINDOW:
             expiring[ch] = expiring.get(ch, 0) + 1
+            if r["cid"] is not None: chars_in_view.add(r["cid"])
         for k in kinds:
             by_char.setdefault(ch, {}).setdefault(k, []).append(loc)
+            if r["cid"] is not None: chars_in_view.add(r["cid"])
 
     KIND = {                                       # severity, singular, plural
         "ext_unrouted": ("high", "extractor not routed", "extractors not routed"),
@@ -1320,6 +1327,7 @@ def dashboard(pp_session: str = Cookie(default=None)):
             continue
         ttf = ((cap - vol) / st["fill_m3_h"]) if st.get("fill_m3_h", 0) > 0 and vol < cap else None
         loc = (r["system"] or "?") + (f" P{r['pn']}" if r["pn"] is not None else "")
+        if r["cid"] is not None: chars_in_view.add(r["cid"])
         fulls.append({"ch": r["ch"] or "?", "loc": loc, "pct": round(pct), "ttf": ttf})
     if fulls:
         fulls.sort(key=lambda x: (x["ttf"] if x["ttf"] is not None else 1e9, -x["pct"]))
@@ -1342,6 +1350,7 @@ def dashboard(pp_session: str = Cookie(default=None)):
     return {
         "logged_in": True,
         "factories": factories,
+        "char_ids_in_view": sorted(chars_in_view),
         "issues": issues,
         "totals": {
             "factory_count": len(factories),
