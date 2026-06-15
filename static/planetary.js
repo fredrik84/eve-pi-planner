@@ -2761,6 +2761,7 @@ function _leverCards(headroom, bindName) {
 }
 
 // ── Yield burn-down (measured decline across programs) ─────────────────────────
+const _YIELD_CAP = 10;   // programs kept per colony server-side (esi._YIELD_KEEP) — for the "N of X" label
 // One sample per extraction program (logged at scan time, deduped by install). The trend is the
 // only way to tell "this colony's hotspots are depleting → reseat" from "it's just a thin planet"
 // (a thin planet is steady-low; a depleting one trends DOWN). Density-free, fleet-independent.
@@ -2777,36 +2778,51 @@ function _decayingColonies() {
   }));
   return out.sort((a, b) => b.decline - a.decline);
 }
-function _sparkline(vals) {
-  if (vals.length < 2)
-    return `<svg class="an-spark" viewBox="0 0 80 20" preserveAspectRatio="none"><line x1="1" y1="10" x2="79" y2="10" class="an-spark-flat"/></svg>`;
-  const min = Math.min(...vals), max = Math.max(...vals), rng = (max - min) || 1, n = vals.length;
-  const pts = vals.map((v, i) => `${(i / (n - 1) * 78 + 1).toFixed(1)},${(19 - (v - min) / rng * 18).toFixed(1)}`).join(' ');
-  const down = vals[n - 1] < vals[0] * 0.98;
-  return `<svg class="an-spark" viewBox="0 0 80 20" preserveAspectRatio="none"><polyline points="${pts}" class="${down ? 'an-spark-down' : 'an-spark-up'}"/></svg>`;
+// Mini column chart of a colony's yield across its programs (oldest → newest). Bar count = programs
+// logged (so "how much data" is visible at a glance); a falling staircase = depleting hotspots. The
+// newest bar is accented so "now" stands out.
+function _yieldBars(peaks, declining) {
+  const n = peaks.length, W = 140, H = 34, gap = n > 1 ? 3 : 0;
+  const max = Math.max(...peaks) || 1;
+  const bw = (W - gap * (n - 1)) / n;
+  const bars = peaks.map((v, i) => {
+    const h = Math.max(2, (v / max) * (H - 2)), x = i * (bw + gap), y = H - h, last = i === n - 1;
+    const cls = last ? (declining ? 'an-yb-now-down' : 'an-yb-now') : (declining ? 'an-yb-down' : 'an-yb-up');
+    return `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" rx="1" class="${cls}"/>`;
+  }).join('');
+  return `<svg class="an-yb" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">${bars}</svg>`;
 }
 function _burndownSection() {
   const cols = _decayingColonies();
-  const lead = `Measured install-yield across your recent extraction programs (one sample per reseat/restart). A line trending <b>down</b> means that colony's hotspots are depleting — reseat onto fresh ones. Steady-low is just a thin planet; leave it.`;
   if (!cols.length)
     return `<div class="an-suggest an-suggest-burndown"><div class="an-suggest-h">Yield burn-down</div>`
-      + `<div class="an-levers-lead">No yield samples logged yet — <b>Rescan</b> to record a baseline, then again after your next reseat to see the trend.</div></div>`;
-  const rows = cols.map(c => {
+      + `<div class="an-levers-lead">No yield logged yet — <b>Rescan</b> to record a baseline, then again after your next reseat. Each rescan after a restart adds one bar.</div></div>`;
+  const isDown = c => c.n >= 2 && c.decline >= 0.05;
+  const dec = cols.filter(isDown).length;
+  const steady = cols.filter(c => c.n >= 2 && c.decline < 0.05).length;
+  const base = cols.filter(c => c.n < 2).length;
+  const chip = (n, cls, lbl) => n ? `<span class="an-bd-chip ${cls}">${n} ${lbl}</span>` : '';
+  const summary = `<div class="an-bd-summary">${chip(dec, 'an-bd-chip-down', 'declining')}${chip(steady, 'an-bd-chip-steady', 'steady')}${chip(base, 'an-bd-chip-base', 'building baseline')}</div>`;
+  const lead = `Each <b>bar = one extraction program</b> (oldest → newest), height = its yield. A falling staircase means that colony's hotspots are depleting — <b>reseat</b> onto fresh ones. Flat = steady, leave it.`;
+  const cards = cols.map(c => {
     const loc = c.system ? `${_esc(c.system)}${c.planet_num != null ? ' P' + c.planet_num : ''}` : '';
-    const dpct = Math.round(c.decline * 100);
+    const down = isDown(c);
     const cls = c.n < 2 ? 'an-bd-new' : (c.decline >= 0.15 ? 'an-bd-bad' : c.decline >= 0.05 ? 'an-bd-warn' : 'an-bd-ok');
-    const trend = c.n < 2 ? `<span class="an-bd-trend an-bd-flat">baseline · ${c.n} program</span>`
-      : (c.decline >= 0.05 ? `<span class="an-bd-trend an-bd-down">▼ ${dpct}% off peak</span>`
-                           : `<span class="an-bd-trend an-bd-steady">steady</span>`);
-    return `<div class="an-bd-row ${cls}">
-        <span class="an-bd-loc">${_esc(c.char)}${loc ? ' · ' + loc : ''}<span class="an-bd-p0">${_esc(c.p0 || '')}</span></span>
-        ${_sparkline(c.peaks)}
-        <span class="an-bd-val">${c.cur.toLocaleString()}<span class="an-bd-unit"> P0/day</span></span>
-        ${trend}
+    const trend = c.n < 2 ? `<span class="an-bd-trend an-bd-flat">building baseline</span>`
+      : (down ? `<span class="an-bd-trend an-bd-down">▼ ${Math.round(c.decline * 100)}% off peak</span>`
+              : `<span class="an-bd-trend an-bd-steady">● holding</span>`);
+    return `<div class="an-bd-card ${cls}">
+        <div class="an-bd-head"><span class="an-bd-loc">${_esc(c.char)}${loc ? ' · ' + loc : ''}</span><span class="an-bd-p0">${_esc(c.p0 || '')}</span></div>
+        ${_yieldBars(c.peaks, down)}
+        <div class="an-bd-foot">
+          <span class="an-bd-now">${c.cur.toLocaleString()}<span class="an-bd-unit"> P0/day now</span></span>
+          ${trend}
+        </div>
+        <div class="an-bd-meta">peak ${c.max.toLocaleString()} · ${c.n} of ${_YIELD_CAP} programs</div>
       </div>`;
   }).join('');
   return `<div class="an-suggest an-suggest-burndown"><div class="an-suggest-h">Yield burn-down</div>`
-    + `<div class="an-levers-lead">${lead}</div><div class="an-bd-list">${rows}</div></div>`;
+    + summary + `<div class="an-levers-lead">${lead}</div><div class="an-bd-grid">${cards}</div></div>`;
 }
 
 function _extRuntimeAdviceHtml(headroom, curDays) {

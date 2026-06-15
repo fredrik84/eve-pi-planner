@@ -336,7 +336,7 @@ def _storage_summary(detail: dict, sim: dict | None, types: dict) -> dict | None
     return {"vol_m3": round(min(best["vol"], best["cap"]), 1), "cap_m3": best["cap"], "fill_m3_h": round(fill_h, 2)}
 
 
-_YIELD_KEEP = 8     # programs of yield history kept per colony (bounded storage)
+_YIELD_KEEP = 10    # programs of yield history kept per colony (bounded storage)
 def _record_yield_sample(con, character_id: int, planet_id: int, sim: dict | None, scan_ts: float) -> None:
     """Log this colony's install-yield for the CURRENT program (deduped by install_ts), then prune to
     the last _YIELD_KEEP programs. One row per reseat/restart — the measured trend the burn-down uses."""
