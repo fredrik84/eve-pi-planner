@@ -2633,11 +2633,13 @@ function renderAnalysis() {
   }
   if (!moves.length && !newBuilds.length && !addFactories)
     suggest = `<div class="an-suggest an-suggest-free"><div class="an-suggest-h">Balanced — every material this plan needs is covered${leftover.length ? ', with a little to spare' : ''}.</div></div>`;
+  // General levers (reseat heads / redeploy a CC) head the rebalance advice — clickable for detail.
+  suggest = _leverCards(binding.ratio, binding.name) + suggest;
 
   // Extraction-runtime advice: longest program that keeps extraction above factory demand
   // (+ safety buffer), anchored on the measured headroom and your detected current program.
   _extRt = { ppd: Number(snap.products_per_day) || 0, ipd: Number(snap.isk_per_day) || 0, unit };
-  const rtAdvice = _extRuntimeAdviceHtml(binding.ratio, _currentProgramDays(), binding.name);
+  const rtAdvice = _extRuntimeAdviceHtml(binding.ratio, _currentProgramDays());
 
   el.innerHTML = head + stats + proj
     + `<div class="an-legend">Producing (left) vs the plan’s daily need (right) per P1. A full green bar = factories stay fed; a short red bar is the bottleneck.</div>`
@@ -2721,27 +2723,46 @@ function _extDecayGraphSvg(headroom, L0, safe, edge) {
 // when you reseat heads or restart programs. This note tells the user the two levers: reseat heads
 // (light touch — raises a colony's own peak, best aimed at the binding material) vs. redeploy a
 // command center (rebalances a material that stays short while others overflow).
-function _reseatNote(headroom, bindName) {
+let _anLeverOpen = new Set();   // which advice levers ('reseat'/'redeploy') are expanded
+function _toggleLever(k) {
+  if (_anLeverOpen.has(k)) _anLeverOpen.delete(k); else _anLeverOpen.add(k);
+  renderAnalysis();
+}
+// Two general levers for lifting yields / balancing the chain, shown at the head of the rebalance
+// advice. Each card is clickable to expand the why / how / when. `headroom`+`bindName` come from the
+// binding (worst-fed) P1 so the reseat card can name it when something's short.
+function _leverCards(headroom, bindName) {
   const short = headroom < 0.995;
   const reseatTxt = (short && bindName)
     ? `Move <b>${_esc(bindName)}</b>'s heads onto stronger hotspots, then rescan.`
     : `Move extractor heads onto stronger hotspots, then rescan.`;
-  return `<div class="an-levers">
-      <div class="an-levers-lead">Yields are from your last scan and decay as a program runs — so this shifts when you reseat or restart. Two ways to lift it:</div>
+  const reseatMore =
+      `<p><b>Why:</b> each extractor head sits on the planet's resource heatmap, and its yield decays as the program runs. Restarting onto the densest hotspots resets to a higher peak — no new colony needed.</p>`
+    + `<p><b>How:</b> open the colony → Extractor Control Unit → drag the heads onto the brightest concentrations (cross-check Agency → Resource Harvesting → Planets, hover the P0 for density), restart the program, then <b>Rescan colonies</b> here so the analysis picks up the new yield.</p>`
+    + `<p><b>Best for:</b> a material that's a little short, or squeezing a longer safe runtime out of the colonies you already have.</p>`;
+  const redeployMore =
+      `<p><b>Why:</b> one command center = one colony. If a P1 is structurally short while others overflow, reseating can't fix the ratio — you have to shift extraction onto the short P0.</p>`
+    + `<p><b>How:</b> tear down a colony on an over-produced material and drop a new command center on a planet that yields the short P0. The <b>Rebalance</b> moves below name specific colonies and destination planets to swap.</p>`
+    + `<p><b>Best for:</b> a material that stays short after reseating, with spare colonies sitting on surplus P0.</p>`;
+  const card = (key, cls, ico, ttl, tag, txt, more) => {
+    const open = _anLeverOpen.has(key);
+    return `<div class="an-lever ${cls} an-lever-click${open ? ' an-lever-open' : ''}" onclick="_toggleLever('${key}')">
+        <div class="an-lever-top"><span class="an-lever-ico">${ico}</span><span class="an-lever-ttl">${ttl}</span><span class="an-lever-tag">${tag}</span><span class="an-lever-caret">${open ? '▾' : '▸'}</span></div>
+        <div class="an-lever-txt">${txt}</div>
+        ${open ? `<div class="an-lever-more">${more}</div>` : ''}
+      </div>`;
+  };
+  return `<div class="an-suggest an-suggest-levers">
+      <div class="an-suggest-h">Lift yields &amp; balance</div>
+      <div class="an-levers-lead">Figures track your heads' placement at the last scan and decay as a program runs — so they shift when you reseat or restart. Two levers (tap for detail):</div>
       <div class="an-lever-row">
-        <div class="an-lever an-lever-a">
-          <div class="an-lever-top"><span class="an-lever-ico">⟳</span><span class="an-lever-ttl">Reseat heads</span><span class="an-lever-tag">low effort</span></div>
-          <div class="an-lever-txt">${reseatTxt} A fresh, well-placed program pulls a higher peak.</div>
-        </div>
-        <div class="an-lever an-lever-b">
-          <div class="an-lever-top"><span class="an-lever-ico">⇄</span><span class="an-lever-ttl">Redeploy a CC</span><span class="an-lever-tag">rebalance</span></div>
-          <div class="an-lever-txt">If a material stays short while others overflow, move a surplus colony's command center onto it.</div>
-        </div>
+        ${card('reseat', 'an-lever-a', '⟳', 'Reseat heads', 'low effort', reseatTxt + ' A fresh, well-placed program pulls a higher peak.', reseatMore)}
+        ${card('redeploy', 'an-lever-b', '⇄', 'Redeploy a CC', 'rebalance', "If a material stays short while others overflow, move a surplus colony's command center onto it.", redeployMore)}
       </div>
     </div>`;
 }
 
-function _extRuntimeAdviceHtml(headroom, curDays, bindName) {
+function _extRuntimeAdviceHtml(headroom, curDays) {
   if (!_extRt || !_extRt.ppd || !headroom) return '';
   const unit = _extRt.unit || 'units', ppd = Math.round(_extRt.ppd).toLocaleString();
   const L0 = (curDays && curDays > 0) ? Math.round(curDays) : 2;
@@ -2755,7 +2776,6 @@ function _extRuntimeAdviceHtml(headroom, curDays, bindName) {
         <div class="an-suggest-h">Extraction runtime</div>
         <div class="an-rt-pick">Extraction covers only <b>${Math.round(headroom * 100)}%</b> of demand on ${detected ? `your ~${L0}-day` : `a ~${L0}-day`} program — under a safe margin.</div>
         <ul><li>Shorten the program or add extraction (see above) before the factories fall behind.</li></ul>
-        ${_reseatNote(headroom, bindName)}
       </div>`;
   }
 
@@ -2783,7 +2803,6 @@ function _extRuntimeAdviceHtml(headroom, curDays, bindName) {
       </table>
       ${_extDecayGraphSvg(headroom, L0, safe, edge)}
       <div class="an-sug-note">Buffer = how far the program's average extraction sits above factory demand (below 0 = factories starve).${detected ? '' : ' Current length assumed 2d — rescan to detect yours.'} Decay is an estimate — verify against your in-game ECU.</div>
-      ${_reseatNote(headroom, bindName)}
     </div>`;
 }
 

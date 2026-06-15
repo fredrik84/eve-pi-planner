@@ -1620,13 +1620,14 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .ext-graph-leg .g-k-demand { background: #e0b84a; }
 .an-rt-pick { font-size: 13px; color: #c8d2e6; margin: 2px 0 9px; }
 .an-rt-pick b { color: #6fe0c0; }
-.an-levers { margin-top: 11px; }
-.an-levers-lead { color: #8b93a6; font-size: 12px; margin-bottom: 8px; line-height: 1.45; }
-.an-lever-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.an-levers-lead { color: #8b93a6; font-size: 12px; margin: 2px 0 9px; line-height: 1.45; }
+.an-lever-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-start; }
 .an-lever { flex: 1 1 220px; padding: 9px 11px; border-left: 2px solid #3a4a6a;
   background: rgba(58,74,106,.12); border-radius: 0 5px 5px 0; }
 .an-lever-a { border-left-color: #3f7d68; background: rgba(63,125,104,.12); }
 .an-lever-b { border-left-color: #7d6a3f; background: rgba(125,106,63,.12); }
+.an-lever-click { cursor: pointer; transition: filter .12s; }
+.an-lever-click:hover { filter: brightness(1.18); }
 .an-lever-top { display: flex; align-items: center; gap: 7px; margin-bottom: 5px; }
 .an-lever-ico { font-size: 14px; line-height: 1; }
 .an-lever-a .an-lever-ico { color: #6fe0c0; }
@@ -1634,8 +1635,14 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .an-lever-ttl { font-weight: 600; color: #c8d2e6; font-size: 13px; }
 .an-lever-tag { margin-left: auto; font-size: 10px; text-transform: uppercase; letter-spacing: .04em;
   color: #8b93a6; background: rgba(255,255,255,.05); padding: 1px 7px; border-radius: 9px; }
+.an-lever-caret { color: #8b93a6; font-size: 11px; }
 .an-lever-txt { color: #9aa3b5; font-size: 12px; line-height: 1.45; }
 .an-lever-txt b { color: #c8d2e6; }
+.an-lever-more { margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,.07);
+  color: #9aa3b5; font-size: 12px; line-height: 1.5; }
+.an-lever-more p { margin: 0 0 6px; }
+.an-lever-more p:last-child { margin-bottom: 0; }
+.an-lever-more b { color: #c8d2e6; }
 .an-rt-tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
 .an-rt-tbl th { font-size: 9.5px; text-transform: uppercase; letter-spacing: .4px; color: #5a6b80;
   text-align: left; padding: 3px 8px; border-bottom: 1px solid #1d3340; }
