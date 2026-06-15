@@ -1272,6 +1272,8 @@ def dashboard(pp_session: str = Cookie(default=None)):
         "ext_unrouted": ("high", "extractor not routed", "extractors not routed"),
         "fac_unfed":    ("high", "factory has no input route", "factories with no input route"),
         "fac_output":   ("high", "factory output not routed", "factory outputs not routed"),
+        "p0_mismatch":  ("high", "extracting something the factories don't use — piling up",
+                                 "extracting things the factories don't use — piling up"),
     }
     issues = []
     for ch in sorted(by_char):
@@ -1297,11 +1299,13 @@ def dashboard(pp_session: str = Cookie(default=None)):
     if expiring:
         issues.append(_collapse(expiring, "warn", "Extractions expiring soon", "expiring within 3h"))
 
-    # Near-full launchpads/storage — projected % full + estimated time-to-full, so you can judge
-    # whether it's "haul now" or "later". Volume is projected from the checkpoint at the colony's
-    # output rate (time-to-full only when we know that rate — extractors).
+    # Storage filling up — EXTRACTOR planets only (their output piles up if you don't haul; a
+    # factory's launchpads are meant to sit full of inputs and drain, so those aren't flagged).
+    # % full and ~time-to-full are projected forward from the checkpoint at the colony's output rate.
     fulls = []
     for (r, prods, inputs, pads) in parsed:
+        if not r["is_ext"]:
+            continue
         st = _json.loads(r["storage"] or "null")
         if not st:
             continue
@@ -1326,12 +1330,9 @@ def dashboard(pp_session: str = Cookie(default=None)):
             if t >= 24:
                 return f" · ~{round(t / 24)}d to full"
             return f" · ~{round(t)}h to full"
-        items = []
-        for f in fulls[:12]:
-            urgent = f["pct"] >= 95 or (f["ttf"] is not None and f["ttf"] < 2)
-            items.append({"severity": "high" if urgent else "warn",
-                          "msg": f"{f['ch']} · {f['loc']} — {f['pct']}% full{_ttf_str(f['ttf'])}"})
-        issues.append({"char": "Launchpads filling up",
+        items = [{"severity": "high" if (f["pct"] >= 95 or (f["ttf"] is not None and f["ttf"] < 2)) else "warn",
+                  "msg": f"{f['ch']} · {f['loc']} — {f['pct']}% full{_ttf_str(f['ttf'])}"} for f in fulls[:12]]
+        issues.append({"char": "Storage filling up",
                        "severity": "high" if any(i["severity"] == "high" for i in items) else "warn",
                        "items": items})
     issues.sort(key=lambda c: 0 if c["severity"] == "high" else 1)

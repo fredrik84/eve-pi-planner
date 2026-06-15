@@ -246,59 +246,76 @@ def _roman_to_int(s: str) -> int | None:
 # short warning strings for anything amiss — wrong/missing routes and near-full storage. Empty
 # list = nothing to flag. (Expired/expiring programs are checked live in the dashboard instead,
 # since that's time-dependent.)
-_TIER_VOL = {0: 0.01, 1: 0.38, 2: 1.5, 3: 6.0, 4: 100.0}   # m³ per unit by PI tier (storage volume)
+def _detect_colony_issues(detail: dict, types: dict, pi: dict) -> list[str]:
+    """Deduped issue KIND codes for this colony (the dashboard turns them into per-character,
+    counted warnings):
+       ext_unrouted — an extractor head isn't routed (extracted P0 goes nowhere)
+       fac_unfed    — a factory has no input route
+       fac_output   — a factory's output isn't routed
+       p0_mismatch  — a P0 is being extracted that NO facility on the planet consumes, so it just
+                      piles up (e.g. extracting Heavy Metal while the factories are set to make
+                      Oxidizing, which wants a different input). A reliable, volume-free signal."""
+    pins = detail.get("pins") or []
+    routes = detail.get("routes") or []
+    src = {r.get("source_pin_id") for r in routes}
+    dst = {r.get("destination_pin_id") for r in routes}
+    schematics = pi.get("schematics") or {}
+    sch_to_out = {v["schematic_id"]: out for out, v in schematics.items()}
+    facility_inputs: set = set()      # every type_id consumed by a facility on this planet
+    extracted: set = set()            # every P0 the extractors pull
+    kinds = set()
+    for pin in pins:
+        pid = pin.get("pin_id")
+        ext = pin.get("extractor_details")
+        if ext:
+            if ext.get("product_type_id"):
+                extracted.add(ext["product_type_id"])
+            if pid not in src:
+                kinds.add("ext_unrouted")
+            continue
+        sid = pin.get("schematic_id") or (pin.get("factory_details") or {}).get("schematic_id")
+        if sid:
+            for inp in (schematics.get(sch_to_out.get(sid), {}) or {}).get("inputs") or []:
+                if inp.get("type_id"):
+                    facility_inputs.add(inp["type_id"])
+            if pid not in dst:
+                kinds.add("fac_unfed")
+            elif pid not in src:
+                kinds.add("fac_output")
+    if facility_inputs and any(p0 not in facility_inputs for p0 in extracted):
+        kinds.add("p0_mismatch")
+    return list(kinds)
+
+
+_TIER_VOL = {0: 0.01, 1: 0.19, 2: 1.5, 3: 6.0, 4: 100.0}   # m³ per unit by PI tier (P1 verified 0.19 in-game)
 def _struct_cap(name: str):
     if "Launchpad" in name: return ("Launchpad", 10000.0)
     if "Storage Facility" in name: return ("Storage", 12000.0)
     if "Command Center" in name: return ("Command center", 500.0)
     return None
 
-def _detect_colony_issues(detail: dict, types: dict) -> list[str]:
-    """Return a deduped list of issue KIND codes for this colony (the dashboard turns them into
-    per-character, counted warnings). Kinds: ext_unrouted, fac_unfed, fac_output. (Near-full
-    storage is tracked separately, with a % and fill rate, by _storage_summary.)"""
-    pins = detail.get("pins") or []
-    routes = detail.get("routes") or []
-    src = {r.get("source_pin_id") for r in routes}
-    dst = {r.get("destination_pin_id") for r in routes}
-    kinds = set()
-    for pin in pins:
-        pid = pin.get("pin_id")
-        if pin.get("extractor_details"):
-            if pid not in src:
-                kinds.add("ext_unrouted")
-        elif pin.get("schematic_id") or pin.get("factory_details"):
-            if pid not in dst:
-                kinds.add("fac_unfed")
-            elif pid not in src:
-                kinds.add("fac_output")
-    return list(kinds)
-
-
-def _pin_volume(pin: dict, types: dict) -> float:
-    return sum((c.get("amount", 0) or 0) * _TIER_VOL.get((types.get(c.get("type_id"), {}) or {}).get("pi_tier") or 0, 0.01)
-               for c in (pin.get("contents") or []))
-
 def _storage_summary(detail: dict, sim: dict | None, types: dict) -> dict | None:
     """Fullest launchpad/storage on the planet + how fast it's filling (the colony's output volume
-    per hour, from the sim — extractors), so the dashboard can show "% full" and "~time to full".
-    Only returned once a container is past 60% (below that it isn't worth flagging)."""
+    per hour, from the sim). Lets the dashboard show "% full" and "~time to full". Only returned
+    past 60% (below that it isn't worth flagging). The dashboard only acts on EXTRACTOR planets —
+    a factory's launchpads are meant to sit full of inputs and drain, so they're not flagged."""
     best = None
     for pin in (detail.get("pins") or []):
         cap = _struct_cap((types.get(pin.get("type_id"), {}) or {}).get("name") or "")
         if not cap:
             continue
         _, capacity = cap
-        vol = _pin_volume(pin, types)
+        vol = sum((c.get("amount", 0) or 0) * _TIER_VOL.get((types.get(c.get("type_id"), {}) or {}).get("pi_tier") or 0, 0.01)
+                  for c in (pin.get("contents") or []))
         if capacity and (best is None or vol / capacity > best["frac"]):
             best = {"frac": vol / capacity, "vol": vol, "cap": capacity}
     if not best or best["frac"] < 0.6:
         return None
     fill_h = 0.0
-    if sim:    # output items accrue in the launchpad at the colony's production rate
+    if sim:
         fill_h = sum((o.get("rate", 0) or 0) * 3600.0 * _TIER_VOL.get(o.get("tier") or 0, 0.01)
                      for o in (sim.get("outputs") or []))
-    return {"vol_m3": round(best["vol"], 1), "cap_m3": best["cap"], "fill_m3_h": round(fill_h, 2)}
+    return {"vol_m3": round(min(best["vol"], best["cap"]), 1), "cap_m3": best["cap"], "fill_m3_h": round(fill_h, 2)}
 
 
 def _fetch_planets(character_id: int, access_token: str) -> None:
@@ -440,11 +457,10 @@ def _fetch_planets(character_id: int, access_token: str) -> None:
                         storage_json = _json.dumps(_st) if _st else None
                 except Exception:
                     storage_json = None
-
-                issues_json = None       # colony health warnings (routes / near-full storage)
+                issues_json = None        # colony health warnings (routes / extractor-recipe mismatch)
                 try:
                     if _detail:
-                        _iss = _detect_colony_issues(_detail, _types)
+                        _iss = _detect_colony_issues(_detail, _types, _pi)
                         issues_json = _json.dumps(_iss) if _iss else None
                 except Exception:
                     issues_json = None
