@@ -1253,7 +1253,8 @@ def dashboard(pp_session: str = Cookie(default=None)):
     # "12 extractions expiring" line, not 12 rows). Stored scan-time kinds + a live expiry check.
     EXPIRING_WINDOW = 3 * 3600                     # 3h — short enough that 1-day cycles don't always trip
     by_char: dict[str, dict[str, list]] = {}      # char -> kind -> [planet labels]
-    expiring: dict[str, int] = {}                 # char -> count (compacted into one global line)
+    expired: dict[str, int] = {}                  # char -> count (extraction cycle events collapse
+    expiring: dict[str, int] = {}                 # char -> count   into one global line each)
     for (r, prods, inputs, pads) in parsed:
         ch = r["ch"] or "?"
         loc = (r["system"] or "?") + (f" P{r['pn']}" if r["pn"] is not None else "")
@@ -1261,14 +1262,13 @@ def dashboard(pp_session: str = Cookie(default=None)):
         ss = _json.loads(r["sim_state"] or "null")
         exp = ss.get("expiry") if isinstance(ss, dict) else None
         if exp and exp < now:
-            kinds.append("expired")
+            expired[ch] = expired.get(ch, 0) + 1
         elif exp and exp - now < EXPIRING_WINDOW:
             expiring[ch] = expiring.get(ch, 0) + 1
         for k in kinds:
             by_char.setdefault(ch, {}).setdefault(k, []).append(loc)
 
     KIND = {                                       # severity, singular, plural
-        "expired":      ("high", "extraction program expired", "extraction programs expired"),
         "ext_unrouted": ("high", "extractor not routed", "extractors not routed"),
         "fac_unfed":    ("high", "factory has no input route", "factories with no input route"),
         "fac_output":   ("high", "factory output not routed", "factory outputs not routed"),
@@ -1286,14 +1286,18 @@ def dashboard(pp_session: str = Cookie(default=None)):
             items.append({"severity": sev, "msg": msg})
         items.sort(key=lambda x: 0 if x["severity"] == "high" else 1)
         issues.append({"char": ch, "severity": "high" if any(i["severity"] == "high" for i in items) else "warn", "items": items})
-    issues.sort(key=lambda c: 0 if c["severity"] == "high" else 1)
 
-    # All "expiring soon" extractors collapse into ONE line (these come in fleets and just need a cycle).
+    # Extraction cycle events come in fleets, so collapse each state into ONE line (char ×count).
+    def _collapse(tally, sev, header, verb):
+        total = sum(tally.values())
+        parts = ", ".join(f"{c} ×{n}" for c, n in sorted(tally.items(), key=lambda x: -x[1]))
+        return {"char": header, "severity": sev,
+                "items": [{"severity": sev, "msg": f"{total} extractor{'s' if total != 1 else ''} {verb} — {parts}"}]}
+    if expired:
+        issues.append(_collapse(expired, "high", "Extractions expired", "expired"))
     if expiring:
-        total = sum(expiring.values())
-        parts = ", ".join(f"{c} ×{n}" for c, n in sorted(expiring.items(), key=lambda x: -x[1]))
-        issues.append({"char": "Extractions expiring soon", "severity": "warn",
-                       "items": [{"severity": "warn", "msg": f"{total} extractor{'s' if total != 1 else ''} expiring within 3h — {parts}"}]})
+        issues.append(_collapse(expiring, "warn", "Extractions expiring soon", "expiring within 3h"))
+    issues.sort(key=lambda c: 0 if c["severity"] == "high" else 1)
 
     return {
         "logged_in": True,
