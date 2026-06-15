@@ -510,7 +510,7 @@ def _fetch_planets(character_id: int, access_token: str) -> None:
 # ── OAuth endpoints ───────────────────────────────────────────────────────────
 
 @router.get("/auth/login")
-def esi_login():
+def esi_login(pp_session: str = Cookie(default=None)):
     if not _is_configured():
         return HTMLResponse(
             "<h2>ESI not configured</h2>"
@@ -519,8 +519,15 @@ def esi_login():
             "<p><a href='/'>Back</a></p>",
             status_code=503,
         )
+    # Capture the caller's existing context NOW (this is a first-party request to our own domain,
+    # so the session cookie is reliably present) and carry it through the OAuth `state`. The cookie
+    # is often dropped on the cross-site redirect back from EVE SSO to /auth/callback, which used to
+    # silently create a NEW context — orphaning the previously-added characters ("adding a 2nd char
+    # removes the 1st"). Threading the context through `state` makes the link survive that cookie loss.
+    _load_sessions()
+    ctx = _sessions.get(pp_session, (None, 0))[1] if pp_session else 0
     state = secrets.token_urlsafe(16)
-    _pending[state] = "ok"
+    _pending[state] = ctx or 0
     scope_enc = SCOPES.replace(" ", "%20")
     url = (
         f"{EVE_AUTH_URL}?response_type=code"
@@ -541,7 +548,9 @@ def esi_callback(
 ):
     if state not in _pending:
         raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
-    _pending.pop(state)
+    state_ctx = _pending.pop(state)        # context captured at /auth/login time (0 if not logged in then)
+    if not isinstance(state_ctx, int):     # legacy "ok" tokens from before this change
+        state_ctx = 0
 
     # Exchange code for tokens
     with httpx.Client() as client:
@@ -583,7 +592,11 @@ def esi_callback(
     ).fetchone()
     if existing and existing["context_id"]:
         context_id = existing["context_id"]
-    # 2. Caller already has a valid session → add character to that context
+    # 2. Caller was logged in when they started this add → join that context. Taken from the OAuth
+    #    `state` (captured at /auth/login), so it works even if the cross-site redirect dropped the
+    #    session cookie. Cookie is only a fallback for the rare case state didn't carry it.
+    elif state_ctx:
+        context_id = state_ctx
     elif pp_session and pp_session in _sessions:
         _, context_id = _sessions[pp_session]
     # 3. New user → create a fresh context

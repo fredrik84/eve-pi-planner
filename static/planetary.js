@@ -2637,7 +2637,7 @@ function renderAnalysis() {
   // Extraction-runtime advice: longest program that keeps extraction above factory demand
   // (+ safety buffer), anchored on the measured headroom and your detected current program.
   _extRt = { ppd: Number(snap.products_per_day) || 0, ipd: Number(snap.isk_per_day) || 0, unit };
-  const rtAdvice = _extRuntimeAdviceHtml(binding.ratio, _currentProgramDays());
+  const rtAdvice = _extRuntimeAdviceHtml(binding.ratio, _currentProgramDays(), binding.name);
 
   el.innerHTML = head + stats + proj
     + `<div class="an-legend">Producing (left) vs the plan’s daily need (right) per P1. A full green bar = factories stay fed; a short red bar is the bottleneck.</div>`
@@ -2716,7 +2716,20 @@ function _extDecayGraphSvg(headroom, L0, safe, edge) {
     <div class="ext-graph-leg"><span><i class="g-k g-k-avg"></i>average fed to factories</span><span><i class="g-k g-k-inst"></i>raw per-cycle yield</span><span><i class="g-k g-k-demand"></i>demand</span></div>`;
 }
 
-function _extRuntimeAdviceHtml(headroom, curDays) {
+// The runtime recommendation is built from each colony's LAST-SCANNED head yield, which depends on
+// where the heads sit (hotspot density) and how far the current program has decayed — so it shifts
+// when you reseat heads or restart programs. This note tells the user the two levers: reseat heads
+// (light touch — raises a colony's own peak, best aimed at the binding material) vs. redeploy a
+// command center (rebalances a material that stays short while others overflow).
+function _reseatNote(headroom, bindName) {
+  const short = headroom < 0.995;
+  const reseat = (short && bindName)
+    ? `recover <b>${_esc(bindName)}</b> without a new colony — <b>reseat its extractor heads</b> onto the strongest hotspots`
+    : `push the safe runtime out — <b>reseat the extractor heads</b> onto the strongest hotspots`;
+  return `<div class="an-sug-note an-reseat-note">These figures track your heads' placement at the last scan and decay as each program runs, so they move when you reseat or restart. To ${reseat} (Agency → Resource Harvesting → hover the P0 for density) and rescan; a fresh, well-placed program pulls a higher peak. If a material stays short while others overflow, redeploy a surplus colony's command center onto it instead.</div>`;
+}
+
+function _extRuntimeAdviceHtml(headroom, curDays, bindName) {
   if (!_extRt || !_extRt.ppd || !headroom) return '';
   const unit = _extRt.unit || 'units', ppd = Math.round(_extRt.ppd).toLocaleString();
   const L0 = (curDays && curDays > 0) ? Math.round(curDays) : 2;
@@ -2730,6 +2743,7 @@ function _extRuntimeAdviceHtml(headroom, curDays) {
         <div class="an-suggest-h">Extraction runtime</div>
         <div class="an-rt-pick">Extraction covers only <b>${Math.round(headroom * 100)}%</b> of demand on ${detected ? `your ~${L0}-day` : `a ~${L0}-day`} program — under a safe margin.</div>
         <ul><li>Shorten the program or add extraction (see above) before the factories fall behind.</li></ul>
+        ${_reseatNote(headroom, bindName)}
       </div>`;
   }
 
@@ -2757,6 +2771,7 @@ function _extRuntimeAdviceHtml(headroom, curDays) {
       </table>
       ${_extDecayGraphSvg(headroom, L0, safe, edge)}
       <div class="an-sug-note">Buffer = how far the program's average extraction sits above factory demand (below 0 = factories starve).${detected ? '' : ' Current length assumed 2d — rescan to detect yours.'} Decay is an estimate — verify against your in-game ECU.</div>
+      ${_reseatNote(headroom, bindName)}
     </div>`;
 }
 

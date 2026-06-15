@@ -1620,6 +1620,9 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .ext-graph-leg .g-k-demand { background: #e0b84a; }
 .an-rt-pick { font-size: 13px; color: #c8d2e6; margin: 2px 0 9px; }
 .an-rt-pick b { color: #6fe0c0; }
+.an-reseat-note { margin-top: 9px; padding: 8px 10px; border-left: 2px solid #3a4a6a;
+  background: rgba(58,74,106,.12); border-radius: 0 5px 5px 0; line-height: 1.5; }
+.an-reseat-note b { color: #c8d2e6; }
 .an-rt-tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
 .an-rt-tbl th { font-size: 9.5px; text-transform: uppercase; letter-spacing: .4px; color: #5a6b80;
   text-align: left; padding: 3px 8px; border-bottom: 1px solid #1d3340; }
