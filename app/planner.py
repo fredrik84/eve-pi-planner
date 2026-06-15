@@ -1168,7 +1168,9 @@ def dashboard(pp_session: str = Cookie(default=None)):
         for p in prods:
             price_tids.add(p["type_id"])
         for it in pads:
-            pad_all.append(it); price_tids.add(it["type_id"])
+            price_tids.add(it["type_id"])
+            if not r["is_ext"]:        # "In pads now" = sellable FACTORY product only; an extractor's
+                pad_all.append(it)     # P1 in its launchpad is intermediate (hauled to factories, not sold)
     prices = fetch_prices(list(price_tids)) if price_tids else {}
 
     factories = []
