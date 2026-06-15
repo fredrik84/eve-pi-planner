@@ -164,7 +164,7 @@ def ensure_char_tables():
         con.execute("ALTER TABLE pp_char_planets ADD COLUMN planet_num INTEGER")
     except Exception:
         pass
-    for _col in ("products TEXT", "pad_contents TEXT", "pad_inputs TEXT", "sim_state TEXT", "issues TEXT", "scanned_at REAL", "checkpoint_at REAL"):  # JSON cols + scan epoch + colony checkpoint (last_cycle_start) the contents are "as of"
+    for _col in ("products TEXT", "pad_contents TEXT", "pad_inputs TEXT", "sim_state TEXT", "issues TEXT", "scanned_at REAL", "checkpoint_at REAL", "storage TEXT"):  # JSON cols + scan/checkpoint epochs + fullest-container fill state
         try:
             con.execute(f"ALTER TABLE pp_char_planets ADD COLUMN {_col}")
         except Exception:
@@ -255,7 +255,8 @@ def _struct_cap(name: str):
 
 def _detect_colony_issues(detail: dict, types: dict) -> list[str]:
     """Return a deduped list of issue KIND codes for this colony (the dashboard turns them into
-    per-character, counted warnings). Kinds: ext_unrouted, fac_unfed, fac_output, full."""
+    per-character, counted warnings). Kinds: ext_unrouted, fac_unfed, fac_output. (Near-full
+    storage is tracked separately, with a % and fill rate, by _storage_summary.)"""
     pins = detail.get("pins") or []
     routes = detail.get("routes") or []
     src = {r.get("source_pin_id") for r in routes}
@@ -263,7 +264,6 @@ def _detect_colony_issues(detail: dict, types: dict) -> list[str]:
     kinds = set()
     for pin in pins:
         pid = pin.get("pin_id")
-        tname = (types.get(pin.get("type_id"), {}) or {}).get("name") or ""
         if pin.get("extractor_details"):
             if pid not in src:
                 kinds.add("ext_unrouted")
@@ -272,14 +272,33 @@ def _detect_colony_issues(detail: dict, types: dict) -> list[str]:
                 kinds.add("fac_unfed")
             elif pid not in src:
                 kinds.add("fac_output")
-        cap = _struct_cap(tname)
-        if cap:
-            _, capacity = cap
-            vol = sum((c.get("amount", 0) or 0) * _TIER_VOL.get((types.get(c.get("type_id"), {}) or {}).get("pi_tier") or 0, 0.01)
-                      for c in (pin.get("contents") or []))
-            if capacity and vol >= 0.9 * capacity:
-                kinds.add("full")
     return list(kinds)
+
+
+def _pin_volume(pin: dict, types: dict) -> float:
+    return sum((c.get("amount", 0) or 0) * _TIER_VOL.get((types.get(c.get("type_id"), {}) or {}).get("pi_tier") or 0, 0.01)
+               for c in (pin.get("contents") or []))
+
+def _storage_summary(detail: dict, sim: dict | None, types: dict) -> dict | None:
+    """Fullest launchpad/storage on the planet + how fast it's filling (the colony's output volume
+    per hour, from the sim — extractors), so the dashboard can show "% full" and "~time to full".
+    Only returned once a container is past 60% (below that it isn't worth flagging)."""
+    best = None
+    for pin in (detail.get("pins") or []):
+        cap = _struct_cap((types.get(pin.get("type_id"), {}) or {}).get("name") or "")
+        if not cap:
+            continue
+        _, capacity = cap
+        vol = _pin_volume(pin, types)
+        if capacity and (best is None or vol / capacity > best["frac"]):
+            best = {"frac": vol / capacity, "vol": vol, "cap": capacity}
+    if not best or best["frac"] < 0.6:
+        return None
+    fill_h = 0.0
+    if sim:    # output items accrue in the launchpad at the colony's production rate
+        fill_h = sum((o.get("rate", 0) or 0) * 3600.0 * _TIER_VOL.get(o.get("tier") or 0, 0.01)
+                     for o in (sim.get("outputs") or []))
+    return {"vol_m3": round(best["vol"], 1), "cap_m3": best["cap"], "fill_m3_h": round(fill_h, 2)}
 
 
 def _fetch_planets(character_id: int, access_token: str) -> None:
@@ -405,13 +424,22 @@ def _fetch_planets(character_id: int, access_token: str) -> None:
                 # to request time (ESI's stored contents are a stale checkpoint; the colony keeps
                 # producing). Extractor planets only; factory imports fall back to the snapshot.
                 sim_state_json = None
+                _sim = None
                 if _detail:
                     try:
                         from app.pi_sim import colony_sim_state
                         _sim = colony_sim_state(_detail, _pi)
                         sim_state_json = _json.dumps(_sim) if _sim else None
                     except Exception:
+                        _sim = None
                         sim_state_json = None
+                storage_json = None       # fullest launchpad/storage fill state (% + rate to full)
+                try:
+                    if _detail:
+                        _st = _storage_summary(_detail, _sim, _types)
+                        storage_json = _json.dumps(_st) if _st else None
+                except Exception:
+                    storage_json = None
 
                 issues_json = None       # colony health warnings (routes / near-full storage)
                 try:
@@ -449,11 +477,11 @@ def _fetch_planets(character_id: int, access_token: str) -> None:
                     INSERT OR REPLACE INTO pp_char_planets
                         (character_id, planet_id, planet_type, solar_system_id,
                          upgrade_level, num_pins, is_extractor, p0_type_id, p0_name,
-                         planet_num, products, pad_contents, pad_inputs, sim_state, issues, scanned_at, checkpoint_at)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                         planet_num, products, pad_contents, pad_inputs, sim_state, issues, scanned_at, checkpoint_at, storage)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """, (character_id, planet_id, planet_type, solar_system_id,
                       upgrade_level, num_pins, is_extractor, p0_type_id, p0_name,
-                      planet_num, products_json, pads_json, pad_inputs_json, sim_state_json, issues_json, _scan_ts, checkpoint_at))
+                      planet_num, products_json, pads_json, pad_inputs_json, sim_state_json, issues_json, _scan_ts, checkpoint_at, storage_json))
 
         con.commit()
         con.close()

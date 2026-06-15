@@ -1147,7 +1147,7 @@ def dashboard(pp_session: str = Cookie(default=None)):
                cp.is_extractor AS is_ext, cp.products AS products,
                cp.pad_inputs AS pad_inputs, cp.pad_contents AS pad_contents,
                cp.issues AS issues, cp.sim_state AS sim_state,
-               cp.scanned_at AS scanned_at, cp.checkpoint_at AS checkpoint_at
+               cp.scanned_at AS scanned_at, cp.checkpoint_at AS checkpoint_at, cp.storage AS storage
         FROM pp_char_planets cp
         JOIN pp_characters c ON c.character_id = cp.character_id
         LEFT JOIN solar_systems s ON s.system_id = cp.solar_system_id
@@ -1272,7 +1272,6 @@ def dashboard(pp_session: str = Cookie(default=None)):
         "ext_unrouted": ("high", "extractor not routed", "extractors not routed"),
         "fac_unfed":    ("high", "factory has no input route", "factories with no input route"),
         "fac_output":   ("high", "factory output not routed", "factory outputs not routed"),
-        "full":         ("warn", "launchpad/storage near full", "launchpads/storage near full"),
     }
     issues = []
     for ch in sorted(by_char):
@@ -1297,6 +1296,44 @@ def dashboard(pp_session: str = Cookie(default=None)):
         issues.append(_collapse(expired, "high", "Extractions expired", "expired"))
     if expiring:
         issues.append(_collapse(expiring, "warn", "Extractions expiring soon", "expiring within 3h"))
+
+    # Near-full launchpads/storage — projected % full + estimated time-to-full, so you can judge
+    # whether it's "haul now" or "later". Volume is projected from the checkpoint at the colony's
+    # output rate (time-to-full only when we know that rate — extractors).
+    fulls = []
+    for (r, prods, inputs, pads) in parsed:
+        st = _json.loads(r["storage"] or "null")
+        if not st:
+            continue
+        anchor = r["checkpoint_at"] or r["scanned_at"]
+        el_h = max(0.0, (now - anchor) / 3600.0) if anchor else 0.0
+        cap = st["cap_m3"] or 1
+        vol = min(cap, st["vol_m3"] + st.get("fill_m3_h", 0.0) * el_h)
+        pct = vol / cap * 100.0
+        if pct < 80:
+            continue
+        ttf = ((cap - vol) / st["fill_m3_h"]) if st.get("fill_m3_h", 0) > 0 and vol < cap else None
+        loc = (r["system"] or "?") + (f" P{r['pn']}" if r["pn"] is not None else "")
+        fulls.append({"ch": r["ch"] or "?", "loc": loc, "pct": round(pct), "ttf": ttf})
+    if fulls:
+        fulls.sort(key=lambda x: (x["ttf"] if x["ttf"] is not None else 1e9, -x["pct"]))
+
+        def _ttf_str(t):
+            if t is None:
+                return ""
+            if t < 1:
+                return " · full within the hour"
+            if t >= 24:
+                return f" · ~{round(t / 24)}d to full"
+            return f" · ~{round(t)}h to full"
+        items = []
+        for f in fulls[:12]:
+            urgent = f["pct"] >= 95 or (f["ttf"] is not None and f["ttf"] < 2)
+            items.append({"severity": "high" if urgent else "warn",
+                          "msg": f"{f['ch']} · {f['loc']} — {f['pct']}% full{_ttf_str(f['ttf'])}"})
+        issues.append({"char": "Launchpads filling up",
+                       "severity": "high" if any(i["severity"] == "high" for i in items) else "warn",
+                       "items": items})
     issues.sort(key=lambda c: 0 if c["severity"] == "high" else 1)
 
     return {
