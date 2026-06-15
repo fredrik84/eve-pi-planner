@@ -3148,7 +3148,7 @@ function _updateRefillDays() {
   const sellValue = (m.iskPerDay || 0) * minDays;
   const lead = `<div class="refill-lead">With what you pasted, <b>${_esc(binding.name)}</b> runs out first.</div>`;
   const tiles = [
-    `<div class="refill-stat"><span class="refill-stat-val">${_dur(minDays)}</span>
+    `<div class="refill-stat"><span class="refill-stat-val">${_fmtHours(minDays * 24)}</span>
        <span class="refill-stat-lbl">before refill</span></div>`,
   ];
   if (m.productsPerDay)
