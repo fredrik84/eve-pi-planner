@@ -2189,12 +2189,6 @@ async function deleteSavedPlan(id, srvId) {
 // factories eat at full rate). Answers "am I extracting/producing enough to keep this plan's
 // factories refilled?" with headline stats + per-P1 bars.
 let _analyzeSnaps = [];
-// Show days normally, but drop to hours when it's under a day (otherwise it rounds to "0 days").
-function _fmtHours(days * 24) {
-  if (days >= 1) { const d = days >= 10 ? Math.round(days) : Math.round(days * 10) / 10; return `${d.toLocaleString()} ${d === 1 ? 'day' : 'days'}`; }
-  const h = days * 24, hr = h >= 10 ? Math.round(h) : Math.round(h * 10) / 10;
-  return `${hr.toLocaleString()} ${hr === 1 ? 'hour' : 'hours'}`;
-}
 
 // Per-material drill-down: every colony producing a given output, weakest (underperforming) first.
 let _anExpanded = new Set();   // material type_ids whose planet breakdown is expanded
