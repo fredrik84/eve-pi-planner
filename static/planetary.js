@@ -253,11 +253,18 @@ function renderDashboard(data) {
     }).join(', ');
     exItems.push(`<li><b>${ex.skills_grew.length} trained up</b> since you saved${ex.plan_name ? ` “${_esc(ex.plan_name)}”` : ''} — ${names}</li>`);
   }
+  let projHtml = '';
+  if (ex.add_isk_per_day) {
+    const u = (ex.add_units_per_day && ex.add_unit_label)
+      ? `~${ex.add_units_per_day.toLocaleString()} ${_esc(ex.add_unit_label)}/day` : '';
+    projHtml = `<div class="dash-expand-proj">Using it could add roughly <b>${u ? u + ' · ' : ''}${_fmtIsk(ex.add_isk_per_day)}/day</b> <span class="dash-expand-est">— rough estimate (scales your current output by the spare planets); re-run for the exact plan</span></div>`;
+  }
   const expansionHtml = exItems.length ? `
     <section class="pp-card dash-expand">
       <div class="pp-card-title">Spare capacity <span class="pp-card-hint">— unused fleet you could plan into</span></div>
       <div class="pp-card-body">
         <ul class="dash-expand-list">${exItems.join('')}</ul>
+        ${projHtml}
         <div class="dash-expand-cta">${ex.plan_name
           ? `Re-run <b>“${_esc(ex.plan_name)}”</b> in <a href="#" onclick="switchTab('planetary');return false;">Planetary Planning</a> to scale up — a re-run includes every character and their current skills.`
           : `Build a plan in <a href="#" onclick="switchTab('planetary');return false;">Planetary Planning</a> to use it (and to start tracking skill growth).`}</div>

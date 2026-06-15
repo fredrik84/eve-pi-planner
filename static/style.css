@@ -1596,6 +1596,10 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .dash-expand-list { margin: 0 0 9px; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
 .dash-expand-list li { color: #aeb6c6; font-size: 13px; line-height: 1.4; }
 .dash-expand-list b { color: #cfe0f5; }
+.dash-expand-proj { margin: 0 0 9px; padding: 7px 10px; border-radius: 5px; background: rgba(74,134,197,.10);
+  color: #cfe0f5; font-size: 13px; line-height: 1.45; }
+.dash-expand-proj b { color: #9fd0ff; }
+.dash-expand-est { color: #8b93a6; font-size: 11px; font-weight: 400; }
 .dash-expand-cta { color: #8b93a6; font-size: 12px; line-height: 1.5; }
 .dash-expand-cta a { color: #6fb0e0; text-decoration: none; }
 .dash-expand-cta a:hover { text-decoration: underline; }

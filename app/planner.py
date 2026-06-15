@@ -1190,7 +1190,8 @@ def _expansion_capacity(context_id: int) -> dict:
             if d_ccu > 0 or d_ic > 0:
                 grew.append({"name": r["nm"], "ccu_up": max(0, d_ccu), "ic_up": max(0, d_ic)})
     return {"idle_chars": idle, "free_slots": free_slots, "free_slot_chars": free_chars,
-            "skills_grew": grew, "plan_name": base_row["plan_name"] if base_row else None}
+            "skills_grew": grew, "plan_name": base_row["plan_name"] if base_row else None,
+            "total_used": sum(used.values())}
 
 
 @router.get("/api/dashboard")
@@ -1241,6 +1242,7 @@ def dashboard(pp_session: str = Cookie(default=None)):
                                        # warning) — the rescan button scopes to these, not the whole fleet
     total_run_value = total_value_per_day = 0.0
     soonest_h = None
+    cur_units_by_prod: dict[str, float] = {}   # current units/day by product (for the expansion estimate)
     produced_by_tid: dict[int, float] = {}     # product made since checkpoint (projected up)
     for (r, prods, inputs, pads) in parsed:
         if r["is_ext"] or not prods:
@@ -1282,6 +1284,7 @@ def dashboard(pp_session: str = Cookie(default=None)):
         vpd = fph24 * price
         total_run_value += run_value
         total_value_per_day += vpd
+        cur_units_by_prod[prod.get("name") or f"#{tid}"] = cur_units_by_prod.get(prod.get("name") or f"#{tid}", 0.0) + fph24
         soonest_h = tte_h if soonest_h is None else min(soonest_h, tte_h)
         # Finished product ready to haul off THIS planet now: what's in the pad + what's been made
         # since the checkpoint. The actionable per-planet figure (pairs with "runs out").
@@ -1411,6 +1414,17 @@ def dashboard(pp_session: str = Cookie(default=None)):
     issues.sort(key=lambda c: 0 if c["severity"] == "high" else 1)
 
     expansion = _expansion_capacity(context_id)
+    # Rough upside of using that capacity: a balanced colony layout scales ~linearly with planets, so
+    # adding free_slots over the total_used currently deployed lifts output by free_slots/total_used.
+    # An ESTIMATE (new planets may be thinner / in worse systems) — the card links to the real re-run.
+    tu, fs = expansion.get("total_used") or 0, expansion.get("free_slots") or 0
+    if tu > 0 and fs > 0 and total_value_per_day > 0:
+        cf = fs / tu
+        expansion["add_isk_per_day"] = round(total_value_per_day * cf, 2)
+        if len(cur_units_by_prod) == 1:
+            (pname, u), = cur_units_by_prod.items()
+            expansion["add_units_per_day"] = round(u * cf)
+            expansion["add_unit_label"] = pname
 
     return {
         "logged_in": True,
