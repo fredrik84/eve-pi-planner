@@ -2190,7 +2190,7 @@ async function deleteSavedPlan(id, srvId) {
 // factories refilled?" with headline stats + per-P1 bars.
 let _analyzeSnaps = [];
 // Show days normally, but drop to hours when it's under a day (otherwise it rounds to "0 days").
-function _dur(days) {
+function _fmtHours(days * 24) {
   if (days >= 1) { const d = days >= 10 ? Math.round(days) : Math.round(days * 10) / 10; return `${d.toLocaleString()} ${d === 1 ? 'day' : 'days'}`; }
   const h = days * 24, hr = h >= 10 ? Math.round(h) : Math.round(h * 10) / 10;
   return `${hr.toLocaleString()} ${hr === 1 ? 'hour' : 'hours'}`;
@@ -2362,7 +2362,7 @@ function renderAnalysis() {
   const stat = (val, lbl, cls) => `<div class="an-stat ${cls || ''}"><div class="an-stat-val">${val}</div><div class="an-stat-lbl">${lbl}</div></div>`;
   const head = `<div class="an-headline ${fed ? 'an-ok' : 'an-bad'}">
       <div class="an-head-word">${fed ? 'KEEPS UP' : 'FALLS BEHIND'}</div>
-      <div class="an-head-sub">Your colonies produce <b>${feedPct}%</b> of what “${_esc(snap.name)}” needs to stay fed${fed ? `, and refill the factories every <b>${refillDays ? _dur(refillDays) : '—'}</b>.` : ` — short on <b>${_esc(binding.name)}</b>.`}</div>
+      <div class="an-head-sub">Your colonies produce <b>${feedPct}%</b> of what “${_esc(snap.name)}” needs to stay fed${fed ? `, and refill the factories every <b>${refillDays ? _fmtHours(refillDays * 24) : '—'}</b>.` : ` — short on <b>${_esc(binding.name)}</b>.`}</div>
     </div>`;
 
   // Achievable final output is throttled by the scarcest input: the factories can only run at the
@@ -2412,12 +2412,12 @@ function renderAnalysis() {
     const days = perFacM3 ? 30000 / perFacM3 : 0;
     if (perFacP1) {
       const cells = [
-        stat(_dur(days), 'between refills · 3 LP', 'an-ok'),
+        stat(_fmtHours(days * 24), 'between refills · 3 LP', 'an-ok'),
         stat(`~${Math.round(perFacM3).toLocaleString()} <span class="an-of">m³/day</span>`, 'of P1 per factory to haul', ''),
         nfac ? stat(String(nfac), 'factories to service', '') : '',
       ].join('');
       proj = `<div class="an-proj">`
-        + `<div class="an-proj-h">Refill run — empty extractors & top up factories every <b>${_dur(days)}</b></div>`
+        + `<div class="an-proj-h">Refill run — empty extractors & top up factories every <b>${_fmtHours(days * 24)}</b></div>`
         + `<div class="an-stats">${cells}</div></div>`;
     }
   }
