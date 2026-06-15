@@ -2723,10 +2723,22 @@ function _extDecayGraphSvg(headroom, L0, safe, edge) {
 // command center (rebalances a material that stays short while others overflow).
 function _reseatNote(headroom, bindName) {
   const short = headroom < 0.995;
-  const reseat = (short && bindName)
-    ? `recover <b>${_esc(bindName)}</b> without a new colony — <b>reseat its extractor heads</b> onto the strongest hotspots`
-    : `push the safe runtime out — <b>reseat the extractor heads</b> onto the strongest hotspots`;
-  return `<div class="an-sug-note an-reseat-note">These figures track your heads' placement at the last scan and decay as each program runs, so they move when you reseat or restart. To ${reseat} (Agency → Resource Harvesting → hover the P0 for density) and rescan; a fresh, well-placed program pulls a higher peak. If a material stays short while others overflow, redeploy a surplus colony's command center onto it instead.</div>`;
+  const reseatTxt = (short && bindName)
+    ? `Move <b>${_esc(bindName)}</b>'s heads onto stronger hotspots, then rescan.`
+    : `Move extractor heads onto stronger hotspots, then rescan.`;
+  return `<div class="an-levers">
+      <div class="an-levers-lead">Yields are from your last scan and decay as a program runs — so this shifts when you reseat or restart. Two ways to lift it:</div>
+      <div class="an-lever-row">
+        <div class="an-lever an-lever-a">
+          <div class="an-lever-top"><span class="an-lever-ico">⟳</span><span class="an-lever-ttl">Reseat heads</span><span class="an-lever-tag">low effort</span></div>
+          <div class="an-lever-txt">${reseatTxt} A fresh, well-placed program pulls a higher peak.</div>
+        </div>
+        <div class="an-lever an-lever-b">
+          <div class="an-lever-top"><span class="an-lever-ico">⇄</span><span class="an-lever-ttl">Redeploy a CC</span><span class="an-lever-tag">rebalance</span></div>
+          <div class="an-lever-txt">If a material stays short while others overflow, move a surplus colony's command center onto it.</div>
+        </div>
+      </div>
+    </div>`;
 }
 
 function _extRuntimeAdviceHtml(headroom, curDays, bindName) {
