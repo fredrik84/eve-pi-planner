@@ -2754,7 +2754,7 @@ function _leverCards(headroom, bindName) {
       <div class="an-suggest-h">Lift yields &amp; balance</div>
       <div class="an-levers-lead">Figures track your heads' placement at the last scan and decay as a program runs — so they shift when you reseat or restart. Two levers:</div>
       <div class="an-lever-row">
-        ${card('reseat', 'an-lever-a', '⟳', 'Reseat heads', 'low effort', reseatTxt, 'yield burn-down')}
+        ${card('reseat', 'an-lever-a', '⟳', 'Reseat heads', 'low effort', reseatTxt, 'reseat candidates')}
         ${card('redeploy', 'an-lever-b', '⇄', 'Redeploy a CC', 'rebalance', "If a material stays short while others overflow, move a surplus colony's command center onto it.", 'rebalance moves')}
       </div>
     </div>`;
@@ -2778,51 +2778,41 @@ function _decayingColonies() {
   }));
   return out.sort((a, b) => b.decline - a.decline);
 }
-// Mini column chart of a colony's yield across its programs (oldest → newest). Bar count = programs
-// logged (so "how much data" is visible at a glance); a falling staircase = depleting hotspots. The
-// newest bar is accented so "now" stands out.
-function _yieldBars(peaks, declining) {
-  const n = peaks.length, W = 140, H = 34, gap = n > 1 ? 3 : 0;
-  const max = Math.max(...peaks) || 1;
-  const bw = (W - gap * (n - 1)) / n;
-  const bars = peaks.map((v, i) => {
-    const h = Math.max(2, (v / max) * (H - 2)), x = i * (bw + gap), y = H - h, last = i === n - 1;
-    const cls = last ? (declining ? 'an-yb-now-down' : 'an-yb-now') : (declining ? 'an-yb-down' : 'an-yb-up');
-    return `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" rx="1" class="${cls}"/>`;
-  }).join('');
-  return `<svg class="an-yb" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">${bars}</svg>`;
-}
+// Reseat candidates: ONLY the colonies measurably below their proven best (hotspots depleting). The
+// steady + still-building ones are collapsed to a one-line count — no point listing every toon.
 function _burndownSection() {
-  const cols = _decayingColonies();
-  if (!cols.length)
-    return `<div class="an-suggest an-suggest-burndown"><div class="an-suggest-h">Yield burn-down</div>`
-      + `<div class="an-levers-lead">No yield logged yet — <b>Rescan</b> to record a baseline, then again after your next reseat. Each rescan after a restart adds one bar.</div></div>`;
-  const isDown = c => c.n >= 2 && c.decline >= 0.05;
-  const dec = cols.filter(isDown).length;
-  const steady = cols.filter(c => c.n >= 2 && c.decline < 0.05).length;
-  const base = cols.filter(c => c.n < 2).length;
-  const chip = (n, cls, lbl) => n ? `<span class="an-bd-chip ${cls}">${n} ${lbl}</span>` : '';
-  const summary = `<div class="an-bd-summary">${chip(dec, 'an-bd-chip-down', 'declining')}${chip(steady, 'an-bd-chip-steady', 'steady')}${chip(base, 'an-bd-chip-base', 'building baseline')}</div>`;
-  const lead = `Each <b>bar = one extraction program</b> (oldest → newest), height = its yield. A falling staircase means that colony's hotspots are depleting — <b>reseat</b> onto fresh ones. Flat = steady, leave it.`;
-  const cards = cols.map(c => {
+  const cols = _decayingColonies();   // sorted worst-first
+  const declining = cols.filter(c => c.n >= 2 && c.decline >= 0.10);
+  const steady = cols.filter(c => c.n >= 2 && c.decline < 0.10).length;
+  const building = cols.filter(c => c.n < 2).length;
+  const restBits = [];
+  if (steady) restBits.push(`${steady} holding steady`);
+  if (building) restBits.push(`${building} still building a baseline (need a 2nd program)`);
+  const rest = restBits.length ? `<div class="an-bd-rest">${restBits.join(' · ')} — not shown.</div>` : '';
+
+  if (!declining.length) {
+    const msg = (building && !steady)
+      ? `Tracking just started — one program logged per colony so far. Keep reseating/restarting and <b>Rescan</b> as usual; once a colony has a 2nd program, any that's lost yield shows up here, worst first, with a reseat prompt.`
+      : `Nothing to reseat — every tracked colony is holding its yield. Any that starts depleting will appear here automatically.`;
+    return `<div class="an-suggest an-suggest-burndown"><div class="an-suggest-h">Reseat candidates</div>`
+      + `<div class="an-levers-lead">${msg}</div>${rest}</div>`;
+  }
+
+  const cards = declining.map(c => {
     const loc = c.system ? `${_esc(c.system)}${c.planet_num != null ? ' P' + c.planet_num : ''}` : '';
-    const down = isDown(c);
-    const cls = c.n < 2 ? 'an-bd-new' : (c.decline >= 0.15 ? 'an-bd-bad' : c.decline >= 0.05 ? 'an-bd-warn' : 'an-bd-ok');
-    const trend = c.n < 2 ? `<span class="an-bd-trend an-bd-flat">building baseline</span>`
-      : (down ? `<span class="an-bd-trend an-bd-down">▼ ${Math.round(c.decline * 100)}% off peak</span>`
-              : `<span class="an-bd-trend an-bd-steady">● holding</span>`);
-    return `<div class="an-bd-card ${cls}">
+    const pct = Math.round(c.cur / c.max * 100), lost = c.max - c.cur;
+    const sev = c.decline >= 0.25 ? 'an-bd-bad' : 'an-bd-warn';
+    return `<div class="an-bd-card ${sev}">
         <div class="an-bd-head"><span class="an-bd-loc">${_esc(c.char)}${loc ? ' · ' + loc : ''}</span><span class="an-bd-p0">${_esc(c.p0 || '')}</span></div>
-        ${_yieldBars(c.peaks, down)}
-        <div class="an-bd-foot">
-          <span class="an-bd-now">${c.cur.toLocaleString()}<span class="an-bd-unit"> P0/day now</span></span>
-          ${trend}
-        </div>
-        <div class="an-bd-meta">peak ${c.max.toLocaleString()} · ${c.n} of ${_YIELD_CAP} programs</div>
+        <div class="an-bd-meter"><div class="an-bd-meter-fill" style="width:${pct}%"></div><span class="an-bd-meter-lbl">${pct}% of best</span></div>
+        <div class="an-bd-foot"><span class="an-bd-drop">▼ ${Math.round(c.decline * 100)}% · −${lost.toLocaleString()} P0/day</span><span class="an-bd-meta">${c.cur.toLocaleString()} now · best ${c.max.toLocaleString()} · ${c.n} programs</span></div>
       </div>`;
   }).join('');
-  return `<div class="an-suggest an-suggest-burndown"><div class="an-suggest-h">Yield burn-down</div>`
-    + summary + `<div class="an-levers-lead">${lead}</div><div class="an-bd-grid">${cards}</div></div>`;
+  return `<div class="an-suggest an-suggest-burndown">
+      <div class="an-suggest-h">Reseat candidates — ${declining.length} losing yield</div>
+      <div class="an-levers-lead">These colonies extract below their proven best — the hotspots are depleting. <b>Reseat the heads</b> onto fresh spots, worst first, then <b>Rescan</b>:</div>
+      <div class="an-bd-grid">${cards}</div>${rest}
+    </div>`;
 }
 
 function _extRuntimeAdviceHtml(headroom, curDays) {
