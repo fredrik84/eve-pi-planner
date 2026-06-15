@@ -2637,7 +2637,7 @@ function renderAnalysis() {
   // Levers head the advice; each reveals its own section. Reseat → yield burn-down, Redeploy → the
   // rebalance moves above. "Add factories" (a distinct surplus opportunity) always shows.
   let suggest = _leverCards(binding.ratio, binding.name);
-  if (_anLeverOpen.has('reseat')) suggest += _burndownSection();
+  if (_anLeverOpen.has('reseat')) suggest += _burndownSection(rows);
   if (_anLeverOpen.has('redeploy')) suggest += rebal;
   if (addFactories) suggest += addFactories;
 
@@ -2765,53 +2765,68 @@ const _YIELD_CAP = 10;   // programs kept per colony server-side (esi._YIELD_KEE
 // One sample per extraction program (logged at scan time, deduped by install). The trend is the
 // only way to tell "this colony's hotspots are depleting → reseat" from "it's just a thin planet"
 // (a thin planet is steady-low; a depleting one trends DOWN). Density-free, fleet-independent.
-function _decayingColonies() {
+// Colonies producing P1 `t`, weakest output first, each annotated with its measured decline (from
+// yield_history) so we can flag the ones a reseat would actually recover vs ones that are just thin.
+function _producersOf(t) {
   const out = [];
   (_ppCharsData || []).forEach(ch => (ch.planets || []).forEach(p => {
     if (!p.is_extractor) return;
-    const h = (p.yield_history || []).filter(s => s.peak > 0);
-    if (!h.length) return;
-    const peaks = h.map(s => s.peak);
-    const cur = peaks[peaks.length - 1], max = Math.max(...peaks);
-    out.push({ char: ch.name, system: p.system, planet_num: p.planet_num, p0: p.p0_name,
-               peaks, cur, max, n: peaks.length, decline: max > 0 ? (max - cur) / max : 0 });
+    (p.production || []).forEach(o => {
+      if (String(o.type_id) !== String(t)) return;
+      const h = (p.yield_history || []).filter(s => s.peak > 0).map(s => s.peak);
+      const cur = h.length ? h[h.length - 1] : null, max = h.length ? Math.max(...h) : null;
+      out.push({ char: ch.name, system: p.system, planet_num: p.planet_num, p0: p.p0_name,
+                 perDay: o.per_day || 0, n: h.length, decline: (max && max > 0) ? (max - cur) / max : 0 });
+    });
   }));
-  return out.sort((a, b) => b.decline - a.decline);
+  return out.sort((a, b) => a.perDay - b.perDay);   // weakest producer first
 }
-// Reseat candidates: ONLY the colonies measurably below their proven best (hotspots depleting). The
-// steady + still-building ones are collapsed to a one-line count — no point listing every toon.
-function _burndownSection() {
-  const cols = _decayingColonies();   // sorted worst-first
-  const declining = cols.filter(c => c.n >= 2 && c.decline >= 0.10);
-  const steady = cols.filter(c => c.n >= 2 && c.decline < 0.10).length;
-  const building = cols.filter(c => c.n < 2).length;
-  const restBits = [];
-  if (steady) restBits.push(`${steady} holding steady`);
-  if (building) restBits.push(`${building} still building a baseline (need a 2nd program)`);
-  const rest = restBits.length ? `<div class="an-bd-rest">${restBits.join(' · ')} — not shown.</div>` : '';
 
-  if (!declining.length) {
-    const msg = (building && !steady)
-      ? `Tracking just started — one program logged per colony so far. Keep reseating/restarting and <b>Rescan</b> as usual; once a colony has a 2nd program, any that's lost yield shows up here, worst first, with a reseat prompt.`
-      : `Nothing to reseat — every tracked colony is holding its yield. Any that starts depleting will appear here automatically.`;
+// Reseat list, scoped to the materials the plan is SHORT on (reseating a surplus P0 is pointless).
+// Grouped per short P1, showing the worst few producing colonies — those drag the shortage, so they're
+// where a reseat helps most. A measured decline is flagged "off best" (reseat recovers it).
+const _RESEAT_PER_P1 = 5;   // worst N colonies shown per short material
+function _burndownSection(rows) {
+  const short = (rows || []).filter(r => r.ratio < 0.995);   // materials below the plan's need
+  if (!short.length)
     return `<div class="an-suggest an-suggest-burndown"><div class="an-suggest-h">Reseat candidates</div>`
-      + `<div class="an-levers-lead">${msg}</div>${rest}</div>`;
-  }
+      + `<div class="an-levers-lead">Every material this plan needs is covered — no shortage to chase. (Reseating a depleting colony still extends runtime, but nothing here is short.)</div></div>`;
 
-  const cards = declining.map(c => {
-    const loc = c.system ? `${_esc(c.system)}${c.planet_num != null ? ' P' + c.planet_num : ''}` : '';
-    const pct = Math.round(c.cur / c.max * 100), lost = c.max - c.cur;
-    const sev = c.decline >= 0.25 ? 'an-bd-bad' : 'an-bd-warn';
-    return `<div class="an-bd-card ${sev}">
-        <div class="an-bd-head"><span class="an-bd-loc">${_esc(c.char)}${loc ? ' · ' + loc : ''}</span><span class="an-bd-p0">${_esc(c.p0 || '')}</span></div>
-        <div class="an-bd-meter"><div class="an-bd-meter-fill" style="width:${pct}%"></div><span class="an-bd-meter-lbl">${pct}% of best</span></div>
-        <div class="an-bd-foot"><span class="an-bd-drop">▼ ${Math.round(c.decline * 100)}% · −${lost.toLocaleString()} P0/day</span><span class="an-bd-meta">${c.cur.toLocaleString()} now · best ${c.max.toLocaleString()} · ${c.n} programs</span></div>
+  const groups = short.map(r => {
+    const prods = _producersOf(r.t);
+    const shortBy = Math.max(0, Math.round(r.need - r.have));
+    if (!prods.length)
+      return `<div class="an-bd-group"><div class="an-bd-group-h">${_esc(r.name)} <span class="an-bd-group-sub">short ${shortBy.toLocaleString()}/day · no colony makes it — add one (Redeploy)</span></div></div>`;
+    const worst = prods.slice(0, _RESEAT_PER_P1);
+    // Target average for the weakest N: lifting just them by the whole shortfall closes the gap, so
+    // each needs to average (their current total + shortfall) / N. Compare to their current average.
+    const sumWorst = worst.reduce((a, c) => a + c.perDay, 0);
+    const curAvg = Math.round(sumWorst / worst.length);
+    const targetAvg = Math.round((sumWorst + shortBy) / worst.length);
+    const rowsHtml = worst.map(c => {
+      const loc = c.system ? `${_esc(c.system)}${c.planet_num != null ? ' P' + c.planet_num : ''}` : '';
+      const tag = (c.n >= 2 && c.decline >= 0.10)
+        ? `<span class="an-bd-prod-tag an-bd-down">▼ ${Math.round(c.decline * 100)}% off best — reseat recovers it</span>`
+        : (c.n >= 2 ? `<span class="an-bd-prod-tag an-bd-flat">steady — likely a thin spot</span>`
+                    : `<span class="an-bd-prod-tag an-bd-flat">no history yet</span>`);
+      return `<div class="an-bd-prod">
+          <span class="an-bd-prod-loc">${_esc(c.char)}${loc ? ' · ' + loc : ''}</span>
+          <span class="an-bd-prod-val">${Math.round(c.perDay).toLocaleString()}<span class="an-bd-unit">/day</span></span>
+          ${tag}
+        </div>`;
+    }).join('');
+    const more = prods.length > worst.length ? `<div class="an-bd-more">+ ${prods.length - worst.length} more producing this</div>` : '';
+    return `<div class="an-bd-group">
+        <div class="an-bd-group-h">${_esc(r.name)} <span class="an-bd-group-sub">${Math.round(r.ratio * 100)}% fed · short ${shortBy.toLocaleString()}/day</span></div>
+        <div class="an-bd-target">Bring the weakest ${worst.length} to <b>~${targetAvg.toLocaleString()}/day</b> each to clear it <span class="an-bd-target-now">(avg ${curAvg.toLocaleString()} now)</span></div>
+        <div class="an-bd-prod-list">${rowsHtml}</div>${more}
       </div>`;
   }).join('');
+
   return `<div class="an-suggest an-suggest-burndown">
-      <div class="an-suggest-h">Reseat candidates — ${declining.length} losing yield</div>
-      <div class="an-levers-lead">These colonies extract below their proven best — the hotspots are depleting. <b>Reseat the heads</b> onto fresh spots, worst first, then <b>Rescan</b>:</div>
-      <div class="an-bd-grid">${cards}</div>${rest}
+      <div class="an-suggest-h">Reseat for short materials</div>
+      <div class="an-levers-lead">You're short on <b>${short.map(r => _esc(r.name)).join('</b>, <b>')}</b>. These are the weakest colonies producing them — reseat their heads (worst first), then <b>Rescan</b>. "Off best" means it has measurably dropped, so a reseat recovers yield; "thin spot" won't gain much.</div>
+      <div class="an-bd-groups">${groups}</div>
     </div>`;
 }
 
