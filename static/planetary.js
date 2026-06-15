@@ -2738,7 +2738,7 @@ function _leverCards(headroom, bindName) {
     : `Move extractor heads onto stronger hotspots, then rescan.`;
   const reseatMore =
       `<p><b>Why:</b> each extractor head sits on the planet's resource heatmap, and its yield decays as the program runs. Restarting onto the densest hotspots resets to a higher peak — no new colony needed.</p>`
-    + `<p><b>How:</b> open the colony → Extractor Control Unit → drag the heads onto the brightest concentrations (cross-check Agency → Resource Harvesting → Planets, hover the P0 for density), restart the program, then <b>Rescan colonies</b> here so the analysis picks up the new yield.</p>`
+    + `<p><b>How:</b> open the colony → Extractor Control Unit → drag the heads onto the brightest concentrations (the in-game survey, not a stored density — we've found density doesn't track real yield), restart the program, then <b>Rescan colonies</b> here so the analysis picks up the new yield.</p>`
     + `<p><b>Best for:</b> a material that's a little short, or squeezing a longer safe runtime out of the colonies you already have.</p>`;
   const redeployMore =
       `<p><b>Why:</b> one command center = one colony. If a P1 is structurally short while others overflow, reseating can't fix the ratio — you have to shift extraction onto the short P0.</p>`
