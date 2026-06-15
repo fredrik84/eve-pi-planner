@@ -233,7 +233,37 @@ function renderDashboard(data) {
           <ul class="dash-issue-items">${c.items.map(i => `<li class="dash-il-${i.severity === 'high' ? 'high' : 'warn'}">${_esc(i.msg)}</li>`).join('')}</ul>
         </div>`).join('')}</div>
     </section>` : '';
-  el.innerHTML = issuesHtml + `
+  // Spare fleet capacity — a nudge to re-plan when you've added toons, have free planet slots, or
+  // trained CCU/Interplanetary Consolidation since the plan was last saved.
+  const ex = data.expansion || {};
+  const exItems = [];
+  if (ex.idle_chars && ex.idle_chars.length) {
+    const names = ex.idle_chars.slice(0, 6).map(_esc).join(', ') + (ex.idle_chars.length > 6 ? ` +${ex.idle_chars.length - 6}` : '');
+    exItems.push(`<li><b>${ex.idle_chars.length} idle character${ex.idle_chars.length !== 1 ? 's' : ''}</b> with no colonies — ${names}</li>`);
+  }
+  if (ex.free_slots >= 2) {
+    const fc = ex.free_slot_chars || [];
+    const detail = fc.slice(0, 5).map(c => `${_esc(c.name)} ${c.used}/${c.max}`).join(', ') + (fc.length > 5 ? ', …' : '');
+    exItems.push(`<li><b>${ex.free_slots} free planet slots</b>${fc.length ? ` across ${fc.length} character${fc.length !== 1 ? 's' : ''} — ${detail}` : ''}</li>`);
+  }
+  if (ex.skills_grew && ex.skills_grew.length) {
+    const names = ex.skills_grew.slice(0, 6).map(g => {
+      const bits = []; if (g.ccu_up) bits.push(`CCU +${g.ccu_up}`); if (g.ic_up) bits.push(`planets +${g.ic_up}`);
+      return `${_esc(g.name)} (${bits.join(', ')})`;
+    }).join(', ');
+    exItems.push(`<li><b>${ex.skills_grew.length} trained up</b> since you saved${ex.plan_name ? ` “${_esc(ex.plan_name)}”` : ''} — ${names}</li>`);
+  }
+  const expansionHtml = exItems.length ? `
+    <section class="pp-card dash-expand">
+      <div class="pp-card-title">Spare capacity <span class="pp-card-hint">— unused fleet you could plan into</span></div>
+      <div class="pp-card-body">
+        <ul class="dash-expand-list">${exItems.join('')}</ul>
+        <div class="dash-expand-cta">${ex.plan_name
+          ? `Re-run <b>“${_esc(ex.plan_name)}”</b> in <a href="#" onclick="switchTab('planetary');return false;">Planetary Planning</a> to scale up — a re-run includes every character and their current skills.`
+          : `Build a plan in <a href="#" onclick="switchTab('planetary');return false;">Planetary Planning</a> to use it (and to start tracking skill growth).`}</div>
+      </div>
+    </section>` : '';
+  el.innerHTML = issuesHtml + expansionHtml + `
     <section class="pp-card">
       <div class="pp-card-title">Overview <span class="pp-card-hint">— your PI at a glance · Rescan in the top bar pulls fresh data</span></div>
       <div class="pp-card-body"><div class="an-stats">${tiles}</div></div>

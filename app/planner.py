@@ -784,6 +784,16 @@ def ensure_profile_tables():
                     con.execute(f"ALTER TABLE pp_profiles ADD COLUMN {col} {defval}")
                 except Exception:
                     pass
+    # Fleet skill baseline captured when a plan was last saved (one row per context). Lets the
+    # dashboard flag "characters trained up since you planned" without storing skill history.
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS pp_plan_baseline (
+            context_id  INTEGER PRIMARY KEY,
+            skills_json TEXT,        -- {char_id: [ccu, interplanetary_consolidation]} at save time
+            plan_name   TEXT,
+            saved_at    REAL
+        )
+    """)
     con.commit()
     con.close()
 
@@ -853,6 +863,13 @@ def save_profile(req: ProfileSave, context_id: int = Depends(require_context)):
           req.factory_output_per_hour, _json.dumps(req.factory_character_ids), req.max_jumps,
           _json.dumps(req.factory_planet_types), _norm_split_mode(req.split_mode),
           _norm_dist_mode(req.distribution_mode), max(0, min(100, int(req.min_density_pct or 0)))))
+    # Snapshot the fleet's current skills so the dashboard can later flag "trained up since you planned".
+    skills = {str(r["character_id"]): [r["command_center_upgrades"] or 0, r["interplanetary_consolidation"] or 0]
+              for r in con.execute(
+                  "SELECT character_id, command_center_upgrades, interplanetary_consolidation "
+                  "FROM pp_characters WHERE context_id=? AND COALESCE(is_dummy,0)=0", (context_id,)).fetchall()}
+    con.execute("INSERT OR REPLACE INTO pp_plan_baseline (context_id, skills_json, plan_name, saved_at) VALUES (?,?,?,?)",
+                (context_id, _json.dumps(skills), req.name, _time.time()))
     con.commit()
     con.close()
     return {"ok": True}
@@ -1130,6 +1147,52 @@ def my_setup_plan(pp_session: str = Cookie(default=None)):
     return {"plans": plans}
 
 
+def _expansion_capacity(context_id: int) -> dict:
+    """Spare fleet capacity worth re-planning for: real characters with no colonies (idle), free
+    planet slots (max_planets − deployed), and characters whose CCU/IC grew since the last plan was
+    saved (vs pp_plan_baseline). All from current data + one baseline row — no skill history stored."""
+    try:
+        ensure_profile_tables()
+        con = get_connection()
+        chars = con.execute(
+            "SELECT character_id AS cid, character_name AS nm, "
+            "       1 + COALESCE(interplanetary_consolidation,0) AS max_planets, "
+            "       COALESCE(command_center_upgrades,0) AS ccu, COALESCE(interplanetary_consolidation,0) AS ic "
+            "FROM pp_characters WHERE context_id=? AND COALESCE(is_dummy,0)=0", (context_id,)).fetchall()
+        used = {r["character_id"]: r["n"] for r in con.execute(
+            "SELECT cp.character_id, COUNT(*) AS n FROM pp_char_planets cp "
+            "JOIN pp_characters c ON c.character_id=cp.character_id "
+            "WHERE c.context_id=? AND COALESCE(c.is_dummy,0)=0 GROUP BY cp.character_id", (context_id,)).fetchall()}
+        base_row = con.execute("SELECT skills_json, plan_name FROM pp_plan_baseline WHERE context_id=?", (context_id,)).fetchone()
+        con.close()
+    except Exception:
+        return {"idle_chars": [], "free_slots": 0, "free_slot_chars": [], "skills_grew": [], "plan_name": None}
+
+    baseline = {}
+    if base_row and base_row["skills_json"]:
+        try:
+            baseline = _json.loads(base_row["skills_json"])
+        except Exception:
+            baseline = {}
+
+    idle, free_chars, grew, free_slots = [], [], [], 0
+    for r in chars:
+        n = used.get(r["cid"], 0)
+        if n == 0:
+            idle.append(r["nm"])
+        spare = max(0, r["max_planets"] - n)
+        if spare > 0 and n > 0:                       # partial: deployed but not full (idle covered above)
+            free_chars.append({"name": r["nm"], "used": n, "max": r["max_planets"], "free": spare})
+        free_slots += spare
+        b = baseline.get(str(r["cid"]))               # [ccu, ic] at last plan save
+        if b:
+            d_ccu, d_ic = r["ccu"] - (b[0] or 0), r["ic"] - (b[1] or 0)
+            if d_ccu > 0 or d_ic > 0:
+                grew.append({"name": r["nm"], "ccu_up": max(0, d_ccu), "ic_up": max(0, d_ic)})
+    return {"idle_chars": idle, "free_slots": free_slots, "free_slot_chars": free_chars,
+            "skills_grew": grew, "plan_name": base_row["plan_name"] if base_row else None}
+
+
 @router.get("/api/dashboard")
 def dashboard(pp_session: str = Cookie(default=None)):
     """Logged-in overview: per-factory launchpad fill %, time-to-empty and current-run value,
@@ -1347,11 +1410,14 @@ def dashboard(pp_session: str = Cookie(default=None)):
                        "items": items})
     issues.sort(key=lambda c: 0 if c["severity"] == "high" else 1)
 
+    expansion = _expansion_capacity(context_id)
+
     return {
         "logged_in": True,
         "factories": factories,
         "char_ids_in_view": sorted(chars_in_view),
         "issues": issues,
+        "expansion": expansion,
         "totals": {
             "factory_count": len(factories),
             "runtime_hours": round(soonest_h, 1) if soonest_h is not None else None,

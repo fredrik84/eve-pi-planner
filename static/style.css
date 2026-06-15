@@ -1591,6 +1591,15 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 
 /* Dashboard "Needs attention" — warnings only, grouped per character. */
 .dash-issues .pp-card-body { display: flex; flex-direction: column; gap: 8px; }
+/* Spare-capacity nudge */
+.dash-expand { border-left: 3px solid #4a86c5; }
+.dash-expand-list { margin: 0 0 9px; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
+.dash-expand-list li { color: #aeb6c6; font-size: 13px; line-height: 1.4; }
+.dash-expand-list b { color: #cfe0f5; }
+.dash-expand-cta { color: #8b93a6; font-size: 12px; line-height: 1.5; }
+.dash-expand-cta a { color: #6fb0e0; text-decoration: none; }
+.dash-expand-cta a:hover { text-decoration: underline; }
+.dash-expand-cta b { color: #cfe0f5; }
 .dash-issue { padding: 8px 11px; border-radius: 5px; border-left: 3px solid; }
 .dash-issue-high { background: #1f1416; border-left-color: #ef6b78; }
 .dash-issue-warn { background: #1f1c12; border-left-color: #e0b84a; }
