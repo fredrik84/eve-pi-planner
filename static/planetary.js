@@ -3020,7 +3020,7 @@ function syncRefillFromInventory() {
     const parsed = _parseInventoryLine(line);
     if (!parsed) continue;
     const tid = _p1NameToTid[parsed[0].toLowerCase()];
-    if (tid) _p1Stacks[tid] = parsed[1];
+    if (tid) _p1Stacks[tid] = (_p1Stacks[tid] || 0) + parsed[1];   // sum duplicate lines (e.g. pads paste + inventory paste)
   }
   updateP1Distribution();
 }
