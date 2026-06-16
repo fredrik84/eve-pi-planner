@@ -31,6 +31,7 @@
     <aside class="sidebar" id="sidebar">
       <nav class="sidebar-nav">
         <button class="tab" data-tab="dashboard" id="dashboardNavTab" style="display:none"><span class="nav-ico">HM</span><span class="nav-lbl">Dashboard</span></button>
+        <button class="tab" data-tab="howitworks"><span class="nav-ico">i</span><span class="nav-lbl">How it works</span></button>
         <div class="nav-group">
           <div class="nav-group-hd"><span class="nav-ico">PI</span><span class="nav-lbl">PI Planner</span></div>
           <button class="tab tab-sub active" data-tab="planner" data-pimode="build"><span class="nav-ico">FB</span><span class="nav-lbl">Find Buildables</span></button>
@@ -59,6 +60,82 @@
     <div id="tab-dashboard" class="tab-panel" style="display:none">
       <div id="dashboardContent" class="pp-chars-page"></div>
     </div><!-- /tab-dashboard -->
+
+    <!-- ── Tab: How it works (static help) ───────────────────────────────────── -->
+    <div id="tab-howitworks" class="tab-panel" style="display:none">
+      <div class="pp-layout">
+        <div class="pp-main" style="grid-column: 1 / -1; max-width: 100%;">
+
+          <section class="pp-card">
+            <div class="pp-card-title">How it works
+              <span class="pp-card-hint">— what the tool does, in plain terms</span>
+            </div>
+            <div class="contrib">
+              <p class="contrib-lead">
+                This tool helps you plan and run <strong>Planetary Industry</strong> across all your
+                characters — for the most profit with the least hauling and fiddling. Here's what each
+                part does, and one important thing to know about the numbers.
+              </p>
+
+              <h3 class="contrib-h">1. Plan a setup</h3>
+              <p>
+                In <strong>Planetary Planning</strong> you pick a product (or fuel blocks). The wizard
+                works out how many extractor and factory planets you need, spreads them across your
+                characters to keep hauling short, and hands you ready-to-import <strong>templates</strong>.
+              </p>
+
+              <h3 class="contrib-h">2. The plan is a guesstimate — not the truth</h3>
+              <p>
+                The wizard plans <em>before</em> anything is deployed, so it has <strong>no real
+                extraction data</strong>. It estimates a planet's yield from surveyed
+                <strong>resource densities</strong> — and we've found those don't reliably match what a
+                planet actually produces. EVE also applies a per-program yield decay we can only
+                approximate. So treat the plan as a <strong>solid starting point, not gospel</strong>:
+                your real colonies will run a bit richer or leaner than it predicted.
+              </p>
+
+              <h3 class="contrib-h">3. Setup Analysis corrects for reality</h3>
+              <p>
+                Once your colonies are live, log in and <strong>Rescan</strong> (Characters tab). Now the
+                tool reads your <strong>actual in-game extraction</strong> — exact numbers, not estimates.
+                The <strong>Setup Analysis</strong> tab compares what you really produce against what your
+                factories need, material by material, and shows the lightest fix for anything off:
+              </p>
+              <ul class="contrib-steps">
+                <li><strong>Reseat heads</strong> — recover yield a depleting colony has lost (its hotspots thin out over time).</li>
+                <li><strong>Redeploy a command center</strong> — shift a surplus colony onto a material you're short on.</li>
+                <li><strong>Add factories</strong> — only when there's comfortable spare, so you're never forced to micromanage.</li>
+              </ul>
+              <p>
+                It deliberately keeps a buffer, so a good setup stays <strong>stable</strong> instead of
+                needing constant tweaks. Run it now and then to keep your efficiency up as resources
+                deplete and you reseat.
+              </p>
+
+              <h3 class="contrib-h">4. Dashboard — your PI at a glance</h3>
+              <p>
+                When logged in: each factory's fill % and time-to-empty, the value sitting in your
+                launchpads, warnings (broken routes, expiring extractor programs, storage filling up),
+                and spare capacity you could plan into.
+              </p>
+
+              <h3 class="contrib-h">5. The rest</h3>
+              <ul class="contrib-steps">
+                <li><strong>Refill a plan</strong> — paste your P1 stash and it splits it into your factories.</li>
+                <li><strong>Factory Layout</strong> — importable templates for any P1–P4 product.</li>
+                <li><strong>Planet DB</strong> — the shared density data the wizard plans from. Reading densities in-game and <strong>contributing</strong> them makes everyone's plans better.</li>
+              </ul>
+
+              <p class="contrib-lead">
+                The short version: the wizard gets you <strong>close</strong> with limited data; Setup
+                Analysis uses your <strong>real numbers</strong> to close the gap — and keep you there.
+              </p>
+            </div>
+          </section>
+
+        </div>
+      </div>
+    </div><!-- /tab-howitworks -->
 
     <!-- ── Tab: PI Planner ─────────────────────────────────────────────────── -->
     <div id="tab-planner" class="tab-panel">
