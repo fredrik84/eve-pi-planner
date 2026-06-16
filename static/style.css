@@ -1560,11 +1560,12 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .an-row-click:hover { background: rgba(90,160,230,0.05); }
 .an-row-caret { color: #5a6478; font-size: 9px; }
 .an-row-detail { margin: 1px 0 8px 14px; padding: 8px 14px; background: #11151f; border-left: 2px solid #2a3142; border-radius: 4px;
-  display: grid; grid-template-columns: minmax(160px, auto) minmax(110px, auto) auto; justify-content: start; gap: 4px 40px; font-size: 12px; }
+  display: grid; grid-template-columns: minmax(150px, auto) minmax(100px, auto) auto auto; justify-content: start; gap: 4px 28px; font-size: 12px; }
 .an-pd-row { display: contents; }
 .an-pd-char { color: #c8cdd8; white-space: nowrap; }
 .an-pd-loc { color: #8b93a6; white-space: nowrap; }
-.an-pd-val { color: #e6e9ef; text-align: right; white-space: nowrap; }
+.an-pd-p0 { color: #8fd0b8; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.an-pd-val { color: #e6e9ef; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .an-pd-empty { color: #8b93a6; grid-column: 1 / -1; }
 .an-cc-tag { font-size: 10px; font-weight: 700; letter-spacing: .03em; color: #cfe2f2; background: #1f3142; border: 1px solid #2f4a63; border-radius: 4px; padding: 1px 6px; margin-left: 6px; white-space: nowrap; }
 

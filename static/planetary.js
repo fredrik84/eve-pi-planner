@@ -2242,7 +2242,8 @@ function _planetsForMaterial(t) {
   const out = [];
   (_ppCharsData || []).forEach(ch => (ch.planets || []).forEach(p => (p.production || []).forEach(o => {
     if (String(o.type_id) === String(t))
-      out.push({ char: ch.name, system: p.system, planet_num: p.planet_num, perDay: o.per_day || 0 });
+      out.push({ char: ch.name, system: p.system, planet_num: p.planet_num, perDay: o.per_day || 0,
+                 p0Hr: p.ext_p0_day ? Math.round(p.ext_p0_day / 24) : null });
   })));
   out.sort((a, b) => a.perDay - b.perDay);   // underperforming (lowest output) first
   return out;
@@ -2474,7 +2475,7 @@ function renderAnalysis() {
     if (expanded) {
       const pls = _planetsForMaterial(r.t);
       const items = pls.length
-        ? pls.map(p => `<div class="an-pd-row"><span class="an-pd-char">${_esc(p.char)}</span><span class="an-pd-loc">${p.system ? _esc(p.system) + (p.planet_num != null ? ' P' + p.planet_num : '') : '—'}</span><span class="an-pd-val">${Math.round(p.perDay).toLocaleString()}/day</span></div>`).join('')
+        ? pls.map(p => `<div class="an-pd-row"><span class="an-pd-char">${_esc(p.char)}</span><span class="an-pd-loc">${p.system ? _esc(p.system) + (p.planet_num != null ? ' P' + p.planet_num : '') : '—'}</span><span class="an-pd-p0">${p.p0Hr != null ? p.p0Hr.toLocaleString() + ' P0/hr' : ''}</span><span class="an-pd-val">${Math.round(p.perDay).toLocaleString()}/day</span></div>`).join('')
         : '<div class="an-pd-empty">No colony is producing this yet.</div>';
       detail = `<div class="an-row-detail">${items}</div>`;
     }
