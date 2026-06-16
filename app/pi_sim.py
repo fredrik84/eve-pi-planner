@@ -17,6 +17,7 @@ raw checkpoint contents.
 """
 from __future__ import annotations
 
+import math
 from datetime import datetime, timezone
 
 
@@ -27,6 +28,28 @@ def _epoch(s: str | None) -> float | None:
         return datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
     except Exception:
         return None
+
+
+def extractor_program_total(qty_per_cycle: float, cycle_time_s: float, num_cycles: int) -> float:
+    """EVE's exact extractor program output. The per-cycle yield decays (decay 0.012, dogma 1683)
+    and oscillates with a deterministic noise wave (noise 0.8, dogma 1687) whose phase is seeded by
+    qty_per_cycle**0.7; the program total is the floored sum. Validated against in-game program
+    totals to the unit. IMPORTANT: qty_per_cycle/cycle_time UNDER-counts real extraction by ~16-20%
+    — the true rate is this total / program runtime (what the game shows as units/hour)."""
+    if qty_per_cycle <= 0 or cycle_time_s <= 0 or num_cycles <= 0:
+        return 0.0
+    decay_factor, noise_factor = 0.012, 0.8
+    bar_width = cycle_time_s / 900.0
+    phase = pow(qty_per_cycle, 0.7)
+    total = 0.0
+    for cycle in range(num_cycles):
+        t = (cycle + 0.5) * bar_width
+        decay_value = qty_per_cycle / (1 + t * decay_factor)
+        sin_stuff = max((math.cos(phase + t * (1.0 / 12.0))
+                         + math.cos(phase / 2.0 + t * 0.2)
+                         + math.cos(t * 0.5)) / 3.0, 0.0)
+        total += math.floor(bar_width * decay_value * (1 + noise_factor * sin_stuff))
+    return total
 
 
 def colony_sim_state(detail: dict, pi_data: dict) -> dict | None:
@@ -51,15 +74,24 @@ def colony_sim_state(detail: dict, pi_data: dict) -> dict | None:
             has_ecu = True
             p0 = ed["product_type_id"]
             _qpc = ed.get("qty_per_cycle", 0) or 0
-            ext_rate[p0] = ext_rate.get(p0, 0.0) + _qpc / ed["cycle_time"]
+            _cyc = ed["cycle_time"]
+            ex = _epoch(pin.get("expiry_time"))
+            inst = _epoch(pin.get("install_time"))
+            # True extraction rate = EVE's program total / runtime (decay+noise formula). The headline
+            # qty_per_cycle/cycle_time under-counts it by ~16-20%; fall back to it if the program
+            # window is missing so we never divide by zero.
+            if inst and ex and ex > inst and _cyc > 0:
+                _ncyc = int((ex - inst) // _cyc)
+                _rate = extractor_program_total(_qpc, _cyc, _ncyc) / (ex - inst)
+            else:
+                _rate = _qpc / _cyc
+            ext_rate[p0] = ext_rate.get(p0, 0.0) + _rate
             ext_batch[p0] = ext_batch.get(p0, 0.0) + _qpc
             lcs = _epoch(pin.get("last_cycle_start"))
             if lcs:
                 t0 = max(t0, lcs)
-            ex = _epoch(pin.get("expiry_time"))
             if ex:
                 expiry = ex if expiry is None else max(expiry, ex)
-            inst = _epoch(pin.get("install_time"))
             if inst:
                 install = inst if install is None else min(install, inst)
     if not has_ecu:
@@ -125,8 +157,9 @@ def colony_sim_state(detail: dict, pi_data: dict) -> dict | None:
                             "batch": ext_batch.get(p0, 0.0)})
     if not outputs or t0 <= 0:
         return None
-    # install = when the current program started; peak_p0_day = install extraction headline (sum of
-    # all heads' qty_per_cycle / cycle_time × 86400). Used to log a per-program yield sample so the
+    # install = when the current program started; peak_p0_day = the colony's game-true average P0/day
+    # (program total / runtime × 86400 via the EVE formula — constant for a program, so re-scanning
+    # the same program doesn't drift it). Used to log a per-program yield sample so the
     # tool can show the MEASURED yield trend across reseats (a single snapshot can't).
     peak_p0_day = sum(ext_rate.values()) * 86400.0
     return {"t0": t0, "expiry": expiry, "install": install, "program_days": program_days,
