@@ -1634,9 +1634,10 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .an-rt-pick { font-size: 13px; color: #c8d2e6; margin: 2px 0 9px; }
 .an-rt-pick b { color: #6fe0c0; }
 .an-levers-lead { color: #8b93a6; font-size: 12px; margin: 2px 0 9px; line-height: 1.45; }
-.an-lever-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-start; }
+.an-lever-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: stretch; }
 .an-lever { flex: 1 1 220px; padding: 9px 11px; border-left: 2px solid #3a4a6a;
-  background: rgba(58,74,106,.12); border-radius: 0 5px 5px 0; }
+  background: rgba(58,74,106,.12); border-radius: 0 5px 5px 0;
+  display: flex; flex-direction: column; }
 .an-lever-a { border-left-color: #3f7d68; background: rgba(63,125,104,.12); }
 .an-lever-b { border-left-color: #7d6a3f; background: rgba(125,106,63,.12); }
 .an-lever-click { cursor: pointer; transition: filter .12s; }
@@ -1656,7 +1657,7 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .an-lever-more p { margin: 0 0 6px; }
 .an-lever-more p:last-child { margin-bottom: 0; }
 .an-lever-more b { color: #c8d2e6; }
-.an-lever-cta { margin-top: 7px; font-size: 11px; font-weight: 600; letter-spacing: .02em; }
+.an-lever-cta { margin-top: auto; padding-top: 7px; font-size: 11px; font-weight: 600; letter-spacing: .02em; }
 .an-lever-a .an-lever-cta { color: #6fe0c0; }
 .an-lever-b .an-lever-cta { color: #e0c06f; }
 .an-lever-open { filter: brightness(1.12); }
