@@ -2767,7 +2767,9 @@ function _extDecayGraphSvg(headroom, L0, safe, edge) {
 // command center (rebalances a material that stays short while others overflow).
 let _anLeverOpen = new Set();   // which advice levers ('reseat'/'redeploy') have their section shown
 function _toggleLever(k) {
-  if (_anLeverOpen.has(k)) _anLeverOpen.delete(k); else _anLeverOpen.add(k);
+  const open = _anLeverOpen.has(k);
+  _anLeverOpen.clear();          // accordion: only one section open at a time (keeps the page short)
+  if (!open) _anLeverOpen.add(k);
   renderAnalysis();
 }
 // Two levers heading the rebalance advice. Each card is a toggle: Reseat heads → the measured yield
