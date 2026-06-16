@@ -270,18 +270,25 @@ function renderDashboard(data) {
           : `Build a plan in <a href="#" onclick="switchTab('planetary');return false;">Planetary Planning</a> to use it (and to start tracking skill growth).`}</div>
       </div>
     </section>` : '';
-  // Maintenance routine — how often each job comes due (restart programs / empty extractor pads /
-  // refill factory inputs). Cadences (from-fresh intervals), with the tightest binding colony.
-  const _rtTile = (h, lbl, sub) => h == null
-    ? `<div class="an-stat"><div class="an-stat-val">—</div><div class="an-stat-lbl">${lbl}</div></div>`
-    : `<div class="an-stat"${sub ? ` title="${_esc(sub)}"` : ''}><div class="an-stat-val">${_fmtHours(h)}</div><div class="an-stat-lbl">${lbl}${sub ? ` <span class="dash-rt-sub">${_esc(sub)}</span>` : ''}</div></div>`;
+  // Maintenance routine — big number = countdown to NEXT due (from current state); small text = the
+  // cadence ("every X") + the binding colony.
+  const _rtTile = (dueH, cadenceH, lbl, loc) => {
+    if (dueH == null && cadenceH == null)
+      return `<div class="an-stat"><div class="an-stat-val">—</div><div class="an-stat-lbl">${lbl}</div></div>`;
+    const big = dueH != null ? (dueH < 0.1 ? 'due now' : _fmtHours(dueH)) : _fmtHours(cadenceH);
+    const bits = [];
+    if (cadenceH != null) bits.push(`every ${_fmtHours(cadenceH)}`);
+    if (loc) bits.push(_esc(loc));
+    const sub = bits.length ? `<span class="dash-rt-sub">${bits.join(' · ')}</span>` : '';
+    return `<div class="an-stat"${loc ? ` title="${_esc(loc)} is next"` : ''}><div class="an-stat-val">${big}</div><div class="an-stat-lbl">${lbl}${sub}</div></div>`;
+  };
   const routineHtml = (t.empty_pads_hours != null || t.refill_factories_hours != null || t.restart_extractors_hours != null) ? `
     <section class="pp-card">
-      <div class="pp-card-title">Maintenance routine <span class="pp-card-hint">— how often each job comes due</span></div>
+      <div class="pp-card-title">Maintenance routine <span class="pp-card-hint">— countdown to the next job · cadence below</span></div>
       <div class="pp-card-body"><div class="an-stats">
-        ${_rtTile(t.restart_extractors_hours, 'Restart extractor programs')}
-        ${_rtTile(t.empty_pads_hours, 'Empty extractor pads', t.empty_pads_loc ? t.empty_pads_loc + ' fills first' : '')}
-        ${_rtTile(t.refill_factories_hours, 'Refill factory inputs', t.refill_factories_loc || '')}
+        ${_rtTile(t.restart_due_hours, t.restart_extractors_hours, 'Restart extractors')}
+        ${_rtTile(t.empty_due_hours, t.empty_pads_hours, 'Empty extractor pads', t.empty_due_loc || t.empty_pads_loc)}
+        ${_rtTile(t.refill_due_hours, t.refill_factories_hours, 'Refill factory inputs', t.refill_due_loc || t.refill_factories_loc)}
       </div></div>
     </section>` : '';
   el.innerHTML = issuesHtml + expansionHtml + `
