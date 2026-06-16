@@ -270,11 +270,25 @@ function renderDashboard(data) {
           : `Build a plan in <a href="#" onclick="switchTab('planetary');return false;">Planetary Planning</a> to use it (and to start tracking skill growth).`}</div>
       </div>
     </section>` : '';
+  // Maintenance routine — how often each job comes due (restart programs / empty extractor pads /
+  // refill factory inputs). Cadences (from-fresh intervals), with the tightest binding colony.
+  const _rtTile = (h, lbl, sub) => h == null
+    ? `<div class="an-stat"><div class="an-stat-val">—</div><div class="an-stat-lbl">${lbl}</div></div>`
+    : `<div class="an-stat"${sub ? ` title="${_esc(sub)}"` : ''}><div class="an-stat-val">${_fmtHours(h)}</div><div class="an-stat-lbl">${lbl}${sub ? ` <span class="dash-rt-sub">${_esc(sub)}</span>` : ''}</div></div>`;
+  const routineHtml = (t.empty_pads_hours != null || t.refill_factories_hours != null || t.restart_extractors_hours != null) ? `
+    <section class="pp-card">
+      <div class="pp-card-title">Maintenance routine <span class="pp-card-hint">— how often each job comes due</span></div>
+      <div class="pp-card-body"><div class="an-stats">
+        ${_rtTile(t.restart_extractors_hours, 'Restart extractor programs')}
+        ${_rtTile(t.empty_pads_hours, 'Empty extractor pads', t.empty_pads_loc ? t.empty_pads_loc + ' fills first' : '')}
+        ${_rtTile(t.refill_factories_hours, 'Refill factory inputs', t.refill_factories_loc || '')}
+      </div></div>
+    </section>` : '';
   el.innerHTML = issuesHtml + expansionHtml + `
     <section class="pp-card">
       <div class="pp-card-title">Overview <span class="pp-card-hint">— your PI at a glance · Rescan in the top bar pulls fresh data</span></div>
       <div class="pp-card-body"><div class="an-stats">${tiles}</div></div>
-    </section>
+    </section>` + routineHtml + `
     <section class="pp-card">
       <div class="pp-card-title">Factories <span class="pp-card-hint">— launchpad fill &amp; time to empty, projected forward from your last rescan (${facs.length})</span></div>
       <div class="pp-card-body">

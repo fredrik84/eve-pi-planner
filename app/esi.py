@@ -311,12 +311,12 @@ def _struct_cap(name: str):
     return None
 
 def _storage_summary(detail: dict, sim: dict | None, types: dict) -> dict | None:
-    """Fullest LAUNCHPAD on the planet + how fast it's filling (the colony's output volume
-    per hour, from the sim). Lets the dashboard show "% full" and "~time to full". Only returned
-    past 60% (below that it isn't worth flagging). The dashboard only acts on EXTRACTOR planets —
-    a factory's launchpads are meant to sit full of inputs and drain, so they're not flagged.
-    Storage Facilities are intentionally ignored: a storage buffer sitting full is expected (it
-    isn't a factory input), so it's not an alert — only a full launchpad actually blocks export."""
+    """Fullest LAUNCHPAD on the planet + how fast it's filling (the colony's output volume per hour,
+    from the sim's SUSTAINED rate — what actually piles up long-term). Returned for every extractor
+    planet (None only if it has no launchpad) so the dashboard can both warn at ≥80% AND estimate the
+    soonest pad to cap. The dashboard only acts on EXTRACTOR planets — a factory's launchpads are meant
+    to sit full of inputs and drain, so they're not flagged. Storage Facilities are intentionally
+    ignored: a storage buffer sitting full is expected — only a full launchpad blocks export."""
     best = None
     for pin in (detail.get("pins") or []):
         cap = _struct_cap((types.get(pin.get("type_id"), {}) or {}).get("name") or "")
@@ -327,11 +327,13 @@ def _storage_summary(detail: dict, sim: dict | None, types: dict) -> dict | None
                   for c in (pin.get("contents") or []))
         if capacity and (best is None or vol / capacity > best["frac"]):
             best = {"frac": vol / capacity, "vol": vol, "cap": capacity}
-    if not best or best["frac"] < 0.6:
+    if not best:
         return None
     fill_h = 0.0
     if sim:
-        fill_h = sum((o.get("rate", 0) or 0) * 3600.0 * _TIER_VOL.get(o.get("tier") or 0, 0.01)
+        # rate_sustained = the long-run production that actually accumulates (extraction-limited), so
+        # the time-to-full holds over a multi-hour/day fill (the full factory rate would over-count).
+        fill_h = sum((o.get("rate_sustained", o.get("rate", 0)) or 0) * 3600.0 * _TIER_VOL.get(o.get("tier") or 0, 0.01)
                      for o in (sim.get("outputs") or []))
     return {"vol_m3": round(min(best["vol"], best["cap"]), 1), "cap_m3": best["cap"], "fill_m3_h": round(fill_h, 2)}
 

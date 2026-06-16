@@ -1242,6 +1242,7 @@ def dashboard(pp_session: str = Cookie(default=None)):
                                        # warning) — the rescan button scopes to these, not the whole fleet
     total_run_value = total_value_per_day = 0.0
     soonest_h = None
+    refill_fac_h = None; refill_fac_loc = None  # tightest from-full factory input buffer (refill cadence)
     cur_units_by_prod: dict[str, float] = {}   # current units/day by product (for the expansion estimate)
     produced_by_tid: dict[int, float] = {}     # product made since checkpoint (projected up)
     for (r, prods, inputs, pads) in parsed:
@@ -1293,6 +1294,13 @@ def dashboard(pp_session: str = Cookie(default=None)):
         if r["cid"] is not None:
             chars_in_view.add(r["cid"])
         loc = f"{r['ch']} · {r['system'] or '?'}" + (f" P{r['pn']}" if r["pn"] is not None else "")
+        # Refill cadence = how long a FULL P1 input buffer (3 launchpads) lasts at this factory's
+        # consumption — the interval you must top it up on. Keep the tightest (fastest-draining).
+        day_in_m3 = fph24 * sum(fracs.values()) * VOL
+        if day_in_m3 > 0:
+            rc_h = LP_M3 / day_in_m3 * 24.0
+            if refill_fac_h is None or rc_h < refill_fac_h:
+                refill_fac_h, refill_fac_loc = rc_h, loc
         factories.append({
             "loc": loc, "product": prod.get("name") or f"#{tid}",
             "tier": types.get(tid, {}).get("pi_tier") or 0,
@@ -1378,12 +1386,24 @@ def dashboard(pp_session: str = Cookie(default=None)):
     # factory's launchpads are meant to sit full of inputs and drain, so those aren't flagged).
     # % full and ~time-to-full are projected forward from the checkpoint at the colony's output rate.
     fulls = []
+    prog_days_list = []                          # extractor program lengths → restart cadence (median)
+    empty_pads_h = None; empty_pads_loc = None   # tightest empty→full launchpad time (emptying cadence)
     for (r, prods, inputs, pads) in parsed:
         if not r["is_ext"]:
             continue
+        ss = _json.loads(r["sim_state"] or "null")
+        if isinstance(ss, dict) and ss.get("program_days"):
+            prog_days_list.append(ss["program_days"])
         st = _json.loads(r["storage"] or "null")
         if not st:
             continue
+        # Emptying cadence = how long a freshly-emptied launchpad takes to cap (10k m³ → extraction
+        # stalls). Track the fastest-filling pad (the one you have to empty most often).
+        if st.get("fill_m3_h", 0) > 0 and st.get("cap_m3"):
+            cad_h = st["cap_m3"] / st["fill_m3_h"]
+            if empty_pads_h is None or cad_h < empty_pads_h:
+                empty_pads_h = cad_h
+                empty_pads_loc = f"{r['ch']} · {r['system'] or '?'}" + (f" P{r['pn']}" if r["pn"] is not None else "")
         anchor = r["checkpoint_at"] or r["scanned_at"]
         el_h = max(0.0, (now - anchor) / 3600.0) if anchor else 0.0
         cap = st["cap_m3"] or 1
@@ -1438,6 +1458,12 @@ def dashboard(pp_session: str = Cookie(default=None)):
             "pads_value": pads_value,
             "current_run_value": round(total_run_value, 2),
             "value_per_day": round(total_value_per_day, 2),
+            # Maintenance cadences (how often each job comes due)
+            "restart_extractors_hours": round(sorted(prog_days_list)[len(prog_days_list) // 2] * 24.0, 1) if prog_days_list else None,
+            "empty_pads_hours": round(empty_pads_h, 1) if empty_pads_h is not None else None,
+            "empty_pads_loc": empty_pads_loc,
+            "refill_factories_hours": round(refill_fac_h, 1) if refill_fac_h is not None else None,
+            "refill_factories_loc": refill_fac_loc,
         },
         "top_pi": top_pi,
     }
