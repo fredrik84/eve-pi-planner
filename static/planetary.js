@@ -2579,12 +2579,14 @@ function renderAnalysis() {
   // an over-produced extractor (which also trims waste). Maxed chars with nothing over-produced to
   // free, or no free B/T planet, can't host one.
   const curFac = snap.factories_count || (snap.factories || []).length || 0;
-  // Round (not floor) the surplus headroom to whole factories so this agrees with the over-extraction
-  // tile: e.g. 22 SHPC of headroom = 1.83 factories → 2, not floor→1.
-  const extraFac = Math.round(curFac * (binding.ratio - 1));
+  // Only recommend factories from surplus BEYOND a comfort buffer (~10%), so we don't push the user
+  // to spend the headroom that keeps their current runtime relaxed — and don't start a runaway where
+  // each added factory forces a shorter program, which frees more surplus → more factories → …
+  const RT_BUFFER = 0.10;
+  const extraFac = Math.max(0, Math.round(curFac * (binding.ratio - 1 - RT_BUFFER)));
   const supportable = curFac + extraFac;
   let addFactories = '';
-  if (curFac && binding.ratio > 1.005 && extraFac >= 1) {
+  if (curFac && extraFac >= 1) {
     const facChars = new Set((snap.factories || []).map(f => (f.loc || '').split(' · ')[0].trim()).filter(Boolean));
     const facSystems = new Set((snap.factories || []).map(f => ((f.loc || '').split('·')[1] || '').trim().split(' ')[0]).filter(Boolean));
     const ratioOf = {}; surplus.forEach(s => { ratioOf[String(s.t)] = s.ratio; });
@@ -2649,7 +2651,7 @@ function renderAnalysis() {
       return `<li class="an-move"><div class="an-move-char">${_esc(c.char)}</div><div class="an-move-pair">${build}</div></li>`;
     });
     if (remaining > 0) cardLi.push(`<li class="an-move-note">+ ${remaining} more couldn't be placed — your factory characters are at max planets with no over-produced colony to free (or no free Barren/Temperate planet). You'd need another character or to free a slot.</li>`);
-    addFactories = `<div class="an-suggest an-suggest-add"><div class="an-suggest-h">Add factories — your inputs could feed ~${supportable} (${extraFac} more than ${curFac}), capped by ${_esc(binding.name)}</div><ul>${cardLi.join('')}</ul></div>`;
+    addFactories = `<div class="an-suggest an-suggest-add"><div class="an-suggest-h">Add factories — spare extraction could feed ${extraFac} more (${curFac} → ${supportable}), capped by ${_esc(binding.name)}</div><div class="an-sug-note">Keeps a ~10% extraction buffer, so you can stay on your current program length — not chase a shorter one.</div><ul>${cardLi.join('')}</ul></div>`;
   }
 
   // The rebalance section (specific colony moves) — hidden until the "Redeploy a CC" lever is opened.
@@ -2886,45 +2888,38 @@ function _burndownSection(rows) {
 
 function _extRuntimeAdviceHtml(headroom, curDays) {
   if (!_extRt || !_extRt.ppd || !headroom) return '';
-  const unit = _extRt.unit || 'units', ppd = Math.round(_extRt.ppd).toLocaleString();
   const L0 = (curDays && curDays > 0) ? Math.round(curDays) : 2;
   const detected = !!(curDays && curDays > 0), e0 = _extEff(L0);
   const buffer = d => headroom * _extEff(d) / e0 - 1;     // extraction over demand at a d-day program
-  const maxDayFor = m => { let b = 0; for (let d = 1; d <= _EXT_MAX_DAYS; d++) if (buffer(d) >= m) b = d; return b; };
-  const safe = maxDayFor(0.10), edge = maxDayFor(0.0);    // ≥10% buffer vs right at demand
+  const bL0 = buffer(L0);                                 // buffer at the CURRENT runtime
+  const L0lbl = detected ? `~${L0}-day` : `~${L0}-day (assumed)`;
 
-  if (safe < 1) {   // can't keep any buffer even at the shortest program → under-supplied
-    return `<div class="an-suggest an-suggest-fix">
+  // Fed at the current runtime → leave it alone. Don't push SHORTER (a bigger buffer you don't need,
+  // plus more frequent restarts) or LONGER (spare extraction is better spent on factories — above).
+  // This is deliberate: chasing buffer creates a runaway (shorten → surplus → more factories → ...).
+  if (bL0 >= 0) {
+    return `<div class="an-suggest an-suggest-add">
         <div class="an-suggest-h">Extraction runtime</div>
-        <div class="an-rt-pick">Extraction covers only <b>${Math.round(headroom * 100)}%</b> of demand on ${detected ? `your ~${L0}-day` : `a ~${L0}-day`} program — under a safe margin.</div>
-        <ul><li>Shorten the program or add extraction (see above) before the factories fall behind.</li></ul>
+        <div class="an-rt-pick">Your ${L0lbl} programs are <b>sustainable</b> — extraction sits <b>+${Math.round(bL0 * 100)}%</b> above demand. Keep the runtime; no need to restart more often.</div>
+        <div class="an-sug-note">A thin buffer is fine — running shorter only buys a margin you don't need, and the spare extraction is better spent on more factories (above) than on longer downtime.${detected ? '' : ' Current length assumed 2d — rescan to detect yours.'} Decay is an estimate — verify against your in-game ECU.</div>
       </div>`;
   }
 
-  const start = Math.max(1, Math.min(L0, safe) - 1);
-  const end = Math.min(_EXT_MAX_DAYS, Math.max(edge + 1, safe + 2));
-  let rows = '';
-  for (let d = start; d <= end; d++) {
-    const b = buffer(d);
-    const pct = (b >= 0 ? '+' : '−') + Math.round(Math.abs(b) * 100) + '%';
-    const cls = b >= 0.10 ? 'an-rt-ok' : b >= 0 ? 'an-rt-warn' : 'an-rt-bad';
-    const tags = [];
-    if (d === safe) tags.push('recommended');
-    if (detected && d === L0) tags.push('now');
-    rows += `<tr class="${d === safe ? 'an-rt-row-rec' : ''}">`
-      + `<td>${d}d</td><td class="an-rt-mono">${_progDuration(d)}</td>`
-      + `<td class="${cls}">${pct}</td><td class="an-rt-tag">${tags.join(' · ')}</td></tr>`;
-  }
-  const pick = (detected && safe < L0) ? `Shorten to <b>${safe} day${safe === 1 ? '' : 's'}</b>` : `Run <b>${safe} day${safe === 1 ? '' : 's'}</b>`;
-  return `<div class="an-suggest an-suggest-add">
+  // Deficit at the current runtime: factories will fall behind. Adding supply (reseat / redeploy)
+  // comes FIRST; shortening the program is the last resort — fresher extraction, but daily restarts.
+  let fedDay = 0;
+  for (let d = 1; d <= L0; d++) if (buffer(d) >= 0) fedDay = d;
+  const steps = [`<b>Reseat</b> the short colonies (above) to recover lost yield, or <b>redeploy</b> a surplus colony's command center onto the short material — that fixes supply without touching your runtime.`];
+  if (fedDay >= 1 && fedDay < L0)
+    steps.push(`Only if you can't add supply: <b>shorten to ${fedDay} day${fedDay === 1 ? '' : 's'}</b> (${_progDuration(fedDay)}) — fresher extraction stays fed, at the cost of restarting more often.`);
+  else
+    steps.push(`Even daily programs can't keep up here — you need more extraction (reseat / redeploy / another colony); a shorter runtime alone won't fix it.`);
+  return `<div class="an-suggest an-suggest-fix">
       <div class="an-suggest-h">Extraction runtime</div>
-      <div class="an-rt-pick">${pick} — set programs to <b>${_progDuration(safe)}</b>; output holds at <b>${ppd}</b> ${_esc(unit)}/day.</div>
-      <table class="an-rt-tbl">
-        <thead><tr><th>Run</th><th>Program</th><th class="an-rt-num">Buffer</th><th></th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
-      ${_extDecayGraphSvg(headroom, L0, safe, edge)}
-      <div class="an-sug-note">Buffer = how far the program's average extraction sits above factory demand (below 0 = factories starve).${detected ? '' : ' Current length assumed 2d — rescan to detect yours.'} Decay is an estimate — verify against your in-game ECU.</div>
+      <div class="an-rt-pick">Your ${L0lbl} programs <b>over-extend</b> supply — extraction covers only <b>${Math.round((bL0 + 1) * 100)}%</b> of demand, so factories fall behind.</div>
+      <ul>${steps.map(s => `<li>${s}</li>`).join('')}</ul>
+      ${_extDecayGraphSvg(headroom, L0, fedDay || 1, fedDay || 1)}
+      <div class="an-sug-note">Decay is an estimate — verify against your in-game ECU.</div>
     </div>`;
 }
 
