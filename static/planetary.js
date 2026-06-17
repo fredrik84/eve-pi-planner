@@ -2940,11 +2940,12 @@ function _burndownSection(rows) {
 
 function _extRuntimeAdviceHtml(headroom, curDays) {
   if (!_extRt || !_extRt.ppd || !headroom) return '';
-  const L0 = (curDays && curDays > 0) ? Math.round(curDays) : 2;
-  const detected = !!(curDays && curDays > 0), e0 = _extEff(L0);
+  const detected = !!(curDays && curDays > 0);
+  const L0 = detected ? curDays : 2;                      // ACTUAL program length (fractional, not rounded)
+  const e0 = _extEff(L0);
   const buffer = d => headroom * _extEff(d) / e0 - 1;     // extraction over demand at a d-day program
   const bL0 = buffer(L0);                                 // buffer at the CURRENT runtime
-  const L0lbl = detected ? `~${L0}-day` : `~${L0}-day (assumed)`;
+  const L0lbl = detected ? `~${_fmtHours(L0 * 24)}` : '~2-day (assumed)';
 
   // Fed at the current runtime → leave it alone. Don't push SHORTER (a bigger buffer you don't need,
   // plus more frequent restarts) or LONGER (spare extraction is better spent on factories — above).
@@ -2960,7 +2961,7 @@ function _extRuntimeAdviceHtml(headroom, curDays) {
   // Deficit at the current runtime: factories will fall behind. Adding supply (reseat / redeploy)
   // comes FIRST; shortening the program is the last resort — fresher extraction, but daily restarts.
   let fedDay = 0;
-  for (let d = 1; d <= L0; d++) if (buffer(d) >= 0) fedDay = d;
+  for (let d = 1; d <= Math.floor(L0); d++) if (buffer(d) >= 0) fedDay = d;   // whole-day options ≤ current
   const steps = [`<b>Reseat</b> the short colonies (above) to recover lost yield, or <b>redeploy</b> a surplus colony's command center onto the short material — that fixes supply without touching your runtime.`];
   if (fedDay >= 1 && fedDay < L0)
     steps.push(`Only if you can't add supply: <b>shorten to ${fedDay} day${fedDay === 1 ? '' : 's'}</b> (${_progDuration(fedDay)}) — fresher extraction stays fed, at the cost of restarting more often.`);
