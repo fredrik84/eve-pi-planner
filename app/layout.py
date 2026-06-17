@@ -456,9 +456,9 @@ def build_factory_template(product_id: int, struct: dict, planet_type: str,
         p["La"], p["Lo"] = round(p["La"], 5), round(p["Lo"], 5)
     _enforce_min_sep(pins)
     unit_label = f" ×{n_trees}" if n_trees > 1 else ""
-    # Planet type omitted from a FACTORY name on purpose: P2–P4 factories sit on whatever planet the
-    # plan assigns (the type was just our sizing default), so "(Barren)" only confused users told to
-    # place it on a Storm planet. Extractors keep their type — that's the actual extraction location.
+    # Planet type omitted from the name: PI templates are planet-PORTABLE (a "Lava" extractor imports
+    # fine onto a Storm planet), so the type was only ever our sizing default and "(Barren)" just
+    # confused users told to place it elsewhere. Zip dedup keys on the template's Pln, not the name.
     cmt = f"P{tier} {types[product_id]['name']} factory{unit_label}{copy_label}"
     template = {
         "CmdCtrLv": CMD_CTR_LEVEL, "Cmt": cmt, "Diam": PLANET_DIAM.get(planet_type, 8000.0),
@@ -563,7 +563,7 @@ def build_extractor_template(p1_id: int, planet_type: str, struct: dict, pi_data
     for p in pins:
         p["La"], p["Lo"] = round(p["La"], 5), round(p["Lo"], 5)
     # Lead with the P0 — that's what you search/select in-game to find hotspots — then the P1.
-    cmt = f"{types[p0_id]['name']} → {types[p1_id]['name']} ({planet_type})"
+    cmt = f"{types[p0_id]['name']} → {types[p1_id]['name']}"   # planet type omitted — templates are portable
     return {
         "template": {"CmdCtrLv": CMD_CTR_LEVEL, "Cmt": cmt, "Diam": PLANET_DIAM.get(planet_type, 8000.0),
                      "Pln": struct["planet_type_id"], "P": pins, "L": links, "R": routes},
@@ -624,7 +624,7 @@ def build_split_extractor_template(p1a_id: int, p1b_id: int, planet_type: str, s
     _enforce_min_sep(pins)
     for p in pins:
         p["La"], p["Lo"] = round(p["La"], 5), round(p["Lo"], 5)
-    cmt = f"Split: {types[p0a]['name']} + {types[p0b]['name']} ({planet_type})"
+    cmt = f"Split: {types[p0a]['name']} + {types[p0b]['name']}"   # planet type omitted — templates are portable
     return {
         "template": {"CmdCtrLv": CMD_CTR_LEVEL, "Cmt": cmt, "Diam": PLANET_DIAM.get(planet_type, 8000.0),
                      "Pln": struct["planet_type_id"], "P": pins, "L": links, "R": routes},

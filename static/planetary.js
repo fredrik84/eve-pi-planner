@@ -309,7 +309,7 @@ function renderDashboard(data) {
   const prodTot = pb.product.reduce((a, x) => a + x.value, 0);
   const rawM3 = pb.raw.reduce((a, x) => a + x.m3, 0);
   const rawShown = pb.raw.slice(0, 12);
-  const padsCollapsed = localStorage.getItem('dashPadsCollapsed') === '1';
+  const padsCollapsed = localStorage.getItem('dashPadsCollapsed') !== '0';   // default folded
   const padsSummary = `${pb.product.length ? _fmtIsk(prodTot) + ' to sell' : ''}${pb.product.length && pb.raw.length ? ' · ' : ''}${pb.raw.length ? Math.round(rawM3).toLocaleString() + ' m³ to haul' : ''}`;
   const padsHtml = (pb.product.length || pb.raw.length) ? `
     <section class="pp-card">

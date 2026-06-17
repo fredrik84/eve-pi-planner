@@ -400,6 +400,17 @@ def _parse_planet_rows(text: str, con) -> tuple[list[dict], int, list[str]]:
                     except ValueError:
                         pass
 
+        # Drop any P0 value that doesn't grow on this planet type (e.g. a Noble Gas reading on a Plasma
+        # planet — usually a "Noble Gas"/"Noble Metals" column mix-up). Keeps contradictory data out of
+        # the DB; the planner's per-P0 planet-type filter is the backstop if any still slips through.
+        valid_cols = {_p0_col(n) for n in PLANET_P0_MAP.get(ptype_key, [])}
+        stray = [c for c in list(p0_vals) if c not in valid_cols and p0_vals.get(c)]
+        for c in stray:
+            p0_vals.pop(c, None)
+        if stray:
+            errors.append(f"{system} P{praw}: dropped {', '.join(_COL_TO_NAME.get(c, c) for c in stray)}"
+                          f" — doesn't occur on {ptype_key} planets")
+
         row = {"system": system, "planet_num": planet_num,
                "planet_type": ptype_key, "constellation": constel}
         row.update(p0_vals)
