@@ -456,7 +456,10 @@ def build_factory_template(product_id: int, struct: dict, planet_type: str,
         p["La"], p["Lo"] = round(p["La"], 5), round(p["Lo"], 5)
     _enforce_min_sep(pins)
     unit_label = f" ×{n_trees}" if n_trees > 1 else ""
-    cmt = f"P{tier} {types[product_id]['name']} factory{unit_label}{copy_label} ({planet_type})"
+    # Planet type omitted from a FACTORY name on purpose: P2–P4 factories sit on whatever planet the
+    # plan assigns (the type was just our sizing default), so "(Barren)" only confused users told to
+    # place it on a Storm planet. Extractors keep their type — that's the actual extraction location.
+    cmt = f"P{tier} {types[product_id]['name']} factory{unit_label}{copy_label}"
     template = {
         "CmdCtrLv": CMD_CTR_LEVEL, "Cmt": cmt, "Diam": PLANET_DIAM.get(planet_type, 8000.0),
         "Pln": struct["planet_type_id"], "P": pins, "L": links, "R": routes,
@@ -497,7 +500,7 @@ def build_flat_p2_template(product_id: int, n_fac: int, struct: dict,
                 routes.append({"P": path, "Q": inp["quantity"], "T": inp["type_id"]})
         routes.append({"P": [fac, lp_pins[0]], "Q": sch["output_qty"], "T": product_id})
     _enforce_min_sep(pins)
-    cmt = f"P2 {types[product_id]['name']} factory{copy_label} ({planet_type})"
+    cmt = f"P2 {types[product_id]['name']} factory{copy_label}"   # planet type omitted (see build_factory_template)
     return {
         "template": {"CmdCtrLv": CMD_CTR_LEVEL, "Cmt": cmt, "Diam": PLANET_DIAM.get(planet_type, 8000.0),
                      "Pln": struct["planet_type_id"], "P": pins, "L": links, "R": routes},

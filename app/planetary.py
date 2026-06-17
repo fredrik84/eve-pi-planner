@@ -237,8 +237,10 @@ def download_bundle(type_ids: str = "", expand: int = 0, splits: str = "", no_st
                                     no_storage=bool(no_storage))
                 pairs = [(r["planets"][0]["name"], r["planets"][0]["template"])]
             for name, tmpl in pairs:
-                # Disambiguate per (planet type, CC) variants so they don't collide in the zip.
-                key = f"{name}|CC{tmpl.get('CmdCtrLv', 5)}"
+                # Disambiguate per (planet type, CC) variants so they don't collide in the zip. Key on
+                # the template's planet-type id (Pln), not the name — factory names no longer carry the
+                # type, but a Barren vs Temperate factory is a genuinely different template.
+                key = f"{name}|{tmpl.get('Pln')}|CC{tmpl.get('CmdCtrLv', 5)}"
                 if key not in seen:
                     seen.add(key)
                     items.append((name, tmpl))
@@ -246,7 +248,7 @@ def download_bundle(type_ids: str = "", expand: int = 0, splits: str = "", no_st
             r = generate_split_extractor_layout(p1a, p1b, heads_a=ha, heads_b=hb,
                                                 planet_type=ptype, cc_level=cc)
             name, tmpl = r["planets"][0]["name"], r["planets"][0]["template"]
-            key = f"{name}|CC{tmpl.get('CmdCtrLv', 5)}"
+            key = f"{name}|{tmpl.get('Pln')}|CC{tmpl.get('CmdCtrLv', 5)}"
             if key not in seen:
                 seen.add(key)
                 items.append((name, tmpl))
