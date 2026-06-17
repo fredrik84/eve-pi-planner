@@ -2923,7 +2923,7 @@ function _bestFreeSpot(t, cap) {
   if (!best) return null;
   const ch = (_ppCharsData || []).find(c => String(c.character_id) === String(bestCid));
   return { p0: pl.p0_name, system: best.system, planet_num: best.planet_num,
-           richness: best.richness, char: ch ? ch.name : '', cid: bestCid };
+           planet_type: best.planet_type, richness: best.richness, char: ch ? ch.name : '', cid: bestCid };
 }
 // Assign each free planet slot to the WORST-fed short material it can grow. Production is capped by
 // the worst-fed material, so that's the most impactful place to add a colony — with limited slots we
@@ -2961,12 +2961,20 @@ function _burndownSection(rows) {
   const { totalFree, assigned } = _assignFreeSlots(short);
   let bestUse = '';
   if (assigned.length) {
-    const items = assigned.map(a => {
+    const cards = assigned.map((a, i) => {
       const loc = `${_esc(a.system)}${a.planet_num != null ? ' P' + a.planet_num : ''}`;
-      return `<li>deploy <b>${_esc(a.p0)} → ${_esc(a.name)}</b> on <b>${a.char ? _esc(a.char) + ' · ' : ''}${loc}</b> (${a.richness}% density) <span class="an-bd-bestuse-sub">— ${_esc(a.name)} is short ${a.shortBy.toLocaleString()}/day</span></li>`;
+      const cc = a.planet_type ? `<span class="an-cc-tag">${_esc(a.planet_type)} CC</span>` : '';
+      return `<div class="an-bu-card">
+          <div class="an-bu-rank">${i + 1}</div>
+          <div class="an-bu-body">
+            <div class="an-bu-mat">${_esc(a.p0)} <span class="an-move-p0arrow">→</span> ${_esc(a.name)}</div>
+            <div class="an-bu-where">anchor a ${cc} on <b>${a.char ? _esc(a.char) + ' · ' : ''}${loc}</b></div>
+            <div class="an-bu-meta">${a.richness}% density · spare slot, no teardown · covers ~${a.shortBy.toLocaleString()}/day of the shortfall</div>
+          </div>
+        </div>`;
     }).join('');
     const more = short.length - assigned.length;
-    bestUse = `<div class="an-bd-bestuse"><div class="an-bd-bestuse-h">🎯 Best use of your ${totalFree} free planet slot${totalFree > 1 ? 's' : ''} — most impactful first, no teardown:</div><ol>${items}</ol>`
+    bestUse = `<div class="an-bd-bestuse"><div class="an-bd-bestuse-h">🎯 Best use of your ${totalFree} free planet slot${totalFree > 1 ? 's' : ''} — most impactful first, no teardown:</div><div class="an-bu-list">${cards}</div>`
       + (more > 0 ? `<div class="an-bd-bestuse-note">The other ${more} short material${more > 1 ? 's' : ''} need more capacity — reseat/redeploy below, free a slot, or train Interplanetary Consolidation.</div>` : '')
       + `</div>`;
   } else if (totalFree > 0) {
