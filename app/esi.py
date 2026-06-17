@@ -934,10 +934,19 @@ def list_characters(pp_session: str = Cookie(default=None)):
                     # Sustainable (extraction-limited) rate — poor planets can't hold full factory
                     # output, so this is the honest "units/day toward a quota". Falls back to the
                     # launchpad rate for sim states scanned before rate_sustained existed.
-                    rate = o.get("rate_sustained", o.get("rate", 0)) or 0
+                    full = o.get("rate", 0) or 0                     # full factory appetite
+                    sustained = o.get("rate_sustained")             # None on pre-rate_sustained scans
+                    stale = sustained is None                       # → we're showing the optimistic full rate
+                    rate = (sustained if sustained is not None else full) or 0
                     if rate > 0:
-                        production.append({"type_id": o["type_id"], "name": o["name"],
-                                           "per_day": round(rate * 86400)})
+                        production.append({
+                            "type_id": o["type_id"], "name": o["name"],
+                            "per_day": round(rate * 86400),
+                            "full_per_day": round(full * 86400),
+                            # extraction-limited: the planet can't keep its own factories fed
+                            "capped": (not stale) and full > 0 and rate < full * 0.97,
+                            "stale": stale,
+                        })
         except Exception:
             production = []
         program_days = None      # the extraction-program length the player set (install→expiry)

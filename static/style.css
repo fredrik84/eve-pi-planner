@@ -1734,6 +1734,21 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .an-bu-where { font-size: 12px; color: #aeb6c6; margin-top: 2px; }
 .an-bu-where b { color: #d6deef; }
 .an-bu-meta { font-size: 11px; color: #8b93a6; margin-top: 3px; }
+.an-bu-land { font-size: 12px; font-weight: 600; white-space: nowrap; margin-left: 4px; }
+.an-bu-arrow { color: #6fd0a0; }
+.an-bu-good { color: #6fd0a0; }
+.an-bu-over { color: #e0a23a; }
+.an-bd-bestuse-h2 { margin-top: 12px; color: #d6deef; }
+.an-bu-fine-list { display: flex; flex-direction: column; gap: 6px; }
+.an-bu-fine { padding: 7px 10px; border-radius: 5px; background: rgba(224,162,58,.08);
+  border-left: 3px solid #b9842c; }
+.an-bu-fine-h { font-size: 13px; font-weight: 700; color: #e6dcc8; }
+.an-bu-fine-sub { font-size: 11px; font-weight: 400; color: #9a8e75; margin-left: 4px; }
+.an-bu-fine-fix { font-size: 12px; color: #c8bfa8; margin-top: 3px; line-height: 1.45; }
+.an-bu-fine-fix b { color: #ecd9b0; }
+.an-stale-note { margin: 8px 0 0; padding: 8px 11px; border-radius: 6px; font-size: 12px; line-height: 1.5;
+  color: #e6dcc8; background: rgba(224,162,58,.10); border-left: 3px solid #b9842c; }
+.an-stale-note b { color: #ecd9b0; }
 .an-rt-tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
 .an-rt-tbl th { font-size: 9.5px; text-transform: uppercase; letter-spacing: .4px; color: #5a6b80;
   text-align: left; padding: 3px 8px; border-bottom: 1px solid #1d3340; }
