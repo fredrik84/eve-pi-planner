@@ -2925,15 +2925,25 @@ function _bestFreeSpot(t, cap) {
   return { p0: pl.p0_name, system: best.system, planet_num: best.planet_num,
            richness: best.richness, char: ch ? ch.name : '', cid: bestCid };
 }
-// `cap` reserves a free planet SLOT on a real toon (under its max planets) per material — a planet
-// hosts one colony, and a toon at capacity can't add one, so we never reuse a slot or a planet.
-function _spotLine(t, p1name, cap) {
-  const s = _bestFreeSpot(t, cap);
-  if (!s) return '';
-  if (cap) { cap.usedPlanets.add(`${s.system}|${s.planet_num}`); cap.free[s.cid] = (cap.free[s.cid] || 0) - 1; }
-  const loc = `${_esc(s.system)}${s.planet_num != null ? ' P' + s.planet_num : ''}`;
-  return `<div class="an-bd-spot">↳ Add it without redeploying: deploy <b>${_esc(s.p0)} → ${_esc(p1name)}</b> on `
-    + `your free planet <b>${s.char ? _esc(s.char) + ' · ' : ''}${loc}</b> (${s.richness}% density) — a spare slot, no teardown.</div>`;
+// Assign each free planet slot to the WORST-fed short material it can grow. Production is capped by
+// the worst-fed material, so that's the most impactful place to add a colony — with limited slots we
+// fix the biggest bottlenecks first, one slot/planet each. Returns [{name, shortBy, p0, char, ...}].
+function _assignFreeSlots(short) {
+  const cap = { free: {}, usedPlanets: new Set() };
+  (_ppCharsData || []).forEach(c => {
+    const f = (c.max_planets || 0) - (c.planets || []).length;
+    if (f > 0) cap.free[String(c.character_id)] = f;
+  });
+  const totalFree = Object.values(cap.free).reduce((a, b) => a + b, 0);
+  const assigned = [];
+  for (const r of short) {                       // short is worst-fed first
+    if (!Object.values(cap.free).some(v => v > 0)) break;
+    const s = _bestFreeSpot(r.t, cap);
+    if (!s) continue;
+    cap.usedPlanets.add(`${s.system}|${s.planet_num}`); cap.free[s.cid] -= 1;
+    assigned.push({ ...s, name: r.name, shortBy: Math.max(0, Math.round(r.need - r.have)) });
+  }
+  return { totalFree, assigned };
 }
 
 function _burndownSection(rows) {
@@ -2945,20 +2955,31 @@ function _burndownSection(rows) {
   const P0_PER_P1 = 150;   // basic-industry ratio: 3000 P0 → 20 P1 per cycle. Heads show P0, so target in P0.
   const toP0h = p1day => Math.round(p1day * P0_PER_P1 / 24);   // P1/day → P0/hour (the ECU's extraction rate)
   const RECLAIM = 0.05;    // ignore sub-5% "decline" as scan noise
-  // Spare-planet capacity: only toons UNDER their max planets can host a new colony, and each free
-  // slot takes exactly one (so we don't suggest the same toon/planet for several short materials).
-  const cap = { free: {}, usedPlanets: new Set() };
-  (_ppCharsData || []).forEach(c => {
-    const f = (c.max_planets || 0) - (c.planets || []).length;
-    if (f > 0) cap.free[String(c.character_id)] = f;
-  });
+
+  // One prominent "best use of your free slots" line — each spare planet goes to the worst-fed
+  // material it can grow (most impactful first), rather than a vague "add a colony" on every shortage.
+  const { totalFree, assigned } = _assignFreeSlots(short);
+  let bestUse = '';
+  if (assigned.length) {
+    const items = assigned.map(a => {
+      const loc = `${_esc(a.system)}${a.planet_num != null ? ' P' + a.planet_num : ''}`;
+      return `<li>deploy <b>${_esc(a.p0)} → ${_esc(a.name)}</b> on <b>${a.char ? _esc(a.char) + ' · ' : ''}${loc}</b> (${a.richness}% density) <span class="an-bd-bestuse-sub">— ${_esc(a.name)} is short ${a.shortBy.toLocaleString()}/day</span></li>`;
+    }).join('');
+    const more = short.length - assigned.length;
+    bestUse = `<div class="an-bd-bestuse"><div class="an-bd-bestuse-h">🎯 Best use of your ${totalFree} free planet slot${totalFree > 1 ? 's' : ''} — most impactful first, no teardown:</div><ol>${items}</ol>`
+      + (more > 0 ? `<div class="an-bd-bestuse-note">The other ${more} short material${more > 1 ? 's' : ''} need more capacity — reseat/redeploy below, free a slot, or train Interplanetary Consolidation.</div>` : '')
+      + `</div>`;
+  } else if (totalFree > 0) {
+    bestUse = `<div class="an-bd-bestuse"><div class="an-bd-bestuse-note">You have ${totalFree} free planet slot${totalFree > 1 ? 's' : ''}, but none of your reachable free planets grow what you're short on — redeploy a surplus colony, or widen your systems / import that planet's data.</div></div>`;
+  }
+
   const groups = short.map(r => {
     const prods = _producersOf(r.t);              // weakest first
     const shortBy = Math.max(0, Math.round(r.need - r.have));
     const headH = `${_esc(r.name)} <span class="an-bd-group-sub">${Math.round(r.ratio * 100)}% fed · short ${shortBy.toLocaleString()}/day</span>`;
     if (!prods.length)
       return `<div class="an-bd-group"><div class="an-bd-group-h">${_esc(r.name)} <span class="an-bd-group-sub">short ${shortBy.toLocaleString()}/day · no colony makes it yet</span></div>`
-        + `<div class="an-bd-target"><b>Add</b> a ${_esc(r.name)} colony.</div>${_spotLine(r.t, r.name, cap)}</div>`;
+        + `<div class="an-bd-target"><b>Add</b> a ${_esc(r.name)} colony${assigned.some(a => a.name === r.name) ? ' (see Best use above)' : ''}.</div></div>`;
 
     // Reseat only RECOVERS a declined colony to its proven best (current → best); it can't push a
     // planet past its capacity. So the most reseating can add back = Σ each colony's lost yield.
@@ -2992,15 +3013,13 @@ function _burndownSection(rows) {
     } else {
       action = `Your producer${prods.length === 1 ? ' is' : 's are'} at their proven best — reseating can't make up the <b>${shortBy.toLocaleString()}/day</b>. <b>Redeploy</b> a surplus colony or <b>add</b> a ${_esc(r.name)} colony.`;
     }
-    // Show the concrete "deploy on a free planet" line whenever adding a colony is part of the fix
-    // (and only then claim a slot, so reseat-clears-it materials don't burn capacity).
-    const spot = (reclaimable < shortBy) ? _spotLine(r.t, r.name, cap) : '';
-    return `<div class="an-bd-group"><div class="an-bd-group-h">${headH}</div><div class="an-bd-target">${action}</div>${list}${spot}</div>`;
+    return `<div class="an-bd-group"><div class="an-bd-group-h">${headH}</div><div class="an-bd-target">${action}</div>${list}</div>`;
   }).join('');
 
   return `<div class="an-suggest an-suggest-burndown">
       <div class="an-suggest-h">Fix short materials</div>
       <div class="an-levers-lead">You're short on <b>${short.map(r => _esc(r.name)).join('</b>, <b>')}</b>. <b>Reseating</b> only recovers a colony's <em>lost</em> yield (back to its best) — it can't push a planet past its capacity, so it's the fix only when a producer has dropped. When it isn't enough, <b>add or redeploy</b> a colony.</div>
+      ${bestUse}
       <div class="an-bd-groups">${groups}</div>
     </div>`;
 }
