@@ -2535,24 +2535,22 @@ function renderAnalysis() {
     }
   }
 
+  const _p0h = p1day => p1day * 150 / 24;     // P1/day → P0/hour (1h cycle, 150 P0 per P1)
+  const _kfmt = n => Math.abs(n) >= 10000 ? Math.round(n / 1000) + 'k' : Math.round(n).toLocaleString();
   const barRows = rows.map(r => {
-    const surplus = r.have - r.need;
     const cls = r.ratio >= 0.995 ? 'an-bar-ok' : (r.ratio >= 0.85 ? 'an-bar-warn' : 'an-bar-bad');
     const haveW = Math.max(2, Math.min(100, (r.have / r.need) * 100));
-    // Extraction buffer: how far the heads' UNCLIPPED output sits above the factory's appetite. For a
-    // satisfied (factory-limited) material the deliverable surplus reads ~+0 even when there's plenty of
-    // headroom — this is the number that says "hit it exactly" (thin, will go negative as it decays) vs
-    // "overshot" (margin to spare). Only shown when the material is actually being met.
-    const extSupply = _extSupplyOf(r.t);
-    let bufChip = '';
-    if (r.ratio >= 0.995 && extSupply > 0 && r.need > 0) {
-      const bufPct = Math.round((extSupply / r.need - 1) * 100);
-      const thin = bufPct < 5;
-      bufChip = `<span class="an-buf ${thin ? 'an-buf-thin' : 'an-buf-ok'}" title="Your heads extract ${bufPct >= 0 ? '+' + bufPct : bufPct}% versus what the factories consume. That margin is your cushion as extraction decays through the program — near 0% you'll dip below demand before it ends, so reseat or restart sooner.">${thin ? '⚠ ' : ''}${bufPct >= 0 ? '+' : ''}${bufPct}% buffer</span>`;
-    }
-    const delta = surplus >= 0
-      ? (bufChip || `<span class="an-pos">+${Math.round(surplus).toLocaleString()}/day</span>`)
-      : `<span class="an-neg">${Math.round(surplus).toLocaleString()}/day</span>`;
+    // What the player tunes is P0/hour at the ECU — so instead of raw P1/day produce-vs-need (noise),
+    // show ONE number: how far the heads' extraction average sits from what the factories need, in P0/hr.
+    // Unclipped (a factory-limited colony still shows its true head margin), so +X = decay cushion, −X =
+    // how much more extraction you need. Near 0 = hit it exactly (will dip short as heads fade).
+    const needP0h = _p0h(r.need);
+    const extP0h = _p0h(_extSupplyOf(r.t) || r.have);
+    const dev = Math.round(extP0h - needP0h);
+    const f = needP0h > 0 ? dev / needP0h : 0;
+    const devCls = f < -0.05 ? 'an-neg' : (f < 0.05 ? 'an-dev-edge' : 'an-pos');
+    const devStr = `${dev >= 0 ? '+' : '−'}${_kfmt(Math.abs(dev))} P0/hr`;
+    const numTitle = `Your heads extract ~${Math.round(extP0h).toLocaleString()} P0/hr; the factories need ~${Math.round(needP0h).toLocaleString()} P0/hr. ${dev >= 0 ? 'The surplus is your cushion as extraction decays — near 0 you hit it exactly and will dip short as the heads fade.' : 'Reseat onto denser hotspots or add a colony to close it.'}`;
     const expanded = _anExpanded.has(String(r.t));
     let detail = '';
     if (expanded) {
@@ -2566,7 +2564,7 @@ function renderAnalysis() {
         <div class="an-row an-row-click" onclick="_toggleMatDetail('${r.t}')">
           <div class="an-row-name"><span class="an-row-caret">${expanded ? '▾' : '▸'}</span> ${_esc(r.name)}</div>
           <div class="an-bar-track"><div class="an-bar-fill ${cls}" style="width:${haveW}%"></div></div>
-          <div class="an-row-nums"><span class="an-have">${Math.round(r.have).toLocaleString()}</span><span class="an-sep">/</span><span class="an-need">${Math.round(r.need).toLocaleString()}/day</span>${delta}</div>
+          <div class="an-row-nums ${devCls}" title="${numTitle}">${devStr}</div>
         </div>${detail}
       </div>`;
   }).join('');
@@ -2773,7 +2771,7 @@ function renderAnalysis() {
   const rtAdvice = _extRuntimeAdviceHtml(binding.ratio, _currentProgramDays());
 
   el.innerHTML = head + _staleSupplyNote(rows) + stats + proj
-    + `<div class="an-legend">Producing (left) vs the plan’s daily need (right) per P1. A full green bar = factories stay fed; a short red bar is the bottleneck. <b>Buffer</b> = how far your heads out-extract the factory’s appetite — your cushion as extraction decays (⚠ near 0% means you hit it exactly and will dip below demand as it fades).</div>`
+    + `<div class="an-legend">The bar = how fed each factory input is (full green = kept up, short red = bottleneck). The number = <b>how off your extraction is in P0/hour</b> — what you tune at the ECU: <span class="an-pos">+</span> is cushion as heads decay, <span class="an-neg">−</span> is how much more you need, <span class="an-dev-edge">±0</span> means you hit it exactly (will dip short as it fades).</div>`
     + `<div class="an-bars">${barRows}</div>`
     + suggest + rtAdvice;
 }
