@@ -14,7 +14,7 @@
   <meta property="og:image" content="https://eve-pi.failed.name/og-image.png?v=4">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:image" content="https://eve-pi.failed.name/og-image.png?v=4">
-  <link rel="stylesheet" href="/style.css?v=165">
+  <link rel="stylesheet" href="/style.css?v=167">
 </head>
 <body>
   <header>
@@ -329,6 +329,7 @@
             <button class="pp-profile-action-btn" onclick="ppLoadSelectedProfile()">Load</button>
             <button class="pp-profile-action-btn" onclick="wizardSaveProfile()">Save</button>
             <button class="pp-profile-action-btn pp-profile-del-btn" onclick="ppDeleteSelectedProfile()">Delete</button>
+            <span id="ppProfileWarn" class="pp-profile-warn" style="display:none"></span>
           </div>
 
           <!-- Saved plans (refill snapshots) — populated by planetary.js -->
@@ -824,6 +825,6 @@ PVF-N9    3         95                 60             80                  100   
   </div>
 
   <script src="/app.js?v=24"></script>
-  <script src="/planetary.js?v=239"></script>
+  <script src="/planetary.js?v=241"></script>
 </body>
 </html>

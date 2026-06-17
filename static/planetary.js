@@ -1644,9 +1644,26 @@ function renderProfilesBar(profiles) {
   sel.innerHTML = profiles.map(p => {
     const op = p.overproduction_pct ?? 10;
     const sys = p.preferred_systems || 1;
-    const label = `${p.name}  —  ${p.type_name || '?'} · +${op}% overprod · ${sys} sys`;
+    const label = `${p.stale ? '⚠ ' : ''}${p.name}  —  ${p.type_name || '?'} · +${op}% overprod · ${sys} sys`;
     return `<option value="${p.id}">${_esc(label)}</option>`;
   }).join('');
+  sel.onchange = _updateProfileWarn;
+  _updateProfileWarn();
+}
+
+// Show a "this saved plan is stale — re-run" note when the selected profile's fleet/skills have
+// changed since it was saved (re-running would place colonies differently).
+function _updateProfileWarn() {
+  const sel = document.getElementById('ppProfileSelect');
+  const warn = document.getElementById('ppProfileWarn');
+  if (!sel || !warn) return;
+  const p = (_ppProfiles || []).find(x => x.id === parseInt(sel.value, 10));
+  if (p && p.stale) {
+    warn.style.display = '';
+    warn.innerHTML = `⚠ Stale — ${_esc(p.stale_reason || 'fleet changed since saved')}. <b>Load &amp; re-run</b> to refresh.`;
+  } else {
+    warn.style.display = 'none';
+  }
 }
 
 function ppLoadSelectedProfile() {
@@ -2211,7 +2228,7 @@ async function _fetchAllSnapshots() {
     ...server.map(s => ({ id: 'srv:' + s.id, srvId: s.id, name: s.name, factories: s.factories, consumption: s.consumption || {},
                           products_per_day: s.products_per_day, isk_per_day: s.isk_per_day, unit_label: s.unit_label,
                           factory_refill_hours: s.factory_refill_hours, factories_count: s.factories_count,
-                          hasPayload: !!s.has_payload, saved: true })),
+                          hasPayload: !!s.has_payload, saved: true, stale: !!s.stale, stale_reason: s.stale_reason || '' })),
     ..._loadPlanSnapshots().filter(s => !serverNames.has(s.name)),
   ];
 }
@@ -2234,8 +2251,9 @@ async function renderSavedPlansBar() {
     const open = s.hasPayload
       ? `<button class="pp-profile-action-btn" onclick="openSavedPlanFull('${s.srvId || ''}')" title="Reopen the full allocation plan">Open plan</button>`
       : '';
-    return `<div class="pp-saved-row">
-        <span class="pp-saved-name">${_esc(s.name)}${s.saved ? '' : ' · this browser'}</span>
+    const stale = s.stale ? `<span class="pp-saved-stale" title="${_esc(s.stale_reason || '')} — re-run to refresh">⚠ stale</span>` : '';
+    return `<div class="pp-saved-row${s.stale ? ' pp-saved-row-stale' : ''}">
+        <span class="pp-saved-name">${_esc(s.name)}${s.saved ? '' : ' · this browser'}${stale}</span>
         <span class="pp-saved-meta">${meta}</span>
         <span class="pp-saved-actions">
           ${open}

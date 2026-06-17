@@ -783,6 +783,7 @@ def ensure_profile_tables():
             ("split_mode",             "TEXT NOT NULL DEFAULT 'off'"),
             ("distribution_mode",      "TEXT NOT NULL DEFAULT 'stability'"),
             ("min_density_pct",        "INTEGER NOT NULL DEFAULT 0"),
+            ("fleet_json",             "TEXT"),   # {char_id: [ccu, ic]} at save → staleness flag
         ]:
             if col not in cols:
                 try:
@@ -821,6 +822,30 @@ class ProfileSave(BaseModel):
     min_density_pct: int = 0
 
 
+def _fleet_fingerprint(con, context_id: int) -> dict:
+    """{char_id: [ccu, ic]} for the context's real characters — the state a saved plan depends on."""
+    return {str(r["character_id"]): [r["command_center_upgrades"] or 0, r["interplanetary_consolidation"] or 0]
+            for r in con.execute(
+                "SELECT character_id, command_center_upgrades, interplanetary_consolidation "
+                "FROM pp_characters WHERE context_id=? AND COALESCE(is_dummy,0)=0", (context_id,)).fetchall()}
+
+def _plan_staleness(saved: dict, current: dict) -> dict:
+    """A saved plan is stale once the fleet it assumed has changed — toons added/removed or skills
+    trained. Re-running would then place colonies differently. Returns {stale, reason}."""
+    if not saved:
+        return {"stale": False, "reason": ""}          # pre-feature profile → can't compare, don't nag
+    added = [c for c in current if c not in saved]
+    removed = [c for c in saved if c not in current]
+    changed = [c for c in current if c in saved and current[c] != saved[c]]
+    if not (added or removed or changed):
+        return {"stale": False, "reason": ""}
+    parts = []
+    if added:   parts.append(f"{len(added)} character{'s' if len(added) != 1 else ''} added")
+    if removed: parts.append(f"{len(removed)} removed")
+    if changed: parts.append(f"{len(changed)} skill change{'s' if len(changed) != 1 else ''}")
+    return {"stale": True, "reason": " · ".join(parts) + " since saved"}
+
+
 @router.get("/api/profiles")
 def list_profiles(pp_session: str = Cookie(default=None)):
     context_id = session_context_id(pp_session)
@@ -831,50 +856,57 @@ def list_profiles(pp_session: str = Cookie(default=None)):
     rows = con.execute(
         "SELECT id, name, type_id, type_name, overproduction_pct, preferred_systems, "
         "constellations, use_existing, factory_system, factory_output_per_hour, factory_character_ids, max_jumps, "
-        "factory_planet_types, split_mode, distribution_mode, min_density_pct "
+        "factory_planet_types, split_mode, distribution_mode, min_density_pct, fleet_json "
         "FROM pp_profiles WHERE context_id=? ORDER BY name",
         (context_id,),
     ).fetchall()
+    current = _fleet_fingerprint(con, context_id)
     con.close()
-    return {"profiles": [
-        {**dict(r),
-         "constellations":          _json.loads(r["constellations"] or "[]"),
-         "use_existing":            bool(r["use_existing"]),
-         "factory_system":          r["factory_system"] or "",
-         "factory_output_per_hour": r["factory_output_per_hour"],
-         "factory_character_ids":   _json.loads(r["factory_character_ids"] or "[]"),
-         "factory_planet_types":    _json.loads(r["factory_planet_types"] or "[]"),
-         "split_mode":              r["split_mode"] or "off",
-         "distribution_mode":       r["distribution_mode"] or "stability",
-         "min_density_pct":         r["min_density_pct"] or 0}
-        for r in rows
-    ]}
+    out = []
+    for r in rows:
+        d = dict(r)
+        try:
+            saved_fleet = _json.loads(d.pop("fleet_json") or "null") or {}
+        except Exception:
+            saved_fleet = {}
+        d.update({
+            "constellations":          _json.loads(r["constellations"] or "[]"),
+            "use_existing":            bool(r["use_existing"]),
+            "factory_system":          r["factory_system"] or "",
+            "factory_output_per_hour": r["factory_output_per_hour"],
+            "factory_character_ids":   _json.loads(r["factory_character_ids"] or "[]"),
+            "factory_planet_types":    _json.loads(r["factory_planet_types"] or "[]"),
+            "split_mode":              r["split_mode"] or "off",
+            "distribution_mode":       r["distribution_mode"] or "stability",
+            "min_density_pct":         r["min_density_pct"] or 0,
+            **_plan_staleness(saved_fleet, current),
+        })
+        out.append(d)
+    return {"profiles": out}
 
 
 @router.post("/api/profiles")
 def save_profile(req: ProfileSave, context_id: int = Depends(require_context)):
     ensure_profile_tables()
     con = get_connection()
+    fleet = _fleet_fingerprint(con, context_id)   # the fleet+skills this plan was built against
     con.execute("""
         INSERT OR REPLACE INTO pp_profiles
             (context_id, name, type_id, type_name, overproduction_pct, preferred_systems,
              constellations, use_existing, factory_system, factory_output_per_hour,
              factory_character_ids, max_jumps, factory_planet_types, split_mode, distribution_mode,
-             min_density_pct)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             min_density_pct, fleet_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (context_id, req.name, req.type_id, req.type_name, req.overproduction_pct,
           req.preferred_systems, _json.dumps(req.constellations),
           1 if req.use_existing else 0, req.factory_system or "",
           req.factory_output_per_hour, _json.dumps(req.factory_character_ids), req.max_jumps,
           _json.dumps(req.factory_planet_types), _norm_split_mode(req.split_mode),
-          _norm_dist_mode(req.distribution_mode), max(0, min(100, int(req.min_density_pct or 0)))))
-    # Snapshot the fleet's current skills so the dashboard can later flag "trained up since you planned".
-    skills = {str(r["character_id"]): [r["command_center_upgrades"] or 0, r["interplanetary_consolidation"] or 0]
-              for r in con.execute(
-                  "SELECT character_id, command_center_upgrades, interplanetary_consolidation "
-                  "FROM pp_characters WHERE context_id=? AND COALESCE(is_dummy,0)=0", (context_id,)).fetchall()}
+          _norm_dist_mode(req.distribution_mode), max(0, min(100, int(req.min_density_pct or 0))),
+          _json.dumps(fleet)))
+    # Same fingerprint feeds the dashboard "trained up since you planned" nudge (per-context baseline).
     con.execute("INSERT OR REPLACE INTO pp_plan_baseline (context_id, skills_json, plan_name, saved_at) VALUES (?,?,?,?)",
-                (context_id, _json.dumps(skills), req.name, _time.time()))
+                (context_id, _json.dumps(fleet), req.name, _time.time()))
     con.commit()
     con.close()
     return {"ok": True}
@@ -925,10 +957,12 @@ def save_plan_snapshot(req: PlanSnapshotSave, context_id: int = Depends(require_
         raise HTTPException(status_code=400, detail="Plan name is required")
     ensure_plan_snapshot_table()
     con = get_connection()
+    snap = dict(req.snapshot) if isinstance(req.snapshot, dict) else {"value": req.snapshot}
+    snap["fleet"] = _fleet_fingerprint(con, context_id)   # fleet+skills this plan was built against → stale flag
     con.execute(
         "INSERT OR REPLACE INTO pp_plan_snapshots (context_id, name, snapshot, created_at) "
         "VALUES (?,?,?,?)",
-        (context_id, name, _json.dumps(req.snapshot), datetime.now(timezone.utc).isoformat()),
+        (context_id, name, _json.dumps(snap), datetime.now(timezone.utc).isoformat()),
     )
     con.commit()
     con.close()
@@ -946,6 +980,7 @@ def list_plan_snapshots(pp_session: str = Cookie(default=None)):
         "SELECT id, name, snapshot, created_at FROM pp_plan_snapshots WHERE context_id=? ORDER BY name",
         (context_id,),
     ).fetchall()
+    current = _fleet_fingerprint(con, context_id)
     con.close()
     out = []
     for r in rows:
@@ -961,7 +996,8 @@ def list_plan_snapshots(pp_session: str = Cookie(default=None)):
                     "unit_label": snap.get("unit_label", "units"),
                     "factory_refill_hours": snap.get("factory_refill_hours"),
                     "factories_count": snap.get("factories_count"),
-                    "has_payload": bool(snap.get("payload"))})
+                    "has_payload": bool(snap.get("payload")),
+                    **_plan_staleness(snap.get("fleet") or {}, current)})
     return {"snapshots": out}
 
 
