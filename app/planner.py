@@ -151,11 +151,16 @@ def _fetch_p0_planets(
         if not col:
             result[name] = []
             continue
+        # Only planet TYPES that actually grow this P0 (per PLANET_P0_MAP). Guards against a bad Planet-DB
+        # row — e.g. a Plasma planet with a stray Noble Gas value (Noble Gas vs Noble Metals mix-up) —
+        # being handed out as a Noble Gas extractor site on a planet that physically can't have it.
+        valid_types = _P0_PLANET_TYPES.get(name, [])
+        type_filter = (" AND planet_type IN ({})".format(",".join("?" * len(valid_types)))) if valid_types else ""
         try:
             rows = con.execute(
                 f"SELECT system, planet_num, planet_type, {col} as value "
-                f"FROM pp_planets WHERE {col}>=?{where_extra} ORDER BY {col} DESC",
-                [thresh] + params_base,
+                f"FROM pp_planets WHERE {col}>=?{where_extra}{type_filter} ORDER BY {col} DESC",
+                [thresh] + params_base + valid_types,
             ).fetchall()
             result[name] = [dict(r) for r in rows]
         except Exception:
@@ -1032,9 +1037,13 @@ def analyze_placements(body: dict = Body(...), pp_session: str = Cookie(default=
         col = _p0_col(p0_name) if p0_name else None
         if not col:
             continue
-        # col comes from the fixed _NAME_TO_COL map → safe to interpolate.
+        # col comes from the fixed _NAME_TO_COL map → safe to interpolate. Restrict to planet types that
+        # actually grow this P0 (guards against a bad row, e.g. Plasma carrying a stray Noble Gas value).
+        valid_types = _P0_PLANET_TYPES.get(p0_name, [])
+        type_filter = (" AND planet_type IN ({})".format(",".join("?" * len(valid_types)))) if valid_types else ""
         planets = con.execute(
-            f'SELECT system, planet_num, planet_type, "{col}" AS r FROM pp_planets WHERE "{col}" > 0'
+            f'SELECT system, planet_num, planet_type, "{col}" AS r FROM pp_planets WHERE "{col}" > 0{type_filter}',
+            valid_types,
         ).fetchall()
         by_char = {}
         for cid, systems in foot.items():
