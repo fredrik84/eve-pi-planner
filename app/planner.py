@@ -1399,7 +1399,7 @@ def dashboard(pp_session: str = Cookie(default=None)):
                                        "tier": types.get(t, {}).get("pi_tier") or 0, "amount": 0.0})
             a["amount"] += it.get("amount", 0) or 0
 
-    def _pad_list(d):
+    def _pad_list(d, sort_by="value"):
         out = []
         for a in d.values():
             amt = round(a["amount"])
@@ -1408,9 +1408,11 @@ def dashboard(pp_session: str = Cookie(default=None)):
             out.append({"name": a["name"], "tier": a["tier"], "amount": amt,
                         "value": round(amt * prices.get(a["type_id"], 0.0), 2),
                         "m3": round(amt * _PAD_VOL.get(a["tier"], 0.01), 1)})
-        out.sort(key=lambda x: -x["value"])
+        out.sort(key=lambda x: -x[sort_by])
         return out
-    pads_breakdown = {"product": _pad_list(agg), "raw": _pad_list(ext_agg)}
+    # Finished product → by sell value (what to move first). Raw P1 to haul → by volume (it's a hauling
+    # job; the m³ column is what the player reads, and biggest-space-first is what fills the hold).
+    pads_breakdown = {"product": _pad_list(agg, "value"), "raw": _pad_list(ext_agg, "m3")}
 
     # Colony warnings, grouped PER CHARACTER and counted (so a fleet of expiring extractors is one
     # "12 extractions expiring" line, not 12 rows). Stored scan-time kinds + a live expiry check.
