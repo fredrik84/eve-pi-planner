@@ -2900,6 +2900,30 @@ function _producersOf(t) {
 // Grouped per short P1, showing the worst few producing colonies — those drag the shortage, so they're
 // where a reseat helps most. A measured decline is flagged "off best" (reseat recovers it).
 const _RESEAT_PER_P1 = 5;   // worst N colonies shown per short material
+
+// The single best FREE planet to drop a new extractor for short material `t` on — a colony the
+// player can add to a spare slot without tearing down anything. From _placements (free, reachable,
+// grows the P0), richest first. Lets us say "deploy X here" instead of a vague "add a colony".
+function _bestFreeSpot(t) {
+  const pl = _placements && _placements[String(t)];
+  if (!pl || !pl.by_char) return null;
+  let best = null, bestCid = null;
+  Object.entries(pl.by_char).forEach(([cid, arr]) => (arr || []).forEach(p => {
+    if (!best || (p.richness || 0) > (best.richness || 0)) { best = p; bestCid = cid; }
+  }));
+  if (!best) return null;
+  const ch = (_ppCharsData || []).find(c => String(c.character_id) === String(bestCid));
+  return { p0: pl.p0_name, system: best.system, planet_num: best.planet_num,
+           richness: best.richness, char: ch ? ch.name : '' };
+}
+function _spotLine(t, p1name) {
+  const s = _bestFreeSpot(t);
+  if (!s) return '';
+  const loc = `${_esc(s.system)}${s.planet_num != null ? ' P' + s.planet_num : ''}`;
+  return `<div class="an-bd-spot">↳ Add it without redeploying: deploy <b>${_esc(s.p0)} → ${_esc(p1name)}</b> on `
+    + `your free planet <b>${s.char ? _esc(s.char) + ' · ' : ''}${loc}</b> (${s.richness}% density) — a spare slot, no teardown.</div>`;
+}
+
 function _burndownSection(rows) {
   const short = (rows || []).filter(r => r.ratio < 0.995);   // materials below the plan's need
   if (!short.length)
@@ -2913,8 +2937,10 @@ function _burndownSection(rows) {
     const prods = _producersOf(r.t);              // weakest first
     const shortBy = Math.max(0, Math.round(r.need - r.have));
     const headH = `${_esc(r.name)} <span class="an-bd-group-sub">${Math.round(r.ratio * 100)}% fed · short ${shortBy.toLocaleString()}/day</span>`;
+    const spot = _spotLine(r.t, r.name);   // "deploy on your free planet" — incremental, no teardown
     if (!prods.length)
-      return `<div class="an-bd-group"><div class="an-bd-group-h">${_esc(r.name)} <span class="an-bd-group-sub">short ${shortBy.toLocaleString()}/day · no colony makes it — <b>add one</b> (Redeploy)</span></div></div>`;
+      return `<div class="an-bd-group"><div class="an-bd-group-h">${_esc(r.name)} <span class="an-bd-group-sub">short ${shortBy.toLocaleString()}/day · no colony makes it yet</span></div>`
+        + `<div class="an-bd-target"><b>Add</b> a ${_esc(r.name)} colony.</div>${spot}</div>`;
 
     // Reseat only RECOVERS a declined colony to its proven best (current → best); it can't push a
     // planet past its capacity. So the most reseating can add back = Σ each colony's lost yield.
@@ -2948,7 +2974,9 @@ function _burndownSection(rows) {
     } else {
       action = `Your producer${prods.length === 1 ? ' is' : 's are'} at their proven best — reseating can't make up the <b>${shortBy.toLocaleString()}/day</b>. <b>Redeploy</b> a surplus colony or <b>add</b> a ${_esc(r.name)} colony.`;
     }
-    return `<div class="an-bd-group"><div class="an-bd-group-h">${headH}</div><div class="an-bd-target">${action}</div>${list}</div>`;
+    // Show the concrete "deploy on a free planet" line whenever adding a colony is part of the fix.
+    const showSpot = reclaimable < shortBy;
+    return `<div class="an-bd-group"><div class="an-bd-group-h">${headH}</div><div class="an-bd-target">${action}</div>${list}${showSpot ? spot : ''}</div>`;
   }).join('');
 
   return `<div class="an-suggest an-suggest-burndown">
