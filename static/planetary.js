@@ -1853,7 +1853,7 @@ async function _tryRestoreFromHash() {
     const data = await resp.json();
     if (data.payload && data.payload.tid) {
       _shareConsumed = true;
-      await _restoreFromPayload(data.payload);
+      await _restoreFromPayload(data.payload, true);   // from a share → flag it
       // Consume the share link: strip the id from the URL so a refresh after the user
       // navigates to another tab doesn't force the plan again. The plan stays loaded for
       // this session; the shareable URL was already copied to the clipboard on share.
@@ -1878,7 +1878,8 @@ async function _tryRestoreLastPlan() {
   try { await _restoreFromPayload(payload); } catch (e) { console.error('Restore last plan failed:', e); }
 }
 
-async function _restoreFromPayload(payload) {
+async function _restoreFromPayload(payload, fromShare = false) {
+  _wiz.fromShare = !!fromShare;   // a shared plan is someone else's fleet — editing re-plans for YOURS
   const tidBasketId = _basketIdFromTid(payload.tid);
   const isFuelBlock = payload.tid === FUEL_BLOCK_TYPE_ID;
   const isBasket = tidBasketId != null;
@@ -1935,6 +1936,15 @@ async function _restoreFromPayload(payload) {
       note.className = 'pp-anon-note';
       note.textContent = 'Anonymized share — character names and locations have been removed by the owner.';
       pc.prepend(note);
+    }
+    if (fromShare) {
+      const pc = document.getElementById('wizPlanContent');
+      const b = document.createElement('div');
+      b.className = 'pp-share-note';
+      b.innerHTML = "📋 <b>Shared plan</b> — this allocation is for the <b>original owner's</b> characters. "
+        + "It can't be re-run for their fleet (you don't have their characters), so changing any setting "
+        + "(overproduction, systems…) re-plans it against <b>your own</b> toons instead.";
+      pc.prepend(b);
     }
     wizardGo(3);
     return;
@@ -4073,6 +4083,8 @@ function renderShoppingList(data) {
 }
 
 async function _rerunPlan(overrides = {}) {
+  const wasShare = _wiz.fromShare;
+  _wiz.fromShare = false;                 // a re-run is computed against YOUR context now
   try {
     const { url, body } = _planRequest(_wiz.chosenSystems);
     const resp = await fetch(url, {
@@ -4084,6 +4096,15 @@ async function _rerunPlan(overrides = {}) {
     if (!resp.ok || data.error) throw new Error(data.error || `HTTP ${resp.status}`);
     _wiz.lastPlanData = data;
     renderFinalPlan(data, { scroll: false });
+    if (wasShare) {   // first edit of a shared plan → make the switch to your own fleet explicit
+      const pc = document.getElementById('wizPlanContent');
+      if (pc) {
+        const n = document.createElement('div');
+        n.className = 'pp-share-note pp-share-note-own';
+        n.innerHTML = "Re-planned for <b>your</b> characters — the shared plan was for someone else's fleet.";
+        pc.prepend(n);
+      }
+    }
   } catch (e) { alert('Re-run failed: ' + e.message); }
 }
 

@@ -1169,6 +1169,20 @@ tr:hover td { background: #181d2a; }
   border-radius: 4px;
   margin-bottom: 12px;
 }
+.pp-share-note {
+  background: rgba(224,167,111,.10);
+  border: 1px solid rgba(224,167,111,.30);
+  border-left: 3px solid #e0a76f;
+  color: #d8bfa0;
+  font-size: 12px;
+  line-height: 1.45;
+  padding: 9px 12px;
+  border-radius: 4px;
+  margin-bottom: 12px;
+}
+.pp-share-note b { color: #f0c89a; }
+.pp-share-note-own { border-left-color: #6fb0e0; background: rgba(111,176,224,.10); border-color: rgba(111,176,224,.30); color: #aecbe6; }
+.pp-share-note-own b { color: #cfe0f5; }
 
 .wiz-find-btn {
   width: 100%;
