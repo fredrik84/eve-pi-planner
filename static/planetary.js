@@ -2346,7 +2346,8 @@ function _setupPlanetsByMaterial() {
   const idx = {};
   (_ppCharsData || []).forEach(ch => (ch.planets || []).forEach(p => (p.production || []).forEach(o => {
     const k = String(o.type_id);
-    (idx[k] = idx[k] || []).push({ cid: ch.character_id, char: ch.name, system: p.system, planet_num: p.planet_num, perDay: o.per_day || 0 });
+    (idx[k] = idx[k] || []).push({ cid: ch.character_id, char: ch.name, system: p.system, planet_num: p.planet_num,
+                                   perDay: o.per_day || 0, extPerDay: o.ext_per_day || o.full_per_day || o.per_day || 0 });
   })));
   return idx;
 }
@@ -2642,13 +2643,30 @@ function renderAnalysis() {
     `<div class="an-move-side ${cls}"><span class="an-move-tag">${tag}</span>`
     + (loc ? `<span class="an-move-loc">${loc}</span>` : '')
     + `<span class="an-move-mat">${matHtml}</span><span class="an-sug-note">${note}</span></div>`;
+  // The move trades capacity between two P1s, so show BOTH sides' standing after it: the surplus
+  // material drops (does it stay healthy?) and the short one rises (does it reach the green?). Same
+  // banded over/under-% as the bars, before → after, so a redeploy that would break the donor is visible.
+  const _ovrBand = pct => pct < 0 ? { c: 'an-ovr-short', l: 'short' } : (pct < 10 ? { c: 'an-ovr-tight', l: 'tight' } : { c: 'an-ovr-ok', l: 'healthy' });
+  const _movePct = (supply, need) => need > 0 ? Math.round((supply / need - 1) * 100) : 0;
+  const _moveTrans = (before, after) => {
+    const b = _ovrBand(after);
+    return `<span class="an-move-trans">${before >= 0 ? '+' : ''}${before}% <span class="an-move-tarrow">→</span> <b class="${b.c}">${after >= 0 ? '+' : ''}${after}%</b> <span class="an-ovr-lbl ${b.c}">${b.l}</span></span>`;
+  };
   const _moveLi = (m) => {
     const c = m.colony;
     const fromLoc = c.system ? `${_esc(c.system)}${c.planet_num != null ? ' P' + c.planet_num : ''}` : '';
-    const rm = _moveSide('an-move-rm', 'tear down', fromLoc, _matHtml(m.fromName, m.fromT), `${Math.round(c.perDay).toLocaleString()}/day`);
+    // Donor P1 loses this colony's extraction; recipient P1 gains a colony's worth on the dest planet.
+    const needFrom = (needs[m.fromT] && needs[m.fromT].perDay) || 0;
+    const needTo = (needs[m.toT] && needs[m.toT].perDay) || 0;
+    const fromExt = _extSupplyOf(m.fromT), toExt = _extSupplyOf(m.toT);
+    const colExt = c.extPerDay || c.perDay || 0;
+    const gainExt = _estColonyP1(m.toT, m.dest ? m.dest.richness : 0);
+    const rmNote = _moveTrans(_movePct(fromExt, needFrom), _movePct(fromExt - colExt, needFrom));
+    const addNote = _moveTrans(_movePct(toExt, needTo), _movePct(toExt + gainExt, needTo));
+    const rm = _moveSide('an-move-rm', 'tear down', fromLoc, _matHtml(m.fromName, m.fromT), rmNote);
     const add = m.dest
-      ? _moveSide('an-move-add', 'build', `${_esc(m.dest.system)} P${m.dest.planet_num} <span class="an-cc-tag">${_esc(m.dest.planet_type)}</span>`, _matHtml(m.to, m.toT), `richness ${m.dest.richness}%`)
-      : _moveSide('an-move-add', 'build', '', _matHtml(m.to, m.toT), 'on a free planet');
+      ? _moveSide('an-move-add', 'build', `${_esc(m.dest.system)} P${m.dest.planet_num} <span class="an-cc-tag">${_esc(m.dest.planet_type)}</span> ${m.dest.richness}%`, _matHtml(m.to, m.toT), addNote)
+      : _moveSide('an-move-add', 'build', '', _matHtml(m.to, m.toT), addNote);
     return `<li class="an-move"><div class="an-move-char">${_esc(c.char)}</div>`
       + `<div class="an-move-pair">${rm}<div class="an-move-arrow">→</div>${add}</div></li>`;
   };
