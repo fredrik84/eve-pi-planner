@@ -291,11 +291,27 @@ function renderDashboard(data) {
         ${_rtTile(t.refill_due_hours, t.refill_factories_hours, 'Refill factory inputs', t.refill_due_loc || t.refill_factories_loc)}
       </div></div>
     </section>` : '';
+
+  // What's actually in the launchpads — finished product (to sell) and raw P1 (to haul to factories).
+  const pb = data.pads_breakdown || { product: [], raw: [] };
+  const _padRows = (items, showM3) => items.map(it =>
+    `<div class="dash-pad-row"><span class="dash-pad-amt">${it.amount.toLocaleString()}</span><span class="dash-pad-name">${_esc(it.name)}</span><span class="dash-pad-meta">${showM3 ? it.m3.toLocaleString() + ' m³' : _fmtIsk(it.value)}</span></div>`).join('');
+  const prodTot = pb.product.reduce((a, x) => a + x.value, 0);
+  const rawM3 = pb.raw.reduce((a, x) => a + x.m3, 0);
+  const rawShown = pb.raw.slice(0, 12);
+  const padsHtml = (pb.product.length || pb.raw.length) ? `
+    <section class="pp-card">
+      <div class="pp-card-title">In the pads <span class="pp-card-hint">— what's in your launchpads now</span></div>
+      <div class="pp-card-body">
+        ${pb.product.length ? `<div class="dash-pad-grp"><div class="dash-pad-grp-h">Finished product <span class="dash-pad-grp-sub">ready to sell · ${_fmtIsk(prodTot)}</span></div>${_padRows(pb.product, false)}</div>` : ''}
+        ${pb.raw.length ? `<div class="dash-pad-grp"><div class="dash-pad-grp-h">Raw P1 in extractors <span class="dash-pad-grp-sub">haul to factories · ${Math.round(rawM3).toLocaleString()} m³</span></div>${_padRows(rawShown, true)}${pb.raw.length > rawShown.length ? `<div class="dash-pad-more">+ ${pb.raw.length - rawShown.length} more</div>` : ''}</div>` : ''}
+      </div>
+    </section>` : '';
   el.innerHTML = issuesHtml + expansionHtml + `
     <section class="pp-card">
       <div class="pp-card-title">Overview <span class="pp-card-hint">— your PI at a glance · Rescan in the top bar pulls fresh data</span></div>
       <div class="pp-card-body"><div class="an-stats">${tiles}</div></div>
-    </section>` + routineHtml + `
+    </section>` + routineHtml + padsHtml + `
     <section class="pp-card">
       <div class="pp-card-title">Factories <span class="pp-card-hint">— launchpad fill &amp; time to empty, projected forward from your last rescan (${facs.length})</span></div>
       <div class="pp-card-body">
