@@ -2888,52 +2888,52 @@ function _burndownSection(rows) {
 
   const P0_PER_P1 = 150;   // basic-industry ratio: 3000 P0 → 20 P1 per cycle. Heads show P0, so target in P0.
   const toP0h = p1day => Math.round(p1day * P0_PER_P1 / 24);   // P1/day → P0/hour (the ECU's extraction rate)
+  const RECLAIM = 0.05;    // ignore sub-5% "decline" as scan noise
   const groups = short.map(r => {
     const prods = _producersOf(r.t);              // weakest first
     const shortBy = Math.max(0, Math.round(r.need - r.have));
+    const headH = `${_esc(r.name)} <span class="an-bd-group-sub">${Math.round(r.ratio * 100)}% fed · short ${shortBy.toLocaleString()}/day</span>`;
     if (!prods.length)
-      return `<div class="an-bd-group"><div class="an-bd-group-h">${_esc(r.name)} <span class="an-bd-group-sub">short ${shortBy.toLocaleString()}/day · no colony makes it — add one (Redeploy)</span></div></div>`;
-    const numP = prods.length;
-    const targetP1 = r.need / numP;               // the average each producer must hit to cover demand
-    const targetP0 = toP0h(targetP1);
-    const groupAvgP0 = toP0h(r.have / numP);
-    // How many of the weakest must reach that average to close the gap (the rest already carry their
-    // share). Walk from the worst, summing each one's lift-to-average, until it covers the shortfall.
-    let acc = 0, nNeed = 0;
-    for (const c of prods) {
-      if (c.perDay >= targetP1) break;            // at/above average — no lift needed here or beyond
-      acc += targetP1 - c.perDay; nNeed++;
-      if (acc >= shortBy) break;
-    }
-    nNeed = Math.min(numP, Math.max(1, nNeed));
-    const nLabel = nNeed >= numP ? `all ${numP} colonies` : `the weakest <b>${nNeed}</b> of ${numP} colonies`;
+      return `<div class="an-bd-group"><div class="an-bd-group-h">${_esc(r.name)} <span class="an-bd-group-sub">short ${shortBy.toLocaleString()}/day · no colony makes it — <b>add one</b> (Redeploy)</span></div></div>`;
 
-    const worst = prods.slice(0, _RESEAT_PER_P1);
-    const rowsHtml = worst.map(c => {
+    // Reseat only RECOVERS a declined colony to its proven best (current → best); it can't push a
+    // planet past its capacity. So the most reseating can add back = Σ each colony's lost yield.
+    const withBest = prods.map(c => {
+      const recoverable = (c.n >= 2 && c.decline >= RECLAIM) ? c.perDay * c.decline / (1 - c.decline) : 0;
+      return { ...c, recoverable, best: c.perDay + recoverable };
+    });
+    const declined = withBest.filter(c => c.recoverable > 0).sort((a, b) => b.recoverable - a.recoverable);
+    const reclaimable = Math.round(declined.reduce((s, c) => s + c.recoverable, 0));
+    const hasUnknown = withBest.some(c => c.n < 2);
+    const rem = Math.max(0, shortBy - reclaimable);
+
+    const reseatRows = declined.slice(0, _RESEAT_PER_P1).map(c => {
       const loc = c.system ? `${_esc(c.system)}${c.planet_num != null ? ' P' + c.planet_num : ''}` : '';
-      const p0now = toP0h(c.perDay);
-      const short_i = c.perDay < targetP1;
-      const tag = (c.n >= 2 && c.decline >= 0.10)
-        ? `<span class="an-bd-prod-tag an-bd-down">▼ ${Math.round(c.decline * 100)}% off best — reseat recovers it</span>`
-        : (c.n >= 2 ? `<span class="an-bd-prod-tag an-bd-flat">steady — likely a thin spot</span>`
-                    : `<span class="an-bd-prod-tag an-bd-flat">no history yet</span>`);
-      return `<div class="an-bd-prod${short_i ? '' : ' an-bd-prod-ok'}">
+      return `<div class="an-bd-prod">
           <span class="an-bd-prod-loc">${_esc(c.char)}${loc ? ' · ' + loc : ''}</span>
-          <span class="an-bd-prod-val">${p0now.toLocaleString()}<span class="an-bd-unit"> P0/hr</span></span>
-          ${tag}
+          <span class="an-bd-prod-val">${toP0h(c.perDay).toLocaleString()} → ${toP0h(c.best).toLocaleString()}<span class="an-bd-unit"> P0/hr</span></span>
+          <span class="an-bd-prod-tag an-bd-down">▼ ${Math.round(c.decline * 100)}% off best — reseat recovers it</span>
         </div>`;
     }).join('');
-    const more = prods.length > worst.length ? `<div class="an-bd-more">+ ${prods.length - worst.length} more producing this</div>` : '';
-    return `<div class="an-bd-group">
-        <div class="an-bd-group-h">${_esc(r.name)} <span class="an-bd-group-sub">${Math.round(r.ratio * 100)}% fed · short ${shortBy.toLocaleString()}/day</span></div>
-        <div class="an-bd-target">Reseat ${nLabel} to <b>~${targetP0.toLocaleString()} P0/hr</b> each to clear it <span class="an-bd-target-now">(group avg ${groupAvgP0.toLocaleString()} P0/hr now)</span></div>
-        <div class="an-bd-prod-list">${rowsHtml}</div>${more}
-      </div>`;
+
+    let action, list = '';
+    if (reclaimable >= shortBy && declined.length) {
+      action = `<b>Reseat</b> the ${declined.length} declined colon${declined.length === 1 ? 'y' : 'ies'} below — recovering them to their best adds back ~<b>${reclaimable.toLocaleString()}/day</b>, clearing the gap.`;
+      list = `<div class="an-bd-prod-list">${reseatRows}</div>`;
+    } else if (reclaimable > 0) {
+      action = `Reseating the ${declined.length} declined colon${declined.length === 1 ? 'y' : 'ies'} recovers only ~${reclaimable.toLocaleString()}/day — still short <b>${rem.toLocaleString()}/day</b>. ${hasUnknown ? 'A rescan may reveal more headroom on the others; otherwise ' : ''}<b>redeploy</b> a surplus colony or <b>add</b> a ${_esc(r.name)} colony for the rest.`;
+      list = `<div class="an-bd-prod-list">${reseatRows}</div>`;
+    } else if (hasUnknown) {
+      action = `No measured decline yet, so reseating may or may not help. <b>Try reseating</b> your ${_esc(r.name)} producers, then <b>Rescan</b> — if it doesn't add ~${shortBy.toLocaleString()}/day, they're at capacity, so <b>redeploy</b> or <b>add</b> a colony.`;
+    } else {
+      action = `Your producer${prods.length === 1 ? ' is' : 's are'} at their proven best — reseating can't make up the <b>${shortBy.toLocaleString()}/day</b>. <b>Redeploy</b> a surplus colony or <b>add</b> a ${_esc(r.name)} colony.`;
+    }
+    return `<div class="an-bd-group"><div class="an-bd-group-h">${headH}</div><div class="an-bd-target">${action}</div>${list}</div>`;
   }).join('');
 
   return `<div class="an-suggest an-suggest-burndown">
-      <div class="an-suggest-h">Reseat for short materials</div>
-      <div class="an-levers-lead">You're short on <b>${short.map(r => _esc(r.name)).join('</b>, <b>')}</b>. Reseat the weakest colonies' heads to lift their <b>P0 extraction</b> (the rate the ECU shows as you place heads) toward the target, then <b>Rescan</b>. "Off best" = it has measurably dropped, so a reseat recovers it; "thin spot" won't gain much.</div>
+      <div class="an-suggest-h">Fix short materials</div>
+      <div class="an-levers-lead">You're short on <b>${short.map(r => _esc(r.name)).join('</b>, <b>')}</b>. <b>Reseating</b> only recovers a colony's <em>lost</em> yield (back to its best) — it can't push a planet past its capacity, so it's the fix only when a producer has dropped. When it isn't enough, <b>add or redeploy</b> a colony.</div>
       <div class="an-bd-groups">${groups}</div>
     </div>`;
 }
