@@ -2536,21 +2536,20 @@ function renderAnalysis() {
   }
 
   const _p0h = p1day => p1day * 150 / 24;     // P1/day → P0/hour (1h cycle, 150 P0 per P1)
-  const _kfmt = n => Math.abs(n) >= 10000 ? Math.round(n / 1000) + 'k' : Math.round(n).toLocaleString();
   const barRows = rows.map(r => {
     const cls = r.ratio >= 0.995 ? 'an-bar-ok' : (r.ratio >= 0.85 ? 'an-bar-warn' : 'an-bar-bad');
     const haveW = Math.max(2, Math.min(100, (r.have / r.need) * 100));
-    // What the player tunes is P0/hour at the ECU — so instead of raw P1/day produce-vs-need (noise),
-    // show ONE number: how far the heads' extraction average sits from what the factories need, in P0/hr.
-    // Unclipped (a factory-limited colony still shows its true head margin), so +X = decay cushion, −X =
-    // how much more extraction you need. Near 0 = hit it exactly (will dip short as heads fade).
-    const needP0h = _p0h(r.need);
-    const extP0h = _p0h(_extSupplyOf(r.t) || r.have);
-    const dev = Math.round(extP0h - needP0h);
-    const f = needP0h > 0 ? dev / needP0h : 0;
-    const devCls = f < -0.05 ? 'an-neg' : (f < 0.05 ? 'an-dev-edge' : 'an-pos');
-    const devStr = `${dev >= 0 ? '+' : '−'}${_kfmt(Math.abs(dev))} P0/hr`;
-    const numTitle = `Your heads extract ~${Math.round(extP0h).toLocaleString()} P0/hr; the factories need ~${Math.round(needP0h).toLocaleString()} P0/hr. ${dev >= 0 ? 'The surplus is your cushion as extraction decays — near 0 you hit it exactly and will dip short as the heads fade.' : 'Reseat onto denser hotspots or add a colony to close it.'}`;
+    // Over/under-production %, measured on the UNCLIPPED extraction (so a factory-limited colony still
+    // shows its true head margin, not a flat +0). The % alone is meaningless without "good vs bad", so we
+    // band it: 10%+ = comfortable decay cushion (good), 0–10% = tight (hit it, will fade short), <0 = short.
+    const extSupply = _extSupplyOf(r.t) || r.have;
+    const f = r.need > 0 ? extSupply / r.need - 1 : 0;
+    const pct = Math.round(f * 100);
+    let band = 'an-ovr-ok', lbl = 'healthy';        // band on the DISPLAYED % so label/colour match it
+    if (pct < 0) { band = 'an-ovr-short'; lbl = 'short'; }
+    else if (pct < 10) { band = 'an-ovr-tight'; lbl = 'tight'; }
+    const ovrStr = `<b>${pct >= 0 ? '+' : ''}${pct}%</b> <span class="an-ovr-lbl">${lbl}</span>`;
+    const numTitle = `Your heads extract ${pct >= 0 ? '+' + pct : pct}% vs what the factories consume (≈${Math.round(_p0h(extSupply)).toLocaleString()} of ${Math.round(_p0h(r.need)).toLocaleString()} P0/hr). 10%+ is a comfortable cushion as extraction decays; 0–10% is tight (you hit it, but it'll dip short as the heads fade); below 0 isn't keeping up.`;
     const expanded = _anExpanded.has(String(r.t));
     let detail = '';
     if (expanded) {
@@ -2564,7 +2563,7 @@ function renderAnalysis() {
         <div class="an-row an-row-click" onclick="_toggleMatDetail('${r.t}')">
           <div class="an-row-name"><span class="an-row-caret">${expanded ? '▾' : '▸'}</span> ${_esc(r.name)}</div>
           <div class="an-bar-track"><div class="an-bar-fill ${cls}" style="width:${haveW}%"></div></div>
-          <div class="an-row-nums ${devCls}" title="${numTitle}">${devStr}</div>
+          <div class="an-row-nums ${band}" title="${numTitle}">${ovrStr}</div>
         </div>${detail}
       </div>`;
   }).join('');
@@ -2771,7 +2770,7 @@ function renderAnalysis() {
   const rtAdvice = _extRuntimeAdviceHtml(binding.ratio, _currentProgramDays());
 
   el.innerHTML = head + _staleSupplyNote(rows) + stats + proj
-    + `<div class="an-legend">The bar = how fed each factory input is (full green = kept up, short red = bottleneck). The number = <b>how off your extraction is in P0/hour</b> — what you tune at the ECU: <span class="an-pos">+</span> is cushion as heads decay, <span class="an-neg">−</span> is how much more you need, <span class="an-dev-edge">±0</span> means you hit it exactly (will dip short as it fades).</div>`
+    + `<div class="an-legend">The bar = how fed each factory input is (full green = kept up, short red = bottleneck). The % = <b>over/under-production</b> from your heads' extraction: <span class="an-ovr-ok">+10% or more = healthy</span> (cushion as heads decay), <span class="an-ovr-tight">0–10% = tight</span> (you hit it, but it'll dip short as they fade), <span class="an-ovr-short">below 0 = short</span>. Hover for the P0/hour figures.</div>`
     + `<div class="an-bars">${barRows}</div>`
     + suggest + rtAdvice;
 }
