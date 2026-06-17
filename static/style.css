@@ -1183,6 +1183,11 @@ tr:hover td { background: #181d2a; }
 .pp-share-note b { color: #f0c89a; }
 .pp-share-note-own { border-left-color: #6fb0e0; background: rgba(111,176,224,.10); border-color: rgba(111,176,224,.30); color: #aecbe6; }
 .pp-share-note-own b { color: #cfe0f5; }
+.pp-share-mine-btn { margin-left: 8px; padding: 3px 12px; font-size: 12px; font-weight: 600; cursor: pointer;
+  color: #1a1206; background: #e0a76f; border: none; border-radius: 4px; }
+.pp-share-mine-btn:hover { background: #f0c89a; }
+.pp-share-mine-pulse { animation: ppMinePulse 1s ease 2; }
+@keyframes ppMinePulse { 0%,100% { box-shadow: 0 0 0 0 rgba(224,167,111,.6); } 50% { box-shadow: 0 0 0 6px rgba(224,167,111,0); } }
 
 .wiz-find-btn {
   width: 100%;

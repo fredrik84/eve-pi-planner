@@ -1937,15 +1937,7 @@ async function _restoreFromPayload(payload, fromShare = false) {
       note.textContent = 'Anonymized share — character names and locations have been removed by the owner.';
       pc.prepend(note);
     }
-    if (fromShare) {
-      const pc = document.getElementById('wizPlanContent');
-      const b = document.createElement('div');
-      b.className = 'pp-share-note';
-      b.innerHTML = "📋 <b>Shared plan</b> — this allocation is for the <b>original owner's</b> characters. "
-        + "It can't be re-run for their fleet (you don't have their characters), so changing any setting "
-        + "(overproduction, systems…) re-plans it against <b>your own</b> toons instead.";
-      pc.prepend(b);
-    }
+    if (fromShare) _showSharedBanner();
     wizardGo(3);
     return;
   }
@@ -4082,9 +4074,45 @@ function renderShoppingList(data) {
   div.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
+// A shared plan is a READ-ONLY view of someone else's fleet — you can't recompute their ESI setup.
+// Show it with a "Make this mine" button; any edit before adopting it just bounces back to the view.
+function _showSharedBanner(pulse) {
+  const pc = document.getElementById('wizPlanContent');
+  if (!pc || document.getElementById('ppShareBanner')) { if (pulse) _pulseMineBtn(); return; }
+  const b = document.createElement('div');
+  b.className = 'pp-share-note';
+  b.id = 'ppShareBanner';
+  b.innerHTML = "📋 <b>Shared plan</b> — a read-only view of the <b>owner's</b> characters; it can't be "
+    + "re-run for their fleet. To tweak the settings for your own toons, adopt it: "
+    + "<button class='pp-share-mine-btn' onclick='makeShareMine()'>Make this mine</button>";
+  pc.prepend(b);
+  if (pulse) _pulseMineBtn();
+}
+function _pulseMineBtn() {
+  const btn = document.querySelector('.pp-share-mine-btn');
+  if (!btn) return;
+  btn.classList.remove('pp-share-mine-pulse'); void btn.offsetWidth;   // restart the animation
+  btn.classList.add('pp-share-mine-pulse');
+}
+function makeShareMine() {
+  _wiz.fromShare = false;                 // adopt it — now re-runs are computed against YOUR context
+  _rerunPlan().then(() => {
+    const pc = document.getElementById('wizPlanContent');
+    if (pc) {
+      const n = document.createElement('div');
+      n.className = 'pp-share-note pp-share-note-own';
+      n.innerHTML = "Now <b>your</b> plan — re-planned for your characters. Edit away.";
+      pc.prepend(n);
+    }
+  });
+}
+
 async function _rerunPlan(overrides = {}) {
-  const wasShare = _wiz.fromShare;
-  _wiz.fromShare = false;                 // a re-run is computed against YOUR context now
+  if (_wiz.fromShare) {                    // read-only until adopted: revert controls, nudge the button
+    if (_wiz.lastPlanData) renderFinalPlan(_wiz.lastPlanData, { scroll: false });
+    _showSharedBanner(true);
+    return;
+  }
   try {
     const { url, body } = _planRequest(_wiz.chosenSystems);
     const resp = await fetch(url, {
@@ -4096,15 +4124,6 @@ async function _rerunPlan(overrides = {}) {
     if (!resp.ok || data.error) throw new Error(data.error || `HTTP ${resp.status}`);
     _wiz.lastPlanData = data;
     renderFinalPlan(data, { scroll: false });
-    if (wasShare) {   // first edit of a shared plan → make the switch to your own fleet explicit
-      const pc = document.getElementById('wizPlanContent');
-      if (pc) {
-        const n = document.createElement('div');
-        n.className = 'pp-share-note pp-share-note-own';
-        n.innerHTML = "Re-planned for <b>your</b> characters — the shared plan was for someone else's fleet.";
-        pc.prepend(n);
-      }
-    }
   } catch (e) { alert('Re-run failed: ' + e.message); }
 }
 
