@@ -2748,6 +2748,9 @@ function renderAnalysis() {
 
   // Levers head the advice; each reveals its own section. Reseat → yield burn-down, Redeploy → the
   // rebalance moves above. "Add factories" (a distinct surplus opportunity) always shows.
+  // If the plan is SHORT and the user hasn't touched the levers yet, open the fix section for them —
+  // otherwise the "deploy on a free planet" advice stays hidden behind a collapsed accordion.
+  if (!_anLeverTouched && !_anLeverOpen.size && rows.some(r => r.ratio < 0.995)) _anLeverOpen.add('reseat');
   let suggest = _leverCards(binding.ratio, binding.name);
   if (_anLeverOpen.has('reseat')) suggest += _burndownSection(rows);
   if (_anLeverOpen.has('redeploy')) suggest += rebal;
@@ -2841,7 +2844,9 @@ function _extDecayGraphSvg(headroom, L0, safe, edge) {
 // (light touch — raises a colony's own peak, best aimed at the binding material) vs. redeploy a
 // command center (rebalances a material that stays short while others overflow).
 let _anLeverOpen = new Set();   // which advice levers ('reseat'/'redeploy') have their section shown
+let _anLeverTouched = false;    // once the user clicks a lever, stop auto-opening one for them
 function _toggleLever(k) {
+  _anLeverTouched = true;
   const open = _anLeverOpen.has(k);
   _anLeverOpen.clear();          // accordion: only one section open at a time (keeps the page short)
   if (!open) _anLeverOpen.add(k);
