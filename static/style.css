@@ -1501,6 +1501,8 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .dash-pad-name { color: #aeb6c6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dash-pad-meta { text-align: right; color: #8b93a6; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .dash-pad-more { color: #757d90; font-size: 11px; margin: 4px 0 0 6px; }
+.dash-fold { cursor: pointer; user-select: none; }
+.dash-fold-caret { color: #8b93a6; font-size: 11px; margin-right: 2px; }
 
 .an-legend { font-size: 12px; color: #8b93a6; margin-bottom: 8px; }
 .an-bars { display: flex; flex-direction: column; gap: 8px; }

@@ -190,6 +190,16 @@ async function rescanAll() {
   if (res && res.failed) alert(`${res.failed} of ${res.total} character${res.total !== 1 ? 's' : ''} could not be rescanned — usually an expired ESI token (red dot in Characters).`);
 }
 
+// Fold/unfold a dashboard card by clicking its title (state persisted in localStorage).
+function _toggleDashFold(titleEl, key) {
+  const body = titleEl.nextElementSibling;
+  const caret = titleEl.querySelector('.dash-fold-caret');
+  const collapsing = body.style.display !== 'none';
+  body.style.display = collapsing ? 'none' : '';
+  if (caret) caret.textContent = collapsing ? '▸' : '▾';
+  localStorage.setItem(key, collapsing ? '1' : '0');
+}
+
 function _dashTile(val, lbl, cls) {
   return `<div class="an-stat"><div class="an-stat-val${cls ? ' ' + cls : ''}">${val}</div><div class="an-stat-lbl">${lbl}</div></div>`;
 }
@@ -299,10 +309,15 @@ function renderDashboard(data) {
   const prodTot = pb.product.reduce((a, x) => a + x.value, 0);
   const rawM3 = pb.raw.reduce((a, x) => a + x.m3, 0);
   const rawShown = pb.raw.slice(0, 12);
+  const padsCollapsed = localStorage.getItem('dashPadsCollapsed') === '1';
+  const padsSummary = `${pb.product.length ? _fmtIsk(prodTot) + ' to sell' : ''}${pb.product.length && pb.raw.length ? ' · ' : ''}${pb.raw.length ? Math.round(rawM3).toLocaleString() + ' m³ to haul' : ''}`;
   const padsHtml = (pb.product.length || pb.raw.length) ? `
     <section class="pp-card">
-      <div class="pp-card-title">In the pads <span class="pp-card-hint">— what's in your launchpads now</span></div>
-      <div class="pp-card-body">
+      <div class="pp-card-title dash-fold" onclick="_toggleDashFold(this, 'dashPadsCollapsed')">
+        <span class="dash-fold-caret">${padsCollapsed ? '▸' : '▾'}</span> In the pads
+        <span class="pp-card-hint">— ${padsCollapsed ? _esc(padsSummary) : "what's in your launchpads now"}</span>
+      </div>
+      <div class="pp-card-body"${padsCollapsed ? ' style="display:none"' : ''}>
         ${pb.product.length ? `<div class="dash-pad-grp"><div class="dash-pad-grp-h">Finished product <span class="dash-pad-grp-sub">ready to sell · ${_fmtIsk(prodTot)}</span></div>${_padRows(pb.product, false)}</div>` : ''}
         ${pb.raw.length ? `<div class="dash-pad-grp"><div class="dash-pad-grp-h">Raw P1 in extractors <span class="dash-pad-grp-sub">haul to factories · ${Math.round(rawM3).toLocaleString()} m³</span></div>${_padRows(rawShown, true)}${pb.raw.length > rawShown.length ? `<div class="dash-pad-more">+ ${pb.raw.length - rawShown.length} more</div>` : ''}</div>` : ''}
       </div>
