@@ -1749,6 +1749,9 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .an-stale-note { margin: 8px 0 0; padding: 8px 11px; border-radius: 6px; font-size: 12px; line-height: 1.5;
   color: #e6dcc8; background: rgba(224,162,58,.10); border-left: 3px solid #b9842c; }
 .an-stale-note b { color: #ecd9b0; }
+.an-buf { font-size: 11px; font-weight: 700; white-space: nowrap; padding: 1px 6px; border-radius: 4px; cursor: help; }
+.an-buf-ok { color: #6fd0a0; background: rgba(63,125,104,.16); }
+.an-buf-thin { color: #e0a23a; background: rgba(224,162,58,.14); }
 .an-rt-tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
 .an-rt-tbl th { font-size: 9.5px; text-transform: uppercase; letter-spacing: .4px; color: #5a6b80;
   text-align: left; padding: 3px 8px; border-bottom: 1px solid #1d3340; }

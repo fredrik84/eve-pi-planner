@@ -144,9 +144,13 @@ def colony_sim_state(detail: dict, pi_data: dict) -> dict | None:
         rate = f["count"] * f["output_qty"] / f["cycle_time"]    # product per sec
         ext_refined = ext_rate.get(f["input_type"], 0.0) * f["output_qty"] / (f["input_qty"] or 1)
         rate_sustained = min(rate, ext_refined) if ext_refined > 0 else rate
+        # `ext_refined` is what the heads can refine BEFORE the factory clips it. When it exceeds `rate`
+        # the colony is factory-limited and the surplus is the player's decay/overshoot buffer — invisible
+        # in rate_sustained (which clamps at the factory rate), so we surface it separately.
         outputs.append({"type_id": out, "name": types.get(out, {}).get("name") or f"#{out}",
                         "tier": types.get(out, {}).get("pi_tier") or 1,
                         "base": base.get(out, 0.0), "rate": rate, "rate_sustained": rate_sustained,
+                        "ext_refined": ext_refined if ext_refined > 0 else rate,
                         "batch": f["count"] * f["output_qty"]})
     if not outputs:
         # Pure extractor (no on-planet factories): the P0 itself piles up in the launchpad.
@@ -154,7 +158,7 @@ def colony_sim_state(detail: dict, pi_data: dict) -> dict | None:
             outputs.append({"type_id": p0, "name": types.get(p0, {}).get("name") or f"#{p0}",
                             "tier": types.get(p0, {}).get("pi_tier") or 0,
                             "base": base.get(p0, 0.0), "rate": rate, "rate_sustained": rate,
-                            "batch": ext_batch.get(p0, 0.0)})
+                            "ext_refined": rate, "batch": ext_batch.get(p0, 0.0)})
     if not outputs or t0 <= 0:
         return None
     # install = when the current program started; peak_p0_day = the colony's game-true average P0/day

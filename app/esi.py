@@ -938,11 +938,15 @@ def list_characters(pp_session: str = Cookie(default=None)):
                     sustained = o.get("rate_sustained")             # None on pre-rate_sustained scans
                     stale = sustained is None                       # → we're showing the optimistic full rate
                     rate = (sustained if sustained is not None else full) or 0
+                    ext = o.get("ext_refined", full) or full      # heads' refined rate, BEFORE factory clip
                     if rate > 0:
                         production.append({
                             "type_id": o["type_id"], "name": o["name"],
                             "per_day": round(rate * 86400),
                             "full_per_day": round(full * 86400),
+                            # unclipped extraction the heads sustain — the surplus over full_per_day is
+                            # the decay/overshoot buffer that rate_sustained hides once factory-limited
+                            "ext_per_day": round(ext * 86400),
                             # extraction-limited: the planet can't keep its own factories fed
                             "capped": (not stale) and full > 0 and rate < full * 0.97,
                             "stale": stale,

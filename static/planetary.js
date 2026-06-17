@@ -2539,8 +2539,19 @@ function renderAnalysis() {
     const surplus = r.have - r.need;
     const cls = r.ratio >= 0.995 ? 'an-bar-ok' : (r.ratio >= 0.85 ? 'an-bar-warn' : 'an-bar-bad');
     const haveW = Math.max(2, Math.min(100, (r.have / r.need) * 100));
+    // Extraction buffer: how far the heads' UNCLIPPED output sits above the factory's appetite. For a
+    // satisfied (factory-limited) material the deliverable surplus reads ~+0 even when there's plenty of
+    // headroom — this is the number that says "hit it exactly" (thin, will go negative as it decays) vs
+    // "overshot" (margin to spare). Only shown when the material is actually being met.
+    const extSupply = _extSupplyOf(r.t);
+    let bufChip = '';
+    if (r.ratio >= 0.995 && extSupply > 0 && r.need > 0) {
+      const bufPct = Math.round((extSupply / r.need - 1) * 100);
+      const thin = bufPct < 5;
+      bufChip = `<span class="an-buf ${thin ? 'an-buf-thin' : 'an-buf-ok'}" title="Your heads extract ${bufPct >= 0 ? '+' + bufPct : bufPct}% versus what the factories consume. That margin is your cushion as extraction decays through the program — near 0% you'll dip below demand before it ends, so reseat or restart sooner.">${thin ? '⚠ ' : ''}${bufPct >= 0 ? '+' : ''}${bufPct}% buffer</span>`;
+    }
     const delta = surplus >= 0
-      ? `<span class="an-pos">+${Math.round(surplus).toLocaleString()}/day</span>`
+      ? (bufChip || `<span class="an-pos">+${Math.round(surplus).toLocaleString()}/day</span>`)
       : `<span class="an-neg">${Math.round(surplus).toLocaleString()}/day</span>`;
     const expanded = _anExpanded.has(String(r.t));
     let detail = '';
@@ -2762,7 +2773,7 @@ function renderAnalysis() {
   const rtAdvice = _extRuntimeAdviceHtml(binding.ratio, _currentProgramDays());
 
   el.innerHTML = head + _staleSupplyNote(rows) + stats + proj
-    + `<div class="an-legend">Producing (left) vs the plan’s daily need (right) per P1. A full green bar = factories stay fed; a short red bar is the bottleneck.</div>`
+    + `<div class="an-legend">Producing (left) vs the plan’s daily need (right) per P1. A full green bar = factories stay fed; a short red bar is the bottleneck. <b>Buffer</b> = how far your heads out-extract the factory’s appetite — your cushion as extraction decays (⚠ near 0% means you hit it exactly and will dip below demand as it fades).</div>`
     + `<div class="an-bars">${barRows}</div>`
     + suggest + rtAdvice;
 }
@@ -2896,6 +2907,7 @@ function _producersOf(t) {
       const cur = h.length ? h[h.length - 1] : null, max = h.length ? Math.max(...h) : null;
       out.push({ char: ch.name, system: p.system, planet_num: p.planet_num, p0: p.p0_name,
                  perDay: o.per_day || 0, full: o.full_per_day || o.per_day || 0,
+                 extPerDay: o.ext_per_day || o.full_per_day || o.per_day || 0,
                  capped: !!o.capped, stale: !!o.stale,
                  n: h.length, decline: (max && max > 0) ? (max - cur) / max : 0 });
     });
@@ -2927,6 +2939,13 @@ function _bestFreeSpot(t, cap) {
   return { p0: pl.p0_name, system: best.system, planet_num: best.planet_num,
            planet_type: best.planet_type, richness: best.richness, char: ch ? ch.name : '', cid: bestCid };
 }
+// Total UNCLIPPED extraction (P1/day) the heads sustain for material `t`, summed over its colonies.
+// rate_sustained clamps each colony at its factory rate, so a satisfied material reads +0 surplus even
+// when the heads pull far more — this recovers that hidden headroom (the decay/overshoot buffer).
+function _extSupplyOf(t) {
+  return _producersOf(t).reduce((s, c) => s + (c.extPerDay || 0), 0);
+}
+
 // Estimated P1/day a NEW colony for material `t` would add — calibrated to the player's own existing
 // colonies (real sustained output), falling back to a richness-scaled baseline (100-richness ≈ 7,680
 // P1/day) when they grow none yet. Used to tell whether a whole colony FITS a gap or overshoots it.
