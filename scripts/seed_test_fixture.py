@@ -69,6 +69,10 @@ planets = [
     (6, "Barren",    {"aqueous_liquids": 78}),
     (7, "Storm",     {"ionic_solutions": 69}),
     (8, "Temperate", {"aqueous_liquids": 71}),
+    (9, "Barren",    {"aqueous_liquids": 64}),
+    (10, "Storm",    {"ionic_solutions": 66}),
+    (11, "Temperate", {"aqueous_liquids": 60}),
+    (12, "Barren",   {"aqueous_liquids": 58}),
 ]
 for pn, ptype, dens in planets:
     cols = ", ".join(P0COLS)

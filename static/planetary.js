@@ -281,13 +281,21 @@ function renderDashboard(data) {
     // The vision: concrete "deploy this here" cards (same style as Setup Analysis), not a re-plan.
     const cards = ex.deploys.map((d, i) => {
       const loc = `${_esc(d.system)}${d.planet_num != null ? ' P' + d.planet_num : ''}`;
-      const cc = d.planet_type ? `<span class="an-cc-tag">${_esc(d.planet_type)}</span>` : '';
+      const isFac = d.kind === 'factory';
+      const cc = d.planet_type ? `<span class="an-cc-tag">${_esc(d.planet_type)}${isFac ? ' CC' : ''}</span>` : '';
+      const mat = isFac
+        ? `<b>${_esc(d.p1)}</b> factory`
+        : `${_esc(d.p0)} <span class="an-move-p0arrow">→</span> ${_esc(d.p1)}`;
+      const dens = (!isFac && d.richness != null) ? ` ${d.richness}% density` : '';
+      const meta = isFac
+        ? `Supply has room — turns your surplus into <b>~${(d.add_per_day || 0).toLocaleString()} more ${_esc(d.p1)}/day</b>`
+        : `${_esc(d.p1)} is only <b>${d.fed_pct}% fed</b> — this colony lifts your bottleneck`;
       return `<div class="an-bu-card">
           <div class="an-bu-rank">${i + 1}</div>
           <div class="an-bu-body">
-            <div class="an-bu-mat">${_esc(d.p0)} <span class="an-move-p0arrow">→</span> ${_esc(d.p1)}</div>
-            <div class="an-bu-where">anchor on <b>${_esc(d.char)} · ${loc}</b> ${cc} ${d.richness}% density</div>
-            <div class="an-bu-meta">${_esc(d.p1)} is only <b>${d.fed_pct}% fed</b> — this colony lifts your bottleneck</div>
+            <div class="an-bu-mat">${mat}</div>
+            <div class="an-bu-where">anchor on <b>${_esc(d.char)} · ${loc}</b> ${cc}${dens}</div>
+            <div class="an-bu-meta">${meta}</div>
           </div>
         </div>`;
     }).join('');
