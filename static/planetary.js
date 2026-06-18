@@ -215,9 +215,19 @@ function renderDashboard(data) {
   _dashCharIds = Array.isArray(data.char_ids_in_view) ? data.char_ids_in_view : null;
   const t = data.totals || {}, facs = data.factories || [], top = data.top_pi;
   const runtime = (t.runtime_hours != null) ? _fmtHours(t.runtime_hours) : '—';
+  // Units of the top finished product sitting in factory pads (sum of haul_units for that product —
+  // pad snapshot + what's been made since the checkpoint). Shown even at 0 ("all hauled out") so the
+  // count is always there; derived from factories so it survives top_pi being null on empty pads.
+  const prodAgg = {};
+  facs.forEach(f => {
+    const g = prodAgg[f.product] || (prodAgg[f.product] = { name: f.product, tier: f.tier || 0, units: 0 });
+    g.units += (f.haul_units || 0);
+  });
+  const topProd = Object.values(prodAgg).sort((a, b) => (b.tier - a.tier) || (b.units - a.units))[0] || null;
   const tiles = [
     _dashTile(runtime, 'Runtime left (soonest)'),
-    _dashTile(_fmtIsk(t.pads_value || 0), top ? `In pads now · top ${_esc(top.name)}` : 'In pads now'),
+    _dashTile(_fmtIsk(t.pads_value || 0), (top && !(topProd && topProd.tier >= 2)) ? `In pads now · top ${_esc(top.name)}` : 'In pads now'),
+    ...(topProd && topProd.tier >= 2 ? [_dashTile(topProd.units.toLocaleString(), `${_esc(topProd.name)} in pads`)] : []),
     _dashTile(_fmtIsk(t.current_run_value || 0), 'Run value (from current inputs)'),
     _dashTile(_fmtIsk(t.value_per_day || 0), 'Value / day'),
   ].join('');
