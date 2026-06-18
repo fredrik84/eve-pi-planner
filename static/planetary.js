@@ -204,6 +204,40 @@ function _dashTile(val, lbl, cls) {
   return `<div class="an-stat"><div class="an-stat-val${cls ? ' ' + cls : ''}">${val}</div><div class="an-stat-lbl">${lbl}</div></div>`;
 }
 
+// Spare-capacity "deploy this here" cards, keyed by product for the "plan for this product" dropdown.
+let _expandDeploysByProduct = {};
+let _expandProduct = '';
+function _renderExpandCards(deploys) {
+  if (!deploys || !deploys.length)
+    return `<div class="dash-expand-est">This product is already balanced for your spare slots — nothing to add right now.</div>`;
+  const cards = deploys.map((d, i) => {
+    const loc = `${_esc(d.system)}${d.planet_num != null ? ' P' + d.planet_num : ''}`;
+    const isFac = d.kind === 'factory';
+    const cc = d.planet_type ? `<span class="an-cc-tag">${_esc(d.planet_type)}${isFac ? ' CC' : ''}</span>` : '';
+    const mat = isFac
+      ? `<b>${_esc(d.p1)}</b> factory`
+      : `${_esc(d.p0)} <span class="an-move-p0arrow">→</span> ${_esc(d.p1)}`;
+    const dens = (!isFac && d.richness != null) ? ` ${d.richness}% density` : '';
+    const meta = isFac
+      ? `Supply has room — turns your surplus into <b>~${(d.add_per_day || 0).toLocaleString()} more ${_esc(d.p1)}/day</b>`
+      : `${_esc(d.p1)} is only <b>${d.fed_pct}% fed</b> — this colony lifts your bottleneck`;
+    return `<div class="an-bu-card">
+        <div class="an-bu-rank">${i + 1}</div>
+        <div class="an-bu-body">
+          <div class="an-bu-mat">${mat}</div>
+          <div class="an-bu-where">anchor on <b>${_esc(d.char)} · ${loc}</b> ${cc}${dens}</div>
+          <div class="an-bu-meta">${meta}</div>
+        </div>
+      </div>`;
+  }).join('');
+  return `<div class="an-bu-list">${cards}</div>`;
+}
+function _setExpandProduct(tid) {
+  _expandProduct = String(tid);
+  const el = document.getElementById('expandDeployCards');
+  if (el) el.innerHTML = _renderExpandCards(_expandDeploysByProduct[_expandProduct] || []);
+}
+
 function renderDashboard(data) {
   const el = document.getElementById('dashboardContent');
   if (!el) return;
@@ -279,29 +313,18 @@ function renderDashboard(data) {
   let projHtml = '';
   if (ex.deploys && ex.deploys.length) {
     // The vision: concrete "deploy this here" cards (same style as Setup Analysis), not a re-plan.
-    const cards = ex.deploys.map((d, i) => {
-      const loc = `${_esc(d.system)}${d.planet_num != null ? ' P' + d.planet_num : ''}`;
-      const isFac = d.kind === 'factory';
-      const cc = d.planet_type ? `<span class="an-cc-tag">${_esc(d.planet_type)}${isFac ? ' CC' : ''}</span>` : '';
-      const mat = isFac
-        ? `<b>${_esc(d.p1)}</b> factory`
-        : `${_esc(d.p0)} <span class="an-move-p0arrow">→</span> ${_esc(d.p1)}`;
-      const dens = (!isFac && d.richness != null) ? ` ${d.richness}% density` : '';
-      const meta = isFac
-        ? `Supply has room — turns your surplus into <b>~${(d.add_per_day || 0).toLocaleString()} more ${_esc(d.p1)}/day</b>`
-        : `${_esc(d.p1)} is only <b>${d.fed_pct}% fed</b> — this colony lifts your bottleneck`;
-      return `<div class="an-bu-card">
-          <div class="an-bu-rank">${i + 1}</div>
-          <div class="an-bu-body">
-            <div class="an-bu-mat">${mat}</div>
-            <div class="an-bu-where">anchor on <b>${_esc(d.char)} · ${loc}</b> ${cc}${dens}</div>
-            <div class="an-bu-meta">${meta}</div>
-          </div>
-        </div>`;
-    }).join('');
+    // Multiple products → a "plan for this product" dropdown that switches the cards instantly.
+    _expandDeploysByProduct = ex.deploys_by_product || {};
+    const prods = ex.products || [];
+    _expandProduct = prods.length ? String(prods[0].type_id) : '';
+    const dropdown = prods.length > 1
+      ? `<span class="dash-expand-prod-pick">Plan for <select class="dash-expand-prod" onchange="_setExpandProduct(this.value)">`
+        + prods.map(p => `<option value="${p.type_id}">${_esc(p.name)} (×${p.count})</option>`).join('')
+        + `</select></span>`
+      : '';
     projHtml = `<div class="dash-expand-sug">
-        <div class="dash-expand-sug-h">Grow your setup <span class="dash-expand-sug-sub">— deploy these on your spare slots, most impactful first</span></div>
-        <div class="an-bu-list">${cards}</div>
+        <div class="dash-expand-sug-h">Grow your setup <span class="dash-expand-sug-sub">— deploy these on your spare slots, most impactful first</span>${dropdown}</div>
+        <div id="expandDeployCards">${_renderExpandCards(ex.deploys)}</div>
         <div class="dash-expand-est">Targets the inputs your factories are short on, so the new colonies actually lift output — no re-plan, no teardown.</div>
       </div>`;
   } else if (ex.suggestion) {

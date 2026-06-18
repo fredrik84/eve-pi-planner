@@ -1239,7 +1239,28 @@ def _expansion_capacity(context_id: int) -> dict:
             "total_used": sum(used.values())}
 
 
-def _expansion_deploys(context_id: int, pi: dict) -> list[dict]:
+def _setup_products(context_id: int, pi: dict) -> list[dict]:
+    """The distinct products the player's deployed factories build, most factories first — drives the
+    'plan for this product' dropdown on the Spare-capacity card."""
+    con = get_connection()
+    rows = con.execute(
+        "SELECT cp.products FROM pp_char_planets cp JOIN pp_characters c ON c.character_id=cp.character_id "
+        "WHERE c.context_id=? AND COALESCE(c.is_dummy,0)=0 AND cp.is_extractor=0 "
+        "AND cp.products IS NOT NULL AND cp.products != '[]'", (context_id,)).fetchall()
+    con.close()
+    cnt: dict[int, int] = {}
+    for r in rows:
+        for p in (_json.loads(r["products"]) or []):
+            t = p.get("type_id")
+            if t:
+                cnt[t] = cnt.get(t, 0) + 1
+    types = pi["types"]
+    return sorted(
+        [{"type_id": t, "name": types.get(t, {}).get("name") or f"#{t}", "count": c} for t, c in cnt.items()],
+        key=lambda x: -x["count"])
+
+
+def _expansion_deploys(context_id: int, pi: dict, chosen_product: int | None = None) -> list[dict]:
     """Concrete 'deploy this colony here' cards for spare capacity — the Analysis-style answer to
     'I added a toon / freed a slot, now what'. Each free planet slot goes to the material that most
     helps the setup (tightest supply/demand first, re-evaluated as we add), pinned to a real free
@@ -1248,7 +1269,7 @@ def _expansion_deploys(context_id: int, pi: dict) -> list[dict]:
     types, sch = pi["types"], pi["schematics"]
     con = get_connection()
     rows = con.execute("""
-        SELECT cp.character_id AS cid, c.character_name AS nm,
+        SELECT c.character_id AS cid, c.character_name AS nm,
                1 + COALESCE(c.interplanetary_consolidation, 0) AS maxp,
                s.name AS sys, cp.planet_num AS pn, cp.is_extractor AS ext,
                cp.products AS products, cp.sim_state AS sim_state
@@ -1286,10 +1307,11 @@ def _expansion_deploys(context_id: int, pi: dict) -> list[dict]:
         con.close()
         return []
 
-    # Balance the DOMINANT product's chain (most factory planets). F = its factories; D0 = one factory's
-    # per-material P1 demand. Effective output = min(factories, the most-limiting input's supply ÷ D0):
-    # so a factory helps only while supply has headroom, an extractor only while a material is binding.
-    product = max(prod_count, key=prod_count.get)
+    # Balance one product's chain — the caller's chosen product if it exists, else the DOMINANT one (most
+    # factory planets). F = its factories; D0 = one factory's per-material P1 demand. Effective output =
+    # min(factories, the most-limiting input's supply ÷ D0): so a factory helps only while supply has
+    # headroom, an extractor only while a material is binding.
+    product = chosen_product if (chosen_product in prod_count) else max(prod_count, key=prod_count.get)
     F = prod_count[product]
     fr = _compute_p1_fracs(product, pi)
     ppd_fac = _effective_fph(product, pi) * 24.0
@@ -1670,7 +1692,13 @@ def dashboard(pp_session: str = Cookie(default=None)):
     expansion = _expansion_capacity(context_id)
     if (expansion.get("free_slots") or 0) > 0:
         try:
-            expansion["deploys"] = _expansion_deploys(context_id, pi)
+            prods = _setup_products(context_id, pi)
+            expansion["products"] = prods
+            # Per-product deploy cards (each plans the full spare capacity into THAT product's chain), so
+            # the "plan for this product" dropdown switches instantly with no extra round-trip.
+            by_prod = {str(p["type_id"]): _expansion_deploys(context_id, pi, p["type_id"]) for p in prods}
+            expansion["deploys_by_product"] = by_prod
+            expansion["deploys"] = by_prod.get(str(prods[0]["type_id"]), []) if prods else []
         except Exception:
             expansion["deploys"] = []
     # Rough upside of using that capacity: a balanced colony layout scales ~linearly with planets, so
