@@ -67,9 +67,9 @@ def _available_factory_planet_types(con, req) -> list[str]:
         rows = con.execute(
             f"SELECT DISTINCT planet_type FROM pp_planets {where} ORDER BY planet_type", params
         ).fetchall()
-        # Don't offer planet types a factory can't fit on (Gas) — they're not real factory options.
-        from app.planner import _FACTORY_EXCLUDE_TYPES
-        return [r["planet_type"] for r in rows if r["planet_type"] and r["planet_type"] not in _FACTORY_EXCLUDE_TYPES]
+        # Factories only reliably fit on Barren/Temperate (see _run_fuelblock_plan) — don't offer others.
+        present = {r["planet_type"] for r in rows if r["planet_type"]}
+        return [t for t in DEFAULT_FACTORY_PLANET_TYPES if t in present]
     except Exception:
         return []
 
@@ -566,14 +566,15 @@ def _run_fuelblock_plan(req: "FuelBlockPlanRequest", context_id: int) -> dict:
     p0_planet_lists, p0_planet_lists_global, best_ptypes, sys_recs = _fetch_planets_and_recs(
         con, all_p0_names, req, types, p1_info_raw)
 
-    # Factory candidates restricted to the chosen planet types (default Barren/Temperate: smallest
-    # footprint). A factory's link layout overflows the grid on the largest planets, so Gas (Ø40000) is
-    # dropped here too — never recommend a factory on a planet it can't fit on. Fall back to the default
-    # if the user's selection was Gas-only, and report what was dropped so the UI can explain it.
-    from app.planner import _FACTORY_EXCLUDE_TYPES
+    # Factories go ONLY on Barren/Temperate. The layout's CPU/PG fit is computed from a fixed diameter
+    # PER PLANET TYPE, but real planets vary wildly in size — and we have no per-planet radius. On the
+    # small-modelled types (Ice/Lava Ø6000) the planner over-packs facilities (a real, larger Ice planet
+    # then overflows the grid); on the giants (Storm/Gas) even a single factory's links overflow. B/T
+    # (Ø8000) is the conventional, layout-calibrated type the model is reliable for (and the only one P4
+    # can use). Other selected types are dropped for factories and reported; extraction still uses them.
     requested_types = req.factory_planet_types or list(DEFAULT_FACTORY_PLANET_TYPES)
-    allowed_types = [t for t in requested_types if t not in _FACTORY_EXCLUDE_TYPES]
-    dropped_factory_types = [t for t in requested_types if t in _FACTORY_EXCLUDE_TYPES]
+    allowed_types = [t for t in requested_types if t in DEFAULT_FACTORY_PLANET_TYPES]
+    dropped_factory_types = [t for t in requested_types if t not in DEFAULT_FACTORY_PLANET_TYPES]
     if not allowed_types:
         allowed_types = list(DEFAULT_FACTORY_PLANET_TYPES)
     fac_pool, factory_system_options, sys_fac_capacity = _factory_candidates(

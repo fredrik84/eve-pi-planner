@@ -3893,7 +3893,7 @@ function renderFinalPlan(data, opts = {}) {
     : '';
   const dft = data.dropped_factory_types || [];
   const droppedFacHtml = dft.length
-    ? `<div class="plan-note">Skipped <b>${dft.join(', ')}</b> for factories — a factory's layout won't fit on a planet that large (Gas is Ø40000). Extractors can still use ${dft.length > 1 ? 'them' : 'it'}.</div>`
+    ? `<div class="plan-note">Factories only go on <b>Barren / Temperate</b> planets. Off those, real planet sizes vary too much to guarantee the layout fits its power grid (the planner would over-pack a small-looking Ice/Lava, or overflow a giant Storm/Gas). Skipped <b>${dft.join(', ')}</b> for factories — still used for extraction.</div>`
     : '';
 
   // Factory system selector — dropdown of systems with their allowed-planet-type counts.
