@@ -1105,6 +1105,14 @@ tr:hover td { background: #181d2a; }
 .pp-mfg-eff { font-size: 11px; color: #5ecf80; font-family: 'Consolas', monospace; margin-left: 4px; }
 
 /* ── Wizard ─────────────────────────────────────────────────────────────────── */
+.pp-role-note {
+  font-size: 12.5px; line-height: 1.55; color: #aeb6c6;
+  background: rgba(90,160,230,.07); border-left: 3px solid #3f6896; border-radius: 6px;
+  padding: 9px 12px; margin: 4px 0 4px;
+}
+.pp-role-note b { color: #d6deef; }
+.pp-role-note a { color: #6fb0ff; text-decoration: none; font-weight: 600; }
+.pp-role-note a:hover { text-decoration: underline; }
 .wiz-bar {
   display: flex;
   align-items: center;

@@ -14,7 +14,7 @@
   <meta property="og:image" content="https://eve-pi.failed.name/og-image.png?v=4">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:image" content="https://eve-pi.failed.name/og-image.png?v=4">
-  <link rel="stylesheet" href="/style.css?v=177">
+  <link rel="stylesheet" href="/style.css?v=178">
 </head>
 <body>
   <header>
@@ -306,6 +306,10 @@
 
     <!-- ── Tab: Planetary Planning ─────────────────────────────────────────── -->
     <div id="tab-planetary" class="tab-panel" style="display:none">
+
+      <div class="pp-role-note">
+        <b>This builds your initial plan.</b> Planetary Planning lays out a colony setup from scratch (or scales it up when you add characters or train skills). Once it's deployed, <a href="#" onclick="switchTab('analyze');return false;">Setup&nbsp;Analysis</a> takes over as your main tool — it reads your live colonies to flag shortages, rebalance, and tell you what to reseat. Re-plan here only to start fresh or expand, not to fine-tune a running setup.
+      </div>
 
       <!-- Wizard progress -->
       <div class="wiz-bar">
@@ -666,7 +670,7 @@ PVF-N9    3         95                 60             80                  100   
             <span class="pp-card-hint">— Rescan in the top bar pulls fresh colony data</span>
           </div>
           <div id="analyzeContent" class="pp-analyze-content">
-            <div class="admin-hint">Compares what your characters' colonies actually produce (from ESI, live rates) against a saved plan's required P1 — so you can see what's under- or over-performing.</div>
+            <div class="admin-hint"><b>Your main tool once a plan is deployed.</b> Compares what your characters' colonies actually produce (from ESI, live rates) against the plan's required P1 — so you can see what's under- or over-performing and fix it in place, without re-running Planetary Planning.</div>
           </div>
         </section>
       </div>
