@@ -273,21 +273,32 @@ function renderDashboard(data) {
     }).join(', ');
     exItems.push(`<li><b>${ex.skills_grew.length} trained up</b> since you saved${ex.plan_name ? ` “${_esc(ex.plan_name)}”` : ''} — ${names}</li>`);
   }
+  // Balanced incremental addition — the Analysis-style "grow what you run" suggestion: extractors +
+  // factories at your current ratio, so the spare capacity stays fed. No full re-plan (which would
+  // reshuffle a working setup); just deploy the delta on the idle toons / free slots listed above.
   let projHtml = '';
-  if (ex.add_isk_per_day) {
+  if (ex.suggestion) {
+    const s = ex.suggestion;
+    const out = (s.add_units_per_day && s.unit_label) ? `~${s.add_units_per_day.toLocaleString()} ${_esc(s.unit_label)}/day` : '';
+    const fac = `+${s.add_factories} factor${s.add_factories !== 1 ? 'ies' : 'y'}`;
+    const ext = `+${s.add_extractors} extractor${s.add_extractors !== 1 ? 's' : ''}`;
+    projHtml = `<div class="dash-expand-sug">
+        <div class="dash-expand-sug-h">Suggested addition <span class="dash-expand-sug-sub">— balanced, fits your ${s.spare_planets} spare planet${s.spare_planets !== 1 ? 's' : ''}</span></div>
+        <div class="dash-expand-sug-b">Deploy <b>${fac}</b> and <b>${ext}</b> at your current ratio → roughly <b>${out ? out + ' · ' : ''}${_fmtIsk(s.add_isk_per_day)}/day</b> more.</div>
+        <div class="dash-expand-est">Keeps the same extractor-to-factory balance as your running setup, so everything stays fed. Drop them on the idle characters / free slots above — no re-plan needed.</div>
+      </div>`;
+  } else if (ex.add_isk_per_day) {
     const u = (ex.add_units_per_day && ex.add_unit_label)
       ? `~${ex.add_units_per_day.toLocaleString()} ${_esc(ex.add_unit_label)}/day` : '';
-    projHtml = `<div class="dash-expand-proj">Using it could add roughly <b>${u ? u + ' · ' : ''}${_fmtIsk(ex.add_isk_per_day)}/day</b> <span class="dash-expand-est">— rough estimate (scales your current output by the spare planets); re-run for the exact plan</span></div>`;
+    projHtml = `<div class="dash-expand-proj">Using it could add roughly <b>${u ? u + ' · ' : ''}${_fmtIsk(ex.add_isk_per_day)}/day</b> <span class="dash-expand-est">— rough estimate (scales your current output by the spare planets)</span></div>`;
   }
   const expansionHtml = exItems.length ? `
     <section class="pp-card dash-expand">
-      <div class="pp-card-title">Spare capacity <span class="pp-card-hint">— unused fleet you could plan into</span></div>
+      <div class="pp-card-title">Spare capacity <span class="pp-card-hint">— unused fleet you could grow into</span></div>
       <div class="pp-card-body">
         <ul class="dash-expand-list">${exItems.join('')}</ul>
         ${projHtml}
-        <div class="dash-expand-cta">${ex.plan_name
-          ? `Re-run <b>“${_esc(ex.plan_name)}”</b> in <a href="#" onclick="switchTab('planetary');return false;">Planetary Planning</a> to scale up — a re-run includes every character and their current skills.`
-          : `Build a plan in <a href="#" onclick="switchTab('planetary');return false;">Planetary Planning</a> to use it (and to start tracking skill growth).`}</div>
+        <div class="dash-expand-cta dash-expand-cta-sub">Prefer to start over? <a href="#" onclick="switchTab('planetary');return false;">Planetary Planning</a> rebuilds the whole layout from scratch.</div>
       </div>
     </section>` : '';
   // Maintenance routine — big number = countdown to NEXT due (from current state); small text = the

@@ -1539,6 +1539,23 @@ def dashboard(pp_session: str = Cookie(default=None)):
             (pname, u), = cur_units_by_prod.items()
             expansion["add_units_per_day"] = round(u * cf)
             expansion["add_unit_label"] = pname
+        # Balanced incremental addition: split the spare slots into factories + their extractors at the
+        # CURRENT setup's ratio, so you never add a factory you can't feed. This is the "grow what you
+        # run" advice the Spare-capacity card shows instead of pushing a full re-plan — no reshuffle of
+        # the working setup, no wizard.
+        cur_fac = len(factories)
+        cur_ext = sum(1 for t in parsed if t[0]["is_ext"])
+        if cur_fac > 0 and cur_ext > 0:
+            ext_per_fac = cur_ext / cur_fac
+            add_fac = int(fs // (1 + ext_per_fac))
+            if add_fac >= 1:
+                sug = {"add_factories": add_fac, "add_extractors": round(add_fac * ext_per_fac),
+                       "spare_planets": fs, "add_isk_per_day": round(total_value_per_day / cur_fac * add_fac, 2)}
+                if len(cur_units_by_prod) == 1:
+                    (pname, u), = cur_units_by_prod.items()
+                    sug["add_units_per_day"] = round(u / cur_fac * add_fac)
+                    sug["unit_label"] = pname
+                expansion["suggestion"] = sug
 
     return {
         "logged_in": True,
