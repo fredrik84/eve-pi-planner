@@ -2224,6 +2224,7 @@ let _planMeta = {};        // selected plan's production rate + sell value, for 
 let _refillModel = null;   // [{title, cols:[{id,name}], facs:[{loc, char, shareByTid, amt}]}]
 let _refillView = (() => { try { return localStorage.getItem('refillView') || 'summary'; } catch (e) { return 'summary'; } })();
 let _refillChar = (() => { try { return localStorage.getItem('refillChar') || ''; } catch (e) { return ''; } })();
+let _refillUserPicked = false;   // true once the user deliberately chose a plan — else default to Current Setup
 const _PLAN_SNAP_KEY = 'ppPlanSnapshots';
 
 function _loadPlanSnapshots() {
@@ -2296,6 +2297,7 @@ async function openSavedPlanFull(srvId) {
 function openSavedPlanRefill(id) {
   const sect = document.getElementById('planDistSection');
   if (sect) sect.dataset.sel = id;
+  _refillUserPicked = true;       // they explicitly opened THIS plan to refill — keep it selected
   if (typeof switchTab === 'function') switchTab('planner');
   if (typeof setPiMode === 'function') setPiMode('refill');
 }
@@ -3315,6 +3317,7 @@ function onPlannerTabOpen() { setPiMode(_piMode); }
 function onPlanDistSelect(id) {
   const el = document.getElementById('planDistSection');
   if (el) el.dataset.sel = id;
+  _refillUserPicked = true;       // deliberate choice — honour it over the Current Setup default
   renderPlanDistribution();
 }
 
@@ -3334,9 +3337,21 @@ async function renderPlanDistribution() {
       <div class="pp-card"><div class="admin-hint">Build a plan in <b>Planetary Planning</b> and hit <b>Save plan</b> — or set up factories on your characters — and it'll appear here so you can paste your P1 stacks and see exactly how many units to drop at each factory.</div></div>`;
     return;
   }
-  const snap = snaps.find(s => String(s.id) === el.dataset.sel) || snaps[0];
+  // Default to the live Current Setup (◆ derived) — that's what the player actually runs. Only honour a
+  // remembered selection when they deliberately chose one this session (dropdown / "refill this plan"),
+  // so a stale saved plan can't silently stick and get refilled against the wrong factory layout.
+  let snap = (_refillUserPicked && el.dataset.sel) ? snaps.find(s => String(s.id) === el.dataset.sel) : null;
+  if (!snap) snap = snaps.find(s => s.derived) || snaps[0];
+  // Flag a saved plan whose factory planets aren't what's currently deployed (the source of the
+  // "it splits across more factories than I built" confusion).
+  const deployedLocs = new Set(derived.flatMap(d => (d.factories || []).map(f => f.loc)));
+  const _mismatch = s => !s.derived && deployedLocs.size > 0 && Array.isArray(s.factories)
+    && s.factories.some(f => !deployedLocs.has(f.loc));
   const opts = snaps.map(s =>
-    `<option value="${s.id}"${String(s.id) === String(snap.id) ? ' selected' : ''}>${s.derived ? '◆ ' : ''}${_esc(s.name)}${(!s.saved && !s.derived) ? ' · this browser (unsaved)' : ''}</option>`).join('');
+    `<option value="${s.id}"${String(s.id) === String(snap.id) ? ' selected' : ''}>${s.derived ? '◆ ' : ''}${_esc(s.name)}${_mismatch(s) ? ' ⚠ differs from deployed' : ''}${(!s.saved && !s.derived) ? ' · this browser (unsaved)' : ''}</option>`).join('');
+  const mismatchNote = _mismatch(snap)
+    ? `<div class="dist-mismatch">⚠ This plan's factories don't match your deployed setup, so the split may target planets you didn't build${derived.length ? ` — switch to <b>◆ ${_esc(derived[0].name)}</b> to refill what you actually run` : ''}.</div>`
+    : '';
   const delBtn = snap.saved
     ? `<button class="pp-profile-action-btn pp-profile-del-btn" onclick="deletePlanSnapshot(${snap.srvId})" title="Delete this saved plan">Delete</button>` : '';
   // P1 name → type_id (for parsing the pasted inventory — the textarea is the single input).
@@ -3384,6 +3399,7 @@ async function renderPlanDistribution() {
         ${delBtn}
       </div>
       <div class="pp-card-body">
+        ${mismatchNote}
         <div class="dist-controls" id="refillControls"></div>
         <div class="dist-hint">Tops up each factory's launchpads toward full (3 LP ≈ 30,000 m³) in recipe ratio, <b>counting the P1 already in them</b> — so you never overflow. <b>Summary</b> = one drop that fits every factory; <b>All planets</b> = each topped to its own free space. Limited by the P1 in your <b>inventory above</b>. Click a number to copy.</div>
         <div class="dist-days" id="refillDays"></div>
