@@ -94,7 +94,9 @@ for pn, t, d in [(1, "Lava", {"base_metals": 90}), (2, "Lava", {"base_metals": 8
 
 add_char(999100, "Test Alpha", 5)
 add_char(999101, "Test Bravo", 5)
-add_char(999102, "Test Idle", 2, ccu=3)  # IC2 → 3 planets, none used → spare capacity; CCU3 = cramped factory
+add_char(999102, "Test Idle", 2, ccu=3)  # IC2 → 3 planets, none used → spare capacity. CCU3 verifies we
+#                                          do NOT over-warn: the fixture's P2 factories fit 3 LP at CC3, so
+#                                          no CCU warning should appear (only P4 like RCM is cramped at CC3).
 add_char(999103, "Test Charlie", 5)
 
 # Coolant op (TST-AA): Electrolytes deliberately short (500/day) vs Water (9000/day).

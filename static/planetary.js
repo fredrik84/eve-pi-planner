@@ -221,9 +221,13 @@ function _renderExpandCards(deploys) {
     const meta = isFac
       ? `Supply has room — turns your surplus into <b>~${(d.add_per_day || 0).toLocaleString()} more ${_esc(d.p1)}/day</b>`
       : `${_esc(d.p1)} is only <b>${d.fed_pct}% fed</b> — this colony lifts your bottleneck`;
-    const ccuWarn = (isFac && d.ccu_low)
-      ? `<div class="an-bu-warn">⚠ ${_esc(d.char)} is only CCU ${d.host_ccu} — a factory fits cramped here (fewer launchpads) and you'd redeploy it after training. <b>Train Command Center Upgrades to 4+ first.</b></div>`
-      : '';
+    let ccuWarn = '';
+    if (isFac && d.ccu_low) {
+      const lp = d.fit_lp || 0;
+      const fits = lp >= 1 ? `fits with only <b>${lp} launchpad${lp !== 1 ? 's' : ''}</b> here (full layout needs 3)` : `won't fit here`;
+      const train = d.train_to ? `Train Command Center Upgrades to <b>CCU ${d.train_to}</b> first` : `Train Command Center Upgrades higher first`;
+      ccuWarn = `<div class="an-bu-warn">⚠ At ${_esc(d.char)}'s <b>CCU ${d.host_ccu}</b> this ${_esc(d.p1)} factory ${fits} — ${train}, or you'll redeploy it after training.</div>`;
+    }
     return `<div class="an-bu-card">
         <div class="an-bu-rank">${i + 1}</div>
         <div class="an-bu-body">

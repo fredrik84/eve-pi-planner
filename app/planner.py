@@ -1239,6 +1239,40 @@ def _expansion_capacity(context_id: int) -> dict:
             "total_used": sum(used.values())}
 
 
+_FACTORY_FIT: dict = {}   # (product, planet_type, ccu) -> max launchpads (3..1) the real template fits, 0 if none
+
+
+def _factory_fit_lp(product: int, planet_type: str, ccu: int | None) -> int:
+    """How many launchpads the product's factory template ACTUALLY fits on this planet type at this
+    command-centre level — by generating the layout and reading its CPU/PG budget, not by assuming.
+    3 = full layout; <3 = cramped (the player would redeploy after training CCU up); 0 = doesn't fit."""
+    cc = ccu or 5
+    key = (product, planet_type, cc)
+    if key in _FACTORY_FIT:
+        return _FACTORY_FIT[key]
+    from app.layout import generate_layout
+    best = 0
+    for lp in (3, 2, 1):
+        try:
+            r = generate_layout(product, planet_type, launchpads=lp, count=1, cc_level=cc)
+            res = (r.get("planets") or [{}])[0].get("resources") or {}
+            if not res.get("over"):
+                best = lp
+                break
+        except Exception:
+            continue
+    _FACTORY_FIT[key] = best
+    return best
+
+
+def _factory_full_ccu(product: int, planet_type: str) -> int | None:
+    """Lowest command-centre level at which the full 3-launchpad layout fits (what to train CCU to)."""
+    for cc in range(1, 6):
+        if _factory_fit_lp(product, planet_type, cc) >= 3:
+            return cc
+    return None
+
+
 def _setup_products(context_id: int, pi: dict) -> list[dict]:
     """The distinct products the player's deployed factories build, most factories first — drives the
     'plan for this product' dropdown on the Spare-capacity card."""
@@ -1382,13 +1416,15 @@ def _expansion_deploys(context_id: int, pi: dict, chosen_product: int | None = N
             cid, pl = r
             free_cap[cid] -= 1; used.add((pl["system"], pl["planet_num"])); f_add += 1
             host_ccu = cap[cid].get("ccu")
+            # VERIFY the actual fit at this pilot's CCU on this planet type — don't just assume low CCU is
+            # a problem. Only warn when the full layout genuinely won't fit (cramped = a later redeploy).
+            fit_lp = _factory_fit_lp(product, pl["planet_type"], host_ccu)
             deploys.append({"kind": "factory", "char": cap[cid]["nm"], "system": pl["system"],
                             "planet_num": pl["planet_num"], "planet_type": pl["planet_type"],
                             "richness": None, "p0": None, "p1": pname, "add_per_day": round(ppd_fac),
-                            "fed_pct": None, "host_ccu": host_ccu,
-                            # a factory on a low command-centre level fits cramped (fewer launchpads) and
-                            # has to be torn down + rebuilt once the pilot trains CCU up.
-                            "ccu_low": host_ccu is not None and host_ccu < 4})
+                            "fed_pct": None, "host_ccu": host_ccu, "fit_lp": fit_lp,
+                            "ccu_low": fit_lp < 3,
+                            "train_to": _factory_full_ccu(product, pl["planet_type"]) if fit_lp < 3 else None})
         else:
             # A material is binding → an extractor for it lifts the bottleneck.
             m = min(D0, key=lambda x: S.get(x, 0.0) / D0[x])
