@@ -277,7 +277,26 @@ function renderDashboard(data) {
   // factories at your current ratio, so the spare capacity stays fed. No full re-plan (which would
   // reshuffle a working setup); just deploy the delta on the idle toons / free slots listed above.
   let projHtml = '';
-  if (ex.suggestion) {
+  if (ex.deploys && ex.deploys.length) {
+    // The vision: concrete "deploy this here" cards (same style as Setup Analysis), not a re-plan.
+    const cards = ex.deploys.map((d, i) => {
+      const loc = `${_esc(d.system)}${d.planet_num != null ? ' P' + d.planet_num : ''}`;
+      const cc = d.planet_type ? `<span class="an-cc-tag">${_esc(d.planet_type)}</span>` : '';
+      return `<div class="an-bu-card">
+          <div class="an-bu-rank">${i + 1}</div>
+          <div class="an-bu-body">
+            <div class="an-bu-mat">${_esc(d.p0)} <span class="an-move-p0arrow">→</span> ${_esc(d.p1)}</div>
+            <div class="an-bu-where">anchor on <b>${_esc(d.char)} · ${loc}</b> ${cc} ${d.richness}% density</div>
+            <div class="an-bu-meta">${_esc(d.p1)} is only <b>${d.fed_pct}% fed</b> — this colony lifts your bottleneck</div>
+          </div>
+        </div>`;
+    }).join('');
+    projHtml = `<div class="dash-expand-sug">
+        <div class="dash-expand-sug-h">Grow your setup <span class="dash-expand-sug-sub">— deploy these on your spare slots, most impactful first</span></div>
+        <div class="an-bu-list">${cards}</div>
+        <div class="dash-expand-est">Targets the inputs your factories are short on, so the new colonies actually lift output — no re-plan, no teardown.</div>
+      </div>`;
+  } else if (ex.suggestion) {
     const s = ex.suggestion;
     const out = (s.add_units_per_day && s.unit_label) ? `~${s.add_units_per_day.toLocaleString()} ${_esc(s.unit_label)}/day` : '';
     const fac = `+${s.add_factories} factor${s.add_factories !== 1 ? 'ies' : 'y'}`;

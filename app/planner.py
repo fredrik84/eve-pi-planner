@@ -1239,6 +1239,120 @@ def _expansion_capacity(context_id: int) -> dict:
             "total_used": sum(used.values())}
 
 
+def _expansion_deploys(context_id: int, pi: dict) -> list[dict]:
+    """Concrete 'deploy this colony here' cards for spare capacity — the Analysis-style answer to
+    'I added a toon / freed a slot, now what'. Each free planet slot goes to the material that most
+    helps the setup (tightest supply/demand first, re-evaluated as we add), pinned to a real free
+    planet in a system the fleet already runs (idle/new toons join the fleet's systems). Bottleneck
+    relief before scale, so a supply-limited setup gets fed before you add factories. Read-only/no plan."""
+    types, sch = pi["types"], pi["schematics"]
+    con = get_connection()
+    rows = con.execute("""
+        SELECT cp.character_id AS cid, c.character_name AS nm,
+               1 + COALESCE(c.interplanetary_consolidation, 0) AS maxp,
+               s.name AS sys, cp.planet_num AS pn, cp.is_extractor AS ext,
+               cp.products AS products, cp.sim_state AS sim_state
+        FROM pp_characters c
+        LEFT JOIN pp_char_planets cp ON cp.character_id = c.character_id
+        LEFT JOIN solar_systems s ON s.system_id = cp.solar_system_id
+        WHERE c.context_id = ? AND COALESCE(c.is_dummy, 0) = 0
+    """, (context_id,)).fetchall()
+
+    demand: dict[int, float] = {}
+    supply: dict[int, float] = {}
+    fleet_sys: set = set()
+    occ: dict[int, set] = {}          # cid -> {(system, planet_num)}
+    cap: dict[int, dict] = {}         # cid -> {nm, used, maxp}
+    for r in rows:
+        cap.setdefault(r["cid"], {"nm": r["nm"], "used": 0, "maxp": r["maxp"]})
+        if r["pn"] is None:
+            continue                  # char with no colonies (idle) — a row with null planet
+        cap[r["cid"]]["used"] += 1
+        if r["sys"]:
+            fleet_sys.add(r["sys"])
+            occ.setdefault(r["cid"], set()).add((r["sys"], r["pn"]))
+        if not r["ext"] and r["products"]:
+            for p in (_json.loads(r["products"]) or []):
+                tid = p.get("type_id")
+                if not tid:
+                    continue
+                fr = _compute_p1_fracs(tid, pi)
+                ppd = _effective_fph(tid, pi) * 24.0
+                for pid, frac in fr.items():
+                    demand[pid] = demand.get(pid, 0.0) + ppd * frac
+        elif r["ext"] and r["sim_state"]:
+            ss = _json.loads(r["sim_state"] or "null")
+            for o in ((ss or {}).get("outputs") or []):
+                rate = o.get("rate_sustained", o.get("rate", 0)) or 0
+                supply[o["type_id"]] = supply.get(o["type_id"], 0.0) + rate * 86400
+
+    if not demand or not fleet_sys:
+        con.close()
+        return []
+
+    # Free planets in the fleet's systems that grow each demanded P1's P0, richest first.
+    free_planets: dict[int, list] = {}
+    for tid in demand:
+        s = sch.get(tid) or {}
+        inputs = s.get("inputs") or []
+        p0 = types.get(inputs[0]["type_id"], {}).get("name") if inputs else None
+        col = _p0_col(p0) if p0 else None
+        if not col:
+            continue
+        vt = _P0_PLANET_TYPES.get(p0, [])
+        tf = " AND planet_type IN ({})".format(",".join("?" * len(vt))) if vt else ""
+        ph = ",".join("?" * len(fleet_sys))
+        ps = con.execute(
+            f'SELECT system, planet_num, planet_type, "{col}" AS r FROM pp_planets '
+            f'WHERE "{col}" > 0{tf} AND system IN ({ph})', vt + list(fleet_sys)).fetchall()
+        free_planets[tid] = [{"p0": p0, "system": p["system"], "planet_num": p["planet_num"],
+                              "planet_type": p["planet_type"], "richness": round(p["r"] or 0)}
+                             for p in ps]
+        free_planets[tid].sort(key=lambda x: -x["richness"])
+    con.close()
+
+    # Greedy: keep filling the tightest material with a placeable free planet until capacity runs out.
+    eff = dict(supply)
+    used_planets: set = set()
+    free_cap = {cid: max(0, c["maxp"] - c["used"]) for cid, c in cap.items()}
+    PER_COLONY = 7680.0           # ~one 100%-richness extractor's P1/day (richness-scaled below)
+    deploys: list[dict] = []
+    # Only add extractors to materials that are actually SHORT — adding to an over-fed input does nothing
+    # (the factory can't consume it). Tightest-first, re-evaluated as we add, and we stop a material once
+    # it reaches its demand. (Over-fed setups want more FACTORIES, not extractors — handled separately.)
+    while sum(free_cap.values()) > 0:
+        under = [t for t in demand if demand[t] > 0 and eff.get(t, 0.0) / demand[t] < 0.995]
+        if not under:
+            break
+        under.sort(key=lambda t: eff.get(t, 0.0) / demand[t])
+        placed = False
+        for t in under:
+            for pl in free_planets.get(t, []):
+                key = (pl["system"], pl["planet_num"])
+                if key in used_planets:
+                    continue
+                # a char can host it if it already operates in that system, or is idle (joins the fleet).
+                cid = next((c for c in free_cap if free_cap[c] > 0 and
+                            (key[0] in {s for (s, _) in occ.get(c, set())} or not occ.get(c))), None)
+                if cid is None:
+                    continue
+                free_cap[cid] -= 1
+                used_planets.add(key)
+                eff[t] = eff.get(t, 0.0) + PER_COLONY * min(1.0, (pl["richness"] or 0) / 100.0)
+                fed = round((supply.get(t, 0.0) / demand[t]) * 100) if demand[t] else 100
+                deploys.append({"kind": "extractor", "char": cap[cid]["nm"], "system": pl["system"],
+                                "planet_num": pl["planet_num"], "planet_type": pl["planet_type"],
+                                "richness": pl["richness"], "p0": pl["p0"],
+                                "p1": types.get(t, {}).get("name") or f"#{t}", "fed_pct": fed})
+                placed = True
+                break
+            if placed:
+                break
+        if not placed:
+            break
+    return deploys
+
+
 @router.get("/api/dashboard")
 def dashboard(pp_session: str = Cookie(default=None)):
     """Logged-in overview: per-factory launchpad fill %, time-to-empty and current-run value,
@@ -1528,6 +1642,11 @@ def dashboard(pp_session: str = Cookie(default=None)):
     issues.sort(key=lambda c: 0 if c["severity"] == "high" else 1)
 
     expansion = _expansion_capacity(context_id)
+    if (expansion.get("free_slots") or 0) > 0:
+        try:
+            expansion["deploys"] = _expansion_deploys(context_id, pi)
+        except Exception:
+            expansion["deploys"] = []
     # Rough upside of using that capacity: a balanced colony layout scales ~linearly with planets, so
     # adding free_slots over the total_used currently deployed lifts output by free_slots/total_used.
     # An ESTIMATE (new planets may be thinner / in worse systems) — the card links to the real re-run.
