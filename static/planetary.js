@@ -3822,6 +3822,10 @@ function renderFinalPlan(data, opts = {}) {
   const unplacedFacHtml = totalUnplacedFac
     ? `<div class="plan-warning">${totalUnplacedFac} factory slot${totalUnplacedFac !== 1 ? 's' : ''} unplaced — not enough ${typeNames} planets in chosen system. Check character ext config if unexpected.</div>`
     : '';
+  const dft = data.dropped_factory_types || [];
+  const droppedFacHtml = dft.length
+    ? `<div class="plan-note">Skipped <b>${dft.join(', ')}</b> for factories — a factory's layout won't fit on a planet that large (Gas is Ø40000). Extractors can still use ${dft.length > 1 ? 'them' : 'it'}.</div>`
+    : '';
 
   // Factory system selector — dropdown of systems with their allowed-planet-type counts.
   let facSysHtml = '';
@@ -4130,7 +4134,7 @@ function renderFinalPlan(data, opts = {}) {
       ${reqPills}
     </div>
     ${unmetHtml}
-    ${unplacedFacHtml}
+    ${unplacedFacHtml}${droppedFacHtml}
     <div class="plan-section-title">Character assignment
       <span class="plan-view-toggle">
         <button class="plan-view-btn${!_grouped ? ' plan-view-on' : ''}" onclick="setPlanGroup('flat')" title="One location-ordered list per character">All systems</button>

@@ -2811,20 +2811,35 @@ def _fetch_planets_and_recs(con, all_p0_names, req, types, p1_info_raw):
     return p0_planet_lists, p0_planet_lists_global, best_ptypes, sys_recs
 
 
+# Planet types a factory can never go on (too large — links overflow the grid). Gas is Ø40000.
+_FACTORY_EXCLUDE_TYPES = ("Gas",)
+# Smallest-diameter-first ordering for factory placement (Lava/Ice Ø6000 < the Ø8000 group < Storm Ø30000).
+_FACTORY_SIZE_RANK_SQL = "WHEN 'Lava' THEN 0 WHEN 'Ice' THEN 0 WHEN 'Storm' THEN 8 WHEN 'Gas' THEN 9 ELSE 1"
+
+
 def _factory_candidates(con, req, only_bt: bool = False, allowed_types: list[str] | None = None):
     """Factory-planet DB candidates + per-system options for the UI picker.
-    `allowed_types` restricts the pool to those planet types (Barren first in the
+    `allowed_types` restricts the pool to those planet types (smallest planets first in the
     placement order); pass e.g. ['Barren','Temperate'] for the fuel-block default. When
     None, any planet type qualifies. `only_bt=True` is shorthand for the B/T restriction
     (single-product factories). Returns (fac_pool, factory_system_options, sys_fac_capacity)."""
     if only_bt and allowed_types is None:
         allowed_types = ["Barren", "Temperate"]
-    # Build the planet_type IN (...) restriction (None → unrestricted)
-    if allowed_types:
-        type_clause = "planet_type IN ({})".format(",".join("?" * len(allowed_types)))
-        type_params = list(allowed_types)
+    # Factory layouts are link-heavy, so a planet's diameter decides whether one fits. Gas (Ø40000) is
+    # so large the links overflow the grid — it can NEVER host a factory, so drop it whatever was asked
+    # for. The rest sort smallest-first (least CPU/PG, most efficient), with the giant Storm (Ø30000)
+    # last so it's only used when nothing smaller is left. Extractors are pinned to the planets carrying
+    # their P0 and get first pick elsewhere; factories take what's left, preferring the compact planets.
+    if allowed_types is not None:
+        allowed_types = [t for t in allowed_types if t not in _FACTORY_EXCLUDE_TYPES]
+        if allowed_types:
+            type_clause = "planet_type IN ({})".format(",".join("?" * len(allowed_types)))
+            type_params = list(allowed_types)
+        else:
+            type_clause, type_params = "1=0", []         # nothing eligible after dropping the giants
     else:
-        type_clause, type_params = "", []
+        type_clause = "planet_type NOT IN ({})".format(",".join("?" * len(_FACTORY_EXCLUDE_TYPES)))
+        type_params = list(_FACTORY_EXCLUDE_TYPES)
 
     fac_filter, fac_params = "", []
     fac_systems = list({*req.chosen_systems, req.factory_system}) if req.factory_system else list(req.chosen_systems)
@@ -2835,13 +2850,9 @@ def _factory_candidates(con, req, only_bt: bool = False, allowed_types: list[str
         fac_filter = " AND constellation IN ({})".format(",".join("?" * len(req.constellations)))
         fac_params = list(req.constellations)
 
-    if type_clause:
-        where = f"WHERE {type_clause}{fac_filter}"
-        order = "ORDER BY CASE planet_type WHEN 'Barren' THEN 0 ELSE 1 END, system, planet_num"
-        fac_params = type_params + fac_params
-    else:
-        where = f"WHERE 1=1{fac_filter}"
-        order = "ORDER BY system, planet_num"
+    where = f"WHERE {type_clause}{fac_filter}"
+    order = f"ORDER BY CASE planet_type {_FACTORY_SIZE_RANK_SQL} END, system, planet_num"
+    fac_params = type_params + fac_params
     try:
         fac_pool = [dict(r) for r in con.execute(
             f"SELECT system, planet_num, planet_type FROM pp_planets {where} {order}",

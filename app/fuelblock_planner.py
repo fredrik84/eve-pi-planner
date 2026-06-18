@@ -67,7 +67,9 @@ def _available_factory_planet_types(con, req) -> list[str]:
         rows = con.execute(
             f"SELECT DISTINCT planet_type FROM pp_planets {where} ORDER BY planet_type", params
         ).fetchall()
-        return [r["planet_type"] for r in rows if r["planet_type"]]
+        # Don't offer planet types a factory can't fit on (Gas) — they're not real factory options.
+        from app.planner import _FACTORY_EXCLUDE_TYPES
+        return [r["planet_type"] for r in rows if r["planet_type"] and r["planet_type"] not in _FACTORY_EXCLUDE_TYPES]
     except Exception:
         return []
 
@@ -265,9 +267,13 @@ def _assign_fuelblock_factories(
             (e["system"], e["planet_num"]) for e in asgn["extractors"]
             if e.get("system") and e.get("planet_num") is not None
         }
+        # Reuse the player's existing factory colonies — but NOT ones on a planet a factory can't fit on
+        # (Gas): an empty Command Center anchored on a Gas planet must not be turned into a factory.
+        from app.planner import _FACTORY_EXCLUDE_TYPES
         nonfac = [
             p for p in char_nonfac.get(cid, [])
             if (p.get("system_name"), p.get("planet_num")) not in char_used
+            and p.get("planet_type") not in _FACTORY_EXCLUDE_TYPES
         ] if req.use_existing else []
 
         fac_assigns: list[dict] = []
@@ -560,9 +566,16 @@ def _run_fuelblock_plan(req: "FuelBlockPlanRequest", context_id: int) -> dict:
     p0_planet_lists, p0_planet_lists_global, best_ptypes, sys_recs = _fetch_planets_and_recs(
         con, all_p0_names, req, types, p1_info_raw)
 
-    # Factory candidates restricted to the chosen planet types (default Barren/Temperate:
-    # smallest footprint). Fuel-block lines are P1/P2/P3, so any type physically works.
-    allowed_types = req.factory_planet_types or list(DEFAULT_FACTORY_PLANET_TYPES)
+    # Factory candidates restricted to the chosen planet types (default Barren/Temperate: smallest
+    # footprint). A factory's link layout overflows the grid on the largest planets, so Gas (Ø40000) is
+    # dropped here too — never recommend a factory on a planet it can't fit on. Fall back to the default
+    # if the user's selection was Gas-only, and report what was dropped so the UI can explain it.
+    from app.planner import _FACTORY_EXCLUDE_TYPES
+    requested_types = req.factory_planet_types or list(DEFAULT_FACTORY_PLANET_TYPES)
+    allowed_types = [t for t in requested_types if t not in _FACTORY_EXCLUDE_TYPES]
+    dropped_factory_types = [t for t in requested_types if t in _FACTORY_EXCLUDE_TYPES]
+    if not allowed_types:
+        allowed_types = list(DEFAULT_FACTORY_PLANET_TYPES)
     fac_pool, factory_system_options, sys_fac_capacity = _factory_candidates(
         con, req, allowed_types=allowed_types)
     for rec in sys_recs:
@@ -819,6 +832,7 @@ def _run_fuelblock_plan(req: "FuelBlockPlanRequest", context_id: int) -> dict:
         "factory_system":        best_fac_system,
         "factory_system_options": factory_system_options,
         "factory_planet_types":  allowed_types,
+        "dropped_factory_types": dropped_factory_types,
         "available_planet_types": available_planet_types,
         "factory_planets_unpinned": factory_planets_unpinned,
         "factory_planets_needed": total_factory_planets,

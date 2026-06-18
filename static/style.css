@@ -871,6 +871,8 @@ tr:hover td { background: #181d2a; }
 .plan-req-pill em { color: #a8c8ff; font-style: normal; font-weight: 600; }
 
 .plan-warning { margin: 8px 14px; padding: 6px 10px; background: #2a1a10; border: 1px solid #5a3020; border-radius: 4px; font-size: 12px; color: #e08050; }
+.plan-note { margin: 8px 14px; padding: 6px 10px; background: #11151f; border-left: 3px solid #3f6896; border-radius: 4px; font-size: 12px; color: #aeb6c6; }
+.plan-note b { color: #d6deef; }
 
 .plan-assignments { display: flex; flex-direction: column; }
 .plan-char-block {
