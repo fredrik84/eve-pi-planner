@@ -51,10 +51,10 @@ def add_planet(sid, sysname, pn, ptype, dens):
         (sysname, pn, ptype, "Test-Const", sid, *(dens[c] for c in cols)))
 
 
-def add_char(cid, nm, ic):
+def add_char(cid, nm, ic, ccu=5):
     cur.execute(
         "INSERT INTO pp_characters (character_id, character_name, interplanetary_consolidation, "
-        "command_center_upgrades, context_id, is_dummy) VALUES (?,?,?,?,?,0)", (cid, nm, ic, 5, CTX))
+        "command_center_upgrades, context_id, is_dummy) VALUES (?,?,?,?,?,0)", (cid, nm, ic, ccu, CTX))
 
 
 def add_colony(cid, sid, pn, ptype, is_ext, product=None, out_name=None, per_day=None):
@@ -94,7 +94,7 @@ for pn, t, d in [(1, "Lava", {"base_metals": 90}), (2, "Lava", {"base_metals": 8
 
 add_char(999100, "Test Alpha", 5)
 add_char(999101, "Test Bravo", 5)
-add_char(999102, "Test Idle", 2)        # IC2 → 3 planets, none used → the spare capacity
+add_char(999102, "Test Idle", 2, ccu=3)  # IC2 → 3 planets, none used → spare capacity; CCU3 = cramped factory
 add_char(999103, "Test Charlie", 5)
 
 # Coolant op (TST-AA): Electrolytes deliberately short (500/day) vs Water (9000/day).

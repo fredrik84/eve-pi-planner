@@ -1271,6 +1271,7 @@ def _expansion_deploys(context_id: int, pi: dict, chosen_product: int | None = N
     rows = con.execute("""
         SELECT c.character_id AS cid, c.character_name AS nm,
                1 + COALESCE(c.interplanetary_consolidation, 0) AS maxp,
+               c.command_center_upgrades AS ccu,
                s.name AS sys, cp.planet_num AS pn, cp.is_extractor AS ext,
                cp.products AS products, cp.sim_state AS sim_state
         FROM pp_characters c
@@ -1285,7 +1286,7 @@ def _expansion_deploys(context_id: int, pi: dict, chosen_product: int | None = N
     occ: dict[int, set] = {}          # cid -> {(system, planet_num)}
     cap: dict[int, dict] = {}         # cid -> {nm, used, maxp}
     for r in rows:
-        cap.setdefault(r["cid"], {"nm": r["nm"], "used": 0, "maxp": r["maxp"]})
+        cap.setdefault(r["cid"], {"nm": r["nm"], "used": 0, "maxp": r["maxp"], "ccu": r["ccu"]})
         if r["pn"] is None:
             continue                  # char with no colonies (idle) — a row with null planet
         cap[r["cid"]]["used"] += 1
@@ -1380,10 +1381,14 @@ def _expansion_deploys(context_id: int, pi: dict, chosen_product: int | None = N
                 break
             cid, pl = r
             free_cap[cid] -= 1; used.add((pl["system"], pl["planet_num"])); f_add += 1
+            host_ccu = cap[cid].get("ccu")
             deploys.append({"kind": "factory", "char": cap[cid]["nm"], "system": pl["system"],
                             "planet_num": pl["planet_num"], "planet_type": pl["planet_type"],
                             "richness": None, "p0": None, "p1": pname, "add_per_day": round(ppd_fac),
-                            "fed_pct": None})
+                            "fed_pct": None, "host_ccu": host_ccu,
+                            # a factory on a low command-centre level fits cramped (fewer launchpads) and
+                            # has to be torn down + rebuilt once the pilot trains CCU up.
+                            "ccu_low": host_ccu is not None and host_ccu < 4})
         else:
             # A material is binding → an extractor for it lifts the bottleneck.
             m = min(D0, key=lambda x: S.get(x, 0.0) / D0[x])

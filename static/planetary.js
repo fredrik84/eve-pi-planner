@@ -221,12 +221,16 @@ function _renderExpandCards(deploys) {
     const meta = isFac
       ? `Supply has room — turns your surplus into <b>~${(d.add_per_day || 0).toLocaleString()} more ${_esc(d.p1)}/day</b>`
       : `${_esc(d.p1)} is only <b>${d.fed_pct}% fed</b> — this colony lifts your bottleneck`;
+    const ccuWarn = (isFac && d.ccu_low)
+      ? `<div class="an-bu-warn">⚠ ${_esc(d.char)} is only CCU ${d.host_ccu} — a factory fits cramped here (fewer launchpads) and you'd redeploy it after training. <b>Train Command Center Upgrades to 4+ first.</b></div>`
+      : '';
     return `<div class="an-bu-card">
         <div class="an-bu-rank">${i + 1}</div>
         <div class="an-bu-body">
           <div class="an-bu-mat">${mat}</div>
           <div class="an-bu-where">anchor on <b>${_esc(d.char)} · ${loc}</b> ${cc}${dens}</div>
           <div class="an-bu-meta">${meta}</div>
+          ${ccuWarn}
         </div>
       </div>`;
   }).join('');
