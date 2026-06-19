@@ -891,7 +891,8 @@ def default_launchpads(tier: int) -> int:
 
 def generate_layout(product_id: int, planet_type: str = "Barren",
                     launchpads: Optional[int] = None, count: Optional[int] = None,
-                    cc_level: Optional[int] = None, no_storage: bool = False) -> dict:
+                    cc_level: Optional[int] = None, no_storage: bool = False,
+                    diam_override: Optional[float] = None) -> dict:
     """
     Generate ONE importable template for the product (you replicate it across as many
     planets as you want — every planet is identical):
@@ -934,6 +935,8 @@ def generate_layout(product_id: int, planet_type: str = "Barren",
         else:
             b = build_factory_template(product_id, struct, planet_type, pi_data, "", launchpads, n_trees=c)
         b["template"]["CmdCtrLv"] = cc  # CPU/PG budget the packing must fit
+        if diam_override and diam_override > 0:
+            b["template"]["Diam"] = float(diam_override)   # real planet size → real link costs/packing
         return b
 
     # Largest count that still fits the command-centre budget.

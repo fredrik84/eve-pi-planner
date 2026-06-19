@@ -3891,9 +3891,9 @@ function renderFinalPlan(data, opts = {}) {
   const unplacedFacHtml = totalUnplacedFac
     ? `<div class="plan-warning">${totalUnplacedFac} factory slot${totalUnplacedFac !== 1 ? 's' : ''} unplaced — not enough ${typeNames} planets in chosen system. Check character ext config if unexpected.</div>`
     : '';
-  const dft = data.dropped_factory_types || [];
-  const droppedFacHtml = dft.length
-    ? `<div class="plan-note">Factories only go on <b>Barren / Temperate</b> planets. Off those, real planet sizes vary too much to guarantee the layout fits its power grid (the planner would over-pack a small-looking Ice/Lava, or overflow a giant Storm/Gas). Skipped <b>${dft.join(', ')}</b> for factories — still used for extraction.</div>`
+  const oversized = data.factory_planets_oversized || 0;
+  const droppedFacHtml = oversized
+    ? `<div class="plan-note">Factories can go on <b>any planet type</b> now, sized by each planet's <b>real diameter</b> (from the SDE). <b>${oversized}</b> planet${oversized !== 1 ? 's were' : ' was'} skipped as too large for the factory layout to fit its power grid${data.factory_diam_cap_km ? ` (cut-off ≈ ${(data.factory_diam_cap_km).toLocaleString()} km)` : ''} — small Ice/Lava/Storm are fine, oversized planets of any type aren't.</div>`
     : '';
 
   // Factory system selector — dropdown of systems with their allowed-planet-type counts.

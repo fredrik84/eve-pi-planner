@@ -67,9 +67,9 @@ def _available_factory_planet_types(con, req) -> list[str]:
         rows = con.execute(
             f"SELECT DISTINCT planet_type FROM pp_planets {where} ORDER BY planet_type", params
         ).fetchall()
-        # Factories only reliably fit on Barren/Temperate (see _run_fuelblock_plan) — don't offer others.
-        present = {r["planet_type"] for r in rows if r["planet_type"]}
-        return [t for t in DEFAULT_FACTORY_PLANET_TYPES if t in present]
+        # All planet types are factory-eligible now — oversized individual planets are filtered by real
+        # diameter in _run_fuelblock_plan, not by type.
+        return [r["planet_type"] for r in rows if r["planet_type"]]
     except Exception:
         return []
 
@@ -566,19 +566,26 @@ def _run_fuelblock_plan(req: "FuelBlockPlanRequest", context_id: int) -> dict:
     p0_planet_lists, p0_planet_lists_global, best_ptypes, sys_recs = _fetch_planets_and_recs(
         con, all_p0_names, req, types, p1_info_raw)
 
-    # Factories go ONLY on Barren/Temperate. The layout's CPU/PG fit is computed from a fixed diameter
-    # PER PLANET TYPE, but real planets vary wildly in size — and we have no per-planet radius. On the
-    # small-modelled types (Ice/Lava Ø6000) the planner over-packs facilities (a real, larger Ice planet
-    # then overflows the grid); on the giants (Storm/Gas) even a single factory's links overflow. B/T
-    # (Ø8000) is the conventional, layout-calibrated type the model is reliable for (and the only one P4
-    # can use). Other selected types are dropped for factories and reported; extraction still uses them.
-    requested_types = req.factory_planet_types or list(DEFAULT_FACTORY_PLANET_TYPES)
-    allowed_types = [t for t in requested_types if t in DEFAULT_FACTORY_PLANET_TYPES]
-    dropped_factory_types = [t for t in requested_types if t not in DEFAULT_FACTORY_PLANET_TYPES]
-    if not allowed_types:
-        allowed_types = list(DEFAULT_FACTORY_PLANET_TYPES)
+    # Factories may go on ANY allowed planet type — but only on planets whose REAL diameter (pp_planets.
+    # diameter, from the SDE) is small enough that the unchanged type-based factory template still fits in
+    # game. So a small Ice/Lava/Storm becomes eligible, while an oversized planet of ANY type (including a
+    # big Barren/Temperate) is excluded. The cut-off is the tightest (most-packed) factory product at the
+    # fleet's lowest CCU. Planets with no known diameter fall back to the safe B/T-only rule.
+    allowed_types = req.factory_planet_types or list(DEFAULT_FACTORY_PLANET_TYPES)
     fac_pool, factory_system_options, sys_fac_capacity = _factory_candidates(
         con, req, allowed_types=allowed_types)
+    from app.planner import _factory_pack_max_diameter
+    fac_products = [c["type_id"] for c in components if c.get("is_factory") or (c.get("tier") or 0) >= 2]
+    min_ccu = con.execute(
+        "SELECT MIN(COALESCE(command_center_upgrades, 5)) FROM pp_characters "
+        "WHERE context_id=? AND COALESCE(is_dummy, 0)=0", (context_id,)).fetchone()[0] or 5
+    diam_cap = min((_factory_pack_max_diameter(t, min_ccu) for t in fac_products), default=250000.0)
+    _before = len(fac_pool)
+    fac_pool = [p for p in fac_pool
+                if (p.get("diameter") is not None and p["diameter"] <= diam_cap)
+                or (p.get("diameter") is None and p["planet_type"] in DEFAULT_FACTORY_PLANET_TYPES)]
+    factory_planets_oversized = _before - len(fac_pool)
+    dropped_factory_types = []   # no type is categorically dropped now — only individual oversized planets
     for rec in sys_recs:
         rec["factory_capacity"] = {s: sys_fac_capacity.get(s, 0) for s in rec["systems_needed"]}
 
@@ -834,6 +841,8 @@ def _run_fuelblock_plan(req: "FuelBlockPlanRequest", context_id: int) -> dict:
         "factory_system_options": factory_system_options,
         "factory_planet_types":  allowed_types,
         "dropped_factory_types": dropped_factory_types,
+        "factory_planets_oversized": factory_planets_oversized,
+        "factory_diam_cap_km":   round(diam_cap),
         "available_planet_types": available_planet_types,
         "factory_planets_unpinned": factory_planets_unpinned,
         "factory_planets_needed": total_factory_planets,

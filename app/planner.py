@@ -1242,19 +1242,20 @@ def _expansion_capacity(context_id: int) -> dict:
 _FACTORY_FIT: dict = {}   # (product, planet_type, ccu) -> max launchpads (3..1) the real template fits, 0 if none
 
 
-def _factory_fit_lp(product: int, planet_type: str, ccu: int | None) -> int:
-    """How many launchpads the product's factory template ACTUALLY fits on this planet type at this
+def _factory_fit_lp(product: int, planet_type: str, ccu: int | None, diameter: float | None = None) -> int:
+    """How many launchpads the product's factory template ACTUALLY fits on this planet at this
     command-centre level — by generating the layout and reading its CPU/PG budget, not by assuming.
-    3 = full layout; <3 = cramped (the player would redeploy after training CCU up); 0 = doesn't fit."""
+    `diameter` (km) uses the planet's REAL size (per-planet from pp_planets); without it the flat
+    per-type PLANET_DIAM is used. 3 = full layout; <3 = cramped; 0 = doesn't fit at all."""
     cc = ccu or 5
-    key = (product, planet_type, cc)
+    key = (product, planet_type, cc, round(diameter) if diameter else 0)
     if key in _FACTORY_FIT:
         return _FACTORY_FIT[key]
     from app.layout import generate_layout
     best = 0
     for lp in (3, 2, 1):
         try:
-            r = generate_layout(product, planet_type, launchpads=lp, count=1, cc_level=cc)
+            r = generate_layout(product, planet_type, launchpads=lp, count=1, cc_level=cc, diam_override=diameter)
             res = (r.get("planets") or [{}])[0].get("resources") or {}
             if not res.get("over"):
                 best = lp
@@ -1263,6 +1264,80 @@ def _factory_fit_lp(product: int, planet_type: str, ccu: int | None) -> int:
             continue
     _FACTORY_FIT[key] = best
     return best
+
+
+_FACTORY_PACK_MAXDIAM: dict = {}   # (product, ccu) -> largest real diameter the TYPE-packed factory fits
+
+
+def _factory_pack_max_diameter(product: int, ccu: int | None) -> float:
+    """Largest REAL planet diameter (km) on which the factory still fits — at the facility count the
+    exported template actually packs (computed at the calibrated B/T size). Place a factory only on a
+    planet at/under this and the unchanged type-based export is guaranteed to fit the real planet."""
+    cc = ccu or 5
+    key = (product, cc)
+    if key in _FACTORY_PACK_MAXDIAM:
+        return _FACTORY_PACK_MAXDIAM[key]
+    from app.layout import generate_layout
+    try:
+        n = generate_layout(product, "Barren", launchpads=3, count=None, cc_level=cc)["summary"]["max_count"]
+    except Exception:
+        n = 1
+
+    def fits(d):
+        try:
+            r = generate_layout(product, "Barren", launchpads=3, count=n, cc_level=cc, diam_override=d)
+            return not ((r.get("planets") or [{}])[0].get("resources") or {}).get("over")
+        except Exception:
+            return False
+
+    lo, hi = 8000.0, 250000.0      # 8000 = the calibrated size where `n` fits by construction
+    if fits(hi):
+        _FACTORY_PACK_MAXDIAM[key] = hi
+        return hi
+    for _ in range(8):
+        mid = (lo + hi) / 2
+        if fits(mid):
+            lo = mid
+        else:
+            hi = mid
+    _FACTORY_PACK_MAXDIAM[key] = lo
+    return lo
+
+
+_FACTORY_MAX_DIAM: dict = {}   # (product, ccu) -> largest planet diameter (km) a full 3-LP factory fits
+
+
+def _factory_max_diameter(product: int, ccu: int | None) -> float:
+    """Largest real planet diameter (km) the product's factory fits with the full 3 launchpads at this CCU
+    — the cut-off for whether a planet (any type) can host this factory. Coarse binary search, cached."""
+    cc = ccu or 5
+    key = (product, cc)
+    if key in _FACTORY_MAX_DIAM:
+        return _FACTORY_MAX_DIAM[key]
+    from app.layout import generate_layout
+
+    def fits(d):
+        try:
+            r = generate_layout(product, "Barren", launchpads=3, count=1, cc_level=cc, diam_override=d)
+            return not ((r.get("planets") or [{}])[0].get("resources") or {}).get("over")
+        except Exception:
+            return False
+
+    lo, hi = 2000.0, 60000.0
+    if not fits(lo):
+        _FACTORY_MAX_DIAM[key] = 0.0
+        return 0.0
+    if fits(hi):
+        _FACTORY_MAX_DIAM[key] = hi
+        return hi
+    for _ in range(7):                 # ~450 km resolution, plenty for a cut-off
+        mid = (lo + hi) / 2
+        if fits(mid):
+            lo = mid
+        else:
+            hi = mid
+    _FACTORY_MAX_DIAM[key] = lo
+    return lo
 
 
 def _factory_full_ccu(product: int, planet_type: str) -> int | None:
@@ -3082,15 +3157,26 @@ def _factory_candidates(con, req, only_bt: bool = False, allowed_types: list[str
         fac_params = list(req.constellations)
 
     where = f"WHERE {type_clause}{fac_filter}"
-    order = f"ORDER BY CASE planet_type {_FACTORY_SIZE_RANK_SQL} END, system, planet_num"
+    # Prefer the genuinely smallest planets (real diameter when known — least link footprint, most likely
+    # to fit a factory); unknown-diameter planets sort last, then fall back to the per-type size rank.
+    order = (f"ORDER BY (diameter IS NULL), diameter, "
+             f"CASE planet_type {_FACTORY_SIZE_RANK_SQL} END, system, planet_num")
     fac_params = type_params + fac_params
     try:
         fac_pool = [dict(r) for r in con.execute(
-            f"SELECT system, planet_num, planet_type FROM pp_planets {where} {order}",
+            f"SELECT system, planet_num, planet_type, diameter FROM pp_planets {where} {order}",
             fac_params,
         ).fetchall()]
     except Exception:
-        fac_pool = []
+        # diameter column may not exist yet (pre-populate) — fall back without it.
+        try:
+            fac_pool = [dict(r) for r in con.execute(
+                f"SELECT system, planet_num, planet_type FROM pp_planets {where} "
+                f"ORDER BY CASE planet_type {_FACTORY_SIZE_RANK_SQL} END, system, planet_num",
+                fac_params,
+            ).fetchall()]
+        except Exception:
+            fac_pool = []
 
     try:
         chosen_consts = []
