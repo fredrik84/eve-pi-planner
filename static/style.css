@@ -1710,12 +1710,28 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
   display: flex; flex-direction: column; }
 .an-lever-a { border-left-color: #3f7d68; background: rgba(63,125,104,.12); }
 .an-lever-b { border-left-color: #7d6a3f; background: rgba(125,106,63,.12); }
+.an-lever-c { border-left-color: #3f6896; background: rgba(63,104,150,.12); }
 .an-lever-click { cursor: pointer; transition: filter .12s; }
 .an-lever-click:hover { filter: brightness(1.18); }
 .an-lever-top { display: flex; align-items: center; gap: 7px; margin-bottom: 5px; }
 .an-lever-ico { font-size: 14px; line-height: 1; }
 .an-lever-a .an-lever-ico { color: #6fe0c0; }
 .an-lever-b .an-lever-ico { color: #e0c06f; }
+.an-lever-c .an-lever-ico { color: #6fb0ff; }
+.an-lever-c .an-lever-cta { color: #6fb0ff; }
+/* Separate-factories section */
+.an-suggest-sep .an-suggest-h { color: #aecdf2; }
+.an-move-list { list-style: none; margin: 4px 0 10px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.an-sep-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 8px 0 10px; }
+.an-sep-chips-lbl { font-size: 11px; color: #8b93a6; margin-right: 2px; }
+.an-sep-chip { font-size: 12px; color: #aeb6c6; background: #11151f; border: 1px solid #2a3142;
+  border-radius: 14px; padding: 3px 10px; cursor: pointer; transition: filter .12s; }
+.an-sep-chip:hover { filter: brightness(1.25); }
+.an-sep-chip-on { color: #dbe7f7; background: rgba(63,104,150,.22); border-color: #3f6896; font-weight: 600; }
+.an-sep-chip-n { font-size: 10px; color: #6a7286; margin-left: 3px; }
+.an-sep-notes { margin-top: 8px; font-size: 11.5px; line-height: 1.5; color: #c8bfa8; }
+.an-sep-notes div { background: rgba(224,162,58,.09); border-left: 2px solid #b9842c; border-radius: 4px;
+  padding: 5px 9px; margin-top: 5px; }
 .an-lever-ttl { font-weight: 600; color: #c8d2e6; font-size: 13px; }
 .an-lever-tag { margin-left: auto; font-size: 10px; text-transform: uppercase; letter-spacing: .04em;
   color: #8b93a6; background: rgba(255,255,255,.05); padding: 1px 7px; border-radius: 9px; }
