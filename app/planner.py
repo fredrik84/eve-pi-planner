@@ -1266,6 +1266,12 @@ def _factory_fit_lp(product: int, planet_type: str, ccu: int | None, diameter: f
     return best
 
 
+# The layout's CPU/PG model is calibrated at ~8000 km (a real hand-built factory) and its link cost is
+# weak, so it stays optimistic far past where it's been validated (it claims even a 73,000 km Gas planet
+# fits). Never place a factory above this hard ceiling — twice the calibrated size — no matter what the
+# model says. Below it, the per-product / per-CCU cap (_factory_pack_max_diameter) governs.
+_FACTORY_DIAM_CEILING = 16000.0
+
 _FACTORY_PACK_MAXDIAM: dict = {}   # (product, ccu) -> largest real diameter the TYPE-packed factory fits
 
 

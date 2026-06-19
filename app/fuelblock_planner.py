@@ -302,10 +302,23 @@ def _assign_fuelblock_factories(
                     "product":     comp,
                 })
             else:
+                # Per-host fit: this character's CCU + this component decide how big a planet the factory
+                # fits on (real diameter), hard-capped by the model's trust ceiling. So a CC5 toon may use
+                # a bigger planet than a CC4 toon. Unknown-diameter planets fall back to the safe B/T rule.
+                from app.planner import _factory_pack_max_diameter, _FACTORY_DIAM_CEILING
+                cap = min(_FACTORY_DIAM_CEILING, _factory_pack_max_diameter(comp["type_id"], char.get("effective_ccu")))
+
+                def _fits(p):
+                    d = p.get("diameter")
+                    if d is None:
+                        return p["planet_type"] in DEFAULT_FACTORY_PLANET_TYPES
+                    return d <= cap
+
                 planet = next(
                     (p for p in fac_pool
                      if (best_fac_system is None or p["system"] == best_fac_system)
-                     and (p["system"], p["planet_num"]) not in char_used),
+                     and (p["system"], p["planet_num"]) not in char_used
+                     and _fits(p)),
                     None,
                 )
                 if planet is not None:
@@ -574,17 +587,15 @@ def _run_fuelblock_plan(req: "FuelBlockPlanRequest", context_id: int) -> dict:
     allowed_types = req.factory_planet_types or list(DEFAULT_FACTORY_PLANET_TYPES)
     fac_pool, factory_system_options, sys_fac_capacity = _factory_candidates(
         con, req, allowed_types=allowed_types)
-    from app.planner import _factory_pack_max_diameter
+    # Eligibility is decided PER FACTORY at assignment (host CCU + component + real diameter), not here.
+    # For the plan note, count planets too big for even the most generous case — a CC5 toon building the
+    # tightest (most-packed) factory product, capped by the model-trust ceiling. Those can't host a
+    # factory under any character.
+    from app.planner import _factory_pack_max_diameter, _FACTORY_DIAM_CEILING
     fac_products = [c["type_id"] for c in components if c.get("is_factory") or (c.get("tier") or 0) >= 2]
-    min_ccu = con.execute(
-        "SELECT MIN(COALESCE(command_center_upgrades, 5)) FROM pp_characters "
-        "WHERE context_id=? AND COALESCE(is_dummy, 0)=0", (context_id,)).fetchone()[0] or 5
-    diam_cap = min((_factory_pack_max_diameter(t, min_ccu) for t in fac_products), default=250000.0)
-    _before = len(fac_pool)
-    fac_pool = [p for p in fac_pool
-                if (p.get("diameter") is not None and p["diameter"] <= diam_cap)
-                or (p.get("diameter") is None and p["planet_type"] in DEFAULT_FACTORY_PLANET_TYPES)]
-    factory_planets_oversized = _before - len(fac_pool)
+    diam_cap = min([_FACTORY_DIAM_CEILING] + [_factory_pack_max_diameter(t, 5) for t in fac_products])
+    factory_planets_oversized = sum(
+        1 for p in fac_pool if p.get("diameter") is not None and p["diameter"] > diam_cap)
     dropped_factory_types = []   # no type is categorically dropped now — only individual oversized planets
     for rec in sys_recs:
         rec["factory_capacity"] = {s: sys_fac_capacity.get(s, 0) for s in rec["systems_needed"]}
