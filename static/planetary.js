@@ -3210,12 +3210,21 @@ function _burndownSection(rows) {
     const declined = withBest.filter(c => c.recoverable > 0).sort((a, b) => b.recoverable - a.recoverable);
     const reclaimable = Math.round(declined.reduce((s, c) => s + c.recoverable, 0));
     const hasUnknown = withBest.some(c => c.n < 2 && !c.capped);
-    const hasCapped = declined.some(c => c.reason === 'capped');
     const rem = Math.max(0, shortBy - reclaimable);
     const colTail = coveredAbove ? coveredAbove.replace(' (see', ' — see').replace(')', '') : ` <b>redeploy</b> a surplus colony or <b>add</b> a ${_esc(r.name)} colony`;
+
+    // Suggest only the FEWEST colonies whose combined recovery covers the shortfall — a 2% gap must not
+    // ask you to reseat all 9 producers. declined is sorted strongest-recovery first.
+    const covers = reclaimable >= shortBy && declined.length;
+    const need = [];
+    let needRecover = 0;
+    for (const c of declined) { if (needRecover >= shortBy) break; need.push(c); needRecover += c.recoverable; }
+    needRecover = Math.round(needRecover);
+    const showSet = covers ? need : declined;          // which colonies to actually list
+    const hasCapped = showSet.some(c => c.reason === 'capped');
     const ifRicher = hasCapped ? ' (extraction-capped — only if those planets have richer hotspots; if they\'re just thin, add a second source)' : '';
 
-    const reseatRows = declined.slice(0, _RESEAT_PER_P1).map(c => {
+    const reseatRows = showSet.slice(0, _RESEAT_PER_P1).map(c => {
       const loc = c.system ? `${_esc(c.system)}${c.planet_num != null ? ' P' + c.planet_num : ''}` : '';
       const tag = c.reason === 'capped'
         ? `⚠ extraction-capped — reseat denser hotspots`
@@ -3228,8 +3237,9 @@ function _burndownSection(rows) {
     }).join('');
 
     let action, list = '';
-    if (reclaimable >= shortBy && declined.length) {
-      action = `<b>Reseat</b> the ${declined.length} colon${declined.length === 1 ? 'y' : 'ies'} below — lifting ${declined.length === 1 ? 'it' : 'them'} adds back ~<b>${reclaimable.toLocaleString()}/day</b>, clearing the gap${ifRicher}.`;
+    if (covers) {
+      const one = need.length === 1;
+      action = `<b>Reseat</b> ${one ? 'the colony' : `the ${need.length} colon${need.length === 1 ? 'y' : 'ies'}`} below — recovering ${one ? 'it' : 'them'} adds ~<b>${needRecover.toLocaleString()}/day</b>, enough to clear the <b>${shortBy.toLocaleString()}/day</b> gap${ifRicher}.`;
       list = `<div class="an-bd-prod-list">${reseatRows}</div>`;
     } else if (reclaimable > 0) {
       action = `Reseating the ${declined.length} colon${declined.length === 1 ? 'y' : 'ies'} below recovers ~${reclaimable.toLocaleString()}/day — still short <b>${rem.toLocaleString()}/day</b>.${ifRicher} ${hasUnknown ? 'A rescan may reveal more headroom; otherwise ' : ''}${colTail.trim()} for the rest.`;
