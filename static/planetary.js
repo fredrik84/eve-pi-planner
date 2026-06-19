@@ -3213,14 +3213,20 @@ function _burndownSection(rows) {
     const rem = Math.max(0, shortBy - reclaimable);
     const colTail = coveredAbove ? coveredAbove.replace(' (see', ' — see').replace(')', '') : ` <b>redeploy</b> a surplus colony or <b>add</b> a ${_esc(r.name)} colony`;
 
-    // Suggest only the FEWEST colonies whose combined recovery covers the shortfall — a 2% gap must not
-    // ask you to reseat all 9 producers. declined is sorted strongest-recovery first.
+    // Suggest only the FEWEST colonies whose combined recovery covers the shortfall — and show each
+    // colony's target as only AS FAR AS THE GAP NEEDS, not its full ceiling (a 917/day gap must not read
+    // "21,819 → 48,000 P0/hr"). declined is sorted strongest-recovery first; the last colony takes just
+    // the remainder.
     const covers = reclaimable >= shortBy && declined.length;
     const need = [];
-    let needRecover = 0;
-    for (const c of declined) { if (needRecover >= shortBy) break; need.push(c); needRecover += c.recoverable; }
-    needRecover = Math.round(needRecover);
-    const showSet = covers ? need : declined;          // which colonies to actually list
+    let remainGap = shortBy;
+    for (const c of declined) {
+      if (remainGap <= 0) break;
+      const contrib = Math.min(c.recoverable, remainGap);
+      need.push({ ...c, target: c.perDay + contrib });   // only lift it enough to close the gap
+      remainGap -= contrib;
+    }
+    const showSet = covers ? need : declined.map(c => ({ ...c, target: c.best }));   // can't cover → full best
     const hasCapped = showSet.some(c => c.reason === 'capped');
     const ifRicher = hasCapped ? ' (extraction-capped — only if those planets have richer hotspots; if they\'re just thin, add a second source)' : '';
 
@@ -3231,7 +3237,7 @@ function _burndownSection(rows) {
         : `▼ ${Math.round(c.decline * 100)}% off best — reseat recovers it`;
       return `<div class="an-bd-prod">
           <span class="an-bd-prod-loc">${_esc(c.char)}${loc ? ' · ' + loc : ''}</span>
-          <span class="an-bd-prod-val">${toP0h(c.perDay).toLocaleString()} → ${toP0h(c.best).toLocaleString()}<span class="an-bd-unit"> P0/hr</span></span>
+          <span class="an-bd-prod-val">${toP0h(c.perDay).toLocaleString()} → ${toP0h(c.target).toLocaleString()}<span class="an-bd-unit"> P0/hr</span></span>
           <span class="an-bd-prod-tag an-bd-down">${tag}</span>
         </div>`;
     }).join('');
@@ -3239,7 +3245,7 @@ function _burndownSection(rows) {
     let action, list = '';
     if (covers) {
       const one = need.length === 1;
-      action = `<b>Reseat</b> ${one ? 'the colony' : `the ${need.length} colon${need.length === 1 ? 'y' : 'ies'}`} below — recovering ${one ? 'it' : 'them'} adds ~<b>${needRecover.toLocaleString()}/day</b>, enough to clear the <b>${shortBy.toLocaleString()}/day</b> gap${ifRicher}.`;
+      action = `<b>Reseat</b> ${one ? 'the colony' : `the ${need.length} colon${need.length === 1 ? 'y' : 'ies'}`} below to clear the <b>${shortBy.toLocaleString()}/day</b> gap — a small bump on ${one ? 'it' : 'them'} does it${ifRicher}; ${one ? 'it has' : 'they have'} far more recovery headroom than you need.`;
       list = `<div class="an-bd-prod-list">${reseatRows}</div>`;
     } else if (reclaimable > 0) {
       action = `Reseating the ${declined.length} colon${declined.length === 1 ? 'y' : 'ies'} below recovers ~${reclaimable.toLocaleString()}/day — still short <b>${rem.toLocaleString()}/day</b>.${ifRicher} ${hasUnknown ? 'A rescan may reveal more headroom; otherwise ' : ''}${colTail.trim()} for the rest.`;
