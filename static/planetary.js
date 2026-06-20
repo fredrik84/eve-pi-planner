@@ -2978,7 +2978,7 @@ function _leverCards(headroom, bindName) {
       </div>`;
   };
   const sepCard = _sepHasWork(_facDeployment())
-    ? card('separate', 'an-lever-c', '⛶', 'Separate factories', 'reorganise', 'Factories scattered across characters? Consolidate them onto dedicated factory character(s) and move those characters’ extractors out.', 'the moves')
+    ? card('separate', 'an-lever-c', '⇆', 'Switch factory character', 'move toon', 'Want your factories on a different character? Pick where they are now and where they should go — the moves (and your extractors back the other way) follow.', 'the move')
     : '';
   return `<div class="an-suggest an-suggest-levers">
       <div class="an-suggest-h">Lift yields &amp; balance</div>
@@ -2991,14 +2991,15 @@ function _leverCards(headroom, bindName) {
     </div>`;
 }
 
-// ── Separate factory characters ────────────────────────────────────────────────
-// Factories scattered across several characters of ONE account are a hauling/logging chore (you can run
-// only one character at a time). This consolidates them onto the fewest dedicated "factory characters" —
-// FULL separation: factories move IN, those chars' extractors move OUT — so factory chars are
-// factory-only and the rest extract. Concrete teardown→rebuild move cards; recommend + override.
+// ── Switch factory characters ──────────────────────────────────────────────────
+// A directed ONE-to-ONE role swap: "move my factories from character A to character B." Pick A (where the
+// factories are now) and B (the character you want to be the factory toon) from two dropdowns. The tool
+// tears down A's factories and rebuilds them on B, and moves B's extractors back onto A. No fleet-wide
+// consolidation, no extractor↔extractor shuffling — just the one swap the player asked for.
 const _SEP_DIAM_CEILING = 16000;     // mirrors backend _FACTORY_DIAM_CEILING — a destination B/T must fit
-let _sepFactoryChars = null;         // Set<cid string> chosen as factory chars; null/untouched = use recommendation
-let _sepTouched = false;
+let _sepFrom = null, _sepTo = null;  // chosen character ids (strings); null = use a sensible default
+function _setSepFrom(cid) { _sepFrom = String(cid); if (_sepTo === _sepFrom) _sepTo = null; renderAnalysis(); }
+function _setSepTo(cid) { _sepTo = String(cid); renderAnalysis(); }
 
 function _realChars() { return (_ppCharsData || []).filter(c => !c.is_dummy); }
 
@@ -3035,39 +3036,11 @@ function _facDeployment() {
 
 function _hubFactories(dep) { return dep.factories.filter(f => f.system === dep.hub); }
 
-// Recommended factory characters: fewest needed for the HUB system's factories, preferring already
-// factory-heavy / extractor-light chars (fewest total teardowns) — mirrors _compute_factory_shares.
-// Scoped to the hub so a multi-system setup never tries to drag a factory into the wrong system.
-function _recommendFactoryChars(dep) {
-  const hubFac = _hubFactories(dep);
-  if (!hubFac.length) return [];
-  const K = Math.max(1, Math.ceil(hubFac.length / dep.perCharCap));
-  return Object.values(dep.byChar)
-    .map(e => { const f = e.factories.filter(x => x.system === dep.hub).length; return { cid: e.cid, score: f - e.extractors.length, fac: f }; })
-    .sort((a, b) => b.score - a.score || b.fac - a.fac)
-    .slice(0, K).map(e => e.cid);
-}
+function _hubFacCount(dep, cid) { return dep.byChar[cid] ? dep.byChar[cid].factories.filter(f => f.system === dep.hub).length : 0; }
 
-function _activeFactoryChars(dep) {
-  return (_sepTouched && _sepFactoryChars && _sepFactoryChars.size) ? _sepFactoryChars : new Set(_recommendFactoryChars(dep));
-}
-
-function _toggleSepFactoryChar(cid) {
-  const dep = _facDeployment();
-  if (!_sepFactoryChars) _sepFactoryChars = new Set(_recommendFactoryChars(dep));
-  _sepTouched = true;
-  cid = String(cid);
-  if (_sepFactoryChars.has(cid)) { if (_sepFactoryChars.size > 1) _sepFactoryChars.delete(cid); }
-  else _sepFactoryChars.add(cid);
-  renderAnalysis();
-}
-
-// Is there anything to separate? hub factories on >1 char, or a hub-factory char also runs extractors.
+// Offer the swap whenever at least one character has factories and there's another character to move to.
 function _sepHasWork(dep) {
-  const hubFac = _hubFactories(dep);
-  if (!hubFac.length || _realChars().length < 2) return false;
-  const facChars = new Set(hubFac.map(f => f.cid));
-  return facChars.size > 1 || [...facChars].some(cid => (dep.byChar[cid].extractors || []).length > 0);
+  return _hubFactories(dep).length > 0 && _realChars().length >= 2;
 }
 
 // One cross-character teardown→rebuild card (reuses the an-move-* styling; char lives in each side's loc).
@@ -3083,90 +3056,75 @@ function _separateFactoriesSection() {
   const dep = _facDeployment();
   const hubFac = _hubFactories(dep);
   if (!hubFac.length || _realChars().length < 2) return '';
-  const active = _activeFactoryChars(dep);
-  const facChars = new Set(hubFac.map(f => f.cid));
-  const otherSysFac = dep.factories.filter(f => f.system !== dep.hub).length;
-  const facList = [...active].map(cid => `<b>${_esc(dep.byChar[cid].name)}</b>`).join(', ');
-  const chips = Object.values(dep.byChar).map(e =>
-    `<button class="an-sep-chip${active.has(e.cid) ? ' an-sep-chip-on' : ''}" onclick="_toggleSepFactoryChar('${e.cid}')">${active.has(e.cid) ? '✓ ' : ''}${_esc(e.name)} <span class="an-sep-chip-n">${e.factories.length}f·${e.extractors.length}e</span></button>`).join('');
+  const chars = Object.values(dep.byChar);
 
-  const scattered = hubFac.some(f => !active.has(f.cid));
-  const mixed = [...active].some(cid => dep.byChar[cid].extractors.length > 0);
-  if (!scattered && !mixed) {
-    return `<div class="an-suggest an-suggest-sep"><div class="an-suggest-h">Separate factories</div>`
-      + `<div class="an-levers-lead">Your factories already sit on dedicated factory character${active.size > 1 ? 's' : ''} (${facList}) with no extractors mixed in — nothing to move. 👍</div>`
-      + `<div class="an-sep-chips"><span class="an-sep-chips-lbl">Factory characters:</span>${chips}</div></div>`;
+  // FROM = where the factories are now (default: most hub factories). TO = who you want to be the factory
+  // toon (default: the character with the most extractors). Both adjustable via the dropdowns.
+  const facCharsSorted = chars.filter(e => _hubFacCount(dep, e.cid) > 0).sort((a, b) => _hubFacCount(dep, b.cid) - _hubFacCount(dep, a.cid));
+  const from = (_sepFrom && _hubFacCount(dep, _sepFrom) > 0) ? _sepFrom : facCharsSorted[0].cid;
+  const toOpts = chars.filter(e => e.cid !== from);
+  const to = (_sepTo && _sepTo !== from && dep.byChar[_sepTo]) ? _sepTo
+    : (toOpts.slice().sort((a, b) => b.extractors.length - a.extractors.length)[0] || {}).cid;
+  const fromName = dep.byChar[from].name, toName = to ? dep.byChar[to].name : '';
+
+  const opts = (list, val) => list.map(e => `<option value="${e.cid}"${String(e.cid) === String(val) ? ' selected' : ''}>${_esc(e.name)} (${_hubFacCount(dep, e.cid)}f·${e.extractors.length}e)</option>`).join('');
+  const controls = `<div class="an-sep-pick">Move factories from `
+    + `<select class="an-sep-sel" onchange="_setSepFrom(this.value)">${opts(facCharsSorted, from)}</select> → to `
+    + (to ? `<select class="an-sep-sel" onchange="_setSepTo(this.value)">${opts(toOpts, to)}</select>` : '—') + `</div>`;
+  if (!to) {
+    return `<div class="an-suggest an-suggest-sep"><div class="an-suggest-h">Switch factory characters</div>${controls}`
+      + `<div class="an-levers-lead">You'd need a second character to move factories to.</div></div>`;
   }
 
-  // FACTORY MOVES — each factory not on an active char → an active char's fitting B/T slot in the hub.
-  const destPool = {}, usedDest = {}, facCapLeft = {};
-  active.forEach(cid => {
-    const sites = ((_factorySites && _factorySites[cid]) || [])
-      .filter(p => p.system === dep.hub && (p.diameter == null || p.diameter <= _SEP_DIAM_CEILING));
-    const ownExtraBt = (dep.byChar[cid].extractors || [])    // its own extractor B/T slots free up when they move out
-      .filter(e => e.system === dep.hub && (e.planet_type === 'Barren' || e.planet_type === 'Temperate'))
-      .map(e => ({ system: dep.hub, planet_num: e.planet_num, planet_type: e.planet_type, diameter: null }));
-    const seen = new Set(); destPool[cid] = [];
-    sites.concat(ownExtraBt).sort((a, b) => (a.diameter || 1e9) - (b.diameter || 1e9))
-      .forEach(p => { if (!seen.has(p.planet_num)) { seen.add(p.planet_num); destPool[cid].push(p); } });
-    usedDest[cid] = new Set(dep.byChar[cid].factories.filter(f => f.system === dep.hub).map(f => f.planet_num));
-    facCapLeft[cid] = Math.max(0, Math.min(dep.perCharCap, dep.byChar[cid].maxPlanets) - dep.byChar[cid].factories.length);
-  });
-  const facMoves = [], facUnplaced = [];
-  hubFac.filter(f => !active.has(f.cid)).forEach(f => {
-    let placed = false;
-    for (const cid of active) {
-      if (facCapLeft[cid] <= 0) continue;
-      const dest = (destPool[cid] || []).find(p => !usedDest[cid].has(p.planet_num));
-      if (!dest) continue;
-      usedDest[cid].add(dest.planet_num); facCapLeft[cid] -= 1;
-      facMoves.push({ f, toChar: dep.byChar[cid].name, dest });
-      placed = true; break;
-    }
-    if (!placed) facUnplaced.push(f);
+  // FACTORY MOVES — from's hub factories → to, on a fitting B/T planet (to's free B/T + the B/T its
+  // extractors vacate when they move back to `from`), smallest first.
+  const sites = ((_factorySites && _factorySites[to]) || []).filter(p => p.system === dep.hub && (p.diameter == null || p.diameter <= _SEP_DIAM_CEILING));
+  const vacated = dep.byChar[to].extractors.filter(e => e.system === dep.hub && (e.planet_type === 'Barren' || e.planet_type === 'Temperate'))
+    .map(e => ({ system: dep.hub, planet_num: e.planet_num, planet_type: e.planet_type, diameter: null }));
+  const seen = new Set(); const toDest = [];
+  sites.concat(vacated).sort((a, b) => (a.diameter || 1e9) - (b.diameter || 1e9)).forEach(p => { if (!seen.has(p.planet_num)) { seen.add(p.planet_num); toDest.push(p); } });
+  const toUsed = new Set(dep.byChar[to].factories.filter(f => f.system === dep.hub).map(f => f.planet_num));
+  const facMoves = [], facUn = [];
+  dep.byChar[from].factories.filter(f => f.system === dep.hub).forEach(f => {
+    const d = toDest.find(p => !toUsed.has(p.planet_num));
+    if (d) { toUsed.add(d.planet_num); facMoves.push({ f, dest: d }); } else facUn.push(f);
   });
 
-  // EXTRACTOR MOVES — each extractor on an active char → a non-active char with a free slot + a reachable
-  // planet for that P0 (from _placements; its factories leaving free up the slots).
-  const nonActive = Object.values(dep.byChar).filter(e => !active.has(e.cid));
-  const slotLeft = {}, usedExt = {};
-  nonActive.forEach(e => { slotLeft[e.cid] = Math.max(0, e.maxPlanets - e.extractors.length); usedExt[e.cid] = new Set((e.extractors || []).map(x => `${x.system}|${x.planet_num}`)); });
-  const extMoves = [], extUnplaced = [];
-  [...active].forEach(cid => (dep.byChar[cid].extractors || []).forEach(ex => {
+  // EXTRACTOR MOVES — to's extractors → from, on a reachable free planet for that P0 (from _placements);
+  // from's factories leaving free up its slots.
+  const fromUsed = new Set(dep.byChar[from].extractors.map(e => `${e.system}|${e.planet_num}`));
+  let fromCap = Math.max(0, dep.byChar[from].maxPlanets - dep.byChar[from].extractors.length);
+  const extMoves = [], extUn = [];
+  dep.byChar[to].extractors.forEach(ex => {
+    if (fromCap <= 0) { extUn.push(ex); return; }
     const tid = ex.p1 && ex.p1.type_id;
-    const placeBy = (tid != null && _placements && _placements[String(tid)] && _placements[String(tid)].by_char) || {};
-    let placed = false;
-    for (const tgt of nonActive) {
-      if (slotLeft[tgt.cid] <= 0) continue;
-      const dest = (placeBy[tgt.cid] || []).find(p => !usedExt[tgt.cid].has(`${p.system}|${p.planet_num}`));
-      if (!dest) continue;
-      usedExt[tgt.cid].add(`${dest.system}|${dest.planet_num}`); slotLeft[tgt.cid] -= 1;
-      extMoves.push({ ex, toChar: tgt.name, dest });
-      placed = true; break;
-    }
-    if (!placed) extUnplaced.push(ex);
-  }));
+    const cand = (tid != null && _placements && _placements[String(tid)] && _placements[String(tid)].by_char[from]) || [];
+    const d = cand.find(p => !fromUsed.has(`${p.system}|${p.planet_num}`));
+    if (d) fromUsed.add(`${d.system}|${d.planet_num}`);
+    fromCap -= 1;
+    extMoves.push({ ex, dest: d || null });   // d may be null → rebuild on a free slot (planet unspecified)
+  });
 
-  const facMoveHtml = facMoves.map(m => _sepCard(m.f.char, `${_esc(m.f.system)} P${m.f.planet_num}`,
-    m.toChar, `${_esc(m.dest.system)} P${m.dest.planet_num} <span class="an-cc-tag">${_esc(m.dest.planet_type)}</span>`,
+  const facHtml = facMoves.map(m => _sepCard(fromName, `${_esc(m.f.system)} P${m.f.planet_num}`,
+    toName, `${_esc(m.dest.system)} P${m.dest.planet_num} <span class="an-cc-tag">${_esc(m.dest.planet_type)}</span>`,
     `<b>${_esc(m.f.product.name)}</b> factory`)).join('');
-  const extMoveHtml = extMoves.map(m => _sepCard(m.ex.char, `${_esc(m.ex.system)} P${m.ex.planet_num}`,
-    m.toChar, `${_esc(m.dest.system)} P${m.dest.planet_num} <span class="an-cc-tag">${_esc(m.dest.planet_type)}</span>${m.dest.richness != null ? ' ' + m.dest.richness + '%' : ''}`,
+  const extHtml = extMoves.map(m => _sepCard(toName, `${_esc(m.ex.system)} P${m.ex.planet_num}`,
+    fromName, m.dest ? `${_esc(m.dest.system)} P${m.dest.planet_num} <span class="an-cc-tag">${_esc(m.dest.planet_type)}</span>${m.dest.richness != null ? ' ' + m.dest.richness + '%' : ''}` : 'a free slot',
     `${_esc(m.ex.p0 || '')}${m.ex.p1 ? ' <span class="an-move-p0arrow">→</span> ' + _esc(m.ex.p1.name) : ''}`)).join('');
 
   const total = facMoves.length + extMoves.length;
   const notes = [];
-  if (facUnplaced.length) notes.push(`${facUnplaced.length} factor${facUnplaced.length === 1 ? 'y' : 'ies'} can't be placed on a factory character — pick another factory character above, free a Barren/Temperate slot, or train Interplanetary Consolidation.`);
-  if (extUnplaced.length) notes.push(`${extUnplaced.length} extractor${extUnplaced.length === 1 ? '' : 's'} on your factory character${active.size > 1 ? 's' : ''} have no reachable home on another character (every other character is full, or the P0 isn't reachable) — leave ${extUnplaced.length === 1 ? 'it' : 'them'} put, or free a slot elsewhere.`);
-  if (otherSysFac) notes.push(`You also have ${otherSysFac} factor${otherSysFac === 1 ? 'y' : 'ies'} in other systems — those run a separate chain and aren't touched here.`);
+  if (facUn.length) notes.push(`${facUn.length} of ${_esc(fromName)}'s factor${facUn.length === 1 ? 'y has' : 'ies have'} no fitting Barren/Temperate slot on ${_esc(toName)} — free a B/T planet there or train its Interplanetary Consolidation.`);
+  if (extUn.length) notes.push(`${extUn.length} of ${_esc(toName)}'s extractor${extUn.length === 1 ? '' : 's'} won't fit on ${_esc(fromName)} — it ran out of free slots once its factories leave.`);
+  notes.push(`After you rebuild, <b>Rescan</b> — if a material dips short on the new layout, the <b>Reseat</b> / <b>Redeploy</b> levers above show the rebalance.`);
 
   return `<div class="an-suggest an-suggest-sep">
-      <div class="an-suggest-h">Separate factories</div>
-      <div class="an-levers-lead"><b>${hubFac.length}</b> factor${hubFac.length === 1 ? 'y' : 'ies'} in <b>${_esc(dep.hub || '')}</b> across <b>${facChars.size}</b> character${facChars.size !== 1 ? 's' : ''}. Make ${facList} your factory character${active.size > 1 ? 's' : ''} (factory-only) and keep the rest for extraction — <b>${total}</b> teardown/rebuild move${total !== 1 ? 's' : ''}:</div>
-      <div class="an-sep-chips"><span class="an-sep-chips-lbl">Factory characters:</span>${chips}</div>
-      ${facMoveHtml ? `<div class="an-bd-bestuse-h">⇄ Bring factories onto your factory character${active.size > 1 ? 's' : ''}:</div><ul class="an-move-list">${facMoveHtml}</ul>` : ''}
-      ${extMoveHtml ? `<div class="an-bd-bestuse-h an-bd-bestuse-h2">↗ Move the factory character${active.size > 1 ? 's' : ''}' extractors out:</div><ul class="an-move-list">${extMoveHtml}</ul>` : ''}
-      ${notes.length ? `<div class="an-sep-notes">${notes.map(n => `<div>⚠ ${n}</div>`).join('')}</div>` : ''}
+      <div class="an-suggest-h">Switch factory characters</div>
+      ${controls}
+      <div class="an-levers-lead">Make <b>${_esc(toName)}</b> your factory character: rebuild <b>${_esc(fromName)}</b>'s factories on it, and move <b>${_esc(toName)}</b>'s extractors back onto <b>${_esc(fromName)}</b> — <b>${total}</b> teardown/rebuild move${total !== 1 ? 's' : ''}.</div>
+      ${facHtml ? `<div class="an-bd-bestuse-h">⇄ ${_esc(fromName)}'s factories → ${_esc(toName)}:</div><ul class="an-move-list">${facHtml}</ul>` : ''}
+      ${extHtml ? `<div class="an-bd-bestuse-h an-bd-bestuse-h2">↩ ${_esc(toName)}'s extractors → ${_esc(fromName)}:</div><ul class="an-move-list">${extHtml}</ul>` : ''}
+      ${notes.length ? `<div class="an-sep-notes">${notes.map(n => `<div>${n}</div>`).join('')}</div>` : ''}
     </div>`;
 }
 
