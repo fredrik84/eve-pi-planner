@@ -1309,7 +1309,8 @@ async function loadCorpWallet() {
     return;
   }
 
-  let html = `<div class="an-stats">`
+  let html = `<div class="wallet-actions"><button onclick="loadCorpWallet()" title="Re-read the wallet from ESI">↻ Refresh</button></div>`
+    + `<div class="an-stats">`
     + `<div class="an-stat an-ok"><div class="an-stat-val">${_fmtIsk(d.total_balance)}</div><div class="an-stat-lbl">${_esc(d.corp_name || 'Corp')} · total balance</div></div>`
     + `<div class="an-stat"><div class="an-stat-val">${_fmtIsk(d.balance)}</div><div class="an-stat-lbl">master wallet (div 1)</div></div>`
     + `<div class="an-stat"><div class="an-stat-val">${_fmtIsk(d.total_donated)}</div><div class="an-stat-lbl">player donations (recent)</div></div>`

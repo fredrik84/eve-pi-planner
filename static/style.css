@@ -1980,6 +1980,7 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 
 /* ── Admin: corp wallet (donations) ───────────────────────────────────────────── */
 .admin-wallet { margin-top: 4px; }
+.wallet-actions { display: flex; justify-content: flex-end; margin-bottom: 8px; }
 .wallet-don-head { font-size: 12px; font-weight: 700; color: #c8d2e6; margin: 16px 0 8px; }
 .wallet-don-list { display: flex; flex-direction: column; gap: 4px; }
 .wallet-don-row { display: grid; grid-template-columns: 140px 1fr auto; align-items: baseline;
