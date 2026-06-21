@@ -3457,28 +3457,38 @@ function _extSupplyOf(t) {
 // (over-production buffer < 10%, the same banding as the bars). Names the single best low-work fix:
 // reseat the most-recoverable colony (capped or declined) if reseating would help, else redeploy /
 // add a colony. Healthy materials get nothing (no noise).
+const _HEALTHY_BUFFER = 0.10;   // target over-production buffer that clears the "tight" band
 function _fixNudge(r) {
   const extSupply = _extSupplyOf(r.t) || r.have;
   const pct = r.need > 0 ? Math.round((extSupply / r.need - 1) * 100) : 0;
-  if (pct >= 10) return '';                         // healthy buffer — nothing to fix
+  if (pct >= _HEALTHY_BUFFER * 100) return '';      // already healthy — nothing to fix
   const band = pct < 0 ? 'short' : 'tight';
-  const goal = band === 'short' ? 'close the shortfall' : 'widen the buffer';
+  const gap = Math.max(0, r.need * (1 + _HEALTHY_BUFFER) - extSupply);   // P1/day extra to reach +10%
+  const landPct = added => r.need > 0 ? Math.round((extSupply + added) / r.need * 100 - 100) : 0;
   const RECLAIM = 0.05;
-  const recoverable = _producersOf(r.t).map(c => {
+  const prods = _producersOf(r.t);
+  const recoverable = prods.map(c => {
     let rec = 0, reason = null;
     if (c.capped && c.full > c.perDay) { rec = c.full - c.perDay; reason = 'capped'; }
     else if (c.n >= 2 && c.decline >= RECLAIM) { rec = c.perDay * c.decline / (1 - c.decline); reason = 'declined'; }
     return { ...c, rec, reason };
   }).filter(c => c.rec > 0).sort((a, b) => b.rec - a.rec);
+  const _loc = c => c.system ? `${_esc(c.char)} · ${_esc(c.system)}${c.planet_num != null ? ' P' + c.planet_num : ''}` : _esc(c.char);
+  const _why = c => c.reason === 'capped' ? 'extraction-capped' : `${Math.round(c.decline * 100)}% off best`;
+
+  // Fewest colonies whose combined recovery lifts the buffer past +10%.
+  let acc = 0; const use = [];
+  for (const c of recoverable) { if (acc >= gap) break; use.push(c); acc += c.rec; }
+  const totalRec = recoverable.reduce((s, c) => s + c.rec, 0);
 
   let fix;
-  if (recoverable.length) {                          // reseating recovers lost/capped yield — least work
-    const c = recoverable[0];
-    const loc = c.system ? `${_esc(c.char)} · ${_esc(c.system)}${c.planet_num != null ? ' P' + c.planet_num : ''}` : _esc(c.char);
-    const why = c.reason === 'capped' ? 'extraction-capped' : `${Math.round(c.decline * 100)}% off its best`;
-    fix = `<b>Reseat ${loc}</b> (${why}) onto denser hotspots — recovers ≈${Math.round(c.rec).toLocaleString()}/day, enough to ${goal} without a new colony.`;
-  } else if (_producersOf(r.t).length) {             // colonies near peak — reseat won't lift it
-    fix = `Its colonies are near peak, so reseating won't lift it — <b>redeploy a surplus colony</b> onto ${_esc(r.name)} or <b>add one</b> to ${goal}.`;
+  if (acc >= gap && use.length) {                    // reseating alone clears it to a healthy +10%
+    const more = use.length > 1 ? ` and ${use.length - 1} more decayed colon${use.length - 1 === 1 ? 'y' : 'ies'}` : '';
+    fix = `<b>Reseat ${_loc(use[0])}</b> (${_why(use[0])})${more} onto denser hotspots — ≈+${Math.round(acc).toLocaleString()}/day lifts ${_esc(r.name)} to <b>+${landPct(acc)}%</b> (healthy), no new colony.`;
+  } else if (totalRec > 0) {                          // reseating helps but can't reach +10% by itself
+    fix = `<b>Reseat</b> its decayed colonies (≈+${Math.round(totalRec).toLocaleString()}/day → +${landPct(totalRec)}%), then <b>redeploy a surplus colony</b> onto ${_esc(r.name)} or <b>add one</b> to clear +10%.`;
+  } else if (prods.length) {                          // colonies near peak — reseat won't lift it
+    fix = `Its colonies are near peak, so reseating won't lift it — <b>redeploy a surplus colony</b> onto ${_esc(r.name)} or <b>add one</b> for a +10% buffer.`;
   } else {
     fix = `<b>Add a ${_esc(r.name)} colony</b> — nothing produces it yet.`;
   }
