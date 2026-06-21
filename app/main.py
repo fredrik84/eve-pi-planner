@@ -165,7 +165,7 @@ def share_preview(share_id: str, request: Request):
     d = _html.escape(desc, quote=True)
     base = str(request.base_url).rstrip("/")
     url = f"{base}/s/{share_id}"
-    img = f"{base}/og-image.png?v=5"
+    img = f"{base}/og-image.png?v=6"
     og = (
         f'<meta property="og:type" content="website">\n'
         f'  <meta property="og:site_name" content="EVE PI Planner">\n'

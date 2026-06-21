@@ -33,16 +33,16 @@
 <path d="M40,24 L40,36 L52,36" stroke="#5ab4e6" stroke-width="1" fill="none"/>
 <path d="M640,24 L640,36 L628,36" stroke="#5ab4e6" stroke-width="1" fill="none"/>
 
-<text x="40" y="62" fill="#6a7390" font-family="sans-serif" font-size="10" font-weight="500" letter-spacing="3">CAPSULEER ∙ PLANETARY INDUSTRY ∙ ADVISORY</text>
+<text x="40" y="62" fill="#6a7390" font-family="sans-serif" font-size="10" font-weight="500" letter-spacing="3">EVE PI PLANNER [EVPI] ∙ EVPI ALLIANCE</text>
 
 <text x="40" y="104" fill="#d2e6ff" font-family="sans-serif" font-size="30" font-weight="500" letter-spacing="0.5">EVE PI Planner</text>
 <text x="40" y="130" fill="#c8cdd8" font-family="sans-serif" font-size="14" font-weight="400" letter-spacing="0.6">How it works — five-step workflow overview</text>
 
 <g>
-<text x="640" y="98" fill="#6a7390" font-family="sans-serif" font-size="10" font-weight="500" letter-spacing="2" text-anchor="end">DOC.UID</text>
-<text x="640" y="116" fill="#5ab4e6" font-family="sans-serif" font-size="11" font-weight="500" letter-spacing="1.5" text-anchor="end">PI-PLN-005</text>
-<line x1="586" y1="124" x2="640" y2="124" stroke="#5ab4e6" stroke-width="0.5" opacity="0.6"/>
-<text x="640" y="138" fill="#6a7390" font-family="sans-serif" font-size="9" letter-spacing="1.5" text-anchor="end">CHANNEL // SECURE</text>
+<text x="640" y="98" fill="#6a7390" font-family="sans-serif" font-size="10" font-weight="500" letter-spacing="2" text-anchor="end">SITE</text>
+<text x="640" y="116" fill="#5ab4e6" font-family="sans-serif" font-size="11" font-weight="500" letter-spacing="1.5" text-anchor="end">EVE-PI.FAILED.NAME</text>
+<line x1="500" y1="124" x2="640" y2="124" stroke="#5ab4e6" stroke-width="0.5" opacity="0.6"/>
+<text x="640" y="138" fill="#6a7390" font-family="sans-serif" font-size="9" letter-spacing="1.5" text-anchor="end">[EVPI] ALLIANCE</text>
 </g>
 
 <line x1="40" y1="153" x2="640" y2="153" stroke="#1b2030" stroke-width="0.5"/>
@@ -204,14 +204,14 @@
 <path d="M -26 -28 L -22 -22 L -16 -26" fill="none" stroke="#5ecf80" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
 </g>
 
-<g transform="translate(458,40)">
-<rect x="0" y="0" width="60" height="44" fill="#0d0f14" stroke="#5ecf80" stroke-width="0.7" opacity="0.9"/>
-<rect x="0" y="0" width="60" height="6" fill="#5ecf80" opacity="0.3"/>
+<g transform="translate(442,40)">
+<rect x="0" y="0" width="76" height="44" fill="#0d0f14" stroke="#5ecf80" stroke-width="0.7" opacity="0.9"/>
+<rect x="0" y="0" width="76" height="6" fill="#5ecf80" opacity="0.3"/>
 <text x="4" y="20" fill="#5ecf80" font-family="sans-serif" font-size="8" letter-spacing="1.5">YIELD</text>
-<text x="56" y="20" fill="#c8cdd8" font-family="sans-serif" font-size="9" letter-spacing="0.5" text-anchor="end">+7.4%</text>
-<line x1="4" y1="26" x2="56" y2="26" stroke="#1b2030" stroke-width="0.5"/>
+<text x="72" y="20" fill="#c8cdd8" font-family="sans-serif" font-size="9" letter-spacing="0.5" text-anchor="end">+7.4%</text>
+<line x1="4" y1="26" x2="72" y2="26" stroke="#1b2030" stroke-width="0.5"/>
 <text x="4" y="38" fill="#6a7390" font-family="sans-serif" font-size="8" letter-spacing="1.5">STATE</text>
-<text x="56" y="38" fill="#5ecf80" font-family="sans-serif" font-size="8" letter-spacing="1" text-anchor="end">LIVE</text>
+<text x="72" y="38" fill="#5ecf80" font-family="sans-serif" font-size="8" letter-spacing="1" text-anchor="end">LIVE</text>
 </g>
 </g>
 
@@ -246,7 +246,7 @@
 <tspan x="138" dy="18">and surfaces the lightest fix for anything off.</tspan>
 </text>
 
-<g transform="translate(138,140)">
+<g transform="translate(68,140)">
 <circle cx="0" cy="-3" r="2.6" fill="#5ecf80"/>
 <text x="8" y="0" fill="#6a7390" font-family="sans-serif" font-size="9" letter-spacing="1.5">RESEAT HEADS</text>
 <circle cx="116" cy="-3" r="2.6" fill="#5ecf80"/>
@@ -297,7 +297,7 @@
 <tspan x="138" dy="18">resource densities deplete — small fixes only.</tspan>
 </text>
 
-<g transform="translate(138,140)">
+<g transform="translate(68,140)">
 <text x="0" y="0" fill="#5ecf80" font-family="sans-serif" font-size="9" letter-spacing="2">✓ NOMINAL</text>
 <text x="92" y="0" fill="#6a7390" font-family="sans-serif" font-size="9" letter-spacing="2">▸ FILL 87%</text>
 <text x="178" y="0" fill="#6a7390" font-family="sans-serif" font-size="9" letter-spacing="2">↻ LOOP TO STEP 04</text>
@@ -331,7 +331,7 @@
 
 <line x1="40" y1="1162" x2="640" y2="1162" stroke="#1b2030" stroke-width="0.6"/>
 <rect x="40" y="1160" width="50" height="3" fill="#5ab4e6" opacity="0.7"/>
-<text x="40" y="1184" fill="#6a7390" font-family="sans-serif" font-size="9" letter-spacing="2.5">CONCORD ∙ DODIXIE IX-MOON 20 ∙ FREDERIK.SE</text>
+<text x="40" y="1184" fill="#6a7390" font-family="sans-serif" font-size="9" letter-spacing="2.5">EVE PI PLANNER [EVPI] ∙ EVPI ALLIANCE ∙ EVE-PI.FAILED.NAME</text>
 <text x="640" y="1184" fill="#5ab4e6" font-family="sans-serif" font-size="9" letter-spacing="2" text-anchor="end">END OF DOC</text>
 <path d="M40,1200 L40,1192 L52,1192" stroke="#5ab4e6" stroke-width="0.8" fill="none" opacity="0.7"/>
 <path d="M640,1200 L640,1192 L628,1192" stroke="#5ab4e6" stroke-width="0.8" fill="none" opacity="0.7"/>
