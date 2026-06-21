@@ -1328,7 +1328,16 @@ async function loadCorpWallet() {
           + `</div>`).join('')
       + `</div>`;
   } else {
-    html += `<div class="pp-empty">No player donations in the recent journal yet.</div>`;
+    let why;
+    if (d.journal_status && d.journal_status !== 200) {
+      why = `the journal request returned HTTP ${d.journal_status} (the character may lack the Accountant / Junior Accountant role for the journal specifically).`;
+    } else if (!d.journal_count) {
+      why = `the corp journal read back empty. ESI caches the corp journal up to <b>~1 hour</b> (the balance refreshes in ~5 min), so a brand-new donation can take a while to appear here — check again later.`;
+    } else {
+      const rts = Object.entries(d.ref_types || {}).map(([k, v]) => `${k} (${v})`).join(', ');
+      why = `read <b>${d.journal_count}</b> journal entries but none were donations. ESI caches the journal up to ~1 hour, so a fresh donation may not be in it yet. Entry types seen: ${_esc(rts) || '—'}.`;
+    }
+    html += `<div class="pp-empty">No player donations yet — ${why}</div>`;
   }
   html += `<div class="an-sug-note">Reading as <b>${_esc(d.character_name)}</b> · <a href="#" onclick="connectCorpWallet();return false;">reconnect</a></div>`;
   el.innerHTML = html;

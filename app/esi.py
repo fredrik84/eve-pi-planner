@@ -950,14 +950,25 @@ def corp_wallet_summary(context_id: int) -> dict:
 
             donations: list[dict] = []
             total_donated = 0.0
+            journal_status = None
+            journal_count = 0
+            ref_types: dict[str, int] = {}
             try:
                 jresp = client.get(
                     f"{ESI_BASE}/corporations/{corp_id}/wallets/1/journal/?datasource=tranquility",
                     headers=headers,
                 )
+                journal_status = jresp.status_code
                 if jresp.status_code == 200:
-                    dons = [e for e in (jresp.json() or [])
-                            if e.get("ref_type") == "player_donation" and (e.get("amount") or 0) > 0]
+                    entries = jresp.json() or []
+                    journal_count = len(entries)
+                    for e in entries:                                   # diagnostic: what ref_types exist
+                        rt = e.get("ref_type", "?")
+                        ref_types[rt] = ref_types.get(rt, 0) + 1
+                    # A player giving ISK to the corp lands as `player_donation`; match any
+                    # positive donation-typed entry so a CCP relabel can't silently hide it.
+                    dons = [e for e in entries
+                            if (e.get("amount") or 0) > 0 and "donation" in (e.get("ref_type") or "")]
                     dons.sort(key=lambda e: e.get("date", ""), reverse=True)
                     total_donated = sum(e.get("amount", 0) for e in dons)
                     dons = dons[:30]
@@ -968,6 +979,7 @@ def corp_wallet_summary(context_id: int) -> dict:
                             "amount": e.get("amount"),
                             "donor": names.get(e.get("first_party_id"), str(e.get("first_party_id") or "?")),
                             "reason": (e.get("reason") or "").strip(),
+                            "ref_type": e.get("ref_type"),
                         })
             except Exception:
                 pass
@@ -975,7 +987,9 @@ def corp_wallet_summary(context_id: int) -> dict:
             return {"connected": True, "character_name": name, "corp_id": corp_id, "corp_name": corp_name,
                     "balance": master, "total_balance": total,
                     "divisions": [{"division": w.get("division"), "balance": w.get("balance", 0)} for w in wallets],
-                    "donations": donations, "total_donated": total_donated}
+                    "donations": donations, "total_donated": total_donated,
+                    "journal_status": journal_status, "journal_count": journal_count,
+                    "ref_types": dict(sorted(ref_types.items(), key=lambda kv: -kv[1])[:12])}
     except Exception:
         return {"connected": True, "character_name": name, "error": "fetch"}
 
