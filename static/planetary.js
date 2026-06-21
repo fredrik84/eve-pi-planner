@@ -981,6 +981,19 @@ async function setBugStatus(id, status) {
   } catch (e) { alert('Failed: ' + e.message); }
 }
 
+// Rescan a single character's colonies from ESI (the per-character button), then repaint.
+async function rescanCharacter(cid, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = 'Rescanning…'; }
+  try {
+    const resp = await fetch(`/api/characters/${cid}/refresh-planets`, { method: 'POST' });
+    if (!resp.ok) { const d = await resp.json().catch(() => ({})); throw new Error(d.detail || `HTTP ${resp.status}`); }
+    await loadCharacters();   // repaint with fresh data (recreates the button)
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = 'Rescan this character'; }
+    alert('Rescan failed: ' + e.message);
+  }
+}
+
 function renderCharacters(chars, loggedIn) {
   const list = document.getElementById('characterList');
   list.innerHTML = '';
@@ -1075,7 +1088,11 @@ function renderCharacters(chars, loggedIn) {
             ? `<span class="pp-pl-pad" title="Estimated launchpad contents — simulated forward from the last Refresh (ESI only reports a stale checkpoint).">${p.pads.map(x => `<b>${x.amount.toLocaleString()}</b> ${_esc(x.name)}`).join(' · ')}</span>`
             : '';
           const cc = p.upgrade_level ? `<span class="pp-pl-cc" title="Command center level">CC${p.upgrade_level}</span>` : '';
-          return `<div class="pp-pl-row"><span class="pp-pl-loc">${loc}</span>${_ptypeSpan(p.planet_type)}${what}${pad}${cc}</div>`;
+          // Extractor program time left (from its expiry) — so you can spot which colony is about to stop.
+          const extLeft = (p.is_extractor && p.expiry)
+            ? (h => `<span class="pp-pl-exp ${h <= 0 ? 'pp-pl-exp-now' : (h < 3 ? 'pp-pl-exp-soon' : '')}" title="Extraction program time left before it stops and the heads need reseating">${h <= 0 ? 'expired' : _fmtDHM(h) + ' left'}</span>`)((p.expiry - Date.now() / 1000) / 3600)
+            : '';
+          return `<div class="pp-pl-row"><span class="pp-pl-loc">${loc}</span>${_ptypeSpan(p.planet_type)}${what}${extLeft}${pad}${cc}</div>`;
         }).join('')
       : '<div class="pp-pl-empty">No colonies scanned — set them up in-game, then hit Refresh.</div>';
 
@@ -1100,6 +1117,7 @@ function renderCharacters(chars, loggedIn) {
         <div class="pp-char-body">
           ${stats}
           <div class="pp-char-planet-list">${planetRows}</div>
+          <div class="pp-char-actions"><button class="pp-char-rescan" ${c.token_ok ? '' : 'disabled'} onclick="rescanCharacter(${c.character_id}, this)" title="${c.token_ok ? "Re-scan just this character's colonies from ESI" : 'Token expired — re-add this character first'}">Rescan this character</button></div>
         </div>
       </details>`;
     if (loggedIn) {

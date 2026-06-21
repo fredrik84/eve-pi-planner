@@ -1844,6 +1844,17 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .dist-view-btn.on { background: #2a1c40; color: #c89ce8; }
 
 
+/* ── Characters: per-character rescan + extractor time-left ───────────────────── */
+.pp-char-actions { margin-top: 10px; display: flex; justify-content: flex-end; }
+.pp-char-rescan { background: #1a2a3a; border: 1px solid #2a4a6a; border-radius: 4px;
+  color: #5a9fd4; cursor: pointer; font-size: 12px; padding: 5px 12px;
+  transition: background 0.15s, border-color 0.15s, color 0.15s; }
+.pp-char-rescan:hover:not(:disabled) { background: #1e3448; border-color: #3a6a9a; color: #7abfe8; }
+.pp-char-rescan:disabled { opacity: 0.4; cursor: not-allowed; }
+.pp-pl-exp { font-size: 11px; color: #8a93a8; margin-left: 6px; white-space: nowrap; }
+.pp-pl-exp-soon { color: #e0b84a; }
+.pp-pl-exp-now { color: #ef6b78; font-weight: 600; }
+
 /* ── Extractor schedule-sync warning (Dashboard, feature-gated) ───────────────── */
 .sync-mute-btn { margin-left: 10px; background: #1a2230; border: 1px solid #2a3142; border-radius: 4px;
   color: #8a93a8; cursor: pointer; font-size: 11px; font-weight: 600; padding: 2px 9px;

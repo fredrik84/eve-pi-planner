@@ -954,12 +954,14 @@ def list_characters(pp_session: str = Cookie(default=None)):
         except Exception:
             production = []
         program_days = None      # the extraction-program length the player set (install→expiry)
+        prog_expiry = None       # extraction-program expiry (epoch) → drives the "extraction left" readout
         ext_p0_day = None        # game-true average P0 extraction/day (matches the in-game units/hour)
         try:
             if p["sim_state"]:
                 _ss = _json.loads(p["sim_state"])
                 program_days = _ss.get("program_days")
                 ext_p0_day = _ss.get("peak_p0_day")
+                prog_expiry = _ss.get("expiry")
         except Exception:
             program_days = None
         char_planets.setdefault(cid, []).append({
@@ -974,6 +976,7 @@ def list_characters(pp_session: str = Cookie(default=None)):
             "pads":          pads,
             "production":    production,
             "program_days":  program_days,
+            "expiry":        prog_expiry,
             "ext_p0_day":    ext_p0_day,
             "yield_history": yield_hist.get((cid, p["planet_id"]), []),
         })
