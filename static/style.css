@@ -1871,6 +1871,12 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .an-pd-fix b { color: #d2e6ff; }
 .an-pd-fix-tight { border-left-color: #e0b84a; }
 .an-pd-fix-short { border-left-color: #ef6b78; }
+.an-pd-fix-list { margin-top: 6px; display: flex; flex-direction: column; gap: 3px; }
+.an-pd-fix-col { display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+  padding: 4px 8px; border-radius: 5px; background: #0d0f14; }
+.an-pd-fix-loc { font-size: 12px; color: #c8d2e6; }
+.an-pd-fix-why { color: #8a93a8; font-size: 11px; }
+.an-pd-fix-rec { font-size: 12px; font-weight: 600; color: #5ab4e6; white-space: nowrap; }
 
 /* ── Setup Analysis: status badge (check / warning / needs-fixing) ────────────── */
 .an-status { display: flex; align-items: center; gap: 12px; padding: 12px 16px; margin-bottom: 12px;
