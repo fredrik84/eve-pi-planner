@@ -2863,7 +2863,7 @@ function renderAnalysis() {
       const items = pls.length
         ? pls.map(p => `<div class="an-pd-row"><span class="an-pd-char">${_esc(p.char)}</span><span class="an-pd-loc">${p.system ? _esc(p.system) + (p.planet_num != null ? ' P' + p.planet_num : '') : '—'}</span><span class="an-pd-p0">${p.p0Hr != null ? p.p0Hr.toLocaleString() + ' P0/hr' : ''}</span><span class="an-pd-val">${Math.round(p.perDay).toLocaleString()}/day</span></div>`).join('')
         : '<div class="an-pd-empty">No colony is producing this yet.</div>';
-      detail = `<div class="an-row-detail">${items}</div>`;
+      detail = `<div class="an-row-detail">${items}${_fixNudge(r)}</div>`;
     }
     return `<div class="an-mat">
         <div class="an-row an-row-click" onclick="_toggleMatDetail('${r.t}')">
@@ -3451,6 +3451,38 @@ function _bestFreeSpot(t, cap) {
 // when the heads pull far more — this recovers that hidden headroom (the decay/overshoot buffer).
 function _extSupplyOf(t) {
   return _producersOf(t).reduce((s, c) => s + (c.extPerDay || 0), 0);
+}
+
+// One-line "how to fix it" nudge for a material's drilldown, shown only when it's short or tight
+// (over-production buffer < 10%, the same banding as the bars). Names the single best low-work fix:
+// reseat the most-recoverable colony (capped or declined) if reseating would help, else redeploy /
+// add a colony. Healthy materials get nothing (no noise).
+function _fixNudge(r) {
+  const extSupply = _extSupplyOf(r.t) || r.have;
+  const pct = r.need > 0 ? Math.round((extSupply / r.need - 1) * 100) : 0;
+  if (pct >= 10) return '';                         // healthy buffer — nothing to fix
+  const band = pct < 0 ? 'short' : 'tight';
+  const goal = band === 'short' ? 'close the shortfall' : 'widen the buffer';
+  const RECLAIM = 0.05;
+  const recoverable = _producersOf(r.t).map(c => {
+    let rec = 0, reason = null;
+    if (c.capped && c.full > c.perDay) { rec = c.full - c.perDay; reason = 'capped'; }
+    else if (c.n >= 2 && c.decline >= RECLAIM) { rec = c.perDay * c.decline / (1 - c.decline); reason = 'declined'; }
+    return { ...c, rec, reason };
+  }).filter(c => c.rec > 0).sort((a, b) => b.rec - a.rec);
+
+  let fix;
+  if (recoverable.length) {                          // reseating recovers lost/capped yield — least work
+    const c = recoverable[0];
+    const loc = c.system ? `${_esc(c.char)} · ${_esc(c.system)}${c.planet_num != null ? ' P' + c.planet_num : ''}` : _esc(c.char);
+    const why = c.reason === 'capped' ? 'extraction-capped' : `${Math.round(c.decline * 100)}% off its best`;
+    fix = `<b>Reseat ${loc}</b> (${why}) onto denser hotspots — recovers ≈${Math.round(c.rec).toLocaleString()}/day, enough to ${goal} without a new colony.`;
+  } else if (_producersOf(r.t).length) {             // colonies near peak — reseat won't lift it
+    fix = `Its colonies are near peak, so reseating won't lift it — <b>redeploy a surplus colony</b> onto ${_esc(r.name)} or <b>add one</b> to ${goal}.`;
+  } else {
+    fix = `<b>Add a ${_esc(r.name)} colony</b> — nothing produces it yet.`;
+  }
+  return `<div class="an-pd-fix an-pd-fix-${band}">🔧 ${fix}</div>`;
 }
 
 // Estimated P1/day a NEW colony for material `t` would add — calibrated to the player's own existing
