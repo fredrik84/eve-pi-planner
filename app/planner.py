@@ -1905,7 +1905,7 @@ def dashboard(pp_session: str = Cookie(default=None)):
     prog_days_list = []                          # extractor program lengths → restart cadence (median)
     empty_pads_h = None; empty_pads_loc = None   # tightest empty→full launchpad time (emptying CADENCE)
     empty_due_h = None; empty_due_loc = None     # soonest pad to cap from its CURRENT fill (DEADLINE)
-    restart_due_h = None                          # soonest extractor program to expire (next restart due)
+    restart_due_h = None; restart_due_loc = None  # soonest extractor program to expire (next restart due) + which
     for (r, prods, inputs, pads) in parsed:
         if not r["is_ext"]:
             continue
@@ -1916,7 +1916,9 @@ def dashboard(pp_session: str = Cookie(default=None)):
             prog_days_list.append(ss["program_days"])
         if isinstance(ss, dict) and ss.get("expiry"):
             due = max(0.0, (ss["expiry"] - now) / 3600.0)   # next restart due = soonest expiry
-            restart_due_h = due if restart_due_h is None else min(restart_due_h, due)
+            if restart_due_h is None or due < restart_due_h:
+                restart_due_h = due
+                restart_due_loc = cloc
         st = _json.loads(r["storage"] or "null")
         if not st:
             continue
@@ -2015,6 +2017,7 @@ def dashboard(pp_session: str = Cookie(default=None)):
             # Maintenance routine — DUE = countdown to the next time the job is needed (from current
             # state); HOURS = the cadence (how often it comes due once on schedule).
             "restart_due_hours": round(restart_due_h, 1) if restart_due_h is not None else None,
+            "restart_due_loc": restart_due_loc,
             "restart_extractors_hours": round(sorted(prog_days_list)[len(prog_days_list) // 2] * 24.0, 1) if prog_days_list else None,
             "empty_due_hours": round(empty_due_h, 1) if empty_due_h is not None else None,
             "empty_due_loc": empty_due_loc,

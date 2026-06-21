@@ -273,7 +273,7 @@ function _setExpandProduct(tid) {
 // absolute clock time. All timing comes from the dashboard totals (no extra request).
 function _renderTimelineCard(t) {
   const jobs = [
-    { lbl: 'Restart extractors', due: t.restart_due_hours, loc: null },
+    { lbl: 'Restart extractors', due: t.restart_due_hours, loc: t.restart_due_loc },
     { lbl: 'Haul extractor P1',  due: t.empty_due_hours,   loc: t.empty_due_loc || t.empty_pads_loc },
     { lbl: 'Refill factories',   due: t.refill_due_hours,  loc: t.refill_due_loc || t.refill_factories_loc },
   ].filter(j => j.due != null && j.due >= 0).sort((a, b) => a.due - b.due);
@@ -444,7 +444,7 @@ function renderDashboard(data) {
     <section class="pp-card">
       <div class="pp-card-title">Maintenance routine <span class="pp-card-hint">— countdown to the next job · cadence below</span></div>
       <div class="pp-card-body"><div class="an-stats">
-        ${_rtTile(t.restart_due_hours, t.restart_extractors_hours, 'Restart extractors')}
+        ${_rtTile(t.restart_due_hours, t.restart_extractors_hours, 'Restart extractors', t.restart_due_loc)}
         ${_rtTile(t.empty_due_hours, t.empty_pads_hours, 'Empty extractor pads', t.empty_due_loc || t.empty_pads_loc)}
         ${_rtTile(t.refill_due_hours, t.refill_factories_hours, 'Refill factory inputs', t.refill_due_loc || t.refill_factories_loc)}
       </div></div>
