@@ -768,7 +768,9 @@ can't run alongside other characters). Admin-gated, so no public feature flag.
 
 **Scope handling — one app, opt-in scope.** The base `SCOPES` (skills + planets) is unchanged, so
 the normal **Login** never asks the public for wallet access. `esi.WALLET_SCOPE =
-esi-wallet.read_corporation_wallets.v1`; `WALLET_SCOPES = SCOPES + WALLET_SCOPE`. `/auth/login`
+esi-wallet.read_corporation_wallets.v1`; **`WALLET_SCOPES = WALLET_SCOPE`** — the connect flow
+requests ONLY the wallet scope (no skills/planets/POCOs; the wallet toon is a read-only money viewer
+and isn't planned over, so the callback's skill/planet fetches just fail silently). `/auth/login`
 gained a `wallet: int = 0` query param — `?wallet=1` requests `WALLET_SCOPES` instead of `SCOPES`.
 The EVE application (developers.eveonline.com) must **list** the wallet scope in its allowed set, but
 listing ≠ requesting — it's only requested on the wallet flow. No second app needed.

@@ -35,9 +35,11 @@ SCOPES = "esi-skills.read_skills.v1 esi-planets.manage_planets.v1 esi-planets.re
 # Corp-wallet read is requested only on the dedicated "connect wallet" login (?wallet=1) so the
 # normal Login flow never asks the public for wallet access. Requires the EVE application (on
 # developers.eveonline.com) to also list this scope, and the character to be CEO/Director or hold
-# the Accountant / Junior Accountant corp role.
+# the Accountant / Junior Accountant corp role. The wallet toon is a read-only money viewer, so we
+# request ONLY the wallet scope — no skills/planets/POCOs (the callback's skill/planet fetches fail
+# silently without those, which is fine: this toon isn't planned over).
 WALLET_SCOPE  = "esi-wallet.read_corporation_wallets.v1"
-WALLET_SCOPES = SCOPES + " " + WALLET_SCOPE
+WALLET_SCOPES = WALLET_SCOPE
 
 EVE_AUTH_URL  = "https://login.eveonline.com/v2/oauth/authorize"
 EVE_TOKEN_URL = "https://login.eveonline.com/v2/oauth/token"
