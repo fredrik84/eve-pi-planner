@@ -164,7 +164,7 @@ def ensure_char_tables():
         con.execute("ALTER TABLE pp_char_planets ADD COLUMN planet_num INTEGER")
     except Exception:
         pass
-    for _col in ("products TEXT", "pad_contents TEXT", "pad_inputs TEXT", "sim_state TEXT", "issues TEXT", "scanned_at REAL", "checkpoint_at REAL", "storage TEXT"):  # JSON cols + scan/checkpoint epochs + fullest-container fill state
+    for _col in ("products TEXT", "pad_contents TEXT", "pad_inputs TEXT", "sim_state TEXT", "issues TEXT", "scanned_at REAL", "checkpoint_at REAL", "storage TEXT", "esi_modified REAL"):  # JSON cols + scan/checkpoint epochs + fullest-container fill state + ESI data vintage (Last-Modified)
         try:
             con.execute(f"ALTER TABLE pp_char_planets ADD COLUMN {_col}")
         except Exception:
@@ -428,6 +428,7 @@ def _fetch_planets(character_id: int, access_token: str) -> None:
                 p0_name      = None
                 planet_num   = None
                 _detail      = None
+                esi_modified = None             # when ESI actually generated this colony's data (its cache vintage)
                 products: dict[int, str] = {}   # output type_id → name (factory pins)
                 pads: dict[int, int] = {}       # stored item type_id → total amount
                 try:
@@ -438,6 +439,15 @@ def _fetch_planets(character_id: int, access_token: str) -> None:
                     )
                     pr.raise_for_status()
                     _detail = pr.json()
+                    # ESI caches PI data, so a reseat isn't reflected until ESI regenerates. Last-Modified
+                    # is when THIS body was generated — surfacing its age explains a stale "expired".
+                    try:
+                        from email.utils import parsedate_to_datetime
+                        _lm = pr.headers.get("last-modified")
+                        if _lm:
+                            esi_modified = parsedate_to_datetime(_lm).timestamp()
+                    except Exception:
+                        esi_modified = None
                     for pin in _detail.get("pins", []):
                         ext = pin.get("extractor_details")
                         if ext:
@@ -544,11 +554,11 @@ def _fetch_planets(character_id: int, access_token: str) -> None:
                     INSERT OR REPLACE INTO pp_char_planets
                         (character_id, planet_id, planet_type, solar_system_id,
                          upgrade_level, num_pins, is_extractor, p0_type_id, p0_name,
-                         planet_num, products, pad_contents, pad_inputs, sim_state, issues, scanned_at, checkpoint_at, storage)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                         planet_num, products, pad_contents, pad_inputs, sim_state, issues, scanned_at, checkpoint_at, storage, esi_modified)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """, (character_id, planet_id, planet_type, solar_system_id,
                       upgrade_level, num_pins, is_extractor, p0_type_id, p0_name,
-                      planet_num, products_json, pads_json, pad_inputs_json, sim_state_json, issues_json, _scan_ts, checkpoint_at, storage_json))
+                      planet_num, products_json, pads_json, pad_inputs_json, sim_state_json, issues_json, _scan_ts, checkpoint_at, storage_json, esi_modified))
 
                 if is_extractor and _sim:      # log a per-program yield sample for the trend/burn-down
                     _record_yield_sample(con, character_id, planet_id, _sim, _scan_ts)
@@ -878,7 +888,7 @@ def list_characters(pp_session: str = Cookie(default=None)):
     try:
         planet_rows = con.execute("""
             SELECT cp.character_id, cp.planet_id, cp.planet_type, cp.is_extractor, cp.p0_name, cp.upgrade_level,
-                   cp.planet_num, cp.num_pins, cp.products, cp.pad_contents, cp.sim_state,
+                   cp.planet_num, cp.num_pins, cp.products, cp.pad_contents, cp.sim_state, cp.esi_modified,
                    COALESCE(ss.name, '') AS system_name
             FROM pp_char_planets cp
             LEFT JOIN solar_systems ss ON ss.system_id = cp.solar_system_id
@@ -886,7 +896,7 @@ def list_characters(pp_session: str = Cookie(default=None)):
     except Exception:  # no geo table → no system names
         planet_rows = con.execute("""
             SELECT character_id, planet_id, planet_type, is_extractor, p0_name, upgrade_level,
-                   planet_num, num_pins, products, pad_contents, sim_state, '' AS system_name
+                   planet_num, num_pins, products, pad_contents, sim_state, esi_modified, '' AS system_name
             FROM pp_char_planets
         """).fetchall()
     # Per-colony yield history (oldest→newest), for the measured-decline burn-down.
@@ -977,6 +987,7 @@ def list_characters(pp_session: str = Cookie(default=None)):
             "production":    production,
             "program_days":  program_days,
             "expiry":        prog_expiry,
+            "esi_modified":  p["esi_modified"],
             "ext_p0_day":    ext_p0_day,
             "yield_history": yield_hist.get((cid, p["planet_id"]), []),
         })

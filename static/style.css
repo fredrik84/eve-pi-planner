@@ -1854,6 +1854,7 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .pp-pl-exp { font-size: 11px; color: #8a93a8; margin-left: 6px; white-space: nowrap; }
 .pp-pl-exp-soon { color: #e0b84a; }
 .pp-pl-exp-now { color: #ef6b78; font-weight: 600; }
+.pp-pl-exp-age { color: #6a7390; font-size: 10px; font-weight: 400; }
 
 /* ── Extractor schedule-sync warning (Dashboard, feature-gated) ───────────────── */
 .sync-mute-btn { margin-left: 10px; background: #1a2230; border: 1px solid #2a3142; border-radius: 4px;

@@ -1088,9 +1088,20 @@ function renderCharacters(chars, loggedIn) {
             ? `<span class="pp-pl-pad" title="Estimated launchpad contents — simulated forward from the last Refresh (ESI only reports a stale checkpoint).">${p.pads.map(x => `<b>${x.amount.toLocaleString()}</b> ${_esc(x.name)}`).join(' · ')}</span>`
             : '';
           const cc = p.upgrade_level ? `<span class="pp-pl-cc" title="Command center level">CC${p.upgrade_level}</span>` : '';
-          // Extractor program time left (from its expiry) — so you can spot which colony is about to stop.
+          // Extractor program time left (from ESI's expiry). ESI caches PI, so a recent reseat won't
+          // show until ESI refreshes — when the reading is expired/soon AND ESI's data is old, flag the age.
           const extLeft = (p.is_extractor && p.expiry)
-            ? (h => `<span class="pp-pl-exp ${h <= 0 ? 'pp-pl-exp-now' : (h < 3 ? 'pp-pl-exp-soon' : '')}" title="Extraction program time left before it stops and the heads need reseating">${h <= 0 ? 'expired' : _fmtDHM(h) + ' left'}</span>`)((p.expiry - Date.now() / 1000) / 3600)
+            ? (() => {
+                const h = (p.expiry - Date.now() / 1000) / 3600;
+                const cls = h <= 0 ? 'pp-pl-exp-now' : (h < 3 ? 'pp-pl-exp-soon' : '');
+                const ageM = p.esi_modified ? Math.round((Date.now() / 1000 - p.esi_modified) / 60) : null;
+                const stale = h < 3 && ageM != null && ageM >= 10;
+                const ageTxt = stale ? ` <span class="pp-pl-exp-age">· ESI ${_fmtDHM(ageM / 60)} old</span>` : '';
+                const tip = ageM != null
+                  ? `Extraction time left, from ESI data generated ~${ageM}m ago. ESI caches PI, so a recent reseat won't show until it refreshes — rescan once this age resets.`
+                  : 'Extraction program time left before it stops and the heads need reseating.';
+                return `<span class="pp-pl-exp ${cls}" title="${tip}">${h <= 0 ? 'expired' : _fmtDHM(h) + ' left'}${ageTxt}</span>`;
+              })()
             : '';
           return `<div class="pp-pl-row"><span class="pp-pl-loc">${loc}</span>${_ptypeSpan(p.planet_type)}${what}${extLeft}${pad}${cc}</div>`;
         }).join('')
