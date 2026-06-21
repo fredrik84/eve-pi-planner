@@ -952,6 +952,8 @@ def corp_wallet_summary(context_id: int) -> dict:
             total_donated = 0.0
             journal_status = None
             journal_count = 0
+            journal_modified = None
+            journal_expires = None
             ref_types: dict[str, int] = {}
             try:
                 jresp = client.get(
@@ -959,6 +961,10 @@ def corp_wallet_summary(context_id: int) -> dict:
                     headers=headers,
                 )
                 journal_status = jresp.status_code
+                # ESI caches the corp journal ~1h; surface when its snapshot was taken / next refreshes
+                # so the UI can explain why a fresh donation (in the balance) isn't in the log yet.
+                journal_modified = jresp.headers.get("last-modified")
+                journal_expires = jresp.headers.get("expires")
                 if jresp.status_code == 200:
                     entries = jresp.json() or []
                     journal_count = len(entries)
@@ -989,6 +995,7 @@ def corp_wallet_summary(context_id: int) -> dict:
                     "divisions": [{"division": w.get("division"), "balance": w.get("balance", 0)} for w in wallets],
                     "donations": donations, "total_donated": total_donated,
                     "journal_status": journal_status, "journal_count": journal_count,
+                    "journal_modified": journal_modified, "journal_expires": journal_expires,
                     "ref_types": dict(sorted(ref_types.items(), key=lambda kv: -kv[1])[:12])}
     except Exception:
         return {"connected": True, "character_name": name, "error": "fetch"}

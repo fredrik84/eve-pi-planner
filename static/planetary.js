@@ -1296,6 +1296,13 @@ function _fmtWalletDate(s) {
   return String(s).slice(0, 16).replace('T', ' ');   // 2026-06-21 14:32
 }
 
+// HTTP-date (e.g. "Sun, 21 Jun 2026 20:38:14 GMT") → the viewer's local time, short form.
+function _fmtCacheTime(s) {
+  if (!s) return '—';
+  const d = new Date(s);
+  return isNaN(d) ? s : d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
 async function loadCorpWallet() {
   const el = document.getElementById('corpWalletContent');
   if (!el) return;
@@ -1345,11 +1352,14 @@ async function loadCorpWallet() {
           + `</div>`).join('')
       + `</div>`;
   } else {
+    const cache = (d.journal_modified || d.journal_expires)
+      ? ` ESI's journal snapshot is from <b>${_fmtCacheTime(d.journal_modified)}</b>; it next refreshes at <b>${_fmtCacheTime(d.journal_expires)}</b>.`
+      : '';
     let why;
     if (d.journal_status && d.journal_status !== 200) {
       why = `the journal request returned HTTP ${d.journal_status} (the character may lack the Accountant / Junior Accountant role for the journal specifically).`;
     } else if (!d.journal_count) {
-      why = `the corp journal read back empty. ESI caches the corp journal up to <b>~1 hour</b> (the balance refreshes in ~5 min), so a brand-new donation can take a while to appear here — check again later.`;
+      why = `the corp journal read back empty. ESI caches the corp journal ~1 hour while the balance refreshes faster, so a brand-new donation shows in the balance well before the log.${cache} Hit Refresh after that time.`;
     } else {
       const rts = Object.entries(d.ref_types || {}).map(([k, v]) => `${k} (${v})`).join(', ');
       why = `read <b>${d.journal_count}</b> journal entries but none were donations. ESI caches the journal up to ~1 hour, so a fresh donation may not be in it yet. Entry types seen: ${_esc(rts) || '—'}.`;
