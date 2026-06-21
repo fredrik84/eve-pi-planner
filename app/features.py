@@ -36,6 +36,10 @@ FEATURE_REGISTRY = [
      "description": "On Setup Analysis: which character skills (Interplanetary Consolidation, "
                     "Command Center Upgrades) to train for more output, ranked by ISK/day.",
      "default": False},
+    {"key": "move_character", "label": "Move a character to another account",
+     "description": "On Setup Analysis: the 1:1 colony-swap tool for moving a character's PI to a "
+                    "character on another account.",
+     "default": False},
 ]
 _DEFAULTS = {f["key"]: f for f in FEATURE_REGISTRY}
 

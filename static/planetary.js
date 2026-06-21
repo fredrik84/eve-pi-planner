@@ -2767,9 +2767,21 @@ function renderAnalysis() {
   const refillDays = rh ? rh / 24 : null;
 
   const stat = (val, lbl, cls) => `<div class="an-stat ${cls || ''}"><div class="an-stat-val">${val}</div><div class="an-stat-lbl">${lbl}</div></div>`;
-  const head = `<div class="an-headline ${fed ? 'an-ok' : 'an-bad'}">
-      <div class="an-head-word">${fed ? 'KEEPS UP' : 'FALLS BEHIND'}</div>
-      <div class="an-head-sub">Your colonies produce <b>${feedPct}%</b> of what “${_esc(snap.name)}” needs to stay fed${fed ? `, and refill the factories every <b>${refillDays ? _fmtHours(refillDays * 24) : '—'}</b>.` : ` — short on <b>${_esc(binding.name)}</b>.`}</div>
+
+  // Status badge (check / warning / needs-fixing) instead of a verbose card that duplicates the
+  // stats + bars below. Banded like the bars: short (binding under-fed) → fix; fed but the binding's
+  // extraction buffer is thin (<10%) → tight warning (it'll dip as heads decay); else healthy.
+  const bindSupply = _extSupplyOf(binding.t) || binding.have;
+  const bindPct = binding.need > 0 ? Math.round((bindSupply / binding.need - 1) * 100) : 0;
+  const status = !fed ? 'bad' : (bindPct < 10 ? 'warn' : 'ok');
+  const statusMeta = {
+    ok:   { ico: '✓', word: 'Keeping up', sub: `+${bindPct}% extraction buffer on ${_esc(binding.name)}${refillDays ? ` · refill every ${_fmtHours(refillDays * 24)}` : ''}` },
+    warn: { ico: '⚠', word: 'Keeping up, but tight', sub: `only +${bindPct}% buffer on ${_esc(binding.name)} — it'll dip short as your heads decay` },
+    bad:  { ico: '✕', word: 'Needs fixing', sub: `short on ${_esc(binding.name)} — fed at ${feedPct}%` },
+  }[status];
+  const head = `<div class="an-status an-st-${status}">
+      <span class="an-status-ico">${statusMeta.ico}</span>
+      <span class="an-status-txt"><b class="an-status-word">${statusMeta.word}</b><span class="an-status-sub">${statusMeta.sub}</span></span>
     </div>`;
 
   // Achievable final output is throttled by the scarcest input: the factories can only run at the
@@ -3083,7 +3095,8 @@ function renderAnalysis() {
   el.innerHTML = head + _staleSupplyNote(rows) + stats + proj
     + `<div class="an-legend">The bar = how fed each factory input is (full green = kept up, short red = bottleneck). The % = <b>over/under-production</b> from your heads' extraction: <span class="an-ovr-ok">+10% or more = healthy</span> (cushion as heads decay), <span class="an-ovr-tight">0–10% = tight</span> (you hit it, but it'll dip short as they fade), <span class="an-ovr-short">below 0 = short</span>. Hover for the P0/hour figures.</div>`
     + `<div class="an-bars">${barRows}</div>`
-    + suggest + rtAdvice + _renderSkillRoiSection() + _sepStandaloneCard(moves.map(m => ({ ...m, p0: p0Of(m.toT) })));
+    + suggest + rtAdvice + _renderSkillRoiSection()
+    + (_featureActive('move_character') ? _sepStandaloneCard(moves.map(m => ({ ...m, p0: p0Of(m.toT) }))) : '');
 }
 
 // ── Extraction-runtime helper (decay-aware recommendation) ────────────────────
@@ -3177,6 +3190,9 @@ function _toggleLever(k) {
 // (worst-fed) P1 so the reseat card can name it when something's short.
 function _leverCards(headroom, bindName) {
   const short = headroom < 0.995;
+  // No shortage → reseat/redeploy have nothing to act on (reseat only recovers lost yield, redeploy
+  // only rebalances a short material). Hide the whole section rather than show empty levers.
+  if (!short) return '';
   const reseatTxt = (short && bindName)
     ? `Move <b>${_esc(bindName)}</b>'s heads onto stronger hotspots, then rescan — a fresh program pulls a higher peak.`
     : `Move extractor heads onto stronger hotspots, then rescan — a fresh program pulls a higher peak.`;
@@ -3673,28 +3689,47 @@ function _extRuntimeAdviceHtml(headroom, curDays) {
   // Fed at the current runtime → leave it alone. Don't push SHORTER (a bigger buffer you don't need,
   // plus more frequent restarts) or LONGER (spare extraction is better spent on factories — above).
   // This is deliberate: chasing buffer creates a runaway (shorten → surplus → more factories → ...).
+  // Longest whole-day program that still stays fed — graph markers + the "shorten" option.
+  let fedDay = 0;
+  for (let d = 1; d <= _EXT_MAX_DAYS; d++) if (buffer(d) >= 0) fedDay = d;
+  const graph = _extDecayGraphSvg(headroom, L0, fedDay || 1, fedDay || 1);
+
+  // Healthy: comfortable buffer (≥10%). Calm, but the graph still shows (always visible).
+  if (bL0 >= 0.10) {
+    return `<div class="an-suggest an-suggest-add an-rt-ok">
+        <div class="an-suggest-h">Extraction runtime <span class="an-rt-badge an-rt-badge-ok">✓ sustainable</span></div>
+        <div class="an-rt-pick">Your ${L0lbl} programs sit <b>+${Math.round(bL0 * 100)}%</b> above demand — comfortable headroom as your heads decay. Keep the runtime.</div>
+        ${graph}
+        <div class="an-sug-note">Spare extraction is better spent on more factories (above) than a shorter runtime.${detected ? '' : ' Length assumed 2d — rescan to detect yours.'} Decay is an estimate — verify against your in-game ECU.</div>
+      </div>`;
+  }
+
+  // Tight: fed now, but a thin buffer that decay will eat before you reseat — surface as a WARNING.
   if (bL0 >= 0) {
-    return `<div class="an-suggest an-suggest-add">
-        <div class="an-suggest-h">Extraction runtime</div>
-        <div class="an-rt-pick">Your ${L0lbl} programs are <b>sustainable</b> — extraction sits <b>+${Math.round(bL0 * 100)}%</b> above demand. Keep the runtime; no need to restart more often.</div>
-        <div class="an-sug-note">A thin buffer is fine — running shorter only buys a margin you don't need, and the spare extraction is better spent on more factories (above) than on longer downtime.${detected ? '' : ' Current length assumed 2d — rescan to detect yours.'} Decay is an estimate — verify against your in-game ECU.</div>
+    return `<div class="an-suggest an-suggest-warn an-rt-warn">
+        <div class="an-suggest-h">Extraction runtime <span class="an-rt-badge an-rt-badge-warn">⚠ tight</span></div>
+        <div class="an-rt-pick">Your ${L0lbl} programs sit only <b>+${Math.round(bL0 * 100)}%</b> above demand — fine right now, but extraction <b>decays as the program runs</b>, so the factories will dip short before you reseat.</div>
+        <ul>
+          <li><b>Reseat / redeploy</b> to build a margin (best), or add a colony to the binding material.</li>
+          ${fedDay >= 1 && fedDay < L0 ? `<li>Or <b>shorten to ${fedDay} day${fedDay === 1 ? '' : 's'}</b> (${_progDuration(fedDay)}) so fresher extraction stays ahead — at the cost of more frequent restarts.</li>` : ''}
+        </ul>
+        ${graph}
+        <div class="an-sug-note">Decay is an estimate — verify against your in-game ECU.</div>
       </div>`;
   }
 
   // Deficit at the current runtime: factories will fall behind. Adding supply (reseat / redeploy)
   // comes FIRST; shortening the program is the last resort — fresher extraction, but daily restarts.
-  let fedDay = 0;
-  for (let d = 1; d <= Math.floor(L0); d++) if (buffer(d) >= 0) fedDay = d;   // whole-day options ≤ current
   const steps = [`<b>Reseat</b> the short colonies (above) to recover lost yield, or <b>redeploy</b> a surplus colony's command center onto the short material — that fixes supply without touching your runtime.`];
   if (fedDay >= 1 && fedDay < L0)
     steps.push(`Only if you can't add supply: <b>shorten to ${fedDay} day${fedDay === 1 ? '' : 's'}</b> (${_progDuration(fedDay)}) — fresher extraction stays fed, at the cost of restarting more often.`);
   else
     steps.push(`Even daily programs can't keep up here — you need more extraction (reseat / redeploy / another colony); a shorter runtime alone won't fix it.`);
   return `<div class="an-suggest an-suggest-fix">
-      <div class="an-suggest-h">Extraction runtime</div>
+      <div class="an-suggest-h">Extraction runtime <span class="an-rt-badge an-rt-badge-bad">✕ falling behind</span></div>
       <div class="an-rt-pick">Your ${L0lbl} programs <b>over-extend</b> supply — extraction covers only <b>${Math.round((bL0 + 1) * 100)}%</b> of demand, so factories fall behind.</div>
       <ul>${steps.map(s => `<li>${s}</li>`).join('')}</ul>
-      ${_extDecayGraphSvg(headroom, L0, fedDay || 1, fedDay || 1)}
+      ${graph}
       <div class="an-sug-note">Decay is an estimate — verify against your in-game ECU.</div>
     </div>`;
 }
