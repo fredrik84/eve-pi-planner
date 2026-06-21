@@ -1906,6 +1906,7 @@ def dashboard(pp_session: str = Cookie(default=None)):
     empty_pads_h = None; empty_pads_loc = None   # tightest empty→full launchpad time (emptying CADENCE)
     empty_due_h = None; empty_due_loc = None     # soonest pad to cap from its CURRENT fill (DEADLINE)
     restart_due_h = None; restart_due_loc = None  # soonest extractor program to expire (next restart due) + which
+    ext_progs = []                                # per-extractor program length, for the out-of-sync check
     for (r, prods, inputs, pads) in parsed:
         if not r["is_ext"]:
             continue
@@ -1914,6 +1915,7 @@ def dashboard(pp_session: str = Cookie(default=None)):
         ss = _json.loads(r["sim_state"] or "null")
         if isinstance(ss, dict) and ss.get("program_days"):
             prog_days_list.append(ss["program_days"])
+            ext_progs.append({"cid": r["cid"], "char": r["ch"], "loc": cloc, "progH": ss["program_days"] * 24.0})
         if isinstance(ss, dict) and ss.get("expiry"):
             due = max(0.0, (ss["expiry"] - now) / 3600.0)   # next restart due = soonest expiry
             if restart_due_h is None or due < restart_due_h:
@@ -2001,9 +2003,27 @@ def dashboard(pp_session: str = Cookie(default=None)):
                     sug["unit_label"] = pname
                 expansion["suggestion"] = sug
 
+    # Out-of-sync extractors: most run the same program length (you restart them in batches); a planet
+    # set to a different length drifts off the batch (and drags the "restart due" countdown). Find the
+    # fleet's most common length (0.5h bins) and flag any extractor > 0.4h off it. Muting is client-side
+    # (per character) since some accounts deliberately run a character on a different schedule.
+    sync_warn = None
+    if len(ext_progs) >= 3:
+        counts: dict = {}
+        for e in ext_progs:
+            b = round(e["progH"] * 2) / 2
+            counts[b] = counts.get(b, 0) + 1
+        norm = max(counts, key=counts.get)
+        off = sorted((e for e in ext_progs if abs(e["progH"] - norm) > 0.4), key=lambda e: e["progH"])
+        if off:
+            sync_warn = {"norm_hours": round(norm, 1),
+                         "off": [{"cid": e["cid"], "char": e["char"], "loc": e["loc"],
+                                  "hours": round(e["progH"], 1)} for e in off]}
+
     return {
         "logged_in": True,
         "factories": factories,
+        "sync_warn": sync_warn,
         "char_ids_in_view": sorted(chars_in_view),
         "issues": issues,
         "expansion": expansion,

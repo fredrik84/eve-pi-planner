@@ -1844,6 +1844,14 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .dist-view-btn.on { background: #2a1c40; color: #c89ce8; }
 
 
+/* ── Extractor schedule-sync warning (Dashboard, feature-gated) ───────────────── */
+.sync-mute-btn { margin-left: 10px; background: #1a2230; border: 1px solid #2a3142; border-radius: 4px;
+  color: #8a93a8; cursor: pointer; font-size: 11px; font-weight: 600; padding: 2px 9px;
+  transition: color 0.14s, border-color 0.14s; }
+.sync-mute-btn:hover { color: #c8d2e6; border-color: #3a6a9a; }
+.sync-muted-note { margin-top: 10px; font-size: 11.5px; color: #6a7390; }
+.sync-muted-note a { color: #5a9fd4; }
+
 /* ── PI "Up next" agenda (Dashboard, feature-gated) ───────────────────────────── */
 .tl-preview-tag { margin-left: 8px; font-size: 10px; font-weight: 700; letter-spacing: 0.6px;
   text-transform: uppercase; color: #e0b84a; border: 1px solid #5a4a1f; border-radius: 4px;

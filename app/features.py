@@ -40,6 +40,10 @@ FEATURE_REGISTRY = [
      "description": "On Setup Analysis: the 1:1 colony-swap tool for moving a character's PI to a "
                     "character on another account.",
      "default": False},
+    {"key": "schedule_sync", "label": "Extractor schedule sync warning",
+     "description": "On the Dashboard: warn when an extractor runs a different program length than "
+                    "the rest of the fleet (drifts off your batch restart). Mutable per character.",
+     "default": False},
 ]
 _DEFAULTS = {f["key"]: f for f in FEATURE_REGISTRY}
 

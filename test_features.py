@@ -18,7 +18,7 @@ import urllib.error
 # Every key the frontend relies on must exist in the registry. We do NOT assert each flag's
 # enabled VALUE: an admin can toggle public visibility at runtime, so the live state legitimately
 # diverges from the code default. The durable invariant is "the key exists and enabled is a bool".
-EXPECTED_FEATURES = ["timeline", "split_extraction", "baskets", "skill_roi", "move_character"]
+EXPECTED_FEATURES = ["timeline", "split_extraction", "baskets", "skill_roi", "move_character", "schedule_sync"]
 
 
 def get(url: str):

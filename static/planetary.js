@@ -311,9 +311,40 @@ function _renderTimelineCard(t) {
     </section>`;
 }
 
+// Per-character mutes for the extractor-sync warning, kept client-side (low-stakes, and some
+// accounts deliberately run a character on a different schedule).
+let _syncMutes = (() => { try { return new Set(JSON.parse(localStorage.getItem('ppSyncMutes') || '[]')); } catch (e) { return new Set(); } })();
+let _dashData = null;   // last dashboard payload, so mute toggles can re-render without a refetch
+function _saveSyncMutes() { try { localStorage.setItem('ppSyncMutes', JSON.stringify([..._syncMutes])); } catch (e) {} }
+function _toggleSyncMute(cid) { cid = String(cid); _syncMutes.has(cid) ? _syncMutes.delete(cid) : _syncMutes.add(cid); _saveSyncMutes(); if (_dashData) renderDashboard(_dashData); }
+function _clearSyncMutes() { _syncMutes.clear(); _saveSyncMutes(); if (_dashData) renderDashboard(_dashData); }
+
+// "Extractor schedule out of sync" card — only the gated feature, only non-muted offenders.
+function _renderSyncWarn(data) {
+  const sw = data.sync_warn;
+  if (!_featureActive('schedule_sync') || !sw || !sw.off || !sw.off.length) return '';
+  const visible = sw.off.filter(o => !_syncMutes.has(String(o.cid)));
+  if (!visible.length) {
+    return _syncMutes.size ? `<section class="pp-card dash-issues"><div class="pp-card-body"><div class="sync-muted-note">${_syncMutes.size} character${_syncMutes.size !== 1 ? 's' : ''} muted from the extractor-sync check. <a href="#" onclick="_clearSyncMutes();return false;">Unmute all</a></div></div></section>` : '';
+  }
+  const byChar = {};
+  visible.forEach(o => { (byChar[o.cid] = byChar[o.cid] || { char: o.char, cid: o.cid, items: [] }).items.push(o); });
+  const planet = loc => loc.split(' · ').slice(1).join(' · ') || loc;
+  const cards = Object.values(byChar).map(c => `
+    <div class="dash-issue dash-issue-warn">
+      <div class="dash-issue-char">${_esc(c.char)}<button class="sync-mute-btn" onclick="_toggleSyncMute('${c.cid}')" title="Stop warning for this character (it's on a different schedule on purpose)">Mute</button></div>
+      <ul class="dash-issue-items">${c.items.map(o => `<li class="dash-il-warn">${_esc(planet(o.loc))} runs a <b>${o.hours}h</b> program — the fleet uses <b>${sw.norm_hours}h</b></li>`).join('')}</ul>
+    </div>`).join('');
+  return `<section class="pp-card dash-issues">
+      <div class="pp-card-title">Extractor schedule out of sync <span class="pp-card-hint">— ${visible.length} extractor${visible.length !== 1 ? 's' : ''} on a different program; they drift off your batch restart</span></div>
+      <div class="pp-card-body">${cards}${_syncMutes.size ? `<div class="sync-muted-note">${_syncMutes.size} muted. <a href="#" onclick="_clearSyncMutes();return false;">Unmute all</a></div>` : ''}</div>
+    </section>`;
+}
+
 function renderDashboard(data) {
   const el = document.getElementById('dashboardContent');
   if (!el) return;
+  _dashData = data;
   if (!data || !data.logged_in) {
     el.innerHTML = `<section class="pp-card"><div class="pp-card-title">Dashboard</div>
       <div class="pp-card-body"><div class="pp-empty">Log in with ESI (Characters tab) to see your PI overview.</div></div></section>`;
@@ -470,7 +501,7 @@ function renderDashboard(data) {
         ${pb.raw.length ? `<div class="dash-pad-grp"><div class="dash-pad-grp-h">Raw P1 in extractors <span class="dash-pad-grp-sub">haul to factories · ${Math.round(rawM3).toLocaleString()} m³</span></div>${_padRows(rawShown, true)}${pb.raw.length > rawShown.length ? `<div class="dash-pad-more">+ ${pb.raw.length - rawShown.length} more</div>` : ''}</div>` : ''}
       </div>
     </section>` : '';
-  el.innerHTML = issuesHtml + expansionHtml + `
+  el.innerHTML = _renderSyncWarn(data) + issuesHtml + expansionHtml + `
     <section class="pp-card">
       <div class="pp-card-title">Overview <span class="pp-card-hint">— your PI at a glance · Rescan in the top bar pulls fresh data</span></div>
       <div class="pp-card-body"><div class="an-stats">${tiles}</div></div>
