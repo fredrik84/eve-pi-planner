@@ -1877,6 +1877,7 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .an-pd-fix-loc { font-size: 12px; color: #c8d2e6; }
 .an-pd-fix-why { color: #8a93a8; font-size: 11px; }
 .an-pd-fix-rec { font-size: 12px; font-weight: 600; color: #5ab4e6; white-space: nowrap; }
+.an-pd-fix-p1 { font-weight: 500; color: #6a7390; }
 
 /* ── Setup Analysis: status badge (check / warning / needs-fixing) ────────────── */
 .an-status { display: flex; align-items: center; gap: 12px; padding: 12px 16px; margin-bottom: 12px;

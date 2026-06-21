@@ -3468,33 +3468,48 @@ function _fixNudge(r) {
   const toP0h = p1day => Math.round(p1day * 150 / 24);   // P1/day → P0/hr (the tangible in-game ECU rate)
   const RECLAIM = 0.05;
   const prods = _producersOf(r.t);
+  // Reseating recovers a colony's OWN lost yield — back toward the peak it has actually produced —
+  // never beyond it, and never to the 48k full-bar baseline (no real planet reaches that). So a
+  // reseat fix is only offered for colonies measurably DECLINED from their own best; a colony already
+  // at its peak (just a thin planet) isn't a reseat candidate.
   const recoverable = prods.map(c => {
-    let rec = 0, reason = null;
-    if (c.capped && c.full > c.perDay) { rec = c.full - c.perDay; reason = 'capped'; }
-    else if (c.n >= 2 && c.decline >= RECLAIM) { rec = c.perDay * c.decline / (1 - c.decline); reason = 'declined'; }
-    return { ...c, rec, reason };
+    const rec = (c.n >= 2 && c.decline >= RECLAIM) ? c.perDay * c.decline / (1 - c.decline) : 0;
+    return { ...c, rec };
   }).filter(c => c.rec > 0).sort((a, b) => b.rec - a.rec);
   const _loc = c => c.system ? `${_esc(c.char)} · ${_esc(c.system)}${c.planet_num != null ? ' P' + c.planet_num : ''}` : _esc(c.char);
-  const _why = c => c.reason === 'capped' ? 'extraction-capped' : `${Math.round(c.decline * 100)}% off best`;
-  // One named colony to reseat: where it is, why, and how much reseating recovers.
-  const _reseatLine = c => `<div class="an-pd-fix-col"><span class="an-pd-fix-loc"><b>${_loc(c)}</b> <span class="an-pd-fix-why">${_why(c)}</span></span><span class="an-pd-fix-rec">${toP0h(c.perDay).toLocaleString()} → ${toP0h(c.perDay + c.rec).toLocaleString()} P0/hr</span></div>`;
+  // One named colony to reseat: where it is, how far off its best, current → target extraction
+  // (P0/hr, the in-game ECU rate) and the P1/day it adds (to compare against the page's figures).
+  const _reseatLine = c => `<div class="an-pd-fix-col"><span class="an-pd-fix-loc"><b>${_loc(c)}</b> <span class="an-pd-fix-why">${Math.round(c.decline * 100)}% off best</span></span><span class="an-pd-fix-rec">${toP0h(c.perDay).toLocaleString()} → ${toP0h(c.target).toLocaleString()} P0/hr <span class="an-pd-fix-p1">+${Math.round(c.target - c.perDay).toLocaleString()} P1/day</span></span></div>`;
 
-  // Fewest colonies whose combined recovery lifts the buffer past +10%.
-  let acc = 0; const use = [];
-  for (const c of recoverable) { if (acc >= gap) break; use.push(c); acc += c.rec; }
+  // Fewest colonies, each lifted only as far as the +10% gap needs — so we never recommend recovering
+  // more than the shortfall calls for.
+  let remain = gap; const use = [];
+  for (const c of recoverable) {
+    if (remain <= 0) break;
+    const contrib = Math.min(c.rec, remain);
+    use.push({ ...c, target: c.perDay + contrib });
+    remain -= contrib;
+  }
+  const covered = gap - remain;
   const totalRec = recoverable.reduce((s, c) => s + c.rec, 0);
 
   let fix;
-  if (acc >= gap && use.length) {                    // reseating alone clears it to a healthy +10%
-    fix = `Reseat ${use.length === 1 ? 'this colony' : `these ${use.length} colonies`} onto denser hotspots → lifts ${_esc(r.name)} to <b>+${landPct(acc)}%</b> (healthy), no new colony:`
+  if (remain <= 0 && use.length) {                   // recovering lost yield alone reaches +10% (trimmed)
+    fix = `Reseat ${use.length === 1 ? 'this colony' : `these ${use.length} colonies`} onto denser hotspots → recovers lost yield, lifting ${_esc(r.name)} to <b>+${landPct(covered)}%</b> (healthy), no new colony:`
         + `<div class="an-pd-fix-list">${use.map(_reseatLine).join('')}</div>`;
-  } else if (totalRec > 0) {                          // reseating helps but can't reach +10% by itself
-    fix = `Reseat ${recoverable.length === 1 ? 'this colony' : `these ${recoverable.length} colonies`} (only reaches +${landPct(totalRec)}%), then <b>redeploy a surplus colony</b> onto ${_esc(r.name)} or <b>add one</b> to clear +10%:`
-        + `<div class="an-pd-fix-list">${recoverable.map(_reseatLine).join('')}</div>`;
-  } else if (prods.length) {                          // colonies near peak — reseat won't lift it
-    fix = `Its colonies are near peak, so reseating won't lift it — <b>redeploy a surplus colony</b> onto ${_esc(r.name)} or <b>add one</b> for a +10% buffer.`;
-  } else {
+  } else if (totalRec > 0) {                          // recovering everything still falls short of +10%
+    const full = recoverable.map(c => ({ ...c, target: c.perDay + c.rec }));
+    fix = `Reseat ${full.length === 1 ? 'its declined colony' : `its ${full.length} declined colonies`} (recovers to only +${landPct(totalRec)}%), then <b>redeploy a surplus colony</b> onto ${_esc(r.name)} or <b>add one</b> to clear +10%:`
+        + `<div class="an-pd-fix-list">${full.map(_reseatLine).join('')}</div>`;
+  } else if (!prods.length) {
     fix = `<b>Add a ${_esc(r.name)} colony</b> — nothing produces it yet.`;
+  } else {                                            // colonies at their best — reseating won't lift it
+    const colonyEst = _estColonyP1(r.t, 0);
+    const land = colonyEst > 0 ? landPct(colonyEst) : null;
+    if (band === 'tight' && land != null && land > 25)
+      fix = `Only mildly tight, and your colonies are near their best — a whole new colony would overshoot to ~+${land}%. Leave it; reseat when one decays.`;
+    else
+      fix = `Your colonies are near their best, so reseating won't lift it — <b>redeploy a surplus colony</b> onto ${_esc(r.name)} or <b>add one</b> for a +10% buffer.`;
   }
   return `<div class="an-pd-fix an-pd-fix-${band}">🔧 ${fix}</div>`;
 }
