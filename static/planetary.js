@@ -3694,13 +3694,13 @@ function _extRuntimeAdviceHtml(headroom, curDays) {
   for (let d = 1; d <= _EXT_MAX_DAYS; d++) if (buffer(d) >= 0) fedDay = d;
   const graph = _extDecayGraphSvg(headroom, L0, fedDay || 1, fedDay || 1);
 
-  // Healthy: comfortable buffer (≥10%). Calm, but the graph still shows (always visible).
+  // Healthy: comfortable buffer (≥10%). No graph — a flat sustainable curve is just noise; the graph
+  // only earns its space when the crossover matters (tight / deficit, below).
   if (bL0 >= 0.10) {
     return `<div class="an-suggest an-suggest-add an-rt-ok">
         <div class="an-suggest-h">Extraction runtime <span class="an-rt-badge an-rt-badge-ok">✓ sustainable</span></div>
         <div class="an-rt-pick">Your ${L0lbl} programs sit <b>+${Math.round(bL0 * 100)}%</b> above demand — comfortable headroom as your heads decay. Keep the runtime.</div>
-        ${graph}
-        <div class="an-sug-note">Spare extraction is better spent on more factories (above) than a shorter runtime.${detected ? '' : ' Length assumed 2d — rescan to detect yours.'} Decay is an estimate — verify against your in-game ECU.</div>
+        <div class="an-sug-note">Spare extraction is better spent on more factories (above) than a shorter runtime.${detected ? '' : ' Length assumed 2d — rescan to detect yours.'}</div>
       </div>`;
   }
 
