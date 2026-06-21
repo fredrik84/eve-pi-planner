@@ -515,8 +515,8 @@ document.addEventListener('wheel', () => {
 // home-screen apps have no native pull-to-refresh, so we provide our own. Passive
 // listeners (we never block scrolling); a small banner slides in to signal state.
 (function setupPullToRefresh() {
-  const THRESHOLD = 56;   // px of pull needed to arm a refresh
-  const MAX_PULL = 90;
+  const THRESHOLD = 78;   // px of indicator travel needed to arm a refresh (stiffer)
+  const MAX_PULL = 110;
   let startY = 0, pulling = false, armed = false, ind = null;
 
   const isPhone = () => window.matchMedia('(max-width: 760px)').matches;
