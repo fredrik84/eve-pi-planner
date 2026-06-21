@@ -725,3 +725,28 @@ the bare white file URL. The social/OG preview `static/og-image.png` (1200×630)
 `index.html` AND the `/s/{id}` OG injection in `main.py` when it changes. SVG source posters live in
 `~/Claude-Workspace/` (`eve_pi_planner.svg`, `eve_pi_banner.svg`); re-render the OG with cairosvg +
 Pillow.
+
+## Mobile layout + "Add to Home Screen"
+
+The site is usable on phones and meant to be **bookmarked to the iOS home screen** — a plain
+shortcut, NOT a packaged PWA (no `manifest.webmanifest`, no service worker). `index.html` head
+carries `viewport-fit=cover` + `theme-color` + the `apple-mobile-web-app-*` meta (capable=yes,
+`black-translucent` status bar, title "EVE PI") so the bookmark opens full-screen; the existing
+`apple-touch-icon` supplies the icon.
+
+A single `@media (max-width: 760px)` block at the **end of `style.css`** does the rest:
+- The left `.sidebar` becomes a **fixed bottom tab bar** (icon-over-label). Selectors are paired
+  with `body.nav-collapsed .sidebar …` so a desktop-collapsed state can't out-specify them.
+- **Only the lightweight pages show** on the bar: Dashboard, Setup Analysis, How it works,
+  Contribute, Admin (admins only). The heavy tools — Planetary Planning, Factory Layout, Find
+  Buildables/Refill (the `.nav-group`), Planet DB, and Characters — are `display:none`. Login and
+  **Rescan both live in the header**, so the hidden Characters tab isn't needed on mobile.
+- `#dashboardNavTab` is forced visible (`display:flex !important`) so the bar stays consistent when
+  logged out (JS otherwise inline-hides it); its panel is the login CTA.
+- `.an-suggest-move` (Setup-Analysis rebalance "move factories" cards) is hidden — no use on a phone.
+- Two-column page grids (`.pp-layout`, `.input-grid`) stack; `.pp-card` gets `overflow-x:auto` so
+  wide tables scroll inside the card instead of the whole page.
+
+`app.js` DOMContentLoaded has a matching guard: `MOBILE_TABS` + `matchMedia('(max-width:760px)')`
+— on a phone it never lands on a hidden tab, falling back to **Dashboard** (a `/s/<id>` share link
+still opens the plan view). Bump the relevant `?v=` (style.css / app.js / planetary.js) on changes.

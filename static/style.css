@@ -1977,3 +1977,87 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .admin-feature-state.on { color: #5ecf80; border: 1px solid #2a5a3a; }
 .admin-feature-state.off { color: #8a93a8; border: 1px solid #2a3142; }
 .admin-feature-desc { font-size: 11.5px; color: #6a7390; margin-top: 5px; padding-left: 24px; }
+
+
+/* ============================================================================
+   Mobile / "Add to Home Screen" layout (phones, <=760px)
+   The left sidebar becomes a fixed bottom tab bar showing only the lightweight
+   pages (Dashboard, Setup Analysis, How it works, Contribute, Admin). The heavy
+   planning tools (Planetary Planning, Factory Layout, Find Buildables, Refill,
+   Planet DB, Characters) stay desktop-only. Selectors are paired with
+   `body.nav-collapsed ...` so a desktop-collapsed state can't override them.
+   ============================================================================ */
+@media (max-width: 760px) {
+  /* Header: compact; drop the desktop hamburger + subtitle. The top padding
+     respects the iOS status bar when launched from the home screen. */
+  header { padding: 0 12px; padding-top: env(safe-area-inset-top); }
+  .nav-toggle { display: none; }
+  .header-brand { padding: 10px 0; margin-right: 0; gap: 8px; }
+  .header-brand span { display: none; }
+  header h1 { font-size: 16px; }
+
+  /* Single-column body; leave room for the fixed bottom bar + home indicator. */
+  .app-layout { display: block; }
+  main {
+    max-width: 100%;
+    padding: 16px 12px calc(74px + env(safe-area-inset-bottom)) 12px;
+  }
+
+  /* Sidebar -> fixed bottom tab bar */
+  .sidebar,
+  body.nav-collapsed .sidebar {
+    position: fixed; left: 0; right: 0; bottom: 0; top: auto;
+    width: 100%; flex-basis: auto; height: auto; align-self: auto;
+    flex-direction: row;
+    padding: 4px 4px calc(4px + env(safe-area-inset-bottom)) 4px;
+    background: #0d0f14; border-top: 1px solid #1b2030;
+    box-shadow: 0 -4px 18px -10px rgba(0, 0, 0, 0.9);
+    overflow: visible; z-index: 50;
+  }
+  .sidebar-nav { flex-direction: row; justify-content: space-around; width: 100%; gap: 0; }
+
+  /* Hide the heavy tools + non-essential nav items and the donate box on phones. */
+  .sidebar .nav-group,
+  .sidebar [data-tab="planetary"],
+  .sidebar [data-tab="layout"],
+  .sidebar [data-tab="planetdb"],
+  .sidebar [data-tab="characters"],
+  .sidebar-donate { display: none !important; }
+
+  /* Keep the Dashboard tab on the bar even when logged out — its panel is the
+     login call-to-action, so the bar stays consistent and shows an active item.
+     (JS hides it via an inline style when logged out; override that on phones.) */
+  .sidebar #dashboardNavTab { display: flex !important; }
+
+  /* Each remaining tab -> icon over a tiny label */
+  .sidebar .tab,
+  body.nav-collapsed .sidebar .tab {
+    flex: 1 1 0; min-width: 0;
+    flex-direction: column; align-items: center; justify-content: center;
+    gap: 3px; padding: 7px 3px 5px; border-radius: 6px;
+  }
+  .sidebar .tab .nav-ico { display: block; flex: none; font-size: 12px; }
+  .sidebar .tab .nav-lbl {
+    display: block; font-size: 9.5px; letter-spacing: 0.2px; line-height: 1;
+    max-width: 100%; overflow: hidden; text-overflow: ellipsis;
+  }
+  /* Active accent: a top bar instead of the desktop left rail. */
+  .sidebar .tab.active { background: linear-gradient(180deg, rgba(74,136,204,0.18), rgba(74,136,204,0.02)); }
+  .sidebar .tab.active::before,
+  body.nav-collapsed .sidebar .tab.active::before {
+    left: 8px; right: 8px; top: 0; bottom: auto; width: auto; height: 2px;
+  }
+
+  /* Stack the two-column page layouts. */
+  .pp-layout { grid-template-columns: 1fr; gap: 14px; }
+  .input-grid { grid-template-columns: 1fr; }
+  .contrib { padding: 14px 14px 18px; }
+
+  /* Setup Analysis: the rebalance "move factories" suggestions aren't useful on
+     a phone -> hide them. */
+  .an-suggest-move { display: none; }
+
+  /* Wide tabular grids (factory tables, per-material detail) scroll inside their
+     card instead of forcing the whole page to scroll sideways. */
+  .pp-card { overflow-x: auto; }
+}

@@ -479,7 +479,13 @@ document.addEventListener('DOMContentLoaded', () => {
   // forcing the plan again. Without a share link, just restore the last active tab.
   const hasPlanetaryShare = window.__SHARE_ID__ || /^\/s\//.test(location.pathname);
   const saved = localStorage.getItem('activeTab');
+  // On phones the heavy tools (planner/planetary/layout/planetdb/characters) are hidden
+  // from the bottom tab bar, so never land on one — fall back to the Dashboard. A shared
+  // plan link is still an explicit deep-link and opens the plan view regardless.
+  const MOBILE_TABS = ['dashboard', 'analyze', 'howitworks', 'contribute', 'admin'];
+  const isMobile = window.matchMedia('(max-width: 760px)').matches;
   if (hasPlanetaryShare) switchTab('planetary');
+  else if (isMobile) switchTab(saved && MOBILE_TABS.includes(saved) ? saved : 'dashboard');
   else if (saved) switchTab(saved);
   // Load session/character state on every page load so the header + Dashboard nav populate
   // (and a logged-in player with no remembered tab lands on the Dashboard).

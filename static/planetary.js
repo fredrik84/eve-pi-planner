@@ -347,7 +347,7 @@ function renderDashboard(data) {
   _dashData = data;
   if (!data || !data.logged_in) {
     el.innerHTML = `<section class="pp-card"><div class="pp-card-title">Dashboard</div>
-      <div class="pp-card-body"><div class="pp-empty">Log in with ESI (Characters tab) to see your PI overview.</div></div></section>`;
+      <div class="pp-card-body"><div class="pp-empty">Log in with ESI (the <b>Login</b> button, top right) to see your PI overview.</div></div></section>`;
     return;
   }
   _dashCharIds = Array.isArray(data.char_ids_in_view) ? data.char_ids_in_view : null;
