@@ -1905,8 +1905,8 @@ def dashboard(pp_session: str = Cookie(default=None)):
     prog_days_list = []                          # extractor program lengths → restart cadence (median)
     empty_pads_h = None; empty_pads_loc = None   # tightest empty→full launchpad time (emptying CADENCE)
     empty_due_h = None; empty_due_loc = None     # soonest pad to cap from its CURRENT fill (DEADLINE)
-    restart_due_h = None; restart_due_loc = None  # soonest extractor program to expire (next restart due) + which
-    ext_progs = []                                # per-extractor program length, for the out-of-sync check
+    restart_due_h = None; restart_due_loc = None  # soonest expiry among IN-SYNC extractors (the fleet batch) + which
+    ext_progs = []                                # per-extractor {program length, expiry} — fleet sync + restart timer
     for (r, prods, inputs, pads) in parsed:
         if not r["is_ext"]:
             continue
@@ -1915,12 +1915,8 @@ def dashboard(pp_session: str = Cookie(default=None)):
         ss = _json.loads(r["sim_state"] or "null")
         if isinstance(ss, dict) and ss.get("program_days"):
             prog_days_list.append(ss["program_days"])
-            ext_progs.append({"cid": r["cid"], "char": r["ch"], "loc": cloc, "progH": ss["program_days"] * 24.0})
-        if isinstance(ss, dict) and ss.get("expiry"):
-            due = max(0.0, (ss["expiry"] - now) / 3600.0)   # next restart due = soonest expiry
-            if restart_due_h is None or due < restart_due_h:
-                restart_due_h = due
-                restart_due_loc = cloc
+            ext_progs.append({"cid": r["cid"], "char": r["ch"], "loc": cloc,
+                              "progH": ss["program_days"] * 24.0, "expiry": ss.get("expiry")})
         st = _json.loads(r["storage"] or "null")
         if not st:
             continue
@@ -2007,13 +2003,30 @@ def dashboard(pp_session: str = Cookie(default=None)):
     # set to a different length drifts off the batch (and drags the "restart due" countdown). Find the
     # fleet's most common length (0.5h bins) and flag any extractor > 0.4h off it. Muting is client-side
     # (per character) since some accounts deliberately run a character on a different schedule.
-    sync_warn = None
-    if len(ext_progs) >= 3:
+    # Fleet program-length norm (most common, 0.5h bins) — drives both the out-of-sync warning and
+    # the restart countdown.
+    norm = None
+    if ext_progs:
         counts: dict = {}
         for e in ext_progs:
             b = round(e["progH"] * 2) / 2
             counts[b] = counts.get(b, 0) + 1
         norm = max(counts, key=counts.get)
+
+    # Restart-due = the MEDIAN expiry of the in-sync batch (extractors on the common program length).
+    # Median, not the soonest, is deliberate: the player would rather be told to come back a touch LATE
+    # and restart the whole batch in one go than log in early for the first straggler and wait. One
+    # off-schedule planet is excluded (it's surfaced as sync_warn) so it can't drag this to "due now".
+    in_sync_exp = sorted(e["expiry"] for e in ext_progs
+                         if e.get("expiry") and (norm is None or abs(e["progH"] - norm) <= 0.4))
+    if in_sync_exp:
+        median_exp = in_sync_exp[len(in_sync_exp) // 2]
+        restart_due_h = max(0.0, (median_exp - now) / 3600.0)
+        restart_due_loc = None   # fleet-wide batch, not a single colony
+
+    # Out-of-sync extractors (off the fleet norm).
+    sync_warn = None
+    if len(ext_progs) >= 3 and norm is not None:
         off = sorted((e for e in ext_progs if abs(e["progH"] - norm) > 0.4), key=lambda e: e["progH"])
         if off:
             sync_warn = {"norm_hours": round(norm, 1),
