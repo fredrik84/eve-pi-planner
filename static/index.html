@@ -20,7 +20,7 @@
   <meta property="og:image" content="https://eve-pi.failed.name/og-image.png?v=6">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:image" content="https://eve-pi.failed.name/og-image.png?v=6">
-  <link rel="stylesheet" href="/style.css?v=205">
+  <link rel="stylesheet" href="/style.css?v=206">
 </head>
 <body>
   <header>
@@ -754,6 +754,7 @@ PVF-N9    3         95                 60             80                  100   
           <button class="admin-subtab" data-page="features" onclick="adminSubPage('features')">Features</button>
           <button class="admin-subtab" data-page="baskets" onclick="adminSubPage('baskets')">Baskets</button>
           <button class="admin-subtab" data-page="users" onclick="adminSubPage('users')">User management</button>
+          <button class="admin-subtab" data-page="wallet" onclick="adminSubPage('wallet')">Corp wallet</button>
           <button class="admin-subtab" data-page="bugs" onclick="adminSubPage('bugs')">Bug reports <span id="adminTabBugs" class="admin-subtab-badge"></span></button>
         </nav>
 
@@ -791,6 +792,14 @@ PVF-N9    3         95                 60             80                  100   
               <span id="adminAddStatus" class="bug-status-msg"></span>
             </div>
             <div id="adminList" class="admin-list"></div>
+          </section>
+        </div>
+
+        <div class="admin-subpage" data-page="wallet" style="display:none">
+          <section class="pp-card admin-section">
+            <div class="pp-card-title">Corp wallet</div>
+            <div class="admin-hint">See your corp's ISK balance and <strong>player donations</strong> without logging the toon into the game — the web SSO only needs a browser. Connect a character that can read the corp wallet: <strong>CEO/Director</strong>, or one holding the <strong>Accountant</strong> / <strong>Junior Accountant</strong> role. Only this admin account is asked for the wallet scope; normal Login never requests it.</div>
+            <div id="corpWalletContent" class="admin-wallet"></div>
           </section>
         </div>
 
@@ -865,6 +874,6 @@ PVF-N9    3         95                 60             80                  100   
   </div>
 
   <script src="/app.js?v=27"></script>
-  <script src="/planetary.js?v=297"></script>
+  <script src="/planetary.js?v=298"></script>
 </body>
 </html>

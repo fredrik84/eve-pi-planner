@@ -39,6 +39,16 @@ def post_status(url: str, body: dict) -> int:
         return e.code
 
 
+def get_status(url: str) -> int:
+    """GET and return the HTTP status (for endpoints we expect to reject anonymous callers)."""
+    req = urllib.request.Request(url, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return resp.status
+    except urllib.error.HTTPError as e:
+        return e.code
+
+
 def check(cond: bool, msg: str) -> bool:
     print(f"  {'PASS' if cond else 'FAIL'}: {msg}")
     return cond
@@ -78,6 +88,12 @@ def test_skill_roi_anon(base: str) -> bool:
     return ok
 
 
+def test_corp_wallet_gated(base: str) -> bool:
+    print(f"\n{'='*60}\n  GET /api/corp-wallet is admin-gated\n{'='*60}")
+    code = get_status(f"{base}/api/corp-wallet")
+    return check(code == 403, f"anonymous corp-wallet read rejected (got HTTP {code})")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--url", default="https://eve-pi.failed.name")
@@ -88,6 +104,7 @@ def main():
         test_features(base),
         test_feature_toggle_gated(base),
         test_skill_roi_anon(base),
+        test_corp_wallet_gated(base),
     ]
     print(f"\n{'='*60}")
     passed = sum(results)

@@ -630,6 +630,8 @@ function adminSubPage(key) {
   document.querySelectorAll('#tab-admin .admin-subpage').forEach(p => {
     p.style.display = (p.dataset.page === key) ? '' : 'none';
   });
+  // Corp wallet hits ESI, so only load it when its sub-page is actually opened.
+  if (key === 'wallet' && typeof loadCorpWallet === 'function') loadCorpWallet();
 }
 
 // Feature flags: list every registered feature with an enable-for-public toggle. Admins always
@@ -1256,6 +1258,79 @@ function esiLogin() {
       loadCharacters();
     }
   });
+}
+
+// Admin-only: authorise a character WITH the corp-wallet scope (?wallet=1). Same popup flow as
+// esiLogin, but the extra scope is requested only here — never on the public Login button.
+function connectCorpWallet() {
+  const w = window.open('/auth/login?wallet=1', 'EVE SSO', 'width=800,height=900');
+  window.addEventListener('message', function handler(e) {
+    if (e.data === 'esi-done') {
+      window.removeEventListener('message', handler);
+      if (w && !w.closed) w.close();
+      loadCharacters();
+      loadCorpWallet();
+    }
+  });
+}
+
+function _fmtWalletDate(s) {
+  if (!s) return '';
+  return String(s).slice(0, 16).replace('T', ' ');   // 2026-06-21 14:32
+}
+
+async function loadCorpWallet() {
+  const el = document.getElementById('corpWalletContent');
+  if (!el) return;
+  el.innerHTML = '<div class="pp-empty">Loading…</div>';
+  let d;
+  try {
+    const r = await fetch('/api/corp-wallet');
+    if (!r.ok) { el.innerHTML = '<div class="pp-empty">Admin access required.</div>'; return; }
+    d = await r.json();
+  } catch (e) { el.innerHTML = '<div class="pp-empty">Could not reach the wallet service.</div>'; return; }
+
+  const reconnect = `<button onclick="connectCorpWallet()">Connect a character…</button>`;
+  if (!d.connected) {
+    el.innerHTML = `<div class="pp-empty">No wallet character connected yet.</div>${reconnect}`;
+    return;
+  }
+  if (d.error === 'role') {
+    el.innerHTML = `<div class="an-stale-note">⚠ <b>${_esc(d.character_name)}</b> is connected, but in <b>${_esc(d.corp_name || 'its corp')}</b> it can't read the wallet. The character must be <b>CEO/Director</b>, or hold the <b>Accountant</b> or <b>Junior Accountant</b> role.</div>`
+      + `<button onclick="connectCorpWallet()">Connect a different character…</button>`;
+    return;
+  }
+  if (d.error === 'token') {
+    el.innerHTML = `<div class="pp-empty"><b>${_esc(d.character_name)}</b>'s ESI token expired — reconnect to refresh it.</div>${reconnect}`;
+    return;
+  }
+  if (d.error) {
+    el.innerHTML = `<div class="pp-empty">Connected as ${_esc(d.character_name)}, but the wallet couldn't be read right now. <button onclick="loadCorpWallet()">Retry</button></div>`;
+    return;
+  }
+
+  let html = `<div class="an-stats">`
+    + `<div class="an-stat an-ok"><div class="an-stat-val">${_fmtIsk(d.total_balance)}</div><div class="an-stat-lbl">${_esc(d.corp_name || 'Corp')} · total balance</div></div>`
+    + `<div class="an-stat"><div class="an-stat-val">${_fmtIsk(d.balance)}</div><div class="an-stat-lbl">master wallet (div 1)</div></div>`
+    + `<div class="an-stat"><div class="an-stat-val">${_fmtIsk(d.total_donated)}</div><div class="an-stat-lbl">player donations (recent)</div></div>`
+    + `</div>`;
+
+  if (d.donations && d.donations.length) {
+    html += `<div class="wallet-don-head">Player donations <span class="pp-card-hint">— most recent first</span></div>`
+      + `<div class="wallet-don-list">`
+      + d.donations.map(x =>
+          `<div class="wallet-don-row">`
+          + `<span class="wallet-don-amt">${_fmtIsk(x.amount)}</span>`
+          + `<span class="wallet-don-who">${_esc(x.donor)}</span>`
+          + `<span class="wallet-don-date">${_fmtWalletDate(x.date)}</span>`
+          + (x.reason ? `<span class="wallet-don-reason">“${_esc(x.reason)}”</span>` : '')
+          + `</div>`).join('')
+      + `</div>`;
+  } else {
+    html += `<div class="pp-empty">No player donations in the recent journal yet.</div>`;
+  }
+  html += `<div class="an-sug-note">Reading as <b>${_esc(d.character_name)}</b> · <a href="#" onclick="connectCorpWallet();return false;">reconnect</a></div>`;
+  el.innerHTML = html;
 }
 
 // ── Product autocomplete ──────────────────────────────────────────────────────

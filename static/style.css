@@ -1978,6 +1978,18 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .admin-feature-state.off { color: #8a93a8; border: 1px solid #2a3142; }
 .admin-feature-desc { font-size: 11.5px; color: #6a7390; margin-top: 5px; padding-left: 24px; }
 
+/* ── Admin: corp wallet (donations) ───────────────────────────────────────────── */
+.admin-wallet { margin-top: 4px; }
+.wallet-don-head { font-size: 12px; font-weight: 700; color: #c8d2e6; margin: 16px 0 8px; }
+.wallet-don-list { display: flex; flex-direction: column; gap: 4px; }
+.wallet-don-row { display: grid; grid-template-columns: 140px 1fr auto; align-items: baseline;
+  gap: 3px 14px; padding: 7px 11px; border: 1px solid #1c2030; border-radius: 7px;
+  background: #11151f; font-size: 13px; }
+.wallet-don-amt { color: #46d18a; font-weight: 700; font-variant-numeric: tabular-nums; }
+.wallet-don-who { color: #e6e9ef; font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+.wallet-don-date { color: #8b93a6; font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.wallet-don-reason { grid-column: 2 / -1; color: #8a93ad; font-style: italic; font-size: 12px; }
+
 
 /* ============================================================================
    Mobile / "Add to Home Screen" layout (phones, <=760px)

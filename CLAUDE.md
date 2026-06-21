@@ -759,3 +759,38 @@ still opens the plan view). `app.js` also adds **pull-to-refresh** (`setupPullTo
 down from `scrollTop 0` past a threshold triggers `rescanAll()` (only when the header `#rescanBtn`
 exists, i.e. logged in), with a `#ptr-indicator` banner. Standalone home-screen apps have no native
 pull-to-refresh, so this is ours. Bump the relevant `?v=` (style.css / app.js / planetary.js) on changes.
+
+## Admin → Corp wallet (donations)
+
+Admin-only view of the corp ISK balance + **player donations**, read via ESI so the owner doesn't
+have to log the toon into the game (web SSO needs only a browser — handy for an alpha account that
+can't run alongside other characters). Admin-gated, so no public feature flag.
+
+**Scope handling — one app, opt-in scope.** The base `SCOPES` (skills + planets) is unchanged, so
+the normal **Login** never asks the public for wallet access. `esi.WALLET_SCOPE =
+esi-wallet.read_corporation_wallets.v1`; `WALLET_SCOPES = SCOPES + WALLET_SCOPE`. `/auth/login`
+gained a `wallet: int = 0` query param — `?wallet=1` requests `WALLET_SCOPES` instead of `SCOPES`.
+The EVE application (developers.eveonline.com) must **list** the wallet scope in its allowed set, but
+listing ≠ requesting — it's only requested on the wallet flow. No second app needed.
+
+**Granted scopes are stored.** `pp_characters.scopes` (TEXT, migrated via `ALTER TABLE`) holds the
+JWT `scp` claim (a list, or a bare string for one scope) captured in `esi_callback` — so we can find
+which character authorised wallet read. `_wallet_character(context_id)` returns the first character
+in that context whose `scopes` contains `WALLET_SCOPE`.
+
+**`esi.corp_wallet_summary(context_id)`** (called by `GET /api/corp-wallet`, `Depends(require_admin)`
+which returns the admin's context id) reads, via that character's token: `/characters/{id}/` →
+`corporation_id`, `/corporations/{id}/` → name, `/corporations/{id}/wallets/` → per-division balances
+(403/401 → `{error:'role'}` = character lacks Accountant/Junior-Accountant/Director), and
+`/corporations/{id}/wallets/1/journal/` → entries with `ref_type == 'player_donation'` (donor =
+`first_party_id`, resolved via `_resolve_names`). Returns `{connected, balance (div1), total_balance,
+total_donated, donations:[{date,amount,donor,reason}], corp_name, ...}`; `{connected:False}` when no
+wallet character is linked; `{error:'token'|'fetch'}` otherwise. **Donations/`total_donated` cover
+only the most recent journal page (~2500 rows)** — fine for a low-volume corp; the *balance* is
+always current. Journal is the master division (1) only.
+
+**Frontend:** Admin sub-page `data-page="wallet"` (`loadCorpWallet`, lazy-loaded from `adminSubPage`
+only when opened, since it hits ESI). `connectCorpWallet()` mirrors `esiLogin()` but opens
+`/auth/login?wallet=1`. The connected toon joins the admin's context like any character (shows in
+Characters / may get PI-scanned — set `planet_limit=0` to exclude from plans if it clutters).
+Gating test in `test_features.py` (`test_corp_wallet_gated` → 403 for anonymous).

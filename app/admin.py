@@ -14,9 +14,17 @@ from app.sde import get_connection, load_pi_data
 from app.esi import (
     require_admin, require_context, is_admin, session_context_id,
     ADMIN_CHARACTERS, ensure_admin_table, _sessions, _load_sessions,
+    corp_wallet_summary,
 )
 
 router = APIRouter()
+
+
+@router.get("/api/corp-wallet")
+def corp_wallet(ctx: int = Depends(require_admin)):
+    """Admin: corp wallet balance + recent player donations, read via a wallet-scoped
+    character in the admin's own context (require_admin returns that context id)."""
+    return corp_wallet_summary(ctx)
 
 # Per-character config (pp_plan_config) for a basket is keyed by a synthetic type id well
 # above real PI type_ids (~<100k) and the fuel-block sentinel (4312), so it never collides.

@@ -32,6 +32,12 @@ CLIENT_SECRET = os.environ.get("EVE_CLIENT_SECRET", "")
 CALLBACK_URL  = os.environ.get("EVE_CALLBACK_URL", "https://eve-pi.failed.name/auth/callback")
 
 SCOPES = "esi-skills.read_skills.v1 esi-planets.manage_planets.v1 esi-planets.read_customs_offices.v1"
+# Corp-wallet read is requested only on the dedicated "connect wallet" login (?wallet=1) so the
+# normal Login flow never asks the public for wallet access. Requires the EVE application (on
+# developers.eveonline.com) to also list this scope, and the character to be CEO/Director or hold
+# the Accountant / Junior Accountant corp role.
+WALLET_SCOPE  = "esi-wallet.read_corporation_wallets.v1"
+WALLET_SCOPES = SCOPES + " " + WALLET_SCOPE
 
 EVE_AUTH_URL  = "https://login.eveonline.com/v2/oauth/authorize"
 EVE_TOKEN_URL = "https://login.eveonline.com/v2/oauth/token"
@@ -142,7 +148,8 @@ def ensure_char_tables():
             command_center_upgrades      INTEGER DEFAULT 0,
             planetology                  INTEGER DEFAULT 0,
             advanced_planetology         INTEGER DEFAULT 0,
-            context_id     INTEGER
+            context_id     INTEGER,
+            scopes         TEXT    DEFAULT ''
         )
     """)
     con.execute("""
@@ -213,6 +220,10 @@ def ensure_char_tables():
             con.execute(f"ALTER TABLE {tbl} ADD COLUMN {col} INTEGER")
         except Exception:
             pass
+    try:
+        con.execute("ALTER TABLE pp_characters ADD COLUMN scopes TEXT DEFAULT ''")
+    except Exception:
+        pass
     # Migrate existing characters/sessions to context 1
     unscoped = con.execute(
         "SELECT COUNT(*) FROM pp_characters WHERE context_id IS NULL"
@@ -572,7 +583,7 @@ def _fetch_planets(character_id: int, access_token: str) -> None:
 # ── OAuth endpoints ───────────────────────────────────────────────────────────
 
 @router.get("/auth/login")
-def esi_login(pp_session: str = Cookie(default=None)):
+def esi_login(wallet: int = 0, pp_session: str = Cookie(default=None)):
     if not _is_configured():
         return HTMLResponse(
             "<h2>ESI not configured</h2>"
@@ -590,7 +601,7 @@ def esi_login(pp_session: str = Cookie(default=None)):
     ctx = _sessions.get(pp_session, (None, 0))[1] if pp_session else 0
     state = secrets.token_urlsafe(16)
     _pending[state] = ctx or 0
-    scope_enc = SCOPES.replace(" ", "%20")
+    scope_enc = (WALLET_SCOPES if wallet else SCOPES).replace(" ", "%20")
     url = (
         f"{EVE_AUTH_URL}?response_type=code"
         f"&client_id={CLIENT_ID}"
@@ -640,6 +651,12 @@ def esi_callback(
     sub = payload.get("sub", "")  # "CHARACTER:EVE:12345678"
     character_id = int(sub.split(":")[-1])
     character_name = payload.get("name", str(character_id))
+    # Granted scopes (the `scp` claim is a list, or a bare string for a single scope) — stored so
+    # the corp-wallet feature can find a character that authorised wallet read.
+    scp = payload.get("scp", [])
+    if isinstance(scp, str):
+        scp = [scp]
+    scopes_str = " ".join(scp)
 
     skills = _fetch_skills(character_id, access_token)
 
@@ -674,15 +691,15 @@ def esi_callback(
         INSERT OR REPLACE INTO pp_characters
             (character_id, character_name, access_token, refresh_token, token_expiry,
              interplanetary_consolidation, command_center_upgrades, planetology,
-             advanced_planetology, context_id)
-        VALUES (?,?,?,?,?,?,?,?,?,?)
+             advanced_planetology, context_id, scopes)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?)
     """, (
         character_id, character_name, access_token, refresh_token, expiry,
         skills.get("interplanetary_consolidation", 0),
         skills.get("command_center_upgrades", 0),
         skills.get("planetology", 0),
         skills.get("advanced_planetology", 0),
-        context_id,
+        context_id, scopes_str,
     ))
     con.commit()
     con.close()
@@ -861,6 +878,104 @@ def _refresh_token(character_id: int, refresh_token: str) -> str | None:
         return new_access
     except Exception:
         return None
+
+
+# ── Corp wallet (admin: see donations without logging the toon into the game) ──────
+
+def _resolve_names(ids: list[int], client: "httpx.Client") -> dict[int, str]:
+    """Resolve character/corp ids to names via /universe/names/ (best-effort)."""
+    out: dict[int, str] = {}
+    ids = [int(i) for i in ids if i]
+    for i in range(0, len(ids), 1000):
+        chunk = ids[i:i + 1000]
+        try:
+            r = client.post(f"{ESI_BASE}/universe/names/?datasource=tranquility", json=chunk, timeout=15)
+            if r.status_code == 200:
+                for x in r.json():
+                    out[x["id"]] = x["name"]
+        except Exception:
+            pass
+    return out
+
+
+def _wallet_character(context_id: int):
+    """First character in this context that authorised the corp-wallet scope, or None."""
+    con = get_connection()
+    rows = con.execute(
+        "SELECT character_id, character_name, scopes FROM pp_characters WHERE context_id=?",
+        (context_id,),
+    ).fetchall()
+    con.close()
+    for r in rows:
+        if WALLET_SCOPE in (r["scopes"] or "").split():
+            return r
+    return None
+
+
+def corp_wallet_summary(context_id: int) -> dict:
+    """Corp wallet balance + recent player donations, read via the context's wallet character.
+
+    Shapes (all carry `connected`):
+      {connected: False}                              → no wallet character linked yet
+      {connected: True, error: 'token'|'role'|'fetch'}→ linked but unavailable (re-auth / no role)
+      {connected: True, balance, total_balance, donations:[...], total_donated, corp_name, ...}
+    """
+    ch = _wallet_character(context_id)
+    if not ch:
+        return {"connected": False}
+    cid, name = ch["character_id"], ch["character_name"]
+    token = _get_valid_token(cid)
+    if not token:
+        return {"connected": True, "character_name": name, "error": "token"}
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        with httpx.Client(timeout=15) as client:
+            pub = client.get(f"{ESI_BASE}/characters/{cid}/?datasource=tranquility").json()
+            corp_id = pub.get("corporation_id")
+            corp = client.get(f"{ESI_BASE}/corporations/{corp_id}/?datasource=tranquility").json()
+            corp_name = corp.get("name")
+
+            wresp = client.get(f"{ESI_BASE}/corporations/{corp_id}/wallets/?datasource=tranquility", headers=headers)
+            if wresp.status_code in (401, 403):
+                # Authorised, but the character lacks the in-game role to read the corp wallet.
+                return {"connected": True, "character_name": name, "corp_id": corp_id,
+                        "corp_name": corp_name, "error": "role"}
+            wresp.raise_for_status()
+            wallets = sorted(wresp.json() or [], key=lambda w: w.get("division", 0))
+            total = sum(w.get("balance", 0) for w in wallets)
+            master = next((w.get("balance", 0) for w in wallets if w.get("division") == 1),
+                          wallets[0].get("balance", 0) if wallets else 0)
+
+            donations: list[dict] = []
+            total_donated = 0.0
+            try:
+                jresp = client.get(
+                    f"{ESI_BASE}/corporations/{corp_id}/wallets/1/journal/?datasource=tranquility",
+                    headers=headers,
+                )
+                if jresp.status_code == 200:
+                    dons = [e for e in (jresp.json() or [])
+                            if e.get("ref_type") == "player_donation" and (e.get("amount") or 0) > 0]
+                    dons.sort(key=lambda e: e.get("date", ""), reverse=True)
+                    total_donated = sum(e.get("amount", 0) for e in dons)
+                    dons = dons[:30]
+                    names = _resolve_names(list({e.get("first_party_id") for e in dons if e.get("first_party_id")}), client)
+                    for e in dons:
+                        donations.append({
+                            "date": e.get("date"),
+                            "amount": e.get("amount"),
+                            "donor": names.get(e.get("first_party_id"), str(e.get("first_party_id") or "?")),
+                            "reason": (e.get("reason") or "").strip(),
+                        })
+            except Exception:
+                pass
+
+            return {"connected": True, "character_name": name, "corp_id": corp_id, "corp_name": corp_name,
+                    "balance": master, "total_balance": total,
+                    "divisions": [{"division": w.get("division"), "balance": w.get("balance", 0)} for w in wallets],
+                    "donations": donations, "total_donated": total_donated}
+    except Exception:
+        return {"connected": True, "character_name": name, "error": "fetch"}
 
 
 # ── Character API ─────────────────────────────────────────────────────────────
