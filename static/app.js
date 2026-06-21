@@ -508,3 +508,65 @@ document.addEventListener('wheel', () => {
     document.activeElement.blur();
   }
 }, { passive: true });
+
+// ── Pull-to-refresh (mobile) ───────────────────────────────────────────────────
+// Dragging down from the very top of the page triggers a colony Rescan — the same
+// action as the header Rescan button (which only exists when logged in). Standalone
+// home-screen apps have no native pull-to-refresh, so we provide our own. Passive
+// listeners (we never block scrolling); a small banner slides in to signal state.
+(function setupPullToRefresh() {
+  const THRESHOLD = 56;   // px of pull needed to arm a refresh
+  const MAX_PULL = 90;
+  let startY = 0, pulling = false, armed = false, ind = null;
+
+  const isPhone = () => window.matchMedia('(max-width: 760px)').matches;
+  const atTop = () => (window.scrollY || document.documentElement.scrollTop || 0) <= 0;
+  const canRescan = () => !!document.getElementById('rescanBtn'); // present only when logged in
+
+  function indicator() {
+    if (!ind) {
+      ind = document.createElement('div');
+      ind.id = 'ptr-indicator';
+      document.body.appendChild(ind);
+    }
+    return ind;
+  }
+  function show(px, text) {
+    const el = indicator();
+    el.textContent = text;
+    el.style.transition = 'none';
+    el.style.transform = `translateY(${px}px)`;
+  }
+  function hide() {
+    if (!ind) return;
+    ind.style.transition = 'transform 0.2s ease';
+    ind.style.transform = 'translateY(0)';
+  }
+
+  window.addEventListener('touchstart', e => {
+    if (!isPhone() || !atTop() || !canRescan() || e.touches.length !== 1) { pulling = false; return; }
+    startY = e.touches[0].clientY; pulling = true; armed = false;
+  }, { passive: true });
+
+  window.addEventListener('touchmove', e => {
+    if (!pulling) return;
+    const dy = e.touches[0].clientY - startY;
+    if (dy <= 0 || !atTop()) { pulling = false; hide(); return; }
+    const pull = Math.min(dy * 0.5, MAX_PULL);     // damped
+    armed = pull >= THRESHOLD;
+    show(pull, armed ? '↻  Release to refresh' : '↓  Pull to refresh');
+  }, { passive: true });
+
+  window.addEventListener('touchend', () => {
+    if (!pulling) return;
+    pulling = false;
+    if (armed && canRescan() && typeof rescanAll === 'function') {
+      show(MAX_PULL, '↻  Refreshing…');
+      rescanAll();
+      setTimeout(hide, 900);
+    } else {
+      hide();
+    }
+    armed = false;
+  });
+})();

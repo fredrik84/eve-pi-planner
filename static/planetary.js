@@ -554,7 +554,7 @@ function renderHeaderSession(loggedIn, chars, sessionCharId) {
   // Admin access is the sidebar "Admin" item now (no duplicate header button).
   el.innerHTML =
     `<button id="rescanBtn" class="header-bug-btn" onclick="rescanAll()" ${_rescanning ? 'disabled' : ''} title="Re-scan every character's colonies from ESI">${_rescanning ? 'Rescanning…' : 'Rescan'}</button>`
-    + `<button class="header-bug-btn" onclick="openBugModal()">Report bug</button>`
+    + `<button id="reportBugBtn" class="header-bug-btn" onclick="openBugModal()">Report bug</button>`
     + `<span class="header-session">${name} · <a href="/auth/logout" class="header-logout">Log out</a></span>`;
   const navTab = document.getElementById('adminNavTab');
   if (navTab) navTab.style.display = _isAdmin ? '' : 'none';

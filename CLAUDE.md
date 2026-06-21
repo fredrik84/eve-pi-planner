@@ -737,16 +737,25 @@ carries `viewport-fit=cover` + `theme-color` + the `apple-mobile-web-app-*` meta
 A single `@media (max-width: 760px)` block at the **end of `style.css`** does the rest:
 - The left `.sidebar` becomes a **fixed bottom tab bar** (icon-over-label). Selectors are paired
   with `body.nav-collapsed .sidebar …` so a desktop-collapsed state can't out-specify them.
-- **Only the lightweight pages show** on the bar: Dashboard, Setup Analysis, How it works,
-  Contribute, Admin (admins only). The heavy tools — Planetary Planning, Factory Layout, Find
+- **Only the lightweight pages show** on the bar, in this order (flex `order:` overrides, How-it-
+  works and Setup-Analysis swapped vs. desktop): **Dashboard · Setup Analysis · How it works ·
+  Contribute · Admin** (admins only). The heavy tools — Planetary Planning, Factory Layout, Find
   Buildables/Refill (the `.nav-group`), Planet DB, and Characters — are `display:none`. Login and
-  **Rescan both live in the header**, so the hidden Characters tab isn't needed on mobile.
+  **Rescan both live in the header**, so the hidden Characters tab isn't needed on mobile. The
+  header drops `#reportBugBtn` and keeps `EVE PI` on one line (`white-space:nowrap`).
 - `#dashboardNavTab` is forced visible (`display:flex !important`) so the bar stays consistent when
-  logged out (JS otherwise inline-hides it); its panel is the login CTA.
-- `.an-suggest-move` (Setup-Analysis rebalance "move factories" cards) is hidden — no use on a phone.
+  logged out (JS otherwise inline-hides it); its panel is the login CTA (which now points to the
+  header **Login** button, not the hidden Characters tab).
+- Hidden on phones in Setup Analysis: `.an-suggest-move` (rebalance "move factories" cards) and
+  `.an-suggest-sep` (the manual "Move a character to another account" tool).
+- `.an-stats` becomes a 2-up grid (a lone stat tile no longer stretches full-width with its value
+  stranded left); `.pp-card-title` wraps so the analyze "Plan" dropdown gets its own full-width line.
 - Two-column page grids (`.pp-layout`, `.input-grid`) stack; `.pp-card` gets `overflow-x:auto` so
   wide tables scroll inside the card instead of the whole page.
 
 `app.js` DOMContentLoaded has a matching guard: `MOBILE_TABS` + `matchMedia('(max-width:760px)')`
 — on a phone it never lands on a hidden tab, falling back to **Dashboard** (a `/s/<id>` share link
-still opens the plan view). Bump the relevant `?v=` (style.css / app.js / planetary.js) on changes.
+still opens the plan view). `app.js` also adds **pull-to-refresh** (`setupPullToRefresh`): dragging
+down from `scrollTop 0` past a threshold triggers `rescanAll()` (only when the header `#rescanBtn`
+exists, i.e. logged in), with a `#ptr-indicator` banner. Standalone home-screen apps have no native
+pull-to-refresh, so this is ours. Bump the relevant `?v=` (style.css / app.js / planetary.js) on changes.

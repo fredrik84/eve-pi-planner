@@ -1994,7 +1994,8 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
   .nav-toggle { display: none; }
   .header-brand { padding: 10px 0; margin-right: 0; gap: 8px; }
   .header-brand span { display: none; }
-  header h1 { font-size: 16px; }
+  header h1 { font-size: 16px; white-space: nowrap; }   /* keep "EVE PI" on one line */
+  #reportBugBtn { display: none; }                       /* drop Report bug on phones */
 
   /* Single-column body; leave room for the fixed bottom bar + home indicator. */
   .app-layout { display: block; }
@@ -2029,6 +2030,14 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
      (JS hides it via an inline style when logged out; override that on phones.) */
   .sidebar #dashboardNavTab { display: flex !important; }
 
+  /* Bottom-bar order: Dashboard · Setup Analysis · How it works · Contribute · Admin
+     (How it works and Setup Analysis swapped vs. the desktop sidebar order). */
+  .sidebar #dashboardNavTab        { order: 0; }
+  .sidebar [data-tab="analyze"]    { order: 1; }
+  .sidebar [data-tab="howitworks"] { order: 2; }
+  .sidebar [data-tab="contribute"] { order: 3; }
+  .sidebar #adminNavTab            { order: 4; }
+
   /* Each remaining tab -> icon over a tiny label */
   .sidebar .tab,
   body.nav-collapsed .sidebar .tab {
@@ -2053,11 +2062,31 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
   .input-grid { grid-template-columns: 1fr; }
   .contrib { padding: 14px 14px 18px; }
 
-  /* Setup Analysis: the rebalance "move factories" suggestions aren't useful on
-     a phone -> hide them. */
-  .an-suggest-move { display: none; }
+  /* Stat tiles (Overview, Setup Analysis) → an even 2-up grid so a lone tile
+     doesn't stretch full-width with its value stranded on the left. */
+  .an-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+
+  /* Setup Analysis card title: let the "Plan" dropdown take its own full-width
+     line instead of squishing the title onto three lines. */
+  .pp-card-title { flex-wrap: wrap; }
+  .pp-analyze-pick { width: 100%; margin-left: 0; }
+  .pp-card-hint { flex-basis: 100%; }
+
+  /* Setup Analysis: the rebalance "move factories" cards and the manual
+     "Move a character to another account" tool aren't useful on a phone. */
+  .an-suggest-move,
+  .an-suggest-sep { display: none; }
 
   /* Wide tabular grids (factory tables, per-material detail) scroll inside their
      card instead of forcing the whole page to scroll sideways. */
   .pp-card { overflow-x: auto; }
+
+  /* Pull-to-refresh indicator (rescan on pull-down from the top) */
+  #ptr-indicator {
+    position: fixed; top: calc(-46px); left: 0; right: 0; height: 46px;
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+    font-size: 12px; letter-spacing: 0.3px; color: #8fb4d6;
+    background: #0d0f14; border-bottom: 1px solid #1b2030;
+    z-index: 60; pointer-events: none;
+  }
 }
