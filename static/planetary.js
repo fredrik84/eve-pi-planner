@@ -1062,6 +1062,23 @@ function renderCharacters(chars, loggedIn) {
       list.appendChild(row);
       return;
     }
+    if (c.wallet_only) {
+      // A toon connected only to read the corp wallet — not a PI character. Show it plainly with a
+      // remove option, but keep it out of all the PI counts/pickers.
+      row.className = 'pp-char-row pp-char-wallet';
+      row.innerHTML = `
+        <div class="pp-char-header">
+          <span class="pp-char-name"><span class="pp-char-dummy-badge" title="Connected only to read the corp wallet — not used for Planetary Industry">wallet</span> ${_esc(c.name)}</span>
+          <button class="pp-char-del" title="Disconnect wallet character" data-id="${c.character_id}">✕</button>
+        </div>
+        <div class="pp-char-meta"><span style="color:#6a7390;font-size:12px">Corp-wallet viewer · see Admin → Corp wallet</span></div>`;
+      row.querySelector('.pp-char-del').addEventListener('click', async () => {
+        await fetch(`/api/characters/${c.character_id}`, { method: 'DELETE' });
+        loadCharacters();
+      });
+      list.appendChild(row);
+      return;
+    }
     const tokenDot = c.token_ok
       ? '<span title="Token valid" style="color:#5ecf80;font-size:10px">●</span>'
       : '<span title="Token expired — re-add character" style="color:#e06060;font-size:10px">●</span>';
@@ -2816,7 +2833,7 @@ async function _fetchSetupPlans() {
 // then re-render. This is what actually updates the production rates; the plain reopen only re-reads
 // the DB. Used by the tab's "Rescan colonies" button.
 async function rescanAndAnalyze(btn) {
-  const ids = (_ppCharsData || []).filter(c => !c.is_dummy && c.character_id > 0).map(c => c.character_id);
+  const ids = (_ppCharsData || []).filter(c => !c.is_dummy && !c.wallet_only && c.character_id > 0).map(c => c.character_id);
   if (!ids.length) { await onAnalyzeTabOpen(); return; }
   const orig = btn ? btn.textContent : '';
   if (btn) btn.disabled = true;
@@ -3378,7 +3395,7 @@ let _sepFrom = null, _sepTo = null;  // chosen character ids (strings); null = u
 function _setSepFrom(cid) { _sepFrom = String(cid); if (_sepTo === _sepFrom) _sepTo = null; renderAnalysis(); }
 function _setSepTo(cid) { _sepTo = String(cid); renderAnalysis(); }
 
-function _realChars() { return (_ppCharsData || []).filter(c => !c.is_dummy); }
+function _realChars() { return (_ppCharsData || []).filter(c => !c.is_dummy && !c.wallet_only); }
 
 // Per-character factory/extractor breakdown of the CURRENT deployment + the factory hub system.
 function _facDeployment() {

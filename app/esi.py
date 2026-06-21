@@ -1009,7 +1009,8 @@ def list_characters(pp_session: str = Cookie(default=None)):
         rows = con.execute("""
             SELECT character_id, character_name, token_expiry,
                    interplanetary_consolidation, command_center_upgrades,
-                   planetology, advanced_planetology, COALESCE(is_dummy, 0) AS is_dummy
+                   planetology, advanced_planetology, COALESCE(is_dummy, 0) AS is_dummy,
+                   COALESCE(scopes, '') AS scopes
             FROM pp_characters WHERE context_id=?
             ORDER BY COALESCE(is_dummy,0), character_name COLLATE NOCASE
         """, (context_id,)).fetchall()
@@ -1129,11 +1130,17 @@ def list_characters(pp_session: str = Cookie(default=None)):
         expiry = r["token_expiry"] or ""
         is_dummy = bool(r["is_dummy"])
         token_ok = True if is_dummy else (expiry > now if expiry else False)
+        # A wallet-only toon (corp-wallet scope, no planets scope) is just a money viewer — it isn't
+        # a PI character. Flagged so the UI can label it and keep it out of PI pickers; the planner /
+        # dashboard exclude it in SQL already.
+        sc = r["scopes"] or ""
+        wallet_only = ("read_corporation_wallets" in sc) and ("manage_planets" not in sc)
         chars.append({
             "character_id":   r["character_id"],
             "name":           r["character_name"],
             "token_ok":       token_ok,
             "is_dummy":       is_dummy,
+            "wallet_only":    wallet_only,
             "max_planets":    1 + r["interplanetary_consolidation"],
             "ccu":            r["command_center_upgrades"],
             "planetology":    r["planetology"],
@@ -1302,7 +1309,8 @@ def refresh_all_planets(body: _RefreshAllBody | None = None, context_id: int = D
     want = set(body.character_ids) if body and body.character_ids else None
     con = get_connection()
     rows = con.execute(
-        "SELECT character_id FROM pp_characters WHERE context_id=? AND COALESCE(is_dummy, 0) = 0",
+        "SELECT character_id FROM pp_characters WHERE context_id=? AND COALESCE(is_dummy, 0) = 0 "
+        "AND NOT (COALESCE(scopes,'') LIKE '%read_corporation_wallets%' AND COALESCE(scopes,'') NOT LIKE '%manage_planets%')",
         (context_id,)).fetchall()
     con.close()
     if want is not None:                      # keep only requested ids, but never outside this context

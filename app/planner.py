@@ -77,7 +77,9 @@ def get_plan_config(type_id: int, context_id: int = Depends(require_context)):
         SELECT character_id, character_name,
                1 + interplanetary_consolidation AS max_planets,
                command_center_upgrades AS esi_ccu
-        FROM pp_characters WHERE context_id=? ORDER BY character_name
+        FROM pp_characters WHERE context_id=?
+              AND NOT (COALESCE(scopes,'') LIKE '%read_corporation_wallets%' AND COALESCE(scopes,'') NOT LIKE '%manage_planets%')
+        ORDER BY character_name
     """, (context_id,)).fetchall()
     saved = {
         r["character_id"]: dict(r)
@@ -827,7 +829,8 @@ def _fleet_fingerprint(con, context_id: int) -> dict:
     return {str(r["character_id"]): [r["command_center_upgrades"] or 0, r["interplanetary_consolidation"] or 0]
             for r in con.execute(
                 "SELECT character_id, command_center_upgrades, interplanetary_consolidation "
-                "FROM pp_characters WHERE context_id=? AND COALESCE(is_dummy,0)=0", (context_id,)).fetchall()}
+                "FROM pp_characters WHERE context_id=? AND COALESCE(is_dummy,0)=0 "
+                "AND NOT (COALESCE(scopes,'') LIKE '%read_corporation_wallets%' AND COALESCE(scopes,'') NOT LIKE '%manage_planets%')", (context_id,)).fetchall()}
 
 def _plan_staleness(saved: dict, current: dict) -> dict:
     """A saved plan is stale once the fleet it assumed has changed — toons added/removed or skills
@@ -1247,7 +1250,8 @@ def skill_roi(pp_session: str = Cookie(default=None)):
         "SELECT character_id AS cid, character_name AS nm, "
         "       COALESCE(interplanetary_consolidation,0) AS ic, "
         "       COALESCE(command_center_upgrades,0) AS ccu "
-        "FROM pp_characters WHERE context_id=? AND COALESCE(is_dummy,0)=0", (context_id,)).fetchall()
+        "FROM pp_characters WHERE context_id=? AND COALESCE(is_dummy,0)=0 "
+                "AND NOT (COALESCE(scopes,'') LIKE '%read_corporation_wallets%' AND COALESCE(scopes,'') NOT LIKE '%manage_planets%')", (context_id,)).fetchall()
     rows = con.execute(
         "SELECT cp.character_id AS cid, cp.is_extractor AS ext, cp.planet_type AS ptype, "
         "       cp.products AS products "
@@ -1350,7 +1354,8 @@ def _expansion_capacity(context_id: int) -> dict:
             "SELECT character_id AS cid, character_name AS nm, "
             "       1 + COALESCE(interplanetary_consolidation,0) AS max_planets, "
             "       COALESCE(command_center_upgrades,0) AS ccu, COALESCE(interplanetary_consolidation,0) AS ic "
-            "FROM pp_characters WHERE context_id=? AND COALESCE(is_dummy,0)=0", (context_id,)).fetchall()
+            "FROM pp_characters WHERE context_id=? AND COALESCE(is_dummy,0)=0 "
+                "AND NOT (COALESCE(scopes,'') LIKE '%read_corporation_wallets%' AND COALESCE(scopes,'') NOT LIKE '%manage_planets%')", (context_id,)).fetchall()
         used = {r["character_id"]: r["n"] for r in con.execute(
             "SELECT cp.character_id, COUNT(*) AS n FROM pp_char_planets cp "
             "JOIN pp_characters c ON c.character_id=cp.character_id "
@@ -3219,6 +3224,7 @@ def _load_char_planet_config(con, context_id: int, config_type_id: int):
                1 + interplanetary_consolidation AS max_planets,
                command_center_upgrades AS ccu
         FROM pp_characters WHERE context_id=?
+              AND NOT (COALESCE(scopes,'') LIKE '%read_corporation_wallets%' AND COALESCE(scopes,'') NOT LIKE '%manage_planets%')
         ORDER BY (1 + interplanetary_consolidation) DESC, character_name
     """, (context_id,)).fetchall()
 
