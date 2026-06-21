@@ -11,10 +11,10 @@
   <meta property="og:site_name" content="EVE PI Planner">
   <meta property="og:title" content="EVE PI Planner">
   <meta property="og:description" content="Plan your EVE Online Planetary Industry production chains.">
-  <meta property="og:image" content="https://eve-pi.failed.name/og-image.png?v=4">
+  <meta property="og:image" content="https://eve-pi.failed.name/og-image.png?v=5">
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:image" content="https://eve-pi.failed.name/og-image.png?v=4">
-  <link rel="stylesheet" href="/style.css?v=184">
+  <meta name="twitter:image" content="https://eve-pi.failed.name/og-image.png?v=5">
+  <link rel="stylesheet" href="/style.css?v=195">
 </head>
 <body>
   <header>
@@ -71,6 +71,12 @@
               <span class="pp-card-hint">— what the tool does, in plain terms</span>
             </div>
             <div class="contrib">
+              <figure class="hiw-poster">
+                <a href="/how-it-works.svg" title="Click to enlarge" onclick="openImageLightbox(event, '/how-it-works.svg', 'EVE PI Planner — how it works')">
+                  <img src="/how-it-works.svg" alt="EVE PI Planner — how it works, in five steps: Plan, Estimate (not gospel), Deploy &amp; Rescan, Fix issues, Leave it &amp; iterate" loading="lazy">
+                </a>
+                <figcaption>The five-step workflow at a glance — read on for the detail.</figcaption>
+              </figure>
               <p class="contrib-lead">
                 This tool helps you plan and run <strong>Planetary Industry</strong> across all your
                 characters — for the most profit with the least hauling and fiddling. Here's what each
@@ -737,39 +743,63 @@ PVF-N9    3         95                 60             80                  100   
     <div id="tab-admin" class="tab-panel" style="display:none">
       <div class="admin-page">
 
-        <section class="pp-card admin-section">
-          <div class="pp-card-title">Planet submissions <span id="psubCount" class="bug-admin-counts"></span></div>
-          <div class="admin-hint">Planet data contributed by non-admins waits here for review. <strong>Approve</strong> writes it to the shared Planet DB — new planets are added and existing ones are updated (blank cells keep the current value, so a sparse paste never wipes good data). <strong>Reject</strong> discards it. Nothing reaches the live database until you approve.</div>
-          <div id="planetSubList" class="bug-admin-list"></div>
-        </section>
+        <nav class="admin-subnav" id="adminSubnav">
+          <button class="admin-subtab" data-page="submissions" onclick="adminSubPage('submissions')">Planet submissions <span id="adminTabPsub" class="admin-subtab-badge"></span></button>
+          <button class="admin-subtab" data-page="features" onclick="adminSubPage('features')">Features</button>
+          <button class="admin-subtab" data-page="baskets" onclick="adminSubPage('baskets')">Baskets</button>
+          <button class="admin-subtab" data-page="users" onclick="adminSubPage('users')">User management</button>
+          <button class="admin-subtab" data-page="bugs" onclick="adminSubPage('bugs')">Bug reports <span id="adminTabBugs" class="admin-subtab-badge"></span></button>
+        </nav>
 
-        <section class="pp-card admin-section">
-          <div class="pp-card-title">Production baskets</div>
-          <div class="admin-hint">A basket is a named set of PI products + quantities, planned like the built-in Fuel Blocks. Any logged-in user creates private baskets (visible only to them); admins also publish <strong>global</strong> baskets available to everyone. Components must be P1–P4.</div>
-          <button onclick="openBasketModal()">Manage baskets…</button>
-        </section>
+        <div class="admin-subpage" data-page="submissions" style="display:none">
+          <section class="pp-card admin-section">
+            <div class="pp-card-title">Planet submissions <span id="psubCount" class="bug-admin-counts"></span></div>
+            <div class="admin-hint">Planet data contributed by non-admins waits here for review. <strong>Approve</strong> writes it to the shared Planet DB — new planets are added and existing ones are updated (blank cells keep the current value, so a sparse paste never wipes good data). <strong>Reject</strong> discards it. Nothing reaches the live database until you approve.</div>
+            <div id="planetSubList" class="bug-admin-list"></div>
+          </section>
+        </div>
 
-        <section class="pp-card admin-section">
-          <div class="pp-card-title">Admin users</div>
-          <div class="admin-hint">Admins can manage baskets, read bug reports, and add/remove other admins. Matching is by EVE character name (SSO-verified, globally unique).</div>
-          <div class="admin-add-row">
-            <input id="adminNameInput" class="bug-input" maxlength="60" placeholder="Character name" autocomplete="off">
-            <button onclick="addAdmin()">Add admin</button>
-            <span id="adminAddStatus" class="bug-status-msg"></span>
-          </div>
-          <div id="adminList" class="admin-list"></div>
-        </section>
+        <div class="admin-subpage" data-page="features" style="display:none">
+          <section class="pp-card admin-section">
+            <div class="pp-card-title">Features</div>
+            <div class="admin-hint">Roll features out to the public, or keep them admin-only (we have no separate test site). <strong>Admin only</strong> = visible just to admins for preview; <strong>Public</strong> = everyone sees it.</div>
+            <div id="adminFeatureList" class="admin-feature-list"></div>
+          </section>
+        </div>
 
-        <section class="pp-card admin-section">
-          <div class="pp-card-title">Bug reports <span id="bugAdminCounts" class="bug-admin-counts"></span></div>
-          <div class="bug-admin-filters">
-            <button class="bug-filter active" data-status="" onclick="filterBugs('', this)">All</button>
-            <button class="bug-filter" data-status="open" onclick="filterBugs('open', this)">Open</button>
-            <button class="bug-filter" data-status="complete" onclick="filterBugs('complete', this)">Complete</button>
-            <button class="bug-filter" data-status="ignored" onclick="filterBugs('ignored', this)">Ignored</button>
-          </div>
-          <div id="bugAdminList" class="bug-admin-list"></div>
-        </section>
+        <div class="admin-subpage" data-page="baskets" style="display:none">
+          <section class="pp-card admin-section">
+            <div class="pp-card-title">Production baskets</div>
+            <div class="admin-hint">A basket is a named set of PI products + quantities, planned like the built-in Fuel Blocks. Any logged-in user creates private baskets (visible only to them); admins also publish <strong>global</strong> baskets available to everyone. Components must be P1–P4.</div>
+            <button onclick="openBasketModal()">Manage baskets…</button>
+          </section>
+        </div>
+
+        <div class="admin-subpage" data-page="users" style="display:none">
+          <section class="pp-card admin-section">
+            <div class="pp-card-title">Admin users</div>
+            <div class="admin-hint">Admins can manage baskets, read bug reports, and add/remove other admins. Matching is by EVE character name (SSO-verified, globally unique).</div>
+            <div class="admin-add-row">
+              <input id="adminNameInput" class="bug-input" maxlength="60" placeholder="Character name" autocomplete="off">
+              <button onclick="addAdmin()">Add admin</button>
+              <span id="adminAddStatus" class="bug-status-msg"></span>
+            </div>
+            <div id="adminList" class="admin-list"></div>
+          </section>
+        </div>
+
+        <div class="admin-subpage" data-page="bugs" style="display:none">
+          <section class="pp-card admin-section">
+            <div class="pp-card-title">Bug reports <span id="bugAdminCounts" class="bug-admin-counts"></span></div>
+            <div class="bug-admin-filters">
+              <button class="bug-filter active" data-status="" onclick="filterBugs('', this)">All</button>
+              <button class="bug-filter" data-status="open" onclick="filterBugs('open', this)">Open</button>
+              <button class="bug-filter" data-status="complete" onclick="filterBugs('complete', this)">Complete</button>
+              <button class="bug-filter" data-status="ignored" onclick="filterBugs('ignored', this)">Ignored</button>
+            </div>
+            <div id="bugAdminList" class="bug-admin-list"></div>
+          </section>
+        </div>
 
       </div>
     </div><!-- /tab-admin -->
@@ -829,6 +859,6 @@ PVF-N9    3         95                 60             80                  100   
   </div>
 
   <script src="/app.js?v=24"></script>
-  <script src="/planetary.js?v=268"></script>
+  <script src="/planetary.js?v=281"></script>
 </body>
 </html>

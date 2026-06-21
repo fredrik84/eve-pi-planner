@@ -18,6 +18,7 @@ from app.planner import router as planner_router
 from app.fuelblock_planner import router as fuelblock_router
 from app.bugs import router as bugs_router
 from app.admin import router as admin_router
+from app.features import router as features_router
 
 app = FastAPI(title="EVE PI Planner")
 app.include_router(planetary_router)
@@ -26,6 +27,7 @@ app.include_router(planner_router)
 app.include_router(fuelblock_router)
 app.include_router(bugs_router)
 app.include_router(admin_router)
+app.include_router(features_router)
 
 
 class AnalyzeRequest(BaseModel):
@@ -163,7 +165,7 @@ def share_preview(share_id: str, request: Request):
     d = _html.escape(desc, quote=True)
     base = str(request.base_url).rstrip("/")
     url = f"{base}/s/{share_id}"
-    img = f"{base}/og-image.png?v=4"
+    img = f"{base}/og-image.png?v=5"
     og = (
         f'<meta property="og:type" content="website">\n'
         f'  <meta property="og:site_name" content="EVE PI Planner">\n'

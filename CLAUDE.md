@@ -6,6 +6,39 @@ Optimize a player's EVE Online Planetary Industry (PI) setup across multiple cha
 
 ---
 
+## Development guidelines (deploy & change policy)
+
+These are standing rules for ALL changes. Follow them unless the user explicitly says otherwise.
+
+1. **Always test.** Write proper test cases for new features and run them against the container
+   before calling anything shipped. Existing suites: `test_distribution.py` (planner correctness,
+   needs `DEBUG_PI`/`DEBUG_CONTEXT_ID`), `test_features.py` (feature flags + skill-roi public
+   surface). Add to these or create a new `test_*.py` in the same urllib/`--url` style. Assert
+   *durable invariants*, not runtime state an admin can change (e.g. don't assert a flag's enabled
+   value equals its code default — admins toggle it).
+2. **Gate new features.** Every NEW feature ships behind a feature flag (`app/features.py`
+   `FEATURE_REGISTRY`, default `False` = admin-preview), rolled out to the public from the Admin →
+   Features tab. We have no staging environment, so this IS the staging mechanism.
+   **Hot-patches / fixes to EXISTING features do NOT need a flag** — fix them in place.
+3. **User simplicity is a core design element.** Maximize automation, minimize manual config. The
+   best UI is read-only: surface a computed answer rather than a knob. Add a configurable field only
+   when the math genuinely can't decide for the user. (See also the PI-planner design principle:
+   minimize planet interactions; automate the math or drop the feature.)
+4. **Reuse code; build generic endpoints — but no reuse-by-conditional.** Extract shared helpers and
+   write general endpoints. Do NOT bolt `if mode == ...` branches onto an endpoint to make it serve
+   two callers; that gets messy fast. Prefer a clean shared helper called by two thin endpoints, or a
+   parameter that's genuinely orthogonal (like `FuelBlockPlanRequest.basket_id`), over a flag that
+   forks the body.
+5. **Static data first, live data when needed.** Prefer SDE / Fuzzwork (static) for anything that
+   doesn't change per-player. Use ESI for live per-character data. **Live data trumps everything —
+   UNLESS the value can be reliably derived from a known, documented formula** (then compute it; see
+   the extraction-decay and factory-rate models, which are formula-derived rather than scraped).
+6. **Commit + push when a change is complete.** The user wants steady checkpoints to revert to. After
+   a feature/fix is tested and deployed, `git commit` and `git push` to `origin/main`. End commit
+   messages with the Co-Authored-By trailer.
+
+---
+
 ## Code layout
 
 `app/planner.py` is the core. `_run_plan(req, context_id)` orchestrates; the heavy lifting is in named helpers (refactored out of one giant function):
@@ -621,3 +654,74 @@ Both persist plan inputs. When adding a new `PlanRequest` field that a user sets
 | `_kk` | `48_000 × 24` | Baseline P0 per day per extractor slot |
 | `_cycles_per_day` | 24 | Extractor cycles per day (1-hour cycle assumed) |
 | Planet value scale | 0–100+ | Raw richness from SDE; 100 = full bar; values > 100 are boosted/exceptional planets |
+
+---
+
+## Feature flags (`app/features.py`)
+
+Admin-controlled rollout (no staging env — this is how we stage). `pp_features(key, enabled,
+updated_at)` stores public-visibility state; the known set is the code-defined `FEATURE_REGISTRY`
+(key, label, description, default). A feature missing from the registry can't be toggled.
+`ensure_features_table()` seeds missing rows at their default. Endpoints: `GET /api/features`
+(public — returns every registered feature with its current `enabled` + the caller's `is_admin`),
+`POST /api/features/{key}` (admin-gated via `require_admin`, body `{enabled}`). `feature_enabled(key)`
+is a backend helper for server-side gating if ever needed.
+
+**Frontend gating** (`planetary.js`): `_loadFeatures()` caches `/api/features`; `_featureActive(key,
+dflt=false)` returns `enabled OR is_admin` (admins preview everything), falling back to `dflt` when
+not yet loaded — pass `dflt=true` for retrofitted existing features so they never vanish on a load
+hiccup, omit it for new features (fail-closed). Call sites: `onDashboardTabOpen`, `onAnalyzeTabOpen`,
+`_refreshBaskets`, `renderFinalPlan` (split control). Admin → **Features** sub-tab
+(`loadAdminFeatures`/`toggleFeature`) flips flags. Registry today: `timeline`, `split_extraction`
+(default on), `baskets` (default on), `skill_roi`.
+
+## Admin sub-navigation
+
+The Admin tab (`#tab-admin`) is split into sub-pages via an inner nav (`adminSubPage(key)`,
+remembered in `localStorage` as `adminPage`): **Planet submissions · Features · Baskets · User
+management · Bug reports**. Each is a `.admin-subpage[data-page]` div toggled by the sub-nav; all
+sections still load their data on `onAdminTabOpen` so the nav badges (pending submissions, open bugs)
+populate. Add a sixth page = one `<button>` in `#adminSubnav` + one `.admin-subpage` div.
+
+## Dashboard "Up next" agenda (`timeline` flag)
+
+Account-level sorted list of the next maintenance tasks (Restart extractors / Haul extractor P1 /
+Refill factories) with countdown + absolute clock time, on the Dashboard under Maintenance routine.
+`_renderTimelineCard(t)` reuses the existing dashboard `*_due_hours` totals (no extra request).
+**Deliberately NOT a single-cycle line** — extractor and factory cadences desync badly (several
+extractor restarts per factory refill), so a "you are here on one timeline" viz is misleading; a
+sorted agenda is honest. Gated by `timeline`; shows an "admin preview" tag only while not public.
+
+## Skill-ROI advisor (`skill_roi` flag, Setup Analysis)
+
+`GET /api/skill-roi` (session-scoped): per character, the output gain from the next level of the two
+yield skills — **Interplanetary Consolidation** (<5 → +1 planet ≈ one colony's average value/day,
+from `total_value_day / total_planets`) and **Command Center Upgrades** (<5 → extra factory units
+that pack onto each FACTORY planet, via `_units_per_planet` = layout-engine `max_count` at cc vs
+cc+1, × per-unit value). Gain-only (no SP/train cost — the user's spend decision). Sorted by ISK/day,
+top 12. Frontend: `_fetchSkillRoi()` + `_renderSkillRoiSection()` appended in `renderAnalysis`.
+**Limitations (v1):** flat per-unit factory rate (same model as `my-setup-plan`); P4 factories are
+1/planet so CCU shows no gain for them; **extractor-side CCU (more basics → more P0→P1 refining) is
+NOT modelled yet** — the documented follow-up. Returns nothing when all characters are IC5/CCU5
+(correct — nothing to train). Planetology / Advanced Planetology affect survey only, not yield, so
+they're excluded.
+
+## Refill "empty pads" toggle
+
+Factory launchpad contents come from the last ESI scan and are **not** simulated forward (only
+extractors are), so the scanned "P1 already in the pad" goes stale and over-reports (ESI returns the
+last-checkpoint contents, from before the factory drew them down — a rescan re-reads the same stale
+checkpoint). The Refill tool's **"Pads emptied at drop-off"** toggle (`_refillIgnorePads`, default
+ON) ignores `input_m3` and fills to a clean 30,000 m³ (3 LP), matching the usual "empty the pads when
+you drop the next batch" workflow. Off = subtract the last-scan contents. m³/unit is 0.19 (verified);
+the under-fill people hit was the stale `input_m3`, not the volume constant.
+
+## How-it-works poster + social banner
+
+`static/how-it-works.svg` (9:16 five-step infographic) is the hero on the How-it-works page, opened
+in an in-page dark lightbox (`openImageLightbox`/`closeImageLightbox` — generic, reusable) instead of
+the bare white file URL. The social/OG preview `static/og-image.png` (1200×630) is the 3:1 banner
+(`eve_pi_banner.svg`) centred on a matching dark canvas; bump `?v=` on the og:image meta in
+`index.html` AND the `/s/{id}` OG injection in `main.py` when it changes. SVG source posters live in
+`~/Claude-Workspace/` (`eve_pi_planner.svg`, `eve_pi_banner.svg`); re-render the OG with cairosvg +
+Pillow.

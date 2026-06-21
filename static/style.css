@@ -1730,6 +1730,21 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .an-sep-notes div { background: rgba(63,104,150,.10); border-left: 2px solid #3f6896; border-radius: 4px;
   padding: 5px 9px; margin-top: 5px; color: #aeb6c6; }
 .an-sep-notes div b { color: #cfe0f5; }
+/* Standalone "Move factories to another character" tool (user-initiated, bottom of analysis). */
+.an-sep-card { border-left: 3px solid #3f6896; }
+.an-sep-head { display: flex; align-items: center; gap: 8px; }
+.an-sep-head .an-lever-ico { color: #6fb0ff; }
+.an-sep-cta { margin-left: auto; font-size: 11px; font-weight: 600; color: #6fb0ff; }
+.an-sep-sub { margin-top: 6px; color: #9aa3b5; font-size: 12px; line-height: 1.5; }
+.an-sep-sub b { color: #c8d2e6; }
+.an-sep-fit { margin-top: 4px; font-size: 11.5px; line-height: 1.4; color: #c8bfa8; }
+.an-sep-fit b { color: #e6dcc0; }
+.an-sep-fit-chk { color: #7d8597; font-style: italic; }
+.an-sep-fit-block { color: #e7a3a3; }
+.an-sep-fit-block b { color: #f2c2c2; }
+.an-sep-noFit { outline: 1px solid rgba(200,80,80,.45); border-radius: 7px; }
+.an-sep-rebal { outline: 1px solid rgba(111,224,192,.40); border-radius: 7px; }
+.an-sep-rebal-note { color: #8fe0c6; font-size: 11px; }
 .an-lever-ttl { font-weight: 600; color: #c8d2e6; font-size: 13px; }
 .an-lever-tag { margin-left: auto; font-size: 10px; text-transform: uppercase; letter-spacing: .04em;
   color: #8b93a6; background: rgba(255,255,255,.05); padding: 1px 7px; border-radius: 9px; }
@@ -1828,3 +1843,81 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .dist-view-btn:hover { background: #1c1630; color: #a888c8; }
 .dist-view-btn.on { background: #2a1c40; color: #c89ce8; }
 
+
+/* ── PI "Up next" agenda (Dashboard, feature-gated) ───────────────────────────── */
+.tl-preview-tag { margin-left: 8px; font-size: 10px; font-weight: 700; letter-spacing: 0.6px;
+  text-transform: uppercase; color: #e0b84a; border: 1px solid #5a4a1f; border-radius: 4px;
+  padding: 1px 6px; vertical-align: middle; }
+/* the next (soonest) task — prominent, accent-bordered */
+.tl-next { display: flex; align-items: baseline; justify-content: space-between; gap: 16px;
+  flex-wrap: wrap; padding: 12px 14px; border: 1px solid #2a4a6a; border-radius: 8px;
+  background: linear-gradient(90deg, rgba(74, 136, 204, 0.14), rgba(74, 136, 204, 0.02)); }
+.tl-next-task { font-size: 16px; font-weight: 700; color: #d2e6ff; }
+.tl-next-loc { font-size: 12px; font-weight: 500; color: #8a93a8; }
+.tl-next-when { font-size: 15px; font-weight: 700; color: #5ab4e6; white-space: nowrap; }
+.tl-next-clock { font-size: 12px; font-weight: 500; color: #6a7390; }
+/* the rest, sorted by soonest */
+.tl-up-list { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; }
+.tl-up-item { display: flex; align-items: baseline; justify-content: space-between; gap: 16px;
+  padding: 8px 14px; border-top: 1px solid #1b2030; }
+.tl-up-lbl { font-size: 13px; font-weight: 600; color: #c8d2e6; }
+.tl-up-loc { font-size: 11.5px; font-weight: 500; color: #6a7390; }
+.tl-up-when { font-size: 13px; color: #a8b4cc; white-space: nowrap; }
+.tl-up-clock { font-size: 11.5px; color: #6a7390; }
+
+/* ── Setup Analysis: skill-ROI advice ─────────────────────────────────────────── */
+.an-skill-list { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.an-skill-row { display: grid; grid-template-columns: 1fr auto; align-items: baseline; gap: 6px 16px;
+  padding: 9px 12px; border: 1px solid #1c2030; border-radius: 7px; background: #11151f; }
+.an-skill-main { font-size: 13px; color: #c8d2e6; }
+.an-skill-lvl { color: #5ab4e6; font-weight: 700; font-size: 12px; margin-left: 4px; }
+.an-skill-gain { font-size: 13px; font-weight: 700; color: #5ecf80; white-space: nowrap; text-align: right; }
+.an-skill-row .an-sug-note { grid-column: 1 / -1; margin-top: 2px; }
+
+/* ── Image lightbox (in-page enlarge, dark backdrop) ──────────────────────────── */
+.img-lightbox { position: fixed; inset: 0; z-index: 1000; display: none;
+  align-items: center; justify-content: center; padding: 28px;
+  background: rgba(6, 8, 12, 0.9); backdrop-filter: blur(3px); }
+.img-lightbox.open { display: flex; }
+.img-lightbox img { max-width: min(94vw, 540px); max-height: 94vh; width: auto; height: auto;
+  border: 1px solid #2a4a6a; border-radius: 12px;
+  box-shadow: 0 24px 70px -22px rgba(0, 0, 0, 0.9); }
+.img-lightbox-close { position: absolute; top: 16px; right: 22px; background: none; border: none;
+  color: #c8d2e6; font-size: 32px; line-height: 1; cursor: pointer; padding: 4px 10px; }
+.img-lightbox-close:hover { color: #fff; }
+
+/* ── How-it-works poster (the 5-step infographic) ─────────────────────────────── */
+.hiw-poster { float: right; width: 360px; max-width: 42%; margin: 2px 0 18px 26px; }
+.hiw-poster a { display: block; border: 1px solid #1b2030; border-radius: 10px; overflow: hidden;
+  box-shadow: 0 8px 26px -14px rgba(0, 0, 0, 0.8); transition: border-color 0.15s; }
+.hiw-poster a:hover { border-color: #2a4a6a; }
+.hiw-poster img { display: block; width: 100%; height: auto; }
+.hiw-poster figcaption { margin-top: 7px; font-size: 11px; color: #6a7390; text-align: center; }
+@media (max-width: 860px) {
+  .hiw-poster { float: none; width: 100%; max-width: 340px; margin: 0 auto 18px; }
+}
+
+/* ── Admin sub-navigation (one section per page) ──────────────────────────────── */
+.admin-subnav { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 16px;
+  border-bottom: 1px solid #1b2030; padding-bottom: 0; }
+.admin-subtab { background: none; border: none; border-bottom: 2px solid transparent;
+  color: #7c879c; cursor: pointer; font-size: 13px; font-weight: 500; letter-spacing: 0.3px;
+  padding: 9px 14px; margin-bottom: -1px; transition: color 0.14s, border-color 0.14s; }
+.admin-subtab:hover { color: #c8d2e6; }
+.admin-subtab.active { color: #d2e6ff; border-bottom-color: #5ab4e6; }
+.admin-subtab-badge:not(:empty) { display: inline-block; margin-left: 5px; min-width: 17px;
+  padding: 0 5px; border-radius: 9px; background: #4a3018; color: #e0b84a; font-size: 11px;
+  font-weight: 700; text-align: center; line-height: 17px; }
+
+/* ── Admin: feature flags ─────────────────────────────────────────────────────── */
+.admin-feature-list { display: flex; flex-direction: column; gap: 4px; }
+.admin-feature-row { padding: 9px 11px; border: 1px solid #1c2030; border-radius: 7px;
+  background: #11151f; }
+.admin-feature-toggle { display: flex; align-items: center; gap: 9px; cursor: pointer; }
+.admin-feature-toggle input { width: 15px; height: 15px; cursor: pointer; accent-color: #5ab4e6; }
+.admin-feature-name { font-size: 13px; font-weight: 600; color: #c8d2e6; }
+.admin-feature-state { margin-left: auto; font-size: 10px; font-weight: 700; letter-spacing: 0.5px;
+  text-transform: uppercase; border-radius: 4px; padding: 2px 8px; }
+.admin-feature-state.on { color: #5ecf80; border: 1px solid #2a5a3a; }
+.admin-feature-state.off { color: #8a93a8; border: 1px solid #2a3142; }
+.admin-feature-desc { font-size: 11.5px; color: #6a7390; margin-top: 5px; padding-left: 24px; }

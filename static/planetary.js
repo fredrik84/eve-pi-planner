@@ -136,7 +136,28 @@ function onPlanetDbTabOpen() {
 // ── Dashboard (logged-in overview) ────────────────────────────────────────────
 let _dashLanded = false;   // auto-land on the dashboard once per page load (logged-in, no saved tab)
 
+// ── Feature flags ─────────────────────────────────────────────────────────────
+// Admin-gated rollout (no staging env): a feature is "active" for the user when its flag is
+// enabled for the public OR the user is an admin (admins preview everything). New features
+// default off (admin-only); retrofitted existing ones default on — pass dflt=true so they stay
+// visible if /api/features hasn't loaded yet.
+let _features = {};            // key -> {key,label,description,enabled}
+let _featuresIsAdmin = false;
+async function _loadFeatures() {
+  try {
+    const d = await (await fetch('/api/features')).json();
+    _features = {}; (d.features || []).forEach(f => { _features[f.key] = f; });
+    _featuresIsAdmin = !!d.is_admin;
+  } catch (e) { /* leave whatever we had; _featureActive falls back to dflt */ }
+}
+function _featureActive(key, dflt = false) {
+  if (_featuresIsAdmin) return true;
+  const f = _features[key];
+  return f ? !!f.enabled : dflt;
+}
+
 async function onDashboardTabOpen() {
+  await _loadFeatures();
   const el = document.getElementById('dashboardContent');
   if (el && !el.dataset.loaded) el.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Loading overview…</div>';
   try {
@@ -244,6 +265,50 @@ function _setExpandProduct(tid) {
   _expandProduct = String(tid);
   const el = document.getElementById('expandDeployCards');
   if (el) el.innerHTML = _renderExpandCards(_expandDeploysByProduct[_expandProduct] || []);
+}
+
+// "Up next" PI agenda (admin-gated PoC). The extractor and factory cadences are usually badly
+// desynced (you might restart extractors several times before a factory refill), so a single-cycle
+// line is misleading. Instead: a sorted list of the next maintenance tasks with countdown + the
+// absolute clock time. All timing comes from the dashboard totals (no extra request).
+function _renderTimelineCard(t) {
+  const jobs = [
+    { lbl: 'Restart extractors', due: t.restart_due_hours, loc: null },
+    { lbl: 'Haul extractor P1',  due: t.empty_due_hours,   loc: t.empty_due_loc || t.empty_pads_loc },
+    { lbl: 'Refill factories',   due: t.refill_due_hours,  loc: t.refill_due_loc || t.refill_factories_loc },
+  ].filter(j => j.due != null && j.due >= 0).sort((a, b) => a.due - b.due);
+  if (!jobs.length) return '';   // no live colony timing yet
+
+  // Absolute clock time for a task `due` hours out (browser-local; Date is fine client-side).
+  const clock = h => new Date(Date.now() + h * 3600 * 1000)
+    .toLocaleString([], { weekday: 'long', hour: '2-digit', minute: '2-digit' });
+  const rel = h => (h < 0.05 ? 'now' : 'in ' + _fmtHours(h));
+
+  // "admin preview" only while it's still admin-gated (not yet rolled out to the public).
+  const isPublic = !!(_features['timeline'] && _features['timeline'].enabled);
+  const previewTag = isPublic ? '' : '<span class="tl-preview-tag">admin preview</span>';
+
+  const next = jobs[0], rest = jobs.slice(1);
+  const restHtml = rest.map(j => `
+    <li class="tl-up-item">
+      <span class="tl-up-lbl">${_esc(j.lbl)}${j.loc ? ` <span class="tl-up-loc">${_esc(j.loc)}</span>` : ''}</span>
+      <span class="tl-up-when">${rel(j.due)} <span class="tl-up-clock">· ${clock(j.due)}</span></span>
+    </li>`).join('');
+
+  return `
+    <section class="pp-card tl-card">
+      <div class="pp-card-title">Up next
+        <span class="pp-card-hint">— your next PI tasks</span>
+        ${previewTag}
+      </div>
+      <div class="pp-card-body">
+        <div class="tl-next">
+          <div class="tl-next-task">${_esc(next.lbl)}${next.loc ? ` <span class="tl-next-loc">${_esc(next.loc)}</span>` : ''}</div>
+          <div class="tl-next-when">${rel(next.due)} <span class="tl-next-clock">· ${clock(next.due)}</span></div>
+        </div>
+        ${rest.length ? `<ul class="tl-up-list">${restHtml}</ul>` : ''}
+      </div>
+    </section>`;
 }
 
 function renderDashboard(data) {
@@ -371,6 +436,10 @@ function renderDashboard(data) {
     const sub = bits.length ? `<span class="dash-rt-sub">${bits.join(' · ')}</span>` : '';
     return `<div class="an-stat"${loc ? ` title="${_esc(loc)} is next"` : ''}><div class="an-stat-val">${big}</div><div class="an-stat-lbl">${lbl}${sub}</div></div>`;
   };
+  // PI process timeline (admin-gated PoC): one account-level "you are here" line from
+  // "extractors started" to the next maintenance jobs, using the same due/cadence the routine card has.
+  const timelineHtml = _featureActive('timeline') ? _renderTimelineCard(t) : '';
+
   const routineHtml = (t.empty_pads_hours != null || t.refill_factories_hours != null || t.restart_extractors_hours != null) ? `
     <section class="pp-card">
       <div class="pp-card-title">Maintenance routine <span class="pp-card-hint">— countdown to the next job · cadence below</span></div>
@@ -405,7 +474,7 @@ function renderDashboard(data) {
     <section class="pp-card">
       <div class="pp-card-title">Overview <span class="pp-card-hint">— your PI at a glance · Rescan in the top bar pulls fresh data</span></div>
       <div class="pp-card-body"><div class="an-stats">${tiles}</div></div>
-    </section>` + routineHtml + padsHtml + `
+    </section>` + routineHtml + timelineHtml + padsHtml + `
     <section class="pp-card">
       <div class="pp-card-title">Factories <span class="pp-card-hint">— launchpad fill &amp; time to empty, projected forward from your last rescan (${facs.length})</span></div>
       <div class="pp-card-body">
@@ -508,11 +577,64 @@ let _bugFilter = '';
 function openBugAdmin() { switchTab('admin'); }  // bug reports now live in the Admin tab
 
 // ── Admin tab ───────────────────────────────────────────────────────────────────
+let _adminPage = (() => { try { return localStorage.getItem('adminPage') || 'submissions'; } catch (e) { return 'submissions'; } })();
 function onAdminTabOpen() {
   if (!_isAdmin) { switchTab('planetary'); return; }
+  // Load every section's data on open so the nav badges are populated; the sub-nav just toggles
+  // which section is visible.
   loadPlanetSubmissions();
   loadBugs();
   loadAdmins();
+  loadAdminFeatures();
+  adminSubPage(_adminPage);
+}
+
+// Admin sub-navigation: show one section at a time (Planet submissions / Features / Baskets /
+// User management / Bug reports), so the Admin tab stays tidy as it grows.
+function adminSubPage(key) {
+  _adminPage = key;
+  try { localStorage.setItem('adminPage', key); } catch (e) {}
+  document.querySelectorAll('#adminSubnav .admin-subtab').forEach(b =>
+    b.classList.toggle('active', b.dataset.page === key));
+  document.querySelectorAll('#tab-admin .admin-subpage').forEach(p => {
+    p.style.display = (p.dataset.page === key) ? '' : 'none';
+  });
+}
+
+// Feature flags: list every registered feature with an enable-for-public toggle. Admins always
+// see gated features themselves; the toggle controls whether the public sees them.
+async function loadAdminFeatures() {
+  const el = document.getElementById('adminFeatureList');
+  if (!el) return;
+  await _loadFeatures();
+  const feats = Object.values(_features);
+  if (!feats.length) { el.innerHTML = '<div class="pp-empty">No features registered.</div>'; return; }
+  el.innerHTML = feats.map(f => `
+    <div class="admin-feature-row">
+      <label class="admin-feature-toggle">
+        <input type="checkbox" ${f.enabled ? 'checked' : ''} onchange="toggleFeature('${f.key}', this)">
+        <span class="admin-feature-name">${_esc(f.label)}</span>
+        <span class="admin-feature-state ${f.enabled ? 'on' : 'off'}">${f.enabled ? 'Public' : 'Admin only'}</span>
+      </label>
+      <div class="admin-feature-desc">${_esc(f.description)}</div>
+    </div>`).join('');
+}
+
+async function toggleFeature(key, cb) {
+  const enabled = cb.checked;
+  cb.disabled = true;
+  try {
+    const resp = await fetch('/api/features/' + encodeURIComponent(key), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    if (_features[key]) _features[key].enabled = enabled;
+    loadAdminFeatures();   // repaint the state chips
+  } catch (e) {
+    cb.checked = !enabled; cb.disabled = false;
+    alert('Failed to update feature: ' + e.message);
+  }
 }
 
 async function loadPlanetSubmissions() {
@@ -532,6 +654,8 @@ async function loadPlanetSubmissions() {
 function renderPlanetSubmissions(subs) {
   const cEl = document.getElementById('psubCount');
   if (cEl) cEl.textContent = subs.length ? `${subs.length} pending` : '';
+  const navBadge = document.getElementById('adminTabPsub');
+  if (navBadge) navBadge.textContent = subs.length ? String(subs.length) : '';
   const list = document.getElementById('planetSubList');
   if (!subs.length) { list.innerHTML = '<div class="pp-empty">No pending submissions.</div>'; return; }
   list.innerHTML = subs.map(s => {
@@ -793,6 +917,8 @@ async function loadBugs() {
 function renderBugs(bugs, counts) {
   const cEl = document.getElementById('bugAdminCounts');
   cEl.textContent = `${counts.open || 0} open · ${counts.complete || 0} done · ${counts.ignored || 0} ignored`;
+  const navBadge = document.getElementById('adminTabBugs');
+  if (navBadge) navBadge.textContent = counts.open ? String(counts.open) : '';
   const list = document.getElementById('bugAdminList');
   if (!bugs.length) { list.innerHTML = '<div class="pp-empty">No reports.</div>'; return; }
   list.innerHTML = bugs.map(b => {
@@ -1103,9 +1229,16 @@ async function loadPiProducts() {
 // Fetch custom baskets and (re)render their <option>s in the product datalist. Called on
 // load and after an admin creates/edits/deletes a basket so the picker stays current.
 async function _refreshBaskets() {
+  await _loadFeatures();
+  const dl = document.getElementById('productList');
+  // Gated feature (default on): when an admin has hidden baskets from the public, don't list them.
+  if (!_featureActive('baskets', true)) {
+    _baskets = [];
+    if (dl) dl.querySelectorAll('option[data-basket-id]').forEach(o => o.remove());
+    return;
+  }
   try { _baskets = (await (await fetch('/api/baskets')).json()).baskets || []; }
   catch (e) { _baskets = []; }
-  const dl = document.getElementById('productList');
   if (!dl) return;
   dl.querySelectorAll('option[data-basket-id]').forEach(o => o.remove());
   _baskets.forEach(b => {
@@ -2167,6 +2300,30 @@ function _esc(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+// Generic image lightbox — open an image in a dark in-page overlay (so SVGs don't load as a bare
+// white file page). Click the backdrop or ✕ or press Esc to close; clicking the image keeps it open.
+function openImageLightbox(ev, src, alt) {
+  if (ev && ev.preventDefault) ev.preventDefault();
+  let ov = document.getElementById('imgLightbox');
+  if (!ov) {
+    ov = document.createElement('div');
+    ov.id = 'imgLightbox';
+    ov.className = 'img-lightbox';
+    ov.onclick = closeImageLightbox;
+    document.body.appendChild(ov);
+  }
+  ov.innerHTML = `<button class="img-lightbox-close" aria-label="Close" onclick="closeImageLightbox()">×</button>`
+    + `<img src="${_esc(src)}" alt="${_esc(alt || '')}" onclick="event.stopPropagation()">`;
+  ov.classList.add('open');
+  document.addEventListener('keydown', _lightboxEsc);
+}
+function closeImageLightbox() {
+  const ov = document.getElementById('imgLightbox');
+  if (ov) ov.classList.remove('open');
+  document.removeEventListener('keydown', _lightboxEsc);
+}
+function _lightboxEsc(e) { if (e.key === 'Escape') closeImageLightbox(); }
+
 // ── Step 2: System Recommendations ───────────────────────────────────────────
 
 function renderRecommendations(data) {
@@ -2293,6 +2450,10 @@ let _planMeta = {};        // selected plan's production rate + sell value, for 
 let _refillModel = null;   // [{title, cols:[{id,name}], facs:[{loc, char, shareByTid, amt}]}]
 let _refillView = (() => { try { return localStorage.getItem('refillView') || 'summary'; } catch (e) { return 'summary'; } })();
 let _refillChar = (() => { try { return localStorage.getItem('refillChar') || ''; } catch (e) { return ''; } })();
+// Ignore what the last scan saw in the launchpads and fill to a clean 30,000 m³. ON by default:
+// factory pad contents aren't simulated forward (only extractors are), so the scanned figure goes
+// stale fast, and the usual workflow is to empty the pads when dropping off the next batch.
+let _refillIgnorePads = (() => { try { return localStorage.getItem('refillIgnorePads') !== '0'; } catch (e) { return true; } })();
 let _refillUserPicked = false;   // true once the user deliberately chose a plan — else default to Current Setup
 const _PLAN_SNAP_KEY = 'ppPlanSnapshots';
 
@@ -2453,6 +2614,25 @@ async function _ensurePlacements(typeIds) {
   renderAnalysis();   // re-render now that feasibility is known
 }
 
+// Factory CPU/PG fit at a given CCU — "tid|planet_type|ccu" -> launchpads that fit (3 full, 1-2 cramped,
+// 0 doesn't fit). Backed by /api/factory-fit (server generates the layout). Used by the move-character
+// tool to verify a factory colony fits the receiving character's command-center level.
+let _facFit = {};
+const _facFitPending = new Set();
+async function _ensureFactoryFit(keys) {
+  const need = [...new Set(keys)].filter(k => !(k in _facFit) && !_facFitPending.has(k));
+  if (!need.length) return;
+  need.forEach(k => _facFitPending.add(k));
+  const items = need.map(k => { const [tid, pt, ccu] = k.split('|'); return { type_id: Number(tid), planet_type: pt, ccu: Number(ccu) }; });
+  try {
+    const r = await fetch('/api/factory-fit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items }) });
+    const j = await r.json();
+    Object.assign(_facFit, j.fit || {});
+  } catch (e) { /* unknown fit just shows nothing */ }
+  need.forEach(k => _facFitPending.delete(k));
+  renderAnalysis();   // re-render now that fit is known
+}
+
 function _snapNeedsByP1(snap) {
   const out = {};
   const c = snap && snap.consumption;
@@ -2513,8 +2693,40 @@ async function onAnalyzeTabOpen() {
   try { saved = await _fetchAllSnapshots(); } catch (e) {}
   try { derived = await _fetchSetupPlans(); } catch (e) {}
   _analyzeSnaps = [...derived, ...saved];   // your live setup first, then saved plans
+  await _loadFeatures();
+  await _fetchSkillRoi();          // skill-training advice (feature-gated; independent of the selected plan)
   _renderAnalyzePlans();
   renderAnalysis();
+}
+
+let _skillRoi = null;
+async function _fetchSkillRoi() {
+  if (!_featureActive('skill_roi')) { _skillRoi = null; return; }
+  try { _skillRoi = await (await fetch('/api/skill-roi')).json(); }
+  catch (e) { _skillRoi = null; }
+}
+
+// "Train these skills for more output" — forward-looking ROI section for the Setup Analysis tab.
+function _renderSkillRoiSection() {
+  if (!_featureActive('skill_roi') || !_skillRoi) return '';
+  const sugs = _skillRoi.suggestions || [];
+  if (!sugs.length) return '';
+  const li = sugs.map(s => {
+    const gain = [];
+    if (s.add_isk_day) gain.push(`+${_fmtIsk(s.add_isk_day)}/day`);
+    if (s.add_units_day) gain.push(`+${s.add_units_day.toLocaleString()} ${_esc(s.unit_label || 'units')}/day`);
+    return `<li class="an-skill-row">
+        <span class="an-skill-main"><b>${_esc(s.char)}</b> · ${_esc(s.skill)} <span class="an-skill-lvl">${s.from_lvl} → ${s.to_lvl}</span></span>
+        <span class="an-skill-gain">${gain.join(' · ') || '—'}</span>
+        <span class="an-sug-note">${_esc(s.detail)}</span>
+      </li>`;
+  }).join('');
+  const note = _skillRoi.note ? `<div class="an-sug-note">${_esc(_skillRoi.note)}</div>` : '';
+  return `<div class="an-suggest an-suggest-skill">
+      <div class="an-suggest-h">Train skills for more output <span class="tl-preview-tag">estimate</span></div>
+      <div class="an-sug-note">What an extra skill level on each character would add at your current setup — your call whether the train (or an injector) is worth it.</div>
+      <ul class="an-skill-list">${li}</ul>${note}
+    </div>`;
 }
 
 function renderAnalysis() {
@@ -2861,7 +3073,6 @@ function renderAnalysis() {
   let suggest = _leverCards(binding.ratio, binding.name);
   if (_anLeverOpen.has('reseat')) suggest += _burndownSection(rows);
   if (_anLeverOpen.has('redeploy')) suggest += rebal;
-  if (_anLeverOpen.has('separate')) suggest += _separateFactoriesSection();
   if (addFactories) suggest += addFactories;
 
   // Extraction-runtime advice: longest program that keeps extraction above factory demand
@@ -2872,7 +3083,7 @@ function renderAnalysis() {
   el.innerHTML = head + _staleSupplyNote(rows) + stats + proj
     + `<div class="an-legend">The bar = how fed each factory input is (full green = kept up, short red = bottleneck). The % = <b>over/under-production</b> from your heads' extraction: <span class="an-ovr-ok">+10% or more = healthy</span> (cushion as heads decay), <span class="an-ovr-tight">0–10% = tight</span> (you hit it, but it'll dip short as they fade), <span class="an-ovr-short">below 0 = short</span>. Hover for the P0/hour figures.</div>`
     + `<div class="an-bars">${barRows}</div>`
-    + suggest + rtAdvice;
+    + suggest + rtAdvice + _renderSkillRoiSection() + _sepStandaloneCard(moves.map(m => ({ ...m, p0: p0Of(m.toT) })));
 }
 
 // ── Extraction-runtime helper (decay-aware recommendation) ────────────────────
@@ -2977,26 +3188,24 @@ function _leverCards(headroom, bindName) {
         <div class="an-lever-cta">${open ? `Hide ${hint} ▴` : `Show ${hint} ▾`}</div>
       </div>`;
   };
-  const sepCard = _sepHasWork(_facDeployment())
-    ? card('separate', 'an-lever-c', '⇆', 'Switch factory character', 'move toon', 'Want your factories on a different character? Pick where they are now and where they should go — the moves (and your extractors back the other way) follow.', 'the move')
-    : '';
   return `<div class="an-suggest an-suggest-levers">
       <div class="an-suggest-h">Lift yields &amp; balance</div>
-      <div class="an-levers-lead">Figures track your heads' placement at the last scan and decay as a program runs — so they shift when you reseat or restart. ${sepCard ? 'Levers:' : 'Two levers:'}</div>
+      <div class="an-levers-lead">Figures track your heads' placement at the last scan and decay as a program runs — so they shift when you reseat or restart. Two levers:</div>
       <div class="an-lever-row">
         ${card('reseat', 'an-lever-a', '⟳', 'Reseat heads', 'low effort', reseatTxt, 'reseat candidates')}
         ${card('redeploy', 'an-lever-b', '⇄', 'Redeploy a CC', 'rebalance', "If a material stays short while others overflow, move a surplus colony's command center onto it.", 'rebalance moves')}
-        ${sepCard}
       </div>
     </div>`;
 }
 
-// ── Switch factory characters ──────────────────────────────────────────────────
-// A directed ONE-to-ONE role swap: "move my factories from character A to character B." Pick A (where the
-// factories are now) and B (the character you want to be the factory toon) from two dropdowns. The tool
-// tears down A's factories and rebuilds them on B, and moves B's extractors back onto A. No fleet-wide
-// consolidation, no extractor↔extractor shuffling — just the one swap the player asked for.
-const _SEP_DIAM_CEILING = 16000;     // mirrors backend _FACTORY_DIAM_CEILING — a destination B/T must fit
+// ── Move a character to another account ─────────────────────────────────────────
+// A USER-INITIATED standalone tool (its own collapsed card at the bottom of the analysis, NOT one of the
+// auto-advice levers). The real goal is moving a whole character's PI to a character on ANOTHER ACCOUNT
+// (so factories and extractors can run at the same time). So it's a literal 1:1 SWAP: pick A and B, and
+// every colony A runs moves to B while every colony B runs moves to A — each keeps its EXACT planet and
+// layout, only the owner flips. Because the planet already hosts that exact colony it ALWAYS fits — no
+// B/T / diameter / capacity juggling. NOTE: ESI never exposes account membership (each char is authorised
+// individually via SSO), so we CANNOT verify B is on a different account — that's on the user (noted in UI).
 let _sepFrom = null, _sepTo = null;  // chosen character ids (strings); null = use a sensible default
 function _setSepFrom(cid) { _sepFrom = String(cid); if (_sepTo === _sepFrom) _sepTo = null; renderAnalysis(); }
 function _setSepTo(cid) { _sepTo = String(cid); renderAnalysis(); }
@@ -3009,7 +3218,7 @@ function _facDeployment() {
   const factories = [], extractors = [];
   _realChars().forEach(c => {
     const cid = String(c.character_id);
-    const e = byChar[cid] = { cid, name: c.name, maxPlanets: c.max_planets || 0, factories: [], extractors: [] };
+    const e = byChar[cid] = { cid, name: c.name, maxPlanets: c.max_planets || 0, ccu: c.ccu || 5, factories: [], extractors: [] };
     (c.planets || []).forEach(p => {
       if (!p.is_extractor && p.products && p.products.length) {
         const f = { cid, char: c.name, system: p.system, planet_num: p.planet_num, planet_type: p.planet_type, product: p.products[0] };
@@ -3034,98 +3243,142 @@ function _facDeployment() {
   return { byChar, factories, extractors, hub, perCharCap: Math.min(6, Math.max(1, btNums.size)) };
 }
 
-function _hubFactories(dep) { return dep.factories.filter(f => f.system === dep.hub); }
-
-function _hubFacCount(dep, cid) { return dep.byChar[cid] ? dep.byChar[cid].factories.filter(f => f.system === dep.hub).length : 0; }
-
-// Offer the swap whenever at least one character has factories and there's another character to move to.
+// A character's role: factory toon (has any factories), extractor toon (only extractors), or empty (no
+// colonies — e.g. a freshly added toon on a new account).
+function _sepRole(e) { return e.factories.length ? 'f' : (e.extractors.length ? 'e' : 'empty'); }
+// A swap A⇄B is meaningful only when their roles DIFFER, or B is empty (move A onto the fresh toon). Same
+// productive role both sides — factory↔factory or extractor↔extractor — is pointless and excluded.
+function _sepValidTarget(a, b) { return b.cid !== a.cid && _sepRole(b) !== _sepRole(a); }
+// Offer the tool when some character with colonies has at least one valid target.
 function _sepHasWork(dep) {
-  return _hubFactories(dep).length > 0 && _realChars().length >= 2;
+  const chars = Object.values(dep.byChar);
+  return chars.some(a => (a.factories.length + a.extractors.length) > 0 && chars.some(b => _sepValidTarget(a, b)));
 }
 
 // One cross-character teardown→rebuild card (reuses the an-move-* styling; char lives in each side's loc).
-function _sepCard(fromChar, fromLoc, toChar, toLoc, matHtml) {
-  return `<li class="an-move"><div class="an-move-pair">`
+// A cross-character teardown→rebuild card. `warn` = {html, block?} CCU-fit line. `toMat`/`rebalTag` (both
+// set together) mark a FOLDED rebalance redeploy: the rebuild side shows the deficit material on the dest
+// planet instead of the as-is colony, with a "rebalance" badge + explanation.
+function _sepCard(fromChar, fromLoc, toChar, toLoc, matHtml, warn, toMat, rebalTag) {
+  return `<li class="an-move${warn && warn.block ? ' an-sep-noFit' : ''}${rebalTag ? ' an-sep-rebal' : ''}"><div class="an-move-pair">`
     + `<div class="an-move-side an-move-rm"><span class="an-move-tag">tear down</span><span class="an-move-loc">${_esc(fromChar)} · ${fromLoc}</span><span class="an-move-mat">${matHtml}</span></div>`
     + `<div class="an-move-arrow">→</div>`
-    + `<div class="an-move-side an-move-add"><span class="an-move-tag">rebuild</span><span class="an-move-loc">${_esc(toChar)} · ${toLoc}</span><span class="an-move-mat">${matHtml}</span></div>`
-    + `</div></li>`;
+    + `<div class="an-move-side an-move-add"><span class="an-move-tag">${rebalTag ? 'rebuild + rebalance' : 'rebuild'}</span><span class="an-move-loc">${_esc(toChar)} · ${toLoc}</span><span class="an-move-mat">${toMat || matHtml}</span></div>`
+    + `</div>${warn && warn.html ? `<div class="an-sep-fit${warn.block ? ' an-sep-fit-block' : ''}">${warn.html}</div>`
+      : (rebalTag ? `<div class="an-sep-fit an-sep-rebal-note">↻ ${rebalTag}</div>` : '')}</li>`;
 }
 
-function _separateFactoriesSection() {
+// User-INITIATED tool (NOT one of the auto-advice levers) — its own standalone card at the bottom of the
+// analysis, collapsed by default.
+let _sepOpen = false;
+function _toggleSepOpen() { _sepOpen = !_sepOpen; renderAnalysis(); }
+
+function _sepStandaloneCard(moves) {
   const dep = _facDeployment();
-  const hubFac = _hubFactories(dep);
-  if (!hubFac.length || _realChars().length < 2) return '';
+  if (!_sepHasWork(dep)) return '';
+  const head = `<div class="an-sep-head an-lever-click" onclick="_toggleSepOpen()">`
+    + `<span class="an-lever-ico">⇆</span><span class="an-lever-ttl">Move a character to another account</span>`
+    + `<span class="an-lever-tag">manual</span><span class="an-sep-cta">${_sepOpen ? 'Hide ▴' : 'Open ▾'}</span></div>`;
+  const body = _sepOpen ? _sepSwapBody(dep, moves || [])
+    : `<div class="an-sep-sub">Factories on the wrong character, or moving a character to another account (incl. a freshly added empty toon)? Pick two characters and swap all their colonies 1:1.</div>`;
+  return `<div class="an-suggest an-suggest-sep an-sep-card">${head}${body}</div>`;
+}
+
+function _sepSwapBody(dep, moves) {
   const chars = Object.values(dep.byChar);
+  // A (source) = any character with colonies, default the heaviest factory toon. B (target) = a character
+  // of a DIFFERENT role or an EMPTY (newly added) toon — so you can move A onto a fresh toon, then build
+  // new stuff where A was. Same-role pairs (factory↔factory / extractor↔extractor) are excluded.
+  const colonies = e => e.factories.length + e.extractors.length;
+  const sources = chars.filter(e => colonies(e) > 0).sort((a, b) => (b.factories.length - a.factories.length) || (b.extractors.length - a.extractors.length));
+  const from = (_sepFrom && sources.some(e => e.cid === _sepFrom)) ? _sepFrom : sources[0].cid;
+  const A = dep.byChar[from];
+  const toOpts = chars.filter(e => _sepValidTarget(A, e)).sort((a, b) => colonies(b) - colonies(a));
+  const to = (_sepTo && toOpts.some(e => e.cid === _sepTo)) ? _sepTo : (toOpts[0] || {}).cid;
+  const B = to ? dep.byChar[to] : null;
+  const fromName = A.name, toName = B ? B.name : '';
 
-  // FROM = where the factories are now (default: most hub factories). TO = who you want to be the factory
-  // toon (default: the character with the most extractors). Both adjustable via the dropdowns.
-  const facCharsSorted = chars.filter(e => _hubFacCount(dep, e.cid) > 0).sort((a, b) => _hubFacCount(dep, b.cid) - _hubFacCount(dep, a.cid));
-  const from = (_sepFrom && _hubFacCount(dep, _sepFrom) > 0) ? _sepFrom : facCharsSorted[0].cid;
-  const toOpts = chars.filter(e => e.cid !== from);
-  const to = (_sepTo && _sepTo !== from && dep.byChar[_sepTo]) ? _sepTo
-    : (toOpts.slice().sort((a, b) => b.extractors.length - a.extractors.length)[0] || {}).cid;
-  const fromName = dep.byChar[from].name, toName = to ? dep.byChar[to].name : '';
-
-  const opts = (list, val) => list.map(e => `<option value="${e.cid}"${String(e.cid) === String(val) ? ' selected' : ''}>${_esc(e.name)} (${_hubFacCount(dep, e.cid)}f·${e.extractors.length}e)</option>`).join('');
-  const controls = `<div class="an-sep-pick">Move factories from `
-    + `<select class="an-sep-sel" onchange="_setSepFrom(this.value)">${opts(facCharsSorted, from)}</select> → to `
+  const opts = (list, val) => list.map(e => {
+    const tag = colonies(e) ? `${e.factories.length}f·${e.extractors.length}e` : 'empty';
+    return `<option value="${e.cid}"${String(e.cid) === String(val) ? ' selected' : ''}>${_esc(e.name)} · CCU ${e.ccu} (${tag})</option>`;
+  }).join('');
+  const controls = `<div class="an-sep-pick">Swap `
+    + `<select class="an-sep-sel" onchange="_setSepFrom(this.value)">${opts(sources, from)}</select> ⇄ `
     + (to ? `<select class="an-sep-sel" onchange="_setSepTo(this.value)">${opts(toOpts, to)}</select>` : '—') + `</div>`;
-  if (!to) {
-    return `<div class="an-suggest an-suggest-sep"><div class="an-suggest-h">Switch factory characters</div>${controls}`
-      + `<div class="an-levers-lead">You'd need a second character to move factories to.</div></div>`;
-  }
+  if (!to) return `${controls}<div class="an-sep-sub">You'd need a second character to swap with.</div>`;
 
-  // FACTORY MOVES — from's hub factories → to, on a fitting B/T planet (to's free B/T + the B/T its
-  // extractors vacate when they move back to `from`), smallest first.
-  const sites = ((_factorySites && _factorySites[to]) || []).filter(p => p.system === dep.hub && (p.diameter == null || p.diameter <= _SEP_DIAM_CEILING));
-  const vacated = dep.byChar[to].extractors.filter(e => e.system === dep.hub && (e.planet_type === 'Barren' || e.planet_type === 'Temperate'))
-    .map(e => ({ system: dep.hub, planet_num: e.planet_num, planet_type: e.planet_type, diameter: null }));
-  const seen = new Set(); const toDest = [];
-  sites.concat(vacated).sort((a, b) => (a.diameter || 1e9) - (b.diameter || 1e9)).forEach(p => { if (!seen.has(p.planet_num)) { seen.add(p.planet_num); toDest.push(p); } });
-  const toUsed = new Set(dep.byChar[to].factories.filter(f => f.system === dep.hub).map(f => f.planet_num));
-  const facMoves = [], facUn = [];
-  dep.byChar[from].factories.filter(f => f.system === dep.hub).forEach(f => {
-    const d = toDest.find(p => !toUsed.has(p.planet_num));
-    if (d) { toUsed.add(d.planet_num); facMoves.push({ f, dest: d }); } else facUn.push(f);
-  });
+  // FULL 1:1 SWAP — every colony keeps its EXACT planet & layout, only the owner flips. A's colonies move
+  // to B and B's move to A. Each planet already hosts that exact colony, so PLACEMENT always fits — the one
+  // real check is the receiving character's CCU: a factory packed at a higher CC may not fit a lower-CC
+  // host (fewer facilities / less CPU+PG). We verify each factory against the target CCU via /api/factory-fit.
+  const fitKey = (p, ccu) => `${p.product.type_id}|${p.planet_type}|${ccu}`;
+  const fitKeys = [];
+  A.factories.forEach(f => fitKeys.push(fitKey(f, B.ccu)));
+  B.factories.forEach(f => fitKeys.push(fitKey(f, A.ccu)));
+  if (fitKeys.length) _ensureFactoryFit(fitKeys);
+  const fitWarn = (p, ccu) => {
+    if (!p.product) return null;     // extractors keep 10 heads and just scale basics — always fit
+    const v = _facFit[fitKey(p, ccu)];
+    if (v === undefined) return { html: `<span class="an-sep-fit-chk">checking CCU ${ccu} fit…</span>` };
+    if (v === 0) return { block: true, html: `⛔ Won't fit at <b>CCU ${ccu}</b> — the factory needs a higher Command Center than ${_esc(ccu === A.ccu ? fromName : toName)} has.` };
+    if (v < 3) return { html: `⚠ Fits at <b>CCU ${ccu}</b> but cramped (${v} launchpad${v === 1 ? '' : 's'}, fewer facilities → lower output).` };
+    return null;
+  };
 
-  // EXTRACTOR MOVES — to's extractors → from, on a reachable free planet for that P0 (from _placements);
-  // from's factories leaving free up its slots.
-  const fromUsed = new Set(dep.byChar[from].extractors.map(e => `${e.system}|${e.planet_num}`));
-  let fromCap = Math.max(0, dep.byChar[from].maxPlanets - dep.byChar[from].extractors.length);
-  const extMoves = [], extUn = [];
-  dep.byChar[to].extractors.forEach(ex => {
-    if (fromCap <= 0) { extUn.push(ex); return; }
-    const tid = ex.p1 && ex.p1.type_id;
-    const cand = (tid != null && _placements && _placements[String(tid)] && _placements[String(tid)].by_char[from]) || [];
-    const d = cand.find(p => !fromUsed.has(`${p.system}|${p.planet_num}`));
-    if (d) fromUsed.add(`${d.system}|${d.planet_num}`);
-    fromCap -= 1;
-    extMoves.push({ ex, dest: d || null });   // d may be null → rebuild on a free slot (planet unspecified)
-  });
+  const locOf = p => `${_esc(p.system)} P${p.planet_num} <span class="an-cc-tag">${_esc(p.planet_type)}</span>`;
+  const matOf = p => p.product ? `<b>${_esc(p.product.name)}</b> factory`
+    : `${_esc(p.p0 || '')}${p.p1 ? ' <span class="an-move-p0arrow">→</span> ' + _esc(p.p1.name) : ''}`;
 
-  const facHtml = facMoves.map(m => _sepCard(fromName, `${_esc(m.f.system)} P${m.f.planet_num}`,
-    toName, `${_esc(m.dest.system)} P${m.dest.planet_num} <span class="an-cc-tag">${_esc(m.dest.planet_type)}</span>`,
-    `<b>${_esc(m.f.product.name)}</b> factory`)).join('');
-  const extHtml = extMoves.map(m => _sepCard(toName, `${_esc(m.ex.system)} P${m.ex.planet_num}`,
-    fromName, m.dest ? `${_esc(m.dest.system)} P${m.dest.planet_num} <span class="an-cc-tag">${_esc(m.dest.planet_type)}</span>${m.dest.richness != null ? ' ' + m.dest.richness + '%' : ''}` : 'a free slot',
-    `${_esc(m.ex.p0 || '')}${m.ex.p1 ? ' <span class="an-move-p0arrow">→</span> ' + _esc(m.ex.p1.name) : ''}`)).join('');
+  // FOLD-IN REBALANCE: the analysis's "Redeploy a CC" suggestions are feasible redeployments of a surplus
+  // colony onto a short material's free planet. Since the swap rebuilds every colony anyway, a redeploy on
+  // the side being rebuilt is folded in for free — rebuild that colony as the SHORT material on the dest
+  // planet instead of as-is. (Reseat-head fixes are not folded, per design.) Only the owner's feasible
+  // (has a dest) redeploys are folded; redeploys on other characters are flagged as a follow-up.
+  const foldMap = ownerCid => {
+    const m = {};
+    (moves || []).forEach(mv => { if (mv && mv.dest && String(mv.colony.cid) === String(ownerCid)) m[`${mv.colony.system}|${mv.colony.planet_num}`] = mv; });
+    return m;
+  };
+  let folded = 0;
+  const sideCards = (srcName, srcCid, dstName, dstCcu, colonies) => {
+    const fold = foldMap(srcCid);
+    return colonies.map(p => {
+      const mv = fold[`${p.system}|${p.planet_num}`];
+      if (mv) {
+        folded++;
+        const toMat = `${_esc(mv.p0 || '')}${mv.p0 ? ' <span class="an-move-p0arrow">→</span> ' : ''}<b>${_esc(mv.to)}</b>`;
+        const destLoc = `${_esc(mv.dest.system)} P${mv.dest.planet_num} <span class="an-cc-tag">${_esc(mv.dest.planet_type)}</span>${mv.dest.richness != null ? ' ' + mv.dest.richness + '%' : ''}`;
+        return _sepCard(srcName, locOf(p), dstName, destLoc, matOf(p), null, toMat, `was surplus ${_esc(mv.fromName)} → now covers short ${_esc(mv.to)}`);
+      }
+      return _sepCard(srcName, locOf(p), dstName, locOf(p), matOf(p), p.product ? fitWarn(p, dstCcu) : null);
+    }).join('');
+  };
+  const aAll = [...A.factories, ...A.extractors], bAll = [...B.factories, ...B.extractors];
+  const aToB = sideCards(fromName, A.cid, toName, B.ccu, aAll);
+  const bToA = sideCards(toName, B.cid, fromName, A.ccu, bAll);
+  const otherMoves = (moves || []).filter(mv => mv && mv.dest && String(mv.colony.cid) !== String(A.cid) && String(mv.colony.cid) !== String(B.cid)).length;
 
-  const total = facMoves.length + extMoves.length;
+  const noFit = A.factories.filter(f => _facFit[fitKey(f, B.ccu)] === 0).length
+              + B.factories.filter(f => _facFit[fitKey(f, A.ccu)] === 0).length;
   const notes = [];
-  if (facUn.length) notes.push(`${facUn.length} of ${_esc(fromName)}'s factor${facUn.length === 1 ? 'y has' : 'ies have'} no fitting Barren/Temperate slot on ${_esc(toName)} — free a B/T planet there or train its Interplanetary Consolidation.`);
-  if (extUn.length) notes.push(`${extUn.length} of ${_esc(toName)}'s extractor${extUn.length === 1 ? '' : 's'} won't fit on ${_esc(fromName)} — it ran out of free slots once its factories leave.`);
-  notes.push(`After you rebuild, <b>Rescan</b> — if a material dips short on the new layout, the <b>Reseat</b> / <b>Redeploy</b> levers above show the rebalance.`);
+  if (folded) notes.push(`↻ Folded <b>${folded}</b> rebalance redeploy${folded === 1 ? '' : 's'} into the move — the affected colon${folded === 1 ? 'y rebuilds' : 'ies rebuild'} as the short material instead of as-is, so the move fixes the imbalance too.`);
+  if (otherMoves) notes.push(`The analysis suggests ${otherMoves} more redeploy${otherMoves === 1 ? '' : 's'} on other characters — open <b>Redeploy a CC</b> to apply those separately.`);
+  if (noFit) notes.push(`⛔ <b>${noFit} factor${noFit === 1 ? 'y' : 'ies'} won't fit the receiving character's Command Center</b> — raise that character's CCU, or leave ${noFit === 1 ? 'it' : 'those'} where they are.`);
+  if (bAll.length > A.maxPlanets) notes.push(`<b>${_esc(fromName)}</b> can only run ${A.maxPlanets} colonies but would take ${bAll.length} — train its Interplanetary Consolidation or leave ${bAll.length - A.maxPlanets} of <b>${_esc(toName)}</b>'s behind.`);
+  if (aAll.length > B.maxPlanets) notes.push(`<b>${_esc(toName)}</b> can only run ${B.maxPlanets} colonies but would take ${aAll.length} — train its Interplanetary Consolidation or leave ${aAll.length - B.maxPlanets} of <b>${_esc(fromName)}</b>'s behind.`);
+  const bEmpty = _sepRole(B) === 'empty';
+  if (bEmpty) notes.push(`Once <b>${_esc(fromName)}</b> is cleared it's a blank character again — build a fresh setup on it, or let the <b>Spare capacity</b> card suggest one.`);
+  notes.push(`⚠ Make sure <b>${_esc(toName)}</b> is on a <b>different account</b> than <b>${_esc(fromName)}</b> — otherwise you still can't run both at once. Account membership isn't in the API, so this can't be checked for you.`);
+  notes.push(`After you rebuild, <b>Rescan</b> to refresh the analysis.`);
 
-  return `<div class="an-suggest an-suggest-sep">
-      <div class="an-suggest-h">Switch factory characters</div>
-      ${controls}
-      <div class="an-levers-lead">Make <b>${_esc(toName)}</b> your factory character: rebuild <b>${_esc(fromName)}</b>'s factories on it, and move <b>${_esc(toName)}</b>'s extractors back onto <b>${_esc(fromName)}</b> — <b>${total}</b> teardown/rebuild move${total !== 1 ? 's' : ''}.</div>
-      ${facHtml ? `<div class="an-bd-bestuse-h">⇄ ${_esc(fromName)}'s factories → ${_esc(toName)}:</div><ul class="an-move-list">${facHtml}</ul>` : ''}
-      ${extHtml ? `<div class="an-bd-bestuse-h an-bd-bestuse-h2">↩ ${_esc(toName)}'s extractors → ${_esc(fromName)}:</div><ul class="an-move-list">${extHtml}</ul>` : ''}
-      ${notes.length ? `<div class="an-sep-notes">${notes.map(n => `<div>${n}</div>`).join('')}</div>` : ''}
-    </div>`;
+  const lead = bEmpty
+    ? `Move all of <b>${fromName}</b>'s colonies onto the empty character <b>${toName}</b> — same planets, just a new owner. A clean 1:1, so it always fits:`
+    : `Swap everything between <b>${fromName}</b> and <b>${toName}</b> — same planets, just a different owner. A clean 1:1, so it always fits:`;
+  return `${controls}
+      <div class="an-levers-lead">${lead}</div>
+      ${aToB ? `<div class="an-bd-bestuse-h">→ ${_esc(fromName)}'s ${aAll.length} colon${aAll.length === 1 ? 'y' : 'ies'} → ${_esc(toName)}:</div><ul class="an-move-list">${aToB}</ul>` : ''}
+      ${bToA ? `<div class="an-bd-bestuse-h an-bd-bestuse-h2">↩ ${_esc(toName)}'s ${bAll.length} colon${bAll.length === 1 ? 'y' : 'ies'} → ${_esc(fromName)}:</div><ul class="an-move-list">${bToA}</ul>` : ''}
+      ${notes.length ? `<div class="an-sep-notes">${notes.map(n => `<div>${n}</div>`).join('')}</div>` : ''}`;
 }
 
 // ── Yield burn-down (measured decline across programs) ─────────────────────────
@@ -3642,6 +3895,7 @@ async function renderPlanDistribution() {
 function _refillCharOf(loc) { return (loc.split(' · ')[0] || '').trim(); }
 function _setRefillChar(v) { _refillChar = v; try { localStorage.setItem('refillChar', v); } catch (e) {} _renderRefillTables(); }
 function _setRefillView(v) { _refillView = v; try { localStorage.setItem('refillView', v); } catch (e) {} _renderRefillControls(); _renderRefillTables(); }
+function _setRefillIgnorePads(on) { _refillIgnorePads = !!on; try { localStorage.setItem('refillIgnorePads', on ? '1' : '0'); } catch (e) {} updateP1Distribution(); }
 
 function _renderRefillControls() {
   const el = document.getElementById('refillControls');
@@ -3655,11 +3909,16 @@ function _renderRefillControls() {
           <option value="">All characters (${total})</option>
           ${chars.map(c => `<option value="${_esc(c)}"${c === _refillChar ? ' selected' : ''}>${_esc(c)}</option>`).join('')}
         </select></label>` : '';
+  // Show the "empty pads" toggle only when some factory actually has scanned pad contents to ignore.
+  const hasPadData = _refillModel.some(g => g.facs.some(f => typeof f.inputM3 === 'number' && f.inputM3 > 0));
+  const ignoreCtl = hasPadData
+    ? `<label class="dist-ctl dist-ctl-check" title="Factory launchpad contents come from the last scan and aren't simulated forward, so they go stale. ON = ignore them and fill to a clean 30,000 m³ (assumes you empty the pads when you drop off the batch). OFF = subtract what the last scan saw.">
+        <input type="checkbox" ${_refillIgnorePads ? 'checked' : ''} onchange="_setRefillIgnorePads(this.checked)"> Pads emptied at drop-off</label>` : '';
   el.innerHTML = `${charSel}
     <div class="dist-view-toggle">
       <button class="dist-view-btn${_refillView === 'summary' ? ' on' : ''}" onclick="_setRefillView('summary')" title="One uniform drop that fits every factory">Summary</button>
       <button class="dist-view-btn${_refillView === 'detailed' ? ' on' : ''}" onclick="_setRefillView('detailed')" title="Each factory topped to its own free launchpad space">All planets</button>
-    </div>`;
+    </div>${ignoreCtl}`;
 }
 
 // One P1 cell. undefined share → factory doesn't use this input (·); null amount → no stock yet (–).
@@ -3767,7 +4026,9 @@ function updateP1Distribution() {
   const allFacs = [];
   _refillModel.forEach(g => g.facs.forEach(f => {
     f.amt = {};
-    f.availM3 = (f.inputM3 != null) ? Math.max(0, _LP_CAP_M3 - f.inputM3) : _LP_CAP_M3;  // free LP space
+    // Free LP space = full buffer minus what the last scan saw — unless we're ignoring stale pad
+    // contents (default), in which case fill to the full 30,000 m³.
+    f.availM3 = (!_refillIgnorePads && f.inputM3 != null) ? Math.max(0, _LP_CAP_M3 - f.inputM3) : _LP_CAP_M3;
     allFacs.push(f);
   }));
 
@@ -3934,11 +4195,12 @@ function renderFinalPlan(data, opts = {}) {
     const savedLbl = (s.split_planets > 0)
       ? `${s.split_planets} split → ${s.planets_saved} planet${s.planets_saved !== 1 ? 's' : ''} reinvested`
       : (splitOn ? 'no overproduction slack to reclaim' : 'reuse planets → more factories');
-    const splitStatHtml = `
+    // Gated feature (default on): hide the split control when an admin has pulled it from the public.
+    const splitStatHtml = _featureActive('split_extraction', true) ? `
         <div class="plan-stat plan-split-ctrl" title="Split P1 production: where two P0s share a planet type, host both on one planet (2 ECUs sharing the 10-head budget → two P1 lines). The planets this frees are reinvested into more factory planets — so output rises only by what those real extra factories produce (it needs overproduction slack to reclaim; with none, nothing to split). Head counts on split planets are guidance — real yield varies with hotspot placement and depletion.">
           <span class="plan-split-seg">${splitBtns}</span>
           <span class="plan-stat-lbl">split planets · ${savedLbl}</span>
-        </div>`;
+        </div>` : '';
     // Distribution method: how extractor counts are split across resources. Each button gets
     // its own tooltip (one combined title on the wrapper was unreadable and ambiguous).
     const distMode = (_wiz.distMode || s.distribution_mode || 'stability');

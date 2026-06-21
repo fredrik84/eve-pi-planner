@@ -1107,6 +1107,22 @@ def analyze_placements(body: dict = Body(...), pp_session: str = Cookie(default=
     return {"placements": out, "factory_sites": factory_sites}
 
 
+@router.post("/api/factory-fit")
+def factory_fit(body: dict = Body(...)):
+    """For each {type_id, planet_type, ccu}, how many launchpads the product's factory template fits at
+    that command-centre level (via _factory_fit_lp: 3 = full, 1-2 = cramped/fewer facilities, 0 = doesn't
+    fit at all). Pure layout math, no user data. Lets the 'move a character' tool verify a factory colony
+    actually fits the receiving character's CCU before suggesting the move."""
+    out = {}
+    for it in (body.get("items") or []):
+        try:
+            tid = int(it["type_id"]); pt = str(it["planet_type"]); ccu = int(it["ccu"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        out[f"{tid}|{pt}|{ccu}"] = _factory_fit_lp(tid, pt, ccu)
+    return {"fit": out}
+
+
 @router.get("/api/my-setup-plan")
 def my_setup_plan(pp_session: str = Cookie(default=None)):
     """Derive a 'demand profile' per distinct product the player's DEPLOYED factories build,
@@ -1191,6 +1207,136 @@ def my_setup_plan(pp_session: str = Cookie(default=None)):
     # Highest-tier / biggest operations first.
     plans.sort(key=lambda x: (-x["tier"], -x["factories_count"]))
     return {"plans": plans}
+
+
+_UNITS_PER_PLANET: dict = {}   # (product, planet_type, cc) -> factory units the template packs
+
+
+def _units_per_planet(product: int, planet_type: str, cc: int) -> int:
+    """How many factory units of `product` pack onto one planet at command-centre level `cc`
+    (the layout engine's max_count). Bigger CC budget → more units fit. Cached."""
+    key = (product, planet_type or "Barren", cc)
+    if key in _UNITS_PER_PLANET:
+        return _UNITS_PER_PLANET[key]
+    from app.layout import generate_layout
+    try:
+        n = generate_layout(product, planet_type or "Barren", launchpads=3,
+                            count=None, cc_level=cc)["summary"]["max_count"]
+    except Exception:
+        n = 0
+    _UNITS_PER_PLANET[key] = n
+    return n
+
+
+@router.get("/api/skill-roi")
+def skill_roi(pp_session: str = Cookie(default=None)):
+    """Forward-looking 'train these skills for more output' advice for the player's CURRENT
+    deployed setup (Setup Analysis tab). Two yield skills:
+      • Interplanetary Consolidation — next level = +1 planet ≈ +1 colony's average value/day.
+      • Command Center Upgrades — next level = a bigger CC budget → more factory units pack onto
+        each FACTORY planet (layout-engine max_count delta × per-unit value). Extractor-side CCU
+        gains (more basics) aren't modelled yet.
+    Estimates (flat per-unit factory rate); strictly scoped to the session's context."""
+    context_id = session_context_id(pp_session)
+    if not context_id:
+        return {"suggestions": [], "note": None}
+    pi = load_pi_data()
+    types = pi["types"]
+    con = get_connection()
+    chars = con.execute(
+        "SELECT character_id AS cid, character_name AS nm, "
+        "       COALESCE(interplanetary_consolidation,0) AS ic, "
+        "       COALESCE(command_center_upgrades,0) AS ccu "
+        "FROM pp_characters WHERE context_id=? AND COALESCE(is_dummy,0)=0", (context_id,)).fetchall()
+    rows = con.execute(
+        "SELECT cp.character_id AS cid, cp.is_extractor AS ext, cp.planet_type AS ptype, "
+        "       cp.products AS products "
+        "FROM pp_char_planets cp JOIN pp_characters c ON c.character_id=cp.character_id "
+        "WHERE c.context_id=? AND COALESCE(c.is_dummy,0)=0", (context_id,)).fetchall()
+    con.close()
+
+    by_char: dict = {}
+    total_used = 0
+    fac_products: set = set()
+    for p in rows:
+        total_used += 1
+        d = by_char.setdefault(p["cid"], {"ext": 0, "fac": []})
+        if p["ext"]:
+            d["ext"] += 1
+        else:
+            try:
+                prods = _json.loads(p["products"] or "[]")
+            except Exception:
+                prods = []
+            tid = prods[0].get("type_id") if prods else None
+            if tid:
+                d["fac"].append({"tid": tid, "ptype": p["ptype"] or "Barren"})
+                fac_products.add(tid)
+
+    prices = fetch_prices(list(fac_products)) if fac_products else {}
+    _unit_val = lambda tid: _effective_fph(tid, pi) * 24 * prices.get(tid, 0.0)   # ISK/day per factory unit
+
+    # Current flat value/day (one unit per factory planet, same model as my_setup_plan), to value
+    # the marginal IC planet. Also the single-product label, if the whole setup makes one thing.
+    total_value_day = 0.0
+    prod_ppd: dict = {}
+    for cid, d in by_char.items():
+        for f in d["fac"]:
+            total_value_day += _unit_val(f["tid"])
+            prod_ppd[f["tid"]] = prod_ppd.get(f["tid"], 0.0) + _effective_fph(f["tid"], pi) * 24
+    per_planet_value = (total_value_day / total_used) if total_used else 0.0
+    single_tid = next(iter(prod_ppd)) if len(prod_ppd) == 1 else None
+    single_label = (types.get(single_tid, {}).get("name") if single_tid else None)
+
+    suggestions = []
+    for c in chars:
+        d = by_char.get(c["cid"])
+        if not d:
+            continue                                    # idle character — nothing deployed to scale
+        n_planets = d["ext"] + len(d["fac"])
+
+        # Interplanetary Consolidation → +1 planet (next level), valued at one colony's average.
+        if c["ic"] < 5 and n_planets > 0 and per_planet_value > 0:
+            sug = {"char": c["nm"], "skill": "Interplanetary Consolidation",
+                   "from_lvl": c["ic"], "to_lvl": c["ic"] + 1, "detail": "+1 planet slot",
+                   "add_isk_day": round(per_planet_value, 2)}
+            if single_tid:
+                sug["add_units_day"] = round(prod_ppd[single_tid] / total_used)
+                sug["unit_label"] = single_label
+            suggestions.append(sug)
+
+        # Command Center Upgrades → more factory units per planet (factory planets only).
+        if c["ccu"] < 5 and d["fac"]:
+            cc = max(1, min(5, c["ccu"] or 5))
+            add_isk = 0.0
+            add_units = 0.0
+            by_prod: dict = {}
+            for f in d["fac"]:
+                mc0 = _units_per_planet(f["tid"], f["ptype"], cc)
+                mc1 = _units_per_planet(f["tid"], f["ptype"], cc + 1)
+                extra = mc1 - mc0
+                if mc0 > 0 and extra > 0:
+                    add_isk += extra * _unit_val(f["tid"])
+                    u = extra * _effective_fph(f["tid"], pi) * 24
+                    add_units += u
+                    by_prod[f["tid"]] = by_prod.get(f["tid"], 0) + extra
+            if add_isk > 0 or add_units > 0:
+                sug = {"char": c["nm"], "skill": "Command Center Upgrades",
+                       "from_lvl": c["ccu"], "to_lvl": c["ccu"] + 1,
+                       "detail": "bigger command centre → more factories per planet",
+                       "add_isk_day": round(add_isk, 2)}
+                if len(by_prod) == 1:
+                    only = next(iter(by_prod))
+                    sug["add_units_day"] = round(add_units)
+                    sug["unit_label"] = types.get(only, {}).get("name")
+                suggestions.append(sug)
+
+    # Biggest gains first; keep ISK-bearing ones above pure-unit ones.
+    suggestions.sort(key=lambda s: (s.get("add_isk_day") or 0, s.get("add_units_day") or 0), reverse=True)
+    note = None
+    if fac_products and not prices:
+        note = "Market prices unavailable — showing extra output only."
+    return {"suggestions": suggestions[:12], "note": note}
 
 
 def _expansion_capacity(context_id: int) -> dict:
