@@ -3093,7 +3093,7 @@ function renderAnalysis() {
   const rtAdvice = _extRuntimeAdviceHtml(binding.ratio, _currentProgramDays());
 
   el.innerHTML = head + _staleSupplyNote(rows) + stats + proj
-    + `<div class="an-legend">The bar = how fed each factory input is (full green = kept up, short red = bottleneck). The % = <b>over/under-production</b> from your heads' extraction: <span class="an-ovr-ok">+10% or more = healthy</span> (cushion as heads decay), <span class="an-ovr-tight">0–10% = tight</span> (you hit it, but it'll dip short as they fade), <span class="an-ovr-short">below 0 = short</span>. Hover for the P0/hour figures.</div>`
+    + `<div class="an-legend">Bar = how fed each input is. % = extraction headroom: <span class="an-ovr-ok">+10% or more healthy</span>, <span class="an-ovr-tight">0–10% tight</span> (dips as heads decay), <span class="an-ovr-short">below 0 short</span>. Click a row for the fix.</div>`
     + `<div class="an-bars">${barRows}</div>`
     + suggest + rtAdvice + _renderSkillRoiSection()
     + (_featureActive('move_character') ? _sepStandaloneCard(moves.map(m => ({ ...m, p0: p0Of(m.toT) }))) : '');
