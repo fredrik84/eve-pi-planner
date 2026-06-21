@@ -3710,27 +3710,27 @@ function _extRuntimeAdviceHtml(headroom, curDays) {
         <div class="an-suggest-h">Extraction runtime <span class="an-rt-badge an-rt-badge-warn">⚠ tight</span></div>
         <div class="an-rt-pick">Your ${L0lbl} programs sit only <b>+${Math.round(bL0 * 100)}%</b> above demand — fine right now, but extraction <b>decays as the program runs</b>, so the factories will dip short before you reseat.</div>
         <ul>
-          <li><b>Reseat / redeploy</b> to build a margin (best), or add a colony to the binding material.</li>
-          ${fedDay >= 1 && fedDay < L0 ? `<li>Or <b>shorten to ${fedDay} day${fedDay === 1 ? '' : 's'}</b> (${_progDuration(fedDay)}) so fresher extraction stays ahead — at the cost of more frequent restarts.</li>` : ''}
+          <li>Next time you're in there, <b>reseat the binding colonies</b> onto stronger hotspots, or <b>redeploy</b> a surplus colony onto the binding material — that builds margin and keeps your long, low-touch runtime.</li>
         </ul>
         ${graph}
-        <div class="an-sug-note">Decay is an estimate — verify against your in-game ECU.</div>
+        <div class="an-sug-note">Reseating refreshes the heads in the same visit, so there's no need to run shorter programs (that's just more restarts). Decay is an estimate — verify against your in-game ECU.</div>
       </div>`;
   }
 
-  // Deficit at the current runtime: factories will fall behind. Adding supply (reseat / redeploy)
-  // comes FIRST; shortening the program is the last resort — fresher extraction, but daily restarts.
-  const steps = [`<b>Reseat</b> the short colonies (above) to recover lost yield, or <b>redeploy</b> a surplus colony's command center onto the short material — that fixes supply without touching your runtime.`];
-  if (fedDay >= 1 && fedDay < L0)
-    steps.push(`Only if you can't add supply: <b>shorten to ${fedDay} day${fedDay === 1 ? '' : 's'}</b> (${_progDuration(fedDay)}) — fresher extraction stays fed, at the cost of restarting more often.`);
-  else
-    steps.push(`Even daily programs can't keep up here — you need more extraction (reseat / redeploy / another colony); a shorter runtime alone won't fix it.`);
+  // Deficit at the current runtime: factories fall behind. The least-work, LASTING fix is more yield
+  // (reseat / redeploy / add a colony) — that keeps the long runtime. Shortening trades runtime for
+  // more restarts (more work) and only masks the gap, so it's a stopgap, demoted to the note.
+  const canShorten = fedDay >= 1 && fedDay < L0;
   return `<div class="an-suggest an-suggest-fix">
       <div class="an-suggest-h">Extraction runtime <span class="an-rt-badge an-rt-badge-bad">✕ falling behind</span></div>
       <div class="an-rt-pick">Your ${L0lbl} programs <b>over-extend</b> supply — extraction covers only <b>${Math.round((bL0 + 1) * 100)}%</b> of demand, so factories fall behind.</div>
-      <ul>${steps.map(s => `<li>${s}</li>`).join('')}</ul>
+      <ul>
+        <li><b>Reseat</b> the short colonies to recover lost yield, <b>redeploy</b> a surplus colony's command center onto the short material, or <b>add a colony</b> — more extraction fixes it for good and keeps your long, low-touch runtime.</li>
+      </ul>
       ${graph}
-      <div class="an-sug-note">Decay is an estimate — verify against your in-game ECU.</div>
+      <div class="an-sug-note">${canShorten
+        ? `Shortening to ${fedDay} day${fedDay === 1 ? '' : 's'} (${_progDuration(fedDay)}) would feed them on fresher extraction — but only by restarting more often (more work), and it masks the shortfall rather than fixing it. Add extraction instead.`
+        : `A shorter runtime won't help here — even daily programs can't keep up, so you need more extraction.`} Decay is an estimate — verify against your in-game ECU.</div>
     </div>`;
 }
 
