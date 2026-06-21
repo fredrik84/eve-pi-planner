@@ -333,7 +333,7 @@ function _renderSyncWarn(data) {
   const cards = Object.values(byChar).map(c => `
     <div class="dash-issue dash-issue-warn">
       <div class="dash-issue-char">${_esc(c.char)}<button class="sync-mute-btn" onclick="_toggleSyncMute('${c.cid}')" title="Stop warning for this character (it's on a different schedule on purpose)">Mute</button></div>
-      <ul class="dash-issue-items">${c.items.map(o => `<li class="dash-il-warn">${_esc(planet(o.loc))} runs a <b>${o.hours}h</b> program — the fleet uses <b>${sw.norm_hours}h</b></li>`).join('')}</ul>
+      <ul class="dash-issue-items">${c.items.map(o => `<li class="dash-il-warn">${_esc(planet(o.loc))} runs a <b>${_fmtDHM(o.hours)}</b> program — the fleet uses <b>${_fmtDHM(sw.norm_hours)}</b></li>`).join('')}</ul>
     </div>`).join('');
   return `<section class="pp-card dash-issues">
       <div class="pp-card-title">Extractor schedule out of sync <span class="pp-card-hint">— ${visible.length} extractor${visible.length !== 1 ? 's' : ''} on a different program; they drift off your batch restart</span></div>
@@ -2329,6 +2329,13 @@ function _fmtHours(h) {
 
 function _esc(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// Hours → "1d 23h 30m" (keeps minutes, unlike _fmtHours which floors them past 24h).
+function _fmtDHM(h) {
+  const total = Math.round((h || 0) * 60);
+  const d = Math.floor(total / 1440), hr = Math.floor((total % 1440) / 60), m = total % 60;
+  return [d ? d + 'd' : '', hr ? hr + 'h' : '', m ? m + 'm' : ''].filter(Boolean).join(' ') || '0m';
 }
 
 // Generic image lightbox — open an image in a dark in-page overlay (so SVGs don't load as a bare
