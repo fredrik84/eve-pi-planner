@@ -460,9 +460,9 @@ function renderDashboard(data) {
   const _rtTile = (dueH, cadenceH, lbl, loc) => {
     if (dueH == null && cadenceH == null)
       return `<div class="an-stat"><div class="an-stat-val">—</div><div class="an-stat-lbl">${lbl}</div></div>`;
-    const big = dueH != null ? (dueH < 0.1 ? 'due now' : _fmtHours(dueH)) : _fmtHours(cadenceH);
+    const big = dueH != null ? (dueH < 0.1 ? 'due now' : _fmtDHM(dueH)) : _fmtDHM(cadenceH);
     const bits = [];
-    if (cadenceH != null) bits.push(`every ${_fmtHours(cadenceH)}`);
+    if (cadenceH != null) bits.push(`every ${_fmtDHM(cadenceH)}`);
     if (loc) bits.push(_esc(loc));
     const sub = bits.length ? `<span class="dash-rt-sub">${bits.join(' · ')}</span>` : '';
     return `<div class="an-stat"${loc ? ` title="${_esc(loc)} is next"` : ''}><div class="an-stat-val">${big}</div><div class="an-stat-lbl">${lbl}${sub}</div></div>`;
