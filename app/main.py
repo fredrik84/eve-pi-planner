@@ -131,10 +131,14 @@ def _share_meta(share_id: str):
     pn = payload.get("pn") or "PI plan"
     stats = (payload.get("plan") or {}).get("stats") or {}
     parts = []
-    ppd = stats.get("products_per_day")
+    # When the plan is supply-limited the plan view shows the EFFECTIVE (supply-capped) numbers, not
+    # the nominal "if fully fed" ones — the OG preview must match, or a shared SHPC plan reads 192/day
+    # in the unfurl but 81/day on the page. Fall back to nominal for old shares / non-limited plans.
+    supply_limited = stats.get("supply_limited")
+    ppd = (stats.get("effective_products_per_day") if supply_limited else None) or stats.get("products_per_day")
     if ppd:
-        parts.append(f"{ppd:,}/day")
-    ipd = stats.get("isk_per_day")
+        parts.append(f"{round(ppd):,}/day")
+    ipd = (stats.get("effective_isk_per_day") if supply_limited else None) or stats.get("isk_per_day")
     if ipd:
         parts.append(f"{_fmt_isk(ipd)} ISK/day")
     fac = stats.get("factories")
