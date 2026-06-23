@@ -282,7 +282,9 @@ function _renderTimelineCard(t) {
   // Absolute clock time for a task `due` hours out (browser-local; Date is fine client-side).
   const clock = h => new Date(Date.now() + h * 3600 * 1000)
     .toLocaleString([], { weekday: 'long', hour: '2-digit', minute: '2-digit' });
-  const rel = h => (h < 0.05 ? 'now' : 'in ' + _fmtHours(h));
+  // Use _fmtDHM (rounds + keeps minutes) to match the Maintenance-routine card exactly — _fmtHours
+  // floors and drops minutes past 12h/24h, which made the same job read 1 minute off between cards.
+  const rel = h => (h < 0.05 ? 'now' : 'in ' + _fmtDHM(h));
 
   // "admin preview" only while it's still admin-gated (not yet rolled out to the public).
   const isPublic = !!(_features['timeline'] && _features['timeline'].enabled);
