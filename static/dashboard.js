@@ -249,10 +249,10 @@ function renderDashboard(data) {
     const names = ex.idle_chars.slice(0, 6).map(_esc).join(', ') + (ex.idle_chars.length > 6 ? ` +${ex.idle_chars.length - 6}` : '');
     exItems.push(`<li><b>${ex.idle_chars.length} idle character${ex.idle_chars.length !== 1 ? 's' : ''}</b> with no colonies — ${names}</li>`);
   }
-  if (ex.free_slots >= 2) {
+  if (ex.free_slots >= 1) {
     const fc = ex.free_slot_chars || [];
     const detail = fc.slice(0, 5).map(c => `${_esc(c.name)} ${c.used}/${c.max}`).join(', ') + (fc.length > 5 ? ', …' : '');
-    exItems.push(`<li><b>${ex.free_slots} free planet slots</b>${fc.length ? ` across ${fc.length} character${fc.length !== 1 ? 's' : ''} — ${detail}` : ''}</li>`);
+    exItems.push(`<li><b>${ex.free_slots} free planet slot${ex.free_slots !== 1 ? 's' : ''}</b>${fc.length ? ` across ${fc.length} character${fc.length !== 1 ? 's' : ''} — ${detail}` : ''}</li>`);
   }
   if (ex.skills_grew && ex.skills_grew.length) {
     const names = ex.skills_grew.slice(0, 6).map(g => {
