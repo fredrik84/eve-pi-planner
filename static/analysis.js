@@ -136,6 +136,7 @@ async function onAnalyzeTabOpen() {
   _analyzeSnaps = [...derived, ...saved];   // your live setup first, then saved plans
   await _loadFeatures();
   await _fetchSkillRoi();          // skill-training advice (feature-gated; independent of the selected plan)
+  await _fetchExpansion();          // spare-capacity "deploy this here" advice (moved from the dashboard)
   _renderAnalyzePlans();
   renderAnalysis();
 }
@@ -167,6 +168,83 @@ function _renderSkillRoiSection() {
       <div class="an-suggest-h">Train skills for more output <span class="tl-preview-tag">estimate</span></div>
       <div class="an-sug-note">What an extra skill level on each character would add at your current setup — your call whether the train (or an injector) is worth it.</div>
       <ul class="an-skill-list">${li}</ul>${note}
+    </div>`;
+}
+
+// ── Grow your setup (spare capacity) ──────────────────────────────────────────
+// Moved here from the Dashboard (which now shows only the status counts + a link): the concrete
+// "deploy this here" cards for free planet slots. Fed by GET /api/expansion.
+let _expansion = null;
+let _expandDeploysByProduct = {};
+let _expandProduct = '';
+async function _fetchExpansion() {
+  try { _expansion = await (await fetch('/api/expansion')).json(); }
+  catch (e) { _expansion = null; }
+}
+function _renderExpandCards(deploys) {
+  if (!deploys || !deploys.length)
+    return `<div class="an-sug-note">This product is already balanced for your spare slots — nothing to add right now.</div>`;
+  const cards = deploys.map((d, i) => {
+    const loc = `${_esc(d.system)}${d.planet_num != null ? ' P' + d.planet_num : ''}`;
+    const isFac = d.kind === 'factory';
+    const cc = d.planet_type ? `<span class="an-cc-tag">${_esc(d.planet_type)}${isFac ? ' CC' : ''}</span>` : '';
+    const mat = isFac
+      ? `<b>${_esc(d.p1)}</b> factory`
+      : `${_esc(d.p0)} <span class="an-move-p0arrow">→</span> ${_esc(d.p1)}`;
+    const dens = (!isFac && d.richness != null) ? ` ${d.richness}% density` : '';
+    const meta = isFac
+      ? `Supply has room — turns your surplus into <b>~${(d.add_per_day || 0).toLocaleString()} more ${_esc(d.p1)}/day</b>`
+      : `${_esc(d.p1)} is only <b>${d.fed_pct}% fed</b> — this colony lifts your bottleneck`;
+    let ccuWarn = '';
+    if (isFac && d.ccu_low) {
+      const lp = d.fit_lp || 0;
+      const fits = lp >= 1 ? `fits with only <b>${lp} launchpad${lp !== 1 ? 's' : ''}</b> here (full layout needs 3)` : `won't fit here`;
+      const train = d.train_to ? `Train Command Center Upgrades to <b>CCU ${d.train_to}</b> first` : `Train Command Center Upgrades higher first`;
+      ccuWarn = `<div class="an-bu-warn">⚠ At ${_esc(d.char)}'s <b>CCU ${d.host_ccu}</b> this ${_esc(d.p1)} factory ${fits} — ${train}, or you'll redeploy it after training.</div>`;
+    }
+    return `<div class="an-bu-card">
+        <div class="an-bu-rank">${i + 1}</div>
+        <div class="an-bu-body">
+          <div class="an-bu-mat">${mat}</div>
+          <div class="an-bu-where">anchor on <b>${_esc(d.char)} · ${loc}</b> ${cc}${dens}</div>
+          <div class="an-bu-meta">${meta}</div>
+          ${ccuWarn}
+        </div>
+      </div>`;
+  }).join('');
+  return `<div class="an-bu-list">${cards}</div>`;
+}
+function _setExpandProduct(tid) {
+  _expandProduct = String(tid);
+  const el = document.getElementById('expandDeployCards');
+  if (el) el.innerHTML = _renderExpandCards(_expandDeploysByProduct[_expandProduct] || []);
+}
+function _renderGrowSection() {
+  const ex = _expansion;
+  if (!ex || !(ex.free_slots > 0)) return '';
+  const bits = [];
+  const fc = ex.free_slot_chars || [];
+  if (fc.length)
+    bits.push(`<b>${ex.free_slots} free planet slot${ex.free_slots !== 1 ? 's' : ''}</b> (${fc.slice(0, 4).map(c => `${_esc(c.name)} ${c.used}/${c.max}`).join(', ')}${fc.length > 4 ? ', …' : ''})`);
+  if (ex.idle_chars && ex.idle_chars.length)
+    bits.push(`<b>${ex.idle_chars.length} idle character${ex.idle_chars.length !== 1 ? 's' : ''}</b>`);
+  const status = bits.length ? `<div class="an-sug-note">${bits.join(' · ')}</div>` : '';
+  const deploys = ex.deploys || [];
+  if (!deploys.length)
+    return `<div class="an-suggest an-suggest-free"><div class="an-suggest-h">Spare capacity</div>${status}`
+      + `<div class="an-sug-note">Your setup is already balanced for the spare slots — nothing short, and no richer planet free in your systems to deploy on right now.</div></div>`;
+  _expandDeploysByProduct = ex.deploys_by_product || {};
+  const prods = ex.products || [];
+  _expandProduct = prods.length ? String(prods[0].type_id) : '';
+  const dropdown = prods.length > 1
+    ? `<span class="dash-expand-prod-pick">Plan for <select class="dash-expand-prod" onchange="_setExpandProduct(this.value)">`
+      + prods.map(p => `<option value="${p.type_id}">${_esc(p.name)} (×${p.count})</option>`).join('') + `</select></span>`
+    : '';
+  return `<div class="an-suggest an-suggest-add">
+      <div class="an-suggest-h">Grow your setup <span class="dash-expand-sug-sub">— deploy these on your spare slots, most impactful first</span>${dropdown}</div>
+      ${status}
+      <div id="expandDeployCards">${_renderExpandCards(deploys)}</div>
+      <div class="an-sug-note">Targets the inputs your factories are short on, so the new colonies actually lift output — no re-plan, no teardown.</div>
     </div>`;
 }
 
@@ -536,7 +614,7 @@ function renderAnalysis() {
   el.innerHTML = head + _staleSupplyNote(rows) + stats + proj
     + `<div class="an-legend">Bar = how fed each input is. % = extraction headroom: <span class="an-ovr-ok">+10% or more healthy</span>, <span class="an-ovr-tight">0–10% tight</span> (dips as heads decay), <span class="an-ovr-short">below 0 short</span>. Click a row for the fix.</div>`
     + `<div class="an-bars">${barRows}</div>`
-    + suggest + rtAdvice + _renderSkillRoiSection()
+    + suggest + rtAdvice + _renderGrowSection() + _renderSkillRoiSection()
     + (_featureActive('move_character') ? _sepStandaloneCard(moves.map(m => ({ ...m, p0: p0Of(m.toT) }))) : '');
 }
 

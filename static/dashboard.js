@@ -73,47 +73,6 @@ function _dashTile(val, lbl, cls) {
   return `<div class="an-stat"><div class="an-stat-val${cls ? ' ' + cls : ''}">${val}</div><div class="an-stat-lbl">${lbl}</div></div>`;
 }
 
-// Spare-capacity "deploy this here" cards, keyed by product for the "plan for this product" dropdown.
-let _expandDeploysByProduct = {};
-let _expandProduct = '';
-function _renderExpandCards(deploys) {
-  if (!deploys || !deploys.length)
-    return `<div class="dash-expand-est">This product is already balanced for your spare slots — nothing to add right now.</div>`;
-  const cards = deploys.map((d, i) => {
-    const loc = `${_esc(d.system)}${d.planet_num != null ? ' P' + d.planet_num : ''}`;
-    const isFac = d.kind === 'factory';
-    const cc = d.planet_type ? `<span class="an-cc-tag">${_esc(d.planet_type)}${isFac ? ' CC' : ''}</span>` : '';
-    const mat = isFac
-      ? `<b>${_esc(d.p1)}</b> factory`
-      : `${_esc(d.p0)} <span class="an-move-p0arrow">→</span> ${_esc(d.p1)}`;
-    const dens = (!isFac && d.richness != null) ? ` ${d.richness}% density` : '';
-    const meta = isFac
-      ? `Supply has room — turns your surplus into <b>~${(d.add_per_day || 0).toLocaleString()} more ${_esc(d.p1)}/day</b>`
-      : `${_esc(d.p1)} is only <b>${d.fed_pct}% fed</b> — this colony lifts your bottleneck`;
-    let ccuWarn = '';
-    if (isFac && d.ccu_low) {
-      const lp = d.fit_lp || 0;
-      const fits = lp >= 1 ? `fits with only <b>${lp} launchpad${lp !== 1 ? 's' : ''}</b> here (full layout needs 3)` : `won't fit here`;
-      const train = d.train_to ? `Train Command Center Upgrades to <b>CCU ${d.train_to}</b> first` : `Train Command Center Upgrades higher first`;
-      ccuWarn = `<div class="an-bu-warn">⚠ At ${_esc(d.char)}'s <b>CCU ${d.host_ccu}</b> this ${_esc(d.p1)} factory ${fits} — ${train}, or you'll redeploy it after training.</div>`;
-    }
-    return `<div class="an-bu-card">
-        <div class="an-bu-rank">${i + 1}</div>
-        <div class="an-bu-body">
-          <div class="an-bu-mat">${mat}</div>
-          <div class="an-bu-where">anchor on <b>${_esc(d.char)} · ${loc}</b> ${cc}${dens}</div>
-          <div class="an-bu-meta">${meta}</div>
-          ${ccuWarn}
-        </div>
-      </div>`;
-  }).join('');
-  return `<div class="an-bu-list">${cards}</div>`;
-}
-function _setExpandProduct(tid) {
-  _expandProduct = String(tid);
-  const el = document.getElementById('expandDeployCards');
-  if (el) el.innerHTML = _renderExpandCards(_expandDeploysByProduct[_expandProduct] || []);
-}
 
 // "Up next" PI agenda (admin-gated PoC). The extractor and factory cadences are usually badly
 // desynced (you might restart extractors several times before a factory refill), so a single-cycle
@@ -261,47 +220,14 @@ function renderDashboard(data) {
     }).join(', ');
     exItems.push(`<li><b>${ex.skills_grew.length} trained up</b> since you saved${ex.plan_name ? ` “${_esc(ex.plan_name)}”` : ''} — ${names}</li>`);
   }
-  // Balanced incremental addition — the Analysis-style "grow what you run" suggestion: extractors +
-  // factories at your current ratio, so the spare capacity stays fed. No full re-plan (which would
-  // reshuffle a working setup); just deploy the delta on the idle toons / free slots listed above.
-  let projHtml = '';
-  if (ex.deploys && ex.deploys.length) {
-    // The vision: concrete "deploy this here" cards (same style as Setup Analysis), not a re-plan.
-    // Multiple products → a "plan for this product" dropdown that switches the cards instantly.
-    _expandDeploysByProduct = ex.deploys_by_product || {};
-    const prods = ex.products || [];
-    _expandProduct = prods.length ? String(prods[0].type_id) : '';
-    const dropdown = prods.length > 1
-      ? `<span class="dash-expand-prod-pick">Plan for <select class="dash-expand-prod" onchange="_setExpandProduct(this.value)">`
-        + prods.map(p => `<option value="${p.type_id}">${_esc(p.name)} (×${p.count})</option>`).join('')
-        + `</select></span>`
-      : '';
-    projHtml = `<div class="dash-expand-sug">
-        <div class="dash-expand-sug-h">Grow your setup <span class="dash-expand-sug-sub">— deploy these on your spare slots, most impactful first</span>${dropdown}</div>
-        <div id="expandDeployCards">${_renderExpandCards(ex.deploys)}</div>
-        <div class="dash-expand-est">Targets the inputs your factories are short on, so the new colonies actually lift output — no re-plan, no teardown.</div>
-      </div>`;
-  } else if (ex.suggestion) {
-    const s = ex.suggestion;
-    const out = (s.add_units_per_day && s.unit_label) ? `~${s.add_units_per_day.toLocaleString()} ${_esc(s.unit_label)}/day` : '';
-    const fac = `+${s.add_factories} factor${s.add_factories !== 1 ? 'ies' : 'y'}`;
-    const ext = `+${s.add_extractors} extractor${s.add_extractors !== 1 ? 's' : ''}`;
-    projHtml = `<div class="dash-expand-sug">
-        <div class="dash-expand-sug-h">Suggested addition <span class="dash-expand-sug-sub">— balanced, fits your ${s.spare_planets} spare planet${s.spare_planets !== 1 ? 's' : ''}</span></div>
-        <div class="dash-expand-sug-b">Deploy <b>${fac}</b> and <b>${ext}</b> at your current ratio → roughly <b>${out ? out + ' · ' : ''}${_fmtIsk(s.add_isk_per_day)}/day</b> more.</div>
-        <div class="dash-expand-est">Keeps the same extractor-to-factory balance as your running setup, so everything stays fed. Drop them on the idle characters / free slots above — no re-plan needed.</div>
-      </div>`;
-  } else if (ex.add_isk_per_day) {
-    const u = (ex.add_units_per_day && ex.add_unit_label)
-      ? `~${ex.add_units_per_day.toLocaleString()} ${_esc(ex.add_unit_label)}/day` : '';
-    projHtml = `<div class="dash-expand-proj">Using it could add roughly <b>${u ? u + ' · ' : ''}${_fmtIsk(ex.add_isk_per_day)}/day</b> <span class="dash-expand-est">— rough estimate (scales your current output by the spare planets)</span></div>`;
-  }
+  // Status only: the concrete "deploy this here" advice lives in Setup Analysis (which fetches
+  // /api/expansion). The dashboard just surfaces that there's spare capacity and links to it.
   const expansionHtml = exItems.length ? `
     <section class="pp-card dash-expand">
       <div class="pp-card-title">Spare capacity <span class="pp-card-hint">— unused fleet you could grow into</span></div>
       <div class="pp-card-body">
         <ul class="dash-expand-list">${exItems.join('')}</ul>
-        ${projHtml}
+        <div class="dash-expand-cta"><a href="#" onclick="switchTab('analyze');return false;">See Setup Analysis for what to deploy →</a></div>
         <div class="dash-expand-cta dash-expand-cta-sub">Prefer to start over? <a href="#" onclick="switchTab('planetary');return false;">Planetary Planning</a> rebuilds the whole layout from scratch.</div>
       </div>
     </section>` : '';

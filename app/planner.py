@@ -1639,6 +1639,27 @@ def _expansion_deploys(context_id: int, pi: dict, chosen_product: int | None = N
     return deploys
 
 
+@router.get("/api/expansion")
+def expansion(pp_session: str = Cookie(default=None)):
+    """Spare-capacity ADVICE for Setup Analysis: free slots + concrete 'deploy this here' cards per
+    product (the dashboard now shows only the status counts and links here). Read-only / no plan."""
+    context_id = session_context_id(pp_session)
+    if not context_id:
+        return {"free_slots": 0}
+    ex = _expansion_capacity(context_id)
+    if (ex.get("free_slots") or 0) > 0:
+        try:
+            pi = load_pi_data()
+            prods = _setup_products(context_id, pi)
+            ex["products"] = prods
+            by_prod = {str(p["type_id"]): _expansion_deploys(context_id, pi, p["type_id"]) for p in prods}
+            ex["deploys_by_product"] = by_prod
+            ex["deploys"] = by_prod.get(str(prods[0]["type_id"]), []) if prods else []
+        except Exception:
+            ex["deploys"] = []
+    return ex
+
+
 @router.get("/api/dashboard")
 def dashboard(pp_session: str = Cookie(default=None)):
     """Logged-in overview: per-factory launchpad fill %, time-to-empty and current-run value,
@@ -1927,46 +1948,10 @@ def dashboard(pp_session: str = Cookie(default=None)):
                        "items": items})
     issues.sort(key=lambda c: 0 if c["severity"] == "high" else 1)
 
+    # Dashboard shows spare capacity as STATUS only (free slots / idle / trained-up counts); the
+    # concrete "deploy this here" advice lives in Setup Analysis (GET /api/expansion). Keeps the
+    # dashboard a status surface and avoids the expensive per-product deploy search on every load.
     expansion = _expansion_capacity(context_id)
-    if (expansion.get("free_slots") or 0) > 0:
-        try:
-            prods = _setup_products(context_id, pi)
-            expansion["products"] = prods
-            # Per-product deploy cards (each plans the full spare capacity into THAT product's chain), so
-            # the "plan for this product" dropdown switches instantly with no extra round-trip.
-            by_prod = {str(p["type_id"]): _expansion_deploys(context_id, pi, p["type_id"]) for p in prods}
-            expansion["deploys_by_product"] = by_prod
-            expansion["deploys"] = by_prod.get(str(prods[0]["type_id"]), []) if prods else []
-        except Exception:
-            expansion["deploys"] = []
-    # Rough upside of using that capacity: a balanced colony layout scales ~linearly with planets, so
-    # adding free_slots over the total_used currently deployed lifts output by free_slots/total_used.
-    # An ESTIMATE (new planets may be thinner / in worse systems) — the card links to the real re-run.
-    tu, fs = expansion.get("total_used") or 0, expansion.get("free_slots") or 0
-    if tu > 0 and fs > 0 and total_value_per_day > 0:
-        cf = fs / tu
-        expansion["add_isk_per_day"] = round(total_value_per_day * cf, 2)
-        if len(cur_units_by_prod) == 1:
-            (pname, u), = cur_units_by_prod.items()
-            expansion["add_units_per_day"] = round(u * cf)
-            expansion["add_unit_label"] = pname
-        # Balanced incremental addition: split the spare slots into factories + their extractors at the
-        # CURRENT setup's ratio, so you never add a factory you can't feed. This is the "grow what you
-        # run" advice the Spare-capacity card shows instead of pushing a full re-plan — no reshuffle of
-        # the working setup, no wizard.
-        cur_fac = len(factories)
-        cur_ext = sum(1 for t in parsed if t[0]["is_ext"])
-        if cur_fac > 0 and cur_ext > 0:
-            ext_per_fac = cur_ext / cur_fac
-            add_fac = int(fs // (1 + ext_per_fac))
-            if add_fac >= 1:
-                sug = {"add_factories": add_fac, "add_extractors": round(add_fac * ext_per_fac),
-                       "spare_planets": fs, "add_isk_per_day": round(total_value_per_day / cur_fac * add_fac, 2)}
-                if len(cur_units_by_prod) == 1:
-                    (pname, u), = cur_units_by_prod.items()
-                    sug["add_units_per_day"] = round(u / cur_fac * add_fac)
-                    sug["unit_label"] = pname
-                expansion["suggestion"] = sug
 
     # Out-of-sync extractors: most run the same program length (you restart them in batches); a planet
     # set to a different length drifts off the batch (and drags the "restart due" countdown). Find the
