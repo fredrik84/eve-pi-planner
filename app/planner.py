@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from app.sde import load_pi_data, get_connection
 from app.planetary import PLANET_P0_MAP, _NAME_TO_COL
 from app.market import fetch_prices
-from app.esi import require_context, session_context_id, ensure_char_tables
+from app.esi import require_context, session_context_id, ensure_char_tables, PI_CHAR_SQL
 
 router = APIRouter()
 
@@ -73,12 +73,12 @@ class SaveConfigRequest(BaseModel):
 def get_plan_config(type_id: int, context_id: int = Depends(require_context)):
     ensure_plan_tables()
     con = get_connection()
-    char_rows = con.execute("""
+    char_rows = con.execute(f"""
         SELECT character_id, character_name,
                1 + interplanetary_consolidation AS max_planets,
                command_center_upgrades AS esi_ccu
         FROM pp_characters WHERE context_id=?
-              AND NOT (COALESCE(scopes,'') LIKE '%read_corporation_wallets%' AND COALESCE(scopes,'') NOT LIKE '%manage_planets%')
+              {PI_CHAR_SQL}
         ORDER BY character_name
     """, (context_id,)).fetchall()
     saved = {
@@ -830,7 +830,7 @@ def _fleet_fingerprint(con, context_id: int) -> dict:
             for r in con.execute(
                 "SELECT character_id, command_center_upgrades, interplanetary_consolidation "
                 "FROM pp_characters WHERE context_id=? AND COALESCE(is_dummy,0)=0 "
-                "AND NOT (COALESCE(scopes,'') LIKE '%read_corporation_wallets%' AND COALESCE(scopes,'') NOT LIKE '%manage_planets%')", (context_id,)).fetchall()}
+                + PI_CHAR_SQL, (context_id,)).fetchall()}
 
 def _plan_staleness(saved: dict, current: dict) -> dict:
     """A saved plan is stale once the fleet it assumed has changed — toons added/removed or skills
@@ -1251,7 +1251,7 @@ def skill_roi(pp_session: str = Cookie(default=None)):
         "       COALESCE(interplanetary_consolidation,0) AS ic, "
         "       COALESCE(command_center_upgrades,0) AS ccu "
         "FROM pp_characters WHERE context_id=? AND COALESCE(is_dummy,0)=0 "
-                "AND NOT (COALESCE(scopes,'') LIKE '%read_corporation_wallets%' AND COALESCE(scopes,'') NOT LIKE '%manage_planets%')", (context_id,)).fetchall()
+                + PI_CHAR_SQL, (context_id,)).fetchall()
     rows = con.execute(
         "SELECT cp.character_id AS cid, cp.is_extractor AS ext, cp.planet_type AS ptype, "
         "       cp.products AS products "
@@ -1355,7 +1355,7 @@ def _expansion_capacity(context_id: int) -> dict:
             "       1 + COALESCE(interplanetary_consolidation,0) AS max_planets, "
             "       COALESCE(command_center_upgrades,0) AS ccu, COALESCE(interplanetary_consolidation,0) AS ic "
             "FROM pp_characters WHERE context_id=? AND COALESCE(is_dummy,0)=0 "
-                "AND NOT (COALESCE(scopes,'') LIKE '%read_corporation_wallets%' AND COALESCE(scopes,'') NOT LIKE '%manage_planets%')", (context_id,)).fetchall()
+                + PI_CHAR_SQL, (context_id,)).fetchall()
         used = {r["character_id"]: r["n"] for r in con.execute(
             "SELECT cp.character_id, COUNT(*) AS n FROM pp_char_planets cp "
             "JOIN pp_characters c ON c.character_id=cp.character_id "
@@ -3219,12 +3219,12 @@ def _load_char_planet_config(con, context_id: int, config_type_id: int):
     """Load characters, their planets, and per-product config for a plan run.
     config_type_id selects the pp_plan_config rows (the real product id, or the
     fuel-block sentinel). Returns (char_rows, planet_rows, has_system_name, config_map)."""
-    char_rows = con.execute("""
+    char_rows = con.execute(f"""
         SELECT character_id, character_name,
                1 + interplanetary_consolidation AS max_planets,
                command_center_upgrades AS ccu
         FROM pp_characters WHERE context_id=?
-              AND NOT (COALESCE(scopes,'') LIKE '%read_corporation_wallets%' AND COALESCE(scopes,'') NOT LIKE '%manage_planets%')
+              {PI_CHAR_SQL}
         ORDER BY (1 + interplanetary_consolidation) DESC, character_name
     """, (context_id,)).fetchall()
 

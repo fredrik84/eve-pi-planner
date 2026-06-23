@@ -41,6 +41,12 @@ SCOPES = "esi-skills.read_skills.v1 esi-planets.manage_planets.v1 esi-planets.re
 WALLET_SCOPE  = "esi-wallet.read_corporation_wallets.v1"
 WALLET_SCOPES = WALLET_SCOPE
 
+# Wallet-only toons (corp-wallet scope, no planets scope) aren't PI characters. AND this into any
+# single-table pp_characters PI query to exclude them; legacy empty-scope chars are kept. Begins with
+# "AND " so it appends directly after an existing WHERE predicate (mind the leading space at the join).
+PI_CHAR_SQL = ("AND NOT (COALESCE(scopes,'') LIKE '%read_corporation_wallets%' "
+               "AND COALESCE(scopes,'') NOT LIKE '%manage_planets%')")
+
 EVE_AUTH_URL  = "https://login.eveonline.com/v2/oauth/authorize"
 EVE_TOKEN_URL = "https://login.eveonline.com/v2/oauth/token"
 ESI_BASE      = "https://esi.evetech.net/latest"
@@ -1317,7 +1323,7 @@ def refresh_all_planets(body: _RefreshAllBody | None = None, context_id: int = D
     con = get_connection()
     rows = con.execute(
         "SELECT character_id FROM pp_characters WHERE context_id=? AND COALESCE(is_dummy, 0) = 0 "
-        "AND NOT (COALESCE(scopes,'') LIKE '%read_corporation_wallets%' AND COALESCE(scopes,'') NOT LIKE '%manage_planets%')",
+        + PI_CHAR_SQL,
         (context_id,)).fetchall()
     con.close()
     if want is not None:                      # keep only requested ids, but never outside this context
