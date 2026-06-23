@@ -440,7 +440,7 @@ function renderAnalysis() {
 
     // Per factory character: spare slots, free B/T destinations (factory system first), and the
     // over-produced extractors we could tear down to free a slot (most over-produced first).
-    const chars = (_ppCharsData || []).filter(c => facChars.has(c.name)).map(c => {
+    const chars = (_ppCharsData || []).filter(c => facChars.has(c.name) && !c.wallet_only).map(c => {
       const teardowns = [];
       (c.planets || []).forEach(p => {
         if (!p.is_extractor) return;
@@ -988,6 +988,7 @@ function _finetuneHint(r) {
 function _assignFreeSlots(short) {
   const cap = { free: {}, usedPlanets: new Set() };
   (_ppCharsData || []).forEach(c => {
+    if (c.wallet_only) return;                    // corp-wallet viewer toon — not a PI character
     const f = (c.max_planets || 0) - (c.planets || []).length;
     if (f > 0) cap.free[String(c.character_id)] = f;
   });
