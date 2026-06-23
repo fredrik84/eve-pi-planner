@@ -939,25 +939,6 @@ function _producersOf(t) {
 // where a reseat helps most. A measured decline is flagged "off best" (reseat recovers it).
 const _RESEAT_PER_P1 = 5;   // worst N colonies shown per short material
 
-// The single best FREE planet to drop a new extractor for short material `t` on — a colony the
-// player can add to a spare slot without tearing down anything. From _placements (free, reachable,
-// grows the P0), richest first. Lets us say "deploy X here" instead of a vague "add a colony".
-function _bestFreeSpot(t, cap) {
-  const pl = _placements && _placements[String(t)];
-  if (!pl || !pl.by_char) return null;
-  let best = null, bestCid = null;
-  Object.entries(pl.by_char).forEach(([cid, arr]) => {
-    if (cap && !(cap.free[cid] > 0)) return;                          // this toon is at max planets
-    (arr || []).forEach(p => {
-      if (cap && cap.usedPlanets.has(`${p.system}|${p.planet_num}`)) return;   // planet already claimed
-      if (!best || (p.richness || 0) > (best.richness || 0)) { best = p; bestCid = cid; }
-    });
-  });
-  if (!best) return null;
-  const ch = (_ppCharsData || []).find(c => String(c.character_id) === String(bestCid));
-  return { p0: pl.p0_name, system: best.system, planet_num: best.planet_num,
-           planet_type: best.planet_type, richness: best.richness, char: ch ? ch.name : '', cid: bestCid };
-}
 // Total UNCLIPPED extraction (P1/day) the heads sustain for material `t`, summed over its colonies.
 // rate_sustained clamps each colony at its factory rate, so a satisfied material reads +0 surplus even
 // when the heads pull far more — this recovers that hidden headroom (the decay/overshoot buffer).
@@ -1034,65 +1015,6 @@ function _estColonyP1(t, richness) {
   if (prods.length) return Math.round(prods.reduce((s, c) => s + c.perDay, 0) / prods.length);
   return Math.round(Math.min(100, richness || 0) / 100 * 7680);
 }
-// How much a material's gap can be recovered WITHOUT a new colony, by reseating its extraction-capped
-// colonies onto denser hotspots (lift toward the full factory rate). Upper bound — a genuinely thin
-// planet may not have richer spots — so it's surfaced hedged.
-function _cappedRecover(t) {
-  return Math.round(_producersOf(t).reduce((s, c) => s + (c.capped ? Math.max(0, c.full - c.perDay) : 0), 0));
-}
-// Finer lever than a whole colony for a SMALL gap: shortening this material's extractor program lifts
-// its yield (less decay over a shorter run). Returns the shortest whole-day program that covers the gap.
-function _finetuneHint(r) {
-  const L0 = _currentProgramDays() || 2;
-  const gap = Math.max(0, r.need - r.have);
-  const cap = _cappedRecover(r.t);
-  if (cap >= gap * 0.5 && cap > 0) return { kind: 'reseat-capped', gain: cap, covers: cap >= gap };
-  const e0 = _extEff(L0);
-  if (r.have > 0 && L0 > 1) {
-    for (let d = Math.floor(L0 - 1e-9); d >= 1; d--) {           // whole-day programs shorter than current
-      const gain = r.have * (_extEff(d) / e0 - 1);
-      if (gain >= gap) return { kind: 'shorten', days: d, gain: Math.round(gain), covers: true };
-    }
-    const gain1 = r.have * (_extEff(1) / e0 - 1);
-    if (gain1 > 0) return { kind: 'shorten', days: 1, gain: Math.round(gain1), covers: false };
-  }
-  return { kind: 'reseat', covers: false };
-}
-
-// Assign each free planet slot to the WORST-fed short material it can grow — but ONLY when a whole
-// colony actually FITS the gap. A free planet is a full colony (~a colony's worth of output); using it
-// to patch a small shortfall overshoots (the Biofuels 83%→177% trap). For small gaps we instead point
-// at the finer lever (shorten the program / reseat a capped colony). Returns {assigned, finetune}.
-function _assignFreeSlots(short) {
-  const cap = { free: {}, usedPlanets: new Set() };
-  (_ppCharsData || []).forEach(c => {
-    if (c.wallet_only) return;                    // corp-wallet viewer toon — not a PI character
-    const f = (c.max_planets || 0) - (c.planets || []).length;
-    if (f > 0) cap.free[String(c.character_id)] = f;
-  });
-  const totalFree = Object.values(cap.free).reduce((a, b) => a + b, 0);
-  const OVERSHOOT_CAP = 1.25;   // a full colony may land at most 25% over the need to be "the right tool"
-  const assigned = [], finetune = [];
-  for (const r of short) {                       // short is worst-fed first
-    const gap = Math.max(0, r.need - r.have);
-    const slotsLeft = Object.values(cap.free).some(v => v > 0);
-    const s = slotsLeft ? _bestFreeSpot(r.t, cap) : null;        // peek — only consumed if we assign
-    const est = _estColonyP1(r.t, s ? s.richness : 0);
-    const proj = r.need > 0 ? (r.have + est) / r.need : Infinity;
-    const overshoots = est > 0 && proj > OVERSHOOT_CAP;          // a whole colony is too big for this gap
-    if (s && !overshoots) {
-      cap.usedPlanets.add(`${s.system}|${s.planet_num}`); cap.free[s.cid] -= 1;
-      assigned.push({ ...s, name: r.name, t: r.t, shortBy: Math.round(gap), est,
-                      fromPct: Math.round(r.ratio * 100), toPct: Math.round(proj * 100) });
-    } else if (overshoots) {                                     // small gap → finer lever, keep the slot free
-      finetune.push({ name: r.name, t: r.t, shortBy: Math.round(gap),
-                      fromPct: Math.round(r.ratio * 100), colonyPct: Math.round(proj * 100),
-                      hint: _finetuneHint(r) });
-    }
-    // else (big gap, no reachable free planet) → falls through to the per-material reseat/redeploy groups
-  }
-  return { totalFree, assigned, finetune };
-}
 
 // A pre-rate_sustained scan shows a colony's OPTIMISTIC full factory rate instead of its real
 // extraction-limited output — so supply can read high until the player refreshes (the Plasmoids
@@ -1120,62 +1042,10 @@ function _burndownSection(rows) {
   const toP0h = p1day => Math.round(p1day * P0_PER_P1 / 24);   // P1/day → P0/hour (the ECU's extraction rate)
   const RECLAIM = 0.05;    // ignore sub-5% "decline" as scan noise
 
-  // One prominent "best use of your free slots" line — each spare planet goes to the worst-fed
-  // material it can grow (most impactful first), rather than a vague "add a colony" on every shortage.
-  const { totalFree, assigned, finetune } = _assignFreeSlots(short);
-  let bestUse = '';
-  const blocks = [];
-  if (assigned.length) {
-    const cards = assigned.map((a, i) => {
-      const loc = `${_esc(a.system)}${a.planet_num != null ? ' P' + a.planet_num : ''}`;
-      const cc = a.planet_type ? `<span class="an-cc-tag">${_esc(a.planet_type)} CC</span>` : '';
-      const over = a.toPct > 110;
-      const land = `<span class="an-bu-land">${a.fromPct}% <span class="an-bu-arrow">→</span> <b class="${over ? 'an-bu-over' : 'an-bu-good'}">${a.toPct}%</b> fed</span>`;
-      return `<div class="an-bu-card">
-          <div class="an-bu-rank">${i + 1}</div>
-          <div class="an-bu-body">
-            <div class="an-bu-mat">${_esc(a.p0)} <span class="an-move-p0arrow">→</span> ${_esc(a.name)} ${land}</div>
-            <div class="an-bu-where">anchor a ${cc} on <b>${a.char ? _esc(a.char) + ' · ' : ''}${loc}</b></div>
-            <div class="an-bu-meta">${a.richness}% density · adds ~${a.est.toLocaleString()}/day · spare slot, no teardown</div>
-          </div>
-        </div>`;
-    }).join('');
-    blocks.push(`<div class="an-bd-bestuse-h">🎯 Best use of your ${totalFree} free planet slot${totalFree > 1 ? 's' : ''} — a full colony fits these, most impactful first:</div><div class="an-bu-list">${cards}</div>`);
-  }
-  if (finetune.length) {
-    const fcards = finetune.map(f => {
-      const h = f.hint;
-      let fix;
-      if (h.kind === 'reseat-capped' && h.covers)
-        fix = `<b>reseat its heads onto denser hotspots</b> — its colonies run extraction-capped, and lifting them to full rate recovers ~${h.gain.toLocaleString()}/day, clearing the gap (only if richer spots exist on those planets; if they're just thin, add a second source).`;
-      else if (h.kind === 'reseat-capped')
-        fix = `<b>reseat its heads onto denser hotspots</b> — its colonies are extraction-capped; recovering toward full rate adds up to ~${h.gain.toLocaleString()}/day (if richer spots exist), then add a source for the rest.`;
-      else if (h.kind === 'shorten' && h.covers)
-        fix = `<b>shorten its program to ${h.days} day${h.days === 1 ? '' : 's'}</b> ≈ +${h.gain.toLocaleString()}/day — clears the gap with no new colony, no teardown.`;
-      else if (h.kind === 'shorten')
-        fix = `<b>shorten its program to ${h.days} day${h.days === 1 ? '' : 's'}</b> (≈ +${h.gain.toLocaleString()}/day) and <b>reseat</b> a declined producer for the rest — both finer than a whole colony.`;
-      else
-        fix = `<b>reseat</b> a declined producer to recover the small gap — finer than dropping a whole colony.`;
-      return `<div class="an-bu-fine">
-          <div class="an-bu-fine-h">${_esc(f.name)} <span class="an-bu-fine-sub">${f.fromPct}% fed · short only ${f.shortBy.toLocaleString()}/day · a full colony would overshoot to ~${f.colonyPct}%</span></div>
-          <div class="an-bu-fine-fix">${fix}</div>
-        </div>`;
-    }).join('');
-    blocks.push(`<div class="an-bd-bestuse-h an-bd-bestuse-h2">Small gaps — fine-tune, don't add a whole colony:</div><div class="an-bu-fine-list">${fcards}</div>`);
-  }
-  if (blocks.length) {
-    bestUse = `<div class="an-bd-bestuse">${blocks.join('')}</div>`;
-  } else if (totalFree > 0) {
-    bestUse = `<div class="an-bd-bestuse"><div class="an-bd-bestuse-note">You have ${totalFree} free planet slot${totalFree > 1 ? 's' : ''}, but none of your reachable free planets grow what you're short on — redeploy a surplus colony, or widen your systems / import that planet's data.</div></div>`;
-  }
-
-  const assignedNames = new Set(assigned.map(a => a.name));
-  const finetuneNames = new Set(finetune.map(f => f.name));
   const groups = short.map(r => {
     const prods = _producersOf(r.t);              // weakest first
     const shortBy = Math.max(0, Math.round(r.need - r.have));
-    const coveredAbove = assignedNames.has(r.name) ? ' (see Best use above)'
-      : finetuneNames.has(r.name) ? ' (see fine-tune above)' : '';
+    const coveredAbove = '';
     const headH = `${_esc(r.name)} <span class="an-bd-group-sub">${Math.round(r.ratio * 100)}% fed · short ${shortBy.toLocaleString()}/day</span>`;
     if (!prods.length)
       return `<div class="an-bd-group"><div class="an-bd-group-h">${_esc(r.name)} <span class="an-bd-group-sub">short ${shortBy.toLocaleString()}/day · no colony makes it yet</span></div>`
@@ -1246,7 +1116,6 @@ function _burndownSection(rows) {
   return `<div class="an-suggest an-suggest-burndown">
       <div class="an-suggest-h">Fix short materials</div>
       <div class="an-levers-lead">You're short on <b>${short.map(r => _esc(r.name)).join('</b>, <b>')}</b>. <b>Reseating</b> only recovers a colony's <em>lost</em> yield (back to its best) — it can't push a planet past its capacity, so it's the fix only when a producer has dropped. When it isn't enough, <b>add or redeploy</b> a colony.</div>
-      ${bestUse}
       <div class="an-bd-groups">${groups}</div>
     </div>`;
 }
