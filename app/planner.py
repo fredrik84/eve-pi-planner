@@ -1462,42 +1462,6 @@ def _factory_pack_max_diameter(product: int, ccu: int | None) -> float:
     return lo
 
 
-_FACTORY_MAX_DIAM: dict = {}   # (product, ccu) -> largest planet diameter (km) a full 3-LP factory fits
-
-
-def _factory_max_diameter(product: int, ccu: int | None) -> float:
-    """Largest real planet diameter (km) the product's factory fits with the full 3 launchpads at this CCU
-    — the cut-off for whether a planet (any type) can host this factory. Coarse binary search, cached."""
-    cc = ccu or 5
-    key = (product, cc)
-    if key in _FACTORY_MAX_DIAM:
-        return _FACTORY_MAX_DIAM[key]
-    from app.layout import generate_layout
-
-    def fits(d):
-        try:
-            r = generate_layout(product, "Barren", launchpads=3, count=1, cc_level=cc, diam_override=d)
-            return not ((r.get("planets") or [{}])[0].get("resources") or {}).get("over")
-        except Exception:
-            return False
-
-    lo, hi = 2000.0, 60000.0
-    if not fits(lo):
-        _FACTORY_MAX_DIAM[key] = 0.0
-        return 0.0
-    if fits(hi):
-        _FACTORY_MAX_DIAM[key] = hi
-        return hi
-    for _ in range(7):                 # ~450 km resolution, plenty for a cut-off
-        mid = (lo + hi) / 2
-        if fits(mid):
-            lo = mid
-        else:
-            hi = mid
-    _FACTORY_MAX_DIAM[key] = lo
-    return lo
-
-
 def _factory_full_ccu(product: int, planet_type: str) -> int | None:
     """Lowest command-centre level at which the full 3-launchpad layout fits (what to train CCU to)."""
     for cc in range(1, 6):

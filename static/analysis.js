@@ -833,7 +833,6 @@ function _sepSwapBody(dep, moves) {
 }
 
 // ── Yield burn-down (measured decline across programs) ─────────────────────────
-const _YIELD_CAP = 10;   // programs kept per colony server-side (esi._YIELD_KEEP) — for the "N of X" label
 // One sample per extraction program (logged at scan time, deduped by install). The trend is the
 // only way to tell "this colony's hotspots are depleting → reseat" from "it's just a thin planet"
 // (a thin planet is steady-low; a depleting one trends DOWN). Density-free, fleet-independent.
