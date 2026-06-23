@@ -607,7 +607,6 @@ async function submitBug() {
 }
 
 let _bugFilter = '';
-function openBugAdmin() { switchTab('admin'); }  // bug reports now live in the Admin tab
 
 // ── Admin tab ───────────────────────────────────────────────────────────────────
 let _adminPage = (() => { try { return localStorage.getItem('adminPage') || 'submissions'; } catch (e) { return 'submissions'; } })();
@@ -1729,10 +1728,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }, { passive: false });
   });
 });
-
-function showAddPlanet() {
-  alert('Manual planet entry coming soon.');
-}
 
 // ── Character roles ───────────────────────────────────────────────────────────
 
