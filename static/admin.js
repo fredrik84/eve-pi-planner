@@ -7,7 +7,11 @@
 // ── Admin tab ───────────────────────────────────────────────────────────────────
 let _adminPage = (() => { try { return localStorage.getItem('adminPage') || 'submissions'; } catch (e) { return 'submissions'; } })();
 function onAdminTabOpen() {
-  if (!_isAdmin) { switchTab('planetary'); return; }
+  // Only bounce a CONFIRMED non-admin (session loaded), and to a mobile-visible tab — bouncing to
+  // the hidden planner before _isAdmin had loaded was shuffling phone users off a restored admin tab.
+  // When state is still unknown, proceed: the admin endpoints are authenticated server-side, so they
+  // populate for a real admin and 403 gracefully otherwise (loadCharacters then bounces a non-admin).
+  if (_sessionLoaded && !_isAdmin) { switchTab('dashboard'); return; }
   // Load every section's data on open so the nav badges are populated; the sub-nav just toggles
   // which section is visible.
   loadPlanetSubmissions();

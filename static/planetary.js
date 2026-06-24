@@ -162,6 +162,7 @@ function _featureActive(key, dflt = false) {
 let _esiConfigured = false;
 let _loggedIn = false;
 let _isAdmin = false;
+let _sessionLoaded = false;   // true once /api/characters has resolved → _isAdmin/_loggedIn are real
 let _ppCharsData = [];   // last /api/characters payload, for the Setup Analysis tab
 
 async function loadCharacters() {
@@ -174,6 +175,11 @@ async function loadCharacters() {
     _ppCharsData = data.characters || [];
     renderCharacters(data.characters || [], _loggedIn);
     renderHeaderSession(_loggedIn, data.characters || [], data.session_character_id);
+    _sessionLoaded = true;
+    // Tab-restore on boot runs before this resolves, so a saved "admin" tab opened with _isAdmin
+    // still false. Now that the real state is known, bounce a confirmed non-admin off the admin tab
+    // to a mobile-visible tab (the old onAdminTabOpen bounce to the hidden planner shuffled phones).
+    if (!_isAdmin && localStorage.getItem('activeTab') === 'admin' && typeof switchTab === 'function') switchTab('dashboard');
     await loadProfiles();
   } catch (e) {
     console.error('Failed to load characters:', e);
