@@ -17,11 +17,12 @@ async function onDashboardTabOpen() {
   }
 }
 
-// Global rescan (header button): one server-side request rescans every character's colonies from
-// ESI, then we repaint the data-driven views. A single in-flight request survives the browser
-// throttling a backgrounded tab. `_rescanning` is a module flag so the button shows "Rescanning…"
-// (disabled) no matter which page you're on or how often the header re-renders — and a second
-// press is ignored. The server also rate-limits (429) so it can't be spammed.
+// Global rescan (header button): rescan each character one at a time via the PER-CHARACTER endpoint
+// (small, fast requests), NOT one giant /refresh-all that re-fetches every planet in a single HTTP
+// call. The bulk call made 90+ sequential ESI calls in one request for a real fleet — it timed out
+// (so the whole rescan failed) and a mid-loop ESI hiccup silently skipped a toon. Per-char requests
+// isolate failures (the rest still update) and show real progress. `_rescanning` is a module flag so
+// the button shows "Rescanning…" (disabled) on any page and a second press is ignored.
 let _rescanning = false;
 let _dashCharIds = null;   // character_ids surfaced on the dashboard — set by renderDashboard; lets the
                            // rescan button hit only the toons in view (usually just the factory owners)
@@ -31,32 +32,30 @@ function _setRescanUI() {
 }
 async function rescanAll() {
   if (_rescanning) return;                 // already scanning → ignore repeat presses
-  _rescanning = true; _setRescanUI();
-  let res = null, cooldownMsg = null;
-  // On the dashboard, rescan only the characters it actually shows (a few factory owners) instead of
-  // the whole fleet. Other tabs (Characters/Analysis) cover every toon, so they still do a full rescan.
+  // On the dashboard, rescan only the characters it actually shows (a few factory owners). Other tabs
+  // cover every real toon (skip dummies, the wallet-only viewer, and toons with a dead token).
   const onDash = localStorage.getItem('activeTab') === 'dashboard';
-  const scoped = (onDash && _dashCharIds && _dashCharIds.length) ? { character_ids: _dashCharIds } : null;
-  try {
-    const resp = await fetch('/api/characters/refresh-all', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(scoped || {}),
-    });
-    if (resp.status === 429) cooldownMsg = (await resp.json().catch(() => ({}))).detail || 'Rescanned recently — try again shortly';
-    else res = await resp.json().catch(() => null);
-  } catch (e) {}
-  _rescanning = false;
-  if (cooldownMsg) {                        // rate-limited: flash the message on the button, no repaint
-    const b = document.getElementById('rescanBtn');
-    if (b) { b.disabled = true; b.textContent = cooldownMsg; setTimeout(() => { b.disabled = false; b.textContent = 'Rescan'; }, 2500); }
-    return;
+  const ids = (onDash && _dashCharIds && _dashCharIds.length)
+    ? _dashCharIds.slice()
+    : (_ppCharsData || []).filter(c => !c.is_dummy && !c.wallet_only && c.token_ok && c.character_id > 0)
+                          .map(c => c.character_id);
+  if (!ids.length) return;
+  _rescanning = true; _setRescanUI();
+  const b = document.getElementById('rescanBtn');
+  let failed = 0;
+  for (let i = 0; i < ids.length; i++) {
+    if (b) b.textContent = `Rescanning ${i + 1}/${ids.length}…`;
+    try {
+      const r = await fetch(`/api/characters/${ids[i]}/refresh-planets`, { method: 'POST' });
+      if (!r.ok) failed++;
+    } catch (e) { failed++; }
   }
+  _rescanning = false;
   if (typeof loadCharacters === 'function') await loadCharacters();   // refresh _ppCharsData + header
-  if (typeof onDashboardTabOpen === 'function') await onDashboardTabOpen();
+  if (typeof onDashboardTabOpen === 'function' && onDash) await onDashboardTabOpen();
   if (typeof renderAnalysis === 'function' && _analyzeSnaps.length) renderAnalysis();
   _setRescanUI();
-  if (res && res.failed) alert(`${res.failed} of ${res.total} character${res.total !== 1 ? 's' : ''} could not be rescanned — usually an expired ESI token (red dot in Characters).`);
+  if (failed) alert(`${failed} of ${ids.length} character${ids.length !== 1 ? 's' : ''} could not be rescanned — usually an expired ESI token (red dot in Characters).`);
 }
 
 // Fold/unfold a dashboard card by clicking its title (state persisted in localStorage).
