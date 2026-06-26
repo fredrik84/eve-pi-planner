@@ -482,7 +482,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // On phones the heavy tools (planner/planetary/layout/planetdb/characters) are hidden
   // from the bottom tab bar, so never land on one — fall back to the Dashboard. A shared
   // plan link is still an explicit deep-link and opens the plan view regardless.
-  const MOBILE_TABS = ['dashboard', 'analyze', 'howitworks', 'admin'];
+  const MOBILE_TABS = ['dashboard', 'analyze', 'howitworks', 'characters', 'admin'];
   const isMobile = window.matchMedia('(max-width: 760px)').matches;
   if (hasPlanetaryShare) switchTab('planetary');
   else if (isMobile) switchTab(saved && MOBILE_TABS.includes(saved) ? saved : 'dashboard');

@@ -263,34 +263,23 @@ function renderDashboard(data) {
       </div></div>
     </section>` : '';
 
-  // Finished product sitting in factory pads (to sell). The raw P1 → factories that used to live here
-  // is now covered by the "Fill factories from pads" card.
-  const pb = data.pads_breakdown || { product: [], raw: [] };
-  const _padRows = (items) => items.map(it =>
-    `<div class="dash-pad-row"><span class="dash-pad-amt">${it.amount.toLocaleString()}</span><span class="dash-pad-name">${_esc(it.name)}</span><span class="dash-pad-meta">${_fmtIsk(it.value)}</span></div>`).join('');
-  const prodTot = pb.product.reduce((a, x) => a + x.value, 0);
-  const padsCollapsed = localStorage.getItem('dashPadsCollapsed') !== '0';   // default folded
-  const padsHtml = pb.product.length ? `
-    <section class="pp-card">
-      <div class="pp-card-title dash-fold" onclick="_toggleDashFold(this, 'dashPadsCollapsed')">
-        <span class="dash-fold-caret">${padsCollapsed ? '▸' : '▾'}</span> Product in the pads
-        <span class="pp-card-hint">— ${padsCollapsed ? _fmtIsk(prodTot) + ' to sell' : 'finished product ready to sell'}</span>
-      </div>
-      <div class="pp-card-body"${padsCollapsed ? ' style="display:none"' : ''}>
-        <div class="dash-pad-grp">${_padRows(pb.product)}</div>
-      </div>
-    </section>` : '';
   // Fill-factories meter: how far the P1 in your extractor pads goes toward filling every factory's
-  // 30k m³ buffer — binding-material % + per-material breakdown (weakest first).
+  // 30k m³ buffer. The total meter (binding %) stays visible; the per-material breakdown folds.
+  const fillFold = localStorage.getItem('dashFillMatsCollapsed') !== '0';   // breakdown folded by default
+  const _pfCls = _pfShow ? (_pf.fill_pct >= 1 ? 'an-ok' : (_pf.fill_pct < 0.9 ? 'an-warn' : '')) : '';
   const padFillHtml = _pfShow ? `
     <section class="pp-card">
       <div class="pp-card-title">Fill factories from pads <span class="pp-card-hint">— if you hauled your extractor P1 into your ${_pf.factories} factories</span></div>
       <div class="pp-card-body">
         <div class="padfill-head">
-          <span class="padfill-pct ${_pf.fill_pct >= 1 ? 'an-ok' : (_pf.fill_pct < 0.9 ? 'an-warn' : '')}">${Math.round(_pf.fill_pct * 100)}%</span>
+          <span class="padfill-pct ${_pfCls}">${Math.round(_pf.fill_pct * 100)}%</span>
           <span class="padfill-sub">${_pf.fill_pct < 1 ? `to fully fill all <b>${_pf.factories}</b> factories — limited by <b>${_esc(_pf.binding)}</b>` : `every input covers all <b>${_pf.factories}</b> factories`}</span>
         </div>
-        <div class="padfill-mats">${_pf.materials.map(m => {
+        <div class="padfill-meter"><div class="padfill-meter-fill ${_pfCls}" style="width:${Math.min(100, Math.round(_pf.fill_pct * 100))}%"></div></div>
+        <div class="dash-fold padfill-fold" onclick="_toggleDashFold(this, 'dashFillMatsCollapsed')">
+          <span class="dash-fold-caret">${fillFold ? '▸' : '▾'}</span> Per-material breakdown
+        </div>
+        <div class="padfill-mats"${fillFold ? ' style="display:none"' : ''}>${_pf.materials.map(m => {
           const pct = Math.round(m.pct * 100);
           return `<div class="padfill-row"><span class="padfill-name">${_esc(m.name)}</span>`
             + `<div class="padfill-bar"><div class="padfill-fill ${m.pct >= 1 ? 'pf-ok' : (m.pct < 0.9 ? 'pf-warn' : '')}" style="width:${Math.min(100, pct)}%"></div></div>`
@@ -302,7 +291,7 @@ function renderDashboard(data) {
     <section class="pp-card">
       <div class="pp-card-title">Overview <span class="pp-card-hint">— your PI at a glance · Rescan in the top bar pulls fresh data</span></div>
       <div class="pp-card-body"><div class="an-stats">${tiles}</div></div>
-    </section>` + padFillHtml + routineHtml + timelineHtml + padsHtml + `
+    </section>` + routineHtml + timelineHtml + padFillHtml + `
     <section class="pp-card">
       <div class="pp-card-title">Factories <span class="pp-card-hint">— launchpad fill &amp; time to empty, projected forward from your last rescan (${facs.length})</span></div>
       <div class="pp-card-body">

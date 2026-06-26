@@ -1545,6 +1545,13 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .padfill-fill.pf-ok { background: #46d18a; }
 .padfill-fill.pf-warn { background: #e0b84a; }
 .padfill-amt { color: #8b93a6; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.padfill-meter { height: 12px; background: #11151f; border: 1px solid #1b2030; border-radius: 6px; overflow: hidden; margin-bottom: 8px; }
+.padfill-meter-fill { height: 100%; background: #5ab4e6; border-radius: 5px; transition: width .25s; }
+.padfill-meter-fill.an-ok { background: #46d18a; }
+.padfill-meter-fill.an-warn { background: #e0b84a; }
+.padfill-fold { color: #8b93a6; font-size: 12px; padding: 3px 0; }
+.padfill-fold:hover { color: #c8d2e6; }
+.padfill-fold + .padfill-mats { margin-top: 4px; }
 /* In the pads breakdown */
 .dash-pad-grp { margin-bottom: 13px; }
 .dash-pad-grp:last-child { margin-bottom: 0; }
@@ -2052,7 +2059,6 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
   .sidebar [data-tab="planetary"],
   .sidebar [data-tab="layout"],
   .sidebar [data-tab="planetdb"],
-  .sidebar [data-tab="characters"],
   .sidebar [data-tab="contribute"],
   .sidebar-donate { display: none !important; }
 
@@ -2061,11 +2067,12 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
      (JS hides it via an inline style when logged out; override that on phones.) */
   .sidebar #dashboardNavTab { display: flex !important; }
 
-  /* Bottom-bar order: Dashboard · Setup Analysis · How it works · Admin
-     (How it works and Setup Analysis swapped vs. the desktop sidebar order; Contribute is hidden). */
+  /* Bottom-bar order: Dashboard · Setup Analysis · How it works · Characters · Admin
+     (Characters is on mobile so you can refresh per-toon; Contribute is hidden). */
   .sidebar #dashboardNavTab        { order: 0; }
   .sidebar [data-tab="analyze"]    { order: 1; }
   .sidebar [data-tab="howitworks"] { order: 2; }
+  .sidebar [data-tab="characters"] { order: 3; }
   .sidebar #adminNavTab            { order: 4; }
 
   /* Each remaining tab -> icon over a tiny label */

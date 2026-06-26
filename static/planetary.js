@@ -271,6 +271,9 @@ async function rescanCharacter(cid, btn) {
 function renderCharacters(chars, loggedIn) {
   const list = document.getElementById('characterList');
   list.innerHTML = '';
+  // Wallet-only viewer toons sit at the bottom (they're not PI characters). Sort is stable, so the
+  // real characters keep their server order.
+  chars = [...(chars || [])].sort((a, b) => (a.wallet_only ? 1 : 0) - (b.wallet_only ? 1 : 0));
   const dummyCard = document.getElementById('dummyCharCard');
   if (dummyCard) dummyCard.style.display = loggedIn ? '' : 'none';
 
