@@ -1033,7 +1033,8 @@ def list_characters(pp_session: str = Cookie(default=None)):
     try:
         planet_rows = con.execute("""
             SELECT cp.character_id, cp.planet_id, cp.planet_type, cp.is_extractor, cp.p0_name, cp.upgrade_level,
-                   cp.planet_num, cp.num_pins, cp.products, cp.pad_contents, cp.sim_state, cp.esi_modified,
+                   cp.planet_num, cp.num_pins, cp.products, cp.pad_contents, cp.pad_inputs, cp.checkpoint_at,
+                   cp.sim_state, cp.esi_modified,
                    COALESCE(ss.name, '') AS system_name
             FROM pp_char_planets cp
             LEFT JOIN solar_systems ss ON ss.system_id = cp.solar_system_id
@@ -1041,7 +1042,8 @@ def list_characters(pp_session: str = Cookie(default=None)):
     except Exception:  # no geo table → no system names
         planet_rows = con.execute("""
             SELECT character_id, planet_id, planet_type, is_extractor, p0_name, upgrade_level,
-                   planet_num, num_pins, products, pad_contents, sim_state, esi_modified, '' AS system_name
+                   planet_num, num_pins, products, pad_contents, pad_inputs, checkpoint_at,
+                   sim_state, esi_modified, '' AS system_name
             FROM pp_char_planets
         """).fetchall()
     # Per-colony yield history (oldest→newest), for the measured-decline burn-down.
@@ -1080,6 +1082,22 @@ def list_characters(pp_session: str = Cookie(default=None)):
                 pads = _json.loads(p["pad_contents"]) if p["pad_contents"] else []
             except Exception:
                 pads = []
+        # FACTORY planets have no sim_state, so `pads` above is the raw (often days-old) ESI checkpoint.
+        # Project the FINAL product forward at its effective rate, capped by P1 runout — so the "In pads
+        # ~est" tracks reality (P4 especially) and agrees with the dashboard instead of freezing.
+        if not p["is_extractor"]:
+            try:
+                _prods = _json.loads(p["products"] or "[]")
+                if _prods:
+                    from app.planner import project_factory_pad
+                    _tid = _prods[0]["type_id"]
+                    _base = next((it.get("amount", 0) or 0 for it in pads if it.get("type_id") == _tid), 0)
+                    _proj = project_factory_pad(_tid, _json.loads(p["pad_inputs"] or "[]"), _base, p["checkpoint_at"])
+                    pads = [it for it in pads if it.get("type_id") != _tid]
+                    if round(_proj) >= 1:
+                        pads.insert(0, {"type_id": _tid, "name": _prods[0].get("name"), "amount": int(round(_proj))})
+            except Exception:
+                pass
         # Production rate (units/day) per output — reliable (from the extractor program config,
         # not the stale stored volume). Used by the Analyze tab to map setup vs a plan's needs.
         production = []

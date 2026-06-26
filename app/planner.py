@@ -546,6 +546,34 @@ def _factory_refill_hours(products_per_day: float, p1_fracs: dict, factories: in
     return round((_FACTORY_LAUNCHPADS * 10_000) / (p1_m3_per_factory_day / 24), 1)
 
 
+def project_factory_pad(product_tid: int, inputs: list, base_product: float, t0, now: float | None = None) -> float:
+    """Projected FINAL product in a factory's launchpad NOW = checkpoint amount + what it made since the
+    checkpoint, at the effective product rate (a P4 is throttled to 0.5/hr), capped at when the imported
+    P1 would run dry (the factory stops feeding then). Factory planets have no extractor sim_state — the
+    on-planet P1→P2→P3→P4 chain can't be line-simmed (the intermediates don't accrue in the launchpad) —
+    so without this the Characters tab freezes on a days-old ESI checkpoint. Mirrors the dashboard's
+    'In pads now' projection so the two agree."""
+    import time as _t
+    if now is None:
+        now = _t.time()
+    pi = load_pi_data()
+    fracs = _compute_p1_fracs(product_tid, pi)
+    rate_hr = _effective_fph(product_tid, pi)          # products/hr (P4 → 0.5)
+    if not fracs or rate_hr <= 0 or not t0:
+        return base_product
+    elapsed_h = max(0.0, (now - t0) / 3600.0)
+    snap = {it.get("type_id"): (it.get("amount", 0) or 0) for it in (inputs or [])}
+    tte_h = None                                        # hours until the first P1 input runs dry
+    for pid, frac in fracs.items():
+        need_per_h = rate_hr * frac                     # P1 consumed/hr (frac = P1 per product)
+        if need_per_h <= 0:
+            continue
+        h = snap.get(pid, 0) / need_per_h
+        tte_h = h if tte_h is None else min(tte_h, h)
+    fed_h = min(elapsed_h, tte_h) if tte_h is not None else elapsed_h
+    return base_product + rate_hr * fed_h
+
+
 # ── Plan request model ────────────────────────────────────────────────────────
 
 class PlanRequest(BaseModel):
