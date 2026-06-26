@@ -2036,6 +2036,7 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
   .sidebar [data-tab="layout"],
   .sidebar [data-tab="planetdb"],
   .sidebar [data-tab="characters"],
+  .sidebar [data-tab="contribute"],
   .sidebar-donate { display: none !important; }
 
   /* Keep the Dashboard tab on the bar even when logged out — its panel is the
@@ -2043,12 +2044,11 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
      (JS hides it via an inline style when logged out; override that on phones.) */
   .sidebar #dashboardNavTab { display: flex !important; }
 
-  /* Bottom-bar order: Dashboard · Setup Analysis · How it works · Contribute · Admin
-     (How it works and Setup Analysis swapped vs. the desktop sidebar order). */
+  /* Bottom-bar order: Dashboard · Setup Analysis · How it works · Admin
+     (How it works and Setup Analysis swapped vs. the desktop sidebar order; Contribute is hidden). */
   .sidebar #dashboardNavTab        { order: 0; }
   .sidebar [data-tab="analyze"]    { order: 1; }
   .sidebar [data-tab="howitworks"] { order: 2; }
-  .sidebar [data-tab="contribute"] { order: 3; }
   .sidebar #adminNavTab            { order: 4; }
 
   /* Each remaining tab -> icon over a tiny label */
@@ -2078,6 +2078,11 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
   /* Stat tiles (Overview, Setup Analysis) → an even 2-up grid so a lone tile
      doesn't stretch full-width with its value stranded on the left. */
   .an-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  /* Dashboard tiles are short (runtime / value-per-day) → fit 3 per row; compact a touch so they
+     don't crowd. (Analysis stats keep 2-up — those values are longer.) */
+  #dashboardContent .an-stats { grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  #dashboardContent .an-stat { padding: 8px 8px; }
+  #dashboardContent .an-stat-val { font-size: 17px; }
 
   /* Setup Analysis card title: let the "Plan" dropdown take its own full-width
      line instead of squishing the title onto three lines. */

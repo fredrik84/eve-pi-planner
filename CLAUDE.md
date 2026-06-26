@@ -739,8 +739,10 @@ A single `@media (max-width: 760px)` block at the **end of `style.css`** does th
   with `body.nav-collapsed .sidebar …` so a desktop-collapsed state can't out-specify them.
 - **Only the lightweight pages show** on the bar, in this order (flex `order:` overrides, How-it-
   works and Setup-Analysis swapped vs. desktop): **Dashboard · Setup Analysis · How it works ·
-  Contribute · Admin** (admins only). The heavy tools — Planetary Planning, Factory Layout, Find
-  Buildables/Refill (the `.nav-group`), Planet DB, and Characters — are `display:none`. Login and
+  Admin** (admins only). The heavy tools — Planetary Planning, Factory Layout, Find
+  Buildables/Refill (the `.nav-group`), Planet DB, Characters, and **Contribute** (no mobile value)
+  — are `display:none` (and dropped from `MOBILE_TABS` in `app.js`). Dashboard stat tiles go 3-up on
+  phones (`#dashboardContent .an-stats`); Setup-Analysis stats stay 2-up. Login and
   **Rescan both live in the header**, so the hidden Characters tab isn't needed on mobile. The
   header drops `#reportBugBtn` and keeps `EVE PI` on one line (`white-space:nowrap`).
 - `#dashboardNavTab` is forced visible (`display:flex !important`) so the bar stays consistent when
