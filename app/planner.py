@@ -1840,43 +1840,6 @@ def dashboard(pp_session: str = Cookie(default=None)):
     top_pi = max(agg.values(), key=lambda a: (a["tier"], a["value"])) if agg else None
     pads_value = round(sum(a["value"] for a in agg.values()), 2)
 
-    # "In the pads" breakdown — what's actually sitting in launchpads, so the player needn't dig into
-    # Characters. Two groups: finished factory product (sellable) and raw P1 in extractor pads (to haul
-    # to factories). Extractor P1 is projected to now (via the sim) to match the Characters tab.
-    from app.pi_sim import project as _project
-    _PAD_VOL = {0: 0.01, 1: 0.19, 2: 1.5, 3: 6.0, 4: 100.0}    # m³ per unit by tier
-    ext_agg: dict = {}
-    for (r, prods, inputs, pads) in parsed:
-        if not r["is_ext"]:
-            continue
-        items = pads
-        try:
-            ss = _json.loads(r["sim_state"] or "null")
-            if ss:
-                items = _project(ss)        # projected pad contents (base + production since checkpoint)
-        except Exception:
-            items = pads
-        for it in (items or []):
-            t = it["type_id"]
-            a = ext_agg.setdefault(t, {"type_id": t, "name": it.get("name") or f"#{t}",
-                                       "tier": types.get(t, {}).get("pi_tier") or 0, "amount": 0.0})
-            a["amount"] += it.get("amount", 0) or 0
-
-    def _pad_list(d, sort_by="value"):
-        out = []
-        for a in d.values():
-            amt = round(a["amount"])
-            if amt <= 0:
-                continue
-            out.append({"name": a["name"], "tier": a["tier"], "amount": amt,
-                        "value": round(amt * prices.get(a["type_id"], 0.0), 2),
-                        "m3": round(amt * _PAD_VOL.get(a["tier"], 0.01), 1)})
-        out.sort(key=lambda x: -x[sort_by])
-        return out
-    # Finished product → by sell value (what to move first). Raw P1 to haul → by volume (it's a hauling
-    # job; the m³ column is what the player reads, and biggest-space-first is what fills the hold).
-    pads_breakdown = {"product": _pad_list(agg, "value"), "raw": _pad_list(ext_agg, "m3")}
-
     # Colony warnings, grouped PER CHARACTER and counted (so a fleet of expiring extractors is one
     # "12 extractions expiring" line, not 12 rows). Stored scan-time kinds + a live expiry check.
     EXPIRING_WINDOW = 3 * 3600                     # 3h — short enough that 1-day cycles don't always trip
@@ -2036,7 +1999,6 @@ def dashboard(pp_session: str = Cookie(default=None)):
         "char_ids_in_view": sorted(chars_in_view),
         "issues": issues,
         "expansion": expansion,
-        "pads_breakdown": pads_breakdown,
         "pad_fill": _pad_fill_meter(parsed, pi, types),
         "totals": {
             "factory_count": len(factories),
