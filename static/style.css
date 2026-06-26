@@ -2054,13 +2054,29 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
   }
   .sidebar-nav { flex-direction: row; justify-content: space-around; width: 100%; gap: 0; }
 
-  /* Hide the heavy tools + non-essential nav items and the donate box on phones. */
+  /* Hide the heavy tools + non-essential nav items on phones. */
   .sidebar .nav-group,
   .sidebar [data-tab="planetary"],
   .sidebar [data-tab="layout"],
   .sidebar [data-tab="planetdb"],
-  .sidebar [data-tab="contribute"],
-  .sidebar-donate { display: none !important; }
+  .sidebar [data-tab="contribute"] { display: none !important; }
+
+  /* Donate sticker — show as a tab-like item at the end of the bottom bar. */
+  .sidebar-donate {
+    flex: 1 1 0; min-width: 0;
+    display: flex !important; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 3px; padding: 7px 3px 5px; border-radius: 6px;
+    order: 5; cursor: default;
+  }
+  .sidebar-donate .sidebar-donate-full { display: none; }
+  .sidebar-donate .sidebar-donate-ico {
+    display: block; font-size: 12px; color: #ffce6b; padding: 0;
+  }
+  .sidebar-donate::after {
+    content: 'Donate'; font-size: 9.5px; color: #ffce6b;
+    letter-spacing: 0.2px; line-height: 1;
+  }
 
   /* Keep the Dashboard tab on the bar even when logged out — its panel is the
      login call-to-action, so the bar stays consistent and shows an active item.
