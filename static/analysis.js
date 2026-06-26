@@ -1142,8 +1142,8 @@ function _extRuntimeAdviceHtml(headroom, curDays) {
   if (bL0 >= 0.10) {
     return `<div class="an-suggest an-suggest-add an-rt-ok">
         <div class="an-suggest-h">Extraction runtime <span class="an-rt-badge an-rt-badge-ok">✓ sustainable</span></div>
-        <div class="an-rt-pick">Your ${L0lbl} programs sit <b>+${Math.round(bL0 * 100)}%</b> above demand — comfortable headroom as your heads decay. Keep the runtime.</div>
-        <div class="an-sug-note">Spare extraction is better spent on more factories (above) than a shorter runtime.${detected ? '' : ' Length assumed 2d — rescan to detect yours.'}</div>
+        <div class="an-rt-pick"><b>+${Math.round(bL0 * 100)}%</b> above demand on ${L0lbl} programs — comfortable margin as heads decay.</div>
+        <div class="an-sug-note">Spare extraction is better spent on more factories than a shorter runtime.${detected ? '' : ' Length assumed 2d — rescan to detect yours.'}</div>
       </div>`;
   }
 
@@ -1151,12 +1151,12 @@ function _extRuntimeAdviceHtml(headroom, curDays) {
   if (bL0 >= 0) {
     return `<div class="an-suggest an-suggest-warn an-rt-warn">
         <div class="an-suggest-h">Extraction runtime <span class="an-rt-badge an-rt-badge-warn">⚠ tight</span></div>
-        <div class="an-rt-pick">Your ${L0lbl} programs sit only <b>+${Math.round(bL0 * 100)}%</b> above demand — fine right now, but extraction <b>decays as the program runs</b>, so the factories will dip short before you reseat.</div>
+        <div class="an-rt-pick">Only <b>+${Math.round(bL0 * 100)}%</b> above demand on ${L0lbl} programs — extraction <b>decays</b> as the program runs, so factories will dip short before you reseat.</div>
         <ul>
-          <li>Next time you're in there, <b>reseat the binding colonies</b> onto stronger hotspots, or <b>redeploy</b> a surplus colony onto the binding material — that builds margin and keeps your long, low-touch runtime.</li>
+          <li><b>Reseat the binding colonies</b> onto stronger hotspots, or <b>redeploy</b> a surplus colony onto the binding material — builds margin without more restarts.</li>
         </ul>
         ${graph}
-        <div class="an-sug-note">Reseating refreshes the heads in the same visit, so there's no need to run shorter programs (that's just more restarts). Decay is an estimate — verify against your in-game ECU.</div>
+        <div class="an-sug-note">Decay is an estimate — verify against your in-game ECU.</div>
       </div>`;
   }
 
@@ -1166,14 +1166,14 @@ function _extRuntimeAdviceHtml(headroom, curDays) {
   const canShorten = fedDay >= 1 && fedDay < L0;
   return `<div class="an-suggest an-suggest-fix">
       <div class="an-suggest-h">Extraction runtime <span class="an-rt-badge an-rt-badge-bad">✕ falling behind</span></div>
-      <div class="an-rt-pick">Your ${L0lbl} programs <b>over-extend</b> supply — extraction covers only <b>${Math.round((bL0 + 1) * 100)}%</b> of demand, so factories fall behind.</div>
+      <div class="an-rt-pick">${L0lbl} programs <b>over-extend</b> supply — extraction covers only <b>${Math.round((bL0 + 1) * 100)}%</b> of demand.</div>
       <ul>
-        <li><b>Reseat</b> the short colonies to recover lost yield, <b>redeploy</b> a surplus colony's command center onto the short material, or <b>add a colony</b> — more extraction fixes it for good and keeps your long, low-touch runtime.</li>
+        <li><b>Reseat</b> short colonies, <b>redeploy</b> a surplus colony onto the short material, or <b>add a colony</b>.</li>
       </ul>
       ${graph}
       <div class="an-sug-note">${canShorten
-        ? `Shortening to ${fedDay} day${fedDay === 1 ? '' : 's'} (${_progDuration(fedDay)}) would feed them on fresher extraction — but only by restarting more often (more work), and it masks the shortfall rather than fixing it. Add extraction instead.`
-        : `A shorter runtime won't help here — even daily programs can't keep up, so you need more extraction.`} Decay is an estimate — verify against your in-game ECU.</div>
+        ? `Shortening to ${fedDay}d (${_progDuration(fedDay)}) would help on fresher extraction — but means more restarts and masks the gap. Add extraction instead.`
+        : `Shorter programs won't help — even daily cycles can't keep up.`} Decay is an estimate — verify against your in-game ECU.</div>
     </div>`;
 }
 
