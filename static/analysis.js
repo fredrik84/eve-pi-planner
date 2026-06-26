@@ -1100,22 +1100,22 @@ function _burndownSection(rows) {
     let action, list = '';
     if (covers) {
       const one = need.length === 1;
-      action = `<b>Reseat</b> ${one ? 'the colony' : `the ${need.length} colon${need.length === 1 ? 'y' : 'ies'}`} below to clear the <b>${shortBy.toLocaleString()}/day</b> gap — a small bump on ${one ? 'it' : 'them'} does it${ifRicher}; ${one ? 'it has' : 'they have'} far more recovery headroom than you need.`;
+      action = `<b>Reseat</b> the ${one ? 'colony' : `${need.length} colonies`} below — covers the <b>${shortBy.toLocaleString()}/day</b> gap${ifRicher}.`;
       list = `<div class="an-bd-prod-list">${reseatRows}</div>`;
     } else if (reclaimable > 0) {
-      action = `Reseating the ${declined.length} colon${declined.length === 1 ? 'y' : 'ies'} below recovers ~${reclaimable.toLocaleString()}/day — still short <b>${rem.toLocaleString()}/day</b>.${ifRicher} ${hasUnknown ? 'A rescan may reveal more headroom; otherwise ' : ''}${colTail.trim()} for the rest.`;
+      action = `Reseating recovers ~${reclaimable.toLocaleString()}/day — still short <b>${rem.toLocaleString()}/day</b>.${ifRicher} ${hasUnknown ? 'Rescan may reveal more; otherwise ' : ''}${colTail.trim()}.`;
       list = `<div class="an-bd-prod-list">${reseatRows}</div>`;
     } else if (hasUnknown) {
-      action = `No measured decline yet, so reseating may or may not help. <b>Try reseating</b> your ${_esc(r.name)} producers, then <b>Rescan</b> — if it doesn't add ~${shortBy.toLocaleString()}/day, they're at capacity, so${colTail}.`;
+      action = `No decline measured — <b>try reseating</b>, then <b>Rescan</b>. If it doesn't add ~${shortBy.toLocaleString()}/day,${colTail}.`;
     } else {
-      action = `Your producer${prods.length === 1 ? ' is' : 's are'} at their proven best — reseating can't make up the <b>${shortBy.toLocaleString()}/day</b>. ${colTail.trim()}.`;
+      action = `At peak — reseating won't close <b>${shortBy.toLocaleString()}/day</b>. ${colTail.trim()}.`;
     }
     return `<div class="an-bd-group"><div class="an-bd-group-h">${headH}</div><div class="an-bd-target">${action}</div>${list}</div>`;
   }).join('');
 
   return `<div class="an-suggest an-suggest-burndown">
       <div class="an-suggest-h">Fix short materials</div>
-      <div class="an-levers-lead">You're short on <b>${short.map(r => _esc(r.name)).join('</b>, <b>')}</b>. <b>Reseating</b> only recovers a colony's <em>lost</em> yield (back to its best) — it can't push a planet past its capacity, so it's the fix only when a producer has dropped. When it isn't enough, <b>add or redeploy</b> a colony.</div>
+      <div class="an-levers-lead">Short on <b>${short.map(r => _esc(r.name)).join('</b>, <b>')}</b>. Reseating recovers <em>lost</em> yield only — no help if a colony is already at its peak. If it's not enough, <b>add or redeploy</b>.</div>
       <div class="an-bd-groups">${groups}</div>
     </div>`;
 }
