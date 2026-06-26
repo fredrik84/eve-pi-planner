@@ -355,7 +355,7 @@ function renderAnalysis() {
         nfac ? stat(String(nfac), 'factories to service', '') : '',
       ].join('');
       proj = `<div class="an-proj">`
-        + `<div class="an-proj-h">Refill run — empty extractors & top up factories every <b>${_fmtHours(days * 24)}</b></div>`
+        + `<div class="an-proj-h">Refill run</div>`
         + `<div class="an-stats">${cells}</div></div>`;
     }
   }
