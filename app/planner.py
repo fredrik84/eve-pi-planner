@@ -1660,6 +1660,48 @@ def expansion(pp_session: str = Cookie(default=None)):
     return ex
 
 
+def _pad_fill_meter(parsed, pi, types):
+    """How far the P1 sitting in EXTRACTOR launchpads would go toward FILLING every factory's 30,000 m³
+    (3-LP) input buffer. `have` = projected extractor-pad P1 per material; `need` = each factory's buffer
+    split by consumption ratio (units = 30000 m³ × normalised frac ÷ 0.19 m³/unit). The headline % is the
+    BINDING material (you need them all), with a per-material breakdown (weakest first)."""
+    from app.pi_sim import project
+    VOL, LP_M3 = 0.19, 30000.0
+    have: dict[int, float] = {}        # P1 in extractor launchpads, per type_id
+    need: dict[int, float] = {}        # P1 to fill every factory buffer, per type_id
+    nfac = 0
+    for (r, prods, inputs, pads) in parsed:
+        if r["is_ext"]:
+            src = None
+            if r["sim_state"]:
+                try:
+                    src = project(_json.loads(r["sim_state"]))   # forward-projected output
+                except Exception:
+                    src = None
+            for it in (src if src is not None else (pads or [])):
+                tid, amt = it.get("type_id"), (it.get("amount", 0) or 0)
+                if tid and amt > 0:
+                    have[tid] = have.get(tid, 0) + amt
+        elif prods:
+            fr = _compute_p1_fracs(prods[0]["type_id"], pi)   # P1-per-product recipe quantities
+            if fr:
+                nfac += 1
+                tot = sum(fr.values()) or 1.0                 # → consumption ratio (sums to 1)
+                for pid, frac in fr.items():
+                    need[pid] = need.get(pid, 0) + LP_M3 * (frac / tot) / VOL
+    if not need:
+        return None
+    mats = []
+    for pid, nd in need.items():
+        hv = have.get(pid, 0)
+        mats.append({"type_id": pid, "name": types.get(pid, {}).get("name") or f"#{pid}",
+                     "have": round(hv), "need": round(nd),
+                     "pct": round(min(1.0, hv / nd) if nd > 0 else 1.0, 4)})
+    mats.sort(key=lambda m: m["pct"])
+    return {"fill_pct": mats[0]["pct"], "binding": mats[0]["name"], "factories": nfac,
+            "target_units": round(sum(need.values())), "materials": mats}
+
+
 @router.get("/api/dashboard")
 def dashboard(pp_session: str = Cookie(default=None)):
     """Logged-in overview: per-factory launchpad fill %, time-to-empty and current-run value,
@@ -1995,6 +2037,7 @@ def dashboard(pp_session: str = Cookie(default=None)):
         "issues": issues,
         "expansion": expansion,
         "pads_breakdown": pads_breakdown,
+        "pad_fill": _pad_fill_meter(parsed, pi, types),
         "totals": {
             "factory_count": len(factories),
             "runtime_hours": round(soonest_h, 1) if soonest_h is not None else None,

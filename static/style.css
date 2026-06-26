@@ -1528,6 +1528,23 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .an-stat.an-bad .an-stat-val { color: #ef6b78; }
 .an-stat-lbl { font-size: 11px; color: #8b93a6; margin-top: 2px; text-transform: uppercase; letter-spacing: .04em; }
 .dash-rt-sub { display: block; text-transform: none; letter-spacing: 0; color: #707892; font-size: 10px; margin-top: 2px; }
+
+/* ── Fill-factories meter (Dashboard, pad_fill flag) ──────────────────────────── */
+.padfill-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+.padfill-pct { font-size: 28px; font-weight: 700; color: #fff; line-height: 1; flex: 0 0 auto; }
+.padfill-pct.an-ok { color: #46d18a; }
+.padfill-pct.an-warn { color: #e0b84a; }
+.padfill-sub { font-size: 12.5px; color: #8b93a6; flex: 1 1 200px; }
+.padfill-sub b { color: #c8d2e6; }
+.padfill-mats { display: flex; flex-direction: column; gap: 4px; }
+.padfill-row { display: grid; grid-template-columns: minmax(110px, 150px) 1fr minmax(140px, auto);
+  align-items: center; gap: 10px; font-size: 12px; }
+.padfill-name { color: #c8d2e6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.padfill-bar { height: 8px; background: #11151f; border: 1px solid #1b2030; border-radius: 4px; overflow: hidden; }
+.padfill-fill { height: 100%; background: #5ab4e6; border-radius: 3px; }
+.padfill-fill.pf-ok { background: #46d18a; }
+.padfill-fill.pf-warn { background: #e0b84a; }
+.padfill-amt { color: #8b93a6; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 /* In the pads breakdown */
 .dash-pad-grp { margin-bottom: 13px; }
 .dash-pad-grp:last-child { margin-bottom: 0; }
@@ -2116,6 +2133,10 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
   .an-pd-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 1px 12px; padding: 3px 0;
     border-bottom: 1px solid #161b28; }
   .an-pd-char { flex-basis: 100%; font-weight: 600; }
+
+  /* Fill-factories breakdown rows: name + amount on one line, bar full-width below. */
+  .padfill-row { grid-template-columns: 1fr auto; }
+  .padfill-bar { grid-column: 1 / -1; }
 
   /* Wide tabular grids (factory tables, per-material detail) scroll inside their
      card instead of forcing the whole page to scroll sideways. */

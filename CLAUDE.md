@@ -673,7 +673,23 @@ not yet loaded — pass `dflt=true` for retrofitted existing features so they ne
 hiccup, omit it for new features (fail-closed). Call sites: `onDashboardTabOpen`, `onAnalyzeTabOpen`,
 `_refreshBaskets`, `renderFinalPlan` (split control). Admin → **Features** sub-tab
 (`loadAdminFeatures`/`toggleFeature`) flips flags. Registry today: `timeline`, `split_extraction`
-(default on), `baskets` (default on), `skill_roi`.
+(default on), `baskets` (default on), `skill_roi`, `move_character`, `schedule_sync`, `pad_fill`.
+
+## Fill-factories meter (Dashboard, `pad_fill` flag)
+
+"How far does the P1 in my extractor pads go toward filling all my factories?" Backend
+`_pad_fill_meter(parsed, pi, types)` in planner.py (attached as `pad_fill` in the dashboard payload):
+- **have** = P1 sitting in EXTRACTOR launchpads, per type_id, forward-projected via `pi_sim.project`
+  (falls back to raw `pad_contents`).
+- **need** = each factory's 30,000 m³ (3-LP) buffer split by **consumption ratio**, per material:
+  `30000 × (frac/Σfrac) ÷ 0.19 m³/unit`. NOTE `_compute_p1_fracs` returns **P1-per-product recipe
+  quantities, NOT fractions summing to 1** — normalise per factory (`frac/Σfrac`) or `need` blows up
+  ~4000× (a real bug hit during dev). Full buffer per factory = 30000/0.19 ≈ 157,894 units.
+- **fill %** = the BINDING material `min(have/need)` (you need them all); `materials[]` is the
+  per-material breakdown (have/need/pct), weakest first.
+Frontend (`dashboard.js`, gated by `_featureActive('pad_fill')`): a top Overview tile ("N% to fully
+fill factories") + a "Fill factories from pads" card with the binding statement + per-material bars
+(`.padfill-*`). Default off (admin-preview).
 
 ## Admin sub-navigation
 

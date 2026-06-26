@@ -172,7 +172,12 @@ function renderDashboard(data) {
     g.units += (f.haul_units || 0);
   });
   const topProd = Object.values(prodAgg).sort((a, b) => (b.tier - a.tier) || (b.units - a.units))[0] || null;
+  const _pf = data.pad_fill;
+  const _pfShow = _pf && typeof _featureActive === 'function' && _featureActive('pad_fill');
   const tiles = [
+    ...(_pfShow ? [_dashTile(Math.round(_pf.fill_pct * 100) + '%',
+        isMobile ? 'to fill factories' : 'to fully fill factories',
+        _pf.fill_pct >= 1 ? 'an-ok' : (_pf.fill_pct < 0.9 ? 'an-warn' : ''))] : []),
     _dashTile(runtime, 'Runtime left (soonest)'),
     _dashTile(_fmtIsk(t.pads_value || 0), (top && !(topProd && topProd.tier >= 2)) ? `In pads now · top ${_esc(top.name)}` : 'In pads now'),
     ...(topProd && topProd.tier >= 2 ? [_dashTile(topProd.units.toLocaleString(), `${_esc(topProd.name)} in pads`)] : []),
@@ -278,11 +283,29 @@ function renderDashboard(data) {
         ${pb.raw.length ? `<div class="dash-pad-grp"><div class="dash-pad-grp-h">Raw P1 in extractors <span class="dash-pad-grp-sub">haul to factories · ${Math.round(rawM3).toLocaleString()} m³</span></div>${_padRows(rawShown, true)}${pb.raw.length > rawShown.length ? `<div class="dash-pad-more">+ ${pb.raw.length - rawShown.length} more</div>` : ''}</div>` : ''}
       </div>
     </section>` : '';
+  // Fill-factories meter: how far the P1 in your extractor pads goes toward filling every factory's
+  // 30k m³ buffer — binding-material % + per-material breakdown (weakest first).
+  const padFillHtml = _pfShow ? `
+    <section class="pp-card">
+      <div class="pp-card-title">Fill factories from pads <span class="pp-card-hint">— if you hauled your extractor P1 into your ${_pf.factories} factories</span></div>
+      <div class="pp-card-body">
+        <div class="padfill-head">
+          <span class="padfill-pct ${_pf.fill_pct >= 1 ? 'an-ok' : (_pf.fill_pct < 0.9 ? 'an-warn' : '')}">${Math.round(_pf.fill_pct * 100)}%</span>
+          <span class="padfill-sub">${_pf.fill_pct < 1 ? `to fully fill all <b>${_pf.factories}</b> — limited by <b>${_esc(_pf.binding)}</b>` : `every input covers all <b>${_pf.factories}</b> factories`}. Target <b>${_pf.target_units.toLocaleString()}</b> units total.</span>
+        </div>
+        <div class="padfill-mats">${_pf.materials.map(m => {
+          const pct = Math.round(m.pct * 100);
+          return `<div class="padfill-row"><span class="padfill-name">${_esc(m.name)}</span>`
+            + `<div class="padfill-bar"><div class="padfill-fill ${m.pct >= 1 ? 'pf-ok' : (m.pct < 0.9 ? 'pf-warn' : '')}" style="width:${Math.min(100, pct)}%"></div></div>`
+            + `<span class="padfill-amt">${m.have.toLocaleString()} / ${m.need.toLocaleString()} · ${pct}%</span></div>`;
+        }).join('')}</div>
+      </div>
+    </section>` : '';
   el.innerHTML = _renderSyncWarn(data) + issuesHtml + expansionHtml + `
     <section class="pp-card">
       <div class="pp-card-title">Overview <span class="pp-card-hint">— your PI at a glance · Rescan in the top bar pulls fresh data</span></div>
       <div class="pp-card-body"><div class="an-stats">${tiles}</div></div>
-    </section>` + routineHtml + timelineHtml + padsHtml + `
+    </section>` + padFillHtml + routineHtml + timelineHtml + padsHtml + `
     <section class="pp-card">
       <div class="pp-card-title">Factories <span class="pp-card-hint">— launchpad fill &amp; time to empty, projected forward from your last rescan (${facs.length})</span></div>
       <div class="pp-card-body">

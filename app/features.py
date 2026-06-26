@@ -44,6 +44,10 @@ FEATURE_REGISTRY = [
      "description": "On the Dashboard: warn when an extractor runs a different program length than "
                     "the rest of the fleet (drifts off your batch restart). Mutable per character.",
      "default": False},
+    {"key": "pad_fill", "label": "Fill-factories meter",
+     "description": "On the Dashboard: how far the P1 in your extractor pads would go toward filling "
+                    "every factory's 30,000 m³ buffer — a binding-material % + per-material breakdown.",
+     "default": False},
 ]
 _DEFAULTS = {f["key"]: f for f in FEATURE_REGISTRY}
 
