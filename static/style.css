@@ -2145,6 +2145,15 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
   .padfill-row { grid-template-columns: 1fr auto; }
   .padfill-bar { grid-column: 1 / -1; }
 
+  /* Characters tab (now visible on phones): each planet row is a wide single-line flex on desktop —
+     on a phone wrap it so the LOCATION sits on its own line, then "what it produces · time · pad est"
+     flow below without the desktop right-push (margin-left:auto), and produce names don't break mid-word. */
+  .pp-pl-row { flex-wrap: wrap; gap: 1px 8px; padding: 4px 0; border-bottom: 1px solid #161b28; align-items: baseline; }
+  .pp-pl-loc { flex-basis: 100%; min-width: 0; }
+  .pp-pl-extract, .pp-pl-build { white-space: nowrap; }
+  .pp-pl-pad { margin-left: 0; }
+  .pp-pl-cc { margin-left: 0; }
+
   /* Wide tabular grids (factory tables, per-material detail) scroll inside their
      card instead of forcing the whole page to scroll sideways. */
   .pp-card { overflow-x: auto; }
