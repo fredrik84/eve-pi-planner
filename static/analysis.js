@@ -1036,7 +1036,7 @@ function _burndownSection(rows) {
   const short = (rows || []).filter(r => r.ratio < 0.995);   // materials below the plan's need
   if (!short.length)
     return `<div class="an-suggest an-suggest-burndown"><div class="an-suggest-h">Reseat candidates</div>`
-      + `<div class="an-levers-lead">Every material this plan needs is covered — no shortage to chase. (Reseating a depleting colony still extends runtime, but nothing here is short.)</div></div>`;
+      + `<div class="an-levers-lead">All materials covered — nothing short to fix. Reseating a depleting colony still extends runtime.</div></div>`;
 
   const P0_PER_P1 = 150;   // basic-industry ratio: 3000 P0 → 20 P1 per cycle. Heads show P0, so target in P0.
   const toP0h = p1day => Math.round(p1day * P0_PER_P1 / 24);   // P1/day → P0/hour (the ECU's extraction rate)
