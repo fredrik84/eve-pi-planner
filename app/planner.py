@@ -1974,9 +1974,18 @@ def dashboard(pp_session: str = Cookie(default=None)):
             if t >= 24:
                 return f" · ~{round(t / 24)}d to full"
             return f" · ~{round(t)}h to full"
+        # Grouped: a count in the header + only the few most-urgent pads, so a big fleet shows one tidy
+        # card (e.g. "62 launchpads ≥80% full (8 within 3h)") instead of dozens of rows.
+        n = len(fulls)
+        urgent = sum(1 for f in fulls if f["ttf"] is not None and f["ttf"] < 3)
+        head = f"Storage filling up — {n} launchpad{'s' if n != 1 else ''} ≥80% full"
+        if urgent:
+            head += f" ({urgent} within 3h)"
         items = [{"severity": "high" if (f["pct"] >= 95 or (f["ttf"] is not None and f["ttf"] < 2)) else "warn",
-                  "msg": f"{f['ch']} · {f['loc']} — {f['pct']}% full{_ttf_str(f['ttf'])}"} for f in fulls[:12]]
-        issues.append({"char": "Storage filling up",
+                  "msg": f"{f['ch']} · {f['loc']} — {f['pct']}% full{_ttf_str(f['ttf'])}"} for f in fulls[:5]]
+        if n > len(items):
+            items.append({"severity": "warn", "msg": f"+ {n - len(items)} more pad{'s' if n - len(items) != 1 else ''} ≥80%"})
+        issues.append({"char": head,
                        "severity": "high" if any(i["severity"] == "high" for i in items) else "warn",
                        "items": items})
     issues.sort(key=lambda c: 0 if c["severity"] == "high" else 1)

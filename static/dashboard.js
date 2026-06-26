@@ -32,13 +32,11 @@ function _setRescanUI() {
 }
 async function rescanAll() {
   if (_rescanning) return;                 // already scanning → ignore repeat presses
-  // On the dashboard, rescan only the characters it actually shows (a few factory owners). Other tabs
-  // cover every real toon (skip dummies, the wallet-only viewer, and toons with a dead token).
-  const onDash = localStorage.getItem('activeTab') === 'dashboard';
-  const ids = (onDash && _dashCharIds && _dashCharIds.length)
-    ? _dashCharIds.slice()
-    : (_ppCharsData || []).filter(c => !c.is_dummy && !c.wallet_only && c.token_ok && c.character_id > 0)
-                          .map(c => c.character_id);
+  // Rescan EVERY real toon, the same per-character endpoint the (reliable) Characters-tab button uses —
+  // one small request each. We deliberately accept the many requests for a thorough full-fleet refresh
+  // (no dashboard scoping). Skips dummies, the wallet-only viewer, and toons with a dead token.
+  const ids = (_ppCharsData || []).filter(c => !c.is_dummy && !c.wallet_only && c.token_ok && c.character_id > 0)
+                                  .map(c => c.character_id);
   if (!ids.length) return;
   _rescanning = true; _setRescanUI();
   const b = document.getElementById('rescanBtn');
@@ -52,7 +50,7 @@ async function rescanAll() {
   }
   _rescanning = false;
   if (typeof loadCharacters === 'function') await loadCharacters();   // refresh _ppCharsData + header
-  if (typeof onDashboardTabOpen === 'function' && onDash) await onDashboardTabOpen();
+  if (localStorage.getItem('activeTab') === 'dashboard' && typeof onDashboardTabOpen === 'function') await onDashboardTabOpen();
   if (typeof renderAnalysis === 'function' && _analyzeSnaps.length) renderAnalysis();
   _setRescanUI();
   if (failed) alert(`${failed} of ${ids.length} character${ids.length !== 1 ? 's' : ''} could not be rescanned — usually an expired ESI token (red dot in Characters).`);
