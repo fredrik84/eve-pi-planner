@@ -263,24 +263,21 @@ function renderDashboard(data) {
       </div></div>
     </section>` : '';
 
-  // What's actually in the launchpads — finished product (to sell) and raw P1 (to haul to factories).
+  // Finished product sitting in factory pads (to sell). The raw P1 → factories that used to live here
+  // is now covered by the "Fill factories from pads" card.
   const pb = data.pads_breakdown || { product: [], raw: [] };
-  const _padRows = (items, showM3) => items.map(it =>
-    `<div class="dash-pad-row"><span class="dash-pad-amt">${it.amount.toLocaleString()}</span><span class="dash-pad-name">${_esc(it.name)}</span><span class="dash-pad-meta">${showM3 ? it.m3.toLocaleString() + ' m³' : _fmtIsk(it.value)}</span></div>`).join('');
+  const _padRows = (items) => items.map(it =>
+    `<div class="dash-pad-row"><span class="dash-pad-amt">${it.amount.toLocaleString()}</span><span class="dash-pad-name">${_esc(it.name)}</span><span class="dash-pad-meta">${_fmtIsk(it.value)}</span></div>`).join('');
   const prodTot = pb.product.reduce((a, x) => a + x.value, 0);
-  const rawM3 = pb.raw.reduce((a, x) => a + x.m3, 0);
-  const rawShown = pb.raw.slice(0, 12);
   const padsCollapsed = localStorage.getItem('dashPadsCollapsed') !== '0';   // default folded
-  const padsSummary = `${pb.product.length ? _fmtIsk(prodTot) + ' to sell' : ''}${pb.product.length && pb.raw.length ? ' · ' : ''}${pb.raw.length ? Math.round(rawM3).toLocaleString() + ' m³ to haul' : ''}`;
-  const padsHtml = (pb.product.length || pb.raw.length) ? `
+  const padsHtml = pb.product.length ? `
     <section class="pp-card">
       <div class="pp-card-title dash-fold" onclick="_toggleDashFold(this, 'dashPadsCollapsed')">
-        <span class="dash-fold-caret">${padsCollapsed ? '▸' : '▾'}</span> In the pads
-        <span class="pp-card-hint">— ${padsCollapsed ? _esc(padsSummary) : "what's in your launchpads now"}</span>
+        <span class="dash-fold-caret">${padsCollapsed ? '▸' : '▾'}</span> Product in the pads
+        <span class="pp-card-hint">— ${padsCollapsed ? _fmtIsk(prodTot) + ' to sell' : 'finished product ready to sell'}</span>
       </div>
       <div class="pp-card-body"${padsCollapsed ? ' style="display:none"' : ''}>
-        ${pb.product.length ? `<div class="dash-pad-grp"><div class="dash-pad-grp-h">Finished product <span class="dash-pad-grp-sub">ready to sell · ${_fmtIsk(prodTot)}</span></div>${_padRows(pb.product, false)}</div>` : ''}
-        ${pb.raw.length ? `<div class="dash-pad-grp"><div class="dash-pad-grp-h">Raw P1 in extractors <span class="dash-pad-grp-sub">haul to factories · ${Math.round(rawM3).toLocaleString()} m³</span></div>${_padRows(rawShown, true)}${pb.raw.length > rawShown.length ? `<div class="dash-pad-more">+ ${pb.raw.length - rawShown.length} more</div>` : ''}</div>` : ''}
+        <div class="dash-pad-grp">${_padRows(pb.product)}</div>
       </div>
     </section>` : '';
   // Fill-factories meter: how far the P1 in your extractor pads goes toward filling every factory's
@@ -291,7 +288,7 @@ function renderDashboard(data) {
       <div class="pp-card-body">
         <div class="padfill-head">
           <span class="padfill-pct ${_pf.fill_pct >= 1 ? 'an-ok' : (_pf.fill_pct < 0.9 ? 'an-warn' : '')}">${Math.round(_pf.fill_pct * 100)}%</span>
-          <span class="padfill-sub">${_pf.fill_pct < 1 ? `to fully fill all <b>${_pf.factories}</b> — limited by <b>${_esc(_pf.binding)}</b>` : `every input covers all <b>${_pf.factories}</b> factories`}. Target <b>${_pf.target_units.toLocaleString()}</b> units total.</span>
+          <span class="padfill-sub">${_pf.fill_pct < 1 ? `to fully fill all <b>${_pf.factories}</b> factories — limited by <b>${_esc(_pf.binding)}</b>` : `every input covers all <b>${_pf.factories}</b> factories`}</span>
         </div>
         <div class="padfill-mats">${_pf.materials.map(m => {
           const pct = Math.round(m.pct * 100);
