@@ -2083,6 +2083,10 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
   #dashboardContent .an-stats { grid-template-columns: repeat(3, 1fr); gap: 6px; }
   #dashboardContent .an-stat { padding: 8px 8px; }
   #dashboardContent .an-stat-val { font-size: 17px; }
+  /* At 3-up the tile is narrow; the uppercase + letter-spaced label broke each word onto its own
+     line. Drop the letter-spacing, shrink a touch, and tighten lines so 2–3 words sit per line. */
+  #dashboardContent .an-stat-lbl { font-size: 9.5px; letter-spacing: 0; line-height: 1.2; }
+  #dashboardContent .dash-rt-sub { font-size: 9px; letter-spacing: 0; }
 
   /* Setup Analysis card title: let the "Plan" dropdown take its own full-width
      line instead of squishing the title onto three lines. */
