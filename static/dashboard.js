@@ -153,6 +153,8 @@ function renderDashboard(data) {
   const el = document.getElementById('dashboardContent');
   if (!el) return;
   _dashData = data;
+  // Phones run the tiles 3-up (narrow) — use shorter labels there; desktop keeps the fuller wording.
+  const isMobile = window.matchMedia('(max-width: 760px)').matches;
   if (!data || !data.logged_in) {
     el.innerHTML = `<section class="pp-card"><div class="pp-card-title">Dashboard</div>
       <div class="pp-card-body"><div class="pp-empty">Log in with ESI (the <b>Login</b> button, top right) to see your PI overview.</div></div></section>`;
@@ -174,7 +176,7 @@ function renderDashboard(data) {
     _dashTile(runtime, 'Runtime left (soonest)'),
     _dashTile(_fmtIsk(t.pads_value || 0), (top && !(topProd && topProd.tier >= 2)) ? `In pads now · top ${_esc(top.name)}` : 'In pads now'),
     ...(topProd && topProd.tier >= 2 ? [_dashTile(topProd.units.toLocaleString(), `${_esc(topProd.name)} in pads`)] : []),
-    _dashTile(_fmtIsk(t.current_run_value || 0), 'Run value (from current inputs)'),
+    _dashTile(_fmtIsk(t.current_run_value || 0), isMobile ? 'Run value' : 'Run value (from current inputs)'),
     _dashTile(_fmtIsk(t.value_per_day || 0), 'Value / day'),
   ].join('');
   const rows = facs.length ? facs.map(f => {
@@ -251,8 +253,8 @@ function renderDashboard(data) {
       <div class="pp-card-title">Maintenance routine <span class="pp-card-hint">— countdown to the next job · cadence below</span></div>
       <div class="pp-card-body"><div class="an-stats">
         ${_rtTile(t.restart_due_hours, t.restart_extractors_hours, 'Restart extractors', t.restart_due_loc)}
-        ${_rtTile(t.empty_due_hours, t.empty_pads_hours, 'Empty extractor pads', t.empty_due_loc || t.empty_pads_loc)}
-        ${_rtTile(t.refill_due_hours, t.refill_factories_hours, 'Refill factory inputs', t.refill_due_loc || t.refill_factories_loc)}
+        ${_rtTile(t.empty_due_hours, t.empty_pads_hours, isMobile ? 'Empty pads' : 'Empty extractor pads', t.empty_due_loc || t.empty_pads_loc)}
+        ${_rtTile(t.refill_due_hours, t.refill_factories_hours, isMobile ? 'Refill factories' : 'Refill factory inputs', t.refill_due_loc || t.refill_factories_loc)}
       </div></div>
     </section>` : '';
 
