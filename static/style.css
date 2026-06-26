@@ -2090,6 +2090,16 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
   .an-suggest-move,
   .an-suggest-sep { display: none; }
 
+  /* Reseat-candidate rows: the location (character · system P#) is flex:1 with
+     ellipsis truncation, so the fixed value/tag columns squeeze it to nothing on a
+     phone — the user couldn't see WHICH toon/planet to reseat. Stack so the location
+     gets a full, un-truncated line. */
+  .an-bd-prod { flex-wrap: wrap; }
+  .an-bd-prod-loc { flex-basis: 100%; white-space: normal; overflow: visible; }
+  .an-bd-prod-val, .an-bd-prod-tag { min-width: 0; text-align: left; }
+  .an-pd-fix-col { flex-wrap: wrap; }
+  .an-pd-fix-rec { white-space: normal; }
+
   /* Wide tabular grids (factory tables, per-material detail) scroll inside their
      card instead of forcing the whole page to scroll sideways. */
   .pp-card { overflow-x: auto; }
