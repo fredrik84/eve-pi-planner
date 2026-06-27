@@ -1476,6 +1476,7 @@ body.nav-collapsed .sidebar-donate-full { display: none; }
 body.nav-collapsed .sidebar-donate-ico { display: block; }
 .mobile-donate { display: none; }
 
+
 /* ── Admin tab ──────────────────────────────────────────────────────────────── */
 .admin-page { max-width: 900px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; }
 .admin-section { padding: 16px 18px; }
@@ -2159,12 +2160,15 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
      card instead of forcing the whole page to scroll sideways. */
   .pp-card { overflow-x: auto; }
 
-  /* Donate note at the bottom of the Dashboard tab. */
+  /* Donate strip — a thin bar just below the header, visible on every page. */
   .mobile-donate {
-    text-align: center; padding: 18px 16px 24px;
-    font-size: 12px; color: #7a8aaa; line-height: 1.5;
+    display: block;
+    width: 100%; text-align: center;
+    padding: 5px 12px; font-size: 11px;
+    color: #7a8aaa; line-height: 1.4;
+    background: #0d0f14; border-bottom: 1px solid #1b2030;
   }
-  .mobile-donate strong { color: #ffce6b; }
+  .mobile-donate strong { color: #ffce6b; font-weight: 600; }
 
   /* Pull-to-refresh indicator (rescan on pull-down from the top) */
   #ptr-indicator {
