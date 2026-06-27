@@ -1020,7 +1020,7 @@ def list_characters(pp_session: str = Cookie(default=None)):
     con = get_connection()
     if context_id:
         rows = con.execute("""
-            SELECT character_id, character_name, token_expiry,
+            SELECT character_id, character_name, token_expiry, refresh_token,
                    interplanetary_consolidation, command_center_upgrades,
                    planetology, advanced_planetology, COALESCE(is_dummy, 0) AS is_dummy,
                    COALESCE(scopes, '') AS scopes
@@ -1160,7 +1160,10 @@ def list_characters(pp_session: str = Cookie(default=None)):
     for r in rows:
         expiry = r["token_expiry"] or ""
         is_dummy = bool(r["is_dummy"])
-        token_ok = True if is_dummy else (expiry > now if expiry else False)
+        # A character's token is usable as long as a refresh token exists — access tokens
+        # expire in 20 minutes but are transparently refreshed on use. Only a truly revoked
+        # or missing refresh token means the character needs to be re-added.
+        token_ok = True if is_dummy else bool(r["refresh_token"])
         # A wallet-only toon (corp-wallet scope, no planets scope) is just a money viewer — it isn't
         # a PI character. Flagged so the UI can label it and keep it out of PI pickers; the planner /
         # dashboard exclude it in SQL already.
