@@ -277,6 +277,18 @@ class AdminAdd(BaseModel):
     character_name: str
 
 
+@router.get("/api/character-names")
+def all_character_names(_: int = Depends(require_admin)):
+    """All real (non-dummy) character names known to the system, for admin autocomplete."""
+    con = get_connection()
+    rows = con.execute(
+        "SELECT DISTINCT character_name FROM pp_characters "
+        "WHERE COALESCE(is_dummy,0)=0 ORDER BY character_name COLLATE NOCASE"
+    ).fetchall()
+    con.close()
+    return {"names": [r["character_name"] for r in rows]}
+
+
 @router.get("/api/admins")
 def list_admins(_: int = Depends(require_admin)):
     ensure_admin_table()

@@ -784,11 +784,12 @@ PVF-N9    3         95                 60             80                  100   
         </div>
 
         <div class="admin-subpage" data-page="users" style="display:none">
+          <datalist id="charNameSuggestions"></datalist>
           <section class="pp-card admin-section">
             <div class="pp-card-title">Admin users</div>
             <div class="admin-hint">Admins can manage baskets, read bug reports, and add/remove other admins and testers. Matching is by EVE character name (SSO-verified, globally unique).</div>
             <div class="admin-add-row">
-              <input id="adminNameInput" class="bug-input" maxlength="60" placeholder="Character name" autocomplete="off">
+              <input id="adminNameInput" class="bug-input" maxlength="60" placeholder="Character name" list="charNameSuggestions" autocomplete="off">
               <button onclick="addAdmin()">Add admin</button>
               <span id="adminAddStatus" class="bug-status-msg"></span>
             </div>
@@ -798,7 +799,7 @@ PVF-N9    3         95                 60             80                  100   
             <div class="pp-card-title">Testers</div>
             <div class="admin-hint">Testers see features in the <strong>Testers</strong> state — a staging tier between Admin-only and Public. Use this to give trusted users early access before a full rollout.</div>
             <div class="admin-add-row">
-              <input id="testerNameInput" class="bug-input" maxlength="60" placeholder="Character name" autocomplete="off">
+              <input id="testerNameInput" class="bug-input" maxlength="60" placeholder="Character name" list="charNameSuggestions" autocomplete="off">
               <button onclick="addTester()">Add tester</button>
               <span id="testerAddStatus" class="bug-status-msg"></span>
             </div>
@@ -887,7 +888,7 @@ PVF-N9    3         95                 60             80                  100   
   <script src="/app.js?v=29"></script>
   <script src="/planetary.js?v=313"></script>
   <script src="/dashboard.js?v=9"></script>
-  <script src="/admin.js?v=3"></script>
+  <script src="/admin.js?v=4"></script>
   <script src="/planetdb.js?v=1"></script>
   <script src="/refill.js?v=1"></script>
   <script src="/analysis.js?v=10"></script>

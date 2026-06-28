@@ -34,6 +34,16 @@ function adminSubPage(key) {
   });
   // Corp wallet hits ESI, so only load it when its sub-page is actually opened.
   if (key === 'wallet' && typeof loadCorpWallet === 'function') loadCorpWallet();
+  if (key === 'users') _loadCharNameSuggestions();
+}
+
+async function _loadCharNameSuggestions() {
+  const dl = document.getElementById('charNameSuggestions');
+  if (!dl) return;
+  try {
+    const { names } = await (await fetch('/api/character-names')).json();
+    dl.innerHTML = (names || []).map(n => `<option value="${_esc(n)}">`).join('');
+  } catch (e) { /* suggestions are best-effort */ }
 }
 
 // Feature flags: 4-state (hidden / admin / testers / public) per feature.
