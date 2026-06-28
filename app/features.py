@@ -48,6 +48,10 @@ FEATURE_REGISTRY = [
      "description": "On the Dashboard: how far the P1 in your extractor pads would go toward filling "
                     "every factory's 30,000 m³ buffer — a binding-material % + per-material breakdown.",
      "default": False},
+    {"key": "dummy_characters", "label": "Placeholder characters",
+     "description": "On the Characters tab: add placeholder toons (no ESI login) that contribute "
+                    "planet slots + CCU level to plans without logging the alt in.",
+     "default": False},
 ]
 _DEFAULTS = {f["key"]: f for f in FEATURE_REGISTRY}
 

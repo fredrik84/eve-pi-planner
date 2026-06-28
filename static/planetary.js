@@ -275,7 +275,7 @@ function renderCharacters(chars, loggedIn) {
   // real characters keep their server order.
   chars = [...(chars || [])].sort((a, b) => (a.wallet_only ? 1 : 0) - (b.wallet_only ? 1 : 0));
   const dummyCard = document.getElementById('dummyCharCard');
-  if (dummyCard) dummyCard.style.display = loggedIn ? '' : 'none';
+  if (dummyCard) dummyCard.style.display = (loggedIn && _featureActive('dummy_characters')) ? '' : 'none';
 
   const addBtn     = document.getElementById('esiLoginBtn');
   const refreshBtn = document.getElementById('ppRefreshBtn');
