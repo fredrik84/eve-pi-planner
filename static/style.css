@@ -14,6 +14,7 @@ header {
   box-shadow: 0 1px 0 rgba(90, 180, 230, 0.10), 0 6px 18px -12px rgba(0, 0, 0, 0.8);
   padding: 0 24px;
   display: flex;
+  user-select: none; -webkit-user-select: none;
   align-items: stretch;
   gap: 0;
   position: relative;
@@ -1965,7 +1966,7 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .img-lightbox img { max-width: min(94vw, 540px); max-height: 94vh; width: auto; height: auto;
   border: 1px solid #2a4a6a; border-radius: 12px;
   box-shadow: 0 24px 70px -22px rgba(0, 0, 0, 0.9); }
-.img-lightbox-close { position: absolute; top: 16px; right: 22px; background: none; border: none;
+.img-lightbox-close { position: absolute; top: max(16px, env(safe-area-inset-top, 0px) + 10px); right: 22px; background: none; border: none;
   color: #c8d2e6; font-size: 32px; line-height: 1; cursor: pointer; padding: 4px 10px; }
 .img-lightbox-close:hover { color: #fff; }
 
