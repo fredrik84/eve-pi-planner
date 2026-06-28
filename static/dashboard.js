@@ -91,7 +91,7 @@ function _renderTimelineCard(t) {
   const rel = h => (h < 0.05 ? 'now' : 'in ' + _fmtDHM(h));
 
   // "admin preview" only while it's still admin-gated (not yet rolled out to the public).
-  const isPublic = !!(_features['timeline'] && _features['timeline'].enabled);
+  const isPublic = !!(_features['timeline'] && _features['timeline'].state === 'public');
   const previewTag = isPublic ? '' : '<span class="tl-preview-tag">admin preview</span>';
 
   const next = jobs[0], rest = jobs.slice(1);
