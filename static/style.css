@@ -2148,6 +2148,17 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
   .padfill-bar { grid-column: 1; }
   .padfill-amt { text-align: left; font-size: 11px; white-space: normal; }
 
+  /* Factory rows: reflow 5-column desktop grid into 2 rows on mobile.
+     Row 1: name/loc (1fr) | time | haul value
+     Row 2: fill bar (spans cols 1-2) | fill % */
+  .dash-fac-head { display: none; }
+  .dash-fac-row { grid-template-columns: 1fr auto auto; gap: 3px 8px; }
+  .dash-fac-id   { grid-column: 1; grid-row: 1; }
+  .dash-fac-time { grid-column: 2; grid-row: 1; }
+  .dash-fac-val  { grid-column: 3; grid-row: 1; }
+  .an-bar-track  { grid-column: 1 / 3; grid-row: 2; }
+  .dash-fac-pct  { grid-column: 3; grid-row: 2; }
+
   /* Characters tab (now visible on phones): each planet row is a wide single-line flex on desktop —
      on a phone wrap it so the LOCATION sits on its own line, then "what it produces · time · pad est"
      flow below without the desktop right-push (margin-left:auto), and produce names don't break mid-word. */
