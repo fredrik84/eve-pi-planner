@@ -175,6 +175,28 @@ function _applyTabGates() {
   if (needRedirect && typeof switchTab === 'function') switchTab('dashboard');
 }
 
+function _applyLoginGates() {
+  const loggedIn = !!_loggedIn;
+  // Tabs that require a login — hide when logged out, show when logged in.
+  const AUTH_TABS = ['analyze', 'planetary', 'characters', 'planetdb'];
+  const cur = localStorage.getItem('activeTab');
+  let needRedirect = false;
+  AUTH_TABS.forEach(tab => {
+    document.querySelectorAll(`.tab[data-tab="${tab}"]`).forEach(el => el.style.display = loggedIn ? '' : 'none');
+    if (!loggedIn && cur === tab) needRedirect = true;
+  });
+  // "Refill a plan" sub-item also requires a saved plan / login context.
+  document.querySelectorAll('.tab[data-pimode="refill"]').forEach(el => {
+    el.style.display = loggedIn ? '' : 'none';
+  });
+  // Also send logged-out users off the Dashboard (which just shows a login prompt) to How it works.
+  if (!loggedIn && (needRedirect || cur === 'dashboard' || !cur)) {
+    if (typeof switchTab === 'function') switchTab('howitworks');
+  } else if (needRedirect && typeof switchTab === 'function') {
+    switchTab('dashboard');
+  }
+}
+
 
 // ── ESI / Characters ──────────────────────────────────────────────────────────
 
@@ -201,6 +223,7 @@ async function loadCharacters() {
     if (!_isAdmin && localStorage.getItem('activeTab') === 'admin' && typeof switchTab === 'function') switchTab('dashboard');
     await _loadFeatures();
     _applyTabGates();
+    _applyLoginGates();
     await loadProfiles();
   } catch (e) {
     console.error('Failed to load characters:', e);
