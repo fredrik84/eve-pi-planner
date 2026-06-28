@@ -1997,14 +1997,17 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .admin-feature-list { display: flex; flex-direction: column; gap: 4px; }
 .admin-feature-row { padding: 9px 11px; border: 1px solid #1c2030; border-radius: 7px;
   background: #11151f; }
-.admin-feature-toggle { display: flex; align-items: center; gap: 9px; cursor: pointer; }
-.admin-feature-toggle input { width: 15px; height: 15px; cursor: pointer; accent-color: #5ab4e6; }
-.admin-feature-name { font-size: 13px; font-weight: 600; color: #c8d2e6; }
-.admin-feature-state { margin-left: auto; font-size: 10px; font-weight: 700; letter-spacing: 0.5px;
-  text-transform: uppercase; border-radius: 4px; padding: 2px 8px; }
-.admin-feature-state.on { color: #5ecf80; border: 1px solid #2a5a3a; }
-.admin-feature-state.off { color: #8a93a8; border: 1px solid #2a3142; }
-.admin-feature-desc { font-size: 11.5px; color: #6a7390; margin-top: 5px; padding-left: 24px; }
+.admin-feature-head { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.admin-feature-name { font-size: 13px; font-weight: 600; color: #c8d2e6; flex: 1 1 120px; }
+.admin-feature-desc { font-size: 11.5px; color: #6a7390; margin-top: 6px; }
+.afs-group { display: flex; gap: 2px; margin-left: auto; }
+.afs-btn { background: #12151f; border: 1px solid #1e2436; color: #56607a; border-radius: 5px;
+  padding: 3px 10px; font-size: 11px; font-weight: 600; cursor: pointer; letter-spacing: 0.3px; }
+.afs-btn:hover { background: #181d2e; color: #8a93a8; }
+.afs-active.afs-hidden  { background: #1e1520; border-color: #3a2040; color: #c060c0; }
+.afs-active.afs-admin   { background: #131a2a; border-color: #2a3a5a; color: #5ab4e6; }
+.afs-active.afs-testers { background: #161a14; border-color: #2a4020; color: #e0b84a; }
+.afs-active.afs-public  { background: #111e16; border-color: #1e4030; color: #5ecf80; }
 
 /* ── Admin: corp wallet (donations) ───────────────────────────────────────────── */
 .admin-wallet { margin-top: 4px; }

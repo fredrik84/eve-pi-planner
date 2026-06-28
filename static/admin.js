@@ -17,6 +17,7 @@ function onAdminTabOpen() {
   loadPlanetSubmissions();
   loadBugs();
   loadAdmins();
+  loadTesters();
   loadAdminFeatures();
   adminSubPage(_adminPage);
 }
@@ -35,40 +36,86 @@ function adminSubPage(key) {
   if (key === 'wallet' && typeof loadCorpWallet === 'function') loadCorpWallet();
 }
 
-// Feature flags: list every registered feature with an enable-for-public toggle. Admins always
-// see gated features themselves; the toggle controls whether the public sees them.
+// Feature flags: 4-state (hidden / admin / testers / public) per feature.
+const _FEATURE_STATES = [
+  { key: 'hidden',  label: 'Hidden',  title: 'Nobody sees this feature, including admins' },
+  { key: 'admin',   label: 'Admin',   title: 'Visible to admins only' },
+  { key: 'testers', label: 'Testers', title: 'Visible to admins and testers' },
+  { key: 'public',  label: 'Public',  title: 'Visible to everyone' },
+];
 async function loadAdminFeatures() {
   const el = document.getElementById('adminFeatureList');
   if (!el) return;
   await _loadFeatures();
   const feats = Object.values(_features);
   if (!feats.length) { el.innerHTML = '<div class="pp-empty">No features registered.</div>'; return; }
-  el.innerHTML = feats.map(f => `
-    <div class="admin-feature-row">
-      <label class="admin-feature-toggle">
-        <input type="checkbox" ${f.enabled ? 'checked' : ''} onchange="toggleFeature('${f.key}', this)">
+  el.innerHTML = feats.map(f => {
+    const cur = f.state || (f.enabled ? 'public' : 'admin');
+    const btns = _FEATURE_STATES.map(s =>
+      `<button class="afs-btn${cur === s.key ? ' afs-active afs-' + s.key : ''}" title="${s.title}"
+         onclick="setFeatureState('${f.key}','${s.key}')">${s.label}</button>`
+    ).join('');
+    return `<div class="admin-feature-row">
+      <div class="admin-feature-head">
         <span class="admin-feature-name">${_esc(f.label)}</span>
-        <span class="admin-feature-state ${f.enabled ? 'on' : 'off'}">${f.enabled ? 'Public' : 'Admin only'}</span>
-      </label>
+        <div class="afs-group">${btns}</div>
+      </div>
       <div class="admin-feature-desc">${_esc(f.description)}</div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 
-async function toggleFeature(key, cb) {
-  const enabled = cb.checked;
-  cb.disabled = true;
+async function setFeatureState(key, state) {
   try {
     const resp = await fetch('/api/features/' + encodeURIComponent(key), {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ enabled }),
+      body: JSON.stringify({ state }),
     });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    if (_features[key]) _features[key].enabled = enabled;
-    loadAdminFeatures();   // repaint the state chips
-  } catch (e) {
-    cb.checked = !enabled; cb.disabled = false;
-    alert('Failed to update feature: ' + e.message);
-  }
+    if (_features[key]) { _features[key].state = state; _features[key].enabled = state === 'public'; }
+    loadAdminFeatures();
+    _applyTabGates();
+  } catch (e) { alert('Failed to update feature: ' + e.message); }
+}
+
+// ── Tester management ─────────────────────────────────────────────────────────
+async function loadTesters() {
+  const el = document.getElementById('testerList');
+  if (!el) return;
+  try {
+    const data = await (await fetch('/api/testers')).json();
+    const rows = (data.testers || []).map(t =>
+      `<div class="admin-row"><span class="admin-name">${_esc(t.character_name)}</span>`
+      + `<span class="admin-meta">${t.added_by ? 'by ' + _esc(t.added_by) : ''}</span>`
+      + `<button class="bug-act bug-act-ignore" onclick="removeTester('${_esc(t.character_name).replace(/'/g, "\\'")}')">Remove</button></div>`).join('');
+    el.innerHTML = rows || '<div class="pp-empty">No testers yet.</div>';
+  } catch (e) { el.innerHTML = `<div class="pp-empty">Failed: ${_esc(e.message)}</div>`; }
+}
+
+async function addTester() {
+  const inp = document.getElementById('testerNameInput');
+  const status = document.getElementById('testerAddStatus');
+  const name = inp.value.trim();
+  if (!name) return;
+  status.textContent = 'Adding…';
+  try {
+    const resp = await fetch('/api/testers', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ character_name: name }),
+    });
+    if (!resp.ok) throw new Error((await resp.json()).detail || `HTTP ${resp.status}`);
+    inp.value = ''; status.textContent = '';
+    loadTesters();
+  } catch (e) { status.textContent = e.message; }
+}
+
+async function removeTester(name) {
+  if (!confirm(`Remove tester "${name}"?`)) return;
+  try {
+    const resp = await fetch(`/api/testers/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    if (!resp.ok) throw new Error((await resp.json()).detail || `HTTP ${resp.status}`);
+    loadTesters();
+  } catch (e) { alert('Failed: ' + e.message); }
 }
 
 async function loadPlanetSubmissions() {

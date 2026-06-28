@@ -143,17 +143,22 @@ let _dashLanded = false;   // auto-land on the dashboard once per page load (log
 // visible if /api/features hasn't loaded yet.
 let _features = {};            // key -> {key,label,description,enabled}
 let _featuresIsAdmin = false;
+let _featuresIsTester = false;
 async function _loadFeatures() {
   try {
     const d = await (await fetch('/api/features')).json();
     _features = {}; (d.features || []).forEach(f => { _features[f.key] = f; });
     _featuresIsAdmin = !!d.is_admin;
+    _featuresIsTester = !!d.is_tester;
   } catch (e) { /* leave whatever we had; _featureActive falls back to dflt */ }
 }
 function _featureActive(key, dflt = false) {
-  if (_featuresIsAdmin) return true;
   const f = _features[key];
-  return f ? !!f.enabled : dflt;
+  const state = f ? (f.state || (f.enabled ? 'public' : 'admin')) : (dflt ? 'public' : 'admin');
+  if (state === 'public') return true;
+  if (state === 'testers') return _featuresIsAdmin || _featuresIsTester;
+  if (state === 'admin') return _featuresIsAdmin;
+  return false; // hidden
 }
 function _applyTabGates() {
   const gates = [

@@ -14,7 +14,7 @@ from app.sde import get_connection, load_pi_data
 from app.esi import (
     require_admin, require_context, is_admin, session_context_id,
     ADMIN_CHARACTERS, ensure_admin_table, _sessions, _load_sessions,
-    corp_wallet_summary,
+    corp_wallet_summary, _db_tester_names,
 )
 
 router = APIRouter()
@@ -322,4 +322,44 @@ def remove_admin(character_name: str, _: int = Depends(require_admin)):
     con.close()
     if not changed:
         raise HTTPException(status_code=404, detail="Admin not found")
+    return {"ok": True}
+
+
+# ── Tester management ─────────────────────────────────────────────────────────
+
+@router.get("/api/testers")
+def list_testers(_: int = Depends(require_admin)):
+    con = get_connection()
+    rows = con.execute(
+        "SELECT character_name, added_by, added_at FROM pp_testers ORDER BY character_name COLLATE NOCASE"
+    ).fetchall()
+    con.close()
+    return {"testers": [dict(r) for r in rows]}
+
+
+@router.post("/api/testers")
+def add_tester(req: AdminAdd, _: int = Depends(require_admin),
+               pp_session: str = Cookie(default=None)):
+    name = (req.character_name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Character name is required")
+    con = get_connection()
+    con.execute(
+        "INSERT OR IGNORE INTO pp_testers (character_name, added_by, added_at) VALUES (?,?,?)",
+        (name, _session_char_name(pp_session), datetime.now(timezone.utc).isoformat()),
+    )
+    con.commit()
+    con.close()
+    return {"ok": True}
+
+
+@router.delete("/api/testers/{character_name}")
+def remove_tester(character_name: str, _: int = Depends(require_admin)):
+    con = get_connection()
+    cur = con.execute("DELETE FROM pp_testers WHERE character_name=?", (character_name,))
+    con.commit()
+    changed = cur.rowcount
+    con.close()
+    if not changed:
+        raise HTTPException(status_code=404, detail="Tester not found")
     return {"ok": True}

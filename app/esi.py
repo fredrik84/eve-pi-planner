@@ -222,6 +222,13 @@ def ensure_char_tables():
             added_at       TEXT
         )
     """)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS pp_testers (
+            character_name TEXT PRIMARY KEY COLLATE NOCASE,
+            added_by       TEXT,
+            added_at       TEXT
+        )
+    """)
     # Schema migrations for existing deployments
     for col, tbl in [("context_id", "pp_characters"), ("context_id", "pp_sessions")]:
         try:
@@ -837,6 +844,36 @@ def require_admin(pp_session: str = Cookie(default=None)) -> int:
     return _sessions[pp_session][1]
 
 
+def _db_tester_names() -> set[str]:
+    """Lowercased tester names from pp_testers (empty on any failure)."""
+    try:
+        con = get_connection()
+        rows = con.execute("SELECT character_name FROM pp_testers").fetchall()
+        con.close()
+        return {(r["character_name"] or "").lower() for r in rows}
+    except Exception:
+        return set()
+
+
+def is_tester(pp_session: str = Cookie(default=None)) -> bool:
+    """True if the session's account owns a character in pp_testers (or is an admin)."""
+    if is_admin(pp_session):
+        return True
+    _load_sessions()
+    info = _sessions.get(pp_session) if pp_session else None
+    if not info:
+        return False
+    context_id = info[1]
+    con = get_connection()
+    rows = con.execute(
+        "SELECT character_name FROM pp_characters "
+        "WHERE context_id=? AND COALESCE(is_dummy, 0) = 0", (context_id,)
+    ).fetchall()
+    con.close()
+    tester_names = _db_tester_names()
+    return any((r["character_name"] or "").lower() in tester_names for r in rows)
+
+
 # ── ESI helpers ───────────────────────────────────────────────────────────────
 
 def _fetch_skills(character_id: int, access_token: str) -> dict[str, int]:
@@ -1187,6 +1224,7 @@ def list_characters(pp_session: str = Cookie(default=None)):
         "logged_in":  session_char is not None,
         "session_character_id": session_char,
         "is_admin":   is_admin(pp_session),
+        "is_tester":  is_tester(pp_session),
     }
 
 

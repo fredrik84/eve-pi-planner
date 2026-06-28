@@ -13,7 +13,7 @@ from fastapi import APIRouter, Cookie, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.sde import get_connection
-from app.esi import require_admin, is_admin
+from app.esi import require_admin, is_admin, is_tester
 
 router = APIRouter()
 
@@ -62,6 +62,11 @@ FEATURE_REGISTRY = [
      "default": False},
 ]
 _DEFAULTS = {f["key"]: f for f in FEATURE_REGISTRY}
+VALID_STATES = {"hidden", "admin", "testers", "public"}
+
+
+def _default_state(f: dict) -> str:
+    return "public" if f["default"] else "admin"
 
 
 def ensure_features_table():
@@ -73,60 +78,70 @@ def ensure_features_table():
                updated_at TEXT
            )"""
     )
+    # Add state column and migrate from boolean enabled if needed
+    try:
+        con.execute("ALTER TABLE pp_features ADD COLUMN state TEXT")
+    except Exception:
+        pass
+    con.execute(
+        "UPDATE pp_features SET state = CASE WHEN enabled=1 THEN 'public' ELSE 'admin' END "
+        "WHERE state IS NULL"
+    )
     existing = {r["key"] for r in con.execute("SELECT key FROM pp_features")}
     now = datetime.now(timezone.utc).isoformat()
     for f in FEATURE_REGISTRY:
-        if f["key"] not in existing:   # seed a missing flag with its registry default
+        if f["key"] not in existing:
             con.execute(
-                "INSERT INTO pp_features (key, enabled, updated_at) VALUES (?,?,?)",
-                (f["key"], 1 if f["default"] else 0, now),
+                "INSERT INTO pp_features (key, enabled, state, updated_at) VALUES (?,?,?,?)",
+                (f["key"], 1 if f["default"] else 0, _default_state(f), now),
             )
     con.commit()
     con.close()
 
 
 def feature_enabled(key: str) -> bool:
-    """Is this feature on for the public? (Ignores admin — for backend gating if ever needed.)"""
+    """Is this feature public-visible? (For backend gating — ignores admin/tester roles.)"""
     ensure_features_table()
     con = get_connection()
-    row = con.execute("SELECT enabled FROM pp_features WHERE key=?", (key,)).fetchone()
+    row = con.execute("SELECT state FROM pp_features WHERE key=?", (key,)).fetchone()
     con.close()
     if row is not None:
-        return bool(row["enabled"])
+        return row["state"] == "public"
     return bool(_DEFAULTS.get(key, {}).get("default", False))
 
 
 @router.get("/api/features")
 def list_features(pp_session: str = Cookie(default=None)):
-    """Public. Returns every registered feature with its current public-visibility state, plus
-    whether the caller is an admin (the SPA shows a feature when enabled OR the caller is admin)."""
+    """Public. Returns every registered feature with its state, plus caller's admin/tester role."""
     ensure_features_table()
     con = get_connection()
-    state = {r["key"]: bool(r["enabled"]) for r in con.execute("SELECT key, enabled FROM pp_features")}
+    db_state = {r["key"]: r["state"] for r in con.execute("SELECT key, state FROM pp_features")}
     con.close()
     feats = [
         {"key": f["key"], "label": f["label"], "description": f["description"],
-         "enabled": state.get(f["key"], f["default"])}
+         "state": db_state.get(f["key"]) or _default_state(f)}
         for f in FEATURE_REGISTRY
     ]
-    return {"features": feats, "is_admin": is_admin(pp_session)}
+    return {"features": feats, "is_admin": is_admin(pp_session), "is_tester": is_tester(pp_session)}
 
 
-class FeatureToggle(BaseModel):
-    enabled: bool
+class FeatureStateUpdate(BaseModel):
+    state: str
 
 
 @router.post("/api/features/{key}")
-def set_feature(key: str, req: FeatureToggle, _: int = Depends(require_admin)):
+def set_feature(key: str, req: FeatureStateUpdate, _: int = Depends(require_admin)):
     if key not in _DEFAULTS:
         raise HTTPException(status_code=404, detail="Unknown feature")
+    if req.state not in VALID_STATES:
+        raise HTTPException(status_code=400, detail=f"Invalid state — must be one of: {', '.join(sorted(VALID_STATES))}")
     ensure_features_table()
     con = get_connection()
     con.execute(
-        "INSERT INTO pp_features (key, enabled, updated_at) VALUES (?,?,?) "
-        "ON CONFLICT(key) DO UPDATE SET enabled=excluded.enabled, updated_at=excluded.updated_at",
-        (key, 1 if req.enabled else 0, datetime.now(timezone.utc).isoformat()),
+        "INSERT INTO pp_features (key, enabled, state, updated_at) VALUES (?,?,?,?) "
+        "ON CONFLICT(key) DO UPDATE SET enabled=excluded.enabled, state=excluded.state, updated_at=excluded.updated_at",
+        (key, 1 if req.state == "public" else 0, req.state, datetime.now(timezone.utc).isoformat()),
     )
     con.commit()
     con.close()
-    return {"ok": True, "key": key, "enabled": req.enabled}
+    return {"ok": True, "key": key, "state": req.state}
