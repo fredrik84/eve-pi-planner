@@ -2146,7 +2146,7 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
   /* Fill-factories breakdown rows: single column stack — name / bar / amount. */
   .padfill-row { grid-template-columns: 1fr; }
   .padfill-bar { grid-column: 1; }
-  .padfill-amt { text-align: left; font-size: 11px; }
+  .padfill-amt { text-align: left; font-size: 11px; white-space: normal; }
 
   /* Characters tab (now visible on phones): each planet row is a wide single-line flex on desktop —
      on a phone wrap it so the LOCATION sits on its own line, then "what it produces · time · pad est"
