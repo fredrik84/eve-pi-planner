@@ -52,6 +52,14 @@ FEATURE_REGISTRY = [
      "description": "On the Characters tab: add placeholder toons (no ESI login) that contribute "
                     "planet slots + CCU level to plans without logging the alt in.",
      "default": False},
+    {"key": "factory_layout", "label": "Factory Layout tab",
+     "description": "Show the Factory Layout tab — generates importable EVE PI templates for any "
+                    "P1–P4 product.",
+     "default": False},
+    {"key": "planet_db", "label": "Planet DB tab",
+     "description": "Show the Planet DB tab — the shared planet density database the planner "
+                    "uses; also lets users submit and browse planet data.",
+     "default": False},
 ]
 _DEFAULTS = {f["key"]: f for f in FEATURE_REGISTRY}
 

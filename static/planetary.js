@@ -155,6 +155,20 @@ function _featureActive(key, dflt = false) {
   const f = _features[key];
   return f ? !!f.enabled : dflt;
 }
+function _applyTabGates() {
+  const gates = [
+    { key: 'factory_layout', tab: 'layout' },
+    { key: 'planet_db',      tab: 'planetdb' },
+  ];
+  const cur = localStorage.getItem('activeTab');
+  let needRedirect = false;
+  gates.forEach(({ key, tab }) => {
+    const show = _featureActive(key);
+    document.querySelectorAll(`.tab[data-tab="${tab}"]`).forEach(el => el.style.display = show ? '' : 'none');
+    if (!show && cur === tab) needRedirect = true;
+  });
+  if (needRedirect && typeof switchTab === 'function') switchTab('dashboard');
+}
 
 
 // ── ESI / Characters ──────────────────────────────────────────────────────────
@@ -180,6 +194,8 @@ async function loadCharacters() {
     // still false. Now that the real state is known, bounce a confirmed non-admin off the admin tab
     // to a mobile-visible tab (the old onAdminTabOpen bounce to the hidden planner shuffled phones).
     if (!_isAdmin && localStorage.getItem('activeTab') === 'admin' && typeof switchTab === 'function') switchTab('dashboard');
+    await _loadFeatures();
+    _applyTabGates();
     await loadProfiles();
   } catch (e) {
     console.error('Failed to load characters:', e);
