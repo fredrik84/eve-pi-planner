@@ -73,6 +73,7 @@ header .header-brand span { color: #6a7390; font-size: 12px; }
   height: calc(100vh - 62px); overflow-y: auto;
   display: flex; flex-direction: column;
   transition: flex-basis 0.18s ease, width 0.18s ease, padding 0.18s ease;
+  user-select: none; -webkit-user-select: none;
 }
 .sidebar-nav { display: flex; flex-direction: column; gap: 2px; }
 .sidebar .tab {
