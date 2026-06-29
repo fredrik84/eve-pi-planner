@@ -248,8 +248,8 @@ function renderHeaderSession(loggedIn, chars, sessionCharId) {
     `<button id="rescanBtn" class="header-bug-btn" onclick="rescanAll()" ${_rescanning ? 'disabled' : ''} title="Re-scan every character's colonies from ESI">${_rescanning ? 'Rescanning…' : 'Rescan'}</button>`
     + `<button id="reportBugBtn" class="header-bug-btn" onclick="openBugModal()">Report bug</button>`
     + `<span class="header-session">${name} · <a href="/auth/logout" class="header-logout">Log out</a></span>`;
-  const navTab = document.getElementById('adminNavTab');
-  if (navTab) navTab.style.display = _isAdmin ? '' : 'none';
+  const navGroup = document.getElementById('adminNavGroup');
+  if (navGroup) navGroup.style.display = _isAdmin ? '' : 'none';
   const dashTab = document.getElementById('dashboardNavTab');
   if (dashTab) dashTab.style.display = '';   // the overview is for logged-in players
   // First load for a logged-in player with no remembered tab → land on the dashboard.

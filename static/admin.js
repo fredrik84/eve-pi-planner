@@ -22,17 +22,24 @@ function onAdminTabOpen() {
   adminSubPage(_adminPage);
 }
 
-// Admin sub-navigation: show one section at a time (Planet submissions / Features / Baskets /
-// User management / Bug reports), so the Admin tab stays tidy as it grows.
+// Admin sub-navigation: driven from the sidebar nav-group.
+// adminNavTo() is called by sidebar buttons; adminSubPage() handles the panel logic.
+function adminNavTo(key) {
+  switchTab('admin');
+  adminSubPage(key);
+}
+
 function adminSubPage(key) {
   _adminPage = key;
   try { localStorage.setItem('adminPage', key); } catch (e) {}
-  document.querySelectorAll('#adminSubnav .admin-subtab').forEach(b =>
+  // Mark active item in the sidebar nav-group.
+  document.querySelectorAll('#adminNavGroup .admin-nav-item').forEach(b =>
     b.classList.toggle('active', b.dataset.page === key));
+  // Show the matching sub-page panel.
   document.querySelectorAll('#tab-admin .admin-subpage').forEach(p => {
     p.style.display = (p.dataset.page === key) ? '' : 'none';
   });
-  // Lazy-load heavy or ESI-hitting sub-pages only when opened.
+  // Lazy-load expensive sub-pages only when opened.
   if (key === 'wallet' && typeof loadCorpWallet === 'function') loadCorpWallet();
   if (key === 'users') _loadCharNameSuggestions();
   if (key === 'stats') loadAdminStats();
@@ -146,7 +153,7 @@ async function loadPlanetSubmissions() {
 function renderPlanetSubmissions(subs) {
   const cEl = document.getElementById('psubCount');
   if (cEl) cEl.textContent = subs.length ? `${subs.length} pending` : '';
-  const navBadge = document.getElementById('adminTabPsub');
+  const navBadge = document.getElementById('adminNavPsub');
   if (navBadge) navBadge.textContent = subs.length ? String(subs.length) : '';
   const list = document.getElementById('planetSubList');
   if (!subs.length) { list.innerHTML = '<div class="pp-empty">No pending submissions.</div>'; return; }
@@ -409,7 +416,7 @@ async function loadBugs() {
 function renderBugs(bugs, counts) {
   const cEl = document.getElementById('bugAdminCounts');
   cEl.textContent = `${counts.open || 0} open · ${counts.complete || 0} done · ${counts.ignored || 0} ignored`;
-  const navBadge = document.getElementById('adminTabBugs');
+  const navBadge = document.getElementById('adminNavBugs');
   if (navBadge) navBadge.textContent = counts.open ? String(counts.open) : '';
   const list = document.getElementById('bugAdminList');
   if (!bugs.length) { list.innerHTML = '<div class="pp-empty">No reports.</div>'; return; }
