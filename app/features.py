@@ -60,6 +60,10 @@ FEATURE_REGISTRY = [
      "description": "Show the Planet DB tab — the shared planet density database the planner "
                     "uses; also lets users submit and browse planet data.",
      "default": False},
+    {"key": "notifications", "label": "Notifications",
+     "description": "Let users configure Pushover / ntfy.sh / Discord alerts for extractor "
+                    "expiry and factory refill reminders.",
+     "default": False},
 ]
 _DEFAULTS = {f["key"]: f for f in FEATURE_REGISTRY}
 VALID_STATES = {"hidden", "admin", "testers", "public"}

@@ -20,7 +20,7 @@
   <meta property="og:image" content="https://eve-pi.failed.name/og-image.png?v=6">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:image" content="https://eve-pi.failed.name/og-image.png?v=6">
-  <link rel="stylesheet" href="/style.css?v=228">
+  <link rel="stylesheet" href="/style.css?v=235">
 </head>
 <body>
   <header>
@@ -40,7 +40,8 @@
         <button class="tab" data-tab="dashboard" id="dashboardNavTab" style="display:none"><span class="nav-ico">HM</span><span class="nav-lbl">Dashboard</span></button>
         <button class="tab" data-tab="analyze"><span class="nav-ico">AN</span><span class="nav-lbl">Setup Analysis</span></button>
         <button class="tab" data-tab="planetary"><span class="nav-ico">PP</span><span class="nav-lbl">Planetary Planning</span></button>
-        <button class="tab" data-tab="characters"><span class="nav-ico">CH</span><span class="nav-lbl">Characters</span></button>
+        <button class="settings-mobile-tab" id="settingsMobileTab" style="display:none" onclick="openSettingsModal()"><span class="nav-ico">ST</span><span class="nav-lbl">Settings</span></button>
+        <button class="tab" id="adminMobileTab" data-tab="admin" style="display:none"><span class="nav-ico">AD</span><span class="nav-lbl">Admin</span></button>
         <div class="nav-group">
           <div class="nav-group-hd"><span class="nav-ico">PI</span><span class="nav-lbl">PI Tools</span></div>
           <button class="tab tab-sub" data-tab="planner" data-pimode="refill"><span class="nav-ico">RF</span><span class="nav-lbl">Refill a plan</span></button>
@@ -651,45 +652,7 @@ PVF-N9    3         95                 60             80                  100   
     </div><!-- /tab-contribute -->
 
     <!-- ── Tab: Characters ───────────────────────────────────────────────────── -->
-    <div id="tab-characters" class="tab-panel" style="display:none">
-      <div class="pp-chars-page">
-        <section class="pp-card">
-          <div class="pp-card-title">Characters
-            <button class="pp-add-btn" id="esiLoginBtn" onclick="esiLogin()">+ Add via ESI</button>
-            <button class="pp-add-btn" id="ppRefreshBtn" onclick="refreshAllPlanets(this)">Refresh</button>
-          </div>
-          <div id="ppMaterialsSummary" class="pp-materials-summary" style="display:none"></div>
-          <div id="characterList" class="pp-char-list">
-            <div class="pp-empty">No characters added yet.</div>
-          </div>
-        </section>
-
-        <section class="pp-card" id="accountDangerCard" style="display:none">
-          <div class="pp-card-title">Account</div>
-          <div class="account-danger-row">
-            <span class="account-danger-lbl">Remove all your data from this service</span>
-            <button class="account-delete-btn" onclick="openDeleteAccountModal()">Delete my account</button>
-          </div>
-        </section>
-
-        <section class="pp-card" id="dummyCharCard" style="display:none">
-          <div class="pp-card-title">Add placeholder characters</div>
-          <div class="admin-hint">Have alts you don't want to log in? Add placeholder toons that contribute planet slots + a command-centre level to plans, without ESI. They mix in with your real characters; set per-product roles in Setup as usual. (Placeholders never grant admin.)</div>
-          <div class="dummy-add-row">
-            <label>How many<input id="dummyCount" type="number" min="1" max="100" value="1" class="bug-input dummy-num"></label>
-            <label>Max planets<select id="dummyMaxPlanets" class="bug-input dummy-num">
-              <option>1</option><option>2</option><option>3</option><option>4</option><option>5</option><option selected>6</option>
-            </select></label>
-            <label>CCU<select id="dummyCcu" class="bug-input dummy-num">
-              <option>1</option><option>2</option><option>3</option><option>4</option><option selected>5</option>
-            </select></label>
-            <label>Name prefix<input id="dummyPrefix" class="bug-input" maxlength="40" value="Alt" autocomplete="off"></label>
-            <button onclick="addDummyCharacters(this)">Add</button>
-            <span id="dummyStatus" class="bug-status-msg"></span>
-          </div>
-        </section>
-      </div>
-    </div><!-- /tab-characters -->
+    <div id="tab-characters" class="tab-panel" style="display:none"></div><!-- legacy stub: settings modal replaced this tab -->
 
     <!-- ── Tab: Setup Analysis ─────────────────────────────────────────────────── -->
     <div id="tab-analyze" class="tab-panel" style="display:none">
@@ -766,6 +729,17 @@ PVF-N9    3         95                 60             80                  100   
 
     <!-- ── Tab: Admin (admins only) ────────────────────────────────────────────── -->
     <div id="tab-admin" class="tab-panel" style="display:none">
+      <!-- Mobile-only sub-page nav (sidebar nav group is hidden on small screens) -->
+      <div id="adminMobilePageNav" class="admin-mobile-page-nav">
+        <button class="admin-mobile-page-btn" data-page="stats"        onclick="adminNavTo('stats')">Stats</button>
+        <button class="admin-mobile-page-btn" data-page="features"     onclick="adminNavTo('features')">Features</button>
+        <button class="admin-mobile-page-btn" data-page="users"        onclick="adminNavTo('users')">Users</button>
+        <button class="admin-mobile-page-btn" data-page="submissions"  onclick="adminNavTo('submissions')">Submissions</button>
+        <button class="admin-mobile-page-btn" data-page="bugs"         onclick="adminNavTo('bugs')">Bugs</button>
+        <button class="admin-mobile-page-btn" data-page="baskets"      onclick="adminNavTo('baskets')">Baskets</button>
+        <button class="admin-mobile-page-btn" data-page="wallet"       onclick="adminNavTo('wallet')">Wallet</button>
+        <button class="admin-mobile-page-btn" data-page="cleanup"      onclick="adminNavTo('cleanup')">Cleanup</button>
+      </div>
       <div class="admin-page">
 
 <div class="admin-subpage" data-page="stats" style="display:none">
@@ -897,6 +871,135 @@ PVF-N9    3         95                 60             80                  100   
     </div>
   </div>
 
+  <!-- Settings modal (Characters / Notifications / Account) -->
+  <div id="settingsModal" class="pp-modal" style="display:none" onclick="settingsBackdropClick(event)">
+    <div class="settings-modal-box">
+      <div class="settings-modal-hdr">
+        <span class="settings-modal-title">Settings</span>
+        <button class="pp-modal-close" onclick="closeSettingsModal()">✕</button>
+      </div>
+      <div class="settings-modal-layout">
+
+        <!-- Left section nav -->
+        <nav class="settings-modal-nav">
+          <button class="settings-nav-item active" id="settingsNavCharacters" onclick="settingsSection('characters')">
+            <span class="settings-nav-ico">CH</span>
+            <span class="settings-nav-lbl">Characters</span>
+          </button>
+          <button class="settings-nav-item" id="settingsNavNotifications" onclick="settingsSection('notifications')" style="display:none">
+            <span class="settings-nav-ico">NF</span>
+            <span class="settings-nav-lbl">Notifications</span>
+          </button>
+          <button class="settings-nav-item" id="settingsNavAccount" onclick="settingsSection('account')" style="display:none">
+            <span class="settings-nav-ico">AC</span>
+            <span class="settings-nav-lbl">Account</span>
+          </button>
+        </nav>
+
+        <!-- Section content -->
+        <div class="settings-modal-content">
+
+          <!-- Characters section -->
+          <div id="settingsSecCharacters" class="settings-section">
+            <div class="settings-sec-hdr">
+              <h3 class="settings-sec-title">Characters</h3>
+              <div class="settings-char-btns">
+                <button class="pp-add-btn" id="esiLoginBtn" onclick="esiLogin()">+ Add via ESI</button>
+                <button class="pp-add-btn" id="ppRefreshBtn" onclick="refreshAllPlanets(this)">Refresh</button>
+              </div>
+            </div>
+            <div id="ppMaterialsSummary" class="pp-materials-summary" style="display:none"></div>
+            <div id="characterList" class="pp-char-list">
+              <div class="pp-empty">No characters added yet.</div>
+            </div>
+            <div id="dummyCharCard" style="display:none" class="settings-subsec">
+              <div class="settings-subsec-title">Placeholder characters</div>
+              <div class="settings-subsec-hint">Have alts you don't want to log in? Add placeholder toons that contribute planet slots + a command-centre level to plans, without ESI. They mix in with your real characters; set per-product roles in Setup as usual. (Placeholders never grant admin.)</div>
+              <div class="dummy-add-row">
+                <label>How many<input id="dummyCount" type="number" min="1" max="100" value="1" class="bug-input dummy-num"></label>
+                <label>Max planets<select id="dummyMaxPlanets" class="bug-input dummy-num">
+                  <option>1</option><option>2</option><option>3</option><option>4</option><option>5</option><option selected>6</option>
+                </select></label>
+                <label>CCU<select id="dummyCcu" class="bug-input dummy-num">
+                  <option>1</option><option>2</option><option>3</option><option>4</option><option selected>5</option>
+                </select></label>
+                <label>Name prefix<input id="dummyPrefix" class="bug-input" maxlength="40" value="Alt" autocomplete="off"></label>
+                <button onclick="addDummyCharacters(this)">Add</button>
+                <span id="dummyStatus" class="bug-status-msg"></span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Notifications section -->
+          <div id="settingsSecNotifications" class="settings-section" style="display:none">
+            <div class="settings-sec-hdr">
+              <h3 class="settings-sec-title">Notifications</h3>
+            </div>
+            <div class="notif-section">
+              <div class="notif-section-title">Channels</div>
+              <div class="notif-section-hint">Get alerts when extractors expire or factories need refilling. Tokens are stored server-side.</div>
+              <div id="notifChannelList" class="notif-channel-list"></div>
+              <details class="notif-add-details">
+                <summary>Add channel</summary>
+                <div class="notif-add-form">
+                  <label>Type
+                    <select id="notifAddType" onchange="notifTypeChanged()">
+                      <option value="pushover">Pushover</option>
+                      <option value="ntfy">ntfy.sh</option>
+                      <option value="discord">Discord webhook</option>
+                    </select>
+                  </label>
+                  <div id="notifConfigFields"></div>
+                  <div class="notif-add-actions">
+                    <button onclick="notifSendTest()">Send test</button>
+                    <button onclick="notifAddChannel()">Save channel</button>
+                    <span id="notifAddStatus" class="notif-status-msg"></span>
+                  </div>
+                </div>
+              </details>
+            </div>
+            <div class="notif-section">
+              <div class="notif-section-title">Preferences</div>
+              <div class="notif-prefs-row">
+                <label><input type="checkbox" id="notifPrefExtractors"> Alert when extractors expire</label>
+                <label><input type="checkbox" id="notifPrefFactories"> Alert when factories need refilling</label>
+                <div id="notifAdminPrefsRow" style="display:none">
+                  <div class="notif-admin-prefs-hdr">Admin alerts</div>
+                  <label><input type="checkbox" id="notifPrefSubmissions"> New planet submission queued for review</label>
+                  <label><input type="checkbox" id="notifPrefBugs"> New bug report filed</label>
+                </div>
+                <label>Warn me
+                  <input type="number" id="notifPrefLeadHours" min="1" max="72" value="4" class="notif-hours-input">
+                  hours in advance
+                </label>
+                <div class="notif-pref-actions">
+                  <button onclick="notifSavePrefs()">Save preferences</button>
+                  <span id="notifPrefsStatus" class="notif-status-msg"></span>
+                </div>
+              </div>
+            </div>
+            <div class="notif-section">
+              <div class="notif-section-title">Recent sends</div>
+              <div id="notifLog" class="notif-log"></div>
+            </div>
+          </div>
+
+          <!-- Account section -->
+          <div id="settingsSecAccount" class="settings-section" style="display:none">
+            <div class="settings-sec-hdr">
+              <h3 class="settings-sec-title">Account</h3>
+            </div>
+            <div class="settings-account-body">
+              <p class="settings-account-hint">Permanently removes all your characters, saved plans, scan data, and profiles from this service. Shared links you created will remain — they contain no character names by default.</p>
+              <button class="account-delete-btn" onclick="openDeleteAccountModal()">Delete my account</button>
+            </div>
+          </div>
+
+        </div><!-- /settings-modal-content -->
+      </div><!-- /settings-modal-layout -->
+    </div><!-- /settings-modal-box -->
+  </div><!-- /settingsModal -->
+
   <!-- Account deletion modal -->
   <div id="deleteAccountModal" class="pp-modal" style="display:none">
     <div class="pp-modal-box">
@@ -934,9 +1037,9 @@ PVF-N9    3         95                 60             80                  100   
   </div>
 
   <script src="/app.js?v=29"></script>
-  <script src="/planetary.js?v=316"></script>
+  <script src="/planetary.js?v=321"></script>
   <script src="/dashboard.js?v=10"></script>
-  <script src="/admin.js?v=8"></script>
+  <script src="/admin.js?v=9"></script>
   <script src="/planetdb.js?v=1"></script>
   <script src="/refill.js?v=1"></script>
   <script src="/analysis.js?v=10"></script>

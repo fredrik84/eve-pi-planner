@@ -19,6 +19,7 @@ from app.fuelblock_planner import router as fuelblock_router
 from app.bugs import router as bugs_router
 from app.admin import router as admin_router
 from app.features import router as features_router
+from app.notifications import router as notifications_router, make_scheduler
 
 app = FastAPI(title="EVE PI Planner")
 app.include_router(planetary_router)
@@ -28,6 +29,22 @@ app.include_router(fuelblock_router)
 app.include_router(bugs_router)
 app.include_router(admin_router)
 app.include_router(features_router)
+app.include_router(notifications_router)
+
+_scheduler = None
+
+
+@app.on_event("startup")
+async def _startup():
+    global _scheduler
+    _scheduler = make_scheduler()
+    _scheduler.start()
+
+
+@app.on_event("shutdown")
+async def _shutdown():
+    if _scheduler and _scheduler.running:
+        _scheduler.shutdown(wait=False)
 
 
 class AnalyzeRequest(BaseModel):

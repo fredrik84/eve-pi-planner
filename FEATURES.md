@@ -679,3 +679,25 @@ Endpoints:
 4. Scheduler wired into `main.py` startup
 5. Settings UI (channels + preferences + log)
 6. Feature-flagged (`notifications`, default off)
+
+**SHIPPED 2026-06-29**: all 6 steps done.
+
+---
+
+### Queue readiness
+
+The event detection and delivery are already decoupled in the code:
+`_extractor_events()`/`_factory_events()` detect → `_process_context()` delivers.
+
+To add a Redis Streams queue later: change `_process_context()` to push events to a
+stream instead of calling notifiers directly, and run a consumer that pops and delivers.
+The notifier code is already fully decoupled from the scheduler.
+
+**This is not needed at current scale** (tens/hundreds of users, a handful of HTTP calls
+per 15-minute cycle). Add it if/when:
+- The 15-min scan/send loop becomes measurably slow.
+- You want retry-with-backoff on delivery failures.
+- Delivery workers need to scale independently of the web tier.
+
+When it is needed: Redis Streams (not Lists) — supports consumer groups and message
+acknowledgment. The `cache.py` plan already covers adding Redis to the stack.

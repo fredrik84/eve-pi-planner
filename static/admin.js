@@ -32,8 +32,11 @@ function adminNavTo(key) {
 function adminSubPage(key) {
   _adminPage = key;
   try { localStorage.setItem('adminPage', key); } catch (e) {}
-  // Mark active item in the sidebar nav-group.
+  // Mark active item in the desktop sidebar nav-group.
   document.querySelectorAll('#adminNavGroup .admin-nav-item').forEach(b =>
+    b.classList.toggle('active', b.dataset.page === key));
+  // Mark active item in the mobile inline nav.
+  document.querySelectorAll('#adminMobilePageNav .admin-mobile-page-btn').forEach(b =>
     b.classList.toggle('active', b.dataset.page === key));
   // Show the matching sub-page panel.
   document.querySelectorAll('#tab-admin .admin-subpage').forEach(p => {

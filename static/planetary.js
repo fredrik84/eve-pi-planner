@@ -243,23 +243,26 @@ function renderHeaderSession(loggedIn, chars, sessionCharId) {
   }
   const char = chars.find(c => c.character_id === sessionCharId);
   const name = char ? char.name : 'Unknown';
-  // Admin access is the sidebar "Admin" item now (no duplicate header button).
   el.innerHTML =
     `<button id="rescanBtn" class="header-bug-btn" onclick="rescanAll()" ${_rescanning ? 'disabled' : ''} title="Re-scan every character's colonies from ESI">${_rescanning ? 'Rescanning…' : 'Rescan'}</button>`
     + `<button id="reportBugBtn" class="header-bug-btn" onclick="openBugModal()">Report bug</button>`
+    + `<button class="header-settings-btn" onclick="openSettingsModal()" title="Settings">⚙&#xFE0E;</button>`
     + `<span class="header-session">${name} · <a href="/auth/logout" class="header-logout">Log out</a></span>`;
+  // Desktop sidebar: show admin nav group for admins.
   const navGroup = document.getElementById('adminNavGroup');
   if (navGroup) navGroup.style.display = _isAdmin ? '' : 'none';
+  // Mobile bottom bar: dedicated Admin tab button for admins only.
+  const adminMobileTab = document.getElementById('adminMobileTab');
+  if (adminMobileTab) adminMobileTab.style.display = _isAdmin ? '' : 'none';
   const dashTab = document.getElementById('dashboardNavTab');
-  if (dashTab) dashTab.style.display = '';   // the overview is for logged-in players
-  // First load for a logged-in player with no remembered tab → land on the dashboard.
+  if (dashTab) dashTab.style.display = '';
   if (!_dashLanded) {
     _dashLanded = true;
     const isShare = window.__SHARE_ID__ || /^\/s\//.test(location.pathname);
     if (!localStorage.getItem('activeTab') && !isShare && typeof switchTab === 'function') switchTab('dashboard');
   }
   const mb = document.getElementById('manageBasketsBtn');
-  if (mb) mb.style.display = loggedIn ? '' : 'none';   // user-owned baskets need a login
+  if (mb) mb.style.display = loggedIn ? '' : 'none';
 }
 
 // ── Bug reporting ─────────────────────────────────────────────────────────────
@@ -354,8 +357,6 @@ function renderCharacters(chars, loggedIn) {
   chars = [...(chars || [])].sort((a, b) => (a.wallet_only ? 1 : 0) - (b.wallet_only ? 1 : 0));
   const dummyCard = document.getElementById('dummyCharCard');
   if (dummyCard) dummyCard.style.display = (loggedIn && _featureActive('dummy_characters')) ? '' : 'none';
-  const accountCard = document.getElementById('accountDangerCard');
-  if (accountCard) accountCard.style.display = loggedIn ? '' : 'none';
 
   const addBtn     = document.getElementById('esiLoginBtn');
   const refreshBtn = document.getElementById('ppRefreshBtn');
@@ -2420,4 +2421,231 @@ async function toggleFactoryChar(charId) {
     _wiz.factoryCharIds = [...ids, charId];
   }
   await _rerunPlan();
+}
+
+// ── Settings modal ────────────────────────────────────────────────────────────
+
+let _settingsOpen = false;
+
+function openSettingsModal(section) {
+  section = section || 'characters';
+  const modal = document.getElementById('settingsModal');
+  if (!modal) return;
+  // Show/hide nav items based on current login/feature state.
+  const notifNav = document.getElementById('settingsNavNotifications');
+  if (notifNav) notifNav.style.display = (_loggedIn && _featureActive('notifications')) ? '' : 'none';
+  const acctNav = document.getElementById('settingsNavAccount');
+  if (acctNav) acctNav.style.display = _loggedIn ? '' : 'none';
+  // If the requested section is gated and not available, fall back to characters.
+  if (section === 'notifications' && !((_loggedIn && _featureActive('notifications')))) section = 'characters';
+  if (section === 'account' && !_loggedIn) section = 'characters';
+  modal.style.display = 'flex';
+  _settingsOpen = true;
+  settingsSection(section, false);
+}
+
+function closeSettingsModal() {
+  const modal = document.getElementById('settingsModal');
+  if (modal) modal.style.display = 'none';
+  _settingsOpen = false;
+}
+
+function settingsBackdropClick(e) {
+  if (e.target === document.getElementById('settingsModal')) closeSettingsModal();
+}
+
+function settingsSection(name, doLoad) {
+  document.querySelectorAll('.settings-nav-item').forEach(b =>
+    b.classList.toggle('active', b.id === 'settingsNav' + name.charAt(0).toUpperCase() + name.slice(1)));
+  document.querySelectorAll('.settings-section').forEach(s =>
+    s.style.display = (s.id === 'settingsSec' + name.charAt(0).toUpperCase() + name.slice(1)) ? '' : 'none');
+  if (name === 'notifications' && doLoad !== false) loadNotifications();
+}
+
+// Intercept switchTab('characters') → settings modal. Must run at script-load time
+// (not DOMContentLoaded) so the patch is in place before app.js's DOMContentLoaded
+// handler calls switchTab() to restore the last active tab.
+// app.js loads and fully executes before planetary.js, so switchTab is defined here.
+try { if (localStorage.getItem('activeTab') === 'characters') localStorage.removeItem('activeTab'); } catch (e) {}
+if (typeof window.switchTab === 'function') {
+  const _origSwitchTab = window.switchTab;
+  window.switchTab = function(name) {
+    if (name === 'characters') { openSettingsModal('characters'); return; }
+    _origSwitchTab.apply(this, arguments);
+  };
+}
+
+// ── Notifications ─────────────────────────────────────────────────────────────
+
+const _NOTIF_CHANNEL_FIELDS = {
+  pushover: [
+    { name: 'user_key', label: 'User key', type: 'text', placeholder: 'uXXXXXXXXXXXXXXXXXXXXX', required: true },
+    { name: 'app_token', label: 'App token (optional — uses server default if blank)', type: 'text', placeholder: '' },
+  ],
+  ntfy: [
+    { name: 'topic', label: 'Topic (keep secret)', type: 'text', placeholder: 'my-secret-topic', required: true },
+    { name: 'server', label: 'Server (optional, default ntfy.sh)', type: 'text', placeholder: 'https://ntfy.sh' },
+  ],
+  discord: [
+    { name: 'webhook_url', label: 'Webhook URL', type: 'text', placeholder: 'https://discord.com/api/webhooks/...', required: true },
+  ],
+};
+
+function notifTypeChanged() {
+  const type = document.getElementById('notifAddType').value;
+  const fields = _NOTIF_CHANNEL_FIELDS[type] || [];
+  document.getElementById('notifConfigFields').innerHTML = fields.map(f =>
+    `<label>${f.label}<input type="${f.type}" class="notif-config-input" data-field="${f.name}" placeholder="${f.escapeHtml ? '' : (f.placeholder||'')}" ${f.required ? 'required' : ''}></label>`
+  ).join('');
+}
+
+function _notifReadConfig() {
+  const cfg = {};
+  document.querySelectorAll('.notif-config-input').forEach(el => {
+    if (el.value.trim()) cfg[el.dataset.field] = el.value.trim();
+  });
+  return cfg;
+}
+
+async function loadNotifications() {
+  notifTypeChanged(); // init fields for default type
+  try {
+    const [sData, pData, lData] = await Promise.all([
+      fetch('/api/notifications/settings').then(r => r.json()),
+      fetch('/api/notifications/prefs').then(r => r.json()),
+      fetch('/api/notifications/log').then(r => r.json()),
+    ]);
+    _renderNotifChannels(sData.settings || []);
+    _renderNotifPrefs(pData);
+    _renderNotifLog(lData.log || []);
+  } catch (e) {
+    console.error('Failed to load notifications:', e);
+  }
+}
+
+function _renderNotifChannels(settings) {
+  const el = document.getElementById('notifChannelList');
+  if (!el) return;
+  if (!settings.length) {
+    el.innerHTML = '<div class="notif-empty">No channels configured.</div>';
+    return;
+  }
+  el.innerHTML = settings.map(s => `
+    <div class="notif-channel-row" data-id="${s.id}">
+      <span class="notif-channel-type">${s.channel_label}</span>
+      <span class="notif-channel-preview">${s.config_preview}</span>
+      <label class="notif-channel-toggle"><input type="checkbox" ${s.enabled ? 'checked' : ''} onchange="notifToggle(${s.id})"> Enabled</label>
+      <button class="notif-channel-delete" onclick="notifDelete(${s.id})">Remove</button>
+    </div>
+  `).join('');
+}
+
+function _renderNotifPrefs(prefs) {
+  const ext = document.getElementById('notifPrefExtractors');
+  const fac = document.getElementById('notifPrefFactories');
+  const hrs = document.getElementById('notifPrefLeadHours');
+  if (ext) ext.checked = prefs.notify_extractors !== false;
+  if (fac) fac.checked = prefs.notify_factories !== false;
+  if (hrs) hrs.value = prefs.lead_hours || 4;
+  // Admin-only events
+  const adminRow = document.getElementById('notifAdminPrefsRow');
+  if (adminRow) adminRow.style.display = _isAdmin ? '' : 'none';
+  const sub = document.getElementById('notifPrefSubmissions');
+  const bug = document.getElementById('notifPrefBugs');
+  if (sub) sub.checked = !!prefs.notify_submissions;
+  if (bug) bug.checked = !!prefs.notify_bugs;
+}
+
+function _renderNotifLog(entries) {
+  const el = document.getElementById('notifLog');
+  if (!el) return;
+  if (!entries.length) {
+    el.innerHTML = '<div class="notif-empty">No notifications sent yet.</div>';
+    return;
+  }
+  el.innerHTML = `<table class="notif-log-table"><thead><tr>
+    <th>When</th><th>Channel</th><th>Event</th><th>Character</th><th>Status</th>
+  </tr></thead><tbody>` +
+  entries.map(e => {
+    const when = e.sent_at ? new Date(e.sent_at).toLocaleString() : '';
+    const ok = e.status === 'ok';
+    return `<tr>
+      <td>${when}</td>
+      <td>${e.channel}</td>
+      <td>${e.event}</td>
+      <td>${e.character || ''}</td>
+      <td class="${ok ? 'notif-ok' : 'notif-err'}">${e.status || ''}</td>
+    </tr>`;
+  }).join('') + '</tbody></table>';
+}
+
+async function notifAddChannel() {
+  const type = document.getElementById('notifAddType').value;
+  const cfg = _notifReadConfig();
+  const status = document.getElementById('notifAddStatus');
+  status.textContent = 'Saving...';
+  try {
+    const r = await fetch('/api/notifications/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ channel: type, config: cfg }),
+    });
+    if (!r.ok) { const e = await r.json(); throw new Error(e.detail || r.status); }
+    status.textContent = 'Saved.';
+    await loadNotifications();
+  } catch (e) {
+    status.textContent = 'Error: ' + e.message;
+  }
+}
+
+async function notifSendTest() {
+  const type = document.getElementById('notifAddType').value;
+  const cfg = _notifReadConfig();
+  const status = document.getElementById('notifAddStatus');
+  status.textContent = 'Sending test...';
+  try {
+    const r = await fetch('/api/notifications/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ channel: type, config: cfg }),
+    });
+    if (!r.ok) { const e = await r.json(); throw new Error(e.detail || r.status); }
+    status.textContent = 'Test sent successfully.';
+  } catch (e) {
+    status.textContent = 'Error: ' + e.message;
+  }
+}
+
+async function notifToggle(id) {
+  await fetch(`/api/notifications/settings/${id}`, { method: 'PATCH' });
+  await loadNotifications();
+}
+
+async function notifDelete(id) {
+  if (!confirm('Remove this notification channel?')) return;
+  await fetch(`/api/notifications/settings/${id}`, { method: 'DELETE' });
+  await loadNotifications();
+}
+
+async function notifSavePrefs() {
+  const status = document.getElementById('notifPrefsStatus');
+  const prefs = {
+    lead_hours: parseInt(document.getElementById('notifPrefLeadHours').value, 10) || 4,
+    notify_extractors: document.getElementById('notifPrefExtractors').checked,
+    notify_factories: document.getElementById('notifPrefFactories').checked,
+    notify_submissions: _isAdmin && !!(document.getElementById('notifPrefSubmissions') || {}).checked,
+    notify_bugs: _isAdmin && !!(document.getElementById('notifPrefBugs') || {}).checked,
+  };
+  status.textContent = 'Saving...';
+  try {
+    const r = await fetch('/api/notifications/prefs', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(prefs),
+    });
+    if (!r.ok) { const e = await r.json(); throw new Error(e.detail || r.status); }
+    status.textContent = 'Saved.';
+  } catch (e) {
+    status.textContent = 'Error: ' + e.message;
+  }
 }
