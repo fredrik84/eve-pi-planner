@@ -1512,6 +1512,17 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
   border-radius: 6px; padding: 7px 14px; font-size: 13px; cursor: pointer; }
 .cleanup-refresh-btn:hover { color: #c8d2e6; }
 .cleanup-status { font-size: 12px; color: #8a93a8; }
+
+/* Account self-deletion */
+.account-danger-row { display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap; padding: 4px 0; }
+.account-danger-lbl { font-size: 13px; color: #8a93a8; }
+.account-delete-btn { background: #3a1515; border: 1px solid #6a2828; color: #e07070;
+  border-radius: 6px; padding: 7px 16px; font-size: 13px; cursor: pointer; }
+.account-delete-btn:hover:not(:disabled) { background: #5a2020; }
+.account-delete-btn:disabled { opacity: 0.4; cursor: default; }
+.delete-account-confirm-row { display: flex; flex-direction: column; gap: 6px; margin: 12px 0; }
+.delete-account-confirm-lbl { font-size: 12px; color: #8a93a8; }
 .admin-add-row { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
 .admin-list { display: flex; flex-direction: column; gap: 6px; }
 .admin-row { display: flex; align-items: center; gap: 10px; padding: 7px 10px; background: #161b28; border: 1px solid #1b2030; border-radius: 7px; }

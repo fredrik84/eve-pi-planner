@@ -275,6 +275,40 @@ function openBugModal() {
 }
 function closeBugModal() { document.getElementById('bugModal').style.display = 'none'; }
 
+// ── Account deletion modal ────────────────────────────────────────────────────
+function openDeleteAccountModal() {
+  document.getElementById('deleteAccountInput').value = '';
+  document.getElementById('deleteAccountStatus').textContent = '';
+  document.getElementById('deleteAccountBtn').disabled = true;
+  document.getElementById('deleteAccountModal').style.display = 'flex';
+  document.getElementById('deleteAccountInput').focus();
+}
+function closeDeleteAccountModal() {
+  document.getElementById('deleteAccountModal').style.display = 'none';
+}
+function onDeleteAccountInput() {
+  const val = document.getElementById('deleteAccountInput').value;
+  document.getElementById('deleteAccountBtn').disabled = (val !== 'DELETE');
+}
+async function confirmDeleteAccount() {
+  const btn = document.getElementById('deleteAccountBtn');
+  const status = document.getElementById('deleteAccountStatus');
+  btn.disabled = true;
+  status.textContent = 'Deleting…';
+  try {
+    const resp = await fetch('/api/me', { method: 'DELETE' });
+    if (!resp.ok) {
+      const d = await resp.json().catch(() => ({}));
+      throw new Error(d.detail || `HTTP ${resp.status}`);
+    }
+    status.textContent = 'Done. Redirecting…';
+    setTimeout(() => { window.location.href = '/'; }, 800);
+  } catch (e) {
+    status.textContent = 'Failed: ' + e.message;
+    btn.disabled = false;
+  }
+}
+
 async function submitBug() {
   const title = document.getElementById('bugTitle').value.trim();
   const description = document.getElementById('bugDesc').value.trim();
@@ -320,6 +354,8 @@ function renderCharacters(chars, loggedIn) {
   chars = [...(chars || [])].sort((a, b) => (a.wallet_only ? 1 : 0) - (b.wallet_only ? 1 : 0));
   const dummyCard = document.getElementById('dummyCharCard');
   if (dummyCard) dummyCard.style.display = (loggedIn && _featureActive('dummy_characters')) ? '' : 'none';
+  const accountCard = document.getElementById('accountDangerCard');
+  if (accountCard) accountCard.style.display = loggedIn ? '' : 'none';
 
   const addBtn     = document.getElementById('esiLoginBtn');
   const refreshBtn = document.getElementById('ppRefreshBtn');

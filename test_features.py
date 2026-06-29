@@ -94,6 +94,36 @@ def test_corp_wallet_gated(base: str) -> bool:
     return check(code == 403, f"anonymous corp-wallet read rejected (got HTTP {code})")
 
 
+def delete_status(url: str) -> int:
+    req = urllib.request.Request(url, method="DELETE")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return resp.status
+    except urllib.error.HTTPError as e:
+        return e.code
+
+
+def test_delete_account_gated(base: str) -> bool:
+    print(f"\n{'='*60}\n  DELETE /api/me requires authentication\n{'='*60}")
+    ok = True
+    # Anonymous call must be rejected with 401
+    code = delete_status(f"{base}/api/me")
+    ok &= check(code == 401, f"anonymous DELETE /api/me rejected (got HTTP {code})")
+    return ok
+
+
+def test_cleanup_preview_gated(base: str) -> bool:
+    print(f"\n{'='*60}\n  GET /api/admin/cleanup/preview is admin-gated\n{'='*60}")
+    code = get_status(f"{base}/api/admin/cleanup/preview")
+    return check(code == 403, f"anonymous cleanup preview rejected (got HTTP {code})")
+
+
+def test_admin_stats_gated(base: str) -> bool:
+    print(f"\n{'='*60}\n  GET /api/admin/stats is admin-gated\n{'='*60}")
+    code = get_status(f"{base}/api/admin/stats")
+    return check(code == 403, f"anonymous admin stats rejected (got HTTP {code})")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--url", default="https://eve-pi.failed.name")
@@ -105,6 +135,9 @@ def main():
         test_feature_toggle_gated(base),
         test_skill_roi_anon(base),
         test_corp_wallet_gated(base),
+        test_delete_account_gated(base),
+        test_cleanup_preview_gated(base),
+        test_admin_stats_gated(base),
     ]
     print(f"\n{'='*60}")
     passed = sum(results)

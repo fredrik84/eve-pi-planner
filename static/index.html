@@ -20,7 +20,7 @@
   <meta property="og:image" content="https://eve-pi.failed.name/og-image.png?v=6">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:image" content="https://eve-pi.failed.name/og-image.png?v=6">
-  <link rel="stylesheet" href="/style.css?v=227">
+  <link rel="stylesheet" href="/style.css?v=228">
 </head>
 <body>
   <header>
@@ -664,6 +664,14 @@ PVF-N9    3         95                 60             80                  100   
           </div>
         </section>
 
+        <section class="pp-card" id="accountDangerCard" style="display:none">
+          <div class="pp-card-title">Account</div>
+          <div class="account-danger-row">
+            <span class="account-danger-lbl">Remove all your data from this service</span>
+            <button class="account-delete-btn" onclick="openDeleteAccountModal()">Delete my account</button>
+          </div>
+        </section>
+
         <section class="pp-card" id="dummyCharCard" style="display:none">
           <div class="pp-card-title">Add placeholder characters</div>
           <div class="admin-hint">Have alts you don't want to log in? Add placeholder toons that contribute planet slots + a command-centre level to plans, without ESI. They mix in with your real characters; set per-product roles in Setup as usual. (Placeholders never grant admin.)</div>
@@ -889,6 +897,25 @@ PVF-N9    3         95                 60             80                  100   
     </div>
   </div>
 
+  <!-- Account deletion modal -->
+  <div id="deleteAccountModal" class="pp-modal" style="display:none">
+    <div class="pp-modal-box">
+      <div class="pp-modal-title">Delete my account
+        <button class="pp-modal-close" onclick="closeDeleteAccountModal()">✕</button>
+      </div>
+      <div class="pp-modal-hint">This will permanently delete all your characters, saved plans, profiles, and scan data. Shared links you created will remain — they contain no character names if you used the default anonymous share. <strong>This cannot be undone.</strong></div>
+      <div class="delete-account-confirm-row">
+        <label class="delete-account-confirm-lbl">Type <strong>DELETE</strong> to confirm</label>
+        <input id="deleteAccountInput" class="bug-input" maxlength="10" placeholder="DELETE" autocomplete="off" oninput="onDeleteAccountInput()">
+      </div>
+      <div class="pp-modal-actions">
+        <button id="deleteAccountBtn" class="account-delete-btn" onclick="confirmDeleteAccount()" disabled>Delete my account</button>
+        <button class="pp-cancel-btn" onclick="closeDeleteAccountModal()">Cancel</button>
+        <span id="deleteAccountStatus" class="bug-status-msg"></span>
+      </div>
+    </div>
+  </div>
+
   <!-- Bug report modal (submit) -->
   <div id="bugModal" class="pp-modal" style="display:none">
     <div class="pp-modal-box">
@@ -907,7 +934,7 @@ PVF-N9    3         95                 60             80                  100   
   </div>
 
   <script src="/app.js?v=29"></script>
-  <script src="/planetary.js?v=315"></script>
+  <script src="/planetary.js?v=316"></script>
   <script src="/dashboard.js?v=10"></script>
   <script src="/admin.js?v=8"></script>
   <script src="/planetdb.js?v=1"></script>

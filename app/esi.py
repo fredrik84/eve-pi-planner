@@ -126,6 +126,13 @@ def _delete_session(token: str):
         pass
 
 
+def _invalidate_context_sessions(context_id: int):
+    """Remove all in-memory session entries for a context (used after account deletion)."""
+    stale = [tok for tok, (_, ctx) in _sessions.items() if ctx == context_id]
+    for tok in stale:
+        _sessions.pop(tok, None)
+
+
 def _is_configured() -> bool:
     return bool(CLIENT_ID and CLIENT_SECRET)
 
@@ -783,6 +790,51 @@ def session_context_id(pp_session: str = Cookie(default=None)) -> int | None:
     if pp_session and pp_session in _sessions:
         return _sessions[pp_session][1]
     return None
+
+
+@router.delete("/api/me")
+def delete_account(context_id: int = Depends(require_context)):
+    """Permanently delete all data for the calling user's account.
+    Runs in a single transaction; invalidates all sessions on success."""
+    con = get_connection()
+    try:
+        char_ids = [r["character_id"] for r in
+                    con.execute("SELECT character_id FROM pp_characters WHERE context_id=?",
+                                (context_id,)).fetchall()]
+        if char_ids:
+            ph = ",".join("?" * len(char_ids))
+            con.execute(f"DELETE FROM pp_plan_config WHERE character_id IN ({ph})", char_ids)
+            con.execute(f"DELETE FROM pp_colony_yield WHERE character_id IN ({ph})", char_ids)
+            con.execute(f"DELETE FROM pp_char_planets WHERE character_id IN ({ph})", char_ids)
+
+        con.execute("DELETE FROM pp_plan_snapshots WHERE context_id=?", (context_id,))
+        con.execute("DELETE FROM pp_plan_baseline WHERE context_id=?", (context_id,))
+        con.execute("DELETE FROM pp_profiles WHERE context_id=?", (context_id,))
+
+        # Private baskets (context_id IS NOT NULL = owned by this context)
+        basket_ids = [r["id"] for r in
+                      con.execute("SELECT id FROM pp_baskets WHERE context_id=?",
+                                  (context_id,)).fetchall()]
+        if basket_ids:
+            ph = ",".join("?" * len(basket_ids))
+            con.execute(f"DELETE FROM pp_basket_items WHERE basket_id IN ({ph})", basket_ids)
+        con.execute("DELETE FROM pp_baskets WHERE context_id=?", (context_id,))
+
+        if char_ids:
+            ph = ",".join("?" * len(char_ids))
+            con.execute(f"DELETE FROM pp_characters WHERE character_id IN ({ph})", char_ids)
+
+        con.execute("DELETE FROM pp_sessions WHERE context_id=?", (context_id,))
+        con.execute("DELETE FROM pp_user_contexts WHERE id=?", (context_id,))
+        con.commit()
+    except Exception:
+        con.rollback()
+        con.close()
+        raise HTTPException(status_code=500, detail="Deletion failed — no data was changed")
+
+    con.close()
+    _invalidate_context_sessions(context_id)
+    return {"deleted": True}
 
 
 # Permanent bootstrap admins (lowercase), un-removable via the UI. Additional admins are
