@@ -15,7 +15,7 @@ from pydantic import BaseModel
 from app.sde import get_connection, load_pi_data
 from app.esi import (
     require_admin, require_context, is_admin, session_context_id,
-    ADMIN_CHARACTERS, ensure_admin_table, _sessions, _load_sessions,
+    ADMIN_CHARACTERS, ensure_admin_table, _session_lookup,
     corp_wallet_summary, _db_tester_names,
 )
 
@@ -92,8 +92,7 @@ def ensure_basket_tables():
 
 
 def _session_char_name(pp_session: str | None) -> str | None:
-    _load_sessions()
-    info = _sessions.get(pp_session) if pp_session else None
+    info = _session_lookup(pp_session)
     if not info:
         return None
     con = get_connection()

@@ -6,7 +6,7 @@ from fastapi import APIRouter, Cookie, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.sde import get_connection
-from app.esi import require_context, require_admin, _sessions, _load_sessions
+from app.esi import require_context, require_admin, session_character_id
 
 router = APIRouter()
 
@@ -44,8 +44,7 @@ class BugStatusUpdate(BaseModel):
 @router.post("/api/bugs")
 def submit_bug(req: BugReport, pp_session: str = Cookie(default=None)):
     context_id = require_context(pp_session)   # 401 if not logged in
-    _load_sessions()
-    char_id = _sessions[pp_session][0]
+    char_id = session_character_id(pp_session)
 
     title = (req.title or "").strip()[:200]
     desc = (req.description or "").strip()[:5000]

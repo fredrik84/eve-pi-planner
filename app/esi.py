@@ -78,31 +78,24 @@ P0_TYPE_NAMES = {
     2308: "Suspended Plasma",
 }
 
-# In-memory CSRF state store (sufficient for single-server personal tool)
-_pending: dict[str, str] = {}
-
-# Active session tokens → (character_id, context_id)
-_sessions: dict[str, tuple[int, int]] = {}
-_sessions_loaded = False
-
-
-def _load_sessions():
-    global _sessions_loaded
-    if _sessions_loaded:
-        return
-    _sessions_loaded = True
+def _session_lookup(token: str | None) -> tuple[int, int] | None:
+    """Look up a session token in the DB. Returns (character_id, context_id) or None."""
+    if not token:
+        return None
     try:
         con = get_connection()
-        rows = con.execute("SELECT token, character_id, context_id FROM pp_sessions").fetchall()
+        row = con.execute(
+            "SELECT character_id, context_id FROM pp_sessions WHERE token=?", (token,)
+        ).fetchone()
         con.close()
-        for r in rows:
-            _sessions[r["token"]] = (r["character_id"], r["context_id"] or 0)
+        if row:
+            return (row["character_id"], row["context_id"] or 0)
     except Exception:
         pass
+    return None
 
 
 def _save_session(token: str, character_id: int, context_id: int):
-    _sessions[token] = (character_id, context_id)
     try:
         con = get_connection()
         con.execute(
@@ -116,7 +109,6 @@ def _save_session(token: str, character_id: int, context_id: int):
 
 
 def _delete_session(token: str):
-    _sessions.pop(token, None)
     try:
         con = get_connection()
         con.execute("DELETE FROM pp_sessions WHERE token=?", (token,))
@@ -127,10 +119,14 @@ def _delete_session(token: str):
 
 
 def _invalidate_context_sessions(context_id: int):
-    """Remove all in-memory session entries for a context (used after account deletion)."""
-    stale = [tok for tok, (_, ctx) in _sessions.items() if ctx == context_id]
-    for tok in stale:
-        _sessions.pop(tok, None)
+    """Delete all session rows for a context (used after account deletion)."""
+    try:
+        con = get_connection()
+        con.execute("DELETE FROM pp_sessions WHERE context_id=?", (context_id,))
+        con.commit()
+        con.close()
+    except Exception:
+        pass
 
 
 def _is_configured() -> bool:
@@ -220,6 +216,13 @@ def ensure_char_tables():
             character_id INTEGER NOT NULL,
             context_id   INTEGER NOT NULL DEFAULT 0,
             created_at   TEXT    NOT NULL
+        )
+    """)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS pp_oauth_pending (
+            state      TEXT PRIMARY KEY,
+            context_id INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL
         )
     """)
     con.execute("""
@@ -619,10 +622,21 @@ def esi_login(wallet: int = 0, pp_session: str = Cookie(default=None)):
     # is often dropped on the cross-site redirect back from EVE SSO to /auth/callback, which used to
     # silently create a NEW context — orphaning the previously-added characters ("adding a 2nd char
     # removes the 1st"). Threading the context through `state` makes the link survive that cookie loss.
-    _load_sessions()
-    ctx = _sessions.get(pp_session, (None, 0))[1] if pp_session else 0
+    sess = _session_lookup(pp_session)
+    ctx = sess[1] if sess else 0
     state = secrets.token_urlsafe(16)
-    _pending[state] = ctx or 0
+    try:
+        con = get_connection()
+        # Clean up expired pending states (>10 min) opportunistically
+        con.execute("DELETE FROM pp_oauth_pending WHERE created_at < datetime('now', '-10 minutes')")
+        con.execute(
+            "INSERT OR REPLACE INTO pp_oauth_pending (state, context_id, created_at) VALUES (?,?,?)",
+            (state, ctx, datetime.now(timezone.utc).isoformat()),
+        )
+        con.commit()
+        con.close()
+    except Exception:
+        pass
     scope_enc = (WALLET_SCOPES if wallet else SCOPES).replace(" ", "%20")
     url = (
         f"{EVE_AUTH_URL}?response_type=code"
@@ -641,11 +655,20 @@ def esi_callback(
     response: Response = None,
     pp_session: str = Cookie(default=None),
 ):
-    if state not in _pending:
+    try:
+        con_p = get_connection()
+        pending_row = con_p.execute(
+            "SELECT context_id FROM pp_oauth_pending WHERE state=?", (state,)
+        ).fetchone()
+        if pending_row:
+            con_p.execute("DELETE FROM pp_oauth_pending WHERE state=?", (state,))
+            con_p.commit()
+        con_p.close()
+    except Exception:
+        pending_row = None
+    if not pending_row:
         raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
-    state_ctx = _pending.pop(state)        # context captured at /auth/login time (0 if not logged in then)
-    if not isinstance(state_ctx, int):     # legacy "ok" tokens from before this change
-        state_ctx = 0
+    state_ctx = pending_row["context_id"] or 0
 
     # Exchange code for tokens
     with httpx.Client() as client:
@@ -683,7 +706,6 @@ def esi_callback(
     skills = _fetch_skills(character_id, access_token)
 
     ensure_char_tables()
-    _load_sessions()
     con = get_connection()
 
     # Resolve context_id:
@@ -698,8 +720,8 @@ def esi_callback(
     #    session cookie. Cookie is only a fallback for the rare case state didn't carry it.
     elif state_ctx:
         context_id = state_ctx
-    elif pp_session and pp_session in _sessions:
-        _, context_id = _sessions[pp_session]
+    elif (sess := _session_lookup(pp_session)):
+        _, context_id = sess
     # 3. New user → create a fresh context
     else:
         cur = con.execute(
@@ -762,34 +784,30 @@ def esi_logout(pp_session: str = Cookie(default=None)):
 
 def require_context(pp_session: str = Cookie(default=None)) -> int:
     """FastAPI dependency: return context_id or raise 401."""
-    _load_sessions()
-    if pp_session and pp_session in _sessions:
-        return _sessions[pp_session][1]
+    sess = _session_lookup(pp_session)
+    if sess:
+        return sess[1]
     raise HTTPException(status_code=401, detail="Not authenticated — please log in via EVE SSO")
 
 
 def require_session(pp_session: str = Cookie(default=None)) -> int:
     """FastAPI dependency: return character_id or raise 401."""
-    _load_sessions()
-    if pp_session and pp_session in _sessions:
-        return _sessions[pp_session][0]
+    sess = _session_lookup(pp_session)
+    if sess:
+        return sess[0]
     raise HTTPException(status_code=401, detail="Not authenticated — please log in via EVE SSO")
 
 
 def session_character_id(pp_session: str = Cookie(default=None)) -> int | None:
     """Returns character_id or None (no exception)."""
-    _load_sessions()
-    if pp_session and pp_session in _sessions:
-        return _sessions[pp_session][0]
-    return None
+    sess = _session_lookup(pp_session)
+    return sess[0] if sess else None
 
 
 def session_context_id(pp_session: str = Cookie(default=None)) -> int | None:
     """Returns context_id or None (no exception)."""
-    _load_sessions()
-    if pp_session and pp_session in _sessions:
-        return _sessions[pp_session][1]
-    return None
+    sess = _session_lookup(pp_session)
+    return sess[1] if sess else None
 
 
 @router.delete("/api/me")
@@ -872,11 +890,10 @@ def _db_admin_names() -> set[str]:
 def is_admin(pp_session: str = Cookie(default=None)) -> bool:
     """True if the session's account owns a character with an admin name (bootstrap set
     or the pp_admins table)."""
-    _load_sessions()
-    info = _sessions.get(pp_session) if pp_session else None
-    if not info:
+    sess = _session_lookup(pp_session)
+    if not sess:
         return False
-    context_id = info[1]
+    context_id = sess[1]
     con = get_connection()
     # Only real, SSO-verified characters count — a dummy character is just a typed-in name and
     # must never confer admin (otherwise anyone could add a dummy named after an admin).
@@ -891,9 +908,10 @@ def is_admin(pp_session: str = Cookie(default=None)) -> bool:
 
 def require_admin(pp_session: str = Cookie(default=None)) -> int:
     """FastAPI dependency: return context_id for admins, else raise 403."""
-    if not is_admin(pp_session):
+    sess = _session_lookup(pp_session)
+    if not sess or not is_admin(pp_session):
         raise HTTPException(status_code=403, detail="Admin access required")
-    return _sessions[pp_session][1]
+    return sess[1]
 
 
 def _db_tester_names() -> set[str]:
@@ -911,11 +929,10 @@ def is_tester(pp_session: str = Cookie(default=None)) -> bool:
     """True if the session's account owns a character in pp_testers (or is an admin)."""
     if is_admin(pp_session):
         return True
-    _load_sessions()
-    info = _sessions.get(pp_session) if pp_session else None
-    if not info:
+    sess = _session_lookup(pp_session)
+    if not sess:
         return False
-    context_id = info[1]
+    context_id = sess[1]
     con = get_connection()
     rows = con.execute(
         "SELECT character_name FROM pp_characters "
@@ -1101,10 +1118,9 @@ def corp_wallet_summary(context_id: int) -> dict:
 @router.get("/api/characters")
 def list_characters(pp_session: str = Cookie(default=None)):
     ensure_char_tables()
-    _load_sessions()
-    session_info = _sessions.get(pp_session) if pp_session else None
-    session_char   = session_info[0] if session_info else None
-    context_id     = session_info[1] if session_info else None
+    session_info = _session_lookup(pp_session)
+    session_char = session_info[0] if session_info else None
+    context_id   = session_info[1] if session_info else None
 
     con = get_connection()
     if context_id:
