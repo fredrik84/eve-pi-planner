@@ -615,11 +615,16 @@ def ensure_share_table():
     con = get_connection()
     con.execute("""
         CREATE TABLE IF NOT EXISTS pp_shares (
-            id         TEXT PRIMARY KEY,
-            payload    TEXT NOT NULL,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            id            TEXT PRIMARY KEY,
+            payload       TEXT NOT NULL,
+            created_at    TEXT DEFAULT CURRENT_TIMESTAMP,
+            last_accessed TEXT
         )
     """)
+    # Migration: add last_accessed to existing tables that predate this column.
+    cols = {r["name"] for r in con.execute("PRAGMA table_info(pp_shares)")}
+    if "last_accessed" not in cols:
+        con.execute("ALTER TABLE pp_shares ADD COLUMN last_accessed TEXT")
     con.commit()
     con.close()
 
@@ -747,10 +752,19 @@ def load_plan_share(share_id: str):
     ensure_share_table()
     con = get_connection()
     row = con.execute("SELECT payload FROM pp_shares WHERE id=?", (share_id,)).fetchone()
-    con.close()
     if not row:
+        con.close()
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="Share not found")
+    try:
+        con.execute(
+            "UPDATE pp_shares SET last_accessed=datetime('now') WHERE id=?",
+            (share_id,),
+        )
+        con.commit()
+    except Exception:
+        pass
+    con.close()
     return {"payload": _json.loads(row["payload"])}
 
 

@@ -121,9 +121,18 @@ def _share_meta(share_id: str):
         ensure_share_table()
         con = get_connection()
         row = con.execute("SELECT payload FROM pp_shares WHERE id=?", (share_id,)).fetchone()
-        con.close()
         if not row:
+            con.close()
             return title, desc
+        try:
+            con.execute(
+                "UPDATE pp_shares SET last_accessed=datetime('now') WHERE id=?",
+                (share_id,),
+            )
+            con.commit()
+        except Exception:
+            pass
+        con.close()
         payload = _json.loads(row[0])
     except Exception:
         return title, desc
