@@ -324,6 +324,169 @@ Steps 3–7 are a future project. Don't start step 3 without a dedicated session
 
 ---
 
+## Redis cache layer
+
+**Goal:** Optional cache layer in front of the DB to reduce query load and enable
+sub-millisecond auth checks across pods. Not needed today, but the architecture
+should slot Redis in cleanly when the time comes.
+
+**Design principle: Redis is optional.** The app must work correctly without it —
+single-container deployments should not require Redis. Every read goes through a
+cache-aside helper that falls back to the DB on a miss or when Redis is unavailable.
+Redis is purely a performance layer, never the source of truth.
+
+**Enabled by:** `REDIS_URL=redis://localhost:6379` env var. Absent → cache layer is
+a no-op (all reads go straight to DB, all writes are no-ops).
+
+---
+
+### What to cache and why
+
+**Tier 1 — high value, implement first**
+
+| Key pattern | Content | TTL | Invalidation |
+|-------------|---------|-----|-------------|
+| `session:{token}` | `{character_id, context_id}` | 30 days (matches cookie) | Delete on logout / account deletion |
+| `oauth_pending:{state}` | `context_id` | 10 min | Delete on callback (consumed once) |
+| `market:{type_id}` | `{buy, sell}` prices | 1 hour | TTL only (prices change slowly) |
+
+These three replace the two broken in-memory dicts (`_sessions`, `_pending`) and the
+per-pod market cache — all described in the statelessness plan. With Redis, the
+statelessness plan's "fix `_pending` with a DB table" becomes "fix `_pending` with
+Redis" instead, which is cleaner (natural TTL, no cleanup job needed).
+
+**Tier 2 — moderate value, add when DB load is measurable**
+
+| Key pattern | Content | TTL | Invalidation |
+|-------------|---------|-----|-------------|
+| `features` | Full feature flag dict | 60s | Delete on any flag toggle |
+| `admin_stats` | All 20 stat counters | 60s | TTL only (admin page, stale is fine) |
+| `pi_data` | SDE schematics + type names | 24h | Delete on SDE rebuild |
+| `planet_constellations` | `GET /api/constellations` response | 10 min | Delete on planet import |
+
+`pi_data` is the most valuable: it's loaded from SQLite on every plan run and is
+large (~hundreds of rows). A 24h cache cuts a lot of redundant SQLite reads in a
+busy multi-pod setup.
+
+**Tier 3 — low value, probably never needed**
+
+| Key | Content | Notes |
+|-----|---------|-------|
+| `plan:{hash}` | Full plan result | Invalidation is complex (planet DB changes, config changes). Not worth it. |
+| `char_planets:{context_id}` | Colony scan data | Changes on every rescan. Cache churn would exceed benefit. |
+
+---
+
+### Implementation pattern
+
+A single thin module `app/cache.py`:
+
+```python
+import os, json, functools
+
+REDIS_URL = os.environ.get("REDIS_URL", "")
+_redis = None
+
+def _get_redis():
+    global _redis
+    if _redis is None and REDIS_URL:
+        import redis
+        _redis = redis.from_url(REDIS_URL, decode_responses=True)
+    return _redis
+
+def cache_get(key: str):
+    r = _get_redis()
+    if not r:
+        return None
+    try:
+        val = r.get(key)
+        return json.loads(val) if val is not None else None
+    except Exception:
+        return None  # Redis down → cache miss, never crash
+
+def cache_set(key: str, value, ttl_seconds: int):
+    r = _get_redis()
+    if not r:
+        return
+    try:
+        r.setex(key, ttl_seconds, json.dumps(value))
+    except Exception:
+        pass
+
+def cache_delete(key: str):
+    r = _get_redis()
+    if not r:
+        return
+    try:
+        r.delete(key)
+    except Exception:
+        pass
+
+def cache_delete_prefix(prefix: str):
+    """Delete all keys matching prefix:* — use sparingly (SCAN, not KEYS)."""
+    r = _get_redis()
+    if not r:
+        return
+    try:
+        cursor = 0
+        while True:
+            cursor, keys = r.scan(cursor, match=f"{prefix}:*", count=100)
+            if keys:
+                r.delete(*keys)
+            if cursor == 0:
+                break
+    except Exception:
+        pass
+```
+
+All errors are swallowed — a Redis outage degrades to DB-only, never causes a 500.
+`cache_delete_prefix` uses `SCAN` (not `KEYS`) so it never blocks the Redis event
+loop on large keyspaces.
+
+---
+
+### Interaction with the statelessness plan
+
+With Redis available, Phase 0 of the statelessness plan changes slightly:
+
+| Without Redis | With Redis |
+|---------------|------------|
+| `_sessions` → DB lookup on every request | `_sessions` → `cache_get("session:{token}")`, miss → DB → `cache_set` |
+| `_pending` → `pp_oauth_pending` DB table | `_pending` → `cache_set("oauth_pending:{state}", ctx, ttl=600)` |
+
+The DB remains the source of truth for sessions. Redis is a read-through cache in
+front of it. This means the DB fix (Phase 0) should land first regardless — Redis
+then slots in as an optimisation on top of already-correct DB-backed behaviour.
+
+---
+
+### Dependencies
+
+- `redis` (pip) — lazy import, only needed if `REDIS_URL` is set. Add to
+  `requirements.txt` unconditionally (tiny package, no harm installed unused).
+- No Redis server needed for local dev / single-container deployments.
+- For Docker Compose multi-instance: add a `redis:alpine` service and set
+  `REDIS_URL=redis://redis:6379` in `.env`.
+- For Kubernetes: managed Redis (e.g. Upstash, Redis Cloud, or a simple
+  `redis:alpine` Deployment with a ClusterIP service).
+
+---
+
+### Build order
+
+1. Write `app/cache.py` (the module above — pure utility, no side effects).
+2. Wire `session:{token}` cache into `require_context` / `_save_session` /
+   `_delete_session` / `_invalidate_context_sessions` (after Phase 0 of
+   statelessness plan is done — build on top of correct DB-backed behaviour).
+3. Wire `oauth_pending:{state}` (replaces the `pp_oauth_pending` table approach).
+4. Wire `market:{type_id}` (drop `_cache` dict in `market.py`).
+5. Wire Tier 2 keys as DB load becomes measurable.
+
+Do NOT build this before the statelessness Phase 0 fixes. Redis on top of broken
+in-memory state makes debugging much harder.
+
+---
+
 ## [CONSIDERING] Public API access for user data
 
 **Status: undecided.** Owner hasn't decided whether to build this. Document trade-offs
