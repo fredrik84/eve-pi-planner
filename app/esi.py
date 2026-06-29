@@ -179,6 +179,7 @@ def ensure_char_tables():
             PRIMARY KEY (character_id, planet_id)
         )
     """)
+    con.commit()
     try:
         con.execute("ALTER TABLE pp_char_planets ADD COLUMN planet_num INTEGER")
     except Exception:
