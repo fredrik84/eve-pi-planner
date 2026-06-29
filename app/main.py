@@ -2,6 +2,8 @@ import html as _html
 import json as _json
 from typing import Optional
 
+APP_VERSION = "2026.06.29"
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
