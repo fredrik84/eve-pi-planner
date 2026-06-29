@@ -128,13 +128,21 @@ class _PgConn:
     def execute(self, sql: str, params=()) -> _PgCursor:
         sql = _pg_translate(sql)
         cur = self._conn.cursor()
-        cur.execute(sql, params if params else None)
+        try:
+            cur.execute(sql, params if params else None)
+        except Exception:
+            self._conn.rollback()
+            raise
         return _PgCursor(cur)
 
     def executemany(self, sql: str, seq) -> _PgCursor:
         sql = _pg_translate(sql)
         cur = self._conn.cursor()
-        cur.executemany(sql, seq)
+        try:
+            cur.executemany(sql, seq)
+        except Exception:
+            self._conn.rollback()
+            raise
         return _PgCursor(cur)
 
     def cursor(self) -> _PgCursor:
