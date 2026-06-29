@@ -172,6 +172,158 @@ Two-step confirm: type "DELETE" into a text input before the button activates
 
 ---
 
+## Statelessness / Kubernetes readiness
+
+**Goal:** Make the app runnable as multiple identical pods behind a load balancer.
+Not needed today (single container on a VPS), but the architecture should not
+actively resist it. Document what needs to change and in what order.
+
+---
+
+### Current statefulness inventory
+
+Three categories of shared mutable state, ordered by blast radius:
+
+**1. `_sessions` dict (esi.py) — BREAKING in multi-instance**
+
+`_sessions: dict[str, tuple[int, int]]` is a module-level in-memory cache of
+`token → (character_id, context_id)`. It is lazily loaded once per process
+(`_sessions_loaded` flag) and then kept in sync by `_save_session` / `_delete_session`.
+
+In a two-pod setup: pod A creates a session → pod B never learns about it → 50% of
+requests get 401 randomly. This is the single most important thing to fix.
+
+**Fix:** Remove the in-memory cache entirely. Replace every `_sessions.get(token)` with
+a direct DB query `SELECT character_id, context_id FROM pp_sessions WHERE token=?`.
+With an index on `token` (add one — currently missing), this is a single-row lookup
+and fast enough for this app's traffic. No Redis needed.
+
+`_save_session` / `_delete_session` / `_invalidate_context_sessions` become pure DB
+operations. `_sessions_loaded` flag disappears.
+
+**2. `_pending` dict (esi.py) — BREAKING in multi-instance**
+
+`_pending: dict[str, str]` stores the OAuth `state` parameter between `/auth/login`
+and `/auth/callback`. If login hits pod A and callback hits pod B, the state lookup
+fails → 403 / broken OAuth flow.
+
+**Fix:** Store the pending state in the DB instead of memory. New table:
+```sql
+CREATE TABLE pp_oauth_pending (
+    state      TEXT PRIMARY KEY,
+    context_id INTEGER,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+```
+`/auth/login` inserts a row; `/auth/callback` reads and deletes it. Add a cleanup
+job (or inline expiry check) for states older than 10 minutes.
+
+**3. `_cache` dict (market.py) — DEGRADED but not breaking**
+
+In-memory price cache with a TTL. In multi-pod, each pod has its own cold cache →
+extra Fuzzwork requests on startup. Not broken (requests are idempotent) but
+wasteful. Leave as-is for now; revisit if traffic warrants it. If the DB move
+happens first, a `pp_price_cache` table with a `fetched_at` column would solve it.
+
+---
+
+### SQLite → PostgreSQL migration plan
+
+SQLite is a single-writer, single-file DB. It cannot be shared across pods. The SDE
+data (planet types, schematics, etc.) is read-only and could stay as SQLite on a
+shared volume, but the user tables (`pp_*`) must move to Postgres.
+
+**Scope:** ~108 `get_connection()` call sites across 10 app files. Not a one-day job
+but not a rewrite either — the SQL is simple and the patterns are consistent.
+
+**SQLite → Postgres translation table:**
+
+| SQLite | Postgres |
+|--------|----------|
+| `datetime('now')` | `NOW()` |
+| `datetime('now', '-90 days')` | `NOW() - INTERVAL '90 days'` |
+| `CURRENT_TIMESTAMP` | `NOW()` |
+| `INTEGER PRIMARY KEY` (autoincrement) | `SERIAL` or `BIGSERIAL` |
+| `INSERT OR REPLACE INTO` | `INSERT INTO … ON CONFLICT … DO UPDATE SET` |
+| `INSERT OR IGNORE INTO` | `INSERT INTO … ON CONFLICT DO NOTHING` |
+| `PRAGMA table_info(t)` | `SELECT column_name FROM information_schema.columns WHERE table_name='t'` |
+| `PRAGMA journal_mode=WAL` | not needed (Postgres handles concurrency natively) |
+| `?` parameter placeholder | `%s` (psycopg2) |
+| `con.row_factory = sqlite3.Row` | `psycopg2.extras.RealDictCursor` |
+
+**Suggested migration phases:**
+
+**Phase 0 (now → any time): fix in-memory state** (see above). Stateless-safe and
+useful independent of the DB move.
+
+**Phase 1: abstract the connection layer.** Replace `sqlite3.connect(...)` in
+`app/sde.py:get_connection()` with a thin adapter that can be backed by either
+SQLite or Postgres via an env var `DATABASE_URL`. Keep SQLite as the default so
+nothing breaks. This is the enabler for all subsequent work — no call-site changes.
+
+```python
+# app/sde.py
+import os
+DATABASE_URL = os.environ.get("DATABASE_URL", "")  # empty = SQLite
+
+def get_connection():
+    if DATABASE_URL.startswith("postgresql"):
+        import psycopg2, psycopg2.extras
+        con = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+        return con
+    else:
+        con = sqlite3.connect("data/sde.db")
+        con.row_factory = sqlite3.Row
+        return con
+```
+
+The adapter must also handle the placeholder difference (`?` vs `%s`). Options:
+- Wrapper method `con.execute(sql, params)` that translates placeholders.
+- Use SQLAlchemy Core (no ORM) — handles both dialects transparently. Adds a dep
+  but removes the translation burden entirely. **Recommended for this app's size.**
+
+**Phase 2: translate SQL syntax.** With the adapter in place, run the app against a
+test Postgres instance and fix each failure. The 13 `datetime('now'...)` calls and
+12 `INSERT OR REPLACE/IGNORE` calls are the bulk of the work. The 4 `PRAGMA` calls
+are all in `ensure_*` migration helpers — replace with `information_schema` queries.
+
+**Phase 3: split SDE vs user DB.** The SDE tables (`pi_schematics`, `pi_schematic_inputs`,
+`types`, `constellations`, `system_geo`, `system_jumps`, `solar_systems`) are
+populated by `scripts/populate_*.py` and are read-only at runtime. Keep these in
+SQLite on a volume (or ship them baked into the image — they're ~5 MB). Move only
+`pp_*` tables to Postgres. This avoids migrating the SDE pipeline and keeps image
+builds simple.
+
+**Phase 4: Kubernetes deployment.** At this point:
+- User DB: Postgres (external managed service or a StatefulSet).
+- SDE DB: SQLite file baked into the image (rebuild image on SDE update).
+- Sessions: stateless (DB-backed after Phase 0).
+- OAuth pending: DB-backed (after Phase 0).
+- Market cache: per-pod in-memory (acceptable degradation).
+- APScheduler (notifications): runs in ONE pod only. Use a `pp_scheduler_lock` table
+  with a heartbeat row to elect a single scheduler leader. Other pods skip scheduling
+  if the lock is held by a live heartbeat. Simple and dependency-free.
+
+---
+
+### Build order
+
+1. **Fix `_sessions`** — remove in-memory cache, DB-only lookup. Test: two-process
+   simulation (start app, write session directly to DB from a second process, verify
+   the first process honours it).
+2. **Fix `_pending`** — move OAuth state to DB table.
+3. **Abstract `get_connection()`** — env-var switchable, placeholder translation.
+4. **Postgres SQL translation** — iterate until test suite passes against Postgres.
+5. **Split SDE / user DB** — bake SDE into image, point user tables at Postgres.
+6. **Helm chart / K8s manifests** — deployment, service, ingress (Traefik is already
+   the reverse proxy; the Helm chart just replaces docker-compose labels).
+7. **Scheduler leader election** — implement only when notifications are shipped.
+
+Steps 1–2 are valuable TODAY (remove a class of subtle bugs) independent of Kubernetes.
+Steps 3–7 are a future project. Don't start step 3 without a dedicated session for it.
+
+---
+
 ## [CONSIDERING] Public API access for user data
 
 **Status: undecided.** Owner hasn't decided whether to build this. Document trade-offs
