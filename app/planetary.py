@@ -93,6 +93,7 @@ def ensure_tables():
             reviewed_at TEXT
         )
     """)
+    con.commit()
     # Add solar_system_id if upgrading from older schema
     try:
         con.execute("ALTER TABLE pp_planets ADD COLUMN solar_system_id INTEGER")

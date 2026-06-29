@@ -240,6 +240,10 @@ def ensure_char_tables():
             added_at       TEXT
         )
     """)
+    # Commit all CREATE TABLEs before running ALTER TABLE migrations.
+    # In Postgres, a failed ALTER (column already exists) triggers auto-rollback
+    # which would undo all preceding CREATEs if they're in the same transaction.
+    con.commit()
     # Schema migrations for existing deployments
     for col, tbl in [("context_id", "pp_characters"), ("context_id", "pp_sessions")]:
         try:

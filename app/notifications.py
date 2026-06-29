@@ -58,6 +58,7 @@ def ensure_notification_tables():
             notify_bugs        INTEGER DEFAULT 0
         )
     """)
+    con.commit()
     # Migrate existing rows that lack the admin columns
     for col in ("notify_submissions", "notify_bugs"):
         try:

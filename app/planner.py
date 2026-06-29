@@ -39,6 +39,7 @@ def ensure_plan_tables():
             PRIMARY KEY (character_id, product_type_id)
         )
     """)
+    con.commit()
     try:
         con.execute("ALTER TABLE pp_plan_config ADD COLUMN extractor_limit INTEGER")
     except Exception:
@@ -774,7 +775,26 @@ def load_plan_share(share_id: str):
 def ensure_profile_tables():
     con = get_connection()
     cols = [r["name"] for r in con.execute("PRAGMA table_info(pp_profiles)").fetchall()]
-    if "context_id" not in cols:
+    if not cols:
+        # Fresh DB — create directly, no old data to migrate.
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS pp_profiles (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                context_id        INTEGER NOT NULL DEFAULT 1,
+                name              TEXT    NOT NULL,
+                type_id           INTEGER NOT NULL,
+                type_name         TEXT    NOT NULL DEFAULT '',
+                factories         INTEGER NOT NULL DEFAULT 15,
+                preferred_systems INTEGER NOT NULL DEFAULT 1,
+                constellations    TEXT    NOT NULL DEFAULT '[]',
+                use_existing      INTEGER NOT NULL DEFAULT 1,
+                created_at        TEXT    DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(context_id, name)
+            )
+        """)
+        con.commit()
+    elif "context_id" not in cols:
+        # Old schema without context_id — migrate via rename.
         con.execute("""
             CREATE TABLE IF NOT EXISTS pp_profiles_new (
                 id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -790,6 +810,7 @@ def ensure_profile_tables():
                 UNIQUE(context_id, name)
             )
         """)
+        con.commit()
         try:
             con.execute("""
                 INSERT INTO pp_profiles_new
@@ -800,9 +821,11 @@ def ensure_profile_tables():
                 FROM pp_profiles
             """)
             con.execute("DROP TABLE pp_profiles")
+            con.commit()
         except Exception:
             pass
         con.execute("ALTER TABLE pp_profiles_new RENAME TO pp_profiles")
+        con.commit()
     else:
         con.execute("""
             CREATE TABLE IF NOT EXISTS pp_profiles (
@@ -819,6 +842,7 @@ def ensure_profile_tables():
                 UNIQUE(context_id, name)
             )
         """)
+        con.commit()
         for col, defval in [
             ("use_existing",           "INTEGER NOT NULL DEFAULT 1"),
             ("factory_system",         "TEXT NOT NULL DEFAULT ''"),

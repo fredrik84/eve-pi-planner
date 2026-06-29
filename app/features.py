@@ -82,6 +82,7 @@ def ensure_features_table():
                updated_at TEXT
            )"""
     )
+    con.commit()
     # Add state column and migrate from boolean enabled if needed
     try:
         con.execute("ALTER TABLE pp_features ADD COLUMN state TEXT")
