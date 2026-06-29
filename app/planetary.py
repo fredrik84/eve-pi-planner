@@ -129,12 +129,14 @@ def list_planets():
 
 @router.get("/api/pi-products")
 def list_pi_products():
-    con = get_connection()
-    rows = con.execute(
-        "SELECT type_id, name, pi_tier FROM types WHERE pi_tier IN (1,2,3,4) ORDER BY pi_tier, name"
-    ).fetchall()
-    con.close()
-    return {"products": [{"type_id": r["type_id"], "name": r["name"], "tier": r["pi_tier"]} for r in rows]}
+    pi_data = load_pi_data()
+    products = [
+        {"type_id": tid, "name": t["name"], "tier": t["pi_tier"]}
+        for tid, t in pi_data["types"].items()
+        if t["pi_tier"] in (1, 2, 3, 4)
+    ]
+    products.sort(key=lambda p: (p["tier"], p["name"]))
+    return {"products": products}
 
 
 class LayoutRequest(BaseModel):

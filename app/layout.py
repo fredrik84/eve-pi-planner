@@ -36,7 +36,7 @@ NOTE: the pin "S" field is the produced item's *type id* (e.g. 9832 Coolant,
 import math
 from typing import Optional
 
-from app.sde import get_connection, load_pi_data
+from app.sde import load_pi_data
 
 CMD_CTR_LEVEL = 5
 
@@ -167,8 +167,9 @@ def _enforce_min_sep(pins: list[dict], min_sep: float = MIN_SEP, iterations: int
         p["La"], p["Lo"] = round(x, 5), round(y, 5)
 
 
-def _structure_ids(con, planet_type: str) -> dict:
+def _structure_ids(pi_data: dict, planet_type: str) -> dict:
     """Resolve role -> structure type_id for a given planet type from the SDE."""
+    name_to_id = pi_data["name_to_id"]
     patterns = {
         "launchpad":      f"{planet_type} Launchpad",
         "basic_if":       f"{planet_type} Basic Industry Facility",
@@ -178,11 +179,7 @@ def _structure_ids(con, planet_type: str) -> dict:
         "ecu":            f"{planet_type} Extractor Control Unit",
         "command_center": f"Standard {planet_type} Command Center",
     }
-    out: dict[str, Optional[int]] = {}
-    for role, name in patterns.items():
-        r = con.execute("SELECT type_id FROM types WHERE name=?", (name,)).fetchone()
-        out[role] = r["type_id"] if r else None
-    return out
+    return {role: name_to_id.get(name.lower()) for role, name in patterns.items()}
 
 
 def _facility_type(struct: dict, tier: int) -> int:
@@ -649,11 +646,8 @@ def generate_split_extractor_layout(p1a_id: int, p1b_id: int, heads_a: int = 5, 
     if both and planet_type not in both:
         planet_type = both[0]
 
-    con = get_connection()
-    struct = _structure_ids(con, planet_type)
-    r = con.execute("SELECT type_id FROM types WHERE name=?", (f"Planet ({planet_type})",)).fetchone()
-    struct["planet_type_id"] = r["type_id"] if r else None
-    con.close()
+    struct = _structure_ids(pi_data, planet_type)
+    struct["planet_type_id"] = pi_data["name_to_id"].get(f"planet ({planet_type})")
 
     cc = CMD_CTR_LEVEL if cc_level is None else max(1, min(5, int(cc_level)))
     lp = max(1, min(MAX_LAUNCHPADS, launchpads))
@@ -766,11 +760,8 @@ def generate_extractor_layout(p1_id: int, planet_type: str = "Barren", launchpad
     if valid and planet_type not in valid:
         planet_type = valid[0]
 
-    con = get_connection()
-    struct = _structure_ids(con, planet_type)
-    r = con.execute("SELECT type_id FROM types WHERE name=?", (f"Planet ({planet_type})",)).fetchone()
-    struct["planet_type_id"] = r["type_id"] if r else None
-    con.close()
+    struct = _structure_ids(pi_data, planet_type)
+    struct["planet_type_id"] = pi_data["name_to_id"].get(f"planet ({planet_type})")
 
     cc = CMD_CTR_LEVEL if cc_level is None else max(1, min(5, int(cc_level)))
     lp = max(1, min(MAX_LAUNCHPADS, launchpads))
@@ -830,11 +821,8 @@ def fitted_extractor_basics(planet_type: str, cc: int, no_storage: bool = False)
     try:
         pi_data = load_pi_data()
         p1_id = next(tid for tid, t in pi_data["types"].items() if t.get("pi_tier") == 1)
-        con = get_connection()
-        struct = _structure_ids(con, planet_type)
-        r = con.execute("SELECT type_id FROM types WHERE name=?", (f"Planet ({planet_type})",)).fetchone()
-        struct["planet_type_id"] = r["type_id"] if r else None
-        con.close()
+        struct = _structure_ids(pi_data, planet_type)
+        struct["planet_type_id"] = pi_data["name_to_id"].get(f"planet ({planet_type})")
 
         def _build(nb):
             b = build_extractor_template(p1_id, planet_type, struct, pi_data, EXTRACTOR_HEADS, nb,
@@ -923,11 +911,8 @@ def generate_layout(product_id: int, planet_type: str = "Barren",
     if tier == 4 and planet_type not in P4_PLANET_TYPES:
         planet_type = "Barren"   # High-Tech Production Plant is Barren/Temperate only
 
-    con = get_connection()
-    struct = _structure_ids(con, planet_type)
-    r = con.execute("SELECT type_id FROM types WHERE name=?", (f"Planet ({planet_type})",)).fetchone()
-    struct["planet_type_id"] = r["type_id"] if r else None
-    con.close()
+    struct = _structure_ids(pi_data, planet_type)
+    struct["planet_type_id"] = pi_data["name_to_id"].get(f"planet ({planet_type})")
 
     def _build(c):
         if tier == 2:
