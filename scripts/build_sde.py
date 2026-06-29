@@ -8,8 +8,8 @@ Tables built:
   pi_schematic_inputs- schematic_id, type_id, quantity
 """
 
-import io
 import sqlite3
+import tempfile
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -20,20 +20,18 @@ SDE_URL = "https://eve-static-data-export.s3-eu-west-1.amazonaws.com/tranquility
 DB_PATH = Path("data/sde.db")
 
 
-def download_sde() -> io.BytesIO:
-    print(f"Downloading SDE from CCP...")
-    buf = io.BytesIO()
+def download_sde(dest: Path) -> None:
+    print("Downloading SDE from CCP...")
     with urllib.request.urlopen(SDE_URL) as resp:
         total = int(resp.headers.get("Content-Length", 0))
         downloaded = 0
-        while chunk := resp.read(1024 * 1024):
-            buf.write(chunk)
-            downloaded += len(chunk)
-            if total:
-                print(f"\r  {downloaded / 1e6:6.1f} / {total / 1e6:.1f} MB  ({downloaded/total*100:.0f}%)", end="", flush=True)
+        with dest.open("wb") as fh:
+            while chunk := resp.read(1024 * 1024):
+                fh.write(chunk)
+                downloaded += len(chunk)
+                if total:
+                    print(f"\r  {downloaded / 1e6:6.1f} / {total / 1e6:.1f} MB  ({downloaded/total*100:.0f}%)", end="", flush=True)
     print(f"\nDownloaded {downloaded / 1e6:.1f} MB.")
-    buf.seek(0)
-    return buf
 
 
 def parse_yaml(zf: zipfile.ZipFile, member: str) -> dict:
@@ -274,12 +272,18 @@ def main() -> None:
     if DB_PATH.exists():
         print(f"SDE already built at {DB_PATH} — skipping. (Delete to force refresh.)")
         return
-    buf = download_sde()
-    print("Extracting YAML files...")
-    with zipfile.ZipFile(buf) as zf:
-        type_data = parse_yaml(zf, "fsd/types.yaml")
-        schematics_yaml = parse_yaml(zf, "fsd/planetSchematics.yaml")
-        build_db(type_data, schematics_yaml, zf)
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = Path(tempfile.mktemp(suffix=".zip"))
+    try:
+        download_sde(tmp_path)
+        print("Extracting YAML files...")
+        with zipfile.ZipFile(tmp_path) as zf:
+            type_data = parse_yaml(zf, "fsd/types.yaml")
+            schematics_yaml = parse_yaml(zf, "fsd/planetSchematics.yaml")
+            build_db(type_data, schematics_yaml, zf)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
     print("Done.")
 
 
