@@ -2,7 +2,6 @@
 Planetary Planning — planet database and allocation.
 """
 
-import sqlite3
 from typing import Optional
 
 from fastapi import APIRouter, Cookie, Depends, HTTPException
@@ -317,7 +316,7 @@ def _parse_planet_rows(text: str, con) -> tuple[list[dict], int, list[str]]:
     try:
         for r in con.execute("SELECT system, constellation FROM system_geo"):
             sysgeo[r["system"]] = r["constellation"]
-    except sqlite3.Error:
+    except Exception:
         pass
     # planet type ↔ its P0 column set (infer type from which P0 columns are present)
     type_p0_sets = {t: frozenset(c for c in (_p0_col(n) for n in names) if c)
@@ -445,7 +444,7 @@ def _write_planet_rows(con, rows: list[dict]) -> tuple[int, int]:
         try:
             cur.execute(sql, values)
             imported += 1
-        except sqlite3.Error:
+        except Exception:
             skipped += 1
     return imported, skipped
 
@@ -581,7 +580,7 @@ def list_constellations():
     try:
         for r in con.execute("SELECT name, region FROM constellations"):
             region_of[r["name"]] = r["region"]
-    except sqlite3.Error:
+    except Exception:
         pass
     con.close()
     return {"constellations": names, "regions": {n: region_of.get(n, "") for n in names}}

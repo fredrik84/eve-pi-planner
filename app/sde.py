@@ -2,15 +2,15 @@ import sqlite3
 from pathlib import Path
 from functools import lru_cache
 
+from app.db import get_connection  # re-export: all app code imports get_connection from here
+
 DB_PATH = Path("data/sde.db")
 
 
-def get_connection() -> sqlite3.Connection:
+def _sde_connection() -> sqlite3.Connection:
+    """Always-SQLite connection for reading SDE tables (types, schematics). Never Postgres."""
     con = sqlite3.connect(str(DB_PATH))
     con.row_factory = sqlite3.Row
-    # WAL lets readers run concurrently with a single writer; busy_timeout makes a
-    # contended write wait instead of failing instantly with "database is locked";
-    # synchronous=NORMAL is safe under WAL and much faster on writes.
     con.execute("PRAGMA journal_mode=WAL")
     con.execute("PRAGMA busy_timeout=5000")
     con.execute("PRAGMA synchronous=NORMAL")
@@ -30,7 +30,7 @@ def load_pi_data() -> dict:
         "name_to_id":  {lower_name: type_id},
       }
     """
-    con = get_connection()
+    con = _sde_connection()
     cur = con.cursor()
 
     types: dict[int, dict] = {}

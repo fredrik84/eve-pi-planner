@@ -441,12 +441,11 @@ def create_notification_setting(req: NotificationSettingCreate, ctx: int = Depen
         raise HTTPException(status_code=400, detail=f"Unknown channel: {req.channel}")
     ensure_notification_tables()
     con = get_connection()
-    con.execute(
-        "INSERT INTO pp_notification_settings (context_id, channel, config, enabled) VALUES (?,?,?,?)",
+    new_id = con.execute(
+        "INSERT INTO pp_notification_settings (context_id, channel, config, enabled) VALUES (?,?,?,?) RETURNING id",
         (ctx, req.channel, _json.dumps(req.config), 1 if req.enabled else 0),
-    )
+    ).fetchone()[0]
     con.commit()
-    new_id = con.execute("SELECT last_insert_rowid()").fetchone()[0]
     con.close()
     return {"ok": True, "id": new_id}
 

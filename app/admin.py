@@ -233,13 +233,12 @@ def create_basket(req: BasketSave, ctx: int = Depends(require_context),
     if _name_clash(con, name, owner):
         con.close()
         raise HTTPException(status_code=400, detail="You already have a basket with that name")
-    cur = con.execute(
+    bid = con.execute(
         "INSERT INTO pp_baskets (name, run_size, unit_label, context_id, created_by, created_at) "
-        "VALUES (?,?,?,?,?,?)",
+        "VALUES (?,?,?,?,?,?) RETURNING id",
         (name, req.run_size, (req.unit_label or "sets").strip() or "sets",
          owner, _session_char_name(pp_session), datetime.now(timezone.utc).isoformat()),
-    )
-    bid = cur.lastrowid
+    ).fetchone()[0]
     _write_items(con, bid, items)
     con.commit()
     con.close()

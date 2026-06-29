@@ -14,7 +14,6 @@ Scopes requested:
 import json as _json
 import os
 import secrets
-import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -99,7 +98,9 @@ def _save_session(token: str, character_id: int, context_id: int):
     try:
         con = get_connection()
         con.execute(
-            "INSERT OR REPLACE INTO pp_sessions (token, character_id, context_id, created_at) VALUES (?,?,?,?)",
+            "INSERT INTO pp_sessions (token, character_id, context_id, created_at) VALUES (?,?,?,?)"
+            " ON CONFLICT (token) DO UPDATE SET character_id=EXCLUDED.character_id,"
+            " context_id=EXCLUDED.context_id, created_at=EXCLUDED.created_at",
             (token, character_id, context_id, datetime.now(timezone.utc).isoformat()),
         )
         con.commit()
@@ -390,9 +391,12 @@ def _record_yield_sample(con, character_id: int, planet_id: int, sim: dict | Non
             if (o.get("tier") or 0) == 0:    # pure P0 output identifies the extracted resource
                 p0 = o.get("type_id"); break
         con.execute(
-            "INSERT OR REPLACE INTO pp_colony_yield "
+            "INSERT INTO pp_colony_yield "
             "(character_id, planet_id, install_ts, p0_type_id, peak_day, prog_days, scanned_ts) "
-            "VALUES (?,?,?,?,?,?,?)",
+            "VALUES (?,?,?,?,?,?,?)"
+            " ON CONFLICT (character_id, planet_id, install_ts) DO UPDATE SET"
+            " p0_type_id=EXCLUDED.p0_type_id, peak_day=EXCLUDED.peak_day,"
+            " prog_days=EXCLUDED.prog_days, scanned_ts=EXCLUDED.scanned_ts",
             (character_id, planet_id, float(install), p0, float(peak),
              sim.get("program_days"), scan_ts))
         # prune older programs beyond the cap (keep the newest _YIELD_KEEP by install_ts)
@@ -587,11 +591,21 @@ def _fetch_planets(character_id: int, access_token: str) -> None:
                     pass
 
                 con.execute("""
-                    INSERT OR REPLACE INTO pp_char_planets
+                    INSERT INTO pp_char_planets
                         (character_id, planet_id, planet_type, solar_system_id,
                          upgrade_level, num_pins, is_extractor, p0_type_id, p0_name,
                          planet_num, products, pad_contents, pad_inputs, sim_state, issues, scanned_at, checkpoint_at, storage, esi_modified)
                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT (character_id, planet_id) DO UPDATE SET
+                      planet_type=EXCLUDED.planet_type, solar_system_id=EXCLUDED.solar_system_id,
+                      upgrade_level=EXCLUDED.upgrade_level, num_pins=EXCLUDED.num_pins,
+                      is_extractor=EXCLUDED.is_extractor, p0_type_id=EXCLUDED.p0_type_id,
+                      p0_name=EXCLUDED.p0_name, planet_num=EXCLUDED.planet_num,
+                      products=EXCLUDED.products, pad_contents=EXCLUDED.pad_contents,
+                      pad_inputs=EXCLUDED.pad_inputs, sim_state=EXCLUDED.sim_state,
+                      issues=EXCLUDED.issues, scanned_at=EXCLUDED.scanned_at,
+                      checkpoint_at=EXCLUDED.checkpoint_at, storage=EXCLUDED.storage,
+                      esi_modified=EXCLUDED.esi_modified
                 """, (character_id, planet_id, planet_type, solar_system_id,
                       upgrade_level, num_pins, is_extractor, p0_type_id, p0_name,
                       planet_num, products_json, pads_json, pad_inputs_json, sim_state_json, issues_json, _scan_ts, checkpoint_at, storage_json, esi_modified))
@@ -630,7 +644,8 @@ def esi_login(wallet: int = 0, pp_session: str = Cookie(default=None)):
         # Clean up expired pending states (>10 min) opportunistically
         con.execute("DELETE FROM pp_oauth_pending WHERE created_at < datetime('now', '-10 minutes')")
         con.execute(
-            "INSERT OR REPLACE INTO pp_oauth_pending (state, context_id, created_at) VALUES (?,?,?)",
+            "INSERT INTO pp_oauth_pending (state, context_id, created_at) VALUES (?,?,?)"
+            " ON CONFLICT (state) DO UPDATE SET context_id=EXCLUDED.context_id, created_at=EXCLUDED.created_at",
             (state, ctx, datetime.now(timezone.utc).isoformat()),
         )
         con.commit()
@@ -724,19 +739,26 @@ def esi_callback(
         _, context_id = sess
     # 3. New user → create a fresh context
     else:
-        cur = con.execute(
-            "INSERT INTO pp_user_contexts (created_at) VALUES (?)",
+        row = con.execute(
+            "INSERT INTO pp_user_contexts (created_at) VALUES (?) RETURNING id",
             (datetime.now(timezone.utc).isoformat(),),
-        )
-        context_id = cur.lastrowid
+        ).fetchone()
+        context_id = row[0]
         con.commit()
 
     con.execute("""
-        INSERT OR REPLACE INTO pp_characters
+        INSERT INTO pp_characters
             (character_id, character_name, access_token, refresh_token, token_expiry,
              interplanetary_consolidation, command_center_upgrades, planetology,
              advanced_planetology, context_id, scopes)
         VALUES (?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT (character_id) DO UPDATE SET
+          character_name=EXCLUDED.character_name, access_token=EXCLUDED.access_token,
+          refresh_token=EXCLUDED.refresh_token, token_expiry=EXCLUDED.token_expiry,
+          interplanetary_consolidation=EXCLUDED.interplanetary_consolidation,
+          command_center_upgrades=EXCLUDED.command_center_upgrades,
+          planetology=EXCLUDED.planetology, advanced_planetology=EXCLUDED.advanced_planetology,
+          context_id=EXCLUDED.context_id, scopes=EXCLUDED.scopes
     """, (
         character_id, character_name, access_token, refresh_token, expiry,
         skills.get("interplanetary_consolidation", 0),

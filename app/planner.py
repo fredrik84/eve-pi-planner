@@ -115,9 +115,12 @@ def save_plan_config(type_id: int, req: SaveConfigRequest):
             )
         else:
             con.execute("""
-                INSERT OR REPLACE INTO pp_plan_config
+                INSERT INTO pp_plan_config
                     (character_id, product_type_id, planet_limit, extractor_limit, factory_only, ccu)
                 VALUES (?,?,?,?,?,?)
+                ON CONFLICT (character_id, product_type_id) DO UPDATE SET
+                  planet_limit=EXCLUDED.planet_limit, extractor_limit=EXCLUDED.extractor_limit,
+                  factory_only=EXCLUDED.factory_only, ccu=EXCLUDED.ccu
             """, (
                 e.character_id, type_id, e.planet_limit, e.extractor_limit,
                 1 if e.extractor_limit == 0 else 0, e.ccu,
@@ -770,7 +773,7 @@ def load_plan_share(share_id: str):
 
 def ensure_profile_tables():
     con = get_connection()
-    cols = [r[1] for r in con.execute("PRAGMA table_info(pp_profiles)").fetchall()]
+    cols = [r["name"] for r in con.execute("PRAGMA table_info(pp_profiles)").fetchall()]
     if "context_id" not in cols:
         con.execute("""
             CREATE TABLE IF NOT EXISTS pp_profiles_new (
@@ -936,12 +939,22 @@ def save_profile(req: ProfileSave, context_id: int = Depends(require_context)):
     con = get_connection()
     fleet = _fleet_fingerprint(con, context_id)   # the fleet+skills this plan was built against
     con.execute("""
-        INSERT OR REPLACE INTO pp_profiles
+        INSERT INTO pp_profiles
             (context_id, name, type_id, type_name, overproduction_pct, preferred_systems,
              constellations, use_existing, factory_system, factory_output_per_hour,
              factory_character_ids, max_jumps, factory_planet_types, split_mode, distribution_mode,
              min_density_pct, fleet_json)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (context_id, name) DO UPDATE SET
+          type_id=EXCLUDED.type_id, type_name=EXCLUDED.type_name,
+          overproduction_pct=EXCLUDED.overproduction_pct,
+          preferred_systems=EXCLUDED.preferred_systems, constellations=EXCLUDED.constellations,
+          use_existing=EXCLUDED.use_existing, factory_system=EXCLUDED.factory_system,
+          factory_output_per_hour=EXCLUDED.factory_output_per_hour,
+          factory_character_ids=EXCLUDED.factory_character_ids, max_jumps=EXCLUDED.max_jumps,
+          factory_planet_types=EXCLUDED.factory_planet_types, split_mode=EXCLUDED.split_mode,
+          distribution_mode=EXCLUDED.distribution_mode, min_density_pct=EXCLUDED.min_density_pct,
+          fleet_json=EXCLUDED.fleet_json
     """, (context_id, req.name, req.type_id, req.type_name, req.overproduction_pct,
           req.preferred_systems, _json.dumps(req.constellations),
           1 if req.use_existing else 0, req.factory_system or "",
@@ -950,8 +963,11 @@ def save_profile(req: ProfileSave, context_id: int = Depends(require_context)):
           _norm_dist_mode(req.distribution_mode), max(0, min(100, int(req.min_density_pct or 0))),
           _json.dumps(fleet)))
     # Same fingerprint feeds the dashboard "trained up since you planned" nudge (per-context baseline).
-    con.execute("INSERT OR REPLACE INTO pp_plan_baseline (context_id, skills_json, plan_name, saved_at) VALUES (?,?,?,?)",
-                (context_id, _json.dumps(fleet), req.name, _time.time()))
+    con.execute(
+        "INSERT INTO pp_plan_baseline (context_id, skills_json, plan_name, saved_at) VALUES (?,?,?,?)"
+        " ON CONFLICT (context_id) DO UPDATE SET skills_json=EXCLUDED.skills_json,"
+        " plan_name=EXCLUDED.plan_name, saved_at=EXCLUDED.saved_at",
+        (context_id, _json.dumps(fleet), req.name, _time.time()))
     con.commit()
     con.close()
     return {"ok": True}
@@ -1005,8 +1021,10 @@ def save_plan_snapshot(req: PlanSnapshotSave, context_id: int = Depends(require_
     snap = dict(req.snapshot) if isinstance(req.snapshot, dict) else {"value": req.snapshot}
     snap["fleet"] = _fleet_fingerprint(con, context_id)   # fleet+skills this plan was built against → stale flag
     con.execute(
-        "INSERT OR REPLACE INTO pp_plan_snapshots (context_id, name, snapshot, created_at) "
-        "VALUES (?,?,?,?)",
+        "INSERT INTO pp_plan_snapshots (context_id, name, snapshot, created_at) "
+        "VALUES (?,?,?,?)"
+        " ON CONFLICT (context_id, name) DO UPDATE SET"
+        " snapshot=EXCLUDED.snapshot, created_at=EXCLUDED.created_at",
         (context_id, name, _json.dumps(snap), datetime.now(timezone.utc).isoformat()),
     )
     con.commit()
