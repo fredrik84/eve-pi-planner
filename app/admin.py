@@ -5,9 +5,11 @@ A basket is a named set of PI commodities + per-run quantities. It is planned by
 multi-product engine as the built-in Fuel Blocks basket (see `fuelblock_planner`), so any
 logged-in user can pick a basket as a wizard target. Only admins create/edit/delete them.
 """
+import os
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Cookie, Depends, HTTPException
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Request
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
 from app.sde import get_connection, load_pi_data
@@ -18,6 +20,13 @@ from app.esi import (
 )
 
 router = APIRouter()
+
+# Prometheus metrics endpoint — disabled by default.
+# Enable by setting PROMETHEUS_ENABLED=1 in the environment.
+# Secure with PROMETHEUS_TOKEN=<secret>; Prometheus scrape config:
+#   bearer_token: <secret>
+_PROMETHEUS_ENABLED = os.environ.get("PROMETHEUS_ENABLED", "0").strip() == "1"
+_PROMETHEUS_TOKEN   = os.environ.get("PROMETHEUS_TOKEN", "").strip()
 
 
 @router.get("/api/corp-wallet")
@@ -428,6 +437,72 @@ def admin_stats(_: int = Depends(require_admin)):
 
     con.close()
     return s
+
+
+# Prometheus metric name → (help text, type)
+_METRIC_META = {
+    "evepi_users_total":              ("Total user accounts (contexts)", "gauge"),
+    "evepi_users_active_7d":          ("Accounts with a session in the last 7 days", "gauge"),
+    "evepi_users_active_30d":         ("Accounts with a session in the last 30 days", "gauge"),
+    "evepi_characters_total":         ("Total non-dummy characters", "gauge"),
+    "evepi_dummy_characters_total":   ("Total dummy/placeholder characters", "gauge"),
+    "evepi_planet_rows_total":        ("Rows in the shared planet database", "gauge"),
+    "evepi_systems_covered_total":    ("Systems with at least one planet row", "gauge"),
+    "evepi_profiles_total":           ("Saved planner profiles", "gauge"),
+    "evepi_shares_total":             ("Stored plan share links", "gauge"),
+    "evepi_shares_7d_total":          ("Share links created in the last 7 days", "gauge"),
+    "evepi_shares_never_accessed":    ("Share links created >7 days ago and never opened", "gauge"),
+    "evepi_bugs_open":                ("Open bug reports", "gauge"),
+    "evepi_bugs_total":               ("Total bug reports", "gauge"),
+    "evepi_colony_scans_total":       ("Character colony scan records", "gauge"),
+    "evepi_sessions_total":           ("Total stored sessions", "gauge"),
+    "evepi_sessions_stale_90d":       ("Sessions older than 90 days", "gauge"),
+}
+
+# Maps admin_stats dict keys → Prometheus metric names (same order as above).
+_STATS_TO_METRIC = {
+    "contexts":             "evepi_users_total",
+    "active_7d":            "evepi_users_active_7d",
+    "active_30d":           "evepi_users_active_30d",
+    "characters":           "evepi_characters_total",
+    "dummy_characters":     "evepi_dummy_characters_total",
+    "planet_rows":          "evepi_planet_rows_total",
+    "systems_covered":      "evepi_systems_covered_total",
+    "profiles":             "evepi_profiles_total",
+    "shares":               "evepi_shares_total",
+    "shares_7d":            "evepi_shares_7d_total",
+    "shares_never_accessed":"evepi_shares_never_accessed",
+    "bugs_open":            "evepi_bugs_open",
+    "bugs_total":           "evepi_bugs_total",
+    "char_planet_scans":    "evepi_colony_scans_total",
+    "sessions":             "evepi_sessions_total",
+    "sessions_stale_90d":   "evepi_sessions_stale_90d",
+}
+
+
+@router.get("/metrics", response_class=PlainTextResponse, include_in_schema=False)
+def prometheus_metrics(request: Request):
+    """Prometheus text-format metrics scrape endpoint.
+    Disabled unless PROMETHEUS_ENABLED=1. When PROMETHEUS_TOKEN is set, the
+    request must carry 'Authorization: Bearer <token>'."""
+    if not _PROMETHEUS_ENABLED:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    if _PROMETHEUS_TOKEN:
+        auth = request.headers.get("Authorization", "")
+        if auth != f"Bearer {_PROMETHEUS_TOKEN}":
+            raise HTTPException(status_code=401, detail="Unauthorized")
+
+    stats = admin_stats(0)  # pass dummy ctx — admin_stats ignores it
+
+    lines = []
+    for stat_key, metric_name in _STATS_TO_METRIC.items():
+        help_text, metric_type = _METRIC_META[metric_name]
+        lines.append(f"# HELP {metric_name} {help_text}")
+        lines.append(f"# TYPE {metric_name} {metric_type}")
+        lines.append(f"{metric_name} {stats[stat_key]}")
+
+    return "\n".join(lines) + "\n"
 
 
 @router.delete("/api/testers/{character_name}")

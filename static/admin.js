@@ -454,6 +454,26 @@ async function loadAdminStats() {
   } catch (e) {
     el.innerHTML = `<div class="pp-empty">Failed to load: ${_esc(e.message)}</div>`;
   }
+  _checkPrometheusStatus();
+}
+
+async function _checkPrometheusStatus() {
+  const el = document.getElementById('adminPrometheusStatus');
+  if (!el) return;
+  try {
+    const resp = await fetch('/metrics');
+    if (resp.status === 404) {
+      el.innerHTML = '<span class="admin-prom-status admin-prom-off">Disabled — set PROMETHEUS_ENABLED=1 to enable</span>';
+    } else if (resp.status === 401) {
+      el.innerHTML = '<span class="admin-prom-status admin-prom-on">Enabled — secured with PROMETHEUS_TOKEN</span>';
+    } else if (resp.ok) {
+      el.innerHTML = '<span class="admin-prom-status admin-prom-warn">Enabled — no token set, endpoint is open</span>';
+    } else {
+      el.innerHTML = `<span class="admin-prom-status">${resp.status}</span>`;
+    }
+  } catch (e) {
+    el.innerHTML = '';
+  }
 }
 
 function renderAdminStats(s) {

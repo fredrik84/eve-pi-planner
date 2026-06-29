@@ -20,7 +20,7 @@
   <meta property="og:image" content="https://eve-pi.failed.name/og-image.png?v=6">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:image" content="https://eve-pi.failed.name/og-image.png?v=6">
-  <link rel="stylesheet" href="/style.css?v=224">
+  <link rel="stylesheet" href="/style.css?v=225">
 </head>
 <body>
   <header>
@@ -765,6 +765,11 @@ PVF-N9    3         95                 60             80                  100   
             <div class="pp-card-title">System stats</div>
             <div id="adminStatsContent"></div>
           </section>
+          <section class="pp-card admin-section" style="margin-top:12px">
+            <div class="pp-card-title">Prometheus export</div>
+            <div class="admin-hint">The <code>/metrics</code> endpoint exports these stats in Prometheus text format. Enable it by setting <code>PROMETHEUS_ENABLED=1</code> in the environment. Secure it with <code>PROMETHEUS_TOKEN=&lt;secret&gt;</code> — Prometheus scrape config: <code>bearer_token: &lt;secret&gt;</code>. The endpoint returns 404 when disabled.</div>
+            <div id="adminPrometheusStatus"></div>
+          </section>
         </div>
 
         <div class="admin-subpage" data-page="submissions" style="display:none">
@@ -896,7 +901,7 @@ PVF-N9    3         95                 60             80                  100   
   <script src="/app.js?v=29"></script>
   <script src="/planetary.js?v=314"></script>
   <script src="/dashboard.js?v=10"></script>
-  <script src="/admin.js?v=5"></script>
+  <script src="/admin.js?v=6"></script>
   <script src="/planetdb.js?v=1"></script>
   <script src="/refill.js?v=1"></script>
   <script src="/analysis.js?v=10"></script>

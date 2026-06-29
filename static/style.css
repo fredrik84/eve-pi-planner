@@ -1485,6 +1485,10 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .admin-hint { font-size: 12px; color: #8a93a8; margin: 4px 0 12px; line-height: 1.5; }
 .admin-stats-group { margin-bottom: 18px; }
 .admin-stats-heading { font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; color: #6a7390; margin-bottom: 8px; }
+.admin-prom-status { font-size: 12px; font-weight: 600; }
+.admin-prom-off   { color: #6a7390; }
+.admin-prom-on    { color: #4caf82; }
+.admin-prom-warn  { color: #ffce6b; }
 .admin-add-row { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
 .admin-list { display: flex; flex-direction: column; gap: 6px; }
 .admin-row { display: flex; align-items: center; gap: 10px; padding: 7px 10px; background: #161b28; border: 1px solid #1b2030; border-radius: 7px; }
