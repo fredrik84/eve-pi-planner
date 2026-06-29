@@ -7,7 +7,7 @@ from typing import Optional
 from fastapi import APIRouter, Cookie, Depends, HTTPException
 from pydantic import BaseModel
 
-from app.sde import get_connection
+from app.sde import get_connection, load_pi_data
 from app.esi import require_context, is_admin, require_admin
 
 router = APIRouter()
