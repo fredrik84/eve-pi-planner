@@ -169,3 +169,198 @@ Two-step confirm: type "DELETE" into a text input before the button activates
   `created_at`-based logic and swap the condition after.
 - Account deletion endpoint must be tested before UI is wired — a misfire here
   is not recoverable.
+
+---
+
+## [CONSIDERING] Public API access for user data
+
+**Status: undecided.** Owner hasn't decided whether to build this. Document trade-offs
+before committing.
+
+**Goal:** Let users pull their own plan/colony data programmatically (spreadsheet tools,
+personal dashboards, third-party EVE tools).
+
+**Trade-offs:**
+
+| Pro | Con |
+|-----|-----|
+| Power users can automate workflows | Increases DB + webserver load (tools poll aggressively) |
+| Builds ecosystem goodwill | Harder to revoke once published |
+| Reduces manual copy-paste | Rate-limiting infrastructure needed |
+| | Auth design non-trivial (tokens vs session cookies) |
+
+**If built, non-negotiable constraints (guideline 7 + 8):**
+- Must be per-user scoped — a token only accesses the issuing account's data.
+- No endpoint may return data across users, even aggregate.
+- Tokens are user-generated and user-revokable from the settings page.
+- No third party may receive the data; the API is for the user themselves.
+- Rate-limited from day one (e.g. 60 req/min per token).
+
+**Suggested scope for v1 (read-only):**
+- `GET /api/v1/characters` — own characters + skills
+- `GET /api/v1/colonies` — own colony scan data
+- `GET /api/v1/plans` — saved profiles
+
+**Decision needed:** is the load increase acceptable? Could mitigate with aggressive
+caching (colony data only changes on rescan anyway) or a separate read replica.
+Do not start implementation without explicit go-ahead.
+
+---
+
+## Notification support
+
+**Goal:** Alert users when their PI needs attention — extractors expiring, factory
+pads near-empty — without requiring them to log in and check manually.
+
+**Supported channels (v1):** Pushover, ntfy.sh, Discord webhook. Designed to add
+more without touching existing channels.
+
+---
+
+### Data model
+
+New table `pp_notification_settings`:
+```sql
+CREATE TABLE pp_notification_settings (
+    id          INTEGER PRIMARY KEY,
+    context_id  INTEGER NOT NULL,
+    channel     TEXT NOT NULL,        -- 'pushover' | 'ntfy' | 'discord'
+    config      TEXT NOT NULL,        -- JSON, channel-specific (see below)
+    enabled     INTEGER DEFAULT 1,
+    created_at  TEXT DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+Per-channel `config` shape:
+- **Pushover:** `{"user_key": "...", "app_token": "..."}` — user supplies both; the
+  app token is a single registered Pushover app key (one app key for the service,
+  stored in env `PUSHOVER_APP_TOKEN`; user supplies only their user key).
+- **ntfy.sh:** `{"topic": "your-secret-topic", "server": "https://ntfy.sh"}` — server
+  is optional (defaults to ntfy.sh, allows self-hosted).
+- **Discord:** `{"webhook_url": "https://discord.com/api/webhooks/..."}` — user
+  pastes their channel webhook URL.
+
+`config` is stored as-is (no encryption in v1 — SQLite is local, single-tenant
+enough). Add a note in the UI that tokens are stored server-side.
+
+New table `pp_notification_log`:
+```sql
+CREATE TABLE pp_notification_log (
+    id          INTEGER PRIMARY KEY,
+    context_id  INTEGER NOT NULL,
+    channel     TEXT NOT NULL,
+    event       TEXT NOT NULL,        -- 'extractor_expiry' | 'factory_refill'
+    character   TEXT,
+    sent_at     TEXT DEFAULT CURRENT_TIMESTAMP,
+    status      TEXT                  -- 'ok' | 'error: ...'
+);
+```
+Used to suppress duplicate alerts (don't re-notify within a cooldown window) and
+shown in the settings page so the user can see what was sent.
+
+---
+
+### Notification events
+
+**1. Extractor program expiry** (`extractor_expiry`)
+- Source: `pp_colony_yield.install_ts + prog_days * 86400` = expiry timestamp.
+- Trigger: expiry is within the next N hours (user-configurable, default 4h).
+- Cooldown: don't re-notify the same planet within 2h.
+- Message: "3 extractors expire in ~2h — ekaoni · L7-RDZ"
+
+**2. Factory refill due** (`factory_refill`)
+- Source: `pp_char_planets` (factory planets) + `pp_plan_snapshots` (refill cadence
+  `factory_refill_hours` from the most recent saved plan for this context).
+- Trigger: `last_scanned_at + factory_refill_hours` is within N hours.
+- Caveat: scan time is not production time; this is an estimate. State clearly in
+  the notification that it's approximate.
+- Cooldown: don't re-notify the same factory planet within 4h.
+- Message: "Factory pads due for refill in ~3h — ekaoni · 0-U2M4"
+
+---
+
+### Background job
+
+**Approach:** APScheduler embedded in FastAPI (no external queue, no extra
+containers). Runs `check_and_send_notifications()` every 15 minutes.
+
+```python
+# app/notifications.py
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+scheduler = AsyncIOScheduler()
+scheduler.add_job(check_and_send_notifications, 'interval', minutes=15)
+```
+
+Started in `main.py` `startup` event, shut down in `shutdown` event.
+
+`check_and_send_notifications()`:
+1. Load all contexts with at least one enabled notification setting.
+2. For each context, compute upcoming events (no ESI calls — pure DB math).
+3. For each event not already logged within its cooldown, send via the configured
+   channel(s) and write to `pp_notification_log`.
+
+**No rescanning required.** Extractor expiry is computed from `install_ts + prog_days`
+already in `pp_colony_yield`. Factory timing uses the last scan timestamp as a
+proxy. This means notifications go slightly stale between rescans, but avoids
+hammering ESI on a 15-minute loop.
+
+---
+
+### Channel abstraction
+
+```python
+# app/notifiers.py
+class BaseNotifier:
+    def send(self, title: str, body: str, url: str | None = None) -> None:
+        raise NotImplementedError
+
+class PushoverNotifier(BaseNotifier): ...
+class NtfyNotifier(BaseNotifier): ...
+class DiscordNotifier(BaseNotifier): ...
+
+def make_notifier(channel: str, config: dict) -> BaseNotifier:
+    return {"pushover": PushoverNotifier, "ntfy": NtfyNotifier,
+            "discord": DiscordNotifier}[channel](config)
+```
+
+Adding a new channel = one new `BaseNotifier` subclass + one entry in `make_notifier`.
+No changes to the scheduler or event logic.
+
+---
+
+### Settings UI
+
+New **Settings** tab (or section within Characters tab — decide at build time).
+Sections:
+- **Notification channels** — add/test/remove channels; per-channel config form;
+  "Send test notification" button (`POST /api/notifications/test`).
+- **Notification preferences** — per-event toggles + lead-time input (how many
+  hours ahead to warn).
+- **Notification log** — last 20 sent notifications (event, channel, time, status).
+
+Endpoints:
+- `GET/POST/DELETE /api/notifications/settings` (session-gated)
+- `POST /api/notifications/test` — send a test message to a channel immediately
+- `GET /api/notifications/log` — recent send history for this context
+
+---
+
+### Dependencies
+
+- `apscheduler` (pip) for the background scheduler.
+- Each channel uses only stdlib `urllib` (no `requests` dependency) to keep the
+  image small.
+- No new env vars required for ntfy/Discord. Pushover optionally uses
+  `PUSHOVER_APP_TOKEN` if the operator registers a shared app token; otherwise
+  the user supplies their own app token in the config JSON.
+
+---
+
+### Build order
+
+1. `app/notifiers.py` + channel implementations (testable in isolation)
+2. DB tables + `app/notifications.py` scheduler + event logic
+3. `POST /api/notifications/test` endpoint (validates channels before wiring the scheduler)
+4. Scheduler wired into `main.py` startup
+5. Settings UI (channels + preferences + log)
+6. Feature-flagged (`notifications`, default off)

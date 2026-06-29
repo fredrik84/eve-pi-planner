@@ -36,6 +36,19 @@ These are standing rules for ALL changes. Follow them unless the user explicitly
 6. **Commit + push when a change is complete.** The user wants steady checkpoints to revert to. After
    a feature/fix is tested and deployed, `git commit` and `git push` to `origin/main`. End commit
    messages with the Co-Authored-By trailer.
+7. **Preserve user privacy.** User data is never exposed publicly. Every endpoint that returns
+   character names, systems, planets, or any locatable data **must** be gated by `require_context`
+   (own data only) or `require_admin` (admin tools). The only exceptions are: (a) the Admin → Users
+   page, which needs character names for management and is already admin-gated; (b) anonymous/full
+   shares, where the user has explicitly chosen to publish (`anonymize=False`). When adding a new
+   endpoint, default to session-scoped. Never add a publicly accessible endpoint that returns
+   per-user data, even in aggregate form that could be re-identified.
+8. **No ads, no third-party data sharing.** No analytics scripts, tracking pixels, ad networks, or
+   any third-party JS may be added to the frontend. No user data (characters, systems, plans, usage
+   patterns) is ever sent to a third party. ESI (CCP's official API) and Fuzzwork (static SDE
+   mirror) are the only external services this app contacts, and only for game data — not
+   telemetry. The Prometheus `/metrics` endpoint is infrastructure-internal (token-gated, default
+   off) and contains only aggregate counts, never per-user data.
 
 ---
 
