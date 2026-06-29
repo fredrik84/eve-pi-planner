@@ -43,6 +43,7 @@ function adminSubPage(key) {
   if (key === 'wallet' && typeof loadCorpWallet === 'function') loadCorpWallet();
   if (key === 'users') _loadCharNameSuggestions();
   if (key === 'stats') loadAdminStats();
+  if (key === 'cleanup') loadCleanupPreview();
 }
 
 async function _loadCharNameSuggestions() {
@@ -536,4 +537,137 @@ function renderAdminStats(s) {
       <div class="admin-stats-heading">${_esc(g.heading)}</div>
       <div class="an-stats">${g.tiles.join('')}</div>
     </div>`).join('');
+}
+
+// ── DB Cleanup ────────────────────────────────────────────────────────────────
+const _CLEANUP_LABELS = {
+  old_sessions:        { label: 'Old sessions',         unit: 'session' },
+  old_shares:          { label: 'Stale share links',    unit: 'share' },
+  empty_contexts:      { label: 'Empty accounts',       unit: 'account' },
+  orphaned_plan_config:  { label: 'Orphaned plan config', unit: 'row' },
+  orphaned_colony_yield: { label: 'Orphaned yield data',  unit: 'row' },
+};
+
+let _cleanupPreview = null;
+
+async function loadCleanupPreview() {
+  const el = document.getElementById('cleanupContent');
+  if (!el) return;
+  el.innerHTML = '<div class="pp-empty">Loading preview…</div>';
+  try {
+    const resp = await fetch('/api/admin/cleanup/preview');
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    _cleanupPreview = await resp.json();
+    renderCleanupPreview(_cleanupPreview);
+  } catch (e) {
+    el.innerHTML = `<div class="pp-empty">Failed to load: ${_esc(e.message)}</div>`;
+  }
+}
+
+function _cleanupDetail(key, data) {
+  // Returns a plain-English detail string for the preview table.
+  if (key === 'old_sessions') {
+    if (!data.count) return 'None — nothing to clean';
+    return `${data.count} session${data.count !== 1 ? 's' : ''}, oldest ${(data.oldest || '').slice(0, 10)}, newest ${(data.newest || '').slice(0, 10)}`;
+  }
+  if (key === 'old_shares') {
+    if (!data.count) {
+      return `None older than 90 days${data.never_accessed ? ` (${data.never_accessed} have never been opened — check back after 90 days)` : ''}`;
+    }
+    return `${data.count} share${data.count !== 1 ? 's' : ''} not opened since ${(data.oldest || '').slice(0, 10)}`;
+  }
+  if (key === 'empty_contexts') {
+    if (!data.count) return 'None — nothing to clean';
+    const extra = data.also_sessions ? ` + ${data.also_sessions} dangling session${data.also_sessions !== 1 ? 's' : ''}` : '';
+    const ids = (data.items || []).map(i => `account ${i.id} (created ${i.created})`).join(', ');
+    return `${data.count} account${data.count !== 1 ? 's' : ''} with no characters${extra}: ${ids}`;
+  }
+  if (key === 'orphaned_plan_config') {
+    return data.count ? `${data.count} config row${data.count !== 1 ? 's' : ''} for deleted characters` : 'None — nothing to clean';
+  }
+  if (key === 'orphaned_colony_yield') {
+    return data.count ? `${data.count} yield row${data.count !== 1 ? 's' : ''} for deleted characters` : 'None — nothing to clean';
+  }
+  return '';
+}
+
+function renderCleanupPreview(preview) {
+  const el = document.getElementById('cleanupContent');
+  if (!el) return;
+
+  const rows = Object.entries(_CLEANUP_LABELS).map(([key, meta]) => {
+    const data = preview[key] || { count: 0 };
+    const hasWork = data.count > 0;
+    const detail = _cleanupDetail(key, data);
+    const checked = hasWork ? 'checked' : '';
+    const dimmed = hasWork ? '' : ' cleanup-row-empty';
+    return `<tr class="cleanup-row${dimmed}">
+      <td class="cleanup-check"><input type="checkbox" id="chk_${key}" ${checked} ${hasWork ? '' : 'disabled'}></td>
+      <td class="cleanup-cat">${_esc(meta.label)}</td>
+      <td class="cleanup-count">${hasWork ? `<strong>${data.count}</strong> ${meta.unit}${data.count !== 1 ? 's' : ''}` : '—'}</td>
+      <td class="cleanup-detail">${_esc(detail)}</td>
+    </tr>`;
+  }).join('');
+
+  const anyWork = Object.values(preview).some(d => d.count > 0);
+
+  el.innerHTML = `
+    <table class="cleanup-table">
+      <thead><tr>
+        <th></th>
+        <th>Category</th>
+        <th>Will delete</th>
+        <th>Detail</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div class="cleanup-actions">
+      <button class="cleanup-run-btn" onclick="runCleanup()" ${anyWork ? '' : 'disabled'}>Run cleanup</button>
+      <button onclick="loadCleanupPreview()" class="cleanup-refresh-btn">Refresh preview</button>
+      <span id="cleanupStatus" class="cleanup-status"></span>
+    </div>`;
+}
+
+async function runCleanup() {
+  const preview = _cleanupPreview;
+  if (!preview) return;
+
+  // Collect checked categories
+  const cats = Object.keys(_CLEANUP_LABELS).filter(key => {
+    const cb = document.getElementById('chk_' + key);
+    return cb && cb.checked;
+  });
+  if (!cats.length) { alert('Nothing selected.'); return; }
+
+  // Build confirm message
+  const lines = cats.map(key => {
+    const data = preview[key] || { count: 0 };
+    const meta = _CLEANUP_LABELS[key];
+    return `• ${meta.label}: ${data.count} ${meta.unit}${data.count !== 1 ? 's' : ''}`;
+  });
+  if (!confirm(`Permanently delete:\n\n${lines.join('\n')}\n\nThis cannot be undone.`)) return;
+
+  const statusEl = document.getElementById('cleanupStatus');
+  if (statusEl) statusEl.textContent = 'Running…';
+  document.querySelectorAll('.cleanup-run-btn').forEach(b => b.disabled = true);
+
+  try {
+    const resp = await fetch('/api/admin/cleanup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ categories: cats }),
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const result = await resp.json();
+    const deleted = result.deleted || {};
+    const summary = Object.entries(deleted)
+      .map(([k, n]) => `${_CLEANUP_LABELS[k]?.label || k}: ${n} deleted`)
+      .join(' · ');
+    if (statusEl) statusEl.textContent = summary || 'Done.';
+    // Reload preview so counts drop to 0
+    await loadCleanupPreview();
+  } catch (e) {
+    if (statusEl) statusEl.textContent = 'Failed: ' + e.message;
+    document.querySelectorAll('.cleanup-run-btn').forEach(b => b.disabled = false);
+  }
 }

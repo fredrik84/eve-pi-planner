@@ -1489,6 +1489,29 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .admin-prom-off   { color: #6a7390; }
 .admin-prom-on    { color: #4caf82; }
 .admin-prom-warn  { color: #ffce6b; }
+
+/* DB Cleanup table */
+.cleanup-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 16px; }
+.cleanup-table th { text-align: left; font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.06em; color: #6a7390; padding: 0 10px 8px; }
+.cleanup-table th:first-child { padding-left: 0; }
+.cleanup-row td { padding: 9px 10px; border-top: 1px solid #1b2030; vertical-align: top; }
+.cleanup-row td:first-child { padding-left: 0; }
+.cleanup-row-empty td { opacity: 0.45; }
+.cleanup-check { width: 28px; }
+.cleanup-cat { font-weight: 600; color: #c8d2e6; white-space: nowrap; }
+.cleanup-count { white-space: nowrap; color: #dbe1ee; }
+.cleanup-count strong { color: #e07b5a; }
+.cleanup-detail { color: #8a93a8; font-size: 12px; }
+.cleanup-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 4px; }
+.cleanup-run-btn { background: #5c2020; border: 1px solid #8a3030; color: #f0a0a0;
+  border-radius: 6px; padding: 7px 18px; font-size: 13px; cursor: pointer; }
+.cleanup-run-btn:hover:not(:disabled) { background: #7a2828; }
+.cleanup-run-btn:disabled { opacity: 0.4; cursor: default; }
+.cleanup-refresh-btn { background: none; border: 1px solid #2a3050; color: #7c879c;
+  border-radius: 6px; padding: 7px 14px; font-size: 13px; cursor: pointer; }
+.cleanup-refresh-btn:hover { color: #c8d2e6; }
+.cleanup-status { font-size: 12px; color: #8a93a8; }
 .admin-add-row { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
 .admin-list { display: flex; flex-direction: column; gap: 6px; }
 .admin-row { display: flex; align-items: center; gap: 10px; padding: 7px 10px; background: #161b28; border: 1px solid #1b2030; border-radius: 7px; }

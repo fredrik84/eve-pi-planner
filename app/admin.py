@@ -480,6 +480,144 @@ _STATS_TO_METRIC = {
 }
 
 
+def _cleanup_preview_data(con) -> dict:
+    """Compute per-category preview counts without writing anything."""
+    p = {}
+
+    # Old sessions (>90 days)
+    r = con.execute(
+        "SELECT COUNT(*), MIN(created_at), MAX(created_at) FROM pp_sessions "
+        "WHERE created_at < datetime('now', '-90 days')"
+    ).fetchone()
+    p["old_sessions"] = {"count": r[0], "oldest": r[1], "newest": r[2]}
+
+    # Old shares — never accessed after 90 days OR last_accessed >90 days ago
+    r = con.execute(
+        "SELECT COUNT(*), MIN(COALESCE(last_accessed, created_at)), MAX(COALESCE(last_accessed, created_at)) "
+        "FROM pp_shares "
+        "WHERE COALESCE(last_accessed, created_at) < datetime('now', '-90 days')"
+    ).fetchone()
+    # Also report how many have never been accessed at all (useful context)
+    never = con.execute(
+        "SELECT COUNT(*) FROM pp_shares WHERE last_accessed IS NULL"
+    ).fetchone()[0]
+    p["old_shares"] = {"count": r[0], "oldest": r[1], "newest": r[2], "never_accessed": never}
+
+    # Empty contexts (no characters) + their dangling sessions
+    empty_ctx_rows = con.execute(
+        "SELECT c.id, c.created_at FROM pp_user_contexts c "
+        "WHERE NOT EXISTS (SELECT 1 FROM pp_characters ch WHERE ch.context_id=c.id)"
+    ).fetchall()
+    ctx_ids = [r["id"] for r in empty_ctx_rows]
+    dangling_sessions = 0
+    if ctx_ids:
+        ph = ",".join("?" * len(ctx_ids))
+        dangling_sessions = con.execute(
+            f"SELECT COUNT(*) FROM pp_sessions WHERE context_id IN ({ph})", ctx_ids
+        ).fetchone()[0]
+    p["empty_contexts"] = {
+        "count": len(ctx_ids),
+        "also_sessions": dangling_sessions,
+        "items": [{"id": r["id"], "created": (r["created_at"] or "")[:10]} for r in empty_ctx_rows],
+    }
+
+    # Orphaned plan config (character deleted)
+    r = con.execute(
+        "SELECT COUNT(*) FROM pp_plan_config "
+        "WHERE NOT EXISTS (SELECT 1 FROM pp_characters ch WHERE ch.character_id=pp_plan_config.character_id)"
+    ).fetchone()
+    p["orphaned_plan_config"] = {"count": r[0]}
+
+    # Orphaned colony yield (character deleted)
+    r = con.execute(
+        "SELECT COUNT(*) FROM pp_colony_yield "
+        "WHERE NOT EXISTS (SELECT 1 FROM pp_characters ch WHERE ch.character_id=pp_colony_yield.character_id)"
+    ).fetchone()
+    p["orphaned_colony_yield"] = {"count": r[0]}
+
+    return p
+
+
+@router.get("/api/admin/cleanup/preview")
+def cleanup_preview(_: int = Depends(require_admin)):
+    """Return per-category counts of what would be deleted — no writes."""
+    con = get_connection()
+    try:
+        return _cleanup_preview_data(con)
+    finally:
+        con.close()
+
+
+class CleanupRequest(BaseModel):
+    categories: list
+
+
+@router.post("/api/admin/cleanup")
+def run_cleanup(req: CleanupRequest, _: int = Depends(require_admin)):
+    """Execute cleanup for the requested categories. Returns counts deleted per category."""
+    valid = {"old_sessions", "old_shares", "empty_contexts",
+             "orphaned_plan_config", "orphaned_colony_yield"}
+    cats = set(req.categories) & valid
+    deleted = {k: 0 for k in cats}
+
+    con = get_connection()
+    try:
+        if "old_sessions" in cats:
+            cur = con.execute(
+                "DELETE FROM pp_sessions WHERE created_at < datetime('now', '-90 days')"
+            )
+            deleted["old_sessions"] = cur.rowcount
+
+        if "old_shares" in cats:
+            cur = con.execute(
+                "DELETE FROM pp_shares "
+                "WHERE COALESCE(last_accessed, created_at) < datetime('now', '-90 days')"
+            )
+            deleted["old_shares"] = cur.rowcount
+
+        if "empty_contexts" in cats:
+            empty_ctx = con.execute(
+                "SELECT id FROM pp_user_contexts "
+                "WHERE NOT EXISTS (SELECT 1 FROM pp_characters ch WHERE ch.context_id=pp_user_contexts.id)"
+            ).fetchall()
+            ctx_ids = [r["id"] for r in empty_ctx]
+            if ctx_ids:
+                ph = ",".join("?" * len(ctx_ids))
+                # Delete sessions first (FK order), then profiles/baskets, then context
+                con.execute(f"DELETE FROM pp_sessions WHERE context_id IN ({ph})", ctx_ids)
+                con.execute(f"DELETE FROM pp_profiles WHERE context_id IN ({ph})", ctx_ids)
+                con.execute(f"DELETE FROM pp_plan_snapshots WHERE context_id IN ({ph})", ctx_ids)
+                con.execute(f"DELETE FROM pp_plan_baseline WHERE context_id IN ({ph})", ctx_ids)
+                con.execute(f"DELETE FROM pp_baskets WHERE context_id IN ({ph})", ctx_ids)
+                cur = con.execute(
+                    f"DELETE FROM pp_user_contexts WHERE id IN ({ph})", ctx_ids
+                )
+                deleted["empty_contexts"] = cur.rowcount
+
+        if "orphaned_plan_config" in cats:
+            cur = con.execute(
+                "DELETE FROM pp_plan_config "
+                "WHERE NOT EXISTS (SELECT 1 FROM pp_characters ch WHERE ch.character_id=pp_plan_config.character_id)"
+            )
+            deleted["orphaned_plan_config"] = cur.rowcount
+
+        if "orphaned_colony_yield" in cats:
+            cur = con.execute(
+                "DELETE FROM pp_colony_yield "
+                "WHERE NOT EXISTS (SELECT 1 FROM pp_characters ch WHERE ch.character_id=pp_colony_yield.character_id)"
+            )
+            deleted["orphaned_colony_yield"] = cur.rowcount
+
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.close()
+
+    return {"deleted": deleted}
+
+
 @router.get("/metrics", response_class=PlainTextResponse, include_in_schema=False)
 def prometheus_metrics(request: Request):
     """Prometheus text-format metrics scrape endpoint.
