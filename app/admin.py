@@ -365,6 +365,71 @@ def add_tester(req: AdminAdd, _: int = Depends(require_admin),
     return {"ok": True}
 
 
+@router.get("/api/admin/stats")
+def admin_stats(_: int = Depends(require_admin)):
+    """Aggregate system health stats — no names, counts only."""
+    con = get_connection()
+    s = {}
+
+    # Users
+    s["contexts"] = con.execute("SELECT COUNT(*) FROM pp_user_contexts").fetchone()[0]
+    s["active_7d"] = con.execute(
+        "SELECT COUNT(DISTINCT context_id) FROM pp_sessions "
+        "WHERE created_at >= datetime('now', '-7 days')"
+    ).fetchone()[0]
+    s["active_30d"] = con.execute(
+        "SELECT COUNT(DISTINCT context_id) FROM pp_sessions "
+        "WHERE created_at >= datetime('now', '-30 days')"
+    ).fetchone()[0]
+    s["characters"] = con.execute(
+        "SELECT COUNT(*) FROM pp_characters WHERE is_dummy=0"
+    ).fetchone()[0]
+    s["dummy_characters"] = con.execute(
+        "SELECT COUNT(*) FROM pp_characters WHERE is_dummy=1"
+    ).fetchone()[0]
+
+    # Planet DB
+    s["planet_rows"] = con.execute("SELECT COUNT(*) FROM pp_planets").fetchone()[0]
+    s["systems_covered"] = con.execute(
+        "SELECT COUNT(DISTINCT system) FROM pp_planets"
+    ).fetchone()[0]
+    s["constellations_covered"] = con.execute(
+        "SELECT COUNT(DISTINCT constellation) FROM pp_planets WHERE constellation IS NOT NULL"
+    ).fetchone()[0]
+    s["pending_submissions"] = con.execute(
+        "SELECT COUNT(*) FROM pp_planet_submissions WHERE status='pending'"
+    ).fetchone()[0]
+
+    # Usage
+    s["profiles"] = con.execute("SELECT COUNT(*) FROM pp_profiles").fetchone()[0]
+    s["shares"] = con.execute("SELECT COUNT(*) FROM pp_shares").fetchone()[0]
+    s["shares_7d"] = con.execute(
+        "SELECT COUNT(*) FROM pp_shares WHERE created_at >= datetime('now', '-7 days')"
+    ).fetchone()[0]
+    s["shares_30d"] = con.execute(
+        "SELECT COUNT(*) FROM pp_shares WHERE created_at >= datetime('now', '-30 days')"
+    ).fetchone()[0]
+    s["shares_never_accessed"] = con.execute(
+        "SELECT COUNT(*) FROM pp_shares "
+        "WHERE last_accessed IS NULL AND created_at < datetime('now', '-7 days')"
+    ).fetchone()[0]
+    s["bugs_open"] = con.execute(
+        "SELECT COUNT(*) FROM pp_bugs WHERE status='open'"
+    ).fetchone()[0]
+    s["bugs_total"] = con.execute("SELECT COUNT(*) FROM pp_bugs").fetchone()[0]
+
+    # Raw data
+    s["char_planet_scans"] = con.execute("SELECT COUNT(*) FROM pp_char_planets").fetchone()[0]
+    s["colony_yield_rows"] = con.execute("SELECT COUNT(*) FROM pp_colony_yield").fetchone()[0]
+    s["sessions"] = con.execute("SELECT COUNT(*) FROM pp_sessions").fetchone()[0]
+    s["sessions_stale_90d"] = con.execute(
+        "SELECT COUNT(*) FROM pp_sessions WHERE created_at < datetime('now', '-90 days')"
+    ).fetchone()[0]
+
+    con.close()
+    return s
+
+
 @router.delete("/api/testers/{character_name}")
 def remove_tester(character_name: str, _: int = Depends(require_admin)):
     con = get_connection()

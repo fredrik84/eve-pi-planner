@@ -20,7 +20,7 @@
   <meta property="og:image" content="https://eve-pi.failed.name/og-image.png?v=6">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:image" content="https://eve-pi.failed.name/og-image.png?v=6">
-  <link rel="stylesheet" href="/style.css?v=223">
+  <link rel="stylesheet" href="/style.css?v=224">
 </head>
 <body>
   <header>
@@ -751,6 +751,7 @@ PVF-N9    3         95                 60             80                  100   
       <div class="admin-page">
 
         <nav class="admin-subnav" id="adminSubnav">
+          <button class="admin-subtab" data-page="stats" onclick="adminSubPage('stats')">System stats</button>
           <button class="admin-subtab" data-page="submissions" onclick="adminSubPage('submissions')">Planet submissions <span id="adminTabPsub" class="admin-subtab-badge"></span></button>
           <button class="admin-subtab" data-page="features" onclick="adminSubPage('features')">Features</button>
           <button class="admin-subtab" data-page="baskets" onclick="adminSubPage('baskets')">Baskets</button>
@@ -758,6 +759,13 @@ PVF-N9    3         95                 60             80                  100   
           <button class="admin-subtab" data-page="wallet" onclick="adminSubPage('wallet')">Corp wallet</button>
           <button class="admin-subtab" data-page="bugs" onclick="adminSubPage('bugs')">Bug reports <span id="adminTabBugs" class="admin-subtab-badge"></span></button>
         </nav>
+
+        <div class="admin-subpage" data-page="stats" style="display:none">
+          <section class="pp-card admin-section">
+            <div class="pp-card-title">System stats</div>
+            <div id="adminStatsContent"></div>
+          </section>
+        </div>
 
         <div class="admin-subpage" data-page="submissions" style="display:none">
           <section class="pp-card admin-section">
@@ -888,7 +896,7 @@ PVF-N9    3         95                 60             80                  100   
   <script src="/app.js?v=29"></script>
   <script src="/planetary.js?v=314"></script>
   <script src="/dashboard.js?v=10"></script>
-  <script src="/admin.js?v=4"></script>
+  <script src="/admin.js?v=5"></script>
   <script src="/planetdb.js?v=1"></script>
   <script src="/refill.js?v=1"></script>
   <script src="/analysis.js?v=10"></script>

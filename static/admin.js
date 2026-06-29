@@ -32,9 +32,10 @@ function adminSubPage(key) {
   document.querySelectorAll('#tab-admin .admin-subpage').forEach(p => {
     p.style.display = (p.dataset.page === key) ? '' : 'none';
   });
-  // Corp wallet hits ESI, so only load it when its sub-page is actually opened.
+  // Lazy-load heavy or ESI-hitting sub-pages only when opened.
   if (key === 'wallet' && typeof loadCorpWallet === 'function') loadCorpWallet();
   if (key === 'users') _loadCharNameSuggestions();
+  if (key === 'stats') loadAdminStats();
 }
 
 async function _loadCharNameSuggestions() {
@@ -439,4 +440,73 @@ async function setBugStatus(id, status) {
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     loadBugs();
   } catch (e) { alert('Failed: ' + e.message); }
+}
+
+// ── System stats ─────────────────────────────────────────────────────────────
+async function loadAdminStats() {
+  const el = document.getElementById('adminStatsContent');
+  if (!el) return;
+  el.innerHTML = '<div class="pp-empty">Loading…</div>';
+  try {
+    const resp = await fetch('/api/admin/stats');
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    renderAdminStats(await resp.json());
+  } catch (e) {
+    el.innerHTML = `<div class="pp-empty">Failed to load: ${_esc(e.message)}</div>`;
+  }
+}
+
+function renderAdminStats(s) {
+  const el = document.getElementById('adminStatsContent');
+  if (!el) return;
+  const tile = (val, lbl) =>
+    `<div class="an-stat"><div class="an-stat-val">${val}</div><div class="an-stat-lbl">${lbl}</div></div>`;
+
+  const groups = [
+    {
+      heading: 'Users',
+      tiles: [
+        tile(s.contexts, 'accounts'),
+        tile(s.active_7d, 'active 7d'),
+        tile(s.active_30d, 'active 30d'),
+        tile(s.characters, 'characters'),
+        tile(s.dummy_characters, 'dummy chars'),
+      ],
+    },
+    {
+      heading: 'Planet DB',
+      tiles: [
+        tile(s.planet_rows.toLocaleString(), 'planet rows'),
+        tile(s.systems_covered.toLocaleString(), 'systems'),
+        tile(s.constellations_covered, 'constellations'),
+        tile(s.pending_submissions, 'pending submissions'),
+      ],
+    },
+    {
+      heading: 'Usage',
+      tiles: [
+        tile(s.profiles, 'saved profiles'),
+        tile(s.shares, 'shares total'),
+        tile(s.shares_7d, 'shares 7d'),
+        tile(s.shares_30d, 'shares 30d'),
+        tile(s.shares_never_accessed, 'shares never opened'),
+        tile(s.bugs_open + ' / ' + s.bugs_total, 'bugs open / total'),
+      ],
+    },
+    {
+      heading: 'Raw data',
+      tiles: [
+        tile(s.char_planet_scans, 'colony scans'),
+        tile(s.colony_yield_rows, 'yield records'),
+        tile(s.sessions, 'sessions'),
+        tile(s.sessions_stale_90d, 'sessions >90d old'),
+      ],
+    },
+  ];
+
+  el.innerHTML = groups.map(g => `
+    <div class="admin-stats-group">
+      <div class="admin-stats-heading">${_esc(g.heading)}</div>
+      <div class="an-stats">${g.tiles.join('')}</div>
+    </div>`).join('');
 }
