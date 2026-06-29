@@ -95,8 +95,19 @@ def _pg_translate(sql: str) -> str:
 class _PgCursor:
     """Wraps a psycopg2 cursor to match the sqlite3.Cursor interface used in app code."""
 
-    def __init__(self, pg_cursor):
+    def __init__(self, pg_cursor, pg_conn=None):
         self._cur = pg_cursor
+        self._conn = pg_conn
+
+    def execute(self, sql: str, params=()):
+        sql = _pg_translate(sql)
+        try:
+            self._cur.execute(sql, params if params else None)
+        except Exception:
+            if self._conn:
+                self._conn.rollback()
+            raise
+        return self
 
     def _row(self, raw):
         if raw is None:
@@ -154,7 +165,7 @@ class _PgConn:
         return _PgCursor(cur)
 
     def cursor(self) -> _PgCursor:
-        return _PgCursor(self._conn.cursor())
+        return _PgCursor(self._conn.cursor(), self._conn)
 
     def commit(self):
         self._conn.commit()
