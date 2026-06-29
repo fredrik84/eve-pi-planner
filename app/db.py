@@ -86,6 +86,9 @@ def _pg_translate(sql: str) -> str:
     # IFNULL → COALESCE
     sql = re.sub(r"\bIFNULL\b", "COALESCE", sql, flags=re.IGNORECASE)
 
+    # Escape literal % (e.g. in LIKE patterns) before ? → %s so psycopg2
+    # doesn't mistake them for parameter placeholders.
+    sql = sql.replace("%", "%%")
     # ? → %s (must be last so earlier replacements don't double-translate)
     sql = sql.replace("?", "%s")
 
