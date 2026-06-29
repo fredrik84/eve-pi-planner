@@ -5,7 +5,7 @@ from typing import Optional
 APP_VERSION = "2026.06.29"
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -34,6 +34,18 @@ app.include_router(features_router)
 app.include_router(notifications_router)
 
 _scheduler = None
+
+
+@app.get("/healthz", include_in_schema=False)
+def healthz():
+    from app.db import get_connection
+    try:
+        con = get_connection()
+        con.execute("SELECT 1")
+        con.close()
+    except Exception as e:
+        return JSONResponse(status_code=503, content={"status": "error", "detail": str(e)})
+    return {"status": "ok"}
 
 
 @app.on_event("startup")
