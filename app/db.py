@@ -58,12 +58,20 @@ def _pg_translate(sql: str) -> str:
         sql = sql.rstrip().rstrip(";") + " ON CONFLICT DO NOTHING"
 
     # datetime('now', '-N unit') / ('+N unit')
-    sql = re.sub(r"datetime\('now',\s*'-(\d+)\s+(\w+)'\)", r"NOW() - INTERVAL '\1 \2'", sql)
-    sql = re.sub(r"datetime\('now',\s*'\+(\d+)\s+(\w+)'\)", r"NOW() + INTERVAL '\1 \2'", sql)
+    # Return TEXT (ISO 8601) so comparisons against TEXT columns work on Postgres.
+    # All created_at/updated_at columns store Python .isoformat() strings (TEXT), and
+    # TEXT < timestamptz is a type error in Postgres. Casting to text keeps it consistent.
+    sql = re.sub(r"datetime\('now',\s*'-(\d+)\s+(\w+)'\)",
+                 r"TO_CHAR(NOW() AT TIME ZONE 'UTC' - INTERVAL '\1 \2', 'YYYY-MM-DD\"T\"HH24:MI:SS')", sql)
+    sql = re.sub(r"datetime\('now',\s*'\+(\d+)\s+(\w+)'\)",
+                 r"TO_CHAR(NOW() AT TIME ZONE 'UTC' + INTERVAL '\1 \2', 'YYYY-MM-DD\"T\"HH24:MI:SS')", sql)
     # datetime('now') (bare)
-    sql = re.sub(r"datetime\('now'\)", "NOW()", sql)
+    sql = re.sub(r"datetime\('now'\)",
+                 r"TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS')", sql)
     # DEFAULT (datetime('now')) in DDL
-    sql = re.sub(r"DEFAULT\s*\(datetime\('now'\)\)", "DEFAULT NOW()", sql, flags=re.IGNORECASE)
+    sql = re.sub(r"DEFAULT\s*\(datetime\('now'\)\)",
+                 r"DEFAULT TO_CHAR(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS')",
+                 sql, flags=re.IGNORECASE)
 
     # INTEGER PRIMARY KEY AUTOINCREMENT → BIGSERIAL PRIMARY KEY
     sql = re.sub(
