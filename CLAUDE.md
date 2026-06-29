@@ -35,7 +35,11 @@ These are standing rules for ALL changes. Follow them unless the user explicitly
    the extraction-decay and factory-rate models, which are formula-derived rather than scraped).
 6. **Commit + push when a change is complete.** The user wants steady checkpoints to revert to. After
    a feature/fix is tested and deployed, `git commit` and `git push` to `origin/main`. End commit
-   messages with the Co-Authored-By trailer.
+   messages with the Co-Authored-By trailer. **Deployment is fully automated** — a push to main
+   triggers GitHub Actions (builds image ~38s), ArgoCD image updater detects the new digest within
+   2 minutes and commits to evpi-gitops, ArgoCD syncs and rolls the pod. Total ~3 min. There is no
+   manual deploy step. Do NOT use `docker compose` — the app runs on k3s at
+   `ssh fredrik@116.203.246.127`, namespace `eve-pi`, `sudo kubectl -n eve-pi`.
 7. **Preserve user privacy.** User data is never exposed publicly. Every endpoint that returns
    character names, systems, planets, or any locatable data **must** be gated by `require_context`
    (own data only) or `require_admin` (admin tools). The only exceptions are: (a) the Admin → Users
