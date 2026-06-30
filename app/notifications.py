@@ -441,58 +441,80 @@ def test_notification(req: NotificationTestRequest, ctx: int = Depends(require_c
     return {"ok": True}
 
 
-@router.post("/api/notifications/check-now")
-def check_notifications_now(ctx: int = Depends(require_context)):
-    """Run the notification check immediately, ignoring cooldowns, and send to all saved channels."""
+@router.post("/api/notifications/resend-last")
+def resend_last_notification(ctx: int = Depends(require_context)):
+    """Resend the most recent notification batch from the log to all saved channels."""
     ensure_notification_tables()
     con = get_connection()
-    prefs = _get_prefs(con, ctx)
-    lead = prefs["lead_hours"]
 
     settings = con.execute(
-        "SELECT id, channel, config FROM pp_notification_settings WHERE context_id=? AND enabled=1",
+        "SELECT channel, config FROM pp_notification_settings WHERE context_id=? AND enabled=1",
         (ctx,),
     ).fetchall()
     if not settings:
         con.close()
         raise HTTPException(status_code=400, detail="No enabled notification channels configured.")
 
-    ext_evs: list[dict] = []
-    fac_evs: list[dict] = []
-    if prefs["notify_extractors"]:
-        for ev in _extractor_events(con, ctx, lead):
-            ev["event"] = "extractor_expiry"
-            ext_evs.append(ev)
-    if prefs["notify_factories"]:
-        for ev in _factory_events(con, ctx, lead):
-            ev["event"] = "factory_refill"
-            fac_evs.append(ev)
+    latest_row = con.execute(
+        "SELECT MAX(sent_at) AS ts FROM pp_notification_log WHERE context_id=? AND status='ok'",
+        (ctx,),
+    ).fetchone()
+    if not latest_row or not latest_row["ts"]:
+        con.close()
+        raise HTTPException(status_code=404, detail="No previous notifications found in log.")
 
+    latest_ts = latest_row["ts"]
+    # Match to the minute — all events in the same scheduler run land within seconds of each other.
+    minute_prefix = latest_ts[:16]
+    rows = con.execute(
+        "SELECT DISTINCT event, character, planet_id FROM pp_notification_log "
+        "WHERE context_id=? AND status='ok' AND sent_at >= ? ORDER BY event",
+        (ctx, minute_prefix),
+    ).fetchall()
+
+    by_event: dict[str, list[dict]] = {}
+    for r in rows:
+        sys_row = con.execute(
+            "SELECT ss.name FROM pp_char_planets cp "
+            "JOIN pp_characters ch ON ch.character_id = cp.character_id "
+            "LEFT JOIN solar_systems ss ON ss.system_id = cp.solar_system_id "
+            "WHERE ch.context_id=? AND cp.planet_id=? LIMIT 1",
+            (ctx, r["planet_id"]),
+        ).fetchone()
+        by_event.setdefault(r["event"], []).append({
+            "event": r["event"],
+            "character_name": r["character"] or "?",
+            "planet_id": r["planet_id"],
+            "system_name": (sys_row["name"] if sys_row else "") or "?",
+            "hours_left": 0.0,
+        })
     con.close()
 
-    if not ext_evs and not fac_evs:
-        return {"nothing_due": True, "sent": [], "errors": []}
+    if not by_event:
+        raise HTTPException(status_code=404, detail="No previous notifications found.")
 
     sent = []
     errors = []
-    for evs in (ext_evs, fac_evs):
-        if not evs:
-            continue
-        title, body = _format_batch(evs)
-        batch_errors = []
+    for event_type, evs in by_event.items():
+        _, body = _format_batch(evs)
+        n = len(evs)
+        if event_type == "extractor_expiry":
+            title = "[Replay] Extractor expiring" if n == 1 else f"[Replay] {n} extractors expiring"
+        else:
+            title = "[Replay] Factory refill due" if n == 1 else f"[Replay] {n} factories due for refill"
+        # Strip the ~0.0h placeholder — not meaningful for a replay
+        body = "\n".join(line.split(" — ", 1)[-1] for line in body.splitlines())
         for setting in settings:
             try:
                 cfg = _json.loads(setting["config"])
                 notifier = make_notifier(setting["channel"], cfg)
                 notifier.send(title, body)
             except Exception as exc:
-                batch_errors.append(f"{setting['channel']}: {exc}")
-        if batch_errors:
-            errors.extend(batch_errors)
-        else:
-            sent.append({"event": evs[0]["event"], "count": len(evs), "title": title, "body": body})
+                errors.append(f"{setting['channel']}: {exc}")
+        if not errors:
+            sent.append({"event": event_type, "count": n, "title": title})
 
-    return {"nothing_due": False, "sent": sent, "errors": errors}
+    return {"sent": sent, "errors": errors}
 
 
 @router.get("/api/notifications/log")

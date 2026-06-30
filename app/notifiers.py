@@ -76,6 +76,8 @@ class DiscordNotifier(BaseNotifier):
         content = f"**{title}**\n{body}"
         if url:
             content += f"\n<{url}>"
+        if len(content) > 2000:
+            content = content[:1997] + "…"
         payload = _json.dumps({"content": content}).encode("utf-8")
         req = urllib.request.Request(
             self._webhook_url,

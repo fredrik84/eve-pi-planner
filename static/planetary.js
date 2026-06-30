@@ -2606,22 +2606,19 @@ async function notifDelete(id) {
   await loadNotifications();
 }
 
-async function notifCheckNow() {
+async function notifResendLast() {
   const status = document.getElementById('notifPrefsStatus');
-  status.textContent = 'Checking...';
+  status.textContent = 'Resending...';
   try {
-    const r = await fetch('/api/notifications/check-now', { method: 'POST' });
+    const r = await fetch('/api/notifications/resend-last', { method: 'POST' });
     const d = await r.json();
     if (!r.ok) throw new Error(d.detail || r.status);
-    if (d.nothing_due) {
-      status.textContent = 'Nothing due within your lead window.';
-    } else if (d.errors && d.errors.length) {
+    if (d.errors && d.errors.length) {
       status.textContent = 'Send error: ' + d.errors.join('; ');
     } else {
-      const summary = d.sent.map(s => `${s.title} (${s.count})`).join(', ');
+      const summary = d.sent.map(s => s.title).join(', ');
       status.textContent = 'Sent: ' + summary;
     }
-    loadNotifications();
   } catch (e) {
     status.textContent = 'Error: ' + e.message;
   }
