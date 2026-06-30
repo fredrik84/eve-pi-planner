@@ -2295,6 +2295,7 @@ body.nav-collapsed .admin-nav-item .nav-lbl { display: none; }
   .sidebar [data-tab="planetdb"],
   .sidebar [data-tab="contribute"],
   .sidebar [data-tab="characters"],
+  .sidebar-discord { display: none !important; }
   .sidebar-donate { display: none !important; }
 
   /* Keep the Dashboard tab on the bar even when logged out — its panel is the
