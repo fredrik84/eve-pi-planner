@@ -2234,6 +2234,9 @@ body.nav-collapsed .admin-nav-item .nav-lbl { display: none; }
    Planet DB, Characters) stay desktop-only. Selectors are paired with
    `body.nav-collapsed ...` so a desktop-collapsed state can't override them.
    ============================================================================ */
+/* Mobile-only nav buttons — hidden on desktop, shown by mobile media query. */
+#adminMobileTab, .settings-mobile-tab { display: none; }
+
 @media (max-width: 760px) {
   /* Header: compact; drop the desktop hamburger + subtitle. The top padding
      respects the iOS status bar when launched from the home screen. */
@@ -2287,7 +2290,8 @@ body.nav-collapsed .admin-nav-item .nav-lbl { display: none; }
   .sidebar #dashboardNavTab        { order: 0; }
   .sidebar [data-tab="analyze"]    { order: 1; }
   .sidebar [data-tab="howitworks"] { order: 2; }
-  .sidebar #adminMobileTab         { order: 3; }
+  #adminMobileTab                   { display: flex; }
+  .sidebar #adminMobileTab          { order: 3; }
   .sidebar #adminNavGroup          { order: 5; }
 
   /* Each remaining tab -> icon over a tiny label */
