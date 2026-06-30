@@ -83,10 +83,16 @@ class DiscordNotifier(BaseNotifier):
             method="POST",
             headers={"Content-Type": "application/json"},
         )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            # Discord returns 204 No Content on success; anything 2xx is fine.
-            if resp.status not in range(200, 300):
-                raise RuntimeError(f"Discord webhook returned HTTP {resp.status}")
+        try:
+            with urllib.request.urlopen(req, timeout=10):
+                pass  # Discord returns 204 No Content on success
+        except urllib.error.HTTPError as exc:
+            body_text = ""
+            try:
+                body_text = exc.read().decode("utf-8", errors="replace")
+            except Exception:
+                pass
+            raise RuntimeError(f"Discord webhook returned HTTP {exc.code}: {body_text}") from exc
 
 
 _CHANNEL_MAP: dict[str, type] = {
