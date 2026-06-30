@@ -281,7 +281,7 @@ def _planet_label(e: dict) -> str:
     ptype = e.get("planet_type") or ""
     roman = ["I","II","III","IV","V","VI","VII","VIII","IX","X","XI","XII","XIII","XIV","XV"]
     num_str = roman[num - 1] if num and 1 <= num <= len(roman) else (str(num) if num else "?")
-    return f"{system} {num_str} ({ptype})" if ptype else f"{system} {num_str}"
+    return f"{system} {num_str}"
 
 
 def _format_batch(evs: list[dict]) -> tuple[str, str, list[dict]]:
