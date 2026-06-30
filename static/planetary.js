@@ -164,38 +164,28 @@ function _featureActive(key, dflt = false) {
 }
 function _applyTabGates() {
   const gates = [
-    { key: 'factory_layout', tab: 'layout' },
-    { key: 'planet_db',      tab: 'planetdb' },
+    { key: 'factory_layout', storageKey: 'ppNavFeatLayout', cls: 'nav-feat-layout', tab: 'layout' },
+    { key: 'planet_db',      storageKey: 'ppNavFeatPdb',    cls: 'nav-feat-pdb',    tab: 'planetdb' },
   ];
   const cur = localStorage.getItem('activeTab');
   let needRedirect = false;
-  gates.forEach(({ key, tab }) => {
+  gates.forEach(({ key, storageKey, cls, tab }) => {
     const show = _featureActive(key);
-    document.querySelectorAll(`.tab[data-tab="${tab}"]`).forEach(el => el.style.display = show ? '' : 'none');
+    try { localStorage.setItem(storageKey, show ? '1' : '0'); } catch(e) {}
+    document.documentElement.classList.toggle(cls, show);
     if (!show && cur === tab) needRedirect = true;
   });
   if (needRedirect && typeof switchTab === 'function') switchTab('dashboard');
 }
 
 function _applyLoginGates() {
-  const loggedIn = !!_loggedIn;
-  // Tabs that require a login — hide when logged out, show when logged in.
+  // Display is handled by CSS classes (nav-li set in renderHeaderSession).
+  // This function only handles redirects for users who land on a gated tab while logged out.
+  if (_loggedIn) return;
   const AUTH_TABS = ['analyze', 'planetary', 'characters', 'planetdb'];
   const cur = localStorage.getItem('activeTab');
-  let needRedirect = false;
-  AUTH_TABS.forEach(tab => {
-    document.querySelectorAll(`.tab[data-tab="${tab}"]`).forEach(el => el.style.display = loggedIn ? '' : 'none');
-    if (!loggedIn && cur === tab) needRedirect = true;
-  });
-  // "Refill a plan" sub-item also requires a saved plan / login context.
-  document.querySelectorAll('.tab[data-pimode="refill"]').forEach(el => {
-    el.style.display = loggedIn ? '' : 'none';
-  });
-  // Also send logged-out users off the Dashboard (which just shows a login prompt) to How it works.
-  if (!loggedIn && (needRedirect || cur === 'dashboard' || !cur)) {
+  if (AUTH_TABS.includes(cur) || cur === 'dashboard' || !cur) {
     if (typeof switchTab === 'function') switchTab('howitworks');
-  } else if (needRedirect && typeof switchTab === 'function') {
-    switchTab('dashboard');
   }
 }
 

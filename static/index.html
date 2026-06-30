@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <script>try{if(localStorage.getItem('ppNavLoggedIn')==='1')document.documentElement.classList.add('nav-li');if(localStorage.getItem('ppNavIsAdmin')==='1')document.documentElement.classList.add('nav-adm');}catch(e){}</script>
+  <script>try{var _cl=document.documentElement.classList;if(localStorage.getItem('ppNavLoggedIn')==='1')_cl.add('nav-li');if(localStorage.getItem('ppNavIsAdmin')==='1')_cl.add('nav-adm');if(localStorage.getItem('ppNavFeatLayout')==='1')_cl.add('nav-feat-layout');if(localStorage.getItem('ppNavFeatPdb')==='1')_cl.add('nav-feat-pdb');}catch(e){}</script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>EVE PI Planner</title>
@@ -1039,7 +1039,7 @@ PVF-N9    3         95                 60             80                  100   
   </div>
 
   <script src="/app.js?v=29"></script>
-  <script src="/planetary.js?v=325"></script>
+  <script src="/planetary.js?v=326"></script>
   <script src="/dashboard.js?v=11"></script>
   <script src="/admin.js?v=10"></script>
   <script src="/planetdb.js?v=1"></script>
