@@ -1462,8 +1462,24 @@ a.plan-action-btn { text-decoration: none; display: inline-block; }
 /* site footer (donation) */
 /* Donation note pinned to the bottom of the sticky sidebar — always on screen,
    no scrolling to the page foot to find it. */
+.sidebar-discord {
+  display: block; margin-top: auto; padding: 12px 13px 8px; border-top: 1px solid #1b2030;
+  font-size: 12px; color: #8a93a8; line-height: 1.5;
+  text-decoration: none;
+}
+.sidebar-discord:hover { background: #131825; }
+.sidebar-discord-hd {
+  font-size: 10px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase;
+  color: #6a7390; margin-bottom: 6px;
+}
+.sidebar-discord-txt strong { color: #7289da; font-weight: 700; }
+.sidebar-discord-ico { display: none; text-align: center; font-size: 16px; color: #7289da; padding: 4px 0; }
+body.nav-collapsed .sidebar-discord { padding: 12px 0 8px; }
+body.nav-collapsed .sidebar-discord-full { display: none; }
+body.nav-collapsed .sidebar-discord-ico { display: block; }
+
 .sidebar-donate {
-  margin-top: auto; padding: 12px 13px 4px; border-top: 1px solid #1b2030;
+  padding: 12px 13px 4px; border-top: 1px solid #1b2030;
   font-size: 12px; color: #8a93a8; line-height: 1.5;
 }
 .sidebar-donate-hd {
@@ -1477,6 +1493,7 @@ body.nav-collapsed .sidebar-donate { padding: 12px 0 4px; }
 body.nav-collapsed .sidebar-donate-full { display: none; }
 body.nav-collapsed .sidebar-donate-ico { display: block; }
 .mobile-donate { display: none; }
+.mobile-discord { display: none; }
 
 
 /* ── Admin tab ──────────────────────────────────────────────────────────────── */
@@ -2400,6 +2417,16 @@ body.nav-collapsed .admin-nav-item .nav-lbl { display: none; }
     background: #0d0f14; border-bottom: 1px solid #1b2030;
   }
   .mobile-donate strong { color: #ffce6b; font-weight: 600; }
+
+  .mobile-discord {
+    display: block;
+    width: 100%; text-align: center;
+    padding: 5px 12px; font-size: 11px;
+    color: #7289da; line-height: 1.4;
+    background: #0d0f14; border-bottom: 1px solid #1b2030;
+    text-decoration: none;
+  }
+  .mobile-discord:hover { color: #99aae8; }
 
   /* Pull-to-refresh indicator (rescan on pull-down from the top) */
   #ptr-indicator {
