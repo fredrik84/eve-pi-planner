@@ -1729,6 +1729,8 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .an-stat.an-ok  { border-color: #1f6b46; }
 .an-stat.an-bad { border-color: #7a3036; }
 .an-stat-val { font-size: 22px; font-weight: 700; color: #fff; }
+.an-stat-val a { color: #a8c8ff; font-family: 'Consolas', 'Menlo', monospace; font-size: 15px; font-weight: 600; text-decoration: none; letter-spacing: 0.03em; }
+.an-stat-val a:hover { text-decoration: underline; text-underline-offset: 3px; }
 .an-stat.an-ok  .an-stat-val { color: #46d18a; }
 .an-stat.an-bad .an-stat-val { color: #ef6b78; }
 .an-stat-lbl { font-size: 11px; color: #8b93a6; margin-top: 2px; text-transform: uppercase; letter-spacing: .04em; }
