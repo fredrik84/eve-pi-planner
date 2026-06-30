@@ -1479,7 +1479,6 @@ html.nav-li .tab[data-tab="planetary"],
 html.nav-li .tab[data-tab="characters"],
 html.nav-li .tab[data-pimode="refill"] { display: flex; }
 
-html.nav-adm #adminNavGroup { display: flex; }
 html.nav-adm #adminMobileTab { display: flex; }
 html.nav-feat-layout .tab[data-tab="layout"] { display: flex; }
 html.nav-li.nav-feat-pdb .tab[data-tab="planetdb"] { display: flex; }
