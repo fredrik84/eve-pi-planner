@@ -16,7 +16,7 @@ from fastapi import APIRouter, Cookie, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.sde import get_connection
-from app.esi import require_context, session_context_id, ADMIN_CHARACTERS
+from app.esi import require_context, session_context_id
 from app.notifiers import make_notifier, CHANNEL_LABELS
 
 log = logging.getLogger(__name__)
@@ -59,20 +59,13 @@ def ensure_notification_tables():
         )
     """)
     con.commit()
-    # Migrate existing rows that lack the admin columns
-    for col in ("notify_submissions", "notify_bugs"):
-        try:
-            con.execute(f"ALTER TABLE pp_notification_prefs ADD COLUMN {col} INTEGER DEFAULT 0")
-        except Exception:
-            pass
     con.commit()
     con.close()
 
 
 def _get_prefs(con, context_id: int) -> dict:
     row = con.execute(
-        "SELECT lead_hours, notify_extractors, notify_factories, "
-        "notify_submissions, notify_bugs "
+        "SELECT lead_hours, notify_extractors, notify_factories "
         "FROM pp_notification_prefs WHERE context_id=?",
         (context_id,),
     ).fetchone()
@@ -81,15 +74,11 @@ def _get_prefs(con, context_id: int) -> dict:
             "lead_hours": row["lead_hours"] or 4,
             "notify_extractors": bool(row["notify_extractors"]),
             "notify_factories": bool(row["notify_factories"]),
-            "notify_submissions": bool(row["notify_submissions"]),
-            "notify_bugs": bool(row["notify_bugs"]),
         }
     return {
         "lead_hours": 4,
         "notify_extractors": True,
         "notify_factories": True,
-        "notify_submissions": False,
-        "notify_bugs": False,
     }
 
 
@@ -203,49 +192,6 @@ def _factory_events(con, context_id: int, lead_hours: float) -> list[dict]:
     return events
 
 
-def _is_admin_context(con, context_id: int) -> bool:
-    """True if any character in this context is an admin (bootstrap or DB)."""
-    try:
-        db_admins = {
-            r["character_name"].lower()
-            for r in con.execute("SELECT character_name FROM pp_admins").fetchall()
-        }
-    except Exception:
-        db_admins = set()
-    all_admins = {n.lower() for n in ADMIN_CHARACTERS} | db_admins
-    rows = con.execute(
-        "SELECT character_name FROM pp_characters WHERE context_id=?", (context_id,)
-    ).fetchall()
-    return any(r["character_name"].lower() in all_admins for r in rows)
-
-
-def _submission_events(con) -> list[dict]:
-    """New pending planet submissions created in the last 20 minutes."""
-    rows = con.execute(
-        "SELECT id, submitted_at FROM pp_planet_submissions "
-        "WHERE status='pending' AND submitted_at > datetime('now', '-20 minutes')"
-    ).fetchall()
-    return [{"item_id": r["id"], "event": "submission_new",
-             "cooldown_h": 168.0, "info": f"submission #{r['id']}"} for r in rows]
-
-
-def _bug_events(con) -> list[dict]:
-    """New open bug reports created in the last 20 minutes."""
-    rows = con.execute(
-        "SELECT id, created_at, title FROM pp_bugs "
-        "WHERE status='open' AND created_at > datetime('now', '-20 minutes')"
-    ).fetchall()
-    return [{"item_id": r["id"], "event": "bug_new",
-             "cooldown_h": 168.0, "info": r["title"] or f"bug #{r['id']}"} for r in rows]
-
-
-def _recently_notified_item(con, context_id: int, event: str, item_id: int) -> bool:
-    row = con.execute(
-        "SELECT 1 FROM pp_notification_log "
-        "WHERE context_id=? AND event=? AND planet_id=? AND status='ok'",
-        (context_id, event, item_id),
-    ).fetchone()
-    return row is not None
 
 
 # ── Background job ────────────────────────────────────────────────────────────
@@ -317,37 +263,7 @@ def _process_context(con, context_id: int):
                           ev["character_name"], ev["planet_id"], f"error: {exc}")
                 log.warning("Notification send failed (%s/%s): %s", setting["channel"], ev["event"], exc)
 
-    # Admin-only events (planet submissions, bug reports)
-    if not _is_admin_context(con, context_id):
-        return
-    admin_events: list[dict] = []
-    if prefs.get("notify_submissions"):
-        admin_events.extend(_submission_events(con))
-    if prefs.get("notify_bugs"):
-        admin_events.extend(_bug_events(con))
 
-    for ev in admin_events:
-        if _recently_notified_item(con, context_id, ev["event"], ev["item_id"]):
-            continue
-        title, body = _format_admin_event(ev)
-        for setting in settings:
-            try:
-                cfg = _json.loads(setting["config"])
-                notifier = make_notifier(setting["channel"], cfg)
-                notifier.send(title, body)
-                _log_send(con, context_id, setting["channel"], ev["event"],
-                          None, ev["item_id"], "ok")
-                log.info("Admin notification sent: %s → %s #%s", setting["channel"], ev["event"], ev["item_id"])
-            except Exception as exc:
-                _log_send(con, context_id, setting["channel"], ev["event"],
-                          None, ev["item_id"], f"error: {exc}")
-                log.warning("Admin notification failed (%s/%s): %s", setting["channel"], ev["event"], exc)
-
-
-def _format_admin_event(ev: dict) -> tuple[str, str]:
-    if ev["event"] == "submission_new":
-        return "New planet submission", f"A pilot submitted planet data for review — {ev['info']}"
-    return "New bug report", f"A new bug was filed — {ev['info']}"
 
 
 def _format_event(ev: dict) -> tuple[str, str]:
@@ -384,8 +300,6 @@ class NotificationPrefsUpdate(BaseModel):
     lead_hours: int
     notify_extractors: bool
     notify_factories: bool
-    notify_submissions: bool = False
-    notify_bugs: bool = False
 
 
 class NotificationTestRequest(BaseModel):
@@ -502,14 +416,12 @@ def update_notification_prefs(req: NotificationPrefsUpdate, ctx: int = Depends(r
     con = get_connection()
     con.execute(
         "INSERT INTO pp_notification_prefs "
-        "(context_id, lead_hours, notify_extractors, notify_factories, notify_submissions, notify_bugs) "
-        "VALUES (?,?,?,?,?,?) ON CONFLICT(context_id) DO UPDATE SET "
+        "(context_id, lead_hours, notify_extractors, notify_factories) "
+        "VALUES (?,?,?,?) ON CONFLICT(context_id) DO UPDATE SET "
         "lead_hours=excluded.lead_hours, notify_extractors=excluded.notify_extractors, "
-        "notify_factories=excluded.notify_factories, "
-        "notify_submissions=excluded.notify_submissions, notify_bugs=excluded.notify_bugs",
+        "notify_factories=excluded.notify_factories",
         (ctx, req.lead_hours,
-         1 if req.notify_extractors else 0, 1 if req.notify_factories else 0,
-         1 if req.notify_submissions else 0, 1 if req.notify_bugs else 0),
+         1 if req.notify_extractors else 0, 1 if req.notify_factories else 0),
     )
     con.commit()
     con.close()

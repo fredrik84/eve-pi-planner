@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from app.sde import get_connection
 from app.esi import require_context, require_admin, session_character_id
+from app.notifiers import notify_admin_discord
 
 router = APIRouter()
 
@@ -64,6 +65,7 @@ def submit_bug(req: BugReport, pp_session: str = Cookie(default=None)):
     )
     con.commit()
     con.close()
+    notify_admin_discord("New bug report", f"**{title}**\nFiled by {name}\n\n{desc[:300]}{'…' if len(desc) > 300 else ''}")
     return {"ok": True}
 
 

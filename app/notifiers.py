@@ -107,3 +107,25 @@ def make_notifier(channel: str, config: dict) -> BaseNotifier:
     if cls is None:
         raise ValueError(f"Unknown notification channel: {channel!r}")
     return cls(config)
+
+
+import logging as _logging
+import threading as _threading
+
+_admin_log = _logging.getLogger(__name__)
+
+
+def notify_admin_discord(title: str, body: str) -> None:
+    """Fire a plain-text admin alert to the server Discord webhook (DISCORD_WEBHOOK env var).
+    Runs in a daemon thread so it never blocks the request."""
+    url = os.environ.get("DISCORD_WEBHOOK", "")
+    if not url:
+        return
+
+    def _send():
+        try:
+            DiscordNotifier({"webhook_url": url}).send(title, body)
+        except Exception as exc:
+            _admin_log.warning("Admin Discord notify failed: %s", exc)
+
+    _threading.Thread(target=_send, daemon=True).start()

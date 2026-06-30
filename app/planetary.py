@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from app.sde import get_connection, load_pi_data
 from app.esi import require_context, is_admin, require_admin
+from app.notifiers import notify_admin_discord
 
 router = APIRouter()
 
@@ -480,13 +481,15 @@ def import_planets(req: ImportRequest,
                 "skipped": skipped + wskip, "errors": errors[:10]}
 
     # Non-admin → queue for review. Store the original paste; it's re-parsed on approval.
+    submitter = _submitter_name(con, context_id)
     if rows:
         con.execute(
             "INSERT INTO pp_planet_submissions (context_id, submitter_name, raw_text, "
             "planet_count, status) VALUES (?,?,?,?, 'pending')",
-            (context_id, _submitter_name(con, context_id), req.text, len(rows)),
+            (context_id, submitter, req.text, len(rows)),
         )
         con.commit()
+        notify_admin_discord("New planet submission", f"{len(rows)} planet(s) submitted by {submitter} — pending review in Admin → Planet submissions")
     con.close()
     return {"queued": True, "submitted": len(rows), "skipped": skipped, "errors": errors[:10]}
 

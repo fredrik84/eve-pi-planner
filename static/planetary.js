@@ -2549,13 +2549,6 @@ function _renderNotifPrefs(prefs) {
   if (ext) ext.checked = prefs.notify_extractors !== false;
   if (fac) fac.checked = prefs.notify_factories !== false;
   if (hrs) hrs.value = prefs.lead_hours || 4;
-  // Admin-only events
-  const adminRow = document.getElementById('notifAdminPrefsRow');
-  if (adminRow) adminRow.style.display = _isAdmin ? '' : 'none';
-  const sub = document.getElementById('notifPrefSubmissions');
-  const bug = document.getElementById('notifPrefBugs');
-  if (sub) sub.checked = !!prefs.notify_submissions;
-  if (bug) bug.checked = !!prefs.notify_bugs;
 }
 
 function _renderNotifLog(entries) {
@@ -2635,8 +2628,6 @@ async function notifSavePrefs() {
     lead_hours: parseInt(document.getElementById('notifPrefLeadHours').value, 10) || 4,
     notify_extractors: document.getElementById('notifPrefExtractors').checked,
     notify_factories: document.getElementById('notifPrefFactories').checked,
-    notify_submissions: _isAdmin && !!(document.getElementById('notifPrefSubmissions') || {}).checked,
-    notify_bugs: _isAdmin && !!(document.getElementById('notifPrefBugs') || {}).checked,
   };
   status.textContent = 'Saving...';
   try {
