@@ -23,6 +23,7 @@ from app.bugs import router as bugs_router
 from app.admin import router as admin_router
 from app.features import router as features_router
 from app.notifications import router as notifications_router, make_scheduler
+from app.internal import router as internal_router
 
 app = FastAPI(title="EVE PI Planner")
 app.include_router(planetary_router)
@@ -33,6 +34,7 @@ app.include_router(bugs_router)
 app.include_router(admin_router)
 app.include_router(features_router)
 app.include_router(notifications_router)
+app.include_router(internal_router)
 
 _scheduler = None
 
