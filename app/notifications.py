@@ -252,13 +252,13 @@ def _process_context(con, context_id: int):
     for evs in (ext_evs, fac_evs):
         if not evs:
             continue
-        title, body = _format_batch(evs)
+        title, body, fields = _format_batch(evs)
         for setting in settings:
             status = "ok"
             try:
                 cfg = _json.loads(setting["config"])
                 notifier = make_notifier(setting["channel"], cfg)
-                notifier.send(title, body)
+                notifier.send(title, body, fields=fields)
                 log.info("Notification sent: %s → %s (%d events)", setting["channel"], evs[0]["event"], len(evs))
             except Exception as exc:
                 status = f"error: {exc}"
@@ -268,16 +268,29 @@ def _process_context(con, context_id: int):
                           ev["character_name"], ev["planet_id"], status)
 
 
-def _format_batch(evs: list[dict]) -> tuple[str, str]:
+def _format_batch(evs: list[dict]) -> tuple[str, str, list[dict]]:
+    """Return (title, plain_body, embed_fields) for a batch of events."""
     n = len(evs)
     evs_sorted = sorted(evs, key=lambda e: e["hours_left"])
     if evs[0]["event"] == "extractor_expiry":
         title = "Extractor expiring" if n == 1 else f"{n} extractors expiring"
         lines = [f"~{round(e['hours_left'], 1)}h — {e.get('character_name', '?')} · {e.get('system_name', '?')}" for e in evs_sorted]
+        fields = [
+            {"name": e.get("character_name", "?"),
+             "value": f"{e.get('system_name', '?')} · ~{round(e['hours_left'], 1)}h",
+             "inline": True}
+            for e in evs_sorted
+        ]
     else:
         title = "Factory refill due" if n == 1 else f"{n} factories due for refill"
         lines = [f"~{round(e['hours_left'], 1)}h — {e.get('character_name', '?')} · {e.get('system_name', '?')} (estimate)" for e in evs_sorted]
-    return title, "\n".join(lines)
+        fields = [
+            {"name": e.get("character_name", "?"),
+             "value": f"{e.get('system_name', '?')} · ~{round(e['hours_left'], 1)}h",
+             "inline": True}
+            for e in evs_sorted
+        ]
+    return title, "\n".join(lines), fields
 
 
 # ── Scheduler ─────────────────────────────────────────────────────────────────
@@ -496,19 +509,21 @@ def resend_last_notification(ctx: int = Depends(require_context)):
     sent = []
     errors = []
     for event_type, evs in by_event.items():
-        _, body = _format_batch(evs)
         n = len(evs)
         if event_type == "extractor_expiry":
             title = "[Replay] Extractor expiring" if n == 1 else f"[Replay] {n} extractors expiring"
         else:
             title = "[Replay] Factory refill due" if n == 1 else f"[Replay] {n} factories due for refill"
-        # Strip the ~0.0h placeholder — not meaningful for a replay
-        body = "\n".join(line.split(" — ", 1)[-1] for line in body.splitlines())
+        body = "\n".join(f"{e['character_name']} · {e['system_name']}" for e in evs)
+        fields = [
+            {"name": e["character_name"], "value": e["system_name"], "inline": True}
+            for e in evs
+        ]
         for setting in settings:
             try:
                 cfg = _json.loads(setting["config"])
                 notifier = make_notifier(setting["channel"], cfg)
-                notifier.send(title, body)
+                notifier.send(title, body, fields=fields)
             except Exception as exc:
                 errors.append(f"{setting['channel']}: {exc}")
         if not errors:

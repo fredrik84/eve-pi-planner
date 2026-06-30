@@ -8,9 +8,13 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+_COLOR_EXTRACTOR = 0xF4A460  # sandy orange
+_COLOR_FACTORY   = 0x4488FF  # blue
+
 
 class BaseNotifier:
-    def send(self, title: str, body: str, url: str | None = None) -> None:
+    def send(self, title: str, body: str, url: str | None = None,
+             fields: list[dict] | None = None) -> None:
         raise NotImplementedError
 
 
@@ -22,7 +26,8 @@ class PushoverNotifier(BaseNotifier):
         # App token: user-supplied takes precedence, then env var.
         self._app_token = config.get("app_token") or os.environ.get("PUSHOVER_APP_TOKEN", "")
 
-    def send(self, title: str, body: str, url: str | None = None) -> None:
+    def send(self, title: str, body: str, url: str | None = None,
+             fields: list[dict] | None = None) -> None:
         if not self._user_key or not self._app_token:
             raise ValueError(
                 "Pushover requires user_key and app_token "
@@ -50,7 +55,8 @@ class NtfyNotifier(BaseNotifier):
         self._topic = config.get("topic", "")
         self._server = config.get("server", "https://ntfy.sh").rstrip("/")
 
-    def send(self, title: str, body: str, url: str | None = None) -> None:
+    def send(self, title: str, body: str, url: str | None = None,
+             fields: list[dict] | None = None) -> None:
         if not self._topic:
             raise ValueError("ntfy requires a topic")
         endpoint = f"{self._server}/{urllib.parse.quote(self._topic, safe='')}"
@@ -70,15 +76,32 @@ class DiscordNotifier(BaseNotifier):
     def __init__(self, config: dict):
         self._webhook_url = config.get("webhook_url", "")
 
-    def send(self, title: str, body: str, url: str | None = None) -> None:
+    def send(self, title: str, body: str, url: str | None = None,
+             fields: list[dict] | None = None) -> None:
         if not self._webhook_url:
             raise ValueError("Discord requires webhook_url")
-        content = f"**{title}**\n{body}"
-        if url:
-            content += f"\n<{url}>"
-        if len(content) > 2000:
-            content = content[:1997] + "…"
-        payload = _json.dumps({"content": content}).encode("utf-8")
+
+        if fields is not None:
+            # Rich embed card
+            color = _COLOR_FACTORY if "factory" in title.lower() else _COLOR_EXTRACTOR
+            embed: dict = {
+                "title": title,
+                "color": color,
+                "fields": fields,
+                "footer": {"text": "EVE PI Planner · eve-pi.failed.name"},
+            }
+            if url:
+                embed["url"] = url
+            payload = _json.dumps({"embeds": [embed]}).encode("utf-8")
+        else:
+            # Plain fallback (admin alerts, test messages)
+            content = f"**{title}**\n{body}"
+            if url:
+                content += f"\n<{url}>"
+            if len(content) > 2000:
+                content = content[:1997] + "…"
+            payload = _json.dumps({"content": content}).encode("utf-8")
+
         req = urllib.request.Request(
             self._webhook_url,
             data=payload,
