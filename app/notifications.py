@@ -441,6 +441,60 @@ def test_notification(req: NotificationTestRequest, ctx: int = Depends(require_c
     return {"ok": True}
 
 
+@router.post("/api/notifications/check-now")
+def check_notifications_now(ctx: int = Depends(require_context)):
+    """Run the notification check immediately, ignoring cooldowns, and send to all saved channels."""
+    ensure_notification_tables()
+    con = get_connection()
+    prefs = _get_prefs(con, ctx)
+    lead = prefs["lead_hours"]
+
+    settings = con.execute(
+        "SELECT id, channel, config FROM pp_notification_settings WHERE context_id=? AND enabled=1",
+        (ctx,),
+    ).fetchall()
+    if not settings:
+        con.close()
+        raise HTTPException(status_code=400, detail="No enabled notification channels configured.")
+
+    ext_evs: list[dict] = []
+    fac_evs: list[dict] = []
+    if prefs["notify_extractors"]:
+        for ev in _extractor_events(con, ctx, lead):
+            ev["event"] = "extractor_expiry"
+            ext_evs.append(ev)
+    if prefs["notify_factories"]:
+        for ev in _factory_events(con, ctx, lead):
+            ev["event"] = "factory_refill"
+            fac_evs.append(ev)
+
+    con.close()
+
+    if not ext_evs and not fac_evs:
+        return {"nothing_due": True, "sent": [], "errors": []}
+
+    sent = []
+    errors = []
+    for evs in (ext_evs, fac_evs):
+        if not evs:
+            continue
+        title, body = _format_batch(evs)
+        batch_errors = []
+        for setting in settings:
+            try:
+                cfg = _json.loads(setting["config"])
+                notifier = make_notifier(setting["channel"], cfg)
+                notifier.send(title, body)
+            except Exception as exc:
+                batch_errors.append(f"{setting['channel']}: {exc}")
+        if batch_errors:
+            errors.extend(batch_errors)
+        else:
+            sent.append({"event": evs[0]["event"], "count": len(evs), "title": title, "body": body})
+
+    return {"nothing_due": False, "sent": sent, "errors": errors}
+
+
 @router.get("/api/notifications/log")
 def get_notification_log(ctx: int = Depends(require_context)):
     ensure_notification_tables()

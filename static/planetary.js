@@ -2606,6 +2606,27 @@ async function notifDelete(id) {
   await loadNotifications();
 }
 
+async function notifCheckNow() {
+  const status = document.getElementById('notifPrefsStatus');
+  status.textContent = 'Checking...';
+  try {
+    const r = await fetch('/api/notifications/check-now', { method: 'POST' });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || r.status);
+    if (d.nothing_due) {
+      status.textContent = 'Nothing due within your lead window.';
+    } else if (d.errors && d.errors.length) {
+      status.textContent = 'Send error: ' + d.errors.join('; ');
+    } else {
+      const summary = d.sent.map(s => `${s.title} (${s.count})`).join(', ');
+      status.textContent = 'Sent: ' + summary;
+    }
+    loadNotifications();
+  } catch (e) {
+    status.textContent = 'Error: ' + e.message;
+  }
+}
+
 async function notifSavePrefs() {
   const status = document.getElementById('notifPrefsStatus');
   const prefs = {
