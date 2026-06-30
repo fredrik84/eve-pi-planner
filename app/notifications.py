@@ -234,49 +234,50 @@ def _process_context(con, context_id: int):
     if not settings:
         return
 
-    events: list[dict] = []
+    ext_evs: list[dict] = []
+    fac_evs: list[dict] = []
     if prefs["notify_extractors"]:
         for ev in _extractor_events(con, context_id, lead):
             ev["event"] = "extractor_expiry"
             ev["cooldown_h"] = 2.0
-            events.append(ev)
+            if not _recently_notified(con, context_id, ev["event"], ev["planet_id"], ev["cooldown_h"]):
+                ext_evs.append(ev)
     if prefs["notify_factories"]:
         for ev in _factory_events(con, context_id, lead):
             ev["event"] = "factory_refill"
             ev["cooldown_h"] = 4.0
-            events.append(ev)
+            if not _recently_notified(con, context_id, ev["event"], ev["planet_id"], ev["cooldown_h"]):
+                fac_evs.append(ev)
 
-    for ev in events:
-        if _recently_notified(con, context_id, ev["event"], ev["planet_id"], ev["cooldown_h"]):
+    for evs in (ext_evs, fac_evs):
+        if not evs:
             continue
-        title, body = _format_event(ev)
+        title, body = _format_batch(evs)
         for setting in settings:
+            status = "ok"
             try:
                 cfg = _json.loads(setting["config"])
                 notifier = make_notifier(setting["channel"], cfg)
                 notifier.send(title, body)
-                _log_send(con, context_id, setting["channel"], ev["event"],
-                          ev["character_name"], ev["planet_id"], "ok")
-                log.info("Notification sent: %s → %s / %s", setting["channel"], ev["event"], ev.get("system_name"))
+                log.info("Notification sent: %s → %s (%d events)", setting["channel"], evs[0]["event"], len(evs))
             except Exception as exc:
+                status = f"error: {exc}"
+                log.warning("Notification send failed (%s/%s): %s", setting["channel"], evs[0]["event"], exc)
+            for ev in evs:
                 _log_send(con, context_id, setting["channel"], ev["event"],
-                          ev["character_name"], ev["planet_id"], f"error: {exc}")
-                log.warning("Notification send failed (%s/%s): %s", setting["channel"], ev["event"], exc)
+                          ev["character_name"], ev["planet_id"], status)
 
 
-
-
-def _format_event(ev: dict) -> tuple[str, str]:
-    hours = round(ev["hours_left"], 1)
-    name = ev.get("character_name") or "unknown"
-    sys = ev.get("system_name") or "unknown system"
-    if ev["event"] == "extractor_expiry":
-        title = "Extractor expiring"
-        body = f"Extractor expires in ~{hours}h — {name} · {sys}"
+def _format_batch(evs: list[dict]) -> tuple[str, str]:
+    n = len(evs)
+    evs_sorted = sorted(evs, key=lambda e: e["hours_left"])
+    if evs[0]["event"] == "extractor_expiry":
+        title = "Extractor expiring" if n == 1 else f"{n} extractors expiring"
+        lines = [f"~{round(e['hours_left'], 1)}h — {e.get('character_name', '?')} · {e.get('system_name', '?')}" for e in evs_sorted]
     else:
-        title = "Factory refill due"
-        body = f"Factory pads due for refill in ~{hours}h — {name} · {sys} (estimate based on last scan)"
-    return title, body
+        title = "Factory refill due" if n == 1 else f"{n} factories due for refill"
+        lines = [f"~{round(e['hours_left'], 1)}h — {e.get('character_name', '?')} · {e.get('system_name', '?')} (estimate)" for e in evs_sorted]
+    return title, "\n".join(lines)
 
 
 # ── Scheduler ─────────────────────────────────────────────────────────────────

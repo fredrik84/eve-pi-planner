@@ -164,13 +164,14 @@ function _featureActive(key, dflt = false) {
 }
 function _applyTabGates() {
   const gates = [
-    { key: 'factory_layout', cls: 'nav-feat-layout', tab: 'layout' },
-    { key: 'planet_db',      cls: 'nav-feat-pdb',    tab: 'planetdb' },
+    { key: 'factory_layout', storageKey: 'ppNavFeatLayout', cls: 'nav-feat-layout', tab: 'layout' },
+    { key: 'planet_db',      storageKey: 'ppNavFeatPdb',    cls: 'nav-feat-pdb',    tab: 'planetdb' },
   ];
   const cur = localStorage.getItem('activeTab');
   let needRedirect = false;
-  gates.forEach(({ key, cls, tab }) => {
+  gates.forEach(({ key, storageKey, cls, tab }) => {
     const show = _featureActive(key);
+    try { localStorage.setItem(storageKey, show ? '1' : '0'); } catch(e) {}
     document.documentElement.classList.toggle(cls, show);
     if (!show && cur === tab) needRedirect = true;
   });
