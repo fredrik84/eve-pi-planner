@@ -49,3 +49,27 @@ jobs:
             GIT_COMMIT=${{ github.sha }}
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
+
+      - name: Notify Discord
+        if: success()
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          COMMIT_SHA: ${{ github.sha }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+        run: |
+          SHORT_SHA="${COMMIT_SHA:0:7}"
+          BODY=$(jq -n \
+            --arg msg "$COMMIT_MSG" \
+            --arg sha "$SHORT_SHA" \
+            '{
+              username: "EVE PI Planner",
+              embeds: [{
+                title: ("Deploying · \($sha)"),
+                description: $msg,
+                color: 3447003,
+                footer: { text: "Image built — pod rolling in ~3 min" }
+              }]
+            }')
+          curl -s -X POST "$DISCORD_WEBHOOK" \
+            -H "Content-Type: application/json" \
+            -d "$BODY"
