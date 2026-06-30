@@ -2,7 +2,8 @@ import html as _html
 import json as _json
 from typing import Optional
 
-APP_VERSION = "2026.06.29"
+import os as _os
+GIT_COMMIT = _os.environ.get("GIT_COMMIT", "unknown")
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse

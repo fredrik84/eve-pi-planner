@@ -144,12 +144,14 @@ let _dashLanded = false;   // auto-land on the dashboard once per page load (log
 let _features = {};            // key -> {key,label,description,enabled}
 let _featuresIsAdmin = false;
 let _featuresIsTester = false;
+let _featuresGitCommit = 'unknown';
 async function _loadFeatures() {
   try {
     const d = await (await fetch('/api/features')).json();
     _features = {}; (d.features || []).forEach(f => { _features[f.key] = f; });
     _featuresIsAdmin = !!d.is_admin;
     _featuresIsTester = !!d.is_tester;
+    _featuresGitCommit = d.git_commit || 'unknown';
   } catch (e) { /* leave whatever we had; _featureActive falls back to dflt */ }
 }
 function _featureActive(key, dflt = false) {

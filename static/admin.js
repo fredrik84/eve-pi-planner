@@ -535,11 +535,19 @@ function renderAdminStats(s) {
     },
   ];
 
+  const commit = (typeof _featuresGitCommit !== 'undefined') ? _featuresGitCommit : 'unknown';
+  const shortCommit = commit.length > 7 ? commit.slice(0, 7) : commit;
+  const commitLink = commit !== 'unknown'
+    ? `<a href="https://github.com/fredrik84/eve-pi-planner/commit/${commit}" target="_blank" rel="noopener">${shortCommit}</a>`
+    : shortCommit;
+
   el.innerHTML = groups.map(g => `
     <div class="admin-stats-group">
       <div class="admin-stats-heading">${_esc(g.heading)}</div>
       <div class="an-stats">${g.tiles.join('')}</div>
-    </div>`).join('');
+    </div>`).join('')
+    + `<div class="admin-stats-group"><div class="admin-stats-heading">Deployment</div>`
+    + `<div class="an-stats">${tile(commitLink, 'git commit')}</div></div>`;
 }
 
 // ── DB Cleanup ────────────────────────────────────────────────────────────────

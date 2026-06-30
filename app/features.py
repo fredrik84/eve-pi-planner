@@ -127,7 +127,8 @@ def list_features(pp_session: str = Cookie(default=None)):
          "state": db_state.get(f["key"]) or _default_state(f)}
         for f in FEATURE_REGISTRY
     ]
-    return {"features": feats, "is_admin": is_admin(pp_session), "is_tester": is_tester(pp_session)}
+    from app.main import GIT_COMMIT
+    return {"features": feats, "is_admin": is_admin(pp_session), "is_tester": is_tester(pp_session), "git_commit": GIT_COMMIT}
 
 
 class FeatureStateUpdate(BaseModel):
