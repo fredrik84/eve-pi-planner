@@ -1460,6 +1460,15 @@ a.plan-action-btn { text-decoration: none; display: inline-block; }
 .layout-svg .lp-t4   { fill: #ffce6b; stroke: #5a4416; }
 
 /* site footer (donation) */
+/* Nav items hidden until JS confirms session state. Classes set by a <head> script
+   from localStorage so the correct state is applied before first paint. */
+#dashboardNavTab { display: none; }
+html.nav-li #dashboardNavTab { display: flex; }
+#adminNavGroup { display: none; }
+html.nav-adm #adminNavGroup { display: flex; }
+#adminMobileTab { display: none; }
+html.nav-adm #adminMobileTab { display: flex; }
+
 /* Donation note pinned to the bottom of the sticky sidebar — always on screen,
    no scrolling to the page foot to find it. */
 .sidebar-discord {

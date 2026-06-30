@@ -235,14 +235,14 @@ async function loadCharacters() {
 function renderHeaderSession(loggedIn, chars, sessionCharId) {
   try { localStorage.setItem('ppNavLoggedIn', loggedIn ? '1' : '0'); } catch(e) {}
   try { localStorage.setItem('ppNavIsAdmin', _isAdmin ? '1' : '0'); } catch(e) {}
+  document.documentElement.classList.toggle('nav-li', !!loggedIn);
+  document.documentElement.classList.toggle('nav-adm', !!_isAdmin);
   const el = document.getElementById('headerActions');
   if (!el) return;
   if (!loggedIn) {
     el.innerHTML = _esiConfigured
       ? `<button class="header-login-btn" onclick="esiLogin()">Login</button>`
       : '';
-    const dt = document.getElementById('dashboardNavTab');
-    if (dt) dt.style.display = 'none';
     return;
   }
   const char = chars.find(c => c.character_id === sessionCharId);
@@ -252,14 +252,6 @@ function renderHeaderSession(loggedIn, chars, sessionCharId) {
     + `<button id="reportBugBtn" class="header-bug-btn" onclick="openBugModal()">Report bug</button>`
     + `<button class="header-settings-btn" onclick="openSettingsModal()" title="Settings">⚙&#xFE0E;</button>`
     + `<span class="header-session">${name} · <a href="/auth/logout" class="header-logout">Log out</a></span>`;
-  // Desktop sidebar: show admin nav group for admins.
-  const navGroup = document.getElementById('adminNavGroup');
-  if (navGroup) navGroup.style.display = _isAdmin ? '' : 'none';
-  // Mobile bottom bar: dedicated Admin tab button for admins only.
-  const adminMobileTab = document.getElementById('adminMobileTab');
-  if (adminMobileTab) adminMobileTab.style.display = _isAdmin ? '' : 'none';
-  const dashTab = document.getElementById('dashboardNavTab');
-  if (dashTab) dashTab.style.display = '';
   if (!_dashLanded) {
     _dashLanded = true;
     const isShare = window.__SHARE_ID__ || /^\/s\//.test(location.pathname);

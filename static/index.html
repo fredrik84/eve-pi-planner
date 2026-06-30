@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+  <script>try{if(localStorage.getItem('ppNavLoggedIn')==='1')document.documentElement.classList.add('nav-li');if(localStorage.getItem('ppNavIsAdmin')==='1')document.documentElement.classList.add('nav-adm');}catch(e){}</script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>EVE PI Planner</title>
@@ -20,7 +21,7 @@
   <meta property="og:image" content="https://eve-pi.failed.name/og-image.png?v=6">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:image" content="https://eve-pi.failed.name/og-image.png?v=6">
-  <link rel="stylesheet" href="/style.css?v=239">
+  <link rel="stylesheet" href="/style.css?v=240">
 </head>
 <body>
   <header>
@@ -38,11 +39,11 @@
   <div class="app-layout">
     <aside class="sidebar" id="sidebar">
       <nav class="sidebar-nav">
-        <button class="tab" data-tab="dashboard" id="dashboardNavTab" style="display:none"><span class="nav-ico">HM</span><span class="nav-lbl">Dashboard</span></button>
+        <button class="tab" data-tab="dashboard" id="dashboardNavTab"><span class="nav-ico">HM</span><span class="nav-lbl">Dashboard</span></button>
         <button class="tab" data-tab="analyze"><span class="nav-ico">AN</span><span class="nav-lbl">Setup Analysis</span></button>
         <button class="tab" data-tab="planetary"><span class="nav-ico">PP</span><span class="nav-lbl">Planetary Planning</span></button>
         <button class="settings-mobile-tab" id="settingsMobileTab" style="display:none" onclick="openSettingsModal()"><span class="nav-ico">ST</span><span class="nav-lbl">Settings</span></button>
-        <button class="tab" id="adminMobileTab" data-tab="admin" style="display:none"><span class="nav-ico">AD</span><span class="nav-lbl">Admin</span></button>
+        <button class="tab" id="adminMobileTab" data-tab="admin"><span class="nav-ico">AD</span><span class="nav-lbl">Admin</span></button>
         <div class="nav-group">
           <div class="nav-group-hd"><span class="nav-ico">PI</span><span class="nav-lbl">PI Tools</span></div>
           <button class="tab tab-sub" data-tab="planner" data-pimode="refill"><span class="nav-ico">RF</span><span class="nav-lbl">Refill a plan</span></button>
@@ -52,7 +53,7 @@
         <button class="tab" data-tab="planetdb"><span class="nav-ico">DB</span><span class="nav-lbl">Planet DB</span></button>
         <button class="tab" data-tab="howitworks"><span class="nav-ico">i</span><span class="nav-lbl">How it works</span></button>
         <button class="tab" data-tab="contribute"><span class="nav-ico">?</span><span class="nav-lbl">Contribute</span></button>
-        <div class="nav-group" id="adminNavGroup" style="display:none">
+        <div class="nav-group" id="adminNavGroup">
           <div class="nav-group-hd"><span class="nav-ico">AD</span><span class="nav-lbl">Admin</span></div>
           <button class="admin-nav-item" data-page="stats" onclick="adminNavTo('stats')"><span class="nav-ico">ST</span><span class="nav-lbl">System stats</span></button>
           <button class="admin-nav-item" data-page="features" onclick="adminNavTo('features')"><span class="nav-ico">FT</span><span class="nav-lbl">Features</span></button>
@@ -79,19 +80,6 @@
         </div>
       </div>
     </aside>
-    <script>
-    // Restore nav visibility synchronously before first paint to prevent jump.
-    // loadCharacters() updates these after /api/characters resolves and saves the new state.
-    (function(){try{
-      if(localStorage.getItem('ppNavLoggedIn')==='1'){
-        var dt=document.getElementById('dashboardNavTab');if(dt)dt.style.display='';
-      }
-      if(localStorage.getItem('ppNavIsAdmin')==='1'){
-        var ng=document.getElementById('adminNavGroup');if(ng)ng.style.display='';
-        var mt=document.getElementById('adminMobileTab');if(mt)mt.style.display='';
-      }
-    }catch(e){}}());
-    </script>
 
   <main>
 
@@ -1051,7 +1039,7 @@ PVF-N9    3         95                 60             80                  100   
   </div>
 
   <script src="/app.js?v=29"></script>
-  <script src="/planetary.js?v=324"></script>
+  <script src="/planetary.js?v=325"></script>
   <script src="/dashboard.js?v=11"></script>
   <script src="/admin.js?v=10"></script>
   <script src="/planetdb.js?v=1"></script>
