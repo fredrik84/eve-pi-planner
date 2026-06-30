@@ -123,20 +123,19 @@ async function _fetchSetupPlans() {
 // Paint instantly from cache (colony data + snapshots are usually warm from the Planetary tab),
 // then refresh in the background — no need to hit Reload to see anything.
 async function onAnalyzeTabOpen() {
-  _renderAnalyzePlans();
-  if (_ppCharsData.length || _analyzeSnaps.length) renderAnalysis();
-  else {
-    const el = document.getElementById('analyzeContent');
-    if (el) el.innerHTML = '<div class="admin-hint">Loading your colonies and saved plans…</div>';
-  }
-  await loadCharacters();          // refresh the live production rates
-  let saved = [], derived = [];
-  try { saved = await _fetchAllSnapshots(); } catch (e) {}
-  try { derived = await _fetchSetupPlans(); } catch (e) {}
-  _analyzeSnaps = [...derived, ...saved];   // your live setup first, then saved plans
-  await _loadFeatures();
-  await _fetchSkillRoi();          // skill-training advice (feature-gated; independent of the selected plan)
-  await _fetchExpansion();          // spare-capacity "deploy this here" advice (moved from the dashboard)
+  const el = document.getElementById('analyzeContent');
+  if (el && !_analyzeSnaps.length && !_ppCharsData.length)
+    el.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Loading…</div>';
+  // Fetch characters, features, snapshots and derived plans in parallel — all independent.
+  const [saved, derived] = await Promise.all([
+    _fetchAllSnapshots().catch(() => []),
+    _fetchSetupPlans().catch(() => []),
+    loadCharacters(),
+    _loadFeatures(),
+  ]);
+  _analyzeSnaps = [...(derived || []), ...(saved || [])];
+  // Skill ROI and expansion depend on _loadFeatures (via _featureActive) — run after phase 1.
+  await Promise.all([_fetchSkillRoi(), _fetchExpansion()]);
   _renderAnalyzePlans();
   renderAnalysis();
 }

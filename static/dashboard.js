@@ -5,13 +5,11 @@
 // _isAdmin, switchTab) lives in planetary.js, which loads first.
 
 async function onDashboardTabOpen() {
-  await _loadFeatures();
   const el = document.getElementById('dashboardContent');
-  if (el && !el.dataset.loaded) el.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Loading overview…</div>';
+  if (el && !_dashData) el.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Loading overview…</div>';
   try {
-    const data = await (await fetch('/api/dashboard')).json();
+    const [data] = await Promise.all([fetch('/api/dashboard').then(r => r.json()), _loadFeatures()]);
     renderDashboard(data);
-    if (el) el.dataset.loaded = '1';
   } catch (e) {
     if (el) el.innerHTML = '<section class="pp-card"><div class="pp-card-body"><div class="pp-empty">Failed to load dashboard.</div></div></section>';
   }
