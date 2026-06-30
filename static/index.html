@@ -79,6 +79,19 @@
         </div>
       </div>
     </aside>
+    <script>
+    // Restore nav visibility synchronously before first paint to prevent jump.
+    // loadCharacters() updates these after /api/characters resolves and saves the new state.
+    (function(){try{
+      if(localStorage.getItem('ppNavLoggedIn')==='1'){
+        var dt=document.getElementById('dashboardNavTab');if(dt)dt.style.display='';
+      }
+      if(localStorage.getItem('ppNavIsAdmin')==='1'){
+        var ng=document.getElementById('adminNavGroup');if(ng)ng.style.display='';
+        var mt=document.getElementById('adminMobileTab');if(mt)mt.style.display='';
+      }
+    }catch(e){}}());
+    </script>
 
   <main>
 
@@ -1038,7 +1051,7 @@ PVF-N9    3         95                 60             80                  100   
   </div>
 
   <script src="/app.js?v=29"></script>
-  <script src="/planetary.js?v=323"></script>
+  <script src="/planetary.js?v=324"></script>
   <script src="/dashboard.js?v=11"></script>
   <script src="/admin.js?v=10"></script>
   <script src="/planetdb.js?v=1"></script>

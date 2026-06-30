@@ -233,6 +233,8 @@ async function loadCharacters() {
 }
 
 function renderHeaderSession(loggedIn, chars, sessionCharId) {
+  try { localStorage.setItem('ppNavLoggedIn', loggedIn ? '1' : '0'); } catch(e) {}
+  try { localStorage.setItem('ppNavIsAdmin', _isAdmin ? '1' : '0'); } catch(e) {}
   const el = document.getElementById('headerActions');
   if (!el) return;
   if (!loggedIn) {
