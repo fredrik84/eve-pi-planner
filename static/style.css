@@ -1460,14 +1460,29 @@ a.plan-action-btn { text-decoration: none; display: inline-block; }
 .layout-svg .lp-t4   { fill: #ffce6b; stroke: #5a4416; }
 
 /* site footer (donation) */
-/* Nav items hidden until JS confirms session state. Classes set by a <head> script
-   from localStorage so the correct state is applied before first paint. */
-#dashboardNavTab { display: none; }
-html.nav-li #dashboardNavTab { display: flex; }
-#adminNavGroup { display: none; }
+/* Nav visibility — all conditional tabs hidden by default.
+   A <head> script reads localStorage and sets classes on <html> before first paint
+   so the correct state applies without any visible jump. */
+#dashboardNavTab,
+#adminNavGroup,
+#adminMobileTab,
+.tab[data-tab="analyze"],
+.tab[data-tab="planetary"],
+.tab[data-tab="characters"],
+.tab[data-tab="planetdb"],
+.tab[data-tab="layout"],
+.tab[data-pimode="refill"] { display: none; }
+
+html.nav-li #dashboardNavTab,
+html.nav-li .tab[data-tab="analyze"],
+html.nav-li .tab[data-tab="planetary"],
+html.nav-li .tab[data-tab="characters"],
+html.nav-li .tab[data-pimode="refill"] { display: flex; }
+
 html.nav-adm #adminNavGroup { display: flex; }
-#adminMobileTab { display: none; }
 html.nav-adm #adminMobileTab { display: flex; }
+html.nav-feat-layout .tab[data-tab="layout"] { display: flex; }
+html.nav-li.nav-feat-pdb .tab[data-tab="planetdb"] { display: flex; }
 
 /* Donation note pinned to the bottom of the sticky sidebar — always on screen,
    no scrolling to the page foot to find it. */
