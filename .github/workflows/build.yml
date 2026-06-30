@@ -72,4 +72,4 @@ jobs:
             }')
           curl -s -X POST "$DISCORD_WEBHOOK" \
             -H "Content-Type: application/json" \
-            -d "$BODY"
+            -d "$BODY" || true
