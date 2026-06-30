@@ -114,7 +114,8 @@ def _extractor_events(con, context_id: int, lead_hours: float) -> list[dict]:
         SELECT cy.character_id, cy.planet_id,
                cy.install_ts, cy.prog_days,
                ch.character_name,
-               COALESCE(ss.name, '') AS system_name
+               COALESCE(ss.name, '') AS system_name,
+               cp.planet_num, cp.planet_type
         FROM pp_colony_yield cy
         JOIN pp_characters ch ON ch.character_id = cy.character_id
         LEFT JOIN pp_char_planets cp
@@ -139,6 +140,8 @@ def _extractor_events(con, context_id: int, lead_hours: float) -> list[dict]:
                 "character_name": r["character_name"],
                 "planet_id": r["planet_id"],
                 "system_name": r["system_name"],
+                "planet_num": r["planet_num"],
+                "planet_type": r["planet_type"],
                 "hours_left": hours_left,
             })
     return events
@@ -167,7 +170,8 @@ def _factory_events(con, context_id: int, lead_hours: float) -> list[dict]:
         """
         SELECT cp.character_id, cp.planet_id, cp.scanned_at,
                ch.character_name,
-               COALESCE(ss.name, '') AS system_name
+               COALESCE(ss.name, '') AS system_name,
+               cp.planet_num, cp.planet_type
         FROM pp_char_planets cp
         JOIN pp_characters ch ON ch.character_id = cp.character_id
         LEFT JOIN solar_systems ss ON ss.system_id = cp.solar_system_id
@@ -187,6 +191,8 @@ def _factory_events(con, context_id: int, lead_hours: float) -> list[dict]:
                 "character_name": r["character_name"],
                 "planet_id": r["planet_id"],
                 "system_name": r["system_name"],
+                "planet_num": r["planet_num"],
+                "planet_type": r["planet_type"],
                 "hours_left": hours_left,
             })
     return events
@@ -268,29 +274,51 @@ def _process_context(con, context_id: int):
                           ev["character_name"], ev["planet_id"], status)
 
 
+def _planet_label(e: dict) -> str:
+    """Short planet label: 'System IV (Barren)' or fallback."""
+    system = e.get("system_name") or "?"
+    num = e.get("planet_num")
+    ptype = e.get("planet_type") or ""
+    roman = ["I","II","III","IV","V","VI","VII","VIII","IX","X","XI","XII","XIII","XIV","XV"]
+    num_str = roman[num - 1] if num and 1 <= num <= len(roman) else (str(num) if num else "?")
+    return f"{system} {num_str} ({ptype})" if ptype else f"{system} {num_str}"
+
+
 def _format_batch(evs: list[dict]) -> tuple[str, str, list[dict]]:
     """Return (title, plain_body, embed_fields) for a batch of events."""
     n = len(evs)
-    evs_sorted = sorted(evs, key=lambda e: e["hours_left"])
-    if evs[0]["event"] == "extractor_expiry":
+    is_extractor = evs[0]["event"] == "extractor_expiry"
+    if is_extractor:
         title = "Extractor expiring" if n == 1 else f"{n} extractors expiring"
-        lines = [f"~{round(e['hours_left'], 1)}h — {e.get('character_name', '?')} · {e.get('system_name', '?')}" for e in evs_sorted]
-        fields = [
-            {"name": e.get("character_name", "?"),
-             "value": f"{e.get('system_name', '?')} · ~{round(e['hours_left'], 1)}h",
-             "inline": True}
-            for e in evs_sorted
-        ]
     else:
         title = "Factory refill due" if n == 1 else f"{n} factories due for refill"
-        lines = [f"~{round(e['hours_left'], 1)}h — {e.get('character_name', '?')} · {e.get('system_name', '?')} (estimate)" for e in evs_sorted]
-        fields = [
-            {"name": e.get("character_name", "?"),
-             "value": f"{e.get('system_name', '?')} · ~{round(e['hours_left'], 1)}h",
-             "inline": True}
-            for e in evs_sorted
-        ]
-    return title, "\n".join(lines), fields
+
+    # Group by character, sorted by earliest hours_left within each character
+    by_char: dict[str, list[dict]] = {}
+    for e in sorted(evs, key=lambda e: e["hours_left"]):
+        by_char.setdefault(e.get("character_name", "?"), []).append(e)
+
+    # Plain text body (one line per event, sorted)
+    lines = []
+    for e in sorted(evs, key=lambda e: e["hours_left"]):
+        suffix = " (estimate)" if not is_extractor else ""
+        lines.append(f"~{round(e['hours_left'], 1)}h — {_planet_label(e)}{suffix}")
+    body = "\n".join(lines)
+
+    # Embed fields: one field per character listing their planets
+    fields = []
+    for char_name, char_evs in by_char.items():
+        planet_lines = []
+        for e in char_evs:
+            hrs = f"~{round(e['hours_left'], 1)}h"
+            planet_lines.append(f"{_planet_label(e)} · {hrs}")
+        fields.append({
+            "name": char_name,
+            "value": "\n".join(planet_lines),
+            "inline": True,
+        })
+
+    return title, body, fields
 
 
 # ── Scheduler ─────────────────────────────────────────────────────────────────
@@ -487,8 +515,9 @@ def resend_last_notification(ctx: int = Depends(require_context)):
 
     by_event: dict[str, list[dict]] = {}
     for r in rows:
-        sys_row = con.execute(
-            "SELECT ss.name FROM pp_char_planets cp "
+        cp_row = con.execute(
+            "SELECT ss.name AS system_name, cp.planet_num, cp.planet_type "
+            "FROM pp_char_planets cp "
             "JOIN pp_characters ch ON ch.character_id = cp.character_id "
             "LEFT JOIN solar_systems ss ON ss.system_id = cp.solar_system_id "
             "WHERE ch.context_id=? AND cp.planet_id=? LIMIT 1",
@@ -498,7 +527,9 @@ def resend_last_notification(ctx: int = Depends(require_context)):
             "event": r["event"],
             "character_name": r["character"] or "?",
             "planet_id": r["planet_id"],
-            "system_name": (sys_row["name"] if sys_row else "") or "?",
+            "system_name": (cp_row["system_name"] if cp_row else "") or "?",
+            "planet_num": cp_row["planet_num"] if cp_row else None,
+            "planet_type": cp_row["planet_type"] if cp_row else "",
             "hours_left": 0.0,
         })
     con.close()
@@ -514,10 +545,13 @@ def resend_last_notification(ctx: int = Depends(require_context)):
             title = "[Replay] Extractor expiring" if n == 1 else f"[Replay] {n} extractors expiring"
         else:
             title = "[Replay] Factory refill due" if n == 1 else f"[Replay] {n} factories due for refill"
-        body = "\n".join(f"{e['character_name']} · {e['system_name']}" for e in evs)
+        by_char: dict[str, list[dict]] = {}
+        for e in evs:
+            by_char.setdefault(e["character_name"], []).append(e)
+        body = "\n".join(f"{e['character_name']} · {_planet_label(e)}" for e in evs)
         fields = [
-            {"name": e["character_name"], "value": e["system_name"], "inline": True}
-            for e in evs
+            {"name": char_name, "value": "\n".join(_planet_label(e) for e in char_evs), "inline": True}
+            for char_name, char_evs in by_char.items()
         ]
         for setting in settings:
             try:
