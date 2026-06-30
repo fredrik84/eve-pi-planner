@@ -81,7 +81,10 @@ class DiscordNotifier(BaseNotifier):
             self._webhook_url,
             data=payload,
             method="POST",
-            headers={"Content-Type": "application/json"},
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent": "DiscordBot (https://eve-pi.failed.name, 1)",
+            },
         )
         try:
             with urllib.request.urlopen(req, timeout=10):
