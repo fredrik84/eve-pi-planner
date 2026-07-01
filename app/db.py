@@ -177,7 +177,8 @@ class _PgConn:
         self._conn.rollback()
 
     def close(self):
-        self._conn.close()
+        self._conn.rollback()  # leave no dangling transaction for the next borrower
+        _pg_pool().putconn(self._conn)
 
     def __enter__(self):
         return self
@@ -187,18 +188,34 @@ class _PgConn:
             self._conn.rollback()
         else:
             self._conn.commit()
-        self._conn.close()
+        _pg_pool().putconn(self._conn)
 
 
 def _sqlite_row_factory(cursor, row):
     return _Row(zip((d[0] for d in cursor.description), row))
 
 
+_PG_POOL = None
+
+
+def _pg_pool():
+    """Lazily-created process-wide pool. Each get_connection() call used to open a brand-new
+    psycopg2 connection (TCP + auth handshake); on a multi-node cluster where Postgres isn't
+    on the same host as the app, that handshake crosses the network and costs ~80-140ms per
+    call instead of the near-zero latency of a same-node/loopback connection. With ~100 call
+    sites across the app, a single feature-rich page can open dozens of connections, so this
+    added up to multi-second page loads. Pooling reuses already-established connections."""
+    global _PG_POOL
+    if _PG_POOL is None:
+        from psycopg2.pool import ThreadedConnectionPool
+        _PG_POOL = ThreadedConnectionPool(minconn=2, maxconn=20, dsn=DATABASE_URL)
+    return _PG_POOL
+
+
 def get_connection():
     """Return a DB connection for user (pp_*) tables. Postgres when DATABASE_URL is set."""
     if _IS_POSTGRES:
-        import psycopg2
-        conn = psycopg2.connect(DATABASE_URL)
+        conn = _pg_pool().getconn()
         conn.autocommit = False
         return _PgConn(conn)
     con = sqlite3.connect(str(_SQLITE_PATH))
