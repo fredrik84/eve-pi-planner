@@ -1,0 +1,432 @@
+/* Contribute tab + bug reporting (static informational pages). */
+/* ── Contribute tab ─────────────────────────────────────────────── */
+.contrib { padding: 16px 20px 22px; color: #b4bdd4; font-size: 13px; line-height: 1.65; max-width: 820px; }
+.contrib p { margin: 0 0 12px; }
+.contrib-lead { color: #c8d0e6; }
+.contrib-h {
+  margin: 22px 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--clr-accent);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+}
+.contrib-steps, .contrib-notes { margin: 0 0 12px; padding-left: 22px; }
+.contrib-steps li, .contrib-notes li { margin-bottom: 7px; }
+.contrib strong { color: #d6deef; font-weight: 600; }
+.contrib em { color: #8a93ad; }
+.contrib code {
+  background: #1a2030;
+  border: 1px solid #232b3e;
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-size: 12px;
+  color: #9fc4ff;
+}
+.contrib-code {
+  background: #0f121b;
+  border: 1px solid #232b3e;
+  border-radius: 6px;
+  padding: 12px 14px;
+  margin: 0 0 14px;
+  font-size: 12px;
+  color: #c8d0e6;
+  overflow-x: auto;
+  white-space: pre;
+  line-height: 1.5;
+}
+.contrib-note-block {
+  background: #12141d;
+  border-left: 3px solid #2a3a4a;
+  padding: 10px 14px;
+  border-radius: 0 6px 6px 0;
+  font-size: 12px;
+  color: #8a93ad;
+}
+.contrib-note-block code { font-size: 11px; }
+.contrib-thanks { margin-top: 18px; color: #8a93ad; font-style: italic; }
+
+.pp-loading {
+  padding: 24px 14px;
+  color: var(--clr-text-dim);
+  font-size: 13px;
+  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+.pp-spinner {
+  width: 15px;
+  height: 15px;
+  border: 2px solid #2a3146;
+  border-top-color: #5aa9e6;
+  border-radius: 50%;
+  animation: pp-spin 0.7s linear infinite;
+}
+@keyframes pp-spin { to { transform: rotate(360deg); } }
+
+/* Materials-on-hand rollup (launchpad totals across all characters) → PI Planner */
+.pp-materials-summary { padding: 10px 12px; border-bottom: 1px solid #1a1e2a; background: #0e1118; }
+.pp-mat-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 7px; }
+.pp-mat-title { font-size: 12px; font-weight: 600; color: var(--clr-text-bright); }
+.pp-mat-sub { font-size: 10px; color: #56607a; font-weight: 400; text-transform: none; letter-spacing: 0; }
+.pp-mat-actions { margin-left: auto; display: flex; gap: 6px; }
+/* Aligned multi-column list — each P1 is a cell with the material name left and its
+   launchpad total right, so the numbers line up instead of running on as one wrapped line. */
+.pp-mat-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 1px 18px; font-size: 12px; }
+.pp-mat-item { display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+  padding: 3px 8px; border-radius: 4px; white-space: nowrap; color: var(--clr-stat-label); }
+.pp-mat-item:hover { background: #161b27; }
+.pp-mat-name { overflow: hidden; text-overflow: ellipsis; }
+.pp-mat-item b { color: #a8d0e0; font-family: 'Consolas', monospace; font-weight: 600; }
+
+.pp-char-list { padding: 8px; display: flex; flex-direction: column; gap: 6px; max-height: 74vh; overflow-y: auto; }
+.pp-char-row {
+  background: #1c2030;
+  border: 1px solid var(--clr-border);
+  border-radius: 4px;
+  font-size: 13px;
+  overflow: hidden;
+  flex-shrink: 0;   /* don't let the flex column compress an open foldout (clips its planet rows) */
+}
+.pp-char-dummy { padding: 7px 10px; }
+.pp-char-header { display: flex; align-items: center; gap: 6px; }
+.pp-char-name { flex: 1; color: var(--clr-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pp-char-meta { display: flex; align-items: center; gap: 8px; margin-top: 3px; }
+.pp-char-skill { font-size: 11px; color: var(--clr-text-dim); white-space: nowrap; }
+.pp-char-del { background: none; border: none; color: #4a3030; cursor: pointer; padding: 0 2px; font-size: 14px; flex-shrink: 0; }
+.pp-char-del:hover { color: #e06060; }
+/* Foldable character: summary row + planet list / stats on expand */
+.pp-char-fold > summary { display: flex; align-items: center; gap: 8px; padding: 8px 10px; cursor: pointer;
+  list-style: none; user-select: none; }
+.pp-char-fold > summary::-webkit-details-marker { display: none; }
+.pp-char-fold > summary::before { content: '▸'; color: var(--clr-caret); font-size: 10px; flex-shrink: 0; }
+.pp-char-fold[open] > summary::before { content: '▾'; }
+.pp-char-fold > summary:hover { background: rgba(90, 160, 230, 0.05); }
+.pp-char-fold .pp-char-name { flex: 0 1 auto; }
+.pp-char-summary { margin-left: auto; font-size: 11px; color: var(--clr-text-dim); white-space: nowrap; }
+.pp-char-body { padding: 0 12px 10px 27px; }
+.pp-char-stats { display: flex; flex-wrap: wrap; gap: 4px 14px; padding: 7px 0; font-size: 11px; color: var(--clr-stat-label);
+  border-top: 1px solid #161a26; margin-bottom: 4px; }
+.pp-char-stats span { white-space: nowrap; }
+.pp-char-planet-list { display: flex; flex-direction: column; gap: 3px; }
+.pp-pl-row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.pp-pl-loc { flex: 0 0 auto; min-width: 116px; color: var(--clr-text); font-family: 'Consolas', monospace; font-size: 11px; }
+.pp-pl-extract { color: #9ec89e; }
+.pp-pl-build { color: #a8c0e0; }
+.pp-pl-factory { color: var(--clr-stat-label); }
+.pp-pl-pad { margin-left: auto; font-size: 11px; color: #5a8aa0; white-space: nowrap;
+  background: #0e1a22; border: 1px solid #16303c; border-radius: 4px; padding: 1px 7px; }
+.pp-pl-pad b { color: #a8d0e0; font-family: 'Consolas', monospace; font-weight: 600; }
+.pp-pl-cc { font-size: 10px; color: #56607a; flex: 0 0 auto; margin-left: auto; }
+.pp-pl-row .pp-pl-pad + .pp-pl-cc { margin-left: 8px; }
+.pp-pl-empty { font-size: 12px; color: #56607a; font-style: italic; padding: 6px 0; }
+/* placeholder (dummy) characters */
+.pp-char-dummy { border-style: dashed; border-color: #2e2840; background: #181626; }
+.pp-char-dummy-badge { font-size: 9px; text-transform: uppercase; letter-spacing: 0.04em; color: #9a86c8;
+  border: 1px solid #34284c; border-radius: 3px; padding: 0 4px; margin-right: 4px; }
+.pp-dummy-field { font-size: 11px; color: var(--clr-text-dim); display: inline-flex; align-items: center; gap: 4px; }
+.pp-dummy-field select { background: #141020; color: #b8a8d8; border: 1px solid #2e2040; border-radius: 3px; font-size: 11px; padding: 1px 3px; }
+.dummy-add-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; }
+.dummy-add-row label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--clr-text-soft); }
+.dummy-num { max-width: 90px; }
+.pp-char-del:hover { color: #e06060; background: none; }
+.pp-char-planets { font-size: 11px; color: #4a6878; cursor: default; white-space: nowrap; }
+
+.pp-target-form {
+  padding: 12px 14px;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px 12px;
+  align-items: center;
+}
+/* The "My baskets…" button is a stray (odd) grid item — span it across both columns so it
+   doesn't shift the label/input pairs after it onto the wrong cells. */
+#manageBasketsBtn { grid-column: 1 / -1; justify-self: end; }
+.pp-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--clr-text-dim);
+  white-space: nowrap;
+}
+/* Shared dark form-control base — bg/border/colour/focus are identical across these
+   inputs; each rule below only carries its unique radius/padding/width/etc. */
+.pp-select, .pp-num-input, .pp-text-input,
+.bug-input, .bug-textarea, .pp-import-ta {
+  background: #0d0f14;
+  border: 1px solid var(--clr-border);
+  color: var(--clr-text);
+  outline: none;
+}
+.pp-select:focus, .pp-num-input:focus, .pp-text-input:focus,
+.bug-input:focus, .bug-textarea:focus, .pp-import-ta:focus { border-color: var(--clr-focus); }
+
+.pp-select { border-radius: 4px; font-size: 13px; padding: 5px 8px; }
+.pp-num-input {
+  border-radius: 4px;
+  font-size: 13px;
+  padding: 5px 10px;
+  width: 80px;
+  -moz-appearance: textfield;
+}
+.pp-num-input::-webkit-inner-spin-button,
+.pp-num-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.pp-run-btn {
+  grid-column: 1 / -1;
+  margin-top: 4px;
+  background: #1e3a5f;
+  color: var(--clr-accent);
+  border: 1px solid #2d5a8a;
+  border-radius: 5px;
+  padding: 8px;
+  font-size: 13px;
+  cursor: pointer;
+  width: 100%;
+}
+.pp-run-btn:hover { background: #254a78; }
+.pp-label-check { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--clr-text-dim); cursor: pointer; text-transform: none; letter-spacing: 0; }
+.pp-label-check input[type=checkbox] { accent-color: #4a88cc; width: 13px; height: 13px; }
+
+/* Character roles card */
+.pp-roles-list { padding: 6px 8px; display: flex; flex-direction: column; gap: 0; }
+/* Compact one-line character rows on a shared grid so the header columns align. */
+.pp-role-head, .pp-role-row { display: grid; align-items: center; gap: 8px;
+  grid-template-columns: minmax(0,1fr) 78px 34px; padding: 2px 6px; font-size: 12px; }
+.pp-roles-list.with-cc .pp-role-head,
+.pp-roles-list.with-cc .pp-role-row { grid-template-columns: minmax(0,1fr) 78px 44px 34px; }
+.pp-role-head { font-size: 9.5px; text-transform: uppercase; letter-spacing: .4px;
+  color: var(--clr-hint); padding-bottom: 3px; margin-bottom: 1px; border-bottom: 1px solid #1a1f2c; }
+.pp-role-head span:not(.pp-role-name), .pp-role-row > span:not(.pp-role-name) {
+  text-align: right; justify-self: end; }
+.pp-role-row:hover { background: #181d2a; border-radius: 3px; }
+.pp-role-name { color: var(--clr-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pp-role-ctl { display: inline-flex; align-items: center; gap: 3px; justify-content: flex-end; }
+.pp-role-trained-mini { font-size: 10px; color: var(--clr-label); }
+.pp-role-unit { font-size: 10px; color: #5a6480; }
+.pp-role-planets, .pp-role-ccu {
+  background: #0d0f14; border: 1px solid var(--clr-border); border-radius: 3px;
+  color: #a8b8cc; text-align: center; padding: 1px 3px; font-size: 11px; outline: none; }
+.pp-role-fac-cb { accent-color: #4a88cc; width: 13px; height: 13px; cursor: pointer; }
+.pp-role-planets:focus, .pp-role-ccu:focus { border-color: var(--clr-focus); }
+/* Fleet-wide set-all bar */
+.pp-role-setall { display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  padding: 5px 7px; margin-bottom: 5px; background: #11151f; border: 1px solid #222a3a;
+  border-radius: 5px; }
+.pp-setall-label { font-size: 10px; color: var(--clr-text-soft); font-weight: 600; text-transform: uppercase; letter-spacing: .4px; }
+.pp-setall-planets, .pp-setall-ccu {
+  background: #0d0f14; border: 1px solid var(--clr-border); border-radius: 3px;
+  color: #a8b8cc; padding: 2px 5px; font-size: 11px; }
+.pp-setall-apply { background: #1f3350; border: 1px solid #335; color: #bcd; cursor: pointer;
+  border-radius: 4px; padding: 2px 10px; font-size: 11px; }
+.pp-setall-apply:hover { background: #28456a; }
+.pp-setall-reset { margin-left: auto; background: none; border: 1px solid #2a3242; color: var(--clr-text-soft);
+  cursor: pointer; border-radius: 4px; padding: 2px 10px; font-size: 11px; }
+.pp-setall-reset:hover { background: #181d29; color: var(--clr-text-bright); border-color: #3a4456; box-shadow: none; }
+.pp-role-ext::placeholder { color: #2a3048; }
+
+/* Constellation filter card */
+.pp-const-list { padding: 6px 8px; display: flex; flex-direction: column; gap: 2px; max-height: 180px; overflow-y: auto; }
+.pp-region-filter { display: flex; align-items: center; gap: 8px; padding: 6px 8px 0; }
+.pp-const-heading { font-size: 11px; color: var(--clr-text-soft); font-weight: 600; padding: 8px 8px 2px; text-transform: uppercase; letter-spacing: 0.04em; }
+.pp-region-label { font-size: 11px; color: var(--clr-text-dim); text-transform: uppercase; letter-spacing: 0.04em; white-space: nowrap; }
+.pp-region-select { background: #141720; color: var(--clr-text); border: 1px solid #2d3550; border-radius: 5px; padding: 5px 8px; font-size: 12px; flex: 1; min-width: 0; }
+.pp-region-hdr { font-size: 10px; color: #5a647e; text-transform: uppercase; letter-spacing: 0.04em; margin: 8px 0 2px; flex: 0 0 100%; width: 100%; }
+.pp-const-row { display: flex; align-items: center; gap: 6px; padding: 3px 4px; font-size: 12px; color: #a8b8cc; cursor: pointer; border-radius: 3px; }
+.pp-const-row:hover { background: #181d2a; }
+.pp-const-row input[type=checkbox] { accent-color: #4a88cc; width: 12px; height: 12px; flex-shrink: 0; }
+
+/* Planet DB table */
+.pp-planet-search-row { display: flex; align-items: center; gap: 10px; padding: 8px 0 10px; }
+.pp-planet-search { flex: 1; max-width: 460px; background: #141720; color: var(--clr-text); border: 1px solid #2d3550; border-radius: 5px; padding: 7px 10px; font-size: 13px; }
+.pp-planet-search:focus { border-color: var(--clr-focus); outline: none; }
+.pp-planet-table-wrap { overflow: auto; width: 100%; max-height: 70vh; }
+.pp-planet-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.pp-planet-table th {
+  background: #1c2030;
+  color: var(--clr-text-dim);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  text-align: right;
+  padding: 6px 7px;
+  border-bottom: 1px solid var(--clr-border);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.pp-planet-table th.left { text-align: left; }
+.pp-planet-table td {
+  padding: 5px 7px;
+  border-bottom: 1px solid #141c28;
+  text-align: right;
+  color: #7a8aaa;
+}
+.pp-planet-table td.left { text-align: left; color: var(--clr-text); }
+.pp-planet-table td.planet-type { color: #8a9ab4; }
+.pp-planet-table td.p0-val { color: #7cb87c; font-family: 'Consolas', monospace; }
+.pp-planet-table td.p0-zero { color: var(--clr-border); }
+.pp-planet-table tr:last-child td { border-bottom: none; }
+.pp-planet-table tr:hover td { background: #181d2a; }
+
+.pp-db-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--clr-border);
+  background: #111520;
+  font-size: 11px;
+  color: var(--clr-label);
+}
+.pp-db-clear {
+  background: none;
+  border: 1px solid #3a2020;
+  border-radius: 4px;
+  color: #7a4040;
+  font-size: 11px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+.pp-db-clear:hover { background: #201010; color: #e06060; border-color: #5a2020; }
+
+/* Import modal */
+.pp-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+.pp-modal-box {
+  background: #141720;
+  border: 1px solid var(--clr-border);
+  border-radius: 8px;
+  padding: 20px 24px;
+  width: min(680px, 90vw);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.pp-modal-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #a8b4cc;
+  display: flex;
+  align-items: center;
+}
+.pp-modal-close {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--clr-text-dim);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.pp-modal-close:hover { background: none; color: var(--clr-text); }
+.pp-modal-hint { font-size: 12px; color: var(--clr-text-dim); line-height: 1.6; }
+.pp-import-ta {
+  width: 100%;
+  height: 220px;
+  border-radius: 5px;
+  font-family: 'Consolas', monospace;
+  font-size: 12px;
+  padding: 10px 12px;
+  resize: vertical;
+}
+.pp-modal-actions { display: flex; gap: 10px; }
+.pp-cancel-btn {
+  background: #1c2030;
+  color: var(--clr-text-dim);
+  border: 1px solid var(--clr-border);
+  border-radius: 5px;
+  padding: 8px 18px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.pp-cancel-btn:hover { background: #222838; color: #a8b4cc; }
+
+.pp-text-input { border-radius: 4px; font-size: 13px; padding: 5px 8px; width: 100%; }
+
+/* ── Bug reporting ─────────────────────────────────────────────────────────── */
+.header-bug-btn { color: #8aa0c0; padding: 5px 12px; font-size: 12px; margin-right: 10px; }
+
+.bug-input, .bug-textarea { width: 100%; border-radius: 5px; font-size: 13px; padding: 9px 12px; font-family: inherit; }
+.bug-textarea { height: 160px; resize: vertical; line-height: 1.5; }
+.bug-status-msg { font-size: 12px; color: #c8956a; align-self: center; }
+
+.pp-modal-box-wide { width: min(820px, 92vw); max-height: 86vh; }
+.bug-admin-counts { font-size: 11px; color: var(--clr-text-dim); font-weight: 400; margin-left: 12px; }
+.bug-admin-filters { display: flex; gap: 6px; }
+.bug-filter {
+  background: #161b26; color: var(--clr-text-dim); border: 1px solid var(--clr-border);
+  border-radius: 4px; padding: 4px 12px; font-size: 12px; cursor: pointer;
+}
+.bug-filter:hover { color: #a8b4cc; }
+.bug-filter.active { background: #1e3348; color: var(--clr-accent); border-color: var(--clr-focus); }
+
+.bug-admin-list { overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+.bug-item {
+  background: #11151f; border: 1px solid #222838; border-left: 3px solid var(--clr-focus);
+  border-radius: 5px; padding: 10px 12px;
+}
+.bug-item.bug-complete { border-left-color: #4a8a5a; opacity: 0.7; }
+.bug-item.bug-ignored  { border-left-color: var(--clr-text-dim); opacity: 0.55; }
+.bug-item-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.bug-item-title { color: var(--clr-text); font-weight: 600; font-size: 13px; }
+.bug-item-meta { color: #5a6480; font-size: 11px; margin-left: auto; }
+.bug-item-desc {
+  color: #9aa6bc; font-size: 12px; line-height: 1.5; margin: 7px 0;
+  white-space: pre-wrap; word-break: break-word;
+}
+.bug-item-actions { display: flex; gap: 6px; }
+.bug-act {
+  background: #1c2030; color: #8a94a8; border: 1px solid #2a3142;
+  border-radius: 4px; padding: 3px 12px; font-size: 11px; cursor: pointer;
+}
+.bug-act:hover { background: var(--clr-border); color: var(--clr-text); }
+.bug-act-done { color: #7cb87c; }
+.bug-act-ignore { color: #b0b0b0; }
+.bug-badge {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px;
+  padding: 2px 7px; border-radius: 3px; font-weight: 600;
+}
+.bug-badge-open { background: #1e3348; color: #6aa0e0; }
+.bug-badge-complete { background: #1c3324; color: #6ac08a; }
+.bug-badge-ignored { background: #24262c; color: #8a94a8; }
+
+/* Planet submissions (Admin tab review queue) */
+.psub-summary { color: var(--clr-text-soft); font-size: 11px; margin: 6px 0 4px; }
+.psub-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 8px; }
+.psub-chip {
+  font-size: 11px; padding: 2px 8px; border-radius: 3px;
+  border: 1px solid #2a3142; background: #161b27; color: #9aa6bc;
+}
+.psub-chip-new { border-color: #25503a; color: #6ac08a; }
+.psub-chip-ov  { border-color: #5a4520; color: #d6a44a; }
+
+.pp-text-input::placeholder { color: #3d4255; }
+
+.pp-clear-btn { color: #7a4040 !important; border-color: #3a2020 !important; }
+.pp-clear-btn:hover { background: #201010 !important; color: #e06060 !important; border-color: #5a2020 !important; }
+
+/* Planet type color badges */
+.ptype-barren   { color: #c09060; }
+.ptype-lava     { color: #e07050; }
+.ptype-oceanic  { color: #60a8d0; }
+.ptype-gas      { color: #80c880; }
+.ptype-ice      { color: #90c8e0; }
+.ptype-storm    { color: #9070c0; }
+.ptype-temperate { color: #70b870; }
+.ptype-plasma   { color: #d070a0; }
+
+

@@ -1,0 +1,234 @@
+/* Shared components: inventory pills, warnings, tables, tier badges, pipeline summary, Planetary Planning intro. */
+/* ── Inventory pills ───────────────────────────────────────────────────────── */
+.inv-pills { display: flex; flex-wrap: wrap; gap: 6px; }
+.pill {
+  background: #1c2030;
+  border: 1px solid #2e3448;
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: #8fa8cc;
+}
+.pill span { color: var(--clr-text); font-weight: 600; }
+.pill-warn {
+  background: #221a10;
+  border-color: #4a3010;
+  color: #c09050;
+}
+.pill-warn span { color: #e0b070; }
+
+/* ── Optimize warnings (not-producible / optimizer errors) ─────────────────── */
+#optWarnings:not(:empty) { padding: 12px 14px 0; }
+.opt-warning {
+  background: #201818;
+  border: 1px solid #5a2a2a;
+  border-radius: 5px;
+  padding: 8px 14px;
+  font-size: 12px;
+  color: #e08070;
+  margin-bottom: 8px;
+}
+.opt-warning:last-child { margin-bottom: 0; }
+
+/* ── Tables ────────────────────────────────────────────────────────────────── */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #141720;
+  border: 1px solid var(--clr-border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+th {
+  background: #1c2030;
+  color: var(--clr-text-dim);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  text-align: left;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--clr-border);
+}
+td {
+  padding: 10px 14px;
+  border-bottom: 1px solid #1c2030;
+  vertical-align: middle;
+}
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: #181d2a; }
+
+.ordered-row td { background: #151e12; }
+.ordered-row:hover td { background: #1a2416; }
+
+.item-name { font-weight: 500; color: #d0daee; }
+.qty { font-family: 'Consolas', monospace; color: #7cb87c; font-weight: 600; white-space: nowrap; }
+.qty-order { font-family: 'Consolas', monospace; color: #8a9ab4; white-space: nowrap; }
+.limiting { color: #e09060; font-size: 12px; }
+
+/* Tier badges */
+.tier-badge {
+  font-size: 11px; font-weight: 700;
+  padding: 3px 10px;
+  border-radius: 3px;
+  letter-spacing: 1px;
+}
+.tier-badge-sm {
+  font-size: 10px; font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 3px;
+  letter-spacing: 0.8px;
+  white-space: nowrap;
+}
+.badge-p2 { background: #1a3320; color: var(--clr-green); border: 1px solid #2d5a3f; }
+.badge-p3 { background: #2a2418; color: #d4a43a; border: 1px solid #5a4820; }
+.badge-p4 { background: #1e1828; color: #9060e0; border: 1px solid #3a2860; }
+
+/* Fill % */
+.fill-pct { font-family: 'Consolas', monospace; font-weight: 600; font-size: 12px; }
+.fill-full  { color: var(--clr-green); }
+.fill-partial { color: #d4a43a; }
+.fill-low   { color: #e06060; }
+
+/* ISK cells */
+.isk-cell { white-space: nowrap; }
+.isk-unit  { color: #8ab0d0; font-family: 'Consolas', monospace; }
+.isk-total { color: #e8c060; font-family: 'Consolas', monospace; font-weight: 600; }
+.isk-na    { color: #3a4060; }
+
+/* Analyze breakdown */
+.p1-breakdown { font-size: 12px; color: var(--clr-text-dim); line-height: 1.8; }
+.p1-row { display: flex; align-items: baseline; gap: 8px; }
+.p1-name { color: #8a9ab4; }
+.p1-used { color: var(--clr-text); font-family: 'Consolas', monospace; }
+.p1-pct  { color: var(--clr-label); font-size: 11px; }
+
+.no-results {
+  color: var(--clr-label); font-style: italic;
+  padding: 20px 14px; text-align: center;
+}
+
+/* ── Tier blocks (analyze) ─────────────────────────────────────────────────── */
+.tier-count { font-size: 12px; color: var(--clr-text-dim); }
+
+/* ── Leftover ──────────────────────────────────────────────────────────────── */
+.leftover-section {
+  margin: 16px 14px 14px;
+  background: #141720;
+  border: 1px solid #3a2a10;
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.leftover-header {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: #8a6030;
+  margin-bottom: 10px;
+}
+
+/* ── Factory split ─────────────────────────────────────────────────────────── */
+.fac-num {
+  font-family: 'Consolas', monospace;
+  user-select: all;
+}
+.fac-num:hover { background: #1e2d1e !important; color: #9cd89c !important; }
+
+.price-note {
+  margin-top: 12px;
+  font-size: 11px;
+  color: var(--clr-hint);
+  text-align: right;
+}
+
+/* ── Analyze split button ──────────────────────────────────────────────────── */
+/* ── Factory duration cell ─────────────────────────────────────────────────── */
+.fac-duration {
+  font-family: 'Consolas', monospace;
+  font-size: 12px;
+  color: #7ab0cc;
+  white-space: nowrap;
+}
+
+/* ── Pipeline summary ──────────────────────────────────────────────────────── */
+.pipeline-summary {
+  padding: 10px 14px;
+  border-top: 1px solid var(--clr-border);
+  background: #111520;
+}
+.pipe-row { font-size: 12px; line-height: 1.9; }
+.pipe-note { font-size: 11px; color: var(--clr-text-dim); margin-top: 6px; line-height: 1.5; }
+.pipe-label { color: var(--clr-text-dim); text-transform: uppercase; letter-spacing: 0.6px; font-size: 11px; }
+.pipe-val { color: #8a9ab4; }
+.pipe-val strong { color: var(--clr-accent); }
+
+/* Secondary (tertiary-action) buttons — shared muted-blue look. Each rule below
+   keeps only its own colour/padding/margins. */
+.split-btn, .pp-add-btn, .header-bug-btn {
+  background: #1a2838;
+  border: 1px solid #2a3a4a;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.split-btn:hover, .pp-add-btn:hover, .header-bug-btn:hover { background: #1e3348; color: var(--clr-accent); }
+
+.split-btn { color: #6a88aa; padding: 3px 8px; font-size: 11px; white-space: nowrap; }
+
+/* ── Planetary Planning ─────────────────────────────────────────────────────── */
+.pp-layout { display: grid; grid-template-columns: 280px 1fr; gap: 20px; align-items: start; }
+.pp-sidebar { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.pp-main    { display: flex; flex-direction: column; gap: 16px; min-width: 0; overflow: hidden; }
+
+/* Setup page: single-column stacked, full width */
+.pp-setup-layout { display: flex; flex-direction: column; gap: 16px; }
+.pp-const-list-wide { display: flex; flex-wrap: wrap; gap: 2px 16px; flex-direction: row; }
+.pp-collapsible-body { overflow: hidden; transition: max-height 0.2s ease; }
+.pp-collapsible-body.collapsed { max-height: 0 !important; }
+.pp-collapse-toggle { cursor: pointer; user-select: none; color: #4a6888; font-size: 11px; margin-left: 8px; }
+.pp-collapse-toggle:hover { color: #8aa8c8; }
+.pp-chars-page { display: flex; flex-direction: column; gap: 18px; }
+
+.pp-card {
+  background: linear-gradient(180deg, #151926, #12141d);
+  border: 1px solid var(--clr-border);
+  border-radius: 9px;
+  overflow: hidden;
+  box-shadow: 0 8px 22px -16px rgba(0, 0, 0, 0.9);
+}
+.pp-card-title {
+  background: #1c2030;
+  border-bottom: 1px solid var(--clr-border);
+  padding: 9px 14px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--clr-text-dim);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.pp-card-hint { color: var(--clr-hint); text-transform: none; letter-spacing: 0; font-size: 11px; font-weight: 400; flex: 1; }
+
+.pp-add-btn { margin-left: auto; color: #6a88aa; padding: 3px 10px; font-size: 11px; }
+.pp-add-btn + .pp-add-btn { margin-left: 0; }
+
+.pp-empty {
+  padding: 20px 14px;
+  color: var(--clr-hint);
+  font-style: italic;
+  font-size: 13px;
+  text-align: center;
+}
+
+/* A table that fills a card edge-to-edge — the card frame supplies the border + radius,
+   so the table drops its own (avoids a double-rounded box). */
+.pp-card > table, .pp-card-table { border: none; border-radius: 0; }
+/* Padded body for free-form card content (pills, notes, controls) that isn't a full-bleed table. */
+.pp-card-body { padding: 14px 16px; }
+/* Cards holding an absolutely-positioned popover (e.g. the Factory Layout search dropdown)
+   can't clip their overflow; round the title's top corners so it still reads as a card. */
+.pp-card-pop { overflow: visible; }
+.pp-card-pop > .pp-card-title { border-radius: 9px 9px 0 0; }
+/* Vertical card stack used by the PI Planner build/analyze results column. */
+.pi-stack { display: flex; flex-direction: column; gap: 16px; }
+

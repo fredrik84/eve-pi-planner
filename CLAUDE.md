@@ -276,7 +276,21 @@ single-tier-per-planet and not what this generates.)
   storage round-trips — this generator routes intermediates tier-to-tier directly), and
   CPU/PG is not simulated.
 
-Frontend JS is split across files loaded in order from `index.html`: **`app.js`** (tab nav, ESI login popup, mobile pull-to-refresh, DOMContentLoaded boot), **`planetary.js`** (the core — shared state + utils like `_esc`/`_fmtIsk`/`_fmtHours`/`_featureActive`, the PI-planner wizard + `renderFinalPlan`, Characters/header, profiles/shares, tab-entry hooks like `onPlanetDbTabOpen`), **`dashboard.js`** (Dashboard tab: overview, maintenance routine, spare-capacity, the global `rescanAll`), **`admin.js`** (Admin tab: planet submissions, feature flags, baskets, admin users, bug triage), **`planetdb.js`** (Planet DB tab: constellation/region filter, planet list + chunked table, import modal), **`refill.js`** (PI-Planner refill tool: saved-plans bar, build/refill mode, P1-stack distribution), **`analysis.js`** (Setup Analysis tab), and **`layout.js`** (Factory Layout tab). Feature files were carved out of `planetary.js` for maintainability. The split is load-order-safe because the JS is **all declarations except one top-level statement** (the `DOMContentLoaded` listener in core) — functions are global and resolve at call time, so feature files just load after `planetary.js`. When carving more out: cut only at top-level boundaries (verify each file with `node --check`), keep shared state/util in `planetary.js`, and never split a wizard/dashboard interdependency you can't trace. Bump the `?v=N` on **every** changed JS file in `index.html` (browsers cache aggressively). Deploy of static-only changes can be a `docker cp` into the container, but always `docker compose build && up -d --force-recreate` to bake in before calling it shipped.
+Frontend JS is split across files loaded in order from `index.html`: **`utils.js`** (loaded first — shared formatting helpers: `fmtIsk`/`_fmtIsk`/`_fmtHours`/`_fmtDHM`/`_esc`/`_fmtWalletDate`/`_fmtCacheTime`), **`app.js`** (tab nav, ESI login popup, mobile pull-to-refresh, DOMContentLoaded boot), **`planetary.js`** (the core — shared state + `_featureActive`, the PI-planner wizard + `renderFinalPlan`, Characters/header, profiles/shares, tab-entry hooks like `onPlanetDbTabOpen`), **`dashboard.js`** (Dashboard tab: overview, maintenance routine, spare-capacity, the global `rescanAll`), **`admin.js`** (Admin tab: planet submissions, feature flags, baskets, admin users, bug triage), **`planetdb.js`** (Planet DB tab: constellation/region filter, planet list + chunked table, import modal), **`refill.js`** (PI-Planner refill tool: saved-plans bar, build/refill mode, P1-stack distribution), **`analysis.js`** (Setup Analysis tab), and **`layout.js`** (Factory Layout tab). Feature files were carved out of `planetary.js` for maintainability. The split is load-order-safe because the JS is **all declarations except one top-level statement** (the `DOMContentLoaded` listener in core) — functions are global and resolve at call time, so feature files just load after `planetary.js`. When carving more out: cut only at top-level boundaries (verify each file with `node --check`), keep shared state/util in `planetary.js`, and never split a wizard/dashboard interdependency you can't trace. Bump the `?v=N` on **every** changed JS file in `index.html` (browsers cache aggressively). Deploy of static-only changes can be a `docker cp` into the container, but always `docker compose build && up -d --force-recreate` to bake in before calling it shipped.
+
+CSS is likewise split into `style-*.css` files loaded in order from `index.html`, sliced at the
+original file's section-comment boundaries with **zero rule reordering** (each file is a contiguous
+slice of what used to be one `style.css`, verified byte-identical when concatenated back together):
+**`style-base.css`** (page shell/header/sidebar nav/input grid/buttons), **`style-components.css`**
+(pills/warnings/tables/tier badges/pipeline summary + Planetary Planning intro),
+**`style-contribute.css`** (Contribute tab + bug reporting), **`style-wizard.css`** (plan
+results/wizard/shopping list), **`style-layout-admin.css`** (Factory Layout + Admin tab),
+**`style-analysis-dashboard.css`** (Setup Analysis + Dashboard, incl. fill-factories meter/refill
+controls/characters/schedule-sync/agenda/skill-ROI), and **`style-misc-responsive.css`** (image
+lightbox/how-it-works poster/remaining Admin sections + **the final mobile `@media` block — this
+file must stay last**, since its overrides target selectors defined in every earlier file). When
+carving further: only cut at existing section-comment boundaries and never move a rule past a
+`@media` block that shares its selectors, or the cascade order (and thus the rendered result) changes.
 
 **Always run `test_distribution.py` against the container after planner changes** (see Testing) — this was repeatedly the difference between "looks done" and "actually correct."
 
@@ -765,7 +779,8 @@ carries `viewport-fit=cover` + `theme-color` + the `apple-mobile-web-app-*` meta
 `black-translucent` status bar, title "EVE PI") so the bookmark opens full-screen; the existing
 `apple-touch-icon` supplies the icon.
 
-A single `@media (max-width: 760px)` block at the **end of `style.css`** does the rest:
+A single `@media (max-width: 760px)` block at the **end of `style-misc-responsive.css`** (the last
+of the `style-*.css` files loaded — see below) does the rest:
 - The left `.sidebar` becomes a **fixed bottom tab bar** (icon-over-label). Selectors are paired
   with `body.nav-collapsed .sidebar …` so a desktop-collapsed state can't out-specify them.
 - **Only the lightweight pages show** on the bar, in this order (flex `order:` overrides, How-it-
@@ -791,7 +806,8 @@ A single `@media (max-width: 760px)` block at the **end of `style.css`** does th
 still opens the plan view). `app.js` also adds **pull-to-refresh** (`setupPullToRefresh`): dragging
 down from `scrollTop 0` past a threshold triggers `rescanAll()` (only when the header `#rescanBtn`
 exists, i.e. logged in), with a `#ptr-indicator` banner. Standalone home-screen apps have no native
-pull-to-refresh, so this is ours. Bump the relevant `?v=` (style.css / app.js / planetary.js) on changes.
+pull-to-refresh, so this is ours. Bump the relevant `?v=` (the touched `style-*.css` file / app.js /
+planetary.js) on changes.
 
 ## Admin → Corp wallet (donations)
 
