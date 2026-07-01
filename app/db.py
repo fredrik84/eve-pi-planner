@@ -225,11 +225,21 @@ def _pg_pool():
     added up to multi-second page loads. Pooling reuses already-established connections.
     Sized conservatively (not e.g. 20) because with multiple uvicorn workers (UVICORN_WORKERS,
     see Dockerfile) each worker process gets its OWN independent pool — total connections
-    against Postgres scale with worker count, and Postgres's max_connections is finite."""
+    against Postgres scale with worker count, and Postgres's max_connections is finite.
+
+    minconn == maxconn (not e.g. minconn=1) so ALL connections are opened eagerly right here,
+    the first time this runs — which app.main's startup hook forces to happen at pod boot,
+    before the readiness probe (and therefore real traffic) can reach the pod. Measured directly:
+    a genuinely fresh connection costs ~80-140ms (TCP+auth handshake) and even its first QUERY
+    pays extra planning-cache warmup (~7-22ms vs <1ms once warm). With minconn=1, only the pool's
+    FIRST slot was ever pre-warmed — a concurrent burst of page-load requests needing the 2nd
+    through 8th slot paid that cold-start cost live, mid-request, which is exactly the kind of
+    one-off latency spike that's invisible in light testing but shows up as real user-facing
+    slowness under a normal multi-tab page load."""
     global _PG_POOL
     if _PG_POOL is None:
         from psycopg2.pool import ThreadedConnectionPool
-        _PG_POOL = ThreadedConnectionPool(minconn=1, maxconn=8, dsn=DATABASE_URL)
+        _PG_POOL = ThreadedConnectionPool(minconn=8, maxconn=8, dsn=DATABASE_URL)
     return _PG_POOL
 
 

@@ -165,6 +165,10 @@ def ensure_char_tables():
             scopes         TEXT    DEFAULT ''
         )
     """)
+    # Virtually every per-user query in the app joins/filters pp_characters by context_id (it's
+    # the tenant boundary) — without this index, each of those queries seq-scans the whole table.
+    # Cheap at today's row count, but it's the one index that matters most as the app grows.
+    con.execute("CREATE INDEX IF NOT EXISTS idx_pp_characters_context ON pp_characters(context_id)")
     con.execute("""
         CREATE TABLE IF NOT EXISTS pp_char_planets (
             character_id    INTEGER NOT NULL,
