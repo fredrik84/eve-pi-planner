@@ -942,9 +942,12 @@ def is_admin(pp_session: str = Cookie(default=None)) -> bool:
 def require_admin(pp_session: str = Cookie(default=None)) -> int:
     """FastAPI dependency: return context_id for admins, else raise 403."""
     sess = _session_lookup(pp_session)
-    if not sess or not is_admin(pp_session):
-        raise HTTPException(status_code=403, detail="Admin access required")
-    return sess[1]
+    if sess:
+        names = _context_character_names(sess[1])
+        admin_names = ADMIN_CHARACTERS | _db_admin_names()
+        if any(n in admin_names for n in names):
+            return sess[1]
+    raise HTTPException(status_code=403, detail="Admin access required")
 
 
 def _db_tester_names() -> set[str]:
@@ -965,13 +968,21 @@ def is_tester(pp_session: str = Cookie(default=None)) -> bool:
 
 def admin_and_tester_status(pp_session: str = Cookie(default=None)) -> tuple[bool, bool]:
     """(is_admin, is_tester) computed together from one session lookup + one character-name
-    fetch — for callers that need both (e.g. list_characters, list_features), this avoids the
-    duplicate session-lookup + character-name query that calling is_admin() and is_tester()
-    separately would otherwise cost."""
+    fetch — for callers that need both (e.g. list_features), this avoids the duplicate
+    session-lookup + character-name query that calling is_admin() and is_tester() separately
+    would otherwise cost."""
     sess = _session_lookup(pp_session)
     if not sess:
         return False, False
-    names = _context_character_names(sess[1])
+    return admin_and_tester_status_for_context(sess[1])
+
+
+def admin_and_tester_status_for_context(context_id: int | None) -> tuple[bool, bool]:
+    """Same as admin_and_tester_status(), but for a caller that has already resolved
+    context_id from its own session lookup (e.g. list_characters) — skips repeating it."""
+    if not context_id:
+        return False, False
+    names = _context_character_names(context_id)
     admin = any(n in (ADMIN_CHARACTERS | _db_admin_names()) for n in names)
     if admin:
         return True, True

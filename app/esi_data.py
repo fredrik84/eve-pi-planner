@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from app.sde import get_connection
 from app.esi import (
     ESI_BASE, WALLET_SCOPE,
-    _session_lookup, _is_configured, admin_and_tester_status,
+    _session_lookup, _is_configured, admin_and_tester_status_for_context,
     require_context, _get_valid_token, _fetch_skills, _fetch_planets,
     ensure_char_tables,
 )
@@ -314,7 +314,7 @@ def list_characters(pp_session: str = Cookie(default=None)):
             "adv_planetology":r["advanced_planetology"],
             "planets":        char_planets.get(r["character_id"], []),
         })
-    _admin, _tester = admin_and_tester_status(pp_session)
+    _admin, _tester = admin_and_tester_status_for_context(context_id)
     return {
         "characters": chars,
         "configured": _is_configured(),

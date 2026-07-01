@@ -145,14 +145,28 @@ let _features = {};            // key -> {key,label,description,enabled}
 let _featuresIsAdmin = false;
 let _featuresIsTester = false;
 let _featuresGitCommit = 'unknown';
+let _loadFeaturesInFlight = null;
 async function _loadFeatures() {
+  // Several tab-open/boot paths call this independently and can overlap (e.g. page boot's
+  // loadCharacters() and switchTab('dashboard')'s onDashboardTabOpen() both call this on the
+  // same load) — share one in-flight request instead of firing a duplicate /api/features call.
+  // Each call still gets a genuinely fresh fetch once no request is already in progress, so
+  // callers that want an up-to-date reload (e.g. after an admin toggles a flag) still get one.
+  if (_loadFeaturesInFlight) return _loadFeaturesInFlight;
+  _loadFeaturesInFlight = (async () => {
+    try {
+      const d = await (await fetch('/api/features')).json();
+      _features = {}; (d.features || []).forEach(f => { _features[f.key] = f; });
+      _featuresIsAdmin = !!d.is_admin;
+      _featuresIsTester = !!d.is_tester;
+      _featuresGitCommit = d.git_commit || 'unknown';
+    } catch (e) { /* leave whatever we had; _featureActive falls back to dflt */ }
+  })();
   try {
-    const d = await (await fetch('/api/features')).json();
-    _features = {}; (d.features || []).forEach(f => { _features[f.key] = f; });
-    _featuresIsAdmin = !!d.is_admin;
-    _featuresIsTester = !!d.is_tester;
-    _featuresGitCommit = d.git_commit || 'unknown';
-  } catch (e) { /* leave whatever we had; _featureActive falls back to dflt */ }
+    await _loadFeaturesInFlight;
+  } finally {
+    _loadFeaturesInFlight = null;
+  }
 }
 function _featureActive(key, dflt = false) {
   const f = _features[key];
