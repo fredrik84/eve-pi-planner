@@ -200,16 +200,26 @@ def list_characters(pp_session: str = Cookie(default=None)):
             products = _json.loads(p["products"]) if p["products"] else []
         except Exception:
             products = []
+        # Parse sim_state once and reuse below — it used to be re-parsed independently for pads,
+        # production rate and program_days (3x _json.loads() of the same string per planet), which
+        # added up across a real fleet's ~300+ planets. A parse failure here still degrades each of
+        # the three downstream uses exactly as before (each already falls back gracefully on its own).
+        sim = None
+        if p["sim_state"]:
+            try:
+                sim = _json.loads(p["sim_state"])
+            except Exception:
+                sim = None
         # Pads: forward-simulate the colony to request time (matches the live in-game launchpad);
         # fall back to the raw ESI checkpoint snapshot for planets we can't simulate.
         pads = []
-        try:
-            if p["sim_state"]:
+        if sim:
+            try:
                 from app.pi_sim import project
                 pads = [{"type_id": o["type_id"], "name": o["name"], "amount": o["amount"]}
-                        for o in project(_json.loads(p["sim_state"]))]
-        except Exception:
-            pads = []
+                        for o in project(sim)]
+            except Exception:
+                pads = []
         if not pads:
             try:
                 pads = _json.loads(p["pad_contents"]) if p["pad_contents"] else []
@@ -220,23 +230,22 @@ def list_characters(pp_session: str = Cookie(default=None)):
         # ~est" tracks reality (P4 especially) and agrees with the dashboard instead of freezing.
         if not p["is_extractor"]:
             try:
-                _prods = _json.loads(p["products"] or "[]")
-                if _prods:
+                if products:
                     from app.planner import project_factory_pad
-                    _tid = _prods[0]["type_id"]
+                    _tid = products[0]["type_id"]
                     _base = next((it.get("amount", 0) or 0 for it in pads if it.get("type_id") == _tid), 0)
                     _proj = project_factory_pad(_tid, _json.loads(p["pad_inputs"] or "[]"), _base, p["checkpoint_at"])
                     pads = [it for it in pads if it.get("type_id") != _tid]
                     if round(_proj) >= 1:
-                        pads.insert(0, {"type_id": _tid, "name": _prods[0].get("name"), "amount": int(round(_proj))})
+                        pads.insert(0, {"type_id": _tid, "name": products[0].get("name"), "amount": int(round(_proj))})
             except Exception:
                 pass
         # Production rate (units/day) per output — reliable (from the extractor program config,
         # not the stale stored volume). Used by the Analyze tab to map setup vs a plan's needs.
         production = []
-        try:
-            if p["sim_state"]:
-                for o in (_json.loads(p["sim_state"]).get("outputs") or []):
+        if sim:
+            try:
+                for o in (sim.get("outputs") or []):
                     # Sustainable (extraction-limited) rate — poor planets can't hold full factory
                     # output, so this is the honest "units/day toward a quota". Falls back to the
                     # launchpad rate for sim states scanned before rate_sustained existed.
@@ -257,19 +266,18 @@ def list_characters(pp_session: str = Cookie(default=None)):
                             "capped": (not stale) and full > 0 and rate < full * 0.97,
                             "stale": stale,
                         })
-        except Exception:
-            production = []
+            except Exception:
+                production = []
         program_days = None      # the extraction-program length the player set (install→expiry)
         prog_expiry = None       # extraction-program expiry (epoch) → drives the "extraction left" readout
         ext_p0_day = None        # game-true average P0 extraction/day (matches the in-game units/hour)
-        try:
-            if p["sim_state"]:
-                _ss = _json.loads(p["sim_state"])
-                program_days = _ss.get("program_days")
-                ext_p0_day = _ss.get("peak_p0_day")
-                prog_expiry = _ss.get("expiry")
-        except Exception:
-            program_days = None
+        if sim:
+            try:
+                program_days = sim.get("program_days")
+                ext_p0_day = sim.get("peak_p0_day")
+                prog_expiry = sim.get("expiry")
+            except Exception:
+                program_days = None
         char_planets.setdefault(cid, []).append({
             "planet_type":   p["planet_type"],
             "is_extractor":  bool(p["is_extractor"]),
