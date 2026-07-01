@@ -4,6 +4,14 @@ on:
   push:
     branches: [main]
 
+# Serialize builds per ref (queue, don't cancel) so two close-together pushes can't race
+# their push-to-:latest step out of order — the loser used to leave `:latest` pointing at
+# an older commit than what actually landed last, and anything doing `updateStrategy: digest`
+# (e.g. ArgoCD Image Updater) would then pin to that stale image.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
