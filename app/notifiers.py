@@ -14,7 +14,7 @@ _COLOR_FACTORY   = 0x4488FF  # blue
 
 class BaseNotifier:
     def send(self, title: str, body: str, url: str | None = None,
-             fields: list[dict] | None = None) -> None:
+             fields: list[dict] | None = None, description: str | None = None) -> None:
         raise NotImplementedError
 
 
@@ -77,19 +77,22 @@ class DiscordNotifier(BaseNotifier):
         self._webhook_url = config.get("webhook_url", "")
 
     def send(self, title: str, body: str, url: str | None = None,
-             fields: list[dict] | None = None) -> None:
+             fields: list[dict] | None = None, description: str | None = None) -> None:
         if not self._webhook_url:
             raise ValueError("Discord requires webhook_url")
 
-        if fields is not None:
+        if fields is not None or description is not None:
             # Rich embed card
             color = _COLOR_FACTORY if "factory" in title.lower() else _COLOR_EXTRACTOR
             embed: dict = {
                 "title": title,
                 "color": color,
-                "fields": fields,
                 "footer": {"text": "EVE PI Planner · eve-pi.failed.name"},
             }
+            if description:
+                embed["description"] = description
+            if fields:
+                embed["fields"] = fields
             if url:
                 embed["url"] = url
             payload = _json.dumps({"embeds": [embed]}).encode("utf-8")

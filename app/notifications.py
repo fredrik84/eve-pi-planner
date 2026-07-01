@@ -259,13 +259,13 @@ def _process_context(con, context_id: int):
     for evs in (ext_evs, fac_evs):
         if not evs:
             continue
-        title, body, fields = _format_batch(evs)
+        title, body = _format_batch(evs, lead_hours=lead)
         for setting in settings:
             status = "ok"
             try:
                 cfg = _json.loads(setting["config"])
                 notifier = make_notifier(setting["channel"], cfg)
-                notifier.send(title, body, fields=fields)
+                notifier.send(title, body, description=body)
                 log.info("Notification sent: %s → %s (%d events)", setting["channel"], evs[0]["event"], len(evs))
             except Exception as exc:
                 status = f"error: {exc}"
@@ -275,58 +275,34 @@ def _process_context(con, context_id: int):
                           ev["character_name"], ev["planet_id"], status)
 
 
-def _planet_label(e: dict) -> str:
-    """Short planet label: 'System IV (Barren)' or fallback."""
-    system = e.get("system_name") or "?"
-    num = e.get("planet_num")
-    ptype = e.get("planet_type") or ""
-    roman = ["I","II","III","IV","V","VI","VII","VIII","IX","X","XI","XII","XIII","XIV","XV"]
-    num_str = roman[num - 1] if num and 1 <= num <= len(roman) else (str(num) if num else "?")
-    return f"{system} {num_str}"
+def _collapse_line(evs: list[dict], singular: str, plural: str, verb: str) -> str:
+    """'N extractors {verb} — Char ×6, Char2 ×6, ...' — the same tally-and-collapse style as
+    the dashboard's maintenance-issues card (planner.py's _collapse). Extraction/refill cycles
+    come in fleets (many planets sharing one schedule), so a per-planet itemization is the wrong
+    shape here — a per-character count, sorted busiest-first, is what's actually actionable."""
+    tally: dict[str, int] = {}
+    for e in evs:
+        name = e.get("character_name") or "?"
+        tally[name] = tally.get(name, 0) + 1
+    total = sum(tally.values())
+    parts = ", ".join(f"{c} ×{n}" for c, n in sorted(tally.items(), key=lambda x: -x[1]))
+    noun = singular if total == 1 else plural
+    return f"{total} {noun} {verb} — {parts}"
 
 
-_GROUP_LIST_MAX = 3   # per character, list planets individually up to this many; beyond it, collapse
-
-
-def _group_value(char_evs: list[dict], show_hours: bool = True) -> str:
-    """One character's due planets, collapsed to 'next + N more' once the list gets long —
-    mirrors the dashboard's 'Up next' style (soonest task + count) instead of a full itemized
-    list, which is what made large batches unreadable (an account with many planets on a
-    similar cycle could produce dozens of lines in one message/embed field)."""
-    def line(e):
-        return f"{_planet_label(e)} · ~{round(e['hours_left'], 1)}h" if show_hours else _planet_label(e)
-
-    if len(char_evs) <= _GROUP_LIST_MAX:
-        return "\n".join(line(e) for e in char_evs)
-    first = char_evs[0]
-    more = len(char_evs) - 1
-    return f"{line(first)}\n+{more} more ({len(char_evs)} total)"
-
-
-def _format_batch(evs: list[dict]) -> tuple[str, str, list[dict]]:
-    """Return (title, plain_body, embed_fields) for a batch of events."""
-    n = len(evs)
+def _format_batch(evs: list[dict], lead_hours: float | None = None) -> tuple[str, str]:
+    """Return (title, body) for a batch of events, matching the dashboard's aggregate style."""
     is_extractor = evs[0]["event"] == "extractor_expiry"
     if is_extractor:
-        title = "Extractor expiring" if n == 1 else f"{n} extractors expiring"
+        title = "Extractions expiring soon"
+        verb = f"expiring within {round(lead_hours)}h" if lead_hours else "expiring"
+        body = _collapse_line(evs, "extractor", "extractors", verb)
     else:
-        title = "Factory refill due" if n == 1 else f"{n} factories due for refill"
+        title = "Factories due for refill"
+        verb = f"due for refill within {round(lead_hours)}h" if lead_hours else "due for refill"
+        body = _collapse_line(evs, "factory", "factories", verb)
 
-    # Group by character, sorted by earliest hours_left within each character
-    by_char: dict[str, list[dict]] = {}
-    for e in sorted(evs, key=lambda e: e["hours_left"]):
-        by_char.setdefault(e.get("character_name", "?"), []).append(e)
-
-    # Plain text body: one block per character, collapsed like the embed fields below.
-    body = "\n".join(f"{char_name}:\n{_group_value(char_evs)}" for char_name, char_evs in by_char.items())
-
-    # Embed fields: one field per character, collapsed once a character has more than a few due.
-    fields = [
-        {"name": char_name, "value": _group_value(char_evs), "inline": True}
-        for char_name, char_evs in by_char.items()
-    ]
-
-    return title, body, fields
+    return title, body
 
 
 # ── Scheduler ─────────────────────────────────────────────────────────────────
@@ -549,24 +525,13 @@ def resend_last_notification(ctx: int = Depends(require_context)):
     errors = []
     for event_type, evs in by_event.items():
         n = len(evs)
-        if event_type == "extractor_expiry":
-            title = "[Replay] Extractor expiring" if n == 1 else f"[Replay] {n} extractors expiring"
-        else:
-            title = "[Replay] Factory refill due" if n == 1 else f"[Replay] {n} factories due for refill"
-        by_char: dict[str, list[dict]] = {}
-        for e in evs:
-            by_char.setdefault(e["character_name"], []).append(e)
-        body = "\n".join(f"{char_name}:\n{_group_value(char_evs, show_hours=False)}"
-                         for char_name, char_evs in by_char.items())
-        fields = [
-            {"name": char_name, "value": _group_value(char_evs, show_hours=False), "inline": True}
-            for char_name, char_evs in by_char.items()
-        ]
+        title, body = _format_batch(evs)
+        title = f"[Replay] {title}"
         for setting in settings:
             try:
                 cfg = _json.loads(setting["config"])
                 notifier = make_notifier(setting["channel"], cfg)
-                notifier.send(title, body, fields=fields)
+                notifier.send(title, body, description=body)
             except Exception as exc:
                 errors.append(f"{setting['channel']}: {exc}")
         if not errors:
