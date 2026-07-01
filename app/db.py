@@ -5,10 +5,13 @@ All app code that writes to pp_* tables imports get_connection from here (via ap
 SDE reads (types, schematics) use a separate private SQLite connection in sde.py.
 """
 import functools
+import itertools
 import os
 import re
 import sqlite3
 from pathlib import Path
+
+_pg_key_counter = itertools.count()   # see _PgConn / get_connection for why this exists
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 _SQLITE_PATH = Path("data/sde.db")
@@ -160,10 +163,19 @@ class _PgCursor:
 
 
 class _PgConn:
-    """Wraps a psycopg2 connection to match the sqlite3.Connection interface used in app code."""
+    """Wraps a psycopg2 connection to match the sqlite3.Connection interface used in app code.
 
-    def __init__(self, pg_conn):
+    Carries its own pool `key` rather than letting ThreadedConnectionPool auto-key by
+    id(conn) (its default when getconn()/putconn() are called with key=None). That default
+    is unsafe under real concurrency — id() is just a memory address, and under FastAPI's
+    threadpool-executed sync routes it's possible for the bookkeeping to point putconn() at
+    the wrong (or no) entry, raising 'trying to put unkeyed connection' and silently leaking
+    the real connection out of the pool for good. An explicit, monotonically-increasing key
+    per checkout sidesteps that lookup entirely — reproduced and confirmed live on 2026-07-01."""
+
+    def __init__(self, pg_conn, key):
         self._conn = pg_conn
+        self._key = key
 
     def execute(self, sql: str, params=()) -> _PgCursor:
         sql = _pg_translate(sql)
@@ -196,7 +208,7 @@ class _PgConn:
 
     def close(self):
         self._conn.rollback()  # leave no dangling transaction for the next borrower
-        _pg_pool().putconn(self._conn)
+        _pg_pool().putconn(self._conn, key=self._key)
 
     def __enter__(self):
         return self
@@ -206,7 +218,7 @@ class _PgConn:
             self._conn.rollback()
         else:
             self._conn.commit()
-        _pg_pool().putconn(self._conn)
+        _pg_pool().putconn(self._conn, key=self._key)
 
 
 def _sqlite_row_factory(cursor, row):
@@ -246,9 +258,10 @@ def _pg_pool():
 def get_connection():
     """Return a DB connection for user (pp_*) tables. Postgres when DATABASE_URL is set."""
     if _IS_POSTGRES:
-        conn = _pg_pool().getconn()
+        key = next(_pg_key_counter)
+        conn = _pg_pool().getconn(key=key)
         conn.autocommit = False
-        return _PgConn(conn)
+        return _PgConn(conn, key=key)
     con = sqlite3.connect(str(_SQLITE_PATH))
     con.row_factory = _sqlite_row_factory
     con.execute("PRAGMA journal_mode=WAL")
