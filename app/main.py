@@ -17,6 +17,7 @@ from app.market import fetch_prices
 from app.shares import save_share, load_share
 from app.planetary import router as planetary_router
 from app.esi import router as esi_router
+from app.esi_data import router as esi_data_router
 from app.planner import router as planner_router
 from app.fuelblock_planner import router as fuelblock_router
 from app.bugs import router as bugs_router
@@ -28,6 +29,7 @@ from app.internal import router as internal_router
 app = FastAPI(title="EVE PI Planner")
 app.include_router(planetary_router)
 app.include_router(esi_router)
+app.include_router(esi_data_router)
 app.include_router(planner_router)
 app.include_router(fuelblock_router)
 app.include_router(bugs_router)
