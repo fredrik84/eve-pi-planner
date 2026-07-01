@@ -84,8 +84,6 @@ extracted to de-duplicate the two run functions (~150 lines of copy-paste).
 `resolve_rig`/`sec_band`, `me_keep_factor`, `apply_effective_me`) is consolidated in
 `app/fuelblocks.py`.
 
-(The old `planner_v1.py` pre-refactor backup has been deleted.)
-
 **Factory planet-type filter.** `FuelBlockPlanRequest.factory_planet_types` (None →
 `DEFAULT_FACTORY_PLANET_TYPES = ["Barren","Temperate"]`, the smallest planets / least link
 + power-grid footprint) restricts where factory planets are placed. `_factory_candidates`
@@ -107,8 +105,8 @@ factory assignments when `best_fac_system` is set); the UI shows a `.plan-ptype-
 warning under the chips that clears when the user widens the planet types (more real planets
 become available → unpinned drops to 0).
 
-**CCU + planet-size scaled templates.** The PI Templates (.zip) was hardcoded to CC5; now
-the bundle token format is `id[:lp[:count[:cc[:planet_type]]]]` (`/api/layout/bundle` in
+**CCU + planet-size scaled templates.** The bundle token format is
+`id[:lp[:count[:cc[:planet_type]]]]` (`/api/layout/bundle` in
 `planetary.py`, backwards compatible). `cc`/`planet_type` pass through to `generate_layout`,
 which already honours `cc_level` (CPU/PG budget) and `PLANET_DIAM[planet_type]` (bigger
 planet → longer links → fewer facilities fit), so each factory's template matches the
@@ -124,8 +122,8 @@ P1→P0 planet type comes from the slot's `best_planet_type`.
 **Extractor template = always 10 heads; basics scale.** `generate_extractor_layout` keeps all
 10 extractor heads (full P0 extraction, matching the planner's flat 48k P0/cycle model) and
 scales **only** the basic (P1) factory count down to fit a lower CC (8→6→3→1 at CC5→4→3→1).
-`generate_layout` passes `cc_level` into the tier-1 path (it previously dropped it, so extractor
-templates always came out CC5). **Factory** planets still scale by CC — the packed facility
+`generate_layout` passes `cc_level` into the tier-1 path (don't drop it — extractor templates
+must scale with the toon's real CC, not default to CC5). **Factory** planets still scale by CC — the packed facility
 count (`component_factory_rate`/`_packed_rate` → `generate_layout` `max_count`) drops at lower
 CC, so the planner places more factory planets. A genuinely impossible combo (e.g. Storm Ø30000
 at CC1) still overflows the grid — that's the physical reason B/T is the default.
@@ -140,8 +138,8 @@ the **PI Templates bundle** (`/api/layout/bundle?...&no_storage=1`, also `/api/l
 `LayoutRequest.no_storage`). UI: "Storage-less extractors" checkbox in the Setup card
 (`targetNoStorage`, `_wiz.extractorNoStorage`), persisted in shares/auto-restore (`xns`), NOT in
 profiles (no DB column) and NOT yet a checkbox in the Factory Layout tab. Extractor template `Cmt`
-(in-game name + zip filename) now leads with the **P0** you select for hotspots, then the P1:
-`"Felsic Magma → Silicon (Lava)"` (was `"P0→P1 Silicon extractor"`); split planets too.
+(in-game name + zip filename) leads with the **P0** you select for hotspots, then the P1:
+`"Felsic Magma → Silicon (Lava)"`; split planets too.
 
 **On-planet refining cap (basics/8).** An extractor planet's P1 output isn't just extraction — its
 Basic Industry Facilities convert P0→P1, and 8 basics = full conversion of a 100%-quality planet
@@ -278,7 +276,7 @@ single-tier-per-planet and not what this generates.)
   storage round-trips — this generator routes intermediates tier-to-tier directly), and
   CPU/PG is not simulated.
 
-Frontend JS is split across files loaded in order from `index.html`: **`app.js`** (tab nav, ESI login popup, mobile pull-to-refresh, DOMContentLoaded boot), **`planetary.js`** (the core — shared state + utils like `_esc`/`_fmtIsk`/`_fmtHours`/`_featureActive`, the PI-planner wizard + `renderFinalPlan`, Characters/header, profiles/shares, tab-entry hooks like `onPlanetDbTabOpen`), **`dashboard.js`** (Dashboard tab: overview, maintenance routine, spare-capacity, the global `rescanAll`), **`admin.js`** (Admin tab: planet submissions, feature flags, baskets, admin users, bug triage), **`planetdb.js`** (Planet DB tab: constellation/region filter, planet list + chunked table, import modal), **`refill.js`** (PI-Planner refill tool: saved-plans bar, build/refill mode, P1-stack distribution), **`analysis.js`** (Setup Analysis tab), and **`layout.js`** (Factory Layout tab). Feature files were carved out of `planetary.js` 2026-06-23 (5,558 → 2,334 lines). The split is load-order-safe because the JS is **all declarations except one top-level statement** (the `DOMContentLoaded` listener in core) — functions are global and resolve at call time, so feature files just load after `planetary.js`. When carving more out: cut only at top-level boundaries (verify each file with `node --check`), keep shared state/util in `planetary.js`, and never split a wizard/dashboard interdependency you can't trace. Bump the `?v=N` on **every** changed JS file in `index.html` (browsers cache aggressively). Deploy of static-only changes can be a `docker cp` into the container, but always `docker compose build && up -d --force-recreate` to bake in before calling it shipped.
+Frontend JS is split across files loaded in order from `index.html`: **`app.js`** (tab nav, ESI login popup, mobile pull-to-refresh, DOMContentLoaded boot), **`planetary.js`** (the core — shared state + utils like `_esc`/`_fmtIsk`/`_fmtHours`/`_featureActive`, the PI-planner wizard + `renderFinalPlan`, Characters/header, profiles/shares, tab-entry hooks like `onPlanetDbTabOpen`), **`dashboard.js`** (Dashboard tab: overview, maintenance routine, spare-capacity, the global `rescanAll`), **`admin.js`** (Admin tab: planet submissions, feature flags, baskets, admin users, bug triage), **`planetdb.js`** (Planet DB tab: constellation/region filter, planet list + chunked table, import modal), **`refill.js`** (PI-Planner refill tool: saved-plans bar, build/refill mode, P1-stack distribution), **`analysis.js`** (Setup Analysis tab), and **`layout.js`** (Factory Layout tab). Feature files were carved out of `planetary.js` for maintainability. The split is load-order-safe because the JS is **all declarations except one top-level statement** (the `DOMContentLoaded` listener in core) — functions are global and resolve at call time, so feature files just load after `planetary.js`. When carving more out: cut only at top-level boundaries (verify each file with `node --check`), keep shared state/util in `planetary.js`, and never split a wizard/dashboard interdependency you can't trace. Bump the `?v=N` on **every** changed JS file in `index.html` (browsers cache aggressively). Deploy of static-only changes can be a `docker cp` into the container, but always `docker compose build && up -d --force-recreate` to bake in before calling it shipped.
 
 **Always run `test_distribution.py` against the container after planner changes** (see Testing) — this was repeatedly the difference between "looks done" and "actually correct."
 
@@ -381,9 +379,7 @@ The number of factories is derived from the overproduction target and the availa
 
 For SHPC (P4), a single factory produces approximately **0.5 units/hour** (accounting for the full P2→P3→P4 processing chain). The SDE rate `cycles_per_day × output_qty` only reflects the *final* step's cycle and over-counts P4 throughput (8 factories / 192/day instead of ~14/168).
 
-**Factory rate is auto-derived (no UI field).** `_run_plan` computes `effective_fph`: a user override (`PlanRequest.factory_output_per_hour`, kept for API/profile/share compat) wins; else **P4 → 0.5/hr**, else the SDE per-hour rate (`output_qty × 3600/cycle_time`, unchanged for P1–P3). It's passed into both `_compute_slot_budget` and `products_per_day` so factory count and products/day always agree (the manual "Factory rate (u/hr)" wizard field was removed). Reported in stats as `effective_factory_output_per_hour`.
-
-- **Comma gotcha:** `parseFloat("0,5")` returns `0` in JS. `_factoryRate()` (now returns null since the field is gone) handled `,`→`.`; keep using it if the override field is ever re-added.
+**Factory rate is auto-derived (no UI field).** `_run_plan` computes `effective_fph`: a user override (`PlanRequest.factory_output_per_hour`, kept for API/profile/share compat) wins; else **P4 → 0.5/hr**, else the SDE per-hour rate (`output_qty × 3600/cycle_time`, unchanged for P1–P3). It's passed into both `_compute_slot_budget` and `products_per_day` so factory count and products/day always agree. Reported in stats as `effective_factory_output_per_hour`.
 
 ### Supply-limited throughput (plan stat)
 
@@ -623,8 +619,7 @@ block (`builtinFb = _wiz.fuelblock && !_wiz.basketId`).
   5-set is unique (verified vs EVE University), so a planet's resources identify its type.
   Used for: import type-inference, the `planet_types` display label, and extractor-template
   planet selection. **Not** used for extractor/factory *assignment* — that reads the
-  per-planet richness columns in `pp_planets`. (Historically this map wrongly had 6 each,
-  which broke import type-inference; corrected to 5.)
+  per-planet richness columns in `pp_planets`.
 - **6 = max planets per character** → `max_planets = 1 + interplanetary_consolidation`
   (the character's skill, from the DB). Unrelated to `PLANET_P0_MAP`. Don't change one
   thinking it's the other.
@@ -834,3 +829,40 @@ only when opened, since it hits ESI). `connectCorpWallet()` mirrors `esiLogin()`
 `/auth/login?wallet=1`. The connected toon joins the admin's context like any character (shows in
 Characters / may get PI-scanned — set `planet_limit=0` to exclude from plans if it clutters).
 Gating test in `test_features.py` (`test_corp_wallet_gated` → 403 for anonymous).
+
+## Notifications (`app/notifications.py`, `app/notifiers.py`)
+
+Push alerts for extractor expiry and factory refill, checked by an APScheduler job every 15
+minutes (`make_scheduler`, `check_and_send_notifications`) — pure DB math, no ESI calls, so it
+runs freely between rescans. Settings/prefs/log are per-`context_id` in `pp_notification_settings`,
+`pp_notification_prefs`, `pp_notification_log`.
+
+- **Channels** (`notifiers.py`, `_CHANNEL_MAP`): Pushover, ntfy.sh, Discord webhook. Each is a
+  `BaseNotifier.send(title, body, url=None, fields=None)`. `fields` (a list of `{name, value,
+  inline}`) is Discord-only — when present, `DiscordNotifier` sends a **rich embed** (colored
+  sidebar: orange for extractor events, blue for factory) instead of plain text; Pushover/ntfy
+  ignore it and use `title`/`body`. Discord content is truncated at 2000 chars (hard API limit) as
+  a fallback safety net — the embed path avoids hitting it in practice since fields don't count
+  against the same limit.
+- **Event detection** (`_extractor_events`, `_factory_events` in `notifications.py`): both pull
+  `planet_num`/`planet_type` alongside `system_name` so alerts can label a planet precisely
+  (`System IV`, via `_planet_label` — roman numeral from `planet_num`, no planet type shown, that
+  was tried and cut as noise). Extractor expiry reads `pp_colony_yield.install_ts + prog_days`;
+  factory refill reads the most recent plan snapshot's `factory_refill_hours` applied to
+  `pp_char_planets.scanned_at`.
+- **Batching, not per-event spam.** `_process_context` groups all due extractor events into ONE
+  message and all due factory events into another (`_format_batch`), rather than firing one
+  notification per planet — was originally per-event and produced a wall of pings when several
+  things expired close together. Cooldown (`_recently_notified`, 2h for extractors / 4h for
+  factories) is checked **before** collecting each event into its batch, so one recently-notified
+  planet doesn't block the others in the same run. Embed fields are grouped **by character**
+  (`_format_batch`'s `by_char` dict) — one Discord field per pilot listing their due planets,
+  rather than one field per planet — so a multi-planet alert reads as "here's what Alice and Bob
+  need to do," not a flat list of unlabeled rows.
+- **`POST /api/notifications/resend-last`:** replays the most recent logged batch (grouped by
+  `sent_at` to the minute, since all sends in one scheduler run land within seconds of each other)
+  to all enabled channels, tagged `[Replay]`. Built because testing the real formatting meant
+  waiting for something to actually be due — this fires immediately from history instead. No fake
+  countdown (`hours_left` isn't meaningful for a replay); just character + planet.
+- **`POST /api/notifications/test`** sends a one-off "channel is working" ping when adding a new
+  channel — separate from resend-last, which replays real event data.
