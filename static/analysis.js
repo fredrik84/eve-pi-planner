@@ -126,12 +126,12 @@ async function onAnalyzeTabOpen() {
   const el = document.getElementById('analyzeContent');
   if (el && !_analyzeSnaps.length && !_ppCharsData.length)
     el.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Loading…</div>';
-  // Fetch characters, features, snapshots and derived plans in parallel — all independent.
+  // Fetch characters, snapshots and derived plans in parallel — all independent. loadCharacters()
+  // already calls _loadFeatures() internally, so no separate call is needed here.
   const [saved, derived] = await Promise.all([
     _fetchAllSnapshots().catch(() => []),
     _fetchSetupPlans().catch(() => []),
     loadCharacters(),
-    _loadFeatures(),
   ]);
   _analyzeSnaps = [...(derived || []), ...(saved || [])];
   // Skill ROI and expansion depend on _loadFeatures (via _featureActive) — run after phase 1.

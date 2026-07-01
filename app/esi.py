@@ -22,7 +22,7 @@ from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Response
 from pydantic import BaseModel
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from app.sde import get_connection
+from app.sde import get_connection, ensure_once
 
 router = APIRouter()
 
@@ -134,6 +134,7 @@ def _is_configured() -> bool:
     return bool(CLIENT_ID and CLIENT_SECRET)
 
 
+@ensure_once
 def ensure_char_tables():
     con = get_connection()
     con.execute("""
@@ -888,6 +889,7 @@ def delete_account(context_id: int = Depends(require_context)):
 ADMIN_CHARACTERS = {"ekaoni"}
 
 
+@ensure_once
 def ensure_admin_table():
     """Create pp_admins if missing (also created by ensure_char_tables; this lets the admin
     endpoints stand alone, matching the ensure_bugs_table/ensure_basket_tables pattern)."""
@@ -914,23 +916,27 @@ def _db_admin_names() -> set[str]:
         return set()
 
 
+def _context_character_names(context_id: int) -> list[str]:
+    """Lowercased names of the context's real (non-dummy, SSO-verified) characters — a dummy
+    character is just a typed-in name and must never confer admin/tester status."""
+    con = get_connection()
+    rows = con.execute(
+        "SELECT character_name FROM pp_characters "
+        "WHERE context_id=? AND COALESCE(is_dummy, 0) = 0", (context_id,)
+    ).fetchall()
+    con.close()
+    return [(r["character_name"] or "").lower() for r in rows]
+
+
 def is_admin(pp_session: str = Cookie(default=None)) -> bool:
     """True if the session's account owns a character with an admin name (bootstrap set
     or the pp_admins table)."""
     sess = _session_lookup(pp_session)
     if not sess:
         return False
-    context_id = sess[1]
-    con = get_connection()
-    # Only real, SSO-verified characters count — a dummy character is just a typed-in name and
-    # must never confer admin (otherwise anyone could add a dummy named after an admin).
-    rows = con.execute(
-        "SELECT character_name FROM pp_characters "
-        "WHERE context_id=? AND COALESCE(is_dummy, 0) = 0", (context_id,)
-    ).fetchall()
-    con.close()
+    names = _context_character_names(sess[1])
     admin_names = ADMIN_CHARACTERS | _db_admin_names()
-    return any((r["character_name"] or "").lower() in admin_names for r in rows)
+    return any(n in admin_names for n in names)
 
 
 def require_admin(pp_session: str = Cookie(default=None)) -> int:
@@ -954,20 +960,23 @@ def _db_tester_names() -> set[str]:
 
 def is_tester(pp_session: str = Cookie(default=None)) -> bool:
     """True if the session's account owns a character in pp_testers (or is an admin)."""
-    if is_admin(pp_session):
-        return True
+    return admin_and_tester_status(pp_session)[1]
+
+
+def admin_and_tester_status(pp_session: str = Cookie(default=None)) -> tuple[bool, bool]:
+    """(is_admin, is_tester) computed together from one session lookup + one character-name
+    fetch — for callers that need both (e.g. list_characters, list_features), this avoids the
+    duplicate session-lookup + character-name query that calling is_admin() and is_tester()
+    separately would otherwise cost."""
     sess = _session_lookup(pp_session)
     if not sess:
-        return False
-    context_id = sess[1]
-    con = get_connection()
-    rows = con.execute(
-        "SELECT character_name FROM pp_characters "
-        "WHERE context_id=? AND COALESCE(is_dummy, 0) = 0", (context_id,)
-    ).fetchall()
-    con.close()
-    tester_names = _db_tester_names()
-    return any((r["character_name"] or "").lower() in tester_names for r in rows)
+        return False, False
+    names = _context_character_names(sess[1])
+    admin = any(n in (ADMIN_CHARACTERS | _db_admin_names()) for n in names)
+    if admin:
+        return True, True
+    tester = any(n in _db_tester_names() for n in names)
+    return False, tester
 
 
 # ── ESI helpers ───────────────────────────────────────────────────────────────

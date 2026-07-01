@@ -5,7 +5,7 @@ Stored in the `pp_bugs` SQLite table."""
 from fastapi import APIRouter, Cookie, Depends, HTTPException
 from pydantic import BaseModel
 
-from app.sde import get_connection
+from app.sde import get_connection, ensure_once
 from app.esi import require_context, require_admin, session_character_id
 from app.notifiers import notify_admin_discord
 
@@ -14,6 +14,7 @@ router = APIRouter()
 _VALID_STATUS = {"open", "complete", "ignored"}
 
 
+@ensure_once
 def ensure_bugs_table():
     con = get_connection()
     con.execute("""

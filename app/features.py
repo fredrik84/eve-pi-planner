@@ -12,8 +12,8 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Cookie, Depends, HTTPException
 from pydantic import BaseModel
 
-from app.sde import get_connection
-from app.esi import require_admin, is_admin, is_tester
+from app.sde import get_connection, ensure_once
+from app.esi import require_admin, admin_and_tester_status
 
 router = APIRouter()
 
@@ -73,6 +73,7 @@ def _default_state(f: dict) -> str:
     return "public" if f["default"] else "admin"
 
 
+@ensure_once
 def ensure_features_table():
     con = get_connection()
     con.execute(
@@ -128,7 +129,8 @@ def list_features(pp_session: str = Cookie(default=None)):
         for f in FEATURE_REGISTRY
     ]
     from app.main import GIT_COMMIT
-    return {"features": feats, "is_admin": is_admin(pp_session), "is_tester": is_tester(pp_session), "git_commit": GIT_COMMIT}
+    _admin, _tester = admin_and_tester_status(pp_session)
+    return {"features": feats, "is_admin": _admin, "is_tester": _tester, "git_commit": GIT_COMMIT}
 
 
 class FeatureStateUpdate(BaseModel):

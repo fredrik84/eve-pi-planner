@@ -4,6 +4,7 @@ Database abstraction layer. Supports SQLite (default) and PostgreSQL (when DATAB
 All app code that writes to pp_* tables imports get_connection from here (via app.sde re-export).
 SDE reads (types, schematics) use a separate private SQLite connection in sde.py.
 """
+import functools
 import os
 import re
 import sqlite3
@@ -12,6 +13,23 @@ from pathlib import Path
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 _SQLITE_PATH = Path("data/sde.db")
 _IS_POSTGRES = DATABASE_URL.startswith(("postgresql://", "postgres://"))
+
+
+def ensure_once(fn):
+    """Wrap an idempotent ensure_*_table() DDL function so it runs once per process instead
+    of on every request. Table schemas can't change while the process is running, so re-running
+    CREATE TABLE IF NOT EXISTS / ALTER TABLE ADD COLUMN on every call is pure waste — and on a
+    multi-node cluster, each call is a real network round-trip to Postgres, not a free no-op."""
+    ran = False
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        nonlocal ran
+        if not ran:
+            fn(*args, **kwargs)
+            ran = True
+
+    return wrapper
 
 
 class _Row(dict):

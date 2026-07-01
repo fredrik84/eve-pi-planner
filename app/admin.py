@@ -12,7 +12,7 @@ from fastapi import APIRouter, Cookie, Depends, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
-from app.sde import get_connection, load_pi_data
+from app.sde import get_connection, load_pi_data, ensure_once
 from app.esi import (
     require_admin, require_context, is_admin, session_context_id,
     ADMIN_CHARACTERS, ensure_admin_table, _session_lookup,
@@ -54,6 +54,7 @@ _NEW_BASKETS_DDL = """
 """
 
 
+@ensure_once
 def ensure_basket_tables():
     """Create the basket tables, migrating the original schema (global `name UNIQUE`, no
     `context_id`) to the private-basket schema. The old table-level UNIQUE on name is

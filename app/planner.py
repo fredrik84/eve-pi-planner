@@ -6,7 +6,7 @@ from math import gcd, ceil
 
 from fastapi import APIRouter, Body, Cookie, Depends, Request
 
-from app.sde import load_pi_data, get_connection
+from app.sde import load_pi_data, get_connection, ensure_once
 from app.market import fetch_prices
 from app.esi import require_context, session_context_id, ensure_char_tables, PI_CHAR_SQL
 from app.planner_models import (
@@ -25,6 +25,7 @@ router = APIRouter()
 
 # ── DB setup ──────────────────────────────────────────────────────────────────
 
+@ensure_once
 def ensure_plan_tables():
     con = get_connection()
     con.execute("""
@@ -340,6 +341,7 @@ import secrets as _secrets
 import time as _time
 
 
+@ensure_once
 def ensure_share_table():
     con = get_connection()
     con.execute("""
@@ -392,6 +394,7 @@ def load_plan_share(share_id: str):
     return {"payload": _json.loads(row["payload"])}
 
 
+@ensure_once
 def ensure_profile_tables():
     con = get_connection()
     cols = [r["name"] for r in con.execute("PRAGMA table_info(pp_profiles)").fetchall()]
@@ -589,6 +592,7 @@ def delete_profile(profile_id: int, context_id: int = Depends(require_context)):
 # can split stacks into their factories without re-running the wizard. Stored server-side
 # (cross-device) and named; the frontend also keeps a localStorage copy of the last build.
 
+@ensure_once
 def ensure_plan_snapshot_table():
     con = get_connection()
     con.execute("""
@@ -1126,15 +1130,19 @@ def _factory_full_ccu(product: int, planet_type: str) -> int | None:
     return None
 
 
-def _setup_products(context_id: int, pi: dict) -> list[dict]:
+def _setup_products(context_id: int, pi: dict, con=None) -> list[dict]:
     """The distinct products the player's deployed factories build, most factories first — drives the
-    'plan for this product' dropdown on the Spare-capacity card."""
-    con = get_connection()
+    'plan for this product' dropdown on the Spare-capacity card. Accepts a shared connection (from a
+    caller that's about to also call _expansion_deploys per product) to avoid opening a fresh one."""
+    owns_con = con is None
+    if owns_con:
+        con = get_connection()
     rows = con.execute(
         "SELECT cp.products FROM pp_char_planets cp JOIN pp_characters c ON c.character_id=cp.character_id "
         "WHERE c.context_id=? AND COALESCE(c.is_dummy,0)=0 AND cp.is_extractor=0 "
         "AND cp.products IS NOT NULL AND cp.products != '[]'", (context_id,)).fetchall()
-    con.close()
+    if owns_con:
+        con.close()
     cnt: dict[int, int] = {}
     for r in rows:
         for p in (_json.loads(r["products"]) or []):
@@ -1147,14 +1155,18 @@ def _setup_products(context_id: int, pi: dict) -> list[dict]:
         key=lambda x: -x["count"])
 
 
-def _expansion_deploys(context_id: int, pi: dict, chosen_product: int | None = None) -> list[dict]:
+def _expansion_deploys(context_id: int, pi: dict, chosen_product: int | None = None, con=None) -> list[dict]:
     """Concrete 'deploy this colony here' cards for spare capacity — the Analysis-style answer to
     'I added a toon / freed a slot, now what'. Each free planet slot goes to the material that most
     helps the setup (tightest supply/demand first, re-evaluated as we add), pinned to a real free
     planet in a system the fleet already runs (idle/new toons join the fleet's systems). Bottleneck
-    relief before scale, so a supply-limited setup gets fed before you add factories. Read-only/no plan."""
+    relief before scale, so a supply-limited setup gets fed before you add factories. Read-only/no plan.
+    Accepts a shared connection — callers computing this per-product in a loop (expansion()) should
+    pass one in to avoid opening a fresh connection on every iteration."""
     types, sch = pi["types"], pi["schematics"]
-    con = get_connection()
+    owns_con = con is None
+    if owns_con:
+        con = get_connection()
     rows = con.execute("""
         SELECT c.character_id AS cid, c.character_name AS nm,
                1 + COALESCE(c.interplanetary_consolidation, 0) AS maxp,
@@ -1192,7 +1204,8 @@ def _expansion_deploys(context_id: int, pi: dict, chosen_product: int | None = N
                 supply[o["type_id"]] = supply.get(o["type_id"], 0.0) + rate * 86400
 
     if not prod_count or not fleet_sys:
-        con.close()
+        if owns_con:
+            con.close()
         return []
 
     # Balance one product's chain — the caller's chosen product if it exists, else the DOMINANT one (most
@@ -1205,7 +1218,8 @@ def _expansion_deploys(context_id: int, pi: dict, chosen_product: int | None = N
     ppd_fac = _effective_fph(product, pi) * 24.0
     D0 = {pid: ppd_fac * frac for pid, frac in fr.items() if ppd_fac * frac > 0}
     if not D0:
-        con.close()
+        if owns_con:
+            con.close()
         return []
     pname = types.get(product, {}).get("name") or f"#{product}"
     occ_all = set().union(*occ.values()) if occ else set()   # planets any char already colonises
@@ -1235,7 +1249,8 @@ def _expansion_deploys(context_id: int, pi: dict, chosen_product: int | None = N
     factory_planets = sorted(
         [{"system": p["system"], "planet_num": p["planet_num"], "planet_type": p["planet_type"]} for p in bt],
         key=lambda x: (x["system"], x["planet_num"]) in occ_all)
-    con.close()
+    if owns_con:
+        con.close()
 
     S = dict(supply)
     used: set = set()
@@ -1306,9 +1321,11 @@ def expansion(pp_session: str = Cookie(default=None)):
     if (ex.get("free_slots") or 0) > 0:
         try:
             pi = load_pi_data()
-            prods = _setup_products(context_id, pi)
+            con = get_connection()
+            prods = _setup_products(context_id, pi, con=con)
             ex["products"] = prods
-            by_prod = {str(p["type_id"]): _expansion_deploys(context_id, pi, p["type_id"]) for p in prods}
+            by_prod = {str(p["type_id"]): _expansion_deploys(context_id, pi, p["type_id"], con=con) for p in prods}
+            con.close()
             ex["deploys_by_product"] = by_prod
             ex["deploys"] = by_prod.get(str(prods[0]["type_id"]), []) if prods else []
         except Exception:

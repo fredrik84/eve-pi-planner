@@ -2,7 +2,7 @@ import sqlite3
 from pathlib import Path
 from functools import lru_cache
 
-from app.db import get_connection  # re-export: all app code imports get_connection from here
+from app.db import get_connection, ensure_once  # re-export: all app code imports these from here
 
 DB_PATH = Path("data/sde.db")
 

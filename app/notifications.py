@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Cookie, Depends, HTTPException
 from pydantic import BaseModel
 
-from app.sde import get_connection
+from app.sde import get_connection, ensure_once
 from app.esi import require_context, session_context_id
 from app.notifiers import make_notifier, CHANNEL_LABELS
 
@@ -24,6 +24,7 @@ router = APIRouter()
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
 
+@ensure_once
 def ensure_notification_tables():
     con = get_connection()
     con.execute("""
