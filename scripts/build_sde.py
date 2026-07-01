@@ -21,6 +21,13 @@ import yaml
 sys.path.insert(0, ".")
 from app.db import get_connection, _IS_POSTGRES
 
+# CSafeLoader (libyaml's C parser) is 5-10x faster than pure-Python SafeLoader — matters here
+# since fsd/types.yaml is 50k+ entries and yaml.safe_load() is single-threaded (measured ~886s
+# on a slow-clocked node vs ~88s on a faster one, for the SafeLoader path — CPU core COUNT/limit
+# doesn't help a single-threaded parse). Falls back to SafeLoader if libyaml isn't bundled in
+# whatever PyYAML wheel/build is installed, so this never hard-fails, just loses the speedup.
+_YAML_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+
 SDE_URL = "https://eve-static-data-export.s3-eu-west-1.amazonaws.com/tranquility/sde.zip"
 
 # Arbitrary fixed key for the Postgres advisory lock guarding this build — only matters that
@@ -55,7 +62,7 @@ def parse_yaml(zf: zipfile.ZipFile, member: str) -> dict:
     _log(f"Parsing {member} ...")
     t0 = time.monotonic()
     with zf.open(member) as fh:
-        data = yaml.safe_load(fh)
+        data = yaml.load(fh, Loader=_YAML_LOADER)
     _log(f"  {member}: {len(data):,} top-level entries ({time.monotonic() - t0:.1f}s)")
     return data
 
