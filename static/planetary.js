@@ -212,27 +212,40 @@ let _isAdmin = false;
 let _sessionLoaded = false;   // true once /api/characters has resolved → _isAdmin/_loggedIn are real
 let _ppCharsData = [];   // last /api/characters payload, for the Setup Analysis tab
 
+let _loadCharactersInFlight = null;
 async function loadCharacters() {
+  // Boot calls this unconditionally (app.js) AND the restored tab's own onXTabOpen() hook
+  // (e.g. Setup Analysis, Dashboard) can call it again concurrently on the very same load —
+  // share one in-flight request instead of firing a duplicate /api/characters call. A later,
+  // non-overlapping call (e.g. after adding a character) still gets a genuinely fresh fetch.
+  if (_loadCharactersInFlight) return _loadCharactersInFlight;
+  _loadCharactersInFlight = (async () => {
+    try {
+      const resp = await fetch('/api/characters');
+      const data = await resp.json();
+      _esiConfigured = data.configured;
+      _loggedIn = data.logged_in || false;
+      _isAdmin = data.is_admin || false;
+      _ppCharsData = data.characters || [];
+      renderCharacters(data.characters || [], _loggedIn);
+      renderHeaderSession(_loggedIn, data.characters || [], data.session_character_id);
+      _sessionLoaded = true;
+      // Tab-restore on boot runs before this resolves, so a saved "admin" tab opened with _isAdmin
+      // still false. Now that the real state is known, bounce a confirmed non-admin off the admin tab
+      // to a mobile-visible tab (the old onAdminTabOpen bounce to the hidden planner shuffled phones).
+      if (!_isAdmin && localStorage.getItem('activeTab') === 'admin' && typeof switchTab === 'function') switchTab('dashboard');
+      await _loadFeatures();
+      _applyTabGates();
+      _applyLoginGates();
+      await loadProfiles();
+    } catch (e) {
+      console.error('Failed to load characters:', e);
+    }
+  })();
   try {
-    const resp = await fetch('/api/characters');
-    const data = await resp.json();
-    _esiConfigured = data.configured;
-    _loggedIn = data.logged_in || false;
-    _isAdmin = data.is_admin || false;
-    _ppCharsData = data.characters || [];
-    renderCharacters(data.characters || [], _loggedIn);
-    renderHeaderSession(_loggedIn, data.characters || [], data.session_character_id);
-    _sessionLoaded = true;
-    // Tab-restore on boot runs before this resolves, so a saved "admin" tab opened with _isAdmin
-    // still false. Now that the real state is known, bounce a confirmed non-admin off the admin tab
-    // to a mobile-visible tab (the old onAdminTabOpen bounce to the hidden planner shuffled phones).
-    if (!_isAdmin && localStorage.getItem('activeTab') === 'admin' && typeof switchTab === 'function') switchTab('dashboard');
-    await _loadFeatures();
-    _applyTabGates();
-    _applyLoginGates();
-    await loadProfiles();
-  } catch (e) {
-    console.error('Failed to load characters:', e);
+    await _loadCharactersInFlight;
+  } finally {
+    _loadCharactersInFlight = null;
   }
 }
 
