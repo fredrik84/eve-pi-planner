@@ -5,13 +5,10 @@ All app code that writes to pp_* tables imports get_connection from here (via ap
 SDE reads (types, schematics) use a separate private SQLite connection in sde.py.
 """
 import functools
-import itertools
 import os
 import re
 import sqlite3
 from pathlib import Path
-
-_pg_key_counter = itertools.count()   # see _PgConn / get_connection for why this exists
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 _SQLITE_PATH = Path("data/sde.db")
@@ -163,19 +160,10 @@ class _PgCursor:
 
 
 class _PgConn:
-    """Wraps a psycopg2 connection to match the sqlite3.Connection interface used in app code.
+    """Wraps a psycopg2 connection to match the sqlite3.Connection interface used in app code."""
 
-    Carries its own pool `key` rather than letting ThreadedConnectionPool auto-key by
-    id(conn) (its default when getconn()/putconn() are called with key=None). That default
-    is unsafe under real concurrency — id() is just a memory address, and under FastAPI's
-    threadpool-executed sync routes it's possible for the bookkeeping to point putconn() at
-    the wrong (or no) entry, raising 'trying to put unkeyed connection' and silently leaking
-    the real connection out of the pool for good. An explicit, monotonically-increasing key
-    per checkout sidesteps that lookup entirely — reproduced and confirmed live on 2026-07-01."""
-
-    def __init__(self, pg_conn, key):
+    def __init__(self, pg_conn):
         self._conn = pg_conn
-        self._key = key
 
     def execute(self, sql: str, params=()) -> _PgCursor:
         sql = _pg_translate(sql)
@@ -208,7 +196,7 @@ class _PgConn:
 
     def close(self):
         self._conn.rollback()  # leave no dangling transaction for the next borrower
-        _pg_pool().putconn(self._conn, key=self._key)
+        _pg_pool().put(self._conn)
 
     def __enter__(self):
         return self
@@ -218,50 +206,71 @@ class _PgConn:
             self._conn.rollback()
         else:
             self._conn.commit()
-        _pg_pool().putconn(self._conn, key=self._key)
+        _pg_pool().put(self._conn)
 
 
 def _sqlite_row_factory(cursor, row):
     return _Row(zip((d[0] for d in cursor.description), row))
 
 
+_PG_POOL_SIZE = 8
 _PG_POOL = None
+_PG_POOL_INIT_LOCK = None   # threading.Lock, created lazily to avoid importing threading for SQLite-only runs
 
 
 def _pg_pool():
-    """Lazily-created per-process pool. Each get_connection() call used to open a brand-new
-    psycopg2 connection (TCP + auth handshake); on a multi-node cluster where Postgres isn't
-    on the same host as the app, that handshake crosses the network and costs ~80-140ms per
-    call instead of the near-zero latency of a same-node/loopback connection. With ~100 call
-    sites across the app, a single feature-rich page can open dozens of connections, so this
-    added up to multi-second page loads. Pooling reuses already-established connections.
-    Sized conservatively (not e.g. 20) because with multiple uvicorn workers (UVICORN_WORKERS,
-    see Dockerfile) each worker process gets its OWN independent pool — total connections
-    against Postgres scale with worker count, and Postgres's max_connections is finite.
+    """Lazily-created per-process pool of real psycopg2 connections, handed out via a plain
+    queue.Queue rather than psycopg2.pool.ThreadedConnectionPool. Two problems with the latter,
+    both reproduced live on 2026-07-01 under a genuine concurrent burst (not just theorized):
 
-    minconn == maxconn (not e.g. minconn=1) so ALL connections are opened eagerly right here,
-    the first time this runs — which app.main's startup hook forces to happen at pod boot,
-    before the readiness probe (and therefore real traffic) can reach the pod. Measured directly:
-    a genuinely fresh connection costs ~80-140ms (TCP+auth handshake) and even its first QUERY
-    pays extra planning-cache warmup (~7-22ms vs <1ms once warm). With minconn=1, only the pool's
-    FIRST slot was ever pre-warmed — a concurrent burst of page-load requests needing the 2nd
-    through 8th slot paid that cold-start cost live, mid-request, which is exactly the kind of
-    one-off latency spike that's invisible in light testing but shows up as real user-facing
-    slowness under a normal multi-tab page load."""
-    global _PG_POOL
+    1. ThreadedConnectionPool.getconn()/putconn() track checked-out connections by an internal
+       'key' (id(conn) by default, or a caller-supplied key) in a plain dict — under real
+       concurrency this bookkeeping proved fragile: putconn() would occasionally find no
+       matching entry ('trying to put unkeyed connection', or a bare KeyError on a supplied
+       key), permanently leaking that connection out of the pool (the exception fires before
+       the connection is returned to the free list).
+    2. Both getconn() and putconn() share ONE lock for the pool's entire lifetime — and
+       putconn() does real network I/O under that lock (conn.rollback() / checking
+       conn.info.transaction_status). So concurrent connection RETURNS were fully serialized,
+       each paying real cross-node network latency while blocking every other thread's
+       getconn()/putconn() — turning a 'give the connection back' step into the actual
+       bottleneck under a concurrent burst (measured multi-second stalls for what should be a
+       sub-5ms round trip).
+
+    A queue.Queue sidesteps both: handoff is by plain object reference (no key/id bookkeeping to
+    get out of sync), and put()/get() don't hold a pool-wide lock across a network call. get()
+    blocks if the queue is empty (a burst beyond pool size waits for a free connection — graceful
+    backpressure) instead of ThreadedConnectionPool's immediate PoolError."""
+    global _PG_POOL, _PG_POOL_INIT_LOCK
     if _PG_POOL is None:
-        from psycopg2.pool import ThreadedConnectionPool
-        _PG_POOL = ThreadedConnectionPool(minconn=8, maxconn=8, dsn=DATABASE_URL)
+        import threading
+        if _PG_POOL_INIT_LOCK is None:
+            _PG_POOL_INIT_LOCK = threading.Lock()
+        with _PG_POOL_INIT_LOCK:
+            if _PG_POOL is None:
+                import queue
+                import psycopg2
+                q = queue.Queue()
+                for _ in range(_PG_POOL_SIZE):
+                    q.put(psycopg2.connect(DATABASE_URL))
+                _PG_POOL = q
     return _PG_POOL
 
 
 def get_connection():
     """Return a DB connection for user (pp_*) tables. Postgres when DATABASE_URL is set."""
     if _IS_POSTGRES:
-        key = next(_pg_key_counter)
-        conn = _pg_pool().getconn(key=key)
+        import queue
+        try:
+            # Bounded wait, not an unbounded block: queue.Queue.get() with no timeout would hang
+            # a request forever if a connection ever genuinely leaks (some path skipping close()),
+            # instead of failing clearly. 15s comfortably rides out a real concurrent burst
+            # queueing for a free connection, without turning a real leak into a silent full hang.
+            conn = _pg_pool().get(timeout=15)
+        except queue.Empty:
+            raise RuntimeError("Database connection pool exhausted (all connections busy for 15s)")
         conn.autocommit = False
-        return _PgConn(conn, key=key)
+        return _PgConn(conn)
     con = sqlite3.connect(str(_SQLITE_PATH))
     con.row_factory = _sqlite_row_factory
     con.execute("PRAGMA journal_mode=WAL")
