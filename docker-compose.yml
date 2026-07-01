@@ -8,6 +8,22 @@ services:
       - .env
     volumes:
       - sde_data:/srv/app/data
+    networks:
+      - default
+      - traefik
+    labels:
+      traefik.enable: true
+      traefik.http.routers.eve-pi-dev.rule: Host("eve-pi-dev.failed.name")
+      traefik.http.services.eve-pi-dev.loadbalancer.server.port: 8000
+      traefik.http.routers.eve-pi-dev.entrypoints: port443
+      traefik.http.routers.eve-pi-dev.tls: true
+      traefik.http.routers.eve-pi-dev.tls.certresolver: myresolver
+      traefik.docker.network: docker_default
 
 volumes:
   sde_data:
+
+networks:
+  traefik:
+    name: docker_default
+    external: true

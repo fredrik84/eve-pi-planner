@@ -27,7 +27,8 @@ def recent_donations(
     _check_token(x_internal_token)
 
     from app.db import get_connection
-    from app.esi import WALLET_SCOPE, corp_wallet_summary
+    from app.esi import WALLET_SCOPE
+    from app.esi_data import corp_wallet_summary
 
     con = get_connection()
     row = con.execute(

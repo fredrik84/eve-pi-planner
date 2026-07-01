@@ -16,12 +16,6 @@ function execCopy(text, cb) {
   document.body.removeChild(ta);
   if (cb) cb();
 }
-function fmtIsk(n) {
-  if (n >= 1e9) return (n / 1e9).toFixed(2) + ' B';
-  if (n >= 1e6) return (n / 1e6).toFixed(2) + ' M';
-  if (n >= 1e3) return (n / 1e3).toFixed(1) + ' K';
-  return n.toFixed(0);
-}
 function pct(used, available) {
   if (!available) return '';
   return Math.round(used / available * 100) + '%';

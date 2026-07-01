@@ -633,18 +633,6 @@ function connectCorpWallet() {
   });
 }
 
-function _fmtWalletDate(s) {
-  if (!s) return '';
-  return String(s).slice(0, 16).replace('T', ' ');   // 2026-06-21 14:32
-}
-
-// HTTP-date (e.g. "Sun, 21 Jun 2026 20:38:14 GMT") → the viewer's local time, short form.
-function _fmtCacheTime(s) {
-  if (!s) return '—';
-  const d = new Date(s);
-  return isNaN(d) ? s : d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-}
-
 async function loadCorpWallet() {
   const el = document.getElementById('corpWalletContent');
   if (!el) return;
@@ -1482,34 +1470,6 @@ function _productTypeId(name) {
 
 function _ptypeSpan(t) {
   return t ? `<span class="plan-ptype ${PP_TYPE_CLASS[t] || ''}">${t}</span>` : '';
-}
-
-// Spaced ISK style ("12.3 K") — the B/M/K logic lives once in app.js's fmtIsk (global,
-// loaded first); only the sub-1k branch differs (keeps separators). NB: _iskFmt below is a
-// DIFFERENT compact style ("12k", no space, signed) used by the Factory Layout cards.
-function _fmtIsk(v) {
-  return v >= 1e3 ? fmtIsk(v) : v.toLocaleString();
-}
-
-// Readable duration, FLOORED so it never overstates a "time left" (1d → days + hours, 12–24h →
-// hours, under 12h → hours + minutes): 61.5h → "2d 13h", 18.x → "18h", 1.7h → "1h 42m".
-function _fmtHours(h) {
-  if (!(h > 0)) return '0m';
-  if (h >= 24) { const d = Math.floor(h / 24), hr = Math.floor(h % 24); return hr ? `${d}d ${hr}h` : `${d}d`; }
-  if (h >= 12) return Math.floor(h) + 'h';
-  const hr = Math.floor(h), m = Math.floor((h % 1) * 60);
-  return hr === 0 ? `${m}m` : (m ? `${hr}h ${m}m` : `${hr}h`);
-}
-
-function _esc(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
-
-// Hours → "1d 23h 30m" (keeps minutes, unlike _fmtHours which floors them past 24h).
-function _fmtDHM(h) {
-  const total = Math.round((h || 0) * 60);
-  const d = Math.floor(total / 1440), hr = Math.floor((total % 1440) / 60), m = total % 60;
-  return [d ? d + 'd' : '', hr ? hr + 'h' : '', m ? m + 'm' : ''].filter(Boolean).join(' ') || '0m';
 }
 
 // Generic image lightbox — open an image in a dark in-page overlay (so SVGs don't load as a bare

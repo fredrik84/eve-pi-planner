@@ -16,8 +16,9 @@ from app.sde import get_connection, load_pi_data
 from app.esi import (
     require_admin, require_context, is_admin, session_context_id,
     ADMIN_CHARACTERS, ensure_admin_table, _session_lookup,
-    corp_wallet_summary, _db_tester_names,
+    _db_tester_names,
 )
+from app.esi_data import corp_wallet_summary
 
 router = APIRouter()
 
