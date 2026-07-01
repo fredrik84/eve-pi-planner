@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Download the CCP SDE and build a SQLite database containing PI schematic data.
+Download the CCP SDE and populate PI schematic data into the app's database (Postgres in
+production, SQLite in dev — via app.db.get_connection(), same as the rest of the app).
 
 Tables built:
   types              - typeID, name, group_id, pi_tier (0=P0 raw, 1=P1, 2=P2, 3=P3, 4=P4, NULL=not PI)
@@ -8,20 +9,35 @@ Tables built:
   pi_schematic_inputs- schematic_id, type_id, quantity
 """
 
-import sqlite3
+import sys
 import tempfile
+import time
 import urllib.request
 import zipfile
 from pathlib import Path
 
 import yaml
 
+sys.path.insert(0, ".")
+from app.db import get_connection, _IS_POSTGRES
+
 SDE_URL = "https://eve-static-data-export.s3-eu-west-1.amazonaws.com/tranquility/sde.zip"
-DB_PATH = Path("data/sde.db")
+
+# Arbitrary fixed key for the Postgres advisory lock guarding this build — only matters that
+# every replica/process uses the same constant. Skipped entirely in SQLite dev (no concurrency).
+_ADVISORY_LOCK_KEY = 918_273_645
+
+_T0 = time.monotonic()
+
+
+def _log(msg: str) -> None:
+    """Timestamped progress line (elapsed since process start) so a live `kubectl logs -f`
+    during first startup shows real progress instead of long silent gaps between phases."""
+    print(f"[+{time.monotonic() - _T0:6.1f}s] {msg}", flush=True)
 
 
 def download_sde(dest: Path) -> None:
-    print("Downloading SDE from CCP...")
+    _log("Downloading SDE from CCP...")
     with urllib.request.urlopen(SDE_URL) as resp:
         total = int(resp.headers.get("Content-Length", 0))
         downloaded = 0
@@ -31,13 +47,17 @@ def download_sde(dest: Path) -> None:
                 downloaded += len(chunk)
                 if total:
                     print(f"\r  {downloaded / 1e6:6.1f} / {total / 1e6:.1f} MB  ({downloaded/total*100:.0f}%)", end="", flush=True)
-    print(f"\nDownloaded {downloaded / 1e6:.1f} MB.")
+    print()
+    _log(f"Downloaded {downloaded / 1e6:.1f} MB.")
 
 
 def parse_yaml(zf: zipfile.ZipFile, member: str) -> dict:
-    print(f"  Parsing {member} ...")
+    _log(f"Parsing {member} ...")
+    t0 = time.monotonic()
     with zf.open(member) as fh:
-        return yaml.safe_load(fh)
+        data = yaml.safe_load(fh)
+    _log(f"  {member}: {len(data):,} top-level entries ({time.monotonic() - t0:.1f}s)")
+    return data
 
 
 def compute_pi_tiers(schematics: list[dict]) -> dict[int, int]:
@@ -79,80 +99,63 @@ def compute_pi_tiers(schematics: list[dict]) -> dict[int, int]:
     return result
 
 
-def parse_universe(zf: zipfile.ZipFile) -> tuple[dict[int, str], dict[int, set[int]]]:
+_DDL = [
     """
-    Walk fsd/universe/eve/**/**/solarsystem.staticdata to extract:
-      - {system_id: system_name}
-      - {system_id: {adjacent_system_id, ...}}  (via stargates)
-    Returns (names, adjacency).
+    CREATE TABLE IF NOT EXISTS types (
+        type_id   INTEGER PRIMARY KEY,
+        name      TEXT    NOT NULL,
+        group_id  INTEGER NOT NULL DEFAULT 0,
+        pi_tier   INTEGER
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_types_name ON types (name)",
     """
-    print("  Parsing universe system adjacency…")
-    # First pass: collect all system IDs and their stargate→destination mappings
-    gate_to_system: dict[int, int] = {}   # stargate_id → system_id that owns it
-    gate_destinations: dict[int, int] = {} # stargate_id → destination_stargate_id
-    system_names: dict[int, str] = {}
-
-    universe_prefix = "fsd/universe/eve/"
-    for member in zf.namelist():
-        if not member.startswith(universe_prefix):
-            continue
-        if not member.endswith("solarsystem.staticdata"):
-            continue
-        # Path: fsd/universe/eve/{region}/{constellation}/{system}/solarsystem.staticdata
-        parts = member[len(universe_prefix):].split("/")
-        if len(parts) < 4:
-            continue
-        system_name = parts[2]
-        try:
-            with zf.open(member) as fh:
-                data = yaml.safe_load(fh)
-        except Exception:
-            continue
-        if not isinstance(data, dict):
-            continue
-        sys_id = data.get("solarSystemID")
-        if not sys_id:
-            continue
-        system_names[sys_id] = system_name
-        for gate_id, gate_data in (data.get("stargates") or {}).items():
-            dest = gate_data.get("destination") if isinstance(gate_data, dict) else None
-            gate_to_system[int(gate_id)] = sys_id
-            if dest:
-                gate_destinations[int(gate_id)] = int(dest)
-
-    # Second pass: build adjacency
-    adjacency: dict[int, set[int]] = {}
-    for gate_id, dest_gate_id in gate_destinations.items():
-        src_sys = gate_to_system.get(gate_id)
-        dst_sys = gate_to_system.get(dest_gate_id)
-        if src_sys and dst_sys and src_sys != dst_sys:
-            adjacency.setdefault(src_sys, set()).add(dst_sys)
-            adjacency.setdefault(dst_sys, set()).add(src_sys)
-
-    print(f"  Universe: {len(system_names):,} systems, {sum(len(v) for v in adjacency.values())//2:,} stargates")
-    return system_names, adjacency
+    CREATE TABLE IF NOT EXISTS pi_schematics (
+        schematic_id   INTEGER PRIMARY KEY,
+        output_type_id INTEGER NOT NULL,
+        output_qty     INTEGER NOT NULL,
+        cycle_time     INTEGER NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_pi_sch_output ON pi_schematics (output_type_id)",
+    """
+    CREATE TABLE IF NOT EXISTS pi_schematic_inputs (
+        schematic_id INTEGER NOT NULL,
+        type_id      INTEGER NOT NULL,
+        quantity     INTEGER NOT NULL,
+        PRIMARY KEY (schematic_id, type_id)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_pi_inputs_type ON pi_schematic_inputs (type_id)",
+]
 
 
-def build_db(type_data: dict, schematics_yaml: dict, zf: zipfile.ZipFile | None = None) -> None:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    if DB_PATH.exists():
-        DB_PATH.unlink()
+def _already_built(con) -> bool:
+    """Data-presence check (works identically on SQLite dev / Postgres prod via get_connection())
+    instead of a file-exists check — a Postgres table has no file to check, and this also
+    correctly treats 'table exists but empty' (a crash mid-build) as not-yet-built, unlike a bare
+    existence check."""
+    try:
+        row = con.execute("SELECT COUNT(*) AS n FROM types").fetchone()
+        return bool(row and row["n"] > 0)
+    except Exception:
+        return False
 
+
+def build_db(con, type_data: dict, schematics_yaml: dict) -> None:
     # Parse types
-    print("  Building types table...")
+    _log("Building types table...")
     type_rows: list[tuple] = []
-    type_name_map: dict[int, str] = {}
     for type_id, attrs in type_data.items():
         name_obj = attrs.get("name", {})
         name = name_obj.get("en", "") if isinstance(name_obj, dict) else str(name_obj or "")
         if not name:
             continue
         group_id = attrs.get("groupID", 0) or 0
-        type_name_map[int(type_id)] = name
         type_rows.append((int(type_id), name, int(group_id)))
 
     # Parse PI schematics
-    print("  Parsing planetSchematics...")
+    _log("Parsing planetSchematics...")
     schematics: list[dict] = []
     for sch_id, sch_attrs in schematics_yaml.items():
         if not isinstance(sch_attrs, dict):
@@ -183,108 +186,72 @@ def build_db(type_data: dict, schematics_yaml: dict, zf: zipfile.ZipFile | None 
             "inputs": inputs,
         })
 
-    print(f"  Found {len(schematics)} PI schematics.")
+    _log(f"Found {len(schematics)} PI schematics.")
 
     # Compute PI tiers via topological sort
     pi_tiers = compute_pi_tiers(schematics)
-    all_pi_type_ids = set(pi_tiers.keys())
 
-    # Build DB
-    con = sqlite3.connect(str(DB_PATH))
-    cur = con.cursor()
-    cur.executescript("""
-        CREATE TABLE types (
-            type_id   INTEGER PRIMARY KEY,
-            name      TEXT    NOT NULL,
-            group_id  INTEGER NOT NULL DEFAULT 0,
-            pi_tier   INTEGER
-        );
-        CREATE INDEX idx_types_name ON types(name COLLATE NOCASE);
+    _log("Creating tables...")
+    for stmt in _DDL:
+        con.execute(stmt)
+    con.commit()
 
-        CREATE TABLE pi_schematics (
-            schematic_id   INTEGER PRIMARY KEY,
-            output_type_id INTEGER NOT NULL,
-            output_qty     INTEGER NOT NULL,
-            cycle_time     INTEGER NOT NULL
-        );
-        CREATE INDEX idx_pi_sch_output ON pi_schematics(output_type_id);
+    _log("Inserting rows...")
+    rows_with_tier = [(tid, name, gid, pi_tiers.get(tid)) for (tid, name, gid) in type_rows]
+    for row in rows_with_tier:
+        con.execute("INSERT INTO types VALUES (?, ?, ?, ?)", row)
 
-        CREATE TABLE pi_schematic_inputs (
-            schematic_id INTEGER NOT NULL,
-            type_id      INTEGER NOT NULL,
-            quantity     INTEGER NOT NULL,
-            PRIMARY KEY (schematic_id, type_id)
-        );
-        CREATE INDEX idx_pi_inputs_type ON pi_schematic_inputs(type_id);
-
-        CREATE TABLE solar_systems (
-            system_id   INTEGER PRIMARY KEY,
-            name        TEXT NOT NULL
-        );
-        CREATE INDEX idx_ss_name ON solar_systems(name COLLATE NOCASE);
-
-        CREATE TABLE system_jumps (
-            from_id INTEGER NOT NULL,
-            to_id   INTEGER NOT NULL,
-            PRIMARY KEY (from_id, to_id)
-        );
-        CREATE INDEX idx_sj_from ON system_jumps(from_id);
-    """)
-
-    # Insert types with pi_tier
-    rows_with_tier = []
-    for (tid, name, gid) in type_rows:
-        t = pi_tiers.get(tid)
-        rows_with_tier.append((tid, name, gid, t))
-    cur.executemany("INSERT INTO types VALUES (?, ?, ?, ?)", rows_with_tier)
-
-    # Insert schematics
-    sch_rows = [(s["schematic_id"], s["output_type_id"], s["output_qty"], s["cycle_time"]) for s in schematics]
-    cur.executemany("INSERT INTO pi_schematics VALUES (?, ?, ?, ?)", sch_rows)
-
-    inp_rows = []
     for s in schematics:
+        con.execute(
+            "INSERT INTO pi_schematics VALUES (?, ?, ?, ?)",
+            (s["schematic_id"], s["output_type_id"], s["output_qty"], s["cycle_time"]),
+        )
         for inp in s["inputs"]:
-            inp_rows.append((s["schematic_id"], inp["type_id"], inp["quantity"]))
-    cur.executemany("INSERT INTO pi_schematic_inputs VALUES (?, ?, ?)", inp_rows)
-
-    # Insert universe adjacency if available
-    if zf is not None:
-        system_names, adjacency = parse_universe(zf)
-        cur.executemany("INSERT OR IGNORE INTO solar_systems VALUES (?,?)", system_names.items())
-        jump_rows = [(src, dst) for src, dsts in adjacency.items() for dst in dsts]
-        cur.executemany("INSERT OR IGNORE INTO system_jumps VALUES (?,?)", jump_rows)
+            con.execute(
+                "INSERT INTO pi_schematic_inputs VALUES (?, ?, ?)",
+                (s["schematic_id"], inp["type_id"], inp["quantity"]),
+            )
 
     con.commit()
-    con.close()
 
     # Summary
     tier_counts = {}
     for t in pi_tiers.values():
         tier_counts[t] = tier_counts.get(t, 0) + 1
-    print(f"  Types: {len(type_rows):,}")
-    print(f"  PI schematics: {len(schematics)}")
-    print(f"  PI tier distribution: { {f'P{k}': v for k,v in sorted(tier_counts.items())} }")
-    print(f"Database written to {DB_PATH}")
+    _log(f"Types: {len(type_rows):,}")
+    _log(f"PI schematics: {len(schematics)}")
+    _log(f"PI tier distribution: { {f'P{k}': v for k,v in sorted(tier_counts.items())} }")
 
 
 def main() -> None:
-    if DB_PATH.exists():
-        print(f"SDE already built at {DB_PATH} — skipping. (Delete to force refresh.)")
-        return
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = Path(tempfile.mktemp(suffix=".zip"))
+    con = get_connection()
     try:
-        download_sde(tmp_path)
-        print("Extracting YAML files...")
-        with zipfile.ZipFile(tmp_path) as zf:
-            type_data = parse_yaml(zf, "fsd/types.yaml")
-            schematics_yaml = parse_yaml(zf, "fsd/planetSchematics.yaml")
-            build_db(type_data, schematics_yaml, zf)
+        if _IS_POSTGRES:
+            _log("Acquiring advisory lock (guards against multiple replicas building at once)...")
+            con.execute("SELECT pg_advisory_lock(?)", (_ADVISORY_LOCK_KEY,))
+        try:
+            if _already_built(con):
+                _log("SDE already built — skipping.")
+                return
+
+            tmp_path = Path(tempfile.mktemp(suffix=".zip"))
+            try:
+                download_sde(tmp_path)
+                _log("Extracting YAML files...")
+                with zipfile.ZipFile(tmp_path) as zf:
+                    type_data = parse_yaml(zf, "fsd/types.yaml")
+                    schematics_yaml = parse_yaml(zf, "fsd/planetSchematics.yaml")
+                    build_db(con, type_data, schematics_yaml)
+            finally:
+                if tmp_path.exists():
+                    tmp_path.unlink()
+        finally:
+            if _IS_POSTGRES:
+                con.execute("SELECT pg_advisory_unlock(?)", (_ADVISORY_LOCK_KEY,))
+                con.commit()
     finally:
-        if tmp_path.exists():
-            tmp_path.unlink()
-    print("Done.")
+        con.close()
+    _log("Done.")
 
 
 if __name__ == "__main__":

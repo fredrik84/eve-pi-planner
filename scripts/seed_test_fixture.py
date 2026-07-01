@@ -18,10 +18,10 @@ first, then add factories. Idempotent: wipes context 999001 first. Run inside th
   docker compose exec -T web python3 scripts/seed_test_fixture.py
 """
 import json
-import sqlite3
 import sys
 
 sys.path.insert(0, ".")
+from app.db import get_connection
 from app.sde import load_pi_data
 
 CTX = 999001
@@ -29,7 +29,7 @@ pi = load_pi_data()
 types = pi["types"]
 NAME = {t.get("name"): tid for tid, t in types.items()}
 
-con = sqlite3.connect("data/sde.db")
+con = get_connection()
 cur = con.cursor()
 
 # Wipe any prior fixture
@@ -40,7 +40,9 @@ for sid in (99990001, 99990002):
 
 
 def add_system(sid, name):
-    cur.execute("INSERT OR REPLACE INTO solar_systems (system_id, name) VALUES (?,?)", (sid, name))
+    # OR IGNORE, not OR REPLACE (app.db._pg_translate only supports the former) — fine here since
+    # the name for a given fixture system_id never actually changes between re-runs.
+    cur.execute("INSERT OR IGNORE INTO solar_systems (system_id, name) VALUES (?,?)", (sid, name))
 
 
 def add_planet(sid, sysname, pn, ptype, dens):

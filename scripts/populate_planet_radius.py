@@ -5,19 +5,20 @@ under-packs and the CPU/PG overflows the grid in-game. Storing the real diameter
 lets the planner verify factory fit against the ACTUAL planet (and benefits every user).
 
 Idempotent. Re-run after each SDE patch. Run inside the container (it needs network):
-    docker compose exec -T web python3 scripts/populate_planet_radius.py
+    kubectl exec -n eve-pi deploy/eve-pi-planner -- python3 scripts/populate_planet_radius.py
 
 Source columns used: groupID=7 (planets), solarSystemID, celestialIndex (= planet number), radius (m).
 diameter_km = radius_m * 2 / 1000 = radius_m / 500.
 """
 import csv
 import io
-import sqlite3
 import sys
 import urllib.request
 
+sys.path.insert(0, ".")
+from app.db import get_connection
+
 BASE = "https://www.fuzzwork.co.uk/dump/latest/csv/"
-DB_PATH = "data/sde.db"
 
 
 def _stream(name: str):
@@ -26,13 +27,17 @@ def _stream(name: str):
 
 
 def main() -> None:
-    db = sys.argv[1] if len(sys.argv) > 1 else DB_PATH
-    con = sqlite3.connect(db)
-    cols = [r[1] for r in con.execute("PRAGMA table_info(pp_planets)")]
+    con = get_connection()
+    # Column existence by NAME, not position: PRAGMA table_info(t) returns 6 columns on SQLite
+    # (cid, name, type, notnull, dflt_value, pk) but app.db._pg_translate rewrites it to a
+    # 4-column Postgres query (name, type, dflt_value, pk) — positional indexing (the old `r[1]`)
+    # silently picked up the wrong column on Postgres. Key-based access is correct on both.
+    cols = [r["name"] for r in con.execute("PRAGMA table_info(pp_planets)")]
     if "diameter" not in cols:
         con.execute("ALTER TABLE pp_planets ADD COLUMN diameter REAL")
+        con.commit()
 
-    want_systems = {r[0] for r in con.execute("SELECT DISTINCT system FROM pp_planets")}
+    want_systems = {r["system"] for r in con.execute("SELECT DISTINCT system FROM pp_planets")}
 
     # Resolve only the system NAMES we actually have planets for → solarSystemID (small file).
     name2id = {}

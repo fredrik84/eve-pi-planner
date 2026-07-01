@@ -4,7 +4,11 @@ system/constellation recommendations scored by density and jump-distance
 clustering. Read-only queries against pp_planets — not part of the
 extractor/factory seating algorithm itself (see app/planner.py for that).
 """
+import logging
+
 from app.planetary import PLANET_P0_MAP, _NAME_TO_COL
+
+log = logging.getLogger(__name__)
 
 _P0_PLANET_TYPES: dict[str, list[str]] = {}
 for _pt, _p0s in PLANET_P0_MAP.items():
@@ -165,6 +169,11 @@ def _system_recommendations(
             for r in con.execute("SELECT system, neighbour FROM system_jumps"):
                 adj.setdefault(r["system"], set()).add(r["neighbour"])
         except Exception:
+            # system_jumps is populated by scripts/populate_geo.py — legitimately absent in a
+            # fresh dev checkout that hasn't run it yet, but in production the Dockerfile's boot
+            # chain guarantees this table exists before traffic is served, so a failure here is a
+            # real regression, not a routine routing quirk. Log it instead of swallowing silently.
+            log.exception("system_jumps lookup failed (jump-distance clustering degraded to none)")
             adj = {}
     pair_dist: dict[frozenset, int] = {}
     if adj:

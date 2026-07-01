@@ -1,20 +1,6 @@
-import sqlite3
-from pathlib import Path
 from functools import lru_cache
 
 from app.db import get_connection, ensure_once  # re-export: all app code imports these from here
-
-DB_PATH = Path("data/sde.db")
-
-
-def _sde_connection() -> sqlite3.Connection:
-    """Always-SQLite connection for reading SDE tables (types, schematics). Never Postgres."""
-    con = sqlite3.connect(str(DB_PATH))
-    con.row_factory = sqlite3.Row
-    con.execute("PRAGMA journal_mode=WAL")
-    con.execute("PRAGMA busy_timeout=5000")
-    con.execute("PRAGMA synchronous=NORMAL")
-    return con
 
 
 @lru_cache(maxsize=1)
@@ -30,17 +16,16 @@ def load_pi_data() -> dict:
         "name_to_id":  {lower_name: type_id},
       }
     """
-    con = _sde_connection()
-    cur = con.cursor()
+    con = get_connection()
 
     types: dict[int, dict] = {}
-    cur.execute("SELECT type_id, name, pi_tier FROM types")
-    for row in cur.fetchall():
+    for row in con.execute("SELECT type_id, name, pi_tier FROM types").fetchall():
         types[row["type_id"]] = {"name": row["name"], "pi_tier": row["pi_tier"]}
 
     schematics: dict[int, dict] = {}
-    cur.execute("SELECT schematic_id, output_type_id, output_qty, cycle_time FROM pi_schematics")
-    for row in cur.fetchall():
+    for row in con.execute(
+        "SELECT schematic_id, output_type_id, output_qty, cycle_time FROM pi_schematics"
+    ).fetchall():
         schematics[row["output_type_id"]] = {
             "schematic_id": row["schematic_id"],
             "output_qty": row["output_qty"],
@@ -48,10 +33,11 @@ def load_pi_data() -> dict:
             "inputs": [],
         }
 
-    cur.execute("SELECT schematic_id, type_id, quantity FROM pi_schematic_inputs")
     # Build a reverse map schematic_id -> output_type_id
     sch_id_to_out: dict[int, int] = {v["schematic_id"]: k for k, v in schematics.items()}
-    for row in cur.fetchall():
+    for row in con.execute(
+        "SELECT schematic_id, type_id, quantity FROM pi_schematic_inputs"
+    ).fetchall():
         out_id = sch_id_to_out.get(row["schematic_id"])
         if out_id is not None:
             schematics[out_id]["inputs"].append({

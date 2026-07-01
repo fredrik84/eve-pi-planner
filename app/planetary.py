@@ -2,6 +2,7 @@
 Planetary Planning — planet database and allocation.
 """
 
+import logging
 from typing import Optional
 
 from fastapi import APIRouter, Cookie, Depends, HTTPException
@@ -11,6 +12,7 @@ from app.sde import get_connection, load_pi_data
 from app.esi import require_context, is_admin, require_admin
 from app.notifiers import notify_admin_discord
 
+log = logging.getLogger(__name__)
 router = APIRouter()
 
 # P0 resources per planet type, sorted alphabetically.
@@ -321,7 +323,11 @@ def _parse_planet_rows(text: str, con) -> tuple[list[dict], int, list[str]]:
         for r in con.execute("SELECT system, constellation FROM system_geo"):
             sysgeo[r["system"]] = r["constellation"]
     except Exception:
-        pass
+        # system_geo is populated by scripts/populate_geo.py — legitimately absent in a fresh
+        # dev checkout that hasn't run it yet, but in production the Dockerfile's boot chain
+        # guarantees this table exists before traffic is served, so a failure here is a real
+        # regression, not a routine routing quirk. Log it instead of swallowing silently.
+        log.exception("system_geo lookup failed (constellation auto-fill degraded to none)")
     # planet type ↔ its P0 column set (infer type from which P0 columns are present)
     type_p0_sets = {t: frozenset(c for c in (_p0_col(n) for n in names) if c)
                     for t, names in PLANET_P0_MAP.items()}
@@ -587,6 +593,8 @@ def list_constellations():
         for r in con.execute("SELECT name, region FROM constellations"):
             region_of[r["name"]] = r["region"]
     except Exception:
-        pass
+        # See the matching comment in _parse_planet_rows — legitimately absent only in a fresh
+        # dev checkout that hasn't run scripts/populate_geo.py yet.
+        log.exception("constellations lookup failed (region grouping degraded to none)")
     con.close()
     return {"constellations": names, "regions": {n: region_of.get(n, "") for n in names}}
