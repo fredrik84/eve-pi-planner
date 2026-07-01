@@ -624,14 +624,20 @@ async function refreshAllPlanets(btn) {
   const beforeById = new Map((_ppCharsData || []).map(c => [c.character_id, c]));
   const failed = [];   // ids — named so the alert can say WHO, not just how many
   for (let i = 0; i < ids.length; i++) {
-    btn.textContent = `Refreshing ${i + 1}/${ids.length}…`;
+    // Re-query by id every iteration rather than reusing the passed-in `btn`: if the Characters
+    // list re-renders mid-scan (e.g. loadCharacters() triggered by something else the user
+    // clicked), the original button node gets replaced and a stale reference stops updating
+    // anything visible — same bug class as the header Rescan button, see rescanAll().
+    const liveBtn = document.getElementById('ppRefreshBtn') || btn;
+    liveBtn.textContent = `Refreshing ${i + 1}/${ids.length}…`;
     try {
       const resp = await fetch(`/api/characters/${ids[i]}/refresh-planets`, { method: 'POST' });
       if (!resp.ok) failed.push(ids[i]);
     } catch (e) { failed.push(ids[i]); }
   }
-  btn.disabled = false;
-  btn.textContent = 'Refresh';
+  const liveBtn = document.getElementById('ppRefreshBtn') || btn;
+  liveBtn.disabled = false;
+  liveBtn.textContent = 'Refresh';
   await loadCharacters();
   if (failed.length) {
     // A failed refresh only clears the token server-side when ESI actually rejected it

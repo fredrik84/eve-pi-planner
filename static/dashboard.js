@@ -36,9 +36,14 @@ async function rescanAll() {
   const targets = (_ppCharsData || []).filter(c => !c.is_dummy && !c.wallet_only && c.token_ok && c.character_id > 0);
   if (!targets.length) return;
   _rescanning = true; _setRescanUI();
-  const b = document.getElementById('rescanBtn');
   const failed = [];   // {id, name} — named so the alert can say WHO, not just how many
   for (let i = 0; i < targets.length; i++) {
+    // Re-query every iteration, not once before the loop: renderHeaderSession() rebuilds
+    // #headerActions via innerHTML (e.g. from another loadCharacters() call triggered by
+    // clicking around mid-scan), which replaces this button with a brand-new DOM node and
+    // orphans any reference captured earlier — the counter would keep "updating" an invisible
+    // detached element and look stuck.
+    const b = document.getElementById('rescanBtn');
     if (b) b.textContent = `Rescanning ${i + 1}/${targets.length}…`;
     try {
       const r = await fetch(`/api/characters/${targets[i].character_id}/refresh-planets`, { method: 'POST' });
