@@ -124,7 +124,11 @@ async function _fetchSetupPlans() {
 // then refresh in the background — no need to hit Reload to see anything.
 async function onAnalyzeTabOpen() {
   const el = document.getElementById('analyzeContent');
-  if (el && !_analyzeSnaps.length && !_ppCharsData.length)
+  // Only this tab's OWN cached data (_analyzeSnaps) means there's something to paint instantly.
+  // _ppCharsData is populated globally on page boot regardless of which tab is open, so checking
+  // it here suppressed the spinner on a genuine first visit — the header/characters list being
+  // warm doesn't mean this tab's own analysis data (snapshots/skill-roi/expansion) has loaded yet.
+  if (el && !_analyzeSnaps.length)
     el.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Loading…</div>';
   // Fetch characters, snapshots and derived plans in parallel — all independent. loadCharacters()
   // already calls _loadFeatures() internally, so no separate call is needed here.
