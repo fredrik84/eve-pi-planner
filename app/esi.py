@@ -1013,7 +1013,14 @@ def _fetch_skills(character_id: int, access_token: str) -> dict[str, int]:
 
 
 def _refresh_token(character_id: int, refresh_token: str) -> str | None:
-    """Exchange refresh token for new access token. Returns new access token or None."""
+    """Exchange refresh token for new access token. Returns new access token or None.
+
+    A 400 from EVE SSO here means the refresh token itself is dead (revoked, or rotated out by
+    a use elsewhere — refresh tokens are single-use/rotating) — permanent, needs re-login. Any
+    other failure (timeout, network, 5xx) is transient. These used to be indistinguishable: both
+    just returned None and left the DB's refresh_token in place, so `token_ok` (which only checks
+    whether a refresh_token is stored, not whether it still works) stayed green forever even for
+    a permanently dead character — the red dot never caught up to reality."""
     try:
         with httpx.Client() as client:
             resp = client.post(
@@ -1023,6 +1030,15 @@ def _refresh_token(character_id: int, refresh_token: str) -> str | None:
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
                 timeout=10,
             )
+        if resp.status_code == 400:
+            con = get_connection()
+            con.execute(
+                "UPDATE pp_characters SET refresh_token=NULL WHERE character_id=?",
+                (character_id,),
+            )
+            con.commit()
+            con.close()
+            return None
         resp.raise_for_status()
         data = resp.json()
         new_access  = data["access_token"]

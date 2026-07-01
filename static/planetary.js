@@ -621,18 +621,31 @@ async function refreshAllPlanets(btn) {
   const ids = Array.from(chars).map(b => parseInt(b.dataset.id)).filter(id => id > 0);  // skip placeholders
   btn.textContent = `Refreshing 0/${ids.length}…`;
   btn.disabled = true;
-  let failed = 0;
+  const beforeById = new Map((_ppCharsData || []).map(c => [c.character_id, c]));
+  const failed = [];   // ids — named so the alert can say WHO, not just how many
   for (let i = 0; i < ids.length; i++) {
     btn.textContent = `Refreshing ${i + 1}/${ids.length}…`;
     try {
       const resp = await fetch(`/api/characters/${ids[i]}/refresh-planets`, { method: 'POST' });
-      if (!resp.ok) failed++;
-    } catch (e) { failed++; }
+      if (!resp.ok) failed.push(ids[i]);
+    } catch (e) { failed.push(ids[i]); }
   }
   btn.disabled = false;
   btn.textContent = 'Refresh';
-  if (failed) alert(`${failed} of ${ids.length} character${ids.length !== 1 ? 's' : ''} could not be refreshed — usually an expired token (red dot). Re-add those characters via ESI to renew access.`);
-  loadCharacters();
+  await loadCharacters();
+  if (failed.length) {
+    // A failed refresh only clears the token server-side when ESI actually rejected it
+    // (permanent) — re-checking token_ok after the reload tells real "needs re-login" cases
+    // apart from a transient ESI hiccup that's worth just retrying.
+    const afterById = new Map((_ppCharsData || []).map(c => [c.character_id, c]));
+    const nameOf = id => (beforeById.get(id) || afterById.get(id) || {}).character_name || `#${id}`;
+    const dead = failed.filter(id => { const c = afterById.get(id); return c && !c.token_ok; });
+    const transient = failed.filter(id => !dead.includes(id));
+    let msg = '';
+    if (dead.length) msg += `Needs re-login (token revoked): ${dead.map(nameOf).join(', ')}.\n`;
+    if (transient.length) msg += `Temporary failure, try again shortly: ${transient.map(nameOf).join(', ')}.`;
+    alert(msg.trim());
+  }
 }
 
 function esiLogin() {

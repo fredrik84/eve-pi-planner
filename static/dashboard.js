@@ -33,25 +33,35 @@ async function rescanAll() {
   // Rescan EVERY real toon, the same per-character endpoint the (reliable) Characters-tab button uses —
   // one small request each. We deliberately accept the many requests for a thorough full-fleet refresh
   // (no dashboard scoping). Skips dummies, the wallet-only viewer, and toons with a dead token.
-  const ids = (_ppCharsData || []).filter(c => !c.is_dummy && !c.wallet_only && c.token_ok && c.character_id > 0)
-                                  .map(c => c.character_id);
-  if (!ids.length) return;
+  const targets = (_ppCharsData || []).filter(c => !c.is_dummy && !c.wallet_only && c.token_ok && c.character_id > 0);
+  if (!targets.length) return;
   _rescanning = true; _setRescanUI();
   const b = document.getElementById('rescanBtn');
-  let failed = 0;
-  for (let i = 0; i < ids.length; i++) {
-    if (b) b.textContent = `Rescanning ${i + 1}/${ids.length}…`;
+  const failed = [];   // {id, name} — named so the alert can say WHO, not just how many
+  for (let i = 0; i < targets.length; i++) {
+    if (b) b.textContent = `Rescanning ${i + 1}/${targets.length}…`;
     try {
-      const r = await fetch(`/api/characters/${ids[i]}/refresh-planets`, { method: 'POST' });
-      if (!r.ok) failed++;
-    } catch (e) { failed++; }
+      const r = await fetch(`/api/characters/${targets[i].character_id}/refresh-planets`, { method: 'POST' });
+      if (!r.ok) failed.push(targets[i]);
+    } catch (e) { failed.push(targets[i]); }
   }
   _rescanning = false;
   if (typeof loadCharacters === 'function') await loadCharacters();   // refresh _ppCharsData + header
   if (localStorage.getItem('activeTab') === 'dashboard' && typeof onDashboardTabOpen === 'function') await onDashboardTabOpen();
   if (typeof renderAnalysis === 'function' && _analyzeSnaps.length) renderAnalysis();
   _setRescanUI();
-  if (failed) alert(`${failed} of ${ids.length} character${ids.length !== 1 ? 's' : ''} could not be rescanned — usually an expired ESI token (red dot in Characters).`);
+  if (failed.length) {
+    // A failed refresh now clears the token server-side only when ESI actually rejected it
+    // (permanent) — so re-checking token_ok after the reload tells us which failures are real
+    // "needs re-login" cases vs. a transient ESI hiccup that's worth just retrying.
+    const byId = new Map((_ppCharsData || []).map(c => [c.character_id, c]));
+    const dead = failed.filter(c => { const fresh = byId.get(c.character_id); return fresh && !fresh.token_ok; });
+    const transient = failed.filter(c => !dead.includes(c));
+    let msg = '';
+    if (dead.length) msg += `Needs re-login (token revoked): ${dead.map(c => c.character_name).join(', ')}.\n`;
+    if (transient.length) msg += `Temporary failure, try again shortly: ${transient.map(c => c.character_name).join(', ')}.`;
+    alert(msg.trim());
+  }
 }
 
 // Fold/unfold a dashboard card by clicking its title (state persisted in localStorage).
