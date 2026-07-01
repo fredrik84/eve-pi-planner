@@ -160,32 +160,46 @@ def list_characters(pp_session: str = Cookie(default=None)):
             FROM pp_characters WHERE context_id=?
             ORDER BY COALESCE(is_dummy,0), character_name COLLATE NOCASE
         """, (context_id,)).fetchall()
+
+        # Scoped to this session's own characters via the JOIN below — these used to fetch
+        # EVERY character's planets/yield history system-wide (no WHERE at all) and filter down
+        # in Python, so every user's load scaled with the WHOLE app's data instead of their own.
+        # Measured directly: the unscoped pp_colony_yield fetch alone cost ~360ms with just 12
+        # accounts' worth of history — that only gets worse as more users sign up.
+        try:
+            planet_rows = con.execute("""
+                SELECT cp.character_id, cp.planet_id, cp.planet_type, cp.is_extractor, cp.p0_name, cp.upgrade_level,
+                       cp.planet_num, cp.num_pins, cp.products, cp.pad_contents, cp.pad_inputs, cp.checkpoint_at,
+                       cp.sim_state, cp.esi_modified,
+                       COALESCE(ss.name, '') AS system_name
+                FROM pp_char_planets cp
+                JOIN pp_characters ch ON ch.character_id = cp.character_id
+                LEFT JOIN solar_systems ss ON ss.system_id = cp.solar_system_id
+                WHERE ch.context_id=?
+            """, (context_id,)).fetchall()
+        except Exception:  # no geo table → no system names
+            planet_rows = con.execute("""
+                SELECT cp.character_id, cp.planet_id, cp.planet_type, cp.is_extractor, cp.p0_name, cp.upgrade_level,
+                       cp.planet_num, cp.num_pins, cp.products, cp.pad_contents, cp.pad_inputs, cp.checkpoint_at,
+                       cp.sim_state, cp.esi_modified, '' AS system_name
+                FROM pp_char_planets cp
+                JOIN pp_characters ch ON ch.character_id = cp.character_id
+                WHERE ch.context_id=?
+            """, (context_id,)).fetchall()
     else:
         rows = []
+        planet_rows = []
 
-    try:
-        planet_rows = con.execute("""
-            SELECT cp.character_id, cp.planet_id, cp.planet_type, cp.is_extractor, cp.p0_name, cp.upgrade_level,
-                   cp.planet_num, cp.num_pins, cp.products, cp.pad_contents, cp.pad_inputs, cp.checkpoint_at,
-                   cp.sim_state, cp.esi_modified,
-                   COALESCE(ss.name, '') AS system_name
-            FROM pp_char_planets cp
-            LEFT JOIN solar_systems ss ON ss.system_id = cp.solar_system_id
-        """).fetchall()
-    except Exception:  # no geo table → no system names
-        planet_rows = con.execute("""
-            SELECT character_id, planet_id, planet_type, is_extractor, p0_name, upgrade_level,
-                   planet_num, num_pins, products, pad_contents, pad_inputs, checkpoint_at,
-                   sim_state, esi_modified, '' AS system_name
-            FROM pp_char_planets
-        """).fetchall()
     # Per-colony yield history (oldest→newest), for the measured-decline burn-down.
     yield_hist: dict[tuple, list] = {}
     try:
-        for y in con.execute("""
-            SELECT character_id, planet_id, install_ts, peak_day, prog_days, scanned_ts
-            FROM pp_colony_yield ORDER BY install_ts ASC
-        """).fetchall():
+        for y in (con.execute("""
+            SELECT y.character_id, y.planet_id, y.install_ts, y.peak_day, y.prog_days, y.scanned_ts
+            FROM pp_colony_yield y
+            JOIN pp_characters ch ON ch.character_id = y.character_id
+            WHERE ch.context_id=?
+            ORDER BY y.install_ts ASC
+        """, (context_id,)).fetchall() if context_id else []):
             yield_hist.setdefault((y["character_id"], y["planet_id"]), []).append(
                 {"install": y["install_ts"], "peak": round(y["peak_day"] or 0),
                  "prog_days": y["prog_days"], "ts": y["scanned_ts"]})
