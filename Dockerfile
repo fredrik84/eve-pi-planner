@@ -15,4 +15,5 @@ COPY static/  ./static/
 RUN mkdir -p data
 
 EXPOSE 8000
-CMD ["sh", "-c", "python scripts/build_sde.py && exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips='*'"]
+ENV UVICORN_WORKERS=1
+CMD ["sh", "-c", "python scripts/build_sde.py && exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips='*' --workers ${UVICORN_WORKERS}"]

@@ -217,16 +217,19 @@ _PG_POOL = None
 
 
 def _pg_pool():
-    """Lazily-created process-wide pool. Each get_connection() call used to open a brand-new
+    """Lazily-created per-process pool. Each get_connection() call used to open a brand-new
     psycopg2 connection (TCP + auth handshake); on a multi-node cluster where Postgres isn't
     on the same host as the app, that handshake crosses the network and costs ~80-140ms per
     call instead of the near-zero latency of a same-node/loopback connection. With ~100 call
     sites across the app, a single feature-rich page can open dozens of connections, so this
-    added up to multi-second page loads. Pooling reuses already-established connections."""
+    added up to multi-second page loads. Pooling reuses already-established connections.
+    Sized conservatively (not e.g. 20) because with multiple uvicorn workers (UVICORN_WORKERS,
+    see Dockerfile) each worker process gets its OWN independent pool — total connections
+    against Postgres scale with worker count, and Postgres's max_connections is finite."""
     global _PG_POOL
     if _PG_POOL is None:
         from psycopg2.pool import ThreadedConnectionPool
-        _PG_POOL = ThreadedConnectionPool(minconn=2, maxconn=20, dsn=DATABASE_URL)
+        _PG_POOL = ThreadedConnectionPool(minconn=1, maxconn=8, dsn=DATABASE_URL)
     return _PG_POOL
 
 
