@@ -6,6 +6,9 @@ Optimize a player's EVE Online Planetary Industry (PI) setup across multiple cha
 
 ---
 
+See also [CONTRIBUTING.md](CONTRIBUTING.md) for the condensed, PR-facing version of the design
+philosophy and code style rules below — point external contributors there first.
+
 ## Development guidelines (deploy & change policy)
 
 These are standing rules for ALL changes. Follow them unless the user explicitly says otherwise.

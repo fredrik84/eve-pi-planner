@@ -97,6 +97,8 @@ No manual deploy step. The gitops repo holds all cluster manifests.
 
 Planet resource density data is the most valuable community contribution. If you have richness data from in-game scanning (Agency → Resource Harvesting → Planets → Planetary Industry, hover a P0 → Resource Density %), submit it via the **Planet DB → Submit data** tab on the site. Submissions are reviewed by admins before going live.
 
+Want to contribute code? See [CONTRIBUTING.md](CONTRIBUTING.md) for the design philosophy, code style, and PR expectations.
+
 ---
 
 ## Support
