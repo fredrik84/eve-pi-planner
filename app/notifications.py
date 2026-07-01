@@ -285,6 +285,24 @@ def _planet_label(e: dict) -> str:
     return f"{system} {num_str}"
 
 
+_GROUP_LIST_MAX = 3   # per character, list planets individually up to this many; beyond it, collapse
+
+
+def _group_value(char_evs: list[dict], show_hours: bool = True) -> str:
+    """One character's due planets, collapsed to 'next + N more' once the list gets long —
+    mirrors the dashboard's 'Up next' style (soonest task + count) instead of a full itemized
+    list, which is what made large batches unreadable (an account with many planets on a
+    similar cycle could produce dozens of lines in one message/embed field)."""
+    def line(e):
+        return f"{_planet_label(e)} · ~{round(e['hours_left'], 1)}h" if show_hours else _planet_label(e)
+
+    if len(char_evs) <= _GROUP_LIST_MAX:
+        return "\n".join(line(e) for e in char_evs)
+    first = char_evs[0]
+    more = len(char_evs) - 1
+    return f"{line(first)}\n+{more} more ({len(char_evs)} total)"
+
+
 def _format_batch(evs: list[dict]) -> tuple[str, str, list[dict]]:
     """Return (title, plain_body, embed_fields) for a batch of events."""
     n = len(evs)
@@ -299,25 +317,14 @@ def _format_batch(evs: list[dict]) -> tuple[str, str, list[dict]]:
     for e in sorted(evs, key=lambda e: e["hours_left"]):
         by_char.setdefault(e.get("character_name", "?"), []).append(e)
 
-    # Plain text body (one line per event, sorted)
-    lines = []
-    for e in sorted(evs, key=lambda e: e["hours_left"]):
-        suffix = " (estimate)" if not is_extractor else ""
-        lines.append(f"~{round(e['hours_left'], 1)}h — {_planet_label(e)}{suffix}")
-    body = "\n".join(lines)
+    # Plain text body: one block per character, collapsed like the embed fields below.
+    body = "\n".join(f"{char_name}:\n{_group_value(char_evs)}" for char_name, char_evs in by_char.items())
 
-    # Embed fields: one field per character listing their planets
-    fields = []
-    for char_name, char_evs in by_char.items():
-        planet_lines = []
-        for e in char_evs:
-            hrs = f"~{round(e['hours_left'], 1)}h"
-            planet_lines.append(f"{_planet_label(e)} · {hrs}")
-        fields.append({
-            "name": char_name,
-            "value": "\n".join(planet_lines),
-            "inline": True,
-        })
+    # Embed fields: one field per character, collapsed once a character has more than a few due.
+    fields = [
+        {"name": char_name, "value": _group_value(char_evs), "inline": True}
+        for char_name, char_evs in by_char.items()
+    ]
 
     return title, body, fields
 
@@ -549,9 +556,10 @@ def resend_last_notification(ctx: int = Depends(require_context)):
         by_char: dict[str, list[dict]] = {}
         for e in evs:
             by_char.setdefault(e["character_name"], []).append(e)
-        body = "\n".join(f"{e['character_name']} · {_planet_label(e)}" for e in evs)
+        body = "\n".join(f"{char_name}:\n{_group_value(char_evs, show_hours=False)}"
+                         for char_name, char_evs in by_char.items())
         fields = [
-            {"name": char_name, "value": "\n".join(_planet_label(e) for e in char_evs), "inline": True}
+            {"name": char_name, "value": _group_value(char_evs, show_hours=False), "inline": True}
             for char_name, char_evs in by_char.items()
         ]
         for setting in settings:
