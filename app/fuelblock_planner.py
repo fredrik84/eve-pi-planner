@@ -117,9 +117,8 @@ def _system_security(system: str | None):
     if not system:
         return None
     try:
-        con = get_connection()
-        row = con.execute("SELECT security FROM system_geo WHERE system=?", (system,)).fetchone()
-        con.close()
+        with get_connection() as con:
+            row = con.execute("SELECT security FROM system_geo WHERE system=?", (system,)).fetchone()
         return row["security"] if row and row["security"] is not None else None
     except Exception:
         return None
