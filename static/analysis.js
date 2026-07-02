@@ -167,11 +167,13 @@ function _renderSkillRoiSection() {
       </li>`;
   }).join('');
   const note = _skillRoi.note ? `<div class="an-sug-note">${_esc(_skillRoi.note)}</div>` : '';
-  return `<div class="an-suggest an-suggest-skill">
-      <div class="an-suggest-h">Train skills for more output <span class="tl-preview-tag">estimate</span></div>
-      <div class="an-sug-note">What an extra skill level on each character would add at your current setup — your call whether the train (or an injector) is worth it.</div>
-      <ul class="an-skill-list">${li}</ul>${note}
-    </div>`;
+  return `<section class="pp-card">
+      <div class="pp-card-title">Train skills for more output <span class="tl-preview-tag">estimate</span></div>
+      <div class="pp-card-body an-suggest an-suggest-skill">
+        <div class="an-sug-note">What an extra skill level on each character would add at your current setup — your call whether the train (or an injector) is worth it.</div>
+        <ul class="an-skill-list">${li}</ul>${note}
+      </div>
+    </section>`;
 }
 
 // ── Grow your setup (spare capacity) ──────────────────────────────────────────
@@ -234,8 +236,11 @@ function _renderGrowSection() {
   const status = bits.length ? `<div class="an-sug-note">${bits.join(' · ')}</div>` : '';
   const deploys = ex.deploys || [];
   if (!deploys.length)
-    return `<div class="an-suggest an-suggest-free"><div class="an-suggest-h">Spare capacity</div>${status}`
-      + `<div class="an-sug-note">Your setup is already balanced for the spare slots — nothing short, and no richer planet free in your systems to deploy on right now.</div></div>`;
+    return `<section class="pp-card">
+        <div class="pp-card-title">Spare capacity</div>
+        <div class="pp-card-body an-suggest an-suggest-free">${status}`
+      + `<div class="an-sug-note">Your setup is already balanced for the spare slots — nothing short, and no richer planet free in your systems to deploy on right now.</div></div>
+      </section>`;
   _expandDeploysByProduct = ex.deploys_by_product || {};
   const prods = ex.products || [];
   _expandProduct = prods.length ? String(prods[0].type_id) : '';
@@ -243,34 +248,43 @@ function _renderGrowSection() {
     ? `<span class="dash-expand-prod-pick">Plan for <select class="dash-expand-prod" onchange="_setExpandProduct(this.value)">`
       + prods.map(p => `<option value="${p.type_id}">${_esc(p.name)} (×${p.count})</option>`).join('') + `</select></span>`
     : '';
-  return `<div class="an-suggest an-suggest-add">
-      <div class="an-suggest-h">Grow your setup <span class="dash-expand-sug-sub">— deploy these on your spare slots, most impactful first</span>${dropdown}</div>
-      ${status}
-      <div id="expandDeployCards">${_renderExpandCards(deploys)}</div>
-      <div class="an-sug-note">Targets the inputs your factories are short on, so the new colonies actually lift output — no re-plan, no teardown.</div>
-    </div>`;
+  return `<section class="pp-card">
+      <div class="pp-card-title">Grow your setup <span class="pp-card-hint">— deploy these on your spare slots, most impactful first</span>${dropdown}</div>
+      <div class="pp-card-body an-suggest an-suggest-add">
+        ${status}
+        <div id="expandDeployCards">${_renderExpandCards(deploys)}</div>
+        <div class="an-sug-note">Targets the inputs your factories are short on, so the new colonies actually lift output — no re-plan, no teardown.</div>
+      </div>
+    </section>`;
 }
 
 function renderAnalysis() {
+  // Status card (title + plan picker, static in index.html) holds the at-a-glance status badge;
+  // everything else renders as its own separate pp-card in the bare #analyzeContent below it —
+  // matching the Dashboard's multi-card layout instead of one large card with internal sub-boxes.
+  const statusEl = document.getElementById('analyzeStatusContent');
   const el = document.getElementById('analyzeContent');
-  if (!el) return;
+  if (!statusEl || !el) return;
   if (!_analyzeSnaps.length) {
-    el.innerHTML = `<div class="admin-hint">Nothing to compare against yet. Either <b>set a recipe on a factory</b> in-game (then <b>Rescan colonies</b> to get a "Current setup" demand profile), or build a plan in <b>Planetary Planning</b> and <b>Save plan</b>.</div>`;
+    statusEl.innerHTML = `<div class="admin-hint">Nothing to compare against yet. Either <b>set a recipe on a factory</b> in-game (then <b>Rescan colonies</b> to get a "Current setup" demand profile), or build a plan in <b>Planetary Planning</b> and <b>Save plan</b>.</div>`;
+    el.innerHTML = '';
     return;
   }
   const sel = document.getElementById('analyzePlanSelect');
   const snap = _analyzeSnaps[parseInt(sel && sel.value, 10) || 0];
-  if (!snap) { el.innerHTML = ''; return; }
+  if (!snap) { statusEl.innerHTML = ''; el.innerHTML = ''; return; }
   const needs = _snapNeedsByP1(snap);
   const prod = _setupProductionByP1();
   const needKeys = Object.keys(needs);
 
   if (!Object.keys(prod).length) {
-    el.innerHTML = `<div class="admin-hint">No colony production data. Add your characters and refresh in the <b>Characters</b> tab (logged in with ESI access), then reload.</div>`;
+    statusEl.innerHTML = `<div class="admin-hint">No colony production data. Add your characters and refresh in the <b>Characters</b> tab (logged in with ESI access), then reload.</div>`;
+    el.innerHTML = '';
     return;
   }
   if (!needKeys.length) {
-    el.innerHTML = `<div class="admin-hint">This saved plan predates the per-P1 consumption data. Re-open it in Planetary Planning and <b>Save plan</b> again to enable the analysis.</div>`;
+    statusEl.innerHTML = `<div class="admin-hint">This saved plan predates the per-P1 consumption data. Re-open it in Planetary Planning and <b>Save plan</b> again to enable the analysis.</div>`;
+    el.innerHTML = '';
     return;
   }
 
@@ -614,10 +628,23 @@ function renderAnalysis() {
   _extRt = { ppd: Number(snap.products_per_day) || 0, ipd: Number(snap.isk_per_day) || 0, unit };
   const rtAdvice = _extRuntimeAdviceHtml(binding.ratio, _currentProgramDays());
 
-  el.innerHTML = head + _staleSupplyNote(rows) + stats + proj
-    + `<div class="an-legend">Bar = how fed each input is. % = extraction headroom: <span class="an-ovr-ok">+10% or more healthy</span>, <span class="an-ovr-tight">0–10% tight</span> (dips as heads decay), <span class="an-ovr-short">below 0 short</span>. Click a row for the fix.</div>`
-    + `<div class="an-bars">${barRows}</div>`
-    + suggest + rtAdvice + _renderGrowSection() + _renderSkillRoiSection()
+  statusEl.innerHTML = head + _staleSupplyNote(rows) + stats + proj;
+
+  const supplyCard = `<section class="pp-card">
+      <div class="pp-card-title">Material supply</div>
+      <div class="pp-card-body">
+        <div class="an-legend">Bar = how fed each input is. % = extraction headroom: <span class="an-ovr-ok">+10% or more healthy</span>, <span class="an-ovr-tight">0–10% tight</span> (dips as heads decay), <span class="an-ovr-short">below 0 short</span>. Click a row for the fix.</div>
+        <div class="an-bars">${barRows}</div>
+      </div>
+    </section>`;
+  const suggestCard = (suggest + rtAdvice)
+    ? `<section class="pp-card">
+        <div class="pp-card-title">Suggestions</div>
+        <div class="pp-card-body">${suggest}${rtAdvice}</div>
+      </section>`
+    : '';
+
+  el.innerHTML = supplyCard + suggestCard + _renderGrowSection() + _renderSkillRoiSection()
     + (_featureActive('move_character') ? _sepStandaloneCard(moves.map(m => ({ ...m, p0: p0Of(m.toT) }))) : '');
 }
 
@@ -813,7 +840,9 @@ function _sepStandaloneCard(moves) {
     + `<span class="an-lever-tag">manual</span><span class="an-sep-cta">${_sepOpen ? 'Hide ▴' : 'Open ▾'}</span></div>`;
   const body = _sepOpen ? _sepSwapBody(dep, moves || [])
     : `<div class="an-sep-sub">Factories on the wrong character, or moving a character to another account (incl. a freshly added empty toon)? Pick two characters and swap all their colonies 1:1.</div>`;
-  return `<div class="an-suggest an-suggest-sep an-sep-card">${head}${body}</div>`;
+  return `<section class="pp-card">
+      <div class="pp-card-body an-suggest an-suggest-sep an-sep-card">${head}${body}</div>
+    </section>`;
 }
 
 function _sepSwapBody(dep, moves) {
