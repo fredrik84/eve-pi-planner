@@ -13,6 +13,7 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
 from app.sde import get_connection, load_pi_data, ensure_once
+from app.cache import cache_get_json, cache_set_json
 from app.esi import (
     require_admin, require_context, is_admin, session_context_id,
     ADMIN_CHARACTERS, ensure_admin_table, _session_lookup,
@@ -374,9 +375,20 @@ def add_tester(req: AdminAdd, _: int = Depends(require_admin),
     return {"ok": True}
 
 
+# 18 separate COUNT(*) queries below — same result for every admin (no context_id scoping), and
+# the exact figures don't need to be second-fresh, so a plain TTL cache fits better here than the
+# write-invalidated caches elsewhere (app/cache.py): there's no single "the stats changed" event to
+# hook into (nearly every table write affects some counter), so TTL is the natural fit.
+_ADMIN_STATS_CACHE_KEY = "admin:stats"
+_ADMIN_STATS_TTL = 300
+
+
 @router.get("/api/admin/stats")
 def admin_stats(_: int = Depends(require_admin)):
-    """Aggregate system health stats — no names, counts only."""
+    """Aggregate system health stats — no names, counts only. Cached 5 min (see note above)."""
+    cached = cache_get_json(_ADMIN_STATS_CACHE_KEY)
+    if cached is not None:
+        return cached
     con = get_connection()
     s = {}
 
@@ -436,6 +448,7 @@ def admin_stats(_: int = Depends(require_admin)):
     ).fetchone()[0]
 
     con.close()
+    cache_set_json(_ADMIN_STATS_CACHE_KEY, s, ttl=_ADMIN_STATS_TTL)
     return s
 
 
