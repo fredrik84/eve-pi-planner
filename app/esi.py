@@ -23,6 +23,7 @@ from pydantic import BaseModel
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app.sde import get_connection, ensure_once
+from app.cache import cache_invalidate, charlist_key
 
 router = APIRouter()
 
@@ -779,8 +780,8 @@ def esi_callback(
     ))
     con.commit()
     con.close()
-
     _fetch_planets(character_id, access_token)
+    cache_invalidate(charlist_key(context_id))
 
     # Create session token and persist it
     session_token = secrets.token_urlsafe(32)
