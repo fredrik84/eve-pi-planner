@@ -533,6 +533,183 @@ function renderCharacters(chars, loggedIn) {
   renderMaterialsSummary(chars);
 }
 
+// ── Move a character to another account ─────────────────────────────────────────
+// A USER-INITIATED standalone tool, not analysis advice — lives in Settings → Characters (moved
+// out of Setup Analysis 2026-07-02: it doesn't fit "Analysis gives advice, not a calculator tool",
+// see project_eve_pi_planner_principle memory, and its CCU-fit check runs the full layout-generation
+// engine server-side — real compute, not free — so it must stay gated behind an explicit reveal
+// rather than computed on every Setup Analysis render regardless of whether anyone opens it).
+// The real goal is moving a whole character's PI to a character on ANOTHER ACCOUNT (so factories and
+// extractors can run at the same time). So it's a literal 1:1 SWAP: pick A and B, and every colony A
+// runs moves to B while every colony B runs moves to A — each keeps its EXACT planet and layout, only
+// the owner flips. Because the planet already hosts that exact colony it ALWAYS fits — no B/T /
+// diameter / capacity juggling. NOTE: ESI never exposes account membership (each char is authorised
+// individually via SSO), so we CANNOT verify B is on a different account — that's on the user (noted
+// in UI). No longer plan-aware (dropped the Setup-Analysis "fold in rebalance" integration when moved
+// — this tool has no "current plan" here, it's a plain as-is swap).
+let _sepFrom = null, _sepTo = null;  // chosen character ids (strings); null = use a sensible default
+function _setSepFrom(cid) { _sepFrom = String(cid); if (_sepTo === _sepFrom) _sepTo = null; _renderMoveCharacterSection(); }
+function _setSepTo(cid) { _sepTo = String(cid); _renderMoveCharacterSection(); }
+
+function _realChars() { return (_ppCharsData || []).filter(c => !c.is_dummy && !c.wallet_only); }
+
+// Per-character factory/extractor breakdown of the current deployment.
+function _facDeployment() {
+  const byChar = {};
+  const factories = [], extractors = [];
+  _realChars().forEach(c => {
+    const cid = String(c.character_id);
+    const e = byChar[cid] = { cid, name: c.name, maxPlanets: c.max_planets || 0, ccu: c.ccu || 5, factories: [], extractors: [] };
+    (c.planets || []).forEach(p => {
+      if (!p.is_extractor && p.products && p.products.length) {
+        const f = { cid, char: c.name, system: p.system, planet_num: p.planet_num, planet_type: p.planet_type, product: p.products[0] };
+        e.factories.push(f); factories.push(f);
+      } else if (p.is_extractor) {
+        const out = (p.production && p.production[0]) || null;
+        const ex = { cid, char: c.name, system: p.system, planet_num: p.planet_num, planet_type: p.planet_type,
+                     p0: p.p0_name, p1: out ? { type_id: out.type_id, name: out.name } : null };
+        e.extractors.push(ex); extractors.push(ex);
+      }
+    });
+  });
+  return { byChar, factories, extractors };
+}
+
+// A character's role: factory toon (has any factories), extractor toon (only extractors), or empty (no
+// colonies — e.g. a freshly added toon on a new account).
+function _sepRole(e) { return e.factories.length ? 'f' : (e.extractors.length ? 'e' : 'empty'); }
+// A swap A⇄B is meaningful only when their roles DIFFER, or B is empty (move A onto the fresh toon). Same
+// productive role both sides — factory↔factory or extractor↔extractor — is pointless and excluded.
+function _sepValidTarget(a, b) { return b.cid !== a.cid && _sepRole(b) !== _sepRole(a); }
+// Offer the tool when some character with colonies has at least one valid target.
+function _sepHasWork(dep) {
+  const chars = Object.values(dep.byChar);
+  return chars.some(a => (a.factories.length + a.extractors.length) > 0 && chars.some(b => _sepValidTarget(a, b)));
+}
+
+// One cross-character teardown→rebuild card (reuses the an-move-* styling; char lives in each side's loc).
+// `warn` = {html, block?} CCU-fit line.
+function _sepCard(fromChar, fromLoc, toChar, toLoc, matHtml, warn) {
+  return `<li class="an-move${warn && warn.block ? ' an-sep-noFit' : ''}"><div class="an-move-pair">`
+    + `<div class="an-move-side an-move-rm"><span class="an-move-tag">tear down</span><span class="an-move-loc">${_esc(fromChar)} · ${fromLoc}</span><span class="an-move-mat">${matHtml}</span></div>`
+    + `<div class="an-move-arrow">→</div>`
+    + `<div class="an-move-side an-move-add"><span class="an-move-tag">rebuild</span><span class="an-move-loc">${_esc(toChar)} · ${toLoc}</span><span class="an-move-mat">${matHtml}</span></div>`
+    + `</div>${warn && warn.html ? `<div class="an-sep-fit${warn.block ? ' an-sep-fit-block' : ''}">${warn.html}</div>` : ''}</li>`;
+}
+
+// Factory CPU/PG fit at a given CCU — "tid|planet_type|ccu" -> launchpads that fit (3 full, 1-2 cramped,
+// 0 doesn't fit). Backed by /api/factory-fit (server generates the layout — real compute, hence gated
+// behind _sepOpen, never fetched just because the Characters settings section is open).
+let _facFit = {};
+const _facFitPending = new Set();
+async function _ensureFactoryFit(keys) {
+  const need = [...new Set(keys)].filter(k => !(k in _facFit) && !_facFitPending.has(k));
+  if (!need.length) return;
+  need.forEach(k => _facFitPending.add(k));
+  const items = need.map(k => { const [tid, pt, ccu] = k.split('|'); return { type_id: Number(tid), planet_type: pt, ccu: Number(ccu) }; });
+  try {
+    const r = await fetch('/api/factory-fit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items }) });
+    const j = await r.json();
+    Object.assign(_facFit, j.fit || {});
+  } catch (e) { /* unknown fit just shows nothing */ }
+  need.forEach(k => _facFitPending.delete(k));
+  _renderMoveCharacterSection();   // re-render now that fit is known
+}
+
+// Collapsed by default — the expensive CCU-fit body only builds (and only calls _ensureFactoryFit)
+// once the user explicitly reveals it.
+let _sepOpen = false;
+function _toggleSepOpen() { _sepOpen = !_sepOpen; _renderMoveCharacterSection(); }
+
+// Entry point: called only when the Settings → Characters section is actually shown (openSettingsModal /
+// settingsSection('characters')) — never during normal page/tab renders, so an account nobody ever opens
+// Settings for pays zero cost for this tool, not even the cheap gating check.
+function _renderMoveCharacterSection() {
+  const el = document.getElementById('moveCharSection');
+  if (!el) return;
+  if (!_featureActive('move_character')) { el.innerHTML = ''; return; }
+  const dep = _facDeployment();
+  if (!_sepHasWork(dep)) { el.innerHTML = ''; return; }
+  const head = `<div class="an-sep-head an-lever-click" onclick="_toggleSepOpen()">`
+    + `<span class="an-lever-ico">⇆</span><span class="an-lever-ttl">Move a character to another account</span>`
+    + `<span class="an-lever-tag">manual</span><span class="an-sep-cta">${_sepOpen ? 'Hide ▴' : 'Open ▾'}</span></div>`;
+  const body = _sepOpen ? _sepSwapBody(dep)
+    : `<div class="an-sep-sub">Factories on the wrong character, or moving a character to another account (incl. a freshly added empty toon)? Pick two characters and swap all their colonies 1:1.</div>`;
+  el.innerHTML = `<div class="settings-subsec an-suggest an-suggest-sep an-sep-card">${head}${body}</div>`;
+}
+
+function _sepSwapBody(dep) {
+  const chars = Object.values(dep.byChar);
+  // A (source) = any character with colonies, default the heaviest factory toon. B (target) = a character
+  // of a DIFFERENT role or an EMPTY (newly added) toon — so you can move A onto a fresh toon, then build
+  // new stuff where A was. Same-role pairs (factory↔factory / extractor↔extractor) are excluded.
+  const colonies = e => e.factories.length + e.extractors.length;
+  const sources = chars.filter(e => colonies(e) > 0).sort((a, b) => (b.factories.length - a.factories.length) || (b.extractors.length - a.extractors.length));
+  const from = (_sepFrom && sources.some(e => e.cid === _sepFrom)) ? _sepFrom : sources[0].cid;
+  const A = dep.byChar[from];
+  const toOpts = chars.filter(e => _sepValidTarget(A, e)).sort((a, b) => colonies(b) - colonies(a));
+  const to = (_sepTo && toOpts.some(e => e.cid === _sepTo)) ? _sepTo : (toOpts[0] || {}).cid;
+  const B = to ? dep.byChar[to] : null;
+  const fromName = A.name, toName = B ? B.name : '';
+
+  const opts = (list, val) => list.map(e => {
+    const tag = colonies(e) ? `${e.factories.length}f·${e.extractors.length}e` : 'empty';
+    return `<option value="${e.cid}"${String(e.cid) === String(val) ? ' selected' : ''}>${_esc(e.name)} · CCU ${e.ccu} (${tag})</option>`;
+  }).join('');
+  const controls = `<div class="an-sep-pick">Swap `
+    + `<select class="an-sep-sel" onchange="_setSepFrom(this.value)">${opts(sources, from)}</select> ⇄ `
+    + (to ? `<select class="an-sep-sel" onchange="_setSepTo(this.value)">${opts(toOpts, to)}</select>` : '—') + `</div>`;
+  if (!to) return `${controls}<div class="an-sep-sub">You'd need a second character to swap with.</div>`;
+
+  // FULL 1:1 SWAP — every colony keeps its EXACT planet & layout, only the owner flips. A's colonies move
+  // to B and B's move to A. Each planet already hosts that exact colony, so PLACEMENT always fits — the one
+  // real check is the receiving character's CCU: a factory packed at a higher CC may not fit a lower-CC
+  // host (fewer facilities / less CPU+PG). We verify each factory against the target CCU via /api/factory-fit.
+  const fitKey = (p, ccu) => `${p.product.type_id}|${p.planet_type}|${ccu}`;
+  const fitKeys = [];
+  A.factories.forEach(f => fitKeys.push(fitKey(f, B.ccu)));
+  B.factories.forEach(f => fitKeys.push(fitKey(f, A.ccu)));
+  if (fitKeys.length) _ensureFactoryFit(fitKeys);
+  const fitWarn = (p, ccu) => {
+    if (!p.product) return null;     // extractors keep 10 heads and just scale basics — always fit
+    const v = _facFit[fitKey(p, ccu)];
+    if (v === undefined) return { html: `<span class="an-sep-fit-chk">checking CCU ${ccu} fit…</span>` };
+    if (v === 0) return { block: true, html: `⛔ Won't fit at <b>CCU ${ccu}</b> — the factory needs a higher Command Center than ${_esc(ccu === A.ccu ? fromName : toName)} has.` };
+    if (v < 3) return { html: `⚠ Fits at <b>CCU ${ccu}</b> but cramped (${v} launchpad${v === 1 ? '' : 's'}, fewer facilities → lower output).` };
+    return null;
+  };
+
+  const locOf = p => `${_esc(p.system)} P${p.planet_num} <span class="an-cc-tag">${_esc(p.planet_type)}</span>`;
+  const matOf = p => p.product ? `<b>${_esc(p.product.name)}</b> factory`
+    : `${_esc(p.p0 || '')}${p.p1 ? ' <span class="an-move-p0arrow">→</span> ' + _esc(p.p1.name) : ''}`;
+
+  const sideCards = (srcName, dstName, dstCcu, colonies) =>
+    colonies.map(p => _sepCard(srcName, locOf(p), dstName, locOf(p), matOf(p), p.product ? fitWarn(p, dstCcu) : null)).join('');
+  const aAll = [...A.factories, ...A.extractors], bAll = [...B.factories, ...B.extractors];
+  const aToB = sideCards(fromName, toName, B.ccu, aAll);
+  const bToA = sideCards(toName, fromName, A.ccu, bAll);
+
+  const noFit = A.factories.filter(f => _facFit[fitKey(f, B.ccu)] === 0).length
+              + B.factories.filter(f => _facFit[fitKey(f, A.ccu)] === 0).length;
+  const notes = [];
+  if (noFit) notes.push(`⛔ <b>${noFit} factor${noFit === 1 ? 'y' : 'ies'} won't fit the receiving character's Command Center</b> — raise that character's CCU, or leave ${noFit === 1 ? 'it' : 'those'} where they are.`);
+  if (bAll.length > A.maxPlanets) notes.push(`<b>${_esc(fromName)}</b> can only run ${A.maxPlanets} colonies but would take ${bAll.length} — train its Interplanetary Consolidation or leave ${bAll.length - A.maxPlanets} of <b>${_esc(toName)}</b>'s behind.`);
+  if (aAll.length > B.maxPlanets) notes.push(`<b>${_esc(toName)}</b> can only run ${B.maxPlanets} colonies but would take ${aAll.length} — train its Interplanetary Consolidation or leave ${aAll.length - B.maxPlanets} of <b>${_esc(fromName)}</b>'s behind.`);
+  const bEmpty = _sepRole(B) === 'empty';
+  if (bEmpty) notes.push(`Once <b>${_esc(fromName)}</b> is cleared it's a blank character again — build a fresh setup on it, or let the <b>Spare capacity</b> card (Setup Analysis) suggest one.`);
+  notes.push(`⚠ Make sure <b>${_esc(toName)}</b> is on a <b>different account</b> than <b>${_esc(fromName)}</b> — otherwise you still can't run both at once. Account membership isn't in the API, so this can't be checked for you.`);
+  notes.push(`After you rebuild, <b>Rescan</b> to refresh the analysis.`);
+
+  const lead = bEmpty
+    ? `Move all of <b>${fromName}</b>'s colonies onto the empty character <b>${toName}</b> — same planets, just a new owner. A clean 1:1, so it always fits:`
+    : `Swap everything between <b>${fromName}</b> and <b>${toName}</b> — same planets, just a different owner. A clean 1:1, so it always fits:`;
+  return `${controls}
+      <div class="an-levers-lead">${lead}</div>
+      ${aToB ? `<div class="an-bd-bestuse-h">→ ${_esc(fromName)}'s ${aAll.length} colon${aAll.length === 1 ? 'y' : 'ies'} → ${_esc(toName)}:</div><ul class="an-move-list">${aToB}</ul>` : ''}
+      ${bToA ? `<div class="an-bd-bestuse-h an-bd-bestuse-h2">↩ ${_esc(toName)}'s ${bAll.length} colon${bAll.length === 1 ? 'y' : 'ies'} → ${_esc(fromName)}:</div><ul class="an-move-list">${bToA}</ul>` : ''}
+      ${notes.length ? `<div class="an-sep-notes">${notes.map(n => `<div>${n}</div>`).join('')}</div>` : ''}`;
+}
+
 // Roll up the (simulated) launchpad contents across every character → a "what I have on hand"
 // list, with one-click copy / send into the PI Planner inventory box.
 let _lastMaterials = [];
@@ -2452,6 +2629,8 @@ function settingsSection(name, doLoad) {
   document.querySelectorAll('.settings-section').forEach(s =>
     s.style.display = (s.id === 'settingsSec' + name.charAt(0).toUpperCase() + name.slice(1)) ? '' : 'none');
   if (name === 'notifications' && doLoad !== false) loadNotifications();
+  // Computed only on reveal, never during background renders — see _renderMoveCharacterSection.
+  if (name === 'characters') _renderMoveCharacterSection();
 }
 
 // Intercept switchTab('characters') → settings modal. Must run at script-load time
