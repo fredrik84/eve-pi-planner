@@ -26,7 +26,7 @@
   <link rel="stylesheet" href="/style-contribute.css?v=1">
   <link rel="stylesheet" href="/style-wizard.css?v=1">
   <link rel="stylesheet" href="/style-layout-admin.css?v=1">
-  <link rel="stylesheet" href="/style-analysis-dashboard.css?v=1">
+  <link rel="stylesheet" href="/style-analysis-dashboard.css?v=2">
   <link rel="stylesheet" href="/style-misc-responsive.css?v=1">
 </head>
 <body>
@@ -678,8 +678,9 @@ PVF-N9    3         95                 60             80                  100   
               <select id="analyzePlanSelect" class="pp-profile-select" onchange="renderAnalysis()"></select></span>
             <span class="pp-card-hint">— Rescan in the top bar pulls fresh colony data</span>
           </div>
-          <div id="analyzeContent" class="pp-analyze-content"></div>
+          <div id="analyzeStatusContent" class="pp-card-body pp-analyze-content"></div>
         </section>
+        <div id="analyzeContent"></div>
       </div>
     </div><!-- /tab-analyze -->
 
@@ -941,6 +942,7 @@ PVF-N9    3         95                 60             80                  100   
                 <span id="dummyStatus" class="bug-status-msg"></span>
               </div>
             </div>
+            <div id="moveCharSection"></div>
           </div>
 
           <!-- Notifications section -->
@@ -1047,12 +1049,12 @@ PVF-N9    3         95                 60             80                  100   
 
   <script src="/utils.js?v=1"></script>
   <script src="/app.js?v=30"></script>
-  <script src="/planetary.js?v=335"></script>
+  <script src="/planetary.js?v=336"></script>
   <script src="/dashboard.js?v=13"></script>
   <script src="/admin.js?v=10"></script>
   <script src="/planetdb.js?v=1"></script>
   <script src="/refill.js?v=1"></script>
-  <script src="/analysis.js?v=13"></script>
+  <script src="/analysis.js?v=16"></script>
   <script src="/layout.js?v=1"></script>
 </body>
 </html>

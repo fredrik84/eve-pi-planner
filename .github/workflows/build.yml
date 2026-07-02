@@ -2,7 +2,7 @@ name: Build and push image
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
 
 # Serialize builds per ref (queue, don't cancel) so two close-together pushes can't race
 # their push-to-:latest step out of order — the loser used to leave `:latest` pointing at
@@ -44,7 +44,8 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=sha,prefix=sha-
-            type=raw,value=latest
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=dev,enable=${{ github.ref == 'refs/heads/dev' }}
 
       - name: Build and push
         uses: docker/build-push-action@v7
@@ -64,15 +65,17 @@ jobs:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
           COMMIT_SHA: ${{ github.sha }}
           COMMIT_MSG: ${{ github.event.head_commit.message }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
           SHORT_SHA="${COMMIT_SHA:0:7}"
           BODY=$(jq -n \
             --arg msg "$COMMIT_MSG" \
             --arg sha "$SHORT_SHA" \
+            --arg ref "$REF_NAME" \
             '{
               username: "EVE PI Planner",
               embeds: [{
-                title: ("Deploying · \($sha)"),
+                title: ("Deploying (\($ref)) · \($sha)"),
                 description: $msg,
                 color: 3447003,
                 footer: { text: "Image built — pod rolling in ~3 min" }

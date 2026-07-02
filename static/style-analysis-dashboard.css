@@ -2,6 +2,10 @@
 /* ── Setup Analysis tab ─────────────────────────────────────────────────────── */
 .pp-analyze-pick { display: inline-flex; align-items: center; gap: 6px; margin-left: 8px; }
 .pp-analyze-content { margin-top: 12px; }
+/* #analyzeContent holds several sibling pp-card sections (material supply, suggestions, grow,
+   skill ROI, move-character) -- same gap as .pp-chars-page so they space consistently with the
+   status card above them instead of stacking flush. */
+#analyzeContent { display: flex; flex-direction: column; gap: 18px; }
 .an-headline { border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; border: 1px solid var(--clr-border); }
 .an-headline.an-ok  { background: #10211a; border-color: #1f6b46; }
 .an-headline.an-bad { background: #2a1518; border-color: #7a3036; }

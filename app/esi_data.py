@@ -5,6 +5,8 @@ callback / logout and session/admin helpers live in app.esi — this module
 imports what it needs from there rather than duplicating it.
 """
 import json as _json
+import logging
+import time
 from datetime import datetime, timezone
 
 import httpx
@@ -12,6 +14,7 @@ from fastapi import APIRouter, Cookie, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.sde import get_connection
+from app.cache import cache_get_json, cache_set_json, cache_invalidate, charlist_key
 from app.esi import (
     ESI_BASE, WALLET_SCOPE,
     _session_lookup, _is_configured, admin_and_tester_status_for_context,
@@ -20,7 +23,11 @@ from app.esi import (
 )
 
 router = APIRouter()
+log = logging.getLogger(__name__)
 
+# /api/characters is invalidated (not TTL-expired-only) by every write path that changes what it
+# returns: rescan, character add/remove, dummy edits. TTL is only a safety net for a missed spot.
+_CHARLIST_TTL = 300
 
 # ── Corp wallet (admin: see donations without logging the toon into the game) ──────
 
@@ -149,6 +156,15 @@ def list_characters(pp_session: str = Cookie(default=None)):
     session_info = _session_lookup(pp_session)
     session_char = session_info[0] if session_info else None
     context_id   = session_info[1] if session_info else None
+
+    if context_id:
+        t0 = time.monotonic()
+        cached = cache_get_json(charlist_key(context_id))
+        if cached is not None:
+            log.info("charlist cache HIT context=%s in %.1fms", context_id, (time.monotonic() - t0) * 1000)
+            return {**cached, "logged_in": session_char is not None, "session_character_id": session_char}
+        log.info("charlist cache MISS context=%s", context_id)
+    t0 = time.monotonic()
 
     con = get_connection()
     if context_id:
@@ -337,13 +353,19 @@ def list_characters(pp_session: str = Cookie(default=None)):
             "planets":        char_planets.get(r["character_id"], []),
         })
     _admin, _tester = admin_and_tester_status_for_context(context_id)
-    return {
+    result = {
         "characters": chars,
         "configured": _is_configured(),
-        "logged_in":  session_char is not None,
-        "session_character_id": session_char,
         "is_admin":   _admin,
         "is_tester":  _tester,
+    }
+    if context_id:
+        log.info("charlist cache MISS context=%s built in %.1fms", context_id, (time.monotonic() - t0) * 1000)
+        cache_set_json(charlist_key(context_id), result, ttl=_CHARLIST_TTL)
+    return {
+        **result,
+        "logged_in": session_char is not None,
+        "session_character_id": session_char,
     }
 
 
@@ -356,6 +378,7 @@ def remove_character(character_id: int, context_id: int = Depends(require_contex
     con.execute("DELETE FROM pp_char_planets WHERE character_id=?", (character_id,))
     con.commit()
     con.close()
+    cache_invalidate(charlist_key(context_id))
     return {"removed": character_id}
 
 
@@ -413,6 +436,7 @@ def add_dummy_characters(req: DummyCreate, context_id: int = Depends(require_con
         next_id -= 1
     con.commit()
     con.close()
+    cache_invalidate(charlist_key(context_id))
     return {"created": created, "count": len(created)}
 
 
@@ -440,6 +464,7 @@ def edit_dummy_character(character_id: int, req: DummyEdit,
         con.execute(f"UPDATE pp_characters SET {', '.join(sets)} WHERE character_id=? AND context_id=?", params)
         con.commit()
     con.close()
+    cache_invalidate(charlist_key(context_id))
     return {"ok": True}
 
 
@@ -477,4 +502,5 @@ def refresh_char_planets(character_id: int, context_id: int = Depends(require_co
         con.commit()
         con.close()
     _fetch_planets(character_id, token)
+    cache_invalidate(charlist_key(context_id))
     return {"ok": True, "skills_updated": bool(skills)}

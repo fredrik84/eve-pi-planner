@@ -8,7 +8,8 @@ from typing import Optional
 from fastapi import APIRouter, Cookie, Depends, HTTPException
 from pydantic import BaseModel
 
-from app.sde import get_connection, load_pi_data
+from app.sde import get_connection, load_pi_data, ensure_once
+from app.cache import cache_get_json, cache_set_json, cache_invalidate
 from app.esi import require_context, is_admin, require_admin
 from app.notifiers import notify_admin_discord
 
@@ -68,6 +69,7 @@ def _p0_col(header: str) -> Optional[str]:
     return _NAME_TO_COL.get(header.strip().lower())
 
 
+@ensure_once
 def ensure_tables():
     p0_ddl = "\n".join(f"    {col} INTEGER NOT NULL DEFAULT 0," for col in P0_COLUMNS)
     con = get_connection()
@@ -118,8 +120,24 @@ def ensure_tables():
     con.close()
 
 
+# Planet DB is a single global, shared table (no context_id) written only by admin
+# import/approve/clear — a good fit for a single global cache entry serving every visitor,
+# invalidated on those writes rather than a bare TTL. No-ops (falls through to the DB) wherever
+# REDIS_URL isn't set, same as the /api/characters cache.
+_PLANETS_CACHE_KEY = "planetdb:planets"
+_CONSTELLATIONS_CACHE_KEY = "planetdb:constellations"
+
+
+def _invalidate_planetdb_cache():
+    cache_invalidate(_PLANETS_CACHE_KEY)
+    cache_invalidate(_CONSTELLATIONS_CACHE_KEY)
+
+
 @router.get("/api/planets")
 def list_planets():
+    cached = cache_get_json(_PLANETS_CACHE_KEY)
+    if cached is not None:
+        return cached
     ensure_tables()
     con = get_connection()
     cur = con.cursor()
@@ -127,7 +145,9 @@ def list_planets():
     cur.execute(f"SELECT {cols} FROM pp_planets ORDER BY system, planet_num")
     rows = [dict(r) for r in cur.fetchall()]
     con.close()
-    return {"planets": rows, "p0_columns": P0_COLUMNS, "planet_p0_map": PLANET_P0_MAP}
+    result = {"planets": rows, "p0_columns": P0_COLUMNS, "planet_p0_map": PLANET_P0_MAP}
+    cache_set_json(_PLANETS_CACHE_KEY, result, ttl=3600)
+    return result
 
 
 @router.get("/api/pi-products")
@@ -483,6 +503,7 @@ def import_planets(req: ImportRequest,
         imported, wskip = _write_planet_rows(con, rows)
         con.commit()
         con.close()
+        _invalidate_planetdb_cache()
         return {"queued": False, "imported": imported,
                 "skipped": skipped + wskip, "errors": errors[:10]}
 
@@ -549,6 +570,7 @@ def approve_planet_submission(sub_id: int, _: int = Depends(require_admin)):
     )
     con.commit()
     con.close()
+    _invalidate_planetdb_cache()
     return {"approved": True, "imported": imported, "skipped": skipped + wskip, "errors": errors[:10]}
 
 
@@ -576,11 +598,15 @@ def clear_planets(context_id: int = Depends(require_context)):
     con.execute("DELETE FROM pp_planets")
     con.commit()
     con.close()
+    _invalidate_planetdb_cache()
     return {"cleared": True}
 
 
 @router.get("/api/constellations")
 def list_constellations():
+    cached = cache_get_json(_CONSTELLATIONS_CACHE_KEY)
+    if cached is not None:
+        return cached
     ensure_tables()
     con = get_connection()
     names = [r["constellation"] for r in con.execute(
@@ -597,4 +623,6 @@ def list_constellations():
         # dev checkout that hasn't run scripts/populate_geo.py yet.
         log.exception("constellations lookup failed (region grouping degraded to none)")
     con.close()
-    return {"constellations": names, "regions": {n: region_of.get(n, "") for n in names}}
+    result = {"constellations": names, "regions": {n: region_of.get(n, "") for n in names}}
+    cache_set_json(_CONSTELLATIONS_CACHE_KEY, result, ttl=3600)
+    return result
