@@ -123,13 +123,19 @@ async function _fetchSetupPlans() {
 // Paint instantly from cache (colony data + snapshots are usually warm from the Planetary tab),
 // then refresh in the background — no need to hit Reload to see anything.
 async function onAnalyzeTabOpen() {
+  const statusEl = document.getElementById('analyzeStatusContent');
   const el = document.getElementById('analyzeContent');
   // Only this tab's OWN cached data (_analyzeSnaps) means there's something to paint instantly.
   // _ppCharsData is populated globally on page boot regardless of which tab is open, so checking
   // it here suppressed the spinner on a genuine first visit — the header/characters list being
   // warm doesn't mean this tab's own analysis data (snapshots/skill-roi/expansion) has loaded yet.
-  if (el && !_analyzeSnaps.length)
-    el.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Loading…</div>';
+  // Spinner goes in the status card's own body (matching where it rendered before the multi-card
+  // split) rather than the bare #analyzeContent below it — otherwise it floats card-less under the
+  // still-visible "Setup vs Plan" title bar, inconsistent with Dashboard's clean loading state.
+  if (statusEl && !_analyzeSnaps.length) {
+    statusEl.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Loading…</div>';
+    if (el) el.innerHTML = '';
+  }
   // Fetch characters, snapshots and derived plans in parallel — all independent. loadCharacters()
   // already calls _loadFeatures() internally, so no separate call is needed here.
   const [saved, derived] = await Promise.all([
