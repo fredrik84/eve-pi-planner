@@ -16,9 +16,11 @@ import urllib.request
 import urllib.error
 
 # Every key the frontend relies on must exist in the registry. We do NOT assert each flag's
-# enabled VALUE: an admin can toggle public visibility at runtime, so the live state legitimately
-# diverges from the code default. The durable invariant is "the key exists and enabled is a bool".
+# state VALUE: an admin can change visibility at runtime, so the live state legitimately
+# diverges from the code default. The durable invariant is "the key exists and state is one of
+# the valid values" (app/features.py VALID_STATES: hidden/admin/testers/public).
 EXPECTED_FEATURES = ["timeline", "split_extraction", "baskets", "skill_roi", "move_character", "schedule_sync", "pad_fill"]
+VALID_STATES = {"hidden", "admin", "testers", "public"}
 
 
 def get(url: str):
@@ -67,15 +69,15 @@ def test_features(base: str) -> bool:
             f = feats[key]
             ok &= check(bool(f.get("label")) and bool(f.get("description")),
                         f"'{key}' has label + description")
-            ok &= check(isinstance(f.get("enabled"), bool),
-                        f"'{key}' enabled is a bool (got {f.get('enabled')!r})")
+            ok &= check(f.get("state") in VALID_STATES,
+                        f"'{key}' state is valid (got {f.get('state')!r})")
     ok &= check(data.get("is_admin") is False, "anonymous caller is not admin")
     return ok
 
 
 def test_feature_toggle_gated(base: str) -> bool:
     print(f"\n{'='*60}\n  POST /api/features/<key> is admin-gated\n{'='*60}")
-    code = post_status(f"{base}/api/features/timeline", {"enabled": True})
+    code = post_status(f"{base}/api/features/timeline", {"state": "public"})
     return check(code == 403, f"anonymous toggle rejected (got HTTP {code})")
 
 
