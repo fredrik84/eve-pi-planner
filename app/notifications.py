@@ -203,30 +203,50 @@ def _factory_events(con, context_id: int, lead_hours: float) -> list[dict]:
 
 # ── Background job ────────────────────────────────────────────────────────────
 
+# Next in the sequence after build_sde.py (918_273_645) / populate_geo.py (918_273_646).
+_NOTIFY_ADVISORY_LOCK_KEY = 918_273_647
+
+
 def check_and_send_notifications():
-    """Run every 15 minutes. Pure DB math — no ESI calls."""
+    """Run every 15 minutes. Pure DB math — no ESI calls.
+
+    Guarded by a Postgres advisory lock (same pattern as scripts/build_sde.py /
+    populate_geo.py). Every uvicorn worker in every pod replica runs its own APScheduler on its
+    own 15-minute timer, and prod alone is 2 replicas x 3 workers = 6 independent processes
+    sharing this DB (plus the dev environment, which shares the same Postgres AND the same
+    discord-webhook secret) — with no lock, several of those timers landing close together could
+    all pass the same _recently_notified() check before any of them committed their own send,
+    producing real duplicate pings (confirmed live: a user got 3 identical extractor-expiry
+    notifications). The lock serializes runs; a process that blocks waiting for it sees the
+    winner's already-committed log rows once it acquires the lock, so _recently_notified()
+    correctly skips instead of racing.
+    """
+    from app.db import _IS_POSTGRES
+    con = get_connection()
     try:
-        ensure_notification_tables()
-        con = get_connection()
-        # Contexts with at least one enabled notification setting.
-        ctx_rows = con.execute(
-            "SELECT DISTINCT context_id FROM pp_notification_settings WHERE enabled=1"
-        ).fetchall()
-        if not ctx_rows:
-            con.close()
-            return
-
-        for ctx_row in ctx_rows:
-            ctx = ctx_row["context_id"]
-            try:
-                _process_context(con, ctx)
-            except Exception:
-                log.exception("Notification error for context %s", ctx)
-
-        con.commit()
-        con.close()
+        if _IS_POSTGRES:
+            con.execute("SELECT pg_advisory_lock(?)", (_NOTIFY_ADVISORY_LOCK_KEY,))
+        try:
+            ensure_notification_tables()
+            # Contexts with at least one enabled notification setting.
+            ctx_rows = con.execute(
+                "SELECT DISTINCT context_id FROM pp_notification_settings WHERE enabled=1"
+            ).fetchall()
+            for ctx_row in ctx_rows:
+                ctx = ctx_row["context_id"]
+                try:
+                    _process_context(con, ctx)
+                except Exception:
+                    log.exception("Notification error for context %s", ctx)
+            con.commit()
+        finally:
+            if _IS_POSTGRES:
+                con.execute("SELECT pg_advisory_unlock(?)", (_NOTIFY_ADVISORY_LOCK_KEY,))
+                con.commit()
     except Exception:
         log.exception("check_and_send_notifications failed")
+    finally:
+        con.close()
 
 
 def _process_context(con, context_id: int):
