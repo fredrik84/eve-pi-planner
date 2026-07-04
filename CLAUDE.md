@@ -36,13 +36,17 @@ These are standing rules for ALL changes. Follow them unless the user explicitly
    doesn't change per-player. Use ESI for live per-character data. **Live data trumps everything —
    UNLESS the value can be reliably derived from a known, documented formula** (then compute it; see
    the extraction-decay and factory-rate models, which are formula-derived rather than scraped).
-6. **Commit + push when a change is complete.** The user wants steady checkpoints to revert to. After
-   a feature/fix is tested and deployed, `git commit` and `git push` to `origin/main`. End commit
-   messages with the Co-Authored-By trailer. **Deployment is fully automated** — a push to main
-   triggers GitHub Actions (builds image ~38s), ArgoCD image updater detects the new digest within
-   2 minutes and commits to evpi-gitops, ArgoCD syncs and rolls the pod. Total ~3 min. There is no
-   manual deploy step. Do NOT use `docker compose` — the app runs on k3s at
-   `ssh fredrik@116.203.246.127`, namespace `eve-pi`, `sudo kubectl -n eve-pi`.
+6. **`dev` first, `main` only after it's proven out.** Commit and push to `origin/dev` first — CI
+   builds a `:dev`-tagged image (`.github/workflows/build.yml`, `branches: [main, dev]`) served by
+   the local `docker compose` stack (`eve-pi-dev.failed.name`). Test there (run the suites below
+   against it, and click through anything UI-facing). Only once it looks right, `git checkout main
+   && git pull && git merge dev && git push origin main` — **that push is the prod deploy**, so
+   don't push to `main` before dev testing has actually happened. End commit messages with the
+   Co-Authored-By trailer. **Deployment off `main` is fully automated**: GitHub Actions builds
+   `:latest` (~38s), ArgoCD image updater detects the new digest within 2 minutes and commits to
+   evpi-gitops, ArgoCD syncs and rolls the pod — total ~3 min, no manual deploy step. Prod runs on
+   the 3-node k3s HA cluster (`node01-03.failed.name`), namespace `eve-pi`, `sudo k3s kubectl -n
+   eve-pi` — the old single-node box is decommissioned and gone.
 7. **Preserve user privacy.** User data is never exposed publicly. Every endpoint that returns
    character names, systems, planets, or any locatable data **must** be gated by `require_context`
    (own data only) or `require_admin` (admin tools). The only exceptions are: (a) the Admin → Users
