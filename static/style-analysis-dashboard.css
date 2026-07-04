@@ -367,7 +367,7 @@
 
 
 /* ── Characters: per-character rescan + extractor time-left ───────────────────── */
-.pp-char-actions { margin-top: 10px; display: flex; justify-content: flex-end; }
+.pp-char-actions { margin-top: 10px; display: flex; justify-content: center; align-items: center; gap: 10px; flex-wrap: wrap; }
 .pp-char-rescan { background: #1a2a3a; border: 1px solid #2a4a6a; border-radius: 4px;
   color: #5a9fd4; cursor: pointer; font-size: 12px; padding: 5px 12px;
   transition: background 0.15s, border-color 0.15s, color 0.15s; }
