@@ -188,28 +188,31 @@ def ensure_char_tables():
         )
     """)
     con.commit()
-    try:
-        con.execute("ALTER TABLE pp_char_planets ADD COLUMN planet_num INTEGER")
-    except Exception:
-        pass
-    for _col in ("products TEXT", "pad_contents TEXT", "pad_inputs TEXT", "sim_state TEXT", "issues TEXT", "scanned_at REAL", "checkpoint_at REAL", "storage TEXT", "esi_modified REAL", "esi_expires REAL"):  # JSON cols + scan/checkpoint epochs + fullest-container fill state + ESI data vintage (Last-Modified) + next-refresh time (Expires)
+    # Each ADD COLUMN commits immediately on success — Postgres aborts the WHOLE current
+    # transaction on any failed statement (e.g. a later column that already exists), and that
+    # rollback silently erases any earlier ADD COLUMN in the same uncommitted transaction that
+    # had actually just succeeded. Bit us for real: esi_expires/skills_expires (below) were
+    # being added successfully, then erased by the next already-exists ALTER (is_dummy) rolling
+    # back before anything committed — the columns were never actually persisted, and every
+    # request touching them threw psycopg2.errors.UndefinedColumn. Don't go back to a bare
+    # try/except-pass chain of ALTERs without a commit after each one.
+    def _add_col(table: str, coldef: str):
         try:
-            con.execute(f"ALTER TABLE pp_char_planets ADD COLUMN {_col}")
+            con.execute(f"ALTER TABLE {table} ADD COLUMN {coldef}")
+            con.commit()
         except Exception:
             pass
-    try:
-        # When ESI will next regenerate this character's skills (Expires header) — lets a
-        # rescan skip a re-fetch that's guaranteed to return the same cached data.
-        con.execute("ALTER TABLE pp_characters ADD COLUMN skills_expires REAL")
-    except Exception:
-        pass
-    try:
-        # Synthetic "dummy" characters (no ESI token / colonies) added manually so a player
-        # needn't log every alt in. is_dummy=1; their character_id is negative to avoid
-        # colliding with real EVE ids. They contribute planet slots + CCU only.
-        con.execute("ALTER TABLE pp_characters ADD COLUMN is_dummy INTEGER DEFAULT 0")
-    except Exception:
-        pass
+
+    _add_col("pp_char_planets", "planet_num INTEGER")
+    for _col in ("products TEXT", "pad_contents TEXT", "pad_inputs TEXT", "sim_state TEXT", "issues TEXT", "scanned_at REAL", "checkpoint_at REAL", "storage TEXT", "esi_modified REAL", "esi_expires REAL"):  # JSON cols + scan/checkpoint epochs + fullest-container fill state + ESI data vintage (Last-Modified) + next-refresh time (Expires)
+        _add_col("pp_char_planets", _col)
+    # When ESI will next regenerate this character's skills (Expires header) — lets a rescan
+    # skip a re-fetch that's guaranteed to return the same cached data.
+    _add_col("pp_characters", "skills_expires REAL")
+    # Synthetic "dummy" characters (no ESI token / colonies) added manually so a player needn't
+    # log every alt in. is_dummy=1; their character_id is negative to avoid colliding with real
+    # EVE ids. They contribute planet slots + CCU only.
+    _add_col("pp_characters", "is_dummy INTEGER DEFAULT 0")
     # Rolling per-colony yield samples: ONE row per extraction program (deduped by install_ts),
     # capped at _YIELD_KEEP per colony. Lets the analysis show the MEASURED install-yield trend
     # across reseats (a colony's hotspots deplete, so successive programs drift down unless you move
@@ -259,16 +262,10 @@ def ensure_char_tables():
     # In Postgres, a failed ALTER (column already exists) triggers auto-rollback
     # which would undo all preceding CREATEs if they're in the same transaction.
     con.commit()
-    # Schema migrations for existing deployments
+    # Schema migrations for existing deployments (same commit-per-statement reasoning as _add_col above)
     for col, tbl in [("context_id", "pp_characters"), ("context_id", "pp_sessions")]:
-        try:
-            con.execute(f"ALTER TABLE {tbl} ADD COLUMN {col} INTEGER")
-        except Exception:
-            pass
-    try:
-        con.execute("ALTER TABLE pp_characters ADD COLUMN scopes TEXT DEFAULT ''")
-    except Exception:
-        pass
+        _add_col(tbl, f"{col} INTEGER")
+    _add_col("pp_characters", "scopes TEXT DEFAULT ''")
     # Migrate existing characters/sessions to context 1
     unscoped = con.execute(
         "SELECT COUNT(*) FROM pp_characters WHERE context_id IS NULL"
