@@ -517,11 +517,13 @@ function renderCharacters(chars, loggedIn) {
           const extractLabel = p0PadAmt != null
             ? `<span class="pp-pl-extract" title="${padTitle}">→ ${_esc(p.p0_name)} <b>${p0PadAmt.toLocaleString()}</b></span>`
             : `<span class="pp-pl-extract">→ ${_esc(p.p0_name || '?')}</span>`;
-          const what = p.is_extractor
+          // Wrapped in one cell (pp-pl-chain) so the P0→P1 chain is a single grid column instead
+          // of two separate items competing for space/position against each other.
+          const what = `<span class="pp-pl-chain">` + (p.is_extractor
             ? `${extractLabel}${builds ? `<span class="pp-pl-build"${buildTitle}> → ${builds}</span>` : ''}`
             : (builds
                 ? `<span class="pp-pl-build"${buildTitle}>→ ${builds}</span>`
-                : `<span class="pp-pl-factory">factory${p.num_pins ? ' · ' + p.num_pins + ' pins' : ''}</span>`);
+                : `<span class="pp-pl-factory">factory${p.num_pins ? ' · ' + p.num_pins + ' pins' : ''}</span>`)) + `</span>`;
           const extraPad = (p.pads || []).filter(x => !prodTypeIds.has(x.type_id) && !(p0PadAmt != null && x.name === p.p0_name));
           const pad = extraPad.length
             ? `<span class="pp-pl-pad" title="${padTitle}">${extraPad.map(x => `<b>${x.amount.toLocaleString()}</b> ${_esc(x.name)}`).join(' · ')}</span>`

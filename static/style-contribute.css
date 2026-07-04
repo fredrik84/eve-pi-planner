@@ -110,23 +110,35 @@
 .pp-char-stats { display: flex; flex-wrap: wrap; gap: 4px 14px; padding: 7px 0; font-size: 11px; color: var(--clr-stat-label);
   border-top: 1px solid #161a26; margin-bottom: 4px; }
 .pp-char-stats span { white-space: nowrap; }
-.pp-char-planet-list { display: flex; flex-direction: column; gap: 3px; }
-.pp-pl-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 8px; font-size: 12px; }
-.pp-pl-loc { flex: 0 0 auto; min-width: 116px; color: var(--clr-text); font-family: 'Consolas', monospace; font-size: 11px; }
-/* extract/build get their OWN wrapped line when the row doesn't fit (flex-wrap above); no
-   white-space:nowrap here — an exceptionally long product list still needs to wrap internally
-   once alone on its line, or it overflows the card instead (verified with a 3-long-name planet). */
+/* A real grid, not a flex "pile" — each .pp-pl-row is display:contents (see below), so its
+   children become direct items of THIS grid and every row shares the same column tracks.
+   "auto" columns size themselves to the widest cell IN THAT COLUMN across this character's
+   whole planet list, so e.g. every CC badge lands in the same X position regardless of how
+   long that row's location/chain text is — genuine per-character column alignment instead of
+   each row's trailing badges landing wherever the preceding text happened to end. */
+.pp-char-planet-list {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto auto auto;
+  column-gap: 8px;
+  row-gap: 4px;
+  align-items: baseline;
+  font-size: 12px;
+}
+.pp-pl-row { display: contents; }
+.pp-pl-loc { grid-column: 1; color: var(--clr-text); font-family: 'Consolas', monospace; font-size: 11px; }
+.pp-char-planet-list .plan-ptype { grid-column: 2; }
+/* The P0→P1 chain is the one flexible (1fr) column — everything else is sized to content. It
+   wraps internally rather than overflowing once it's the widest thing on its line (verified
+   with a 3-long-name planet); no white-space:nowrap on the pieces inside it. */
+.pp-pl-chain { grid-column: 3; min-width: 0; }
 .pp-pl-extract { color: #9ec89e; }
-.pp-pl-build { color: #a8c0e0; min-width: 0; }
+.pp-pl-build { color: #a8c0e0; }
 .pp-pl-extract b, .pp-pl-build b, .pp-pl-pad b { color: #a8d0e0; font-family: 'Consolas', monospace; font-weight: 600; }
 .pp-pl-factory { color: var(--clr-stat-label); }
-/* No margin-left:auto here (or on .pp-pl-cc below) — two auto-margin items on the same flex
-   line fight each other for the leftover space, which is what was isolating CC onto its own
-   wrapped line. Both now just flow left-to-right with the row's gap, wrapping as a group. */
-.pp-pl-pad { font-size: 11px; color: #5a8aa0; white-space: nowrap;
+.pp-pl-exp { grid-column: 4; white-space: nowrap; }
+.pp-pl-pad { grid-column: 5; font-size: 11px; color: #5a8aa0; white-space: nowrap;
   background: #0e1a22; border: 1px solid #16303c; border-radius: 4px; padding: 1px 7px; }
-.pp-pl-cc { font-size: 10px; color: #56607a; flex: 0 0 auto; }
-.pp-pl-row .pp-pl-pad + .pp-pl-cc { margin-left: 8px; }
+.pp-pl-cc { grid-column: 6; font-size: 10px; color: #56607a; }
 .pp-pl-empty { font-size: 12px; color: #56607a; font-style: italic; padding: 6px 0; }
 /* placeholder (dummy) characters */
 .pp-char-dummy { border-style: dashed; border-color: #2e2840; background: #181626; }
