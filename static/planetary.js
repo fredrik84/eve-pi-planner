@@ -544,7 +544,14 @@ function renderCharacters(chars, loggedIn) {
                 return `<span class="pp-pl-exp ${cls}" title="${tip}">${h <= 0 ? 'expired' : _fmtDHM(h) + ' left'}${ageTxt}</span>`;
               })()
             : '';
-          return `<div class="pp-pl-row"><span class="pp-pl-loc">${loc}</span>${_ptypeSpan(p.planet_type)}${what}${extLeft}${pad}${cc}</div>`;
+          // Three explicit groups (loc / what-it-produces / status+CC) instead of one flat flex
+          // row — on desktop these wrappers are display:contents (invisible to layout, so the
+          // CSS grid below still places each field in its own column); on mobile they become
+          // real line breaks, so which fields share a line is a deliberate choice, not whatever
+          // flex-wrap happens to fit given that particular row's text length.
+          return `<div class="pp-pl-row"><span class="pp-pl-loc">${loc}</span>` +
+            `<span class="pp-pl-line-what">${_ptypeSpan(p.planet_type)}${what}</span>` +
+            `<span class="pp-pl-line-status">${extLeft}${pad}${cc}</span></div>`;
         }).join('')
       : '<div class="pp-pl-empty">No colonies scanned — set them up in-game, then hit Refresh.</div>';
 
