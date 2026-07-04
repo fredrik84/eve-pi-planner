@@ -95,3 +95,44 @@ jobs:
           curl -s -X POST "$DISCORD_WEBHOOK" \
             -H "Content-Type: application/json" \
             -d "$BODY" || true
+
+      # The "Deploying" notification above only means the image was built and pushed — the
+      # actual rollout is async from here (ArgoCD Image Updater polls every ~2min, commits to
+      # evpi-gitops, ArgoCD syncs, pod rolls). This step polls the LIVE site's own build-time
+      # GIT_COMMIT (exposed by /api/features, app/main.py GIT_COMMIT) until it matches this
+      # build's SHA, so the "Deployed" notification reflects reality instead of firing at the
+      # start and hoping. Only for branch pushes — tagging a release doesn't trigger a deploy.
+      - name: Wait for rollout & notify Discord
+        if: success() && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          COMMIT_SHA: ${{ github.sha }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          SHORT_SHA="${COMMIT_SHA:0:7}"
+          if [ "$REF_NAME" = "main" ]; then
+            SITE_URL="https://eve-pi.failed.name"
+          else
+            SITE_URL="https://eve-pi-dev.failed.name"
+          fi
+          DEPLOYED=""
+          for i in $(seq 1 40); do        # 40 x 15s = up to 10 minutes
+            LIVE_SHA=$(curl -s --max-time 10 "$SITE_URL/api/features" | jq -r '.git_commit // empty' || true)
+            if [ "$LIVE_SHA" = "$COMMIT_SHA" ]; then
+              DEPLOYED="1"
+              break
+            fi
+            sleep 15
+          done
+          if [ "$DEPLOYED" = "1" ]; then
+            TITLE="Deployed ($REF_NAME) · $SHORT_SHA"
+            DESC="Live at $SITE_URL"
+            COLOR=3066993   # green
+          else
+            TITLE="Deploy not confirmed ($REF_NAME) · $SHORT_SHA"
+            DESC="$SITE_URL still wasn't serving this commit after 10 minutes — check ArgoCD."
+            COLOR=15158332  # red
+          fi
+          BODY=$(jq -n --arg title "$TITLE" --arg desc "$DESC" --argjson color "$COLOR" \
+            '{ username: "EVE PI Planner", embeds: [{ title: $title, description: $desc, color: $color }] }')
+          curl -s -X POST "$DISCORD_WEBHOOK" -H "Content-Type: application/json" -d "$BODY" || true
