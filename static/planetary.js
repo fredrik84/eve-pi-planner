@@ -264,8 +264,18 @@ function renderHeaderSession(loggedIn, chars, sessionCharId) {
   }
   const char = chars.find(c => c.character_id === sessionCharId);
   const name = char ? char.name : 'Unknown';
+  // Whole-fleet cache hint: only shown when EVERY real, rescannable character is still within
+  // its ESI cache window — i.e. hitting Rescan right now is guaranteed to change nothing. The
+  // earliest of those cache windows is when it first becomes worth trying again.
+  const _rescanTargets = chars.filter(c => !c.is_dummy && !c.wallet_only && c.token_ok && c.character_id > 0);
+  const _allCached = _featureActive('esi_cache_skip') && _rescanTargets.length > 0
+    && _rescanTargets.every(c => c.next_data_at);
+  const rescanHint = _allCached
+    ? `<span class="pp-cache-hint" title="Every character's colony data is still within ESI's cache window — a rescan right now would return the same data.">no new data until ${_fmtEpochClock(Math.min(..._rescanTargets.map(c => c.next_data_at)))}</span>`
+    : '';
   el.innerHTML =
     `<button id="rescanBtn" class="header-bug-btn" onclick="rescanAll()" ${_rescanning ? 'disabled' : ''} title="Re-scan every character's colonies from ESI">${_rescanning ? 'Rescanning…' : 'Rescan'}</button>`
+    + rescanHint
     + `<button id="reportBugBtn" class="header-bug-btn" onclick="openBugModal()">Report bug</button>`
     + `<button class="header-settings-btn" onclick="openSettingsModal()" title="Settings">⚙&#xFE0E;</button>`
     + `<span class="header-session">${name} · <a href="/auth/logout" class="header-logout">Log out</a></span>`;
@@ -506,6 +516,13 @@ function renderCharacters(chars, loggedIn) {
         ${c.adv_planetology != null ? `<span title="Advanced Planetology skill">Adv ${c.adv_planetology}</span>` : ''}
       </div>`;
 
+    // ESI caches each colony independently — next_data_at is only set when EVERY one of this
+    // character's planets is still within its cache window, i.e. a rescan right now is
+    // guaranteed to come back unchanged. Admin-preview until the esi_cache_skip flag ships.
+    const cacheHint = (c.next_data_at && _featureActive('esi_cache_skip'))
+      ? `<span class="pp-cache-hint" title="ESI hasn't regenerated this character's colony data yet — a rescan now would return the same cached data.">No new data until ${_fmtEpochClock(c.next_data_at)}</span>`
+      : '';
+
     row.innerHTML = `
       <details class="pp-char-fold">
         <summary class="pp-char-header">
@@ -516,7 +533,10 @@ function renderCharacters(chars, loggedIn) {
         <div class="pp-char-body">
           ${stats}
           <div class="pp-char-planet-list">${planetRows}</div>
-          <div class="pp-char-actions"><button class="pp-char-rescan" ${c.token_ok ? '' : 'disabled'} onclick="rescanCharacter(${c.character_id}, this)" title="${c.token_ok ? "Re-scan just this character's colonies from ESI" : 'Token expired — re-add this character first'}">Rescan this character</button></div>
+          <div class="pp-char-actions">
+            <button class="pp-char-rescan" ${c.token_ok ? '' : 'disabled'} onclick="rescanCharacter(${c.character_id}, this)" title="${c.token_ok ? "Re-scan just this character's colonies from ESI" : 'Token expired — re-add this character first'}">Rescan this character</button>
+            ${cacheHint}
+          </div>
         </div>
       </details>`;
     if (loggedIn) {

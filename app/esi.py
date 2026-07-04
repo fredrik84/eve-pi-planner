@@ -12,6 +12,7 @@ Scopes requested:
 """
 
 import json as _json
+import logging
 import os
 import secrets
 import time
@@ -26,6 +27,7 @@ from app.sde import get_connection, ensure_once
 from app.cache import cache_invalidate, charlist_key
 
 router = APIRouter()
+log = logging.getLogger(__name__)
 
 CLIENT_ID     = os.environ.get("EVE_CLIENT_ID", "")
 CLIENT_SECRET = os.environ.get("EVE_CLIENT_SECRET", "")
@@ -190,11 +192,17 @@ def ensure_char_tables():
         con.execute("ALTER TABLE pp_char_planets ADD COLUMN planet_num INTEGER")
     except Exception:
         pass
-    for _col in ("products TEXT", "pad_contents TEXT", "pad_inputs TEXT", "sim_state TEXT", "issues TEXT", "scanned_at REAL", "checkpoint_at REAL", "storage TEXT", "esi_modified REAL"):  # JSON cols + scan/checkpoint epochs + fullest-container fill state + ESI data vintage (Last-Modified)
+    for _col in ("products TEXT", "pad_contents TEXT", "pad_inputs TEXT", "sim_state TEXT", "issues TEXT", "scanned_at REAL", "checkpoint_at REAL", "storage TEXT", "esi_modified REAL", "esi_expires REAL"):  # JSON cols + scan/checkpoint epochs + fullest-container fill state + ESI data vintage (Last-Modified) + next-refresh time (Expires)
         try:
             con.execute(f"ALTER TABLE pp_char_planets ADD COLUMN {_col}")
         except Exception:
             pass
+    try:
+        # When ESI will next regenerate this character's skills (Expires header) — lets a
+        # rescan skip a re-fetch that's guaranteed to return the same cached data.
+        con.execute("ALTER TABLE pp_characters ADD COLUMN skills_expires REAL")
+    except Exception:
+        pass
     try:
         # Synthetic "dummy" characters (no ESI token / colonies) added manually so a player
         # needn't log every alt in. is_dummy=1; their character_id is negative to avoid
@@ -463,12 +471,43 @@ def _fetch_planets(character_id: int, access_token: str) -> None:
             _types, _sch_to_out = {}, {}
 
         con = get_connection()
-        con.execute("DELETE FROM pp_char_planets WHERE character_id=?", (character_id,))
+        # Purge only planets no longer owned — planets still present may be skip-eligible
+        # below (cache_skip), so we can't blanket-delete before knowing which ones those are.
+        _current_ids = tuple(p["planet_id"] for p in planet_list)
+        if _current_ids:
+            _ph = ",".join("?" * len(_current_ids))
+            con.execute(f"DELETE FROM pp_char_planets WHERE character_id=? AND planet_id NOT IN ({_ph})",
+                        (character_id, *_current_ids))
+        else:
+            con.execute("DELETE FROM pp_char_planets WHERE character_id=?", (character_id,))
+
+        from app.features import feature_enabled
+        _skip_cached = feature_enabled("esi_cache_skip")
+        _cached_expiry = {
+            r["planet_id"]: r["esi_expires"]
+            for r in con.execute(
+                "SELECT planet_id, esi_expires FROM pp_char_planets WHERE character_id=?",
+                (character_id,),
+            )
+        } if _skip_cached else {}
+        _now = time.time()
+        _fetched, _skipped = 0, 0
+
         _scan_ts = time.time()        # anchor for projecting buffer depletion between scans
 
         with httpx.Client() as client:
             for planet in planet_list:
                 planet_id       = planet["planet_id"]
+
+                # ESI's Expires header on the last fetch of THIS planet tells us when it will
+                # next regenerate — before that, a re-fetch is guaranteed to return identical
+                # data, so skip it entirely (fewer round trips = a faster rescan).
+                _exp = _cached_expiry.get(planet_id)
+                if _exp and _exp > _now:
+                    _skipped += 1
+                    continue
+
+                _fetched += 1
                 planet_type     = planet.get("planet_type", "").capitalize()
                 solar_system_id = planet.get("solar_system_id")
                 upgrade_level   = planet.get("upgrade_level", 0)
@@ -480,6 +519,7 @@ def _fetch_planets(character_id: int, access_token: str) -> None:
                 planet_num   = None
                 _detail      = None
                 esi_modified = None             # when ESI actually generated this colony's data (its cache vintage)
+                esi_expires  = None             # when ESI will next regenerate it
                 products: dict[int, str] = {}   # output type_id → name (factory pins)
                 pads: dict[int, int] = {}       # stored item type_id → total amount
                 try:
@@ -492,13 +532,8 @@ def _fetch_planets(character_id: int, access_token: str) -> None:
                     _detail = pr.json()
                     # ESI caches PI data, so a reseat isn't reflected until ESI regenerates. Last-Modified
                     # is when THIS body was generated — surfacing its age explains a stale "expired".
-                    try:
-                        from email.utils import parsedate_to_datetime
-                        _lm = pr.headers.get("last-modified")
-                        if _lm:
-                            esi_modified = parsedate_to_datetime(_lm).timestamp()
-                    except Exception:
-                        esi_modified = None
+                    esi_modified = _http_date_to_epoch(pr.headers.get("last-modified"))
+                    esi_expires  = _http_date_to_epoch(pr.headers.get("expires"))
                     for pin in _detail.get("pins", []):
                         ext = pin.get("extractor_details")
                         if ext:
@@ -605,8 +640,8 @@ def _fetch_planets(character_id: int, access_token: str) -> None:
                     INSERT INTO pp_char_planets
                         (character_id, planet_id, planet_type, solar_system_id,
                          upgrade_level, num_pins, is_extractor, p0_type_id, p0_name,
-                         planet_num, products, pad_contents, pad_inputs, sim_state, issues, scanned_at, checkpoint_at, storage, esi_modified)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                         planet_num, products, pad_contents, pad_inputs, sim_state, issues, scanned_at, checkpoint_at, storage, esi_modified, esi_expires)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     ON CONFLICT (character_id, planet_id) DO UPDATE SET
                       planet_type=EXCLUDED.planet_type, solar_system_id=EXCLUDED.solar_system_id,
                       upgrade_level=EXCLUDED.upgrade_level, num_pins=EXCLUDED.num_pins,
@@ -616,15 +651,17 @@ def _fetch_planets(character_id: int, access_token: str) -> None:
                       pad_inputs=EXCLUDED.pad_inputs, sim_state=EXCLUDED.sim_state,
                       issues=EXCLUDED.issues, scanned_at=EXCLUDED.scanned_at,
                       checkpoint_at=EXCLUDED.checkpoint_at, storage=EXCLUDED.storage,
-                      esi_modified=EXCLUDED.esi_modified
+                      esi_modified=EXCLUDED.esi_modified, esi_expires=EXCLUDED.esi_expires
                 """, (character_id, planet_id, planet_type, solar_system_id,
                       upgrade_level, num_pins, is_extractor, p0_type_id, p0_name,
-                      planet_num, products_json, pads_json, pad_inputs_json, sim_state_json, issues_json, _scan_ts, checkpoint_at, storage_json, esi_modified))
+                      planet_num, products_json, pads_json, pad_inputs_json, sim_state_json, issues_json, _scan_ts, checkpoint_at, storage_json, esi_modified, esi_expires))
 
                 if is_extractor and _sim:      # log a per-program yield sample for the trend/burn-down
                     _record_yield_sample(con, character_id, planet_id, _sim, _scan_ts)
 
         con.commit()
+        if _skip_cached:
+            log.info("planet scan char=%s fetched=%d skipped(cached)=%d", character_id, _fetched, _skipped)
         con.close()
     except Exception:
         pass
@@ -997,6 +1034,17 @@ def admin_and_tester_status_for_context(context_id: int | None) -> tuple[bool, b
 
 # ── ESI helpers ───────────────────────────────────────────────────────────────
 
+def _http_date_to_epoch(value: str | None) -> float | None:
+    """Parse an HTTP-date header (Last-Modified / Expires) to a Unix epoch, or None."""
+    if not value:
+        return None
+    try:
+        from email.utils import parsedate_to_datetime
+        return parsedate_to_datetime(value).timestamp()
+    except Exception:
+        return None
+
+
 def _fetch_skills(character_id: int, access_token: str) -> dict[str, int]:
     try:
         with httpx.Client() as client:
@@ -1012,6 +1060,15 @@ def _fetch_skills(character_id: int, access_token: str) -> dict[str, int]:
             field = SKILL_IDS.get(s["skill_id"])
             if field:
                 result[field] = s.get("trained_skill_level", 0)
+        # Record when ESI will next regenerate this character's skills, so a rescan can skip
+        # re-fetching skills it already knows are still cache-fresh (see esi_cache_skip).
+        expires = _http_date_to_epoch(resp.headers.get("expires"))
+        if expires:
+            con = get_connection()
+            con.execute("UPDATE pp_characters SET skills_expires=? WHERE character_id=?",
+                        (expires, character_id))
+            con.commit()
+            con.close()
         return result
     except Exception:
         return {}

@@ -186,7 +186,7 @@ def list_characters(pp_session: str = Cookie(default=None)):
             planet_rows = con.execute("""
                 SELECT cp.character_id, cp.planet_id, cp.planet_type, cp.is_extractor, cp.p0_name, cp.upgrade_level,
                        cp.planet_num, cp.num_pins, cp.products, cp.pad_contents, cp.pad_inputs, cp.checkpoint_at,
-                       cp.sim_state, cp.esi_modified,
+                       cp.sim_state, cp.esi_modified, cp.esi_expires,
                        COALESCE(ss.name, '') AS system_name
                 FROM pp_char_planets cp
                 JOIN pp_characters ch ON ch.character_id = cp.character_id
@@ -197,7 +197,7 @@ def list_characters(pp_session: str = Cookie(default=None)):
             planet_rows = con.execute("""
                 SELECT cp.character_id, cp.planet_id, cp.planet_type, cp.is_extractor, cp.p0_name, cp.upgrade_level,
                        cp.planet_num, cp.num_pins, cp.products, cp.pad_contents, cp.pad_inputs, cp.checkpoint_at,
-                       cp.sim_state, cp.esi_modified, '' AS system_name
+                       cp.sim_state, cp.esi_modified, cp.esi_expires, '' AS system_name
                 FROM pp_char_planets cp
                 JOIN pp_characters ch ON ch.character_id = cp.character_id
                 WHERE ch.context_id=?
@@ -322,6 +322,7 @@ def list_characters(pp_session: str = Cookie(default=None)):
             "program_days":  program_days,
             "expiry":        prog_expiry,
             "esi_modified":  p["esi_modified"],
+            "esi_expires":   p["esi_expires"],
             "ext_p0_day":    ext_p0_day,
             "yield_history": yield_hist.get((cid, p["planet_id"]), []),
         })
@@ -340,6 +341,12 @@ def list_characters(pp_session: str = Cookie(default=None)):
         # dashboard exclude it in SQL already.
         sc = r["scopes"] or ""
         wallet_only = ("read_corporation_wallets" in sc) and ("manage_planets" not in sc)
+        my_planets = char_planets.get(r["character_id"], [])
+        # Earliest moment ESI will have anything new for this character (min of its planets'
+        # Expires, ignoring ones already in the past — those are already rescan-ready now).
+        _future_expiries = [p["esi_expires"] for p in my_planets
+                             if p["esi_expires"] and p["esi_expires"] > time.time()]
+        next_data_at = min(_future_expiries) if _future_expiries and len(_future_expiries) == len(my_planets) else None
         chars.append({
             "character_id":   r["character_id"],
             "name":           r["character_name"],
@@ -350,7 +357,8 @@ def list_characters(pp_session: str = Cookie(default=None)):
             "ccu":            r["command_center_upgrades"],
             "planetology":    r["planetology"],
             "adv_planetology":r["advanced_planetology"],
-            "planets":        char_planets.get(r["character_id"], []),
+            "planets":        my_planets,
+            "next_data_at":   next_data_at,
         })
     _admin, _tester = admin_and_tester_status_for_context(context_id)
     result = {
