@@ -111,10 +111,13 @@
   border-top: 1px solid #161a26; margin-bottom: 4px; }
 .pp-char-stats span { white-space: nowrap; }
 .pp-char-planet-list { display: flex; flex-direction: column; gap: 3px; }
-.pp-pl-row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.pp-pl-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 8px; font-size: 12px; }
 .pp-pl-loc { flex: 0 0 auto; min-width: 116px; color: var(--clr-text); font-family: 'Consolas', monospace; font-size: 11px; }
+/* extract/build get their OWN wrapped line when the row doesn't fit (flex-wrap above); no
+   white-space:nowrap here — an exceptionally long product list still needs to wrap internally
+   once alone on its line, or it overflows the card instead (verified with a 3-long-name planet). */
 .pp-pl-extract { color: #9ec89e; }
-.pp-pl-build { color: #a8c0e0; }
+.pp-pl-build { color: #a8c0e0; min-width: 0; }
 .pp-pl-factory { color: var(--clr-stat-label); }
 .pp-pl-pad { margin-left: auto; font-size: 11px; color: #5a8aa0; white-space: nowrap;
   background: #0e1a22; border: 1px solid #16303c; border-radius: 4px; padding: 1px 7px; }
