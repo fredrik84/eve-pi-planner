@@ -425,12 +425,17 @@ def _record_yield_sample(con, character_id: int, planet_id: int, sim: dict | Non
         pass
 
 
-def _fetch_planets(character_id: int, access_token: str) -> None:
-    """Fetch planet list + pin details from ESI, store in pp_char_planets."""
+def _fetch_planets(character_id: int, access_token: str) -> dict:
+    """Fetch planet list + pin details from ESI, store in pp_char_planets.
+
+    Returns {"fetched": N, "skipped": N} (planets actually re-fetched vs. skipped because
+    ESI's cache hadn't lapsed yet — see esi_cache_skip) so a caller can surface real numbers
+    instead of digging through server logs (which aren't even configured to emit INFO here)."""
     con = None   # closed in `finally` below, however this function exits — leaking a Postgres
                  # connection out of the (tiny, 8-per-pod) pool on any exception anywhere in this
                  # long function (many sequential ESI calls) previously required a full pod
                  # restart to recover, since the pool never got the connection back.
+    _fetched, _skipped = 0, 0
     try:
         headers = {"Authorization": f"Bearer {access_token}"}
         with httpx.Client() as client:
@@ -505,7 +510,6 @@ def _fetch_planets(character_id: int, access_token: str) -> None:
             )
         } if _skip_cached else {}
         _now = time.time()
-        _fetched, _skipped = 0, 0
 
         _scan_ts = time.time()        # anchor for projecting buffer depletion between scans
 
@@ -676,8 +680,9 @@ def _fetch_planets(character_id: int, access_token: str) -> None:
         con.commit()
         if _skip_cached:
             log.info("planet scan char=%s fetched=%d skipped(cached)=%d", character_id, _fetched, _skipped)
+        return {"fetched": _fetched, "skipped": _skipped}
     except Exception:
-        pass
+        return {"fetched": _fetched, "skipped": _skipped}
     finally:
         if con is not None:
             con.close()

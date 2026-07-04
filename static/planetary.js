@@ -365,6 +365,14 @@ async function rescanCharacter(cid, btn) {
   try {
     const resp = await fetch(`/api/characters/${cid}/refresh-planets`, { method: 'POST' });
     if (!resp.ok) { const d = await resp.json().catch(() => ({})); throw new Error(d.detail || `HTTP ${resp.status}`); }
+    const d = await resp.json().catch(() => ({}));
+    // Briefly show real fetched-vs-cache-skipped counts before the repaint recreates this
+    // button — the only way to see esi_cache_skip actually doing something, short of
+    // reading server logs (which this deployment doesn't even emit at INFO level).
+    if (btn && typeof d.planets_skipped_cached === 'number') {
+      btn.textContent = `${d.planets_fetched} fetched, ${d.planets_skipped_cached} cached`;
+      await new Promise(r => setTimeout(r, 1600));
+    }
     await loadCharacters();   // repaint with fresh data (recreates the button)
   } catch (e) {
     if (btn) { btn.disabled = false; btn.textContent = 'Rescan this character'; }
