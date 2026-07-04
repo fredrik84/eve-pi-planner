@@ -509,6 +509,7 @@ def refresh_char_planets(character_id: int, context_id: int = Depends(require_co
         )
         con.commit()
         con.close()
-    _fetch_planets(character_id, token)
+    scan = _fetch_planets(character_id, token)
     cache_invalidate(charlist_key(context_id))
-    return {"ok": True, "skills_updated": bool(skills)}
+    return {"ok": True, "skills_updated": bool(skills),
+            "planets_fetched": scan["fetched"], "planets_skipped_cached": scan["skipped"]}
