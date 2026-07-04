@@ -3,6 +3,7 @@ name: Build and push image
 on:
   push:
     branches: [main, dev]
+    tags: ['v*']
 
 # Serialize builds per ref (queue, don't cancel) so two close-together pushes can't race
 # their push-to-:latest step out of order — the loser used to leave `:latest` pointing at
@@ -20,7 +21,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write   # write needed for `gh release create` on a tag push
       packages: write
 
     steps:
@@ -46,6 +47,7 @@ jobs:
             type=sha,prefix=sha-
             type=raw,value=latest,enable={{is_default_branch}}
             type=raw,value=dev,enable=${{ github.ref == 'refs/heads/dev' }}
+            type=raw,value=${{ github.ref_name }},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
 
       - name: Build and push
         uses: docker/build-push-action@v7
@@ -58,6 +60,15 @@ jobs:
             GIT_COMMIT=${{ github.sha }}
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --title "${{ github.ref_name }}" \
+            --generate-notes
 
       - name: Notify Discord
         if: success()
