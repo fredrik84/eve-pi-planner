@@ -430,6 +430,10 @@ def _record_yield_sample(con, character_id: int, planet_id: int, sim: dict | Non
 
 def _fetch_planets(character_id: int, access_token: str) -> None:
     """Fetch planet list + pin details from ESI, store in pp_char_planets."""
+    con = None   # closed in `finally` below, however this function exits — leaking a Postgres
+                 # connection out of the (tiny, 8-per-pod) pool on any exception anywhere in this
+                 # long function (many sequential ESI calls) previously required a full pod
+                 # restart to recover, since the pool never got the connection back.
     try:
         headers = {"Authorization": f"Bearer {access_token}"}
         with httpx.Client() as client:
@@ -451,12 +455,14 @@ def _fetch_planets(character_id: int, access_token: str) -> None:
                 )
                 nr.raise_for_status()
                 ss_con = get_connection()
-                for item in nr.json():
-                    if item.get("category") == "solar_system":
-                        ss_con.execute("INSERT OR IGNORE INTO solar_systems VALUES (?,?)",
-                                       (item["id"], item["name"]))
-                ss_con.commit()
-                ss_con.close()
+                try:
+                    for item in nr.json():
+                        if item.get("category") == "solar_system":
+                            ss_con.execute("INSERT OR IGNORE INTO solar_systems VALUES (?,?)",
+                                           (item["id"], item["name"]))
+                    ss_con.commit()
+                finally:
+                    ss_con.close()
             except Exception:
                 pass
 
@@ -481,8 +487,19 @@ def _fetch_planets(character_id: int, access_token: str) -> None:
         else:
             con.execute("DELETE FROM pp_char_planets WHERE character_id=?", (character_id,))
 
-        from app.features import feature_enabled
-        _skip_cached = feature_enabled("esi_cache_skip")
+        # Reuse the connection already open above rather than opening a second one via
+        # feature_enabled() — this function already holds `con` for its whole (potentially
+        # long, many-sequential-ESI-calls) duration, and a second concurrently-held connection
+        # per in-flight rescan was doubling pool pressure under a real user burst. Fails safe
+        # (don't skip) on any error — this is a speed optimization, not a correctness path.
+        _skip_cached = False
+        try:
+            from app.features import ensure_features_table
+            ensure_features_table()
+            _row = con.execute("SELECT state FROM pp_features WHERE key='esi_cache_skip'").fetchone()
+            _skip_cached = bool(_row) and _row["state"] == "public"
+        except Exception:
+            _skip_cached = False
         _cached_expiry = {
             r["planet_id"]: r["esi_expires"]
             for r in con.execute(
@@ -662,9 +679,11 @@ def _fetch_planets(character_id: int, access_token: str) -> None:
         con.commit()
         if _skip_cached:
             log.info("planet scan char=%s fetched=%d skipped(cached)=%d", character_id, _fetched, _skipped)
-        con.close()
     except Exception:
         pass
+    finally:
+        if con is not None:
+            con.close()
 
 
 # ── OAuth endpoints ───────────────────────────────────────────────────────────
@@ -1062,13 +1081,19 @@ def _fetch_skills(character_id: int, access_token: str) -> dict[str, int]:
                 result[field] = s.get("trained_skill_level", 0)
         # Record when ESI will next regenerate this character's skills, so a rescan can skip
         # re-fetching skills it already knows are still cache-fresh (see esi_cache_skip).
+        # try/finally is load-bearing here: a connection obtained but not close()'d never goes
+        # back to the (small, 8-per-pod) Postgres pool — an exception between get_connection()
+        # and close() permanently leaks it, and this whole function is wrapped in a blanket
+        # except below that would otherwise swallow the leak silently.
         expires = _http_date_to_epoch(resp.headers.get("expires"))
         if expires:
             con = get_connection()
-            con.execute("UPDATE pp_characters SET skills_expires=? WHERE character_id=?",
-                        (expires, character_id))
-            con.commit()
-            con.close()
+            try:
+                con.execute("UPDATE pp_characters SET skills_expires=? WHERE character_id=?",
+                            (expires, character_id))
+                con.commit()
+            finally:
+                con.close()
         return result
     except Exception:
         return {}
