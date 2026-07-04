@@ -47,14 +47,33 @@ These are standing rules for ALL changes. Follow them unless the user explicitly
    evpi-gitops, ArgoCD syncs and rolls the pod — total ~3 min, no manual deploy step. Prod runs on
    the 3-node k3s HA cluster (`node01-03.failed.name`), namespace `eve-pi`, `sudo k3s kubectl -n
    eve-pi` — the old single-node box is decommissioned and gone.
-7. **Preserve user privacy.** User data is never exposed publicly. Every endpoint that returns
+7. **Commit messages ARE the release notes — be extra vigilant.** Releases (below) are cut with
+   `gh release create --generate-notes`, which builds its changelog directly from commit/PR titles
+   since the last tag — verbatim, with no editing pass in between. A vague commit (`fix stuff`,
+   `wip`, `updates`) becomes a vague, useless line in the public changelog. Every commit message
+   must stand on its own as a one-line changelog entry: single-line `feat:`/`fix:`/`chore:`
+   description, no body, stating *why* the change was made, not just *what* changed. This is not
+   cosmetic — treat it as seriously as the code change itself.
+   **Cutting a release** (after a batch of shipped changes on `main` is stable — not every commit,
+   only on a meaningful milestone or when asked):
+   ```
+   git checkout main && git pull origin main
+   git tag -a vX.Y.Z -m "vX.Y.Z"   # PATCH for fixes, MINOR for features, MAJOR for breaking changes
+   git push origin vX.Y.Z
+   ```
+   Pushing the tag triggers `.github/workflows/build.yml`, which builds
+   `ghcr.io/fredrik84/eve-pi-planner:vX.Y.Z` (alongside the usual `:latest`) and creates a GitHub
+   Release with auto-generated notes from commits since the previous tag. First release: `v0.1.0`.
+   This is independent of the `:latest`/ArgoCD deploy path — tagging does not trigger a new
+   deploy, it only marks/publishes a version of whatever is already live on `main`.
+8. **Preserve user privacy.** User data is never exposed publicly. Every endpoint that returns
    character names, systems, planets, or any locatable data **must** be gated by `require_context`
    (own data only) or `require_admin` (admin tools). The only exceptions are: (a) the Admin → Users
    page, which needs character names for management and is already admin-gated; (b) anonymous/full
    shares, where the user has explicitly chosen to publish (`anonymize=False`). When adding a new
    endpoint, default to session-scoped. Never add a publicly accessible endpoint that returns
    per-user data, even in aggregate form that could be re-identified.
-8. **No ads, no third-party data sharing.** No analytics scripts, tracking pixels, ad networks, or
+9. **No ads, no third-party data sharing.** No analytics scripts, tracking pixels, ad networks, or
    any third-party JS may be added to the frontend. No user data (characters, systems, plans, usage
    patterns) is ever sent to a third party. ESI (CCP's official API) and Fuzzwork (static SDE
    mirror) are the only external services this app contacts, and only for game data — not
