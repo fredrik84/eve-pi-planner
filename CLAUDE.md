@@ -37,16 +37,30 @@ These are standing rules for ALL changes. Follow them unless the user explicitly
    UNLESS the value can be reliably derived from a known, documented formula** (then compute it; see
    the extraction-decay and factory-rate models, which are formula-derived rather than scraped).
 6. **`dev` first, `main` only after it's proven out.** Commit and push to `origin/dev` first — CI
-   builds a `:dev`-tagged image (`.github/workflows/build.yml`, `branches: [main, dev]`) served by
-   the local `docker compose` stack (`eve-pi-dev.failed.name`). Test there (run the suites below
-   against it, and click through anything UI-facing). Only once it looks right, `git checkout main
-   && git pull && git merge dev && git push origin main` — **that push is the prod deploy**, so
-   don't push to `main` before dev testing has actually happened. End commit messages with the
-   Co-Authored-By trailer. **Deployment off `main` is fully automated**: GitHub Actions builds
-   `:latest` (~38s), ArgoCD image updater detects the new digest within 2 minutes and commits to
-   evpi-gitops, ArgoCD syncs and rolls the pod — total ~3 min, no manual deploy step. Prod runs on
-   the 3-node k3s HA cluster (`node01-03.failed.name`), namespace `eve-pi`, `sudo k3s kubectl -n
-   eve-pi` — the old single-node box is decommissioned and gone.
+   builds a `:dev`-tagged image (`.github/workflows/build.yml`, `branches: [main, dev]`). For quick
+   local iteration (UI tweaks, etc.) there's also a local `docker compose` stack — separate from,
+   and not automatically kept in sync with, the live k8s `dev` namespace below. ArgoCD Image Updater
+   picks up the new `:dev` digest automatically and rolls the live dev pod at
+   `eve-pi-dev.failed.name` the same way prod does. Test against whichever is more convenient, then
+   once it looks right: `git checkout main && git pull && git merge dev && git push origin main` —
+   **that push is the prod deploy**, so don't push to `main` before dev testing has actually
+   happened. End commit messages with the Co-Authored-By trailer. **Deployment off `main` is fully
+   automated**: GitHub Actions builds `:latest` (~38s), ArgoCD image updater detects the new digest
+   within 2 minutes and commits to evpi-gitops, ArgoCD syncs and rolls the pod — total ~3 min, no
+   manual deploy step. Runs on the 3-node k3s HA cluster (`node01-03.failed.name`).
+
+   **Namespace layout (since 2026-07-04):** prod and dev are two fully independent stacks — separate
+   namespaces (`production` / `dev`), each with its own Postgres, Redis, and EVE SSO callback
+   secret, built from one shared Kustomize base with per-environment overlays in the `evpi-gitops`
+   repo (`apps/{eve-pi-planner,postgres,redis}/base` + `overlays/{prod,dev}`). Resource names are
+   **identical** in both namespaces (`eve-pi-planner`, `postgres`, `redis` — no `-dev` suffix);
+   namespace alone provides the separation. `sudo k3s kubectl -n production ...` / `-n dev ...`.
+   This replaced an older setup where dev shared prod's database inside one `eve-pi` namespace — a
+   real bug came from that: logging into a character on the dev site could rotate that character's
+   EVE SSO refresh token and invalidate whatever prod had stored for the same character, since EVE
+   refresh tokens are single-use/rotating regardless of which of our systems asks for one. The
+   `eve-pi` namespace still exists but now hosts only `eve-pi-ops` (donation-alert,
+   pod-health-check) — an unrelated app that was never part of this migration; don't delete it.
 7. **Commit messages ARE the release notes — be extra vigilant.** Releases (below) are cut with
    `gh release create --generate-notes`, which builds its changelog directly from commit/PR titles
    since the last tag — verbatim, with no editing pass in between. A vague commit (`fix stuff`,
