@@ -59,7 +59,7 @@ header h1 { font-size: 18px; font-weight: 700; color: #d2e6ff; letter-spacing: 1
   text-transform: uppercase; text-shadow: 0 0 14px rgba(90, 180, 230, 0.30); }
 header .header-brand span { color: var(--clr-text-dim); font-size: 12px; }
 .header-actions { margin-left: auto; display: flex; align-items: center; padding: 0 4px; }
-.header-session { font-size: 12px; color: var(--clr-text-dim); }
+.header-session { font-size: 12px; color: var(--clr-text-dim); white-space: nowrap; }
 .pp-cache-hint {
   display: inline-flex;
   align-items: center;

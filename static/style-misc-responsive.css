@@ -86,6 +86,15 @@ body.nav-collapsed .admin-nav-item .nav-lbl { display: none; }
   .header-brand span { display: none; }
   header h1 { font-size: 16px; white-space: nowrap; }   /* keep "EVE PI" on one line */
   #reportBugBtn { display: none; }                       /* drop Report bug on phones */
+  /* The full "no new data until HH:MM" phrase is too wide for a phone header — it was pushing
+     the Settings gear + username/logout off the right edge entirely. Icon + time only; the
+     full phrase is still in the title tooltip (long-press to see it). */
+  .pp-cache-hint-text { display: none; }
+  .pp-cache-hint { padding: 3px 6px; margin: 0 4px; }
+  /* Character name dropped too (the name is already visible in Settings → Characters) — with
+     Rescan + the hint + the gear all in the same ~350px header, there isn't room left for a
+     name like "Test Alpha" alongside "Log out" without wrapping across 2-3 lines. */
+  .header-session-name { display: none; }
 
   /* Single-column body; leave room for the fixed bottom bar + home indicator. */
   .app-layout { display: block; }
@@ -217,14 +226,11 @@ body.nav-collapsed .admin-nav-item .nav-lbl { display: none; }
   .an-bar-track  { grid-column: 1 / 3; grid-row: 2; }
   .dash-fac-pct  { grid-column: 3; grid-row: 2; }
 
-  /* Characters tab (now visible on phones): each planet row is a wide single-line flex on desktop —
-     on a phone wrap it so the LOCATION sits on its own line, then "what it produces · time · pad est"
-     flow below without the desktop right-push (margin-left:auto), and produce names don't break mid-word. */
-  .pp-pl-row { flex-wrap: wrap; gap: 1px 8px; padding: 4px 0; border-bottom: 1px solid #161b28; align-items: baseline; }
+  /* Characters tab (now visible on phones): the row already wraps on desktop too (see
+     style-contribute.css), but on a phone the LOCATION specifically gets its own full-width
+     line before everything else wraps below it — there's no room to share a line with it. */
+  .pp-pl-row { padding: 4px 0; border-bottom: 1px solid #161b28; }
   .pp-pl-loc { flex-basis: 100%; min-width: 0; }
-  .pp-pl-extract, .pp-pl-build { white-space: nowrap; }
-  .pp-pl-pad { margin-left: 0; }
-  .pp-pl-cc { margin-left: 0; }
 
   /* Wide tabular grids (factory tables, per-material detail) scroll inside their
      card instead of forcing the whole page to scroll sideways. */
