@@ -235,6 +235,12 @@ async function loadCharacters() {
       // to a mobile-visible tab (the old onAdminTabOpen bounce to the hidden planner shuffled phones).
       if (!_isAdmin && localStorage.getItem('activeTab') === 'admin' && typeof switchTab === 'function') switchTab('dashboard');
       await _loadFeatures();
+      // Re-render: renderCharacters()/renderHeaderSession() above ran BEFORE _loadFeatures()
+      // resolved, so any _featureActive()-gated content (e.g. the esi_cache_skip "no new data
+      // until" hint) was invisible on this very first paint — it only ever showed up once
+      // something else (like a rescan) called loadCharacters() again after flags were warm.
+      renderCharacters(data.characters || [], _loggedIn);
+      renderHeaderSession(_loggedIn, data.characters || [], data.session_character_id);
       _applyTabGates();
       _applyLoginGates();
       await loadProfiles();
@@ -267,18 +273,25 @@ function renderHeaderSession(loggedIn, chars, sessionCharId) {
   // Whole-fleet cache hint: only shown when EVERY real, rescannable character is still within
   // its ESI cache window — i.e. hitting Rescan right now is guaranteed to change nothing. The
   // earliest of those cache windows is when it first becomes worth trying again.
-  const _rescanTargets = chars.filter(c => !c.is_dummy && !c.wallet_only && c.token_ok && c.character_id > 0);
+  // A character with zero scanned planets has nothing cached to wait on (its next_data_at is
+  // always null, "no opinion") — without excluding it here, one never-scanned alt permanently
+  // hid this hint for the whole account, since .every() below saw its null and gave up.
+  const _rescanTargets = chars.filter(c => !c.is_dummy && !c.wallet_only && c.token_ok && c.character_id > 0 && (c.planets || []).length > 0);
   const _allCached = _featureActive('esi_cache_skip') && _rescanTargets.length > 0
     && _rescanTargets.every(c => c.next_data_at);
+  // The "no new data until" phrase is wrapped separately so it can be hidden on narrow mobile
+  // headers (style-misc-responsive.css) without losing the time itself — the full phrase is
+  // still in the title tooltip. Without this, the hint's full text was wide enough to push the
+  // Settings gear + username/logout off the right edge of a phone-width header entirely.
   const rescanHint = _allCached
-    ? `<span class="pp-cache-hint" title="Every character's colony data is still within ESI's cache window — a rescan right now would return the same data.">no new data until ${_fmtEpochClock(Math.min(..._rescanTargets.map(c => c.next_data_at)))}</span>`
+    ? `<span class="pp-cache-hint" title="Every character's colony data is still within ESI's cache window — a rescan right now would return the same data."><span class="pp-cache-hint-text">no new data until </span>${_fmtEpochClock(Math.min(..._rescanTargets.map(c => c.next_data_at)))}</span>`
     : '';
   el.innerHTML =
     `<button id="rescanBtn" class="header-bug-btn" onclick="rescanAll()" ${_rescanning ? 'disabled' : ''} title="Re-scan every character's colonies from ESI">${_rescanning ? 'Rescanning…' : 'Rescan'}</button>`
     + rescanHint
     + `<button id="reportBugBtn" class="header-bug-btn" onclick="openBugModal()">Report bug</button>`
     + `<button class="header-settings-btn" onclick="openSettingsModal()" title="Settings">⚙&#xFE0E;</button>`
-    + `<span class="header-session">${name} · <a href="/auth/logout" class="header-logout">Log out</a></span>`;
+    + `<span class="header-session"><span class="header-session-name">${name} · </span><a href="/auth/logout" class="header-logout">Log out</a></span>`;
   if (!_dashLanded) {
     _dashLanded = true;
     const isShare = window.__SHARE_ID__ || /^\/s\//.test(location.pathname);
@@ -483,15 +496,35 @@ function renderCharacters(chars, loggedIn) {
     const planetRows = planets.length
       ? [...planets].sort(_byloc).map(p => {
           const loc = `${p.system ? _esc(p.system) + ' ' : ''}${p.planet_num != null ? 'P' + p.planet_num : ''}`.trim() || '—';
-          const builds = (p.products || []).map(x => _esc(x.name)).join(', ');
+          // Fold each product's pad amount into its own name ("Oxidizing Compound 880") instead
+          // of naming it once in the build label and AGAIN in a separate pad badge — the same
+          // material was showing up twice per row. Anything in `pads` that isn't one of this
+          // planet's current products (rare — a stale/reconfigured schematic) still gets its own
+          // badge below so we never silently drop real pad contents.
+          const padTitle = 'Estimated launchpad contents — simulated forward from the last Refresh (ESI only reports a stale checkpoint).';
+          const padByType = new Map((p.pads || []).map(x => [x.type_id, x.amount]));
+          const padByName = new Map((p.pads || []).map(x => [x.name, x.amount]));
+          const prodTypeIds = new Set((p.products || []).map(x => x.type_id));
+          const builds = (p.products || []).map(x => {
+            const amt = padByType.get(x.type_id);
+            return amt != null ? `${_esc(x.name)} <b>${amt.toLocaleString()}</b>` : _esc(x.name);
+          }).join(', ');
+          const buildTitle = builds.includes('<b>') ? ` title="${padTitle}"` : '';
+          // A raw extractor with no basics converting P0→P1 yet has its harvested P0 sitting in
+          // the pad directly — fold that in too (matched by name; pads only carry type_id/name,
+          // not a separate p0_type_id) so we don't name the same P0 twice on the same row.
+          const p0PadAmt = (!builds && p.p0_name) ? padByName.get(p.p0_name) : null;
+          const extractLabel = p0PadAmt != null
+            ? `<span class="pp-pl-extract" title="${padTitle}">→ ${_esc(p.p0_name)} <b>${p0PadAmt.toLocaleString()}</b></span>`
+            : `<span class="pp-pl-extract">→ ${_esc(p.p0_name || '?')}</span>`;
           const what = p.is_extractor
-            ? `<span class="pp-pl-extract">→ ${_esc(p.p0_name || '?')}</span>${builds ? `<span class="pp-pl-build"> → ${builds}</span>` : ''}`
+            ? `${extractLabel}${builds ? `<span class="pp-pl-build"${buildTitle}> → ${builds}</span>` : ''}`
             : (builds
-                ? `<span class="pp-pl-build">→ ${builds}</span>`
+                ? `<span class="pp-pl-build"${buildTitle}>→ ${builds}</span>`
                 : `<span class="pp-pl-factory">factory${p.num_pins ? ' · ' + p.num_pins + ' pins' : ''}</span>`);
-          // Estimated launchpad contents for this planet (simulated forward from the last scan).
-          const pad = (p.pads || []).length
-            ? `<span class="pp-pl-pad" title="Estimated launchpad contents — simulated forward from the last Refresh (ESI only reports a stale checkpoint).">${p.pads.map(x => `<b>${x.amount.toLocaleString()}</b> ${_esc(x.name)}`).join(' · ')}</span>`
+          const extraPad = (p.pads || []).filter(x => !prodTypeIds.has(x.type_id) && !(p0PadAmt != null && x.name === p.p0_name));
+          const pad = extraPad.length
+            ? `<span class="pp-pl-pad" title="${padTitle}">${extraPad.map(x => `<b>${x.amount.toLocaleString()}</b> ${_esc(x.name)}`).join(' · ')}</span>`
             : '';
           const cc = p.upgrade_level ? `<span class="pp-pl-cc" title="Command center level">CC${p.upgrade_level}</span>` : '';
           // Extractor program time left (from ESI's expiry). ESI caches PI, so a recent reseat won't
