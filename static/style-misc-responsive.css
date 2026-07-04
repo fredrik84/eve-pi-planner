@@ -227,13 +227,18 @@ body.nav-collapsed .admin-nav-item .nav-lbl { display: none; }
   .dash-fac-pct  { grid-column: 3; grid-row: 2; }
 
   /* Characters tab (now visible on phones): desktop uses a real CSS grid (style-contribute.css)
-     so fields align into columns per character — six columns has no room on a phone screen, so
-     fall back to a simple wrapping flex stack instead, with LOCATION on its own full-width line
-     before everything else wraps below it. */
+     so fields align into columns per character — six columns has no room on a phone screen.
+     Rather than one flex row that wraps wherever it happens to run out of width (inconsistent —
+     sometimes the time-left broke to its own line, sometimes just CC5 did, depending on that
+     row's text length), stack THREE deliberate lines: location, then what it produces, then
+     status+CC — always in the same place regardless of content length. */
   .pp-char-planet-list { display: flex; flex-direction: column; gap: 3px; }
-  .pp-pl-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 1px 8px;
+  .pp-pl-row { display: flex; flex-direction: column; gap: 2px;
     padding: 4px 0; border-bottom: 1px solid #161b28; }
-  .pp-pl-loc { flex-basis: 100%; min-width: 0; }
+  .pp-pl-loc { min-width: 0; }
+  .pp-pl-line-what, .pp-pl-line-status {
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 1px 8px;
+  }
   .pp-pl-chain { min-width: 0; }
 
   /* Wide tabular grids (factory tables, per-material detail) scroll inside their

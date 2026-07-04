@@ -125,6 +125,10 @@
   font-size: 12px;
 }
 .pp-pl-row { display: contents; }
+/* The loc/what/status grouping spans (see planetary.js) exist for mobile's deliberate line
+   breaks (style-misc-responsive.css) — on desktop they're transparent to the grid so their
+   children still land in the explicit columns below, exactly as if .pp-pl-row had no groups. */
+.pp-pl-line-what, .pp-pl-line-status { display: contents; }
 .pp-pl-loc { grid-column: 1; color: var(--clr-text); font-family: 'Consolas', monospace; font-size: 11px; }
 .pp-char-planet-list .plan-ptype { grid-column: 2; }
 /* The P0→P1 chain is the one flexible (1fr) column — everything else is sized to content. It
