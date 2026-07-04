@@ -47,3 +47,10 @@ function _fmtCacheTime(s) {
   const d = new Date(s);
   return isNaN(d) ? s : d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
+
+// Unix epoch (seconds) → the viewer's local clock time, e.g. "14:32" — used for ESI Expires
+// hints (when a colony/skills fetch will next return anything new).
+function _fmtEpochClock(sec) {
+  if (!sec) return '—';
+  return new Date(sec * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}

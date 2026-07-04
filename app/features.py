@@ -64,6 +64,11 @@ FEATURE_REGISTRY = [
      "description": "Let users configure Pushover / ntfy.sh / Discord alerts for extractor "
                     "expiry and factory refill reminders.",
      "default": False},
+    {"key": "esi_cache_skip", "label": "ESI cache-aware rescan",
+     "description": "Skip re-fetching a colony/skills from ESI while its cache (Expires header) "
+                    "hasn't lapsed yet — faster rescans — and show a “no new data until” hint "
+                    "in the UI.",
+     "default": False},
 ]
 _DEFAULTS = {f["key"]: f for f in FEATURE_REGISTRY}
 VALID_STATES = {"hidden", "admin", "testers", "public"}
