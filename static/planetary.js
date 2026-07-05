@@ -284,7 +284,7 @@ function renderHeaderSession(loggedIn, chars, sessionCharId) {
   // still in the title tooltip. Without this, the hint's full text was wide enough to push the
   // Settings gear + username/logout off the right edge of a phone-width header entirely.
   const rescanHint = _allCached
-    ? `<span class="pp-cache-hint" title="Every character's colony data is still within ESI's cache window — a rescan right now would return the same data."><span class="pp-cache-hint-text">no new data until </span>${_fmtEpochClock(Math.min(..._rescanTargets.map(c => c.next_data_at)))}</span>`
+    ? `<span class="pp-cache-hint" title="Colony pin/pad snapshots are still within ESI's ~10min cache window, so those won't change — but rescan still refreshes skills and live production estimates."><span class="pp-cache-hint-text">colony data cached until </span>${_fmtEpochClock(Math.min(..._rescanTargets.map(c => c.next_data_at)))}</span>`
     : '';
   el.innerHTML =
     `<button id="rescanBtn" class="header-bug-btn" onclick="rescanAll()" ${_rescanning ? 'disabled' : ''} title="Re-scan every character's colonies from ESI">${_rescanning ? 'Rescanning…' : 'Rescan'}</button>`
@@ -383,7 +383,11 @@ async function rescanCharacter(cid, btn) {
     // button — the only way to see esi_cache_skip actually doing something, short of
     // reading server logs (which this deployment doesn't even emit at INFO level).
     if (btn && typeof d.planets_skipped_cached === 'number') {
-      btn.textContent = `${d.planets_fetched} fetched, ${d.planets_skipped_cached} cached`;
+      // "cached" colonies aren't frozen — skills + live production estimates still refresh
+      // every rescan (see loadCharacters() below); only their raw pin/pad snapshot is unchanged
+      // since ESI hasn't regenerated it yet. Framing it as "updated"/"unchanged" avoids reading
+      // as a no-op when planets_fetched is 0.
+      btn.textContent = `${d.planets_fetched} updated, ${d.planets_skipped_cached} unchanged`;
       await new Promise(r => setTimeout(r, 1600));
     }
     await loadCharacters();   // repaint with fresh data (recreates the button)
