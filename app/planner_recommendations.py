@@ -20,6 +20,17 @@ def _p0_col(name: str) -> str | None:
     return _NAME_TO_COL.get(name.strip().lower()) if name else None
 
 
+# Hard cap on candidates returned per P0, independent of min_density. These lists feed the
+# planner's bipartite-matching feasibility checks (_can_add_p0/_max_matching_slots in planner.py),
+# whose cost scales with candidate-list size — at min_density_pct=0 (the field's default) with a
+# couple of full constellations selected, an uncapped list can run into the hundreds per P0 and
+# turn a routine plan into a multi-minute one (confirmed live: ~90s on a 2-constellation fuel-block
+# plan). Already sorted richest-first, so this is a pure tail-truncation: no realistic extractor
+# demand for a single P0 approaches this many candidates (max 6 planets/char), it only ever trims
+# the long thin tail that a matching feasibility check never needed anyway.
+_MAX_CANDIDATES_PER_P0 = 300
+
+
 def _fetch_p0_planets(
     p0_names: list[str], con,
     constellations: list[str],
@@ -52,7 +63,8 @@ def _fetch_p0_planets(
         try:
             rows = con.execute(
                 f"SELECT system, planet_num, planet_type, {col} as value "
-                f"FROM pp_planets WHERE {col}>=?{where_extra}{type_filter} ORDER BY {col} DESC",
+                f"FROM pp_planets WHERE {col}>=?{where_extra}{type_filter} "
+                f"ORDER BY {col} DESC LIMIT {_MAX_CANDIDATES_PER_P0}",
                 [thresh] + params_base + valid_types,
             ).fetchall()
             result[name] = [dict(r) for r in rows]
