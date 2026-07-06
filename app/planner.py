@@ -872,23 +872,53 @@ def my_setup_plan(pp_session: str = Cookie(default=None)):
     return {"plans": plans}
 
 
+# The three caches below all memoize expensive layout-engine geometry computations
+# (generate_layout → _enforce_min_sep does an O(pins²) pairwise-distance relaxation) that are
+# PURE functions of static PI/SDE data + the layout algorithm itself — never user-specific.
+# Confirmed live (2026-07-06): a single fuel-block plan touching ~10 products × up to 5 CC levels
+# can cost 60-70s on a cold cache, and with 2+ pod replicas + pod restarts on deploy, the
+# in-process dict below was cold far more often than warm. Backed by Redis (versioned key prefix,
+# 30-day TTL) so each (product, planet_type, cc[, diameter]) combo is computed ONCE across the
+# whole fleet's lifetime, not per-pod-per-cold-start; the in-process dict stays as a zero-latency
+# L1 hit for the (common) case of the same combo recurring within one request/process.
+# Bump _LAYOUT_CALC_VER if the layout engine's math ever changes, to invalidate stale values.
+_LAYOUT_CALC_VER = "v1"
+_LAYOUT_CALC_TTL = 30 * 86400  # 30 days
+
+
+def _layout_cache_get_or_compute(kind: str, mem_cache: dict, mem_key: tuple, compute):
+    if mem_key in mem_cache:
+        return mem_cache[mem_key]
+    from app.cache import cache_get_json, cache_set_json
+    rkey = f"layoutcalc:{_LAYOUT_CALC_VER}:{kind}:" + ":".join(str(k) for k in mem_key)
+    cached = cache_get_json(rkey)
+    if cached is not None:
+        mem_cache[mem_key] = cached
+        return cached
+    result = compute()
+    mem_cache[mem_key] = result
+    cache_set_json(rkey, result, ttl=_LAYOUT_CALC_TTL)
+    return result
+
+
 _UNITS_PER_PLANET: dict = {}   # (product, planet_type, cc) -> factory units the template packs
 
 
 def _units_per_planet(product: int, planet_type: str, cc: int) -> int:
     """How many factory units of `product` pack onto one planet at command-centre level `cc`
-    (the layout engine's max_count). Bigger CC budget → more units fit. Cached."""
+    (the layout engine's max_count). Bigger CC budget → more units fit. Cached (L1 process dict +
+    L2 Redis, see _layout_cache_get_or_compute above)."""
     key = (product, planet_type or "Barren", cc)
-    if key in _UNITS_PER_PLANET:
-        return _UNITS_PER_PLANET[key]
-    from app.layout import generate_layout
-    try:
-        n = generate_layout(product, planet_type or "Barren", launchpads=3,
-                            count=None, cc_level=cc)["summary"]["max_count"]
-    except Exception:
-        n = 0
-    _UNITS_PER_PLANET[key] = n
-    return n
+
+    def compute():
+        from app.layout import generate_layout
+        try:
+            return generate_layout(product, planet_type or "Barren", launchpads=3,
+                                    count=None, cc_level=cc)["summary"]["max_count"]
+        except Exception:
+            return 0
+
+    return _layout_cache_get_or_compute("units_per_planet", _UNITS_PER_PLANET, key, compute)
 
 
 @router.get("/api/skill-roi")
@@ -1058,24 +1088,24 @@ def _factory_fit_lp(product: int, planet_type: str, ccu: int | None, diameter: f
     """How many launchpads the product's factory template ACTUALLY fits on this planet at this
     command-centre level — by generating the layout and reading its CPU/PG budget, not by assuming.
     `diameter` (km) uses the planet's REAL size (per-planet from pp_planets); without it the flat
-    per-type PLANET_DIAM is used. 3 = full layout; <3 = cramped; 0 = doesn't fit at all."""
+    per-type PLANET_DIAM is used. 3 = full layout; <3 = cramped; 0 = doesn't fit at all. Cached
+    (L1 process dict + L2 Redis, see _layout_cache_get_or_compute above)."""
     cc = ccu or 5
     key = (product, planet_type, cc, round(diameter) if diameter else 0)
-    if key in _FACTORY_FIT:
-        return _FACTORY_FIT[key]
-    from app.layout import generate_layout
-    best = 0
-    for lp in (3, 2, 1):
-        try:
-            r = generate_layout(product, planet_type, launchpads=lp, count=1, cc_level=cc, diam_override=diameter)
-            res = (r.get("planets") or [{}])[0].get("resources") or {}
-            if not res.get("over"):
-                best = lp
-                break
-        except Exception:
-            continue
-    _FACTORY_FIT[key] = best
-    return best
+
+    def compute():
+        from app.layout import generate_layout
+        for lp in (3, 2, 1):
+            try:
+                r = generate_layout(product, planet_type, launchpads=lp, count=1, cc_level=cc, diam_override=diameter)
+                res = (r.get("planets") or [{}])[0].get("resources") or {}
+                if not res.get("over"):
+                    return lp
+            except Exception:
+                continue
+        return 0
+
+    return _layout_cache_get_or_compute("factory_fit", _FACTORY_FIT, key, compute)
 
 
 # The layout's CPU/PG model is calibrated at ~8000 km (a real hand-built factory) and its link cost is
@@ -1090,36 +1120,39 @@ _FACTORY_PACK_MAXDIAM: dict = {}   # (product, ccu) -> largest real diameter the
 def _factory_pack_max_diameter(product: int, ccu: int | None) -> float:
     """Largest REAL planet diameter (km) on which the factory still fits — at the facility count the
     exported template actually packs (computed at the calibrated B/T size). Place a factory only on a
-    planet at/under this and the unchanged type-based export is guaranteed to fit the real planet."""
+    planet at/under this and the unchanged type-based export is guaranteed to fit the real planet.
+    Cached (L1 process dict + L2 Redis, see _layout_cache_get_or_compute above) — this was the
+    dominant cost in a confirmed-live 90s+ fuel-block plan (binary search × generate_layout's O(pins²)
+    geometry relaxation, repeated per product × CC level, cold on every pod start)."""
     cc = ccu or 5
     key = (product, cc)
-    if key in _FACTORY_PACK_MAXDIAM:
-        return _FACTORY_PACK_MAXDIAM[key]
-    from app.layout import generate_layout
-    try:
-        n = generate_layout(product, "Barren", launchpads=3, count=None, cc_level=cc)["summary"]["max_count"]
-    except Exception:
-        n = 1
 
-    def fits(d):
+    def compute():
+        from app.layout import generate_layout
         try:
-            r = generate_layout(product, "Barren", launchpads=3, count=n, cc_level=cc, diam_override=d)
-            return not ((r.get("planets") or [{}])[0].get("resources") or {}).get("over")
+            n = generate_layout(product, "Barren", launchpads=3, count=None, cc_level=cc)["summary"]["max_count"]
         except Exception:
-            return False
+            n = 1
 
-    lo, hi = 8000.0, 250000.0      # 8000 = the calibrated size where `n` fits by construction
-    if fits(hi):
-        _FACTORY_PACK_MAXDIAM[key] = hi
-        return hi
-    for _ in range(8):
-        mid = (lo + hi) / 2
-        if fits(mid):
-            lo = mid
-        else:
-            hi = mid
-    _FACTORY_PACK_MAXDIAM[key] = lo
-    return lo
+        def fits(d):
+            try:
+                r = generate_layout(product, "Barren", launchpads=3, count=n, cc_level=cc, diam_override=d)
+                return not ((r.get("planets") or [{}])[0].get("resources") or {}).get("over")
+            except Exception:
+                return False
+
+        lo, hi = 8000.0, 250000.0      # 8000 = the calibrated size where `n` fits by construction
+        if fits(hi):
+            return hi
+        for _ in range(8):
+            mid = (lo + hi) / 2
+            if fits(mid):
+                lo = mid
+            else:
+                hi = mid
+        return lo
+
+    return _layout_cache_get_or_compute("pack_maxdiam", _FACTORY_PACK_MAXDIAM, key, compute)
 
 
 def _factory_full_ccu(product: int, planet_type: str) -> int | None:
