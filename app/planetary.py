@@ -144,7 +144,24 @@ def list_planets():
     cols = ", ".join(["system", "planet_num", "planet_type", "constellation"] + P0_COLUMNS)
     cur.execute(f"SELECT {cols} FROM pp_planets ORDER BY system, planet_num")
     rows = [dict(r) for r in cur.fetchall()]
+
+    # Pooled real-world measured yield (see app/yield_stats.py) — supplementary, sparse, never
+    # overwrites the static columns above. Attached only where it exists (system, planet_num, p0).
+    from app.yield_stats import ensure_yield_avg_table
+    ensure_yield_avg_table()
+    measured: dict[tuple[str, int], dict[str, dict]] = {}
+    for r in con.execute(
+        "SELECT system, planet_num, p0_name, measured_pct, sample_count FROM pp_planet_yield_avg"
+    ):
+        measured.setdefault((r["system"], r["planet_num"]), {})[r["p0_name"]] = {
+            "pct": round(r["measured_pct"]), "n": r["sample_count"],
+        }
     con.close()
+    for row in rows:
+        m = measured.get((row["system"], row["planet_num"]))
+        if m:
+            row["measured"] = m
+
     result = {"planets": rows, "p0_columns": P0_COLUMNS, "planet_p0_map": PLANET_P0_MAP}
     cache_set_json(_PLANETS_CACHE_KEY, result, ttl=3600)
     return result

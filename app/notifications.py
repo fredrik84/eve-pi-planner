@@ -329,8 +329,10 @@ def _format_batch(evs: list[dict], lead_hours: float | None = None) -> tuple[str
 
 def make_scheduler():
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    from app.yield_stats import aggregate_colony_yields
     sched = AsyncIOScheduler()
     sched.add_job(check_and_send_notifications, "interval", minutes=15, id="notify_check")
+    sched.add_job(aggregate_colony_yields, "cron", hour=3, id="yield_aggregate")
     return sched
 
 

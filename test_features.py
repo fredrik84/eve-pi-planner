@@ -19,7 +19,7 @@ import urllib.error
 # state VALUE: an admin can change visibility at runtime, so the live state legitimately
 # diverges from the code default. The durable invariant is "the key exists and state is one of
 # the valid values" (app/features.py VALID_STATES: hidden/admin/testers/public).
-EXPECTED_FEATURES = ["timeline", "split_extraction", "baskets", "skill_roi", "move_character", "schedule_sync", "pad_fill"]
+EXPECTED_FEATURES = ["timeline", "split_extraction", "baskets", "skill_roi", "move_character", "schedule_sync", "pad_fill", "measured_yield"]
 VALID_STATES = {"hidden", "admin", "testers", "public"}
 
 
@@ -126,6 +126,12 @@ def test_admin_stats_gated(base: str) -> bool:
     return check(code == 403, f"anonymous admin stats rejected (got HTTP {code})")
 
 
+def test_aggregate_yields_gated(base: str) -> bool:
+    print(f"\n{'='*60}\n  POST /api/admin/aggregate-yields is admin-gated\n{'='*60}")
+    code = post_status(f"{base}/api/admin/aggregate-yields", {})
+    return check(code == 403, f"anonymous aggregate-yields trigger rejected (got HTTP {code})")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--url", default="https://eve-pi.failed.name")
@@ -140,6 +146,7 @@ def main():
         test_delete_account_gated(base),
         test_cleanup_preview_gated(base),
         test_admin_stats_gated(base),
+        test_aggregate_yields_gated(base),
     ]
     print(f"\n{'='*60}")
     passed = sum(results)
