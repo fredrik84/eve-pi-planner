@@ -69,6 +69,11 @@ FEATURE_REGISTRY = [
                     "hasn't lapsed yet — faster rescans — and show a “no new data until” hint "
                     "in the UI.",
      "default": False},
+    {"key": "measured_yield", "label": "Measured yield in Planet DB",
+     "description": "On the Planet DB tab: show a real measured average extraction yield "
+                    "(pooled across all users' actual colonies) alongside a planet's static "
+                    "richness value, where enough samples exist.",
+     "default": False},
 ]
 _DEFAULTS = {f["key"]: f for f in FEATURE_REGISTRY}
 VALID_STATES = {"hidden", "admin", "testers", "public"}

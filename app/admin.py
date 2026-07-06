@@ -442,6 +442,12 @@ def admin_stats(_: int = Depends(require_admin)):
     # Raw data
     s["char_planet_scans"] = con.execute("SELECT COUNT(*) FROM pp_char_planets").fetchone()[0]
     s["colony_yield_rows"] = con.execute("SELECT COUNT(*) FROM pp_colony_yield").fetchone()[0]
+    from app.yield_stats import ensure_yield_avg_table
+    ensure_yield_avg_table()
+    s["measured_yield_planets"] = con.execute("SELECT COUNT(*) FROM pp_planet_yield_avg").fetchone()[0]
+    s["measured_yield_samples"] = con.execute(
+        "SELECT COALESCE(SUM(sample_count), 0) FROM pp_planet_yield_avg"
+    ).fetchone()[0]
     s["sessions"] = con.execute("SELECT COUNT(*) FROM pp_sessions").fetchone()[0]
     s["sessions_stale_90d"] = con.execute(
         "SELECT COUNT(*) FROM pp_sessions WHERE created_at < datetime('now', '-90 days')"
@@ -629,6 +635,14 @@ def run_cleanup(req: CleanupRequest, _: int = Depends(require_admin)):
         con.close()
 
     return {"deleted": deleted}
+
+
+@router.post("/api/admin/aggregate-yields")
+def run_aggregate_yields(_: int = Depends(require_admin)):
+    """Manually run the nightly measured-yield pooling job (normally runs at 3am via the
+    scheduler in app.notifications) — lets an admin verify/refresh it without waiting."""
+    from app.yield_stats import aggregate_colony_yields
+    return aggregate_colony_yields()
 
 
 @router.get("/metrics", response_class=PlainTextResponse, include_in_schema=False)

@@ -193,7 +193,10 @@ function renderPlanetTable(planets) {
 
   const wrap = container.querySelector('.pp-planet-table-wrap');
   const tbody = container.querySelector('tbody');
-  _ppRender = { rows: planets, cursor: 0, tbody, cols: _ppActiveCols, wrap };
+  // Computed once per render, not per-cell: whether to show the pooled real-world measured-yield
+  // annotation (app/yield_stats.py) alongside each planet's static submitted richness value.
+  const showMeasured = _featureActive('measured_yield');
+  _ppRender = { rows: planets, cursor: 0, tbody, cols: _ppActiveCols, wrap, showMeasured };
   _ppRenderChunk();
 
   wrap.onscroll = () => {
@@ -216,7 +219,16 @@ function _ppRenderChunk() {
       `<td class="left">${_esc(p.constellation)}</td>`;
     for (const col of r.cols) {
       const v = p[col] || 0;
-      html += v > 0 ? `<td class="p0-val">${v}</td>` : '<td class="p0-zero">—</td>';
+      const m = r.showMeasured && p.measured && p.measured[col];
+      if (v > 0) {
+        html += m
+          ? `<td class="p0-val" title="Measured avg from ${m.n} real colonies: ${m.pct}">${v} <span class="p0-measured">⚡${m.pct}</span></td>`
+          : `<td class="p0-val">${v}</td>`;
+      } else if (m) {
+        html += `<td class="p0-val p0-measured-only" title="No submitted value — measured avg from ${m.n} real colonies">⚡${m.pct}</td>`;
+      } else {
+        html += '<td class="p0-zero">—</td>';
+      }
     }
     html += '</tr>';
   }
