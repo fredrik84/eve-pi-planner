@@ -129,8 +129,20 @@ def colony_sim_state(detail: dict, pi_data: dict) -> dict | None:
             if tid:
                 base[tid] = base.get(tid, 0.0) + amt
 
+    # A hand-built colony can chain a P1 line straight into an on-planet P2 (or higher) line —
+    # something our own generated templates never produce, but ESI happily reports as two separate
+    # `lines` entries. Process tier-ascending (P1 before P2 before P3...) so a downstream line can
+    # look up its upstream on-planet line's OWN rate_sustained, not just raw P0 extraction — without
+    # this, a chained line's `input_type` (a P1/P2 type_id) is never a key in `ext_rate` (which only
+    # ever holds P0 type_ids from ECU pins), so ext_refined was always 0 and rate_sustained silently
+    # fell back to the full uncapped nominal rate, ignoring that its real feed is itself
+    # extraction-limited. `consumed_as_input` flags which on-planet outputs are somebody else's
+    # input (self-consumed, not exportable to the rest of the account) vs the planet's real end
+    # product(s).
+    consumed_as_input = {f["input_type"] for f in lines.values()}
+    rate_sustained_by_out: dict[int, float] = {}
     outputs = []
-    for out, f in lines.items():
+    for out, f in sorted(lines.items(), key=lambda kv: types.get(kv[0], {}).get("pi_tier") or 0):
         # `rate` = the FULL factory rate (all facilities running). The launchpad fills at this rate
         # because extraction decay front-loads P0 and storage buffers the facilities — it matches the
         # in-game launchpad, which accrues whole batches (count × output_qty, e.g. 8 × 20 = 160) every
@@ -142,23 +154,43 @@ def colony_sim_state(detail: dict, pi_data: dict) -> dict | None:
         # actively-cycled colony holds the factory rate as long as PEAK extraction covers it — matches
         # the in-game numbers. (A decay average under-counted every factory-limited colony.)
         rate = f["count"] * f["output_qty"] / f["cycle_time"]    # product per sec
-        ext_refined = ext_rate.get(f["input_type"], 0.0) * f["output_qty"] / (f["input_qty"] or 1)
+        chain_input_type = None
+        chain_need_per_day = None
+        if f["input_type"] in ext_rate:
+            ext_refined = ext_rate[f["input_type"]] * f["output_qty"] / (f["input_qty"] or 1)
+        elif f["input_type"] in rate_sustained_by_out:
+            # Chained: this line's real feed is an upstream on-planet line's own sustained output,
+            # not raw extraction.
+            ext_refined = rate_sustained_by_out[f["input_type"]] * f["output_qty"] / (f["input_qty"] or 1)
+            chain_input_type = f["input_type"]
+            # Full/uncapped appetite for the input, independent of whether it's currently starved —
+            # "how much they'd need to end up with" for a reseat suggestion to target.
+            chain_need_per_day = rate * (f["input_qty"] or 1) / f["output_qty"] * 86400
+        else:
+            ext_refined = 0.0   # imported input, schedule unknown — same fallback as before
         rate_sustained = min(rate, ext_refined) if ext_refined > 0 else rate
+        rate_sustained_by_out[out] = rate_sustained
         # `ext_refined` is what the heads can refine BEFORE the factory clips it. When it exceeds `rate`
         # the colony is factory-limited and the surplus is the player's decay/overshoot buffer — invisible
         # in rate_sustained (which clamps at the factory rate), so we surface it separately.
-        outputs.append({"type_id": out, "name": types.get(out, {}).get("name") or f"#{out}",
-                        "tier": types.get(out, {}).get("pi_tier") or 1,
-                        "base": base.get(out, 0.0), "rate": rate, "rate_sustained": rate_sustained,
-                        "ext_refined": ext_refined if ext_refined > 0 else rate,
-                        "batch": f["count"] * f["output_qty"]})
+        entry = {"type_id": out, "name": types.get(out, {}).get("name") or f"#{out}",
+                 "tier": types.get(out, {}).get("pi_tier") or 1,
+                 "base": base.get(out, 0.0), "rate": rate, "rate_sustained": rate_sustained,
+                 "ext_refined": ext_refined if ext_refined > 0 else rate,
+                 "batch": f["count"] * f["output_qty"],
+                 "exportable": out not in consumed_as_input}
+        if chain_input_type is not None:
+            entry["chain_input_type"] = chain_input_type
+            entry["chain_need_per_day"] = chain_need_per_day
+        outputs.append(entry)
     if not outputs:
         # Pure extractor (no on-planet factories): the P0 itself piles up in the launchpad.
         for p0, rate in ext_rate.items():
             outputs.append({"type_id": p0, "name": types.get(p0, {}).get("name") or f"#{p0}",
                             "tier": types.get(p0, {}).get("pi_tier") or 0,
                             "base": base.get(p0, 0.0), "rate": rate, "rate_sustained": rate,
-                            "ext_refined": rate, "batch": ext_batch.get(p0, 0.0)})
+                            "ext_refined": rate, "batch": ext_batch.get(p0, 0.0),
+                            "exportable": True})
     if not outputs or t0 <= 0:
         return None
     # install = when the current program started; peak_p0_day = the colony's game-true average P0/day

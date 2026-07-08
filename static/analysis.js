@@ -36,6 +36,10 @@ function _toggleMatDetail(t) {
 function _setupProductionByP1() {
   const out = {};
   (_ppCharsData || []).forEach(ch => (ch.planets || []).forEach(p => (p.production || []).forEach(o => {
+    // exportable=false means this output is fully self-consumed by a colocated on-planet factory
+    // line (a hybrid colony) — not actually available to the rest of the account, so it must not
+    // inflate the pooled supply picture here.
+    if (o.exportable === false) return;
     const k = String(o.type_id);
     if (!out[k]) out[k] = { name: o.name, perDay: 0, planets: 0 };
     out[k].perDay += o.per_day || 0;
@@ -757,6 +761,9 @@ function _producersOf(t) {
     if (!p.is_extractor) return;
     (p.production || []).forEach(o => {
       if (String(o.type_id) !== String(t)) return;
+      // Self-consumed by a colocated on-planet factory (hybrid colony) — not real spare supply
+      // for a rebalance suggestion to hand out.
+      if (o.exportable === false) return;
       const h = (p.yield_history || []).filter(s => s.peak > 0).map(s => s.peak);
       const cur = h.length ? h[h.length - 1] : null, max = h.length ? Math.max(...h) : null;
       out.push({ char: ch.name, system: p.system, planet_num: p.planet_num, p0: p.p0_name,
