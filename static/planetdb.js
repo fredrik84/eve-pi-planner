@@ -212,9 +212,17 @@ function _ppRenderChunk() {
   let html = '';
   for (let i = r.cursor; i < end; i++) {
     const p = r.rows[i];
+    // Row-level "this planet has measured data somewhere" badge — separate from the per-cell
+    // ⚡pct annotation below, so scanning the table doesn't require checking every column.
+    const rowMeasured = r.showMeasured && p.measured;
+    const rowBadge = rowMeasured
+      ? `<span class="pp-row-measured" title="Measured yield data: ${
+          Object.entries(p.measured).map(([col, m]) => `${_esc(P0_LABEL[col] || col)} (n=${m.n})`).join(', ')
+        }">⚡</span>`
+      : '';
     html += '<tr>' +
       `<td class="left">${_esc(p.system)}</td>` +
-      `<td class="left">${_esc(String(p.planet_num))}</td>` +
+      `<td class="left">${_esc(String(p.planet_num))}${rowBadge}</td>` +
       `<td class="left planet-type ${PP_TYPE_CLASS[p.planet_type] || ''}">${_esc(p.planet_type)}</td>` +
       `<td class="left">${_esc(p.constellation)}</td>`;
     for (const col of r.cols) {
