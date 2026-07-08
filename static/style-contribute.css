@@ -296,6 +296,7 @@
 .pp-planet-table td.p0-zero { color: var(--clr-border); }
 .pp-planet-table .p0-measured { color: #e0b04a; font-size: 0.85em; margin-left: 3px; }
 .pp-planet-table td.p0-measured-only { color: #e0b04a; font-family: 'Consolas', monospace; }
+.pp-planet-table .pp-row-measured { color: #e0b04a; font-size: 0.85em; margin-left: 5px; cursor: help; }
 .pp-planet-table tr:last-child td { border-bottom: none; }
 .pp-planet-table tr:hover td { background: #181d2a; }
 
