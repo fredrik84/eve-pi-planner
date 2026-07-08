@@ -11,6 +11,8 @@ are fuel-block specific.
 """
 from __future__ import annotations
 
+import logging
+import time as _time
 from math import ceil
 
 from fastapi import APIRouter, Depends
@@ -44,6 +46,7 @@ from app.planner import (
     ensure_plan_tables,
 )
 
+log = logging.getLogger(__name__)
 router = APIRouter()
 
 # Default factory planet types: Barren/Temperate are the smallest planets with the
@@ -575,8 +578,10 @@ def _run_fuelblock_plan(req: "FuelBlockPlanRequest", context_id: int) -> dict:
     # Combined P1 info (heaviest first), each P1 mapped to its source P0.
     sorted_p1, p1_info_raw, all_p0_names = _build_p1_info_raw(basket_p1, p1_to_p0, types)
 
+    _t0_recs = _time.monotonic()
     p0_planet_lists, p0_planet_lists_global, best_ptypes, sys_recs = _fetch_planets_and_recs(
         con, all_p0_names, req, types, p1_info_raw)
+    log.info("fuelblock.fetch_planets_and_recs in %.1fms", (_time.monotonic() - _t0_recs) * 1000)
 
     # Factories may go on ANY allowed planet type — but only on planets whose REAL diameter (pp_planets.
     # diameter, from the SDE) is small enough that the unchanged type-based factory template still fits in
@@ -642,6 +647,7 @@ def _run_fuelblock_plan(req: "FuelBlockPlanRequest", context_id: int) -> dict:
     density_est = (_density_estimate(p1_info, p0_planet_lists, ext_slots, has_planet_db)
                    if _norm_dist_mode(req.distribution_mode) == "stability" else None)
 
+    _t0_pipeline = _time.monotonic()
     assignments, remaining, char_nonfac = _run_extractor_pipeline(
         req, char_list, p1_info, ext_slots, needed_at_baseline,
         p0_planet_lists, p0_planet_lists_global, has_planet_db, has_system_name,
@@ -649,6 +655,7 @@ def _run_fuelblock_plan(req: "FuelBlockPlanRequest", context_id: int) -> dict:
         density_est=density_est,
         reusable_type_ids={line["type_id"] for line in factory_lines},
     )
+    log.info("fuelblock.extractor_pipeline in %.1fms", (_time.monotonic() - _t0_pipeline) * 1000)
 
     # Pick best factory system (most candidate planets among chosen/all).
     sys_fac_count: dict[str, int] = {}

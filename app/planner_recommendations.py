@@ -5,6 +5,7 @@ clustering. Read-only queries against pp_planets — not part of the
 extractor/factory seating algorithm itself (see app/planner.py for that).
 """
 import logging
+import time
 
 from app.planetary import PLANET_P0_MAP, _NAME_TO_COL
 
@@ -74,6 +75,33 @@ def _fetch_p0_planets(
 
 
 def _system_recommendations(
+    p0_names: list[str], con, top_n: int = 5,
+    constellations: list[str] | None = None,
+    systems: list[str] | None = None,
+    preferred_systems: int = 1,
+    max_jumps: int = 1,
+    min_density: int = 0,
+    p0_needs: dict[str, float] | None = None,
+) -> list:
+    """Timed wrapper — this is the uncached hotspot fired on every /api/plan and
+    /api/plan-fuelblock request, including the wizard's debounced live re-run on every
+    filter tweak. Logged standalone (not just as part of the caller's total) so its cost
+    distribution under real traffic can be read straight from the logs."""
+    t0 = time.monotonic()
+    result = _system_recommendations_impl(
+        p0_names, con, top_n=top_n, constellations=constellations, systems=systems,
+        preferred_systems=preferred_systems, max_jumps=max_jumps, min_density=min_density,
+        p0_needs=p0_needs,
+    )
+    log.info(
+        "sysrec n_p0=%d n_sys=%s pref=%d in %.1fms",
+        len(p0_names), len(systems) if systems else "*", preferred_systems,
+        (time.monotonic() - t0) * 1000,
+    )
+    return result
+
+
+def _system_recommendations_impl(
     p0_names: list[str], con, top_n: int = 5,
     constellations: list[str] | None = None,
     systems: list[str] | None = None,

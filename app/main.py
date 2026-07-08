@@ -1,9 +1,16 @@
 import html as _html
 import json as _json
+import logging as _logging
 from typing import Optional
 
 import os as _os
 GIT_COMMIT = _os.environ.get("GIT_COMMIT", "unknown")
+
+# Root logger defaults to WARNING with no handler, so every app.*.log.info(...) call
+# (charlist cache hit/miss, the plan-timing instrumentation, etc.) was silently dropped —
+# discovered while verifying new timing logs never appeared. INFO here + no handler means
+# stdout via the default StreamHandler, which is what `docker logs`/`kubectl logs` capture.
+_logging.basicConfig(level=_logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
