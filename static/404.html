@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EVE PI Planner — Error</title>
+  <link rel="icon" href="/favicon.ico?v=4" sizes="any">
+  <style>
+    :root {
+      --clr-border: #1b2030;
+      --clr-text: #c8cdd8;
+      --clr-text-dim: #6a7390;
+      --clr-text-muted: #8b93a6;
+      --clr-accent: #a8c8ff;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #0d0f14;
+      color: var(--clr-text);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 24px;
+    }
+    .err-card {
+      max-width: 440px;
+    }
+    .err-code {
+      font-size: 72px;
+      font-weight: 700;
+      color: var(--clr-accent);
+      line-height: 1;
+      margin-bottom: 12px;
+    }
+    .err-title {
+      font-size: 18px;
+      color: var(--clr-text);
+      margin-bottom: 8px;
+    }
+    .err-msg {
+      font-size: 14px;
+      color: var(--clr-text-muted);
+      margin-bottom: 28px;
+      line-height: 1.5;
+    }
+    .err-home {
+      display: inline-block;
+      padding: 10px 20px;
+      border: 1px solid var(--clr-border);
+      border-radius: 6px;
+      color: var(--clr-accent);
+      text-decoration: none;
+      font-size: 14px;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .err-home:hover {
+      border-color: var(--clr-accent);
+      background: rgba(168, 200, 255, 0.06);
+    }
+  </style>
+</head>
+<body>
+  <div class="err-card">
+    <div class="err-code" id="errCode">404</div>
+    <div class="err-title" id="errTitle">Page not found</div>
+    <div class="err-msg" id="errMsg">The page you're looking for doesn't exist or has moved.</div>
+    <a class="err-home" href="/">← Back to EVE PI Planner</a>
+  </div>
+  <script>
+    // Reused for both Starlette's own 404 fallback (no query string — StaticFiles serves this
+    // file directly for any unmatched path) and Traefik's errors middleware (5xx codes, passed
+    // via ?code={status}) — one file, status de-hardcoded here instead of baked into the HTML.
+    (function () {
+      var code = new URLSearchParams(window.location.search).get('code') || '404';
+      var COPY = {
+        '404': ['Page not found', "The page you're looking for doesn't exist or has moved."],
+        '500': ['Something went wrong', 'An unexpected error occurred. Try again in a moment.'],
+        '502': ['Bad gateway', 'The server got an invalid response. Try again in a moment.'],
+        '503': ['Service unavailable', "We're temporarily down, likely for a deploy or restart. Try again shortly."],
+        '504': ['Gateway timeout', 'The server took too long to respond. Try again in a moment.'],
+      };
+      var copy = COPY[code] || ['Something went wrong', 'An unexpected error occurred (HTTP ' + code + '). Try again in a moment.'];
+      document.getElementById('errCode').textContent = code;
+      document.getElementById('errTitle').textContent = copy[0];
+      document.getElementById('errMsg').textContent = copy[1];
+      document.title = code + ' — EVE PI Planner';
+    })();
+  </script>
+</body>
+</html>
