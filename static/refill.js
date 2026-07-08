@@ -236,7 +236,7 @@ function _setRefillIgnorePads(on) { _refillIgnorePads = !!on; try { localStorage
 function _renderRefillControls() {
   const el = document.getElementById('refillControls');
   if (!el || !_refillModel) return;
-  const chars = [...new Set(_refillModel.flatMap(g => g.facs.map(f => f.char)))].filter(Boolean).sort();
+  const chars = [...new Set(_refillModel.flatMap(g => g.facs.map(f => f.char)))].filter(Boolean).sort(_natCompare);
   if (_refillChar && !chars.includes(_refillChar)) _refillChar = '';   // stale selection
   const total = _refillModel.reduce((a, g) => a + g.facs.length, 0);
   const charSel = chars.length > 1

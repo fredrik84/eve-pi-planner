@@ -8,7 +8,7 @@ from fastapi import APIRouter, Body, Cookie, Depends, Request
 
 from app.sde import load_pi_data, get_connection, ensure_once
 from app.market import fetch_prices
-from app.esi import require_context, session_context_id, ensure_char_tables, PI_CHAR_SQL
+from app.esi import require_context, session_context_id, ensure_char_tables, PI_CHAR_SQL, natural_name_key
 from app.planner_models import (
     CharConfigEntry, SaveConfigRequest, PlanRequest, PlanShareSave,
     ProfileSave, PlanSnapshotSave,
@@ -68,8 +68,8 @@ def get_plan_config(type_id: int, context_id: int = Depends(require_context)):
                command_center_upgrades AS esi_ccu
         FROM pp_characters WHERE context_id=?
               {PI_CHAR_SQL}
-        ORDER BY character_name
     """, (context_id,)).fetchall()
+    char_rows = sorted(char_rows, key=lambda r: natural_name_key(r["character_name"]))
     saved = {
         r["character_id"]: dict(r)
         for r in con.execute(
@@ -2888,6 +2888,13 @@ def _load_char_planet_config(con, context_id: int, config_type_id: int):
     """Load characters, their planets, and per-product config for a plan run.
     config_type_id selects the pp_plan_config rows (the real product id, or the
     fuel-block sentinel). Returns (char_rows, planet_rows, has_system_name, config_map)."""
+    # NOTE: character_name here is a tie-break for the PLANNING algorithm's processing order
+    # (which character gets a marginal/scarce slot in a tight scenario), not a display list —
+    # deliberately left as SQLite's default (BINARY) ordering rather than the natural-sort used
+    # for actual character-list displays elsewhere. Changing it reshuffles who gets the leftover
+    # slot in capacity-constrained fixtures (confirmed via test_distribution.py's DE-IHK case)
+    # without being "more correct" either way — so leave the tie-break alone and only fix display
+    # ordering (GET /api/characters, GET /api/plan-config/{id}, and the frontend result sort).
     char_rows = con.execute(f"""
         SELECT character_id, character_name,
                1 + interplanetary_consolidation AS max_planets,

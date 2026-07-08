@@ -1910,10 +1910,10 @@ function setDistMode(mode) {
 function renderFinalPlan(data, opts = {}) {
   const content = document.getElementById('wizPlanContent');
 
-  // Order characters case-insensitively (so "ekaoni" doesn't sort below "Enbe"); also fixes
-  // older saved/restored plans without a re-run.
+  // Order characters naturally (case-insensitive, numeric-aware: "alt 2" before "alt 10")
+  // — also fixes older saved/restored plans without a re-run.
   if (Array.isArray(data.assignments))
-    data.assignments.sort((a, b) => (a.character_name || '').toLowerCase().localeCompare((b.character_name || '').toLowerCase()));
+    data.assignments.sort((a, b) => _natCompare(a.character_name, b.character_name));
 
   // Stats bar
   let statsHtml = '';
