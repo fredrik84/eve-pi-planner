@@ -79,6 +79,13 @@ FEATURE_REGISTRY = [
                     "on one planet: surfaces their real demand in Setup Analysis and suggests "
                     "reseats to close their own shortfall (never a redeploy).",
      "default": False},
+    {"key": "measured_yield_blend", "label": "Measured yield in planning weights",
+     "description": "Nudge the planner's extractor placement toward planets with real pooled "
+                    "yield data, confidence-weighted by sample count — never overrides the "
+                    "static richness value, and does nothing for the ~99% of planets with no "
+                    "measured data yet. Separate from the Planet DB display flag since this "
+                    "changes real plan output, not just a badge.",
+     "default": False},
 ]
 _DEFAULTS = {f["key"]: f for f in FEATURE_REGISTRY}
 VALID_STATES = {"hidden", "admin", "testers", "public"}

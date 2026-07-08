@@ -19,7 +19,7 @@ import urllib.error
 # state VALUE: an admin can change visibility at runtime, so the live state legitimately
 # diverges from the code default. The durable invariant is "the key exists and state is one of
 # the valid values" (app/features.py VALID_STATES: hidden/admin/testers/public).
-EXPECTED_FEATURES = ["timeline", "split_extraction", "baskets", "skill_roi", "move_character", "schedule_sync", "pad_fill", "measured_yield", "hybrid_colonies"]
+EXPECTED_FEATURES = ["timeline", "split_extraction", "baskets", "skill_roi", "move_character", "schedule_sync", "pad_fill", "measured_yield", "hybrid_colonies", "measured_yield_blend"]
 VALID_STATES = {"hidden", "admin", "testers", "public"}
 
 
