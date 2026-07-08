@@ -514,21 +514,40 @@ function renderCharacters(chars, loggedIn) {
             return amt != null ? `${_esc(x.name)} <b>${amt.toLocaleString()}</b>` : _esc(x.name);
           }).join(', ');
           const buildTitle = builds.includes('<b>') ? ` title="${padTitle}"` : '';
-          // A raw extractor with no basics converting P0→P1 yet has its harvested P0 sitting in
-          // the pad directly — fold that in too (matched by name; pads only carry type_id/name,
-          // not a separate p0_type_id) so we don't name the same P0 twice on the same row.
-          const p0PadAmt = (!builds && p.p0_name) ? padByName.get(p.p0_name) : null;
-          const extractLabel = p0PadAmt != null
-            ? `<span class="pp-pl-extract" title="${padTitle}">→ ${_esc(p.p0_name)} <b>${p0PadAmt.toLocaleString()}</b></span>`
-            : `<span class="pp-pl-extract">→ ${_esc(p.p0_name || '?')}</span>`;
-          // Wrapped in one cell (pp-pl-chain) so the P0→P1 chain is a single grid column instead
-          // of two separate items competing for space/position against each other.
+          // Raw (pre-basics) extraction — p.p0_name is a single string (esi.py overwrites it per
+          // ECU pin, so a DOUBLE extractor — e.g. two ECUs mining different P0s — only ever keeps
+          // the last one). p.production already carries one entry per DISTINCT P0 actually being
+          // harvested (tier 0, from pi_sim's raw-extraction fallback when no basics consume it
+          // yet), so prefer that when it has something to show; fall back to the old single-name
+          // lookup for planets scanned before `production` existed or where the forward-sim
+          // couldn't run — same result as before for the ordinary single-P0 case either way,
+          // since both read the same underlying pad amounts.
+          const rawExtracts = p.is_extractor ? (p.production || []).filter(x => (x.tier || 0) === 0) : [];
+          let extractLabel, coveredPadNames;
+          if (rawExtracts.length) {
+            extractLabel = rawExtracts.map(x => {
+              const amt = padByType.get(x.type_id);
+              return amt != null
+                ? `<span class="pp-pl-extract" title="${padTitle}">→ ${_esc(x.name)} <b>${amt.toLocaleString()}</b></span>`
+                : `<span class="pp-pl-extract">→ ${_esc(x.name)}</span>`;
+            }).join('');
+            coveredPadNames = new Set(rawExtracts.map(x => x.name));
+          } else {
+            const p0PadAmt = (!builds && p.p0_name) ? padByName.get(p.p0_name) : null;
+            extractLabel = p0PadAmt != null
+              ? `<span class="pp-pl-extract" title="${padTitle}">→ ${_esc(p.p0_name)} <b>${p0PadAmt.toLocaleString()}</b></span>`
+              : `<span class="pp-pl-extract">→ ${_esc(p.p0_name || '?')}</span>`;
+            coveredPadNames = p.p0_name ? new Set([p.p0_name]) : new Set();
+          }
+          // Wrapped in one cell (pp-pl-chain) so the P0→P1 chain (however many P0s feed it) is a
+          // single flexible grid column instead of extra items spilling into the fixed-width pad
+          // badge column and forcing every sibling row's columns wide too.
           const what = `<span class="pp-pl-chain">` + (p.is_extractor
             ? `${extractLabel}${builds ? `<span class="pp-pl-build"${buildTitle}> → ${builds}</span>` : ''}`
             : (builds
                 ? `<span class="pp-pl-build"${buildTitle}>→ ${builds}</span>`
                 : `<span class="pp-pl-factory">factory${p.num_pins ? ' · ' + p.num_pins + ' pins' : ''}</span>`)) + `</span>`;
-          const extraPad = (p.pads || []).filter(x => !prodTypeIds.has(x.type_id) && !(p0PadAmt != null && x.name === p.p0_name));
+          const extraPad = (p.pads || []).filter(x => !prodTypeIds.has(x.type_id) && !coveredPadNames.has(x.name));
           const pad = extraPad.length
             ? `<span class="pp-pl-pad" title="${padTitle}">${extraPad.map(x => `<b>${x.amount.toLocaleString()}</b> ${_esc(x.name)}`).join(' · ')}</span>`
             : '';

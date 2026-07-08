@@ -140,7 +140,10 @@
 .pp-pl-extract b, .pp-pl-build b, .pp-pl-pad b { color: #a8d0e0; font-family: 'Consolas', monospace; font-weight: 600; }
 .pp-pl-factory { color: var(--clr-stat-label); }
 .pp-pl-exp { grid-column: 4; white-space: nowrap; }
-.pp-pl-pad { grid-column: 5; font-size: 11px; color: #5a8aa0; white-space: nowrap;
+/* max-width + wrap (not nowrap) so one row's unusually-long leftover-pad badge (e.g. an extra
+   resource with no matching build yet) can't force this shared grid column wide for every
+   sibling row of the same character — it wraps onto its own extra line instead. */
+.pp-pl-pad { grid-column: 5; font-size: 11px; color: #5a8aa0; white-space: normal; max-width: 220px;
   background: #0e1a22; border: 1px solid #16303c; border-radius: 4px; padding: 1px 7px; }
 .pp-pl-cc { grid-column: 6; font-size: 10px; color: #56607a; }
 .pp-pl-empty { font-size: 12px; color: #56607a; font-style: italic; padding: 6px 0; }
