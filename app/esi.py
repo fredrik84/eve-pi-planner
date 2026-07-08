@@ -216,6 +216,14 @@ def ensure_char_tables():
     _add_col("pp_char_planets", "planet_num INTEGER")
     for _col in ("products TEXT", "pad_contents TEXT", "pad_inputs TEXT", "sim_state TEXT", "issues TEXT", "scanned_at REAL", "checkpoint_at REAL", "storage TEXT", "esi_modified REAL", "esi_expires REAL"):  # JSON cols + scan/checkpoint epochs + fullest-container fill state + ESI data vintage (Last-Modified) + next-refresh time (Expires)
         _add_col("pp_char_planets", _col)
+    # Hand-built ("hybrid") colonies run extraction + a chained P1->P2+ factory together on one
+    # planet — a shape our own generated templates never produce. `products` above is deliberately
+    # collapsed to only the highest tier (see _fetch_planets), which throws away the evidence that
+    # lower tiers coexist. product_chain keeps ALL tiers present (uncollapsed), and is_hybrid is a
+    # precomputed flag (is_extractor AND max tier present >= 2) so query sites don't need to parse
+    # JSON to check it — mirrors the existing is_extractor precomputed-flag convention.
+    _add_col("pp_char_planets", "product_chain TEXT")
+    _add_col("pp_char_planets", "is_hybrid INTEGER DEFAULT 0")
     # When ESI will next regenerate this character's skills (Expires header) — lets a rescan
     # skip a re-fetch that's guaranteed to return the same cached data.
     _add_col("pp_characters", "skills_expires REAL")
@@ -580,6 +588,17 @@ def _fetch_planets(character_id: int, access_token: str) -> dict:
                 except Exception:
                     pass
 
+                # Capture ALL tiers present (uncollapsed) before the highest-tier-only collapse
+                # below discards the evidence — this is what lets a hybrid (extraction + chained
+                # P1->P2+ factory) colony be detected without any new ESI call. Must run before
+                # the collapse mutates `products` in place.
+                product_chain = [
+                    {"type_id": t, "name": n, "tier": _types.get(t, {}).get("pi_tier") or 0}
+                    for t, n in products.items()
+                ]
+                product_chain_json = _json.dumps(product_chain) if product_chain else None
+                is_hybrid = 1 if (is_extractor and any(pc["tier"] >= 2 for pc in product_chain)) else 0
+
                 # Keep only the planet's highest-tier output (its end product) — the lower tiers
                 # are just intermediate steps in that planet's chain.
                 if products:
@@ -668,8 +687,8 @@ def _fetch_planets(character_id: int, access_token: str) -> dict:
                     INSERT INTO pp_char_planets
                         (character_id, planet_id, planet_type, solar_system_id,
                          upgrade_level, num_pins, is_extractor, p0_type_id, p0_name,
-                         planet_num, products, pad_contents, pad_inputs, sim_state, issues, scanned_at, checkpoint_at, storage, esi_modified, esi_expires)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                         planet_num, products, pad_contents, pad_inputs, sim_state, issues, scanned_at, checkpoint_at, storage, esi_modified, esi_expires, product_chain, is_hybrid)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     ON CONFLICT (character_id, planet_id) DO UPDATE SET
                       planet_type=EXCLUDED.planet_type, solar_system_id=EXCLUDED.solar_system_id,
                       upgrade_level=EXCLUDED.upgrade_level, num_pins=EXCLUDED.num_pins,
@@ -679,10 +698,11 @@ def _fetch_planets(character_id: int, access_token: str) -> dict:
                       pad_inputs=EXCLUDED.pad_inputs, sim_state=EXCLUDED.sim_state,
                       issues=EXCLUDED.issues, scanned_at=EXCLUDED.scanned_at,
                       checkpoint_at=EXCLUDED.checkpoint_at, storage=EXCLUDED.storage,
-                      esi_modified=EXCLUDED.esi_modified, esi_expires=EXCLUDED.esi_expires
+                      esi_modified=EXCLUDED.esi_modified, esi_expires=EXCLUDED.esi_expires,
+                      product_chain=EXCLUDED.product_chain, is_hybrid=EXCLUDED.is_hybrid
                 """, (character_id, planet_id, planet_type, solar_system_id,
                       upgrade_level, num_pins, is_extractor, p0_type_id, p0_name,
-                      planet_num, products_json, pads_json, pad_inputs_json, sim_state_json, issues_json, _scan_ts, checkpoint_at, storage_json, esi_modified, esi_expires))
+                      planet_num, products_json, pads_json, pad_inputs_json, sim_state_json, issues_json, _scan_ts, checkpoint_at, storage_json, esi_modified, esi_expires, product_chain_json, is_hybrid))
 
                 if is_extractor and _sim:      # log a per-program yield sample for the trend/burn-down
                     _record_yield_sample(con, character_id, planet_id, _sim, _scan_ts)

@@ -188,7 +188,7 @@ def list_characters(pp_session: str = Cookie(default=None)):
             planet_rows = con.execute("""
                 SELECT cp.character_id, cp.planet_id, cp.planet_type, cp.is_extractor, cp.p0_name, cp.upgrade_level,
                        cp.planet_num, cp.num_pins, cp.products, cp.pad_contents, cp.pad_inputs, cp.checkpoint_at,
-                       cp.sim_state, cp.esi_modified, cp.esi_expires,
+                       cp.sim_state, cp.esi_modified, cp.esi_expires, COALESCE(cp.is_hybrid, 0) AS is_hybrid,
                        COALESCE(ss.name, '') AS system_name
                 FROM pp_char_planets cp
                 JOIN pp_characters ch ON ch.character_id = cp.character_id
@@ -199,7 +199,7 @@ def list_characters(pp_session: str = Cookie(default=None)):
             planet_rows = con.execute("""
                 SELECT cp.character_id, cp.planet_id, cp.planet_type, cp.is_extractor, cp.p0_name, cp.upgrade_level,
                        cp.planet_num, cp.num_pins, cp.products, cp.pad_contents, cp.pad_inputs, cp.checkpoint_at,
-                       cp.sim_state, cp.esi_modified, cp.esi_expires, '' AS system_name
+                       cp.sim_state, cp.esi_modified, cp.esi_expires, COALESCE(cp.is_hybrid, 0) AS is_hybrid, '' AS system_name
                 FROM pp_char_planets cp
                 JOIN pp_characters ch ON ch.character_id = cp.character_id
                 WHERE ch.context_id=?
@@ -287,7 +287,11 @@ def list_characters(pp_session: str = Cookie(default=None)):
                     rate = (sustained if sustained is not None else full) or 0
                     ext = o.get("ext_refined", full) or full      # heads' refined rate, BEFORE factory clip
                     if rate > 0:
-                        production.append({
+                        # exportable=False means this output is entirely self-consumed by a
+                        # colocated on-planet factory line (see pi_sim.colony_sim_state) — not
+                        # available to the rest of the account. Default True so sim_state JSON
+                        # scanned before this field existed keeps today's behavior until rescanned.
+                        entry = {
                             "type_id": o["type_id"], "name": o["name"],
                             "per_day": round(rate * 86400),
                             "full_per_day": round(full * 86400),
@@ -297,7 +301,12 @@ def list_characters(pp_session: str = Cookie(default=None)):
                             # extraction-limited: the planet can't keep its own factories fed
                             "capped": (not stale) and full > 0 and rate < full * 0.97,
                             "stale": stale,
-                        })
+                            "exportable": o.get("exportable", True),
+                        }
+                        if o.get("chain_input_type") is not None:
+                            entry["chain_input_type"] = o["chain_input_type"]
+                            entry["chain_need_per_day"] = round((o.get("chain_need_per_day") or 0) )
+                        production.append(entry)
             except Exception:
                 production = []
         program_days = None      # the extraction-program length the player set (install→expiry)
@@ -313,6 +322,7 @@ def list_characters(pp_session: str = Cookie(default=None)):
         char_planets.setdefault(cid, []).append({
             "planet_type":   p["planet_type"],
             "is_extractor":  bool(p["is_extractor"]),
+            "is_hybrid":     bool(p["is_hybrid"]),
             "p0_name":       p["p0_name"],
             "upgrade_level": p["upgrade_level"],
             "system":        p["system_name"],

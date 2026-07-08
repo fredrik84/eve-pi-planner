@@ -36,6 +36,10 @@ function _toggleMatDetail(t) {
 function _setupProductionByP1() {
   const out = {};
   (_ppCharsData || []).forEach(ch => (ch.planets || []).forEach(p => (p.production || []).forEach(o => {
+    // exportable=false means this output is fully self-consumed by a colocated on-planet factory
+    // line (a hybrid colony) — not actually available to the rest of the account, so it must not
+    // inflate the pooled supply picture here.
+    if (o.exportable === false) return;
     const k = String(o.type_id);
     if (!out[k]) out[k] = { name: o.name, perDay: 0, planets: 0 };
     out[k].perDay += o.per_day || 0;
@@ -633,7 +637,7 @@ function renderAnalysis() {
       </section>`
     : '';
 
-  el.innerHTML = supplyCard + suggestCard + _renderGrowSection() + _renderSkillRoiSection();
+  el.innerHTML = supplyCard + suggestCard + _hybridReseatSection() + _renderGrowSection() + _renderSkillRoiSection();
 }
 
 // ── Extraction-runtime helper (decay-aware recommendation) ────────────────────
@@ -757,6 +761,9 @@ function _producersOf(t) {
     if (!p.is_extractor) return;
     (p.production || []).forEach(o => {
       if (String(o.type_id) !== String(t)) return;
+      // Self-consumed by a colocated on-planet factory (hybrid colony) — not real spare supply
+      // for a rebalance suggestion to hand out.
+      if (o.exportable === false) return;
       const h = (p.yield_history || []).filter(s => s.peak > 0).map(s => s.peak);
       const cur = h.length ? h[h.length - 1] : null, max = h.length ? Math.max(...h) : null;
       out.push({ char: ch.name, system: p.system, planet_num: p.planet_num, p0: p.p0_name,
@@ -953,6 +960,43 @@ function _burndownSection(rows) {
       <div class="an-levers-lead">Short on <b>${short.map(r => _esc(r.name)).join('</b>, <b>')}</b>. Reseating recovers <em>lost</em> yield only — no help if a colony is already at its peak. If it's not enough, <b>add or redeploy</b>.</div>
       <div class="an-bd-groups">${groups}</div>
     </div>`;
+}
+
+// Reseat guidance for hand-built ("hybrid") colonies — one planet running extraction + a chained
+// P1->P2+ factory together, a shape our own templates never produce (see project docs). Deliberately
+// SEPARATE from _burndownSection/_producersOf: a hybrid colony's internal P1 is self-consumed on
+// that one planet (pi_sim.colony_sim_state tags it exportable=false), so it's never pooled into the
+// account-wide rebalance picture — this only ever compares a planet against ITS OWN downstream need,
+// and only ever suggests reseating the planet it already has, never redeploying/relocating it.
+function _hybridReseatSection() {
+  if (!_featureActive('hybrid_colonies')) return '';
+  const toP0h = p1day => Math.round(p1day * 150 / 24);   // P1/day -> P0/hr, the in-game ECU rate
+  const rows = [];
+  (_ppCharsData || []).forEach(ch => (ch.planets || []).forEach(p => {
+    if (!p.is_hybrid) return;
+    const prod = p.production || [];
+    const downstream = prod.find(o => o.chain_need_per_day != null);
+    if (!downstream) return;
+    const upstream = prod.find(o => o.type_id === downstream.chain_input_type);
+    if (!upstream) return;
+    const need = downstream.chain_need_per_day || 0;
+    const have = upstream.per_day || 0;
+    if (need <= 0 || have >= need) return;   // already fully fed — nothing to suggest
+    const pct = Math.round(have / need * 100);
+    const loc = p.system ? `${_esc(ch.name)} · ${_esc(p.system)}${p.planet_num != null ? ' P' + p.planet_num : ''}` : _esc(ch.name);
+    rows.push(`<div class="an-bd-group">
+        <div class="an-bd-group-h">${loc} <span class="an-bd-group-sub">its ${_esc(downstream.name)} line wants ~${need.toLocaleString()} ${_esc(upstream.name)}/day; its own extraction only sustains ~${Math.round(have).toLocaleString()} (${pct}% fed)</span></div>
+        <div class="an-bd-target">Reseat its heads toward <b>${toP0h(need).toLocaleString()} P0/hr</b> to fully feed the ${_esc(downstream.name)} line — this colony stays put, only its hotspots move.</div>
+      </div>`);
+  }));
+  if (!rows.length) return '';
+  return `<section class="pp-card">
+      <div class="pp-card-title">Hybrid colonies</div>
+      <div class="pp-card-body">
+        <div class="an-legend">Colonies that extract and process on the same planet — tracked separately since reseating one only helps that planet's own chain, not the rest of your account.</div>
+        <div class="an-suggest an-suggest-burndown"><div class="an-suggest-h">Reseat candidates</div><div class="an-bd-groups">${rows.join('')}</div></div>
+      </div>
+    </section>`;
 }
 
 function _extRuntimeAdviceHtml(headroom, curDays) {

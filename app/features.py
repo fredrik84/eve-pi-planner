@@ -74,6 +74,11 @@ FEATURE_REGISTRY = [
                     "(pooled across all users' actual colonies) alongside a planet's static "
                     "richness value, where enough samples exist.",
      "default": False},
+    {"key": "hybrid_colonies", "label": "Hybrid colony analysis",
+     "description": "Track hand-built colonies that run extraction + a P1→P2+ factory chain "
+                    "on one planet: surfaces their real demand in Setup Analysis and suggests "
+                    "reseats to close their own shortfall (never a redeploy).",
+     "default": False},
 ]
 _DEFAULTS = {f["key"]: f for f in FEATURE_REGISTRY}
 VALID_STATES = {"hidden", "admin", "testers", "public"}
