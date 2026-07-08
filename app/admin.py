@@ -693,7 +693,7 @@ def debug_memory(_: int = Depends(require_admin)):
 
     from app.planner import _UNITS_PER_PLANET, _FACTORY_FIT, _FACTORY_PACK_MAXDIAM
     from app.layout import _FITTED_BASICS_CACHE
-    from app.fuelblocks import _packed_rate
+    from app.fuelblocks import _PACKED_RATE_CACHE
     from app.sde import load_pi_data
 
     caches = {
@@ -701,6 +701,7 @@ def debug_memory(_: int = Depends(require_admin)):
         "planner._FACTORY_FIT":          _FACTORY_FIT,
         "planner._FACTORY_PACK_MAXDIAM": _FACTORY_PACK_MAXDIAM,
         "layout._FITTED_BASICS_CACHE":   _FITTED_BASICS_CACHE,
+        "fuelblocks._PACKED_RATE_CACHE (L1, also Redis-backed)": _PACKED_RATE_CACHE,
     }
     cache_report = {
         name: {"entries": len(d), "bytes": _deep_size(d)}
@@ -711,10 +712,6 @@ def debug_memory(_: int = Depends(require_admin)):
         cache_report["sde.load_pi_data (static SDE, lru_cache maxsize=1)"] = {
             "entries": 1, "bytes": _deep_size(load_pi_data()),
         }
-    pr_info = _packed_rate.cache_info()
-    cache_report["fuelblocks._packed_rate (lru_cache maxsize=256)"] = {
-        "entries": pr_info.currsize, "hits": pr_info.hits, "misses": pr_info.misses,
-    }
 
     return {
         "pod": os.environ.get("HOSTNAME"),
