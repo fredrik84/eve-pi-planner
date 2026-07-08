@@ -132,6 +132,12 @@ def test_aggregate_yields_gated(base: str) -> bool:
     return check(code == 403, f"anonymous aggregate-yields trigger rejected (got HTTP {code})")
 
 
+def test_debug_memory_gated(base: str) -> bool:
+    print(f"\n{'='*60}\n  GET /api/admin/debug/memory is admin-gated\n{'='*60}")
+    code = get_status(f"{base}/api/admin/debug/memory")
+    return check(code == 403, f"anonymous memory diagnostics rejected (got HTTP {code})")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--url", default="https://eve-pi.failed.name")
@@ -147,6 +153,7 @@ def main():
         test_cleanup_preview_gated(base),
         test_admin_stats_gated(base),
         test_aggregate_yields_gated(base),
+        test_debug_memory_gated(base),
     ]
     print(f"\n{'='*60}")
     passed = sum(results)

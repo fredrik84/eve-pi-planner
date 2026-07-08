@@ -5,7 +5,9 @@ A basket is a named set of PI commodities + per-run quantities. It is planned by
 multi-product engine as the built-in Fuel Blocks basket (see `fuelblock_planner`), so any
 logged-in user can pick a basket as a wizard target. Only admins create/edit/delete them.
 """
+import gc
 import os
+import sys
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Request
@@ -643,6 +645,78 @@ def run_aggregate_yields(_: int = Depends(require_admin)):
     scheduler in app.notifications) — lets an admin verify/refresh it without waiting."""
     from app.yield_stats import aggregate_colony_yields
     return aggregate_colony_yields()
+
+
+def _deep_size(obj, seen: set | None = None) -> int:
+    """Recursive size estimate (bytes) for a plain dict/list/tuple/set tree of simple values.
+    Good enough for the small process-local caches this reports on — not a general-purpose
+    profiler. Guards against cycles/shared references via id() tracking (so an object aliased
+    from two places isn't double-counted, and self-referential structures can't loop)."""
+    if seen is None:
+        seen = set()
+    oid = id(obj)
+    if oid in seen:
+        return 0
+    seen.add(oid)
+    size = sys.getsizeof(obj)
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            size += _deep_size(k, seen) + _deep_size(v, seen)
+    elif isinstance(obj, (list, tuple, set, frozenset)):
+        for item in obj:
+            size += _deep_size(item, seen)
+    return size
+
+
+@router.get("/api/admin/debug/memory")
+def debug_memory(_: int = Depends(require_admin)):
+    """Read-only memory diagnostics: this pod's RSS + the size of every known unbounded
+    in-process cache (module-level dicts that never evict, live for the pod's lifetime).
+    Built after prod pods were observed at 500-600Mi RSS vs dev's ~220Mi at identical
+    process age — see project memory project_eve_pi_planner_memory_usage. Meant to answer
+    "is a specific cache actually big" directly instead of guessing/profiling from scratch
+    each time the question comes up again."""
+    rss_kb = None
+    try:
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    rss_kb = int(line.split()[1])
+                    break
+    except Exception:
+        pass
+
+    from app.planner import _UNITS_PER_PLANET, _FACTORY_FIT, _FACTORY_PACK_MAXDIAM
+    from app.layout import _FITTED_BASICS_CACHE
+    from app.fuelblocks import _packed_rate
+    from app.sde import load_pi_data
+
+    caches = {
+        "planner._UNITS_PER_PLANET":     _UNITS_PER_PLANET,
+        "planner._FACTORY_FIT":          _FACTORY_FIT,
+        "planner._FACTORY_PACK_MAXDIAM": _FACTORY_PACK_MAXDIAM,
+        "layout._FITTED_BASICS_CACHE":   _FITTED_BASICS_CACHE,
+    }
+    cache_report = {
+        name: {"entries": len(d), "bytes": _deep_size(d)}
+        for name, d in caches.items()
+    }
+
+    if load_pi_data.cache_info().currsize > 0:
+        cache_report["sde.load_pi_data (static SDE, lru_cache maxsize=1)"] = {
+            "entries": 1, "bytes": _deep_size(load_pi_data()),
+        }
+    pr_info = _packed_rate.cache_info()
+    cache_report["fuelblocks._packed_rate (lru_cache maxsize=256)"] = {
+        "entries": pr_info.currsize, "hits": pr_info.hits, "misses": pr_info.misses,
+    }
+
+    return {
+        "rss_kb": rss_kb,
+        "rss_mb": round(rss_kb / 1024, 1) if rss_kb else None,
+        "gc_object_count": len(gc.get_objects()),
+        "caches": cache_report,
+    }
 
 
 @router.get("/metrics", response_class=PlainTextResponse, include_in_schema=False)
