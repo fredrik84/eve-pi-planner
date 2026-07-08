@@ -675,7 +675,12 @@ def debug_memory(_: int = Depends(require_admin)):
     Built after prod pods were observed at 500-600Mi RSS vs dev's ~220Mi at identical
     process age — see project memory project_eve_pi_planner_memory_usage. Meant to answer
     "is a specific cache actually big" directly instead of guessing/profiling from scratch
-    each time the question comes up again."""
+    each time the question comes up again.
+
+    Prod runs 2 replicas behind Traefik with no sticky session, so repeated hits to this
+    endpoint (or to any endpoint) can land on either pod — `pod`/`pid` below let repeated
+    samples actually be compared against each other instead of silently bouncing between
+    two independent processes."""
     rss_kb = None
     try:
         with open("/proc/self/status") as f:
@@ -712,6 +717,8 @@ def debug_memory(_: int = Depends(require_admin)):
     }
 
     return {
+        "pod": os.environ.get("HOSTNAME"),
+        "pid": os.getpid(),
         "rss_kb": rss_kb,
         "rss_mb": round(rss_kb / 1024, 1) if rss_kb else None,
         "gc_object_count": len(gc.get_objects()),
