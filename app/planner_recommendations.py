@@ -79,6 +79,25 @@ def _p0_col(name: str) -> str | None:
 # the long thin tail that a matching feasibility check never needed anyway.
 _MAX_CANDIDATES_PER_P0 = 300
 
+# Confidence-weighted nudge toward real pooled measured yield (pp_planet_yield_avg, see
+# app/yield_stats.py) — a planet with SATURATION_SAMPLES+ real samples gets ~full weight toward
+# its measured value; fewer samples get a proportionally smaller nudge; zero samples (the vast
+# majority of planets — 67 of 5,141 measured as of 2026-07-08) pass through unchanged. Deliberately
+# NEVER a flat override of the static richness value (explicit user constraint from Phase 1).
+# Applied in Python after the SQL fetch below, not in the SQL itself: the fetch's own
+# `ORDER BY {col} DESC LIMIT 300` ranks/truncates by the STATIC value, which is fine (conservative,
+# and at current coverage a blended rank would essentially never change the candidate set anyway) —
+# doing this arithmetic portably in SQL across SQLite/Postgres is real extra complexity (Postgres
+# has no scalar MIN(a,b), only aggregate MIN/LEAST) for no current benefit.
+_YIELD_SATURATION_SAMPLES = 30
+
+
+def _blend_value(static_value: float, measured: dict | None) -> float:
+    if not measured:
+        return static_value
+    weight = min(1.0, measured["n"] / _YIELD_SATURATION_SAMPLES)
+    return static_value * (1 - weight) + measured["pct"] * weight
+
 
 def _fetch_p0_planets(
     p0_names: list[str], con,
@@ -89,6 +108,8 @@ def _fetch_p0_planets(
     """Return {p0_name: [planets sorted by value DESC]}. Planets thinner than `min_density`%
     are excluded (the density cap), so the planner can't pile extractors onto deposits it isn't
     worth setting up — at the cost of some residual on resources that then can't reach their need."""
+    from app.features import feature_enabled
+    blend_on = feature_enabled("measured_yield_blend")
     thresh = max(0.01, float(min_density or 0))
     result: dict[str, list[dict]] = {}
     where_extra = ""
@@ -116,9 +137,29 @@ def _fetch_p0_planets(
                 f"ORDER BY {col} DESC LIMIT {_MAX_CANDIDATES_PER_P0}",
                 [thresh] + params_base + valid_types,
             ).fetchall()
-            result[name] = [dict(r) for r in rows]
+            planets = [dict(r) for r in rows]
         except Exception:
             result[name] = []
+            continue
+        if blend_on and planets:
+            # Isolated from the fetch above on purpose: a problem here (e.g. the yield-avg table
+            # not yet migrated on a fresh install) must never discard the already-fetched
+            # candidate list — worst case, this P0 just doesn't get the measured-yield nudge.
+            try:
+                measured = {
+                    (m["system"], m["planet_num"]): {"pct": m["measured_pct"], "n": m["sample_count"]}
+                    for m in con.execute(
+                        "SELECT system, planet_num, measured_pct, sample_count "
+                        "FROM pp_planet_yield_avg WHERE p0_name=?", (col,),
+                    ).fetchall()
+                }
+                for p in planets:
+                    m = measured.get((p["system"], p["planet_num"]))
+                    if m:
+                        p["value"] = _blend_value(p["value"], m)
+            except Exception:
+                pass
+        result[name] = planets
     return result
 
 
