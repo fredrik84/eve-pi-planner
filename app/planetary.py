@@ -131,6 +131,11 @@ _CONSTELLATIONS_CACHE_KEY = "planetdb:constellations"
 def _invalidate_planetdb_cache():
     cache_invalidate(_PLANETS_CACHE_KEY)
     cache_invalidate(_CONSTELLATIONS_CACHE_KEY)
+    # Local import: planner_recommendations imports FROM this module (PLANET_P0_MAP/_NAME_TO_COL),
+    # so a top-level import here would be circular. Bumps the sysrec cache version instead of
+    # scanning/deleting sysrec:* keys (Redis has no wildcard delete via cache_invalidate).
+    from app.planner_recommendations import bump_sysrec_cache_version
+    bump_sysrec_cache_version()
 
 
 @router.get("/api/planets")
