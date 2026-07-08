@@ -17,7 +17,6 @@ no factory line.
 from __future__ import annotations
 
 from fractions import Fraction
-from functools import lru_cache
 
 from app import layout
 
@@ -128,13 +127,30 @@ def compute_basket_p1_reqs(components: list[dict], pi_data: dict) -> dict[int, f
     return {k: float(v) for k, v in total.items()}
 
 
-@lru_cache(maxsize=256)
+_PACKED_RATE_CACHE: dict = {}   # (type_id, planet_type, cc_level) -> product_per_hour
+
+
 def _packed_rate(type_id: int, planet_type: str, cc_level: int) -> float:
     """Per-PLANET output/hr of one fully-packed compact factory = single-facility
     rate × max facilities that fit the command-centre budget at `cc_level`. Heavy
-    (builds templates up to ~40 times), so cached. Delegates to generate_layout so
-    the budget and the importable Factory Layout templates agree on throughput."""
-    return layout.generate_layout(type_id, planet_type, cc_level=cc_level)["summary"]["product_per_hour"]
+    (builds templates up to ~40 times). Delegates to generate_layout so the budget
+    and the importable Factory Layout templates agree on throughput.
+
+    Backed by the same Redis-shared cache as planner.py's layout-fit functions (L1
+    process dict + L2 Redis, see _layout_cache_get_or_compute) — this call was missed
+    by the 2026-07-06 fix (it lived behind a plain in-process @lru_cache, cold on every
+    pod restart, never shared across replicas) despite running on EVERY plan/
+    recommendation request via _compute_fuelblock_budget, not just when a system is
+    actually chosen. Local import to avoid a circular import (planner.py doesn't import
+    from this module, but keeping this defensive matches the pattern used elsewhere in
+    this codebase for cross-module helper reuse)."""
+    from app.planner import _layout_cache_get_or_compute
+    key = (type_id, planet_type, cc_level)
+
+    def compute():
+        return layout.generate_layout(type_id, planet_type, cc_level=cc_level)["summary"]["product_per_hour"]
+
+    return _layout_cache_get_or_compute("packed_rate", _PACKED_RATE_CACHE, key, compute)
 
 
 def component_factory_rate(type_id: int, pi_data: dict, planet_type: str = "Barren",

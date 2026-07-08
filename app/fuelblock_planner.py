@@ -245,12 +245,19 @@ def _assign_fuelblock_factories(
     req,
     has_system_name: bool,
     fallback_planet_type: str = "Barren",
+    is_preview: bool = False,
 ) -> int:
     """Place the per-line factory planets across characters, tagging each with its
     component product. Fuel-block factories are P1/P2/P3 → they run on any of the chosen
     factory planet types (the pool is already restricted to those). When no concrete DB
     planet is available, the slot is tagged with `fallback_planet_type` (the first chosen
     type) so the generated template still has a real planet type/diameter.
+
+    is_preview=True (no system chosen yet — see _run_fuelblock_plan) skips the real
+    per-host _factory_pack_max_diameter lookup for NEW slots and uses the hard ceiling
+    directly instead — same fallback already used for planets with unknown diameter,
+    just applied deliberately since this placement is against an arbitrary auto-picked
+    system and gets recomputed accurately the moment the user actually chooses one.
     Mutates assignments; returns the number of factory planets that couldn't be placed."""
     # Expand the per-line counts into a tagged queue (clusters same-component planets).
     queue: list[dict] = []
@@ -307,8 +314,11 @@ def _assign_fuelblock_factories(
                 # Per-host fit: this character's CCU + this component decide how big a planet the factory
                 # fits on (real diameter), hard-capped by the model's trust ceiling. So a CC5 toon may use
                 # a bigger planet than a CC4 toon. Unknown-diameter planets fall back to the safe B/T rule.
+                # In preview mode, skip the real (generate_layout-backed) lookup entirely and use the
+                # ceiling directly — see is_preview docstring above.
                 from app.planner import _factory_pack_max_diameter, _FACTORY_DIAM_CEILING
-                cap = min(_FACTORY_DIAM_CEILING, _factory_pack_max_diameter(comp["type_id"], char.get("effective_ccu")))
+                cap = _FACTORY_DIAM_CEILING if is_preview else min(
+                    _FACTORY_DIAM_CEILING, _factory_pack_max_diameter(comp["type_id"], char.get("effective_ccu")))
 
                 def _fits(p):
                     d = p.get("diameter")
@@ -549,6 +559,14 @@ def _run_fuelblock_plan(req: "FuelBlockPlanRequest", context_id: int) -> dict:
     The 'product' is the whole basket rolled into one combined P1 demand vector (so the
     extractor machinery is reused verbatim), and the factory side runs one line per
     producible component."""
+    # No system chosen yet — this is the wizard's "Find Systems" preview, which only ever
+    # renders system_recommendations[] + the header stat (see renderRecommendations in
+    # planetary.js). Real factory-placement geometry (_factory_pack_max_diameter et al) is
+    # skipped/approximated in this mode: it's never shown at this step, and skipping it avoids
+    # paying real generate_layout cost against an arbitrary auto-picked factory system nobody
+    # has actually chosen. The moment req.chosen_systems is populated (wizardChooseSystems),
+    # this flag is false and the plan is computed with full accuracy as before.
+    is_preview = not req.chosen_systems
     pi_data = load_pi_data()
     types = pi_data["types"]
 
@@ -594,12 +612,18 @@ def _run_fuelblock_plan(req: "FuelBlockPlanRequest", context_id: int) -> dict:
     # Eligibility is decided PER FACTORY at assignment (host CCU + component + real diameter), not here.
     # For the plan note, count planets too big for even the most generous case — a CC5 toon building the
     # tightest (most-packed) factory product, capped by the model-trust ceiling. Those can't host a
-    # factory under any character.
+    # factory under any character. Skipped in preview mode (see is_preview above): nothing in the
+    # Find Systems UI reads factory_diam_cap_km/factory_planets_oversized, so the real per-product
+    # _factory_pack_max_diameter calls (each a generate_layout geometry pass) would be pure waste.
     from app.planner import _factory_pack_max_diameter, _FACTORY_DIAM_CEILING
-    fac_products = [c["type_id"] for c in components if c.get("is_factory") or (c.get("tier") or 0) >= 2]
-    diam_cap = min([_FACTORY_DIAM_CEILING] + [_factory_pack_max_diameter(t, 5) for t in fac_products])
-    factory_planets_oversized = sum(
-        1 for p in fac_pool if p.get("diameter") is not None and p["diameter"] > diam_cap)
+    if is_preview:
+        diam_cap = _FACTORY_DIAM_CEILING
+        factory_planets_oversized = 0
+    else:
+        fac_products = [c["type_id"] for c in components if c.get("is_factory") or (c.get("tier") or 0) >= 2]
+        diam_cap = min([_FACTORY_DIAM_CEILING] + [_factory_pack_max_diameter(t, 5) for t in fac_products])
+        factory_planets_oversized = sum(
+            1 for p in fac_pool if p.get("diameter") is not None and p["diameter"] > diam_cap)
     dropped_factory_types = []   # no type is categorically dropped now — only individual oversized planets
     for rec in sys_recs:
         rec["factory_capacity"] = {s: sys_fac_capacity.get(s, 0) for s in rec["systems_needed"]}
@@ -667,6 +691,7 @@ def _run_fuelblock_plan(req: "FuelBlockPlanRequest", context_id: int) -> dict:
         assignments, char_list, factory_lines, factory_shares, auto_mode,
         fac_pool, best_fac_system, char_nonfac, req, has_system_name,
         fallback_planet_type=allowed_types[0] if allowed_types else "Barren",
+        is_preview=is_preview,
     )
 
     # Optional split-extraction consolidation (opt-in via split_mode). Operates on the
