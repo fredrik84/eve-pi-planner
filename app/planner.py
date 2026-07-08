@@ -2900,7 +2900,7 @@ def _load_char_planet_config(con, context_id: int, config_type_id: int):
     try:
         planet_rows = con.execute("""
             SELECT cp.character_id, cp.planet_type, cp.is_extractor, cp.p0_type_id,
-                   COALESCE(ss.name, '') as system_name, cp.planet_num
+                   cp.products, COALESCE(ss.name, '') as system_name, cp.planet_num
             FROM pp_char_planets cp
             JOIN pp_characters pc ON pc.character_id = cp.character_id
             LEFT JOIN solar_systems ss ON ss.system_id = cp.solar_system_id
@@ -2909,7 +2909,7 @@ def _load_char_planet_config(con, context_id: int, config_type_id: int):
         has_system_name = True
     except Exception:
         planet_rows = con.execute(
-            "SELECT cp.character_id, cp.planet_type, cp.is_extractor, cp.p0_type_id "
+            "SELECT cp.character_id, cp.planet_type, cp.is_extractor, cp.p0_type_id, cp.products "
             "FROM pp_char_planets cp JOIN pp_characters pc ON pc.character_id=cp.character_id "
             "WHERE pc.context_id=?", (context_id,),
         ).fetchall()
@@ -3138,11 +3138,23 @@ def _set_computed_ext_cap(char_list, factory_shares, auto_mode):
     return sum(c["computed_ext_cap"] for c in char_list)
 
 
+def _planet_product_type_ids(raw) -> set:
+    """Parse pp_char_planets.products (JSON list of {type_id, name}, highest-tier output
+    only — see esi.py _fetch_planets) into a set of type_ids. Empty/unparseable -> no
+    known committed product (a genuinely idle non-extractor slot)."""
+    if not raw:
+        return set()
+    try:
+        return {int(p["type_id"]) for p in _json.loads(raw) if p.get("type_id") is not None}
+    except Exception:
+        return set()
+
+
 def _run_extractor_pipeline(
     req, char_list, p1_info, ext_slots, needed_at_baseline,
     p0_planet_lists, p0_planet_lists_global, has_planet_db, has_system_name,
     auto_mode, assignment_extra=None, factory_avoid_cids=None, factory_avoid=None,
-    density_est=None,
+    density_est=None, reusable_type_ids=None,
 ):
     """Shared extractor-assignment core. Builds the per-character candidate views, the
     P0 slot caps and the Bresenham need list, then runs the two-pass extractor
@@ -3153,10 +3165,30 @@ def _run_extractor_pipeline(
     plan (effective_planets > computed_ext_cap). Pure-extractor chars repurpose idle
     existing factory planets — essential for scarce P0s. factory_avoid(_cids) keeps the
     factory system's B/T planets free for maxed factory chars.
-    Returns (assignments, remaining, char_nonfac)."""
+
+    reusable_type_ids: the set of type_ids this plan's factory planets will actually
+    produce (e.g. {req.type_id} for a single-product plan, or a basket's component
+    type_ids). A non-extractor planet already committed to a DIFFERENT real product
+    (per its last ESI scan) is still that player's colony — it must keep blocking new
+    extractor placement there (handled below via the unfiltered char_nonfac/
+    char_nonfac_ext) — but it must NOT be silently claimed as "spare factory capacity"
+    for this unrelated plan. So the RETURNED char_nonfac (what
+    _assign_factory_planets_to_chars / _assign_fuelblock_factories treat as reusable)
+    is filtered to planets with no known product, or one matching reusable_type_ids;
+    the internal char_nonfac used for occupancy/counting stays unfiltered. None
+    (caller didn't scope it) preserves the old product-agnostic behaviour for both.
+    Returns (assignments, remaining, char_nonfac_reusable)."""
+    def _reusable(p):
+        tids = _planet_product_type_ids(p.get("products"))
+        return not tids or reusable_type_ids is None or bool(tids & reusable_type_ids)
+
     char_nonfac: dict[int, list] = {
         c["character_id"]: [p for p in c["planets"] if not p.get("is_extractor")]
         for c in char_list
+    }
+    char_nonfac_reusable: dict[int, list] = {
+        cid: [p for p in planets if _reusable(p)]
+        for cid, planets in char_nonfac.items()
     }
     _reserve_cids = {
         c["character_id"] for c in char_list
@@ -3240,7 +3272,7 @@ def _run_extractor_pipeline(
         p0_planet_lists, p0_planet_lists_global, req, auto_mode,
         factory_avoid_cids=factory_avoid_cids, factory_avoid=factory_avoid,
     )
-    return assignments, remaining, char_nonfac
+    return assignments, remaining, char_nonfac_reusable
 
 
 def _pick_factory_system(req, sys_fac_count: dict[str, int]):
@@ -3376,7 +3408,7 @@ def _run_plan(req: PlanRequest, context_id: int) -> dict:
         req, char_list, p1_info, ext_slots, needed_at_baseline,
         p0_planet_lists, p0_planet_lists_global, has_planet_db, has_system_name,
         auto_mode, factory_avoid_cids=_factory_avoid_cids, factory_avoid=_factory_avoid,
-        density_est=density_est,
+        density_est=density_est, reusable_type_ids={req.type_id},
     )
 
     # Pick best factory system

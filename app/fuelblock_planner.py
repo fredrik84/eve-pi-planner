@@ -647,6 +647,7 @@ def _run_fuelblock_plan(req: "FuelBlockPlanRequest", context_id: int) -> dict:
         p0_planet_lists, p0_planet_lists_global, has_planet_db, has_system_name,
         auto_mode, assignment_extra=lambda c: {"effective_ccu": c["effective_ccu"]},
         density_est=density_est,
+        reusable_type_ids={line["type_id"] for line in factory_lines},
     )
 
     # Pick best factory system (most candidate planets among chosen/all).
