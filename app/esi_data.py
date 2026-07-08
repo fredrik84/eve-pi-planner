@@ -19,7 +19,7 @@ from app.esi import (
     ESI_BASE, WALLET_SCOPE,
     _session_lookup, _is_configured, admin_and_tester_status_for_context,
     require_context, _get_valid_token, _fetch_skills, _fetch_planets,
-    ensure_char_tables,
+    ensure_char_tables, natural_name_key,
 )
 
 router = APIRouter()
@@ -174,8 +174,10 @@ def list_characters(pp_session: str = Cookie(default=None)):
                    planetology, advanced_planetology, COALESCE(is_dummy, 0) AS is_dummy,
                    COALESCE(scopes, '') AS scopes
             FROM pp_characters WHERE context_id=?
-            ORDER BY COALESCE(is_dummy,0), character_name COLLATE NOCASE
         """, (context_id,)).fetchall()
+        # Natural sort (SQL COLLATE NOCASE is plain lexicographic — "alt 10" sorts before
+        # "alt 2") so alt-army names order the way a human expects.
+        rows = sorted(rows, key=lambda r: (r["is_dummy"], natural_name_key(r["character_name"])))
 
         # Scoped to this session's own characters via the JOIN below — these used to fetch
         # EVERY character's planets/yield history system-wide (no WHERE at all) and filter down

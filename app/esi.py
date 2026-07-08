@@ -14,6 +14,7 @@ Scopes requested:
 import json as _json
 import logging
 import os
+import re
 import secrets
 import time
 from datetime import datetime, timedelta, timezone
@@ -32,6 +33,15 @@ log = logging.getLogger(__name__)
 CLIENT_ID     = os.environ.get("EVE_CLIENT_ID", "")
 CLIENT_SECRET = os.environ.get("EVE_CLIENT_SECRET", "")
 CALLBACK_URL  = os.environ.get("EVE_CALLBACK_URL", "https://eve-pi.failed.name/auth/callback")
+
+_NATURAL_SPLIT = re.compile(r"(\d+)")
+
+
+def natural_name_key(name: str):
+    """Sort key so 'alt 2' < 'alt 10' < 'alt 20' (plain string sort gives alt 1, alt 10,
+    alt 2, alt 20 — digit runs compare lexicographically, not numerically)."""
+    return [int(chunk) if chunk.isdigit() else chunk.lower()
+            for chunk in _NATURAL_SPLIT.split(name or "")]
 
 SCOPES = "esi-skills.read_skills.v1 esi-planets.manage_planets.v1 esi-planets.read_customs_offices.v1"
 # Corp-wallet read is requested only on the dedicated "connect wallet" login (?wallet=1) so the

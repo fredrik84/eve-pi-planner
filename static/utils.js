@@ -29,6 +29,12 @@ function _esc(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+// Natural/numeric-aware name compare — "alt 2" before "alt 10" before "alt 20" (plain
+// localeCompare treats digit runs as text, sorting alt 1, alt 10, alt 2, alt 20).
+function _natCompare(a, b) {
+  return (a || '').localeCompare((b || ''), undefined, { numeric: true, sensitivity: 'base' });
+}
+
 // Hours → "1d 23h 30m" (keeps minutes, unlike _fmtHours which floors them past 24h).
 function _fmtDHM(h) {
   const total = Math.round((h || 0) * 60);
