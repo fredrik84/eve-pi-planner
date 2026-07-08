@@ -1,6 +1,8 @@
 """
 Planetary industry planning — extractor assignment across characters.
 """
+import logging
+import time as _time
 from fractions import Fraction
 from math import gcd, ceil
 
@@ -21,6 +23,7 @@ from app.planner_recommendations import (
     _P0_PLANET_TYPES, _p0_col, _fetch_p0_planets, _system_recommendations,
 )
 
+log = logging.getLogger(__name__)
 router = APIRouter()
 
 # ── DB setup ──────────────────────────────────────────────────────────────────
@@ -338,7 +341,6 @@ def project_factory_pad(product_tid: int, inputs: list, base_product: float, t0,
 
 import json as _json
 import secrets as _secrets
-import time as _time
 
 
 @ensure_once
@@ -3322,8 +3324,10 @@ def _run_plan(req: PlanRequest, context_id: int) -> dict:
 
     sorted_p1, p1_info_raw, all_p0_names = _build_p1_info_raw(p1_reqs, p1_to_p0, types)
 
+    _t0_recs = _time.monotonic()
     p0_planet_lists, p0_planet_lists_global, best_ptypes, sys_recs = _fetch_planets_and_recs(
         con, all_p0_names, req, types, p1_info_raw)
+    log.info("plan.fetch_planets_and_recs in %.1fms", (_time.monotonic() - _t0_recs) * 1000)
 
     fac_db_planets, factory_system_options, sys_fac_capacity = _factory_candidates(
         con, req, only_bt=True)
@@ -3411,12 +3415,14 @@ def _run_plan(req: PlanRequest, context_id: int) -> dict:
     density_est = (_density_estimate(p1_info, p0_planet_lists, ext_slots, has_planet_db)
                    if _norm_dist_mode(req.distribution_mode) == "stability" else None)
 
+    _t0_pipeline = _time.monotonic()
     assignments, remaining, char_nonfac = _run_extractor_pipeline(
         req, char_list, p1_info, ext_slots, needed_at_baseline,
         p0_planet_lists, p0_planet_lists_global, has_planet_db, has_system_name,
         auto_mode, factory_avoid_cids=_factory_avoid_cids, factory_avoid=_factory_avoid,
         density_est=density_est, reusable_type_ids={req.type_id},
     )
+    log.info("plan.extractor_pipeline in %.1fms", (_time.monotonic() - _t0_pipeline) * 1000)
 
     # Pick best factory system
     sys_fac_count: dict[str, int] = {}
