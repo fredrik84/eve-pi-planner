@@ -4,12 +4,60 @@ system/constellation recommendations scored by density and jump-distance
 clustering. Read-only queries against pp_planets — not part of the
 extractor/factory seating algorithm itself (see app/planner.py for that).
 """
+import json as _json
 import logging
 import time
 
 from app.planetary import PLANET_P0_MAP, _NAME_TO_COL
 
 log = logging.getLogger(__name__)
+
+# _system_recommendations is the one uncached hotspot the 2026-07-08 layout/factory-fit Redis
+# caching fix didn't cover (see project memory project_eve_pi_planner_frontend_offload). Unlike
+# that fix's inputs, none of THIS function's inputs are per-user — p0_names/p0_needs derive from
+# the product recipe (fixed per type_id/basket) and constellations/systems/preferred_systems/
+# max_jumps/min_density are the request's own scoping choices, all cacheable fleet-wide. The one
+# mutable dependency is pp_planets (admin-editable), so this is deliberately NOT the same helper
+# as planner.py's _layout_cache_get_or_compute (whose doc comment asserts its cached values are
+# pure/never-invalidated static SDE data — that's not true here, reusing it would be exactly the
+# "reuse-by-conditional" CLAUDE.md warns against). TTL is hours, not the layout cache's 30 days,
+# and _SYSREC_CACHE_VER_KEY is bumped (not scanned) on any pp_planets write — see
+# _bump_sysrec_cache_version, called from app.planetary's _invalidate_planetdb_cache.
+_SYSREC_CACHE_TTL = 4 * 3600
+_SYSREC_CACHE_VER_KEY = "sysrec:ver"
+_SYSREC_VER_TTL = 90 * 86400  # generous — only needs to outlive the TTL of entries it versions
+
+
+def _sysrec_cache_version() -> int:
+    from app.cache import cache_get_json
+    v = cache_get_json(_SYSREC_CACHE_VER_KEY)
+    return int(v) if v is not None else 1
+
+
+def bump_sysrec_cache_version():
+    """Invalidate every cached system-recommendation result in one O(1) write (Redis has no
+    wildcard delete via the existing single-key cache_invalidate) by bumping the version prefix
+    folded into every cache key — same pattern as planner.py's _LAYOUT_CALC_VER. Call this
+    whenever pp_planets changes (see app.planetary._invalidate_planetdb_cache)."""
+    from app.cache import cache_set_json
+    cache_set_json(_SYSREC_CACHE_VER_KEY, _sysrec_cache_version() + 1, ttl=_SYSREC_VER_TTL)
+
+
+def _sysrec_cache_key(p0_names, constellations, systems, preferred_systems, max_jumps,
+                       min_density, p0_needs) -> str:
+    payload = {
+        "p0": sorted(p0_names),
+        "const": sorted(constellations) if constellations else None,
+        "sys": sorted(systems) if systems else None,
+        "pref": preferred_systems,
+        "mj": max_jumps,
+        "dens": min_density,
+        # Rounded so float noise (e.g. 4.000000001 vs 4.0 from different call paths) doesn't
+        # fragment the cache into near-duplicate keys for what's really the same request.
+        "needs": {k: round(v, 2) for k, v in sorted((p0_needs or {}).items())},
+    }
+    key_body = _json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return f"sysrec:{_sysrec_cache_version()}:{key_body}"
 
 _P0_PLANET_TYPES: dict[str, list[str]] = {}
 for _pt, _p0s in PLANET_P0_MAP.items():
@@ -83,21 +131,36 @@ def _system_recommendations(
     min_density: int = 0,
     p0_needs: dict[str, float] | None = None,
 ) -> list:
-    """Timed wrapper — this is the uncached hotspot fired on every /api/plan and
-    /api/plan-fuelblock request, including the wizard's debounced live re-run on every
-    filter tweak. Logged standalone (not just as part of the caller's total) so its cost
-    distribution under real traffic can be read straight from the logs."""
+    """Cached + timed wrapper. This is the uncached-until-now hotspot fired on every /api/plan
+    and /api/plan-fuelblock request, including the wizard's debounced live re-run on every
+    filter tweak — none of its inputs are per-user, so results are cached fleet-wide (see the
+    module-level comment above _SYSREC_CACHE_TTL for why this needs its own cache rather than
+    reusing planner.py's _layout_cache_get_or_compute). Logged standalone (not just as part of
+    the caller's total) so cost + hit rate under real traffic can be read straight from the logs."""
+    from app.cache import cache_get_json, cache_set_json
     t0 = time.monotonic()
+    key = _sysrec_cache_key(p0_names, constellations, systems, preferred_systems, max_jumps,
+                             min_density, p0_needs)
+    cached = cache_get_json(key)
+    if cached is not None:
+        log.info(
+            "sysrec HIT n_p0=%d n_sys=%s pref=%d in %.1fms",
+            len(p0_names), len(systems) if systems else "*", preferred_systems,
+            (time.monotonic() - t0) * 1000,
+        )
+        return cached
+
     result = _system_recommendations_impl(
         p0_names, con, top_n=top_n, constellations=constellations, systems=systems,
         preferred_systems=preferred_systems, max_jumps=max_jumps, min_density=min_density,
         p0_needs=p0_needs,
     )
     log.info(
-        "sysrec n_p0=%d n_sys=%s pref=%d in %.1fms",
+        "sysrec MISS n_p0=%d n_sys=%s pref=%d in %.1fms",
         len(p0_names), len(systems) if systems else "*", preferred_systems,
         (time.monotonic() - t0) * 1000,
     )
+    cache_set_json(key, result, ttl=_SYSREC_CACHE_TTL)
     return result
 
 
