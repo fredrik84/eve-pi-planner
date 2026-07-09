@@ -808,12 +808,20 @@ def factory_fit(body: dict = Body(...)):
 
 
 @router.get("/api/my-setup-plan")
-def my_setup_plan(pp_session: str = Cookie(default=None)):
+def my_setup_plan(pp_session: str = Cookie(default=None), debug_context_id: int | None = None):
     """Derive a 'demand profile' per distinct product the player's DEPLOYED factories build,
     shaped like a saved plan snapshot so the Setup Analysis tab can compare it against the
     player's extractor production (supply). Strictly scoped to the session's context so a
     player only ever sees their own factories."""
+    import os as _os
+    # Same DEBUG_PI gate as /api/debug/plan below — lets test scripts exercise this against a
+    # seeded fixture context without a real session. `debug_context_id` (query param) lets one
+    # test run cover several fixture contexts; falls back to the env var for parity with
+    # /api/debug/plan's convention. Both no-ops unless DEBUG_PI is set — never set in prod.
     context_id = session_context_id(pp_session)
+    if _os.environ.get("DEBUG_PI"):
+        env_ctx = _os.environ.get("DEBUG_CONTEXT_ID")
+        context_id = debug_context_id or (int(env_ctx) if env_ctx else None) or context_id
     if not context_id:
         return {"plans": []}
     return {"plans": derive_setup_plans(context_id)}

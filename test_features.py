@@ -138,6 +138,12 @@ def test_debug_memory_gated(base: str) -> bool:
     return check(code == 403, f"anonymous memory diagnostics rejected (got HTTP {code})")
 
 
+def test_debug_user_gated(base: str) -> bool:
+    print(f"\n{'='*60}\n  GET /api/admin/debug/user is admin-gated\n{'='*60}")
+    code = get_status(f"{base}/api/admin/debug/user?character_name=nobody")
+    return check(code == 403, f"anonymous user debug lookup rejected (got HTTP {code})")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--url", default="https://eve-pi.failed.name")
@@ -154,6 +160,7 @@ def main():
         test_admin_stats_gated(base),
         test_aggregate_yields_gated(base),
         test_debug_memory_gated(base),
+        test_debug_user_gated(base),
     ]
     print(f"\n{'='*60}")
     passed = sum(results)

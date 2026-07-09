@@ -59,7 +59,7 @@ def add_char(cid, nm, ic, ccu=5):
         "command_center_upgrades, context_id, is_dummy) VALUES (?,?,?,?,?,0)", (cid, nm, ic, ccu, CTX))
 
 
-def add_colony(cid, sid, pn, ptype, is_ext, product=None, out_name=None, per_day=None):
+def add_colony(cid, sid, pn, ptype, is_ext, product=None, out_name=None, per_day=None, is_hybrid=0):
     sim = None
     if is_ext:
         rate = (per_day or 0) / 86400.0
@@ -71,10 +71,10 @@ def add_colony(cid, sid, pn, ptype, is_ext, product=None, out_name=None, per_day
     prods = [{"type_id": NAME[product], "name": product}] if product else None
     cur.execute(
         "INSERT INTO pp_char_planets (character_id, planet_id, planet_type, solar_system_id, "
-        "upgrade_level, num_pins, is_extractor, p0_name, planet_num, products, sim_state) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        "upgrade_level, num_pins, is_extractor, p0_name, planet_num, products, sim_state, is_hybrid) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
         (cid, cid * 100 + pn, ptype, sid, 5, 10, is_ext, out_name, pn,
-         json.dumps(prods) if prods else None, sim))
+         json.dumps(prods) if prods else None, sim, is_hybrid))
 
 
 # ── TST-AA: Coolant (Electrolytes ← Ionic Solutions / Storm, Water ← Aqueous Liquids / Barren-Temp) ──
