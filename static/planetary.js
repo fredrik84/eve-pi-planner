@@ -2723,7 +2723,54 @@ function settingsSection(name, doLoad) {
     s.style.display = (s.id === 'settingsSec' + name.charAt(0).toUpperCase() + name.slice(1)) ? '' : 'none');
   if (name === 'notifications' && doLoad !== false) loadNotifications();
   // Computed only on reveal, never during background renders — see _renderMoveCharacterSection.
-  if (name === 'characters') _renderMoveCharacterSection();
+  if (name === 'characters') {
+    _renderMoveCharacterSection();
+    const importSec = document.getElementById('importSetupSection');
+    if (importSec) importSec.style.display = _loggedIn ? '' : 'none';
+  }
+}
+
+// Freezes today's /api/my-setup-plan read (one entry per deployed product) into named,
+// permanent pp_plan_snapshots rows — reuses the exact same save endpoint/shape as
+// savePlanForRefills (analysis.js), since a derived "Current setup" plan is already built to the
+// same shape (name/factories/consumption/products_per_day/...). Unlike the live derived read,
+// which recomputes from whatever colonies exist right now, these are frozen at import time (dated
+// name) so re-importing later gives you something to diff against instead of silently overwriting.
+async function importCurrentSetupAsPlan(btn) {
+  const statusEl = document.getElementById('importSetupStatus');
+  const setStatus = (msg) => { if (statusEl) statusEl.textContent = msg; };
+  if (!_loggedIn) { setStatus('Log in first.'); return; }
+  if (btn) btn.disabled = true;
+  setStatus('Checking your deployed colonies…');
+  try {
+    const resp = await fetch('/api/my-setup-plan');
+    const data = await resp.json();
+    const plans = data.plans || [];
+    if (!plans.length) {
+      setStatus('No deployed factories found — nothing to import.');
+      return;
+    }
+    const dateTag = new Date().toISOString().slice(0, 10);
+    let saved = 0, failed = 0;
+    for (const plan of plans) {
+      const snap = { ...plan, name: `${plan.name} — imported ${dateTag}` };
+      try {
+        const r = await fetch('/api/plan-snapshots', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: snap.name, snapshot: snap }),
+        });
+        if (r.ok) saved++; else failed++;
+      } catch (e) { failed++; }
+    }
+    setStatus(failed
+      ? `Imported ${saved} plan${saved === 1 ? '' : 's'}, ${failed} failed.`
+      : `Imported ${saved} plan${saved === 1 ? '' : 's'} as saved snapshot${saved === 1 ? '' : 's'}.`);
+    if (typeof renderSavedPlansBar === 'function') renderSavedPlansBar();   // keep the Refill tab's list current
+  } catch (e) {
+    setStatus('Import failed: ' + e.message);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 // Intercept switchTab('characters') → settings modal. Must run at script-load time

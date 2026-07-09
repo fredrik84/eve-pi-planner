@@ -943,6 +943,12 @@ PVF-N9    3         95                 60             80                  100   
               </div>
             </div>
             <div id="moveCharSection"></div>
+            <div id="importSetupSection" class="settings-subsec" style="display:none">
+              <div class="settings-subsec-title">Import current setup</div>
+              <div class="settings-subsec-hint">Freeze what you actually have deployed right now — per product, from your real colonies — into saved plans, so you can compare against them later in the PI Planner / Refill tab without re-running the wizard.</div>
+              <button onclick="importCurrentSetupAsPlan(this)">Import my current setup as a plan</button>
+              <span id="importSetupStatus" class="bug-status-msg"></span>
+            </div>
           </div>
 
           <!-- Notifications section -->
@@ -1049,7 +1055,7 @@ PVF-N9    3         95                 60             80                  100   
 
   <script src="/utils.js?v=3"></script>
   <script src="/app.js?v=30"></script>
-  <script src="/planetary.js?v=344"></script>
+  <script src="/planetary.js?v=345"></script>
   <script src="/dashboard.js?v=13"></script>
   <script src="/admin.js?v=10"></script>
   <script src="/planetdb.js?v=3"></script>
