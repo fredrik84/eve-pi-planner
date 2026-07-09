@@ -55,10 +55,10 @@ def optimize_production(
     order_text: str,
     pi_data: dict,
 ) -> dict:
-    # scipy/numpy are heavy (~2-3s combined) and only ever needed here, so import lazily —
-    # keeps them off the cold-start path for every request that isn't /api/optimize.
+    # numpy/highspy are only ever needed here, so import lazily — keeps them off the cold-start
+    # path for every request that isn't /api/optimize.
     import numpy as np
-    from scipy.optimize import linprog
+    import highspy
 
     types = pi_data["types"]
     schematics = pi_data["schematics"]
@@ -132,20 +132,35 @@ def optimize_production(
     ]
 
     # ── Solve LP ───────────────────────────────────────────────────────────────
-    result = linprog(-weights, A_ub=C, b_ub=b, bounds=bounds, method="highs")
+    # Same HiGHS solver scipy.optimize.linprog(method="highs") delegates to internally, called
+    # directly — highspy has no scipy/numpy-suite dependency chain, just numpy itself.
+    h = highspy.Highs()
+    h.silent()
+    hvars = h.addVariables(
+        n_out,
+        lb=[lo for lo, _hi in bounds],
+        ub=[(hi if hi is not None else highspy.kHighsInf) for _lo, hi in bounds],
+    )
+    h.maximize(sum(float(weights[col]) * hvars[col] for col in range(n_out) if weights[col] != 0))
+    for row in range(n_res):
+        terms = [float(C[row, col]) * hvars[col] for col in range(n_out) if C[row, col] != 0]
+        if terms:
+            h.addConstr(sum(terms) <= float(b[row]))
+    h.run()
+    status = h.getModelStatus()
 
-    if not result.success:
+    if status != highspy.HighsModelStatus.kOptimal:
         return {
             "plan": [],
             "leftover": {types[tid]["name"]: qty for tid, qty in inventory.items() if tid in types},
             "utilization": 0.0,
             "not_producible": not_producible,
             "unknown_items": inv_unknown + ord_unknown,
-            "error": result.message,
+            "error": h.modelStatusToString(status),
             "total_isk": 0.0,
         }
 
-    x = np.floor(np.maximum(result.x, 0.0))
+    x = np.floor(np.maximum(np.array(h.getSolution().col_value), 0.0))
 
     # ── Build plan ─────────────────────────────────────────────────────────────
     plan = []
