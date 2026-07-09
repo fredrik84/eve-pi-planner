@@ -36,19 +36,21 @@ These are standing rules for ALL changes. Follow them unless the user explicitly
    doesn't change per-player. Use ESI for live per-character data. **Live data trumps everything —
    UNLESS the value can be reliably derived from a known, documented formula** (then compute it; see
    the extraction-decay and factory-rate models, which are formula-derived rather than scraped).
-6. **Scale the workflow to the change.** For a big or disruptive change (new feature, anything
-   touching the planning algorithm, schema/migration changes, anything you'd want to soak-test),
-   go `dev` first: commit and push to `origin/dev` — CI builds a `:dev`-tagged image
-   (`.github/workflows/build.yml`, `branches: [main, dev]`). For quick local iteration (UI tweaks,
-   etc.) there's also a local `docker compose` stack — separate from, and not automatically kept in
-   sync with, the live k8s `dev` namespace below. ArgoCD Image Updater picks up the new `:dev`
-   digest automatically and rolls the live dev pod at `eve-pi-dev.failed.name` the same way prod
-   does. Test against whichever is more convenient, then once it looks right:
+6. **Default to `main` only — `dev` is opt-in, not routine.** Each push (to either branch)
+   triggers its own CI build + ArgoCD deploy + Discord notification chain, so pushing to both
+   doubles the notification volume for one logical change. Normal changes (the vast majority) go
+   straight to `main` — commit and push there directly. Only route through `dev` first when there's
+   a real reason to soak-test before prod: a big or disruptive change (new feature, anything
+   touching the planning algorithm, schema/migration changes) where you genuinely want to watch it
+   run before it hits prod. In that case: commit and push to `origin/dev` — CI builds a
+   `:dev`-tagged image (`.github/workflows/build.yml`, `branches: [main, dev]`), ArgoCD Image
+   Updater rolls the live dev pod at `eve-pi-dev.failed.name` the same way prod does. For quick
+   local iteration (UI tweaks, etc.) there's also a local `docker compose` stack — separate from,
+   and not automatically kept in sync with, the live k8s `dev` namespace. Once it looks right:
    `git checkout main && git pull && git merge dev && git push origin main` — **that push is the
-   prod deploy**, so don't push to `main` before dev testing has actually happened. For a small,
-   low-risk change (copy tweaks, static assets, a one-line fix), skip the soak and push directly to
-   **both** `main` and `dev` so they stay aligned — keeping `dev` behind `main` just means the next
-   real dev test starts from a stale base. End commit messages with the Co-Authored-By trailer.
+   prod deploy**. Don't push the same small change to both branches "to keep them aligned" — that's
+   the pattern that causes the doubled pings; `dev` drifting behind `main` between real dev-test
+   uses is expected and fine. End commit messages with the Co-Authored-By trailer.
    **Deployment off `main` is fully
    automated**: GitHub Actions builds `:latest` (~38s), ArgoCD image updater detects the new digest
    within 2 minutes and commits to evpi-gitops, ArgoCD syncs and rolls the pod — total ~3 min, no
