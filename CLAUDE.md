@@ -36,15 +36,20 @@ These are standing rules for ALL changes. Follow them unless the user explicitly
    doesn't change per-player. Use ESI for live per-character data. **Live data trumps everything —
    UNLESS the value can be reliably derived from a known, documented formula** (then compute it; see
    the extraction-decay and factory-rate models, which are formula-derived rather than scraped).
-6. **`dev` first, `main` only after it's proven out.** Commit and push to `origin/dev` first — CI
-   builds a `:dev`-tagged image (`.github/workflows/build.yml`, `branches: [main, dev]`). For quick
-   local iteration (UI tweaks, etc.) there's also a local `docker compose` stack — separate from,
-   and not automatically kept in sync with, the live k8s `dev` namespace below. ArgoCD Image Updater
-   picks up the new `:dev` digest automatically and rolls the live dev pod at
-   `eve-pi-dev.failed.name` the same way prod does. Test against whichever is more convenient, then
-   once it looks right: `git checkout main && git pull && git merge dev && git push origin main` —
-   **that push is the prod deploy**, so don't push to `main` before dev testing has actually
-   happened. End commit messages with the Co-Authored-By trailer. **Deployment off `main` is fully
+6. **Scale the workflow to the change.** For a big or disruptive change (new feature, anything
+   touching the planning algorithm, schema/migration changes, anything you'd want to soak-test),
+   go `dev` first: commit and push to `origin/dev` — CI builds a `:dev`-tagged image
+   (`.github/workflows/build.yml`, `branches: [main, dev]`). For quick local iteration (UI tweaks,
+   etc.) there's also a local `docker compose` stack — separate from, and not automatically kept in
+   sync with, the live k8s `dev` namespace below. ArgoCD Image Updater picks up the new `:dev`
+   digest automatically and rolls the live dev pod at `eve-pi-dev.failed.name` the same way prod
+   does. Test against whichever is more convenient, then once it looks right:
+   `git checkout main && git pull && git merge dev && git push origin main` — **that push is the
+   prod deploy**, so don't push to `main` before dev testing has actually happened. For a small,
+   low-risk change (copy tweaks, static assets, a one-line fix), skip the soak and push directly to
+   **both** `main` and `dev` so they stay aligned — keeping `dev` behind `main` just means the next
+   real dev test starts from a stale base. End commit messages with the Co-Authored-By trailer.
+   **Deployment off `main` is fully
    automated**: GitHub Actions builds `:latest` (~38s), ArgoCD image updater detects the new digest
    within 2 minutes and commits to evpi-gitops, ArgoCD syncs and rolls the pod — total ~3 min, no
    manual deploy step. Runs on the 3-node k3s HA cluster (`node01-03.failed.name`).
