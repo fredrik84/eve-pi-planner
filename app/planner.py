@@ -821,21 +821,23 @@ def my_setup_plan(pp_session: str = Cookie(default=None)):
     con = get_connection()
     # Configured factory planets (non-extractor, with a top-tier product) for THIS account only.
     # Hybrid colonies (extraction + a chained P1->P2+ factory on one planet, is_hybrid=1) are
-    # included too, gated behind the hybrid_colonies flag — their `products` column is already
-    # correctly populated (the highest-tier collapse in _fetch_planets doesn't check is_extractor),
-    # so no extra parsing is needed, just widening which rows qualify.
-    from app.features import feature_enabled
-    # Bare integer literals aren't valid in a boolean position under Postgres (unlike SQLite's
-    # dynamic typing), so use an always-false/always-true comparison rather than raw 0/1.
-    _hybrid_clause = "cp.is_hybrid = 1" if feature_enabled("hybrid_colonies") else "1=0"
-    rows = con.execute(f"""
+    # deliberately EXCLUDED here, even though the hybrid_colonies flag exists — a hybrid colony's
+    # P1 need is self-fed on the same planet (see _hybridReseatSection in analysis.js), but this
+    # endpoint's consumption feeds the account-wide burndown/supply comparison (_producersOf in
+    # analysis.js), which itself excludes hybrid colonies' output as non-exportable. Including them
+    # here manufactured demand that supply could structurally never satisfy — for an account with
+    # zero standalone factories (all hybrid), every derived "Current setup" plan read 0% fed
+    # regardless of how well the colonies were actually running. Hybrid colonies get their own
+    # correct, self-contained analysis via _hybridReseatSection — this endpoint should stay
+    # standalone-factories-only.
+    rows = con.execute("""
         SELECT c.character_name AS ch, cp.planet_num AS pn, s.name AS system,
                cp.products AS products, cp.pad_inputs AS pad_inputs
         FROM pp_char_planets cp
         JOIN pp_characters c ON c.character_id = cp.character_id
         LEFT JOIN solar_systems s ON s.system_id = cp.solar_system_id
         WHERE c.context_id = ? AND COALESCE(c.is_dummy, 0) = 0
-          AND (cp.is_extractor = 0 OR {_hybrid_clause})
+          AND cp.is_extractor = 0
           AND cp.products IS NOT NULL AND cp.products != '[]'
     """, (context_id,)).fetchall()
     con.close()
