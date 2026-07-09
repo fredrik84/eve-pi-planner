@@ -47,6 +47,12 @@ def load_pi_data() -> dict:
 
     con.close()
 
-    name_to_id = {v["name"].lower(): k for k, v in types.items()}
+    # The SDE genuinely has duplicate-named rows for some types (e.g. every legacy "Planet
+    # (Barren)"-style pseudo-item was reissued at a new, higher type_id: [2016, 56018], while the
+    # low legacy id is no longer accepted by the client for imports). Building this from
+    # `SELECT ... FROM types` with no ORDER BY made which id won arbitrary (Postgres row order
+    # isn't guaranteed) — sorting ascending by type_id first so the highest id always wins on a
+    # name collision makes this deterministic AND correct (CCP's reissues are always the higher id).
+    name_to_id = {v["name"].lower(): k for k, v in sorted(types.items())}
 
     return {"types": types, "schematics": schematics, "name_to_id": name_to_id}
