@@ -13,9 +13,6 @@ Ordered items are capped at their order quantity; non-ordered items are uncapped
 Fractional LP solution is floored to integers before output.
 """
 
-import numpy as np
-from scipy.optimize import linprog
-
 from app.pi import parse_inventory, resolve_inventory, compute_producible_costs
 
 
@@ -58,6 +55,11 @@ def optimize_production(
     order_text: str,
     pi_data: dict,
 ) -> dict:
+    # scipy/numpy are heavy (~2-3s combined) and only ever needed here, so import lazily —
+    # keeps them off the cold-start path for every request that isn't /api/optimize.
+    import numpy as np
+    from scipy.optimize import linprog
+
     types = pi_data["types"]
     schematics = pi_data["schematics"]
     name_to_id = pi_data["name_to_id"]
