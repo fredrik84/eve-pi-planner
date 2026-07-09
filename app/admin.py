@@ -723,6 +723,66 @@ def debug_memory(_: int = Depends(require_admin)):
     }
 
 
+@router.get("/api/admin/debug/user")
+def debug_user(character_name: str, _: int = Depends(require_admin)):
+    """Read-only dump of one player's colonies + derived plan, for support/bug debugging without
+    needing prod DB shell access. Built after the Aiden Lorrent "0% fed" report (2026-07-09) took a
+    manual psql session to diagnose — this surfaces the same data (colonies, hybrid/extractor flags,
+    the /api/my-setup-plan derivation) through the same admin auth already gating the rest of this
+    file, so future reports like it are a curl away instead of a shell session."""
+    import json as _json
+    con = get_connection()
+    char = con.execute(
+        "SELECT character_id, character_name, context_id, is_dummy FROM pp_characters "
+        "WHERE character_name = ? COLLATE NOCASE", (character_name,),
+    ).fetchone()
+    if not char:
+        con.close()
+        raise HTTPException(404, "no character with that name")
+    context_id = char["context_id"]
+
+    siblings = con.execute(
+        "SELECT character_name, is_dummy FROM pp_characters WHERE context_id=? ORDER BY character_name COLLATE NOCASE",
+        (context_id,),
+    ).fetchall()
+
+    colonies = con.execute("""
+        SELECT c.character_name AS character, cp.planet_num, s.name AS system, cp.planet_type,
+               cp.is_extractor, cp.is_hybrid, cp.p0_name, cp.products, cp.product_chain
+        FROM pp_char_planets cp
+        JOIN pp_characters c ON c.character_id = cp.character_id
+        LEFT JOIN solar_systems s ON s.system_id = cp.solar_system_id
+        WHERE c.context_id = ?
+        ORDER BY c.character_name, cp.planet_num
+    """, (context_id,)).fetchall()
+
+    profiles = con.execute(
+        "SELECT id, name, type_id FROM pp_profiles WHERE context_id=?", (context_id,),
+    ).fetchall()
+    con.close()
+
+    def _colony(r):
+        d = dict(r)
+        for k in ("products", "product_chain"):
+            try:
+                d[k] = _json.loads(d[k]) if d[k] else None
+            except Exception:
+                pass
+        return d
+
+    from app.planner import derive_setup_plans
+    return {
+        "character": dict(char),
+        "context_characters": {
+            "real": [s["character_name"] for s in siblings if not s["is_dummy"]],
+            "dummy_count": sum(1 for s in siblings if s["is_dummy"]),
+        },
+        "colonies": [_colony(r) for r in colonies],
+        "saved_profiles": [dict(r) for r in profiles],
+        "derived_setup_plans": derive_setup_plans(context_id),
+    }
+
+
 @router.get("/metrics", response_class=PlainTextResponse, include_in_schema=False)
 def prometheus_metrics(request: Request):
     """Prometheus text-format metrics scrape endpoint.

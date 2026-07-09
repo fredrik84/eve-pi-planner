@@ -816,6 +816,12 @@ def my_setup_plan(pp_session: str = Cookie(default=None)):
     context_id = session_context_id(pp_session)
     if not context_id:
         return {"plans": []}
+    return {"plans": derive_setup_plans(context_id)}
+
+
+def derive_setup_plans(context_id: int) -> list[dict]:
+    """The actual derivation behind /api/my-setup-plan, factored out so the admin debug endpoint
+    (app/admin.py) can run it for an arbitrary context_id without going through session auth."""
     pi = load_pi_data()
     types = pi["types"]
     con = get_connection()
@@ -901,7 +907,7 @@ def my_setup_plan(pp_session: str = Cookie(default=None)):
         })
     # Highest-tier / biggest operations first.
     plans.sort(key=lambda x: (-x["tier"], -x["factories_count"]))
-    return {"plans": plans}
+    return plans
 
 
 # The three caches below all memoize expensive layout-engine geometry computations
