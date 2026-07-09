@@ -647,7 +647,7 @@ def generate_split_extractor_layout(p1a_id: int, p1b_id: int, heads_a: int = 5, 
         planet_type = both[0]
 
     struct = _structure_ids(pi_data, planet_type)
-    struct["planet_type_id"] = pi_data["name_to_id"].get(f"planet ({planet_type})")
+    struct["planet_type_id"] = pi_data["name_to_id"].get(f"planet ({planet_type})".lower())
 
     cc = CMD_CTR_LEVEL if cc_level is None else max(1, min(5, int(cc_level)))
     lp = max(1, min(MAX_LAUNCHPADS, launchpads))
@@ -761,7 +761,7 @@ def generate_extractor_layout(p1_id: int, planet_type: str = "Barren", launchpad
         planet_type = valid[0]
 
     struct = _structure_ids(pi_data, planet_type)
-    struct["planet_type_id"] = pi_data["name_to_id"].get(f"planet ({planet_type})")
+    struct["planet_type_id"] = pi_data["name_to_id"].get(f"planet ({planet_type})".lower())
 
     cc = CMD_CTR_LEVEL if cc_level is None else max(1, min(5, int(cc_level)))
     lp = max(1, min(MAX_LAUNCHPADS, launchpads))
@@ -822,7 +822,7 @@ def fitted_extractor_basics(planet_type: str, cc: int, no_storage: bool = False)
         pi_data = load_pi_data()
         p1_id = next(tid for tid, t in pi_data["types"].items() if t.get("pi_tier") == 1)
         struct = _structure_ids(pi_data, planet_type)
-        struct["planet_type_id"] = pi_data["name_to_id"].get(f"planet ({planet_type})")
+        struct["planet_type_id"] = pi_data["name_to_id"].get(f"planet ({planet_type})".lower())
 
         def _build(nb):
             b = build_extractor_template(p1_id, planet_type, struct, pi_data, EXTRACTOR_HEADS, nb,
@@ -912,7 +912,7 @@ def generate_layout(product_id: int, planet_type: str = "Barren",
         planet_type = "Barren"   # High-Tech Production Plant is Barren/Temperate only
 
     struct = _structure_ids(pi_data, planet_type)
-    struct["planet_type_id"] = pi_data["name_to_id"].get(f"planet ({planet_type})")
+    struct["planet_type_id"] = pi_data["name_to_id"].get(f"planet ({planet_type})".lower())
 
     def _build(c):
         if tier == 2:
