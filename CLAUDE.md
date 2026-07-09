@@ -52,9 +52,12 @@ These are standing rules for ALL changes. Follow them unless the user explicitly
    the pattern that causes the doubled pings; `dev` drifting behind `main` between real dev-test
    uses is expected and fine. End commit messages with the Co-Authored-By trailer.
    **Deployment off `main` is fully
-   automated**: GitHub Actions builds `:latest` (~38s), ArgoCD image updater detects the new digest
-   within 2 minutes and commits to evpi-gitops, ArgoCD syncs and rolls the pod — total ~3 min, no
-   manual deploy step. Runs on the 3-node k3s HA cluster (`node01-03.failed.name`).
+   automated**: GitHub Actions builds `:latest` (~20-40s, not correlated with image size), the
+   ArgoCD image updater detects the new digest (polls ghcr every 30s) and commits to evpi-gitops,
+   then ArgoCD syncs and rolls the pod (its own git-poll runs ~every 60-110s, separate from the
+   image updater's poll — the two stack). Real measured end-to-end push-to-running time is in the
+   low single-digit minutes, not a fixed number — see `evpi-gitops`'s deploy-latency notes if this
+   needs re-tuning. Runs on the 3-node k3s HA cluster (`node01-03.failed.name`).
 
    **Namespace layout (since 2026-07-04):** prod and dev are two fully independent stacks — separate
    namespaces (`production` / `dev`), each with its own Postgres, Redis, and EVE SSO callback
