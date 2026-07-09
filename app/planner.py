@@ -20,7 +20,7 @@ from app.planner_serialization import (
     _fleet_fingerprint, _plan_staleness,
 )
 from app.planner_recommendations import (
-    _P0_PLANET_TYPES, _p0_col, _fetch_p0_planets, _system_recommendations,
+    _P0_PLANET_TYPES, _p0_col, _fetch_p0_planets, _system_recommendations, _blend_value,
 )
 
 log = logging.getLogger(__name__)
@@ -711,6 +711,8 @@ def analyze_placements(body: dict = Body(...), pp_session: str = Cookie(default=
     type_ids = [int(t) for t in (body.get("type_ids") or [])]
     if not type_ids:
         return {"placements": {}}
+    from app.features import feature_enabled
+    blend_on = feature_enabled("measured_yield_blend")
     pi = load_pi_data()
     types, sch = pi["types"], pi["schematics"]
     con = get_connection()
@@ -746,10 +748,27 @@ def analyze_placements(body: dict = Body(...), pp_session: str = Cookie(default=
             f'SELECT system, planet_num, planet_type, "{col}" AS r FROM pp_planets WHERE "{col}" > 0{type_filter}',
             valid_types,
         ).fetchall()
+        # Nudge each candidate's richness toward real pooled extraction yield (pp_planet_yield_avg,
+        # confidence-weighted by sample count — see planner_recommendations._blend_value) so a
+        # redeploy/add-colony estimate for a material the player has never grown reflects what other
+        # players actually measured on that planet, not just its static SDE value.
+        measured: dict[tuple, dict] = {}
+        if blend_on:
+            try:
+                measured = {
+                    (m["system"], m["planet_num"]): {"pct": m["measured_pct"], "n": m["sample_count"]}
+                    for m in con.execute(
+                        "SELECT system, planet_num, measured_pct, sample_count "
+                        "FROM pp_planet_yield_avg WHERE p0_name=?", (col,),
+                    ).fetchall()
+                }
+            except Exception:
+                pass
         by_char = {}
         for cid, systems in foot.items():
             avail = [{"system": p["system"], "planet_num": p["planet_num"],
-                      "planet_type": p["planet_type"], "richness": round(p["r"] or 0)}
+                      "planet_type": p["planet_type"],
+                      "richness": round(_blend_value(p["r"] or 0, measured.get((p["system"], p["planet_num"]))))}
                      for p in planets
                      if p["system"] in systems and (p["system"], p["planet_num"]) not in occ.get(cid, set())]
             avail.sort(key=lambda x: -x["richness"])
