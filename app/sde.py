@@ -47,12 +47,15 @@ def load_pi_data() -> dict:
 
     con.close()
 
-    # The SDE genuinely has duplicate-named rows for some types (e.g. every legacy "Planet
-    # (Barren)"-style pseudo-item was reissued at a new, higher type_id: [2016, 56018], while the
-    # low legacy id is no longer accepted by the client for imports). Building this from
-    # `SELECT ... FROM types` with no ORDER BY made which id won arbitrary (Postgres row order
-    # isn't guaranteed) — sorting ascending by type_id first so the highest id always wins on a
-    # name collision makes this deterministic AND correct (CCP's reissues are always the higher id).
-    name_to_id = {v["name"].lower(): k for k, v in sorted(types.items())}
+    # The SDE genuinely has duplicate-named rows for some types (e.g. every "Planet (Barren)"-style
+    # pseudo-item exists at both a legacy low type_id [2016] and a reissued high one [56018]).
+    # Building this from `SELECT ... FROM types` with no ORDER BY made which id won arbitrary
+    # (Postgres row order isn't guaranteed). An earlier version of this fix preferred the HIGHEST
+    # id, assuming the reissue was canonical — that was backwards: confirmed via a controlled
+    # in-game test (identical PI-import template, only Pln changed from the legacy id to the
+    # reissued one) that the EVE client's PI-import validator only accepts the LEGACY (lower) id
+    # and rejects the reissued one as "not in the correct format". Sorting descending by type_id
+    # so the LOWEST id wins on a name collision makes this deterministic AND correct.
+    name_to_id = {v["name"].lower(): k for k, v in sorted(types.items(), reverse=True)}
 
     return {"types": types, "schematics": schematics, "name_to_id": name_to_id}
