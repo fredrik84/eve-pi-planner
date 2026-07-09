@@ -16,7 +16,10 @@ These are standing rules for ALL changes. Follow them unless the user explicitly
 1. **Always test.** Write proper test cases for new features and run them against the container
    before calling anything shipped. Existing suites: `test_distribution.py` (planner correctness,
    needs `DEBUG_PI`/`DEBUG_CONTEXT_ID`), `test_features.py` (feature flags + skill-roi public
-   surface). Add to these or create a new `test_*.py` in the same urllib/`--url` style. Assert
+   surface), `test_optimizer.py` (LP-solver correctness for `/api/optimize` — synthetic
+   hand-computable cases + a live smoke test; run the in-process cases inside the container, not
+   the bare host, since `highspy`/`numpy` are only installed there). Add to these or create a new
+   `test_*.py` in the same urllib/`--url` style. Assert
    *durable invariants*, not runtime state an admin can change (e.g. don't assert a flag's enabled
    value equals its code default — admins toggle it).
 2. **Gate new features.** Every NEW feature ships behind a feature flag (`app/features.py`
