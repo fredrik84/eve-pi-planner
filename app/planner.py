@@ -913,7 +913,38 @@ def derive_setup_plans(context_id: int) -> list[dict]:
             "factories": g["factories"],
             "tier": types.get(tid, {}).get("pi_tier") or 0,
         })
-    # Highest-tier / biggest operations first.
+
+    # A player with multiple deployed products (e.g. a Coolant line AND a Mechanical Parts line)
+    # otherwise has to switch the Refill tool between each product's plan one at a time, and two
+    # products sharing a P1 (e.g. both wanting Precious Metals) have no shared bookkeeping between
+    # their separate views — a pasted stack can get double-allocated. This merges every current
+    # product into ONE combined entry (factories concatenated, consumption summed per P1) exactly
+    # the way a multi-product basket/fuel-block plan already looks to the Refill tool — same flat
+    # shape, so it reuses the existing single global-ratio split math with no frontend changes.
+    if len(plans) > 1:
+        combined_factories = [f for p in plans for f in p["factories"]]
+        cons_map: dict[int, dict] = {}
+        for p in plans:
+            for c in p["consumption"]:
+                e = cons_map.setdefault(c["p1_type_id"], {
+                    "p1_type_id": c["p1_type_id"], "p1_name": c["p1_name"],
+                    "units_per_day": 0, "sell": c.get("sell", 0.0),
+                })
+                e["units_per_day"] += c["units_per_day"]
+        isk_vals = [p["isk_per_day"] for p in plans if p.get("isk_per_day")]
+        refill_vals = [p["factory_refill_hours"] for p in plans if p.get("factory_refill_hours") is not None]
+        plans.append({
+            "name": f"Current setup: All factories combined (×{len(combined_factories)})",
+            "consumption": list(cons_map.values()),
+            "products_per_day": None,   # mixes incompatible products — no single meaningful unit
+            "isk_per_day": round(sum(isk_vals), 2) if isk_vals else None,
+            "factories_count": len(combined_factories),
+            "factory_refill_hours": min(refill_vals) if refill_vals else None,
+            "unit_label": "combined",
+            "factories": combined_factories,
+            "tier": 99,   # always sorts first (above any real tier 1-4) — the sensible default pick
+        })
+    # Highest-tier / biggest operations first (the combined entry, tier=99, always wins).
     plans.sort(key=lambda x: (-x["tier"], -x["factories_count"]))
     return plans
 
