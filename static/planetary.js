@@ -1356,47 +1356,43 @@ async function loadProfiles() {
   } catch (e) { console.error('Failed to load profiles:', e); }
 }
 
+// Managed from Settings → Plans (moved out of the wizard 2026-07-09 — deleting a profile from
+// inside the planning flow was an odd place for it, and profiles/plans render into always-present
+// elements here rather than the wizard step, so no "only on reveal" guard is needed).
 function renderProfilesBar(profiles) {
-  const bar = document.getElementById('ppProfilesBar');
-  const sel = document.getElementById('ppProfileSelect');
-  if (!bar || !sel) return;
-  if (!_loggedIn || !profiles.length) { bar.style.display = 'none'; return; }
-  bar.style.display = '';
-  sel.innerHTML = profiles.map(p => {
+  const el = document.getElementById('settingsProfilesList');
+  if (!el) return;
+  if (!_loggedIn || !profiles.length) {
+    el.innerHTML = _loggedIn ? '<div class="pp-empty">No saved profiles yet.</div>' : '';
+    return;
+  }
+  el.innerHTML = profiles.map(p => {
     const op = p.overproduction_pct ?? 10;
     const sys = p.preferred_systems || 1;
-    const label = `${p.stale ? '⚠ ' : ''}${p.name}  —  ${p.type_name || '?'} · +${op}% overprod · ${sys} sys`;
-    return `<option value="${p.id}">${_esc(label)}</option>`;
+    const stale = p.stale
+      ? `<span class="pp-saved-stale" title="${_esc(p.stale_reason || 'fleet changed since saved')} — Load re-runs against your current fleet">⚠ stale</span>` : '';
+    return `<div class="pp-saved-row${p.stale ? ' pp-saved-row-stale' : ''}">
+        <span class="pp-saved-name">${_esc(p.name)}${stale}</span>
+        <span class="pp-saved-meta">${_esc(p.type_name || '?')} · +${op}% overprod · ${sys} sys</span>
+        <span class="pp-saved-actions">
+          <button class="pp-profile-action-btn" onclick="settingsLoadProfile(${p.id})">Load</button>
+          <button class="pp-profile-action-btn pp-profile-del-btn" onclick="settingsDeleteProfile(${p.id})">Delete</button>
+        </span>
+      </div>`;
   }).join('');
-  sel.onchange = _updateProfileWarn;
-  _updateProfileWarn();
 }
 
-// Show a "this saved plan is stale — re-run" note when the selected profile's fleet/skills have
-// changed since it was saved (re-running would place colonies differently).
-function _updateProfileWarn() {
-  const sel = document.getElementById('ppProfileSelect');
-  const warn = document.getElementById('ppProfileWarn');
-  if (!sel || !warn) return;
-  const p = (_ppProfiles || []).find(x => x.id === parseInt(sel.value, 10));
-  if (p && p.stale) {
-    warn.style.display = '';
-    warn.innerHTML = `⚠ Stale — ${_esc(p.stale_reason || 'fleet changed since saved')}. <b>Load &amp; re-run</b> to refresh.`;
-  } else {
-    warn.style.display = 'none';
-  }
-}
-
-function ppLoadSelectedProfile() {
-  const sel = document.getElementById('ppProfileSelect');
-  const id = sel && parseInt(sel.value);
+// Load a profile from Settings: apply it, then leave the modal and land on the wizard step it
+// configures (_applyProfile already calls wizardGo(1); this just gets the right tab on screen).
+function settingsLoadProfile(id) {
   const profile = _ppProfiles.find(p => p.id === id);
-  if (profile) _applyProfile(profile);
+  if (!profile) return;
+  closeSettingsModal();
+  if (typeof switchTab === 'function') switchTab('planetary');
+  _applyProfile(profile);
 }
 
-async function ppDeleteSelectedProfile() {
-  const sel = document.getElementById('ppProfileSelect');
-  const id = sel && parseInt(sel.value);
+async function settingsDeleteProfile(id) {
   const profile = _ppProfiles.find(p => p.id === id);
   if (!profile) return;
   if (!confirm(`Delete profile "${profile.name}"?`)) return;
@@ -1588,6 +1584,10 @@ async function _tryRestoreFromHash() {
 
 // Restore the last plan from localStorage on a fresh page load (no share link). One-shot per
 // load so navigating back to the tab mid-session doesn't yank you off whatever you're editing.
+// Deliberately does NOT jump to the Plan step (autoNav=false) — opening the PI Planner tab used
+// to silently dump you on a stale result page just because you'd built *any* plan before, even
+// an unsaved one (reported 2026-07-09). The data is still restored (renderFinalPlan runs, so
+// Step 3 is ready if you navigate there), just not forced on you.
 let _autoRestoreDone = false;
 async function _tryRestoreLastPlan() {
   if (_autoRestoreDone || _shareConsumed) return;
@@ -1596,10 +1596,13 @@ async function _tryRestoreLastPlan() {
   try { payload = JSON.parse(localStorage.getItem('ppLastPlan') || 'null'); } catch (e) { return; }
   if (!payload || !payload.tid || !payload.plan) return;
   _shareConsumed = true;  // reuse the share guard so a share link (if any) doesn't double-restore
-  try { await _restoreFromPayload(payload); } catch (e) { console.error('Restore last plan failed:', e); }
+  try { await _restoreFromPayload(payload, false, false); } catch (e) { console.error('Restore last plan failed:', e); }
 }
 
-async function _restoreFromPayload(payload, fromShare = false) {
+// autoNav: jump straight to the Plan step once restored. true for a share link (that's the
+// point of the link) and an explicit "Open plan" click; false for the passive last-plan restore
+// above, which should prep the data without hijacking navigation on every tab open.
+async function _restoreFromPayload(payload, fromShare = false, autoNav = true) {
   _wiz.fromShare = !!fromShare;   // a shared plan is someone else's fleet — editing re-plans for YOURS
   const tidBasketId = _basketIdFromTid(payload.tid);
   const isFuelBlock = payload.tid === FUEL_BLOCK_TYPE_ID;
@@ -1659,7 +1662,7 @@ async function _restoreFromPayload(payload, fromShare = false) {
       pc.prepend(note);
     }
     if (fromShare) _showSharedBanner();
-    wizardGo(3);
+    if (autoNav) wizardGo(3);
     return;
   }
   // v1 fallback: re-run the plan (requires login)
@@ -2694,11 +2697,14 @@ function openSettingsModal(section) {
   const modal = document.getElementById('settingsModal');
   if (!modal) return;
   // Show/hide nav items based on current login/feature state.
+  const plansNav = document.getElementById('settingsNavPlans');
+  if (plansNav) plansNav.style.display = _loggedIn ? '' : 'none';
   const notifNav = document.getElementById('settingsNavNotifications');
   if (notifNav) notifNav.style.display = (_loggedIn && _featureActive('notifications')) ? '' : 'none';
   const acctNav = document.getElementById('settingsNavAccount');
   if (acctNav) acctNav.style.display = _loggedIn ? '' : 'none';
   // If the requested section is gated and not available, fall back to characters.
+  if (section === 'plans' && !_loggedIn) section = 'characters';
   if (section === 'notifications' && !((_loggedIn && _featureActive('notifications')))) section = 'characters';
   if (section === 'account' && !_loggedIn) section = 'characters';
   modal.style.display = 'flex';
@@ -2723,11 +2729,8 @@ function settingsSection(name, doLoad) {
     s.style.display = (s.id === 'settingsSec' + name.charAt(0).toUpperCase() + name.slice(1)) ? '' : 'none');
   if (name === 'notifications' && doLoad !== false) loadNotifications();
   // Computed only on reveal, never during background renders — see _renderMoveCharacterSection.
-  if (name === 'characters') {
-    _renderMoveCharacterSection();
-    const importSec = document.getElementById('importSetupSection');
-    if (importSec) importSec.style.display = _loggedIn ? '' : 'none';
-  }
+  if (name === 'characters') _renderMoveCharacterSection();
+  if (name === 'plans' && doLoad !== false) { loadProfiles(); renderSavedPlansBar(); }
 }
 
 // Freezes today's /api/my-setup-plan read (one entry per deployed product) into named,

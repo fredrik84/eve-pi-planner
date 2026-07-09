@@ -41,15 +41,16 @@ async function _fetchAllSnapshots() {
   ];
 }
 
-// Page-1 "Saved plans" list (Planetary Planning). Lists the refill snapshots so you can jump
-// straight to refilling one without going through the PI Planner tab.
+// Settings → Plans "Saved plans" list. Lists the refill snapshots so you can jump straight to
+// reopening/refilling one. Moved out of the wizard's step 1 (2026-07-09) — deleting a saved plan
+// from inside the planning flow was an odd place for it; management now lives in Settings, always
+// rendered into an always-present element (no "only on reveal" guard needed).
 async function renderSavedPlansBar() {
-  const el = document.getElementById('ppSavedPlansBar');
+  const el = document.getElementById('settingsPlansList');
   if (!el) return;
   const snaps = await _fetchAllSnapshots();
   _analyzeSnaps = snaps;   // warm the Setup Analysis cache so its tab paints instantly
-  if (!snaps.length) { el.style.display = 'none'; el.innerHTML = ''; return; }
-  el.style.display = '';
+  if (!snaps.length) { el.innerHTML = _loggedIn ? '<div class="pp-empty">No saved plans yet.</div>' : ''; return; }
   const rows = snaps.map(s => {
     const nfac = (s.factories || []).length;
     const ppd = s.products_per_day;
@@ -70,8 +71,7 @@ async function renderSavedPlansBar() {
         </span>
       </div>`;
   }).join('');
-  el.innerHTML = `<details class="pp-saved-fold"><summary>Saved plans (${snaps.length})</summary>
-      <div class="pp-saved-list">${rows}</div></details>`;
+  el.innerHTML = rows;
 }
 
 // Reopen a saved plan as the full allocation view (Planetary Planning → Plan step). Pulls the
@@ -84,8 +84,9 @@ async function openSavedPlanFull(srvId) {
     alert('This saved plan has no stored plan view — re-save it (Save plan) to enable Open.');
     return;
   }
+  if (typeof closeSettingsModal === 'function') closeSettingsModal();
   if (typeof switchTab === 'function') switchTab('planetary');
-  await _restoreFromPayload(payload);
+  await _restoreFromPayload(payload, false, true);   // explicit open → navigate to the plan
 }
 
 // Open a saved plan straight in the refill tool (PI Planner → Refill a plan, that plan selected).
@@ -93,6 +94,7 @@ function openSavedPlanRefill(id) {
   const sect = document.getElementById('planDistSection');
   if (sect) sect.dataset.sel = id;
   _refillUserPicked = true;       // they explicitly opened THIS plan to refill — keep it selected
+  if (typeof closeSettingsModal === 'function') closeSettingsModal();
   if (typeof switchTab === 'function') switchTab('planner');
   if (typeof setPiMode === 'function') setPiMode('refill');
 }
