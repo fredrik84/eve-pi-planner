@@ -484,6 +484,15 @@ document.addEventListener('DOMContentLoaded', () => {
   // Load session/character state on every page load so the header + Dashboard nav populate
   // (and a logged-in player with no remembered tab lands on the Dashboard).
   if (typeof loadCharacters === 'function') loadCharacters();
+  // Cache-hint ticker: next_data_at is a fixed timestamp from the last /api/characters load,
+  // and nothing else re-renders the header between rescans/reloads, so the "cached until
+  // HH:MM" hint would otherwise keep showing long after HH:MM actually passed. Recompute from
+  // already-loaded data (no network call) every 30s so it clears itself on time.
+  setInterval(() => {
+    if (_sessionLoaded && typeof renderHeaderSession === 'function') {
+      renderHeaderSession(_loggedIn, _ppCharsData, _ppSessionCharId);
+    }
+  }, 30000);
 });
 
 document.getElementById('inv').addEventListener('keydown', e => {

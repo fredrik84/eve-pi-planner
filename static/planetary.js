@@ -211,6 +211,7 @@ let _loggedIn = false;
 let _isAdmin = false;
 let _sessionLoaded = false;   // true once /api/characters has resolved → _isAdmin/_loggedIn are real
 let _ppCharsData = [];   // last /api/characters payload, for the Setup Analysis tab
+let _ppSessionCharId = null;   // last session_character_id, so the cache-hint tick below can re-render without a fetch
 
 let _loadCharactersInFlight = null;
 async function loadCharacters() {
@@ -227,6 +228,7 @@ async function loadCharacters() {
       _loggedIn = data.logged_in || false;
       _isAdmin = data.is_admin || false;
       _ppCharsData = data.characters || [];
+      _ppSessionCharId = data.session_character_id;
       renderCharacters(data.characters || [], _loggedIn);
       renderHeaderSession(_loggedIn, data.characters || [], data.session_character_id);
       _sessionLoaded = true;
@@ -277,8 +279,13 @@ function renderHeaderSession(loggedIn, chars, sessionCharId) {
   // always null, "no opinion") — without excluding it here, one never-scanned alt permanently
   // hid this hint for the whole account, since .every() below saw its null and gave up.
   const _rescanTargets = chars.filter(c => !c.is_dummy && !c.wallet_only && c.token_ok && c.character_id > 0 && (c.planets || []).length > 0);
+  // next_data_at is a fixed timestamp from the last scan — once real time passes it, the cache
+  // has actually expired even though the stale value is still sitting in _ppCharsData (nothing
+  // re-fetches it), so a plain truthiness check kept showing "cached until HH:MM" long after
+  // HH:MM had passed. Gate on it still being in the future too.
+  const _nowSec = Date.now() / 1000;
   const _allCached = _featureActive('esi_cache_skip') && _rescanTargets.length > 0
-    && _rescanTargets.every(c => c.next_data_at);
+    && _rescanTargets.every(c => c.next_data_at && c.next_data_at > _nowSec);
   // The "no new data until" phrase is wrapped separately so it can be hidden on narrow mobile
   // headers (style-misc-responsive.css) without losing the time itself — the full phrase is
   // still in the title tooltip. Without this, the hint's full text was wide enough to push the
@@ -592,7 +599,10 @@ function renderCharacters(chars, loggedIn) {
     // ESI caches each colony independently — next_data_at is only set when EVERY one of this
     // character's planets is still within its cache window, i.e. a rescan right now is
     // guaranteed to come back unchanged. Admin-preview until the esi_cache_skip flag ships.
-    const cacheHint = (c.next_data_at && _featureActive('esi_cache_skip'))
+    // Also gate on it still being in the future — next_data_at is a fixed timestamp from the
+    // last scan, so once real time passes it a plain truthiness check kept showing a stale
+    // "No new data until HH:MM" long after HH:MM had passed.
+    const cacheHint = (c.next_data_at && c.next_data_at > Date.now() / 1000 && _featureActive('esi_cache_skip'))
       ? `<span class="pp-cache-hint" title="ESI hasn't regenerated this character's colony data yet — a rescan now would return the same cached data.">No new data until ${_fmtEpochClock(c.next_data_at)}</span>`
       : '';
 
