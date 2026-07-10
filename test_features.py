@@ -19,7 +19,7 @@ import urllib.error
 # state VALUE: an admin can change visibility at runtime, so the live state legitimately
 # diverges from the code default. The durable invariant is "the key exists and state is one of
 # the valid values" (app/features.py VALID_STATES: hidden/admin/testers/public).
-EXPECTED_FEATURES = ["timeline", "split_extraction", "baskets", "skill_roi", "move_character", "schedule_sync", "pad_fill", "measured_yield", "hybrid_colonies", "measured_yield_blend"]
+EXPECTED_FEATURES = ["timeline", "split_extraction", "baskets", "skill_roi", "move_character", "schedule_sync", "pad_fill", "measured_yield", "hybrid_colonies", "measured_yield_blend", "alert_settings"]
 VALID_STATES = {"hidden", "admin", "testers", "public"}
 
 
@@ -144,6 +144,31 @@ def test_debug_user_gated(base: str) -> bool:
     return check(code == 403, f"anonymous user debug lookup rejected (got HTTP {code})")
 
 
+def put_status(url: str, body: dict) -> int:
+    req = urllib.request.Request(
+        url, data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json"}, method="PUT")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return resp.status
+    except urllib.error.HTTPError as e:
+        return e.code
+
+
+def test_alert_settings_gated(base: str) -> bool:
+    print(f"\n{'='*60}\n  /api/alert-settings requires authentication\n{'='*60}")
+    ok = True
+    code = get_status(f"{base}/api/alert-settings")
+    ok &= check(code == 401, f"anonymous GET rejected (got HTTP {code})")
+    body = {"expiring_hours": 3, "storage_warn_pct": 80, "storage_high_pct": 95,
+            "storage_high_ttf_hours": 2, "storage_urgent_hours": 3}
+    code = put_status(f"{base}/api/alert-settings", body)
+    ok &= check(code == 401, f"anonymous PUT rejected (got HTTP {code})")
+    code = post_status(f"{base}/api/alert-settings/reset", {})
+    ok &= check(code == 401, f"anonymous reset rejected (got HTTP {code})")
+    return ok
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--url", default="https://eve-pi.failed.name")
@@ -161,6 +186,7 @@ def main():
         test_aggregate_yields_gated(base),
         test_debug_memory_gated(base),
         test_debug_user_gated(base),
+        test_alert_settings_gated(base),
     ]
     print(f"\n{'='*60}")
     passed = sum(results)

@@ -11,6 +11,7 @@ from fastapi import APIRouter, Body, Cookie, Depends, Request
 from app.sde import load_pi_data, get_connection, ensure_once
 from app.market import fetch_prices
 from app.esi import require_context, session_context_id, ensure_char_tables, PI_CHAR_SQL, natural_name_key
+from app.alert_settings import get_alert_settings
 from app.planner_models import (
     CharConfigEntry, SaveConfigRequest, PlanRequest, PlanShareSave,
     ProfileSave, PlanSnapshotSave,
@@ -1625,7 +1626,10 @@ def dashboard(pp_session: str = Cookie(default=None)):
 
     # Colony warnings, grouped PER CHARACTER and counted (so a fleet of expiring extractors is one
     # "12 extractions expiring" line, not 12 rows). Stored scan-time kinds + a live expiry check.
-    EXPIRING_WINDOW = 3 * 3600                     # 3h — short enough that 1-day cycles don't always trip
+    # Thresholds are per-account (Settings → Alerts), defaulting to the values this used to
+    # hardcode — see app/alert_settings.py.
+    _alert = get_alert_settings(context_id)
+    EXPIRING_WINDOW = _alert["expiring_hours"] * 3600   # short enough that 1-day cycles don't always trip
     by_char: dict[str, dict[str, list]] = {}      # char -> kind -> [planet labels]
     expired: dict[str, int] = {}                  # char -> count (extraction cycle events collapse
     expiring: dict[str, int] = {}                 # char -> count   into one global line each)
@@ -1671,10 +1675,11 @@ def dashboard(pp_session: str = Cookie(default=None)):
         parts = ", ".join(f"{c} ×{n}" for c, n in sorted(tally.items(), key=lambda x: -x[1]))
         return {"char": header, "severity": sev,
                 "items": [{"severity": sev, "msg": f"{total} extractor{'s' if total != 1 else ''} {verb} — {parts}"}]}
+    _expiring_h_str = ("%g" % _alert["expiring_hours"])
     if expired:
         issues.append(_collapse(expired, "high", "Extractions expired", "expired"))
     if expiring:
-        issues.append(_collapse(expiring, "warn", "Extractions expiring soon", "expiring within 3h"))
+        issues.append(_collapse(expiring, "warn", "Extractions expiring soon", f"expiring within {_expiring_h_str}h"))
 
     # Storage filling up — EXTRACTOR planets only (their output piles up if you don't haul; a
     # factory's launchpads are meant to sit full of inputs and drain, so those aren't flagged).
@@ -1713,7 +1718,7 @@ def dashboard(pp_session: str = Cookie(default=None)):
         ttf = ((cap - vol) / fill_h) if fill_h > 0 and vol < cap else None
         if ttf is not None and (empty_due_h is None or ttf < empty_due_h):
             empty_due_h, empty_due_loc = ttf, cloc
-        if pct < 80:
+        if pct < _alert["storage_warn_pct"]:
             continue
         loc = sysloc
         if r["cid"] is not None: chars_in_view.add(r["cid"])
@@ -1732,11 +1737,13 @@ def dashboard(pp_session: str = Cookie(default=None)):
         # Grouped: a count in the header + only the few most-urgent pads, so a big fleet shows one tidy
         # card (e.g. "62 launchpads ≥80% full (8 within 3h)") instead of dozens of rows.
         n = len(fulls)
-        urgent = sum(1 for f in fulls if f["ttf"] is not None and f["ttf"] < 3)
-        head = f"Storage filling up — {n} launchpad{'s' if n != 1 else ''} ≥80% full"
+        urgent = sum(1 for f in fulls if f["ttf"] is not None and f["ttf"] < _alert["storage_urgent_hours"])
+        head = f"Storage filling up — {n} launchpad{'s' if n != 1 else ''} ≥{round(_alert['storage_warn_pct'])}% full"
         if urgent:
-            head += f" ({urgent} within 3h)"
-        items = [{"severity": "high" if (f["pct"] >= 95 or (f["ttf"] is not None and f["ttf"] < 2)) else "warn",
+            head += f" ({urgent} within {'%g' % _alert['storage_urgent_hours']}h)"
+        items = [{"severity": "high" if (f["pct"] >= _alert["storage_high_pct"]
+                                          or (f["ttf"] is not None and f["ttf"] < _alert["storage_high_ttf_hours"]))
+                  else "warn",
                   "msg": f"{f['ch']} · {f['loc']} — {f['pct']}% full{_ttf_str(f['ttf'])}"} for f in fulls[:5]]
         if n > len(items):
             items.append({"severity": "warn", "msg": f"+ {n - len(items)} more pad{'s' if n - len(items) != 1 else ''} ≥80%"})

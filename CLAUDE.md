@@ -754,6 +754,23 @@ hiccup, omit it for new features (fail-closed). Call sites: `onDashboardTabOpen`
 (`loadAdminFeatures`/`toggleFeature`) flips flags. Registry today: `timeline`, `split_extraction`
 (default on), `baskets` (default on), `skill_roi`, `move_character`, `schedule_sync`, `pad_fill`.
 
+## Configurable Dashboard alert thresholds (`app/alert_settings.py`, `alert_settings` flag)
+
+The Dashboard's colony warnings (extraction "expiring soon", "storage filling up") used to hardcode
+their thresholds in `planner.py`'s `dashboard()`. `app/alert_settings.py` makes them per-account:
+`pp_alert_settings` (context_id PK, one row per customizing account — no row = defaults, which are
+set to exactly what used to be hardcoded, so nothing changes until a user edits them):
+`expiring_hours` (3h — extraction cycles ending within this window count as "expiring soon"),
+`storage_warn_pct` (80 — launchpad fill % that starts surfacing the warning), `storage_high_pct`
+(95) / `storage_high_ttf_hours` (2 — either escalates a pad to "high" severity), `storage_urgent_hours`
+(3 — counted in the "(N within Xh)" header). `get_alert_settings(context_id)` is the single read
+path both `dashboard()` and the settings endpoints use, so they can't drift. `GET/PUT
+/api/alert-settings` + `POST /api/alert-settings/reset`, all `require_context`-gated (own account
+only). UI: Settings modal → new **Alerts** section (`settingsSecAlerts`, gated by the
+`alert_settings` flag like `notifications` gates its own section) — 5 number inputs, Save/Reset.
+Deliberately separate from `pp_notification_prefs`' `lead_hours` (push-notification lead time) —
+these only affect what the Dashboard itself displays, not Pushover/ntfy/Discord alerts.
+
 ## Fill-factories meter (Dashboard, `pad_fill` flag)
 
 "How far does the P1 in my extractor pads go toward filling all my factories?" Backend

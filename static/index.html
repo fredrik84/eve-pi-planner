@@ -896,6 +896,10 @@ PVF-N9    3         95                 60             80                  100   
             <span class="settings-nav-ico">NF</span>
             <span class="settings-nav-lbl">Notifications</span>
           </button>
+          <button class="settings-nav-item" id="settingsNavAlerts" onclick="settingsSection('alerts')" style="display:none">
+            <span class="settings-nav-ico">AL</span>
+            <span class="settings-nav-lbl">Alerts</span>
+          </button>
           <button class="settings-nav-item" id="settingsNavAccount" onclick="settingsSection('account')" style="display:none">
             <span class="settings-nav-ico">AC</span>
             <span class="settings-nav-lbl">Account</span>
@@ -1010,6 +1014,44 @@ PVF-N9    3         95                 60             80                  100   
             </div>
           </div>
 
+          <!-- Alerts section -->
+          <div id="settingsSecAlerts" class="settings-section" style="display:none">
+            <div class="settings-sec-hdr">
+              <h3 class="settings-sec-title">Alerts</h3>
+            </div>
+            <div class="settings-subsec">
+              <div class="settings-subsec-title">Dashboard warning thresholds</div>
+              <div class="settings-subsec-hint">Controls the Dashboard's colony warnings — when an extraction counts as "expiring soon" and when a launchpad's fill % is flagged. These are separate from push notifications (Notifications section) — they only affect what's shown on the Dashboard.</div>
+              <div class="notif-prefs-row">
+                <label>Warn extractors expiring within
+                  <input type="number" id="alertExpiringHours" min="0.5" max="24" step="0.5" value="3" class="notif-hours-input">
+                  hours
+                </label>
+                <label>Flag launchpads at
+                  <input type="number" id="alertStorageWarnPct" min="1" max="100" step="1" value="80" class="notif-hours-input">
+                  % full
+                </label>
+                <label>Escalate to high severity at
+                  <input type="number" id="alertStorageHighPct" min="1" max="100" step="1" value="95" class="notif-hours-input">
+                  % full
+                </label>
+                <label>...or when full within
+                  <input type="number" id="alertStorageHighTtfHours" min="0.5" max="48" step="0.5" value="2" class="notif-hours-input">
+                  hours
+                </label>
+                <label>Count as "urgent" when full within
+                  <input type="number" id="alertStorageUrgentHours" min="0.5" max="48" step="0.5" value="3" class="notif-hours-input">
+                  hours
+                </label>
+                <div class="notif-pref-actions">
+                  <button onclick="saveAlertSettings()">Save thresholds</button>
+                  <button onclick="resetAlertSettings()">Reset to defaults</button>
+                  <span id="alertSettingsStatus" class="notif-status-msg"></span>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <!-- Account section -->
           <div id="settingsSecAccount" class="settings-section" style="display:none">
             <div class="settings-sec-hdr">
@@ -1064,7 +1106,7 @@ PVF-N9    3         95                 60             80                  100   
 
   <script src="/utils.js?v=3"></script>
   <script src="/app.js?v=31"></script>
-  <script src="/planetary.js?v=347"></script>
+  <script src="/planetary.js?v=348"></script>
   <script src="/dashboard.js?v=13"></script>
   <script src="/admin.js?v=10"></script>
   <script src="/planetdb.js?v=3"></script>

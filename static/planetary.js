@@ -2711,11 +2711,14 @@ function openSettingsModal(section) {
   if (plansNav) plansNav.style.display = _loggedIn ? '' : 'none';
   const notifNav = document.getElementById('settingsNavNotifications');
   if (notifNav) notifNav.style.display = (_loggedIn && _featureActive('notifications')) ? '' : 'none';
+  const alertsNav = document.getElementById('settingsNavAlerts');
+  if (alertsNav) alertsNav.style.display = (_loggedIn && _featureActive('alert_settings')) ? '' : 'none';
   const acctNav = document.getElementById('settingsNavAccount');
   if (acctNav) acctNav.style.display = _loggedIn ? '' : 'none';
   // If the requested section is gated and not available, fall back to characters.
   if (section === 'plans' && !_loggedIn) section = 'characters';
   if (section === 'notifications' && !((_loggedIn && _featureActive('notifications')))) section = 'characters';
+  if (section === 'alerts' && !((_loggedIn && _featureActive('alert_settings')))) section = 'characters';
   if (section === 'account' && !_loggedIn) section = 'characters';
   modal.style.display = 'flex';
   _settingsOpen = true;
@@ -2741,6 +2744,7 @@ function settingsSection(name, doLoad) {
   // Computed only on reveal, never during background renders — see _renderMoveCharacterSection.
   if (name === 'characters') _renderMoveCharacterSection();
   if (name === 'plans' && doLoad !== false) { loadProfiles(); renderSavedPlansBar(); }
+  if (name === 'alerts' && doLoad !== false) loadAlertSettings();
 }
 
 // Freezes today's /api/my-setup-plan read (one entry per deployed product) into named,
@@ -2978,6 +2982,64 @@ async function notifSavePrefs() {
     });
     if (!r.ok) { const e = await r.json(); throw new Error(e.detail || r.status); }
     status.textContent = 'Saved.';
+  } catch (e) {
+    status.textContent = 'Error: ' + e.message;
+  }
+}
+
+// ── Alert thresholds (Settings → Alerts) ──────────────────────────────────────
+
+function _renderAlertSettings(s) {
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+  set('alertExpiringHours', s.expiring_hours);
+  set('alertStorageWarnPct', s.storage_warn_pct);
+  set('alertStorageHighPct', s.storage_high_pct);
+  set('alertStorageHighTtfHours', s.storage_high_ttf_hours);
+  set('alertStorageUrgentHours', s.storage_urgent_hours);
+}
+
+async function loadAlertSettings() {
+  try {
+    const r = await fetch('/api/alert-settings');
+    const s = await r.json();
+    _renderAlertSettings(s);
+  } catch (e) {
+    console.error('Failed to load alert settings:', e);
+  }
+}
+
+async function saveAlertSettings() {
+  const status = document.getElementById('alertSettingsStatus');
+  const body = {
+    expiring_hours: parseFloat(document.getElementById('alertExpiringHours').value) || 3,
+    storage_warn_pct: parseFloat(document.getElementById('alertStorageWarnPct').value) || 80,
+    storage_high_pct: parseFloat(document.getElementById('alertStorageHighPct').value) || 95,
+    storage_high_ttf_hours: parseFloat(document.getElementById('alertStorageHighTtfHours').value) || 2,
+    storage_urgent_hours: parseFloat(document.getElementById('alertStorageUrgentHours').value) || 3,
+  };
+  status.textContent = 'Saving...';
+  try {
+    const r = await fetch('/api/alert-settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) { const e = await r.json(); throw new Error(e.detail || r.status); }
+    status.textContent = 'Saved.';
+  } catch (e) {
+    status.textContent = 'Error: ' + e.message;
+  }
+}
+
+async function resetAlertSettings() {
+  const status = document.getElementById('alertSettingsStatus');
+  status.textContent = 'Resetting...';
+  try {
+    const r = await fetch('/api/alert-settings/reset', { method: 'POST' });
+    const s = await r.json();
+    if (!r.ok) throw new Error(s.detail || r.status);
+    _renderAlertSettings(s);
+    status.textContent = 'Reset to defaults.';
   } catch (e) {
     status.textContent = 'Error: ' + e.message;
   }

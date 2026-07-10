@@ -86,6 +86,11 @@ FEATURE_REGISTRY = [
                     "measured data yet. Separate from the Planet DB display flag since this "
                     "changes real plan output, not just a badge.",
      "default": False},
+    {"key": "alert_settings", "label": "Configurable Dashboard alerts",
+     "description": "Settings → Alerts: customize the extractor-expiry warning window and "
+                    "storage-fill warning/severity thresholds used by the Dashboard's colony "
+                    "warnings, instead of the fixed defaults.",
+     "default": False},
 ]
 _DEFAULTS = {f["key"]: f for f in FEATURE_REGISTRY}
 VALID_STATES = {"hidden", "admin", "testers", "public"}
