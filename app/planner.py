@@ -12,6 +12,7 @@ from app.sde import load_pi_data, get_connection, ensure_once
 from app.market import fetch_prices
 from app.esi import require_context, session_context_id, ensure_char_tables, PI_CHAR_SQL, natural_name_key
 from app.alert_settings import get_alert_settings
+from app.colony_alerts import compute_colony_alerts
 from app.planner_models import (
     CharConfigEntry, SaveConfigRequest, PlanRequest, PlanShareSave,
     ProfileSave, PlanSnapshotSave,
@@ -1499,7 +1500,8 @@ def dashboard(pp_session: str = Cookie(default=None)):
     types = pi["types"]
     con = get_connection()
     rows = con.execute("""
-        SELECT c.character_name AS ch, c.character_id AS cid, cp.planet_num AS pn, s.name AS system,
+        SELECT c.character_name AS ch, c.character_id AS cid, cp.planet_id AS planet_id,
+               cp.planet_num AS pn, s.name AS system,
                cp.is_extractor AS is_ext, cp.products AS products,
                cp.pad_inputs AS pad_inputs, cp.pad_contents AS pad_contents,
                cp.issues AS issues, cp.sim_state AS sim_state,
@@ -1625,32 +1627,38 @@ def dashboard(pp_session: str = Cookie(default=None)):
     pads_value = round(sum(a["value"] for a in agg.values()), 2)
 
     # Colony warnings, grouped PER CHARACTER and counted (so a fleet of expiring extractors is one
-    # "12 extractions expiring" line, not 12 rows). Stored scan-time kinds + a live expiry check.
-    # Thresholds are per-account (Settings → Alerts), defaulting to the values this used to
-    # hardcode — see app/alert_settings.py.
+    # "12 extractions expiring" line, not 12 rows). All actual DETECTION (thresholds, mutes,
+    # severity) now lives in app.colony_alerts.compute_colony_alerts() — the same engine the
+    # notification scheduler consumes, so a push and what's shown here can't drift apart. This
+    # function only re-groups the flat alert list into display cards.
     _alert = get_alert_settings(context_id)
     _muted = set(_alert.get("muted_kinds") or [])
-    EXPIRING_WINDOW = _alert["expiring_hours"] * 3600   # short enough that 1-day cycles don't always trip
+    _colony_alerts = compute_colony_alerts(context_id, rows=rows, now=now)
+    for a in _colony_alerts:
+        if a["character_id"] is not None:
+            chars_in_view.add(a["character_id"])
+
     by_char: dict[str, dict[str, list]] = {}      # char -> kind -> [planet labels]
     expired: dict[str, int] = {}                  # char -> count (extraction cycle events collapse
     expiring: dict[str, int] = {}                 # char -> count   into one global line each)
-    for (r, prods, inputs, pads) in parsed:
-        ch = r["ch"] or "?"
-        loc = (r["system"] or "?") + (f" P{r['pn']}" if r["pn"] is not None else "")
-        kinds = list(_json.loads(r["issues"] or "[]"))
-        ss = _json.loads(r["sim_state"] or "null")
-        exp = ss.get("expiry") if isinstance(ss, dict) else None
-        if exp and exp < now:
+    factory_refills: dict[str, int] = {}          # char -> count
+    factory_refill_high = False                   # any instance escalated to "high" (imminent)?
+    fulls = []                                    # storage_full instances, for the grouped card below
+    _CORRECTNESS_KINDS = {"ext_unrouted", "fac_unfed", "fac_output", "p0_mismatch"}
+    for a in _colony_alerts:
+        ch = a["character_name"]
+        if a["kind"] in _CORRECTNESS_KINDS:
+            by_char.setdefault(ch, {}).setdefault(a["kind"], []).append(a["location"])
+        elif a["kind"] == "expired":
             expired[ch] = expired.get(ch, 0) + 1
-            if r["cid"] is not None: chars_in_view.add(r["cid"])
-        elif exp and exp - now < EXPIRING_WINDOW:
+        elif a["kind"] == "expiring":
             expiring[ch] = expiring.get(ch, 0) + 1
-            if r["cid"] is not None: chars_in_view.add(r["cid"])
-        for k in kinds:
-            if k in _muted:
-                continue
-            by_char.setdefault(ch, {}).setdefault(k, []).append(loc)
-            if r["cid"] is not None: chars_in_view.add(r["cid"])
+        elif a["kind"] == "factory_refill":
+            factory_refills[ch] = factory_refills.get(ch, 0) + 1
+            if a["severity"] == "high":
+                factory_refill_high = True
+        elif a["kind"] == "storage_full":
+            fulls.append({"ch": ch, "loc": a["location"], "pct": a["pct"], "ttf": a["hours_left"]})
 
     KIND = {                                       # severity, singular, plural
         "ext_unrouted": ("high", "extractor not routed", "extractors not routed"),
@@ -1672,22 +1680,55 @@ def dashboard(pp_session: str = Cookie(default=None)):
         items.sort(key=lambda x: 0 if x["severity"] == "high" else 1)
         issues.append({"char": ch, "severity": "high" if any(i["severity"] == "high" for i in items) else "warn", "items": items})
 
-    # Extraction cycle events come in fleets, so collapse each state into ONE line (char ×count).
-    def _collapse(tally, sev, header, verb):
+    # Extraction cycle events / factory refills come in fleets, so collapse each state into ONE
+    # line (char ×count) rather than one row per planet.
+    def _collapse(tally, sev, header, noun, verb):
         total = sum(tally.values())
         parts = ", ".join(f"{c} ×{n}" for c, n in sorted(tally.items(), key=lambda x: -x[1]))
         return {"char": header, "severity": sev,
-                "items": [{"severity": sev, "msg": f"{total} extractor{'s' if total != 1 else ''} {verb} — {parts}"}]}
+                "items": [{"severity": sev, "msg": f"{total} {noun}{'s' if total != 1 else ''} {verb} — {parts}"}]}
     _expiring_h_str = ("%g" % _alert["expiring_hours"])
-    if expired and "expired" not in _muted:
-        issues.append(_collapse(expired, "high", "Extractions expired", "expired"))
-    if expiring and "expiring" not in _muted:
-        issues.append(_collapse(expiring, "warn", "Extractions expiring soon", f"expiring within {_expiring_h_str}h"))
+    if expired:
+        issues.append(_collapse(expired, "high", "Extractions expired", "extractor", "expired"))
+    if expiring:
+        issues.append(_collapse(expiring, "warn", "Extractions expiring soon", "extractor", f"expiring within {_expiring_h_str}h"))
+    if factory_refills:
+        issues.append(_collapse(factory_refills, "high" if factory_refill_high else "warn",
+                                 "Factories due for refill", "factory", f"due within {_expiring_h_str}h"))
 
-    # Storage filling up — EXTRACTOR planets only (their output piles up if you don't haul; a
-    # factory's launchpads are meant to sit full of inputs and drain, so those aren't flagged).
-    # % full and ~time-to-full are projected forward from the checkpoint at the colony's output rate.
-    fulls = []
+    if fulls:
+        fulls.sort(key=lambda x: (x["ttf"] if x["ttf"] is not None else 1e9, -x["pct"]))
+
+        def _ttf_str(t):
+            if t is None:
+                return ""
+            if t < 1:
+                return " · full within the hour"
+            if t >= 24:
+                return f" · ~{round(t / 24)}d to full"
+            return f" · ~{round(t)}h to full"
+        # Grouped: a count in the header + only the few most-urgent pads, so a big fleet shows one tidy
+        # card (e.g. "62 launchpads ≥80% full (8 within 3h)") instead of dozens of rows.
+        n = len(fulls)
+        urgent = sum(1 for f in fulls if f["ttf"] is not None and f["ttf"] < _alert["storage_urgent_hours"])
+        head = f"Storage filling up — {n} launchpad{'s' if n != 1 else ''} ≥{round(_alert['storage_warn_pct'])}% full"
+        if urgent:
+            head += f" ({urgent} within {'%g' % _alert['storage_urgent_hours']}h)"
+        items = [{"severity": "high" if (f["pct"] >= _alert["storage_high_pct"]
+                                          or (f["ttf"] is not None and f["ttf"] < _alert["storage_high_ttf_hours"]))
+                  else "warn",
+                  "msg": f"{f['ch']} · {f['loc']} — {f['pct']}% full{_ttf_str(f['ttf'])}"} for f in fulls[:5]]
+        if n > len(items):
+            items.append({"severity": "warn", "msg": f"+ {n - len(items)} more pad{'s' if n - len(items) != 1 else ''} ≥{round(_alert['storage_warn_pct'])}%"})
+        issues.append({"char": head,
+                       "severity": "high" if any(i["severity"] == "high" for i in items) else "warn",
+                       "items": items})
+    issues.sort(key=lambda c: 0 if c["severity"] == "high" else 1)
+
+    # The maintenance-routine countdown stats below (restart/empty/refill cadence) are always-on
+    # numbers, not muteable alerts, so they're computed separately from compute_colony_alerts() —
+    # they still need every extractor's storage/program data regardless of any account's alert
+    # thresholds or mutes.
     prog_days_list = []                          # extractor program lengths → restart cadence (median)
     empty_pads_h = None; empty_pads_loc = None   # tightest empty→full launchpad time (emptying CADENCE)
     empty_due_h = None; empty_due_loc = None     # soonest pad to cap from its CURRENT fill (DEADLINE)
@@ -1717,43 +1758,9 @@ def dashboard(pp_session: str = Cookie(default=None)):
         el_h = max(0.0, (now - anchor) / 3600.0) if anchor else 0.0
         cap = st["cap_m3"] or 1
         vol = min(cap, st["vol_m3"] + fill_h * el_h)
-        pct = vol / cap * 100.0
         ttf = ((cap - vol) / fill_h) if fill_h > 0 and vol < cap else None
         if ttf is not None and (empty_due_h is None or ttf < empty_due_h):
             empty_due_h, empty_due_loc = ttf, cloc
-        if pct < _alert["storage_warn_pct"]:
-            continue
-        loc = sysloc
-        if r["cid"] is not None: chars_in_view.add(r["cid"])
-        fulls.append({"ch": r["ch"] or "?", "loc": loc, "pct": round(pct), "ttf": ttf})
-    if fulls and "storage_full" not in _muted:
-        fulls.sort(key=lambda x: (x["ttf"] if x["ttf"] is not None else 1e9, -x["pct"]))
-
-        def _ttf_str(t):
-            if t is None:
-                return ""
-            if t < 1:
-                return " · full within the hour"
-            if t >= 24:
-                return f" · ~{round(t / 24)}d to full"
-            return f" · ~{round(t)}h to full"
-        # Grouped: a count in the header + only the few most-urgent pads, so a big fleet shows one tidy
-        # card (e.g. "62 launchpads ≥80% full (8 within 3h)") instead of dozens of rows.
-        n = len(fulls)
-        urgent = sum(1 for f in fulls if f["ttf"] is not None and f["ttf"] < _alert["storage_urgent_hours"])
-        head = f"Storage filling up — {n} launchpad{'s' if n != 1 else ''} ≥{round(_alert['storage_warn_pct'])}% full"
-        if urgent:
-            head += f" ({urgent} within {'%g' % _alert['storage_urgent_hours']}h)"
-        items = [{"severity": "high" if (f["pct"] >= _alert["storage_high_pct"]
-                                          or (f["ttf"] is not None and f["ttf"] < _alert["storage_high_ttf_hours"]))
-                  else "warn",
-                  "msg": f"{f['ch']} · {f['loc']} — {f['pct']}% full{_ttf_str(f['ttf'])}"} for f in fulls[:5]]
-        if n > len(items):
-            items.append({"severity": "warn", "msg": f"+ {n - len(items)} more pad{'s' if n - len(items) != 1 else ''} ≥{round(_alert['storage_warn_pct'])}%"})
-        issues.append({"char": head,
-                       "severity": "high" if any(i["severity"] == "high" for i in items) else "warn",
-                       "items": items})
-    issues.sort(key=lambda c: 0 if c["severity"] == "high" else 1)
 
     # Dashboard shows spare capacity as STATUS only (free slots / idle / trained-up counts); the
     # concrete "deploy this here" advice lives in Setup Analysis (GET /api/expansion). Keeps the

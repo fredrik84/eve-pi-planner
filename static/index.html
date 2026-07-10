@@ -994,12 +994,14 @@ PVF-N9    3         95                 60             80                  100   
             </div>
             <div class="notif-section">
               <div class="notif-section-title">Preferences</div>
-              <div class="notif-prefs-row">
-                <label><input type="checkbox" id="notifPrefExtractors"> Alert when extractors expire</label>
-                <label><input type="checkbox" id="notifPrefFactories"> Alert when factories need refilling</label>
-                <label>Warn me
-                  <input type="number" id="notifPrefLeadHours" min="1" max="72" value="4" class="notif-hours-input">
-                  hours in advance
+              <div class="notif-section-hint">Same alert types and thresholds as the Dashboard (Settings → Alerts) — pick which ones should also push a notification, checked = notify.</div>
+              <div id="notifKindList" class="settings-toggle-grid"></div>
+              <div class="notif-prefs-row" style="margin-top:12px">
+                <label>Notify me for
+                  <select id="notifMinSeverity" class="settings-field-input" style="width:auto; padding:5px 10px;">
+                    <option value="warn">All severities</option>
+                    <option value="high">High severity only</option>
+                  </select>
                 </label>
                 <div class="notif-pref-actions">
                   <button onclick="notifSavePrefs()">Save preferences</button>
@@ -1111,7 +1113,7 @@ PVF-N9    3         95                 60             80                  100   
 
   <script src="/utils.js?v=3"></script>
   <script src="/app.js?v=31"></script>
-  <script src="/planetary.js?v=350"></script>
+  <script src="/planetary.js?v=351"></script>
   <script src="/dashboard.js?v=13"></script>
   <script src="/admin.js?v=10"></script>
   <script src="/planetdb.js?v=3"></script>

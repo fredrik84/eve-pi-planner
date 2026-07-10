@@ -2869,12 +2869,15 @@ function _renderNotifChannels(settings) {
 }
 
 function _renderNotifPrefs(prefs) {
-  const ext = document.getElementById('notifPrefExtractors');
-  const fac = document.getElementById('notifPrefFactories');
-  const hrs = document.getElementById('notifPrefLeadHours');
-  if (ext) ext.checked = prefs.notify_extractors !== false;
-  if (fac) fac.checked = prefs.notify_factories !== false;
-  if (hrs) hrs.value = prefs.lead_hours || 4;
+  const listEl = document.getElementById('notifKindList');
+  if (listEl && prefs.available_kinds) {
+    const notify = new Set(prefs.notify_kinds || []);
+    listEl.innerHTML = prefs.available_kinds.map(k => `
+      <label class="settings-toggle-row"><input type="checkbox" class="notif-kind-cb" value="${_esc(k.key)}" ${notify.has(k.key) ? 'checked' : ''}> ${_esc(k.label)}</label>
+    `).join('');
+  }
+  const sev = document.getElementById('notifMinSeverity');
+  if (sev) sev.value = prefs.min_severity === 'high' ? 'high' : 'warn';
 }
 
 function _renderNotifLog(entries) {
@@ -2968,10 +2971,10 @@ async function notifResendLast() {
 
 async function notifSavePrefs() {
   const status = document.getElementById('notifPrefsStatus');
+  const notifyKinds = Array.from(document.querySelectorAll('.notif-kind-cb:checked')).map(cb => cb.value);
   const prefs = {
-    lead_hours: parseInt(document.getElementById('notifPrefLeadHours').value, 10) || 4,
-    notify_extractors: document.getElementById('notifPrefExtractors').checked,
-    notify_factories: document.getElementById('notifPrefFactories').checked,
+    notify_kinds: notifyKinds,
+    min_severity: document.getElementById('notifMinSeverity').value,
   };
   status.textContent = 'Saving...';
   try {

@@ -1,7 +1,11 @@
 """Notification support: background scheduler + channel settings + event logic.
 
 Supported channels: Pushover, ntfy.sh, Discord webhook (see notifiers.py).
-Events: extractor_expiry, factory_refill.
+Events: the same 8 alert kinds the Dashboard shows (app.alert_settings.ALERT_KINDS) — expired,
+expiring, storage_full, factory_refill, ext_unrouted, fac_unfed, fac_output, p0_mismatch. Event
+detection itself lives in app.colony_alerts.compute_colony_alerts(); this module is purely a
+consumer (kind/severity filtering, cooldown, batching, sending) — it does not implement its own
+detection, so a push notification and what's shown on the Dashboard can never drift apart.
 
 The scheduler runs check_and_send_notifications() every 15 minutes. It uses
 only data already in the DB (no ESI calls), so it works between rescans and
@@ -18,9 +22,13 @@ from pydantic import BaseModel
 from app.sde import get_connection, ensure_once
 from app.esi import require_context, session_context_id
 from app.notifiers import make_notifier, CHANNEL_LABELS
+from app.alert_settings import ALERT_KINDS
+from app.colony_alerts import compute_colony_alerts
 
 log = logging.getLogger(__name__)
 router = APIRouter()
+
+_VALID_ALERT_KINDS = {k["key"] for k in ALERT_KINDS}
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
 
@@ -60,27 +68,55 @@ def ensure_notification_tables():
         )
     """)
     con.commit()
+    for col, ddl in (("notify_kinds", "TEXT"), ("min_severity", "TEXT")):
+        try:
+            con.execute(f"ALTER TABLE pp_notification_prefs ADD COLUMN {col} {ddl}")
+            con.commit()
+        except Exception:
+            pass
+    # One-time migration for pre-existing rows (notify_kinds still NULL): derive from the old
+    # notify_extractors/notify_factories booleans, so an account that had already muted e.g.
+    # factory refills doesn't suddenly get pinged for it. Deliberately does NOT auto-enable the
+    # new kinds this unification adds (storage_full, ext_unrouted, ...) for already-configured
+    # accounts — least-surprise, don't silently expand what an already-tuned account gets pinged
+    # about. Brand new contexts (no row at all) get "everything on" via _get_prefs's default,
+    # matching the old out-of-the-box behavior (notify_extractors=1, notify_factories=1).
+    rows = con.execute(
+        "SELECT context_id, notify_extractors, notify_factories "
+        "FROM pp_notification_prefs WHERE notify_kinds IS NULL"
+    ).fetchall()
+    for r in rows:
+        kinds = []
+        if r["notify_extractors"]:
+            kinds += ["expired", "expiring"]
+        if r["notify_factories"]:
+            kinds += ["factory_refill"]
+        con.execute(
+            "UPDATE pp_notification_prefs SET notify_kinds=?, "
+            "min_severity=COALESCE(min_severity,'warn') WHERE context_id=?",
+            (_json.dumps(kinds), r["context_id"]),
+        )
     con.commit()
     con.close()
 
 
 def _get_prefs(con, context_id: int) -> dict:
     row = con.execute(
-        "SELECT lead_hours, notify_extractors, notify_factories "
-        "FROM pp_notification_prefs WHERE context_id=?",
+        "SELECT notify_kinds, min_severity FROM pp_notification_prefs WHERE context_id=?",
         (context_id,),
     ).fetchone()
-    if row:
+    if row and row["notify_kinds"] is not None:
+        try:
+            kinds = [k for k in _json.loads(row["notify_kinds"]) if k in _VALID_ALERT_KINDS]
+        except Exception:
+            kinds = []
         return {
-            "lead_hours": row["lead_hours"] or 4,
-            "notify_extractors": bool(row["notify_extractors"]),
-            "notify_factories": bool(row["notify_factories"]),
+            "notify_kinds": kinds,
+            "min_severity": row["min_severity"] if row["min_severity"] in ("warn", "high") else "warn",
         }
-    return {
-        "lead_hours": 4,
-        "notify_extractors": True,
-        "notify_factories": True,
-    }
+    # No row at all — brand new context, default to everything on (matches the old
+    # notify_extractors=1/notify_factories=1 out-of-the-box default).
+    return {"notify_kinds": [k["key"] for k in ALERT_KINDS], "min_severity": "warn"}
 
 
 def _recently_notified(con, context_id: int, event: str, planet_id: int, cooldown_h: float) -> bool:
@@ -104,107 +140,18 @@ def _log_send(con, context_id: int, channel: str, event: str, character: str | N
     )
 
 
-# ── Event detection ───────────────────────────────────────────────────────────
-
-def _extractor_events(con, context_id: int, lead_hours: float) -> list[dict]:
-    """Return extractor planets expiring within lead_hours from now."""
-    now = time.time()
-    deadline = now + lead_hours * 3600
-    rows = con.execute(
-        """
-        SELECT cy.character_id, cy.planet_id,
-               cy.install_ts, cy.prog_days,
-               ch.character_name,
-               COALESCE(ss.name, '') AS system_name,
-               cp.planet_num, cp.planet_type
-        FROM pp_colony_yield cy
-        JOIN pp_characters ch ON ch.character_id = cy.character_id
-        LEFT JOIN pp_char_planets cp
-               ON cp.character_id = cy.character_id AND cp.planet_id = cy.planet_id
-        LEFT JOIN solar_systems ss ON ss.system_id = cp.solar_system_id
-        WHERE ch.context_id = ?
-          AND cy.install_ts = (
-              SELECT MAX(cy2.install_ts) FROM pp_colony_yield cy2
-              WHERE cy2.character_id = cy.character_id AND cy2.planet_id = cy.planet_id
-          )
-          AND cy.prog_days IS NOT NULL
-        """,
-        (context_id,),
-    ).fetchall()
-    events = []
-    for r in rows:
-        expiry = r["install_ts"] + r["prog_days"] * 86400
-        if now < expiry <= deadline:
-            hours_left = (expiry - now) / 3600
-            events.append({
-                "character_id": r["character_id"],
-                "character_name": r["character_name"],
-                "planet_id": r["planet_id"],
-                "system_name": r["system_name"],
-                "planet_num": r["planet_num"],
-                "planet_type": r["planet_type"],
-                "hours_left": hours_left,
-            })
-    return events
-
-
-def _factory_events(con, context_id: int, lead_hours: float) -> list[dict]:
-    """Return factory planets due for refill within lead_hours from now."""
-    # Fetch factory_refill_hours from the most recent snapshot for this context.
-    snap_row = con.execute(
-        "SELECT snapshot FROM pp_plan_snapshots WHERE context_id=? ORDER BY created_at DESC LIMIT 1",
-        (context_id,),
-    ).fetchone()
-    if not snap_row:
-        return []
-    try:
-        snap = _json.loads(snap_row["snapshot"])
-        refill_hours = snap.get("factory_refill_hours")
-    except Exception:
-        return []
-    if not refill_hours or refill_hours <= 0:
-        return []
-
-    now = time.time()
-    deadline = now + lead_hours * 3600
-    rows = con.execute(
-        """
-        SELECT cp.character_id, cp.planet_id, cp.scanned_at,
-               ch.character_name,
-               COALESCE(ss.name, '') AS system_name,
-               cp.planet_num, cp.planet_type
-        FROM pp_char_planets cp
-        JOIN pp_characters ch ON ch.character_id = cp.character_id
-        LEFT JOIN solar_systems ss ON ss.system_id = cp.solar_system_id
-        WHERE ch.context_id = ?
-          AND cp.is_extractor = 0
-          AND cp.scanned_at IS NOT NULL
-        """,
-        (context_id,),
-    ).fetchall()
-    events = []
-    for r in rows:
-        due = r["scanned_at"] + refill_hours * 3600
-        if now < due <= deadline:
-            hours_left = (due - now) / 3600
-            events.append({
-                "character_id": r["character_id"],
-                "character_name": r["character_name"],
-                "planet_id": r["planet_id"],
-                "system_name": r["system_name"],
-                "planet_num": r["planet_num"],
-                "planet_type": r["planet_type"],
-                "hours_left": hours_left,
-            })
-    return events
-
-
-
-
 # ── Background job ────────────────────────────────────────────────────────────
 
 # Next in the sequence after build_sde.py (918_273_645) / populate_geo.py (918_273_646).
 _NOTIFY_ADVISORY_LOCK_KEY = 918_273_647
+
+# Correctness-based kinds are persistent structural problems (not time-decaying like an
+# expiring extraction), so they get a much longer cooldown to avoid nagging about the same
+# unfixed issue every 15-minute scheduler tick.
+_COOLDOWN_HOURS = {
+    "expired": 2.0, "expiring": 2.0, "storage_full": 2.0, "factory_refill": 4.0,
+    "ext_unrouted": 24.0, "fac_unfed": 24.0, "fac_output": 24.0, "p0_mismatch": 24.0,
+}
 
 
 def check_and_send_notifications():
@@ -251,7 +198,10 @@ def check_and_send_notifications():
 
 def _process_context(con, context_id: int):
     prefs = _get_prefs(con, context_id)
-    lead = prefs["lead_hours"]
+    notify_kinds = set(prefs["notify_kinds"])
+    if not notify_kinds:
+        return
+    min_severity = prefs["min_severity"]   # "warn" = everything, "high" = high only
 
     settings = con.execute(
         "SELECT id, channel, config FROM pp_notification_settings "
@@ -261,45 +211,39 @@ def _process_context(con, context_id: int):
     if not settings:
         return
 
-    ext_evs: list[dict] = []
-    fac_evs: list[dict] = []
-    if prefs["notify_extractors"]:
-        for ev in _extractor_events(con, context_id, lead):
-            ev["event"] = "extractor_expiry"
-            ev["cooldown_h"] = 2.0
-            if not _recently_notified(con, context_id, ev["event"], ev["planet_id"], ev["cooldown_h"]):
-                ext_evs.append(ev)
-    if prefs["notify_factories"]:
-        for ev in _factory_events(con, context_id, lead):
-            ev["event"] = "factory_refill"
-            ev["cooldown_h"] = 4.0
-            if not _recently_notified(con, context_id, ev["event"], ev["planet_id"], ev["cooldown_h"]):
-                fac_evs.append(ev)
-
-    for evs in (ext_evs, fac_evs):
-        if not evs:
+    by_kind: dict[str, list[dict]] = {}
+    for a in compute_colony_alerts(context_id):
+        if a["kind"] not in notify_kinds:
             continue
-        title, body = _format_batch(evs, lead_hours=lead)
+        if min_severity == "high" and a["severity"] != "high":
+            continue
+        cooldown_h = _COOLDOWN_HOURS.get(a["kind"], 2.0)
+        if a["planet_id"] is not None and _recently_notified(con, context_id, a["kind"], a["planet_id"], cooldown_h):
+            continue
+        by_kind.setdefault(a["kind"], []).append(a)
+
+    for kind, evs in by_kind.items():
+        title, body = _format_batch(kind, evs)
         for setting in settings:
             status = "ok"
             try:
                 cfg = _json.loads(setting["config"])
                 notifier = make_notifier(setting["channel"], cfg)
                 notifier.send(title, body, description=body)
-                log.info("Notification sent: %s → %s (%d events)", setting["channel"], evs[0]["event"], len(evs))
+                log.info("Notification sent: %s → %s (%d events)", setting["channel"], kind, len(evs))
             except Exception as exc:
                 status = f"error: {exc}"
-                log.warning("Notification send failed (%s/%s): %s", setting["channel"], evs[0]["event"], exc)
+                log.warning("Notification send failed (%s/%s): %s", setting["channel"], kind, exc)
             for ev in evs:
-                _log_send(con, context_id, setting["channel"], ev["event"],
+                _log_send(con, context_id, setting["channel"], kind,
                           ev["character_name"], ev["planet_id"], status)
 
 
-def _collapse_line(evs: list[dict], singular: str, plural: str, verb: str) -> str:
-    """'N extractors {verb} — Char ×6, Char2 ×6, ...' — the same tally-and-collapse style as
-    the dashboard's maintenance-issues card (planner.py's _collapse). Extraction/refill cycles
-    come in fleets (many planets sharing one schedule), so a per-planet itemization is the wrong
-    shape here — a per-character count, sorted busiest-first, is what's actually actionable."""
+def _collapse_line(evs: list[dict], singular: str, plural: str) -> str:
+    """'N extractors — Char ×6, Char2 ×6, ...' — the same tally-and-collapse style as the
+    dashboard's issue cards. These events come in fleets (many planets sharing one schedule or
+    one structural problem), so a per-planet itemization is the wrong shape here — a
+    per-character count, sorted busiest-first, is what's actually actionable."""
     tally: dict[str, int] = {}
     for e in evs:
         name = e.get("character_name") or "?"
@@ -307,21 +251,27 @@ def _collapse_line(evs: list[dict], singular: str, plural: str, verb: str) -> st
     total = sum(tally.values())
     parts = ", ".join(f"{c} ×{n}" for c, n in sorted(tally.items(), key=lambda x: -x[1]))
     noun = singular if total == 1 else plural
-    return f"{total} {noun} {verb} — {parts}"
+    return f"{total} {noun} — {parts}"
 
 
-def _format_batch(evs: list[dict], lead_hours: float | None = None) -> tuple[str, str]:
-    """Return (title, body) for a batch of events, matching the dashboard's aggregate style."""
-    is_extractor = evs[0]["event"] == "extractor_expiry"
-    if is_extractor:
-        title = "Extractions expiring soon"
-        verb = f"expiring within {round(lead_hours)}h" if lead_hours else "expiring"
-        body = _collapse_line(evs, "extractor", "extractors", verb)
-    else:
-        title = "Factories due for refill"
-        verb = f"due for refill within {round(lead_hours)}h" if lead_hours else "due for refill"
-        body = _collapse_line(evs, "factory", "factories", verb)
+# (title, noun-singular, noun-plural) per kind — mirrors the labels in app.alert_settings.ALERT_KINDS.
+_KIND_LABELS = {
+    "expired":        ("Extractions expired", "extractor", "extractors"),
+    "expiring":       ("Extractions expiring soon", "extractor", "extractors"),
+    "storage_full":   ("Storage filling up", "launchpad", "launchpads"),
+    "factory_refill": ("Factories due for refill", "factory", "factories"),
+    "ext_unrouted":   ("Extractor not routed", "extractor", "extractors"),
+    "fac_unfed":      ("Factory has no input route", "factory", "factories"),
+    "fac_output":     ("Factory output not routed", "factory", "factories"),
+    "p0_mismatch":    ("Extracting something unused", "colony", "colonies"),
+}
 
+
+def _format_batch(kind: str, evs: list[dict]) -> tuple[str, str]:
+    """Return (title, body) for a batch of same-kind events, matching the dashboard's
+    aggregate style."""
+    title, singular, plural = _KIND_LABELS.get(kind, (kind, "item", "items"))
+    body = _collapse_line(evs, singular, plural)
     return title, body
 
 
@@ -345,9 +295,8 @@ class NotificationSettingCreate(BaseModel):
 
 
 class NotificationPrefsUpdate(BaseModel):
-    lead_hours: int
-    notify_extractors: bool
-    notify_factories: bool
+    notify_kinds: list[str]
+    min_severity: str
 
 
 class NotificationTestRequest(BaseModel):
@@ -453,23 +402,23 @@ def get_notification_prefs(ctx: int = Depends(require_context)):
     con = get_connection()
     prefs = _get_prefs(con, ctx)
     con.close()
-    return prefs
+    return {**prefs, "available_kinds": ALERT_KINDS}
 
 
 @router.put("/api/notifications/prefs")
 def update_notification_prefs(req: NotificationPrefsUpdate, ctx: int = Depends(require_context)):
-    if req.lead_hours < 1 or req.lead_hours > 72:
-        raise HTTPException(status_code=400, detail="lead_hours must be 1–72")
+    unknown = [k for k in req.notify_kinds if k not in _VALID_ALERT_KINDS]
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Unknown alert kind(s): {', '.join(unknown)}")
+    if req.min_severity not in ("warn", "high"):
+        raise HTTPException(status_code=400, detail="min_severity must be 'warn' or 'high'")
     ensure_notification_tables()
     con = get_connection()
     con.execute(
-        "INSERT INTO pp_notification_prefs "
-        "(context_id, lead_hours, notify_extractors, notify_factories) "
-        "VALUES (?,?,?,?) ON CONFLICT(context_id) DO UPDATE SET "
-        "lead_hours=excluded.lead_hours, notify_extractors=excluded.notify_extractors, "
-        "notify_factories=excluded.notify_factories",
-        (ctx, req.lead_hours,
-         1 if req.notify_extractors else 0, 1 if req.notify_factories else 0),
+        "INSERT INTO pp_notification_prefs (context_id, notify_kinds, min_severity) VALUES (?,?,?) "
+        "ON CONFLICT(context_id) DO UPDATE SET "
+        "notify_kinds=excluded.notify_kinds, min_severity=excluded.min_severity",
+        (ctx, _json.dumps(sorted(set(req.notify_kinds))), req.min_severity),
     )
     con.commit()
     con.close()
@@ -547,7 +496,7 @@ def resend_last_notification(ctx: int = Depends(require_context)):
     errors = []
     for event_type, evs in by_event.items():
         n = len(evs)
-        title, body = _format_batch(evs)
+        title, body = _format_batch(event_type, evs)
         title = f"[Replay] {title}"
         for setting in settings:
             try:

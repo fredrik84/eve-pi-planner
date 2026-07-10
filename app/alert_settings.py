@@ -24,15 +24,17 @@ DEFAULTS = {
     "muted_kinds": [],
 }
 
-# Every kind of Dashboard colony warning, muteable regardless of whether it has a tunable
-# threshold. Keys match the "kind" strings dashboard() already uses internally (ext_unrouted etc.
-# come straight from app.esi._detect_colony_issues; expired/expiring/storage_full are dashboard()'s
-# own labels for the two threshold-based cards, introduced here purely so they share the same
-# mute mechanism as the correctness-based ones).
+# Every kind of colony warning the Dashboard AND the notification system can raise, muteable/
+# routable regardless of whether it has a tunable threshold. Keys match the "kind" strings
+# app.colony_alerts.compute_colony_alerts() emits (the single shared engine both consume):
+# ext_unrouted/fac_unfed/fac_output/p0_mismatch come straight from
+# app.esi._detect_colony_issues; expired/expiring/storage_full/factory_refill are the shared
+# engine's own labels for the four threshold-based kinds.
 ALERT_KINDS = [
     {"key": "expired", "label": "Extractions expired"},
     {"key": "expiring", "label": "Extractions expiring soon"},
     {"key": "storage_full", "label": "Storage filling up"},
+    {"key": "factory_refill", "label": "Factories due for refill"},
     {"key": "ext_unrouted", "label": "Extractor not routed"},
     {"key": "fac_unfed", "label": "Factory has no input route"},
     {"key": "fac_output", "label": "Factory output not routed"},

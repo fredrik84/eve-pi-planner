@@ -18,7 +18,10 @@ These are standing rules for ALL changes. Follow them unless the user explicitly
    needs `DEBUG_PI`/`DEBUG_CONTEXT_ID`), `test_features.py` (feature flags + skill-roi public
    surface), `test_optimizer.py` (LP-solver correctness for `/api/optimize` — synthetic
    hand-computable cases + a live smoke test; run the in-process cases inside the container, not
-   the bare host, since `highspy`/`numpy` are only installed there). Add to these or create a new
+   the bare host, since `highspy`/`numpy` are only installed there), `test_colony_alerts.py`
+   (the shared alert engine + notification prefs migration — seeds fake `pp_char_planets` rows
+   and a fabricated `pp_sessions` cookie to exercise the real `/api/dashboard` endpoint without
+   a live ESI login). Add to these or create a new
    `test_*.py` in the same urllib/`--url` style. Assert
    *durable invariants*, not runtime state an admin can change (e.g. don't assert a flag's enabled
    value equals its code default — admins toggle it).
@@ -754,33 +757,48 @@ hiccup, omit it for new features (fail-closed). Call sites: `onDashboardTabOpen`
 (`loadAdminFeatures`/`toggleFeature`) flips flags. Registry today: `timeline`, `split_extraction`
 (default on), `baskets` (default on), `skill_roi`, `move_character`, `schedule_sync`, `pad_fill`.
 
-## Configurable Dashboard alert thresholds (`app/alert_settings.py`, `alert_settings` flag)
+## Shared colony-alert engine (`app/colony_alerts.py`) + configurable thresholds (`app/alert_settings.py`)
 
-The Dashboard's colony warnings (extraction "expiring soon", "storage filling up") used to hardcode
-their thresholds in `planner.py`'s `dashboard()`. `app/alert_settings.py` makes them per-account:
-`pp_alert_settings` (context_id PK, one row per customizing account — no row = defaults, which are
-set to exactly what used to be hardcoded, so nothing changes until a user edits them):
-`expiring_hours` (3h — extraction cycles ending within this window count as "expiring soon"),
-`storage_warn_pct` (80 — launchpad fill % that starts surfacing the warning), `storage_high_pct`
-(95) / `storage_high_ttf_hours` (2 — either escalates a pad to "high" severity), `storage_urgent_hours`
-(3 — counted in the "(N within Xh)" header). `get_alert_settings(context_id)` is the single read
-path both `dashboard()` and the settings endpoints use, so they can't drift. `GET/PUT
-/api/alert-settings` + `POST /api/alert-settings/reset`, all `require_context`-gated (own account
-only). UI: Settings modal → new **Alerts** section (`settingsSecAlerts`, gated by the
-`alert_settings` flag like `notifications` gates its own section) — 5 number inputs, Save/Reset.
-Deliberately separate from `pp_notification_prefs`' `lead_hours` (push-notification lead time) —
-these only affect what the Dashboard itself displays, not Pushover/ntfy/Discord alerts.
+**`compute_colony_alerts(context_id, rows=None, now=None)`** is the single source of truth for
+every colony warning in the app — both the Dashboard (`planner.py`'s `dashboard()`, for display)
+and the notification scheduler (`app/notifications.py`, for pushes) call it and nothing else
+re-implements detection. This was a deliberate unification (2026-07-10): notifications used to
+have their own bespoke `_extractor_events`/`_factory_events` queries, duplicating (and able to
+drift from) what the Dashboard showed. Returns a flat list of individual alert instances —
+`{kind, severity, character_id, character_name, planet_id, location, hours_left, pct
+(storage_full only)}` — across 8 kinds (`app.alert_settings.ALERT_KINDS`): four threshold-based
+(`expired`, `expiring`, `storage_full`, `factory_refill`) and four correctness-based, stored
+per-scan by `app.esi._detect_colony_issues` (`ext_unrouted`, `fac_unfed`, `fac_output`,
+`p0_mismatch` — always "high" severity, never muted-by-default). `factory_refill` has no
+dedicated threshold fields of its own — deliberately reuses `expiring_hours` as "how far ahead to
+flag" and `storage_high_ttf_hours` as the warn→high cutoff (same ideas as extraction expiry and
+storage already use) rather than adding two more number fields for one kind. `dashboard()` passes
+its own already-fetched `pp_char_planets` rows in via `rows=` to avoid a second query; the
+scheduler (iterating many contexts) leaves it `None` and the function does its own fetch.
+`dashboard()` re-groups the flat list into its existing display cards (per-character correctness
+tallies, collapsed expired/expiring/factory-refill lines, the grouped storage card) — collapsed
+cards derive their severity from whether **any** instance in the group is "high" (see
+`factory_refill_high` in `dashboard()`), not a hardcoded value, so e.g. one imminent factory
+refill escalates the whole "Factories due for refill" card even if others in the batch aren't
+urgent yet.
 
-**Per-kind muting (`muted_kinds`, JSON column on the same row).** Every Dashboard colony warning
-can be muted outright, including the correctness-based ones with no numeric threshold to tune
-(`ext_unrouted`, `fac_unfed`, `fac_output`, `p0_mismatch` — from `app.esi._detect_colony_issues`)
-plus `expired`/`expiring`/`storage_full` (dashboard()'s own labels for the two threshold-based
-cards, so they share one mute mechanism with the correctness ones). `ALERT_KINDS` in
-`alert_settings.py` is the registry of key+label pairs — `GET /api/alert-settings` echoes it back
-as `available_kinds` so the frontend never hardcodes labels. `dashboard()` reads `_muted =
-set(_alert["muted_kinds"])` once and gates every warning's `issues.append(...)` on `kind not in
-_muted`. UI: a "Muted alerts" checklist (checked = muted) in the same Alerts section, saved
-together with the thresholds in one PUT.
+**Thresholds and muting** (`app/alert_settings.py`) are per-account: `pp_alert_settings`
+(context_id PK, one row per customizing account — no row = defaults, set to exactly what used to
+be hardcoded, so nothing changed behavior until a user edits it): `expiring_hours` (3h),
+`storage_warn_pct` (80), `storage_high_pct` (95) / `storage_high_ttf_hours` (2 — either escalates
+a pad to "high"), `storage_urgent_hours` (3 — counted in the "(N within Xh)" header). `muted_kinds`
+(JSON column, same row) lets ANY of the 8 kinds be turned off entirely, including the
+correctness-based ones with no numeric threshold to tune. `get_alert_settings(context_id)` is the
+single read path `compute_colony_alerts()` and the settings endpoints all use, so they can't drift.
+`GET/PUT /api/alert-settings` + `POST /api/alert-settings/reset`, all `require_context`-gated (own
+account only). `ALERT_KINDS` is the key+label registry — `GET /api/alert-settings` echoes it back
+as `available_kinds` so the frontend never hardcodes labels (the same registry is reused by
+`GET /api/notifications/prefs` for the same reason). UI: Settings modal → **Alerts** section
+(`settingsSecAlerts`, gated by the `alert_settings` flag like `notifications` gates its own
+section) — 5 threshold number-inputs (`.settings-field-row`, label left/control right/hairline
+divider — replaces an earlier ad-hoc inline layout that misaligned once there were several rows of
+differing label length) + a "Muted alerts" 2-column checkbox grid (`.settings-toggle-grid`),
+Save/Reset.
 
 ## Fill-factories meter (Dashboard, `pad_fill` flag)
 
@@ -926,33 +944,46 @@ Gating test in `test_features.py` (`test_corp_wallet_gated` → 403 for anonymou
 
 ## Notifications (`app/notifications.py`, `app/notifiers.py`)
 
-Push alerts for extractor expiry and factory refill, checked by an APScheduler job every 15
-minutes (`make_scheduler`, `check_and_send_notifications`) — pure DB math, no ESI calls, so it
-runs freely between rescans. Settings/prefs/log are per-`context_id` in `pp_notification_settings`,
-`pp_notification_prefs`, `pp_notification_log`.
+Push alerts for any of the 8 colony-alert kinds (`app.alert_settings.ALERT_KINDS`), checked by an
+APScheduler job every 15 minutes (`make_scheduler`, `check_and_send_notifications`) — pure DB
+math, no ESI calls, so it runs freely between rescans. Settings/prefs/log are per-`context_id` in
+`pp_notification_settings`, `pp_notification_prefs`, `pp_notification_log`.
 
+- **Event detection is not this module's job.** `_process_context` calls
+  `app.colony_alerts.compute_colony_alerts(context_id)` — the same function `dashboard()` uses —
+  and only filters/batches/sends. There used to be bespoke `_extractor_events`/`_factory_events`
+  queries here, duplicating what the Dashboard computed; unified 2026-07-10 so a push and what's
+  shown on screen can never drift apart. If you're tempted to add a new kind of push alert, add
+  the kind to `compute_colony_alerts()` first, not here.
+- **Prefs = which kinds + a severity floor.** `pp_notification_prefs.notify_kinds` (JSON array of
+  `ALERT_KINDS` keys) + `min_severity` (`"warn"` = everything, `"high"` = high only). Old
+  `lead_hours`/`notify_extractors`/`notify_factories` columns are left in place (harmless, unused)
+  rather than dropped — this codebase's migration convention is additive `ALTER TABLE ADD COLUMN`,
+  never `DROP COLUMN`. **One-time migration** (in `ensure_notification_tables()`) derives
+  `notify_kinds` for pre-existing rows from those old booleans
+  (`notify_extractors→[expired,expiring]`, `notify_factories→[factory_refill]`) so an account that
+  had already muted e.g. factory refills doesn't suddenly get pinged for it — but does **not**
+  auto-enable the new kinds this unification added (`storage_full`, `ext_unrouted`, ...) for
+  already-configured accounts, since silently expanding what an already-tuned account gets pinged
+  about is the wrong default. A brand-new context (no prefs row at all) gets all 8 kinds enabled,
+  matching the old out-of-the-box default. `GET /api/notifications/prefs` echoes back
+  `ALERT_KINDS` as `available_kinds` (same registry `/api/alert-settings` uses) so the frontend
+  never hardcodes labels.
 - **Channels** (`notifiers.py`, `_CHANNEL_MAP`): Pushover, ntfy.sh, Discord webhook. Each is a
   `BaseNotifier.send(title, body, url=None, fields=None)`. `fields` (a list of `{name, value,
-  inline}`) is Discord-only — when present, `DiscordNotifier` sends a **rich embed** (colored
-  sidebar: orange for extractor events, blue for factory) instead of plain text; Pushover/ntfy
-  ignore it and use `title`/`body`. Discord content is truncated at 2000 chars (hard API limit) as
-  a fallback safety net — the embed path avoids hitting it in practice since fields don't count
-  against the same limit.
-- **Event detection** (`_extractor_events`, `_factory_events` in `notifications.py`): both pull
-  `planet_num`/`planet_type` alongside `system_name` so alerts can label a planet precisely
-  (`System IV`, via `_planet_label` — roman numeral from `planet_num`, no planet type shown, that
-  was tried and cut as noise). Extractor expiry reads `pp_colony_yield.install_ts + prog_days`;
-  factory refill reads the most recent plan snapshot's `factory_refill_hours` applied to
-  `pp_char_planets.scanned_at`.
-- **Batching, not per-event spam.** `_process_context` groups all due extractor events into ONE
-  message and all due factory events into another (`_format_batch`), rather than firing one
-  notification per planet — was originally per-event and produced a wall of pings when several
-  things expired close together. Cooldown (`_recently_notified`, 2h for extractors / 4h for
-  factories) is checked **before** collecting each event into its batch, so one recently-notified
-  planet doesn't block the others in the same run. Embed fields are grouped **by character**
-  (`_format_batch`'s `by_char` dict) — one Discord field per pilot listing their due planets,
-  rather than one field per planet — so a multi-planet alert reads as "here's what Alice and Bob
-  need to do," not a flat list of unlabeled rows.
+  inline}`) is Discord-only — when present, `DiscordNotifier` sends a **rich embed** instead of
+  plain text; Pushover/ntfy ignore it and use `title`/`body`. Discord content is truncated at 2000
+  chars (hard API limit) as a fallback safety net — the embed path avoids hitting it in practice
+  since fields don't count against the same limit.
+- **Batching, not per-event spam.** `_process_context` groups same-kind alerts into ONE message
+  each (`_format_batch`, `_KIND_LABELS` for the per-kind title/noun), rather than firing one
+  notification per planet — an earlier per-event version produced a wall of pings when several
+  things expired close together. **Cooldown is per-kind** (`_COOLDOWN_HOURS`): 2h for the
+  time-decaying kinds (expiry/storage), 4h for factory refill, **24h for the correctness-based
+  kinds** (`ext_unrouted` etc.) — those are persistent structural problems until the player fixes
+  them, not something that resolves itself, so a short cooldown would just nag every 15 minutes
+  about the same unfixed issue. Cooldown is checked **before** collecting each alert into its
+  batch, so one recently-notified planet doesn't block others in the same run.
 - **`POST /api/notifications/resend-last`:** replays the most recent logged batch (grouped by
   `sent_at` to the minute, since all sends in one scheduler run land within seconds of each other)
   to all enabled channels, tagged `[Replay]`. Built because testing the real formatting meant
