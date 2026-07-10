@@ -2996,6 +2996,13 @@ function _renderAlertSettings(s) {
   set('alertStorageHighPct', s.storage_high_pct);
   set('alertStorageHighTtfHours', s.storage_high_ttf_hours);
   set('alertStorageUrgentHours', s.storage_urgent_hours);
+  const listEl = document.getElementById('alertMutedList');
+  if (listEl && s.available_kinds) {
+    const muted = new Set(s.muted_kinds || []);
+    listEl.innerHTML = s.available_kinds.map(k => `
+      <label><input type="checkbox" class="alert-mute-cb" value="${_esc(k.key)}" ${muted.has(k.key) ? 'checked' : ''}> ${_esc(k.label)}</label>
+    `).join('');
+  }
 }
 
 async function loadAlertSettings() {
@@ -3010,12 +3017,14 @@ async function loadAlertSettings() {
 
 async function saveAlertSettings() {
   const status = document.getElementById('alertSettingsStatus');
+  const muted = Array.from(document.querySelectorAll('.alert-mute-cb:checked')).map(cb => cb.value);
   const body = {
     expiring_hours: parseFloat(document.getElementById('alertExpiringHours').value) || 3,
     storage_warn_pct: parseFloat(document.getElementById('alertStorageWarnPct').value) || 80,
     storage_high_pct: parseFloat(document.getElementById('alertStorageHighPct').value) || 95,
     storage_high_ttf_hours: parseFloat(document.getElementById('alertStorageHighTtfHours').value) || 2,
     storage_urgent_hours: parseFloat(document.getElementById('alertStorageUrgentHours').value) || 3,
+    muted_kinds: muted,
   };
   status.textContent = 'Saving...';
   try {

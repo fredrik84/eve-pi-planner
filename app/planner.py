@@ -1629,6 +1629,7 @@ def dashboard(pp_session: str = Cookie(default=None)):
     # Thresholds are per-account (Settings → Alerts), defaulting to the values this used to
     # hardcode — see app/alert_settings.py.
     _alert = get_alert_settings(context_id)
+    _muted = set(_alert.get("muted_kinds") or [])
     EXPIRING_WINDOW = _alert["expiring_hours"] * 3600   # short enough that 1-day cycles don't always trip
     by_char: dict[str, dict[str, list]] = {}      # char -> kind -> [planet labels]
     expired: dict[str, int] = {}                  # char -> count (extraction cycle events collapse
@@ -1646,6 +1647,8 @@ def dashboard(pp_session: str = Cookie(default=None)):
             expiring[ch] = expiring.get(ch, 0) + 1
             if r["cid"] is not None: chars_in_view.add(r["cid"])
         for k in kinds:
+            if k in _muted:
+                continue
             by_char.setdefault(ch, {}).setdefault(k, []).append(loc)
             if r["cid"] is not None: chars_in_view.add(r["cid"])
 
@@ -1676,9 +1679,9 @@ def dashboard(pp_session: str = Cookie(default=None)):
         return {"char": header, "severity": sev,
                 "items": [{"severity": sev, "msg": f"{total} extractor{'s' if total != 1 else ''} {verb} — {parts}"}]}
     _expiring_h_str = ("%g" % _alert["expiring_hours"])
-    if expired:
+    if expired and "expired" not in _muted:
         issues.append(_collapse(expired, "high", "Extractions expired", "expired"))
-    if expiring:
+    if expiring and "expiring" not in _muted:
         issues.append(_collapse(expiring, "warn", "Extractions expiring soon", f"expiring within {_expiring_h_str}h"))
 
     # Storage filling up — EXTRACTOR planets only (their output piles up if you don't haul; a
@@ -1723,7 +1726,7 @@ def dashboard(pp_session: str = Cookie(default=None)):
         loc = sysloc
         if r["cid"] is not None: chars_in_view.add(r["cid"])
         fulls.append({"ch": r["ch"] or "?", "loc": loc, "pct": round(pct), "ttf": ttf})
-    if fulls:
+    if fulls and "storage_full" not in _muted:
         fulls.sort(key=lambda x: (x["ttf"] if x["ttf"] is not None else 1e9, -x["pct"]))
 
         def _ttf_str(t):
@@ -1746,7 +1749,7 @@ def dashboard(pp_session: str = Cookie(default=None)):
                   else "warn",
                   "msg": f"{f['ch']} · {f['loc']} — {f['pct']}% full{_ttf_str(f['ttf'])}"} for f in fulls[:5]]
         if n > len(items):
-            items.append({"severity": "warn", "msg": f"+ {n - len(items)} more pad{'s' if n - len(items) != 1 else ''} ≥80%"})
+            items.append({"severity": "warn", "msg": f"+ {n - len(items)} more pad{'s' if n - len(items) != 1 else ''} ≥{round(_alert['storage_warn_pct'])}%"})
         issues.append({"char": head,
                        "severity": "high" if any(i["severity"] == "high" for i in items) else "warn",
                        "items": items})

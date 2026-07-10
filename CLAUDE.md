@@ -771,6 +771,17 @@ only). UI: Settings modal → new **Alerts** section (`settingsSecAlerts`, gated
 Deliberately separate from `pp_notification_prefs`' `lead_hours` (push-notification lead time) —
 these only affect what the Dashboard itself displays, not Pushover/ntfy/Discord alerts.
 
+**Per-kind muting (`muted_kinds`, JSON column on the same row).** Every Dashboard colony warning
+can be muted outright, including the correctness-based ones with no numeric threshold to tune
+(`ext_unrouted`, `fac_unfed`, `fac_output`, `p0_mismatch` — from `app.esi._detect_colony_issues`)
+plus `expired`/`expiring`/`storage_full` (dashboard()'s own labels for the two threshold-based
+cards, so they share one mute mechanism with the correctness ones). `ALERT_KINDS` in
+`alert_settings.py` is the registry of key+label pairs — `GET /api/alert-settings` echoes it back
+as `available_kinds` so the frontend never hardcodes labels. `dashboard()` reads `_muted =
+set(_alert["muted_kinds"])` once and gates every warning's `issues.append(...)` on `kind not in
+_muted`. UI: a "Muted alerts" checklist (checked = muted) in the same Alerts section, saved
+together with the thresholds in one PUT.
+
 ## Fill-factories meter (Dashboard, `pad_fill` flag)
 
 "How far does the P1 in my extractor pads go toward filling all my factories?" Backend

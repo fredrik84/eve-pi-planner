@@ -1043,12 +1043,17 @@ PVF-N9    3         95                 60             80                  100   
                   <input type="number" id="alertStorageUrgentHours" min="0.5" max="48" step="0.5" value="3" class="notif-hours-input">
                   hours
                 </label>
-                <div class="notif-pref-actions">
-                  <button onclick="saveAlertSettings()">Save thresholds</button>
-                  <button onclick="resetAlertSettings()">Reset to defaults</button>
-                  <span id="alertSettingsStatus" class="notif-status-msg"></span>
-                </div>
               </div>
+            </div>
+            <div class="settings-subsec">
+              <div class="settings-subsec-title">Muted alerts</div>
+              <div class="settings-subsec-hint">Turn any Dashboard colony warning off entirely, including ones with no numeric threshold to tune (misrouted pins, extracting something no factory uses). Checked = muted (hidden from the Dashboard).</div>
+              <div id="alertMutedList" class="notif-prefs-row"></div>
+            </div>
+            <div class="notif-pref-actions">
+              <button onclick="saveAlertSettings()">Save</button>
+              <button onclick="resetAlertSettings()">Reset to defaults</button>
+              <span id="alertSettingsStatus" class="notif-status-msg"></span>
             </div>
           </div>
 
@@ -1106,7 +1111,7 @@ PVF-N9    3         95                 60             80                  100   
 
   <script src="/utils.js?v=3"></script>
   <script src="/app.js?v=31"></script>
-  <script src="/planetary.js?v=348"></script>
+  <script src="/planetary.js?v=349"></script>
   <script src="/dashboard.js?v=13"></script>
   <script src="/admin.js?v=10"></script>
   <script src="/planetdb.js?v=3"></script>
