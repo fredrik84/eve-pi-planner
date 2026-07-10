@@ -3000,7 +3000,7 @@ function _renderAlertSettings(s) {
   if (listEl && s.available_kinds) {
     const muted = new Set(s.muted_kinds || []);
     listEl.innerHTML = s.available_kinds.map(k => `
-      <label><input type="checkbox" class="alert-mute-cb" value="${_esc(k.key)}" ${muted.has(k.key) ? 'checked' : ''}> ${_esc(k.label)}</label>
+      <label class="settings-toggle-row"><input type="checkbox" class="alert-mute-cb" value="${_esc(k.key)}" ${muted.has(k.key) ? 'checked' : ''}> ${_esc(k.label)}</label>
     `).join('');
   }
 }

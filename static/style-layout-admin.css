@@ -375,6 +375,47 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .notif-err { color: #d07070; }
 .notif-empty { font-size: 12px; color: #4a5570; padding: 6px 0; }
 
+/* Settings: aligned field rows — label left, control right, one per row with a hairline
+   divider. Replaces an ad-hoc inline "label text + input + unit text" flow that misaligned
+   badly once a subsection had several rows of differing label length (each row's input
+   landed in a different horizontal spot — the "squished and asymmetric" look). */
+.settings-field-list { display: flex; flex-direction: column; }
+.settings-field-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 20px;
+  padding: 11px 2px; border-bottom: 1px solid #161b28;
+}
+.settings-field-row:last-child { border-bottom: none; }
+/* Matches the app-wide `label { text-transform: uppercase }` convention (see Notifications'
+   "WARN ME ... HOURS IN ADVANCE") — these are <span>s, not <label>s, so that global rule
+   doesn't reach them; applied explicitly to stay visually consistent with the rest of the app
+   rather than reading as a different, unrelated style bolted onto the same modal. */
+.settings-field-label {
+  font-size: 12px; color: #8a94b0; text-transform: uppercase; letter-spacing: 0.8px;
+  line-height: 1.4;
+}
+.settings-field-control {
+  display: flex; align-items: center; gap: 8px; flex-shrink: 0;
+  font-size: 12px; color: #8a94b0; text-transform: uppercase; letter-spacing: 0.8px; white-space: nowrap;
+}
+.settings-field-input {
+  width: 60px; background: #161b28; border: 1px solid #1f2840; border-radius: 5px;
+  padding: 5px 8px; color: #dbe1ee; text-align: center; font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.settings-field-input:focus { outline: none; border-color: #3a6a9a; }
+
+/* 2-col grid for on/off toggle lists (e.g. muted alert kinds) — a single long column of
+   checkboxes reads as a wall of text; pairing them side by side is calmer and more compact. */
+.settings-toggle-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 2px 24px; }
+.settings-toggle-row {
+  display: flex; align-items: center; gap: 9px; padding: 8px 2px;
+  font-size: 13px; color: var(--clr-text-soft); cursor: pointer;
+}
+.settings-toggle-row input[type="checkbox"] { accent-color: var(--clr-accent); width: 15px; height: 15px; flex-shrink: 0; }
+@media (max-width: 560px) {
+  .settings-toggle-grid { grid-template-columns: 1fr; }
+}
+
 /* Account self-deletion */
 .account-danger-row { display: flex; align-items: center; justify-content: space-between;
   gap: 12px; flex-wrap: wrap; padding: 4px 0; }
