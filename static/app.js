@@ -444,6 +444,14 @@ function renderFactorySplit(plan) {
 function switchTab(name) {
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
   document.querySelectorAll('.tab-panel').forEach(p => p.style.display = p.id === 'tab-' + name ? '' : 'none');
+  // The Admin sub-nav (#adminNavGroup / mobile equivalent) tracks its own "which admin page" state
+  // independently of these top-level tabs (see adminSubPage in admin.js) — nothing else clears its
+  // highlight, so it stayed lit on whichever admin page was last visited even after leaving Admin
+  // entirely. Clear it here; re-entering Admin re-applies the right one via onAdminTabOpen.
+  if (name !== 'admin') {
+    document.querySelectorAll('#adminNavGroup .admin-nav-item, #adminMobilePageNav .admin-mobile-page-btn')
+      .forEach(b => b.classList.remove('active'));
+  }
   if (name === 'dashboard' && typeof onDashboardTabOpen === 'function') onDashboardTabOpen();
   if (name === 'planner' && typeof onPlannerTabOpen === 'function') onPlannerTabOpen();
   if (name === 'planetary' && typeof onPlanetaryTabOpen === 'function') onPlanetaryTabOpen();
