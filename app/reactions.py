@@ -353,6 +353,30 @@ def _explode_shopping_list(type_id: int, units_needed: float, reached: dict, out
         _explode_shopping_list(inp["type_id"], eff_qty, reached, out)
 
 
+def _explode_chain_tiers(formula_inputs: list[dict], runs: int, reached: dict, tiers: dict[int, dict]):
+    """For `runs` cycles of a formula needing `formula_inputs`, finds every INTERMEDIATE reaction
+    product among those inputs (recursively — a real chain can be several tiers deep, e.g. goo ->
+    Ferrofluid -> Nonlinear Metamaterials) and accumulates how many of ITS OWN reaction cycles are
+    needed to keep the tier above it supplied, into `tiers` (type_id -> {runs, cycle_time,
+    output_qty}). Deliberately excludes the TOP-level formula itself — that's the caller's own
+    suggestion, already tracked separately, not an "extra" tier. Without this, a suggestion for a
+    multi-tier product only ever told the player to install the FINAL reaction, silently assuming
+    they'd already have the intermediate on hand — which since the "force real chains" fix
+    (intermediates are never just bought) is never actually true."""
+    for inp in formula_inputs:
+        inp_node = reached.get(inp["type_id"])
+        if not inp_node or inp_node["via"] is None:
+            continue  # raw goo or a genuine purchasable leaf — nothing to react
+        eff_qty = inp["quantity"] * (1 - REACTION_ME_REDUCTION) * runs
+        formula = inp_node["via"]
+        inp_runs = math.ceil(eff_qty / formula["output_qty"])
+        tid = inp["type_id"]
+        if tid not in tiers:
+            tiers[tid] = {"runs": 0, "cycle_time": formula["cycle_time"], "output_qty": formula["output_qty"]}
+        tiers[tid]["runs"] += inp_runs
+        _explode_chain_tiers(formula["inputs"], inp_runs, reached, tiers)  # this tier may itself be multi-level
+
+
 @router.get("/api/reactions/shopping-list")
 def reactions_shopping_list(context_id: int = Depends(require_b0ss)):
     """Total raw materials needed across every one of the caller's pending assignments (see
@@ -532,8 +556,25 @@ def ensure_reaction_assignments_table():
             )
         """)
         con.commit()
+        # tier_order: 0 = the deepest intermediate reaction (react first — a real chain, e.g.
+        # goo -> Ferrofluid -> Nonlinear Metamaterials, needs the intermediate done before the
+        # top-level reaction can even start), ascending up to the top-level product itself
+        # (highest number in the group = react last). Existing single-tier assignments default
+        # to 0, unaffected — additive migration, matches this codebase's convention.
+        try:
+            con.execute("ALTER TABLE pp_reaction_assignments ADD COLUMN tier_order INTEGER NOT NULL DEFAULT 0")
+            con.commit()
+        except Exception:
+            pass
     finally:
         con.close()
+
+
+class ChainTier(BaseModel):
+    type_id: int
+    name: str
+    runs: int
+    job_count: int = 1
 
 
 class AssignRequest(BaseModel):
@@ -544,6 +585,10 @@ class AssignRequest(BaseModel):
     job_count: int = 1  # how many separate in-game job installs this splits into (one per slot)
     input_cost: float
     reward: float
+    # Intermediate reactions this product's own formula needs (see _explode_chain_tiers in
+    # _suggest_reactions), deepest-first — each becomes its own set of assignment rows the
+    # player must install and let finish BEFORE the top-level reaction above can even start.
+    chain_tiers: list[ChainTier] = []
 
 
 @router.post("/api/reactions/assign")
@@ -554,10 +599,16 @@ def assign_reaction(req: AssignRequest, context_id: int = Depends(require_b0ss))
     slots at once (job_count > 1, e.g. a big batch that needs several parallel jobs to finish
     within the chosen cadence) becomes that many SEPARATE assignment rows — one per actual
     in-game job install — so the dashboard shows the real number of slots this occupies, not one
-    square standing in for several."""
+    square standing in for several.
+
+    Any chain_tiers (intermediate reactions this product's own formula needs, e.g. goo ->
+    Ferrofluid -> this product — see _explode_chain_tiers) get their own assignment rows too,
+    tagged with a LOWER tier_order so the dashboard can show them as "react this first." Their
+    input_cost/reward are recorded as 0 — the full chain's cost/profit is already rolled up into
+    the top-level row (unit_cost is computed recursively down to raw goo), so giving the
+    intermediate rows their own nonzero values would double-count it if anything ever sums
+    pp_reaction_assignments financially."""
     ensure_reaction_assignments_table()
-    job_count = max(1, req.job_count)
-    runs_per_job = math.ceil(req.runs / job_count)
     con = get_connection()
     try:
         owner = con.execute(
@@ -566,12 +617,29 @@ def assign_reaction(req: AssignRequest, context_id: int = Depends(require_b0ss))
         ).fetchone()
         if not owner:
             raise HTTPException(status_code=403, detail="Not your character")
+
+        now = _time.time()
+        for tier_order, tier in enumerate(req.chain_tiers):
+            tier_job_count = max(1, tier.job_count)
+            tier_runs_per_job = math.ceil(tier.runs / tier_job_count)
+            for _ in range(tier_job_count):
+                con.execute(
+                    "INSERT INTO pp_reaction_assignments "
+                    "(character_id, type_id, name, runs, input_cost, reward, created_at, tier_order) "
+                    "VALUES (?,?,?,?,?,?,?,?)",
+                    (req.character_id, tier.type_id, tier.name, tier_runs_per_job, 0.0, 0.0, now, tier_order),
+                )
+
+        job_count = max(1, req.job_count)
+        runs_per_job = math.ceil(req.runs / job_count)
+        top_tier_order = len(req.chain_tiers)
         for _ in range(job_count):
             con.execute(
-                "INSERT INTO pp_reaction_assignments (character_id, type_id, name, runs, input_cost, reward, created_at) "
-                "VALUES (?,?,?,?,?,?,?)",
+                "INSERT INTO pp_reaction_assignments "
+                "(character_id, type_id, name, runs, input_cost, reward, created_at, tier_order) "
+                "VALUES (?,?,?,?,?,?,?,?)",
                 (req.character_id, req.type_id, req.name, runs_per_job,
-                 req.input_cost / job_count, req.reward / job_count, _time.time()),
+                 req.input_cost / job_count, req.reward / job_count, now, top_tier_order),
             )
         con.commit()
     finally:
@@ -645,8 +713,8 @@ def get_industry_jobs(context_id: int = Depends(require_b0ss)):
         if char_ids:
             placeholders = ",".join("?" * len(char_ids))
             for r in con.execute(
-                f"SELECT id, character_id, type_id, name, runs, input_cost, reward FROM pp_reaction_assignments "
-                f"WHERE character_id IN ({placeholders})", char_ids,
+                f"SELECT id, character_id, type_id, name, runs, input_cost, reward, tier_order FROM pp_reaction_assignments "
+                f"WHERE character_id IN ({placeholders}) ORDER BY tier_order", char_ids,
             ):
                 assignments.setdefault(r["character_id"], []).append(dict(r))
     finally:
@@ -689,6 +757,7 @@ def get_industry_jobs(context_id: int = Depends(require_b0ss)):
             else:
                 pending.append({
                     "assignment_id": a["id"], "type_id": a["type_id"], "name": a["name"], "runs": a["runs"],
+                    "tier_order": a["tier_order"],
                 })
         used_slots += len(pending)
 
@@ -793,6 +862,12 @@ def _character_capacities(context_id: int) -> list[dict]:
 def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int, cadence_hours: float,
                         material_ids: set[int] | None = None) -> dict:
     opportunities = _build_opportunities(context_id, allowed_material_ids=material_ids)
+    # Needed again in stage 2 to walk each chosen candidate's own formula tree for chain_tiers
+    # (the intermediate reactions a multi-tier product needs before its own reaction can even
+    # start) — cheap to recompute (fetch_market_data's own cache absorbs the repeat cost).
+    _loaded = _load_goo_and_reached(context_id, material_ids)
+    reached = _loaded[1] if _loaded else {}
+    types = _loaded[4] if _loaded else {}
     candidates = [o for o in opportunities
                   if o["buy_volume"] >= _MIN_LIQUIDITY and o["sell_volume"] >= _MIN_LIQUIDITY
                   and o["top_level_runs"] > 0 and o["net_profit_instant"] > 0
@@ -901,6 +976,31 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
         duration_hours = (runs_needed / slots_used) * cycle_hours
         max_completion_hours = max(max_completion_hours, duration_hours)
 
+        # Chain tiers: any INTERMEDIATE reaction this product's own formula needs (e.g.
+        # goo -> Ferrofluid -> this product) — each is a SEPARATE job the player must install
+        # and let finish BEFORE the top-level reaction can even start, since the "force real
+        # chains" fix means an intermediate is never just bought pre-made. Slots for these come
+        # from the SAME character (one suggestion, one character does the whole chain — simpler
+        # than spreading it), taken out of whatever's left after the top tier's own allocation.
+        chain_tiers = []
+        top_via = reached.get(c["type_id"], {}).get("via")
+        if top_via:
+            tier_runs: dict[int, dict] = {}
+            _explode_chain_tiers(top_via["inputs"], runs_needed, reached, tier_runs)
+            # Deepest (closest to raw goo) first — the one the player must react first.
+            ordered = sorted(tier_runs.items(), key=lambda kv: reached.get(kv[0], {}).get("reaction_count", 0))
+            for tid, info in ordered:
+                t_cycle_hours = info["cycle_time"] / 3600.0 if info["cycle_time"] else 1.0
+                t_ideal_slots = max(1, math.ceil(info["runs"] * t_cycle_hours / cadence_hours)) if cadence_hours > 0 else info["runs"]
+                t_slots_used = max(1, min(t_ideal_slots, remaining_slots.get(pick_id, 0)))
+                remaining_slots[pick_id] = remaining_slots.get(pick_id, 0) - t_slots_used
+                chain_tiers.append({
+                    "type_id": tid, "name": types.get(tid, {}).get("name", str(tid)),
+                    "runs": info["runs"],
+                    "job_count": t_slots_used,
+                    "runs_per_job": math.ceil(info["runs"] / t_slots_used),
+                })
+
         cost = c["input_cost"] * xi
         reward = c["net_profit_instant"] * xi
         output_qty = c["output_qty"] * xi
@@ -948,6 +1048,7 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
             "aligned_output_m3": round(c["shipping_volume_m3"] * align_ratio, 1),
             "assigned_character": char_names.get(pick_id, "?"),
             "assigned_character_id": pick_id,
+            "chain_tiers": chain_tiers,
         })
 
     # "isk" = spent (near enough) the whole budget; "neither" = ran out of profitable, liquid,

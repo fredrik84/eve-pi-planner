@@ -501,6 +501,7 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .rx-sugg-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .rx-sugg-name { font-size: 13px; color: var(--clr-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rx-sugg-meta { font-size: 11px; color: var(--clr-text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rx-sugg-chain { font-size: 11px; color: #e0c07a; white-space: normal; margin-top: 2px; }
 .rx-sugg-reward { font-size: 13px; font-weight: 600; color: #7fd0a0; flex: 0 0 auto; white-space: nowrap; }
 .rx-sugg-assign-btn {
   background: #1e3a5f; color: var(--clr-accent); border: 1px solid #2d5a8a;

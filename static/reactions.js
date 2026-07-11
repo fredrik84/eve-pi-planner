@@ -381,6 +381,14 @@ function _renderReactionsSuggestions(data) {
       const jobLine = s.job_count > 1
         ? `${s.job_count} jobs × ${s.runs_per_job} runs`
         : `${s.runs} runs`;
+      // A real multi-tier chain (goo -> intermediate -> this product) needs the intermediate(s)
+      // reacted and finished FIRST — the player can't even install the top-level job until then.
+      // Shown here (before assigning), not just buried in the dashboard's flat pending list.
+      const chainNote = (s.chain_tiers && s.chain_tiers.length)
+        ? `<div class="rx-sugg-chain">React first: ${s.chain_tiers.map(t =>
+            `${_esc(t.name)} (${t.job_count > 1 ? `${t.job_count} jobs × ${Math.ceil(t.runs / t.job_count)} runs` : `${t.runs} runs`})`
+          ).join(', then ')} — <b>then</b> ${_esc(s.name)}</div>`
+        : '';
       return `
         <div class="rx-sugg-row">
           <img class="rx-sugg-icon" src="${icon}" alt="" onerror="this.style.visibility='hidden'">
@@ -388,6 +396,7 @@ function _renderReactionsSuggestions(data) {
             <div class="rx-sugg-name" title="${_esc(s.name)}">${_esc(s.name)}</div>
             <div class="rx-sugg-meta">${jobLine} · ${_fmtIsk(s.input_cost)} in · ${_fmtHours(s.runtime_hours)} runtime</div>
             <div class="rx-sugg-meta">${Math.round(s.output_qty).toLocaleString()} units · ${_fmtIsk(s.output_value)} value · ${Math.round(s.output_m3).toLocaleString()} m³</div>
+            ${chainNote}
           </div>
           <div class="rx-sugg-reward">+${_fmtIsk(s.reward)}</div>
           <button class="rx-sugg-assign-btn" id="rxAssignBtn${i}" onclick="_rxAssignSuggestion(${i}, this)">Assign</button>
@@ -481,6 +490,7 @@ function _rxAssignSuggestion(i, btn) {
     body: JSON.stringify({
       character_id: s.assigned_character_id, type_id: s.type_id, name: s.name,
       runs: s.runs, job_count: s.job_count || 1, input_cost: s.input_cost, reward: s.reward,
+      chain_tiers: s.chain_tiers || [],
     }),
   })
     .then(r => {
