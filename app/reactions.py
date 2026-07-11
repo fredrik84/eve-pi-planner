@@ -186,6 +186,15 @@ def _resolve_reachable(goo: dict[int, dict], purchasable: dict[int, float],
                     "unit_cost": cost_per_run / f["output_qty"],
                     "max_qty": int(runs) * f["output_qty"],
                     "reaction_count": reaction_count,
+                    # Actual reaction-job cycles of THIS specific formula needed to hit max_qty
+                    # (distinct from reaction_count, which is chain DEPTH/distinct-formula count,
+                    # not run count) — this is what the wizard's "steps budget" (confirmed by the
+                    # user: total reaction runs, not chain complexity) actually constrains.
+                    # Deliberately counts only the top-level formula's own cycles, not upstream
+                    # feeder reactions' cycles too — a documented simplification, not a full
+                    # multi-level rollup (see Phase 3c plan notes).
+                    "top_level_runs": int(runs),
+                    "cycle_time": f["cycle_time"],
                     "via": {"reaction_id": f["reaction_id"], "cycle_time": f["cycle_time"],
                             "inputs": f["inputs"]},
                 }
@@ -270,6 +279,8 @@ def _build_opportunities(context_id: int) -> list[dict]:
             "type_id": tid,
             "name": type_info.get("name", str(tid)),
             "steps": node["reaction_count"],
+            "top_level_runs": node["top_level_runs"],
+            "cycle_time": node["cycle_time"],
             "output_qty": qty,
             "input_cost": round(input_cost, 2),
             "shipping_volume_m3": round(ship_volume, 2),
@@ -464,3 +475,168 @@ def get_industry_jobs(context_id: int = Depends(require_b0ss)):
         "total_slots": total_slots,
         "free_slots": max(0, total_slots - used_slots),
     }
+
+
+# ── Wizard suggestion engine ────────────────────────────────────────────────────────────────
+# Two stages, not one monolithic LP: WHAT to run (a knapsack — genuinely an LP's job) and WHO
+# runs it (bin-packing onto real characters/slots — not naturally an LP, and keeping it a
+# separate greedy step means each stage is small enough to hand-verify on its own).
+
+_MIN_LIQUIDITY = 1000  # order-book depth (both sides) a candidate must clear to be suggested —
+# fixed heuristic, not a UI knob, per "use liquidity as a selection filter, don't show it".
+_CANDIDATE_POOL_SIZE = 30  # how many of the liquidity-filtered opportunities feed the knapsack
+
+
+def _character_capacities(context_id: int) -> list[dict]:
+    """Per-character free reaction slots right now (capacity minus currently-running jobs) —
+    only characters that have opted into job tracking count, since we can't know a non-tracked
+    character's current load. Mirrors get_industry_jobs' slot math."""
+    ensure_industry_jobs_table()
+    con = get_connection()
+    try:
+        chars = con.execute(
+            "SELECT character_id, character_name, mass_reactions, advanced_mass_reactions, scopes "
+            "FROM pp_characters WHERE context_id=? AND COALESCE(is_dummy,0)=0",
+            (context_id,),
+        ).fetchall()
+        cached = {r["character_id"]: r for r in con.execute(
+            "SELECT character_id, jobs_json FROM pp_char_industry_jobs"
+        )}
+    finally:
+        con.close()
+
+    result = []
+    for c in chars:
+        if "read_character_jobs" not in (c["scopes"] or ""):
+            continue
+        slots = reaction_slots(c)
+        row = cached.get(c["character_id"])
+        jobs = _json.loads(row["jobs_json"]) if row else []
+        used = len([j for j in jobs if j.get("status") in ("active", "paused", "ready")])
+        result.append({
+            "character_id": c["character_id"], "character_name": c["character_name"],
+            "free_slots": max(0, slots - used),
+        })
+    return result
+
+
+def _suggest_reactions(context_id: int, isk_budget: float, steps_budget: int) -> dict:
+    opportunities = _build_opportunities(context_id)
+    candidates = [o for o in opportunities
+                  if o["buy_volume"] >= _MIN_LIQUIDITY and o["sell_volume"] >= _MIN_LIQUIDITY
+                  and o["top_level_runs"] > 0 and o["net_profit_instant"] > 0]
+    # Rank by profit per step (the "least work most profitable" ordering) before truncating to
+    # a small pool — keeps the LP tiny regardless of how many opportunities Phase 2 finds.
+    candidates.sort(key=lambda o: -(o["net_profit_instant"] / o["top_level_runs"]))
+    candidates = candidates[:_CANDIDATE_POOL_SIZE]
+    empty = {"suggestions": [], "totals": {
+        "isk_committed": 0.0, "net_profit": 0.0, "characters_used": 0, "completion_hours": None}}
+    if not candidates:
+        return empty
+
+    import highspy  # lazy: only ever needed here, keeps it off the cold-start path (matches app.optimizer)
+    n = len(candidates)
+    h = highspy.Highs()
+    h.silent()
+    # x_i in [0,1]: what fraction of candidate i's max achievable batch to actually run — a
+    # continuous relaxation, not a strict per-unit integer knapsack, since with only two
+    # resource constraints (ISK, steps) the LP optimum is naturally at-or-near integer anyway
+    # (at most one variable fractional at the binding constraint), and this stays small/fast
+    # and easy to hand-verify, matching this codebase's existing app.optimizer approach.
+    hvars = h.addVariables(n, lb=[0.0] * n, ub=[1.0] * n)
+    h.maximize(sum(float(c["net_profit_instant"]) * hvars[i] for i, c in enumerate(candidates)))
+    h.addConstr(sum(float(c["input_cost"]) * hvars[i] for i, c in enumerate(candidates)) <= float(isk_budget))
+    h.addConstr(sum(float(c["top_level_runs"]) * hvars[i] for i, c in enumerate(candidates)) <= float(steps_budget))
+    h.run()
+    if h.getModelStatus() != highspy.HighsModelStatus.kOptimal:
+        return empty
+
+    x = h.getSolution().col_value
+    chosen = [(c, xi) for c, xi in zip(candidates, x) if xi > 1e-6]
+    chosen.sort(key=lambda cx: -(cx[0]["net_profit_instant"] * cx[1]))
+    chosen = chosen[:10]  # the wizard shows up to 10 concrete suggestions
+    if not chosen:
+        return empty
+
+    # Stage 2: schedule the chosen runs onto real characters, fewest-characters-first. Each
+    # candidate is assigned to ONE character's full slot count run in parallel (no splitting a
+    # single product across toons — simpler, and matches "least effort" better than maximum
+    # parallelism would). Slots are NOT a depleting resource — once a product's batch finishes,
+    # the same slots are free again for the next one — so this tracks each character's queued
+    # completion time (a schedule), not a one-time slot count that gets used up. Prefers
+    # queueing onto an already-touched character UNLESS that would take meaningfully longer
+    # than starting fresh on an untouched one — a real trade-off between "fewest characters"
+    # and "best time save", not just always picking one. "Meaningfully longer" = more than 2x
+    # a fresh character's finish time for this specific product; a fresh character is only
+    # worth bringing in when it's a clearly better outcome, not for a marginal time saving.
+    _NEW_CHAR_THRESHOLD = 2.0
+    chars = _character_capacities(context_id)
+    slot_count = {c["character_id"]: c["free_slots"] for c in chars if c["free_slots"] > 0}
+    char_names = {c["character_id"]: c["character_name"] for c in chars}
+    queued_until = {cid: 0.0 for cid in slot_count}  # hours from now this character is next free
+    touched_order: list[int] = []
+
+    def _duration_on(cid: int, runs_needed: int, cycle_time: float) -> float:
+        slots_used = max(1, min(slot_count[cid], runs_needed))
+        return (runs_needed / slots_used) * (cycle_time / 3600.0)
+
+    suggestions = []
+    isk_committed = net_profit = 0.0
+    for c, xi in chosen:
+        runs_needed = max(1, round(c["top_level_runs"] * xi))
+        untouched = [cid for cid in slot_count if cid not in touched_order]
+        pick_id = None
+        if touched_order:
+            best_touched = min(touched_order, key=lambda cid: queued_until[cid])
+            touched_finish = queued_until[best_touched] + _duration_on(best_touched, runs_needed, c["cycle_time"])
+            if untouched:
+                best_untouched = max(untouched, key=lambda cid: slot_count[cid])
+                untouched_finish = _duration_on(best_untouched, runs_needed, c["cycle_time"])
+                pick_id = best_untouched if untouched_finish * _NEW_CHAR_THRESHOLD < touched_finish else best_touched
+            else:
+                pick_id = best_touched
+        elif untouched:
+            pick_id = max(untouched, key=lambda cid: slot_count[cid])
+        if pick_id is None:
+            continue  # no character has any reaction slots at all — this suggestion can't be scheduled
+        if pick_id not in touched_order:
+            touched_order.append(pick_id)
+        duration_hours = _duration_on(pick_id, runs_needed, c["cycle_time"])
+        queued_until[pick_id] += duration_hours
+
+        cost = c["input_cost"] * xi
+        reward = c["net_profit_instant"] * xi
+        isk_committed += cost
+        net_profit += reward
+        suggestions.append({
+            "type_id": c["type_id"], "name": c["name"],
+            "runs": runs_needed,
+            "input_cost": round(cost, 2),
+            "reward": round(reward, 2),
+            "assigned_character": char_names.get(pick_id, "?"),
+        })
+
+    completion_hours = max((queued_until[cid] for cid in touched_order), default=0.0)
+
+    return {
+        "suggestions": suggestions,
+        "totals": {
+            "isk_committed": round(isk_committed, 2),
+            "net_profit": round(net_profit, 2),
+            "characters_used": len(touched_order),
+            "completion_hours": round(completion_hours, 1) if suggestions else None,
+        },
+    }
+
+
+class SuggestRequest(BaseModel):
+    isk_budget: float
+    steps_budget: int
+
+
+@router.post("/api/reactions/suggest")
+def suggest_reactions(req: SuggestRequest, context_id: int = Depends(require_b0ss)):
+    if req.isk_budget <= 0 or req.steps_budget <= 0:
+        return {"suggestions": [], "totals": {
+            "isk_committed": 0.0, "net_profit": 0.0, "characters_used": 0, "completion_hours": None}}
+    return _suggest_reactions(context_id, req.isk_budget, req.steps_budget)
