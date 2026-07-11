@@ -416,6 +416,23 @@ function _renderReactionsSuggestions(data) {
         ${t.characters_used} character${t.characters_used === 1 ? '' : 's'} used ·
         ${t.completion_hours != null ? _fmtHours(t.completion_hours) + ' to complete' : ''}
       </span>
+    </div>` + _renderRxAdvisor(data.advisor);
+}
+
+function _renderRxAdvisor(advisor) {
+  if (!advisor) return '';
+  const items = [];
+  for (const hint of advisor.skill_hints || []) {
+    items.push(`<li>${_esc(hint)}</li>`);
+  }
+  if (advisor.budget_hint) {
+    items.push(`<li>Raising your ISK budget by ${_fmtIsk(advisor.budget_hint.extra_isk)} would add about ${_fmtIsk(advisor.budget_hint.extra_profit)} more profit</li>`);
+  }
+  if (!items.length) return '';
+  return `
+    <div class="rx-advisor">
+      <div class="rx-advisor-title">Suggestions to improve</div>
+      <ul>${items.join('')}</ul>
     </div>`;
 }
 

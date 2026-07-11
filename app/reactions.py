@@ -937,11 +937,62 @@ class SuggestRequest(BaseModel):
     material_ids: list[int] | None = None  # None/empty = no restriction, every priced material usable
 
 
+_BUDGET_SENSITIVITY_STEP = 0.10  # "what if you raised your ISK budget by 10%?"
+
+
+def _build_advisor(context_id: int, isk_budget: float, max_chain_depth: int, cadence_hours: float,
+                    material_ids: set[int] | None, current_profit: float, current_binding: str) -> dict:
+    """Two cheap, easily-computable "how could this be better" hints — not a full analysis,
+    just the obvious low-effort wins: missing skill training on already-tracked characters, and
+    whether a bit more ISK would actually buy meaningfully more profit right now (vs. there being
+    nothing left worth spending it on within the current chain-depth/cadence/material limits)."""
+    skill_hints = []
+    con = get_connection()
+    try:
+        chars = con.execute(
+            "SELECT character_name, mass_reactions, advanced_mass_reactions, scopes "
+            "FROM pp_characters WHERE context_id=? AND COALESCE(is_dummy,0)=0", (context_id,),
+        ).fetchall()
+    finally:
+        con.close()
+    for c in chars:
+        if "read_character_jobs" not in (c["scopes"] or ""):
+            continue
+        mr, amr = c["mass_reactions"] or 0, c["advanced_mass_reactions"] or 0
+        if mr < 5:
+            skill_hints.append(f"{c['character_name']}: training Mass Reactions to level {mr + 1} "
+                                f"would add 1 more reaction slot")
+        elif amr < 5:
+            skill_hints.append(f"{c['character_name']}: training Advanced Mass Reactions to level "
+                                f"{amr + 1} would add 1 more reaction slot")
+
+    # Budget sensitivity: only worth suggesting "raise your ISK budget" when ISK is actually the
+    # thing holding this back right now (current_binding == "isk") — if the current run already
+    # left ISK unspent ("neither"), the real limit is something else (chain depth, cadence,
+    # material filter, or simply no more profitable/liquid candidates), and more ISK wouldn't
+    # help; recommending it anyway would be confusing/wrong advice.
+    budget_hint = None
+    if current_binding == "isk" and current_profit > 0:
+        bigger = _suggest_reactions(context_id, isk_budget * (1 + _BUDGET_SENSITIVITY_STEP),
+                                     max_chain_depth, cadence_hours, material_ids)
+        extra_profit = bigger["totals"]["net_profit"] - current_profit
+        if extra_profit > current_profit * 0.01:
+            budget_hint = {
+                "extra_isk": round(isk_budget * _BUDGET_SENSITIVITY_STEP, 2),
+                "extra_profit": round(extra_profit, 2),
+            }
+
+    return {"skill_hints": skill_hints, "budget_hint": budget_hint}
+
+
 @router.post("/api/reactions/suggest")
 def suggest_reactions(req: SuggestRequest, context_id: int = Depends(require_b0ss)):
     if req.isk_budget <= 0 or req.max_chain_depth <= 0 or req.cadence_hours <= 0:
         return {"suggestions": [], "totals": {
             "isk_committed": 0.0, "isk_budget": req.isk_budget, "net_profit": 0.0, "characters_used": 0,
-            "completion_hours": None, "binding": "neither"}}
+            "completion_hours": None, "binding": "neither"}, "advisor": {"skill_hints": [], "budget_hint": None}}
     material_ids = set(req.material_ids) if req.material_ids else None
-    return _suggest_reactions(context_id, req.isk_budget, req.max_chain_depth, req.cadence_hours, material_ids)
+    result = _suggest_reactions(context_id, req.isk_budget, req.max_chain_depth, req.cadence_hours, material_ids)
+    result["advisor"] = _build_advisor(context_id, req.isk_budget, req.max_chain_depth, req.cadence_hours,
+                                        material_ids, result["totals"]["net_profit"], result["totals"]["binding"])
+    return result
