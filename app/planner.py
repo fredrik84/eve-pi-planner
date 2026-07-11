@@ -195,27 +195,30 @@ def _build_p0_p1_maps(pi_data):
     return p0_to_p1, {v: k for k, v in p0_to_p1.items()}
 
 
+def _trace_p1_frac(tid: int, mult: Fraction, types: dict, schematics: dict) -> dict[int, Fraction]:
+    """Recursively roll a type down to its tier-1 (P1) inputs, scaled by mult. A tier-1
+    input returns itself; tier-0/unknown returns {}. Shared by _compute_p1_reqs (which
+    then reduces to an integer ratio) and _compute_p1_fracs (which just floats the result)."""
+    tier = types.get(tid, {}).get("pi_tier")
+    if tier == 1:
+        return {tid: mult}
+    if not tier:
+        return {}
+    sch = schematics.get(tid)
+    if not sch:
+        return {}
+    out_q = sch["output_qty"]
+    result: dict[int, Fraction] = {}
+    for inp in sch["inputs"]:
+        sub = _trace_p1_frac(inp["type_id"], Fraction(inp["quantity"], out_q) * mult, types, schematics)
+        for k, v in sub.items():
+            result[k] = result.get(k, Fraction(0)) + v
+    return result
+
+
 def _compute_p1_reqs(target_type_id: int, pi_data) -> dict[int, int]:
     schematics, types = pi_data["schematics"], pi_data["types"]
-
-    def trace(tid: int, mult: Fraction) -> dict[int, Fraction]:
-        tier = types.get(tid, {}).get("pi_tier")
-        if tier == 1:
-            return {tid: mult}
-        if not tier:
-            return {}
-        sch = schematics.get(tid)
-        if not sch:
-            return {}
-        out_q = sch["output_qty"]
-        result: dict[int, Fraction] = {}
-        for inp in sch["inputs"]:
-            sub = trace(inp["type_id"], Fraction(inp["quantity"], out_q) * mult)
-            for k, v in sub.items():
-                result[k] = result.get(k, Fraction(0)) + v
-        return result
-
-    raw = trace(target_type_id, Fraction(1))
+    raw = _trace_p1_frac(target_type_id, Fraction(1), types, schematics)
     if not raw:
         return {}
     lcm_d = 1
@@ -231,25 +234,7 @@ def _compute_p1_reqs(target_type_id: int, pi_data) -> dict[int, int]:
 def _compute_p1_fracs(target_type_id: int, pi_data) -> dict[int, float]:
     """P1 units required per 1 unit of final product."""
     schematics, types = pi_data["schematics"], pi_data["types"]
-
-    def trace(tid: int, mult: Fraction) -> dict[int, Fraction]:
-        tier = types.get(tid, {}).get("pi_tier")
-        if tier == 1:
-            return {tid: mult}
-        if not tier:
-            return {}
-        sch = schematics.get(tid)
-        if not sch:
-            return {}
-        out_q = sch["output_qty"]
-        result: dict[int, Fraction] = {}
-        for inp in sch["inputs"]:
-            sub = trace(inp["type_id"], Fraction(inp["quantity"], out_q) * mult)
-            for k, v in sub.items():
-                result[k] = result.get(k, Fraction(0)) + v
-        return result
-
-    return {k: float(v) for k, v in trace(target_type_id, Fraction(1)).items()}
+    return {k: float(v) for k, v in _trace_p1_frac(target_type_id, Fraction(1), types, schematics).items()}
 
 
 # Factory P1 input buffer model (kept here so _run_plan and /api/my-setup-plan agree —
@@ -2683,17 +2668,15 @@ def _consolidate_split_extractors(
 
 
 def _reinvest_freed_planets(assignments, p1_info, p0_planet_lists, fac_db_planets,
-                            best_fac_system, ext_slots, factories,
-                            make_factory_product=None) -> tuple[int, int]:
+                            best_fac_system, ext_slots, factories) -> tuple[int, int]:
     """Aggressive reinvestment: fill the planet slots freed by split-consolidation with extra
     factory + extractor planets (in the plan's equilibrium ext:fac ratio) so reclaimed
     overproduction capacity produces MORE rather than just leaving fewer planets in use.
-    Concrete planets are placed so the per-character view stays consistent.
-
-    make_factory_product: optional callable → a {type_id, name} dict tagging each reinvested
-    factory to a production line (fuel-block/basket), or None for the single-product planner
-    (factory assignments carry no per-line product). Returns (added_factories, added_extractors);
-    the caller rescales throughput from the new totals."""
+    Concrete planets are placed so the per-character view stays consistent. Single-product
+    only — factory assignments carry no per-line product (the basket/fuel-block planner has
+    its own _reinvest_fuelblock_greedy, which needs multi-line + per-CCU rate awareness this
+    doesn't). Returns (added_factories, added_extractors); the caller rescales throughput
+    from the new totals."""
     total_free = sum(max(0, a.get("free_planets", 0)) for a in assignments)
     P = ext_slots + factories
     if total_free <= 0 or P <= 0:
@@ -2725,14 +2708,11 @@ def _reinvest_freed_planets(assignments, p1_info, p0_planet_lists, fac_db_planet
             placed = False
             if added_fac < want_fac:  # owe a factory slot, and a B/T planet is free for this char
                 cand = next((p for p in fac_pool if (p["system"], p["planet_num"]) not in used), None)
-                product = make_factory_product() if (cand and make_factory_product) else None
-                if cand and (product is not None or make_factory_product is None):
+                if cand:
                     fa = {
                         "system": cand["system"], "planet_num": cand["planet_num"],
                         "planet_type": cand["planet_type"], "is_new": True, "reinvest": True,
                     }
-                    if product is not None:
-                        fa["product"] = product
                     a.setdefault("factory_assignments", []).append(fa)
                     a["factory_planets"] = a.get("factory_planets", 0) + 1
                     used.add((cand["system"], cand["planet_num"]))

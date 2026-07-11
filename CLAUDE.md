@@ -760,8 +760,8 @@ dflt=false)` returns `enabled OR is_admin` (admins preview everything), falling 
 not yet loaded — pass `dflt=true` for retrofitted existing features so they never vanish on a load
 hiccup, omit it for new features (fail-closed). Call sites: `onDashboardTabOpen`, `onAnalyzeTabOpen`,
 `_refreshBaskets`, `renderFinalPlan` (split control). Admin → **Features** sub-tab
-(`loadAdminFeatures`/`toggleFeature`) flips flags. Registry today: `timeline`, `split_extraction`
-(default on), `baskets` (default on), `skill_roi`, `move_character`, `schedule_sync`, `pad_fill`.
+(`loadAdminFeatures`/`toggleFeature`) flips flags. `FEATURE_REGISTRY` in `app/features.py` is the
+source of truth for the current flag set — don't duplicate the list here, it drifts.
 
 ## Shared colony-alert engine (`app/colony_alerts.py`) + configurable thresholds (`app/alert_settings.py`)
 
