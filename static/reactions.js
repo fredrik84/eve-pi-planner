@@ -210,17 +210,18 @@ function _renderReactionsDashboard(data) {
       ).join('')}</div>`
     : '';
 
-  // What's currently committed across every pending+running assignment, not just what a fresh
-  // "Suggest reactions" run would project — the wizard's totals bar only ever reflects one
-  // suggestion batch at the moment it was generated, this reflects what's actually on the books.
-  const pendingSummary = (data.pending_isk_committed > 0 || data.pending_net_profit > 0)
-    ? `<div class="rx-totals-summary">
-        <span>${_fmtIsk(data.pending_isk_committed)} committed</span>
-        <span class="rx-totals-profit">+${_fmtIsk(data.pending_net_profit)} expected profit</span>
-      </div>`
-    : '';
+  // Easy at-a-glance numbers, first thing on the page — same big-number-tile pattern as the PI
+  // Dashboard's own "Overview" row (_dashTile, dashboard.js), not a small text line buried below
+  // the character loadout where it's easy to miss.
+  const pendingCount = [...todoGroups.values()].reduce((sum, g) => sum + g.count, 0);
+  const overviewTiles = `<div class="an-stats" style="margin-bottom:14px">
+      ${_dashTile(_fmtIsk(data.pending_isk_committed), 'ISK committed')}
+      ${_dashTile('+' + _fmtIsk(data.pending_net_profit), 'Expected profit', 'an-ok')}
+      ${_dashTile(`${data.free_slots}<span class="an-of"> / ${data.total_slots}</span>`, 'Free slots')}
+      ${_dashTile(String(pendingCount), 'Jobs to install', pendingCount > 0 ? 'an-warn' : '')}
+    </div>`;
 
-  el.innerHTML = rows + pendingSummary + todoNote + untrackedNote;
+  el.innerHTML = overviewTiles + rows + todoNote + untrackedNote;
 }
 
 function _rxCancelAssignment(assignmentId) {
