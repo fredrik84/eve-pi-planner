@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from app.sde import get_connection, ensure_once, load_pi_data
-from app.esi import require_admin, require_b0ss
+from app.esi import require_admin, require_context
 
 router = APIRouter()
 
@@ -120,7 +120,7 @@ class GooImportRequest(BaseModel):
 
 
 @router.get("/api/moon-goo")
-def list_moon_goo(ctx: int = Depends(require_b0ss)):
+def list_moon_goo(ctx: int = Depends(require_context)):
     ensure_moon_goo_table()
     con = get_connection()
     try:
@@ -151,3 +151,44 @@ def import_moon_goo(req: GooImportRequest, ctx: int = Depends(require_admin)):
     finally:
         con.close()
     return {"ok": True, "imported": len(rows), "errors": errors}
+
+
+class GooRowUpsert(BaseModel):
+    type_id: int
+    sell_price: float
+    stock: int
+
+
+@router.post("/api/moon-goo/row")
+def upsert_moon_goo_row(req: GooRowUpsert, ctx: int = Depends(require_admin)):
+    """Add or edit a single material row — the paste-import above is for bulk sheet updates;
+    this is for a quick one-off correction (a stock refresh, a price typo) without re-pasting
+    the whole sheet."""
+    ensure_moon_goo_table()
+    pi_types = load_pi_data()["types"]
+    name = pi_types.get(req.type_id, {}).get("name") or str(req.type_id)
+    con = get_connection()
+    try:
+        con.execute(
+            "INSERT INTO pp_moon_goo_prices (type_id, name, sell_price, stock, updated_at) "
+            "VALUES (?,?,?,?,CURRENT_TIMESTAMP) "
+            "ON CONFLICT (type_id) DO UPDATE SET name=excluded.name, sell_price=excluded.sell_price, "
+            "stock=excluded.stock, updated_at=excluded.updated_at",
+            (req.type_id, name, req.sell_price, req.stock),
+        )
+        con.commit()
+    finally:
+        con.close()
+    return {"ok": True, "name": name}
+
+
+@router.delete("/api/moon-goo/{type_id}")
+def delete_moon_goo_row(type_id: int, ctx: int = Depends(require_admin)):
+    ensure_moon_goo_table()
+    con = get_connection()
+    try:
+        con.execute("DELETE FROM pp_moon_goo_prices WHERE type_id=?", (type_id,))
+        con.commit()
+    finally:
+        con.close()
+    return {"ok": True}

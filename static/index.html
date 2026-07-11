@@ -68,6 +68,7 @@
           <button class="admin-nav-item" data-page="submissions" onclick="adminNavTo('submissions')"><span class="nav-ico">PS</span><span class="nav-lbl">Submissions <span id="adminNavPsub" class="admin-nav-badge"></span></span></button>
           <button class="admin-nav-item" data-page="bugs" onclick="adminNavTo('bugs')"><span class="nav-ico">BG</span><span class="nav-lbl">Bugs <span id="adminNavBugs" class="admin-nav-badge"></span></span></button>
           <button class="admin-nav-item" data-page="baskets" onclick="adminNavTo('baskets')"><span class="nav-ico">BK</span><span class="nav-lbl">Baskets</span></button>
+          <button class="admin-nav-item" data-page="moongoo" onclick="adminNavTo('moongoo')"><span class="nav-ico">MG</span><span class="nav-lbl">Moon goo</span></button>
           <button class="admin-nav-item" data-page="wallet" onclick="adminNavTo('wallet')"><span class="nav-ico">WL</span><span class="nav-lbl">Corp wallet</span></button>
           <button class="admin-nav-item" data-page="cleanup" onclick="adminNavTo('cleanup')"><span class="nav-ico">CL</span><span class="nav-lbl">DB Cleanup</span></button>
         </div>
@@ -860,6 +861,7 @@ PVF-N9    3         95                 60             80                  100   
         <button class="admin-mobile-page-btn" data-page="submissions"  onclick="adminNavTo('submissions')">Submissions</button>
         <button class="admin-mobile-page-btn" data-page="bugs"         onclick="adminNavTo('bugs')">Bugs</button>
         <button class="admin-mobile-page-btn" data-page="baskets"      onclick="adminNavTo('baskets')">Baskets</button>
+        <button class="admin-mobile-page-btn" data-page="moongoo"      onclick="adminNavTo('moongoo')">Moon goo</button>
         <button class="admin-mobile-page-btn" data-page="wallet"       onclick="adminNavTo('wallet')">Wallet</button>
         <button class="admin-mobile-page-btn" data-page="cleanup"      onclick="adminNavTo('cleanup')">Cleanup</button>
       </div>
@@ -898,6 +900,30 @@ PVF-N9    3         95                 60             80                  100   
             <div class="pp-card-title">Production baskets</div>
             <div class="admin-hint">A basket is a named set of PI products + quantities, planned like the built-in Fuel Blocks. Any logged-in user creates private baskets (visible only to them); admins also publish <strong>global</strong> baskets available to everyone. Components must be P1–P4.</div>
             <button onclick="openBasketModal()">Manage baskets…</button>
+          </section>
+        </div>
+
+        <div class="admin-subpage" data-page="moongoo" style="display:none">
+          <section class="pp-card admin-section">
+            <div class="pp-card-title">Moon-goo prices</div>
+            <div class="admin-hint">The alliance's below-market moon-material price/stock list, used to price Reactions chains for B0SS alliance members — everyone else sees Fuzzworks market prices instead. Edit a row directly for a quick correction, or paste the sheet's own export below for a bulk update.</div>
+            <div class="admin-add-row">
+              <input id="gooAddTypeId" class="bug-input" placeholder="Type ID" style="max-width:100px" type="number">
+              <input id="gooAddPrice" class="bug-input" placeholder="Sell price" style="max-width:140px" type="number">
+              <input id="gooAddStock" class="bug-input" placeholder="Stock" style="max-width:100px" type="number">
+              <button onclick="addMoonGooRow()">Add / update</button>
+              <span id="gooAddStatus" class="bug-status-msg"></span>
+            </div>
+            <div id="moonGooList" class="admin-list"></div>
+          </section>
+          <section class="pp-card admin-section" style="margin-top:12px">
+            <div class="pp-card-title">Bulk paste-import</div>
+            <div class="admin-hint">Paste the alliance sheet's own export (type_id, name, price, stock columns, any order) to update many rows at once.</div>
+            <textarea id="gooImportText" class="pp-import-ta" rows="6" placeholder="Paste sheet export here…"></textarea>
+            <div style="margin-top:8px">
+              <button onclick="importMoonGoo()">Import</button>
+              <span id="gooImportStatus" class="bug-status-msg"></span>
+            </div>
           </section>
         </div>
 
@@ -1236,7 +1262,7 @@ PVF-N9    3         95                 60             80                  100   
   <script src="/app.js?v=33"></script>
   <script src="/planetary.js?v=353"></script>
   <script src="/dashboard.js?v=15"></script>
-  <script src="/admin.js?v=11"></script>
+  <script src="/admin.js?v=12"></script>
   <script src="/planetdb.js?v=3"></script>
   <script src="/refill.js?v=3"></script>
   <script src="/analysis.js?v=24"></script>

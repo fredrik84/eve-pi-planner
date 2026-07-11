@@ -47,6 +47,7 @@ function adminSubPage(key) {
   if (key === 'users') _loadCharNameSuggestions();
   if (key === 'stats') loadAdminStats();
   if (key === 'cleanup') loadCleanupPreview();
+  if (key === 'moongoo') loadMoonGoo();
 }
 
 async function _loadCharNameSuggestions() {
@@ -703,5 +704,110 @@ async function runCleanup() {
   } catch (e) {
     if (statusEl) statusEl.textContent = 'Failed: ' + e.message;
     document.querySelectorAll('.cleanup-run-btn').forEach(b => b.disabled = false);
+  }
+}
+
+// ── Moon-goo prices (B0SS alliance deal, feeds the Reactions tool) ─────────────────────────
+async function loadMoonGoo() {
+  const el = document.getElementById('moonGooList');
+  if (!el) return;
+  el.innerHTML = '<div class="pp-empty">Loading…</div>';
+  try {
+    const resp = await fetch('/api/moon-goo');
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    renderMoonGoo(data.prices || []);
+  } catch (e) {
+    el.innerHTML = `<div class="pp-empty">Failed to load: ${_esc(e.message)}</div>`;
+  }
+}
+
+function renderMoonGoo(rows) {
+  const el = document.getElementById('moonGooList');
+  if (!el) return;
+  if (!rows.length) { el.innerHTML = '<div class="pp-empty">No materials priced yet — add one above or paste an import.</div>'; return; }
+  el.innerHTML = rows.map(r => `
+    <div class="admin-row" data-type-id="${r.type_id}">
+      <span class="admin-name">${_esc(r.name)}</span>
+      <span class="admin-meta">#${r.type_id}</span>
+      <input type="number" class="bug-input goo-row-price" value="${r.sell_price}" style="max-width:120px" title="Sell price">
+      <input type="number" class="bug-input goo-row-stock" value="${r.stock}" style="max-width:100px" title="Stock">
+      <button onclick="saveMoonGooRow(${r.type_id}, this)">Save</button>
+      <button onclick="deleteMoonGooRow(${r.type_id}, this)">Delete</button>
+    </div>`).join('');
+}
+
+async function saveMoonGooRow(typeId, btn) {
+  const row = btn.closest('.admin-row');
+  const sell_price = parseFloat(row.querySelector('.goo-row-price').value) || 0;
+  const stock = parseInt(row.querySelector('.goo-row-stock').value, 10) || 0;
+  btn.disabled = true;
+  try {
+    const resp = await fetch('/api/moon-goo/row', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type_id: typeId, sell_price, stock }),
+    });
+    if (!resp.ok) throw new Error((await resp.json()).detail || `HTTP ${resp.status}`);
+    btn.textContent = 'Saved ✓';
+    setTimeout(() => { btn.textContent = 'Save'; btn.disabled = false; }, 1200);
+  } catch (e) {
+    alert('Failed: ' + e.message);
+    btn.disabled = false;
+  }
+}
+
+async function deleteMoonGooRow(typeId, btn) {
+  if (!confirm('Remove this material from the price list?')) return;
+  btn.disabled = true;
+  try {
+    const resp = await fetch(`/api/moon-goo/${typeId}`, { method: 'DELETE' });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    loadMoonGoo();
+  } catch (e) {
+    alert('Failed: ' + e.message);
+    btn.disabled = false;
+  }
+}
+
+async function addMoonGooRow() {
+  const typeId = parseInt(document.getElementById('gooAddTypeId').value, 10);
+  const sell_price = parseFloat(document.getElementById('gooAddPrice').value) || 0;
+  const stock = parseInt(document.getElementById('gooAddStock').value, 10) || 0;
+  const statusEl = document.getElementById('gooAddStatus');
+  if (!typeId) { statusEl.textContent = 'Enter a type ID.'; return; }
+  try {
+    const resp = await fetch('/api/moon-goo/row', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type_id: typeId, sell_price, stock }),
+    });
+    if (!resp.ok) throw new Error((await resp.json()).detail || `HTTP ${resp.status}`);
+    const result = await resp.json();
+    statusEl.textContent = `Added/updated: ${result.name}`;
+    document.getElementById('gooAddTypeId').value = '';
+    document.getElementById('gooAddPrice').value = '';
+    document.getElementById('gooAddStock').value = '';
+    loadMoonGoo();
+  } catch (e) {
+    statusEl.textContent = 'Failed: ' + e.message;
+  }
+}
+
+async function importMoonGoo() {
+  const text = document.getElementById('gooImportText').value;
+  const statusEl = document.getElementById('gooImportStatus');
+  if (!text.trim()) { statusEl.textContent = 'Paste something first.'; return; }
+  try {
+    const resp = await fetch('/api/moon-goo/import', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    if (!resp.ok) throw new Error((await resp.json()).detail || `HTTP ${resp.status}`);
+    const result = await resp.json();
+    statusEl.textContent = `Imported ${result.imported} row${result.imported === 1 ? '' : 's'}.`
+      + (result.errors.length ? ` ${result.errors.length} warning(s): ${result.errors.join('; ')}` : '');
+    document.getElementById('gooImportText').value = '';
+    loadMoonGoo();
+  } catch (e) {
+    statusEl.textContent = 'Failed: ' + e.message;
   }
 }

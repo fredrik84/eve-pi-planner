@@ -26,7 +26,7 @@ from pydantic import BaseModel
 
 from app.sde import get_connection, load_pi_data, ensure_once
 from app.market import fetch_market_data
-from app.esi import require_b0ss, require_admin, require_context, ESI_BASE, _get_valid_token
+from app.esi import require_admin, require_context, ESI_BASE, _get_valid_token, is_b0ss_member
 
 router = APIRouter()
 
@@ -91,7 +91,7 @@ class ReactionSettingsUpdate(BaseModel):
 
 
 @router.get("/api/reactions/settings")
-def api_get_reaction_settings(ctx: int = Depends(require_b0ss)):
+def api_get_reaction_settings(ctx: int = Depends(require_context)):
     return get_reaction_settings()
 
 
@@ -134,8 +134,22 @@ def _load_reaction_graph(con) -> tuple[dict[int, list[dict]], dict[int, list[dic
     return reactions_by_output, inputs_by_reaction
 
 
+_PURCHASABLE_MAX_QTY = 1_000_000_000  # a large-but-finite stand-in for "the open market can
+# absorb as much as we need" for a single LEAF material — kept finite (not literal infinity) so
+# arithmetic on it (cost = qty * unit_cost etc.) stays well-defined. On its own this would
+# compound into absurd numbers through a multi-tier chain (each tier's max_qty is the previous
+# tier's max_qty ÷ its own consumption × its own output_qty, so a big number in only gets
+# bigger going up the chain) — _UNLIMITED_RUNS_CAP below re-applies a sane ceiling at EVERY
+# tier of an "unlimited" (no real finite-stock goo) chain, not just at the raw leaf.
+_UNLIMITED_RUNS_CAP = 5_000  # a generous but sane ceiling on any one tier's reaction-run count
+# when its entire supply chain traces back to purchasable (market) materials only — comfortably
+# above what a real "Suggest reactions" run would ever actually use (cadence/ISK capping there
+# is always much smaller in practice), but keeps the RAW opportunity table (which isn't cadence-
+# capped) from showing nonsensical hundred-million-unit / trillion-ISK "opportunities."
+
+
 def _resolve_reachable(goo: dict[int, dict], purchasable: dict[int, float],
-                        reactions_by_output: dict[int, list[dict]]) -> dict[int, dict]:
+                        reactions_by_output: dict[int, list[dict]], require_real_goo: bool = True) -> dict[int, dict]:
     """Fixed-point expansion from the available goo (type_id -> {sell_price, stock}) through
     the reaction graph. Returns {type_id: node} for every reachable node (goo, market-bought
     inputs, AND every reaction product reachable at any depth), where node carries:
@@ -143,6 +157,8 @@ def _resolve_reachable(goo: dict[int, dict], purchasable: dict[int, float],
       max_qty        - max units producible given available stock through the WHOLE chain
       reaction_count - distinct reaction runs needed in the subtree (the "work" proxy)
       via            - None for raw goo/purchasable, else the {reaction_id, ...} formula used
+      unlimited      - True if every input feeding this node traces back only to purchasable
+                       (market) leaves, never a real finite-stock goo leaf
     A reaction only becomes reachable once every one of its inputs is already reachable —
     same "expand until no more nodes unlock" shape as build_sde.py's compute_pi_tiers, just
     walked forward from available inputs instead of backward from a fixed target.
@@ -152,14 +168,21 @@ def _resolve_reachable(goo: dict[int, dict], purchasable: dict[int, float],
     buy price with effectively unlimited supply — these trade in bulk on the open market, they
     aren't a stock-limited resource the way the alliance's goo deal is. Without this, almost no
     reaction is ever reachable at all (confirmed live: every Composite/Hybrid formula and most
-    Simple ones need at least one fuel block)."""
+    Simple ones need at least one fuel block).
+
+    `require_real_goo` (True for B0SS members) excludes any chain built ENTIRELY from purchasable
+    inputs — not a genuine use of the alliance's below-market goo deal. Non-B0SS callers pass
+    False, since for them there IS no real finite-stock goo at all (moon materials are folded
+    into `purchasable` too, priced from the open market instead) — every one of their reachable
+    chains is "market-only" by definition, and excluding those would leave nothing reachable."""
     reached: dict[int, dict] = {
-        tid: {"unit_cost": g["sell_price"], "max_qty": g["stock"], "reaction_count": 0, "via": None}
+        tid: {"unit_cost": g["sell_price"], "max_qty": g["stock"], "reaction_count": 0, "via": None, "unlimited": False}
         for tid, g in goo.items() if g["stock"] > 0
     }
     for tid, buy_price in purchasable.items():
         if tid not in reached and buy_price > 0:
-            reached[tid] = {"unit_cost": buy_price, "max_qty": float("inf"), "reaction_count": 0, "via": None}
+            reached[tid] = {"unit_cost": buy_price, "max_qty": _PURCHASABLE_MAX_QTY, "reaction_count": 0,
+                             "via": None, "unlimited": True}
 
     changed = True
     while changed:
@@ -170,17 +193,22 @@ def _resolve_reachable(goo: dict[int, dict], purchasable: dict[int, float],
                 if not f["inputs"] or any(inp["type_id"] not in reached for inp in f["inputs"]):
                     continue
                 # A chain built ONLY from purchasable (unlimited) inputs never actually touches
-                # real moon goo — not a genuine "goo reaction" opportunity, and would divide by
-                # an infinite max_qty below. Require at least one finite (goo-backed) input.
-                if all(reached[inp["type_id"]]["max_qty"] == float("inf") for inp in f["inputs"]):
+                # real moon goo — not a genuine "goo reaction" opportunity for a B0SS member.
+                if require_real_goo and all(reached[inp["type_id"]]["unlimited"] for inp in f["inputs"]):
                     continue
                 # ME reduces material CONSUMED per run, so it doesn't change unit_cost's
                 # normalization directly — it scales down how much of each input a run needs.
                 eff_qty = {inp["type_id"]: inp["quantity"] * (1 - REACTION_ME_REDUCTION)
                            for inp in f["inputs"]}
                 runs = min(reached[tid]["max_qty"] / q for tid, q in eff_qty.items())
-                if runs <= 0 or runs == float("inf"):
+                if runs <= 0:
                     continue
+                is_unlimited = all(reached[inp["type_id"]]["unlimited"] for inp in f["inputs"])
+                if is_unlimited:
+                    # Re-cap at EVERY tier, not just the raw leaf — a chain several tiers deep
+                    # would otherwise compound _PURCHASABLE_MAX_QTY into an astronomical number
+                    # (each tier's max_qty feeds the next tier's own runs calculation).
+                    runs = min(runs, _UNLIMITED_RUNS_CAP)
                 cost_per_run = sum(q * reached[tid]["unit_cost"] for tid, q in eff_qty.items())
                 reaction_count = 1 + sum(reached[inp["type_id"]]["reaction_count"] for inp in f["inputs"])
                 candidate = {
@@ -198,6 +226,7 @@ def _resolve_reachable(goo: dict[int, dict], purchasable: dict[int, float],
                     "cycle_time": f["cycle_time"],
                     "via": {"reaction_id": f["reaction_id"], "cycle_time": f["cycle_time"],
                             "output_qty": f["output_qty"], "inputs": f["inputs"]},
+                    "unlimited": is_unlimited,
                 }
                 # Prefer whichever formula yields lower unit_cost (most profitable path to
                 # this product) — "least work most profitable" means the tool should already
@@ -216,25 +245,40 @@ def _load_goo_and_reached(context_id: int, allowed_material_ids: set[int] | None
     goo stock, the reaction graph, and the fixed-point `reached` expansion (see
     _resolve_reachable) from that goo through to every producible product. Returns
     (goo, reached, reactions_by_output, inputs_by_reaction, types) or None if there's no goo to
-    start from at all."""
+    start from at all.
+
+    B0SS alliance members get the below-market pp_moon_goo_prices deal (goo has real, finite
+    stock, no import cost — already at/near the reaction site). Everyone else can still use the
+    tool, just priced off the open market instead: moon materials are folded into `purchasable`
+    (Fuzzworks-priced, unlimited supply, WITH import shipping — unlike B0SS goo, it isn't
+    already at the reaction site) rather than kept in `goo` at all. The Reactions feature itself
+    is open to any logged-in user (require_context) — this only changes which price a material
+    is costed at, not who can see the tool."""
+    from app.esi import is_b0ss_member
+    is_b0ss = is_b0ss_member(context_id)
+
     con = get_connection()
     try:
         goo_rows = con.execute("SELECT type_id, sell_price, stock FROM pp_moon_goo_prices").fetchall()
-        goo = {r["type_id"]: {"sell_price": r["sell_price"], "stock": r["stock"]} for r in goo_rows}
         reactions_by_output, inputs_by_reaction = _load_reaction_graph(con)
     finally:
         con.close()
 
     # Advanced filter: restrict which raw moon materials are actually available to this player
     # (e.g. a Gas type their alliance doesn't stock, or they simply can't reliably buy) — any
-    # chain that would need an excluded material is never reachable in the first place, since
-    # _resolve_reachable only expands from what's in `goo`. None/empty = no restriction (every
-    # priced material is assumed available, the original behavior).
+    # chain that would need an excluded material is never reachable in the first place. None/
+    # empty = no restriction (every priced material is assumed available, the original behavior).
+    moon_material_ids = {r["type_id"] for r in goo_rows}
     if allowed_material_ids:
-        goo = {tid: g for tid, g in goo.items() if tid in allowed_material_ids}
+        moon_material_ids &= set(allowed_material_ids)
+    if not moon_material_ids:
+        return None  # the admin-managed goo list itself is empty — nothing to react from, B0SS or not
 
-    if not goo:
-        return None
+    if is_b0ss:
+        goo = {r["type_id"]: {"sell_price": r["sell_price"], "stock": r["stock"]}
+               for r in goo_rows if r["type_id"] in moon_material_ids}
+    else:
+        goo = {}  # no fixed-stock alliance deal for this account — priced from the market instead, below
 
     settings = get_reaction_settings()
     pi = load_pi_data()
@@ -247,7 +291,9 @@ def _load_goo_and_reached(context_id: int, allowed_material_ids: set[int] | None
     # the sell price, selling earns the buy price) PLUS the configured import shipping cost
     # to get them from Jita to the reaction site (no collateral on the import leg — that's a
     # self-haul assumption, only the export leg uses a courier). Unlimited supply assumed.
-    # Moon goo itself gets no import cost added (confirmed: already at/near the reaction site).
+    # Moon goo itself gets no import cost added for B0SS members (confirmed: already at/near
+    # the reaction site) — non-B0SS members DO pay it on moon materials too, folded in below,
+    # since for them it's just another market purchase that needs hauling in.
     #
     # Deliberately EXCLUDES anything that is itself a reaction product (has its own entry in
     # reactions_by_output, e.g. Ferrofluid, Carbon Polymers — Simple/T1-tier intermediates) even
@@ -261,13 +307,15 @@ def _load_goo_and_reached(context_id: int, allowed_material_ids: set[int] | None
     # purchasable). Only real reaction products get this treatment; true leaves are unaffected.
     all_input_ids = {inp["type_id"] for inputs in inputs_by_reaction.values() for inp in inputs}
     purchasable_ids = [tid for tid in all_input_ids if tid not in goo and tid not in reactions_by_output]
+    if not is_b0ss:
+        purchasable_ids = list(set(purchasable_ids) | moon_material_ids)
     purchasable_market = fetch_market_data(purchasable_ids)
     purchasable = {
         tid: m["sell_price"] + settings["import_isk_per_m3"] * (types.get(tid, {}).get("volume") or 0.0)
         for tid, m in purchasable_market.items()
     }
 
-    reached = _resolve_reachable(goo, purchasable, reactions_by_output)
+    reached = _resolve_reachable(goo, purchasable, reactions_by_output, require_real_goo=is_b0ss)
     return goo, reached, reactions_by_output, inputs_by_reaction, types
 
 
@@ -332,7 +380,7 @@ def _build_opportunities(context_id: int, allowed_material_ids: set[int] | None 
 
 
 @router.get("/api/reactions/opportunities")
-def reactions_opportunities(context_id: int = Depends(require_b0ss)):
+def reactions_opportunities(context_id: int = Depends(require_context)):
     return {"opportunities": _build_opportunities(context_id)}
 
 
@@ -378,7 +426,7 @@ def _explode_chain_tiers(formula_inputs: list[dict], runs: int, reached: dict, t
 
 
 @router.get("/api/reactions/shopping-list")
-def reactions_shopping_list(context_id: int = Depends(require_b0ss)):
+def reactions_shopping_list(context_id: int = Depends(require_context)):
     """Total raw materials needed across every one of the caller's pending assignments (see
     assign_reaction) — moon goo AND any purchased materials (fuel blocks etc.), summed and
     broken down to the same leaf level the profitability table prices from. Meant to be copied
@@ -592,7 +640,7 @@ class AssignRequest(BaseModel):
 
 
 @router.post("/api/reactions/assign")
-def assign_reaction(req: AssignRequest, context_id: int = Depends(require_b0ss)):
+def assign_reaction(req: AssignRequest, context_id: int = Depends(require_context)):
     """Commit a suggested (character, product) pairing as standing "go do this" instructions —
     surfaced on the dashboard until ESI confirms a matching job is actually running, at which
     point it's auto-cleared (see get_industry_jobs). A suggestion sized to use multiple reaction
@@ -648,7 +696,7 @@ def assign_reaction(req: AssignRequest, context_id: int = Depends(require_b0ss))
 
 
 @router.delete("/api/reactions/assign/{assignment_id}")
-def unassign_reaction(assignment_id: int, context_id: int = Depends(require_b0ss)):
+def unassign_reaction(assignment_id: int, context_id: int = Depends(require_context)):
     ensure_reaction_assignments_table()
     con = get_connection()
     try:
@@ -667,7 +715,7 @@ def unassign_reaction(assignment_id: int, context_id: int = Depends(require_b0ss
 
 
 @router.delete("/api/reactions/assign")
-def unassign_all_reactions(context_id: int = Depends(require_b0ss)):
+def unassign_all_reactions(context_id: int = Depends(require_context)):
     """Clear every pending assignment across all of the caller's characters in one go —
     "Clear all" on the dashboard, for starting a fresh suggestion set without hand-cancelling
     each pending slot one at a time."""
@@ -688,7 +736,7 @@ def unassign_all_reactions(context_id: int = Depends(require_b0ss)):
 
 
 @router.get("/api/reactions/jobs")
-def get_industry_jobs(context_id: int = Depends(require_b0ss)):
+def get_industry_jobs(context_id: int = Depends(require_context)):
     """Personal reaction-job status for the Reactions wizard's dashboard page: currently
     running jobs (from the last refresh), a capacity summary (free slots right now, across
     every character that's opted into tracking), the per-character opt-in breakdown so the UI
@@ -1161,7 +1209,7 @@ def _build_advisor(context_id: int, isk_budget: float, max_chain_depth: int, cad
 
 
 @router.post("/api/reactions/suggest")
-def suggest_reactions(req: SuggestRequest, context_id: int = Depends(require_b0ss)):
+def suggest_reactions(req: SuggestRequest, context_id: int = Depends(require_context)):
     if req.isk_budget <= 0 or req.max_chain_depth <= 0 or req.cadence_hours <= 0:
         return {"suggestions": [], "totals": {
             "isk_committed": 0.0, "isk_budget": req.isk_budget, "net_profit": 0.0, "output_value": 0.0,

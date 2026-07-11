@@ -245,8 +245,8 @@ def ensure_char_tables():
     # log every alt in. is_dummy=1; their character_id is negative to avoid colliding with real
     # EVE ids. They contribute planet slots + CCU only.
     _add_col("pp_characters", "is_dummy INTEGER DEFAULT 0")
-    # Reactions-industry skills (see SKILL_IDS below) and alliance affiliation — the latter for
-    # gating the B0SS moon-goo reactions tool to actual alliance members (see require_b0ss).
+    # Reactions-industry skills (see SKILL_IDS below) and alliance affiliation — the latter picks
+    # the Reactions tool's moon-goo pricing source, alliance deal vs. open market (see is_b0ss_member).
     _add_col("pp_characters", "mass_reactions INTEGER DEFAULT 0")
     _add_col("pp_characters", "advanced_mass_reactions INTEGER DEFAULT 0")
     _add_col("pp_characters", "alliance_id INTEGER")
@@ -1074,28 +1074,26 @@ def require_admin(pp_session: str = Cookie(default=None)) -> int:
     raise HTTPException(status_code=403, detail="Admin access required")
 
 
-def require_b0ss(pp_session: str = Cookie(default=None)) -> int:
-    """FastAPI dependency for the B0SS moon-goo reactions tool: return context_id for accounts
-    with a real (non-dummy) character in the B0SS alliance, or for admins (who can always
-    preview, matching this app's existing admin-preview convention). Else raise 403."""
-    sess = _session_lookup(pp_session)
-    if sess:
-        context_id = sess[1]
-        con = get_connection()
-        try:
-            row = con.execute(
-                "SELECT 1 FROM pp_characters WHERE context_id=? AND alliance_id=? "
-                "AND COALESCE(is_dummy, 0) = 0 LIMIT 1",
-                (context_id, B0SS_ALLIANCE_ID),
-            ).fetchone()
-        finally:
-            con.close()
-        if row is not None:
-            return context_id
-        names = _context_character_names(context_id)
-        if any(n in (ADMIN_CHARACTERS | _db_admin_names()) for n in names):
-            return context_id
-    raise HTTPException(status_code=403, detail="B0SS alliance membership required")
+def is_b0ss_member(context_id: int) -> bool:
+    """True if the account has a real (non-dummy) character in the B0SS alliance, or is an admin
+    (who can always preview, matching this app's existing admin-preview convention). Used to
+    pick the Reactions tool's moon-goo pricing source (pp_moon_goo_prices' below-market alliance
+    deal for B0SS members, Fuzzworks market prices for everyone else) — NOT an access gate, the
+    Reactions feature itself is open to any logged-in user (require_context); this only changes
+    which price a material is costed at."""
+    con = get_connection()
+    try:
+        row = con.execute(
+            "SELECT 1 FROM pp_characters WHERE context_id=? AND alliance_id=? "
+            "AND COALESCE(is_dummy, 0) = 0 LIMIT 1",
+            (context_id, B0SS_ALLIANCE_ID),
+        ).fetchone()
+    finally:
+        con.close()
+    if row is not None:
+        return True
+    names = _context_character_names(context_id)
+    return any(n in (ADMIN_CHARACTERS | _db_admin_names()) for n in names)
 
 
 def _db_tester_names() -> set[str]:
@@ -1187,7 +1185,7 @@ def _fetch_skills(character_id: int, access_token: str) -> dict[str, int]:
 
 
 # Brotherhood of Spacers (ticker B0SS) — confirmed via WillusKillus, the exact contact named in
-# the alliance's moon-goo-for-sale price sheet. Gates the reactions tool (see require_b0ss).
+# the alliance's moon-goo-for-sale price sheet. Picks the Reactions pricing source (see is_b0ss_member).
 B0SS_ALLIANCE_ID = 99007887
 
 

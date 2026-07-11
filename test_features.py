@@ -97,25 +97,28 @@ def test_corp_wallet_gated(base: str) -> bool:
 
 
 def test_reactions_gated(base: str) -> bool:
-    print(f"\n{'='*60}\n  Reactions endpoints are B0SS-alliance/admin-gated\n{'='*60}")
+    # Open to any logged-in user (not B0SS-exclusive anymore — B0SS membership only picks the
+    # moon-goo pricing source, pp_moon_goo_prices vs. Fuzzworks market prices); still requires
+    # being logged in at all, so anonymous requests get 401, not the old 403.
+    print(f"\n{'='*60}\n  Reactions endpoints require login (open to all users, B0SS-priced or Fuzzworks-priced)\n{'='*60}")
     ok = True
     code = get_status(f"{base}/api/reactions/opportunities")
-    ok &= check(code == 403, f"anonymous reactions-opportunities read rejected (got HTTP {code})")
+    ok &= check(code == 401, f"anonymous reactions-opportunities read rejected (got HTTP {code})")
     code = get_status(f"{base}/api/moon-goo")
-    ok &= check(code == 403, f"anonymous moon-goo price list read rejected (got HTTP {code})")
+    ok &= check(code == 401, f"anonymous moon-goo price list read rejected (got HTTP {code})")
     code = get_status(f"{base}/api/reactions/jobs")
-    ok &= check(code == 403, f"anonymous reactions-jobs read rejected (got HTTP {code})")
+    ok &= check(code == 401, f"anonymous reactions-jobs read rejected (got HTTP {code})")
     code = post_status(f"{base}/api/reactions/suggest", {"isk_budget": 1, "max_chain_depth": 1})
-    ok &= check(code == 403, f"anonymous reactions-suggest rejected (got HTTP {code})")
+    ok &= check(code == 401, f"anonymous reactions-suggest rejected (got HTTP {code})")
     code = post_status(f"{base}/api/reactions/assign",
                         {"character_id": 1, "type_id": 1, "name": "x", "runs": 1, "input_cost": 1, "reward": 1})
-    ok &= check(code == 403, f"anonymous reactions-assign rejected (got HTTP {code})")
+    ok &= check(code == 401, f"anonymous reactions-assign rejected (got HTTP {code})")
     code = delete_status(f"{base}/api/reactions/assign/1")
-    ok &= check(code == 403, f"anonymous reactions-unassign rejected (got HTTP {code})")
+    ok &= check(code == 401, f"anonymous reactions-unassign rejected (got HTTP {code})")
     code = delete_status(f"{base}/api/reactions/assign")
-    ok &= check(code == 403, f"anonymous reactions-clear-all rejected (got HTTP {code})")
+    ok &= check(code == 401, f"anonymous reactions-clear-all rejected (got HTTP {code})")
     code = get_status(f"{base}/api/reactions/shopping-list")
-    ok &= check(code == 403, f"anonymous reactions-shopping-list rejected (got HTTP {code})")
+    ok &= check(code == 401, f"anonymous reactions-shopping-list rejected (got HTTP {code})")
     return ok
 
 

@@ -1754,10 +1754,10 @@ def dashboard(pp_session: str = Cookie(default=None)):
     ]
 
     # Reactions summary for the main Overview/Maintenance cards — naturally empty/None for
-    # everyone except B0SS members who've opted into job tracking (same "empty is safe" shape
-    # reaction_alerts above already relies on). Calling get_industry_jobs directly (not through
-    # its own route) bypasses its require_b0ss FastAPI dependency, which is fine here: it's
-    # always the caller's OWN context_id, so there's no privacy boundary being skipped, only a
+    # anyone who hasn't opted into job tracking (same "empty is safe" shape reaction_alerts
+    # above already relies on). Calling get_industry_jobs directly (not through its own route)
+    # bypasses its require_context FastAPI dependency, which is fine here: it's always the
+    # caller's OWN context_id anyway, so there's no privacy boundary being skipped, only a
     # feature-visibility one the frontend enforces via _featureActive('reactions'). Wrapped
     # defensively — a problem on the Reactions side must never take down the core PI dashboard.
     reactions_tracked = False
