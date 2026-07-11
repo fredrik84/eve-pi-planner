@@ -1753,6 +1753,31 @@ def dashboard(pp_session: str = Cookie(default=None)):
         for a in _colony_alerts if a["kind"] in ("reaction_not_running", "reaction_low_stock")
     ]
 
+    # Reactions summary for the main Overview/Maintenance cards — naturally empty/None for
+    # everyone except B0SS members who've opted into job tracking (same "empty is safe" shape
+    # reaction_alerts above already relies on). Calling get_industry_jobs directly (not through
+    # its own route) bypasses its require_b0ss FastAPI dependency, which is fine here: it's
+    # always the caller's OWN context_id, so there's no privacy boundary being skipped, only a
+    # feature-visibility one the frontend enforces via _featureActive('reactions'). Wrapped
+    # defensively — a problem on the Reactions side must never take down the core PI dashboard.
+    reactions_tracked = False
+    reactions_time_left_hours = reactions_net_profit = reactions_isk_committed = None
+    reactions_time_left_loc = None
+    try:
+        from app.reactions import get_industry_jobs
+        rx = get_industry_jobs(context_id)
+        if rx.get("tracked"):
+            reactions_tracked = True
+            reactions_net_profit = rx.get("pending_net_profit", 0.0)
+            reactions_isk_committed = rx.get("pending_isk_committed", 0.0)
+            soonest = next((r for r in (rx.get("running") or []) if r.get("hours_left") is not None), None)
+            if soonest:
+                reactions_time_left_hours = round(soonest["hours_left"], 1)
+                reactions_time_left_loc = types.get(soonest["product_type_id"], {}).get(
+                    "name", str(soonest["product_type_id"]))
+    except Exception:
+        pass
+
     return {
         "logged_in": True,
         "factories": factories,
@@ -1781,6 +1806,11 @@ def dashboard(pp_session: str = Cookie(default=None)):
             "refill_due_loc": refill_due_loc,
             "refill_factories_hours": round(refill_fac_h, 1) if refill_fac_h is not None else None,
             "refill_factories_loc": refill_fac_loc,
+            "reactions_tracked": reactions_tracked,
+            "reactions_time_left_hours": reactions_time_left_hours,
+            "reactions_time_left_loc": reactions_time_left_loc,
+            "reactions_net_profit": reactions_net_profit,
+            "reactions_isk_committed": reactions_isk_committed,
         },
         "top_pi": top_pi,
     }

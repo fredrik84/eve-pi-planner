@@ -93,6 +93,9 @@ function _renderTimelineCard(t) {
     { lbl: 'Restart extractors', due: t.restart_due_hours, loc: t.restart_due_loc },
     { lbl: 'Haul extractor P1',  due: t.empty_due_hours,   loc: t.empty_due_loc || t.empty_pads_loc },
     { lbl: 'Refill factories',   due: t.refill_due_hours,  loc: t.refill_due_loc || t.refill_factories_loc },
+    ...(_featureActive('reactions') && t.reactions_tracked
+      ? [{ lbl: 'Reactions done', due: t.reactions_time_left_hours, loc: t.reactions_time_left_loc }]
+      : []),
   ].filter(j => j.due != null && j.due >= 0).sort((a, b) => a.due - b.due);
   if (!jobs.length) return '';   // no live colony timing yet
 
@@ -221,6 +224,14 @@ function renderDashboard(data) {
     ...(topProd && topProd.tier >= 2 ? [_dashTile(topProd.units.toLocaleString(), `${_esc(topProd.name)} in pads`)] : []),
     _dashTile(_fmtIsk(t.current_run_value || 0), isMobile ? 'Run value' : 'Run value (from current inputs)'),
     _dashTile(_fmtIsk(t.value_per_day || 0), 'Value / day'),
+    // Reactions' expected profit is a one-time total for the currently-assigned batch, not a
+    // daily rate like the PI tiles above it — shown alongside rather than blended in, and the
+    // combined tile is explicit about adding a rate + a lump sum (matches how the user asked
+    // for it: "total PI + Reactions", not a rigorously unit-matched rate).
+    ...(_featureActive('reactions') && t.reactions_tracked ? [
+      _dashTile('+' + _fmtIsk(t.reactions_net_profit || 0), 'Reactions profit expected', 'an-ok'),
+      _dashTile(_fmtIsk((t.value_per_day || 0) + (t.reactions_net_profit || 0)), 'Total PI + Reactions'),
+    ] : []),
   ].join('');
   const rows = facs.length ? facs.map(f => {
     const cls = f.fill_pct >= 50 ? 'an-bar-ok' : f.fill_pct >= 20 ? 'an-bar-warn' : 'an-bar-bad';
@@ -291,13 +302,15 @@ function renderDashboard(data) {
   // "extractors started" to the next maintenance jobs, using the same due/cadence the routine card has.
   const timelineHtml = _featureActive('timeline') ? _renderTimelineCard(t) : '';
 
-  const routineHtml = (t.empty_pads_hours != null || t.refill_factories_hours != null || t.restart_extractors_hours != null) ? `
+  const showReactionsTile = _featureActive('reactions') && t.reactions_tracked;
+  const routineHtml = (t.empty_pads_hours != null || t.refill_factories_hours != null || t.restart_extractors_hours != null || showReactionsTile) ? `
     <section class="pp-card">
       <div class="pp-card-title">Maintenance routine <span class="pp-card-hint">— countdown to the next job · cadence below</span></div>
       <div class="pp-card-body"><div class="an-stats">
         ${_rtTile(t.restart_due_hours, t.restart_extractors_hours, 'Restart extractors', t.restart_due_loc)}
         ${_rtTile(t.empty_due_hours, t.empty_pads_hours, isMobile ? 'Empty pads' : 'Empty extractor pads', t.empty_due_loc || t.empty_pads_loc)}
         ${_rtTile(t.refill_due_hours, t.refill_factories_hours, isMobile ? 'Refill factories' : 'Refill factory inputs', t.refill_due_loc || t.refill_factories_loc)}
+        ${showReactionsTile ? _rtTile(t.reactions_time_left_hours, null, 'Reactions done', t.reactions_time_left_loc) : ''}
       </div></div>
     </section>` : '';
 
