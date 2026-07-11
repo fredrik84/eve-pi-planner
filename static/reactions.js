@@ -262,6 +262,11 @@ function _renderReactionsSuggestions(data) {
   const el = document.getElementById('wizRSuggestionsContent');
   if (!el) return;
   _rxLastSuggestions = data.suggestions;
+  const assignAllBtn = document.getElementById('rxAssignAllBtn');
+  if (assignAllBtn) {
+    assignAllBtn.disabled = !data.suggestions.length;
+    assignAllBtn.textContent = 'Assign all';
+  }
 
   if (!data.suggestions.length) {
     el.innerHTML = '<div class="pp-empty">No suggestions fit that budget — try raising the ISK budget, loosening the max chain depth, or connect more characters for reaction tracking.</div>';
@@ -331,10 +336,10 @@ function _renderReactionsSuggestions(data) {
 
 function _rxAssignSuggestion(i, btn) {
   const s = _rxLastSuggestions[i];
-  if (!s) return;
+  if (!s) return Promise.resolve();
   btn.disabled = true;
   btn.textContent = '…';
-  fetch('/api/reactions/assign', {
+  return fetch('/api/reactions/assign', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -350,6 +355,28 @@ function _rxAssignSuggestion(i, btn) {
       btn.disabled = false;
       btn.textContent = 'Retry';
     });
+}
+
+// "Just assign and sort out the best use of my slots" — commits every current suggestion at
+// once instead of clicking Assign per row (still respects whatever's already been assigned/
+// retried, via each row button's own state).
+function _rxAssignAll() {
+  const btn = document.getElementById('rxAssignAllBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Assigning…'; }
+  const jobs = _rxLastSuggestions.map((s, i) => {
+    const rowBtn = document.getElementById(`rxAssignBtn${i}`);
+    if (!rowBtn || rowBtn.textContent.includes('✓')) return Promise.resolve();
+    return _rxAssignSuggestion(i, rowBtn);
+  });
+  Promise.all(jobs).then(() => {
+    if (!btn) return;
+    const allDone = _rxLastSuggestions.every((s, i) => {
+      const rowBtn = document.getElementById(`rxAssignBtn${i}`);
+      return rowBtn && rowBtn.textContent.includes('✓');
+    });
+    btn.textContent = allDone ? 'All assigned ✓' : 'Some failed — retry below';
+    btn.disabled = allDone;
+  });
 }
 
 function _rxSortBy(key) {
