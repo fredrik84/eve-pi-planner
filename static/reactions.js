@@ -214,11 +214,18 @@ function _renderReactionsDashboard(data) {
   // Dashboard's own "Overview" row (_dashTile, dashboard.js), not a small text line buried below
   // the character loadout where it's easy to miss.
   const pendingCount = [...todoGroups.values()].reduce((sum, g) => sum + g.count, 0);
+  // Soonest-finishing running job — data.running is already sorted ascending by hours_left
+  // (see get_industry_jobs), so the first entry is "the next thing that'll need attention."
+  const soonest = (data.running || []).find(r => r.hours_left != null);
+  const timeLeftVal = soonest ? _fmtHours(soonest.hours_left) : '—';
+  const timeLeftLbl = soonest ? `Time left · ${_rxProductName(soonest.product_type_id)}` : 'Time left';
+
   const overviewTiles = `<div class="an-stats" style="margin-bottom:14px">
       ${_dashTile(_fmtIsk(data.pending_isk_committed), 'ISK committed')}
       ${_dashTile('+' + _fmtIsk(data.pending_net_profit), 'Expected profit', 'an-ok')}
       ${_dashTile(`${data.free_slots}<span class="an-of"> / ${data.total_slots}</span>`, 'Free slots')}
       ${_dashTile(String(pendingCount), 'Jobs to install', pendingCount > 0 ? 'an-warn' : '')}
+      ${_dashTile(timeLeftVal, timeLeftLbl)}
     </div>`;
 
   el.innerHTML = overviewTiles + rows + todoNote + untrackedNote;
