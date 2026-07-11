@@ -248,8 +248,19 @@ def _load_goo_and_reached(context_id: int, allowed_material_ids: set[int] | None
     # to get them from Jita to the reaction site (no collateral on the import leg — that's a
     # self-haul assumption, only the export leg uses a courier). Unlimited supply assumed.
     # Moon goo itself gets no import cost added (confirmed: already at/near the reaction site).
+    #
+    # Deliberately EXCLUDES anything that is itself a reaction product (has its own entry in
+    # reactions_by_output, e.g. Ferrofluid, Carbon Polymers — Simple/T1-tier intermediates) even
+    # when buying it outright happens to be marginally cheaper in raw ISK than reacting it from
+    # goo. Without this exclusion, "make chains" is misleading: a "chain-depth-2" suggestion
+    # could actually just be one purchased intermediate + one real reaction, not a genuine
+    # goo-to-final-product chain — and the bought intermediate's own market depth was never
+    # checked by the liquidity filter (which only looks at the FINAL product), so its assumed
+    # "instant, unlimited" availability is a much shakier assumption than for a true raw/
+    # manufactured leaf (fuel blocks etc., which have no reaction formula at all and stay
+    # purchasable). Only real reaction products get this treatment; true leaves are unaffected.
     all_input_ids = {inp["type_id"] for inputs in inputs_by_reaction.values() for inp in inputs}
-    purchasable_ids = [tid for tid in all_input_ids if tid not in goo]
+    purchasable_ids = [tid for tid in all_input_ids if tid not in goo and tid not in reactions_by_output]
     purchasable_market = fetch_market_data(purchasable_ids)
     purchasable = {
         tid: m["sell_price"] + settings["import_isk_per_m3"] * (types.get(tid, {}).get("volume") or 0.0)
