@@ -110,6 +110,7 @@ function _loadReactionsDashboard() {
 
 function _renderReactionsDashboard(data) {
   const el = document.getElementById('rxDashboardContent');
+  const metricsEl = document.getElementById('rxMetricsContent');
   if (!el) return;
 
   // Connecting a character (via /auth/login?reactions=1) is a per-character ESI authorisation,
@@ -126,6 +127,7 @@ function _renderReactionsDashboard(data) {
 
   if (!data.tracked) {
     el.innerHTML = '<div class="pp-empty">No characters are tracking reaction jobs yet — use "Connect a character" above.</div>';
+    if (metricsEl) metricsEl.innerHTML = '<div class="pp-empty">Nothing to show yet.</div>';
     return;
   }
 
@@ -148,6 +150,7 @@ function _renderReactionsDashboard(data) {
     .sort((a, b) => b.slots - a.slots);
   if (!tracked.length) {
     el.innerHTML = '<div class="pp-empty">No tracked characters have trained Mass Reactions skills yet — a bare base slot isn\'t enough to be worth showing.</div>' + untrackedNote;
+    if (metricsEl) metricsEl.innerHTML = '<div class="pp-empty">Nothing to show yet.</div>';
     return;
   }
   const jobsByChar = new Map();
@@ -220,15 +223,17 @@ function _renderReactionsDashboard(data) {
   const timeLeftVal = soonest ? _fmtHours(soonest.hours_left) : '—';
   const timeLeftLbl = soonest ? `Time left · ${_rxProductName(soonest.product_type_id)}` : 'Time left';
 
-  const overviewTiles = `<div class="an-stats" style="margin-bottom:14px">
+  const usedSlots = data.total_slots - data.free_slots;
+  const overviewTiles = `<div class="an-stats">
       ${_dashTile(_fmtIsk(data.pending_isk_committed), 'ISK committed')}
       ${_dashTile('+' + _fmtIsk(data.pending_net_profit), 'Expected profit', 'an-ok')}
-      ${_dashTile(`${data.free_slots}<span class="an-of"> / ${data.total_slots}</span>`, 'Free slots')}
+      ${_dashTile(`${usedSlots}<span class="an-of"> / ${data.total_slots}</span>`, 'Slots used')}
       ${_dashTile(String(pendingCount), 'Jobs to install', pendingCount > 0 ? 'an-warn' : '')}
       ${_dashTile(timeLeftVal, timeLeftLbl)}
     </div>`;
 
-  el.innerHTML = overviewTiles + rows + todoNote + untrackedNote;
+  if (metricsEl) metricsEl.innerHTML = overviewTiles;
+  el.innerHTML = rows + todoNote + untrackedNote;
 }
 
 function _rxCancelAssignment(assignmentId) {
