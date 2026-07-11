@@ -19,6 +19,14 @@ const _p0h = p1day => p1day * 150 / 24;
 
 // Per-material drill-down: every colony producing a given output, weakest (underperforming) first.
 let _anExpanded = new Set();   // material type_ids whose planet breakdown is expanded
+
+// Material-supply display mode: "Fed %" (default) vs "Extraction avg" (absolute P0/hr-per-planet
+// numbers, gated by the extraction_targets flag — see renderAnalysis's barRows).
+let _anShowExtractAvg = false;
+function _toggleExtractAvgMode() {
+  _anShowExtractAvg = !_anShowExtractAvg;
+  renderAnalysis();
+}
 function _planetsForMaterial(t) {
   const out = [];
   (_ppCharsData || []).forEach(ch => (ch.planets || []).forEach(p => (p.production || []).forEach(o => {
@@ -375,9 +383,8 @@ function renderAnalysis() {
     }
   }
 
+  const avgMode = _featureActive('extraction_targets') && _anShowExtractAvg;
   const barRows = rows.map(r => {
-    const cls = r.ratio >= 0.995 ? 'an-bar-ok' : (r.ratio >= 0.85 ? 'an-bar-warn' : 'an-bar-bad');
-    const haveW = Math.max(2, Math.min(100, (r.have / r.need) * 100));
     // Over/under-production %, measured on the UNCLIPPED extraction (so a factory-limited colony still
     // shows its true head margin, not a flat +0). The % alone is meaningless without "good vs bad", so we
     // band it: 10%+ = comfortable decay cushion (good), 0–10% = tight (hit it, will fade short), <0 = short.
@@ -387,24 +394,30 @@ function renderAnalysis() {
     let band = 'an-ovr-ok', lbl = 'healthy';        // band on the DISPLAYED % so label/colour match it
     if (pct < 0) { band = 'an-ovr-short'; lbl = 'short'; }
     else if (pct < 10) { band = 'an-ovr-tight'; lbl = 'tight'; }
-    const ovrStr = `<b>${pct >= 0 ? '+' : ''}${pct}%</b> <span class="an-ovr-lbl">${lbl}</span>`;
-    const numTitle = `Your heads extract ${pct >= 0 ? '+' + pct : pct}% vs what the factories consume (≈${Math.round(_p0h(extSupply)).toLocaleString()} of ${Math.round(_p0h(r.need)).toLocaleString()} P0/hr). 10%+ is a comfortable cushion as extraction decays; 0–10% is tight (you hit it, but it'll dip short as the heads fade); below 0 isn't keeping up.`;
-    // P0 name (schematic-derived, via _placements — see _ensurePlacements) so the row reads as
-    // "what you seat heads for" at a glance, without having to remember/look up the P0↔P1 pairing.
-    const p0Name = (_featureActive('extraction_targets') && _placements && _placements[r.t] && _placements[r.t].p0_name) || null;
-    const nameTitle = p0Name ? `${p0Name} → ${r.name}` : r.name;
-    const nameHtml = p0Name
-      ? `<span class="an-row-p0">${_esc(p0Name)}</span><span class="an-row-p1">→ ${_esc(r.name)}</span>`
-      : _esc(r.name);
-    // Comfortable P0/hr target, spread evenly across the planets CURRENTLY producing this material —
-    // "what each of my heads should average" rather than a whole-plan total. Shown right on the row
-    // (not only in the fold) so it's a glance, not a click, while reseating.
-    const nPlanets = (prod[r.t] && prod[r.t].planets) || 0;
-    const perPlanetTarget = (_featureActive('extraction_targets') && nPlanets)
-      ? Math.round(_p0h(r.need) * (1 + _HEALTHY_BUFFER) / nPlanets)
-      : null;
-    const targetHtml = perPlanetTarget != null
-      ? `<div class="an-row-target">≈${perPlanetTarget.toLocaleString()} P0/hr·planet</div>` : '';
+
+    let cls, barW, numsHtml, numTitle;
+    if (avgMode) {
+      // Same fed-vs-plan colouring, but the bar and the number both speak in absolute P0/hr averaged
+      // per CURRENTLY producing planet — the number you can check a reseated head against in-game,
+      // instead of an abstract %. curAvg/tgtAvg carries the same ratio as have/need (planet count
+      // cancels out), so the bar stays visually consistent between the two modes.
+      const nPlanets = (prod[r.t] && prod[r.t].planets) || 0;
+      const curAvg = nPlanets ? _p0h(extSupply) / nPlanets : null;
+      const tgtAvg = nPlanets ? _p0h(r.need) * (1 + _HEALTHY_BUFFER) / nPlanets : null;
+      cls = pct >= 10 ? 'an-bar-ok' : (pct >= 0 ? 'an-bar-warn' : 'an-bar-bad');
+      barW = (curAvg != null && tgtAvg > 0) ? Math.max(2, Math.min(100, (curAvg / tgtAvg) * 100)) : 2;
+      numsHtml = (curAvg != null)
+        ? `${Math.round(curAvg).toLocaleString()} <span class="an-of">→</span> ${Math.round(tgtAvg).toLocaleString()} <span class="an-of">P0/hr/planet</span>`
+        : `<span class="an-of">no planets yet</span>`;
+      numTitle = (curAvg != null)
+        ? `Averaged per planet CURRENTLY producing this: ${Math.round(curAvg).toLocaleString()} P0/hr. Comfortable target: ${Math.round(tgtAvg).toLocaleString()} P0/hr (+${Math.round(_HEALTHY_BUFFER * 100)}% cushion over what the plan needs).`
+        : `No colony produces this yet, so there's nothing to average per planet.`;
+    } else {
+      cls = r.ratio >= 0.995 ? 'an-bar-ok' : (r.ratio >= 0.85 ? 'an-bar-warn' : 'an-bar-bad');
+      barW = Math.max(2, Math.min(100, (r.have / r.need) * 100));
+      numsHtml = `<b>${pct >= 0 ? '+' : ''}${pct}%</b> <span class="an-ovr-lbl">${lbl}</span>`;
+      numTitle = `Your heads extract ${pct >= 0 ? '+' + pct : pct}% vs what the factories consume (≈${Math.round(_p0h(extSupply)).toLocaleString()} of ${Math.round(_p0h(r.need)).toLocaleString()} P0/hr). 10%+ is a comfortable cushion as extraction decays; 0–10% is tight (you hit it, but it'll dip short as the heads fade); below 0 isn't keeping up.`;
+    }
     const expanded = _anExpanded.has(String(r.t));
     let detail = '';
     if (expanded) {
@@ -416,9 +429,9 @@ function renderAnalysis() {
     }
     return `<div class="an-mat">
         <div class="an-row an-row-click" onclick="_toggleMatDetail('${r.t}')">
-          <div class="an-row-name" title="${_esc(nameTitle)}"><span class="an-row-caret">${expanded ? '▾' : '▸'}</span> ${nameHtml}</div>
-          <div class="an-bar-track"><div class="an-bar-fill ${cls}" style="width:${haveW}%"></div></div>
-          <div class="an-row-nums ${band}" title="${numTitle}">${ovrStr}${targetHtml}</div>
+          <div class="an-row-name"><span class="an-row-caret">${expanded ? '▾' : '▸'}</span> ${_esc(r.name)}</div>
+          <div class="an-bar-track"><div class="an-bar-fill ${cls}" style="width:${barW}%"></div></div>
+          <div class="an-row-nums ${band}" title="${numTitle}">${numsHtml}</div>
         </div>${detail}
       </div>`;
   }).join('');
@@ -643,10 +656,16 @@ function renderAnalysis() {
 
   statusEl.innerHTML = head + _staleSupplyNote(rows) + stats + proj;
 
+  const modeToggle = _featureActive('extraction_targets')
+    ? `<button type="button" class="an-mode-toggle" onclick="_toggleExtractAvgMode()">${avgMode ? 'Show: Fed %' : 'Show: Extraction avg'}</button>`
+    : '';
+  const supplyLegend = avgMode
+    ? `Bar + numbers = your average P0/hr per planet CURRENTLY producing this, vs the comfortable target average (+${Math.round(_HEALTHY_BUFFER * 100)}% cushion) — the number to check a reseated head against. Click a row for the fix.`
+    : `Bar = how fed each input is. % = extraction headroom: <span class="an-ovr-ok">+10% or more healthy</span>, <span class="an-ovr-tight">0–10% tight</span> (dips as heads decay), <span class="an-ovr-short">below 0 short</span>. Click a row for the fix.`;
   const supplyCard = `<section class="pp-card">
-      <div class="pp-card-title">Material supply</div>
+      <div class="pp-card-title">Material supply${modeToggle}</div>
       <div class="pp-card-body">
-        <div class="an-legend">Bar = how fed each input is. % = extraction headroom: <span class="an-ovr-ok">+10% or more healthy</span>, <span class="an-ovr-tight">0–10% tight</span> (dips as heads decay), <span class="an-ovr-short">below 0 short</span>. Click a row for the fix.</div>
+        <div class="an-legend">${supplyLegend}</div>
         <div class="an-bars">${barRows}</div>
       </div>
     </section>`;
