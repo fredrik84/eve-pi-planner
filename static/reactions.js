@@ -7,7 +7,8 @@ let _rxSortKey = 'net_profit_instant';
 let _rxSortDir = -1; // -1 = descending
 
 const _RX_COLUMNS = [
-  { key: 'name',                 label: 'Product',        fmt: v => _esc(v) },
+  { key: 'name',                 label: 'Product',        fmt: (v, o) =>
+      `<img src="https://images.evetech.net/types/${o.type_id}/icon?size=32" alt="" style="width:18px;height:18px;border-radius:3px;vertical-align:middle;margin-right:5px" onerror="this.style.display='none'">${_esc(v)}` },
   { key: 'steps',                label: 'Steps',          fmt: v => String(v) },
   { key: 'output_qty',           label: 'Max output',     fmt: v => Math.round(v).toLocaleString() },
   { key: 'input_cost',           label: 'Input cost',     fmt: v => _fmtIsk(v) },
@@ -240,6 +241,7 @@ function wizRGo(n) {
 function wizRSuggest() {
   const isk = parseFloat(document.getElementById('wizRIsk').value) || 0;
   const depth = parseInt(document.getElementById('wizRDepth').value, 10) || 2;
+  const cadence = parseFloat(document.getElementById('wizRCadence').value) || 168;
   const materialIds = _rxSelectedMaterialIds();
   const el = document.getElementById('wizRSuggestionsContent');
   wizRGo(2);
@@ -247,7 +249,7 @@ function wizRSuggest() {
   fetch('/api/reactions/suggest', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ isk_budget: isk, max_chain_depth: depth, material_ids: materialIds }),
+    body: JSON.stringify({ isk_budget: isk, max_chain_depth: depth, cadence_hours: cadence, material_ids: materialIds }),
   })
     .then(r => {
       if (!r.ok) throw new Error(r.status === 403 ? 'B0SS alliance membership required' : 'Suggest failed');
@@ -308,11 +310,14 @@ function _renderReactionsSuggestions(data) {
     const rows = idxs.map(i => {
       const s = data.suggestions[i];
       const icon = `https://images.evetech.net/types/${s.type_id}/icon?size=32`;
+      const jobLine = s.job_count > 1
+        ? `${s.job_count} jobs × ${s.runs_per_job} runs`
+        : `${s.runs} runs`;
       return `
         <div class="rx-sugg-row">
           <img class="rx-sugg-icon" src="${icon}" alt="" onerror="this.style.visibility='hidden'">
           <div class="rx-sugg-name" title="${_esc(s.name)}">${_esc(s.name)}</div>
-          <div class="rx-sugg-meta">${s.runs} runs · ${_fmtIsk(s.input_cost)} in</div>
+          <div class="rx-sugg-meta">${jobLine} · ${_fmtIsk(s.input_cost)} in</div>
           <div class="rx-sugg-reward">+${_fmtIsk(s.reward)}</div>
           <button class="rx-sugg-assign-btn" id="rxAssignBtn${i}" onclick="_rxAssignSuggestion(${i}, this)">Assign</button>
         </div>`;
@@ -330,10 +335,13 @@ function _renderReactionsSuggestions(data) {
   }).join('');
 
   el.innerHTML = budgetSummary + cards + `
-    <div class="pp-card-hint" style="margin-top:8px">
-      ${_fmtIsk(t.isk_committed)} committed · ${_fmtIsk(t.net_profit)} net profit ·
-      ${t.characters_used} character${t.characters_used === 1 ? '' : 's'} used ·
-      ${t.completion_hours != null ? _fmtHours(t.completion_hours) + ' to complete' : ''}
+    <div class="rx-totals-summary">
+      <span>${_fmtIsk(t.isk_committed)} committed</span>
+      <span class="rx-totals-profit">+${_fmtIsk(t.net_profit)} net profit</span>
+      <span class="pp-card-hint">
+        ${t.characters_used} character${t.characters_used === 1 ? '' : 's'} used ·
+        ${t.completion_hours != null ? _fmtHours(t.completion_hours) + ' to complete' : ''}
+      </span>
     </div>`;
 }
 
@@ -347,7 +355,7 @@ function _rxAssignSuggestion(i, btn) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       character_id: s.assigned_character_id, type_id: s.type_id, name: s.name,
-      runs: s.runs, input_cost: s.input_cost, reward: s.reward,
+      runs: s.runs, job_count: s.job_count || 1, input_cost: s.input_cost, reward: s.reward,
     }),
   })
     .then(r => {

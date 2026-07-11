@@ -16,6 +16,7 @@ product) — it does not account for competing chains sharing the same raw mater
 cross-product allocation is Phase 3's job (an LP over reaction-slot + stock constraints).
 """
 import json as _json
+import math
 import time as _time
 from datetime import datetime, timezone
 
@@ -449,18 +450,24 @@ class AssignRequest(BaseModel):
     character_id: int
     type_id: int
     name: str
-    runs: int
+    runs: int  # total runs across all jobs for this suggestion
+    job_count: int = 1  # how many separate in-game job installs this splits into (one per slot)
     input_cost: float
     reward: float
 
 
 @router.post("/api/reactions/assign")
 def assign_reaction(req: AssignRequest, context_id: int = Depends(require_b0ss)):
-    """Commit a suggested (character, product) pairing as a standing "go do this" instruction —
+    """Commit a suggested (character, product) pairing as standing "go do this" instructions —
     surfaced on the dashboard until ESI confirms a matching job is actually running, at which
-    point it's auto-cleared (see get_industry_jobs). Deliberately NOT a full plan/schedule
-    object — just "the next thing this character should install"."""
+    point it's auto-cleared (see get_industry_jobs). A suggestion sized to use multiple reaction
+    slots at once (job_count > 1, e.g. a big batch that needs several parallel jobs to finish
+    within the chosen cadence) becomes that many SEPARATE assignment rows — one per actual
+    in-game job install — so the dashboard shows the real number of slots this occupies, not one
+    square standing in for several."""
     ensure_reaction_assignments_table()
+    job_count = max(1, req.job_count)
+    runs_per_job = math.ceil(req.runs / job_count)
     con = get_connection()
     try:
         owner = con.execute(
@@ -469,11 +476,13 @@ def assign_reaction(req: AssignRequest, context_id: int = Depends(require_b0ss))
         ).fetchone()
         if not owner:
             raise HTTPException(status_code=403, detail="Not your character")
-        con.execute(
-            "INSERT INTO pp_reaction_assignments (character_id, type_id, name, runs, input_cost, reward, created_at) "
-            "VALUES (?,?,?,?,?,?,?)",
-            (req.character_id, req.type_id, req.name, req.runs, req.input_cost, req.reward, _time.time()),
-        )
+        for _ in range(job_count):
+            con.execute(
+                "INSERT INTO pp_reaction_assignments (character_id, type_id, name, runs, input_cost, reward, created_at) "
+                "VALUES (?,?,?,?,?,?,?)",
+                (req.character_id, req.type_id, req.name, runs_per_job,
+                 req.input_cost / job_count, req.reward / job_count, _time.time()),
+            )
         con.commit()
     finally:
         con.close()
@@ -551,12 +560,21 @@ def get_industry_jobs(context_id: int = Depends(require_b0ss)):
         jobs = _json.loads(row["jobs_json"]) if row else []
         active = [j for j in jobs if j.get("status") in ("active", "paused", "ready")]
         used_slots += len(active)
-        running_type_ids = {j.get("product_type_id") for j in active}
+        # Count-aware, not just a set of type_ids present — a big batch can be split into
+        # several separate pending assignment rows for the SAME product (one per job slot), so
+        # only as many of them may be cleared as there are actually-running jobs of that type;
+        # naive set-membership would wrongly clear every pending row for a product the moment
+        # just ONE of its several intended jobs gets installed.
+        running_type_counts: dict[int, int] = {}
+        for j in active:
+            tid = j.get("product_type_id")
+            running_type_counts[tid] = running_type_counts.get(tid, 0) + 1
 
         pending = []
         for a in assignments.get(c["character_id"], []):
-            if a["type_id"] in running_type_ids:
-                fulfilled_ids.append(a["id"])  # ESI now confirms this is actually running — clear it
+            if running_type_counts.get(a["type_id"], 0) > 0:
+                running_type_counts[a["type_id"]] -= 1
+                fulfilled_ids.append(a["id"])  # ESI now confirms this specific job is actually running — clear it
             else:
                 pending.append({
                     "assignment_id": a["id"], "type_id": a["type_id"], "name": a["name"], "runs": a["runs"],
@@ -647,35 +665,63 @@ def _character_capacities(context_id: int) -> list[dict]:
     return result
 
 
-def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
+def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int, cadence_hours: float,
                         material_ids: set[int] | None = None) -> dict:
     opportunities = _build_opportunities(context_id, allowed_material_ids=material_ids)
     candidates = [o for o in opportunities
                   if o["buy_volume"] >= _MIN_LIQUIDITY and o["sell_volume"] >= _MIN_LIQUIDITY
                   and o["top_level_runs"] > 0 and o["net_profit_instant"] > 0
                   and o["steps"] <= max_chain_depth]
-    # Rank by profit per step (the "least work most profitable" ordering) before truncating to
-    # a small pool — keeps the LP tiny regardless of how many opportunities Phase 2 finds.
-    candidates.sort(key=lambda o: -(o["net_profit_instant"] / o["top_level_runs"]))
-    candidates = candidates[:_CANDIDATE_POOL_SIZE]
     empty = {"suggestions": [], "totals": {
         "isk_committed": 0.0, "isk_budget": isk_budget, "net_profit": 0.0, "characters_used": 0,
         "completion_hours": None, "binding": "neither"}}
     if not candidates:
         return empty
 
+    # Cap each candidate's usable batch size so a huge, cheap-per-unit chain doesn't get most of
+    # the ISK budget allocated to a run count that could never actually finish within the
+    # player's chosen cadence (e.g. "weekly") even using every free reaction slot at once — the
+    # cap uses the single best character's free-slot count as an upper bound (stage 2 below
+    # clamps further to whichever character an assignment actually lands on). Cost/output/profit
+    # scale down linearly with runs (unit cost and unit price don't change with batch size).
+    chars_for_cap = _character_capacities(context_id)
+    max_slots_available = max((c["free_slots"] for c in chars_for_cap), default=0) or 1
+    capped = []
+    for o in candidates:
+        cycle_hours = o["cycle_time"] / 3600.0 if o["cycle_time"] else 0
+        if cycle_hours <= 0:
+            continue
+        max_runs_in_cadence = int(max_slots_available * cadence_hours / cycle_hours)
+        if max_runs_in_cadence <= 0:
+            continue
+        if max_runs_in_cadence >= o["top_level_runs"]:
+            capped.append(o)
+            continue
+        scale = max_runs_in_cadence / o["top_level_runs"]
+        c2 = dict(o)
+        c2["top_level_runs"] = max_runs_in_cadence
+        c2["output_qty"] = o["output_qty"] * scale
+        c2["input_cost"] = o["input_cost"] * scale
+        c2["net_profit_instant"] = o["net_profit_instant"] * scale
+        capped.append(c2)
+    candidates = capped
+    if not candidates:
+        return empty
+
+    # Rank by profit per step (the "least work most profitable" ordering) before truncating to
+    # a small pool — keeps the LP tiny regardless of how many opportunities Phase 2 finds.
+    candidates.sort(key=lambda o: -(o["net_profit_instant"] / o["top_level_runs"]))
+    candidates = candidates[:_CANDIDATE_POOL_SIZE]
+
     import highspy  # lazy: only ever needed here, keeps it off the cold-start path (matches app.optimizer)
     n = len(candidates)
     h = highspy.Highs()
     h.silent()
-    # x_i in [0,1]: what fraction of candidate i's max achievable batch to actually run — a
-    # continuous relaxation, not a strict per-unit integer knapsack, since with only ISK as a
-    # resource constraint the LP optimum is naturally at-or-near integer anyway (at most one
-    # variable fractional at the ISK cap), and this stays small/fast and easy to hand-verify,
-    # matching this codebase's existing app.optimizer approach. Run-count is NOT constrained
-    # here — the user only cares about ISK committed and chain complexity (both handled above/
-    # via the pool filter), not how many cycles it takes; scheduling in stage 2 below still
-    # reports the resulting time so it's visible, just not capped.
+    # x_i in [0,1]: what fraction of candidate i's (cadence-capped) max achievable batch to
+    # actually run — a continuous relaxation, not a strict per-unit integer knapsack, since with
+    # only ISK as a resource constraint the LP optimum is naturally at-or-near integer anyway (at
+    # most one variable fractional at the ISK cap), and this stays small/fast and easy to
+    # hand-verify, matching this codebase's existing app.optimizer approach.
     hvars = h.addVariables(n, lb=[0.0] * n, ub=[1.0] * n)
     h.maximize(sum(float(c["net_profit_instant"]) * hvars[i] for i, c in enumerate(candidates)))
     h.addConstr(sum(float(c["input_cost"]) * hvars[i] for i, c in enumerate(candidates)) <= float(isk_budget))
@@ -690,51 +736,43 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
     if not chosen:
         return empty
 
-    # Stage 2: schedule the chosen runs onto real characters, fewest-characters-first. Each
-    # candidate is assigned to ONE character's full slot count run in parallel (no splitting a
-    # single product across toons — simpler, and matches "least effort" better than maximum
-    # parallelism would). Slots are NOT a depleting resource — once a product's batch finishes,
-    # the same slots are free again for the next one — so this tracks each character's queued
-    # completion time (a schedule), not a one-time slot count that gets used up. Prefers
-    # queueing onto an already-touched character UNLESS that would take meaningfully longer
-    # than starting fresh on an untouched one — a real trade-off between "fewest characters"
-    # and "best time save", not just always picking one. "Meaningfully longer" = more than 2x
-    # a fresh character's finish time for this specific product; a fresh character is only
-    # worth bringing in when it's a clearly better outcome, not for a marginal time saving.
-    _NEW_CHAR_THRESHOLD = 2.0
+    # Stage 2: allocate real reaction slots to each chosen product, all targeting completion
+    # within roughly one cadence period — NOT a queue over unbounded future time (the old model),
+    # since everything here is sized to finish around the same ~cadence window. Each suggestion
+    # claims `slots_used` of a character's free slots (a one-time budget for this cadence period,
+    # not something that frees up mid-period) — using MORE slots for a bigger batch so it still
+    # finishes on time, rather than trickling one run at a time through a single slot for weeks.
+    # `job_count`/`runs_per_job` are what the player actually installs in-game (one job install
+    # per slot); `runs` is just the total for display.
     chars = _character_capacities(context_id)
-    slot_count = {c["character_id"]: c["free_slots"] for c in chars if c["free_slots"] > 0}
+    remaining_slots = {c["character_id"]: c["free_slots"] for c in chars if c["free_slots"] > 0}
     char_names = {c["character_id"]: c["character_name"] for c in chars}
-    queued_until = {cid: 0.0 for cid in slot_count}  # hours from now this character is next free
-    touched_order: list[int] = []
-
-    def _duration_on(cid: int, runs_needed: int, cycle_time: float) -> float:
-        slots_used = max(1, min(slot_count[cid], runs_needed))
-        return (runs_needed / slots_used) * (cycle_time / 3600.0)
+    touched_chars: set[int] = set()
 
     suggestions = []
     isk_committed = net_profit = 0.0
+    max_completion_hours = 0.0
     for c, xi in chosen:
         runs_needed = max(1, round(c["top_level_runs"] * xi))
-        untouched = [cid for cid in slot_count if cid not in touched_order]
-        pick_id = None
-        if touched_order:
-            best_touched = min(touched_order, key=lambda cid: queued_until[cid])
-            touched_finish = queued_until[best_touched] + _duration_on(best_touched, runs_needed, c["cycle_time"])
-            if untouched:
-                best_untouched = max(untouched, key=lambda cid: slot_count[cid])
-                untouched_finish = _duration_on(best_untouched, runs_needed, c["cycle_time"])
-                pick_id = best_untouched if untouched_finish * _NEW_CHAR_THRESHOLD < touched_finish else best_touched
-            else:
-                pick_id = best_touched
-        elif untouched:
-            pick_id = max(untouched, key=lambda cid: slot_count[cid])
-        if pick_id is None:
-            continue  # no character has any reaction slots at all — this suggestion can't be scheduled
-        if pick_id not in touched_order:
-            touched_order.append(pick_id)
-        duration_hours = _duration_on(pick_id, runs_needed, c["cycle_time"])
-        queued_until[pick_id] += duration_hours
+        cycle_hours = c["cycle_time"] / 3600.0 if c["cycle_time"] else 1.0
+        ideal_slots = max(1, math.ceil(runs_needed * cycle_hours / cadence_hours)) if cadence_hours > 0 else runs_needed
+
+        available = [cid for cid, free in remaining_slots.items() if free > 0]
+        if not available:
+            continue  # no character has any reaction slots left at all — this suggestion can't be scheduled
+        # Prefer consolidating onto an already-used character (fewer characters touched overall)
+        # as long as it still has room; otherwise open a fresh one with the most free slots.
+        touched_with_room = [cid for cid in touched_chars if remaining_slots.get(cid, 0) > 0]
+        pick_id = max(touched_with_room, key=lambda cid: remaining_slots[cid]) if touched_with_room \
+            else max(available, key=lambda cid: remaining_slots[cid])
+
+        slots_used = min(ideal_slots, remaining_slots[pick_id])
+        remaining_slots[pick_id] -= slots_used
+        touched_chars.add(pick_id)
+
+        runs_per_job = math.ceil(runs_needed / slots_used)
+        duration_hours = (runs_needed / slots_used) * cycle_hours
+        max_completion_hours = max(max_completion_hours, duration_hours)
 
         cost = c["input_cost"] * xi
         reward = c["net_profit_instant"] * xi
@@ -743,16 +781,17 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
         suggestions.append({
             "type_id": c["type_id"], "name": c["name"],
             "runs": runs_needed,
+            "job_count": slots_used,
+            "runs_per_job": runs_per_job,
             "input_cost": round(cost, 2),
             "reward": round(reward, 2),
             "assigned_character": char_names.get(pick_id, "?"),
             "assigned_character_id": pick_id,
         })
 
-    completion_hours = max((queued_until[cid] for cid in touched_order), default=0.0)
     # "isk" = spent (near enough) the whole budget; "neither" = ran out of profitable, liquid,
-    # within-chain-depth candidates before using it all — raising the ISK budget further won't
-    # help, there's nothing more suitable to spend it on right now.
+    # within-chain-depth/cadence candidates before using it all — raising the ISK budget further
+    # won't help, there's nothing more suitable to spend it on right now.
     binding = "isk" if isk_committed >= 0.97 * isk_budget else "neither"
 
     return {
@@ -761,8 +800,8 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
             "isk_committed": round(isk_committed, 2),
             "isk_budget": isk_budget,
             "net_profit": round(net_profit, 2),
-            "characters_used": len(touched_order),
-            "completion_hours": round(completion_hours, 1) if suggestions else None,
+            "characters_used": len(touched_chars),
+            "completion_hours": round(max_completion_hours, 1) if suggestions else None,
             "binding": binding,
         },
     }
@@ -771,14 +810,15 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
 class SuggestRequest(BaseModel):
     isk_budget: float
     max_chain_depth: int = 2
+    cadence_hours: float = 168.0  # default weekly — how long you want a batch to run before checking back in
     material_ids: list[int] | None = None  # None/empty = no restriction, every priced material usable
 
 
 @router.post("/api/reactions/suggest")
 def suggest_reactions(req: SuggestRequest, context_id: int = Depends(require_b0ss)):
-    if req.isk_budget <= 0 or req.max_chain_depth <= 0:
+    if req.isk_budget <= 0 or req.max_chain_depth <= 0 or req.cadence_hours <= 0:
         return {"suggestions": [], "totals": {
             "isk_committed": 0.0, "isk_budget": req.isk_budget, "net_profit": 0.0, "characters_used": 0,
             "completion_hours": None, "binding": "neither"}}
     material_ids = set(req.material_ids) if req.material_ids else None
-    return _suggest_reactions(context_id, req.isk_budget, req.max_chain_depth, material_ids)
+    return _suggest_reactions(context_id, req.isk_budget, req.max_chain_depth, req.cadence_hours, material_ids)

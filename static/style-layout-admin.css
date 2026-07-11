@@ -504,3 +504,10 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .rx-sugg-assign-btn:hover { background: #254a78; }
 .rx-sugg-assign-btn:disabled { opacity: 0.5; cursor: default; background: #1a2838; color: #6a88aa; border-color: #2a3a4a; }
 
+.rx-totals-summary {
+  margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--clr-border);
+  display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+  font-size: 14px; color: var(--clr-text);
+}
+.rx-totals-profit { font-size: 16px; font-weight: 600; color: #7fd0a0; }
+
