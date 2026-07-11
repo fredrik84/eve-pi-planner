@@ -27,7 +27,7 @@ class PushoverNotifier(BaseNotifier):
         self._app_token = config.get("app_token") or os.environ.get("PUSHOVER_APP_TOKEN", "")
 
     def send(self, title: str, body: str, url: str | None = None,
-             fields: list[dict] | None = None) -> None:
+             fields: list[dict] | None = None, description: str | None = None) -> None:
         if not self._user_key or not self._app_token:
             raise ValueError(
                 "Pushover requires user_key and app_token "
@@ -56,7 +56,7 @@ class NtfyNotifier(BaseNotifier):
         self._server = config.get("server", "https://ntfy.sh").rstrip("/")
 
     def send(self, title: str, body: str, url: str | None = None,
-             fields: list[dict] | None = None) -> None:
+             fields: list[dict] | None = None, description: str | None = None) -> None:
         if not self._topic:
             raise ValueError("ntfy requires a topic")
         endpoint = f"{self._server}/{urllib.parse.quote(self._topic, safe='')}"
