@@ -256,32 +256,6 @@ function _renderGrowSection() {
     </section>`;
 }
 
-// Reseat-reference card: the P0/hr each material needs, as a plain lookup table (not a %) — useful
-// alt-tabbed to the game while reseating heads, where the % headroom bars aren't a fast comparison.
-// `_placements` (populated by _ensurePlacements, called from renderAnalysis) carries the real P0
-// source name per P1 (schematic-derived on the backend); falls back to the P1 name if a material's
-// placements haven't resolved yet (e.g. first paint before that fetch lands).
-function _renderExtractionTargets(rows) {
-  if (!_featureActive('extraction_targets')) return '';
-  const items = rows.map(r => {
-    const p0Name = (_placements && _placements[r.t] && _placements[r.t].p0_name) || r.name;
-    const target = _p0h(r.need);
-    return { name: p0Name, target, buffered: target * (1 + _HEALTHY_BUFFER) };
-  }).sort((a, b) => a.name.localeCompare(b.name));
-  const li = items.map(i => `<div class="an-target-row">
-      <span class="an-target-name">${_esc(i.name)}</span>
-      <span class="an-target-val">${Math.round(i.target).toLocaleString()} <span class="an-of">P0/hr min</span></span>
-      <span class="an-target-val an-target-buf">${Math.round(i.buffered).toLocaleString()} <span class="an-of">P0/hr comfortable</span></span>
-    </div>`).join('');
-  return `<section class="pp-card">
-      <div class="pp-card-title">Extraction targets <span class="pp-card-hint">— per-resource P0/hr to check against as you reseat heads</span></div>
-      <div class="pp-card-body">
-        <div class="an-legend">Min = exactly covers this plan, 0% buffer. Comfortable = +${Math.round(_HEALTHY_BUFFER * 100)}% cushion so it stays covered as extraction decays over the program.</div>
-        <div class="an-target-list">${li}</div>
-      </div>
-    </section>`;
-}
-
 function renderAnalysis() {
   // Status card (title + plan picker, static in index.html) holds the at-a-glance status badge;
   // everything else renders as its own separate pp-card in the bare #analyzeContent below it —
@@ -419,10 +393,16 @@ function renderAnalysis() {
     let detail = '';
     if (expanded) {
       const pls = _planetsForMaterial(r.t);
+      // Reseat reference: the whole-plan comfortable P0/hr target, spread evenly across the planets
+      // CURRENTLY producing this material — "what should each of my heads average" rather than an
+      // account-wide total, since that's what you check a single reseated head against in-game.
+      const target = (_featureActive('extraction_targets') && pls.length)
+        ? `<div class="an-pd-target">Target ≈ <b>${Math.round(_p0h(r.need) * (1 + _HEALTHY_BUFFER) / pls.length).toLocaleString()} P0/hr</b> per planet (comfortable, avg over ${pls.length} planet${pls.length !== 1 ? 's' : ''})</div>`
+        : '';
       const items = pls.length
         ? pls.map(p => `<div class="an-pd-row"><span class="an-pd-char">${_esc(p.char)}</span><span class="an-pd-loc">${p.system ? _esc(p.system) + (p.planet_num != null ? ' P' + p.planet_num : '') : '—'}</span><span class="an-pd-p0">${p.p0Hr != null ? p.p0Hr.toLocaleString() + ' P0/hr' : ''}</span><span class="an-pd-val">${Math.round(p.perDay).toLocaleString()}/day</span></div>`).join('')
         : '<div class="an-pd-empty">No colony is producing this yet.</div>';
-      detail = `<div class="an-row-detail">${items}${_fixNudge(r)}</div>`;
+      detail = `<div class="an-row-detail">${target}${items}${_fixNudge(r)}</div>`;
     }
     return `<div class="an-mat">
         <div class="an-row an-row-click" onclick="_toggleMatDetail('${r.t}')">
@@ -667,7 +647,7 @@ function renderAnalysis() {
       </section>`
     : '';
 
-  el.innerHTML = supplyCard + _renderExtractionTargets(rows) + suggestCard + _hybridReseatSection() + _renderGrowSection() + _renderSkillRoiSection();
+  el.innerHTML = supplyCard + suggestCard + _hybridReseatSection() + _renderGrowSection() + _renderSkillRoiSection();
 }
 
 // ── Extraction-runtime helper (decay-aware recommendation) ────────────────────
