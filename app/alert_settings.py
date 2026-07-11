@@ -29,7 +29,10 @@ DEFAULTS = {
 # app.colony_alerts.compute_colony_alerts() emits (the single shared engine both consume):
 # ext_unrouted/fac_unfed/fac_output/p0_mismatch come straight from
 # app.esi._detect_colony_issues; expired/expiring/storage_full/factory_refill are the shared
-# engine's own labels for the four threshold-based kinds.
+# engine's own labels for the four threshold-based kinds; schedule_sync (an extractor running a
+# different program length than the fleet's norm) has no numeric threshold, same as the
+# correctness kinds — always "warn" severity (a drifted schedule isn't dangerous, just worth a
+# heads-up), never "high".
 ALERT_KINDS = [
     {"key": "expired", "label": "Extractions expired"},
     {"key": "expiring", "label": "Extractions expiring soon"},
@@ -39,6 +42,7 @@ ALERT_KINDS = [
     {"key": "fac_unfed", "label": "Factory has no input route"},
     {"key": "fac_output", "label": "Factory output not routed"},
     {"key": "p0_mismatch", "label": "Extracting something the factories don't use"},
+    {"key": "schedule_sync", "label": "Extractor schedule out of sync"},
 ]
 _VALID_KINDS = {k["key"] for k in ALERT_KINDS}
 

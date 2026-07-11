@@ -1,11 +1,12 @@
 """Notification support: background scheduler + channel settings + event logic.
 
 Supported channels: Pushover, ntfy.sh, Discord webhook (see notifiers.py).
-Events: the same 8 alert kinds the Dashboard shows (app.alert_settings.ALERT_KINDS) — expired,
-expiring, storage_full, factory_refill, ext_unrouted, fac_unfed, fac_output, p0_mismatch. Event
-detection itself lives in app.colony_alerts.compute_colony_alerts(); this module is purely a
-consumer (kind/severity filtering, cooldown, batching, sending) — it does not implement its own
-detection, so a push notification and what's shown on the Dashboard can never drift apart.
+Events: the same 9 alert kinds the Dashboard shows (app.alert_settings.ALERT_KINDS) — expired,
+expiring, storage_full, factory_refill, ext_unrouted, fac_unfed, fac_output, p0_mismatch,
+schedule_sync. Event detection itself lives in app.colony_alerts.compute_colony_alerts(); this
+module is purely a consumer (kind/severity filtering, cooldown, batching, sending) — it does not
+implement its own detection, so a push notification and what's shown on the Dashboard can never
+drift apart.
 
 The scheduler runs check_and_send_notifications() every 15 minutes. It uses
 only data already in the DB (no ESI calls), so it works between rescans and
@@ -145,12 +146,14 @@ def _log_send(con, context_id: int, channel: str, event: str, character: str | N
 # Next in the sequence after build_sde.py (918_273_645) / populate_geo.py (918_273_646).
 _NOTIFY_ADVISORY_LOCK_KEY = 918_273_647
 
-# Correctness-based kinds are persistent structural problems (not time-decaying like an
-# expiring extraction), so they get a much longer cooldown to avoid nagging about the same
-# unfixed issue every 15-minute scheduler tick.
+# Correctness-based kinds (and schedule_sync, which is just as persistent — a drifted extractor
+# stays drifted until the player manually reseats its program) are structural problems, not
+# time-decaying like an expiring extraction, so they get a much longer cooldown to avoid nagging
+# about the same unfixed issue every 15-minute scheduler tick.
 _COOLDOWN_HOURS = {
     "expired": 2.0, "expiring": 2.0, "storage_full": 2.0, "factory_refill": 4.0,
     "ext_unrouted": 24.0, "fac_unfed": 24.0, "fac_output": 24.0, "p0_mismatch": 24.0,
+    "schedule_sync": 24.0,
 }
 
 
@@ -264,6 +267,7 @@ _KIND_LABELS = {
     "fac_unfed":      ("Factory has no input route", "factory", "factories"),
     "fac_output":     ("Factory output not routed", "factory", "factories"),
     "p0_mismatch":    ("Extracting something unused", "colony", "colonies"),
+    "schedule_sync":  ("Extractor schedule out of sync", "extractor", "extractors"),
 }
 
 

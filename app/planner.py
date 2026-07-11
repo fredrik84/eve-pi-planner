@@ -12,7 +12,7 @@ from app.sde import load_pi_data, get_connection, ensure_once
 from app.market import fetch_prices
 from app.esi import require_context, session_context_id, ensure_char_tables, PI_CHAR_SQL, natural_name_key
 from app.alert_settings import get_alert_settings
-from app.colony_alerts import compute_colony_alerts
+from app.colony_alerts import compute_colony_alerts, _extractor_program_lengths
 from app.planner_models import (
     SaveConfigRequest, PlanRequest, PlanShareSave,
     ProfileSave, PlanSnapshotSave,
@@ -1685,21 +1685,14 @@ def dashboard(pp_session: str = Cookie(default=None)):
     # numbers, not muteable alerts, so they're computed separately from compute_colony_alerts() —
     # they still need every extractor's storage/program data regardless of any account's alert
     # thresholds or mutes.
-    prog_days_list = []                          # extractor program lengths → restart cadence (median)
     empty_pads_h = None; empty_pads_loc = None   # tightest empty→full launchpad time (emptying CADENCE)
     empty_due_h = None; empty_due_loc = None     # soonest pad to cap from its CURRENT fill (DEADLINE)
     restart_due_h = None; restart_due_loc = None  # soonest expiry among IN-SYNC extractors (the fleet batch) + which
-    ext_progs = []                                # per-extractor {program length, expiry} — fleet sync + restart timer
     for (r, prods, inputs, pads) in parsed:
         if not r["is_ext"]:
             continue
         sysloc = (r["system"] or "?") + (f" P{r['pn']}" if r["pn"] is not None else "")
         cloc = f"{r['ch']} · {sysloc}"
-        ss = _json.loads(r["sim_state"] or "null")
-        if isinstance(ss, dict) and ss.get("program_days"):
-            prog_days_list.append(ss["program_days"])
-            ext_progs.append({"cid": r["cid"], "char": r["ch"], "loc": cloc,
-                              "progH": ss["program_days"] * 24.0, "expiry": ss.get("expiry")})
         st = _json.loads(r["storage"] or "null")
         if not st:
             continue
@@ -1723,39 +1716,32 @@ def dashboard(pp_session: str = Cookie(default=None)):
     # dashboard a status surface and avoids the expensive per-product deploy search on every load.
     expansion = _expansion_capacity(context_id)
 
-    # Out-of-sync extractors: most run the same program length (you restart them in batches); a planet
-    # set to a different length drifts off the batch (and drags the "restart due" countdown). Find the
-    # fleet's most common length (0.5h bins) and flag any extractor > 0.4h off it. Muting is client-side
-    # (per character) since some accounts deliberately run a character on a different schedule.
-    # Fleet program-length norm (most common, 0.5h bins) — drives both the out-of-sync warning and
-    # the restart countdown.
-    norm = None
-    if ext_progs:
-        counts: dict = {}
-        for e in ext_progs:
-            b = round(e["progH"] * 2) / 2
-            counts[b] = counts.get(b, 0) + 1
-        norm = max(counts, key=counts.get)
+    # Fleet program-length norm (most common, 0.5h bins) — shared with the schedule_sync alert
+    # (see compute_colony_alerts()) so the two can't disagree; computed unconditionally here
+    # (unlike the alert) since the restart-due countdown below needs it regardless of mutes.
+    ext_progs, norm = _extractor_program_lengths(rows)
 
     # Restart-due = the MEDIAN expiry of the in-sync batch (extractors on the common program length).
     # Median, not the soonest, is deliberate: the player would rather be told to come back a touch LATE
     # and restart the whole batch in one go than log in early for the first straggler and wait. One
-    # off-schedule planet is excluded (it's surfaced as sync_warn) so it can't drag this to "due now".
+    # off-schedule planet is excluded (it's surfaced as the schedule_sync alert) so it can't drag this
+    # to "due now".
     in_sync_exp = sorted(e["expiry"] for e in ext_progs
-                         if e.get("expiry") and (norm is None or abs(e["progH"] - norm) <= 0.4))
+                         if e.get("expiry") and (norm is None or abs(e["prog_hours"] - norm) <= 0.4))
     if in_sync_exp:
         median_exp = in_sync_exp[len(in_sync_exp) // 2]
         restart_due_h = max(0.0, (median_exp - now) / 3600.0)
         restart_due_loc = None   # fleet-wide batch, not a single colony
 
-    # Out-of-sync extractors (off the fleet norm).
+    # Out-of-sync extractors: sourced from _colony_alerts (computed above), so muting schedule_sync
+    # in Settings > Alerts hides this card too, same as every other alert kind.
+    _sync_items = [a for a in _colony_alerts if a["kind"] == "schedule_sync"]
     sync_warn = None
-    if len(ext_progs) >= 3 and norm is not None:
-        off = sorted((e for e in ext_progs if abs(e["progH"] - norm) > 0.4), key=lambda e: e["progH"])
-        if off:
-            sync_warn = {"norm_hours": round(norm, 1),
-                         "off": [{"cid": e["cid"], "char": e["char"], "loc": e["loc"],
-                                  "hours": round(e["progH"], 1)} for e in off]}
+    if _sync_items:
+        _sync_items.sort(key=lambda a: a["prog_hours"])
+        sync_warn = {"norm_hours": _sync_items[0]["norm_hours"],
+                     "off": [{"cid": a["character_id"], "char": a["character_name"], "loc": a["location"],
+                              "hours": a["prog_hours"]} for a in _sync_items]}
 
     return {
         "logged_in": True,
@@ -1775,7 +1761,7 @@ def dashboard(pp_session: str = Cookie(default=None)):
             # state); HOURS = the cadence (how often it comes due once on schedule).
             "restart_due_hours": round(restart_due_h, 1) if restart_due_h is not None else None,
             "restart_due_loc": restart_due_loc,
-            "restart_extractors_hours": round(sorted(prog_days_list)[len(prog_days_list) // 2] * 24.0, 1) if prog_days_list else None,
+            "restart_extractors_hours": round(sorted(e["prog_hours"] for e in ext_progs)[len(ext_progs) // 2], 1) if ext_progs else None,
             "empty_due_hours": round(empty_due_h, 1) if empty_due_h is not None else None,
             "empty_due_loc": empty_due_loc,
             "empty_pads_hours": round(empty_pads_h, 1) if empty_pads_h is not None else None,

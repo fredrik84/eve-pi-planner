@@ -7,11 +7,13 @@ call `compute_colony_alerts()` — a single source of truth so a push notificati
 shown on screen can never drift apart, and both automatically respect each account's configured
 thresholds and muted kinds (app/alert_settings.py) without re-implementing that logic.
 
-Eight kinds (app.alert_settings.ALERT_KINDS): four threshold-based (expired, expiring,
-storage_full, factory_refill) and four correctness-based, stored per-scan by
-app.esi._detect_colony_issues (ext_unrouted, fac_unfed, fac_output, p0_mismatch) — the
-correctness ones are always "high" severity; the threshold-based ones compute their own
-severity from the account's configured thresholds (see inline comments below).
+Nine kinds (app.alert_settings.ALERT_KINDS): four threshold-based (expired, expiring,
+storage_full, factory_refill), four correctness-based, stored per-scan by
+app.esi._detect_colony_issues (ext_unrouted, fac_unfed, fac_output, p0_mismatch) — always
+"high" severity — and schedule_sync (an extractor running a different program length than the
+fleet's norm), always "warn" severity, computed fleet-wide via _extractor_program_lengths().
+The threshold-based kinds compute their own severity from the account's configured thresholds
+(see inline comments below).
 """
 import json as _json
 import time as _time
@@ -63,11 +65,41 @@ def _fetch_factory_refill_hours(context_id: int) -> float | None:
     return hours if hours and hours > 0 else None
 
 
+def _extractor_program_lengths(rows) -> tuple[list[dict], float | None]:
+    """Per-extractor {character_id, character_name, planet_id, location, prog_hours, expiry} +
+    the fleet's most common program length (0.5h bins, i.e. the batch-restart cadence). Shared
+    by compute_colony_alerts() (the schedule_sync alert, mute-aware) and planner.dashboard()'s
+    restart-due countdown (an always-on maintenance stat, NOT mute-aware — it needs every
+    extractor's program data regardless of any account's alert settings) — extracted here so
+    the two can't compute a different norm."""
+    ext_progs: list[dict] = []
+    for r in rows:
+        if not r["is_ext"]:
+            continue
+        ss = _json.loads(r["sim_state"] or "null")
+        if isinstance(ss, dict) and ss.get("program_days"):
+            ext_progs.append({
+                "character_id": r["cid"], "character_name": r["ch"] or "?",
+                "planet_id": r["planet_id"],
+                "location": (r["system"] or "?") + (f" P{r['pn']}" if r["pn"] is not None else ""),
+                "prog_hours": ss["program_days"] * 24.0, "expiry": ss.get("expiry"),
+            })
+    norm = None
+    if ext_progs:
+        counts: dict[float, int] = {}
+        for e in ext_progs:
+            b = round(e["prog_hours"] * 2) / 2
+            counts[b] = counts.get(b, 0) + 1
+        norm = max(counts, key=counts.get)
+    return ext_progs, norm
+
+
 def compute_colony_alerts(context_id: int, rows=None, now: float | None = None) -> list[dict]:
     """Flat list of individual alert instances for this account: one dict per affected
     planet/kind — {kind, severity, character_id, character_name, planet_id, location,
-    hours_left, pct (storage_full only)}. Already filtered by the account's alert_settings
-    thresholds and muted_kinds, so callers never need to re-check those.
+    hours_left, pct (storage_full only), prog_hours/norm_hours (schedule_sync only)}. Already
+    filtered by the account's alert_settings thresholds and muted_kinds, so callers never need
+    to re-check those.
 
     `rows` lets a caller that already fetched pp_char_planets for its own purposes (dashboard())
     pass them in and skip a redundant query; a fresh caller (the notification scheduler,
@@ -83,6 +115,20 @@ def compute_colony_alerts(context_id: int, rows=None, now: float | None = None) 
 
     expiring_window_s = _alert["expiring_hours"] * 3600.0
     refill_hours = _fetch_factory_refill_hours(context_id) if "factory_refill" not in muted else None
+
+    # schedule_sync: fleet-wide (needs every extractor's program length to find the norm), so
+    # computed once here rather than per-row like the rest of this function.
+    if "schedule_sync" not in muted:
+        ext_progs, norm = _extractor_program_lengths(rows)
+        if len(ext_progs) >= 3 and norm is not None:
+            for e in ext_progs:
+                if abs(e["prog_hours"] - norm) > 0.4:
+                    alerts.append({
+                        "kind": "schedule_sync", "severity": "warn",
+                        "character_id": e["character_id"], "character_name": e["character_name"],
+                        "planet_id": e["planet_id"], "location": e["location"], "hours_left": None,
+                        "prog_hours": round(e["prog_hours"], 1), "norm_hours": round(norm, 1),
+                    })
 
     for r in rows:
         cid = r["cid"]

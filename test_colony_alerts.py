@@ -5,7 +5,7 @@ consumers: the Dashboard (app/planner.py's dashboard()) and the notification sch
 engine the Dashboard uses, instead of re-implementing detection independently — this exact
 subsystem has caused a real production bug before (duplicate notifications from a scheduler
 race, see check_and_send_notifications()'s docstring), so it gets deliberately thorough
-coverage: the notify_kinds migration, per-kind severity computation for all 8 alert kinds, and
+coverage: the notify_kinds migration, per-kind severity computation for all 9 alert kinds, and
 muting.
 
 Two layers:
@@ -140,7 +140,7 @@ def test_unknown_kind_filtered() -> bool:
 
 
 def test_all_eight_kinds_detected() -> bool:
-    print(f"\n{'='*60}\n  compute_colony_alerts detects all 8 kinds with correct severity\n{'='*60}")
+    print(f"\n{'='*60}\n  compute_colony_alerts detects all 9 kinds with correct severity\n{'='*60}")
     ok = True
     _seed_character()
     now = time.time()
@@ -162,6 +162,13 @@ def test_all_eight_kinds_detected() -> bool:
                    scanned_at=now - (48 - 1) * 3600)                                           # due in 1h -> high
     _insert_planet(5, 5, True, issues=json.dumps(["fac_output"]))
     _insert_planet(6, 6, True, issues=json.dumps(["p0_mismatch"]))
+    # schedule_sync: a fleet's program-length norm needs >=3 extractors carrying program_days;
+    # no "expiry" on these so they don't also register as expired/expiring. 3 on the same
+    # 2-day (48h) cadence, 1 deliberately drifted to 0.5 days (12h) — the outlier.
+    _insert_planet(7, 7, True, sim=json.dumps({"program_days": 2.0}))
+    _insert_planet(8, 8, True, sim=json.dumps({"program_days": 2.0}))
+    _insert_planet(9, 9, True, sim=json.dumps({"program_days": 2.0}))
+    _insert_planet(10, 10, True, sim=json.dumps({"program_days": 0.5}))                        # drifted -> schedule_sync
 
     alerts = compute_colony_alerts(FAKE_CTX)
     by_kind = {}
@@ -177,6 +184,11 @@ def test_all_eight_kinds_detected() -> bool:
     ok &= check("storage_full" in by_kind and by_kind["storage_full"][0]["pct"] == 90
                 and by_kind["storage_full"][0]["severity"] == "warn",
                 f"storage_full detected at 90%, warn severity — below the 95%/2h high cutoffs (got {by_kind.get('storage_full')})")
+    sync = by_kind.get("schedule_sync") or []
+    ok &= check(len(sync) == 1 and sync[0]["planet_id"] == 10 and sync[0]["severity"] == "warn",
+                f"schedule_sync detected for exactly the drifted planet, warn severity (got {sync})")
+    ok &= check(sync and sync[0]["norm_hours"] == 48.0 and sync[0]["prog_hours"] == 12.0,
+                f"schedule_sync carries the fleet norm (48h) and this planet's own length (12h) (got {sync})")
     ok &= check(all(a["planet_id"] is not None for a in alerts), "every alert carries a planet_id (needed for notification cooldown keying)")
     return ok
 
@@ -190,12 +202,13 @@ def test_muting_excludes_from_engine_output() -> bool:
         "INSERT INTO pp_alert_settings (context_id, expiring_hours, storage_warn_pct, storage_high_pct, "
         "storage_high_ttf_hours, storage_urgent_hours, muted_kinds) VALUES (?,3,80,95,2,3,?) "
         "ON CONFLICT(context_id) DO UPDATE SET muted_kinds=excluded.muted_kinds",
-        (FAKE_CTX, json.dumps(["ext_unrouted"])),
+        (FAKE_CTX, json.dumps(["ext_unrouted", "schedule_sync"])),
     )
     con.commit()
     con.close()
     kinds = {a["kind"] for a in compute_colony_alerts(FAKE_CTX)}
     ok &= check("ext_unrouted" not in kinds, f"muted kind excluded (got kinds: {kinds})")
+    ok &= check("schedule_sync" not in kinds, f"muted schedule_sync excluded (got kinds: {kinds})")
     ok &= check("expired" in kinds, "unmuted kinds still present")
     return ok
 
@@ -229,6 +242,9 @@ def test_live_dashboard_renders_expected_cards(base: str) -> bool:
     if correctness_card:
         msgs = " ".join(it["msg"] for it in correctness_card["items"])
         ok &= check("extractor not routed" not in msgs, f"muted ext_unrouted does not appear (got: {msgs})")
+    # schedule_sync is also muted from the previous test — sync_warn (sourced from the same
+    # compute_colony_alerts() list, see dashboard()) must disappear too, same as any other kind.
+    ok &= check(data.get("sync_warn") is None, f"muted schedule_sync's sync_warn card is absent (got {data.get('sync_warn')})")
     ok &= check("Extractions expired" in headers, f"expired card present (got headers: {headers})")
     ok &= check(any(h.startswith("Storage filling up") for h in headers), "storage_full card present")
     ok &= check(any(h.startswith("Factories due for refill") for h in headers), "factory_refill card present")
