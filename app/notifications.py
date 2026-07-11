@@ -154,6 +154,9 @@ _COOLDOWN_HOURS = {
     "expired": 2.0, "expiring": 2.0, "storage_full": 2.0, "factory_refill": 4.0,
     "ext_unrouted": 24.0, "fac_unfed": 24.0, "fac_output": 24.0, "p0_mismatch": 24.0,
     "schedule_sync": 24.0,
+    # A forgotten assignment is a persistent problem until installed (like the correctness
+    # kinds) — no point re-pinging every 15 minutes. Low stock is shared/slower-moving too.
+    "reaction_not_running": 24.0, "reaction_low_stock": 12.0,
 }
 
 
@@ -268,6 +271,8 @@ _KIND_LABELS = {
     "fac_output":     ("Factory output not routed", "factory", "factories"),
     "p0_mismatch":    ("Extracting something unused", "colony", "colonies"),
     "schedule_sync":  ("Extractor schedule out of sync", "extractor", "extractors"),
+    "reaction_not_running": ("Assigned reaction not started", "reaction", "reactions"),
+    "reaction_low_stock":   ("Moon-goo stock too low", "material", "materials"),
 }
 
 

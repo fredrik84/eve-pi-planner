@@ -213,6 +213,40 @@ def test_muting_excludes_from_engine_output() -> bool:
     return ok
 
 
+def test_reaction_not_running() -> bool:
+    print(f"\n{'='*60}\n  reaction_not_running (Reactions assignment pending too long)\n{'='*60}")
+    ok = True
+    con = get_connection()
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS pp_reaction_assignments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, character_id INTEGER NOT NULL,
+            type_id INTEGER NOT NULL, name TEXT NOT NULL, runs INTEGER NOT NULL,
+            input_cost REAL NOT NULL, reward REAL NOT NULL, created_at REAL NOT NULL
+        )
+    """)
+    con.execute("DELETE FROM pp_reaction_assignments WHERE character_id=?", (FAKE_CID,))
+    # expiring_hours default is 3h — 5h old should fire as "warn" (not yet 2x = "high")
+    con.execute(
+        "INSERT INTO pp_reaction_assignments (character_id, type_id, name, runs, input_cost, reward, created_at) "
+        "VALUES (?,?,?,?,?,?,?)",
+        (FAKE_CID, 16665, "Hexite", 100, 1000.0, 100.0, time.time() - 5 * 3600),
+    )
+    con.commit()
+    con.close()
+
+    alerts = [a for a in compute_colony_alerts(FAKE_CTX) if a["kind"] == "reaction_not_running"]
+    ok &= check(len(alerts) == 1, f"exactly one reaction_not_running alert (got {alerts})")
+    if alerts:
+        ok &= check(alerts[0]["severity"] == "warn", f"5h-old assignment is 'warn', not 'high' (got {alerts[0]['severity']})")
+        ok &= check(alerts[0]["location"] == "Hexite", f"carries the product name (got {alerts[0]['location']})")
+
+    con = get_connection()
+    con.execute("DELETE FROM pp_reaction_assignments WHERE character_id=?", (FAKE_CID,))
+    con.commit()
+    con.close()
+    return ok
+
+
 def test_live_dashboard_renders_expected_cards(base: str) -> bool:
     print(f"\n{'='*60}\n  Live /api/dashboard renders the expected issue cards\n{'='*60}")
     ok = True
@@ -267,6 +301,7 @@ def main() -> int:
         test_unknown_kind_filtered(),
         test_all_eight_kinds_detected(),
         test_muting_excludes_from_engine_output(),
+        test_reaction_not_running(),
         test_live_dashboard_renders_expected_cards(base),
     ]
     _cleanup()

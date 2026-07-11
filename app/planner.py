@@ -1743,10 +1743,21 @@ def dashboard(pp_session: str = Cookie(default=None)):
                      "off": [{"cid": a["character_id"], "char": a["character_name"], "loc": a["location"],
                               "hours": a["prog_hours"]} for a in _sync_items]}
 
+    # Reactions alerts (see app.colony_alerts._reaction_alerts) — unrelated to PI colonies, so
+    # they're not folded into `issues`/`by_char` above; a flat pass-through list is enough, the
+    # Dashboard only needs to show them exist (the Reactions tab itself is where the detail —
+    # which product, which character — already lives via its own pending/todo display).
+    reaction_alerts = [
+        {"kind": a["kind"], "severity": a["severity"], "location": a["location"],
+         "character_name": a["character_name"]}
+        for a in _colony_alerts if a["kind"] in ("reaction_not_running", "reaction_low_stock")
+    ]
+
     return {
         "logged_in": True,
         "factories": factories,
         "sync_warn": sync_warn,
+        "reaction_alerts": reaction_alerts,
         "char_ids_in_view": sorted(chars_in_view),
         "issues": issues,
         "expansion": expansion,

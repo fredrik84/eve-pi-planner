@@ -160,6 +160,33 @@ function _renderSyncWarn(data) {
     </section>`;
 }
 
+function _renderReactionAlerts(data) {
+  const items = data.reaction_alerts;
+  if (!_featureActive('reactions') || !items || !items.length) return '';
+  const notRunning = items.filter(a => a.kind === 'reaction_not_running');
+  const lowStock = items.filter(a => a.kind === 'reaction_low_stock');
+  const rows = [];
+  if (notRunning.length) {
+    const groupSev = notRunning.some(a => a.severity === 'high') ? 'high' : 'warn';
+    rows.push(`<div class="dash-issue dash-issue-${groupSev}">
+      <div class="dash-issue-char">Assigned but not started</div>
+      <ul class="dash-issue-items">${notRunning.map(a =>
+        `<li class="dash-il-${a.severity === 'high' ? 'high' : 'warn'}">${_esc(a.character_name)}: ${_esc(a.location)}</li>`
+      ).join('')}</ul>
+    </div>`);
+  }
+  if (lowStock.length) {
+    rows.push(`<div class="dash-issue dash-issue-warn">
+      <div class="dash-issue-char">Moon-goo running low</div>
+      <ul class="dash-issue-items">${lowStock.map(a => `<li class="dash-il-warn">${_esc(a.location)}</li>`).join('')}</ul>
+    </div>`);
+  }
+  return `<section class="pp-card dash-issues">
+      <div class="pp-card-title">Reactions <span class="pp-card-hint">— ${items.length} thing${items.length !== 1 ? 's' : ''} need attention</span></div>
+      <div class="pp-card-body">${rows.join('')}</div>
+    </section>`;
+}
+
 function renderDashboard(data) {
   const el = document.getElementById('dashboardContent');
   if (!el) return;
@@ -298,7 +325,7 @@ function renderDashboard(data) {
         }).join('')}</div>
       </div>
     </section>` : '';
-  el.innerHTML = _renderSyncWarn(data) + issuesHtml + expansionHtml + `
+  el.innerHTML = _renderSyncWarn(data) + _renderReactionAlerts(data) + issuesHtml + expansionHtml + `
     <section class="pp-card">
       <div class="pp-card-title">Overview <span class="pp-card-hint">— your PI at a glance · Rescan in the top bar pulls fresh data</span></div>
       <div class="pp-card-body"><div class="an-stats">${tiles}</div></div>
