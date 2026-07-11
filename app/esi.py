@@ -53,6 +53,17 @@ SCOPES = "esi-skills.read_skills.v1 esi-planets.manage_planets.v1 esi-planets.re
 WALLET_SCOPE  = "esi-wallet.read_corporation_wallets.v1"
 WALLET_SCOPES = WALLET_SCOPE
 
+# Reactions-industry job tracking, requested only on the dedicated "connect for reactions
+# tracking" login (?reactions=1) — same opt-in shape as the wallet scope, since only accounts
+# actually using the Reactions tool should be prompted for this, not every PI-planner user.
+# esi-structures.read_character.v1 resolves a job's facility_id to a readable name/system.
+# Unlike the wallet flow (a dedicated read-only alt), this is the player's OWN PI character —
+# they still need normal PI planning to keep working, so this UNIONS with the base SCOPES
+# rather than replacing them.
+INDUSTRY_JOBS_SCOPE  = "esi-industry.read_character_jobs.v1"
+STRUCTURES_SCOPE     = "esi-structures.read_character.v1"
+INDUSTRY_JOBS_SCOPES = f"{SCOPES} {INDUSTRY_JOBS_SCOPE} {STRUCTURES_SCOPE}"
+
 # Wallet-only toons (corp-wallet scope, no planets scope) aren't PI characters. AND this into any
 # single-table pp_characters PI query to exclude them; legacy empty-scope chars are kept. Begins with
 # "AND " so it appends directly after an existing WHERE predicate (mind the leading space at the join).
@@ -729,7 +740,7 @@ def _fetch_planets(character_id: int, access_token: str) -> dict:
 # ── OAuth endpoints ───────────────────────────────────────────────────────────
 
 @router.get("/auth/login")
-def esi_login(wallet: int = 0, pp_session: str = Cookie(default=None)):
+def esi_login(wallet: int = 0, reactions: int = 0, pp_session: str = Cookie(default=None)):
     if not _is_configured():
         return HTMLResponse(
             "<h2>ESI not configured</h2>"
@@ -759,7 +770,11 @@ def esi_login(wallet: int = 0, pp_session: str = Cookie(default=None)):
         con.close()
     except Exception:
         pass
-    scope_enc = (WALLET_SCOPES if wallet else SCOPES).replace(" ", "%20")
+    scope_enc = (
+        INDUSTRY_JOBS_SCOPES if reactions else
+        WALLET_SCOPES if wallet else
+        SCOPES
+    ).replace(" ", "%20")
     url = (
         f"{EVE_AUTH_URL}?response_type=code"
         f"&client_id={CLIENT_ID}"

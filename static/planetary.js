@@ -962,6 +962,21 @@ function connectCorpWallet() {
   });
 }
 
+// Opt-in: authorise a character WITH the reactions-industry-jobs scope (?reactions=1). Same
+// popup flow as esiLogin/connectCorpWallet — the extra scope is requested only here, never on
+// the public Login button, since only accounts using the Reactions tool need it.
+function connectReactionsTracking() {
+  const w = window.open('/auth/login?reactions=1', 'EVE SSO', 'width=800,height=900');
+  window.addEventListener('message', function handler(e) {
+    if (e.data === 'esi-done') {
+      window.removeEventListener('message', handler);
+      if (w && !w.closed) w.close();
+      loadCharacters();
+      if (typeof onReactionsTabOpen === 'function') onReactionsTabOpen();
+    }
+  });
+}
+
 async function loadCorpWallet() {
   const el = document.getElementById('corpWalletContent');
   if (!el) return;

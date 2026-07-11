@@ -15,12 +15,17 @@ This evaluates each candidate chain IN ISOLATION (as if all available goo went t
 product) — it does not account for competing chains sharing the same raw materials. That
 cross-product allocation is Phase 3's job (an LP over reaction-slot + stock constraints).
 """
+import json as _json
+import time as _time
+from datetime import datetime, timezone
+
+import httpx
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from app.sde import get_connection, load_pi_data, ensure_once
 from app.market import fetch_market_data
-from app.esi import require_b0ss, require_admin
+from app.esi import require_b0ss, require_admin, require_context, ESI_BASE, _get_valid_token
 
 router = APIRouter()
 
@@ -286,3 +291,176 @@ def _build_opportunities(context_id: int) -> list[dict]:
 @router.get("/api/reactions/opportunities")
 def reactions_opportunities(context_id: int = Depends(require_b0ss)):
     return {"opportunities": _build_opportunities(context_id)}
+
+
+# ── Personal reaction-job tracking (opt-in scope, see app.esi.INDUSTRY_JOBS_SCOPES) ────────────
+# Cache-at-fetch, not live-fetch-on-every-page-load (same shape as app.pi_sim's colony state):
+# ESI already reports start_date/end_date directly for a job, so there's no decay/rate math to
+# simulate forward — just cache the raw filtered job list with a fetched_at timestamp, refreshed
+# on demand (a "Refresh" button, same UX as the existing planet rescan) rather than polling.
+
+@ensure_once
+def ensure_industry_jobs_table():
+    con = get_connection()
+    try:
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS pp_char_industry_jobs (
+                character_id INTEGER PRIMARY KEY,
+                jobs_json    TEXT NOT NULL DEFAULT '[]',
+                fetched_at   REAL
+            )
+        """)
+        con.commit()
+    finally:
+        con.close()
+
+
+_structure_name_cache: dict[int, str] = {}  # structure names don't change — cache for process lifetime
+
+
+def _resolve_structure_name(structure_id: int, access_token: str) -> str:
+    if structure_id in _structure_name_cache:
+        return _structure_name_cache[structure_id]
+    name = f"Structure #{structure_id}"
+    try:
+        with httpx.Client() as client:
+            resp = client.get(
+                f"{ESI_BASE}/universe/structures/{structure_id}/",
+                headers={"Authorization": f"Bearer {access_token}"},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        name = data.get("name") or name
+    except Exception:
+        pass  # best-effort — an unresolvable structure just shows its raw ID, never blocks the fetch
+    _structure_name_cache[structure_id] = name
+    return name
+
+
+def fetch_industry_jobs(character_id: int, access_token: str) -> list[dict]:
+    """Fetch this character's reaction jobs (activity_id 11) from ESI, resolving each distinct
+    facility to a readable name. Best-effort: returns [] on any failure rather than raising —
+    a refresh failing for one character must not block the others."""
+    try:
+        with httpx.Client() as client:
+            resp = client.get(
+                f"{ESI_BASE}/characters/{character_id}/industry/jobs/",
+                headers={"Authorization": f"Bearer {access_token}"},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            jobs = resp.json()
+    except Exception:
+        return []
+
+    reaction_jobs = [j for j in jobs if j.get("activity_id") == 11]
+    for j in reaction_jobs:
+        fac_id = j.get("facility_id")
+        j["facility_name"] = _resolve_structure_name(fac_id, access_token) if fac_id else "Unknown"
+    return reaction_jobs
+
+
+@router.post("/api/reactions/jobs/refresh")
+def refresh_industry_jobs(context_id: int = Depends(require_context)):
+    """Refresh the caller's own characters' cached reaction-job list — only characters that
+    have actually granted the industry-jobs scope (opted in via ?reactions=1 login) are
+    fetched; others are silently skipped, not an error, since most PI-planner accounts never
+    opt into this."""
+    ensure_industry_jobs_table()
+    con = get_connection()
+    try:
+        chars = con.execute(
+            "SELECT character_id, scopes FROM pp_characters WHERE context_id=? AND COALESCE(is_dummy,0)=0",
+            (context_id,),
+        ).fetchall()
+    finally:
+        con.close()
+
+    refreshed = 0
+    for c in chars:
+        if "read_character_jobs" not in (c["scopes"] or ""):
+            continue
+        token = _get_valid_token(c["character_id"])
+        if not token:
+            continue
+        jobs = fetch_industry_jobs(c["character_id"], token)
+        con = get_connection()
+        try:
+            con.execute(
+                "INSERT INTO pp_char_industry_jobs (character_id, jobs_json, fetched_at) VALUES (?,?,?) "
+                "ON CONFLICT (character_id) DO UPDATE SET jobs_json=excluded.jobs_json, fetched_at=excluded.fetched_at",
+                (c["character_id"], _json.dumps(jobs), _time.time()),
+            )
+            con.commit()
+        finally:
+            con.close()
+        refreshed += 1
+    return {"ok": True, "characters_refreshed": refreshed}
+
+
+def reaction_slots(character_row: dict) -> int:
+    """1 base slot + 1/level of Mass Reactions + 1/level of Advanced Mass Reactions, capped at
+    the game's real max of 11 (5+5+1)."""
+    return min(11, 1 + (character_row.get("mass_reactions") or 0) + (character_row.get("advanced_mass_reactions") or 0))
+
+
+@router.get("/api/reactions/jobs")
+def get_industry_jobs(context_id: int = Depends(require_b0ss)):
+    """Personal reaction-job status for the Reactions wizard's dashboard page: currently
+    running jobs (from the last refresh) + a capacity summary (free slots right now, across
+    every character that's opted into tracking)."""
+    ensure_industry_jobs_table()
+    con = get_connection()
+    try:
+        chars = con.execute(
+            "SELECT character_id, character_name, mass_reactions, advanced_mass_reactions, scopes "
+            "FROM pp_characters WHERE context_id=? AND COALESCE(is_dummy,0)=0",
+            (context_id,),
+        ).fetchall()
+        cached = {r["character_id"]: r for r in con.execute(
+            "SELECT character_id, jobs_json, fetched_at FROM pp_char_industry_jobs"
+        )}
+    finally:
+        con.close()
+
+    now = _time.time()
+    running: list[dict] = []
+    total_slots = 0
+    used_slots = 0
+    tracked_any = False
+    for c in chars:
+        opted_in = "read_character_jobs" in (c["scopes"] or "")
+        slots = reaction_slots(c)
+        if not opted_in:
+            continue
+        tracked_any = True
+        total_slots += slots
+        row = cached.get(c["character_id"])
+        jobs = _json.loads(row["jobs_json"]) if row else []
+        active = [j for j in jobs if j.get("status") in ("active", "paused", "ready")]
+        used_slots += len(active)
+        for j in active:
+            end = j.get("end_date")
+            hours_left = None
+            if end:
+                try:
+                    end_ts = datetime.fromisoformat(end.replace("Z", "+00:00")).timestamp()
+                    hours_left = round((end_ts - now) / 3600.0, 1)
+                except Exception:
+                    pass
+            running.append({
+                "character_name": c["character_name"],
+                "product_type_id": j.get("product_type_id"),
+                "runs": j.get("runs"),
+                "facility_name": j.get("facility_name"),
+                "status": j.get("status"),
+                "hours_left": hours_left,
+            })
+
+    return {
+        "tracked": tracked_any,
+        "running": sorted(running, key=lambda r: r["hours_left"] if r["hours_left"] is not None else 1e9),
+        "total_slots": total_slots,
+        "free_slots": max(0, total_slots - used_slots),
+    }
