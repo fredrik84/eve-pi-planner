@@ -210,7 +210,7 @@ def _resolve_reachable(goo: dict[int, dict], purchasable: dict[int, float],
     return reached
 
 
-def _build_opportunities(context_id: int) -> list[dict]:
+def _build_opportunities(context_id: int, allowed_material_ids: set[int] | None = None) -> list[dict]:
     # try/finally is load-bearing: an exception between get_connection() and close() (e.g. the
     # reactions/reaction_inputs tables not existing yet on a freshly-deployed environment) would
     # otherwise leak the connection permanently out of the small per-pod pool.
@@ -221,6 +221,14 @@ def _build_opportunities(context_id: int) -> list[dict]:
         reactions_by_output, inputs_by_reaction = _load_reaction_graph(con)
     finally:
         con.close()
+
+    # Advanced filter: restrict which raw moon materials are actually available to this player
+    # (e.g. a Gas type their alliance doesn't stock, or they simply can't reliably buy) — any
+    # chain that would need an excluded material is never reachable in the first place, since
+    # _resolve_reachable only expands from what's in `goo`. None/empty = no restriction (every
+    # priced material is assumed available, the original behavior).
+    if allowed_material_ids:
+        goo = {tid: g for tid, g in goo.items() if tid in allowed_material_ids}
 
     if not goo:
         return []
@@ -422,7 +430,7 @@ def ensure_reaction_assignments_table():
     try:
         con.execute("""
             CREATE TABLE IF NOT EXISTS pp_reaction_assignments (
-                id           INTEGER PRIMARY KEY,
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
                 character_id INTEGER NOT NULL,
                 type_id      INTEGER NOT NULL,
                 name         TEXT NOT NULL,
@@ -639,18 +647,20 @@ def _character_capacities(context_id: int) -> list[dict]:
     return result
 
 
-def _suggest_reactions(context_id: int, isk_budget: float, steps_budget: int) -> dict:
-    opportunities = _build_opportunities(context_id)
+def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
+                        material_ids: set[int] | None = None) -> dict:
+    opportunities = _build_opportunities(context_id, allowed_material_ids=material_ids)
     candidates = [o for o in opportunities
                   if o["buy_volume"] >= _MIN_LIQUIDITY and o["sell_volume"] >= _MIN_LIQUIDITY
-                  and o["top_level_runs"] > 0 and o["net_profit_instant"] > 0]
+                  and o["top_level_runs"] > 0 and o["net_profit_instant"] > 0
+                  and o["steps"] <= max_chain_depth]
     # Rank by profit per step (the "least work most profitable" ordering) before truncating to
     # a small pool — keeps the LP tiny regardless of how many opportunities Phase 2 finds.
     candidates.sort(key=lambda o: -(o["net_profit_instant"] / o["top_level_runs"]))
     candidates = candidates[:_CANDIDATE_POOL_SIZE]
     empty = {"suggestions": [], "totals": {
         "isk_committed": 0.0, "isk_budget": isk_budget, "net_profit": 0.0, "characters_used": 0,
-        "completion_hours": None, "steps_used": 0, "steps_budget": steps_budget, "binding": "neither"}}
+        "completion_hours": None, "binding": "neither"}}
     if not candidates:
         return empty
 
@@ -659,14 +669,16 @@ def _suggest_reactions(context_id: int, isk_budget: float, steps_budget: int) ->
     h = highspy.Highs()
     h.silent()
     # x_i in [0,1]: what fraction of candidate i's max achievable batch to actually run — a
-    # continuous relaxation, not a strict per-unit integer knapsack, since with only two
-    # resource constraints (ISK, steps) the LP optimum is naturally at-or-near integer anyway
-    # (at most one variable fractional at the binding constraint), and this stays small/fast
-    # and easy to hand-verify, matching this codebase's existing app.optimizer approach.
+    # continuous relaxation, not a strict per-unit integer knapsack, since with only ISK as a
+    # resource constraint the LP optimum is naturally at-or-near integer anyway (at most one
+    # variable fractional at the ISK cap), and this stays small/fast and easy to hand-verify,
+    # matching this codebase's existing app.optimizer approach. Run-count is NOT constrained
+    # here — the user only cares about ISK committed and chain complexity (both handled above/
+    # via the pool filter), not how many cycles it takes; scheduling in stage 2 below still
+    # reports the resulting time so it's visible, just not capped.
     hvars = h.addVariables(n, lb=[0.0] * n, ub=[1.0] * n)
     h.maximize(sum(float(c["net_profit_instant"]) * hvars[i] for i, c in enumerate(candidates)))
     h.addConstr(sum(float(c["input_cost"]) * hvars[i] for i, c in enumerate(candidates)) <= float(isk_budget))
-    h.addConstr(sum(float(c["top_level_runs"]) * hvars[i] for i, c in enumerate(candidates)) <= float(steps_budget))
     h.run()
     if h.getModelStatus() != highspy.HighsModelStatus.kOptimal:
         return empty
@@ -738,22 +750,10 @@ def _suggest_reactions(context_id: int, isk_budget: float, steps_budget: int) ->
         })
 
     completion_hours = max((queued_until[cid] for cid in touched_order), default=0.0)
-    steps_used = sum(s["runs"] for s in suggestions)
-
-    # Which budget actually stopped the LP from picking more — the two are independent caps, so
-    # a tight steps_budget can leave most of a generous isk_budget unspent (each run only costs
-    # so much; you simply aren't allowed enough runs to spend the rest). Surfaced so the wizard
-    # can tell the user which number to raise, instead of them guessing why ISK went unused.
-    isk_near_limit = isk_committed >= 0.97 * isk_budget
-    steps_near_limit = steps_used >= 0.97 * steps_budget
-    if isk_near_limit and steps_near_limit:
-        binding = "both"
-    elif steps_near_limit:
-        binding = "steps"
-    elif isk_near_limit:
-        binding = "isk"
-    else:
-        binding = "neither"  # ran out of profitable candidates before hitting either cap
+    # "isk" = spent (near enough) the whole budget; "neither" = ran out of profitable, liquid,
+    # within-chain-depth candidates before using it all — raising the ISK budget further won't
+    # help, there's nothing more suitable to spend it on right now.
+    binding = "isk" if isk_committed >= 0.97 * isk_budget else "neither"
 
     return {
         "suggestions": suggestions,
@@ -763,8 +763,6 @@ def _suggest_reactions(context_id: int, isk_budget: float, steps_budget: int) ->
             "net_profit": round(net_profit, 2),
             "characters_used": len(touched_order),
             "completion_hours": round(completion_hours, 1) if suggestions else None,
-            "steps_used": steps_used,
-            "steps_budget": steps_budget,
             "binding": binding,
         },
     }
@@ -772,13 +770,15 @@ def _suggest_reactions(context_id: int, isk_budget: float, steps_budget: int) ->
 
 class SuggestRequest(BaseModel):
     isk_budget: float
-    steps_budget: int
+    max_chain_depth: int = 2
+    material_ids: list[int] | None = None  # None/empty = no restriction, every priced material usable
 
 
 @router.post("/api/reactions/suggest")
 def suggest_reactions(req: SuggestRequest, context_id: int = Depends(require_b0ss)):
-    if req.isk_budget <= 0 or req.steps_budget <= 0:
+    if req.isk_budget <= 0 or req.max_chain_depth <= 0:
         return {"suggestions": [], "totals": {
             "isk_committed": 0.0, "isk_budget": req.isk_budget, "net_profit": 0.0, "characters_used": 0,
-            "completion_hours": None, "steps_used": 0, "steps_budget": req.steps_budget, "binding": "neither"}}
-    return _suggest_reactions(context_id, req.isk_budget, req.steps_budget)
+            "completion_hours": None, "binding": "neither"}}
+    material_ids = set(req.material_ids) if req.material_ids else None
+    return _suggest_reactions(context_id, req.isk_budget, req.max_chain_depth, material_ids)

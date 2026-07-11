@@ -105,7 +105,7 @@ def test_reactions_gated(base: str) -> bool:
     ok &= check(code == 403, f"anonymous moon-goo price list read rejected (got HTTP {code})")
     code = get_status(f"{base}/api/reactions/jobs")
     ok &= check(code == 403, f"anonymous reactions-jobs read rejected (got HTTP {code})")
-    code = post_status(f"{base}/api/reactions/suggest", {"isk_budget": 1, "steps_budget": 1})
+    code = post_status(f"{base}/api/reactions/suggest", {"isk_budget": 1, "max_chain_depth": 1})
     ok &= check(code == 403, f"anonymous reactions-suggest rejected (got HTTP {code})")
     code = post_status(f"{base}/api/reactions/assign",
                         {"character_id": 1, "type_id": 1, "name": "x", "runs": 1, "input_cost": 1, "reward": 1})

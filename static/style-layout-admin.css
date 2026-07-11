@@ -455,7 +455,7 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
   padding: 10px 0; border-bottom: 1px solid var(--clr-border);
 }
 .rx-char-row:last-child { border-bottom: none; }
-.rx-char-label { min-width: 130px; font-weight: 600; color: #dbe1ee; flex: 0 0 auto; }
+.rx-char-label { width: 130px; flex: 0 0 130px; font-weight: 600; color: #dbe1ee; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rx-slot-row { display: flex; gap: 8px; flex-wrap: wrap; }
 .rx-slot {
   width: 60px; height: 60px; flex: 0 0 auto;
@@ -491,7 +491,7 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 /* Per-character suggestion cards on the results page */
 .rx-sugg-card { margin-bottom: 12px; }
 .rx-sugg-hdr { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
-.rx-sugg-hdr .rx-char-label { min-width: 0; }
+.rx-sugg-hdr .rx-char-label { width: auto; flex: 0 0 auto; overflow: visible; }
 .rx-sugg-row { display: flex; align-items: center; gap: 10px; padding: 7px 9px; background: #161b28; border: 1px solid var(--clr-border); border-radius: 7px; margin-bottom: 6px; }
 .rx-sugg-icon { width: 28px; height: 28px; border-radius: 4px; flex: 0 0 auto; }
 .rx-sugg-name { flex: 1; min-width: 0; font-size: 13px; color: var(--clr-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

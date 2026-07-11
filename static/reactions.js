@@ -157,11 +157,47 @@ function _rxCancelAssignment(assignmentId) {
 }
 
 // ── Wizard: "Add Reaction Product" ──────────────────────────────────────────────────────────
+let _rxMaterials = []; // [{type_id, name}] — loaded once, reused across wizard opens
+
 function wizRStart() {
   document.getElementById('rxDashboard').style.display = 'none';
   document.getElementById('rxWizard').style.display = '';
   wizRGo(1);
   _wizRIskLive();
+  _loadRxMaterialFilter();
+}
+
+function _loadRxMaterialFilter() {
+  const el = document.getElementById('rxMaterialFilterList');
+  if (!el) return;
+  if (_rxMaterials.length) { _renderRxMaterialFilter(); return; }
+  fetch('/api/moon-goo')
+    .then(r => r.ok ? r.json() : { prices: [] })
+    .then(d => {
+      _rxMaterials = (d.prices || []).map(p => ({ type_id: p.type_id, name: p.name }));
+      _renderRxMaterialFilter();
+    })
+    .catch(() => { el.innerHTML = '<div class="pp-empty">Could not load the material list.</div>'; });
+}
+
+function _renderRxMaterialFilter() {
+  const el = document.getElementById('rxMaterialFilterList');
+  if (!el) return;
+  if (!_rxMaterials.length) { el.innerHTML = '<div class="pp-empty">No moon materials priced yet.</div>'; return; }
+  el.innerHTML = _rxMaterials.map(m => `
+    <label class="pp-label-check">
+      <input type="checkbox" class="rx-material-cb" value="${m.type_id}" checked> ${_esc(m.name)}
+    </label>`).join('');
+}
+
+// Unchecked = excluded. Returns null (no restriction) when everything is checked, since that's
+// the same as not filtering at all — avoids sending a full list on the common "use everything"
+// path.
+function _rxSelectedMaterialIds() {
+  const boxes = document.querySelectorAll('.rx-material-cb');
+  if (!boxes.length) return null;
+  const checked = [...boxes].filter(b => b.checked).map(b => parseInt(b.value, 10));
+  return checked.length === boxes.length ? null : checked;
 }
 
 // Live "= 1.00 B" hint next to the raw ISK budget input — counting zeros in a 10-digit number
@@ -200,14 +236,15 @@ function wizRGo(n) {
 
 function wizRSuggest() {
   const isk = parseFloat(document.getElementById('wizRIsk').value) || 0;
-  const steps = parseInt(document.getElementById('wizRSteps').value, 10) || 0;
+  const depth = parseInt(document.getElementById('wizRDepth').value, 10) || 2;
+  const materialIds = _rxSelectedMaterialIds();
   const el = document.getElementById('wizRSuggestionsContent');
   wizRGo(2);
   el.innerHTML = '<div class="pp-empty">Crunching the numbers…</div>';
   fetch('/api/reactions/suggest', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ isk_budget: isk, steps_budget: steps }),
+    body: JSON.stringify({ isk_budget: isk, max_chain_depth: depth, material_ids: materialIds }),
   })
     .then(r => {
       if (!r.ok) throw new Error(r.status === 403 ? 'B0SS alliance membership required' : 'Suggest failed');
@@ -227,31 +264,22 @@ function _renderReactionsSuggestions(data) {
   _rxLastSuggestions = data.suggestions;
 
   if (!data.suggestions.length) {
-    el.innerHTML = '<div class="pp-empty">No suggestions fit that budget — try raising the ISK or steps budget, or connect more characters for reaction tracking.</div>';
+    el.innerHTML = '<div class="pp-empty">No suggestions fit that budget — try raising the ISK budget, loosening the max chain depth, or connect more characters for reaction tracking.</div>';
     return;
   }
 
   const t = data.totals;
   const iskPct = Math.min(100, (t.isk_committed / t.isk_budget) * 100);
-  const stepsPct = Math.min(100, (t.steps_used / t.steps_budget) * 100);
-  const bindingNote = {
-    isk: 'Limited by your ISK budget — raise it on the Budget page to get more suggestions.',
-    steps: 'Limited by "Total reaction runs" — raise it on the Budget page to use more of your ISK.',
-    both: 'Limited by both budgets at once.',
-    neither: 'There simply weren\'t enough profitable, liquid reactions to fill either budget.',
-  }[t.binding] || '';
+  const bindingNote = t.binding === 'isk'
+    ? 'Used your full ISK budget.'
+    : 'There weren\'t enough profitable, liquid reactions within the chain-depth limit to use the whole budget — try loosening "Max chain depth" or the material filter.';
 
   const budgetSummary = `
     <div class="rx-budget-summary">
       <div class="rx-budget-bar-row">
         <span class="rx-budget-label">ISK</span>
-        <div class="rx-budget-bar"><div class="rx-budget-bar-fill${t.binding === 'isk' || t.binding === 'both' ? ' rx-budget-bound' : ''}" style="width:${iskPct}%"></div></div>
+        <div class="rx-budget-bar"><div class="rx-budget-bar-fill${t.binding === 'isk' ? ' rx-budget-bound' : ''}" style="width:${iskPct}%"></div></div>
         <span class="rx-budget-value">${fmtIsk(t.isk_committed)} / ${fmtIsk(t.isk_budget)}</span>
-      </div>
-      <div class="rx-budget-bar-row">
-        <span class="rx-budget-label">Runs</span>
-        <div class="rx-budget-bar"><div class="rx-budget-bar-fill${t.binding === 'steps' || t.binding === 'both' ? ' rx-budget-bound' : ''}" style="width:${stepsPct}%"></div></div>
-        <span class="rx-budget-value">${t.steps_used} / ${t.steps_budget}</span>
       </div>
       <div class="pp-card-hint">${bindingNote}</div>
     </div>`;
