@@ -16,10 +16,11 @@ product) — it does not account for competing chains sharing the same raw mater
 cross-product allocation is Phase 3's job (an LP over reaction-slot + stock constraints).
 """
 from fastapi import APIRouter, Depends
+from pydantic import BaseModel
 
-from app.sde import get_connection, load_pi_data
+from app.sde import get_connection, load_pi_data, ensure_once
 from app.market import fetch_market_data
-from app.esi import require_b0ss
+from app.esi import require_b0ss, require_admin
 
 router = APIRouter()
 
@@ -27,8 +28,83 @@ router = APIRouter()
 # -2% material / -20% time base, x1.1 in null/WH space. Only the material figure matters here.
 REACTION_ME_REDUCTION = 0.022
 
-SHIP_COST_PER_M3 = 1200.0
-COLLATERAL_PCT = 0.005
+# Shared, admin-configurable shipping/collateral rates — these are alliance-wide assumptions
+# (courier rates, insurance terms) that change over time, not a per-user preference, so this
+# is a single global row (no context_id) rather than per-account settings like alert_settings.
+# Import (buying materials in from Jita) has no collateral — that's a self-haul/no-3rd-party-
+# courier assumption; only the export leg (shipping the reacted product OUT to sell) uses a
+# courier and needs collateral declared. Confirmed with the user: moon goo itself has zero
+# import cost (picked up at/near the reaction site), only non-goo purchased inputs (fuel
+# blocks etc.) pay the import rate.
+_RXS_DEFAULTS = {"import_isk_per_m3": 1200.0, "export_isk_per_m3": 1200.0, "export_collateral_pct": 0.005}
+
+
+@ensure_once
+def ensure_reaction_settings_table():
+    con = get_connection()
+    try:
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS pp_reaction_settings (
+                id                   INTEGER PRIMARY KEY,
+                import_isk_per_m3    REAL NOT NULL DEFAULT 1200,
+                export_isk_per_m3    REAL NOT NULL DEFAULT 1200,
+                export_collateral_pct REAL NOT NULL DEFAULT 0.005
+            )
+        """)
+        con.commit()
+    finally:
+        con.close()
+
+
+def get_reaction_settings() -> dict:
+    """Effective shipping/collateral settings — the saved singleton row if an admin has
+    customized it, else the defaults above. Nothing changes in behavior until an admin edits
+    these (same convention as app.alert_settings)."""
+    ensure_reaction_settings_table()
+    con = get_connection()
+    try:
+        row = con.execute(
+            "SELECT import_isk_per_m3, export_isk_per_m3, export_collateral_pct "
+            "FROM pp_reaction_settings WHERE id=1"
+        ).fetchone()
+    finally:
+        con.close()
+    if not row:
+        return dict(_RXS_DEFAULTS)
+    return {
+        "import_isk_per_m3": row["import_isk_per_m3"],
+        "export_isk_per_m3": row["export_isk_per_m3"],
+        "export_collateral_pct": row["export_collateral_pct"],
+    }
+
+
+class ReactionSettingsUpdate(BaseModel):
+    import_isk_per_m3: float
+    export_isk_per_m3: float
+    export_collateral_pct: float
+
+
+@router.get("/api/reactions/settings")
+def api_get_reaction_settings(ctx: int = Depends(require_b0ss)):
+    return get_reaction_settings()
+
+
+@router.put("/api/reactions/settings")
+def api_update_reaction_settings(req: ReactionSettingsUpdate, ctx: int = Depends(require_admin)):
+    ensure_reaction_settings_table()
+    con = get_connection()
+    try:
+        con.execute(
+            "INSERT INTO pp_reaction_settings (id, import_isk_per_m3, export_isk_per_m3, export_collateral_pct) "
+            "VALUES (1, ?, ?, ?) ON CONFLICT (id) DO UPDATE SET "
+            "import_isk_per_m3=excluded.import_isk_per_m3, export_isk_per_m3=excluded.export_isk_per_m3, "
+            "export_collateral_pct=excluded.export_collateral_pct",
+            (req.import_isk_per_m3, req.export_isk_per_m3, req.export_collateral_pct),
+        )
+        con.commit()
+    finally:
+        con.close()
+    return get_reaction_settings()
 
 
 def _load_reaction_graph(con) -> tuple[dict[int, list[dict]], dict[int, list[dict]]]:
@@ -135,15 +211,25 @@ def _build_opportunities(context_id: int) -> list[dict]:
     if not goo:
         return []
 
+    settings = get_reaction_settings()
+    pi = load_pi_data()
+    types = pi["types"]
+
     # Every reaction input that isn't alliance moon goo (fuel blocks, and other named
     # materials most formulas need alongside them) — priced at what it costs to instantly
     # ACQUIRE them (buy from existing Jita sell orders = the order book's sell_price; the
     # market_data field names are from the order book's perspective, not ours — buying costs
-    # the sell price, selling earns the buy price), unlimited supply assumed.
+    # the sell price, selling earns the buy price) PLUS the configured import shipping cost
+    # to get them from Jita to the reaction site (no collateral on the import leg — that's a
+    # self-haul assumption, only the export leg uses a courier). Unlimited supply assumed.
+    # Moon goo itself gets no import cost added (confirmed: already at/near the reaction site).
     all_input_ids = {inp["type_id"] for inputs in inputs_by_reaction.values() for inp in inputs}
     purchasable_ids = [tid for tid in all_input_ids if tid not in goo]
     purchasable_market = fetch_market_data(purchasable_ids)
-    purchasable = {tid: m["sell_price"] for tid, m in purchasable_market.items()}
+    purchasable = {
+        tid: m["sell_price"] + settings["import_isk_per_m3"] * (types.get(tid, {}).get("volume") or 0.0)
+        for tid, m in purchasable_market.items()
+    }
 
     reached = _resolve_reachable(goo, purchasable, reactions_by_output)
     # Only reaction PRODUCTS are candidates — shipping raw unreacted goo isn't what this tool
@@ -152,8 +238,6 @@ def _build_opportunities(context_id: int) -> list[dict]:
     if not candidate_ids:
         return []
 
-    pi = load_pi_data()
-    types = pi["types"]
     market = fetch_market_data(candidate_ids)
 
     opportunities = []
@@ -168,11 +252,11 @@ def _build_opportunities(context_id: int) -> list[dict]:
         qty = node["max_qty"]
         input_cost = qty * node["unit_cost"]
         ship_volume = qty * vol
-        shipping_cost = ship_volume * SHIP_COST_PER_M3
+        shipping_cost = ship_volume * settings["export_isk_per_m3"]
         # Collateral is a transport cost (courier contract), charged regardless of how the
         # cargo is later sold — declared consistently against Jita sell (the standard
         # freight-collateral reference value), not whichever sell method ends up chosen.
-        collateral_cost = qty * m["sell_price"] * COLLATERAL_PCT
+        collateral_cost = qty * m["sell_price"] * settings["export_collateral_pct"]
         instant_value = qty * m["buy_price"]
         order_value = qty * m["sell_price"]
         fixed_costs = input_cost + shipping_cost + collateral_cost
