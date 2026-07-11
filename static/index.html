@@ -551,20 +551,74 @@
 
     <!-- ── Tab: Reactions (B0SS moon-goo, alliance-gated) ────────────────────────── -->
     <div id="tab-reactions" class="tab-panel" style="display:none">
-      <div class="pp-layout">
-        <div class="pp-main" style="grid-column: 1 / -1; max-width: 100%;">
+      <div id="rxDashboard">
+        <div class="pp-layout">
+          <div class="pp-main" style="grid-column: 1 / -1; max-width: 100%;">
 
+            <section class="pp-card">
+              <div class="pp-card-title">Reactions
+                <span class="pp-card-hint">— your reaction capacity and currently-running jobs</span>
+                <button class="pp-add-btn" onclick="wizRStart()">Add Reaction Product</button>
+              </div>
+              <div id="rxDashboardContent">
+                <div class="pp-empty">Loading…</div>
+              </div>
+            </section>
+
+            <section class="pp-card">
+              <details id="rxAdvancedDetails">
+                <summary class="pp-card-title" style="cursor:pointer;display:inline-block">Advanced: full opportunity list
+                  <span class="pp-card-hint">— every reachable reaction chain, ranked by profit</span>
+                </summary>
+                <div id="reactionsContent">
+                  <div class="pp-empty">Loading…</div>
+                </div>
+              </details>
+            </section>
+
+          </div>
+        </div>
+      </div><!-- /rxDashboard -->
+
+      <!-- Wizard: "Add Reaction Product" -->
+      <div id="rxWizard" style="display:none">
+        <div class="wiz-bar">
+          <div class="wiz-steps">
+            <span class="wiz-dot active" id="wizRDot1">1 · Budget</span>
+            <span class="wiz-sep">›</span>
+            <span class="wiz-dot" id="wizRDot2">2 · Suggestions</span>
+          </div>
+        </div>
+
+        <div id="wizRPage1">
           <section class="pp-card">
-            <div class="pp-card-title">Moon-Goo Reaction Opportunities
-              <span class="pp-card-hint">— buy B0SS goo, react it, ship to Jita. Ranked by net profit; sort by any column to weigh liquidity/effort yourself.</span>
+            <div class="pp-card-title">How much are you willing to commit?</div>
+            <div class="pp-target-form">
+              <label class="pp-label" for="wizRIsk">ISK budget</label>
+              <input type="number" id="wizRIsk" class="pp-num-input" style="width:160px" value="1000000000" min="0" step="1000000">
+
+              <label class="pp-label" for="wizRSteps" title="Total reaction runs across every suggestion combined">Steps budget</label>
+              <input type="number" id="wizRSteps" class="pp-num-input" style="width:100px" value="200" min="1">
             </div>
-            <div id="reactionsContent">
-              <div class="pp-empty">Loading…</div>
+            <div style="margin-top:12px">
+              <button class="pp-add-btn" onclick="wizRSuggest()">Suggest reactions</button>
+              <button class="pp-cancel-btn" onclick="wizRCancel()">Cancel</button>
             </div>
           </section>
-
         </div>
-      </div>
+
+        <div id="wizRPage2" style="display:none">
+          <section class="pp-card">
+            <div class="pp-card-title">Suggested reactions
+              <span class="pp-card-hint">— up to 10, chosen to maximize profit within your budget and slot capacity</span>
+            </div>
+            <div id="wizRSuggestionsContent"><div class="pp-empty">…</div></div>
+            <div style="margin-top:12px">
+              <button class="pp-cancel-btn" onclick="wizRCancel()">Done</button>
+            </div>
+          </section>
+        </div>
+      </div><!-- /rxWizard -->
     </div><!-- /tab-reactions -->
 
     <!-- ── Tab: Contribute ─────────────────────────────────────────────────────── -->
@@ -1136,6 +1190,6 @@ PVF-N9    3         95                 60             80                  100   
   <script src="/refill.js?v=3"></script>
   <script src="/analysis.js?v=24"></script>
   <script src="/layout.js?v=1"></script>
-  <script src="/reactions.js?v=1"></script>
+  <script src="/reactions.js?v=2"></script>
 </body>
 </html>
