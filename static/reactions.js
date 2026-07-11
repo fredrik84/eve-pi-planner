@@ -40,6 +40,45 @@ function onReactionsTabOpen() {
       });
   }
   _loadReactionsDashboard();
+  _loadRxShoppingList();
+}
+
+let _rxLastShoppingList = [];
+
+function _loadRxShoppingList() {
+  const card = document.getElementById('rxShoppingCard');
+  const el = document.getElementById('rxShoppingListContent');
+  if (!card || !el) return;
+  fetch('/api/reactions/shopping-list')
+    .then(r => r.ok ? r.json() : { materials: [] })
+    .then(d => {
+      _rxLastShoppingList = d.materials || [];
+      if (!_rxLastShoppingList.length) { card.style.display = 'none'; return; }
+      card.style.display = '';
+      const goo = _rxLastShoppingList.filter(m => m.is_moon_goo);
+      const other = _rxLastShoppingList.filter(m => !m.is_moon_goo);
+      const section = (title, items) => !items.length ? '' : `
+        <div class="rx-shop-sec-title">${title}</div>
+        <div style="overflow-x:auto">
+          <table class="pp-card-table" style="width:100%">
+            <thead><tr><th>Material</th><th>Quantity</th></tr></thead>
+            <tbody>${items.map(m => `<tr><td>${_esc(m.name)}</td><td>${m.quantity.toLocaleString()}</td></tr>`).join('')}</tbody>
+          </table>
+        </div>`;
+      el.innerHTML = section('Moon materials (buy from the alliance)', goo)
+        + section('Other purchased materials (fuel blocks etc.)', other);
+    })
+    .catch(() => { card.style.display = 'none'; });
+}
+
+function _rxCopyShoppingList(btn) {
+  const text = _rxLastShoppingList.map(m => `${m.name}\t${m.quantity}`).join('\n');
+  if (!text) return;
+  navigator.clipboard.writeText(text).then(() => {
+    const orig = btn.textContent;
+    btn.textContent = 'Copied ✓';
+    setTimeout(() => { btn.textContent = orig; }, 1500);
+  });
 }
 
 // Best-effort name lookup via whatever the opportunity list has already loaded — falls back to
@@ -49,16 +88,21 @@ function _rxProductName(type_id) {
   return hit ? hit.name : `#${type_id}`;
 }
 
+let _rxLastDashboardData = null;
+
 function _loadReactionsDashboard() {
   const el = document.getElementById('rxDashboardContent');
   if (!el) return;
-  el.innerHTML = '<div class="pp-empty">Loading…</div>';
+  // Only show the loading flash on a genuinely first/cold load — a refresh after cancelling one
+  // assignment updates the cached data in place instead (see _rxCancelAssignment), so this
+  // full-reload path only runs on tab-open or after "Clear all", not on every small action.
+  if (!_rxLastDashboardData) el.innerHTML = '<div class="pp-empty">Loading…</div>';
   fetch('/api/reactions/jobs')
     .then(r => {
       if (!r.ok) throw new Error(r.status === 403 ? 'B0SS alliance membership required' : 'Load failed');
       return r.json();
     })
-    .then(_renderReactionsDashboard)
+    .then(data => { _rxLastDashboardData = data; _renderReactionsDashboard(data); })
     .catch(err => {
       el.innerHTML = `<div class="pp-empty">${_esc(err.message)}</div>`;
     });
@@ -112,7 +156,11 @@ function _renderReactionsDashboard(data) {
     jobsByChar.get(j.character_name).push(j);
   }
 
-  const todoItems = [];
+  // Pending assignments are one row per actual in-game job slot (see assign_reaction), so a
+  // single big suggestion can produce a dozen identical-looking rows — group them back into ONE
+  // todo line per (character, product, runs) with a "×N jobs" count instead of repeating the
+  // same instruction over and over.
+  const todoGroups = new Map();
   const rows = tracked.map(c => {
     const jobs = jobsByChar.get(c.character_name) || [];
     const pending = c.pending || [];
@@ -131,7 +179,13 @@ function _renderReactionsDashboard(data) {
     // Click to cancel the assignment (e.g. changed your mind, or already did it under a
     // different product than planned).
     for (const a of pending) {
-      todoItems.push(`Install <b>${_esc(a.name)}</b> ×${a.runs} on <b>${_esc(c.character_name)}</b>`);
+      const key = `${c.character_name} ${a.name} ${a.runs}`;
+      if (!todoGroups.has(key)) {
+        todoGroups.set(key, { character_name: c.character_name, name: a.name, runs: a.runs, count: 0, ids: [] });
+      }
+      const g = todoGroups.get(key);
+      g.count++;
+      g.ids.push(a.assignment_id);
       squares.push(`
         <div class="rx-slot rx-slot-pending" title="Not running yet — install ${_esc(a.name)} ×${a.runs} in-game. Click to cancel this assignment." onclick="_rxCancelAssignment(${a.assignment_id})">
           <span class="rx-slot-pending-mark">⊘</span>
@@ -148,8 +202,10 @@ function _renderReactionsDashboard(data) {
       </div>`;
   }).join('');
 
-  const todoNote = todoItems.length
-    ? `<div class="rx-todo-list">${todoItems.map(t => `<div class="rx-todo-item"><span class="rx-todo-x">⊘</span> ${t}</div>`).join('')}</div>`
+  const todoNote = todoGroups.size
+    ? `<div class="rx-todo-list">${[...todoGroups.values()].map(g =>
+        `<div class="rx-todo-item"><span class="rx-todo-x">⊘</span> Install <b>${_esc(g.name)}</b> ×${g.runs}${g.count > 1 ? ` (×${g.count} jobs)` : ''} on <b>${_esc(g.character_name)}</b></div>`
+      ).join('')}</div>`
     : '';
 
   el.innerHTML = rows + todoNote + untrackedNote;
@@ -157,7 +213,22 @@ function _renderReactionsDashboard(data) {
 
 function _rxCancelAssignment(assignmentId) {
   fetch(`/api/reactions/assign/${assignmentId}`, { method: 'DELETE' })
-    .then(r => { if (r.ok) _loadReactionsDashboard(); });
+    .then(r => {
+      if (!r.ok || !_rxLastDashboardData) return;
+      // Optimistic in-place update instead of a full refetch+re-render — a full reload here
+      // was visibly flickery/slow for something as small as clearing one pending slot.
+      for (const c of _rxLastDashboardData.characters || []) {
+        const before = (c.pending || []).length;
+        c.pending = (c.pending || []).filter(p => p.assignment_id !== assignmentId);
+        if (c.pending.length !== before) { c.free_slots++; _rxLastDashboardData.free_slots++; break; }
+      }
+      _renderReactionsDashboard(_rxLastDashboardData);
+    });
+}
+
+function _rxClearAllAssignments() {
+  fetch('/api/reactions/assign', { method: 'DELETE' })
+    .then(r => { if (r.ok) { _rxLastDashboardData = null; _loadReactionsDashboard(); } });
 }
 
 // ── Wizard: "Add Reaction Product" ──────────────────────────────────────────────────────────
@@ -316,8 +387,11 @@ function _renderReactionsSuggestions(data) {
       return `
         <div class="rx-sugg-row">
           <img class="rx-sugg-icon" src="${icon}" alt="" onerror="this.style.visibility='hidden'">
-          <div class="rx-sugg-name" title="${_esc(s.name)}">${_esc(s.name)}</div>
-          <div class="rx-sugg-meta">${jobLine} · ${_fmtIsk(s.input_cost)} in</div>
+          <div class="rx-sugg-info">
+            <div class="rx-sugg-name" title="${_esc(s.name)}">${_esc(s.name)}</div>
+            <div class="rx-sugg-meta">${jobLine} · ${_fmtIsk(s.input_cost)} in · ${_fmtHours(s.runtime_hours)} runtime</div>
+            <div class="rx-sugg-meta">${Math.round(s.output_qty).toLocaleString()} units · ${_fmtIsk(s.output_value)} value · ${Math.round(s.output_m3).toLocaleString()} m³</div>
+          </div>
           <div class="rx-sugg-reward">+${_fmtIsk(s.reward)}</div>
           <button class="rx-sugg-assign-btn" id="rxAssignBtn${i}" onclick="_rxAssignSuggestion(${i}, this)">Assign</button>
         </div>`;

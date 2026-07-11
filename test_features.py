@@ -112,6 +112,10 @@ def test_reactions_gated(base: str) -> bool:
     ok &= check(code == 403, f"anonymous reactions-assign rejected (got HTTP {code})")
     code = delete_status(f"{base}/api/reactions/assign/1")
     ok &= check(code == 403, f"anonymous reactions-unassign rejected (got HTTP {code})")
+    code = delete_status(f"{base}/api/reactions/assign")
+    ok &= check(code == 403, f"anonymous reactions-clear-all rejected (got HTTP {code})")
+    code = get_status(f"{base}/api/reactions/shopping-list")
+    ok &= check(code == 403, f"anonymous reactions-shopping-list rejected (got HTTP {code})")
     return ok
 
 

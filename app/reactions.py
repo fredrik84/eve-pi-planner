@@ -197,7 +197,7 @@ def _resolve_reachable(goo: dict[int, dict], purchasable: dict[int, float],
                     "top_level_runs": int(runs),
                     "cycle_time": f["cycle_time"],
                     "via": {"reaction_id": f["reaction_id"], "cycle_time": f["cycle_time"],
-                            "inputs": f["inputs"]},
+                            "output_qty": f["output_qty"], "inputs": f["inputs"]},
                 }
                 # Prefer whichever formula yields lower unit_cost (most profitable path to
                 # this product) — "least work most profitable" means the tool should already
@@ -211,10 +211,12 @@ def _resolve_reachable(goo: dict[int, dict], purchasable: dict[int, float],
     return reached
 
 
-def _build_opportunities(context_id: int, allowed_material_ids: set[int] | None = None) -> list[dict]:
-    # try/finally is load-bearing: an exception between get_connection() and close() (e.g. the
-    # reactions/reaction_inputs tables not existing yet on a freshly-deployed environment) would
-    # otherwise leak the connection permanently out of the small per-pod pool.
+def _load_goo_and_reached(context_id: int, allowed_material_ids: set[int] | None = None):
+    """Shared setup for both the profitability table and the shopping-list export: the alliance
+    goo stock, the reaction graph, and the fixed-point `reached` expansion (see
+    _resolve_reachable) from that goo through to every producible product. Returns
+    (goo, reached, reactions_by_output, inputs_by_reaction, types) or None if there's no goo to
+    start from at all."""
     con = get_connection()
     try:
         goo_rows = con.execute("SELECT type_id, sell_price, stock FROM pp_moon_goo_prices").fetchall()
@@ -232,7 +234,7 @@ def _build_opportunities(context_id: int, allowed_material_ids: set[int] | None 
         goo = {tid: g for tid, g in goo.items() if tid in allowed_material_ids}
 
     if not goo:
-        return []
+        return None
 
     settings = get_reaction_settings()
     pi = load_pi_data()
@@ -255,6 +257,16 @@ def _build_opportunities(context_id: int, allowed_material_ids: set[int] | None 
     }
 
     reached = _resolve_reachable(goo, purchasable, reactions_by_output)
+    return goo, reached, reactions_by_output, inputs_by_reaction, types
+
+
+def _build_opportunities(context_id: int, allowed_material_ids: set[int] | None = None) -> list[dict]:
+    loaded = _load_goo_and_reached(context_id, allowed_material_ids)
+    if loaded is None:
+        return []
+    goo, reached, reactions_by_output, inputs_by_reaction, types = loaded
+    settings = get_reaction_settings()
+
     # Only reaction PRODUCTS are candidates — shipping raw unreacted goo isn't what this tool
     # is for (that's just the input side).
     candidate_ids = [tid for tid, node in reached.items() if node["reaction_count"] > 0 and node["max_qty"] > 0]
@@ -311,6 +323,73 @@ def _build_opportunities(context_id: int, allowed_material_ids: set[int] | None 
 @router.get("/api/reactions/opportunities")
 def reactions_opportunities(context_id: int = Depends(require_b0ss)):
     return {"opportunities": _build_opportunities(context_id)}
+
+
+def _explode_shopping_list(type_id: int, units_needed: float, reached: dict, out: dict[int, float]):
+    """Recursively break `units_needed` units of `type_id` down to raw moon goo / purchasable
+    leaf materials, accumulating into `out`. A leaf (node["via"] is None) just needs that many
+    units directly; a reaction product needs ceil(units_needed / its output_qty) actual reaction
+    cycles, which in turn consume its own ME-adjusted inputs — same graph _resolve_reachable
+    already built, walked back down instead of the forward fixed-point expansion."""
+    node = reached.get(type_id)
+    if not node or node["via"] is None:
+        out[type_id] = out.get(type_id, 0.0) + units_needed
+        return
+    formula = node["via"]
+    reaction_runs = math.ceil(units_needed / formula["output_qty"])
+    for inp in formula["inputs"]:
+        eff_qty = inp["quantity"] * (1 - REACTION_ME_REDUCTION) * reaction_runs
+        _explode_shopping_list(inp["type_id"], eff_qty, reached, out)
+
+
+@router.get("/api/reactions/shopping-list")
+def reactions_shopping_list(context_id: int = Depends(require_b0ss)):
+    """Total raw materials needed across every one of the caller's pending assignments (see
+    assign_reaction) — moon goo AND any purchased materials (fuel blocks etc.), summed and
+    broken down to the same leaf level the profitability table prices from. Meant to be copied
+    straight into a Jita multibuy tool (Janice) or the alliance's goo buy channel."""
+    ensure_reaction_assignments_table()
+    con = get_connection()
+    try:
+        char_ids = [r["character_id"] for r in con.execute(
+            "SELECT character_id FROM pp_characters WHERE context_id=? AND COALESCE(is_dummy,0)=0",
+            (context_id,),
+        )]
+        if not char_ids:
+            return {"materials": []}
+        placeholders = ",".join("?" * len(char_ids))
+        assignments = con.execute(
+            f"SELECT type_id, runs FROM pp_reaction_assignments WHERE character_id IN ({placeholders})",
+            char_ids,
+        ).fetchall()
+    finally:
+        con.close()
+
+    if not assignments:
+        return {"materials": []}
+
+    loaded = _load_goo_and_reached(context_id)
+    if loaded is None:
+        return {"materials": []}
+    goo, reached, _, _, types = loaded
+
+    totals: dict[int, float] = {}
+    for a in assignments:
+        node = reached.get(a["type_id"])
+        if not node or node["via"] is None:
+            continue  # shouldn't happen (assignments are always reaction products), skip defensively
+        top_units = a["runs"] * node["via"]["output_qty"]
+        _explode_shopping_list(a["type_id"], top_units, reached, totals)
+
+    materials = [
+        {
+            "type_id": tid, "name": types.get(tid, {}).get("name", str(tid)),
+            "quantity": math.ceil(qty), "is_moon_goo": tid in goo,
+        }
+        for tid, qty in totals.items()
+    ]
+    materials.sort(key=lambda m: (not m["is_moon_goo"], m["name"]))
+    return {"materials": materials}
 
 
 # ── Personal reaction-job tracking (opt-in scope, see app.esi.INDUSTRY_JOBS_SCOPES) ────────────
@@ -508,6 +587,27 @@ def unassign_reaction(assignment_id: int, context_id: int = Depends(require_b0ss
     return {"ok": True}
 
 
+@router.delete("/api/reactions/assign")
+def unassign_all_reactions(context_id: int = Depends(require_b0ss)):
+    """Clear every pending assignment across all of the caller's characters in one go —
+    "Clear all" on the dashboard, for starting a fresh suggestion set without hand-cancelling
+    each pending slot one at a time."""
+    ensure_reaction_assignments_table()
+    con = get_connection()
+    try:
+        char_ids = [r["character_id"] for r in con.execute(
+            "SELECT character_id FROM pp_characters WHERE context_id=? AND COALESCE(is_dummy,0)=0",
+            (context_id,),
+        )]
+        if char_ids:
+            placeholders = ",".join("?" * len(char_ids))
+            con.execute(f"DELETE FROM pp_reaction_assignments WHERE character_id IN ({placeholders})", char_ids)
+            con.commit()
+    finally:
+        con.close()
+    return {"ok": True}
+
+
 @router.get("/api/reactions/jobs")
 def get_industry_jobs(context_id: int = Depends(require_b0ss)):
     """Personal reaction-job status for the Reactions wizard's dashboard page: currently
@@ -633,10 +733,14 @@ _CANDIDATE_POOL_SIZE = 30  # how many of the liquidity-filtered opportunities fe
 
 
 def _character_capacities(context_id: int) -> list[dict]:
-    """Per-character free reaction slots right now (capacity minus currently-running jobs) —
-    only characters that have opted into job tracking count, since we can't know a non-tracked
-    character's current load. Mirrors get_industry_jobs' slot math."""
+    """Per-character free reaction slots right now (capacity minus currently-running jobs AND
+    minus already-pending assignments from a previous suggestion the player hasn't installed
+    yet) — only characters that have opted into job tracking count, since we can't know a
+    non-tracked character's current load. A fresh "Suggest reactions" run must not double-book
+    slots a prior suggestion already claimed but hasn't been confirmed as running by ESI yet;
+    mirrors get_industry_jobs' slot math, which does the same running+pending subtraction."""
     ensure_industry_jobs_table()
+    ensure_reaction_assignments_table()
     con = get_connection()
     try:
         chars = con.execute(
@@ -647,6 +751,15 @@ def _character_capacities(context_id: int) -> list[dict]:
         cached = {r["character_id"]: r for r in con.execute(
             "SELECT character_id, jobs_json FROM pp_char_industry_jobs"
         )}
+        char_ids = [c["character_id"] for c in chars]
+        pending_counts: dict[int, int] = {}
+        if char_ids:
+            placeholders = ",".join("?" * len(char_ids))
+            for r in con.execute(
+                f"SELECT character_id, COUNT(*) AS n FROM pp_reaction_assignments "
+                f"WHERE character_id IN ({placeholders}) GROUP BY character_id", char_ids,
+            ):
+                pending_counts[r["character_id"]] = r["n"]
     finally:
         con.close()
 
@@ -658,6 +771,7 @@ def _character_capacities(context_id: int) -> list[dict]:
         row = cached.get(c["character_id"])
         jobs = _json.loads(row["jobs_json"]) if row else []
         used = len([j for j in jobs if j.get("status") in ("active", "paused", "ready")])
+        used += pending_counts.get(c["character_id"], 0)
         result.append({
             "character_id": c["character_id"], "character_name": c["character_name"],
             "free_slots": max(0, slots - used),
@@ -703,6 +817,8 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
         c2["output_qty"] = o["output_qty"] * scale
         c2["input_cost"] = o["input_cost"] * scale
         c2["net_profit_instant"] = o["net_profit_instant"] * scale
+        c2["shipping_volume_m3"] = o["shipping_volume_m3"] * scale
+        c2["instant_sell_value"] = o["instant_sell_value"] * scale
         capped.append(c2)
     candidates = capped
     if not candidates:
@@ -776,6 +892,9 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
 
         cost = c["input_cost"] * xi
         reward = c["net_profit_instant"] * xi
+        output_qty = c["output_qty"] * xi
+        output_value = c["instant_sell_value"] * xi
+        output_m3 = c["shipping_volume_m3"] * xi
         isk_committed += cost
         net_profit += reward
         suggestions.append({
@@ -785,6 +904,10 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
             "runs_per_job": runs_per_job,
             "input_cost": round(cost, 2),
             "reward": round(reward, 2),
+            "output_qty": round(output_qty, 1),
+            "output_value": round(output_value, 2),
+            "output_m3": round(output_m3, 1),
+            "runtime_hours": round(duration_hours, 1),
             "assigned_character": char_names.get(pick_id, "?"),
             "assigned_character_id": pick_id,
         })

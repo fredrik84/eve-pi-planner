@@ -494,9 +494,10 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .rx-sugg-hdr .rx-char-label { width: auto; flex: 0 0 auto; overflow: visible; }
 .rx-sugg-row { display: flex; align-items: center; gap: 10px; padding: 7px 9px; background: #161b28; border: 1px solid var(--clr-border); border-radius: 7px; margin-bottom: 6px; }
 .rx-sugg-icon { width: 28px; height: 28px; border-radius: 4px; flex: 0 0 auto; }
-.rx-sugg-name { flex: 1; min-width: 0; font-size: 13px; color: var(--clr-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rx-sugg-meta { font-size: 11px; color: var(--clr-text-dim); flex: 0 0 auto; white-space: nowrap; }
-.rx-sugg-reward { font-size: 12px; color: #7fd0a0; flex: 0 0 auto; white-space: nowrap; }
+.rx-sugg-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.rx-sugg-name { font-size: 13px; color: var(--clr-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rx-sugg-meta { font-size: 11px; color: var(--clr-text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rx-sugg-reward { font-size: 13px; font-weight: 600; color: #7fd0a0; flex: 0 0 auto; white-space: nowrap; }
 .rx-sugg-assign-btn {
   background: #1e3a5f; color: var(--clr-accent); border: 1px solid #2d5a8a;
   border-radius: 5px; padding: 5px 12px; font-size: 11px; cursor: pointer; flex: 0 0 auto;
@@ -510,4 +511,7 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
   font-size: 14px; color: var(--clr-text);
 }
 .rx-totals-profit { font-size: 16px; font-weight: 600; color: #7fd0a0; }
+
+.rx-shop-sec-title { font-weight: 600; color: #dbe1ee; margin: 10px 0 6px; }
+.rx-shop-sec-title:first-child { margin-top: 0; }
 
