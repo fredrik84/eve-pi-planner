@@ -89,7 +89,8 @@ function _renderReactionsDashboard(data) {
   // hasn't trained anything and can't meaningfully react. Applies to both the "not yet tracked"
   // nudge list and the loadout itself — no point highlighting a character that can't do this.
   const HAS_SKILL = c => c.slots > 1;
-  const untracked = (data.characters || []).filter(c => !c.tracked && HAS_SKILL(c));
+  const untracked = (data.characters || []).filter(c => !c.tracked && HAS_SKILL(c))
+    .sort((a, b) => b.slots - a.slots);
   const untrackedNote = untracked.length
     ? `<div class="pp-card-hint" style="margin-bottom:8px">Not yet tracked: ${untracked.map(c => _esc(c.character_name)).join(', ')}</div>`
     : '';
@@ -97,7 +98,9 @@ function _renderReactionsDashboard(data) {
   // "Loadout screen" per character: one square per reaction slot, occupied ones showing the
   // product's icon + a countdown, empty ones dashed — so an idle tracked character (no jobs
   // running) still shows up as a row of empty slots, not just an aggregate free-slot count.
-  const tracked = (data.characters || []).filter(c => c.tracked && HAS_SKILL(c));
+  // Sorted by total slots descending — your most-trained (most useful) characters lead.
+  const tracked = (data.characters || []).filter(c => c.tracked && HAS_SKILL(c))
+    .sort((a, b) => b.slots - a.slots);
   if (!tracked.length) {
     el.innerHTML = '<div class="pp-empty">No tracked characters have trained Mass Reactions skills yet — a bare base slot isn\'t enough to be worth showing.</div>' + untrackedNote;
     return;
