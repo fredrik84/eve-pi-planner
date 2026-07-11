@@ -92,9 +92,8 @@ FEATURE_REGISTRY = [
                     "warnings, instead of the fixed defaults.",
      "default": False},
     {"key": "extraction_targets", "label": "Extraction targets reference",
-     "description": "On Setup Analysis: in each material's drill-down, the comfortable P0/hr target "
-                    "spread evenly across its currently-producing planets — a reference while "
-                    "reseating extractor heads.",
+     "description": "On Setup Analysis: each material row shows its P0 source name and a comfortable "
+                    "P0/hr-per-planet target at a glance — a reference while reseating extractor heads.",
      "default": False},
 ]
 _DEFAULTS = {f["key"]: f for f in FEATURE_REGISTRY}

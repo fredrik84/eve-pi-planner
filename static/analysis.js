@@ -389,26 +389,36 @@ function renderAnalysis() {
     else if (pct < 10) { band = 'an-ovr-tight'; lbl = 'tight'; }
     const ovrStr = `<b>${pct >= 0 ? '+' : ''}${pct}%</b> <span class="an-ovr-lbl">${lbl}</span>`;
     const numTitle = `Your heads extract ${pct >= 0 ? '+' + pct : pct}% vs what the factories consume (≈${Math.round(_p0h(extSupply)).toLocaleString()} of ${Math.round(_p0h(r.need)).toLocaleString()} P0/hr). 10%+ is a comfortable cushion as extraction decays; 0–10% is tight (you hit it, but it'll dip short as the heads fade); below 0 isn't keeping up.`;
+    // P0 name (schematic-derived, via _placements — see _ensurePlacements) so the row reads as
+    // "what you seat heads for" at a glance, without having to remember/look up the P0↔P1 pairing.
+    const p0Name = (_featureActive('extraction_targets') && _placements && _placements[r.t] && _placements[r.t].p0_name) || null;
+    const nameTitle = p0Name ? `${p0Name} → ${r.name}` : r.name;
+    const nameHtml = p0Name
+      ? `<span class="an-row-p0">${_esc(p0Name)}</span><span class="an-row-p1">→ ${_esc(r.name)}</span>`
+      : _esc(r.name);
+    // Comfortable P0/hr target, spread evenly across the planets CURRENTLY producing this material —
+    // "what each of my heads should average" rather than a whole-plan total. Shown right on the row
+    // (not only in the fold) so it's a glance, not a click, while reseating.
+    const nPlanets = (prod[r.t] && prod[r.t].planets) || 0;
+    const perPlanetTarget = (_featureActive('extraction_targets') && nPlanets)
+      ? Math.round(_p0h(r.need) * (1 + _HEALTHY_BUFFER) / nPlanets)
+      : null;
+    const targetHtml = perPlanetTarget != null
+      ? `<div class="an-row-target">≈${perPlanetTarget.toLocaleString()} P0/hr·planet</div>` : '';
     const expanded = _anExpanded.has(String(r.t));
     let detail = '';
     if (expanded) {
       const pls = _planetsForMaterial(r.t);
-      // Reseat reference: the whole-plan comfortable P0/hr target, spread evenly across the planets
-      // CURRENTLY producing this material — "what should each of my heads average" rather than an
-      // account-wide total, since that's what you check a single reseated head against in-game.
-      const target = (_featureActive('extraction_targets') && pls.length)
-        ? `<div class="an-pd-target">Target ≈ <b>${Math.round(_p0h(r.need) * (1 + _HEALTHY_BUFFER) / pls.length).toLocaleString()} P0/hr</b> per planet (comfortable, avg over ${pls.length} planet${pls.length !== 1 ? 's' : ''})</div>`
-        : '';
       const items = pls.length
         ? pls.map(p => `<div class="an-pd-row"><span class="an-pd-char">${_esc(p.char)}</span><span class="an-pd-loc">${p.system ? _esc(p.system) + (p.planet_num != null ? ' P' + p.planet_num : '') : '—'}</span><span class="an-pd-p0">${p.p0Hr != null ? p.p0Hr.toLocaleString() + ' P0/hr' : ''}</span><span class="an-pd-val">${Math.round(p.perDay).toLocaleString()}/day</span></div>`).join('')
         : '<div class="an-pd-empty">No colony is producing this yet.</div>';
-      detail = `<div class="an-row-detail">${target}${items}${_fixNudge(r)}</div>`;
+      detail = `<div class="an-row-detail">${items}${_fixNudge(r)}</div>`;
     }
     return `<div class="an-mat">
         <div class="an-row an-row-click" onclick="_toggleMatDetail('${r.t}')">
-          <div class="an-row-name"><span class="an-row-caret">${expanded ? '▾' : '▸'}</span> ${_esc(r.name)}</div>
+          <div class="an-row-name" title="${_esc(nameTitle)}"><span class="an-row-caret">${expanded ? '▾' : '▸'}</span> ${nameHtml}</div>
           <div class="an-bar-track"><div class="an-bar-fill ${cls}" style="width:${haveW}%"></div></div>
-          <div class="an-row-nums ${band}" title="${numTitle}">${ovrStr}</div>
+          <div class="an-row-nums ${band}" title="${numTitle}">${ovrStr}${targetHtml}</div>
         </div>${detail}
       </div>`;
   }).join('');

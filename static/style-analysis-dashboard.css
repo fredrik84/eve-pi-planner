@@ -65,17 +65,20 @@
 
 .an-legend { font-size: 12px; color: var(--clr-text-muted); margin-bottom: 8px; }
 .an-bars { display: flex; flex-direction: column; gap: 8px; }
-.an-row { display: grid; grid-template-columns: 150px 1fr 120px; align-items: center; gap: 12px; padding-right: 4px; }
+.an-row { display: grid; grid-template-columns: 190px 1fr 150px; align-items: center; gap: 12px; padding-right: 4px; }
 .an-row-name { font-size: 13px; color: var(--clr-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.an-row-p0 { font-weight: 600; color: var(--clr-text-bright); }
+.an-row-p1 { color: var(--clr-text-muted); font-size: 11px; margin-left: 4px; }
 .an-bar-track { height: 16px; background: #11151f; border: 1px solid var(--clr-border); border-radius: 5px; overflow: hidden; }
 .an-bar-fill { height: 100%; border-radius: 4px 0 0 4px; transition: width .25s; }
 .an-bar-ok   { background: linear-gradient(90deg, #1f6b46, var(--clr-green-alt)); }
 .an-bar-warn { background: linear-gradient(90deg, #8a6a1f, var(--clr-amber)); }
 .an-bar-bad  { background: linear-gradient(90deg, #7a3036, var(--clr-red)); }
-.an-row-nums { font-size: 13px; white-space: nowrap; text-align: right; cursor: help; }
+.an-row-nums { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; font-size: 13px; white-space: nowrap; text-align: right; cursor: help; }
 .an-row-nums.an-ovr-ok    { color: var(--clr-green-alt); }
 .an-row-nums.an-ovr-tight { color: #e0a23a; }
 .an-row-nums.an-ovr-short { color: var(--clr-red); }
+.an-row-target { font-size: 11px; font-weight: 400; color: var(--clr-text-muted); }
 .an-ovr-lbl { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; opacity: .8; }
 .an-ovr-ok    { color: var(--clr-green-alt); }
 .an-ovr-tight { color: #e0a23a; }
@@ -87,7 +90,7 @@
 .an-neg  { color: var(--clr-red); }
 @media (max-width: 640px) {
   .an-row { grid-template-columns: 1fr; gap: 3px; }
-  .an-row-nums { text-align: right; }
+  .an-row-nums { align-items: flex-end; text-align: right; }
 }
 
 .an-suggest { margin-top: 14px; border-radius: 8px; padding: 12px 14px; border: 1px solid var(--clr-border); background: #161b28; }
@@ -149,10 +152,6 @@
 .an-pd-val { color: #e6e9ef; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .an-pd-empty { color: var(--clr-text-muted); grid-column: 1 / -1; }
 .an-cc-tag { font-size: 10px; font-weight: 700; letter-spacing: .03em; color: #cfe2f2; background: #1f3142; border: 1px solid #2f4a63; border-radius: 4px; padding: 1px 6px; margin-left: 6px; white-space: nowrap; }
-
-/* Per-planet comfortable extraction target, folded into a material's drill-down (extraction_targets flag) */
-.an-pd-target { grid-column: 1 / -1; color: #8fd0b8; margin-bottom: 3px; }
-.an-pd-target b { color: #fff; }
 
 /* ── Dashboard ──────────────────────────────────────────────────────────────── */
 .dash-fac-head, .dash-fac-row {
