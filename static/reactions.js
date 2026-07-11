@@ -67,16 +67,27 @@ function _renderReactionsDashboard(data) {
   const el = document.getElementById('rxDashboardContent');
   if (!el) return;
 
+  const untracked = (data.characters || []).filter(c => !c.tracked);
+  // Connecting a character (via /auth/login?reactions=1) is a per-character ESI authorisation,
+  // so this button must stay available even after some characters are already tracked — the
+  // account may have several characters (own alts, or characters logged in from other EVE
+  // accounts sharing this context) that each need to opt in separately. Mirrors the Characters
+  // settings page's always-present "+ Add via ESI" button, not a one-shot CTA that disappears.
+  const connectBtn = `<button class="pp-add-btn" onclick="connectReactionsTracking()">Connect ${data.tracked ? 'another' : 'a'} character</button>`;
+  const untrackedNote = untracked.length
+    ? `<div class="pp-card-hint" style="margin-bottom:8px">Not yet tracked: ${untracked.map(c => _esc(c.character_name)).join(', ')}</div>`
+    : '';
+
   if (!data.tracked) {
     el.innerHTML = `
       <div class="pp-empty">
         No characters are tracking reaction jobs yet.
-        <button class="pp-add-btn" onclick="connectReactionsTracking()">Connect for Reactions tracking</button>
+        ${connectBtn}
       </div>`;
     return;
   }
 
-  const capacity = `<div class="pp-card-hint" style="margin-bottom:8px">${data.free_slots} of ${data.total_slots} reaction slots free across your tracked characters</div>`;
+  const capacity = `<div class="pp-card-hint" style="margin-bottom:8px">${data.free_slots} of ${data.total_slots} reaction slots free across your tracked characters · ${connectBtn}</div>${untrackedNote}`;
 
   if (!data.running.length) {
     el.innerHTML = capacity + '<div class="pp-empty">No reactions currently running.</div>';

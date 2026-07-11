@@ -419,8 +419,11 @@ def reaction_slots(character_row: dict) -> int:
 @router.get("/api/reactions/jobs")
 def get_industry_jobs(context_id: int = Depends(require_b0ss)):
     """Personal reaction-job status for the Reactions wizard's dashboard page: currently
-    running jobs (from the last refresh) + a capacity summary (free slots right now, across
-    every character that's opted into tracking)."""
+    running jobs (from the last refresh), a capacity summary (free slots right now, across
+    every character that's opted into tracking), and the per-character opt-in breakdown so the
+    UI can offer to connect any character that hasn't opted in yet — a context can hold several
+    characters (an account's own alts, or characters from separate EVE accounts logged into the
+    same session), and each authorises the tracking scope independently."""
     ensure_industry_jobs_table()
     con = get_connection()
     try:
@@ -437,6 +440,7 @@ def get_industry_jobs(context_id: int = Depends(require_b0ss)):
 
     now = _time.time()
     running: list[dict] = []
+    characters: list[dict] = []
     total_slots = 0
     used_slots = 0
     tracked_any = False
@@ -444,6 +448,7 @@ def get_industry_jobs(context_id: int = Depends(require_b0ss)):
         opted_in = "read_character_jobs" in (c["scopes"] or "")
         slots = reaction_slots(c)
         if not opted_in:
+            characters.append({"character_name": c["character_name"], "tracked": False, "slots": slots})
             continue
         tracked_any = True
         total_slots += slots
@@ -451,6 +456,10 @@ def get_industry_jobs(context_id: int = Depends(require_b0ss)):
         jobs = _json.loads(row["jobs_json"]) if row else []
         active = [j for j in jobs if j.get("status") in ("active", "paused", "ready")]
         used_slots += len(active)
+        characters.append({
+            "character_name": c["character_name"], "tracked": True,
+            "slots": slots, "free_slots": max(0, slots - len(active)),
+        })
         for j in active:
             end = j.get("end_date")
             hours_left = None
@@ -471,6 +480,7 @@ def get_industry_jobs(context_id: int = Depends(require_b0ss)):
 
     return {
         "tracked": tracked_any,
+        "characters": characters,
         "running": sorted(running, key=lambda r: r["hours_left"] if r["hours_left"] is not None else 1e9),
         "total_slots": total_slots,
         "free_slots": max(0, total_slots - used_slots),
