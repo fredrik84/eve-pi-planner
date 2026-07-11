@@ -88,7 +88,23 @@ function _renderReactionsDashboard(data) {
     return;
   }
 
-  const capacity = `<div class="pp-card-hint" style="margin-bottom:8px">${data.free_slots} of ${data.total_slots} reaction slots free across your tracked characters</div>${untrackedNote}`;
+  // Always list every tracked character's slot capacity, even ones with nothing running right
+  // now (e.g. all slots free) — a bare aggregate "N of M free" hid which specific characters
+  // were actually tracked and idle, only the ones currently mid-job showed up anywhere.
+  const tracked = (data.characters || []).filter(c => c.tracked);
+  const capRows = tracked.map(c => `
+    <tr>
+      <td>${_esc(c.character_name)}</td>
+      <td>${c.free_slots} / ${c.slots}</td>
+    </tr>`).join('');
+  const capacity = `
+    <div style="overflow-x:auto;margin-bottom:8px">
+      <table class="pp-card-table" style="width:100%">
+        <thead><tr><th>Tracked character</th><th>Free slots</th></tr></thead>
+        <tbody>${capRows}</tbody>
+      </table>
+    </div>
+    <div class="pp-card-hint" style="margin-bottom:8px">${data.free_slots} of ${data.total_slots} reaction slots free overall</div>${untrackedNote}`;
 
   if (!data.running.length) {
     el.innerHTML = capacity + '<div class="pp-empty">No reactions currently running.</div>';
