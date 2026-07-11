@@ -117,6 +117,17 @@ function wizRStart() {
   document.getElementById('rxDashboard').style.display = 'none';
   document.getElementById('rxWizard').style.display = '';
   wizRGo(1);
+  _wizRIskLive();
+}
+
+// Live "= 1.00 B" hint next to the raw ISK budget input — counting zeros in a 10-digit number
+// is error-prone, so echo the same B/M/K formatting used everywhere else (fmtIsk, utils.js).
+function _wizRIskLive() {
+  const el = document.getElementById('wizRIsk');
+  const out = document.getElementById('wizRIskFmt');
+  if (!el || !out) return;
+  const v = parseFloat(el.value);
+  out.textContent = v > 0 ? `= ${fmtIsk(v)} ISK` : '';
 }
 
 function wizRCancel() {
