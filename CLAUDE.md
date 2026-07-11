@@ -111,10 +111,12 @@ These are standing rules for ALL changes. Follow them unless the user explicitly
    per-user data, even in aggregate form that could be re-identified.
 9. **No ads, no third-party data sharing.** No analytics scripts, tracking pixels, ad networks, or
    any third-party JS may be added to the frontend. No user data (characters, systems, plans, usage
-   patterns) is ever sent to a third party. ESI (CCP's official API) and Fuzzwork (static SDE
-   mirror) are the only external services this app contacts, and only for game data — not
-   telemetry. The Prometheus `/metrics` endpoint is infrastructure-internal (token-gated, default
-   off) and contains only aggregate counts, never per-user data.
+   patterns) is ever sent to a third party. ESI (CCP's official API), Fuzzwork (static SDE
+   mirror), and `images.evetech.net` (CCP's own type-icon render service, same `evetech.net`
+   domain as ESI — used by the Reactions dashboard's slot icons) are the only external services
+   this app contacts, and only for game data — not telemetry. The Prometheus `/metrics` endpoint
+   is infrastructure-internal (token-gated, default off) and contains only aggregate counts,
+   never per-user data.
 
 ---
 
