@@ -428,6 +428,9 @@ function _renderRxAdvisor(advisor) {
   if (advisor.budget_hint) {
     items.push(`<li>Raising your ISK budget by ${_fmtIsk(advisor.budget_hint.extra_isk)} would add about ${_fmtIsk(advisor.budget_hint.extra_profit)} more profit</li>`);
   }
+  for (const a of advisor.align_hints || []) {
+    items.push(`<li>Increase by ${_fmtIsk(a.extra_isk)} ISK to align <b>${_esc(a.name)}</b> to your cadence (keeps its slots busy the whole period instead of finishing early) — about +${_fmtIsk(a.extra_reward)} more profit</li>`);
+  }
   if (!items.length) return '';
   return `
     <div class="rx-advisor">

@@ -897,6 +897,18 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
         output_m3 = c["shipping_volume_m3"] * xi
         isk_committed += cost
         net_profit += reward
+
+        # How much MORE this specific product could use if it were ISK-funded all the way to
+        # actually filling its claimed slots for the whole cadence window, instead of finishing
+        # early and leaving them idle until the next check-in. Bounded by `top_level_runs` (the
+        # true cadence/stock-capped max for this candidate) so this never suggests spending ISK
+        # on more than could physically be produced.
+        max_runs_per_job_for_cadence = math.floor(cadence_hours / cycle_hours) if cycle_hours > 0 else runs_per_job
+        aligned_runs = min(slots_used * max_runs_per_job_for_cadence, c["top_level_runs"])
+        align_extra_runs = max(0, aligned_runs - runs_needed)
+        align_extra_isk = round(align_extra_runs * (c["input_cost"] / c["top_level_runs"]), 2) if align_extra_runs > 0 else 0.0
+        align_extra_reward = round(align_extra_runs * (c["net_profit_instant"] / c["top_level_runs"]), 2) if align_extra_runs > 0 else 0.0
+
         suggestions.append({
             "type_id": c["type_id"], "name": c["name"],
             "runs": runs_needed,
@@ -908,6 +920,8 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
             "output_value": round(output_value, 2),
             "output_m3": round(output_m3, 1),
             "runtime_hours": round(duration_hours, 1),
+            "align_extra_isk": align_extra_isk,
+            "align_extra_reward": align_extra_reward,
             "assigned_character": char_names.get(pick_id, "?"),
             "assigned_character_id": pick_id,
         })
@@ -941,11 +955,14 @@ _BUDGET_SENSITIVITY_STEP = 0.10  # "what if you raised your ISK budget by 10%?"
 
 
 def _build_advisor(context_id: int, isk_budget: float, max_chain_depth: int, cadence_hours: float,
-                    material_ids: set[int] | None, current_profit: float, current_binding: str) -> dict:
-    """Two cheap, easily-computable "how could this be better" hints — not a full analysis,
-    just the obvious low-effort wins: missing skill training on already-tracked characters, and
-    whether a bit more ISK would actually buy meaningfully more profit right now (vs. there being
-    nothing left worth spending it on within the current chain-depth/cadence/material limits)."""
+                    material_ids: set[int] | None, current_profit: float, current_binding: str,
+                    suggestions: list[dict]) -> dict:
+    """Cheap, easily-computable "how could this be better" hints — not a full analysis, just the
+    obvious low-effort wins: missing skill training on already-tracked characters, whether a bit
+    more ISK would actually buy meaningfully more profit right now (vs. there being nothing left
+    worth spending it on within the current chain-depth/cadence/material limits), and per-product
+    cadence-alignment gaps (a suggestion that finishes early and leaves its claimed slots idle
+    for the rest of the cadence window, for want of a bit more ISK to keep them running)."""
     skill_hints = []
     con = get_connection()
     try:
@@ -982,7 +999,15 @@ def _build_advisor(context_id: int, isk_budget: float, max_chain_depth: int, cad
                 "extra_profit": round(extra_profit, 2),
             }
 
-    return {"skill_hints": skill_hints, "budget_hint": budget_hint}
+    # Per-product cadence-alignment gaps (see the align_extra_isk/align_extra_reward computed
+    # alongside each suggestion in _suggest_reactions) — worth a mention only when it's a
+    # meaningful amount of profit, not a rounding-sized sliver.
+    align_hints = [
+        {"name": s["name"], "extra_isk": s["align_extra_isk"], "extra_reward": s["align_extra_reward"]}
+        for s in suggestions if s.get("align_extra_isk", 0) > 0 and s["align_extra_reward"] > current_profit * 0.01
+    ]
+
+    return {"skill_hints": skill_hints, "budget_hint": budget_hint, "align_hints": align_hints}
 
 
 @router.post("/api/reactions/suggest")
@@ -990,9 +1015,11 @@ def suggest_reactions(req: SuggestRequest, context_id: int = Depends(require_b0s
     if req.isk_budget <= 0 or req.max_chain_depth <= 0 or req.cadence_hours <= 0:
         return {"suggestions": [], "totals": {
             "isk_committed": 0.0, "isk_budget": req.isk_budget, "net_profit": 0.0, "characters_used": 0,
-            "completion_hours": None, "binding": "neither"}, "advisor": {"skill_hints": [], "budget_hint": None}}
+            "completion_hours": None, "binding": "neither"},
+            "advisor": {"skill_hints": [], "budget_hint": None, "align_hints": []}}
     material_ids = set(req.material_ids) if req.material_ids else None
     result = _suggest_reactions(context_id, req.isk_budget, req.max_chain_depth, req.cadence_hours, material_ids)
     result["advisor"] = _build_advisor(context_id, req.isk_budget, req.max_chain_depth, req.cadence_hours,
-                                        material_ids, result["totals"]["net_profit"], result["totals"]["binding"])
+                                        material_ids, result["totals"]["net_profit"], result["totals"]["binding"],
+                                        result["suggestions"])
     return result
