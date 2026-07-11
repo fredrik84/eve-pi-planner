@@ -669,7 +669,7 @@ function renderAnalysis() {
     ? `<button type="button" class="an-mode-toggle" onclick="_toggleExtractAvgMode()">${avgMode ? 'Show: Fed %' : 'Show: Extraction avg'}</button>`
     : '';
   const supplyLegend = avgMode
-    ? `Bar + numbers = your average P0/hr per planet CURRENTLY producing this, vs the comfortable target average (+${Math.round(_HEALTHY_BUFFER * 100)}% cushion) — the number to check a reseated head against. Click a row for the fix.`
+    ? `Numbers = current → comfortable target P0/hr per planet (+${Math.round(_HEALTHY_BUFFER * 100)}% cushion). Click a row for the fix.`
     : `Bar = how fed each input is. % = extraction headroom: <span class="an-ovr-ok">+10% or more healthy</span>, <span class="an-ovr-tight">0–10% tight</span> (dips as heads decay), <span class="an-ovr-short">below 0 short</span>. Click a row for the fix.`;
   const supplyCard = `<section class="pp-card">
       <div class="pp-card-title">Material supply${modeToggle}</div>
