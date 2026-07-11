@@ -906,6 +906,7 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
         max_runs_per_job_for_cadence = math.floor(cadence_hours / cycle_hours) if cycle_hours > 0 else runs_per_job
         aligned_runs = min(slots_used * max_runs_per_job_for_cadence, c["top_level_runs"])
         align_extra_runs = max(0, aligned_runs - runs_needed)
+        align_ratio = aligned_runs / c["top_level_runs"]
         align_extra_isk = round(align_extra_runs * (c["input_cost"] / c["top_level_runs"]), 2) if align_extra_runs > 0 else 0.0
         align_extra_reward = round(align_extra_runs * (c["net_profit_instant"] / c["top_level_runs"]), 2) if align_extra_runs > 0 else 0.0
 
@@ -922,6 +923,16 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
             "runtime_hours": round(duration_hours, 1),
             "align_extra_isk": align_extra_isk,
             "align_extra_reward": align_extra_reward,
+            # Absolute (not delta) values for applying the alignment in one click — the frontend
+            # swaps a suggestion's displayed fields to these wholesale rather than re-running the
+            # whole optimizer, so clicking "align" only ever changes THIS product, nothing else.
+            "aligned_runs": aligned_runs,
+            "aligned_runs_per_job": max_runs_per_job_for_cadence,
+            "aligned_input_cost": round(c["input_cost"] * align_ratio, 2),
+            "aligned_reward": round(c["net_profit_instant"] * align_ratio, 2),
+            "aligned_output_qty": round(c["output_qty"] * align_ratio, 1),
+            "aligned_output_value": round(c["instant_sell_value"] * align_ratio, 2),
+            "aligned_output_m3": round(c["shipping_volume_m3"] * align_ratio, 1),
             "assigned_character": char_names.get(pick_id, "?"),
             "assigned_character_id": pick_id,
         })
@@ -963,11 +974,20 @@ def _build_advisor(context_id: int, isk_budget: float, max_chain_depth: int, cad
     worth spending it on within the current chain-depth/cadence/material limits), and per-product
     cadence-alignment gaps (a suggestion that finishes early and leaves its claimed slots idle
     for the rest of the cadence window, for want of a bit more ISK to keep them running)."""
+    # Only characters this plan actually fully books benefit from more slots — hinting "train
+    # more" for every non-maxed character regardless of whether they're anywhere near their cap
+    # is just noise (true for almost everyone almost always, and not actually actionable: extra
+    # slots they're not using yet wouldn't change anything about this plan).
+    used_slots_by_char: dict[int, int] = {}
+    for s in suggestions:
+        cid = s["assigned_character_id"]
+        used_slots_by_char[cid] = used_slots_by_char.get(cid, 0) + s["job_count"]
+
     skill_hints = []
     con = get_connection()
     try:
         chars = con.execute(
-            "SELECT character_name, mass_reactions, advanced_mass_reactions, scopes "
+            "SELECT character_id, character_name, mass_reactions, advanced_mass_reactions, scopes "
             "FROM pp_characters WHERE context_id=? AND COALESCE(is_dummy,0)=0", (context_id,),
         ).fetchall()
     finally:
@@ -975,13 +995,15 @@ def _build_advisor(context_id: int, isk_budget: float, max_chain_depth: int, cad
     for c in chars:
         if "read_character_jobs" not in (c["scopes"] or ""):
             continue
+        if used_slots_by_char.get(c["character_id"], 0) < reaction_slots(c):
+            continue  # this character still has spare slots this plan didn't need — not a bottleneck
         mr, amr = c["mass_reactions"] or 0, c["advanced_mass_reactions"] or 0
         if mr < 5:
             skill_hints.append(f"{c['character_name']}: training Mass Reactions to level {mr + 1} "
-                                f"would add 1 more reaction slot")
+                                f"would add 1 more reaction slot (this plan is using all of their current ones)")
         elif amr < 5:
             skill_hints.append(f"{c['character_name']}: training Advanced Mass Reactions to level "
-                                f"{amr + 1} would add 1 more reaction slot")
+                                f"{amr + 1} would add 1 more reaction slot (this plan is using all of their current ones)")
 
     # Budget sensitivity: only worth suggesting "raise your ISK budget" when ISK is actually the
     # thing holding this back right now (current_binding == "isk") — if the current run already

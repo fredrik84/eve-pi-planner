@@ -466,13 +466,17 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .rx-slot-empty { border-style: dashed; opacity: 0.45; }
 .rx-slot-pending {
   border-color: #7a2a2a; background: linear-gradient(160deg, #2a1a1a, #221515);
-  cursor: pointer;
+  cursor: pointer; position: relative;
 }
 .rx-slot-pending:hover { border-color: #a83a3a; }
 .rx-slot-icon { width: 32px; height: 32px; border-radius: 4px; }
 .rx-slot-timer { font-size: 9px; color: var(--clr-text-dim); margin-top: 3px; white-space: nowrap; }
 .rx-slot-empty-mark { font-size: 20px; color: var(--clr-text-dim); }
-.rx-slot-pending-mark { font-size: 20px; color: #e05a5a; }
+.rx-slot-pending-badge {
+  position: absolute; top: -5px; right: -5px; font-size: 13px; line-height: 1;
+  color: #ff8a8a; background: #1a1010; border: 1px solid #7a2a2a; border-radius: 50%;
+  width: 16px; height: 16px; display: flex; align-items: center; justify-content: center;
+}
 .rx-slot-pending-label { font-size: 8px; color: #c87a7a; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 54px; }
 .rx-todo-list { margin-top: 6px; padding-top: 8px; border-top: 1px dashed var(--clr-border); }
 .rx-todo-item { font-size: 12px; color: #c87a7a; margin-bottom: 3px; display: flex; align-items: center; gap: 6px; }

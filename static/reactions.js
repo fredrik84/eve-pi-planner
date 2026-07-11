@@ -186,9 +186,11 @@ function _renderReactionsDashboard(data) {
       const g = todoGroups.get(key);
       g.count++;
       g.ids.push(a.assignment_id);
+      const pendingIcon = `https://images.evetech.net/types/${a.type_id}/icon?size=32`;
       squares.push(`
         <div class="rx-slot rx-slot-pending" title="Not running yet — install ${_esc(a.name)} ×${a.runs} in-game. Click to cancel this assignment." onclick="_rxCancelAssignment(${a.assignment_id})">
-          <span class="rx-slot-pending-mark">⊘</span>
+          <img class="rx-slot-icon" src="${pendingIcon}" alt="" onerror="this.style.visibility='hidden'">
+          <span class="rx-slot-pending-badge">⊘</span>
           <div class="rx-slot-pending-label">${_esc(a.name)}</div>
         </div>`);
     }
@@ -334,9 +336,12 @@ function wizRSuggest() {
 
 let _rxLastSuggestions = [];
 
+let _rxLastSuggestData = null;
+
 function _renderReactionsSuggestions(data) {
   const el = document.getElementById('wizRSuggestionsContent');
   if (!el) return;
+  _rxLastSuggestData = data;
   _rxLastSuggestions = data.suggestions;
   const assignAllBtn = document.getElementById('rxAssignAllBtn');
   if (assignAllBtn) {
@@ -350,20 +355,12 @@ function _renderReactionsSuggestions(data) {
   }
 
   const t = data.totals;
-  const iskPct = Math.min(100, (t.isk_committed / t.isk_budget) * 100);
+  // No progress bar here — with ISK as the only real constraint, it reads at (or near) 100%
+  // in the common case, so a bar added no information a line of text doesn't already say.
   const bindingNote = t.binding === 'isk'
     ? 'Used your full ISK budget.'
     : 'There weren\'t enough profitable, liquid reactions within the chain-depth limit to use the whole budget — try loosening "Max chain depth" or the material filter.';
-
-  const budgetSummary = `
-    <div class="rx-budget-summary">
-      <div class="rx-budget-bar-row">
-        <span class="rx-budget-label">ISK</span>
-        <div class="rx-budget-bar"><div class="rx-budget-bar-fill${t.binding === 'isk' ? ' rx-budget-bound' : ''}" style="width:${iskPct}%"></div></div>
-        <span class="rx-budget-value">${fmtIsk(t.isk_committed)} / ${fmtIsk(t.isk_budget)}</span>
-      </div>
-      <div class="pp-card-hint">${bindingNote}</div>
-    </div>`;
+  const budgetSummary = `<div class="pp-card-hint" style="margin-bottom:10px">${bindingNote}</div>`;
 
   // Grouped by assigned character (each is "this character's job list"), not one flat table —
   // the engine already picks a character per suggestion based on free reaction slots; this
@@ -428,15 +425,45 @@ function _renderRxAdvisor(advisor) {
   if (advisor.budget_hint) {
     items.push(`<li>Raising your ISK budget by ${_fmtIsk(advisor.budget_hint.extra_isk)} would add about ${_fmtIsk(advisor.budget_hint.extra_profit)} more profit</li>`);
   }
-  for (const a of advisor.align_hints || []) {
-    items.push(`<li>Increase by ${_fmtIsk(a.extra_isk)} ISK to align <b>${_esc(a.name)}</b> to your cadence (keeps its slots busy the whole period instead of finishing early) — about +${_fmtIsk(a.extra_reward)} more profit</li>`);
-  }
+  (advisor.align_hints || []).forEach((a, i) => {
+    items.push(`<li>Increase by ${_fmtIsk(a.extra_isk)} ISK to align <b>${_esc(a.name)}</b> to your cadence (keeps its slots busy the whole period instead of finishing early) — about +${_fmtIsk(a.extra_reward)} more profit
+      <button class="rx-sugg-assign-btn" id="rxAlignBtn${i}" onclick="_rxApplyAlignHint(${i}, this)">Apply</button></li>`);
+  });
   if (!items.length) return '';
   return `
     <div class="rx-advisor">
       <div class="rx-advisor-title">Suggestions to improve</div>
       <ul>${items.join('')}</ul>
     </div>`;
+}
+
+// Applies one "align to cadence" hint in place — bumps the matching suggestion's runs/cost/
+// reward/output up to its already-computed aligned values (backend-provided, capped by the
+// real cadence/stock limit) and updates the running totals, without re-running the whole
+// optimizer (which could reshuffle every other suggestion too, not just this one product).
+function _rxApplyAlignHint(hintIndex, btn) {
+  if (!_rxLastSuggestData) return;
+  const hint = (_rxLastSuggestData.advisor.align_hints || [])[hintIndex];
+  if (!hint) return;
+  const s = _rxLastSuggestData.suggestions.find(x => x.name === hint.name && x.align_extra_isk > 0);
+  if (!s) return;
+
+  _rxLastSuggestData.totals.isk_committed += s.align_extra_isk;
+  _rxLastSuggestData.totals.net_profit += s.align_extra_reward;
+  s.runs = s.aligned_runs;
+  s.runs_per_job = s.aligned_runs_per_job;
+  s.input_cost = s.aligned_input_cost;
+  s.reward = s.aligned_reward;
+  s.output_qty = s.aligned_output_qty;
+  s.output_value = s.aligned_output_value;
+  s.output_m3 = s.aligned_output_m3;
+  const cadenceEl = document.getElementById('wizRCadence');
+  s.runtime_hours = cadenceEl ? parseFloat(cadenceEl.value) : s.runtime_hours;
+  s.align_extra_isk = 0;
+  s.align_extra_reward = 0;
+
+  _rxLastSuggestData.advisor.align_hints.splice(hintIndex, 1);
+  _renderReactionsSuggestions(_rxLastSuggestData);
 }
 
 function _rxAssignSuggestion(i, btn) {
