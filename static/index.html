@@ -25,7 +25,7 @@
   <link rel="stylesheet" href="/style-components.css?v=1">
   <link rel="stylesheet" href="/style-contribute.css?v=8">
   <link rel="stylesheet" href="/style-wizard.css?v=2">
-  <link rel="stylesheet" href="/style-layout-admin.css?v=3">
+  <link rel="stylesheet" href="/style-layout-admin.css?v=4">
   <link rel="stylesheet" href="/style-analysis-dashboard.css?v=7">
   <link rel="stylesheet" href="/style-misc-responsive.css?v=6">
 </head>
@@ -599,11 +599,17 @@
               <input type="number" id="wizRIsk" class="pp-num-input" style="width:160px" value="1000000000" min="0" step="1000000" oninput="_wizRIskLive()">
               <span id="wizRIskFmt" class="pp-card-hint"></span>
 
-              <label class="pp-label" for="wizRSteps" title="Total reaction runs across every suggestion combined">Steps budget</label>
+              <label class="pp-label" for="wizRSteps" title="The total number of reaction runs (cycles) across every suggestion combined">Total reaction runs</label>
               <input type="number" id="wizRSteps" class="pp-num-input" style="width:100px" value="200" min="1">
             </div>
+            <div class="pp-card-hint" style="margin-top:6px">
+              "Total reaction runs" caps how many individual reaction cycles get suggested, added up across
+              everything on the results page. It's a separate limit from your ISK budget — if it's set too low,
+              you'll see ISK go unused because there simply aren't enough runs allowed to spend it. Raise it to
+              use more of your budget; lower it to keep the plan small and quick to set up.
+            </div>
             <div style="margin-top:12px">
-              <button class="pp-add-btn" onclick="wizRSuggest()">Suggest reactions</button>
+              <button class="wiz-find-btn" style="width:auto;display:inline-block" onclick="wizRSuggest()">Suggest reactions</button>
               <button class="pp-cancel-btn" onclick="wizRCancel()">Cancel</button>
             </div>
           </section>
@@ -616,6 +622,7 @@
             </div>
             <div id="wizRSuggestionsContent"><div class="pp-empty">…</div></div>
             <div style="margin-top:12px">
+              <button class="wiz-back-btn" onclick="wizRGo(1)">← Budget</button>
               <button class="pp-cancel-btn" onclick="wizRCancel()">Done</button>
             </div>
           </section>
@@ -1192,6 +1199,6 @@ PVF-N9    3         95                 60             80                  100   
   <script src="/refill.js?v=3"></script>
   <script src="/analysis.js?v=24"></script>
   <script src="/layout.js?v=1"></script>
-  <script src="/reactions.js?v=7"></script>
+  <script src="/reactions.js?v=8"></script>
 </body>
 </html>

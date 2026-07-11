@@ -450,17 +450,57 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .basket-editor-actions { display: flex; gap: 8px; align-items: center; }
 
 /* ── Reactions: gamified per-character slot loadout ─────────────────────────── */
-.rx-char-block { margin-bottom: 18px; }
-.rx-char-hdr { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; font-weight: 600; color: #dbe1ee; }
+.rx-char-row {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  padding: 10px 0; border-bottom: 1px solid var(--clr-border);
+}
+.rx-char-row:last-child { border-bottom: none; }
+.rx-char-label { min-width: 130px; font-weight: 600; color: #dbe1ee; flex: 0 0 auto; }
 .rx-slot-row { display: flex; gap: 8px; flex-wrap: wrap; }
 .rx-slot {
-  width: 64px; height: 64px; flex: 0 0 auto;
+  width: 60px; height: 60px; flex: 0 0 auto;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   border-radius: 8px; background: #161b28; border: 1px solid var(--clr-border);
 }
 .rx-slot-filled { border-color: #3a5a82; background: linear-gradient(160deg, #1b2a3d, #16202e); }
 .rx-slot-empty { border-style: dashed; opacity: 0.45; }
-.rx-slot-icon { width: 34px; height: 34px; border-radius: 4px; }
+.rx-slot-pending {
+  border-color: #7a2a2a; background: linear-gradient(160deg, #2a1a1a, #221515);
+  cursor: pointer;
+}
+.rx-slot-pending:hover { border-color: #a83a3a; }
+.rx-slot-icon { width: 32px; height: 32px; border-radius: 4px; }
 .rx-slot-timer { font-size: 9px; color: var(--clr-text-dim); margin-top: 3px; white-space: nowrap; }
 .rx-slot-empty-mark { font-size: 20px; color: var(--clr-text-dim); }
+.rx-slot-pending-mark { font-size: 20px; color: #e05a5a; }
+.rx-slot-pending-label { font-size: 8px; color: #c87a7a; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 54px; }
+.rx-todo-list { margin-top: 6px; padding-top: 8px; border-top: 1px dashed var(--clr-border); }
+.rx-todo-item { font-size: 12px; color: #c87a7a; margin-bottom: 3px; display: flex; align-items: center; gap: 6px; }
+.rx-todo-item .rx-todo-x { font-size: 15px; }
+
+/* Budget-usage feedback on the wizard's suggestions page — makes it visible which of the two
+   independent caps (ISK vs total runs) actually stopped more suggestions from being added. */
+.rx-budget-summary { margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px solid var(--clr-border); }
+.rx-budget-bar-row { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.rx-budget-label { width: 44px; flex: 0 0 auto; font-size: 11px; color: var(--clr-text-dim); text-transform: uppercase; letter-spacing: 0.04em; }
+.rx-budget-bar { flex: 1; height: 8px; background: #161b28; border: 1px solid var(--clr-border); border-radius: 4px; overflow: hidden; }
+.rx-budget-bar-fill { height: 100%; background: #3a7ac0; border-radius: 3px 0 0 3px; }
+.rx-budget-bar-fill.rx-budget-bound { background: #c05a3a; }
+.rx-budget-value { width: 130px; flex: 0 0 auto; font-size: 11px; color: var(--clr-text-soft); text-align: right; }
+
+/* Per-character suggestion cards on the results page */
+.rx-sugg-card { margin-bottom: 12px; }
+.rx-sugg-hdr { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.rx-sugg-hdr .rx-char-label { min-width: 0; }
+.rx-sugg-row { display: flex; align-items: center; gap: 10px; padding: 7px 9px; background: #161b28; border: 1px solid var(--clr-border); border-radius: 7px; margin-bottom: 6px; }
+.rx-sugg-icon { width: 28px; height: 28px; border-radius: 4px; flex: 0 0 auto; }
+.rx-sugg-name { flex: 1; min-width: 0; font-size: 13px; color: var(--clr-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rx-sugg-meta { font-size: 11px; color: var(--clr-text-dim); flex: 0 0 auto; white-space: nowrap; }
+.rx-sugg-reward { font-size: 12px; color: #7fd0a0; flex: 0 0 auto; white-space: nowrap; }
+.rx-sugg-assign-btn {
+  background: #1e3a5f; color: var(--clr-accent); border: 1px solid #2d5a8a;
+  border-radius: 5px; padding: 5px 12px; font-size: 11px; cursor: pointer; flex: 0 0 auto;
+}
+.rx-sugg-assign-btn:hover { background: #254a78; }
+.rx-sugg-assign-btn:disabled { opacity: 0.5; cursor: default; background: #1a2838; color: #6a88aa; border-color: #2a3a4a; }
 

@@ -20,7 +20,7 @@ import time as _time
 from datetime import datetime, timezone
 
 import httpx
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.sde import get_connection, load_pi_data, ensure_once
@@ -416,15 +416,92 @@ def reaction_slots(character_row: dict) -> int:
     return min(11, 1 + (character_row.get("mass_reactions") or 0) + (character_row.get("advanced_mass_reactions") or 0))
 
 
+@ensure_once
+def ensure_reaction_assignments_table():
+    con = get_connection()
+    try:
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS pp_reaction_assignments (
+                id           INTEGER PRIMARY KEY,
+                character_id INTEGER NOT NULL,
+                type_id      INTEGER NOT NULL,
+                name         TEXT NOT NULL,
+                runs         INTEGER NOT NULL,
+                input_cost   REAL NOT NULL,
+                reward       REAL NOT NULL,
+                created_at   REAL NOT NULL
+            )
+        """)
+        con.commit()
+    finally:
+        con.close()
+
+
+class AssignRequest(BaseModel):
+    character_id: int
+    type_id: int
+    name: str
+    runs: int
+    input_cost: float
+    reward: float
+
+
+@router.post("/api/reactions/assign")
+def assign_reaction(req: AssignRequest, context_id: int = Depends(require_b0ss)):
+    """Commit a suggested (character, product) pairing as a standing "go do this" instruction —
+    surfaced on the dashboard until ESI confirms a matching job is actually running, at which
+    point it's auto-cleared (see get_industry_jobs). Deliberately NOT a full plan/schedule
+    object — just "the next thing this character should install"."""
+    ensure_reaction_assignments_table()
+    con = get_connection()
+    try:
+        owner = con.execute(
+            "SELECT 1 FROM pp_characters WHERE character_id=? AND context_id=?",
+            (req.character_id, context_id),
+        ).fetchone()
+        if not owner:
+            raise HTTPException(status_code=403, detail="Not your character")
+        con.execute(
+            "INSERT INTO pp_reaction_assignments (character_id, type_id, name, runs, input_cost, reward, created_at) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (req.character_id, req.type_id, req.name, req.runs, req.input_cost, req.reward, _time.time()),
+        )
+        con.commit()
+    finally:
+        con.close()
+    return {"ok": True}
+
+
+@router.delete("/api/reactions/assign/{assignment_id}")
+def unassign_reaction(assignment_id: int, context_id: int = Depends(require_b0ss)):
+    ensure_reaction_assignments_table()
+    con = get_connection()
+    try:
+        owner = con.execute(
+            "SELECT a.id FROM pp_reaction_assignments a JOIN pp_characters c ON c.character_id=a.character_id "
+            "WHERE a.id=? AND c.context_id=?",
+            (assignment_id, context_id),
+        ).fetchone()
+        if not owner:
+            raise HTTPException(status_code=404, detail="Assignment not found")
+        con.execute("DELETE FROM pp_reaction_assignments WHERE id=?", (assignment_id,))
+        con.commit()
+    finally:
+        con.close()
+    return {"ok": True}
+
+
 @router.get("/api/reactions/jobs")
 def get_industry_jobs(context_id: int = Depends(require_b0ss)):
     """Personal reaction-job status for the Reactions wizard's dashboard page: currently
     running jobs (from the last refresh), a capacity summary (free slots right now, across
-    every character that's opted into tracking), and the per-character opt-in breakdown so the
-    UI can offer to connect any character that hasn't opted in yet — a context can hold several
+    every character that's opted into tracking), the per-character opt-in breakdown so the UI
+    can offer to connect any character that hasn't opted in yet, and any standing "assigned but
+    not yet actually running" instructions (see assign_reaction) — a context can hold several
     characters (an account's own alts, or characters from separate EVE accounts logged into the
     same session), and each authorises the tracking scope independently."""
     ensure_industry_jobs_table()
+    ensure_reaction_assignments_table()
     con = get_connection()
     try:
         chars = con.execute(
@@ -435,6 +512,15 @@ def get_industry_jobs(context_id: int = Depends(require_b0ss)):
         cached = {r["character_id"]: r for r in con.execute(
             "SELECT character_id, jobs_json, fetched_at FROM pp_char_industry_jobs"
         )}
+        char_ids = [c["character_id"] for c in chars]
+        assignments: dict[int, list] = {}
+        if char_ids:
+            placeholders = ",".join("?" * len(char_ids))
+            for r in con.execute(
+                f"SELECT id, character_id, type_id, name, runs, input_cost, reward FROM pp_reaction_assignments "
+                f"WHERE character_id IN ({placeholders})", char_ids,
+            ):
+                assignments.setdefault(r["character_id"], []).append(dict(r))
     finally:
         con.close()
 
@@ -444,6 +530,7 @@ def get_industry_jobs(context_id: int = Depends(require_b0ss)):
     total_slots = 0
     used_slots = 0
     tracked_any = False
+    fulfilled_ids: list[int] = []
     for c in chars:
         opted_in = "read_character_jobs" in (c["scopes"] or "")
         slots = reaction_slots(c)
@@ -456,9 +543,22 @@ def get_industry_jobs(context_id: int = Depends(require_b0ss)):
         jobs = _json.loads(row["jobs_json"]) if row else []
         active = [j for j in jobs if j.get("status") in ("active", "paused", "ready")]
         used_slots += len(active)
+        running_type_ids = {j.get("product_type_id") for j in active}
+
+        pending = []
+        for a in assignments.get(c["character_id"], []):
+            if a["type_id"] in running_type_ids:
+                fulfilled_ids.append(a["id"])  # ESI now confirms this is actually running — clear it
+            else:
+                pending.append({
+                    "assignment_id": a["id"], "type_id": a["type_id"], "name": a["name"], "runs": a["runs"],
+                })
+        used_slots += len(pending)
+
         characters.append({
-            "character_name": c["character_name"], "tracked": True,
-            "slots": slots, "free_slots": max(0, slots - len(active)),
+            "character_id": c["character_id"], "character_name": c["character_name"], "tracked": True,
+            "slots": slots, "free_slots": max(0, slots - len(active) - len(pending)),
+            "pending": pending,
         })
         for j in active:
             end = j.get("end_date")
@@ -477,6 +577,15 @@ def get_industry_jobs(context_id: int = Depends(require_b0ss)):
                 "status": j.get("status"),
                 "hours_left": hours_left,
             })
+
+    if fulfilled_ids:
+        con = get_connection()
+        try:
+            placeholders = ",".join("?" * len(fulfilled_ids))
+            con.execute(f"DELETE FROM pp_reaction_assignments WHERE id IN ({placeholders})", fulfilled_ids)
+            con.commit()
+        finally:
+            con.close()
 
     return {
         "tracked": tracked_any,
@@ -540,7 +649,8 @@ def _suggest_reactions(context_id: int, isk_budget: float, steps_budget: int) ->
     candidates.sort(key=lambda o: -(o["net_profit_instant"] / o["top_level_runs"]))
     candidates = candidates[:_CANDIDATE_POOL_SIZE]
     empty = {"suggestions": [], "totals": {
-        "isk_committed": 0.0, "net_profit": 0.0, "characters_used": 0, "completion_hours": None}}
+        "isk_committed": 0.0, "isk_budget": isk_budget, "net_profit": 0.0, "characters_used": 0,
+        "completion_hours": None, "steps_used": 0, "steps_budget": steps_budget, "binding": "neither"}}
     if not candidates:
         return empty
 
@@ -624,17 +734,38 @@ def _suggest_reactions(context_id: int, isk_budget: float, steps_budget: int) ->
             "input_cost": round(cost, 2),
             "reward": round(reward, 2),
             "assigned_character": char_names.get(pick_id, "?"),
+            "assigned_character_id": pick_id,
         })
 
     completion_hours = max((queued_until[cid] for cid in touched_order), default=0.0)
+    steps_used = sum(s["runs"] for s in suggestions)
+
+    # Which budget actually stopped the LP from picking more — the two are independent caps, so
+    # a tight steps_budget can leave most of a generous isk_budget unspent (each run only costs
+    # so much; you simply aren't allowed enough runs to spend the rest). Surfaced so the wizard
+    # can tell the user which number to raise, instead of them guessing why ISK went unused.
+    isk_near_limit = isk_committed >= 0.97 * isk_budget
+    steps_near_limit = steps_used >= 0.97 * steps_budget
+    if isk_near_limit and steps_near_limit:
+        binding = "both"
+    elif steps_near_limit:
+        binding = "steps"
+    elif isk_near_limit:
+        binding = "isk"
+    else:
+        binding = "neither"  # ran out of profitable candidates before hitting either cap
 
     return {
         "suggestions": suggestions,
         "totals": {
             "isk_committed": round(isk_committed, 2),
+            "isk_budget": isk_budget,
             "net_profit": round(net_profit, 2),
             "characters_used": len(touched_order),
             "completion_hours": round(completion_hours, 1) if suggestions else None,
+            "steps_used": steps_used,
+            "steps_budget": steps_budget,
+            "binding": binding,
         },
     }
 
@@ -648,5 +779,6 @@ class SuggestRequest(BaseModel):
 def suggest_reactions(req: SuggestRequest, context_id: int = Depends(require_b0ss)):
     if req.isk_budget <= 0 or req.steps_budget <= 0:
         return {"suggestions": [], "totals": {
-            "isk_committed": 0.0, "net_profit": 0.0, "characters_used": 0, "completion_hours": None}}
+            "isk_committed": 0.0, "isk_budget": req.isk_budget, "net_profit": 0.0, "characters_used": 0,
+            "completion_hours": None, "steps_used": 0, "steps_budget": req.steps_budget, "binding": "neither"}}
     return _suggest_reactions(context_id, req.isk_budget, req.steps_budget)

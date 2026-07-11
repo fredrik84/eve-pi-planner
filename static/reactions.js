@@ -108,8 +108,10 @@ function _renderReactionsDashboard(data) {
     jobsByChar.get(j.character_name).push(j);
   }
 
-  const blocks = tracked.map(c => {
+  const todoItems = [];
+  const rows = tracked.map(c => {
     const jobs = jobsByChar.get(c.character_name) || [];
+    const pending = c.pending || [];
     const squares = jobs.map(j => {
       const icon = `https://images.evetech.net/types/${j.product_type_id}/icon?size=32`;
       const timer = j.hours_left != null ? _fmtHours(j.hours_left) : '—';
@@ -120,17 +122,38 @@ function _renderReactionsDashboard(data) {
           <div class="rx-slot-timer">${_esc(timer)}</div>
         </div>`;
     });
-    for (let i = jobs.length; i < c.slots; i++) {
+    // Assigned (via the wizard's "Assign") but ESI hasn't confirmed it's actually running yet —
+    // a red slashed-circle "you need to go do this" slot, distinct from a genuinely free one.
+    // Click to cancel the assignment (e.g. changed your mind, or already did it under a
+    // different product than planned).
+    for (const a of pending) {
+      todoItems.push(`Install <b>${_esc(a.name)}</b> ×${a.runs} on <b>${_esc(c.character_name)}</b>`);
+      squares.push(`
+        <div class="rx-slot rx-slot-pending" title="Not running yet — install ${_esc(a.name)} ×${a.runs} in-game. Click to cancel this assignment." onclick="_rxCancelAssignment(${a.assignment_id})">
+          <span class="rx-slot-pending-mark">⊘</span>
+          <div class="rx-slot-pending-label">${_esc(a.name)}</div>
+        </div>`);
+    }
+    for (let i = jobs.length + pending.length; i < c.slots; i++) {
       squares.push('<div class="rx-slot rx-slot-empty" title="Free reaction slot"><span class="rx-slot-empty-mark">+</span></div>');
     }
     return `
-      <div class="rx-char-block">
-        <div class="rx-char-hdr">${_esc(c.character_name)} <span class="pp-card-hint">${c.free_slots} / ${c.slots} free</span></div>
+      <div class="rx-char-row">
+        <div class="rx-char-label">${_esc(c.character_name)}<br><span class="pp-card-hint">${c.free_slots} / ${c.slots} free</span></div>
         <div class="rx-slot-row">${squares.join('')}</div>
       </div>`;
   }).join('');
 
-  el.innerHTML = blocks + untrackedNote;
+  const todoNote = todoItems.length
+    ? `<div class="rx-todo-list">${todoItems.map(t => `<div class="rx-todo-item"><span class="rx-todo-x">⊘</span> ${t}</div>`).join('')}</div>`
+    : '';
+
+  el.innerHTML = rows + todoNote + untrackedNote;
+}
+
+function _rxCancelAssignment(assignmentId) {
+  fetch(`/api/reactions/assign/${assignmentId}`, { method: 'DELETE' })
+    .then(r => { if (r.ok) _loadReactionsDashboard(); });
 }
 
 // ── Wizard: "Add Reaction Product" ──────────────────────────────────────────────────────────
@@ -196,14 +219,42 @@ function wizRSuggest() {
     });
 }
 
+let _rxLastSuggestions = [];
+
 function _renderReactionsSuggestions(data) {
   const el = document.getElementById('wizRSuggestionsContent');
   if (!el) return;
+  _rxLastSuggestions = data.suggestions;
 
   if (!data.suggestions.length) {
     el.innerHTML = '<div class="pp-empty">No suggestions fit that budget — try raising the ISK or steps budget, or connect more characters for reaction tracking.</div>';
     return;
   }
+
+  const t = data.totals;
+  const iskPct = Math.min(100, (t.isk_committed / t.isk_budget) * 100);
+  const stepsPct = Math.min(100, (t.steps_used / t.steps_budget) * 100);
+  const bindingNote = {
+    isk: 'Limited by your ISK budget — raise it on the Budget page to get more suggestions.',
+    steps: 'Limited by "Total reaction runs" — raise it on the Budget page to use more of your ISK.',
+    both: 'Limited by both budgets at once.',
+    neither: 'There simply weren\'t enough profitable, liquid reactions to fill either budget.',
+  }[t.binding] || '';
+
+  const budgetSummary = `
+    <div class="rx-budget-summary">
+      <div class="rx-budget-bar-row">
+        <span class="rx-budget-label">ISK</span>
+        <div class="rx-budget-bar"><div class="rx-budget-bar-fill${t.binding === 'isk' || t.binding === 'both' ? ' rx-budget-bound' : ''}" style="width:${iskPct}%"></div></div>
+        <span class="rx-budget-value">${fmtIsk(t.isk_committed)} / ${fmtIsk(t.isk_budget)}</span>
+      </div>
+      <div class="rx-budget-bar-row">
+        <span class="rx-budget-label">Runs</span>
+        <div class="rx-budget-bar"><div class="rx-budget-bar-fill${t.binding === 'steps' || t.binding === 'both' ? ' rx-budget-bound' : ''}" style="width:${stepsPct}%"></div></div>
+        <span class="rx-budget-value">${t.steps_used} / ${t.steps_budget}</span>
+      </div>
+      <div class="pp-card-hint">${bindingNote}</div>
+    </div>`;
 
   // Grouped by assigned character (each is "this character's job list"), not one flat table —
   // the engine already picks a character per suggestion based on free reaction slots; this
@@ -211,42 +262,66 @@ function _renderReactionsSuggestions(data) {
   // character column buried in it. Preserves the backend's profit-descending order within
   // each character's group.
   const byChar = new Map();
-  for (const s of data.suggestions) {
+  data.suggestions.forEach((s, i) => {
     if (!byChar.has(s.assigned_character)) byChar.set(s.assigned_character, []);
-    byChar.get(s.assigned_character).push(s);
-  }
+    byChar.get(s.assigned_character).push(i);
+  });
 
-  const cards = [...byChar.entries()].map(([charName, jobs]) => {
-    const rows = jobs.map(s => `
-      <tr>
-        <td>${_esc(s.name)}</td>
-        <td>${s.runs}</td>
-        <td>${_fmtIsk(s.input_cost)}</td>
-        <td>${_fmtIsk(s.reward)}</td>
-      </tr>`).join('');
+  const cards = [...byChar.entries()].map(([charName, idxs]) => {
+    const jobs = idxs.map(i => data.suggestions[i]);
+    const rows = idxs.map(i => {
+      const s = data.suggestions[i];
+      const icon = `https://images.evetech.net/types/${s.type_id}/icon?size=32`;
+      return `
+        <div class="rx-sugg-row">
+          <img class="rx-sugg-icon" src="${icon}" alt="" onerror="this.style.visibility='hidden'">
+          <div class="rx-sugg-name" title="${_esc(s.name)}">${_esc(s.name)}</div>
+          <div class="rx-sugg-meta">${s.runs} runs · ${_fmtIsk(s.input_cost)} in</div>
+          <div class="rx-sugg-reward">+${_fmtIsk(s.reward)}</div>
+          <button class="rx-sugg-assign-btn" id="rxAssignBtn${i}" onclick="_rxAssignSuggestion(${i}, this)">Assign</button>
+        </div>`;
+    }).join('');
     const cost = jobs.reduce((sum, s) => sum + s.input_cost, 0);
     const reward = jobs.reduce((sum, s) => sum + s.reward, 0);
     return `
-      <div class="pp-card" style="margin-bottom:10px">
-        <div class="pp-card-title">${_esc(charName)}
+      <div class="rx-sugg-card">
+        <div class="rx-sugg-hdr">
+          <span class="rx-char-label">${_esc(charName)}</span>
           <span class="pp-card-hint">${jobs.length} reaction${jobs.length === 1 ? '' : 's'} · ${_fmtIsk(cost)} in · ${_fmtIsk(reward)} profit</span>
         </div>
-        <div style="overflow-x:auto">
-          <table class="pp-card-table" style="width:100%">
-            <thead><tr><th>Product</th><th>Runs</th><th>Input cost</th><th>Reward</th></tr></thead>
-            <tbody>${rows}</tbody>
-          </table>
-        </div>
+        ${rows}
       </div>`;
   }).join('');
 
-  const t = data.totals;
-  el.innerHTML = cards + `
+  el.innerHTML = budgetSummary + cards + `
     <div class="pp-card-hint" style="margin-top:8px">
       ${_fmtIsk(t.isk_committed)} committed · ${_fmtIsk(t.net_profit)} net profit ·
       ${t.characters_used} character${t.characters_used === 1 ? '' : 's'} used ·
       ${t.completion_hours != null ? _fmtHours(t.completion_hours) + ' to complete' : ''}
     </div>`;
+}
+
+function _rxAssignSuggestion(i, btn) {
+  const s = _rxLastSuggestions[i];
+  if (!s) return;
+  btn.disabled = true;
+  btn.textContent = '…';
+  fetch('/api/reactions/assign', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      character_id: s.assigned_character_id, type_id: s.type_id, name: s.name,
+      runs: s.runs, input_cost: s.input_cost, reward: s.reward,
+    }),
+  })
+    .then(r => {
+      if (!r.ok) throw new Error();
+      btn.textContent = 'Assigned ✓';
+    })
+    .catch(() => {
+      btn.disabled = false;
+      btn.textContent = 'Retry';
+    });
 }
 
 function _rxSortBy(key) {
