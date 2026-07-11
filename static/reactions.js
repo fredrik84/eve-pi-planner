@@ -67,7 +67,6 @@ function _renderReactionsDashboard(data) {
   const el = document.getElementById('rxDashboardContent');
   if (!el) return;
 
-  const untracked = (data.characters || []).filter(c => !c.tracked);
   // Connecting a character (via /auth/login?reactions=1) is a per-character ESI authorisation,
   // so this must stay reachable even after some characters are already tracked — the account
   // may have several characters (own alts, or characters logged in from other EVE accounts
@@ -79,19 +78,30 @@ function _renderReactionsDashboard(data) {
     connectBtn.style.display = '';
     connectBtn.textContent = `Connect ${data.tracked ? 'another' : 'a'} character`;
   }
-  const untrackedNote = untracked.length
-    ? `<div class="pp-card-hint" style="margin-bottom:8px">Not yet tracked: ${untracked.map(c => _esc(c.character_name)).join(', ')}</div>`
-    : '';
 
   if (!data.tracked) {
     el.innerHTML = '<div class="pp-empty">No characters are tracking reaction jobs yet — use "Connect a character" above.</div>';
     return;
   }
 
+  // Hide characters with no real Reactions skill investment — slots==1 is just the base slot
+  // everyone has (1 + mass_reactions + advanced_mass_reactions), so a character sitting at 1
+  // hasn't trained anything and can't meaningfully react. Applies to both the "not yet tracked"
+  // nudge list and the loadout itself — no point highlighting a character that can't do this.
+  const HAS_SKILL = c => c.slots > 1;
+  const untracked = (data.characters || []).filter(c => !c.tracked && HAS_SKILL(c));
+  const untrackedNote = untracked.length
+    ? `<div class="pp-card-hint" style="margin-bottom:8px">Not yet tracked: ${untracked.map(c => _esc(c.character_name)).join(', ')}</div>`
+    : '';
+
   // "Loadout screen" per character: one square per reaction slot, occupied ones showing the
   // product's icon + a countdown, empty ones dashed — so an idle tracked character (no jobs
   // running) still shows up as a row of empty slots, not just an aggregate free-slot count.
-  const tracked = (data.characters || []).filter(c => c.tracked);
+  const tracked = (data.characters || []).filter(c => c.tracked && HAS_SKILL(c));
+  if (!tracked.length) {
+    el.innerHTML = '<div class="pp-empty">No tracked characters have trained Mass Reactions skills yet — a bare base slot isn\'t enough to be worth showing.</div>' + untrackedNote;
+    return;
+  }
   const jobsByChar = new Map();
   for (const j of data.running) {
     if (!jobsByChar.has(j.character_name)) jobsByChar.set(j.character_name, []);
