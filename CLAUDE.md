@@ -91,6 +91,12 @@ These are standing rules for ALL changes. Follow them unless the user explicitly
    git tag -a vX.Y.Z -m "vX.Y.Z"   # PATCH for fixes, MINOR for features, MAJOR for breaking changes
    git push origin vX.Y.Z
    ```
+   **Deciding X.Y.Z:** find the last tag (`git tag --sort=-v:refname | head`), then read what
+   shipped since it (`git log <last-tag>..HEAD --oneline`). Any `feat:` commit in that range means
+   at least a MINOR bump; if everything since the last tag is `fix:`/`chore:`/`docs:`/`perf:`, it's
+   a PATCH; MAJOR is for an actual breaking change (none yet as of `v0.1.0`). Decide the number
+   yourself from the commit log and just tag it — "cut a release" is the go-ahead, it doesn't need
+   a round-trip to confirm the version.
    Pushing the tag triggers `.github/workflows/build.yml`, which builds
    `ghcr.io/fredrik84/eve-pi-planner:vX.Y.Z` (alongside the usual `:latest`) and creates a GitHub
    Release with auto-generated notes from commits since the previous tag. First release: `v0.1.0`.
