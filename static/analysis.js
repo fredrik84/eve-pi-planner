@@ -12,6 +12,11 @@
 // factories refilled?" with headline stats + per-P1 bars.
 let _analyzeSnaps = [];
 
+// P1/day → P0/hour (1h extractor cycle, 150 P0 refines into 1 P1 in the basic-industry ratio this
+// app models throughout). Shared so the bar tooltips and the standalone extraction-targets
+// reference (below) can't drift apart.
+const _p0h = p1day => p1day * 150 / 24;
+
 // Per-material drill-down: every colony producing a given output, weakest (underperforming) first.
 let _anExpanded = new Set();   // material type_ids whose planet breakdown is expanded
 function _planetsForMaterial(t) {
@@ -251,6 +256,31 @@ function _renderGrowSection() {
     </section>`;
 }
 
+// Reseat-reference card: the P0/hr each material needs, as a plain lookup table (not a %) — useful
+// alt-tabbed to the game while reseating heads, where the % headroom bars aren't a fast comparison.
+// `_placements` (populated by _ensurePlacements, called from renderAnalysis) carries the real P0
+// source name per P1 (schematic-derived on the backend); falls back to the P1 name if a material's
+// placements haven't resolved yet (e.g. first paint before that fetch lands).
+function _renderExtractionTargets(rows) {
+  const items = rows.map(r => {
+    const p0Name = (_placements && _placements[r.t] && _placements[r.t].p0_name) || r.name;
+    const target = _p0h(r.need);
+    return { name: p0Name, target, buffered: target * (1 + _HEALTHY_BUFFER) };
+  }).sort((a, b) => a.name.localeCompare(b.name));
+  const li = items.map(i => `<div class="an-target-row">
+      <span class="an-target-name">${_esc(i.name)}</span>
+      <span class="an-target-val">${Math.round(i.target).toLocaleString()} <span class="an-of">P0/hr min</span></span>
+      <span class="an-target-val an-target-buf">${Math.round(i.buffered).toLocaleString()} <span class="an-of">P0/hr comfortable</span></span>
+    </div>`).join('');
+  return `<section class="pp-card">
+      <div class="pp-card-title">Extraction targets <span class="pp-card-hint">— per-resource P0/hr to check against as you reseat heads</span></div>
+      <div class="pp-card-body">
+        <div class="an-legend">Min = exactly covers this plan, 0% buffer. Comfortable = +${Math.round(_HEALTHY_BUFFER * 100)}% cushion so it stays covered as extraction decays over the program.</div>
+        <div class="an-target-list">${li}</div>
+      </div>
+    </section>`;
+}
+
 function renderAnalysis() {
   // Status card (title + plan picker, static in index.html) holds the at-a-glance status badge;
   // everything else renders as its own separate pp-card in the bare #analyzeContent below it —
@@ -370,7 +400,6 @@ function renderAnalysis() {
     }
   }
 
-  const _p0h = p1day => p1day * 150 / 24;     // P1/day → P0/hour (1h cycle, 150 P0 per P1)
   const barRows = rows.map(r => {
     const cls = r.ratio >= 0.995 ? 'an-bar-ok' : (r.ratio >= 0.85 ? 'an-bar-warn' : 'an-bar-bad');
     const haveW = Math.max(2, Math.min(100, (r.have / r.need) * 100));
@@ -637,7 +666,7 @@ function renderAnalysis() {
       </section>`
     : '';
 
-  el.innerHTML = supplyCard + suggestCard + _hybridReseatSection() + _renderGrowSection() + _renderSkillRoiSection();
+  el.innerHTML = supplyCard + _renderExtractionTargets(rows) + suggestCard + _hybridReseatSection() + _renderGrowSection() + _renderSkillRoiSection();
 }
 
 // ── Extraction-runtime helper (decay-aware recommendation) ────────────────────

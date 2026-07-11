@@ -150,6 +150,18 @@
 .an-pd-empty { color: var(--clr-text-muted); grid-column: 1 / -1; }
 .an-cc-tag { font-size: 10px; font-weight: 700; letter-spacing: .03em; color: #cfe2f2; background: #1f3142; border: 1px solid #2f4a63; border-radius: 4px; padding: 1px 6px; margin-left: 6px; white-space: nowrap; }
 
+/* Extraction-targets reference card: plain P0/hr lookup table, sorted alphabetically */
+.an-target-list { display: flex; flex-direction: column; gap: 2px; }
+.an-target-row { display: grid; grid-template-columns: minmax(120px, 1fr) auto auto; align-items: baseline; gap: 6px 18px; padding: 5px 6px; border-radius: 5px; font-size: 13px; }
+.an-target-row:nth-child(odd) { background: #161b28; }
+.an-target-name { color: var(--clr-text-bright); font-weight: 600; }
+.an-target-val { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; color: #e6e9ef; }
+.an-target-buf { color: #8fd0b8; }
+@media (max-width: 560px) {
+  .an-target-row { grid-template-columns: 1fr; text-align: left; }
+  .an-target-val { text-align: left; }
+}
+
 /* ── Dashboard ──────────────────────────────────────────────────────────────── */
 .dash-fac-head, .dash-fac-row {
   display: grid;
