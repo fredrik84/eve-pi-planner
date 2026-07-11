@@ -88,45 +88,39 @@ function _renderReactionsDashboard(data) {
     return;
   }
 
-  // Always list every tracked character's slot capacity, even ones with nothing running right
-  // now (e.g. all slots free) — a bare aggregate "N of M free" hid which specific characters
-  // were actually tracked and idle, only the ones currently mid-job showed up anywhere.
+  // "Loadout screen" per character: one square per reaction slot, occupied ones showing the
+  // product's icon + a countdown, empty ones dashed — so an idle tracked character (no jobs
+  // running) still shows up as a row of empty slots, not just an aggregate free-slot count.
   const tracked = (data.characters || []).filter(c => c.tracked);
-  const capRows = tracked.map(c => `
-    <tr>
-      <td>${_esc(c.character_name)}</td>
-      <td>${c.free_slots} / ${c.slots}</td>
-    </tr>`).join('');
-  const capacity = `
-    <div style="overflow-x:auto;margin-bottom:8px">
-      <table class="pp-card-table" style="width:100%">
-        <thead><tr><th>Tracked character</th><th>Free slots</th></tr></thead>
-        <tbody>${capRows}</tbody>
-      </table>
-    </div>
-    <div class="pp-card-hint" style="margin-bottom:8px">${data.free_slots} of ${data.total_slots} reaction slots free overall</div>${untrackedNote}`;
-
-  if (!data.running.length) {
-    el.innerHTML = capacity + '<div class="pp-empty">No reactions currently running.</div>';
-    return;
+  const jobsByChar = new Map();
+  for (const j of data.running) {
+    if (!jobsByChar.has(j.character_name)) jobsByChar.set(j.character_name, []);
+    jobsByChar.get(j.character_name).push(j);
   }
 
-  const rows = data.running.map(j => `
-    <tr>
-      <td>${_esc(j.character_name)}</td>
-      <td>${_esc(_rxProductName(j.product_type_id))}</td>
-      <td>${j.runs != null ? j.runs : '—'}</td>
-      <td>${_esc(j.facility_name || '—')}</td>
-      <td>${j.hours_left != null ? _fmtHours(j.hours_left) : '—'}</td>
-    </tr>`).join('');
+  const blocks = tracked.map(c => {
+    const jobs = jobsByChar.get(c.character_name) || [];
+    const squares = jobs.map(j => {
+      const icon = `https://images.evetech.net/types/${j.product_type_id}/icon?size=32`;
+      const timer = j.hours_left != null ? _fmtHours(j.hours_left) : '—';
+      const tip = `${_rxProductName(j.product_type_id)} — finished in ${timer}${j.facility_name ? ' — ' + j.facility_name : ''}`;
+      return `
+        <div class="rx-slot rx-slot-filled" title="${_esc(tip)}">
+          <img class="rx-slot-icon" src="${icon}" alt="" onerror="this.style.visibility='hidden'">
+          <div class="rx-slot-timer">${_esc(timer)}</div>
+        </div>`;
+    });
+    for (let i = jobs.length; i < c.slots; i++) {
+      squares.push('<div class="rx-slot rx-slot-empty" title="Free reaction slot"><span class="rx-slot-empty-mark">+</span></div>');
+    }
+    return `
+      <div class="rx-char-block">
+        <div class="rx-char-hdr">${_esc(c.character_name)} <span class="pp-card-hint">${c.free_slots} / ${c.slots} free</span></div>
+        <div class="rx-slot-row">${squares.join('')}</div>
+      </div>`;
+  }).join('');
 
-  el.innerHTML = capacity + `
-    <div style="overflow-x:auto">
-      <table class="pp-card-table" style="width:100%">
-        <thead><tr><th>Character</th><th>Product</th><th>Runs</th><th>Facility</th><th>Time left</th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
-    </div>`;
+  el.innerHTML = blocks + untrackedNote;
 }
 
 // ── Wizard: "Add Reaction Product" ──────────────────────────────────────────────────────────

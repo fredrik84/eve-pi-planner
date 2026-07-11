@@ -449,3 +449,18 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .basket-item-name { flex: 1; color: var(--clr-text); font-size: 13px; }
 .basket-editor-actions { display: flex; gap: 8px; align-items: center; }
 
+/* ── Reactions: gamified per-character slot loadout ─────────────────────────── */
+.rx-char-block { margin-bottom: 18px; }
+.rx-char-hdr { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; font-weight: 600; color: #dbe1ee; }
+.rx-slot-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.rx-slot {
+  width: 64px; height: 64px; flex: 0 0 auto;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  border-radius: 8px; background: #161b28; border: 1px solid var(--clr-border);
+}
+.rx-slot-filled { border-color: #3a5a82; background: linear-gradient(160deg, #1b2a3d, #16202e); }
+.rx-slot-empty { border-style: dashed; opacity: 0.45; }
+.rx-slot-icon { width: 34px; height: 34px; border-radius: 4px; }
+.rx-slot-timer { font-size: 9px; color: var(--clr-text-dim); margin-top: 3px; white-space: nowrap; }
+.rx-slot-empty-mark { font-size: 20px; color: var(--clr-text-dim); }
+
