@@ -20,17 +20,19 @@ router = APIRouter()
 @ensure_once
 def ensure_moon_goo_table():
     con = get_connection()
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS pp_moon_goo_prices (
-            type_id    INTEGER PRIMARY KEY,
-            name       TEXT NOT NULL,
-            sell_price REAL NOT NULL DEFAULT 0,
-            stock      INTEGER NOT NULL DEFAULT 0,
-            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    con.commit()
-    con.close()
+    try:
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS pp_moon_goo_prices (
+                type_id    INTEGER PRIMARY KEY,
+                name       TEXT NOT NULL,
+                sell_price REAL NOT NULL DEFAULT 0,
+                stock      INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        con.commit()
+    finally:
+        con.close()
 
 
 _NUM_RE = re.compile(r"[^0-9.\-]")  # strips "ISK", spaces, thousands commas — keeps digits/./-
@@ -121,10 +123,12 @@ class GooImportRequest(BaseModel):
 def list_moon_goo(ctx: int = Depends(require_b0ss)):
     ensure_moon_goo_table()
     con = get_connection()
-    rows = [dict(r) for r in con.execute(
-        "SELECT type_id, name, sell_price, stock, updated_at FROM pp_moon_goo_prices ORDER BY name"
-    )]
-    con.close()
+    try:
+        rows = [dict(r) for r in con.execute(
+            "SELECT type_id, name, sell_price, stock, updated_at FROM pp_moon_goo_prices ORDER BY name"
+        )]
+    finally:
+        con.close()
     return {"prices": rows}
 
 
@@ -134,14 +138,16 @@ def import_moon_goo(req: GooImportRequest, ctx: int = Depends(require_admin)):
     pi_types = load_pi_data()["types"]
     rows, errors = _parse_goo_paste(req.text, pi_types)
     con = get_connection()
-    for r in rows:
-        con.execute(
-            "INSERT INTO pp_moon_goo_prices (type_id, name, sell_price, stock, updated_at) "
-            "VALUES (?,?,?,?,CURRENT_TIMESTAMP) "
-            "ON CONFLICT (type_id) DO UPDATE SET name=excluded.name, sell_price=excluded.sell_price, "
-            "stock=excluded.stock, updated_at=excluded.updated_at",
-            (r["type_id"], r["name"], r["sell_price"], r["stock"]),
-        )
-    con.commit()
-    con.close()
+    try:
+        for r in rows:
+            con.execute(
+                "INSERT INTO pp_moon_goo_prices (type_id, name, sell_price, stock, updated_at) "
+                "VALUES (?,?,?,?,CURRENT_TIMESTAMP) "
+                "ON CONFLICT (type_id) DO UPDATE SET name=excluded.name, sell_price=excluded.sell_price, "
+                "stock=excluded.stock, updated_at=excluded.updated_at",
+                (r["type_id"], r["name"], r["sell_price"], r["stock"]),
+            )
+        con.commit()
+    finally:
+        con.close()
     return {"ok": True, "imported": len(rows), "errors": errors}

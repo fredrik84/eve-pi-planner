@@ -529,10 +529,12 @@ def refresh_char_planets(character_id: int, context_id: int = Depends(require_co
     alliance_id = _fetch_alliance_id(character_id)
     if alliance_id is not None:
         con = get_connection()
-        con.execute("UPDATE pp_characters SET alliance_id=? WHERE character_id=?",
-                     (alliance_id, character_id))
-        con.commit()
-        con.close()
+        try:
+            con.execute("UPDATE pp_characters SET alliance_id=? WHERE character_id=?",
+                         (alliance_id, character_id))
+            con.commit()
+        finally:
+            con.close()
     scan = _fetch_planets(character_id, token)
     cache_invalidate(charlist_key(context_id))
     return {"ok": True, "skills_updated": bool(skills),

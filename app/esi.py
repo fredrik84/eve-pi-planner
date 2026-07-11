@@ -1067,12 +1067,14 @@ def require_b0ss(pp_session: str = Cookie(default=None)) -> int:
     if sess:
         context_id = sess[1]
         con = get_connection()
-        row = con.execute(
-            "SELECT 1 FROM pp_characters WHERE context_id=? AND alliance_id=? "
-            "AND COALESCE(is_dummy, 0) = 0 LIMIT 1",
-            (context_id, B0SS_ALLIANCE_ID),
-        ).fetchone()
-        con.close()
+        try:
+            row = con.execute(
+                "SELECT 1 FROM pp_characters WHERE context_id=? AND alliance_id=? "
+                "AND COALESCE(is_dummy, 0) = 0 LIMIT 1",
+                (context_id, B0SS_ALLIANCE_ID),
+            ).fetchone()
+        finally:
+            con.close()
         if row is not None:
             return context_id
         names = _context_character_names(context_id)

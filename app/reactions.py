@@ -121,11 +121,16 @@ def _resolve_reachable(goo: dict[int, dict], purchasable: dict[int, float],
 
 
 def _build_opportunities(context_id: int) -> list[dict]:
+    # try/finally is load-bearing: an exception between get_connection() and close() (e.g. the
+    # reactions/reaction_inputs tables not existing yet on a freshly-deployed environment) would
+    # otherwise leak the connection permanently out of the small per-pod pool.
     con = get_connection()
-    goo_rows = con.execute("SELECT type_id, sell_price, stock FROM pp_moon_goo_prices").fetchall()
-    goo = {r["type_id"]: {"sell_price": r["sell_price"], "stock": r["stock"]} for r in goo_rows}
-    reactions_by_output, inputs_by_reaction = _load_reaction_graph(con)
-    con.close()
+    try:
+        goo_rows = con.execute("SELECT type_id, sell_price, stock FROM pp_moon_goo_prices").fetchall()
+        goo = {r["type_id"]: {"sell_price": r["sell_price"], "stock": r["stock"]} for r in goo_rows}
+        reactions_by_output, inputs_by_reaction = _load_reaction_graph(con)
+    finally:
+        con.close()
 
     if not goo:
         return []
