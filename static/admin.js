@@ -65,25 +65,48 @@ const _FEATURE_STATES = [
   { key: 'testers', label: 'Testers', title: 'Visible to admins and testers' },
   { key: 'public',  label: 'Public',  title: 'Visible to everyone' },
 ];
+// Which group <details> are collapsed, persisted so an admin's fold state survives reloads.
+// Absence = expanded (matches the old always-expanded behaviour, so nothing regresses on first load).
+function _collapsedFeatureGroups() {
+  try { return new Set(JSON.parse(localStorage.getItem('adminFeatureGroupsCollapsed') || '[]')); }
+  catch (e) { return new Set(); }
+}
+function _toggleFeatureGroup(name, open) {
+  const s = _collapsedFeatureGroups();
+  if (open) s.delete(name); else s.add(name);
+  try { localStorage.setItem('adminFeatureGroupsCollapsed', JSON.stringify([...s])); } catch (e) {}
+}
 async function loadAdminFeatures() {
   const el = document.getElementById('adminFeatureList');
   if (!el) return;
   await _loadFeatures();
   const feats = Object.values(_features);
   if (!feats.length) { el.innerHTML = '<div class="pp-empty">No features registered.</div>'; return; }
-  el.innerHTML = feats.map(f => {
-    const cur = f.state || (f.enabled ? 'public' : 'admin');
-    const btns = _FEATURE_STATES.map(s =>
-      `<button class="afs-btn${cur === s.key ? ' afs-active afs-' + s.key : ''}" title="${s.title}"
-         onclick="setFeatureState('${f.key}','${s.key}')">${s.label}</button>`
-    ).join('');
-    return `<div class="admin-feature-row">
-      <div class="admin-feature-head">
-        <span class="admin-feature-name">${_esc(f.label)}</span>
-        <div class="afs-group">${btns}</div>
-      </div>
-      <div class="admin-feature-desc">${_esc(f.description)}</div>
-    </div>`;
+  const byGroup = {};
+  feats.forEach(f => { (byGroup[f.group || 'Other'] = byGroup[f.group || 'Other'] || []).push(f); });
+  const order = (_featuresGroupOrder || []).filter(g => byGroup[g]);
+  Object.keys(byGroup).forEach(g => { if (!order.includes(g)) order.push(g); });   // unlisted groups sort last
+  const collapsed = _collapsedFeatureGroups();
+  el.innerHTML = order.map(group => {
+    const rows = byGroup[group].map(f => {
+      const cur = f.state || (f.enabled ? 'public' : 'admin');
+      const btns = _FEATURE_STATES.map(s =>
+        `<button class="afs-btn${cur === s.key ? ' afs-active afs-' + s.key : ''}" title="${s.title}"
+           onclick="setFeatureState('${f.key}','${s.key}')">${s.label}</button>`
+      ).join('');
+      return `<div class="admin-feature-row">
+        <div class="admin-feature-head">
+          <span class="admin-feature-name">${_esc(f.label)}</span>
+          <div class="afs-group">${btns}</div>
+        </div>
+        <div class="admin-feature-desc">${_esc(f.description)}</div>
+      </div>`;
+    }).join('');
+    const open = !collapsed.has(group);
+    return `<details class="admin-feature-group"${open ? ' open' : ''} ontoggle="_toggleFeatureGroup('${_esc(group)}', this.open)">
+        <summary class="admin-feature-group-h">${_esc(group)} <span class="admin-feature-group-count">${byGroup[group].length}</span></summary>
+        <div class="admin-feature-list">${rows}</div>
+      </details>`;
   }).join('');
 }
 

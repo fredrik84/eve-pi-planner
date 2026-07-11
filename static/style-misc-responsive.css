@@ -36,7 +36,18 @@ body.nav-collapsed .admin-nav-item .nav-lbl { display: none; }
   padding: 0 4px; border-radius: 8px; background: #4a3018; color: var(--clr-amber); font-size: 10px;
   font-weight: 700; text-align: center; line-height: 15px; vertical-align: middle; }
 
-/* ── Admin: feature flags ─────────────────────────────────────────────────────── */
+/* ── Admin: feature flags (grouped, foldable — same <details> pattern as .pp-char-fold) ──────── */
+#adminFeatureList { display: flex; flex-direction: column; gap: 8px; }
+.admin-feature-group { border: 1px solid #1c2030; border-radius: 7px; background: #0e1118; overflow: hidden; }
+.admin-feature-group-h { display: flex; align-items: center; gap: 8px; padding: 9px 12px; cursor: pointer;
+  list-style: none; user-select: none; font-size: 12.5px; font-weight: 700; color: var(--clr-text-bright);
+  text-transform: uppercase; letter-spacing: 0.5px; }
+.admin-feature-group-h::-webkit-details-marker { display: none; }
+.admin-feature-group-h::before { content: '▸'; color: var(--clr-caret); font-size: 10px; flex-shrink: 0; }
+.admin-feature-group[open] > .admin-feature-group-h::before { content: '▾'; }
+.admin-feature-group-h:hover { background: rgba(90, 160, 230, 0.05); }
+.admin-feature-group-count { color: var(--clr-text-dim); font-weight: 600; text-transform: none; letter-spacing: 0; }
+.admin-feature-group .admin-feature-list { padding: 0 9px 9px; }
 .admin-feature-list { display: flex; flex-direction: column; gap: 4px; }
 .admin-feature-row { padding: 9px 11px; border: 1px solid #1c2030; border-radius: 7px;
   background: #11151f; }

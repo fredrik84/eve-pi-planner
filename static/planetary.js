@@ -141,7 +141,8 @@ let _dashLanded = false;   // auto-land on the dashboard once per page load (log
 // enabled for the public OR the user is an admin (admins preview everything). New features
 // default off (admin-only); retrofitted existing ones default on — pass dflt=true so they stay
 // visible if /api/features hasn't loaded yet.
-let _features = {};            // key -> {key,label,description,enabled}
+let _features = {};            // key -> {key,label,description,enabled,group}
+let _featuresGroupOrder = [];  // display order for the Admin > Features grouped list
 let _featuresIsAdmin = false;
 let _featuresIsTester = false;
 let _featuresGitCommit = 'unknown';
@@ -157,6 +158,7 @@ async function _loadFeatures() {
     try {
       const d = await (await fetch('/api/features')).json();
       _features = {}; (d.features || []).forEach(f => { _features[f.key] = f; });
+      _featuresGroupOrder = d.group_order || [];
       _featuresIsAdmin = !!d.is_admin;
       _featuresIsTester = !!d.is_tester;
       _featuresGitCommit = d.git_commit || 'unknown';
