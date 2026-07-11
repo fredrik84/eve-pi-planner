@@ -280,6 +280,19 @@ def _format_batch(kind: str, evs: list[dict]) -> tuple[str, str]:
     """Return (title, body) for a batch of same-kind events, matching the dashboard's
     aggregate style."""
     title, singular, plural = _KIND_LABELS.get(kind, (kind, "item", "items"))
+    if kind == "reaction_low_stock":
+        # Shared alliance-stock shortages have no character to group by (character_name is
+        # always None here — see app.colony_alerts._reaction_alerts) — _collapse_line's
+        # per-character tally degenerated to a useless "N materials — ? ×N". List the actual
+        # material name(s) + the real need-vs-available numbers instead, so the push is
+        # self-explanatory without a trip to the dashboard.
+        parts = ", ".join(
+            f"{e['location']} (need {round(e['needed']):,}, {round(e['available']):,} in stock)"
+            if e.get("needed") is not None and e.get("available") is not None else e["location"]
+            for e in evs
+        )
+        noun = singular if len(evs) == 1 else plural
+        return title, f"{len(evs)} {noun} — {parts}"
     body = _collapse_line(evs, singular, plural)
     return title, body
 

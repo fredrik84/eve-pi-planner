@@ -102,6 +102,10 @@ def _reaction_alerts(context_id: int, muted: set, now: float) -> list[dict]:
                         "character_id": None, "character_name": None,
                         "planet_id": tid, "location": types.get(tid, {}).get("name", str(tid)),
                         "hours_left": None,
+                        # Bare material name alone gave no way to judge severity (a near-miss vs.
+                        # zero stock look identical) — carry the actual numbers so the dashboard/
+                        # push message can say "need 12,450, 0 in stock" instead of just a name.
+                        "needed": round(qty, 1), "available": g["stock"],
                     })
 
     return alerts
