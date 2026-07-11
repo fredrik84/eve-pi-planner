@@ -149,12 +149,6 @@ body.nav-collapsed .sidebar .tab.active::before { top: 6px; bottom: 6px; }
 main { flex: 1 1 auto; max-width: 1300px; margin: 0 auto; padding: 22px 24px 24px 14px; min-width: 0; }
 
 /* ── Input grid ────────────────────────────────────────────────────────────── */
-.input-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
-  margin-bottom: 12px;
-}
 .input-col { display: flex; flex-direction: column; gap: 6px; }
 
 label {

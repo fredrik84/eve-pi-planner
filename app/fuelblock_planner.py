@@ -40,7 +40,6 @@ from app.planner import (
     _load_char_planet_config,
     _norm_split_mode,
     _pick_factory_system,
-    _reinvest_freed_planets,
     _run_extractor_pipeline,
     _set_computed_ext_cap,
     ensure_plan_tables,
@@ -367,7 +366,6 @@ def _resolve_target_basket(req: "FuelBlockPlanRequest", pi_data: dict):
     summed market value of its produced components. Returns (None, None) if the basket is
     missing/empty. meta keys: is_fuelblock, config_type_id, run_size, unit_label, name,
     effective_me_pct, mfg (None for custom), block_price_id (None for custom)."""
-    types = pi_data["types"]
     from app.admin import BASKET_CONFIG_BASE
 
     # A self-contained snapshot from a shared link wins over basket_id — the recipient may

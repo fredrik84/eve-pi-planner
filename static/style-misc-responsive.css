@@ -176,7 +176,6 @@ body.nav-collapsed .admin-nav-item .nav-lbl { display: none; }
 
   /* Stack the two-column page layouts. */
   .pp-layout { grid-template-columns: 1fr; gap: 14px; }
-  .input-grid { grid-template-columns: 1fr; }
   .contrib { padding: 14px 14px 18px; }
 
   /* Stat tiles (Overview, Setup Analysis) → an even 2-up grid so a lone tile

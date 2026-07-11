@@ -944,7 +944,7 @@ def generate_layout(product_id: int, planet_type: str = "Barren",
         per1 = _p1_imports_per_factory(product_id, pi_data)
         per_imports = {tid: rate * count for tid, rate in per1.items()}
 
-    planet = _planet_entry(1, built, struct, pi_data)
+    planet = _planet_entry(1, built, struct)
     product_rate = _effective_output_rate(product_id, pi_data) * count
 
     summary = {
@@ -993,7 +993,7 @@ def _effective_output_rate(product_id: int, pi_data: dict) -> float:
     return _per_hour(sch) * worst
 
 
-def _planet_entry(pid: int, built: dict, struct: dict, pi_data: dict) -> dict:
+def _planet_entry(pid: int, built: dict, struct: dict) -> dict:
     t = built["template"]
     by_tier = built["facilities_by_tier"]
     lp = sum(1 for p in t["P"] if p["T"] == struct["launchpad"])

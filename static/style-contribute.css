@@ -94,7 +94,6 @@
 .pp-char-header { display: flex; align-items: center; gap: 6px; }
 .pp-char-name { flex: 1; color: var(--clr-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pp-char-meta { display: flex; align-items: center; gap: 8px; margin-top: 3px; }
-.pp-char-skill { font-size: 11px; color: var(--clr-text-dim); white-space: nowrap; }
 .pp-char-del { background: none; border: none; color: #4a3030; cursor: pointer; padding: 0 2px; font-size: 14px; flex-shrink: 0; }
 .pp-char-del:hover { color: #e06060; }
 /* Foldable character: summary row + planet list / stats on expand */
@@ -157,7 +156,6 @@
 .dummy-add-row label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--clr-text-soft); }
 .dummy-num { max-width: 90px; }
 .pp-char-del:hover { color: #e06060; background: none; }
-.pp-char-planets { font-size: 11px; color: #4a6878; cursor: default; white-space: nowrap; }
 
 .pp-target-form {
   padding: 12px 14px;
@@ -178,17 +176,16 @@
 }
 /* Shared dark form-control base — bg/border/colour/focus are identical across these
    inputs; each rule below only carries its unique radius/padding/width/etc. */
-.pp-select, .pp-num-input, .pp-text-input,
+.pp-num-input, .pp-text-input,
 .bug-input, .bug-textarea, .pp-import-ta {
   background: #0d0f14;
   border: 1px solid var(--clr-border);
   color: var(--clr-text);
   outline: none;
 }
-.pp-select:focus, .pp-num-input:focus, .pp-text-input:focus,
+.pp-num-input:focus, .pp-text-input:focus,
 .bug-input:focus, .bug-textarea:focus, .pp-import-ta:focus { border-color: var(--clr-focus); }
 
-.pp-select { border-radius: 4px; font-size: 13px; padding: 5px 8px; }
 .pp-num-input {
   border-radius: 4px;
   font-size: 13px;
@@ -198,19 +195,6 @@
 }
 .pp-num-input::-webkit-inner-spin-button,
 .pp-num-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
-.pp-run-btn {
-  grid-column: 1 / -1;
-  margin-top: 4px;
-  background: #1e3a5f;
-  color: var(--clr-accent);
-  border: 1px solid #2d5a8a;
-  border-radius: 5px;
-  padding: 8px;
-  font-size: 13px;
-  cursor: pointer;
-  width: 100%;
-}
-.pp-run-btn:hover { background: #254a78; }
 .pp-label-check { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--clr-text-dim); cursor: pointer; text-transform: none; letter-spacing: 0; }
 .pp-label-check input[type=checkbox] { accent-color: #4a88cc; width: 13px; height: 13px; }
 
@@ -249,7 +233,6 @@
 .pp-setall-reset { margin-left: auto; background: none; border: 1px solid #2a3242; color: var(--clr-text-soft);
   cursor: pointer; border-radius: 4px; padding: 2px 10px; font-size: 11px; }
 .pp-setall-reset:hover { background: #181d29; color: var(--clr-text-bright); border-color: #3a4456; box-shadow: none; }
-.pp-role-ext::placeholder { color: #2a3048; }
 
 /* Constellation filter card */
 .pp-const-list { padding: 6px 8px; display: flex; flex-direction: column; gap: 2px; max-height: 180px; overflow-y: auto; }
@@ -257,7 +240,6 @@
 .pp-const-heading { font-size: 11px; color: var(--clr-text-soft); font-weight: 600; padding: 8px 8px 2px; text-transform: uppercase; letter-spacing: 0.04em; }
 .pp-region-label { font-size: 11px; color: var(--clr-text-dim); text-transform: uppercase; letter-spacing: 0.04em; white-space: nowrap; }
 .pp-region-select { background: #141720; color: var(--clr-text); border: 1px solid #2d3550; border-radius: 5px; padding: 5px 8px; font-size: 12px; flex: 1; min-width: 0; }
-.pp-region-hdr { font-size: 10px; color: #5a647e; text-transform: uppercase; letter-spacing: 0.04em; margin: 8px 0 2px; flex: 0 0 100%; width: 100%; }
 .pp-const-row { display: flex; align-items: center; gap: 6px; padding: 3px 4px; font-size: 12px; color: #a8b8cc; cursor: pointer; border-radius: 3px; }
 .pp-const-row:hover { background: #181d2a; }
 .pp-const-row input[type=checkbox] { accent-color: #4a88cc; width: 12px; height: 12px; flex-shrink: 0; }
@@ -313,17 +295,6 @@
   font-size: 11px;
   color: var(--clr-label);
 }
-.pp-db-clear {
-  background: none;
-  border: 1px solid #3a2020;
-  border-radius: 4px;
-  color: #7a4040;
-  font-size: 11px;
-  padding: 3px 10px;
-  cursor: pointer;
-}
-.pp-db-clear:hover { background: #201010; color: #e06060; border-color: #5a2020; }
-
 /* Import modal */
 .pp-modal {
   position: fixed;

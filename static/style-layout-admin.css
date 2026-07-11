@@ -338,8 +338,6 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .header-settings-btn:hover { background: #1e3348; color: var(--clr-accent); }
 
 /* Notifications */
-.notif-admin-prefs-hdr { font-size: 11px; font-weight: 700; letter-spacing: 0.5px;
-  color: #4a7a5a; text-transform: uppercase; margin: 10px 0 4px; }
 .notif-section { margin-bottom: 20px; }
 .notif-section-hint { font-size: 12px; color: #5a6a88; line-height: 1.6; margin-bottom: 10px; }
 .notif-pref-actions { display: flex; gap: 8px; align-items: center; margin-top: 4px; }
@@ -365,8 +363,6 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .notif-status-msg { font-size: 12px; color: #7a9abf; margin-left: 4px; }
 .notif-prefs-row { display: flex; flex-direction: column; gap: 8px; }
 .notif-prefs-row label { font-size: 13px; color: var(--clr-text-soft); display: flex; align-items: center; gap: 8px; }
-.notif-hours-input { width: 60px; background: #161b28; border: 1px solid #1f2840;
-  border-radius: 5px; padding: 4px 8px; color: #dbe1ee; text-align: center; }
 .notif-log { font-size: 12px; }
 .notif-log-table { width: 100%; border-collapse: collapse; }
 .notif-log-table th { text-align: left; color: #5e7aaa; padding: 4px 6px; border-bottom: 1px solid var(--clr-border); }
@@ -417,9 +413,6 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 }
 
 /* Account self-deletion */
-.account-danger-row { display: flex; align-items: center; justify-content: space-between;
-  gap: 12px; flex-wrap: wrap; padding: 4px 0; }
-.account-danger-lbl { font-size: 13px; color: var(--clr-text-soft); }
 .account-delete-btn { background: #3a1515; border: 1px solid #6a2828; color: #e07070;
   border-radius: 6px; padding: 7px 16px; font-size: 13px; cursor: pointer; }
 .account-delete-btn:hover:not(:disabled) { background: #5a2020; }

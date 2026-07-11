@@ -126,7 +126,7 @@ These are standing rules for ALL changes. Follow them unless the user explicitly
 - `_assign_extractors` → Pass 1 (existing) → swap → Pass 2 → post-swap; calls `_run_swap_pass`
 - `_attach_extractor_planet_details` → pins existing colonies per-char, then maps new slots to concrete planets + quality via `_waterfill_new_slots` (lever 1: per-character regret assignment — places the slot with the largest best-vs-next-best gap first, so a resource whose only alternative is a thin planet wins a shared planet type over one with a good fallback; order-independent, quality-optimal per char)
 - `_assign_factory_planets_to_chars` → factory planet placement + overflow
-- `_max_matching` / `_max_matching_slots` / `_can_add_p0` → bipartite feasibility (a slot with a committed planet is pinned to it)
+- `_max_matching_slots` / `_can_add_p0` → bipartite feasibility (a slot with a committed planet is pinned to it)
 
 **Shared plan helpers** (in `planner.py`, used by both the single-product and fuel-block
 paths): `_load_char_planet_config`, `_build_p1_info_raw`, `_fetch_planets_and_recs`,
@@ -900,7 +900,7 @@ of the `style-*.css` files loaded — see below) does the rest:
   `.an-suggest-sep` (the manual "Move a character to another account" tool).
 - `.an-stats` becomes a 2-up grid (a lone stat tile no longer stretches full-width with its value
   stranded left); `.pp-card-title` wraps so the analyze "Plan" dropdown gets its own full-width line.
-- Two-column page grids (`.pp-layout`, `.input-grid`) stack; `.pp-card` gets `overflow-x:auto` so
+- Two-column page grids (`.pp-layout`) stack; `.pp-card` gets `overflow-x:auto` so
   wide tables scroll inside the card instead of the whole page.
 
 `app.js` DOMContentLoaded has a matching guard: `MOBILE_TABS` + `matchMedia('(max-width:760px)')`

@@ -62,8 +62,6 @@
 .plan-char-syscol .plan-ptype   { flex: 0 0 auto; min-width: 58px; }
 .plan-char-syscol .plan-ext-sys { flex: 0 0 auto; min-width: 24px; text-align: right; }
 .plan-char-syscol .plan-ext-p1 { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.plan-sys-fac { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px;
-  color: #5ab4e6; background: #0e2030; border: 1px solid #1c3a4a; border-radius: 4px; padding: 1px 5px; }
 .plan-ext-row { display: flex; align-items: center; gap: 6px; font-size: 12px; }
 .plan-ext-tag { font-size: 10px; border-radius: 3px; padding: 1px 5px; white-space: nowrap; }
 .plan-ext-existing { background: #142a18; color: var(--clr-green); border: 1px solid #1e4828; }
@@ -72,7 +70,6 @@
 .plan-ext-free     { background: #0e1a22; color: #4a7090; border: 1px solid #1a3040; }
 .plan-free-label   { color: #3a5060 !important; font-style: italic; }
 .plan-ext-over     { opacity: 0.55; }
-.plan-ext-p0 { color: #8a9ab4; }
 .plan-ext-arrow { color: #252e40; font-size: 10px; }
 .plan-ext-p1 { color: var(--clr-text); }
 .plan-ext-p0col { color: var(--clr-text); }      /* the P0 you extract — the thing you place heads on */
@@ -91,10 +88,6 @@
 .plan-split-btn:last-child { border-right: none; }
 .plan-split-btn:hover { background: #1c1630; color: #a888c8; }
 .plan-split-btn.plan-split-on { background: #2a1c40; color: #c89ce8; }
-.plan-factory-line { font-size: 11px; color: var(--clr-label); margin-top: 5px; padding-left: 2px; }
-.plan-fac-imports { font-size: 10px; color: var(--clr-text-dim); padding: 0 0 3px 26px; line-height: 1.4; }
-.plan-fac-imports b { color: var(--clr-accent); font-weight: 600; }
-.plan-fac-imports b.p1-amt-set { color: var(--clr-green); }
 /* "Optimize for a specific order" — folded away by default; Analyze is the primary action. */
 .pi-order-fold { margin: 0 0 14px; border: 1px solid #1c2030; border-radius: 6px; background: #0e0b16; }
 .pi-order-fold > summary { cursor: pointer; padding: 9px 14px; font-size: 13px; font-weight: 600;

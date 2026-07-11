@@ -62,7 +62,7 @@ _NAME_TO_COL: dict[str, str] = {
 }
 
 # Reverse: db col → display name
-_COL_TO_NAME: dict[str, str] = {v: k.title() for k, v in _NAME_TO_COL.items() if k == k}
+_COL_TO_NAME: dict[str, str] = {v: k.title() for k, v in _NAME_TO_COL.items()}
 
 
 def _p0_col(header: str) -> Optional[str]:

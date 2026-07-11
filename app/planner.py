@@ -14,7 +14,7 @@ from app.esi import require_context, session_context_id, ensure_char_tables, PI_
 from app.alert_settings import get_alert_settings
 from app.colony_alerts import compute_colony_alerts
 from app.planner_models import (
-    CharConfigEntry, SaveConfigRequest, PlanRequest, PlanShareSave,
+    SaveConfigRequest, PlanRequest, PlanShareSave,
     ProfileSave, PlanSnapshotSave,
 )
 from app.planner_serialization import (
@@ -126,40 +126,11 @@ def save_plan_config(type_id: int, req: SaveConfigRequest):
 
 # ── Planning core helpers ─────────────────────────────────────────────────────
 
-def _max_matching(p0_names: list[str], planet_lists: dict[str, list]) -> int:
-    """Maximum bipartite matching: how many of p0_names can be assigned a unique planet."""
-    planet_to_idx: dict[tuple, int] = {}
-    for name in p0_names:
-        for p in planet_lists.get(name, []):
-            k = (p["system"], p["planet_num"])
-            if k not in planet_to_idx:
-                planet_to_idx[k] = len(planet_to_idx)
-    n_planets = len(planet_to_idx)
-    adj: list[list[int]] = [
-        [planet_to_idx[k]
-         for p in planet_lists.get(name, [])
-         if (k := (p["system"], p["planet_num"])) in planet_to_idx]
-        for name in p0_names
-    ]
-    match_planet: list[int] = [-1] * n_planets
-
-    def augment(slot: int, seen: set) -> bool:
-        for p in adj[slot]:
-            if p in seen:
-                continue
-            seen.add(p)
-            if match_planet[p] == -1 or augment(match_planet[p], seen):
-                match_planet[p] = slot
-                return True
-        return False
-
-    return sum(1 for s in range(len(p0_names)) if augment(s, set()))
-
-
 def _max_matching_slots(slot_planet_lists: list[list[dict]]) -> int:
     """
-    Like _max_matching but each slot has its own independent planet candidate list.
-    Used for per-character feasibility checks where some slots have committed planets.
+    Maximum bipartite matching: how many slots can be assigned a unique planet, where
+    each slot has its own independent planet candidate list. Used for per-character
+    feasibility checks where some slots have committed planets.
     """
     planet_to_idx: dict[tuple, int] = {}
     for planets in slot_planet_lists:
@@ -3721,7 +3692,6 @@ async def debug_plan(request: "Request", pp_session: str = Cookie(default=None))
                     "planet_num": e.get("planet_num"), "is_replace": e.get("is_replace", False),
                 })
 
-    total_unassigned = sum(len(a.get("extractors", [])) for a in result.get("assignments", []))
     n_unassigned_slots = ext_slots - sum(actual.values())
 
     distribution, all_pass = [], True

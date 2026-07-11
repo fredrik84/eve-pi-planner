@@ -6,14 +6,6 @@
    skill ROI, move-character) -- same gap as .pp-chars-page so they space consistently with the
    status card above them instead of stacking flush. */
 #analyzeContent { display: flex; flex-direction: column; gap: 18px; }
-.an-headline { border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; border: 1px solid var(--clr-border); }
-.an-headline.an-ok  { background: #10211a; border-color: #1f6b46; }
-.an-headline.an-bad { background: #2a1518; border-color: #7a3036; }
-.an-head-word { font-size: 13px; font-weight: 700; letter-spacing: .12em; }
-.an-ok .an-head-word  { color: var(--clr-green-alt); }
-.an-bad .an-head-word { color: var(--clr-red); }
-.an-head-sub { color: var(--clr-text); font-size: 14px; margin-top: 4px; }
-.an-head-sub b { color: #fff; }
 
 .an-stats { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; }
 .an-stat { flex: 1 1 130px; background: #161b28; border: 1px solid var(--clr-border); border-radius: 8px; padding: 10px 12px; }
@@ -108,9 +100,6 @@
 .an-suggest-move .an-suggest-h { color: #e0c84a; }
 .an-proj { margin: 4px 0 16px; }
 .an-proj-h { font-size: 12px; color: var(--clr-text-muted); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 6px; }
-.an-refill-cfg { font-size: 13px; color: var(--clr-text-muted); margin: 2px 0 10px; }
-.an-refill-cfg input { width: 48px; background: #11151f; border: 1px solid #2a3142; color: #e6e9ef; border-radius: 5px; padding: 3px 6px; font-size: 13px; }
-.an-refill-cfg b { color: var(--clr-text); }
 .an-suggest-add { border-color: #1f5a6b; background: #10202a; }
 .an-suggest-add .an-suggest-h { color: #4ab8d6; }
 

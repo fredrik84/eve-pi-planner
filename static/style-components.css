@@ -175,7 +175,6 @@ tr:hover td { background: #181d2a; }
 
 /* ── Planetary Planning ─────────────────────────────────────────────────────── */
 .pp-layout { display: grid; grid-template-columns: 280px 1fr; gap: 20px; align-items: start; }
-.pp-sidebar { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .pp-main    { display: flex; flex-direction: column; gap: 16px; min-width: 0; overflow: hidden; }
 
 /* Setup page: single-column stacked, full width */
@@ -222,7 +221,7 @@ tr:hover td { background: #181d2a; }
 
 /* A table that fills a card edge-to-edge — the card frame supplies the border + radius,
    so the table drops its own (avoids a double-rounded box). */
-.pp-card > table, .pp-card-table { border: none; border-radius: 0; }
+.pp-card > table { border: none; border-radius: 0; }
 /* Padded body for free-form card content (pills, notes, controls) that isn't a full-bleed table. */
 .pp-card-body { padding: 14px 16px; }
 /* Cards holding an absolutely-positioned popover (e.g. the Factory Layout search dropdown)
