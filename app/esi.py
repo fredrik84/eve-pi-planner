@@ -69,6 +69,9 @@ SKILL_IDS = {
     2505: "command_center_upgrades",       # command center tier
     2406: "planetology",                   # remote sensing range
     2403: "advanced_planetology",          # remote sensing precision
+    # Reactions (moon-goo tool): reaction job slots = 1 base + 1/level each, max 11.
+    45748: "mass_reactions",
+    45749: "advanced_mass_reactions",
 }
 
 # P0 resource type IDs → display names
@@ -231,6 +234,11 @@ def ensure_char_tables():
     # log every alt in. is_dummy=1; their character_id is negative to avoid colliding with real
     # EVE ids. They contribute planet slots + CCU only.
     _add_col("pp_characters", "is_dummy INTEGER DEFAULT 0")
+    # Reactions-industry skills (see SKILL_IDS below) and alliance affiliation — the latter for
+    # gating the B0SS moon-goo reactions tool to actual alliance members (see require_b0ss).
+    _add_col("pp_characters", "mass_reactions INTEGER DEFAULT 0")
+    _add_col("pp_characters", "advanced_mass_reactions INTEGER DEFAULT 0")
+    _add_col("pp_characters", "alliance_id INTEGER")
     # Rolling per-colony yield samples: ONE row per extraction program (deduped by install_ts),
     # capped at _YIELD_KEEP per colony. Lets the analysis show the MEASURED install-yield trend
     # across reseats (a colony's hotspots deplete, so successive programs drift down unless you move
@@ -818,6 +826,7 @@ def esi_callback(
     scopes_str = " ".join(scp)
 
     skills = _fetch_skills(character_id, access_token)
+    alliance_id = _fetch_alliance_id(character_id)
 
     ensure_char_tables()
     con = get_connection()
@@ -849,14 +858,18 @@ def esi_callback(
         INSERT INTO pp_characters
             (character_id, character_name, access_token, refresh_token, token_expiry,
              interplanetary_consolidation, command_center_upgrades, planetology,
-             advanced_planetology, context_id, scopes)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?)
+             advanced_planetology, mass_reactions, advanced_mass_reactions, alliance_id,
+             context_id, scopes)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT (character_id) DO UPDATE SET
           character_name=EXCLUDED.character_name, access_token=EXCLUDED.access_token,
           refresh_token=EXCLUDED.refresh_token, token_expiry=EXCLUDED.token_expiry,
           interplanetary_consolidation=EXCLUDED.interplanetary_consolidation,
           command_center_upgrades=EXCLUDED.command_center_upgrades,
           planetology=EXCLUDED.planetology, advanced_planetology=EXCLUDED.advanced_planetology,
+          mass_reactions=EXCLUDED.mass_reactions,
+          advanced_mass_reactions=EXCLUDED.advanced_mass_reactions,
+          alliance_id=COALESCE(EXCLUDED.alliance_id, pp_characters.alliance_id),
           context_id=EXCLUDED.context_id, scopes=EXCLUDED.scopes
     """, (
         character_id, character_name, access_token, refresh_token, expiry,
@@ -864,6 +877,9 @@ def esi_callback(
         skills.get("command_center_upgrades", 0),
         skills.get("planetology", 0),
         skills.get("advanced_planetology", 0),
+        skills.get("mass_reactions", 0),
+        skills.get("advanced_mass_reactions", 0),
+        alliance_id,
         context_id, scopes_str,
     ))
     con.commit()
@@ -1043,6 +1059,28 @@ def require_admin(pp_session: str = Cookie(default=None)) -> int:
     raise HTTPException(status_code=403, detail="Admin access required")
 
 
+def require_b0ss(pp_session: str = Cookie(default=None)) -> int:
+    """FastAPI dependency for the B0SS moon-goo reactions tool: return context_id for accounts
+    with a real (non-dummy) character in the B0SS alliance, or for admins (who can always
+    preview, matching this app's existing admin-preview convention). Else raise 403."""
+    sess = _session_lookup(pp_session)
+    if sess:
+        context_id = sess[1]
+        con = get_connection()
+        row = con.execute(
+            "SELECT 1 FROM pp_characters WHERE context_id=? AND alliance_id=? "
+            "AND COALESCE(is_dummy, 0) = 0 LIMIT 1",
+            (context_id, B0SS_ALLIANCE_ID),
+        ).fetchone()
+        con.close()
+        if row is not None:
+            return context_id
+        names = _context_character_names(context_id)
+        if any(n in (ADMIN_CHARACTERS | _db_admin_names()) for n in names):
+            return context_id
+    raise HTTPException(status_code=403, detail="B0SS alliance membership required")
+
+
 def _db_tester_names() -> set[str]:
     """Lowercased tester names from pp_testers (empty on any failure)."""
     try:
@@ -1129,6 +1167,24 @@ def _fetch_skills(character_id: int, access_token: str) -> dict[str, int]:
         return result
     except Exception:
         return {}
+
+
+# Brotherhood of Spacers (ticker B0SS) — confirmed via WillusKillus, the exact contact named in
+# the alliance's moon-goo-for-sale price sheet. Gates the reactions tool (see require_b0ss).
+B0SS_ALLIANCE_ID = 99007887
+
+
+def _fetch_alliance_id(character_id: int) -> int | None:
+    """GET /characters/{id}/ is a PUBLIC ESI endpoint (no token needed) that returns alliance_id
+    directly when the character's corp is in an alliance. Best-effort — a failure here must
+    never block login/rescan, just leaves alliance_id unchanged."""
+    try:
+        with httpx.Client() as client:
+            resp = client.get(f"{ESI_BASE}/characters/{character_id}/", timeout=10)
+        resp.raise_for_status()
+        return resp.json().get("alliance_id")
+    except Exception:
+        return None
 
 
 def _refresh_token(character_id: int, refresh_token: str) -> str | None:

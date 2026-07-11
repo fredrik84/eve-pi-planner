@@ -18,7 +18,7 @@ from app.cache import cache_get_json, cache_set_json, cache_invalidate, charlist
 from app.esi import (
     ESI_BASE, WALLET_SCOPE,
     _session_lookup, _is_configured, admin_and_tester_status_for_context,
-    require_context, _get_valid_token, _fetch_skills, _fetch_planets,
+    require_context, _get_valid_token, _fetch_skills, _fetch_planets, _fetch_alliance_id,
     ensure_char_tables, natural_name_key,
 )
 
@@ -510,15 +510,27 @@ def refresh_char_planets(character_id: int, context_id: int = Depends(require_co
         con = get_connection()
         con.execute(
             "UPDATE pp_characters SET interplanetary_consolidation=?, command_center_upgrades=?, "
-            "planetology=?, advanced_planetology=? WHERE character_id=?",
+            "planetology=?, advanced_planetology=?, mass_reactions=?, advanced_mass_reactions=? "
+            "WHERE character_id=?",
             (
                 skills.get("interplanetary_consolidation", 0),
                 skills.get("command_center_upgrades", 0),
                 skills.get("planetology", 0),
                 skills.get("advanced_planetology", 0),
+                skills.get("mass_reactions", 0),
+                skills.get("advanced_mass_reactions", 0),
                 character_id,
             ),
         )
+        con.commit()
+        con.close()
+    # Alliance affiliation can change over time (moved corps, alliance dissolved, etc.) — keep
+    # it fresh on every rescan, same reasoning as skills. Public ESI endpoint, best-effort.
+    alliance_id = _fetch_alliance_id(character_id)
+    if alliance_id is not None:
+        con = get_connection()
+        con.execute("UPDATE pp_characters SET alliance_id=? WHERE character_id=?",
+                     (alliance_id, character_id))
         con.commit()
         con.close()
     scan = _fetch_planets(character_id, token)

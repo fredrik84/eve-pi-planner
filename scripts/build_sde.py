@@ -4,9 +4,12 @@ Download the CCP SDE and populate PI schematic data into the app's database (Pos
 production, SQLite in dev — via app.db.get_connection(), same as the rest of the app).
 
 Tables built:
-  types              - typeID, name, group_id, pi_tier (0=P0 raw, 1=P1, 2=P2, 3=P3, 4=P4, NULL=not PI)
+  types              - typeID, name, group_id, pi_tier (0=P0 raw, 1=P1, 2=P2, 3=P3, 4=P4, NULL=not PI), volume
   pi_schematics      - schematic_id, output_type_id, output_qty, cycle_time
   pi_schematic_inputs- schematic_id, type_id, quantity
+  reactions          - reaction_id, output_type_id, output_qty, cycle_time (seconds; from
+                        fsd/blueprints.yaml's activities.reaction, not planetSchematics)
+  reaction_inputs    - reaction_id, type_id, quantity
 """
 
 import sys
@@ -112,7 +115,8 @@ _DDL = [
         type_id   INTEGER PRIMARY KEY,
         name      TEXT    NOT NULL,
         group_id  INTEGER NOT NULL DEFAULT 0,
-        pi_tier   INTEGER
+        pi_tier   INTEGER,
+        volume    REAL
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_types_name ON types (name)",
@@ -134,6 +138,29 @@ _DDL = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_pi_inputs_type ON pi_schematic_inputs (type_id)",
+    # Reactions (moon-goo → reaction materials), sourced from fsd/blueprints.yaml entries
+    # carrying an `activities.reaction` block — same shape as pi_schematics/pi_schematic_inputs
+    # (every reaction formula has exactly one product, confirmed against the live SDE: 112
+    # formulas, 0 with != 1 product), just from a different SDE file and a different time-field
+    # name (`time`, not PI's `cycleTime`).
+    """
+    CREATE TABLE IF NOT EXISTS reactions (
+        reaction_id    INTEGER PRIMARY KEY,
+        output_type_id INTEGER NOT NULL,
+        output_qty     INTEGER NOT NULL,
+        cycle_time     INTEGER NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_reactions_output ON reactions (output_type_id)",
+    """
+    CREATE TABLE IF NOT EXISTS reaction_inputs (
+        reaction_id INTEGER NOT NULL,
+        type_id     INTEGER NOT NULL,
+        quantity    INTEGER NOT NULL,
+        PRIMARY KEY (reaction_id, type_id)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_reaction_inputs_type ON reaction_inputs (type_id)",
 ]
 
 
@@ -149,7 +176,7 @@ def _already_built(con) -> bool:
         return False
 
 
-def build_db(con, type_data: dict, schematics_yaml: dict) -> None:
+def build_db(con, type_data: dict, schematics_yaml: dict, blueprints_yaml: dict) -> None:
     # Parse types
     _log("Building types table...")
     type_rows: list[tuple] = []
@@ -159,7 +186,8 @@ def build_db(con, type_data: dict, schematics_yaml: dict) -> None:
         if not name:
             continue
         group_id = attrs.get("groupID", 0) or 0
-        type_rows.append((int(type_id), name, int(group_id)))
+        volume = attrs.get("volume")
+        type_rows.append((int(type_id), name, int(group_id), volume))
 
     # Parse PI schematics
     _log("Parsing planetSchematics...")
@@ -198,15 +226,41 @@ def build_db(con, type_data: dict, schematics_yaml: dict) -> None:
     # Compute PI tiers via topological sort
     pi_tiers = compute_pi_tiers(schematics)
 
+    # Parse reactions: blueprints.yaml entries carrying an activities.reaction block. Every
+    # formula has exactly one product (verified against the live SDE: 112 formulas, 0 with
+    # != 1 product) so this is a scalar output_type_id/output_qty, same shape as pi_schematics.
+    # Material counts vary 2-6 per formula (fuel blocks + named materials + bulk minerals all
+    # land in the same `materials` list) — no fixed-shape assumption, just parse what's there.
+    _log("Parsing reactions from blueprints.yaml...")
+    reactions: list[dict] = []
+    for bp_id, bp_attrs in blueprints_yaml.items():
+        if not isinstance(bp_attrs, dict):
+            continue
+        reaction = (bp_attrs.get("activities") or {}).get("reaction")
+        if not reaction:
+            continue
+        materials = reaction.get("materials") or []
+        products = reaction.get("products") or []
+        if len(products) != 1 or not materials:
+            continue
+        reactions.append({
+            "reaction_id": int(bp_id),
+            "output_type_id": products[0]["typeID"],
+            "output_qty": products[0]["quantity"],
+            "cycle_time": reaction.get("time", 0),
+            "inputs": [{"type_id": m["typeID"], "quantity": m["quantity"]} for m in materials],
+        })
+    _log(f"Found {len(reactions)} reaction formulas.")
+
     _log("Creating tables...")
     for stmt in _DDL:
         con.execute(stmt)
     con.commit()
 
     _log("Inserting rows...")
-    rows_with_tier = [(tid, name, gid, pi_tiers.get(tid)) for (tid, name, gid) in type_rows]
+    rows_with_tier = [(tid, name, gid, pi_tiers.get(tid), vol) for (tid, name, gid, vol) in type_rows]
     for row in rows_with_tier:
-        con.execute("INSERT INTO types VALUES (?, ?, ?, ?)", row)
+        con.execute("INSERT INTO types VALUES (?, ?, ?, ?, ?)", row)
 
     for s in schematics:
         con.execute(
@@ -219,6 +273,17 @@ def build_db(con, type_data: dict, schematics_yaml: dict) -> None:
                 (s["schematic_id"], inp["type_id"], inp["quantity"]),
             )
 
+    for r in reactions:
+        con.execute(
+            "INSERT INTO reactions VALUES (?, ?, ?, ?)",
+            (r["reaction_id"], r["output_type_id"], r["output_qty"], r["cycle_time"]),
+        )
+        for inp in r["inputs"]:
+            con.execute(
+                "INSERT INTO reaction_inputs VALUES (?, ?, ?)",
+                (r["reaction_id"], inp["type_id"], inp["quantity"]),
+            )
+
     con.commit()
 
     # Summary
@@ -228,6 +293,7 @@ def build_db(con, type_data: dict, schematics_yaml: dict) -> None:
     _log(f"Types: {len(type_rows):,}")
     _log(f"PI schematics: {len(schematics)}")
     _log(f"PI tier distribution: { {f'P{k}': v for k,v in sorted(tier_counts.items())} }")
+    _log(f"Reactions: {len(reactions)}")
 
 
 def main() -> None:
@@ -248,7 +314,8 @@ def main() -> None:
                 with zipfile.ZipFile(tmp_path) as zf:
                     type_data = parse_yaml(zf, "fsd/types.yaml")
                     schematics_yaml = parse_yaml(zf, "fsd/planetSchematics.yaml")
-                    build_db(con, type_data, schematics_yaml)
+                    blueprints_yaml = parse_yaml(zf, "fsd/blueprints.yaml")
+                    build_db(con, type_data, schematics_yaml, blueprints_yaml)
             finally:
                 if tmp_path.exists():
                     tmp_path.unlink()
