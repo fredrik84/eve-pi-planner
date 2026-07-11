@@ -96,6 +96,16 @@ def test_corp_wallet_gated(base: str) -> bool:
     return check(code == 403, f"anonymous corp-wallet read rejected (got HTTP {code})")
 
 
+def test_reactions_gated(base: str) -> bool:
+    print(f"\n{'='*60}\n  Reactions endpoints are B0SS-alliance/admin-gated\n{'='*60}")
+    ok = True
+    code = get_status(f"{base}/api/reactions/opportunities")
+    ok &= check(code == 403, f"anonymous reactions-opportunities read rejected (got HTTP {code})")
+    code = get_status(f"{base}/api/moon-goo")
+    ok &= check(code == 403, f"anonymous moon-goo price list read rejected (got HTTP {code})")
+    return ok
+
+
 def delete_status(url: str) -> int:
     req = urllib.request.Request(url, method="DELETE")
     try:
@@ -180,6 +190,7 @@ def main():
         test_feature_toggle_gated(base),
         test_skill_roi_anon(base),
         test_corp_wallet_gated(base),
+        test_reactions_gated(base),
         test_delete_account_gated(base),
         test_cleanup_preview_gated(base),
         test_admin_stats_gated(base),

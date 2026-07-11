@@ -9,7 +9,7 @@ def load_pi_data() -> dict:
     Load all PI schematics and types into memory.
     Returns:
       {
-        "types":       {type_id: {"name": str, "pi_tier": int|None}},
+        "types":       {type_id: {"name": str, "pi_tier": int|None, "volume": float|None}},
         "schematics":  {output_type_id: {"schematic_id": int, "output_qty": int,
                                           "cycle_time": int,
                                           "inputs": [{"type_id": int, "quantity": int}]}},
@@ -19,8 +19,8 @@ def load_pi_data() -> dict:
     con = get_connection()
 
     types: dict[int, dict] = {}
-    for row in con.execute("SELECT type_id, name, pi_tier FROM types").fetchall():
-        types[row["type_id"]] = {"name": row["name"], "pi_tier": row["pi_tier"]}
+    for row in con.execute("SELECT type_id, name, pi_tier, volume FROM types").fetchall():
+        types[row["type_id"]] = {"name": row["name"], "pi_tier": row["pi_tier"], "volume": row["volume"]}
 
     schematics: dict[int, dict] = {}
     for row in con.execute(

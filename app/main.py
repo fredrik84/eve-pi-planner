@@ -34,6 +34,7 @@ from app.notifications import router as notifications_router, make_scheduler
 from app.alert_settings import router as alert_settings_router
 from app.internal import router as internal_router
 from app.moon_goo import router as moon_goo_router
+from app.reactions import router as reactions_router
 
 app = FastAPI(title="EVE PI Planner")
 app.include_router(planetary_router)
@@ -48,6 +49,7 @@ app.include_router(notifications_router)
 app.include_router(alert_settings_router)
 app.include_router(internal_router)
 app.include_router(moon_goo_router)
+app.include_router(reactions_router)
 
 _scheduler = None
 

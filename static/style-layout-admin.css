@@ -132,6 +132,7 @@ a.plan-action-btn { text-decoration: none; display: inline-block; }
 .tab[data-tab="characters"],
 .tab[data-tab="planetdb"],
 .tab[data-tab="layout"],
+.tab[data-tab="reactions"],
 .tab[data-pimode="refill"] { display: none; }
 
 html.nav-li #dashboardNavTab,
@@ -143,6 +144,7 @@ html.nav-li .tab[data-pimode="refill"] { display: flex; }
 html.nav-adm #adminNavGroup { display: flex; }
 html.nav-feat-layout .tab[data-tab="layout"] { display: flex; }
 html.nav-li.nav-feat-pdb .tab[data-tab="planetdb"] { display: flex; }
+html.nav-li.nav-feat-reactions .tab[data-tab="reactions"] { display: flex; }
 
 /* Donation note pinned to the bottom of the sticky sidebar — always on screen,
    no scrolling to the page foot to find it. */

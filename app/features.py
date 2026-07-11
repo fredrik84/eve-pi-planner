@@ -99,8 +99,16 @@ FEATURE_REGISTRY = [
      "description": "On Setup Analysis: each material row shows its P0 source name and a comfortable "
                     "P0/hr-per-planet target at a glance — a reference while reseating extractor heads.",
      "default": False},
+    {"key": "reactions", "label": "B0SS moon-goo reactions", "group": "Reactions",
+     "description": "Adds a Reactions tab: ranks the most profitable moon-goo reaction chains to "
+                    "buy from B0SS and ship to Jita. This only controls whether the nav tab shows — "
+                    "the underlying data is always B0SS-alliance-gated server-side regardless of "
+                    "this flag's state, so rolling it to 'public' just reveals the tab to everyone; "
+                    "non-B0SS accounts still get a 403 from the API itself.",
+     "default": False},
 ]
-GROUP_ORDER = ["Dashboard", "Setup Analysis", "Planner", "Planet DB", "Characters", "Notifications & Alerts"]
+GROUP_ORDER = ["Dashboard", "Setup Analysis", "Planner", "Planet DB", "Characters",
+               "Notifications & Alerts", "Reactions"]
 _DEFAULTS = {f["key"]: f for f in FEATURE_REGISTRY}
 VALID_STATES = {"hidden", "admin", "testers", "public"}
 
