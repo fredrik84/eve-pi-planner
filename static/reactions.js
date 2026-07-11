@@ -409,6 +409,8 @@ function _renderReactionsSuggestions(data) {
     <div class="rx-totals-summary">
       <span>${_fmtIsk(t.isk_committed)} committed</span>
       <span class="rx-totals-profit">+${_fmtIsk(t.net_profit)} net profit</span>
+      <span>${_fmtIsk(t.output_value)} output value</span>
+      <span>${Math.round(t.output_m3).toLocaleString()} m³ output</span>
       <span class="pp-card-hint">
         ${t.characters_used} character${t.characters_used === 1 ? '' : 's'} used ·
         ${t.completion_hours != null ? _fmtHours(t.completion_hours) + ' to complete' : ''}
@@ -450,6 +452,8 @@ function _rxApplyAlignHint(hintIndex, btn) {
 
   _rxLastSuggestData.totals.isk_committed += s.align_extra_isk;
   _rxLastSuggestData.totals.net_profit += s.align_extra_reward;
+  _rxLastSuggestData.totals.output_value += (s.aligned_output_value - s.output_value);
+  _rxLastSuggestData.totals.output_m3 += (s.aligned_output_m3 - s.output_m3);
   s.runs = s.aligned_runs;
   s.runs_per_job = s.aligned_runs_per_job;
   s.input_cost = s.aligned_input_cost;

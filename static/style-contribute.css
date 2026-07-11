@@ -177,14 +177,14 @@
 /* Shared dark form-control base — bg/border/colour/focus are identical across these
    inputs; each rule below only carries its unique radius/padding/width/etc. */
 .pp-num-input, .pp-text-input,
-.bug-input, .bug-textarea, .pp-import-ta {
+.bug-input, .bug-textarea, .pp-import-ta, .pp-select {
   background: #0d0f14;
   border: 1px solid var(--clr-border);
   color: var(--clr-text);
   outline: none;
 }
 .pp-num-input:focus, .pp-text-input:focus,
-.bug-input:focus, .bug-textarea:focus, .pp-import-ta:focus { border-color: var(--clr-focus); }
+.bug-input:focus, .bug-textarea:focus, .pp-import-ta:focus, .pp-select:focus { border-color: var(--clr-focus); }
 
 .pp-num-input {
   border-radius: 4px;
@@ -195,6 +195,7 @@
 }
 .pp-num-input::-webkit-inner-spin-button,
 .pp-num-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.pp-select { border-radius: 4px; font-size: 13px; padding: 5px 10px; cursor: pointer; }
 .pp-label-check { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--clr-text-dim); cursor: pointer; text-transform: none; letter-spacing: 0; }
 .pp-label-check input[type=checkbox] { accent-color: #4a88cc; width: 13px; height: 13px; }
 

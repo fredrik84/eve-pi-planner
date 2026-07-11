@@ -787,8 +787,8 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
                   and o["top_level_runs"] > 0 and o["net_profit_instant"] > 0
                   and o["steps"] <= max_chain_depth]
     empty = {"suggestions": [], "totals": {
-        "isk_committed": 0.0, "isk_budget": isk_budget, "net_profit": 0.0, "characters_used": 0,
-        "completion_hours": None, "binding": "neither"}}
+        "isk_committed": 0.0, "isk_budget": isk_budget, "net_profit": 0.0, "output_value": 0.0,
+        "output_m3": 0.0, "characters_used": 0, "completion_hours": None, "binding": "neither"}}
     if not candidates:
         return empty
 
@@ -866,7 +866,7 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
     touched_chars: set[int] = set()
 
     suggestions = []
-    isk_committed = net_profit = 0.0
+    isk_committed = net_profit = total_output_value = total_output_m3 = 0.0
     max_completion_hours = 0.0
     for c, xi in chosen:
         runs_needed = max(1, round(c["top_level_runs"] * xi))
@@ -897,6 +897,8 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
         output_m3 = c["shipping_volume_m3"] * xi
         isk_committed += cost
         net_profit += reward
+        total_output_value += output_value
+        total_output_m3 += output_m3
 
         # How much MORE this specific product could use if it were ISK-funded all the way to
         # actually filling its claimed slots for the whole cadence window, instead of finishing
@@ -948,6 +950,8 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
             "isk_committed": round(isk_committed, 2),
             "isk_budget": isk_budget,
             "net_profit": round(net_profit, 2),
+            "output_value": round(total_output_value, 2),
+            "output_m3": round(total_output_m3, 1),
             "characters_used": len(touched_chars),
             "completion_hours": round(max_completion_hours, 1) if suggestions else None,
             "binding": binding,
@@ -995,6 +999,10 @@ def _build_advisor(context_id: int, isk_budget: float, max_chain_depth: int, cad
     for c in chars:
         if "read_character_jobs" not in (c["scopes"] or ""):
             continue
+        if reaction_slots(c) <= 1:
+            continue  # sitting at the bare base slot (no Mass Reactions trained at all) — same
+                      # "not worth surfacing" threshold the dashboard loadout already uses;
+                      # training advice for a throwaway/untouched alt isn't useful
         if used_slots_by_char.get(c["character_id"], 0) < reaction_slots(c):
             continue  # this character still has spare slots this plan didn't need — not a bottleneck
         mr, amr = c["mass_reactions"] or 0, c["advanced_mass_reactions"] or 0
@@ -1036,8 +1044,8 @@ def _build_advisor(context_id: int, isk_budget: float, max_chain_depth: int, cad
 def suggest_reactions(req: SuggestRequest, context_id: int = Depends(require_b0ss)):
     if req.isk_budget <= 0 or req.max_chain_depth <= 0 or req.cadence_hours <= 0:
         return {"suggestions": [], "totals": {
-            "isk_committed": 0.0, "isk_budget": req.isk_budget, "net_profit": 0.0, "characters_used": 0,
-            "completion_hours": None, "binding": "neither"},
+            "isk_committed": 0.0, "isk_budget": req.isk_budget, "net_profit": 0.0, "output_value": 0.0,
+            "output_m3": 0.0, "characters_used": 0, "completion_hours": None, "binding": "neither"},
             "advisor": {"skill_hints": [], "budget_hint": None, "align_hints": []}}
     material_ids = set(req.material_ids) if req.material_ids else None
     result = _suggest_reactions(context_id, req.isk_budget, req.max_chain_depth, req.cadence_hours, material_ids)
