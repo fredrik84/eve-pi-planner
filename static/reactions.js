@@ -69,25 +69,26 @@ function _renderReactionsDashboard(data) {
 
   const untracked = (data.characters || []).filter(c => !c.tracked);
   // Connecting a character (via /auth/login?reactions=1) is a per-character ESI authorisation,
-  // so this button must stay available even after some characters are already tracked — the
-  // account may have several characters (own alts, or characters logged in from other EVE
-  // accounts sharing this context) that each need to opt in separately. Mirrors the Characters
-  // settings page's always-present "+ Add via ESI" button, not a one-shot CTA that disappears.
-  const connectBtn = `<button class="pp-add-btn" onclick="connectReactionsTracking()">Connect ${data.tracked ? 'another' : 'a'} character</button>`;
+  // so this must stay reachable even after some characters are already tracked — the account
+  // may have several characters (own alts, or characters logged in from other EVE accounts
+  // sharing this context) that each need to opt in separately. Lives as a persistent header
+  // button (#rxConnectBtn, next to "Add Reaction Product") rather than buried in the dashboard
+  // body, since it was easy to miss there.
+  const connectBtn = document.getElementById('rxConnectBtn');
+  if (connectBtn) {
+    connectBtn.style.display = '';
+    connectBtn.textContent = `Connect ${data.tracked ? 'another' : 'a'} character`;
+  }
   const untrackedNote = untracked.length
     ? `<div class="pp-card-hint" style="margin-bottom:8px">Not yet tracked: ${untracked.map(c => _esc(c.character_name)).join(', ')}</div>`
     : '';
 
   if (!data.tracked) {
-    el.innerHTML = `
-      <div class="pp-empty">
-        No characters are tracking reaction jobs yet.
-        ${connectBtn}
-      </div>`;
+    el.innerHTML = '<div class="pp-empty">No characters are tracking reaction jobs yet — use "Connect a character" above.</div>';
     return;
   }
 
-  const capacity = `<div class="pp-card-hint" style="margin-bottom:8px">${data.free_slots} of ${data.total_slots} reaction slots free across your tracked characters · ${connectBtn}</div>${untrackedNote}`;
+  const capacity = `<div class="pp-card-hint" style="margin-bottom:8px">${data.free_slots} of ${data.total_slots} reaction slots free across your tracked characters</div>${untrackedNote}`;
 
   if (!data.running.length) {
     el.innerHTML = capacity + '<div class="pp-empty">No reactions currently running.</div>';
@@ -184,23 +185,43 @@ function _renderReactionsSuggestions(data) {
     return;
   }
 
-  const rows = data.suggestions.map(s => `
-    <tr>
-      <td>${_esc(s.name)}</td>
-      <td>${s.runs}</td>
-      <td>${_fmtIsk(s.input_cost)}</td>
-      <td>${_fmtIsk(s.reward)}</td>
-      <td>${_esc(s.assigned_character)}</td>
-    </tr>`).join('');
+  // Grouped by assigned character (each is "this character's job list"), not one flat table —
+  // the engine already picks a character per suggestion based on free reaction slots; this
+  // just presents that as concrete per-character assignments instead of a ranked table with a
+  // character column buried in it. Preserves the backend's profit-descending order within
+  // each character's group.
+  const byChar = new Map();
+  for (const s of data.suggestions) {
+    if (!byChar.has(s.assigned_character)) byChar.set(s.assigned_character, []);
+    byChar.get(s.assigned_character).push(s);
+  }
+
+  const cards = [...byChar.entries()].map(([charName, jobs]) => {
+    const rows = jobs.map(s => `
+      <tr>
+        <td>${_esc(s.name)}</td>
+        <td>${s.runs}</td>
+        <td>${_fmtIsk(s.input_cost)}</td>
+        <td>${_fmtIsk(s.reward)}</td>
+      </tr>`).join('');
+    const cost = jobs.reduce((sum, s) => sum + s.input_cost, 0);
+    const reward = jobs.reduce((sum, s) => sum + s.reward, 0);
+    return `
+      <div class="pp-card" style="margin-bottom:10px">
+        <div class="pp-card-title">${_esc(charName)}
+          <span class="pp-card-hint">${jobs.length} reaction${jobs.length === 1 ? '' : 's'} · ${_fmtIsk(cost)} in · ${_fmtIsk(reward)} profit</span>
+        </div>
+        <div style="overflow-x:auto">
+          <table class="pp-card-table" style="width:100%">
+            <thead><tr><th>Product</th><th>Runs</th><th>Input cost</th><th>Reward</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      </div>`;
+  }).join('');
 
   const t = data.totals;
-  el.innerHTML = `
-    <div style="overflow-x:auto">
-      <table class="pp-card-table" style="width:100%">
-        <thead><tr><th>Product</th><th>Runs</th><th>Input cost</th><th>Reward</th><th>Character</th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
-    </div>
+  el.innerHTML = cards + `
     <div class="pp-card-hint" style="margin-top:8px">
       ${_fmtIsk(t.isk_committed)} committed · ${_fmtIsk(t.net_profit)} net profit ·
       ${t.characters_used} character${t.characters_used === 1 ? '' : 's'} used ·
