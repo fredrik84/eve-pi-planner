@@ -262,6 +262,7 @@ function _renderGrowSection() {
 // source name per P1 (schematic-derived on the backend); falls back to the P1 name if a material's
 // placements haven't resolved yet (e.g. first paint before that fetch lands).
 function _renderExtractionTargets(rows) {
+  if (!_featureActive('extraction_targets')) return '';
   const items = rows.map(r => {
     const p0Name = (_placements && _placements[r.t] && _placements[r.t].p0_name) || r.name;
     const target = _p0h(r.need);

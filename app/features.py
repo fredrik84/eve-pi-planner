@@ -91,6 +91,10 @@ FEATURE_REGISTRY = [
                     "storage-fill warning/severity thresholds used by the Dashboard's colony "
                     "warnings, instead of the fixed defaults.",
      "default": False},
+    {"key": "extraction_targets", "label": "Extraction targets reference",
+     "description": "On Setup Analysis: a per-resource P0/hr lookup table (min + comfortable-buffer "
+                    "target) for the selected plan — a reference while reseating extractor heads.",
+     "default": False},
 ]
 _DEFAULTS = {f["key"]: f for f in FEATURE_REGISTRY}
 VALID_STATES = {"hidden", "admin", "testers", "public"}
