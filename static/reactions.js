@@ -210,7 +210,17 @@ function _renderReactionsDashboard(data) {
       ).join('')}</div>`
     : '';
 
-  el.innerHTML = rows + todoNote + untrackedNote;
+  // What's currently committed across every pending+running assignment, not just what a fresh
+  // "Suggest reactions" run would project — the wizard's totals bar only ever reflects one
+  // suggestion batch at the moment it was generated, this reflects what's actually on the books.
+  const pendingSummary = (data.pending_isk_committed > 0 || data.pending_net_profit > 0)
+    ? `<div class="rx-totals-summary">
+        <span>${_fmtIsk(data.pending_isk_committed)} committed</span>
+        <span class="rx-totals-profit">+${_fmtIsk(data.pending_net_profit)} expected profit</span>
+      </div>`
+    : '';
+
+  el.innerHTML = rows + pendingSummary + todoNote + untrackedNote;
 }
 
 function _rxCancelAssignment(assignmentId) {

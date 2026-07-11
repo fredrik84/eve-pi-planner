@@ -727,6 +727,7 @@ def get_industry_jobs(context_id: int = Depends(require_b0ss)):
     used_slots = 0
     tracked_any = False
     fulfilled_ids: list[int] = []
+    pending_isk_committed = pending_net_profit = 0.0
     for c in chars:
         opted_in = "read_character_jobs" in (c["scopes"] or "")
         slots = reaction_slots(c)
@@ -757,8 +758,13 @@ def get_industry_jobs(context_id: int = Depends(require_b0ss)):
             else:
                 pending.append({
                     "assignment_id": a["id"], "type_id": a["type_id"], "name": a["name"], "runs": a["runs"],
-                    "tier_order": a["tier_order"],
+                    "tier_order": a["tier_order"], "input_cost": a["input_cost"], "reward": a["reward"],
                 })
+                # Intermediate-tier rows are stored with input_cost/reward=0 (the full chain's
+                # cost/profit already lives on the top-level row — see assign_reaction), so
+                # summing every pending row never double-counts a multi-tier chain.
+                pending_isk_committed += a["input_cost"]
+                pending_net_profit += a["reward"]
         used_slots += len(pending)
 
         characters.append({
@@ -799,6 +805,8 @@ def get_industry_jobs(context_id: int = Depends(require_b0ss)):
         "running": sorted(running, key=lambda r: r["hours_left"] if r["hours_left"] is not None else 1e9),
         "total_slots": total_slots,
         "free_slots": max(0, total_slots - used_slots),
+        "pending_isk_committed": round(pending_isk_committed, 2),
+        "pending_net_profit": round(pending_net_profit, 2),
     }
 
 
