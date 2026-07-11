@@ -226,7 +226,7 @@ function _renderReactionsDashboard(data) {
   const usedSlots = data.total_slots - data.free_slots;
   const overviewTiles = `<div class="an-stats">
       ${_dashTile(_fmtIsk(data.pending_isk_committed), 'ISK committed')}
-      ${_dashTile('+' + _fmtIsk(data.pending_net_profit), 'Expected profit', 'an-ok')}
+      ${_dashTile('+' + _fmtIsk(data.pending_net_profit_per_day), 'Expected profit / day', 'an-ok')}
       ${_dashTile(`${usedSlots}<span class="an-of"> / ${data.total_slots}</span>`, 'Slots used')}
       ${_dashTile(String(pendingCount), 'Jobs to install', pendingCount > 0 ? 'an-warn' : '')}
       ${_dashTile(timeLeftVal, timeLeftLbl)}
@@ -440,7 +440,7 @@ function _renderReactionsSuggestions(data) {
   el.innerHTML = budgetSummary + cards + `
     <div class="rx-totals-summary">
       <span>${_fmtIsk(t.isk_committed)} committed</span>
-      <span class="rx-totals-profit">+${_fmtIsk(t.net_profit)} net profit</span>
+      <span class="rx-totals-profit">+${_fmtIsk(t.net_profit)} net profit${t.net_profit_per_day != null ? ` (${_fmtIsk(t.net_profit_per_day)}/day)` : ''}</span>
       <span>${_fmtIsk(t.output_value)} output value</span>
       <span>${Math.round(t.output_m3).toLocaleString()} m³ output</span>
       <span class="pp-card-hint">
@@ -482,19 +482,26 @@ function _rxApplyAlignHint(hintIndex, btn) {
   const s = _rxLastSuggestData.suggestions.find(x => x.name === hint.name && x.align_extra_isk > 0);
   if (!s) return;
 
+  const cadenceEl = document.getElementById('wizRCadence');
+  const cadenceHours = cadenceEl ? parseFloat(cadenceEl.value) : null;
+
   _rxLastSuggestData.totals.isk_committed += s.align_extra_isk;
   _rxLastSuggestData.totals.net_profit += s.align_extra_reward;
+  if (cadenceHours > 0) {
+    _rxLastSuggestData.totals.net_profit_per_day = (_rxLastSuggestData.totals.net_profit_per_day || 0)
+      + (s.align_extra_reward / (cadenceHours / 24));
+  }
   _rxLastSuggestData.totals.output_value += (s.aligned_output_value - s.output_value);
   _rxLastSuggestData.totals.output_m3 += (s.aligned_output_m3 - s.output_m3);
   s.runs = s.aligned_runs;
   s.runs_per_job = s.aligned_runs_per_job;
   s.input_cost = s.aligned_input_cost;
   s.reward = s.aligned_reward;
+  s.profit_per_day = s.aligned_profit_per_day;
   s.output_qty = s.aligned_output_qty;
   s.output_value = s.aligned_output_value;
   s.output_m3 = s.aligned_output_m3;
-  const cadenceEl = document.getElementById('wizRCadence');
-  s.runtime_hours = cadenceEl ? parseFloat(cadenceEl.value) : s.runtime_hours;
+  s.runtime_hours = cadenceHours || s.runtime_hours;
   s.align_extra_isk = 0;
   s.align_extra_reward = 0;
 

@@ -224,13 +224,12 @@ function renderDashboard(data) {
     ...(topProd && topProd.tier >= 2 ? [_dashTile(topProd.units.toLocaleString(), `${_esc(topProd.name)} in pads`)] : []),
     _dashTile(_fmtIsk(t.current_run_value || 0), isMobile ? 'Run value' : 'Run value (from current inputs)'),
     _dashTile(_fmtIsk(t.value_per_day || 0), 'Value / day'),
-    // Reactions' expected profit is a one-time total for the currently-assigned batch, not a
-    // daily rate like the PI tiles above it — shown alongside rather than blended in, and the
-    // combined tile is explicit about adding a rate + a lump sum (matches how the user asked
-    // for it: "total PI + Reactions", not a rigorously unit-matched rate).
+    // reactions_net_profit_per_day is each pending job's own reward ÷ its own real duration
+    // (runs × cycle time) — a genuine ISK/day rate, same units as PI's value_per_day, so the
+    // combined tile below is a real sum of two rates now, not a rate + a lump sum.
     ...(_featureActive('reactions') && t.reactions_tracked ? [
-      _dashTile('+' + _fmtIsk(t.reactions_net_profit || 0), 'Reactions profit expected', 'an-ok'),
-      _dashTile(_fmtIsk((t.value_per_day || 0) + (t.reactions_net_profit || 0)), 'Total PI + Reactions'),
+      _dashTile('+' + _fmtIsk(t.reactions_net_profit_per_day || 0), 'Reactions profit / day', 'an-ok'),
+      _dashTile(_fmtIsk((t.value_per_day || 0) + (t.reactions_net_profit_per_day || 0)), 'Total PI + Reactions / day'),
     ] : []),
   ].join('');
   const rows = facs.length ? facs.map(f => {

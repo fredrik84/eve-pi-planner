@@ -765,6 +765,11 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
                 f"WHERE character_id IN ({placeholders}) ORDER BY tier_order", char_ids,
             ):
                 assignments.setdefault(r["character_id"], []).append(dict(r))
+        # output_type_id -> cycle hours, so a stored assignment (which only keeps `runs`, not its
+        # own formula) can be turned into a real duration for the profit/day normalization below —
+        # PI's headline number is already a rate (value_per_day), so Reactions' should be too.
+        cycle_hours_by_type = {r["output_type_id"]: (r["cycle_time"] or 0) / 3600.0
+                                for r in con.execute("SELECT output_type_id, cycle_time FROM reactions")}
     finally:
         con.close()
 
@@ -775,7 +780,7 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
     used_slots = 0
     tracked_any = False
     fulfilled_ids: list[int] = []
-    pending_isk_committed = pending_net_profit = 0.0
+    pending_isk_committed = pending_net_profit = pending_net_profit_per_day = 0.0
     for c in chars:
         opted_in = "read_character_jobs" in (c["scopes"] or "")
         slots = reaction_slots(c)
@@ -813,6 +818,13 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
                 # summing every pending row never double-counts a multi-tier chain.
                 pending_isk_committed += a["input_cost"]
                 pending_net_profit += a["reward"]
+                # Per-day rate for this specific job: its own real duration (runs × the
+                # product's own cycle time), not a shared cadence — once committed, an
+                # assignment's completion time is a fact, not a planning-time target.
+                if a["reward"] > 0:
+                    duration_hours = a["runs"] * cycle_hours_by_type.get(a["type_id"], 0)
+                    if duration_hours > 0:
+                        pending_net_profit_per_day += a["reward"] / (duration_hours / 24)
         used_slots += len(pending)
 
         characters.append({
@@ -855,6 +867,7 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
         "free_slots": max(0, total_slots - used_slots),
         "pending_isk_committed": round(pending_isk_committed, 2),
         "pending_net_profit": round(pending_net_profit, 2),
+        "pending_net_profit_per_day": round(pending_net_profit_per_day, 2),
     }
 
 
@@ -929,8 +942,8 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
                   and o["top_level_runs"] > 0 and o["net_profit_instant"] > 0
                   and o["steps"] <= max_chain_depth]
     empty = {"suggestions": [], "totals": {
-        "isk_committed": 0.0, "isk_budget": isk_budget, "net_profit": 0.0, "output_value": 0.0,
-        "output_m3": 0.0, "characters_used": 0, "completion_hours": None, "binding": "neither"}}
+        "isk_committed": 0.0, "isk_budget": isk_budget, "net_profit": 0.0, "net_profit_per_day": None,
+        "output_value": 0.0, "output_m3": 0.0, "characters_used": 0, "completion_hours": None, "binding": "neither"}}
     if not candidates:
         return empty
 
@@ -1079,6 +1092,14 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
         align_extra_isk = round(align_extra_runs * (c["input_cost"] / c["top_level_runs"]), 2) if align_extra_runs > 0 else 0.0
         align_extra_reward = round(align_extra_runs * (c["net_profit_instant"] / c["top_level_runs"]), 2) if align_extra_runs > 0 else 0.0
 
+        # Profit normalized to ISK/day, matching how the PI planner already reports value_per_day
+        # — divided by the CADENCE window (not this suggestion's own, possibly-shorter runtime),
+        # since a batch that finishes early just leaves its claimed slots idle until the next
+        # cadence check-in; the cadence-normalized rate is the honest "average ISK/day this
+        # delivers" including that idle time (the align hint above already targets closing this
+        # exact gap by suggesting more spend to fill the whole window).
+        profit_per_day = round(reward / (cadence_hours / 24), 2) if cadence_hours > 0 else None
+
         suggestions.append({
             "type_id": c["type_id"], "name": c["name"],
             "runs": runs_needed,
@@ -1086,6 +1107,7 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
             "runs_per_job": runs_per_job,
             "input_cost": round(cost, 2),
             "reward": round(reward, 2),
+            "profit_per_day": profit_per_day,
             "output_qty": round(output_qty, 1),
             "output_value": round(output_value, 2),
             "output_m3": round(output_m3, 1),
@@ -1099,6 +1121,7 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
             "aligned_runs_per_job": max_runs_per_job_for_cadence,
             "aligned_input_cost": round(c["input_cost"] * align_ratio, 2),
             "aligned_reward": round(c["net_profit_instant"] * align_ratio, 2),
+            "aligned_profit_per_day": round(c["net_profit_instant"] * align_ratio / (cadence_hours / 24), 2) if cadence_hours > 0 else None,
             "aligned_output_qty": round(c["output_qty"] * align_ratio, 1),
             "aligned_output_value": round(c["instant_sell_value"] * align_ratio, 2),
             "aligned_output_m3": round(c["shipping_volume_m3"] * align_ratio, 1),
@@ -1118,6 +1141,7 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
             "isk_committed": round(isk_committed, 2),
             "isk_budget": isk_budget,
             "net_profit": round(net_profit, 2),
+            "net_profit_per_day": round(net_profit / (cadence_hours / 24), 2) if cadence_hours > 0 and suggestions else None,
             "output_value": round(total_output_value, 2),
             "output_m3": round(total_output_m3, 1),
             "characters_used": len(touched_chars),
@@ -1212,8 +1236,8 @@ def _build_advisor(context_id: int, isk_budget: float, max_chain_depth: int, cad
 def suggest_reactions(req: SuggestRequest, context_id: int = Depends(require_context)):
     if req.isk_budget <= 0 or req.max_chain_depth <= 0 or req.cadence_hours <= 0:
         return {"suggestions": [], "totals": {
-            "isk_committed": 0.0, "isk_budget": req.isk_budget, "net_profit": 0.0, "output_value": 0.0,
-            "output_m3": 0.0, "characters_used": 0, "completion_hours": None, "binding": "neither"},
+            "isk_committed": 0.0, "isk_budget": req.isk_budget, "net_profit": 0.0, "net_profit_per_day": None,
+            "output_value": 0.0, "output_m3": 0.0, "characters_used": 0, "completion_hours": None, "binding": "neither"},
             "advisor": {"skill_hints": [], "budget_hint": None, "align_hints": []}}
     material_ids = set(req.material_ids) if req.material_ids else None
     result = _suggest_reactions(context_id, req.isk_budget, req.max_chain_depth, req.cadence_hours, material_ids)

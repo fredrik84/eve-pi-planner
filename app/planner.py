@@ -1762,6 +1762,7 @@ def dashboard(pp_session: str = Cookie(default=None)):
     # defensively — a problem on the Reactions side must never take down the core PI dashboard.
     reactions_tracked = False
     reactions_time_left_hours = reactions_net_profit = reactions_isk_committed = None
+    reactions_net_profit_per_day = None
     reactions_time_left_loc = None
     try:
         from app.reactions import get_industry_jobs
@@ -1769,6 +1770,7 @@ def dashboard(pp_session: str = Cookie(default=None)):
         if rx.get("tracked"):
             reactions_tracked = True
             reactions_net_profit = rx.get("pending_net_profit", 0.0)
+            reactions_net_profit_per_day = rx.get("pending_net_profit_per_day", 0.0)
             reactions_isk_committed = rx.get("pending_isk_committed", 0.0)
             soonest = next((r for r in (rx.get("running") or []) if r.get("hours_left") is not None), None)
             if soonest:
@@ -1810,6 +1812,7 @@ def dashboard(pp_session: str = Cookie(default=None)):
             "reactions_time_left_hours": reactions_time_left_hours,
             "reactions_time_left_loc": reactions_time_left_loc,
             "reactions_net_profit": reactions_net_profit,
+            "reactions_net_profit_per_day": reactions_net_profit_per_day,
             "reactions_isk_committed": reactions_isk_committed,
         },
         "top_pi": top_pi,
