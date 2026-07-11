@@ -156,7 +156,7 @@ def _compute_fuelblock_budget(
     rate_of: dict[int, float] = {}
     line_cap: dict[int, float] = {}  # baskets/day delivered per planet of this line
     for c in factory_comps:
-        rate = fuelblocks.component_factory_rate(c["type_id"], pi_data, cc_level=cc_level)
+        rate = fuelblocks.component_factory_rate(c["type_id"], cc_level=cc_level)
         rate_of[c["type_id"]] = rate
         line_cap[c["type_id"]] = (rate * 24 / c["qty"]) if c["qty"] else 0.0
 
@@ -237,7 +237,6 @@ def _assign_fuelblock_factories(
     char_list: list[dict],
     factory_lines: list[dict],
     factory_shares: dict[int, int],
-    auto_mode: bool,
     fac_pool: list[dict],
     best_fac_system: str | None,
     char_nonfac: dict[int, list],
@@ -499,7 +498,7 @@ def _reinvest_fuelblock_greedy(assignments, factory_lines, line_units, line_plan
             cand = next((p for p in pool if (p["system"], p["planet_num"]) not in s["used"]), None)
             if not cand:
                 continue
-            rate = fuelblocks.component_factory_rate(tid, pi_data, cc_level=s["ccu"])
+            rate = fuelblocks.component_factory_rate(tid, cc_level=s["ccu"])
             s["a"].setdefault("factory_assignments", []).append({
                 "system": cand["system"], "planet_num": cand["planet_num"],
                 "planet_type": cand["planet_type"], "is_new": True, "reinvest": True,
@@ -686,7 +685,7 @@ def _run_fuelblock_plan(req: "FuelBlockPlanRequest", context_id: int) -> dict:
     best_fac_system = _pick_factory_system(req, sys_fac_count)
 
     unplaced_factories = _assign_fuelblock_factories(
-        assignments, char_list, factory_lines, factory_shares, auto_mode,
+        assignments, char_list, factory_lines, factory_shares,
         fac_pool, best_fac_system, char_nonfac, req, has_system_name,
         fallback_planet_type=allowed_types[0] if allowed_types else "Barren",
         is_preview=is_preview,
@@ -719,7 +718,7 @@ def _run_fuelblock_plan(req: "FuelBlockPlanRequest", context_id: int) -> dict:
         host_ccu = ccu_by_cid.get(a["character_id"], 5)
         for f in a.get("factory_assignments", []):
             tid = f["product"]["type_id"]
-            rate = fuelblocks.component_factory_rate(tid, pi_data, cc_level=host_ccu)
+            rate = fuelblocks.component_factory_rate(tid, cc_level=host_ccu)
             f["ccu"] = host_ccu
             f["rate_per_hour"] = round(rate, 2)
             line_units[tid] = line_units.get(tid, 0.0) + rate * 24

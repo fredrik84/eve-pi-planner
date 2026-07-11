@@ -2057,7 +2057,6 @@ def _run_swap_pass(
             continue
 
         rest_a = restricted(char_a["character_id"])
-        p0s_a = [s["p0_name"] for s in asgn_a["extractors"] if s.get("p0_name")]
 
         cand_x: list[tuple] = []
         for ri, slot in enumerate(remaining):
@@ -2079,7 +2078,6 @@ def _run_swap_pass(
                 if char_b["computed_ext_cap"] != len(asgn_b["extractors"]):
                     continue
                 rest_b = restricted(char_b["character_id"])
-                p0s_b = [s["p0_name"] for s in asgn_b["extractors"] if s.get("p0_name")]
 
                 for ei, ext_y in enumerate(asgn_b["extractors"]):
                     p0_y = ext_y.get("p0_name")
@@ -2631,7 +2629,7 @@ def _consolidate_split_extractors(
                     host = _pick_split_host(A, B, _host_quality)
                     if not host:
                         continue
-                    leg = _solve_split_heads(A, B, host, pu_out, _need, mode)
+                    leg = _solve_split_heads(A, B, host, pu_out, _need)
                     if not leg:
                         continue
                     merged = (A, B, host, leg)
@@ -2787,10 +2785,10 @@ def _pick_split_host(A: dict, B: dict, host_quality) -> dict | None:
     return None
 
 
-def _solve_split_heads(A, B, host, pu_out, need, mode) -> tuple | None:
-    """Allocate the 10-head budget across the two legs, OUTPUT-PRESERVING for both modes:
+def _solve_split_heads(A, B, host, pu_out, need) -> tuple | None:
+    """Allocate the 10-head budget across the two legs, OUTPUT-PRESERVING:
     returns (headsA, headsB, qA, qB) only if the legs can cover each P0's floor within 10
-    heads, else None. (Aggressive's extra value is reinvesting the freed planet, not
+    heads, else None. (Reinvesting the freed planet is a separate step, not
     underproducing here.) qA/qB are the host planet's richness per leg."""
     qA, qB = host["qA"], host["qB"]
     if qA <= 0 or qB <= 0:

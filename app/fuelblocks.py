@@ -153,7 +153,7 @@ def _packed_rate(type_id: int, planet_type: str, cc_level: int) -> float:
     return _layout_cache_get_or_compute("packed_rate", _PACKED_RATE_CACHE, key, compute)
 
 
-def component_factory_rate(type_id: int, pi_data: dict, planet_type: str = "Barren",
+def component_factory_rate(type_id: int, planet_type: str = "Barren",
                            cc_level: int = 5) -> float:
     """Per-planet effective output/hr for a packed factory of this component at the
     given command-centre level.
