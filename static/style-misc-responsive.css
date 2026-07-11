@@ -223,7 +223,7 @@ body.nav-collapsed .admin-nav-item .nav-lbl { display: none; }
   .dash-fac-id   { grid-column: 1; grid-row: 1; }
   .dash-fac-time { grid-column: 2; grid-row: 1; }
   .dash-fac-val  { grid-column: 3; grid-row: 1; }
-  .an-bar-track  { grid-column: 1 / 3; grid-row: 2; }
+  .dash-fac-row .an-bar-track { grid-column: 1 / 3; grid-row: 2; }
   .dash-fac-pct  { grid-column: 3; grid-row: 2; }
 
   /* Characters tab (now visible on phones): desktop uses a real CSS grid (style-contribute.css)

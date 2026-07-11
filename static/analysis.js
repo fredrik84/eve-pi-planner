@@ -17,6 +17,15 @@ let _analyzeSnaps = [];
 // reference (below) can't drift apart.
 const _p0h = p1day => p1day * 150 / 24;
 
+// Compact k/M number for the fixed-width extraction-avg column — the full "70,313" reads fine
+// alone but a "current → target" pair overflowed a 150px column badly.
+const _fmtCompact = n => {
+  const abs = Math.abs(n);
+  if (abs >= 1e6) return (n / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
+  if (abs >= 1e3) return (n / 1e3).toFixed(1).replace(/\.0$/, '') + 'k';
+  return Math.round(n).toString();
+};
+
 // Per-material drill-down: every colony producing a given output, weakest (underperforming) first.
 let _anExpanded = new Set();   // material type_ids whose planet breakdown is expanded
 
@@ -407,7 +416,7 @@ function renderAnalysis() {
       cls = pct >= 10 ? 'an-bar-ok' : (pct >= 0 ? 'an-bar-warn' : 'an-bar-bad');
       barW = (curAvg != null && tgtAvg > 0) ? Math.max(2, Math.min(100, (curAvg / tgtAvg) * 100)) : 2;
       numsHtml = (curAvg != null)
-        ? `${Math.round(curAvg).toLocaleString()} <span class="an-of">→</span> ${Math.round(tgtAvg).toLocaleString()} <span class="an-of">P0/hr/planet</span>`
+        ? `${_fmtCompact(curAvg)} <span class="an-of">→</span> ${_fmtCompact(tgtAvg)} <span class="an-of">P0/hr</span>`
         : `<span class="an-of">no planets yet</span>`;
       numTitle = (curAvg != null)
         ? `Averaged per planet CURRENTLY producing this: ${Math.round(curAvg).toLocaleString()} P0/hr. Comfortable target: ${Math.round(tgtAvg).toLocaleString()} P0/hr (+${Math.round(_HEALTHY_BUFFER * 100)}% cushion over what the plan needs).`
