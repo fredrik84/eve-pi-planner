@@ -423,24 +423,93 @@ function _rxOpenManualAssign(characterId) {
       ? `Assigning to ${char.character_name} (${char.free_slots} free slot${char.free_slots === 1 ? '' : 's'} here). If this needs more concurrent jobs than that, the rest spill onto your other characters' free slots.`
       : 'Pick a product, how many runs each job does, and how many jobs to start at once.';
   }
-  const dl = document.getElementById('rxManProductList');
-  if (dl) dl.innerHTML = _rxOpps.map(o => `<option value="${_esc(o.name)}">`).join('');
   document.getElementById('rxManProduct').value = '';
   document.getElementById('rxManRuns').value = 1;
   document.getElementById('rxManJobs').value = 1;
   document.getElementById('rxManualAssignStatus').textContent =
     _rxOpps.length ? '' : 'Still loading the product list — wait a moment, then search again.';
   document.getElementById('rxManualAssignPreview').innerHTML = '';
+  _rxHideProductDropdown();
   document.getElementById('rxManualAssignModal').style.display = '';
 }
 
 function _rxCloseManualAssign() {
   document.getElementById('rxManualAssignModal').style.display = 'none';
+  _rxHideProductDropdown();
 }
 
 function _rxManualAssignMatch() {
   const name = document.getElementById('rxManProduct').value.trim();
   return _rxOpps.find(o => o.name === name) || null;
+}
+
+// ── Product search dropdown (click to browse the full reachable list, or type to filter) ──
+// A plain <input list=datalist> doesn't let you browse everything with an empty query on every
+// browser, and gives no icons — this is a small custom combobox instead: click/focus with
+// nothing typed shows every reachable product (alphabetical), typing filters by substring
+// match anywhere in the name, arrow keys + Enter select, click selects, Escape/blur closes.
+let _rxProductDropdownList = [];
+let _rxProductDropdownIdx = -1;
+
+function _rxProductDropdownFilter() {
+  const input = document.getElementById('rxManProduct');
+  const dd = document.getElementById('rxManProductDropdown');
+  if (!input || !dd) return;
+  const q = input.value.trim().toLowerCase();
+  const all = [..._rxOpps].sort((a, b) => a.name.localeCompare(b.name));
+  _rxProductDropdownList = (q ? all.filter(o => o.name.toLowerCase().includes(q)) : all).slice(0, 200);
+  _rxProductDropdownIdx = -1;
+  if (!_rxProductDropdownList.length) {
+    dd.innerHTML = `<div class="rx-man-product-empty">${_rxOpps.length ? 'No matching product.' : 'Loading products…'}</div>`;
+  } else {
+    dd.innerHTML = _rxProductDropdownList.map((o, i) => `
+      <div class="rx-man-product-row" data-idx="${i}" onmousedown="event.preventDefault();_rxSelectProduct(${i})">
+        <img src="https://images.evetech.net/types/${o.type_id}/icon?size=32" alt="" onerror="this.style.visibility='hidden'">
+        ${_esc(o.name)}
+      </div>`).join('');
+  }
+  dd.style.display = '';
+}
+
+function _rxSelectProduct(idx) {
+  const o = _rxProductDropdownList[idx];
+  if (!o) return;
+  document.getElementById('rxManProduct').value = o.name;
+  _rxHideProductDropdown();
+  _rxManualAssignPreview();
+}
+
+function _rxHideProductDropdown() {
+  const dd = document.getElementById('rxManProductDropdown');
+  if (dd) dd.style.display = 'none';
+  _rxProductDropdownIdx = -1;
+}
+
+function _rxProductDropdownKey(event) {
+  const dd = document.getElementById('rxManProductDropdown');
+  if (!dd || dd.style.display === 'none') return;
+  if (event.key === 'Escape') { _rxHideProductDropdown(); return; }
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    event.preventDefault();
+    if (!_rxProductDropdownList.length) return;
+    const dir = event.key === 'ArrowDown' ? 1 : -1;
+    _rxProductDropdownIdx = (_rxProductDropdownIdx + dir + _rxProductDropdownList.length) % _rxProductDropdownList.length;
+    [...dd.children].forEach((el, i) => el.classList.toggle('rx-man-product-active', i === _rxProductDropdownIdx));
+    dd.children[_rxProductDropdownIdx].scrollIntoView({ block: 'nearest' });
+  } else if (event.key === 'Enter') {
+    event.preventDefault();
+    _rxSelectProduct(_rxProductDropdownIdx >= 0 ? _rxProductDropdownIdx : 0);
+  }
+}
+
+// Scroll-wheel adjusts a number input by ±1 per tick (clamped to its min) — quicker than typing
+// for the small counts ("Runs per job", "Concurrent jobs") this modal asks for.
+function _rxNumWheel(event, el) {
+  event.preventDefault();
+  const min = parseInt(el.min, 10) || 1;
+  const cur = parseInt(el.value, 10) || min;
+  el.value = Math.max(min, cur + (event.deltaY < 0 ? 1 : -1));
+  _rxManualAssignPreview();
 }
 
 // Scales the matched opportunity's own totals (computed for its max achievable batch,

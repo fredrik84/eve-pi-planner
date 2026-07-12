@@ -520,6 +520,19 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .rx-manual-preview-row:last-of-type { margin-bottom: 0; }
 .rx-manual-preview-breakeven { margin-top: 6px; padding-top: 6px; border-top: 1px solid #2d5a8a; color: var(--clr-text-soft); }
 
+/* Custom searchable product combobox in the manual-assign modal — click with an empty query to
+   browse every reachable product, type to filter by substring anywhere in the name. */
+.rx-man-product-wrap { position: relative; width: 100%; }
+.rx-man-product-dropdown {
+  position: absolute; top: 100%; left: 0; right: 0; z-index: 30; margin-top: 3px;
+  max-height: 220px; overflow-y: auto; background: #11141c; border: 1px solid var(--clr-border);
+  border-radius: 6px; box-shadow: 0 10px 24px -12px rgba(0, 0, 0, 0.85);
+}
+.rx-man-product-row { display: flex; align-items: center; gap: 8px; padding: 6px 10px; cursor: pointer; font-size: 13px; color: var(--clr-text); }
+.rx-man-product-row img { width: 20px; height: 20px; border-radius: 3px; flex: 0 0 auto; }
+.rx-man-product-row:hover, .rx-man-product-row.rx-man-product-active { background: #1c2436; }
+.rx-man-product-empty { padding: 10px; color: var(--clr-hint); font-size: 12px; text-align: center; }
+
 /* Budget-usage feedback on the wizard's suggestions page — makes it visible which of the two
    independent caps (ISK vs total runs) actually stopped more suggestions from being added. */
 .rx-budget-summary { margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px solid var(--clr-border); }
