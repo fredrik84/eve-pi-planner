@@ -624,6 +624,23 @@ def _build_opportunities_uncached(context_id: int, allowed_material_ids: set[int
         order_value = qty * m["sell_price"]
         fixed_costs = input_cost + shipping_cost + collateral_cost + job_cost
 
+        # Intermediate reactions this product's own formula needs BEFORE the top-level reaction
+        # can even start (e.g. goo -> Ferrofluid -> this product) — computed once here at this
+        # opportunity's own max batch (top_level_runs) so a caller (the manual-assign modal, the
+        # suggestion flow) can linearly scale runs down to whatever smaller batch it actually
+        # wants, the same way every other field on this dict already scales. Empty for a
+        # single-tier product (the common case) — via is only set on reaction-product nodes.
+        chain_tiers = []
+        if node.get("via"):
+            tier_runs: dict[int, dict] = {}
+            _explode_chain_tiers(node["via"]["inputs"], node["top_level_runs"], reached, tier_runs)
+            ordered = sorted(tier_runs.items(), key=lambda kv: reached.get(kv[0], {}).get("reaction_count", 0))
+            for tier_tid, info in ordered:
+                chain_tiers.append({
+                    "type_id": tier_tid, "name": types.get(tier_tid, {}).get("name", str(tier_tid)),
+                    "runs": info["runs"], "cycle_time": info["cycle_time"], "output_qty": info["output_qty"],
+                })
+
         opportunities.append({
             "type_id": tid,
             "name": type_info.get("name", str(tid)),
@@ -643,6 +660,7 @@ def _build_opportunities_uncached(context_id: int, allowed_material_ids: set[int
             "profit_per_m3_instant": round((instant_value - fixed_costs) / ship_volume, 2) if ship_volume > 0 else None,
             "buy_volume": m["buy_volume"],
             "sell_volume": m["sell_volume"],
+            "chain_tiers": chain_tiers,
         })
 
     opportunities.sort(key=lambda o: -o["net_profit_instant"])

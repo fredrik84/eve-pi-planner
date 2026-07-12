@@ -542,6 +542,8 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .rx-manual-preview-row .an-ok { color: var(--clr-green-alt); }
 .rx-manual-preview-row .an-warn { color: var(--clr-amber); }
 .rx-manual-preview-breakeven { margin-top: 6px; padding-top: 6px; border-top: 1px solid #2d5a8a; color: var(--clr-text-soft); }
+.rx-manual-preview-chain { margin-top: 6px; padding-top: 6px; border-top: 1px solid #2d5a8a; color: var(--clr-amber); }
+.rx-manual-preview-chain b { color: var(--clr-text-bright); }
 
 /* Custom searchable product combobox in the manual-assign modal — click with an empty query to
    browse every reachable product, type to filter by substring anywhere in the name. */

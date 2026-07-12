@@ -565,6 +565,16 @@ function _rxNumWheel(event, el) {
   _rxManualAssignPreview();
 }
 
+// The chain tiers (intermediate reactions this product's own formula needs, e.g. goo ->
+// Ferrofluid -> this product) come off the opportunity at ITS max batch (top_level_runs) — scale
+// each tier's run count by the same ratio as everything else, ceil'd since a reaction run count
+// can't be fractional, floored at 1 (any nonzero need still means "install this once").
+function _rxScaledChainTiers(o, scale) {
+  return (o.chain_tiers || []).map(t => ({
+    type_id: t.type_id, name: t.name, runs: Math.max(1, Math.ceil(t.runs * scale)), job_count: 1,
+  }));
+}
+
 // Scales the matched opportunity's own totals (computed for its max achievable batch,
 // top_level_runs) down to whatever run count the user actually entered — same per-run rates,
 // just a smaller slice, rather than re-deriving cost/profit from scratch client-side.
@@ -583,6 +593,10 @@ function _rxManualAssignPreview() {
   const profit = outputValue - fixedCosts;
   const breakEven = outputQty > 0 ? fixedCosts / outputQty : 0;
   const runtimeHours = o.cycle_time ? (o.cycle_time / 3600) * runsPerJob : 0;
+  const chainTiers = _rxScaledChainTiers(o, scale);
+  const chainNote = chainTiers.length
+    ? `<div class="rx-manual-preview-chain">Also needs ${chainTiers.length} intermediate reaction${chainTiers.length === 1 ? '' : 's'} first — each takes its own job slot on the same character: ${chainTiers.map(t => `<b>${_esc(t.name)}</b> ×${t.runs}`).join(', ')}.</div>`
+    : '';
   el.innerHTML = `
     <div class="rx-manual-preview">
       <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Input cost</span><b>${_fmtIsk(fixedCosts)}</b></div>
@@ -590,6 +604,7 @@ function _rxManualAssignPreview() {
       <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Output value</span><b>${_fmtIsk(outputValue)} <span class="rx-manual-preview-units">(${Math.round(outputQty).toLocaleString()} units)</span></b></div>
       <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Profit</span><b class="${profit >= 0 ? 'an-ok' : 'an-warn'}">${_fmtIsk(profit)}</b></div>
       <div class="rx-manual-preview-breakeven">Sell for at least <b>${_fmtIsk(breakEven)}</b>/unit to break even at today's material, shipping${o.job_cost ? ', job' : ''} and collateral cost.</div>
+      ${chainNote}
     </div>`;
 }
 
@@ -607,23 +622,52 @@ function _rxSubmitManualAssign() {
   // app.reactions._build_opportunities.
   const costPerRun = o.input_cost / o.top_level_runs;
   const rewardPerRun = o.net_profit_instant / o.top_level_runs;
+  const scale = (runsPerJob * jobsWanted) / o.top_level_runs;
+  const chainTiers = _rxScaledChainTiers(o, scale);
+  const chainJobs = chainTiers.length;  // 1 job slot each — see _rxScaledChainTiers
 
   const chars = ((_rxLastDashboardData && _rxLastDashboardData.characters) || []).filter(c => c.tracked && c.slots > 1);
   const clicked = chars.find(c => String(c.character_id) === String(_rxManualAssignCharId));
   const others = chars.filter(c => String(c.character_id) !== String(_rxManualAssignCharId))
     .sort((a, b) => b.free_slots - a.free_slots);
   const ordered = clicked ? [clicked, ...others] : others;
+  const freeLeft = new Map(ordered.map(c => [c.character_id, c.free_slots]));
 
-  const allocations = [];
+  // The chain (if any) has to sit on ONE character alongside at least 1 of the top-level jobs —
+  // its intermediate output has to be right there to feed the final reaction, this tool doesn't
+  // model shipping half-finished materials between characters. Prefer the clicked character;
+  // fall back to whichever tracked character actually has the room.
+  let primary = null;
+  if (chainJobs > 0) {
+    primary = ordered.find(c => freeLeft.get(c.character_id) >= chainJobs + 1) || null;
+    if (!primary) {
+      const names = chainTiers.map(t => t.name).join(', ');
+      status.textContent = `This needs ${chainJobs} intermediate reaction${chainJobs === 1 ? '' : 's'} first (${names}) plus at least 1 slot for the product itself, all on one character — none of your tracked characters has ${chainJobs + 1} free slots. Free up slots or lower the run count.`;
+      return;
+    }
+  }
+
+  const allocations = [];  // { char, jobs, chain_tiers }
   let remaining = jobsWanted;
+  if (primary) {
+    const take = Math.min(remaining, freeLeft.get(primary.character_id) - chainJobs);
+    freeLeft.set(primary.character_id, freeLeft.get(primary.character_id) - chainJobs - take);
+    allocations.push({ char: primary, jobs: take, chain_tiers: chainTiers });
+    remaining -= take;
+  }
   for (const c of ordered) {
     if (remaining <= 0) break;
-    const take = Math.min(remaining, c.free_slots);
-    if (take > 0) { allocations.push({ char: c, jobs: take }); remaining -= take; }
+    if (c === primary) continue;
+    const avail = freeLeft.get(c.character_id);
+    const take = Math.min(remaining, avail);
+    if (take > 0) { freeLeft.set(c.character_id, avail - take); allocations.push({ char: c, jobs: take, chain_tiers: [] }); remaining -= take; }
   }
 
   if (!allocations.length) { status.textContent = 'No free reaction slots on any tracked character.'; return; }
-  if (remaining > 0 && !confirm(`Only ${jobsWanted - remaining} of ${jobsWanted} jobs fit across your free slots right now. Assign what fits?`)) return;
+  if (remaining > 0) {
+    const chainNote = chainJobs > 0 ? ` (after reserving ${chainJobs} for the intermediate chain)` : '';
+    if (!confirm(`Only ${jobsWanted - remaining} of ${jobsWanted} jobs fit across your free slots right now${chainNote}. Assign what fits?`)) return;
+  }
 
   status.textContent = 'Assigning…';
   Promise.all(allocations.map(a => fetch('/api/reactions/assign', {
@@ -633,7 +677,7 @@ function _rxSubmitManualAssign() {
       character_id: a.char.character_id, type_id: o.type_id, name: o.name,
       runs: a.jobs * runsPerJob, job_count: a.jobs,
       input_cost: costPerRun * a.jobs * runsPerJob, reward: rewardPerRun * a.jobs * runsPerJob,
-      chain_tiers: [],
+      chain_tiers: a.chain_tiers,
     }),
   }).then(r => { if (!r.ok) throw new Error('Assign failed'); })))
     .then(() => { _rxCloseManualAssign(); onReactionsTabOpen(); })
