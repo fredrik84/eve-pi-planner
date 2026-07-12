@@ -1081,6 +1081,21 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
     hvars = h.addVariables(n, lb=[0.0] * n, ub=[1.0] * n)
     h.maximize(sum(float(c["net_profit_instant"]) * hvars[i] for i, c in enumerate(candidates)))
     h.addConstr(sum(float(c["input_cost"]) * hvars[i] for i, c in enumerate(candidates)) <= float(isk_budget))
+    # Real reaction slots are ALSO a shared, limited resource across every chosen candidate —
+    # the per-candidate cadence cap above only checked each one against the single BEST
+    # character's slots in isolation, so the LP could (and did, in a real reported case) fund
+    # several products that each look individually cadence-feasible but together demand more
+    # slots than actually exist across the account; stage 2's real bin-packing then has no
+    # choice but to badly overshoot the chosen cadence on whichever gets scheduled last (a real
+    # instance: two suggestions landing at 24d/10d runtimes against a much shorter cadence).
+    # Uses the continuous (non-ceiled) slot-demand — runs × cycle_hours ÷ cadence_hours — so it
+    # stays linear in x_i; the ceil() rounding that can nudge stage 2's actual slot count up by
+    # a fraction per suggestion is a minor, expected difference, not the systemic multi-week
+    # overshoot this constraint fixes.
+    total_free_slots = sum(c["free_slots"] for c in chars_for_cap)
+    slot_demand = [c["top_level_runs"] * (c["cycle_time"] / 3600.0 if c["cycle_time"] else 1.0) / cadence_hours
+                   for c in candidates]
+    h.addConstr(sum(slot_demand[i] * hvars[i] for i in range(n)) <= float(total_free_slots))
     h.run()
     if h.getModelStatus() != highspy.HighsModelStatus.kOptimal:
         return empty
