@@ -219,7 +219,7 @@ function renderDashboard(data) {
     // (runs × cycle time) — a genuine ISK/day rate, same units as PI's value_per_day, so the
     // combined tile below is a real sum of two rates now, not a rate + a lump sum.
     ...(_featureActive('reactions') && t.reactions_tracked ? [
-      _dashTile('+' + _fmtIsk(t.reactions_net_profit_per_day || 0), 'Reactions profit / day', 'an-ok'),
+      _dashTile(_fmtIsk(t.reactions_net_profit_per_day || 0), 'Reactions profit / day', 'an-ok'),
       _dashTile(_fmtIsk((t.value_per_day || 0) + (t.reactions_net_profit_per_day || 0)), 'Total PI + Reactions / day'),
     ] : []),
   ].join('');

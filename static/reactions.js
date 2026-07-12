@@ -390,7 +390,7 @@ function _renderReactionsDashboard(data) {
   const overviewTiles = `<div class="an-stats">
       ${_dashTile(_fmtIsk(data.pending_isk_committed), 'ISK committed')}
       ${_dashTile(_fmtIsk(data.pending_output_value), 'Expected output value')}
-      ${_dashTile('+' + _fmtIsk(data.pending_net_profit_per_day), 'Expected profit / day', 'an-ok')}
+      ${_dashTile(_fmtIsk(data.pending_net_profit_per_day), 'Expected profit / day', 'an-ok')}
       ${_dashTile(`${usedSlots}<span class="an-of"> / ${data.total_slots}</span>`, 'Slots used')}
       ${_dashTile(String(pendingCount), 'Jobs to install', pendingCount > 0 ? 'an-warn' : '')}
       ${_dashTile(timeLeftVal, timeLeftLbl)}
