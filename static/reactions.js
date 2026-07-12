@@ -651,7 +651,6 @@ function _rxSubmitManualAssign() {
   // app.reactions._build_opportunities.
   const costPerRun = o.input_cost / o.top_level_runs;
   const rewardPerRun = o.net_profit_instant / o.top_level_runs;
-  const outputValuePerRun = o.instant_sell_value / o.top_level_runs;
   const scale = (runsPerJob * jobsWanted) / o.top_level_runs;
   const chainTiers = _rxChainCheckboxChecked() ? _rxScaledChainTiers(o, scale) : [];
   const chainJobs = chainTiers.length;  // 1 job slot each — see _rxScaledChainTiers
@@ -723,7 +722,6 @@ function _rxSubmitManualAssign() {
         character_id: a.char.character_id, type_id: o.type_id, name: o.name,
         runs: a.jobs * runsPerJob, job_count: a.jobs,
         input_cost: costPerRun * a.jobs * runsPerJob, reward: rewardPerRun * a.jobs * runsPerJob,
-        output_value: outputValuePerRun * a.jobs * runsPerJob,
         chain_tiers: a.chain_tiers,
       }),
     }).then(r => { if (!r.ok) throw new Error('Assign failed'); }))))
@@ -1056,7 +1054,6 @@ function _rxAssignSuggestion(i, btn) {
     body: JSON.stringify({
       character_id: s.assigned_character_id, type_id: s.type_id, name: s.name,
       runs: s.runs, job_count: s.job_count || 1, input_cost: s.input_cost, reward: s.reward,
-      output_value: s.output_value || 0,
       chain_tiers: s.chain_tiers || [],
     }),
   })
