@@ -71,11 +71,11 @@ function _loadRxShoppingList() {
       // material right now — a concrete number to check the real quote against, not just a
       // bare quantity to go find a price for yourself.
       const section = (title, items) => !items.length ? '' : `
-        <div class="rx-shop-sec-title">${title}</div>
+        <div class="rx-shop-sec-title">${title} <span class="pp-card-hint">— ${Math.round(items.reduce((s, m) => s + (m.volume_m3 || 0), 0)).toLocaleString()} m³ total</span></div>
         <div style="overflow-x:auto">
           <table class="pp-card-table" style="width:100%">
-            <thead><tr><th>Material</th><th>Quantity</th><th>Unit price</th><th>Est. cost</th></tr></thead>
-            <tbody>${items.map(m => `<tr><td>${_esc(m.name)}</td><td>${m.quantity.toLocaleString()}</td><td>${_fmtIsk(m.unit_cost)}</td><td>${_fmtIsk(m.unit_cost * m.quantity)}</td></tr>`).join('')}</tbody>
+            <thead><tr><th>Material</th><th>Quantity</th><th>Unit price</th><th>Est. cost</th><th>Volume</th></tr></thead>
+            <tbody>${items.map(m => `<tr><td>${_esc(m.name)}</td><td>${m.quantity.toLocaleString()}</td><td>${_fmtIsk(m.unit_cost)}</td><td>${_fmtIsk(m.unit_cost * m.quantity)}</td><td>${Math.round(m.volume_m3 || 0).toLocaleString()} m³</td></tr>`).join('')}</tbody>
           </table>
         </div>`;
       el.innerHTML = section('Fetch from your alliance', group)

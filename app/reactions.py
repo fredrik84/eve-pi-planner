@@ -553,6 +553,7 @@ def reactions_shopping_list(context_id: int = Depends(require_context)):
             "type_id": tid, "name": types.get(tid, {}).get("name", str(tid)),
             "quantity": math.ceil(qty), "source": reached.get(tid, {}).get("source", "market"),
             "unit_cost": round(reached.get(tid, {}).get("unit_cost", 0.0), 2),
+            "volume_m3": round(math.ceil(qty) * (types.get(tid, {}).get("volume") or 0.0), 2),
         }
         for tid, qty in totals.items()
     ]
