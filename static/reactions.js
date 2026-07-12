@@ -353,9 +353,9 @@ function _renderReactionsDashboard(data) {
       g.ids.push(a.assignment_id);
       const pendingIcon = `https://images.evetech.net/types/${a.type_id}/icon?size=32`;
       squares.push(`
-        <div class="rx-slot rx-slot-pending" title="Not running yet — install ${_esc(a.name)} ×${a.runs} in-game. Click to cancel this assignment." onclick="_rxCancelAssignment(${a.assignment_id})">
+        <div class="rx-slot rx-slot-pending" title="Not running yet — install ${_esc(a.name)} ×${a.runs} in-game. Click to edit." onclick="_rxOpenEditAssign(${a.assignment_id}, '${c.character_id}')">
           <img class="rx-slot-icon" src="${pendingIcon}" alt="" onerror="this.style.visibility='hidden'">
-          <span class="rx-slot-pending-badge">⊘</span>
+          <span class="rx-slot-pending-badge" onclick="event.stopPropagation();_rxCancelAssignment(${a.assignment_id})" title="Cancel this assignment">⊘</span>
           <div class="rx-slot-pending-label">${_esc(a.name)}</div>
         </div>`);
     }
@@ -454,9 +454,13 @@ function _rxClearAllAssignments() {
 // free, the extra jobs spill onto the account's other free slots (most-free-first), same idea
 // as the factory-planet overflow elsewhere in this app — never silently overloads one character.
 let _rxManualAssignCharId = null;
+let _rxEditingAssignmentId = null;  // set only when opened via _rxOpenEditAssign
 
 function _rxOpenManualAssign(characterId) {
   _rxManualAssignCharId = characterId;
+  _rxEditingAssignmentId = null;
+  document.getElementById('rxManualAssignTitle').firstChild.textContent = 'Assign a reaction';
+  document.getElementById('rxManualAssignBtn').textContent = 'Assign';
   const chars = (_rxLastDashboardData && _rxLastDashboardData.characters) || [];
   const char = chars.find(c => String(c.character_id) === String(characterId));
   const hint = document.getElementById('rxManualAssignHint');
@@ -473,9 +477,43 @@ function _rxOpenManualAssign(characterId) {
   document.getElementById('rxManualAssignPreview').innerHTML = '';
   _rxHideProductDropdown();
   document.getElementById('rxManualAssignModal').style.display = '';
+  _rxEnsureOppsLoadedForModal();
+}
 
+// A pending slot (assigned but not yet installed in-game) now opens this SAME modal pre-filled
+// with its current product/runs, instead of clicking the slot itself deleting it outright — only
+// the small ⊘ badge in the slot's corner still cancels directly (see the slot markup). Editing
+// deletes the old assignment row and re-runs the normal allocation flow with the new values
+// (there's no dedicated update endpoint — POST/DELETE already cover this exactly).
+function _rxOpenEditAssign(assignmentId, characterId) {
+  const chars = (_rxLastDashboardData && _rxLastDashboardData.characters) || [];
+  const char = chars.find(c => String(c.character_id) === String(characterId));
+  const a = char && (char.pending || []).find(p => p.assignment_id === assignmentId);
+  if (!a) return;
+  _rxManualAssignCharId = characterId;
+  _rxEditingAssignmentId = assignmentId;
+  document.getElementById('rxManualAssignTitle').firstChild.textContent = 'Edit reaction';
+  document.getElementById('rxManualAssignBtn').textContent = 'Save changes';
+  const hint = document.getElementById('rxManualAssignHint');
+  if (hint) {
+    hint.textContent = char
+      ? `Editing this job on ${char.character_name}. Saving replaces just this one slot — raising "Concurrent jobs" adds more elsewhere if this character doesn't have room.`
+      : 'Change the product or runs for this job.';
+  }
+  document.getElementById('rxManProduct').value = a.name;
+  document.getElementById('rxManRuns').value = a.runs;
+  document.getElementById('rxManJobs').value = 1;
+  document.getElementById('rxManProduceChain').checked = true;
+  document.getElementById('rxManChainRow').style.display = 'none';
+  document.getElementById('rxManualAssignPreview').innerHTML = '';
+  _rxHideProductDropdown();
+  document.getElementById('rxManualAssignModal').style.display = '';
+  _rxEnsureOppsLoadedForModal(() => _rxManualAssignPreview());
+}
+
+function _rxEnsureOppsLoadedForModal(onLoaded) {
   const status = document.getElementById('rxManualAssignStatus');
-  if (_rxOppsLoaded) { status.textContent = ''; return; }
+  if (_rxOppsLoaded) { status.textContent = ''; if (onLoaded) onLoaded(); return; }
   // Not loaded yet (e.g. the Advanced table was never opened this visit) — fetch it now and,
   // if the search dropdown is still open by the time it resolves, refresh it in place instead
   // of leaving a stale "still loading" state that never updates on its own.
@@ -485,6 +523,7 @@ function _rxOpenManualAssign(characterId) {
       status.textContent = '';
       const dd = document.getElementById('rxManProductDropdown');
       if (dd && dd.style.display !== 'none') _rxProductDropdownFilter();
+      if (onLoaded) onLoaded();
     })
     .catch(err => { status.textContent = err.message; });
 }
@@ -492,6 +531,7 @@ function _rxOpenManualAssign(characterId) {
 function _rxCloseManualAssign() {
   document.getElementById('rxManualAssignModal').style.display = 'none';
   _rxHideProductDropdown();
+  _rxEditingAssignmentId = null;
 }
 
 function _rxManualAssignMatch() {
@@ -647,6 +687,12 @@ function _rxSubmitManualAssign() {
     .sort((a, b) => b.free_slots - a.free_slots);
   const ordered = clicked ? [clicked, ...others] : others;
   const freeLeft = new Map(ordered.map(c => [c.character_id, c.free_slots]));
+  // Editing replaces one existing slot — the old assignment still occupies it in the cached
+  // free_slots count until the delete below actually happens, so credit that slot back up front
+  // rather than have the allocation think it's short by one when nothing's actually changed.
+  if (_rxEditingAssignmentId && clicked) {
+    freeLeft.set(clicked.character_id, freeLeft.get(clicked.character_id) + 1);
+  }
 
   // The chain (if any) has to sit on ONE character alongside at least 1 of the top-level jobs —
   // its intermediate output has to be right there to feed the final reaction, this tool doesn't
@@ -684,17 +730,27 @@ function _rxSubmitManualAssign() {
     if (!confirm(`Only ${jobsWanted - remaining} of ${jobsWanted} jobs fit across your free slots right now${chainNote}. Assign what fits?`)) return;
   }
 
-  status.textContent = 'Assigning…';
-  Promise.all(allocations.map(a => fetch('/api/reactions/assign', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      character_id: a.char.character_id, type_id: o.type_id, name: o.name,
-      runs: a.jobs * runsPerJob, job_count: a.jobs,
-      input_cost: costPerRun * a.jobs * runsPerJob, reward: rewardPerRun * a.jobs * runsPerJob,
-      chain_tiers: a.chain_tiers,
-    }),
-  }).then(r => { if (!r.ok) throw new Error('Assign failed'); })))
+  status.textContent = _rxEditingAssignmentId ? 'Saving…' : 'Assigning…';
+  // Editing = delete the old row, then run the exact same create flow with the new values —
+  // there's no dedicated update endpoint, and this is simpler than one that would have to
+  // handle the same job-count-changed/chain-changed cases this already handles for a fresh
+  // assign. If the delete fails, don't touch anything else.
+  const deleteOld = _rxEditingAssignmentId
+    ? fetch(`/api/reactions/assign/${_rxEditingAssignmentId}`, { method: 'DELETE' })
+        .then(r => { if (!r.ok) throw new Error('Could not delete the old assignment'); })
+    : Promise.resolve();
+
+  deleteOld
+    .then(() => Promise.all(allocations.map(a => fetch('/api/reactions/assign', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        character_id: a.char.character_id, type_id: o.type_id, name: o.name,
+        runs: a.jobs * runsPerJob, job_count: a.jobs,
+        input_cost: costPerRun * a.jobs * runsPerJob, reward: rewardPerRun * a.jobs * runsPerJob,
+        chain_tiers: a.chain_tiers,
+      }),
+    }).then(r => { if (!r.ok) throw new Error('Assign failed'); }))))
     .then(() => { _rxCloseManualAssign(); onReactionsTabOpen(); })
     .catch(err => { status.textContent = err.message; });
 }
