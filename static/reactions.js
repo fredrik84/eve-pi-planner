@@ -56,8 +56,12 @@ function _loadRxShoppingList() {
       _rxLastShoppingList = d.materials || [];
       if (!_rxLastShoppingList.length) { card.style.display = 'none'; return; }
       card.style.display = '';
-      const goo = _rxLastShoppingList.filter(m => m.is_moon_goo);
-      const other = _rxLastShoppingList.filter(m => !m.is_moon_goo);
+      // "source" is which price actually won for THAT specific material right now (see
+      // app.reactions._resolve_reachable's cheaper-wins logic) — not a fixed "is this moon
+      // goo" category. Your group's own sheet can lose to a better market rate on any given
+      // material, so this list always reflects the cheaper source per item, not a static split.
+      const group = _rxLastShoppingList.filter(m => m.source === 'group');
+      const market = _rxLastShoppingList.filter(m => m.source !== 'group');
       const section = (title, items) => !items.length ? '' : `
         <div class="rx-shop-sec-title">${title}</div>
         <div style="overflow-x:auto">
@@ -66,8 +70,8 @@ function _loadRxShoppingList() {
             <tbody>${items.map(m => `<tr><td>${_esc(m.name)}</td><td>${m.quantity.toLocaleString()}</td></tr>`).join('')}</tbody>
           </table>
         </div>`;
-      el.innerHTML = section('Moon materials (buy from the alliance)', goo)
-        + section('Other purchased materials (fuel blocks etc.)', other);
+      el.innerHTML = section('Fetch from your alliance', group)
+        + section('Buy on the market (fuel blocks, or cheaper right now than your sheet)', market);
     })
     .catch(() => { card.style.display = 'none'; });
 }

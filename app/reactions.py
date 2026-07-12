@@ -196,6 +196,9 @@ def _resolve_reachable(goo: dict[int, dict], purchasable: dict[int, float],
       max_qty        - max units producible this tier, capped by _UNLIMITED_RUNS_CAP
       reaction_count - distinct reaction runs needed in the subtree (the "work" proxy)
       via            - None for raw goo/purchasable, else the {reaction_id, ...} formula used
+      source         - LEAF nodes only ("via" is None): "group" or "market", whichever priced
+                       this specific unit_cost — see the cheaper-wins note below. Absent on
+                       reaction-product nodes (never directly "bought", always reacted).
     A reaction only becomes reachable once every one of its inputs is already reachable —
     same "expand until no more nodes unlock" shape as build_sde.py's compute_pi_tiers, just
     walked forward from available inputs instead of backward from a fixed target.
@@ -218,10 +221,10 @@ def _resolve_reachable(goo: dict[int, dict], purchasable: dict[int, float],
     for tid, g in goo.items():
         if g["sell_price"] > 0:
             reached[tid] = {"unit_cost": g["sell_price"], "max_qty": _PURCHASABLE_MAX_QTY,
-                             "reaction_count": 0, "via": None}
+                             "reaction_count": 0, "via": None, "source": "group"}
     for tid, buy_price in purchasable.items():
         if buy_price > 0 and (tid not in reached or buy_price < reached[tid]["unit_cost"]):
-            reached[tid] = {"unit_cost": buy_price, "max_qty": _PURCHASABLE_MAX_QTY,
+            reached[tid] = {"unit_cost": buy_price, "max_qty": _PURCHASABLE_MAX_QTY, "source": "market",
                              "reaction_count": 0, "via": None}
 
     changed = True
@@ -498,14 +501,19 @@ def reactions_shopping_list(context_id: int = Depends(require_context)):
         top_units = a["runs"] * node["via"]["output_qty"]
         _explode_shopping_list(a["type_id"], top_units, reached, totals)
 
+    # "source" reflects which price actually won for THIS specific leaf (see _resolve_reachable's
+    # cheaper-wins note) — not just "is this material categorically moon goo." A group's own
+    # sheet can lose to a better market rate on any given material, and a shopping-list entry
+    # must follow whichever source is actually cheapest right now, or it'd send the player to
+    # buy from the alliance when the market is the better (or for a non-member, the only) option.
     materials = [
         {
             "type_id": tid, "name": types.get(tid, {}).get("name", str(tid)),
-            "quantity": math.ceil(qty), "is_moon_goo": tid in goo,
+            "quantity": math.ceil(qty), "source": reached.get(tid, {}).get("source", "market"),
         }
         for tid, qty in totals.items()
     ]
-    materials.sort(key=lambda m: (not m["is_moon_goo"], m["name"]))
+    materials.sort(key=lambda m: (m["source"] != "group", m["name"]))
     return {"materials": materials}
 
 
