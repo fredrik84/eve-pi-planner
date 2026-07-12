@@ -532,10 +532,10 @@ function _rxManualAssignPreview() {
   const runtimeHours = o.cycle_time ? (o.cycle_time / 3600) * runsPerJob : 0;
   el.innerHTML = `
     <div class="rx-manual-preview">
-      <div class="rx-manual-preview-row"><span class="pp-card-hint">Input cost</span><b>${_fmtIsk(fixedCosts)}</b></div>
-      <div class="rx-manual-preview-row"><span class="pp-card-hint">Runtime per job</span><b>${_fmtHours(runtimeHours)}</b></div>
-      <div class="rx-manual-preview-row"><span class="pp-card-hint">Output value</span><b>${_fmtIsk(outputValue)} <span class="pp-card-hint">(${Math.round(outputQty).toLocaleString()} units)</span></b></div>
-      <div class="rx-manual-preview-row"><span class="pp-card-hint">Profit</span><b class="${profit >= 0 ? 'an-ok' : 'an-warn'}">${_fmtIsk(profit)}</b></div>
+      <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Input cost</span><b>${_fmtIsk(fixedCosts)}</b></div>
+      <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Runtime per job</span><b>${_fmtHours(runtimeHours)}</b></div>
+      <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Output value</span><b>${_fmtIsk(outputValue)} <span class="rx-manual-preview-units">(${Math.round(outputQty).toLocaleString()} units)</span></b></div>
+      <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Profit</span><b class="${profit >= 0 ? 'an-ok' : 'an-warn'}">${_fmtIsk(profit)}</b></div>
       <div class="rx-manual-preview-breakeven">Sell for at least <b>${_fmtIsk(breakEven)}</b>/unit to break even at today's material, shipping${o.job_cost ? ', job' : ''} and collateral cost.</div>
     </div>`;
 }

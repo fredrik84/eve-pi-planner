@@ -518,6 +518,18 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 }
 .rx-manual-preview-row { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 3px; }
 .rx-manual-preview-row:last-of-type { margin-bottom: 0; }
+/* NOT .pp-card-hint here — that maps to --clr-hint (#3a4460), a near-black tone meant for the
+   main card background (#151926ish); against this callout's lighter #16202e blue it read as
+   barely legible. --clr-text-soft is the same muted-but-actually-readable tone .rx-advisor's
+   own body text already uses successfully in this exact blue-callout shape. */
+.rx-manual-preview-label { color: var(--clr-text-soft); }
+.rx-manual-preview-units { color: var(--clr-text-soft); font-weight: 400; }
+.rx-manual-preview-row b { color: var(--clr-text-bright); }
+/* an-ok/an-warn are normally only ever used compounded onto another class elsewhere in this
+   app (.an-stat.an-ok, .padfill-pct.an-ok, ...) — standalone, as the Profit row uses them, they
+   carried no color at all. Give them one here so profit vs. loss is actually distinguishable. */
+.rx-manual-preview-row .an-ok { color: var(--clr-green-alt); }
+.rx-manual-preview-row .an-warn { color: var(--clr-amber); }
 .rx-manual-preview-breakeven { margin-top: 6px; padding-top: 6px; border-top: 1px solid #2d5a8a; color: var(--clr-text-soft); }
 
 /* Custom searchable product combobox in the manual-assign modal — click with an empty query to
