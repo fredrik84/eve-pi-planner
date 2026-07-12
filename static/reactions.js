@@ -354,7 +354,9 @@ function _renderReactionsDashboard(data) {
     </div>`;
 
   if (metricsEl) metricsEl.innerHTML = overviewTiles;
-  el.innerHTML = rows + todoNote + untrackedNote;
+  // Alerts first — "what needs installing right now" is the actionable part; the per-character
+  // slot grid below is more of a reference/status view once you've acted on the alerts.
+  el.innerHTML = todoNote + rows + untrackedNote;
 }
 
 function _rxCancelAssignment(assignmentId) {

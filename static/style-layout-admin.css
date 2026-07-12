@@ -493,7 +493,7 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
   width: 16px; height: 16px; display: flex; align-items: center; justify-content: center;
 }
 .rx-slot-pending-label { font-size: 8px; color: #c87a7a; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 54px; }
-.rx-todo-groups { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.rx-todo-groups { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
 
 /* Budget-usage feedback on the wizard's suggestions page — makes it visible which of the two
    independent caps (ISK vs total runs) actually stopped more suggestions from being added. */
