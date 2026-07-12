@@ -1,28 +1,39 @@
 // Reactions tab (moon-goo profitability ranking — priced from your alliance group's own price
 // sheet if it has one, live market prices otherwise). Fetches the ranked opportunity list and
 // renders a client-sortable table — this is advice, not an optimizer, so every dimension
-// (profit, steps, liquidity) is shown un-collapsed for the viewer to weigh.
+// (profit, steps, liquidity) is available to weigh, but only the core ones (what it costs, what
+// it makes, what it's worth, what you keep) show by default — the full 13-column table was
+// overflowing badly. "Show more columns" reveals steps/job cost/order-price/liquidity alongside.
 
 let _rxOpps = [];
 let _rxSortKey = 'net_profit_instant';
 let _rxSortDir = -1; // -1 = descending
+let _rxShowDetailCols = (() => { try { return localStorage.getItem('rxShowDetailCols') === '1'; } catch (e) { return false; } })();
 
-const _RX_COLUMNS = [
+const _RX_CORE_COLUMNS = [
   { key: 'name',                 label: 'Product',        fmt: (v, o) =>
       `<img src="https://images.evetech.net/types/${o.type_id}/icon?size=32" alt="" style="width:18px;height:18px;border-radius:3px;vertical-align:middle;margin-right:5px" onerror="this.style.display='none'">${_esc(v)}` },
-  { key: 'steps',                label: 'Steps',          fmt: v => String(v) },
-  { key: 'output_qty',           label: 'Max output',     fmt: v => Math.round(v).toLocaleString() },
+  { key: 'output_qty',           label: 'Units',          fmt: v => Math.round(v).toLocaleString() },
   { key: 'input_cost',           label: 'Input cost',     fmt: v => _fmtIsk(v) },
+  { key: 'instant_sell_value',   label: 'Output value',   fmt: v => _fmtIsk(v) },
   { key: 'shipping_cost',        label: 'Ship+collateral', fmt: (v, o) => _fmtIsk(v + o.collateral_cost) },
+  { key: 'net_profit_instant',   label: 'Profit',         fmt: v => _fmtIsk(v) },
+];
+const _RX_DETAIL_COLUMNS = [
+  { key: 'steps',                label: 'Steps',          fmt: v => String(v) },
   { key: 'job_cost',             label: 'Job cost',        fmt: v => _fmtIsk(v) },
-  { key: 'instant_sell_value',   label: 'Instant sell',   fmt: v => _fmtIsk(v) },
   { key: 'sell_order_value',     label: 'Sell order',     fmt: v => _fmtIsk(v) },
-  { key: 'net_profit_instant',   label: 'Profit (instant)', fmt: v => _fmtIsk(v) },
   { key: 'net_profit_order',     label: 'Profit (order)', fmt: v => _fmtIsk(v) },
   { key: 'profit_per_m3_instant', label: 'ISK/m³',        fmt: v => v == null ? '—' : Math.round(v).toLocaleString() },
   { key: 'buy_volume',           label: 'Buy depth',      fmt: v => Math.round(v).toLocaleString() },
   { key: 'sell_volume',          label: 'Sell depth',     fmt: v => Math.round(v).toLocaleString() },
 ];
+
+function _rxToggleDetailCols(checked) {
+  _rxShowDetailCols = checked;
+  try { localStorage.setItem('rxShowDetailCols', checked ? '1' : '0'); } catch (e) {}
+  _renderReactions();
+}
 
 // Shared loader for the reachable/priced opportunity list (_rxOpps) — used by the "Advanced"
 // table AND the manual-assign modal's product search. Server-side this is now cached for a
@@ -1014,16 +1025,21 @@ function _renderReactions() {
     if (typeof av === 'string') return _rxSortDir * av.localeCompare(bv);
     return _rxSortDir * (av - bv);
   });
-  const head = _RX_COLUMNS.map(c => {
+  const columns = _RX_CORE_COLUMNS.concat(_rxShowDetailCols ? _RX_DETAIL_COLUMNS : []);
+  const head = columns.map(c => {
     const active = c.key === _rxSortKey;
     const arrow = active ? (_rxSortDir === 1 ? ' ▲' : ' ▼') : '';
     return `<th onclick="_rxSortBy('${c.key}')" style="cursor:pointer;white-space:nowrap">${_esc(c.label)}${arrow}</th>`;
   }).join('');
   const body = rows.map(o => {
-    const cells = _RX_COLUMNS.map(c => `<td>${c.fmt(o[c.key], o)}</td>`).join('');
+    const cells = columns.map(c => `<td>${c.fmt(o[c.key], o)}</td>`).join('');
     return `<tr>${cells}</tr>`;
   }).join('');
   el.innerHTML = `
+    <label class="pp-label-check" style="margin-bottom:8px">
+      <input type="checkbox" ${_rxShowDetailCols ? 'checked' : ''} onchange="_rxToggleDetailCols(this.checked)">
+      Show more columns — steps, job cost, sell-order price/profit, ISK/m³, market depth
+    </label>
     <div style="overflow-x:auto">
       <table class="pp-card-table" style="width:100%">
         <thead><tr>${head}</tr></thead>
@@ -1031,9 +1047,10 @@ function _renderReactions() {
       </table>
     </div>
     <div class="pp-card-hint" style="margin-top:8px">
-      ${rows.length} opportunit${rows.length === 1 ? 'y' : 'ies'} · "Steps" = distinct reaction runs needed (the least-work proxy) ·
-      Ship+collateral uses the configured import/export rates ·
-      Buy/sell depth = current Jita order-book units, not daily trade volume — a rough liquidity signal only.
+      ${rows.length} opportunit${rows.length === 1 ? 'y' : 'ies'} · Output value/Profit use the instant-sell price
+      ${_rxShowDetailCols ? ' (see the Sell order / Profit (order) columns for the ask-price alternative)' : ''} ·
+      Ship+collateral uses the configured import/export rates
+      ${_rxShowDetailCols ? ' · "Steps" = distinct reaction runs needed (the least-work proxy) · Buy/sell depth = current Jita order-book units, not daily trade volume — a rough liquidity signal only.' : '.'}
     </div>
     ${_rxCanEditSettings() ? _rxSettingsFormHtml() : ''}
     ${_rxAccountSettingsFormHtml()}`;
