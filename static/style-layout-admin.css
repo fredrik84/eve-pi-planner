@@ -519,6 +519,21 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .rx-fold-summary::-webkit-details-marker { display: none; }
 .rx-fold-caret { display: inline-block; transition: transform 0.15s; color: var(--clr-text-dim); margin-right: 6px; }
 details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
+.rx-fold-caret.rx-fold-caret-open { transform: rotate(90deg); }
+
+/* Full opportunity list: click a row to fold out the secondary dimensions (steps, job cost,
+   sell-order price, ISK/m³, market depth) as a wrapped block below it, instead of cramming them
+   in as more table columns — the table only ever has the 6 core columns, so it never overflows
+   regardless of how many rows are expanded. */
+.rx-opp-row { cursor: pointer; }
+.rx-opp-row:hover { background: rgba(90, 169, 230, 0.06); }
+.rx-opp-detail-row td { padding: 0; border-top: none; }
+.rx-opp-detail {
+  display: flex; flex-wrap: wrap; gap: 6px 18px; padding: 8px 14px 12px;
+  background: #131722; border-top: 1px dashed var(--clr-border); font-size: 12px;
+}
+.rx-opp-detail-chip { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.rx-opp-detail-chip b { color: var(--clr-text-bright); }
 
 /* Live cost/profit preview inside the manual "assign a product to this slot" modal — same
    bordered-callout treatment as .rx-advisor so it reads as "here's what this would cost you",

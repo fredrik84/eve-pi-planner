@@ -2,13 +2,15 @@
 // sheet if it has one, live market prices otherwise). Fetches the ranked opportunity list and
 // renders a client-sortable table — this is advice, not an optimizer, so every dimension
 // (profit, steps, liquidity) is available to weigh, but only the core ones (what it costs, what
-// it makes, what it's worth, what you keep) show by default — the full 13-column table was
-// overflowing badly. "Show more columns" reveals steps/job cost/order-price/liquidity alongside.
+// it makes, what it's worth, what you keep) show as actual table COLUMNS — the full 13-column
+// table was overflowing badly, and a "show more columns" toggle just overflowed just as badly
+// the moment you turned it on (still the same wide row, just wider). Extra dimensions instead
+// expand as a wrapped block BELOW a row when you click it — never adds table width.
 
 let _rxOpps = [];
 let _rxSortKey = 'net_profit_instant';
 let _rxSortDir = -1; // -1 = descending
-let _rxShowDetailCols = (() => { try { return localStorage.getItem('rxShowDetailCols') === '1'; } catch (e) { return false; } })();
+let _rxExpandedOpps = new Set();  // type_ids with their detail row open — survives re-sorts
 
 const _RX_CORE_COLUMNS = [
   { key: 'name',                 label: 'Product',        fmt: (v, o) =>
@@ -19,19 +21,21 @@ const _RX_CORE_COLUMNS = [
   { key: 'shipping_cost',        label: 'Ship+collateral', fmt: (v, o) => _fmtIsk(v + o.collateral_cost) },
   { key: 'net_profit_instant',   label: 'Profit',         fmt: v => _fmtIsk(v) },
 ];
-const _RX_DETAIL_COLUMNS = [
-  { key: 'steps',                label: 'Steps',          fmt: v => String(v) },
+// Rendered as "Label: value" chips in the fold-out row, not table cells — order here is display
+// order, not column order, so it's fine that these vary in shape (a plain number vs. ISK).
+const _RX_DETAIL_FIELDS = [
+  { key: 'steps',                label: 'Steps',           fmt: v => String(v) },
   { key: 'job_cost',             label: 'Job cost',        fmt: v => _fmtIsk(v) },
-  { key: 'sell_order_value',     label: 'Sell order',     fmt: v => _fmtIsk(v) },
-  { key: 'net_profit_order',     label: 'Profit (order)', fmt: v => _fmtIsk(v) },
-  { key: 'profit_per_m3_instant', label: 'ISK/m³',        fmt: v => v == null ? '—' : Math.round(v).toLocaleString() },
-  { key: 'buy_volume',           label: 'Buy depth',      fmt: v => Math.round(v).toLocaleString() },
-  { key: 'sell_volume',          label: 'Sell depth',     fmt: v => Math.round(v).toLocaleString() },
+  { key: 'sell_order_value',     label: 'Sell order value', fmt: v => _fmtIsk(v) },
+  { key: 'net_profit_order',     label: 'Profit (order)',  fmt: v => _fmtIsk(v) },
+  { key: 'profit_per_m3_instant', label: 'ISK/m³',         fmt: v => v == null ? '—' : Math.round(v).toLocaleString() },
+  { key: 'buy_volume',           label: 'Buy depth',       fmt: v => Math.round(v).toLocaleString() },
+  { key: 'sell_volume',          label: 'Sell depth',      fmt: v => Math.round(v).toLocaleString() },
 ];
 
-function _rxToggleDetailCols(checked) {
-  _rxShowDetailCols = checked;
-  try { localStorage.setItem('rxShowDetailCols', checked ? '1' : '0'); } catch (e) {}
+function _rxToggleOppDetail(typeId) {
+  if (_rxExpandedOpps.has(typeId)) _rxExpandedOpps.delete(typeId);
+  else _rxExpandedOpps.add(typeId);
   _renderReactions();
 }
 
@@ -467,6 +471,8 @@ function _rxOpenManualAssign(characterId) {
   document.getElementById('rxManProduct').value = '';
   document.getElementById('rxManRuns').value = 1;
   document.getElementById('rxManJobs').value = 1;
+  document.getElementById('rxManProduceChain').checked = true;
+  document.getElementById('rxManChainRow').style.display = 'none';
   document.getElementById('rxManualAssignPreview').innerHTML = '';
   _rxHideProductDropdown();
   document.getElementById('rxManualAssignModal').style.display = '';
@@ -575,6 +581,11 @@ function _rxScaledChainTiers(o, scale) {
   }));
 }
 
+function _rxChainCheckboxChecked() {
+  const cb = document.getElementById('rxManProduceChain');
+  return !cb || cb.checked;
+}
+
 // Scales the matched opportunity's own totals (computed for its max achievable batch,
 // top_level_runs) down to whatever run count the user actually entered — same per-run rates,
 // just a smaller slice, rather than re-deriving cost/profit from scratch client-side.
@@ -584,19 +595,26 @@ function _rxManualAssignPreview() {
   const o = _rxManualAssignMatch();
   const runsPerJob = parseInt(document.getElementById('rxManRuns').value, 10) || 0;
   const jobs = parseInt(document.getElementById('rxManJobs').value, 10) || 0;
+  const chainRow = document.getElementById('rxManChainRow');
+  if (chainRow) chainRow.style.display = (o && o.chain_tiers && o.chain_tiers.length) ? '' : 'none';
   if (!o || runsPerJob <= 0 || jobs <= 0 || !o.top_level_runs) { el.innerHTML = ''; return; }
   const totalRuns = runsPerJob * jobs;
   const scale = totalRuns / o.top_level_runs;
   const outputQty = o.output_qty * scale;
+  // Input/job cost already reflect the FULL rolled-up cost of producing the chain internally
+  // (see app.reactions._resolve_reachable) regardless of whether assignment rows get created
+  // for it — the "produce chain" checkbox only controls the reminder/slot-reservation, not the
+  // cost math, since either way you're consuming the same materials to get there.
   const fixedCosts = (o.input_cost + (o.job_cost || 0) + o.shipping_cost + o.collateral_cost) * scale;
   const outputValue = o.instant_sell_value * scale;
   const profit = outputValue - fixedCosts;
   const breakEven = outputQty > 0 ? fixedCosts / outputQty : 0;
   const runtimeHours = o.cycle_time ? (o.cycle_time / 3600) * runsPerJob : 0;
-  const chainTiers = _rxScaledChainTiers(o, scale);
-  const chainNote = chainTiers.length
-    ? `<div class="rx-manual-preview-chain">Also needs ${chainTiers.length} intermediate reaction${chainTiers.length === 1 ? '' : 's'} first — each takes its own job slot on the same character: ${chainTiers.map(t => `<b>${_esc(t.name)}</b> ×${t.runs}`).join(', ')}.</div>`
-    : '';
+  const allChainTiers = _rxScaledChainTiers(o, scale);
+  const produceChain = _rxChainCheckboxChecked();
+  const chainNote = !allChainTiers.length ? '' : produceChain
+    ? `<div class="rx-manual-preview-chain">Also needs ${allChainTiers.length} intermediate reaction${allChainTiers.length === 1 ? '' : 's'} first — each takes its own job slot on the same character: ${allChainTiers.map(t => `<b>${_esc(t.name)}</b> ×${t.runs}`).join(', ')}.</div>`
+    : `<div class="rx-manual-preview-chain">Not producing the chain — you'll need ${allChainTiers.map(t => _esc(t.name)).join(', ')} already in stock, or this job can't actually be installed.</div>`;
   el.innerHTML = `
     <div class="rx-manual-preview">
       <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Input cost</span><b>${_fmtIsk(fixedCosts)}</b></div>
@@ -623,7 +641,7 @@ function _rxSubmitManualAssign() {
   const costPerRun = o.input_cost / o.top_level_runs;
   const rewardPerRun = o.net_profit_instant / o.top_level_runs;
   const scale = (runsPerJob * jobsWanted) / o.top_level_runs;
-  const chainTiers = _rxScaledChainTiers(o, scale);
+  const chainTiers = _rxChainCheckboxChecked() ? _rxScaledChainTiers(o, scale) : [];
   const chainJobs = chainTiers.length;  // 1 job slot each — see _rxScaledChainTiers
 
   const chars = ((_rxLastDashboardData && _rxLastDashboardData.characters) || []).filter(c => c.tracked && c.slots > 1);
@@ -1069,21 +1087,25 @@ function _renderReactions() {
     if (typeof av === 'string') return _rxSortDir * av.localeCompare(bv);
     return _rxSortDir * (av - bv);
   });
-  const columns = _RX_CORE_COLUMNS.concat(_rxShowDetailCols ? _RX_DETAIL_COLUMNS : []);
-  const head = columns.map(c => {
+  const head = _RX_CORE_COLUMNS.map(c => {
     const active = c.key === _rxSortKey;
     const arrow = active ? (_rxSortDir === 1 ? ' ▲' : ' ▼') : '';
     return `<th onclick="_rxSortBy('${c.key}')" style="cursor:pointer;white-space:nowrap">${_esc(c.label)}${arrow}</th>`;
   }).join('');
-  const body = rows.map(o => {
-    const cells = columns.map(c => `<td>${c.fmt(o[c.key], o)}</td>`).join('');
-    return `<tr>${cells}</tr>`;
+  const body = rows.map((o, i) => {
+    const expanded = _rxExpandedOpps.has(o.type_id);
+    const cells = _RX_CORE_COLUMNS.map((c, ci) => {
+      const v = c.fmt(o[c.key], o);
+      return `<td>${ci === 0 ? `<span class="rx-fold-caret${expanded ? ' rx-fold-caret-open' : ''}">▸</span>${v}` : v}</td>`;
+    }).join('');
+    const mainRow = `<tr class="rx-opp-row" onclick="_rxToggleOppDetail(${o.type_id})">${cells}</tr>`;
+    if (!expanded) return mainRow;
+    const chips = _RX_DETAIL_FIELDS.map(f => `
+      <span class="rx-opp-detail-chip"><span class="rx-manual-preview-label">${_esc(f.label)}</span> <b>${f.fmt(o[f.key], o)}</b></span>`).join('');
+    const detailRow = `<tr class="rx-opp-detail-row"><td colspan="${_RX_CORE_COLUMNS.length}"><div class="rx-opp-detail">${chips}</div></td></tr>`;
+    return mainRow + detailRow;
   }).join('');
   el.innerHTML = `
-    <label class="pp-label-check" style="margin-bottom:8px">
-      <input type="checkbox" ${_rxShowDetailCols ? 'checked' : ''} onchange="_rxToggleDetailCols(this.checked)">
-      Show more columns — steps, job cost, sell-order price/profit, ISK/m³, market depth
-    </label>
     <div style="overflow-x:auto">
       <table class="pp-card-table" style="width:100%">
         <thead><tr>${head}</tr></thead>
@@ -1091,10 +1113,9 @@ function _renderReactions() {
       </table>
     </div>
     <div class="pp-card-hint" style="margin-top:8px">
-      ${rows.length} opportunit${rows.length === 1 ? 'y' : 'ies'} · Output value/Profit use the instant-sell price
-      ${_rxShowDetailCols ? ' (see the Sell order / Profit (order) columns for the ask-price alternative)' : ''} ·
-      Ship+collateral uses the configured import/export rates
-      ${_rxShowDetailCols ? ' · "Steps" = distinct reaction runs needed (the least-work proxy) · Buy/sell depth = current Jita order-book units, not daily trade volume — a rough liquidity signal only.' : '.'}
+      ${rows.length} opportunit${rows.length === 1 ? 'y' : 'ies'} · click a row for steps, job cost, sell-order
+      price/profit, ISK/m³ and market depth · Output value/Profit use the instant-sell price ·
+      Ship+collateral uses the configured import/export rates.
     </div>
     ${_rxCanEditSettings() ? _rxSettingsFormHtml() : ''}
     ${_rxAccountSettingsFormHtml()}`;
