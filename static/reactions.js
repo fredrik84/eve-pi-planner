@@ -354,9 +354,24 @@ function _renderReactionsDashboard(data) {
     </div>`;
 
   if (metricsEl) metricsEl.innerHTML = overviewTiles;
-  // Alerts first — "what needs installing right now" is the actionable part; the per-character
-  // slot grid below is more of a reference/status view once you've acted on the alerts.
-  el.innerHTML = todoNote + rows + untrackedNote;
+
+  // Alerts get their own card at the very top of the page (same placement/shape as the
+  // Dashboard tab's own alert cards) rather than being buried inside the "Reactions" card body —
+  // "what needs installing right now" is the actionable part, not just a status footnote.
+  const alertsCard = document.getElementById('rxAlertsCard');
+  const alertsContent = document.getElementById('rxAlertsContent');
+  const alertsHint = document.getElementById('rxAlertsHint');
+  if (alertsCard && alertsContent) {
+    if (todoByChar.size) {
+      alertsCard.style.display = '';
+      alertsContent.innerHTML = todoNote;
+      if (alertsHint) alertsHint.textContent = `— ${pendingCount} job${pendingCount === 1 ? '' : 's'} to install`;
+    } else {
+      alertsCard.style.display = 'none';
+    }
+  }
+
+  el.innerHTML = rows + untrackedNote;
 }
 
 function _rxCancelAssignment(assignmentId) {
