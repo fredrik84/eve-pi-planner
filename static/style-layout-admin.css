@@ -525,6 +525,9 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .rx-shop-sec-title { font-weight: 600; color: #dbe1ee; margin: 10px 0 6px; }
 .rx-shop-sec-title:first-child { margin-top: 0; }
 
+.rx-diff-covered { opacity: 0.55; }
+.rx-diff-covered td:nth-child(4) { color: #7fd0a0; }
+
 .rx-advisor {
   margin-top: 12px; padding: 10px 12px; background: #16202e; border: 1px solid #2d5a8a;
   border-left: 3px solid #5aa9e6; border-radius: 6px;

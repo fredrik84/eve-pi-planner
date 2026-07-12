@@ -60,3 +60,26 @@ function _fmtEpochClock(sec) {
   if (!sec) return '—';
   return new Date(sec * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
+
+// Parses one line of a pasted in-game inventory/asset list — name + quantity, tolerant of both
+// tab-separated (EVE's clipboard export: Name\tQty\tGroup\tCategory\t...) and multi-space-padded
+// paste variants. Returns [name, qty] or null for a blank/unparseable line. Shared by the PI
+// Refill tool's inventory paste and the Reactions shopping-list "what you've received" diff.
+function _parseInventoryLine(line) {
+  line = line.trim();
+  if (!line) return null;
+  let parts = line.includes('\t') ? line.split('\t') : line.split(/ {2,}/);
+  if (parts.length < 2) {
+    const m = line.match(/^(.+?)\s+(\d[\d,\s]*)\s*$/);
+    if (!m) return null;
+    parts = [m[1].trim(), m[2].trim()];
+  }
+  const name = parts[0].trim();
+  const col1 = parts[1].trim();
+  let qtyStr;
+  if (/^[\d\s,]+$/.test(col1) && /\d/.test(col1)) qtyStr = col1;   // Format A (qty in col 2)
+  else if (parts.length >= 3) qtyStr = parts[2].trim();           // Format B (category col 2)
+  else return null;
+  const qty = parseInt(qtyStr.replace(/[^\d]/g, ''), 10) || 0;
+  return (qty > 0 && name) ? [name, qty] : null;
+}

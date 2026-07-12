@@ -89,8 +89,58 @@ function _loadRxShoppingList() {
         </div>`;
       el.innerHTML = section('Fetch from your alliance', group)
         + section('Buy on the market (fuel blocks, or cheaper right now than your sheet)', market);
+      _renderRxReceivedDiff();
     })
     .catch(() => { card.style.display = 'none'; });
+}
+
+// Diffs a pasted partial delivery (alliance contract, market buy, whatever actually arrived)
+// against the shopping list totals — a contract rarely covers everything you asked for in one
+// go, so this shows what's still short per material instead of making you eyeball two lists.
+// Reuses the same parser as the PI Refill inventory paste (utils.js).
+function _renderRxReceivedDiff() {
+  const el = document.getElementById('rxReceivedDiff');
+  const ta = document.getElementById('rxReceivedPaste');
+  if (!el || !ta) return;
+  const text = ta.value || '';
+  if (!text.trim()) { el.innerHTML = ''; return; }
+  const received = {};
+  for (const line of text.split('\n')) {
+    const parsed = _parseInventoryLine(line);
+    if (!parsed) continue;
+    const key = parsed[0].toLowerCase();
+    received[key] = (received[key] || 0) + parsed[1];
+  }
+  if (!Object.keys(received).length) {
+    el.innerHTML = '<div class="pp-empty">No recognizable "Name  Quantity" lines found.</div>';
+    return;
+  }
+  const matched = new Set();
+  const rows = _rxLastShoppingList.map(m => {
+    const key = m.name.toLowerCase();
+    const got = received[key] || 0;
+    if (got) matched.add(key);
+    const remaining = Math.max(0, m.quantity - got);
+    return { name: m.name, needed: m.quantity, got, remaining, unit_cost: m.unit_cost };
+  });
+  const leftover = Object.keys(received).filter(k => !matched.has(k));
+  const stillShort = rows.filter(r => r.remaining > 0);
+  const covered = rows.filter(r => r.remaining <= 0 && r.needed > 0);
+  const rowHtml = r => `<tr class="${r.remaining <= 0 ? 'rx-diff-covered' : ''}">
+      <td>${_esc(r.name)}</td><td>${r.needed.toLocaleString()}</td><td>${r.got.toLocaleString()}</td>
+      <td>${r.remaining > 0 ? r.remaining.toLocaleString() : 'Covered ✓'}</td>
+      <td>${r.remaining > 0 ? _fmtIsk(r.remaining * r.unit_cost) : '—'}</td></tr>`;
+  el.innerHTML = `
+    <div style="overflow-x:auto">
+      <table class="pp-card-table" style="width:100%">
+        <thead><tr><th>Material</th><th>Needed</th><th>Received</th><th>Still short</th><th>Est. cost to finish</th></tr></thead>
+        <tbody>${rows.map(rowHtml).join('')}</tbody>
+      </table>
+    </div>
+    <div class="pp-card-hint" style="margin-top:8px">
+      ${stillShort.length} material${stillShort.length === 1 ? '' : 's'} still short · ${covered.length} fully covered
+      ${leftover.length ? ` · unrecognized/unneeded in your paste: ${leftover.map(_esc).join(', ')}` : ''}
+    </div>`;
 }
 
 function _rxCopyShoppingList(btn) {

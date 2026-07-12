@@ -295,27 +295,8 @@ function _renderRefillTables() {
   }).join('');
 }
 
-// Parse one EVE-inventory line into [name, qty] or null. Mirrors app/pi.py parse_inventory:
-// handles tab- or 2+-space columns, "Name | Qty | Category" (qty 2nd) AND "Name | Category |
-// Qty" (qty 3rd), space/comma thousands separators, and a single-space "Name 1234" fallback.
-function _parseInventoryLine(line) {
-  line = line.trim();
-  if (!line) return null;
-  let parts = line.includes('\t') ? line.split('\t') : line.split(/ {2,}/);
-  if (parts.length < 2) {
-    const m = line.match(/^(.+?)\s+(\d[\d,\s]*)\s*$/);
-    if (!m) return null;
-    parts = [m[1].trim(), m[2].trim()];
-  }
-  const name = parts[0].trim();
-  const col1 = parts[1].trim();
-  let qtyStr;
-  if (/^[\d\s,]+$/.test(col1) && /\d/.test(col1)) qtyStr = col1;   // Format A (qty in col 2)
-  else if (parts.length >= 3) qtyStr = parts[2].trim();           // Format B (category col 2)
-  else return null;
-  const qty = parseInt(qtyStr.replace(/[^\d]/g, ''), 10) || 0;
-  return (qty > 0 && name) ? [name, qty] : null;
-}
+// _parseInventoryLine (name/qty parser, tab- or 2+-space columns, both category-position
+// variants) moved to utils.js — shared with the Reactions shopping-list "received" diff.
 
 // The PI Planner's single inventory paste (#inv) drives the refill split too — re-parse it
 // (matching P1 names against the selected plan) and refresh the tables. Called on every #inv
