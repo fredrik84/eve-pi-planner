@@ -172,6 +172,7 @@ async function _loadFeatures() {
 }
 function _featureActive(key, dflt = false) {
   const f = _features[key];
+  if (f && f.group_granted) return true; // this account's own alliance group was granted the feature directly
   const state = f ? (f.state || (f.enabled ? 'public' : 'admin')) : (dflt ? 'public' : 'admin');
   if (state === 'public') return true;
   if (state === 'testers') return _featuresIsAdmin || _featuresIsTester;
@@ -212,6 +213,7 @@ function _applyLoginGates() {
 let _esiConfigured = false;
 let _loggedIn = false;
 let _isAdmin = false;
+let _isGroupManager = false;  // manages at least one alliance group's own data (app.groups) without being a full site admin
 let _sessionLoaded = false;   // true once /api/characters has resolved → _isAdmin/_loggedIn are real
 let _ppCharsData = [];   // last /api/characters payload, for the Setup Analysis tab
 let _ppSessionCharId = null;   // last session_character_id, so the cache-hint tick below can re-render without a fetch
@@ -230,15 +232,17 @@ async function loadCharacters() {
       _esiConfigured = data.configured;
       _loggedIn = data.logged_in || false;
       _isAdmin = data.is_admin || false;
+      _isGroupManager = data.is_group_manager || false;
       _ppCharsData = data.characters || [];
       _ppSessionCharId = data.session_character_id;
       renderCharacters(data.characters || [], _loggedIn);
       renderHeaderSession(_loggedIn, data.characters || [], data.session_character_id);
       _sessionLoaded = true;
       // Tab-restore on boot runs before this resolves, so a saved "admin" tab opened with _isAdmin
-      // still false. Now that the real state is known, bounce a confirmed non-admin off the admin tab
-      // to a mobile-visible tab (the old onAdminTabOpen bounce to the hidden planner shuffled phones).
-      if (!_isAdmin && localStorage.getItem('activeTab') === 'admin' && typeof switchTab === 'function') switchTab('dashboard');
+      // still false. Now that the real state is known, bounce a confirmed non-admin/non-manager off
+      // the admin tab to a mobile-visible tab (the old onAdminTabOpen bounce to the hidden planner
+      // shuffled phones).
+      if (!_isAdmin && !_isGroupManager && localStorage.getItem('activeTab') === 'admin' && typeof switchTab === 'function') switchTab('dashboard');
       await _loadFeatures();
       // Re-render: renderCharacters()/renderHeaderSession() above ran BEFORE _loadFeatures()
       // resolved, so any _featureActive()-gated content (e.g. the esi_cache_skip "no new data
@@ -263,8 +267,11 @@ async function loadCharacters() {
 function renderHeaderSession(loggedIn, chars, sessionCharId) {
   try { localStorage.setItem('ppNavLoggedIn', loggedIn ? '1' : '0'); } catch(e) {}
   try { localStorage.setItem('ppNavIsAdmin', _isAdmin ? '1' : '0'); } catch(e) {}
+  try { localStorage.setItem('ppNavIsGroupMgr', _isGroupManager ? '1' : '0'); } catch(e) {}
   document.documentElement.classList.toggle('nav-li', !!loggedIn);
   document.documentElement.classList.toggle('nav-adm', !!_isAdmin);
+  document.documentElement.classList.toggle('nav-grpmgr', !!_isGroupManager);
+  if (typeof _applyAdminNavVisibility === 'function') _applyAdminNavVisibility();
   const el = document.getElementById('headerActions');
   if (!el) return;
   if (!loggedIn) {

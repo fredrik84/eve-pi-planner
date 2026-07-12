@@ -13,7 +13,7 @@ from fastapi import APIRouter, Cookie, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.sde import get_connection, ensure_once
-from app.esi import require_admin, admin_and_tester_status
+from app.esi import require_admin, admin_and_tester_status, _session_lookup
 
 router = APIRouter()
 
@@ -99,12 +99,13 @@ FEATURE_REGISTRY = [
      "description": "On Setup Analysis: each material row shows its P0 source name and a comfortable "
                     "P0/hr-per-planet target at a glance — a reference while reseating extractor heads.",
      "default": False},
-    {"key": "reactions", "label": "B0SS moon-goo reactions", "group": "Reactions",
-     "description": "Adds a Reactions tab: ranks the most profitable moon-goo reaction chains to "
-                    "buy from B0SS and ship to Jita. This only controls whether the nav tab shows — "
-                    "the underlying data is always B0SS-alliance-gated server-side regardless of "
-                    "this flag's state, so rolling it to 'public' just reveals the tab to everyone; "
-                    "non-B0SS accounts still get a 403 from the API itself.",
+    {"key": "reactions", "label": "Alliance moon-goo reactions", "group": "Reactions",
+     "description": "Adds a Reactions tab: ranks the most profitable moon-goo reaction chains, "
+                    "priced from your alliance's own price sheet if it has one (see Admin → "
+                    "Groups) or live market prices otherwise, to ship and sell. This only "
+                    "controls whether the nav tab shows — the tool itself is open to any "
+                    "logged-in user regardless of this flag's state, so rolling it to 'public' "
+                    "just reveals the tab to everyone.",
      "default": False},
 ]
 GROUP_ORDER = ["Dashboard", "Setup Analysis", "Planner", "Planet DB", "Characters",
@@ -167,10 +168,20 @@ def list_features(pp_session: str = Cookie(default=None)):
     con = get_connection()
     db_state = {r["key"]: r["state"] for r in con.execute("SELECT key, state FROM pp_features")}
     con.close()
+    # Feature keys unlocked via the caller's OWN group membership (app.groups) — a generic
+    # mechanism separate from the admin/testers/public rollout above: a future feature can ship
+    # visible only to specific alliance group(s) regardless of its normal state. Imported lazily
+    # to avoid a hard import-time dependency for a rarely-used path.
+    sess = _session_lookup(pp_session)
+    granted_keys: set[str] = set()
+    if sess:
+        from app.groups import caller_group_feature_keys
+        granted_keys = caller_group_feature_keys(sess[1])
     feats = [
         {"key": f["key"], "label": f["label"], "description": f["description"],
          "group": f.get("group") or "Other",
-         "state": db_state.get(f["key"]) or _default_state(f)}
+         "state": db_state.get(f["key"]) or _default_state(f),
+         "group_granted": f["key"] in granted_keys}
         for f in FEATURE_REGISTRY
     ]
     from app.main import GIT_COMMIT

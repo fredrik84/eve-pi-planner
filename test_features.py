@@ -97,10 +97,10 @@ def test_corp_wallet_gated(base: str) -> bool:
 
 
 def test_reactions_gated(base: str) -> bool:
-    # Open to any logged-in user (not B0SS-exclusive anymore — B0SS membership only picks the
-    # moon-goo pricing source, pp_moon_goo_prices vs. Fuzzworks market prices); still requires
-    # being logged in at all, so anonymous requests get 401, not the old 403.
-    print(f"\n{'='*60}\n  Reactions endpoints require login (open to all users, B0SS-priced or Fuzzworks-priced)\n{'='*60}")
+    # Open to any logged-in user (not exclusive to any one alliance — group membership only
+    # picks the moon-goo pricing source, a group's own price sheet vs. Fuzzworks market prices,
+    # see app.groups); still requires being logged in at all, so anonymous requests get 401.
+    print(f"\n{'='*60}\n  Reactions endpoints require login (open to all users, group-priced or market-priced)\n{'='*60}")
     ok = True
     code = get_status(f"{base}/api/reactions/opportunities")
     ok &= check(code == 401, f"anonymous reactions-opportunities read rejected (got HTTP {code})")
@@ -119,6 +119,27 @@ def test_reactions_gated(base: str) -> bool:
     ok &= check(code == 401, f"anonymous reactions-clear-all rejected (got HTTP {code})")
     code = get_status(f"{base}/api/reactions/shopping-list")
     ok &= check(code == 401, f"anonymous reactions-shopping-list rejected (got HTTP {code})")
+    return ok
+
+
+def test_groups_gated(base: str) -> bool:
+    print(f"\n{'='*60}\n  Group management endpoints are gated\n{'='*60}")
+    ok = True
+    # Site-admin-only CRUD: 403 for anonymous (require_admin, matches test_corp_wallet_gated's shape).
+    code = get_status(f"{base}/api/admin/groups")
+    ok &= check(code == 403, f"anonymous groups-list rejected (got HTTP {code})")
+    code = post_status(f"{base}/api/admin/groups", {"name": "x", "alliance_id": 1})
+    ok &= check(code == 403, f"anonymous group-create rejected (got HTTP {code})")
+    code = post_status(f"{base}/api/admin/groups/1/managers", {"character_name": "x"})
+    ok &= check(code == 403, f"anonymous manager-add rejected (got HTTP {code})")
+    code = post_status(f"{base}/api/admin/groups/1/features", {"feature_key": "reactions"})
+    ok &= check(code == 403, f"anonymous feature-grant rejected (got HTTP {code})")
+    # Caller-facing (require_context): 401 for anonymous, same convention as reactions above.
+    code = get_status(f"{base}/api/groups/mine")
+    ok &= check(code == 401, f"anonymous groups-mine rejected (got HTTP {code})")
+    # Group-scoped moon-goo writes (require_context + is_group_manager): 401 for anonymous.
+    code = post_status(f"{base}/api/moon-goo/1/row", {"type_id": 1, "sell_price": 1, "stock": 1})
+    ok &= check(code == 401, f"anonymous group-scoped moon-goo write rejected (got HTTP {code})")
     return ok
 
 
@@ -207,6 +228,7 @@ def main():
         test_skill_roi_anon(base),
         test_corp_wallet_gated(base),
         test_reactions_gated(base),
+        test_groups_gated(base),
         test_delete_account_gated(base),
         test_cleanup_preview_gated(base),
         test_admin_stats_gated(base),

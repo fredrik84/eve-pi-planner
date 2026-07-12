@@ -1,6 +1,7 @@
-// Reactions tab (B0SS moon-goo profitability ranking, alliance-gated). Fetches the ranked
-// opportunity list and renders a client-sortable table — this is advice, not an optimizer, so
-// every dimension (profit, steps, liquidity) is shown un-collapsed for the viewer to weigh.
+// Reactions tab (moon-goo profitability ranking — priced from your alliance group's own price
+// sheet if it has one, live market prices otherwise). Fetches the ranked opportunity list and
+// renders a client-sortable table — this is advice, not an optimizer, so every dimension
+// (profit, steps, liquidity) is shown un-collapsed for the viewer to weigh.
 
 let _rxOpps = [];
 let _rxSortKey = 'net_profit_instant';
@@ -28,7 +29,7 @@ function onReactionsTabOpen() {
     el.innerHTML = '<div class="pp-empty">Loading…</div>';
     fetch('/api/reactions/opportunities')
       .then(r => {
-        if (!r.ok) throw new Error(r.status === 403 ? 'B0SS alliance membership required' : 'Load failed');
+        if (!r.ok) throw new Error(r.status === 401 ? 'Log in to use Reactions' : 'Load failed');
         return r.json();
       })
       .then(data => {
@@ -99,7 +100,7 @@ function _loadReactionsDashboard() {
   if (!_rxLastDashboardData) el.innerHTML = '<div class="pp-empty">Loading…</div>';
   fetch('/api/reactions/jobs')
     .then(r => {
-      if (!r.ok) throw new Error(r.status === 403 ? 'B0SS alliance membership required' : 'Load failed');
+      if (!r.ok) throw new Error(r.status === 401 ? 'Log in to use Reactions' : 'Load failed');
       return r.json();
     })
     .then(data => { _rxLastDashboardData = data; _renderReactionsDashboard(data); })
@@ -348,7 +349,7 @@ function wizRSuggest() {
     body: JSON.stringify({ isk_budget: isk, max_chain_depth: depth, cadence_hours: cadence, material_ids: materialIds }),
   })
     .then(r => {
-      if (!r.ok) throw new Error(r.status === 403 ? 'B0SS alliance membership required' : 'Suggest failed');
+      if (!r.ok) throw new Error(r.status === 401 ? 'Log in to use Reactions' : 'Suggest failed');
       return r.json();
     })
     .then(_renderReactionsSuggestions)
@@ -601,8 +602,15 @@ function _renderReactions() {
       Ship+collateral uses the configured import/export rates ·
       Buy/sell depth = current Jita order-book units, not daily trade volume — a rough liquidity signal only.
     </div>
-    ${typeof _isAdmin !== 'undefined' && _isAdmin ? _rxSettingsFormHtml() : ''}`;
-  if (typeof _isAdmin !== 'undefined' && _isAdmin) _loadRxSettings();
+    ${_rxCanEditSettings() ? _rxSettingsFormHtml() : ''}`;
+  if (_rxCanEditSettings()) _loadRxSettings();
+}
+
+// Site admins can always preview/edit; a non-admin sees the form only if they manage at least
+// one group — GET/PUT /api/reactions/settings always resolves to THEIR OWN group (via
+// membership), so this is just a visibility check, not a scoping one.
+function _rxCanEditSettings() {
+  return (typeof _isAdmin !== 'undefined' && _isAdmin) || (typeof _isGroupManager !== 'undefined' && _isGroupManager);
 }
 
 function _rxSettingsFormHtml() {

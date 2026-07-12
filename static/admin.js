@@ -5,21 +5,44 @@
 // _isAdmin, switchTab) lives in planetary.js, which loads first.
 
 // ── Admin tab ───────────────────────────────────────────────────────────────────
+// Site-admin-only sub-pages — hidden from a pure group manager (manages a group's own data
+// without being a full site admin). Anything NOT in this set (moongoo, groups-mine — the
+// group-scoped ones) is visible to both.
+const _SITE_ADMIN_ONLY_PAGES = new Set(['stats', 'features', 'users', 'submissions', 'bugs', 'baskets', 'wallet', 'cleanup', 'groups']);
+
 let _adminPage = (() => { try { return localStorage.getItem('adminPage') || 'submissions'; } catch (e) { return 'submissions'; } })();
 function onAdminTabOpen() {
-  // Only bounce a CONFIRMED non-admin (session loaded), and to a mobile-visible tab — bouncing to
-  // the hidden planner before _isAdmin had loaded was shuffling phone users off a restored admin tab.
-  // When state is still unknown, proceed: the admin endpoints are authenticated server-side, so they
-  // populate for a real admin and 403 gracefully otherwise (loadCharacters then bounces a non-admin).
-  if (_sessionLoaded && !_isAdmin) { switchTab('dashboard'); return; }
+  // Only bounce a CONFIRMED non-admin/non-manager (session loaded), and to a mobile-visible tab —
+  // bouncing to the hidden planner before _isAdmin had loaded was shuffling phone users off a
+  // restored admin tab. When state is still unknown, proceed: the admin endpoints are
+  // authenticated server-side, so they populate for an authorized caller and 403 gracefully
+  // otherwise (loadCharacters then bounces someone with neither role).
+  if (_sessionLoaded && !_isAdmin && !_isGroupManager) { switchTab('dashboard'); return; }
+  _applyAdminNavVisibility();
+  // A pure group manager landing on a site-admin-only page (e.g. the hardcoded 'submissions'
+  // default, or a leftover localStorage value from once viewing as an admin) has nothing to see
+  // there — redirect to their own group-scoped moon-goo editor instead.
+  if (!_isAdmin && _isGroupManager && _SITE_ADMIN_ONLY_PAGES.has(_adminPage)) _adminPage = 'moongoo';
   // Load every section's data on open so the nav badges are populated; the sub-nav just toggles
-  // which section is visible.
-  loadPlanetSubmissions();
-  loadBugs();
-  loadAdmins();
-  loadTesters();
-  loadAdminFeatures();
+  // which section is visible. Site-admin-only sections are skipped for a pure group manager —
+  // their own endpoints would just 403.
+  if (_isAdmin) {
+    loadPlanetSubmissions();
+    loadBugs();
+    loadAdmins();
+    loadTesters();
+    loadAdminFeatures();
+    if (typeof loadGroups === 'function') loadGroups();
+  }
   adminSubPage(_adminPage);
+}
+
+// Which sidebar/mobile sub-nav buttons show at all — site-admin-only pages disappear entirely
+// for a pure group manager, rather than being visible-but-403ing on click.
+function _applyAdminNavVisibility() {
+  document.querySelectorAll('#adminNavGroup .admin-nav-item, #adminMobilePageNav .admin-mobile-page-btn').forEach(b => {
+    if (_SITE_ADMIN_ONLY_PAGES.has(b.dataset.page)) b.style.display = _isAdmin ? '' : 'none';
+  });
 }
 
 // Admin sub-navigation: driven from the sidebar nav-group.
@@ -47,6 +70,7 @@ function adminSubPage(key) {
   if (key === 'users') _loadCharNameSuggestions();
   if (key === 'stats') loadAdminStats();
   if (key === 'cleanup') loadCleanupPreview();
+  if (key === 'groups' && typeof loadGroups === 'function') loadGroups();
   if (key === 'moongoo') loadMoonGoo();
 }
 
@@ -707,13 +731,52 @@ async function runCleanup() {
   }
 }
 
-// ── Moon-goo prices (B0SS alliance deal, feeds the Reactions tool) ─────────────────────────
+// ── Moon-goo prices (group-scoped — a group's own alliance price sheet, feeds Reactions) ───
+let _moonGooGroups = [];   // groups the caller can manage (site admin: all; manager: their own)
+let _moonGooGroupId = null;
+
 async function loadMoonGoo() {
   const el = document.getElementById('moonGooList');
+  const pickerRow = document.getElementById('moonGooGroupPickerRow');
+  const picker = document.getElementById('moonGooGroupPicker');
   if (!el) return;
   el.innerHTML = '<div class="pp-empty">Loading…</div>';
   try {
-    const resp = await fetch('/api/moon-goo');
+    const resp = await fetch('/api/groups/mine');
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    _moonGooGroups = data.groups || [];
+    if (!_moonGooGroups.length) {
+      if (pickerRow) pickerRow.style.display = 'none';
+      el.innerHTML = '<div class="pp-empty">No groups to manage yet — an admin needs to create one first (Admin → Groups).</div>';
+      return;
+    }
+    if (!_moonGooGroupId || !_moonGooGroups.some(g => g.id === _moonGooGroupId)) {
+      _moonGooGroupId = _moonGooGroups[0].id;
+    }
+    if (picker) {
+      picker.innerHTML = _moonGooGroups.map(g => `<option value="${g.id}" ${g.id === _moonGooGroupId ? 'selected' : ''}>${_esc(g.name)}</option>`).join('');
+    }
+    if (pickerRow) pickerRow.style.display = _moonGooGroups.length > 1 ? '' : 'none';
+    await _fetchAndRenderMoonGoo();
+  } catch (e) {
+    el.innerHTML = `<div class="pp-empty">Failed to load: ${_esc(e.message)}</div>`;
+  }
+}
+
+function onMoonGooGroupChange() {
+  const picker = document.getElementById('moonGooGroupPicker');
+  if (!picker) return;
+  _moonGooGroupId = parseInt(picker.value, 10);
+  _fetchAndRenderMoonGoo();
+}
+
+async function _fetchAndRenderMoonGoo() {
+  const el = document.getElementById('moonGooList');
+  if (!el || !_moonGooGroupId) return;
+  el.innerHTML = '<div class="pp-empty">Loading…</div>';
+  try {
+    const resp = await fetch(`/api/moon-goo/${_moonGooGroupId}`);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data = await resp.json();
     renderMoonGoo(data.prices || []);
@@ -731,7 +794,7 @@ function renderMoonGoo(rows) {
       <span class="admin-name">${_esc(r.name)}</span>
       <span class="admin-meta">#${r.type_id}</span>
       <input type="number" class="bug-input goo-row-price" value="${r.sell_price}" style="max-width:120px" title="Sell price">
-      <input type="number" class="bug-input goo-row-stock" value="${r.stock}" style="max-width:100px" title="Stock">
+      <input type="number" class="bug-input goo-row-stock" value="${r.stock}" style="max-width:100px" title="Stock (reference only — not used to cap suggestions)">
       <button onclick="saveMoonGooRow(${r.type_id}, this)">Save</button>
       <button onclick="deleteMoonGooRow(${r.type_id}, this)">Delete</button>
     </div>`).join('');
@@ -743,7 +806,7 @@ async function saveMoonGooRow(typeId, btn) {
   const stock = parseInt(row.querySelector('.goo-row-stock').value, 10) || 0;
   btn.disabled = true;
   try {
-    const resp = await fetch('/api/moon-goo/row', {
+    const resp = await fetch(`/api/moon-goo/${_moonGooGroupId}/row`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ type_id: typeId, sell_price, stock }),
     });
@@ -760,9 +823,9 @@ async function deleteMoonGooRow(typeId, btn) {
   if (!confirm('Remove this material from the price list?')) return;
   btn.disabled = true;
   try {
-    const resp = await fetch(`/api/moon-goo/${typeId}`, { method: 'DELETE' });
+    const resp = await fetch(`/api/moon-goo/${_moonGooGroupId}/${typeId}`, { method: 'DELETE' });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    loadMoonGoo();
+    _fetchAndRenderMoonGoo();
   } catch (e) {
     alert('Failed: ' + e.message);
     btn.disabled = false;
@@ -775,8 +838,9 @@ async function addMoonGooRow() {
   const stock = parseInt(document.getElementById('gooAddStock').value, 10) || 0;
   const statusEl = document.getElementById('gooAddStatus');
   if (!typeId) { statusEl.textContent = 'Enter a type ID.'; return; }
+  if (!_moonGooGroupId) { statusEl.textContent = 'No group selected.'; return; }
   try {
-    const resp = await fetch('/api/moon-goo/row', {
+    const resp = await fetch(`/api/moon-goo/${_moonGooGroupId}/row`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ type_id: typeId, sell_price, stock }),
     });
@@ -786,7 +850,7 @@ async function addMoonGooRow() {
     document.getElementById('gooAddTypeId').value = '';
     document.getElementById('gooAddPrice').value = '';
     document.getElementById('gooAddStock').value = '';
-    loadMoonGoo();
+    _fetchAndRenderMoonGoo();
   } catch (e) {
     statusEl.textContent = 'Failed: ' + e.message;
   }
@@ -796,8 +860,9 @@ async function importMoonGoo() {
   const text = document.getElementById('gooImportText').value;
   const statusEl = document.getElementById('gooImportStatus');
   if (!text.trim()) { statusEl.textContent = 'Paste something first.'; return; }
+  if (!_moonGooGroupId) { statusEl.textContent = 'No group selected.'; return; }
   try {
-    const resp = await fetch('/api/moon-goo/import', {
+    const resp = await fetch(`/api/moon-goo/${_moonGooGroupId}/import`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text }),
     });
@@ -806,8 +871,140 @@ async function importMoonGoo() {
     statusEl.textContent = `Imported ${result.imported} row${result.imported === 1 ? '' : 's'}.`
       + (result.errors.length ? ` ${result.errors.length} warning(s): ${result.errors.join('; ')}` : '');
     document.getElementById('gooImportText').value = '';
-    loadMoonGoo();
+    _fetchAndRenderMoonGoo();
   } catch (e) {
     statusEl.textContent = 'Failed: ' + e.message;
+  }
+}
+
+// ── Groups (site-admin only — creates groups, assigns delegated managers/feature grants) ──
+async function loadGroups() {
+  const el = document.getElementById('groupsList');
+  if (!el) return;
+  el.innerHTML = '<div class="pp-empty">Loading…</div>';
+  try {
+    const resp = await fetch('/api/admin/groups');
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    renderGroups(data.groups || []);
+  } catch (e) {
+    el.innerHTML = `<div class="pp-empty">Failed to load: ${_esc(e.message)}</div>`;
+  }
+}
+
+function renderGroups(groups) {
+  const el = document.getElementById('groupsList');
+  if (!el) return;
+  if (!groups.length) { el.innerHTML = '<div class="pp-empty">No groups yet — add one above.</div>'; return; }
+  el.innerHTML = groups.map(g => `
+    <div class="admin-row" data-group-id="${g.id}" style="flex-direction:column;align-items:stretch;gap:6px">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <span class="admin-name">${_esc(g.name)}</span>
+        <span class="admin-meta">alliance #${g.alliance_id}</span>
+        <button onclick="deleteGroup(${g.id}, '${_esc(g.name)}', this)">Delete group</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+        <span class="pp-card-hint" style="margin:0">Managers:</span>
+        ${g.managers.map(m => `<span class="admin-meta">${_esc(m)} <a href="#" onclick="removeGroupManager(${g.id},'${_esc(m)}',this);return false;" title="Remove">×</a></span>`).join('') || '<span class="pp-card-hint">none</span>'}
+        <input type="text" class="bug-input grp-mgr-input" placeholder="Character name" style="max-width:160px">
+        <button onclick="addGroupManager(${g.id}, this)">Add manager</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+        <span class="pp-card-hint" style="margin:0">Feature grants:</span>
+        ${g.features.map(k => `<span class="admin-meta">${_esc(k)} <a href="#" onclick="revokeGroupFeature(${g.id},'${_esc(k)}',this);return false;" title="Revoke">×</a></span>`).join('') || '<span class="pp-card-hint">none</span>'}
+        <select class="pp-select grp-feat-select" style="max-width:220px">${(_features ? Object.keys(_features) : []).map(k => `<option value="${_esc(k)}">${_esc(k)}</option>`).join('')}</select>
+        <button onclick="grantGroupFeature(${g.id}, this)">Grant</button>
+      </div>
+    </div>`).join('');
+}
+
+async function createGroup() {
+  const name = document.getElementById('groupAddName').value.trim();
+  const allianceId = parseInt(document.getElementById('groupAddAllianceId').value, 10);
+  const statusEl = document.getElementById('groupAddStatus');
+  if (!name || !allianceId) { statusEl.textContent = 'Name and alliance ID are required.'; return; }
+  try {
+    const resp = await fetch('/api/admin/groups', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, alliance_id: allianceId }),
+    });
+    if (!resp.ok) throw new Error((await resp.json()).detail || `HTTP ${resp.status}`);
+    statusEl.textContent = `Added: ${name}`;
+    document.getElementById('groupAddName').value = '';
+    document.getElementById('groupAddAllianceId').value = '';
+    loadGroups();
+  } catch (e) {
+    statusEl.textContent = 'Failed: ' + e.message;
+  }
+}
+
+async function deleteGroup(groupId, name, btn) {
+  if (!confirm(`Delete group "${name}"? Its price sheet and reaction settings are left in place but become unreachable.`)) return;
+  btn.disabled = true;
+  try {
+    const resp = await fetch(`/api/admin/groups/${groupId}`, { method: 'DELETE' });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    loadGroups();
+  } catch (e) {
+    alert('Failed: ' + e.message);
+    btn.disabled = false;
+  }
+}
+
+async function addGroupManager(groupId, btn) {
+  const row = btn.closest('.admin-row');
+  const input = row.querySelector('.grp-mgr-input');
+  const name = input.value.trim();
+  if (!name) return;
+  btn.disabled = true;
+  try {
+    const resp = await fetch(`/api/admin/groups/${groupId}/managers`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ character_name: name }),
+    });
+    if (!resp.ok) throw new Error((await resp.json()).detail || `HTTP ${resp.status}`);
+    loadGroups();
+  } catch (e) {
+    alert('Failed: ' + e.message);
+    btn.disabled = false;
+  }
+}
+
+async function removeGroupManager(groupId, name) {
+  try {
+    const resp = await fetch(`/api/admin/groups/${groupId}/managers/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    loadGroups();
+  } catch (e) {
+    alert('Failed: ' + e.message);
+  }
+}
+
+async function grantGroupFeature(groupId, btn) {
+  const row = btn.closest('.admin-row');
+  const select = row.querySelector('.grp-feat-select');
+  const key = select.value;
+  if (!key) return;
+  btn.disabled = true;
+  try {
+    const resp = await fetch(`/api/admin/groups/${groupId}/features`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ feature_key: key }),
+    });
+    if (!resp.ok) throw new Error((await resp.json()).detail || `HTTP ${resp.status}`);
+    loadGroups();
+  } catch (e) {
+    alert('Failed: ' + e.message);
+    btn.disabled = false;
+  }
+}
+
+async function revokeGroupFeature(groupId, key) {
+  try {
+    const resp = await fetch(`/api/admin/groups/${groupId}/features/${encodeURIComponent(key)}`, { method: 'DELETE' });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    loadGroups();
+  } catch (e) {
+    alert('Failed: ' + e.message);
   }
 }

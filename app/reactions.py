@@ -1,19 +1,20 @@
 """
-Moon-goo reaction profitability ranking (Phase 2 of the B0SS reactions tool — see
-app/moon_goo.py for the alliance price list this reads from). Not part of the PI planner's
-extractor/factory distribution algorithm — a separate, unrelated read-only advisory tool.
+Moon-goo reaction profitability ranking — see app/moon_goo.py for the (now group-scoped, see
+app.groups) alliance price sheet this reads from. Not part of the PI planner's extractor/factory
+distribution algorithm — a separate, unrelated read-only advisory tool.
 
-Starting from whatever goo is actually in stock (app.moon_goo's pp_moon_goo_prices), walks the
-reaction graph forward (Simple -> Composite, any depth) to find every reachable product, and
-for each computes: cost to make the max achievable quantity (capped by stock, ME-adjusted),
-value at Jita (both instant-sell/buy and sell-order/ask, with order-book depth alongside so the
-caller can judge liquidity), and shipping+collateral cost to get it there. Ranks by profit but
-returns every dimension (steps, profit/m3, volume) un-collapsed — "advice, not a tool": the
-comparison happens client-side, this doesn't pick a single winner.
+Starting from whatever's priced (a caller's own group's price sheet, if any, compared against
+the open market — see _load_goo_and_reached), walks the reaction graph forward (Simple ->
+Composite, any depth) to find every reachable product, and for each computes: cost to make a
+run at the achievable quantity (ME-adjusted), value at Jita (both instant-sell/buy and
+sell-order/ask, with order-book depth alongside so the caller can judge liquidity), and
+shipping+collateral cost to get it there. Ranks by profit but returns every dimension (steps,
+profit/m3, volume) un-collapsed — "advice, not a tool": the comparison happens client-side,
+this doesn't pick a single winner.
 
-This evaluates each candidate chain IN ISOLATION (as if all available goo went to that one
+This evaluates each candidate chain IN ISOLATION (as if unlimited supply went to that one
 product) — it does not account for competing chains sharing the same raw materials. That
-cross-product allocation is Phase 3's job (an LP over reaction-slot + stock constraints).
+cross-product allocation is what _suggest_reactions' knapsack does, further down.
 """
 import json as _json
 import math
@@ -26,7 +27,8 @@ from pydantic import BaseModel
 
 from app.sde import get_connection, load_pi_data, ensure_once
 from app.market import fetch_market_data
-from app.esi import require_admin, require_context, ESI_BASE, _get_valid_token, is_b0ss_member
+from app.esi import require_context, ESI_BASE, _get_valid_token
+from app.groups import member_group, is_group_manager
 
 router = APIRouter()
 
@@ -34,44 +36,75 @@ router = APIRouter()
 # -2% material / -20% time base, x1.1 in null/WH space. Only the material figure matters here.
 REACTION_ME_REDUCTION = 0.022
 
-# Shared, admin-configurable shipping/collateral rates — these are alliance-wide assumptions
-# (courier rates, insurance terms) that change over time, not a per-user preference, so this
-# is a single global row (no context_id) rather than per-account settings like alert_settings.
-# Import (buying materials in from Jita) has no collateral — that's a self-haul/no-3rd-party-
+# Group-configurable shipping/collateral rates — these are alliance-wide assumptions (courier
+# rates, insurance terms) that vary per alliance ("I doubt everyone has the same values"), so
+# each group gets its own row; anyone not in a priced group falls back to a shared global-default
+# row. Import (buying materials in from Jita) has no collateral — that's a self-haul/no-3rd-party-
 # courier assumption; only the export leg (shipping the reacted product OUT to sell) uses a
 # courier and needs collateral declared. Confirmed with the user: moon goo itself has zero
 # import cost (picked up at/near the reaction site), only non-goo purchased inputs (fuel
 # blocks etc.) pay the import rate.
 _RXS_DEFAULTS = {"import_isk_per_m3": 1200.0, "export_isk_per_m3": 1200.0, "export_collateral_pct": 0.005}
+_GLOBAL_SETTINGS_GROUP_ID = 0  # sentinel "no group" row — kept as a real (non-NULL) value since
+# a nullable PRIMARY KEY doesn't behave consistently across SQLite and Postgres.
 
 
 @ensure_once
 def ensure_reaction_settings_table():
     con = get_connection()
     try:
+        table_exists = con.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='pp_reaction_settings'"
+        ).fetchone()
+        migrate_row = None
+        if table_exists:
+            cols = {r["name"] for r in con.execute("PRAGMA table_info(pp_reaction_settings)")}
+            if "group_id" not in cols:
+                # Old single-global-row shape (id INTEGER PRIMARY KEY, always id=1). SQLite can't
+                # ALTER a PRIMARY KEY in place, so rebuild — preserve the already-configured rate
+                # as BOTH the new global-default row AND the bootstrap (B0SS) group's own row, so
+                # nothing silently resets to the hardcoded defaults after the group split.
+                migrate_row = con.execute(
+                    "SELECT import_isk_per_m3, export_isk_per_m3, export_collateral_pct "
+                    "FROM pp_reaction_settings WHERE id=1"
+                ).fetchone()
+                con.execute("DROP TABLE pp_reaction_settings")
+                con.commit()
         con.execute("""
             CREATE TABLE IF NOT EXISTS pp_reaction_settings (
-                id                   INTEGER PRIMARY KEY,
-                import_isk_per_m3    REAL NOT NULL DEFAULT 1200,
-                export_isk_per_m3    REAL NOT NULL DEFAULT 1200,
-                export_collateral_pct REAL NOT NULL DEFAULT 0.005
+                group_id               INTEGER PRIMARY KEY,
+                import_isk_per_m3      REAL NOT NULL DEFAULT 1200,
+                export_isk_per_m3      REAL NOT NULL DEFAULT 1200,
+                export_collateral_pct  REAL NOT NULL DEFAULT 0.005
             )
         """)
         con.commit()
+        if migrate_row:
+            from app.groups import bootstrap_group_id
+            for gid in (_GLOBAL_SETTINGS_GROUP_ID, bootstrap_group_id()):
+                con.execute(
+                    "INSERT INTO pp_reaction_settings (group_id, import_isk_per_m3, export_isk_per_m3, export_collateral_pct) "
+                    "VALUES (?,?,?,?) ON CONFLICT (group_id) DO NOTHING",
+                    (gid, migrate_row["import_isk_per_m3"], migrate_row["export_isk_per_m3"],
+                     migrate_row["export_collateral_pct"]),
+                )
+            con.commit()
     finally:
         con.close()
 
 
-def get_reaction_settings() -> dict:
-    """Effective shipping/collateral settings — the saved singleton row if an admin has
-    customized it, else the defaults above. Nothing changes in behavior until an admin edits
-    these (same convention as app.alert_settings)."""
+def get_reaction_settings(group_id: int | None = None) -> dict:
+    """Effective shipping/collateral settings for this group (or the shared global default when
+    group_id is None/not in any priced group) — the saved row if a manager has customized it,
+    else the hardcoded defaults above. Nothing changes in behavior until someone edits these
+    (same convention as app.alert_settings)."""
     ensure_reaction_settings_table()
+    gid = group_id if group_id is not None else _GLOBAL_SETTINGS_GROUP_ID
     con = get_connection()
     try:
         row = con.execute(
             "SELECT import_isk_per_m3, export_isk_per_m3, export_collateral_pct "
-            "FROM pp_reaction_settings WHERE id=1"
+            "FROM pp_reaction_settings WHERE group_id=?", (gid,)
         ).fetchone()
     finally:
         con.close()
@@ -92,25 +125,33 @@ class ReactionSettingsUpdate(BaseModel):
 
 @router.get("/api/reactions/settings")
 def api_get_reaction_settings(ctx: int = Depends(require_context)):
-    return get_reaction_settings()
+    """Always the CALLER's own group's settings (or the global default) — a manager only ever
+    needs to see/edit their own group's rate, never someone else's."""
+    group = member_group(ctx)
+    return get_reaction_settings(group["id"] if group else None)
 
 
 @router.put("/api/reactions/settings")
-def api_update_reaction_settings(req: ReactionSettingsUpdate, ctx: int = Depends(require_admin)):
+def api_update_reaction_settings(req: ReactionSettingsUpdate, ctx: int = Depends(require_context)):
+    group = member_group(ctx)
+    if not group:
+        raise HTTPException(status_code=403, detail="You're not a member of any priced group")
+    if not is_group_manager(ctx, group["id"]):
+        raise HTTPException(status_code=403, detail="Only a manager of your group can edit its reaction settings")
     ensure_reaction_settings_table()
     con = get_connection()
     try:
         con.execute(
-            "INSERT INTO pp_reaction_settings (id, import_isk_per_m3, export_isk_per_m3, export_collateral_pct) "
-            "VALUES (1, ?, ?, ?) ON CONFLICT (id) DO UPDATE SET "
+            "INSERT INTO pp_reaction_settings (group_id, import_isk_per_m3, export_isk_per_m3, export_collateral_pct) "
+            "VALUES (?,?,?,?) ON CONFLICT (group_id) DO UPDATE SET "
             "import_isk_per_m3=excluded.import_isk_per_m3, export_isk_per_m3=excluded.export_isk_per_m3, "
             "export_collateral_pct=excluded.export_collateral_pct",
-            (req.import_isk_per_m3, req.export_isk_per_m3, req.export_collateral_pct),
+            (group["id"], req.import_isk_per_m3, req.export_isk_per_m3, req.export_collateral_pct),
         )
         con.commit()
     finally:
         con.close()
-    return get_reaction_settings()
+    return get_reaction_settings(group["id"])
 
 
 def _load_reaction_graph(con) -> tuple[dict[int, list[dict]], dict[int, list[dict]]]:
@@ -159,16 +200,17 @@ def _resolve_reachable(goo: dict[int, dict], purchasable: dict[int, float],
     same "expand until no more nodes unlock" shape as build_sde.py's compute_pi_tiers, just
     walked forward from available inputs instead of backward from a fixed target.
 
-    Both `goo` (a B0SS member's below-market alliance price sheet) and `purchasable` (Fuzzworks
-    market price + import shipping — the only source for non-B0SS members' moon materials, and
-    for every reaction's non-goo inputs like fuel blocks regardless of alliance) are treated as
-    UNLIMITED supply. This was a deliberate 2026-07-12 decision: the alliance sheet's stock
-    figures aren't a trustworthy enough signal to hard-cap on (no visibility into how often it's
-    actually maintained — a stale zero used to silently hide a real opportunity, and a stale
-    nonzero gave false confidence either way), so only price is trusted, not quantity.
+    Both `goo` (a group member's below-market alliance price sheet — see app.groups) and
+    `purchasable` (Fuzzworks market price + import shipping — the only source for a non-member's
+    moon materials, and for every reaction's non-goo inputs like fuel blocks regardless of group)
+    are treated as UNLIMITED supply. This was a deliberate 2026-07-12 decision: a group's price
+    sheet stock figures aren't a trustworthy enough signal to hard-cap on (no visibility into how
+    often any given sheet is actually maintained — a stale zero used to silently hide a real
+    opportunity, and a stale nonzero gave false confidence either way), so only price is trusted,
+    not quantity.
 
-    When a material is priced in BOTH dicts (a B0SS member's own sheet AND the open market), the
-    CHEAPER of the two wins automatically — so a B0SS member is never stuck trusting a possibly-
+    When a material is priced in BOTH dicts (a group member's own sheet AND the open market), the
+    CHEAPER of the two wins automatically — so a group member is never stuck trusting a possibly-
     stale sheet price when the market rate is actually better; no manual override needed, the
     math just picks the cheaper source the same way it already picks the cheaper of two reaction
     formulas below."""
@@ -238,46 +280,52 @@ def _load_goo_and_reached(context_id: int, allowed_material_ids: set[int] | None
     (goo, reached, reactions_by_output, inputs_by_reaction, types) or None if there's no priced
     material to start from at all.
 
-    B0SS alliance members get the below-market pp_moon_goo_prices sheet price for their moon
-    materials AS WELL AS the open-market price (+ import shipping) — _resolve_reachable picks
-    whichever is cheaper automatically, so a B0SS member is never stuck trusting a stale/high
-    sheet price over a better market rate (2026-07-12: the sheet's stock figures were dropped as
-    a hard cap for the same reason — no reliable signal for how well-maintained it actually is;
-    price is trusted, quantity isn't). Everyone else only ever sees the market price — no
-    alliance deal to fall back to. The Reactions feature itself is open to any logged-in user
-    (require_context) — this only changes which price(s) a material is costed at, not who can
-    see the tool."""
-    from app.esi import is_b0ss_member
-    is_b0ss = is_b0ss_member(context_id)
+    A member of a priced group gets that group's below-market pp_moon_goo_prices sheet price for
+    their moon materials AS WELL AS the open-market price (+ import shipping) — _resolve_reachable
+    picks whichever is cheaper automatically, so a group member is never stuck trusting a
+    stale/high sheet price over a better market rate (2026-07-12: the sheet's stock figures were
+    dropped as a hard cap for the same reason — no reliable signal for how well-maintained it
+    actually is; price is trusted, quantity isn't). Everyone else only ever sees the market
+    price — no group deal to fall back to. The Reactions feature itself is open to any logged-in
+    user (require_context) — group membership only changes which price(s) a material is costed
+    at, not who can see the tool."""
+    group = member_group(context_id)
 
     con = get_connection()
     try:
-        goo_rows = con.execute("SELECT type_id, sell_price FROM pp_moon_goo_prices").fetchall()
+        # The reference catalog of "known moon materials" is the UNION across every group's
+        # sheet (not just the caller's own) — this is what makes a type_id count as a "moon
+        # material" reachable via the market-priced path at all for a non-member; a group's
+        # OWN priced rows (queried separately below) are what actually get the below-market
+        # sheet price.
+        all_goo_rows = con.execute("SELECT DISTINCT type_id FROM pp_moon_goo_prices").fetchall()
+        own_goo_rows = (con.execute(
+            "SELECT type_id, sell_price FROM pp_moon_goo_prices WHERE group_id=?", (group["id"],)
+        ).fetchall() if group else [])
         reactions_by_output, inputs_by_reaction = _load_reaction_graph(con)
     finally:
         con.close()
 
     # Advanced filter: restrict which raw moon materials are actually available to this player
-    # (e.g. a Gas type their alliance doesn't stock, or they simply can't reliably buy) — any
+    # (e.g. a Gas type their group doesn't stock, or they simply can't reliably buy) — any
     # chain that would need an excluded material is never reachable in the first place. None/
     # empty = no restriction (every priced material is assumed available, the original behavior).
-    moon_material_ids = {r["type_id"] for r in goo_rows}
+    moon_material_ids = {r["type_id"] for r in all_goo_rows}
     if allowed_material_ids:
         moon_material_ids &= set(allowed_material_ids)
     if not moon_material_ids:
-        return None  # the admin-managed goo list itself is empty — nothing to react from, B0SS or not
+        return None  # no group has priced any moon material at all — nothing to react from
 
-    goo = ({r["type_id"]: {"sell_price": r["sell_price"]} for r in goo_rows if r["type_id"] in moon_material_ids}
-           if is_b0ss else {})  # non-B0SS accounts have no alliance sheet to price from at all
+    goo = {r["type_id"]: {"sell_price": r["sell_price"]} for r in own_goo_rows if r["type_id"] in moon_material_ids}
 
-    settings = get_reaction_settings()
+    settings = get_reaction_settings(group["id"] if group else None)
     pi = load_pi_data()
     types = pi["types"]
 
     # Every reaction input that isn't itself a reaction product (fuel blocks, and other named
     # materials most formulas need alongside moon goo) PLUS every moon material, regardless of
-    # alliance — a B0SS member's material needs a market price to compare against their sheet
-    # price (see _resolve_reachable), and a non-B0SS member has no other price source at all.
+    # group — a group member's material needs a market price to compare against their sheet
+    # price (see _resolve_reachable), and a non-member has no other price source at all.
     # Priced at what it costs to instantly ACQUIRE it (the order book's sell_price — market_data
     # field names are from the order book's perspective, buying costs the sell price) PLUS the
     # configured import shipping cost to haul it in (no collateral on the import leg — that's a

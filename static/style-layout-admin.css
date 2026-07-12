@@ -141,7 +141,12 @@ html.nav-li .tab[data-tab="planetary"],
 html.nav-li .tab[data-tab="characters"],
 html.nav-li .tab[data-pimode="refill"] { display: flex; }
 
-html.nav-adm #adminNavGroup { display: flex; }
+html.nav-adm #adminNavGroup,
+html.nav-grpmgr #adminNavGroup { display: flex; }
+/* A pure group manager (not a site admin) only sees their own group's sub-nav items — the
+   site-admin-only ones (stats/features/users/submissions/bugs/baskets/wallet/cleanup/groups
+   CRUD) are hidden per-button by _applyAdminNavVisibility() in planetary.js, not by CSS, since
+   which buttons qualify is a JS-side list, not a fixed selector. */
 html.nav-feat-layout .tab[data-tab="layout"] { display: flex; }
 html.nav-li.nav-feat-pdb .tab[data-tab="planetdb"] { display: flex; }
 html.nav-li.nav-feat-reactions .tab[data-tab="reactions"] { display: flex; }
