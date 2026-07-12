@@ -324,12 +324,15 @@ function _renderReactionsDashboard(data) {
     if (!todoByChar.has(g.character_name)) todoByChar.set(g.character_name, []);
     todoByChar.get(g.character_name).push(g);
   }
+  // Reaction Formulas aren't consumed (unlike a BPC) but one physical copy has to be loaded
+  // per concurrent job slot to start it — so the formula count needed to install everything
+  // shown is exactly g.count (the same number of job slots), not a separate figure to compute.
   const todoNote = todoByChar.size
     ? `<div class="rx-todo-groups">${[...todoByChar.entries()].map(([charName, items]) => `
         <div class="dash-issue dash-issue-warn">
           <div class="dash-issue-char">${_esc(charName)}</div>
           <ul class="dash-issue-items">${items.map(g =>
-            `<li class="dash-il-warn">Install <b>${_esc(g.name)}</b> ×${g.runs}${g.count > 1 ? ` <span class="an-of">×${g.count} jobs</span>` : ''}</li>`
+            `<li class="dash-il-warn">Install <b>${_esc(g.name)}</b> ×${g.runs} — <b>${g.count}</b> formula${g.count > 1 ? 's' : ''} needed</li>`
           ).join('')}</ul>
         </div>`).join('')}</div>`
     : '';

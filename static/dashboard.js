@@ -187,12 +187,15 @@ function _renderReactionAlerts(data) {
     if (!byChar.has(g.character_name)) byChar.set(g.character_name, []);
     byChar.get(g.character_name).push(g);
   });
+  // Reaction Formulas aren't consumed (unlike a BPC) but one physical copy has to be loaded per
+  // concurrent job slot to start it — g.count (job-slot rows grouped together) is exactly the
+  // formula count needed, not a separate figure.
   const cards = [...byChar.entries()].map(([charName, gs]) => {
     const sev = gs.some(g => g.severity === 'high') ? 'high' : 'warn';
     return `<div class="dash-issue dash-issue-${sev}">
         <div class="dash-issue-char">${_esc(charName)}</div>
         <ul class="dash-issue-items">${gs.map(g =>
-          `<li class="dash-il-${g.severity === 'high' ? 'high' : 'warn'}">${_esc(g.location)}${g.count > 1 ? ` <span class="an-of">×${g.count} jobs</span>` : ''}</li>`
+          `<li class="dash-il-${g.severity === 'high' ? 'high' : 'warn'}">${_esc(g.location)}${g.count > 1 ? ` — <b>${g.count}</b> formulas needed` : ' — 1 formula needed'}</li>`
         ).join('')}</ul>
       </div>`;
   }).join('');
