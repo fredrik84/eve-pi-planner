@@ -315,7 +315,7 @@ function _renderReactionsDashboard(data) {
         </div>`);
     }
     for (let i = jobs.length + pending.length; i < c.slots; i++) {
-      squares.push('<div class="rx-slot rx-slot-empty" title="Free reaction slot"><span class="rx-slot-empty-mark">+</span></div>');
+      squares.push(`<div class="rx-slot rx-slot-empty" title="Free reaction slot — click to assign your own product" onclick="_rxOpenManualAssign('${c.character_id}')"><span class="rx-slot-empty-mark">+</span></div>`);
     }
     return `
       <div class="rx-char-row">
@@ -403,6 +403,119 @@ function _rxCancelAssignment(assignmentId) {
 function _rxClearAllAssignments() {
   fetch('/api/reactions/assign', { method: 'DELETE' })
     .then(r => { if (r.ok) { _rxLastDashboardData = null; _loadReactionsDashboard(); } });
+}
+
+// ── Manual "assign a product to this empty slot" modal ─────────────────────────────────────
+// Picks from the same reachable/priced product list the "Advanced" opportunity table already
+// has (_rxOpps) — so a manual pick gets the same real cost/profit numbers as an algorithm
+// suggestion, not a guess. If the concurrent-jobs count is more than the clicked character has
+// free, the extra jobs spill onto the account's other free slots (most-free-first), same idea
+// as the factory-planet overflow elsewhere in this app — never silently overloads one character.
+let _rxManualAssignCharId = null;
+
+function _rxOpenManualAssign(characterId) {
+  _rxManualAssignCharId = characterId;
+  const chars = (_rxLastDashboardData && _rxLastDashboardData.characters) || [];
+  const char = chars.find(c => String(c.character_id) === String(characterId));
+  const hint = document.getElementById('rxManualAssignHint');
+  if (hint) {
+    hint.textContent = char
+      ? `Assigning to ${char.character_name} (${char.free_slots} free slot${char.free_slots === 1 ? '' : 's'} here). If this needs more concurrent jobs than that, the rest spill onto your other characters' free slots.`
+      : 'Pick a product, how many runs each job does, and how many jobs to start at once.';
+  }
+  const dl = document.getElementById('rxManProductList');
+  if (dl) dl.innerHTML = _rxOpps.map(o => `<option value="${_esc(o.name)}">`).join('');
+  document.getElementById('rxManProduct').value = '';
+  document.getElementById('rxManRuns').value = 1;
+  document.getElementById('rxManJobs').value = 1;
+  document.getElementById('rxManualAssignStatus').textContent =
+    _rxOpps.length ? '' : 'Still loading the product list — wait a moment, then search again.';
+  document.getElementById('rxManualAssignPreview').innerHTML = '';
+  document.getElementById('rxManualAssignModal').style.display = '';
+}
+
+function _rxCloseManualAssign() {
+  document.getElementById('rxManualAssignModal').style.display = 'none';
+}
+
+function _rxManualAssignMatch() {
+  const name = document.getElementById('rxManProduct').value.trim();
+  return _rxOpps.find(o => o.name === name) || null;
+}
+
+// Scales the matched opportunity's own totals (computed for its max achievable batch,
+// top_level_runs) down to whatever run count the user actually entered — same per-run rates,
+// just a smaller slice, rather than re-deriving cost/profit from scratch client-side.
+function _rxManualAssignPreview() {
+  const el = document.getElementById('rxManualAssignPreview');
+  if (!el) return;
+  const o = _rxManualAssignMatch();
+  const runsPerJob = parseInt(document.getElementById('rxManRuns').value, 10) || 0;
+  const jobs = parseInt(document.getElementById('rxManJobs').value, 10) || 0;
+  if (!o || runsPerJob <= 0 || jobs <= 0 || !o.top_level_runs) { el.innerHTML = ''; return; }
+  const totalRuns = runsPerJob * jobs;
+  const scale = totalRuns / o.top_level_runs;
+  const outputQty = o.output_qty * scale;
+  const fixedCosts = (o.input_cost + (o.job_cost || 0) + o.shipping_cost + o.collateral_cost) * scale;
+  const outputValue = o.instant_sell_value * scale;
+  const profit = outputValue - fixedCosts;
+  const breakEven = outputQty > 0 ? fixedCosts / outputQty : 0;
+  const runtimeHours = o.cycle_time ? (o.cycle_time / 3600) * runsPerJob : 0;
+  el.innerHTML = `
+    <div class="rx-manual-preview">
+      <div class="rx-manual-preview-row"><span class="pp-card-hint">Input cost</span><b>${_fmtIsk(fixedCosts)}</b></div>
+      <div class="rx-manual-preview-row"><span class="pp-card-hint">Runtime per job</span><b>${_fmtHours(runtimeHours)}</b></div>
+      <div class="rx-manual-preview-row"><span class="pp-card-hint">Output value</span><b>${_fmtIsk(outputValue)} <span class="pp-card-hint">(${Math.round(outputQty).toLocaleString()} units)</span></b></div>
+      <div class="rx-manual-preview-row"><span class="pp-card-hint">Profit</span><b class="${profit >= 0 ? 'an-ok' : 'an-warn'}">${_fmtIsk(profit)}</b></div>
+      <div class="rx-manual-preview-breakeven">Sell for at least <b>${_fmtIsk(breakEven)}</b>/unit to break even at today's material, shipping${o.job_cost ? ', job' : ''} and collateral cost.</div>
+    </div>`;
+}
+
+function _rxSubmitManualAssign() {
+  const status = document.getElementById('rxManualAssignStatus');
+  const o = _rxManualAssignMatch();
+  if (!o) { status.textContent = 'Pick a product from the list.'; return; }
+  const runsPerJob = parseInt(document.getElementById('rxManRuns').value, 10) || 0;
+  const jobsWanted = parseInt(document.getElementById('rxManJobs').value, 10) || 0;
+  if (runsPerJob <= 0 || jobsWanted <= 0 || !o.top_level_runs) { status.textContent = 'Enter runs per job and concurrent jobs.'; return; }
+
+  // Per-run rates, matching the exact input_cost/reward split _rxAssignSuggestion already uses:
+  // input_cost = raw material spend only (the "ISK committed" tile), reward = fully netted
+  // profit (materials + shipping + collateral + job cost already subtracted) — see
+  // app.reactions._build_opportunities.
+  const costPerRun = o.input_cost / o.top_level_runs;
+  const rewardPerRun = o.net_profit_instant / o.top_level_runs;
+
+  const chars = ((_rxLastDashboardData && _rxLastDashboardData.characters) || []).filter(c => c.tracked && c.slots > 1);
+  const clicked = chars.find(c => String(c.character_id) === String(_rxManualAssignCharId));
+  const others = chars.filter(c => String(c.character_id) !== String(_rxManualAssignCharId))
+    .sort((a, b) => b.free_slots - a.free_slots);
+  const ordered = clicked ? [clicked, ...others] : others;
+
+  const allocations = [];
+  let remaining = jobsWanted;
+  for (const c of ordered) {
+    if (remaining <= 0) break;
+    const take = Math.min(remaining, c.free_slots);
+    if (take > 0) { allocations.push({ char: c, jobs: take }); remaining -= take; }
+  }
+
+  if (!allocations.length) { status.textContent = 'No free reaction slots on any tracked character.'; return; }
+  if (remaining > 0 && !confirm(`Only ${jobsWanted - remaining} of ${jobsWanted} jobs fit across your free slots right now. Assign what fits?`)) return;
+
+  status.textContent = 'Assigning…';
+  Promise.all(allocations.map(a => fetch('/api/reactions/assign', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      character_id: a.char.character_id, type_id: o.type_id, name: o.name,
+      runs: a.jobs * runsPerJob, job_count: a.jobs,
+      input_cost: costPerRun * a.jobs * runsPerJob, reward: rewardPerRun * a.jobs * runsPerJob,
+      chain_tiers: [],
+    }),
+  }).then(r => { if (!r.ok) throw new Error('Assign failed'); })))
+    .then(() => { _rxCloseManualAssign(); onReactionsTabOpen(); })
+    .catch(err => { status.textContent = err.message; });
 }
 
 // ── Wizard: "Add Reaction Product" ──────────────────────────────────────────────────────────

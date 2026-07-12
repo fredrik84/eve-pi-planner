@@ -478,7 +478,8 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
   border-radius: 8px; background: #161b28; border: 1px solid var(--clr-border);
 }
 .rx-slot-filled { border-color: #3a5a82; background: linear-gradient(160deg, #1b2a3d, #16202e); }
-.rx-slot-empty { border-style: dashed; opacity: 0.45; }
+.rx-slot-empty { border-style: dashed; opacity: 0.45; cursor: pointer; transition: opacity 0.15s, border-color 0.15s; }
+.rx-slot-empty:hover { opacity: 0.85; border-color: #5aa9e6; }
 .rx-slot-pending {
   border-color: #7a2a2a; background: linear-gradient(160deg, #2a1a1a, #221515);
   cursor: pointer; position: relative;
@@ -507,6 +508,17 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .rx-fold-summary::-webkit-details-marker { display: none; }
 .rx-fold-caret { display: inline-block; transition: transform 0.15s; color: var(--clr-text-dim); margin-right: 6px; }
 details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
+
+/* Live cost/profit preview inside the manual "assign a product to this slot" modal — same
+   bordered-callout treatment as .rx-advisor so it reads as "here's what this would cost you",
+   not just more form chrome. */
+.rx-manual-preview {
+  margin-top: 12px; padding: 10px 12px; background: #16202e; border: 1px solid #2d5a8a;
+  border-left: 3px solid #5aa9e6; border-radius: 6px; font-size: 12px;
+}
+.rx-manual-preview-row { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 3px; }
+.rx-manual-preview-row:last-of-type { margin-bottom: 0; }
+.rx-manual-preview-breakeven { margin-top: 6px; padding-top: 6px; border-top: 1px solid #2d5a8a; color: var(--clr-text-soft); }
 
 /* Budget-usage feedback on the wizard's suggestions page — makes it visible which of the two
    independent caps (ISK vs total runs) actually stopped more suggestions from being added. */
