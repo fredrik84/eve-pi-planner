@@ -469,9 +469,6 @@ function _renderReactionsSuggestions(data) {
 function _renderRxAdvisor(advisor) {
   if (!advisor) return '';
   const items = [];
-  for (const hint of advisor.skill_hints || []) {
-    items.push(`<li>${_esc(hint)}</li>`);
-  }
   if (advisor.budget_hint) {
     items.push(`<li>Raising your ISK budget by ${_fmtIsk(advisor.budget_hint.extra_isk)} would add about ${_fmtIsk(advisor.budget_hint.extra_profit)} more profit</li>`);
   }
@@ -479,15 +476,28 @@ function _renderRxAdvisor(advisor) {
     items.push(`<li>Increase by ${_fmtIsk(a.extra_isk)} ISK to align <b>${_esc(a.name)}</b> to your cadence (keeps its slots busy the whole period instead of finishing early) — about +${_fmtIsk(a.extra_reward)} more profit
       <button class="rx-sugg-assign-btn" id="rxAlignBtn${i}" onclick="_rxApplyAlignHint(${i}, this)">Apply</button></li>`);
   });
-  for (const h of advisor.fuel_block_hints || []) {
-    items.push(`<li>Also allowing <b>${_esc(h.name)}</b> in the material filter would raise your expected profit by about ${h.extra_pct}% (+${_fmtIsk(h.extra_isk_per_day)}/day)</li>`);
-  }
+  (advisor.fuel_block_hints || []).forEach(h => {
+    items.push(`<li>Also allowing <b>${_esc(h.name)}</b> in the material filter would raise your expected profit by about ${h.extra_pct}% (+${_fmtIsk(h.extra_isk_per_day)}/day)
+      <button class="rx-sugg-assign-btn" onclick="_rxApplyFuelBlockHint(${h.type_id}, this)">Apply</button></li>`);
+  });
   if (!items.length) return '';
   return `
     <div class="rx-advisor">
       <div class="rx-advisor-title">Suggestions to improve</div>
       <ul>${items.join('')}</ul>
     </div>`;
+}
+
+// Checks the matching fuel-block box in the (possibly currently-hidden, since we're on the
+// suggestions page not the budget page) material filter and re-runs the whole suggest call —
+// unlike _rxApplyAlignHint (a pure client-side field swap), widening the material set can
+// genuinely reshuffle every suggestion, not just one product, so a full recalculation is the
+// only correct way to apply this.
+function _rxApplyFuelBlockHint(typeId, btn) {
+  const box = document.querySelector(`.rx-material-cb[value="${typeId}"]`);
+  if (box) box.checked = true;
+  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+  wizRSuggest();
 }
 
 // Applies one "align to cadence" hint in place — bumps the matching suggestion's runs/cost/

@@ -1265,46 +1265,15 @@ def _build_advisor(context_id: int, isk_budget: float, max_chain_depth: int, cad
                     material_ids: set[int] | None, current_profit: float, current_profit_per_day: float | None,
                     current_binding: str, suggestions: list[dict]) -> dict:
     """Cheap, easily-computable "how could this be better" hints — not a full analysis, just the
-    obvious low-effort wins: missing skill training on already-tracked characters, whether a bit
-    more ISK would actually buy meaningfully more profit right now (vs. there being nothing left
-    worth spending it on within the current chain-depth/cadence/material limits), and per-product
-    cadence-alignment gaps (a suggestion that finishes early and leaves its claimed slots idle
-    for the rest of the cadence window, for want of a bit more ISK to keep them running)."""
-    # Only characters this plan actually fully books benefit from more slots — hinting "train
-    # more" for every non-maxed character regardless of whether they're anywhere near their cap
-    # is just noise (true for almost everyone almost always, and not actually actionable: extra
-    # slots they're not using yet wouldn't change anything about this plan).
-    used_slots_by_char: dict[int, int] = {}
-    for s in suggestions:
-        cid = s["assigned_character_id"]
-        used_slots_by_char[cid] = used_slots_by_char.get(cid, 0) + s["job_count"]
-
-    skill_hints = []
-    con = get_connection()
-    try:
-        chars = con.execute(
-            "SELECT character_id, character_name, mass_reactions, advanced_mass_reactions, scopes "
-            "FROM pp_characters WHERE context_id=? AND COALESCE(is_dummy,0)=0", (context_id,),
-        ).fetchall()
-    finally:
-        con.close()
-    for c in chars:
-        if "read_character_jobs" not in (c["scopes"] or ""):
-            continue
-        if reaction_slots(c) <= 1:
-            continue  # sitting at the bare base slot (no Mass Reactions trained at all) — same
-                      # "not worth surfacing" threshold the dashboard loadout already uses;
-                      # training advice for a throwaway/untouched alt isn't useful
-        if used_slots_by_char.get(c["character_id"], 0) < reaction_slots(c):
-            continue  # this character still has spare slots this plan didn't need — not a bottleneck
-        mr, amr = c["mass_reactions"] or 0, c["advanced_mass_reactions"] or 0
-        if mr < 5:
-            skill_hints.append(f"{c['character_name']}: training Mass Reactions to level {mr + 1} "
-                                f"would add 1 more reaction slot (this plan is using all of their current ones)")
-        elif amr < 5:
-            skill_hints.append(f"{c['character_name']}: training Advanced Mass Reactions to level "
-                                f"{amr + 1} would add 1 more reaction slot (this plan is using all of their current ones)")
-
+    obvious low-effort wins: whether a bit more ISK would actually buy meaningfully more profit
+    right now (vs. there being nothing left worth spending it on within the current chain-depth/
+    cadence/material limits), per-product cadence-alignment gaps (a suggestion that finishes
+    early and leaves its claimed slots idle for the rest of the cadence window, for want of a bit
+    more ISK to keep them running), and which excluded fuel blocks would be worth allowing back
+    in. Deliberately does NOT suggest skill training — unlike every other hint here, training a
+    reaction skill takes real days/weeks in-game, not something this session can act on, so it
+    read as permanent background noise rather than a real "low-effort win" (explicit user
+    feedback)."""
     # Budget sensitivity: only worth suggesting "raise your ISK budget" when ISK is actually the
     # thing holding this back right now (current_binding == "isk") — if the current run already
     # left ISK unspent ("neither"), the real limit is something else (chain depth, cadence,
@@ -1351,14 +1320,13 @@ def _build_advisor(context_id: int, isk_budget: float, max_chain_depth: int, cad
             extra_per_day = widened_per_day - current_profit_per_day
             if extra_per_day > current_profit_per_day * 0.01:
                 fuel_block_hints.append({
-                    "name": name,
+                    "type_id": tid, "name": name,
                     "extra_isk_per_day": round(extra_per_day, 2),
                     "extra_pct": round(100 * extra_per_day / current_profit_per_day, 1),
                 })
         fuel_block_hints.sort(key=lambda h: -h["extra_isk_per_day"])
 
-    return {"skill_hints": skill_hints, "budget_hint": budget_hint, "align_hints": align_hints,
-            "fuel_block_hints": fuel_block_hints}
+    return {"budget_hint": budget_hint, "align_hints": align_hints, "fuel_block_hints": fuel_block_hints}
 
 
 @router.post("/api/reactions/suggest")
@@ -1367,7 +1335,7 @@ def suggest_reactions(req: SuggestRequest, context_id: int = Depends(require_con
         return {"suggestions": [], "totals": {
             "isk_committed": 0.0, "isk_budget": req.isk_budget, "net_profit": 0.0, "net_profit_per_day": None,
             "output_value": 0.0, "output_m3": 0.0, "characters_used": 0, "completion_hours": None, "binding": "neither"},
-            "advisor": {"skill_hints": [], "budget_hint": None, "align_hints": [], "fuel_block_hints": []}}
+            "advisor": {"budget_hint": None, "align_hints": [], "fuel_block_hints": []}}
     material_ids = set(req.material_ids) if req.material_ids else None
     result = _suggest_reactions(context_id, req.isk_budget, req.max_chain_depth, req.cadence_hours, material_ids)
     result["advisor"] = _build_advisor(context_id, req.isk_budget, req.max_chain_depth, req.cadence_hours,
