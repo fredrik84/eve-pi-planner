@@ -1107,6 +1107,22 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
     if not chosen:
         return empty
 
+    # Stage 2 below allocates real slots in ASCENDING ideal-slot-need order (smallest first),
+    # not this profit order — letting the biggest, most profit-heavy candidate go first would
+    # let it greedily claim its ENTIRE ideal slot count, leaving only rounding scraps for
+    # smaller candidates; a small candidate losing even 1 slot to ceil() rounding can lose HALF
+    # its allocation (a real reported case: needed 2 slots, got 1, runtime nearly doubled),
+    # while a big candidate absorbing that same 1-slot shortfall barely moves its own
+    # percentage. Smallest-need-first minimizes the worst-case overshoot across the whole set.
+    # `suggestions` is re-sorted back to this original profit order before being returned, so
+    # display order is unaffected — only the internal allocation order changes.
+    def _ideal_slots_for(c, xi):
+        runs_needed = max(1, round(c["top_level_runs"] * xi))
+        cycle_hours = c["cycle_time"] / 3600.0 if c["cycle_time"] else 1.0
+        return max(1, math.ceil(runs_needed * cycle_hours / cadence_hours)) if cadence_hours > 0 else runs_needed
+
+    alloc_order = sorted(chosen, key=lambda cx: _ideal_slots_for(cx[0], cx[1]))
+
     # Stage 2: allocate real reaction slots to each chosen product, all targeting completion
     # within roughly one cadence period — NOT a queue over unbounded future time (the old model),
     # since everything here is sized to finish around the same ~cadence window. Each suggestion
@@ -1123,7 +1139,7 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
     suggestions = []
     isk_committed = net_profit = total_output_value = total_output_m3 = 0.0
     max_completion_hours = 0.0
-    for c, xi in chosen:
+    for c, xi in alloc_order:
         runs_needed = max(1, round(c["top_level_runs"] * xi))
         cycle_hours = c["cycle_time"] / 3600.0 if c["cycle_time"] else 1.0
         ideal_slots = max(1, math.ceil(runs_needed * cycle_hours / cadence_hours)) if cadence_hours > 0 else runs_needed
@@ -1229,6 +1245,10 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
             "assigned_character_id": pick_id,
             "chain_tiers": chain_tiers,
         })
+
+    # Built in allocation order (smallest slot-need first, see alloc_order above) — restore
+    # profit-descending order for display, matching what the LP itself ranked as most valuable.
+    suggestions.sort(key=lambda s: -s["reward"])
 
     # "isk" = spent (near enough) the whole budget; "neither" = ran out of profitable, liquid,
     # within-chain-depth/cadence candidates before using it all — raising the ISK budget further
