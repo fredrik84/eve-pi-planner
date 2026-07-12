@@ -1157,6 +1157,19 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
         remaining_slots[pick_id] -= slots_used
         touched_chars.add(pick_id)
 
+        # Stage 1's cadence cap sized every candidate assuming it COULD land on the single best
+        # character's free-slot count — but only one candidate ever actually can. Once it's
+        # known here which REAL character (and how many of ITS slots) this suggestion landed
+        # on, downscale runs_needed (and everything computed from it below, via xi) to what
+        # those specific slots can really finish within cadence, instead of keeping the full
+        # run count and letting real duration balloon past what was asked for (a real reported
+        # case: multiple suggestions each independently sized for a "best" character that only
+        # one of them could actually get, landing at 11d4h against a much shorter cadence).
+        if slots_used < ideal_slots:
+            achievable_runs = max(1, int(slots_used * cadence_hours / cycle_hours))
+            xi *= min(1.0, achievable_runs / runs_needed)
+            runs_needed = achievable_runs
+
         runs_per_job = math.ceil(runs_needed / slots_used)
         duration_hours = (runs_needed / slots_used) * cycle_hours
         max_completion_hours = max(max_completion_hours, duration_hours)
