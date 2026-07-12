@@ -535,7 +535,10 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 /* A hint with an "Apply" button — plain inline text + button used to let a long product name
    overflow the card and shove the button onto its own broken-looking line. Flex row instead:
    the text wraps normally within its own space, and the button either stays at the end of the
-   last line or drops to a clean new row with real spacing, never mid-word. */
-.rx-hint-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+   last line or drops to a clean new row with real spacing, never mid-word. Top-aligned (not
+   centered) so the button sits at a fixed, predictable spot next to the first line of text
+   regardless of how many lines the text itself wraps to. */
+.rx-hint-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.rx-hint-row .rx-sugg-assign-btn { margin-top: 1px; }
 .rx-hint-text { flex: 1 1 240px; min-width: 0; }
 

@@ -479,7 +479,7 @@ function _renderRxAdvisor(advisor) {
   }
   (advisor.align_hints || []).forEach((a, i) => {
     items.push(`<li><div class="rx-hint-row">
-      <span class="rx-hint-text">Increase by ${_fmtIsk(a.extra_isk)} ISK to align <b>${_esc(a.name)}</b> to your cadence (keeps its slots busy the whole period instead of finishing early) — about +${_fmtIsk(a.extra_reward)} more profit</span>
+      <span class="rx-hint-text">Increase by ${_fmtIsk(a.extra_isk)} ISK to align <b>${_esc(a.name)}</b> to your cadence — about +${_fmtIsk(a.extra_reward)} more profit</span>
       <button class="rx-sugg-assign-btn" id="rxAlignBtn${i}" onclick="_rxApplyAlignHint(${i}, this)">Apply</button>
     </div></li>`);
   });
