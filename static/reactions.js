@@ -684,8 +684,10 @@ function _renderReactions() {
       Ship+collateral uses the configured import/export rates ·
       Buy/sell depth = current Jita order-book units, not daily trade volume — a rough liquidity signal only.
     </div>
-    ${_rxCanEditSettings() ? _rxSettingsFormHtml() : ''}`;
+    ${_rxCanEditSettings() ? _rxSettingsFormHtml() : ''}
+    ${_rxAccountSettingsFormHtml()}`;
   if (_rxCanEditSettings()) _loadRxSettings();
+  _loadRxAccountSettings();
 }
 
 // Site admins can always preview/edit; a non-admin sees the form only if they manage at least
@@ -735,5 +737,68 @@ function _saveRxSettings() {
   })
     .then(r => { if (!r.ok) throw new Error('Save failed'); return r.json(); })
     .then(() => { msg.textContent = 'Saved.'; onReactionsTabOpen(); })
+    .catch(err => { msg.textContent = err.message; });
+}
+
+// Every logged-in user (not just group managers) can override their OWN shipping/collateral
+// rate — JF cost genuinely varies account-to-account (home system, courier arrangement) even
+// within one alliance. No override saved = use the group's rate (or the global default).
+function _rxAccountSettingsFormHtml() {
+  return `
+    <div class="pp-target-form" style="margin-top:14px;border-top:1px solid var(--clr-border);padding-top:12px">
+      <div class="pp-card-hint" id="rxAcctSettingsHint" style="margin-bottom:8px"></div>
+      <label class="pp-label" for="rxAcctImport">Your import ISK/m³</label>
+      <input type="number" id="rxAcctImport" class="pp-num-input" style="width:120px">
+
+      <label class="pp-label" for="rxAcctExport">Your export ISK/m³</label>
+      <input type="number" id="rxAcctExport" class="pp-num-input" style="width:120px">
+
+      <label class="pp-label" for="rxAcctCollateral">Your export collateral %</label>
+      <input type="number" id="rxAcctCollateral" class="pp-num-input" style="width:100px" step="0.1">
+    </div>
+    <div style="margin-top:8px">
+      <button class="pp-add-btn" onclick="_saveRxAccountSettings()">Save my rate</button>
+      <button class="pp-cancel-btn" onclick="_resetRxAccountSettings()">Use default instead</button>
+      <span id="rxAcctSettingsMsg" class="pp-card-hint"></span>
+    </div>`;
+}
+
+function _loadRxAccountSettings() {
+  fetch('/api/reactions/account-settings').then(r => r.ok ? r.json() : null).then(s => {
+    if (!s) return;
+    const eff = s.override || s.default;
+    document.getElementById('rxAcctImport').value = eff.import_isk_per_m3;
+    document.getElementById('rxAcctExport').value = eff.export_isk_per_m3;
+    document.getElementById('rxAcctCollateral').value = (eff.export_collateral_pct * 100).toFixed(2);
+    const hint = document.getElementById('rxAcctSettingsHint');
+    if (hint) {
+      hint.textContent = s.override
+        ? "Your shipping cost — you're using your own rate instead of the group/default."
+        : "Your shipping cost — currently using the group/default rate. Set your own below if your real JF cost differs.";
+    }
+  });
+}
+
+function _saveRxAccountSettings() {
+  const msg = document.getElementById('rxAcctSettingsMsg');
+  fetch('/api/reactions/account-settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      import_isk_per_m3: parseFloat(document.getElementById('rxAcctImport').value) || 0,
+      export_isk_per_m3: parseFloat(document.getElementById('rxAcctExport').value) || 0,
+      export_collateral_pct: (parseFloat(document.getElementById('rxAcctCollateral').value) || 0) / 100,
+    }),
+  })
+    .then(r => { if (!r.ok) throw new Error('Save failed'); return r.json(); })
+    .then(() => { msg.textContent = 'Saved.'; onReactionsTabOpen(); })
+    .catch(err => { msg.textContent = err.message; });
+}
+
+function _resetRxAccountSettings() {
+  const msg = document.getElementById('rxAcctSettingsMsg');
+  fetch('/api/reactions/account-settings', { method: 'DELETE' })
+    .then(r => { if (!r.ok) throw new Error('Reset failed'); return r.json(); })
+    .then(() => { msg.textContent = 'Reverted to default.'; onReactionsTabOpen(); })
     .catch(err => { msg.textContent = err.message; });
 }

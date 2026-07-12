@@ -121,6 +121,13 @@ def test_reactions_gated(base: str) -> bool:
     ok &= check(code == 401, f"anonymous reactions-shopping-list rejected (got HTTP {code})")
     code = get_status(f"{base}/api/reactions/fuel-blocks")
     ok &= check(code == 401, f"anonymous reactions-fuel-blocks rejected (got HTTP {code})")
+    code = get_status(f"{base}/api/reactions/account-settings")
+    ok &= check(code == 401, f"anonymous reactions-account-settings read rejected (got HTTP {code})")
+    code = put_status(f"{base}/api/reactions/account-settings",
+                       {"import_isk_per_m3": 1, "export_isk_per_m3": 1, "export_collateral_pct": 0.01})
+    ok &= check(code == 401, f"anonymous reactions-account-settings write rejected (got HTTP {code})")
+    code = delete_status(f"{base}/api/reactions/account-settings")
+    ok &= check(code == 401, f"anonymous reactions-account-settings reset rejected (got HTTP {code})")
     return ok
 
 

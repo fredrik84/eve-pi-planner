@@ -94,10 +94,12 @@ def ensure_reaction_settings_table():
 
 
 def get_reaction_settings(group_id: int | None = None) -> dict:
-    """Effective shipping/collateral settings for this group (or the shared global default when
+    """Raw shipping/collateral settings for a SPECIFIC group (or the shared global default when
     group_id is None/not in any priced group) — the saved row if a manager has customized it,
-    else the hardcoded defaults above. Nothing changes in behavior until someone edits these
-    (same convention as app.alert_settings)."""
+    else the hardcoded defaults above. This is the group's own configured rate, unaware of any
+    individual member's personal override — use effective_reaction_settings(context_id) for
+    actual pricing math. Nothing changes in behavior until someone edits these (same convention
+    as app.alert_settings)."""
     ensure_reaction_settings_table()
     gid = group_id if group_id is not None else _GLOBAL_SETTINGS_GROUP_ID
     con = get_connection()
@@ -115,6 +117,53 @@ def get_reaction_settings(group_id: int | None = None) -> dict:
         "export_isk_per_m3": row["export_isk_per_m3"],
         "export_collateral_pct": row["export_collateral_pct"],
     }
+
+
+@ensure_once
+def ensure_account_reaction_settings_table():
+    con = get_connection()
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS pp_account_reaction_settings (
+            context_id             INTEGER PRIMARY KEY,
+            import_isk_per_m3      REAL NOT NULL,
+            export_isk_per_m3      REAL NOT NULL,
+            export_collateral_pct  REAL NOT NULL
+        )
+    """)
+    con.commit()
+    con.close()
+
+
+def _account_reaction_settings_override(context_id: int) -> dict | None:
+    ensure_account_reaction_settings_table()
+    con = get_connection()
+    try:
+        row = con.execute(
+            "SELECT import_isk_per_m3, export_isk_per_m3, export_collateral_pct "
+            "FROM pp_account_reaction_settings WHERE context_id=?", (context_id,)
+        ).fetchone()
+    finally:
+        con.close()
+    if not row:
+        return None
+    return {
+        "import_isk_per_m3": row["import_isk_per_m3"],
+        "export_isk_per_m3": row["export_isk_per_m3"],
+        "export_collateral_pct": row["export_collateral_pct"],
+    }
+
+
+def effective_reaction_settings(context_id: int) -> dict:
+    """The shipping/collateral rate actually used to price a specific account's reactions,
+    resolved personal override -> group default -> global default. JF/import costs genuinely
+    vary account to account even within one alliance (different home system, different courier
+    arrangement), so a group's rate is only a starting point, not a mandate — a player can
+    override it for themselves in Settings without affecting anyone else in their group."""
+    override = _account_reaction_settings_override(context_id)
+    if override:
+        return override
+    group = member_group(context_id)
+    return get_reaction_settings(group["id"] if group else None)
 
 
 class ReactionSettingsUpdate(BaseModel):
@@ -152,6 +201,49 @@ def api_update_reaction_settings(req: ReactionSettingsUpdate, ctx: int = Depends
     finally:
         con.close()
     return get_reaction_settings(group["id"])
+
+
+@router.get("/api/reactions/account-settings")
+def api_get_account_reaction_settings(ctx: int = Depends(require_context)):
+    """The caller's personal shipping-cost override, if any, plus the group/global default it
+    falls back to otherwise — the Settings UI shows both so a user can see what rate they're
+    actually getting and whether it's their own override or an inherited default."""
+    override = _account_reaction_settings_override(ctx)
+    group = member_group(ctx)
+    default = get_reaction_settings(group["id"] if group else None)
+    return {"override": override, "default": default, "effective": override or default}
+
+
+@router.put("/api/reactions/account-settings")
+def api_update_account_reaction_settings(req: ReactionSettingsUpdate, ctx: int = Depends(require_context)):
+    ensure_account_reaction_settings_table()
+    con = get_connection()
+    try:
+        con.execute(
+            "INSERT INTO pp_account_reaction_settings (context_id, import_isk_per_m3, export_isk_per_m3, export_collateral_pct) "
+            "VALUES (?,?,?,?) ON CONFLICT (context_id) DO UPDATE SET "
+            "import_isk_per_m3=excluded.import_isk_per_m3, export_isk_per_m3=excluded.export_isk_per_m3, "
+            "export_collateral_pct=excluded.export_collateral_pct",
+            (ctx, req.import_isk_per_m3, req.export_isk_per_m3, req.export_collateral_pct),
+        )
+        con.commit()
+    finally:
+        con.close()
+    return {"ok": True}
+
+
+@router.delete("/api/reactions/account-settings")
+def api_reset_account_reaction_settings(ctx: int = Depends(require_context)):
+    """Revert to the group/global default by removing the personal override."""
+    ensure_account_reaction_settings_table()
+    con = get_connection()
+    try:
+        con.execute("DELETE FROM pp_account_reaction_settings WHERE context_id=?", (ctx,))
+        con.commit()
+    finally:
+        con.close()
+    group = member_group(ctx)
+    return get_reaction_settings(group["id"] if group else None)
 
 
 def _load_reaction_graph(con) -> tuple[dict[int, list[dict]], dict[int, list[dict]]]:
@@ -338,7 +430,7 @@ def _load_goo_and_reached(context_id: int, allowed_material_ids: set[int] | None
 
     goo = {r["type_id"]: {"sell_price": r["sell_price"]} for r in own_goo_rows if r["type_id"] in moon_material_ids}
 
-    settings = get_reaction_settings(group["id"] if group else None)
+    settings = effective_reaction_settings(context_id)
     pi = load_pi_data()
     types = pi["types"]
 
@@ -387,7 +479,7 @@ def _build_opportunities(context_id: int, allowed_material_ids: set[int] | None 
     if loaded is None:
         return []
     goo, reached, reactions_by_output, inputs_by_reaction, types = loaded
-    settings = get_reaction_settings()
+    settings = effective_reaction_settings(context_id)
 
     # Only reaction PRODUCTS are candidates — shipping raw unreacted goo isn't what this tool
     # is for (that's just the input side).
