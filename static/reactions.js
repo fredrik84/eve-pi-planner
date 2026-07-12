@@ -50,6 +50,11 @@ function _loadRxShoppingList() {
   const card = document.getElementById('rxShoppingCard');
   const el = document.getElementById('rxShoppingListContent');
   if (!card || !el) return;
+  // Show the card with a loading state right away instead of leaving it hidden until the fetch
+  // resolves — the market-price lookup behind this can take a moment (see the Redis-cache fix),
+  // and popping the whole card into existence once data finally arrives read as a layout jump.
+  card.style.display = '';
+  el.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Loading shopping list…</div>';
   fetch('/api/reactions/shopping-list')
     .then(r => r.ok ? r.json() : { materials: [] })
     .then(d => {
@@ -473,12 +478,16 @@ function _renderRxAdvisor(advisor) {
     items.push(`<li>Raising your ISK budget by ${_fmtIsk(advisor.budget_hint.extra_isk)} would add about ${_fmtIsk(advisor.budget_hint.extra_profit)} more profit</li>`);
   }
   (advisor.align_hints || []).forEach((a, i) => {
-    items.push(`<li>Increase by ${_fmtIsk(a.extra_isk)} ISK to align <b>${_esc(a.name)}</b> to your cadence (keeps its slots busy the whole period instead of finishing early) — about +${_fmtIsk(a.extra_reward)} more profit
-      <button class="rx-sugg-assign-btn" id="rxAlignBtn${i}" onclick="_rxApplyAlignHint(${i}, this)">Apply</button></li>`);
+    items.push(`<li><div class="rx-hint-row">
+      <span class="rx-hint-text">Increase by ${_fmtIsk(a.extra_isk)} ISK to align <b>${_esc(a.name)}</b> to your cadence (keeps its slots busy the whole period instead of finishing early) — about +${_fmtIsk(a.extra_reward)} more profit</span>
+      <button class="rx-sugg-assign-btn" id="rxAlignBtn${i}" onclick="_rxApplyAlignHint(${i}, this)">Apply</button>
+    </div></li>`);
   });
   (advisor.fuel_block_hints || []).forEach(h => {
-    items.push(`<li>Also allowing <b>${_esc(h.name)}</b> in the material filter would raise your expected profit by about ${h.extra_pct}% (+${_fmtIsk(h.extra_isk_per_day)}/day)
-      <button class="rx-sugg-assign-btn" onclick="_rxApplyFuelBlockHint(${h.type_id}, this)">Apply</button></li>`);
+    items.push(`<li><div class="rx-hint-row">
+      <span class="rx-hint-text">Also allowing <b>${_esc(h.name)}</b> in the material filter would raise your expected profit by about ${h.extra_pct}% (+${_fmtIsk(h.extra_isk_per_day)}/day)</span>
+      <button class="rx-sugg-assign-btn" onclick="_rxApplyFuelBlockHint(${h.type_id}, this)">Apply</button>
+    </div></li>`);
   });
   if (!items.length) return '';
   return `

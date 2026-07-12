@@ -532,4 +532,10 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .rx-advisor-title { font-weight: 600; color: var(--clr-accent); margin-bottom: 6px; font-size: 12px; }
 .rx-advisor ul { margin: 0; padding-left: 18px; font-size: 12px; color: var(--clr-text-soft); }
 .rx-advisor li { margin-bottom: 3px; }
+/* A hint with an "Apply" button — plain inline text + button used to let a long product name
+   overflow the card and shove the button onto its own broken-looking line. Flex row instead:
+   the text wraps normally within its own space, and the button either stays at the end of the
+   last line or drops to a clean new row with real spacing, never mid-word. */
+.rx-hint-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.rx-hint-text { flex: 1 1 240px; min-width: 0; }
 
