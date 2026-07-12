@@ -475,7 +475,10 @@ function _renderRxAdvisor(advisor) {
   if (!advisor) return '';
   const items = [];
   if (advisor.budget_hint) {
-    items.push(`<li>Raising your ISK budget by ${_fmtIsk(advisor.budget_hint.extra_isk)} would add about ${_fmtIsk(advisor.budget_hint.extra_profit)} more profit</li>`);
+    items.push(`<li><div class="rx-hint-row">
+      <span class="rx-hint-text">Raising your ISK budget by ${_fmtIsk(advisor.budget_hint.extra_isk)} would add about ${_fmtIsk(advisor.budget_hint.extra_profit)} more profit</span>
+      <button class="rx-sugg-assign-btn" onclick="_rxApplyBudgetHint(${advisor.budget_hint.extra_isk}, this)">Apply</button>
+    </div></li>`);
   }
   (advisor.align_hints || []).forEach((a, i) => {
     items.push(`<li><div class="rx-hint-row">
@@ -505,6 +508,19 @@ function _renderRxAdvisor(advisor) {
 function _rxApplyFuelBlockHint(typeId, btn) {
   const box = document.querySelector(`.rx-material-cb[value="${typeId}"]`);
   if (box) box.checked = true;
+  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+  wizRSuggest();
+}
+
+// Bumps the ISK budget input by the hinted amount and re-runs the whole suggest call — same
+// "widening a constraint can reshuffle every suggestion" reasoning as _rxApplyFuelBlockHint,
+// so this is a full recalculation too, not a local field patch.
+function _rxApplyBudgetHint(extraIsk, btn) {
+  const iskEl = document.getElementById('wizRIsk');
+  if (iskEl) {
+    iskEl.value = (parseFloat(iskEl.value) || 0) + extraIsk;
+    _wizRIskLive();
+  }
   if (btn) { btn.disabled = true; btn.textContent = '…'; }
   wizRSuggest();
 }
