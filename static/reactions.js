@@ -569,7 +569,7 @@ function _renderReactions() {
   const el = document.getElementById('reactionsContent');
   if (!el) return;
   if (!_rxOpps.length) {
-    el.innerHTML = '<div class="pp-empty">No reaction opportunities found — check the moon-goo price list has stock, and that pricing is up to date.</div>';
+    el.innerHTML = '<div class="pp-empty">No reaction opportunities found — check the moon-goo price list has pricing set, and that it\'s up to date.</div>';
     return;
   }
   const rows = [..._rxOpps].sort((a, b) => {

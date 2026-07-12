@@ -7,20 +7,20 @@ call `compute_colony_alerts()` — a single source of truth so a push notificati
 shown on screen can never drift apart, and both automatically respect each account's configured
 thresholds and muted kinds (app/alert_settings.py) without re-implementing that logic.
 
-Eleven kinds (app.alert_settings.ALERT_KINDS): four threshold-based (expired, expiring,
+Ten kinds (app.alert_settings.ALERT_KINDS): four threshold-based (expired, expiring,
 storage_full, factory_refill), four correctness-based, stored per-scan by
 app.esi._detect_colony_issues (ext_unrouted, fac_unfed, fac_output, p0_mismatch) — always
 "high" severity — schedule_sync (an extractor running a different program length than the
 fleet's norm), always "warn" severity, computed fleet-wide via _extractor_program_lengths() —
-and two Reactions-specific kinds (reaction_not_running, reaction_low_stock, see
-_reaction_alerts() below), unrelated to PI colonies entirely but folded into the same flat list
-so they get the same mute/severity/dashboard/push plumbing for free. The threshold-based kinds
-compute their own severity from the account's configured thresholds (see inline comments below).
+and one Reactions-specific kind (reaction_not_running, see _reaction_alerts() below), unrelated
+to PI colonies entirely but folded into the same flat list so it gets the same mute/severity/
+dashboard/push plumbing for free. The threshold-based kinds compute their own severity from the
+account's configured thresholds (see inline comments below).
 """
 import json as _json
 import time as _time
 
-from app.sde import get_connection, load_pi_data
+from app.sde import get_connection
 from app.alert_settings import get_alert_settings
 
 # Correctness-based kinds are always "high" — matches the severity dashboard() has always used
@@ -34,23 +34,23 @@ _CORRECTNESS_SEVERITY = {
 
 
 def _reaction_alerts(context_id: int, muted: set, now: float) -> list[dict]:
-    """Reactions-specific alerts — entirely separate data (pp_reaction_assignments,
-    pp_moon_goo_prices) from the PI colony rows the rest of this module works from, so this is
-    a self-contained block rather than woven into the per-row loop below. Cheaply short-circuits
-    to nothing for the vast majority of accounts (non-B0SS, or B0SS with nothing pending), since
-    this runs for every account on every 15-minute notification tick.
+    """Reactions-specific alerts — entirely separate data (pp_reaction_assignments) from the PI
+    colony rows the rest of this module works from, so this is a self-contained block rather
+    than woven into the per-row loop below. Cheaply short-circuits to nothing for the vast
+    majority of accounts (nothing pending), since this runs for every account on every
+    15-minute notification tick.
 
     - reaction_not_running: a suggestion the player clicked "Assign" on but hasn't actually
       installed in-game yet (no matching ESI job has shown up) for longer than expiring_hours —
       reuses that existing threshold rather than adding a dedicated field, same convention
       factory_refill already follows.
-    - reaction_low_stock: the shared alliance goo stock can't actually cover what's currently
-      assigned across (potentially) several players — not fixable by any one player, but still
-      useful to surface. Uses `planet_id` to carry the moon-goo type_id (not a real planet) so
-      the notification scheduler's cooldown/dedup keying (which is keyed on `planet_id`) still
-      works — see notifications.py's _recently_notified.
+
+    (There used to be a second kind here, reaction_low_stock, warning when the shared alliance
+    goo stock couldn't cover what was assigned — removed 2026-07-12 once the sheet's stock
+    column itself was judged untrustworthy enough that neither the opportunity engine nor an
+    alert should hard-depend on it; see app.reactions._resolve_reachable's docstring.)
     """
-    if "reaction_not_running" in muted and "reaction_low_stock" in muted:
+    if "reaction_not_running" in muted:
         return []
     con = get_connection()
     try:
@@ -69,44 +69,15 @@ def _reaction_alerts(context_id: int, muted: set, now: float) -> list[dict]:
     alerts: list[dict] = []
     expiring_hours = get_alert_settings(context_id)["expiring_hours"]
 
-    if "reaction_not_running" not in muted:
-        for a in assignments:
-            age_hours = (now - a["created_at"]) / 3600.0
-            if age_hours >= expiring_hours:
-                alerts.append({
-                    "kind": "reaction_not_running",
-                    "severity": "high" if age_hours >= expiring_hours * 2 else "warn",
-                    "character_id": a["character_id"], "character_name": a["character_name"],
-                    "planet_id": a["id"], "location": a["name"], "hours_left": None,
-                })
-
-    if "reaction_low_stock" not in muted:
-        try:
-            from app.reactions import _load_goo_and_reached, _explode_shopping_list
-            loaded = _load_goo_and_reached(context_id)
-        except Exception:
-            loaded = None
-        if loaded:
-            goo, reached, *_ = loaded
-            types = load_pi_data()["types"]
-            needed: dict[int, float] = {}
-            for a in assignments:
-                node = reached.get(a["type_id"])
-                if node and node["via"]:
-                    _explode_shopping_list(a["type_id"], a["runs"] * node["via"]["output_qty"], reached, needed)
-            for tid, qty in needed.items():
-                g = goo.get(tid)
-                if g and g["stock"] < qty:
-                    alerts.append({
-                        "kind": "reaction_low_stock", "severity": "warn",
-                        "character_id": None, "character_name": None,
-                        "planet_id": tid, "location": types.get(tid, {}).get("name", str(tid)),
-                        "hours_left": None,
-                        # Bare material name alone gave no way to judge severity (a near-miss vs.
-                        # zero stock look identical) — carry the actual numbers so the dashboard/
-                        # push message can say "need 12,450, 0 in stock" instead of just a name.
-                        "needed": round(qty, 1), "available": g["stock"],
-                    })
+    for a in assignments:
+        age_hours = (now - a["created_at"]) / 3600.0
+        if age_hours >= expiring_hours:
+            alerts.append({
+                "kind": "reaction_not_running",
+                "severity": "high" if age_hours >= expiring_hours * 2 else "warn",
+                "character_id": a["character_id"], "character_name": a["character_name"],
+                "planet_id": a["id"], "location": a["name"], "hours_left": None,
+            })
 
     return alerts
 

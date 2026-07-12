@@ -166,15 +166,12 @@ function _renderSyncWarn(data) {
 function _renderReactionAlerts(data) {
   const items = data.reaction_alerts;
   if (!_featureActive('reactions') || !items || !items.length) return '';
-  const notRunning = items.filter(a => a.kind === 'reaction_not_running');
-  const lowStock = items.filter(a => a.kind === 'reaction_low_stock');
-  const rows = [];
   // Each pp_reaction_assignments row is one real job slot (see assign_reaction) — a single
   // "Assign" click on a multi-job suggestion can produce a dozen identical-looking rows for
   // the same character+product, which used to print one line each (a "half page" of
   // duplicates). Group back into one line per (character, product) with a ×N count.
   const groups = new Map();
-  notRunning.forEach(a => {
+  items.forEach(a => {
     const key = `${a.character_name} ${a.location}`;
     if (!groups.has(key)) groups.set(key, { character_name: a.character_name, location: a.location, count: 0, severity: 'warn' });
     const g = groups.get(key);
@@ -182,33 +179,19 @@ function _renderReactionAlerts(data) {
     if (a.severity === 'high') g.severity = 'high';
   });
   const groupList = [...groups.values()];
-  if (groupList.length) {
-    const groupSev = groupList.some(g => g.severity === 'high') ? 'high' : 'warn';
-    rows.push(`<div class="dash-issue dash-issue-${groupSev}">
+  const groupSev = groupList.some(g => g.severity === 'high') ? 'high' : 'warn';
+  const rows = `<div class="dash-issue dash-issue-${groupSev}">
       <div class="dash-issue-char">Assigned but not started</div>
       <ul class="dash-issue-items">${groupList.map(g =>
         `<li class="dash-il-${g.severity === 'high' ? 'high' : 'warn'}">${_esc(g.character_name)}: ${_esc(g.location)}${g.count > 1 ? ` <span class="an-of">×${g.count} jobs</span>` : ''}</li>`
       ).join('')}</ul>
-    </div>`);
-  }
-  if (lowStock.length) {
-    rows.push(`<div class="dash-issue dash-issue-warn">
-      <div class="dash-issue-char">Moon-goo running low</div>
-      <ul class="dash-issue-items">${lowStock.map(a => {
-        const nums = (a.needed != null && a.available != null)
-          ? ` — need ${Math.round(a.needed).toLocaleString()}, ${Math.round(a.available).toLocaleString()} in stock`
-          : '';
-        return `<li class="dash-il-warn">${_esc(a.location)}${nums}</li>`;
-      }).join('')}</ul>
-    </div>`);
-  }
+    </div>`;
   // Header count = lines actually shown (post-grouping), not raw alert-row count — otherwise
   // the header could say "11 things" while the body only shows 2 grouped lines, which reads
   // like a bug of its own.
-  const shownCount = groups.size + lowStock.length;
   return `<section class="pp-card dash-issues">
-      <div class="pp-card-title">Reactions <span class="pp-card-hint">— ${shownCount} thing${shownCount !== 1 ? 's' : ''} need attention</span></div>
-      <div class="pp-card-body">${rows.join('')}</div>
+      <div class="pp-card-title">Reactions <span class="pp-card-hint">— ${groupList.length} thing${groupList.length !== 1 ? 's' : ''} need attention</span></div>
+      <div class="pp-card-body">${rows}</div>
     </section>`;
 }
 

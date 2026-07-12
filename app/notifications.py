@@ -155,8 +155,8 @@ _COOLDOWN_HOURS = {
     "ext_unrouted": 24.0, "fac_unfed": 24.0, "fac_output": 24.0, "p0_mismatch": 24.0,
     "schedule_sync": 24.0,
     # A forgotten assignment is a persistent problem until installed (like the correctness
-    # kinds) — no point re-pinging every 15 minutes. Low stock is shared/slower-moving too.
-    "reaction_not_running": 24.0, "reaction_low_stock": 12.0,
+    # kinds) — no point re-pinging every 15 minutes.
+    "reaction_not_running": 24.0,
 }
 
 
@@ -272,7 +272,6 @@ _KIND_LABELS = {
     "p0_mismatch":    ("Extracting something unused", "colony", "colonies"),
     "schedule_sync":  ("Extractor schedule out of sync", "extractor", "extractors"),
     "reaction_not_running": ("Assigned reaction not started", "reaction", "reactions"),
-    "reaction_low_stock":   ("Moon-goo stock too low", "material", "materials"),
 }
 
 
@@ -280,19 +279,6 @@ def _format_batch(kind: str, evs: list[dict]) -> tuple[str, str]:
     """Return (title, body) for a batch of same-kind events, matching the dashboard's
     aggregate style."""
     title, singular, plural = _KIND_LABELS.get(kind, (kind, "item", "items"))
-    if kind == "reaction_low_stock":
-        # Shared alliance-stock shortages have no character to group by (character_name is
-        # always None here — see app.colony_alerts._reaction_alerts) — _collapse_line's
-        # per-character tally degenerated to a useless "N materials — ? ×N". List the actual
-        # material name(s) + the real need-vs-available numbers instead, so the push is
-        # self-explanatory without a trip to the dashboard.
-        parts = ", ".join(
-            f"{e['location']} (need {round(e['needed']):,}, {round(e['available']):,} in stock)"
-            if e.get("needed") is not None and e.get("available") is not None else e["location"]
-            for e in evs
-        )
-        noun = singular if len(evs) == 1 else plural
-        return title, f"{len(evs)} {noun} — {parts}"
     body = _collapse_line(evs, singular, plural)
     return title, body
 
