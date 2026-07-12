@@ -21,6 +21,8 @@ DEFAULTS = {
     "storage_high_pct": 95.0,       # fill % that escalates a pad to "high" severity
     "storage_high_ttf_hours": 2.0,  # time-to-full that escalates a pad to "high" severity
     "storage_urgent_hours": 3.0,    # time-to-full counted in the "(N within Xh)" header
+    "reaction_refill_hours": 24.0,  # a character's soonest-finishing running reaction job within
+                                     # this window counts as "needs a refill/restart soon"
     "muted_kinds": [],
 }
 
@@ -43,7 +45,7 @@ ALERT_KINDS = [
     {"key": "fac_output", "label": "Factory output not routed"},
     {"key": "p0_mismatch", "label": "Extracting something the factories don't use"},
     {"key": "schedule_sync", "label": "Extractor schedule out of sync"},
-    {"key": "reaction_not_running", "label": "Assigned reaction not started"},
+    {"key": "reaction_finishing_soon", "label": "Reactions finishing soon"},
 ]
 _VALID_KINDS = {k["key"] for k in ALERT_KINDS}
 
@@ -67,6 +69,11 @@ def ensure_alert_settings_table():
         con.commit()
     except Exception:
         pass
+    try:
+        con.execute("ALTER TABLE pp_alert_settings ADD COLUMN reaction_refill_hours REAL DEFAULT 24")
+        con.commit()
+    except Exception:
+        pass
     con.close()
 
 
@@ -80,7 +87,7 @@ def get_alert_settings(context_id: int | None) -> dict:
     con = get_connection()
     row = con.execute(
         "SELECT expiring_hours, storage_warn_pct, storage_high_pct, storage_high_ttf_hours, "
-        "storage_urgent_hours, muted_kinds FROM pp_alert_settings WHERE context_id=?",
+        "storage_urgent_hours, muted_kinds, reaction_refill_hours FROM pp_alert_settings WHERE context_id=?",
         (context_id,),
     ).fetchone()
     con.close()
@@ -96,6 +103,7 @@ def get_alert_settings(context_id: int | None) -> dict:
         "storage_high_pct": row["storage_high_pct"],
         "storage_high_ttf_hours": row["storage_high_ttf_hours"],
         "storage_urgent_hours": row["storage_urgent_hours"],
+        "reaction_refill_hours": row["reaction_refill_hours"] if row["reaction_refill_hours"] is not None else DEFAULTS["reaction_refill_hours"],
         "muted_kinds": muted,
     }
 
@@ -106,6 +114,7 @@ class AlertSettingsUpdate(BaseModel):
     storage_high_pct: float
     storage_high_ttf_hours: float
     storage_urgent_hours: float
+    reaction_refill_hours: float = 24.0
     muted_kinds: list[str] = []
 
 
@@ -128,6 +137,8 @@ def api_update_alert_settings(req: AlertSettingsUpdate, ctx: int = Depends(requi
         raise HTTPException(status_code=400, detail="storage_high_ttf_hours must be between 0 and 48")
     if not (0 < req.storage_urgent_hours <= 48):
         raise HTTPException(status_code=400, detail="storage_urgent_hours must be between 0 and 48")
+    if not (0 < req.reaction_refill_hours <= 168):
+        raise HTTPException(status_code=400, detail="reaction_refill_hours must be between 0 and 168")
     unknown = [k for k in req.muted_kinds if k not in _VALID_KINDS]
     if unknown:
         raise HTTPException(status_code=400, detail=f"Unknown alert kind(s): {', '.join(unknown)}")
@@ -135,15 +146,16 @@ def api_update_alert_settings(req: AlertSettingsUpdate, ctx: int = Depends(requi
     con = get_connection()
     con.execute(
         "INSERT INTO pp_alert_settings (context_id, expiring_hours, storage_warn_pct, "
-        "storage_high_pct, storage_high_ttf_hours, storage_urgent_hours, muted_kinds) "
-        "VALUES (?,?,?,?,?,?,?) "
+        "storage_high_pct, storage_high_ttf_hours, storage_urgent_hours, reaction_refill_hours, muted_kinds) "
+        "VALUES (?,?,?,?,?,?,?,?) "
         "ON CONFLICT(context_id) DO UPDATE SET "
         "expiring_hours=excluded.expiring_hours, storage_warn_pct=excluded.storage_warn_pct, "
         "storage_high_pct=excluded.storage_high_pct, "
         "storage_high_ttf_hours=excluded.storage_high_ttf_hours, "
-        "storage_urgent_hours=excluded.storage_urgent_hours, muted_kinds=excluded.muted_kinds",
+        "storage_urgent_hours=excluded.storage_urgent_hours, reaction_refill_hours=excluded.reaction_refill_hours, "
+        "muted_kinds=excluded.muted_kinds",
         (ctx, req.expiring_hours, req.storage_warn_pct, req.storage_high_pct,
-         req.storage_high_ttf_hours, req.storage_urgent_hours,
+         req.storage_high_ttf_hours, req.storage_urgent_hours, req.reaction_refill_hours,
          _json.dumps(sorted(set(req.muted_kinds)))),
     )
     con.commit()

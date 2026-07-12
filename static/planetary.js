@@ -3059,6 +3059,9 @@ function _renderAlertSettings(s) {
   set('alertStorageHighPct', s.storage_high_pct);
   set('alertStorageHighTtfHours', s.storage_high_ttf_hours);
   set('alertStorageUrgentHours', s.storage_urgent_hours);
+  set('alertReactionRefillHours', s.reaction_refill_hours);
+  const reactionSubsec = document.getElementById('alertReactionSubsec');
+  if (reactionSubsec) reactionSubsec.style.display = (typeof _featureActive === 'function' && _featureActive('reactions')) ? '' : 'none';
   const listEl = document.getElementById('alertMutedList');
   if (listEl && s.available_kinds) {
     const muted = new Set(s.muted_kinds || []);
@@ -3087,6 +3090,7 @@ async function saveAlertSettings() {
     storage_high_pct: parseFloat(document.getElementById('alertStorageHighPct').value) || 95,
     storage_high_ttf_hours: parseFloat(document.getElementById('alertStorageHighTtfHours').value) || 2,
     storage_urgent_hours: parseFloat(document.getElementById('alertStorageUrgentHours').value) || 3,
+    reaction_refill_hours: parseFloat(document.getElementById('alertReactionRefillHours').value) || 24,
     muted_kinds: muted,
   };
   status.textContent = 'Saving...';

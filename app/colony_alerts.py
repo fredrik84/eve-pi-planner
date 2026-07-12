@@ -12,10 +12,10 @@ storage_full, factory_refill), four correctness-based, stored per-scan by
 app.esi._detect_colony_issues (ext_unrouted, fac_unfed, fac_output, p0_mismatch) — always
 "high" severity — schedule_sync (an extractor running a different program length than the
 fleet's norm), always "warn" severity, computed fleet-wide via _extractor_program_lengths() —
-and one Reactions-specific kind (reaction_not_running, see _reaction_alerts() below), unrelated
-to PI colonies entirely but folded into the same flat list so it gets the same mute/severity/
-dashboard/push plumbing for free. The threshold-based kinds compute their own severity from the
-account's configured thresholds (see inline comments below).
+and one Reactions-specific kind (reaction_finishing_soon, see _reaction_alerts() below),
+unrelated to PI colonies entirely but folded into the same flat list so it gets the same mute/
+severity/dashboard/push plumbing for free. The threshold-based kinds compute their own severity
+from the account's configured thresholds (see inline comments below).
 """
 import json as _json
 import time as _time
@@ -34,50 +34,71 @@ _CORRECTNESS_SEVERITY = {
 
 
 def _reaction_alerts(context_id: int, muted: set, now: float) -> list[dict]:
-    """Reactions-specific alerts — entirely separate data (pp_reaction_assignments) from the PI
-    colony rows the rest of this module works from, so this is a self-contained block rather
-    than woven into the per-row loop below. Cheaply short-circuits to nothing for the vast
-    majority of accounts (nothing pending), since this runs for every account on every
-    15-minute notification tick.
+    """Reactions-specific alerts — entirely separate data from the PI colony rows the rest of
+    this module works from, so this is a self-contained block rather than woven into the per-row
+    loop below. Cheaply short-circuits to nothing for the vast majority of accounts, since this
+    runs for every account on every 15-minute notification tick.
 
-    - reaction_not_running: a suggestion the player clicked "Assign" on but hasn't actually
-      installed in-game yet (no matching ESI job has shown up) for longer than expiring_hours —
-      reuses that existing threshold rather than adding a dedicated field, same convention
-      factory_refill already follows.
+    - reaction_finishing_soon: a character's soonest-finishing RUNNING reaction job (from the
+      cached ESI job snapshot — see app.reactions.pp_char_industry_jobs) has less than the
+      configured reaction_refill_hours left. ESI reports a job's end_date once at install time
+      and it never changes, so a stale cache is still accurate for this — "hours left" is always
+      recomputed fresh against `now`, only the job LIST itself can go stale if a new job started
+      since the last refresh (same staleness the Reactions tab's own "Refresh" button already
+      exists to fix).
 
-    (There used to be a second kind here, reaction_low_stock, warning when the shared alliance
-    goo stock couldn't cover what was assigned — removed 2026-07-12 once the sheet's stock
-    column itself was judged untrustworthy enough that neither the opportunity engine nor an
-    alert should hard-depend on it; see app.reactions._resolve_reachable's docstring.)
+    (There used to be a kind here called reaction_not_running, warning when an assigned-but-not-
+    yet-installed suggestion sat too long — removed 2026-07-12: it had no natural resolution
+    condition and stayed forever for anyone who simply hadn't gotten to installing it yet,
+    unlike this one, which clears itself the moment a fresh job goes in. There was also, even
+    earlier, a reaction_low_stock kind — removed for the alliance-sheet-stock-is-untrustworthy
+    reason documented in app.reactions._resolve_reachable's docstring.)
     """
-    if "reaction_not_running" in muted:
+    if "reaction_finishing_soon" in muted:
         return []
     con = get_connection()
     try:
-        assignments = con.execute(
-            "SELECT a.id, a.character_id, a.type_id, a.name, a.runs, a.created_at, c.character_name "
-            "FROM pp_reaction_assignments a JOIN pp_characters c ON c.character_id = a.character_id "
-            "WHERE c.context_id=?", (context_id,),
+        rows = con.execute(
+            "SELECT j.character_id, j.jobs_json, c.character_name FROM pp_char_industry_jobs j "
+            "JOIN pp_characters c ON c.character_id = j.character_id WHERE c.context_id=?",
+            (context_id,),
         ).fetchall()
     except Exception:
         return []  # table may not exist yet on a freshly-deployed environment — never let that break PI alerts
     finally:
         con.close()
-    if not assignments:
+    if not rows:
         return []
 
+    from datetime import datetime
+    threshold_hours = get_alert_settings(context_id)["reaction_refill_hours"]
     alerts: list[dict] = []
-    expiring_hours = get_alert_settings(context_id)["expiring_hours"]
 
-    for a in assignments:
-        age_hours = (now - a["created_at"]) / 3600.0
-        if age_hours >= expiring_hours:
+    for r in rows:
+        try:
+            jobs = _json.loads(r["jobs_json"] or "[]")
+        except Exception:
+            continue
+        soonest_hours = None
+        for j in jobs:
+            if j.get("status") not in ("active", "paused", "ready"):
+                continue
+            end = j.get("end_date")
+            if not end:
+                continue
+            try:
+                end_ts = datetime.fromisoformat(end.replace("Z", "+00:00")).timestamp()
+            except Exception:
+                continue
+            hours_left = (end_ts - now) / 3600.0
+            if soonest_hours is None or hours_left < soonest_hours:
+                soonest_hours = hours_left
+        if soonest_hours is not None and soonest_hours <= threshold_hours:
             alerts.append({
-                "kind": "reaction_not_running",
-                "severity": "high" if age_hours >= expiring_hours * 2 else "warn",
-                "character_id": a["character_id"], "character_name": a["character_name"],
-                "planet_id": a["id"], "location": a["name"], "hours_left": None,
-                "runs": a["runs"],
+                "kind": "reaction_finishing_soon",
+                "severity": "warn",
+                "character_id": r["character_id"], "character_name": r["character_name"],
+                "planet_id": None, "location": None, "hours_left": round(soonest_hours, 1),
             })
 
     return alerts

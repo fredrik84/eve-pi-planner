@@ -498,6 +498,7 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .rx-slot-pending:hover { border-color: #a83a3a; }
 .rx-slot-icon { width: 32px; height: 32px; border-radius: 4px; }
 .rx-slot-timer { font-size: 9px; color: var(--clr-text-dim); margin-top: 3px; white-space: nowrap; }
+.rx-slot-runs { color: var(--clr-text-soft); }
 .rx-slot-empty-mark { font-size: 20px; color: var(--clr-text-dim); }
 .rx-slot-pending-badge {
   position: absolute; top: -5px; right: -5px; font-size: 13px; line-height: 1;
@@ -507,7 +508,6 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 }
 .rx-slot-pending-badge:hover { background: #3a1515; border-color: #a83a3a; }
 .rx-slot-pending-label { font-size: 8px; color: #c87a7a; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 54px; }
-.rx-todo-groups { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
 
 /* A <details><summary class="pp-card-title"> used as a foldable card header: the plain
    .pp-card-title class alone renders fine as a <div>, but a <summary> defaults to

@@ -213,35 +213,48 @@ def test_muting_excludes_from_engine_output() -> bool:
     return ok
 
 
-def test_reaction_not_running() -> bool:
-    print(f"\n{'='*60}\n  reaction_not_running (Reactions assignment pending too long)\n{'='*60}")
+def test_reaction_finishing_soon() -> bool:
+    print(f"\n{'='*60}\n  reaction_finishing_soon (running reaction job about to finish)\n{'='*60}")
     ok = True
     con = get_connection()
     con.execute("""
-        CREATE TABLE IF NOT EXISTS pp_reaction_assignments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, character_id INTEGER NOT NULL,
-            type_id INTEGER NOT NULL, name TEXT NOT NULL, runs INTEGER NOT NULL,
-            input_cost REAL NOT NULL, reward REAL NOT NULL, created_at REAL NOT NULL
+        CREATE TABLE IF NOT EXISTS pp_char_industry_jobs (
+            character_id INTEGER PRIMARY KEY, jobs_json TEXT NOT NULL DEFAULT '[]', fetched_at REAL
         )
     """)
-    con.execute("DELETE FROM pp_reaction_assignments WHERE character_id=?", (FAKE_CID,))
-    # expiring_hours default is 3h — 5h old should fire as "warn" (not yet 2x = "high")
+    con.execute("DELETE FROM pp_char_industry_jobs WHERE character_id=?", (FAKE_CID,))
+    # reaction_refill_hours default is 24h — a job with 5h left should fire as "warn"
+    # (the kind never escalates to "high" — see app.colony_alerts._reaction_alerts).
+    end = datetime.fromtimestamp(time.time() + 5 * 3600, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+    jobs = [{"status": "active", "end_date": end, "product_type_id": 16665, "runs": 100, "activity_id": 11}]
     con.execute(
-        "INSERT INTO pp_reaction_assignments (character_id, type_id, name, runs, input_cost, reward, created_at) "
-        "VALUES (?,?,?,?,?,?,?)",
-        (FAKE_CID, 16665, "Hexite", 100, 1000.0, 100.0, time.time() - 5 * 3600),
+        "INSERT INTO pp_char_industry_jobs (character_id, jobs_json, fetched_at) VALUES (?,?,?)",
+        (FAKE_CID, json.dumps(jobs), time.time()),
     )
     con.commit()
     con.close()
 
-    alerts = [a for a in compute_colony_alerts(FAKE_CTX) if a["kind"] == "reaction_not_running"]
-    ok &= check(len(alerts) == 1, f"exactly one reaction_not_running alert (got {alerts})")
+    alerts = [a for a in compute_colony_alerts(FAKE_CTX) if a["kind"] == "reaction_finishing_soon"]
+    ok &= check(len(alerts) == 1, f"exactly one reaction_finishing_soon alert (got {alerts})")
     if alerts:
-        ok &= check(alerts[0]["severity"] == "warn", f"5h-old assignment is 'warn', not 'high' (got {alerts[0]['severity']})")
-        ok &= check(alerts[0]["location"] == "Hexite", f"carries the product name (got {alerts[0]['location']})")
+        ok &= check(alerts[0]["severity"] == "warn", f"is always 'warn', never escalates (got {alerts[0]['severity']})")
+        ok &= check(abs(alerts[0]["hours_left"] - 5.0) < 0.1, f"carries ~5h left (got {alerts[0]['hours_left']})")
+
+    # A job with plenty of time left must NOT fire.
+    con = get_connection()
+    end_far = datetime.fromtimestamp(time.time() + 72 * 3600, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+    jobs_far = [{"status": "active", "end_date": end_far, "product_type_id": 16665, "runs": 100, "activity_id": 11}]
+    con.execute(
+        "UPDATE pp_char_industry_jobs SET jobs_json=? WHERE character_id=?",
+        (json.dumps(jobs_far), FAKE_CID),
+    )
+    con.commit()
+    con.close()
+    alerts_far = [a for a in compute_colony_alerts(FAKE_CTX) if a["kind"] == "reaction_finishing_soon"]
+    ok &= check(len(alerts_far) == 0, f"a job with 72h left does not fire (got {alerts_far})")
 
     con = get_connection()
-    con.execute("DELETE FROM pp_reaction_assignments WHERE character_id=?", (FAKE_CID,))
+    con.execute("DELETE FROM pp_char_industry_jobs WHERE character_id=?", (FAKE_CID,))
     con.commit()
     con.close()
     return ok
@@ -301,7 +314,7 @@ def main() -> int:
         test_unknown_kind_filtered(),
         test_all_eight_kinds_detected(),
         test_muting_excludes_from_engine_output(),
-        test_reaction_not_running(),
+        test_reaction_finishing_soon(),
         test_live_dashboard_renders_expected_cards(base),
     ]
     _cleanup()

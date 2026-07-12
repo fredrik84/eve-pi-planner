@@ -332,11 +332,12 @@ function _renderReactionsDashboard(data) {
     const squares = jobs.map(j => {
       const icon = `https://images.evetech.net/types/${j.product_type_id}/icon?size=32`;
       const timer = j.hours_left != null ? _fmtHours(j.hours_left) : '—';
-      const tip = `${_rxProductName(j.product_type_id)} — finished in ${timer}${j.facility_name ? ' — ' + j.facility_name : ''}`;
+      const runsLabel = j.runs != null ? `×${j.runs}` : '';
+      const tip = `${_rxProductName(j.product_type_id)} — ${runsLabel ? runsLabel + ' runs — ' : ''}finished in ${timer}${j.facility_name ? ' — ' + j.facility_name : ''}`;
       return `
         <div class="rx-slot rx-slot-filled" title="${_esc(tip)}">
           <img class="rx-slot-icon" src="${icon}" alt="" onerror="this.style.visibility='hidden'">
-          <div class="rx-slot-timer">${_esc(timer)}</div>
+          <div class="rx-slot-timer">${_esc(timer)}${runsLabel ? ` <span class="rx-slot-runs">${_esc(runsLabel)}</span>` : ''}</div>
         </div>`;
     });
     // Assigned (via the wizard's "Assign") but ESI hasn't confirmed it's actually running yet —
@@ -356,7 +357,7 @@ function _renderReactionsDashboard(data) {
         <div class="rx-slot rx-slot-pending" title="Not running yet — install ${_esc(a.name)} ×${a.runs} in-game. Click to edit." onclick="_rxOpenEditAssign(${a.assignment_id}, '${c.character_id}')">
           <img class="rx-slot-icon" src="${pendingIcon}" alt="" onerror="this.style.visibility='hidden'">
           <span class="rx-slot-pending-badge" onclick="event.stopPropagation();_rxCancelAssignment(${a.assignment_id})" title="Cancel this assignment">⊘</span>
-          <div class="rx-slot-pending-label">${_esc(a.name)}</div>
+          <div class="rx-slot-pending-label">${_esc(a.name)} <span class="rx-slot-runs">×${a.runs}</span></div>
         </div>`);
     }
     for (let i = jobs.length + pending.length; i < c.slots; i++) {
@@ -369,27 +370,13 @@ function _renderReactionsDashboard(data) {
       </div>`;
   }).join('');
 
-  // Grouped per character, styled the same way the PI Dashboard groups its own "Needs
-  // attention" cards (dash-issue/dash-issue-char/dash-issue-items) — a flat list of "Install X
-  // on Y" lines got hard to scan once several characters each had a few pending installs.
-  const todoByChar = new Map();
-  for (const g of todoGroups.values()) {
-    if (!todoByChar.has(g.character_name)) todoByChar.set(g.character_name, []);
-    todoByChar.get(g.character_name).push(g);
-  }
-  const todoNote = todoByChar.size
-    ? `<div class="rx-todo-groups">${[...todoByChar.entries()].map(([charName, items]) => `
-        <div class="dash-issue dash-issue-warn">
-          <div class="dash-issue-char">${_esc(charName)}</div>
-          <ul class="dash-issue-items">${items.map(g =>
-            `<li class="dash-il-warn">Install <b>${_esc(g.name)}</b> — ${g.count} job${g.count > 1 ? 's' : ''}, ${g.runs} run${g.runs === 1 ? '' : 's'} each</li>`
-          ).join('')}</ul>
-        </div>`).join('')}</div>`
-    : '';
-
   // Easy at-a-glance numbers, first thing on the page — same big-number-tile pattern as the PI
   // Dashboard's own "Overview" row (_dashTile, dashboard.js), not a small text line buried below
-  // the character loadout where it's easy to miss.
+  // the character loadout where it's easy to miss. "Jobs to install" is a plain count, not a
+  // nagging alert — the standalone "Needs attention"-style banner this used to feed
+  // (perpetually "Install X" for anything you just hadn't gotten to yet, with no natural
+  // resolution) was removed 2026-07-13; each pending slot's own red ⊘ square in the loadout
+  // below is reference enough.
   const pendingCount = [...todoGroups.values()].reduce((sum, g) => sum + g.count, 0);
   // Soonest-finishing running job — data.running is already sorted ascending by hours_left
   // (see get_industry_jobs), so the first entry is "the next thing that'll need attention."
@@ -407,22 +394,6 @@ function _renderReactionsDashboard(data) {
     </div>`;
 
   if (metricsEl) metricsEl.innerHTML = overviewTiles;
-
-  // Alerts get their own card at the very top of the page (same placement/shape as the
-  // Dashboard tab's own alert cards) rather than being buried inside the "Reactions" card body —
-  // "what needs installing right now" is the actionable part, not just a status footnote.
-  const alertsCard = document.getElementById('rxAlertsCard');
-  const alertsContent = document.getElementById('rxAlertsContent');
-  const alertsHint = document.getElementById('rxAlertsHint');
-  if (alertsCard && alertsContent) {
-    if (todoByChar.size) {
-      alertsCard.style.display = '';
-      alertsContent.innerHTML = todoNote;
-      if (alertsHint) alertsHint.textContent = `— ${pendingCount} job${pendingCount === 1 ? '' : 's'} to install`;
-    } else {
-      alertsCard.style.display = 'none';
-    }
-  }
 
   el.innerHTML = rows + untrackedNote;
 }

@@ -163,46 +163,20 @@ function _renderSyncWarn(data) {
     </section>`;
 }
 
+// reaction_finishing_soon (app.colony_alerts._reaction_alerts): one alert per character, its
+// soonest-finishing RUNNING job has less than the configured reaction_refill_hours left —
+// already character-level (no per-product grouping needed, unlike the old reaction_not_running
+// kind this replaced 2026-07-13, which was removed for having no natural resolution condition:
+// an assigned-but-never-installed suggestion just sat there forever).
 function _renderReactionAlerts(data) {
   const items = data.reaction_alerts;
   if (!_featureActive('reactions') || !items || !items.length) return '';
-  // Each pp_reaction_assignments row is one real job slot (see assign_reaction) — a single
-  // "Assign" click on a multi-job suggestion can produce a dozen identical-looking rows for
-  // the same character+product, which used to print one line each (a "half page" of
-  // duplicates). Group into one line per (character, product, runs) with a ×N job count —
-  // matches the Reactions tab's own todoGroups grouping exactly, so the two views describe the
-  // same pending work the same way (not just similar-looking).
-  const groups = new Map();
-  items.forEach(a => {
-    const key = `${a.character_name} ${a.location} ${a.runs}`;
-    if (!groups.has(key)) groups.set(key, { character_name: a.character_name, location: a.location, runs: a.runs, count: 0 });
-    groups.get(key).count++;
-  });
-  const groupList = [...groups.values()];
-  // Grouped per character (one dash-issue card per character, same shape as the "Needs
-  // attention" card below) instead of one combined "Assigned but not started" block — a player
-  // with several characters otherwise has to scan every line to find which ones are theirs.
-  const byChar = new Map();
-  groupList.forEach(g => {
-    if (!byChar.has(g.character_name)) byChar.set(g.character_name, []);
-    byChar.get(g.character_name).push(g);
-  });
-  // Always "warn" (amber), never the "high" (red) escalation _reaction_alerts() computes server-
-  // side for notification-threshold purposes — on THIS card that read as alarming for something
-  // that's just "hasn't been installed yet," not a broken/correctness issue like the OTHER
-  // Dashboard alert kinds that legitimately use red. Matches the Reactions tab's own version,
-  // which never escalates either — same underlying data, same visual weight in both places now.
-  const cards = [...byChar.entries()].map(([charName, gs]) => `<div class="dash-issue dash-issue-warn">
-        <div class="dash-issue-char">${_esc(charName)}</div>
-        <ul class="dash-issue-items">${gs.map(g =>
-          `<li class="dash-il-warn">${_esc(g.location)} — ${g.count} job${g.count > 1 ? 's' : ''}, ${g.runs} run${g.runs === 1 ? '' : 's'} each</li>`
-        ).join('')}</ul>
+  const cards = items.map(a => `<div class="dash-issue dash-issue-warn">
+        <div class="dash-issue-char">${_esc(a.character_name)}</div>
+        <ul class="dash-issue-items"><li class="dash-il-warn">Finishing in ${_fmtHours(a.hours_left)} — refill or start the next batch soon</li></ul>
       </div>`).join('');
-  // Header count = lines actually shown (post-grouping), not raw alert-row count — otherwise
-  // the header could say "11 things" while the body only shows 2 grouped lines, which reads
-  // like a bug of its own.
   return `<section class="pp-card dash-issues">
-      <div class="pp-card-title">Reactions <span class="pp-card-hint">— ${groupList.length} thing${groupList.length !== 1 ? 's' : ''} need attention</span></div>
+      <div class="pp-card-title">Reactions <span class="pp-card-hint">— ${items.length} character${items.length !== 1 ? 's' : ''} need attention</span></div>
       <div class="pp-card-body">${cards}</div>
     </section>`;
 }
