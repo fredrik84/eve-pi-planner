@@ -62,5 +62,33 @@ def cache_invalidate(key: str):
         log.exception("cache_invalidate failed for %s", key)
 
 
+def cache_mget_json(keys: list[str]) -> dict[str, object]:
+    """Batch GET (one round-trip, not N) — returns {key: value} for whichever keys had a
+    cached, non-expired value; a miss is simply absent from the result, not an error."""
+    c = _client()
+    if c is None or not keys:
+        return {}
+    try:
+        raw_values = c.mget(keys)
+        return {k: json.loads(v) for k, v in zip(keys, raw_values) if v is not None}
+    except Exception:
+        log.exception("cache_mget_json failed")
+        return {}
+
+
+def cache_mset_json(items: dict, ttl: int = 300):
+    """Batch SETEX via a pipeline (one round-trip, not N)."""
+    c = _client()
+    if c is None or not items:
+        return
+    try:
+        pipe = c.pipeline()
+        for k, v in items.items():
+            pipe.setex(k, ttl, json.dumps(v))
+        pipe.execute()
+    except Exception:
+        log.exception("cache_mset_json failed")
+
+
 def charlist_key(context_id: int) -> str:
     return f"charlist:{context_id}"
