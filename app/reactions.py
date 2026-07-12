@@ -199,6 +199,10 @@ def _resolve_reachable(goo: dict[int, dict], purchasable: dict[int, float],
       source         - LEAF nodes only ("via" is None): "group" or "market", whichever priced
                        this specific unit_cost — see the cheaper-wins note below. Absent on
                        reaction-product nodes (never directly "bought", always reacted).
+      alt_cost/      - LEAF nodes only: the LOSING price and its source, when both a group sheet
+      alt_source       price and a market price were available for this material (None/None if
+                       only one source had it at all) — lets a caller show the real ISK/unit
+                       difference between the two, not just whichever one silently won.
     A reaction only becomes reachable once every one of its inputs is already reachable —
     same "expand until no more nodes unlock" shape as build_sde.py's compute_pi_tiers, just
     walked forward from available inputs instead of backward from a fixed target.
@@ -217,15 +221,28 @@ def _resolve_reachable(goo: dict[int, dict], purchasable: dict[int, float],
     stale sheet price when the market rate is actually better; no manual override needed, the
     math just picks the cheaper source the same way it already picks the cheaper of two reaction
     formulas below."""
+    # alt_cost/alt_source: the LOSING price, kept alongside the winning one whenever a leaf has
+    # both a group sheet price and a market price available — lets a caller (the shopping list)
+    # show the real ISK/unit difference between the two, not just whichever one won silently.
     reached: dict[int, dict] = {}
     for tid, g in goo.items():
         if g["sell_price"] > 0:
             reached[tid] = {"unit_cost": g["sell_price"], "max_qty": _PURCHASABLE_MAX_QTY,
-                             "reaction_count": 0, "via": None, "source": "group"}
+                             "reaction_count": 0, "via": None, "source": "group",
+                             "alt_cost": None, "alt_source": None}
     for tid, buy_price in purchasable.items():
-        if buy_price > 0 and (tid not in reached or buy_price < reached[tid]["unit_cost"]):
+        if buy_price <= 0:
+            continue
+        if tid not in reached:
             reached[tid] = {"unit_cost": buy_price, "max_qty": _PURCHASABLE_MAX_QTY, "source": "market",
-                             "reaction_count": 0, "via": None}
+                             "reaction_count": 0, "via": None, "alt_cost": None, "alt_source": None}
+        elif buy_price < reached[tid]["unit_cost"]:
+            reached[tid] = {"unit_cost": buy_price, "max_qty": _PURCHASABLE_MAX_QTY, "source": "market",
+                             "reaction_count": 0, "via": None,
+                             "alt_cost": reached[tid]["unit_cost"], "alt_source": "group"}
+        else:
+            reached[tid]["alt_cost"] = buy_price
+            reached[tid]["alt_source"] = "market"
 
     changed = True
     while changed:
@@ -547,12 +564,20 @@ def reactions_shopping_list(context_id: int = Depends(require_context)):
     # buy from the alliance when the market is the better (or for a non-member, the only) option.
     # unit_cost is the SAME per-unit price _resolve_reachable already settled on for this leaf
     # (whichever source won) — surfaced so the player has a concrete expected price to check the
-    # actual alliance/market quote against, not just a bare quantity.
+    # actual alliance/market quote against, not just a bare quantity. alt_unit_cost/alt_source
+    # is the LOSING price (if both a group sheet price and a market price were available for
+    # this material) — the actual ISK/unit gap between them, not just an implicit "cheaper won."
+    # Market prices always include the configured import shipping cost per m3 already baked in
+    # (see the "market_data field names..." note in _load_goo_and_reached above) — never a bare
+    # Jita quote.
     materials = [
         {
             "type_id": tid, "name": types.get(tid, {}).get("name", str(tid)),
             "quantity": math.ceil(qty), "source": reached.get(tid, {}).get("source", "market"),
             "unit_cost": round(reached.get(tid, {}).get("unit_cost", 0.0), 2),
+            "alt_unit_cost": (round(reached[tid]["alt_cost"], 2)
+                               if tid in reached and reached[tid].get("alt_cost") is not None else None),
+            "alt_source": reached.get(tid, {}).get("alt_source"),
             "volume_m3": round(math.ceil(qty) * (types.get(tid, {}).get("volume") or 0.0), 2),
         }
         for tid, qty in totals.items()

@@ -70,12 +70,21 @@ function _loadRxShoppingList() {
       // Unit price is whichever source (alliance sheet or market) actually won for this
       // material right now — a concrete number to check the real quote against, not just a
       // bare quantity to go find a price for yourself.
+      // alt_unit_cost is the LOSING price (whichever source didn't win, group vs market) when
+      // both were actually available for this material — shows the real ISK/unit gap instead
+      // of just silently picking the cheaper one, so you can judge whether it's worth chasing.
+      const priceDiff = m => {
+        if (m.alt_unit_cost == null) return '';
+        const diff = m.alt_unit_cost - m.unit_cost;
+        const altLabel = m.alt_source === 'group' ? 'alliance' : 'market';
+        return `<div class="pp-card-hint" style="font-size:10px;white-space:nowrap">${diff >= 0 ? '−' : '+'}${_fmtIsk(Math.abs(diff))} vs ${altLabel}</div>`;
+      };
       const section = (title, items) => !items.length ? '' : `
         <div class="rx-shop-sec-title">${title} <span class="pp-card-hint">— ${Math.round(items.reduce((s, m) => s + (m.volume_m3 || 0), 0)).toLocaleString()} m³ total</span></div>
         <div style="overflow-x:auto">
           <table class="pp-card-table" style="width:100%">
             <thead><tr><th>Material</th><th>Quantity</th><th>Unit price</th><th>Est. cost</th><th>Volume</th></tr></thead>
-            <tbody>${items.map(m => `<tr><td>${_esc(m.name)}</td><td>${m.quantity.toLocaleString()}</td><td>${_fmtIsk(m.unit_cost)}</td><td>${_fmtIsk(m.unit_cost * m.quantity)}</td><td>${Math.round(m.volume_m3 || 0).toLocaleString()} m³</td></tr>`).join('')}</tbody>
+            <tbody>${items.map(m => `<tr><td>${_esc(m.name)}</td><td>${m.quantity.toLocaleString()}</td><td>${_fmtIsk(m.unit_cost)}${priceDiff(m)}</td><td>${_fmtIsk(m.unit_cost * m.quantity)}</td><td>${Math.round(m.volume_m3 || 0).toLocaleString()} m³</td></tr>`).join('')}</tbody>
           </table>
         </div>`;
       el.innerHTML = section('Fetch from your alliance', group)
