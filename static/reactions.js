@@ -74,10 +74,11 @@ function _loadRxShoppingList() {
       // both were actually available for this material — shows the real ISK/unit gap instead
       // of just silently picking the cheaper one, so you can judge whether it's worth chasing.
       const priceDiff = m => {
-        if (m.alt_unit_cost == null) return '';
+        if (m.alt_unit_cost == null || !m.unit_cost) return '';
         const diff = m.alt_unit_cost - m.unit_cost;
+        const pct = Math.abs(diff) / m.unit_cost * 100;
         const altLabel = m.alt_source === 'group' ? 'alliance' : 'market';
-        return `<div class="pp-card-hint" style="font-size:10px;white-space:nowrap">${diff >= 0 ? '−' : '+'}${_fmtIsk(Math.abs(diff))} vs ${altLabel}</div>`;
+        return `<div class="pp-card-hint" style="font-size:10px;white-space:nowrap">${diff >= 0 ? '−' : '+'}${pct.toFixed(1)}% vs ${altLabel}</div>`;
       };
       const section = (title, items) => !items.length ? '' : `
         <div class="rx-shop-sec-title">${title} <span class="pp-card-hint">— ${Math.round(items.reduce((s, m) => s + (m.volume_m3 || 0), 0)).toLocaleString()} m³ total</span></div>
