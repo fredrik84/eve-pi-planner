@@ -301,14 +301,34 @@ function _renderRxMaterialFilter() {
   if (!_rxMaterials.length && !_rxFuelBlocks.length) { el.innerHTML = '<div class="pp-empty">No materials priced yet.</div>'; return; }
   // Two separate groups — a player's real access to moon goo and to each racial fuel block are
   // independent concerns (e.g. cheap local Oxygen Fuel Block production, but unreliable
-  // Hydrogen supply), so they're not lumped into one undifferentiated checklist.
-  const group = (title, items) => !items.length ? '' : `
+  // Hydrogen supply), so they're not lumped into one undifferentiated checklist. data-group
+  // tags which group a box belongs to, so _rxEnforceMaterialMinimum can require at least one
+  // checked box PER group (deselecting every fuel block makes every reaction unreachable —
+  // every formula needs one — which surfaced as a confusing generic "raise your budget" error
+  // instead of the real cause).
+  const group = (title, items, key) => !items.length ? '' : `
     <div class="pp-card-hint" style="margin:8px 0 2px;font-weight:600">${title}</div>
     ${items.map(m => `
       <label class="pp-label-check">
-        <input type="checkbox" class="rx-material-cb" value="${m.type_id}" checked> ${_esc(m.name)}
+        <input type="checkbox" class="rx-material-cb" data-group="${key}" value="${m.type_id}" checked onchange="_rxEnforceMaterialMinimum(this)"> ${_esc(m.name)}
       </label>`).join('')}`;
-  el.innerHTML = group('Moon materials', _rxMaterials) + group('Fuel blocks', _rxFuelBlocks);
+  el.innerHTML = group('Moon materials', _rxMaterials, 'moon') + group('Fuel blocks', _rxFuelBlocks, 'fuel');
+}
+
+// Requires at least one checked box per group (moon materials, fuel blocks) — every reaction
+// needs SOME fuel block and most need moon goo, so emptying either group entirely makes nothing
+// reachable at all, which read as a confusing "no suggestions fit that budget" rather than the
+// real cause. Reverts the change and explains why instead of silently allowing an empty group.
+function _rxEnforceMaterialMinimum(cb) {
+  if (cb.checked) return; // only unchecking can create an empty group
+  const groupKey = cb.dataset.group;
+  const groupBoxes = document.querySelectorAll(`.rx-material-cb[data-group="${groupKey}"]`);
+  const anyChecked = [...groupBoxes].some(b => b.checked);
+  if (!anyChecked) {
+    cb.checked = true;
+    const label = groupKey === 'fuel' ? 'fuel block' : 'moon material';
+    alert(`At least one ${label} must stay checked — every reaction needs one, so leaving none checked would make nothing suggestible at all.`);
+  }
 }
 
 // Unchecked = excluded. Returns null (no restriction) when everything is checked, since that's
