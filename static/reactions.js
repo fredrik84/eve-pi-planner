@@ -362,7 +362,7 @@ function wizRSuggest() {
   const materialIds = _rxSelectedMaterialIds();
   const el = document.getElementById('wizRSuggestionsContent');
   wizRGo(2);
-  el.innerHTML = '<div class="pp-empty">Crunching the numbers…</div>';
+  el.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Crunching the numbers…</div>';
   fetch('/api/reactions/suggest', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
