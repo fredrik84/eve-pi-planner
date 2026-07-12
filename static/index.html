@@ -585,26 +585,30 @@
               </div>
             </section>
 
-            <section class="pp-card" id="rxShoppingCard" style="display:none">
-              <div class="pp-card-title">Shopping list
-                <span class="pp-card-hint">— total materials needed for everything currently assigned</span>
-                <button class="pp-add-btn" onclick="_rxCopyShoppingList(this)">Copy for Janice</button>
-              </div>
-              <div id="rxShoppingListContent" class="pp-card-body"></div>
-              <details style="margin-top:10px">
-                <summary class="pp-card-title" style="cursor:pointer;display:inline-block;font-size:13px">Paste what you've received
-                  <span class="pp-card-hint">— diff a partial contract/delivery against this list</span>
+            <section class="pp-card" id="rxShoppingCard">
+              <details id="rxShoppingDetails" ontoggle="_onRxShoppingToggle(this)">
+                <summary class="pp-card-title rx-fold-summary"><span class="rx-fold-caret">▸</span>Shopping list
+                  <span class="pp-card-hint">— total materials needed for everything currently assigned</span>
                 </summary>
                 <div style="margin-top:8px">
-                  <textarea id="rxReceivedPaste" class="bug-textarea" style="min-height:80px" placeholder="Paste your received/contract items here, e.g.&#10;Chromium&#9;174553&#10;Platinum&#9;136921" oninput="_renderRxReceivedDiff()"></textarea>
-                  <div id="rxReceivedDiff" class="pp-card-body" style="margin-top:8px"></div>
+                  <button class="pp-add-btn" onclick="_rxCopyShoppingList(this)">Copy for Janice</button>
+                  <div id="rxShoppingListContent" class="pp-card-body"></div>
+                  <details style="margin-top:10px">
+                    <summary class="pp-card-title rx-fold-summary" style="font-size:13px"><span class="rx-fold-caret">▸</span>Paste what you've received
+                      <span class="pp-card-hint">— diff a partial contract/delivery against this list</span>
+                    </summary>
+                    <div style="margin-top:8px">
+                      <textarea id="rxReceivedPaste" class="bug-textarea" style="min-height:80px" placeholder="Paste your received/contract items here, e.g.&#10;Chromium&#9;174553&#10;Platinum&#9;136921" oninput="_renderRxReceivedDiff()"></textarea>
+                      <div id="rxReceivedDiff" class="pp-card-body" style="margin-top:8px"></div>
+                    </div>
+                  </details>
                 </div>
               </details>
             </section>
 
             <section class="pp-card">
               <details id="rxAdvancedDetails">
-                <summary class="pp-card-title" style="cursor:pointer;display:inline-block">Advanced: full opportunity list
+                <summary class="pp-card-title rx-fold-summary"><span class="rx-fold-caret">▸</span>Advanced: full opportunity list
                   <span class="pp-card-hint">— every reachable reaction chain, ranked by profit</span>
                 </summary>
                 <div id="reactionsContent" class="pp-card-body">
@@ -1303,6 +1307,6 @@ PVF-N9    3         95                 60             80                  100   
   <script src="/refill.js?v=4"></script>
   <script src="/analysis.js?v=24"></script>
   <script src="/layout.js?v=1"></script>
-  <script src="/reactions.js?v=43"></script>
+  <script src="/reactions.js?v=44"></script>
 </body>
 </html>

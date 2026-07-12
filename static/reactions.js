@@ -42,26 +42,34 @@ function onReactionsTabOpen() {
       });
   }
   _loadReactionsDashboard();
-  _loadRxShoppingList();
+  // Lazy: the shopping list is folded by default (see #rxShoppingDetails) and only worth
+  // computing when actually visible — market-price lookups behind it can take a moment, and
+  // most tab-opens/refreshes don't need this data recomputed at all. _onRxShoppingToggle
+  // fetches it the first time it's unfolded; here we only re-fetch if it's ALREADY open (e.g.
+  // this is a post-assign/cancel refresh and the user had it expanded), not on every tab open.
+  const shopDetails = document.getElementById('rxShoppingDetails');
+  if (shopDetails && shopDetails.open) _loadRxShoppingList();
+}
+
+function _onRxShoppingToggle(el) {
+  if (el.open) _loadRxShoppingList();
 }
 
 let _rxLastShoppingList = [];
 
 function _loadRxShoppingList() {
-  const card = document.getElementById('rxShoppingCard');
   const el = document.getElementById('rxShoppingListContent');
-  if (!card || !el) return;
-  // Show the card with a loading state right away instead of leaving it hidden until the fetch
-  // resolves — the market-price lookup behind this can take a moment (see the Redis-cache fix),
-  // and popping the whole card into existence once data finally arrives read as a layout jump.
-  card.style.display = '';
+  if (!el) return;
   el.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Loading shopping list…</div>';
   fetch('/api/reactions/shopping-list')
     .then(r => r.ok ? r.json() : { materials: [] })
     .then(d => {
       _rxLastShoppingList = d.materials || [];
-      if (!_rxLastShoppingList.length) { card.style.display = 'none'; return; }
-      card.style.display = '';
+      if (!_rxLastShoppingList.length) {
+        el.innerHTML = '<div class="pp-empty">Nothing needed right now — nothing currently assigned.</div>';
+        _renderRxReceivedDiff();
+        return;
+      }
       // "source" is which price actually won for THAT specific material right now (see
       // app.reactions._resolve_reachable's cheaper-wins logic) — not a fixed "is this moon
       // goo" category. Your group's own sheet can lose to a better market rate on any given
@@ -93,7 +101,7 @@ function _loadRxShoppingList() {
         + section('Buy on the market (fuel blocks, or cheaper right now than your sheet)', market);
       _renderRxReceivedDiff();
     })
-    .catch(() => { card.style.display = 'none'; });
+    .catch(() => { el.innerHTML = '<div class="pp-empty">Failed to load shopping list.</div>'; });
 }
 
 // A quantity cell that copies its raw integer to the clipboard on click — ready to paste

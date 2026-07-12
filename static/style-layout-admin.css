@@ -495,6 +495,19 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .rx-slot-pending-label { font-size: 8px; color: #c87a7a; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 54px; }
 .rx-todo-groups { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
 
+/* A <details><summary class="pp-card-title"> used as a foldable card header: the plain
+   .pp-card-title class alone renders fine as a <div>, but a <summary> defaults to
+   display:list-item — without overriding that, the flex/full-width background from
+   .pp-card-title never applies and the bar's background clips to the text's own width instead
+   of spanning the card. rx-fold-summary fixes the display AND hides the native disclosure
+   marker (Safari/older Chrome still draw one even under flex) in favor of the explicit
+   rx-fold-caret, which is also just plain easier to spot as "this is clickable" than a bare
+   cursor:pointer. */
+.rx-fold-summary { cursor: pointer; display: flex !important; list-style: none; }
+.rx-fold-summary::-webkit-details-marker { display: none; }
+.rx-fold-caret { display: inline-block; transition: transform 0.15s; color: var(--clr-text-dim); margin-right: 6px; }
+details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
+
 /* Budget-usage feedback on the wizard's suggestions page — makes it visible which of the two
    independent caps (ISK vs total runs) actually stopped more suggestions from being added. */
 .rx-budget-summary { margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px solid var(--clr-border); }
