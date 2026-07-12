@@ -24,23 +24,40 @@ const _RX_COLUMNS = [
   { key: 'sell_volume',          label: 'Sell depth',     fmt: v => Math.round(v).toLocaleString() },
 ];
 
+// Shared loader for the reachable/priced opportunity list (_rxOpps) — used by the "Advanced"
+// table AND the manual-assign modal's product search. Server-side this is now cached for a
+// short TTL (see app.reactions._build_opportunities), but the bigger win is not re-fetching it
+// at all client-side unless something actually needs it: a fresh, in-flight fetch is shared
+// (concurrent callers get the same promise, not a duplicate request), and once loaded it's
+// reused until a caller explicitly forces a refresh (e.g. the Advanced table re-opening).
+let _rxOppsLoaded = false;
+let _rxOppsLoading = null;
+
+function _rxLoadOpportunities(force) {
+  if (_rxOppsLoading) return _rxOppsLoading;
+  if (_rxOppsLoaded && !force) return Promise.resolve(_rxOpps);
+  _rxOppsLoading = fetch('/api/reactions/opportunities')
+    .then(r => {
+      if (!r.ok) throw new Error(r.status === 401 ? 'Log in to use Reactions' : 'Load failed');
+      return r.json();
+    })
+    .then(data => {
+      _rxOpps = data.opportunities || [];
+      _rxOppsLoaded = true;
+      _rxOppsLoading = null;
+      return _rxOpps;
+    })
+    .catch(err => { _rxOppsLoading = null; throw err; });
+  return _rxOppsLoading;
+}
+
 function onReactionsTabOpen() {
-  const el = document.getElementById('reactionsContent');
-  if (el) {
-    el.innerHTML = '<div class="pp-empty">Loading…</div>';
-    fetch('/api/reactions/opportunities')
-      .then(r => {
-        if (!r.ok) throw new Error(r.status === 401 ? 'Log in to use Reactions' : 'Load failed');
-        return r.json();
-      })
-      .then(data => {
-        _rxOpps = data.opportunities || [];
-        _renderReactions();
-      })
-      .catch(err => {
-        el.innerHTML = `<div class="pp-empty">${_esc(err.message)}</div>`;
-      });
-  }
+  // Lazy, same idea as the shopping list fold: the Advanced table is collapsed by default and
+  // its opportunity list is the single most expensive thing this tab can compute (full reaction
+  // graph walk + a market fetch per candidate + job-cost ESI lookups) — only recompute it when
+  // it's actually visible, not on every tab-open/post-assign refresh.
+  const advDetails = document.getElementById('rxAdvancedDetails');
+  if (advDetails && advDetails.open) _rxLoadAdvancedTable(true);
   _loadReactionsDashboard();
   // Lazy: the shopping list is folded by default (see #rxShoppingDetails) and only worth
   // computing when actually visible — market-price lookups behind it can take a moment, and
@@ -49,6 +66,19 @@ function onReactionsTabOpen() {
   // this is a post-assign/cancel refresh and the user had it expanded), not on every tab open.
   const shopDetails = document.getElementById('rxShoppingDetails');
   if (shopDetails && shopDetails.open) _loadRxShoppingList();
+}
+
+function _onRxAdvancedToggle(el) {
+  if (el.open) _rxLoadAdvancedTable(true);
+}
+
+function _rxLoadAdvancedTable(force) {
+  const el = document.getElementById('reactionsContent');
+  if (!el) return;
+  el.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Loading…</div>';
+  _rxLoadOpportunities(force)
+    .then(() => _renderReactions())
+    .catch(err => { el.innerHTML = `<div class="pp-empty">${_esc(err.message)}</div>`; });
 }
 
 function _onRxShoppingToggle(el) {
@@ -426,11 +456,23 @@ function _rxOpenManualAssign(characterId) {
   document.getElementById('rxManProduct').value = '';
   document.getElementById('rxManRuns').value = 1;
   document.getElementById('rxManJobs').value = 1;
-  document.getElementById('rxManualAssignStatus').textContent =
-    _rxOpps.length ? '' : 'Still loading the product list — wait a moment, then search again.';
   document.getElementById('rxManualAssignPreview').innerHTML = '';
   _rxHideProductDropdown();
   document.getElementById('rxManualAssignModal').style.display = '';
+
+  const status = document.getElementById('rxManualAssignStatus');
+  if (_rxOppsLoaded) { status.textContent = ''; return; }
+  // Not loaded yet (e.g. the Advanced table was never opened this visit) — fetch it now and,
+  // if the search dropdown is still open by the time it resolves, refresh it in place instead
+  // of leaving a stale "still loading" state that never updates on its own.
+  status.textContent = 'Loading the product list…';
+  _rxLoadOpportunities()
+    .then(() => {
+      status.textContent = '';
+      const dd = document.getElementById('rxManProductDropdown');
+      if (dd && dd.style.display !== 'none') _rxProductDropdownFilter();
+    })
+    .catch(err => { status.textContent = err.message; });
 }
 
 function _rxCloseManualAssign() {

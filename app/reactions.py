@@ -28,6 +28,7 @@ from pydantic import BaseModel
 from app.sde import get_connection, load_pi_data, ensure_once
 from app.market import fetch_market_data
 from app.industry_cost import fetch_system_cost_index, fetch_adjusted_prices
+from app.cache import cache_get_json, cache_set_json
 from app.esi import require_context, ESI_BASE, _get_valid_token
 from app.groups import member_group, is_group_manager
 
@@ -563,7 +564,30 @@ def _load_goo_and_reached(context_id: int, allowed_material_ids: set[int] | None
     return goo, reached, reactions_by_output, inputs_by_reaction, types
 
 
+_OPPS_CACHE_TTL = 90  # short-lived Redis cache — this is the single most expensive computation
+# in the Reactions tab (full reaction-graph walk + a market fetch per candidate + job-cost ESI
+# lookups when a reaction system is configured), and it was being recomputed on every dashboard
+# refresh (tab open, every assign/cancel, every settings save) even though nothing upstream
+# usually changed between them. 90s is short enough that a real price/settings change becomes
+# visible again quickly with no explicit invalidation needed — same "TTL is enough" convention
+# as app.market's own 15-minute price cache, just shorter since this result is more request-
+# specific (per context_id + material filter) and therefore has a much smaller cache-hit pool.
+
+
 def _build_opportunities(context_id: int, allowed_material_ids: set[int] | None = None) -> list[dict]:
+    cache_key = "rx:opps:%d:%s" % (
+        context_id,
+        ",".join(str(t) for t in sorted(allowed_material_ids)) if allowed_material_ids else "all",
+    )
+    cached = cache_get_json(cache_key)
+    if cached is not None:
+        return cached
+    result = _build_opportunities_uncached(context_id, allowed_material_ids)
+    cache_set_json(cache_key, result, ttl=_OPPS_CACHE_TTL)
+    return result
+
+
+def _build_opportunities_uncached(context_id: int, allowed_material_ids: set[int] | None = None) -> list[dict]:
     loaded = _load_goo_and_reached(context_id, allowed_material_ids)
     if loaded is None:
         return []
