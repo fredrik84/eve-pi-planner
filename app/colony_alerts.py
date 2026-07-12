@@ -77,6 +77,7 @@ def _reaction_alerts(context_id: int, muted: set, now: float) -> list[dict]:
                 "severity": "high" if age_hours >= expiring_hours * 2 else "warn",
                 "character_id": a["character_id"], "character_name": a["character_name"],
                 "planet_id": a["id"], "location": a["name"], "hours_left": None,
+                "runs": a["runs"],
             })
 
     return alerts

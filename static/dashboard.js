@@ -169,14 +169,14 @@ function _renderReactionAlerts(data) {
   // Each pp_reaction_assignments row is one real job slot (see assign_reaction) — a single
   // "Assign" click on a multi-job suggestion can produce a dozen identical-looking rows for
   // the same character+product, which used to print one line each (a "half page" of
-  // duplicates). Group back into one line per (character, product) with a ×N count.
+  // duplicates). Group into one line per (character, product, runs) with a ×N job count —
+  // matches the Reactions tab's own todoGroups grouping exactly, so the two views describe the
+  // same pending work the same way (not just similar-looking).
   const groups = new Map();
   items.forEach(a => {
-    const key = `${a.character_name} ${a.location}`;
-    if (!groups.has(key)) groups.set(key, { character_name: a.character_name, location: a.location, count: 0, severity: 'warn' });
-    const g = groups.get(key);
-    g.count++;
-    if (a.severity === 'high') g.severity = 'high';
+    const key = `${a.character_name} ${a.location} ${a.runs}`;
+    if (!groups.has(key)) groups.set(key, { character_name: a.character_name, location: a.location, runs: a.runs, count: 0 });
+    groups.get(key).count++;
   });
   const groupList = [...groups.values()];
   // Grouped per character (one dash-issue card per character, same shape as the "Needs
@@ -187,18 +187,17 @@ function _renderReactionAlerts(data) {
     if (!byChar.has(g.character_name)) byChar.set(g.character_name, []);
     byChar.get(g.character_name).push(g);
   });
-  // Reaction Formulas aren't consumed (unlike a BPC) but one physical copy has to be loaded per
-  // concurrent job slot to start it — g.count (job-slot rows grouped together) is exactly the
-  // formula count needed, not a separate figure.
-  const cards = [...byChar.entries()].map(([charName, gs]) => {
-    const sev = gs.some(g => g.severity === 'high') ? 'high' : 'warn';
-    return `<div class="dash-issue dash-issue-${sev}">
+  // Always "warn" (amber), never the "high" (red) escalation _reaction_alerts() computes server-
+  // side for notification-threshold purposes — on THIS card that read as alarming for something
+  // that's just "hasn't been installed yet," not a broken/correctness issue like the OTHER
+  // Dashboard alert kinds that legitimately use red. Matches the Reactions tab's own version,
+  // which never escalates either — same underlying data, same visual weight in both places now.
+  const cards = [...byChar.entries()].map(([charName, gs]) => `<div class="dash-issue dash-issue-warn">
         <div class="dash-issue-char">${_esc(charName)}</div>
         <ul class="dash-issue-items">${gs.map(g =>
-          `<li class="dash-il-${g.severity === 'high' ? 'high' : 'warn'}">${_esc(g.location)}${g.count > 1 ? ` — <b>${g.count}</b> formulas needed` : ' — 1 formula needed'}</li>`
+          `<li class="dash-il-warn">${_esc(g.location)} — ${g.count} job${g.count > 1 ? 's' : ''}, ${g.runs} run${g.runs === 1 ? '' : 's'} each</li>`
         ).join('')}</ul>
-      </div>`;
-  }).join('');
+      </div>`).join('');
   // Header count = lines actually shown (post-grouping), not raw alert-row count — otherwise
   // the header could say "11 things" while the body only shows 2 grouped lines, which reads
   // like a bug of its own.
