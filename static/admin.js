@@ -883,6 +883,9 @@ async function loadGroups() {
   if (!el) return;
   el.innerHTML = '<div class="pp-empty">Loading…</div>';
   try {
+    // The feature-grants checkbox grid needs the full feature registry (labels) — usually
+    // already cached from boot, but load it defensively in case this is reached first.
+    if ((!_features || !Object.keys(_features).length) && typeof _loadFeatures === 'function') await _loadFeatures();
     const resp = await fetch('/api/admin/groups');
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data = await resp.json();
@@ -896,7 +899,14 @@ function renderGroups(groups) {
   const el = document.getElementById('groupsList');
   if (!el) return;
   if (!groups.length) { el.innerHTML = '<div class="pp-empty">No groups yet — add one above.</div>'; return; }
-  el.innerHTML = groups.map(g => `
+  // Every registered feature, as a checkbox grid (checked = granted to this group) — same
+  // on/off-list pattern as Settings' "Muted alerts"/"Notify kinds" grids, reused here instead
+  // of a one-at-a-time dropdown+button so every feature's state is visible and toggleable at
+  // a glance rather than hunting through a <select>.
+  const allFeatureKeys = _features ? Object.keys(_features).sort() : [];
+  el.innerHTML = groups.map(g => {
+    const granted = new Set(g.features);
+    return `
     <div class="admin-row" data-group-id="${g.id}" style="flex-direction:column;align-items:stretch;gap:6px">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <span class="admin-name">${_esc(g.name)}</span>
@@ -909,13 +919,14 @@ function renderGroups(groups) {
         <input type="text" class="bug-input grp-mgr-input" placeholder="Character name" style="max-width:160px">
         <button onclick="addGroupManager(${g.id}, this)">Add manager</button>
       </div>
-      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-        <span class="pp-card-hint" style="margin:0">Feature grants:</span>
-        ${g.features.map(k => `<span class="admin-meta">${_esc(k)} <a href="#" onclick="revokeGroupFeature(${g.id},'${_esc(k)}',this);return false;" title="Revoke">×</a></span>`).join('') || '<span class="pp-card-hint">none</span>'}
-        <select class="pp-select grp-feat-select" style="max-width:220px">${(_features ? Object.keys(_features) : []).map(k => `<option value="${_esc(k)}">${_esc(k)}</option>`).join('')}</select>
-        <button onclick="grantGroupFeature(${g.id}, this)">Grant</button>
+      <div>
+        <span class="pp-card-hint" style="margin:0 0 4px;display:block">Feature grants (this group gets access regardless of the feature's normal rollout state):</span>
+        ${allFeatureKeys.length ? `<div class="settings-toggle-grid">${allFeatureKeys.map(k =>
+          `<label class="settings-toggle-row"><input type="checkbox" class="grp-feat-cb" data-key="${_esc(k)}" ${granted.has(k) ? 'checked' : ''} onchange="toggleGroupFeature(${g.id}, '${_esc(k)}', this.checked, this)"> ${_esc(_features[k].label || k)}</label>`
+        ).join('')}</div>` : '<div class="pp-card-hint">No features registered yet.</div>'}
       </div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 
 async function createGroup() {
@@ -980,31 +991,20 @@ async function removeGroupManager(groupId, name) {
   }
 }
 
-async function grantGroupFeature(groupId, btn) {
-  const row = btn.closest('.admin-row');
-  const select = row.querySelector('.grp-feat-select');
-  const key = select.value;
-  if (!key) return;
-  btn.disabled = true;
+async function toggleGroupFeature(groupId, key, granted, cb) {
+  cb.disabled = true;
   try {
-    const resp = await fetch(`/api/admin/groups/${groupId}/features`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ feature_key: key }),
-    });
-    if (!resp.ok) throw new Error((await resp.json()).detail || `HTTP ${resp.status}`);
-    loadGroups();
+    const resp = granted
+      ? await fetch(`/api/admin/groups/${groupId}/features`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ feature_key: key }),
+        })
+      : await fetch(`/api/admin/groups/${groupId}/features/${encodeURIComponent(key)}`, { method: 'DELETE' });
+    if (!resp.ok) throw new Error((await resp.json().catch(() => ({}))).detail || `HTTP ${resp.status}`);
   } catch (e) {
     alert('Failed: ' + e.message);
-    btn.disabled = false;
-  }
-}
-
-async function revokeGroupFeature(groupId, key) {
-  try {
-    const resp = await fetch(`/api/admin/groups/${groupId}/features/${encodeURIComponent(key)}`, { method: 'DELETE' });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    loadGroups();
-  } catch (e) {
-    alert('Failed: ' + e.message);
+    cb.checked = !granted; // revert the checkbox on failure
+  } finally {
+    cb.disabled = false;
   }
 }
