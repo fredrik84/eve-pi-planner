@@ -32,6 +32,11 @@ _DDL = [
     "CREATE INDEX IF NOT EXISTS idx_jumps_system ON system_jumps (system)",
 ]
 
+# app.industry_cost needs the real solar_system_id to look up ESI's per-system reaction cost
+# index for a player's configured "reaction system" setting — system_geo originally only stored
+# constellation/security (name-keyed) for the region filter, so this is an additive backfill.
+_MIGRATE_DDL = ["ALTER TABLE system_geo ADD COLUMN system_id INTEGER"]
+
 
 def _fetch_rows(name: str) -> list[dict]:
     req = urllib.request.Request(BASE + name, headers={"User-Agent": "eve-pi-planner/1.0"})
@@ -66,7 +71,8 @@ def _populate(con) -> None:
             return None
 
     constellation_rows = [(c["constellationName"], regions.get(c["regionID"], "")) for c in consts]
-    system_rows = [(s["solarSystemName"], con_name.get(s["constellationID"], ""), _sec(s)) for s in systems]
+    system_rows = [(s["solarSystemName"], con_name.get(s["constellationID"], ""), _sec(s),
+                     int(s["solarSystemID"]) if s.get("solarSystemID") else None) for s in systems]
     jump_pairs: set[tuple] = set()
     for j in jumps:
         a, b = sys_name.get(j["fromSolarSystemID"]), sys_name.get(j["toSolarSystemID"])
@@ -77,13 +83,14 @@ def _populate(con) -> None:
     for stmt in _DDL:
         con.execute(stmt)
     con.commit()
+    _ensure_system_id_column(con)
 
     # OR IGNORE (not OR REPLACE): this only ever runs against freshly-created, empty tables
     # (guarded by _already_populated() in main()), so there's nothing to replace — every row is
     # a first insert either way, and OR IGNORE is what app.db's _pg_translate already supports.
     con.executemany("INSERT OR IGNORE INTO constellations (name, region) VALUES (?, ?)", constellation_rows)
     con.executemany(
-        "INSERT OR IGNORE INTO system_geo (system, constellation, security) VALUES (?, ?, ?)",
+        "INSERT OR IGNORE INTO system_geo (system, constellation, security, system_id) VALUES (?, ?, ?, ?)",
         system_rows,
     )
     con.executemany("INSERT OR IGNORE INTO system_jumps (system, neighbour) VALUES (?, ?)", sorted(jump_pairs))
@@ -96,6 +103,32 @@ def _populate(con) -> None:
           f"{ns:,} systems, {nj:,} jump links.")
 
 
+def _ensure_system_id_column(con) -> None:
+    try:
+        con.execute(_MIGRATE_DDL[0])
+        con.commit()
+    except Exception:
+        pass  # column already exists — same additive-migration convention as the rest of the app
+
+
+def _migrate_existing_system_ids(con) -> None:
+    """For a system_geo that was already populated before system_id existed — backfill it from a
+    fresh Fuzzworks fetch. No-op (no network call) once every row already has an ID."""
+    _ensure_system_id_column(con)
+    missing = con.execute("SELECT COUNT(*) FROM system_geo WHERE system_id IS NULL").fetchone()[0]
+    if not missing:
+        return
+    print(f"Backfilling solar_system_id for {missing:,} systems…")
+    systems = _fetch_rows("mapSolarSystems.csv")
+    rows = [(int(s["solarSystemID"]), s["solarSystemName"]) for s in systems if s.get("solarSystemID")]
+    con.executemany("UPDATE system_geo SET system_id=? WHERE system=? AND system_id IS NULL", rows)
+    con.commit()
+    con.execute("CREATE INDEX IF NOT EXISTS idx_system_geo_id ON system_geo (system_id)")
+    con.commit()
+    still_missing = con.execute("SELECT COUNT(*) FROM system_geo WHERE system_id IS NULL").fetchone()[0]
+    print(f"Backfilled — {still_missing:,} systems still without an ID.")
+
+
 def main() -> None:
     con = get_connection()
     try:
@@ -106,7 +139,8 @@ def main() -> None:
                 con.execute(stmt)
             con.commit()
             if _already_populated(con):
-                print("Geo tables already populated — skipping.")
+                print("Geo tables already populated — checking for pending migrations…")
+                _migrate_existing_system_ids(con)
                 return
             _populate(con)
         finally:

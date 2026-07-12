@@ -14,6 +14,7 @@ const _RX_COLUMNS = [
   { key: 'output_qty',           label: 'Max output',     fmt: v => Math.round(v).toLocaleString() },
   { key: 'input_cost',           label: 'Input cost',     fmt: v => _fmtIsk(v) },
   { key: 'shipping_cost',        label: 'Ship+collateral', fmt: (v, o) => _fmtIsk(v + o.collateral_cost) },
+  { key: 'job_cost',             label: 'Job cost',        fmt: v => _fmtIsk(v) },
   { key: 'instant_sell_value',   label: 'Instant sell',   fmt: v => _fmtIsk(v) },
   { key: 'sell_order_value',     label: 'Sell order',     fmt: v => _fmtIsk(v) },
   { key: 'net_profit_instant',   label: 'Profit (instant)', fmt: v => _fmtIsk(v) },
@@ -794,7 +795,14 @@ function _rxSettingsFormHtml() {
 
       <label class="pp-label" for="rxSetCollateral">Export collateral %</label>
       <input type="number" id="rxSetCollateral" class="pp-num-input" style="width:100px" step="0.1">
+
+      <label class="pp-label" for="rxSetSystem">Reaction system</label>
+      <input type="text" id="rxSetSystem" class="pp-num-input" style="width:120px" placeholder="e.g. Jita">
+
+      <label class="pp-label" for="rxSetTax">Facility tax %</label>
+      <input type="number" id="rxSetTax" class="pp-num-input" style="width:100px" step="0.1">
     </div>
+    <div class="pp-card-hint" style="margin-top:2px">Reaction system + facility tax estimate real job-installation fees (EVE's system cost index × EIV, plus your structure's tax). Leave the system blank to skip this — nothing changes until it's set.</div>
     <div style="margin-top:8px">
       <button class="pp-add-btn" onclick="_saveRxSettings()">Save</button>
       <span id="rxSettingsMsg" class="pp-card-hint"></span>
@@ -807,6 +815,8 @@ function _loadRxSettings() {
     document.getElementById('rxSetImport').value = s.import_isk_per_m3;
     document.getElementById('rxSetExport').value = s.export_isk_per_m3;
     document.getElementById('rxSetCollateral').value = (s.export_collateral_pct * 100).toFixed(2);
+    document.getElementById('rxSetSystem').value = s.reaction_system || '';
+    document.getElementById('rxSetTax').value = ((s.facility_tax_pct || 0) * 100).toFixed(2);
   });
 }
 
@@ -819,9 +829,11 @@ function _saveRxSettings() {
       import_isk_per_m3: parseFloat(document.getElementById('rxSetImport').value) || 0,
       export_isk_per_m3: parseFloat(document.getElementById('rxSetExport').value) || 0,
       export_collateral_pct: (parseFloat(document.getElementById('rxSetCollateral').value) || 0) / 100,
+      reaction_system: document.getElementById('rxSetSystem').value.trim() || null,
+      facility_tax_pct: (parseFloat(document.getElementById('rxSetTax').value) || 0) / 100,
     }),
   })
-    .then(r => { if (!r.ok) throw new Error('Save failed'); return r.json(); })
+    .then(async r => { if (!r.ok) throw new Error((await r.json()).detail || 'Save failed'); return r.json(); })
     .then(() => { msg.textContent = 'Saved.'; onReactionsTabOpen(); })
     .catch(err => { msg.textContent = err.message; });
 }
@@ -841,7 +853,14 @@ function _rxAccountSettingsFormHtml() {
 
       <label class="pp-label" for="rxAcctCollateral">Your export collateral %</label>
       <input type="number" id="rxAcctCollateral" class="pp-num-input" style="width:100px" step="0.1">
+
+      <label class="pp-label" for="rxAcctSystem">Your reaction system</label>
+      <input type="text" id="rxAcctSystem" class="pp-num-input" style="width:120px" placeholder="e.g. Jita">
+
+      <label class="pp-label" for="rxAcctTax">Your facility tax %</label>
+      <input type="number" id="rxAcctTax" class="pp-num-input" style="width:100px" step="0.1">
     </div>
+    <div class="pp-card-hint" style="margin-top:2px">Reaction system + facility tax estimate real job-installation fees. Leave the system blank to skip this — nothing changes until it's set.</div>
     <div style="margin-top:8px">
       <button class="pp-add-btn" onclick="_saveRxAccountSettings()">Save my rate</button>
       <button class="pp-cancel-btn" onclick="_resetRxAccountSettings()">Use default instead</button>
@@ -856,11 +875,13 @@ function _loadRxAccountSettings() {
     document.getElementById('rxAcctImport').value = eff.import_isk_per_m3;
     document.getElementById('rxAcctExport').value = eff.export_isk_per_m3;
     document.getElementById('rxAcctCollateral').value = (eff.export_collateral_pct * 100).toFixed(2);
+    document.getElementById('rxAcctSystem').value = eff.reaction_system || '';
+    document.getElementById('rxAcctTax').value = ((eff.facility_tax_pct || 0) * 100).toFixed(2);
     const hint = document.getElementById('rxAcctSettingsHint');
     if (hint) {
       hint.textContent = s.override
         ? "Your shipping cost — you're using your own rate instead of the group/default."
-        : "Your shipping cost — currently using the group/default rate. Set your own below if your real JF cost differs.";
+        : "Your shipping cost — currently using the group/default rate. Set your own below if your real JF cost or reaction system differs.";
     }
   });
 }
@@ -874,9 +895,11 @@ function _saveRxAccountSettings() {
       import_isk_per_m3: parseFloat(document.getElementById('rxAcctImport').value) || 0,
       export_isk_per_m3: parseFloat(document.getElementById('rxAcctExport').value) || 0,
       export_collateral_pct: (parseFloat(document.getElementById('rxAcctCollateral').value) || 0) / 100,
+      reaction_system: document.getElementById('rxAcctSystem').value.trim() || null,
+      facility_tax_pct: (parseFloat(document.getElementById('rxAcctTax').value) || 0) / 100,
     }),
   })
-    .then(r => { if (!r.ok) throw new Error('Save failed'); return r.json(); })
+    .then(async r => { if (!r.ok) throw new Error((await r.json()).detail || 'Save failed'); return r.json(); })
     .then(() => { msg.textContent = 'Saved.'; onReactionsTabOpen(); })
     .catch(err => { msg.textContent = err.message; });
 }

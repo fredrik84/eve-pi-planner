@@ -27,6 +27,7 @@ from pydantic import BaseModel
 
 from app.sde import get_connection, load_pi_data, ensure_once
 from app.market import fetch_market_data
+from app.industry_cost import fetch_system_cost_index, fetch_adjusted_prices
 from app.esi import require_context, ESI_BASE, _get_valid_token
 from app.groups import member_group, is_group_manager
 
@@ -44,7 +45,11 @@ REACTION_ME_REDUCTION = 0.022
 # courier and needs collateral declared. Confirmed with the user: moon goo itself has zero
 # import cost (picked up at/near the reaction site), only non-goo purchased inputs (fuel
 # blocks etc.) pay the import rate.
-_RXS_DEFAULTS = {"import_isk_per_m3": 1200.0, "export_isk_per_m3": 1200.0, "export_collateral_pct": 0.005}
+_RXS_DEFAULTS = {"import_isk_per_m3": 1200.0, "export_isk_per_m3": 1200.0, "export_collateral_pct": 0.005,
+                  # No default reaction system on purpose — an unset system means job installation
+                  # cost is skipped entirely (0 ISK effect), matching pre-feature behavior, rather
+                  # than silently assuming some arbitrary system's cost index applies to you.
+                  "reaction_system": None, "facility_tax_pct": 0.0}
 _GLOBAL_SETTINGS_GROUP_ID = 0  # sentinel "no group" row — kept as a real (non-NULL) value since
 # a nullable PRIMARY KEY doesn't behave consistently across SQLite and Postgres.
 
@@ -79,6 +84,12 @@ def ensure_reaction_settings_table():
             )
         """)
         con.commit()
+        for coldef in ("reaction_system TEXT", "facility_tax_pct REAL NOT NULL DEFAULT 0"):
+            try:
+                con.execute(f"ALTER TABLE pp_reaction_settings ADD COLUMN {coldef}")
+                con.commit()
+            except Exception:
+                pass
         if migrate_row:
             from app.groups import bootstrap_group_id
             for gid in (_GLOBAL_SETTINGS_GROUP_ID, bootstrap_group_id()):
@@ -105,8 +116,8 @@ def get_reaction_settings(group_id: int | None = None) -> dict:
     con = get_connection()
     try:
         row = con.execute(
-            "SELECT import_isk_per_m3, export_isk_per_m3, export_collateral_pct "
-            "FROM pp_reaction_settings WHERE group_id=?", (gid,)
+            "SELECT import_isk_per_m3, export_isk_per_m3, export_collateral_pct, "
+            "reaction_system, facility_tax_pct FROM pp_reaction_settings WHERE group_id=?", (gid,)
         ).fetchone()
     finally:
         con.close()
@@ -116,6 +127,8 @@ def get_reaction_settings(group_id: int | None = None) -> dict:
         "import_isk_per_m3": row["import_isk_per_m3"],
         "export_isk_per_m3": row["export_isk_per_m3"],
         "export_collateral_pct": row["export_collateral_pct"],
+        "reaction_system": row["reaction_system"],
+        "facility_tax_pct": row["facility_tax_pct"] or 0.0,
     }
 
 
@@ -131,6 +144,12 @@ def ensure_account_reaction_settings_table():
         )
     """)
     con.commit()
+    for coldef in ("reaction_system TEXT", "facility_tax_pct REAL NOT NULL DEFAULT 0"):
+        try:
+            con.execute(f"ALTER TABLE pp_account_reaction_settings ADD COLUMN {coldef}")
+            con.commit()
+        except Exception:
+            pass
     con.close()
 
 
@@ -139,8 +158,8 @@ def _account_reaction_settings_override(context_id: int) -> dict | None:
     con = get_connection()
     try:
         row = con.execute(
-            "SELECT import_isk_per_m3, export_isk_per_m3, export_collateral_pct "
-            "FROM pp_account_reaction_settings WHERE context_id=?", (context_id,)
+            "SELECT import_isk_per_m3, export_isk_per_m3, export_collateral_pct, "
+            "reaction_system, facility_tax_pct FROM pp_account_reaction_settings WHERE context_id=?", (context_id,)
         ).fetchone()
     finally:
         con.close()
@@ -150,6 +169,8 @@ def _account_reaction_settings_override(context_id: int) -> dict | None:
         "import_isk_per_m3": row["import_isk_per_m3"],
         "export_isk_per_m3": row["export_isk_per_m3"],
         "export_collateral_pct": row["export_collateral_pct"],
+        "reaction_system": row["reaction_system"],
+        "facility_tax_pct": row["facility_tax_pct"] or 0.0,
     }
 
 
@@ -170,6 +191,10 @@ class ReactionSettingsUpdate(BaseModel):
     import_isk_per_m3: float
     export_isk_per_m3: float
     export_collateral_pct: float
+    # Both optional/nullable — see _RXS_DEFAULTS: an unset reaction_system means job
+    # installation cost is skipped entirely rather than guessed.
+    reaction_system: str | None = None
+    facility_tax_pct: float = 0.0
 
 
 @router.get("/api/reactions/settings")
@@ -180,6 +205,27 @@ def api_get_reaction_settings(ctx: int = Depends(require_context)):
     return get_reaction_settings(group["id"] if group else None)
 
 
+def _resolve_system_id(name: str | None) -> int | None:
+    """System name -> real solar_system_id via system_geo (populated by scripts/populate_geo.py
+    from Fuzzworks — see its system_id backfill). Case-insensitive exact match; None/blank in,
+    None out (that's the valid "not set" state, not an error)."""
+    if not name or not name.strip():
+        return None
+    con = get_connection()
+    try:
+        row = con.execute(
+            "SELECT system_id FROM system_geo WHERE system = ? COLLATE NOCASE", (name.strip(),)
+        ).fetchone()
+    finally:
+        con.close()
+    return row["system_id"] if row and row["system_id"] else None
+
+
+def _validate_reaction_system(name: str | None) -> None:
+    if name and name.strip() and _resolve_system_id(name) is None:
+        raise HTTPException(status_code=400, detail=f'Unrecognized solar system "{name}"')
+
+
 @router.put("/api/reactions/settings")
 def api_update_reaction_settings(req: ReactionSettingsUpdate, ctx: int = Depends(require_context)):
     group = member_group(ctx)
@@ -187,15 +233,19 @@ def api_update_reaction_settings(req: ReactionSettingsUpdate, ctx: int = Depends
         raise HTTPException(status_code=403, detail="You're not a member of any priced group")
     if not is_group_manager(ctx, group["id"]):
         raise HTTPException(status_code=403, detail="Only a manager of your group can edit its reaction settings")
+    _validate_reaction_system(req.reaction_system)
     ensure_reaction_settings_table()
     con = get_connection()
     try:
         con.execute(
-            "INSERT INTO pp_reaction_settings (group_id, import_isk_per_m3, export_isk_per_m3, export_collateral_pct) "
-            "VALUES (?,?,?,?) ON CONFLICT (group_id) DO UPDATE SET "
+            "INSERT INTO pp_reaction_settings (group_id, import_isk_per_m3, export_isk_per_m3, "
+            "export_collateral_pct, reaction_system, facility_tax_pct) "
+            "VALUES (?,?,?,?,?,?) ON CONFLICT (group_id) DO UPDATE SET "
             "import_isk_per_m3=excluded.import_isk_per_m3, export_isk_per_m3=excluded.export_isk_per_m3, "
-            "export_collateral_pct=excluded.export_collateral_pct",
-            (group["id"], req.import_isk_per_m3, req.export_isk_per_m3, req.export_collateral_pct),
+            "export_collateral_pct=excluded.export_collateral_pct, reaction_system=excluded.reaction_system, "
+            "facility_tax_pct=excluded.facility_tax_pct",
+            (group["id"], req.import_isk_per_m3, req.export_isk_per_m3, req.export_collateral_pct,
+             (req.reaction_system or "").strip() or None, req.facility_tax_pct),
         )
         con.commit()
     finally:
@@ -216,15 +266,19 @@ def api_get_account_reaction_settings(ctx: int = Depends(require_context)):
 
 @router.put("/api/reactions/account-settings")
 def api_update_account_reaction_settings(req: ReactionSettingsUpdate, ctx: int = Depends(require_context)):
+    _validate_reaction_system(req.reaction_system)
     ensure_account_reaction_settings_table()
     con = get_connection()
     try:
         con.execute(
-            "INSERT INTO pp_account_reaction_settings (context_id, import_isk_per_m3, export_isk_per_m3, export_collateral_pct) "
-            "VALUES (?,?,?,?) ON CONFLICT (context_id) DO UPDATE SET "
+            "INSERT INTO pp_account_reaction_settings (context_id, import_isk_per_m3, export_isk_per_m3, "
+            "export_collateral_pct, reaction_system, facility_tax_pct) "
+            "VALUES (?,?,?,?,?,?) ON CONFLICT (context_id) DO UPDATE SET "
             "import_isk_per_m3=excluded.import_isk_per_m3, export_isk_per_m3=excluded.export_isk_per_m3, "
-            "export_collateral_pct=excluded.export_collateral_pct",
-            (ctx, req.import_isk_per_m3, req.export_isk_per_m3, req.export_collateral_pct),
+            "export_collateral_pct=excluded.export_collateral_pct, reaction_system=excluded.reaction_system, "
+            "facility_tax_pct=excluded.facility_tax_pct",
+            (ctx, req.import_isk_per_m3, req.export_isk_per_m3, req.export_collateral_pct,
+             (req.reaction_system or "").strip() or None, req.facility_tax_pct),
         )
         con.commit()
     finally:
@@ -280,7 +334,9 @@ _UNLIMITED_RUNS_CAP = 5_000  # a generous but sane ceiling on any one reaction's
 
 
 def _resolve_reachable(goo: dict[int, dict], purchasable: dict[int, float],
-                        reactions_by_output: dict[int, list[dict]]) -> dict[int, dict]:
+                        reactions_by_output: dict[int, list[dict]],
+                        job_cost_rate: float = 0.0, adjusted_prices: dict[int, float] | None = None
+                        ) -> dict[int, dict]:
     """Fixed-point expansion from available leaf materials through the reaction graph. Returns
     {type_id: node} for every reachable node (goo, market-bought inputs, AND every reaction
     product reachable at any depth), where node carries:
@@ -295,6 +351,14 @@ def _resolve_reachable(goo: dict[int, dict], purchasable: dict[int, float],
       alt_source       price and a market price were available for this material (None/None if
                        only one source had it at all) — lets a caller show the real ISK/unit
                        difference between the two, not just whichever one silently won.
+      job_cost       - ISK of reaction JOB INSTALLATION fees to produce one unit, rolled up the
+                       same way unit_cost is (0 for leaves — buying/harvesting installs no job).
+                       Real EVE formula per job: EIV x (system cost index + facility tax rate),
+                       EIV = sum of that job's own consumed materials valued at CCP's published
+                       adjusted price (see app.industry_cost) — NOT the market/group unit_cost
+                       used everywhere else. job_cost_rate is that (cost index + tax) sum,
+                       precomputed once by the caller; 0.0 (the default) means job cost is
+                       skipped entirely — see effective_reaction_settings.
     A reaction only becomes reachable once every one of its inputs is already reachable —
     same "expand until no more nodes unlock" shape as build_sde.py's compute_pi_tiers, just
     walked forward from available inputs instead of backward from a fixed target.
@@ -313,6 +377,7 @@ def _resolve_reachable(goo: dict[int, dict], purchasable: dict[int, float],
     stale sheet price when the market rate is actually better; no manual override needed, the
     math just picks the cheaper source the same way it already picks the cheaper of two reaction
     formulas below."""
+    adjusted_prices = adjusted_prices or {}
     # alt_cost/alt_source: the LOSING price, kept alongside the winning one whenever a leaf has
     # both a group sheet price and a market price available — lets a caller (the shopping list)
     # show the real ISK/unit difference between the two, not just whichever one won silently.
@@ -320,17 +385,17 @@ def _resolve_reachable(goo: dict[int, dict], purchasable: dict[int, float],
     for tid, g in goo.items():
         if g["sell_price"] > 0:
             reached[tid] = {"unit_cost": g["sell_price"], "max_qty": _PURCHASABLE_MAX_QTY,
-                             "reaction_count": 0, "via": None, "source": "group",
+                             "reaction_count": 0, "via": None, "source": "group", "job_cost": 0.0,
                              "alt_cost": None, "alt_source": None}
     for tid, buy_price in purchasable.items():
         if buy_price <= 0:
             continue
         if tid not in reached:
             reached[tid] = {"unit_cost": buy_price, "max_qty": _PURCHASABLE_MAX_QTY, "source": "market",
-                             "reaction_count": 0, "via": None, "alt_cost": None, "alt_source": None}
+                             "reaction_count": 0, "via": None, "job_cost": 0.0, "alt_cost": None, "alt_source": None}
         elif buy_price < reached[tid]["unit_cost"]:
             reached[tid] = {"unit_cost": buy_price, "max_qty": _PURCHASABLE_MAX_QTY, "source": "market",
-                             "reaction_count": 0, "via": None,
+                             "reaction_count": 0, "via": None, "job_cost": 0.0,
                              "alt_cost": reached[tid]["unit_cost"], "alt_source": "group"}
         else:
             reached[tid]["alt_cost"] = buy_price
@@ -356,9 +421,18 @@ def _resolve_reachable(goo: dict[int, dict], purchasable: dict[int, float],
                 # (each tier's max_qty feeds the next tier's own runs calculation).
                 runs = min(runs, _UNLIMITED_RUNS_CAP)
                 cost_per_run = sum(q * reached[tid]["unit_cost"] for tid, q in eff_qty.items())
+                # This formula's OWN job-install fee (EIV of what IT consumes, valued at CCP's
+                # adjusted prices) plus whatever job fees are already embedded in its inputs
+                # (a reacted input's job_cost already rolled up its own subtree the same way) —
+                # exactly mirrors cost_per_run's roll-up above, just for job fees instead of
+                # material ISK. 0 when job_cost_rate is 0 (no reaction system configured).
+                own_eiv_per_run = sum(q * adjusted_prices.get(tid, 0.0) for tid, q in eff_qty.items())
+                job_cost_per_run = own_eiv_per_run * job_cost_rate + \
+                    sum(q * reached[tid]["job_cost"] for tid, q in eff_qty.items())
                 reaction_count = 1 + sum(reached[inp["type_id"]]["reaction_count"] for inp in f["inputs"])
                 candidate = {
                     "unit_cost": cost_per_run / f["output_qty"],
+                    "job_cost": job_cost_per_run / f["output_qty"],
                     "max_qty": int(runs) * f["output_qty"],
                     "reaction_count": reaction_count,
                     # Actual reaction-job cycles of THIS specific formula needed to hit max_qty
@@ -373,12 +447,14 @@ def _resolve_reachable(goo: dict[int, dict], purchasable: dict[int, float],
                     "via": {"reaction_id": f["reaction_id"], "cycle_time": f["cycle_time"],
                             "output_qty": f["output_qty"], "inputs": f["inputs"]},
                 }
-                # Prefer whichever formula yields lower unit_cost (most profitable path to
-                # this product) — "least work most profitable" means the tool should already
-                # have picked the cheap recipe, not surface a worse one alongside it.
-                if best is None or candidate["unit_cost"] < best["unit_cost"]:
+                # Prefer whichever formula yields the lower TOTAL landed cost — material cost
+                # AND its own job-install fee — not just unit_cost alone, so a configured
+                # reaction system's job cost can actually shift which recipe/path looks cheaper
+                # ("least work most profitable" should already have picked the cheap path).
+                if best is None or (candidate["unit_cost"] + candidate["job_cost"]) < (best["unit_cost"] + best["job_cost"]):
                     best = candidate
-            if best is not None and (output_id not in reached or best["unit_cost"] < reached[output_id]["unit_cost"]):
+            if best is not None and (output_id not in reached or
+                                      (best["unit_cost"] + best["job_cost"]) < (reached[output_id]["unit_cost"] + reached[output_id]["job_cost"])):
                 reached[output_id] = best
                 changed = True
 
@@ -470,7 +546,20 @@ def _load_goo_and_reached(context_id: int, allowed_material_ids: set[int] | None
         for tid, m in purchasable_market.items()
     }
 
-    reached = _resolve_reachable(goo, purchasable, reactions_by_output)
+    # Job installation cost: EIV x (system cost index + facility tax) — see _resolve_reachable's
+    # job_cost roll-up. Both are 0 (no effect, current behavior preserved) unless the caller's
+    # effective settings actually name a reaction system — an unconfigured account never pays
+    # the extra ESI round-trip for adjusted prices either.
+    reaction_system = settings.get("reaction_system")
+    job_cost_rate = 0.0
+    adjusted_prices: dict[int, float] = {}
+    if reaction_system:
+        cost_index = fetch_system_cost_index(_resolve_system_id(reaction_system))
+        job_cost_rate = cost_index + (settings.get("facility_tax_pct") or 0.0)
+        if job_cost_rate > 0:
+            adjusted_prices = fetch_adjusted_prices(list(all_input_ids))
+
+    reached = _resolve_reachable(goo, purchasable, reactions_by_output, job_cost_rate, adjusted_prices)
     return goo, reached, reactions_by_output, inputs_by_reaction, types
 
 
@@ -500,6 +589,7 @@ def _build_opportunities(context_id: int, allowed_material_ids: set[int] | None 
 
         qty = node["max_qty"]
         input_cost = qty * node["unit_cost"]
+        job_cost = qty * node.get("job_cost", 0.0)
         ship_volume = qty * vol
         shipping_cost = ship_volume * settings["export_isk_per_m3"]
         # Collateral is a transport cost (courier contract), charged regardless of how the
@@ -508,7 +598,7 @@ def _build_opportunities(context_id: int, allowed_material_ids: set[int] | None 
         collateral_cost = qty * m["sell_price"] * settings["export_collateral_pct"]
         instant_value = qty * m["buy_price"]
         order_value = qty * m["sell_price"]
-        fixed_costs = input_cost + shipping_cost + collateral_cost
+        fixed_costs = input_cost + shipping_cost + collateral_cost + job_cost
 
         opportunities.append({
             "type_id": tid,
@@ -518,6 +608,7 @@ def _build_opportunities(context_id: int, allowed_material_ids: set[int] | None 
             "cycle_time": node["cycle_time"],
             "output_qty": qty,
             "input_cost": round(input_cost, 2),
+            "job_cost": round(job_cost, 2),
             "shipping_volume_m3": round(ship_volume, 2),
             "shipping_cost": round(shipping_cost, 2),
             "collateral_cost": round(collateral_cost, 2),
