@@ -13,7 +13,7 @@ from fastapi import APIRouter, Cookie, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.sde import get_connection, ensure_once
-from app.esi import require_admin, admin_and_tester_status, _session_lookup
+from app.esi import require_admin, admin_and_tester_status
 
 router = APIRouter()
 
@@ -168,20 +168,10 @@ def list_features(pp_session: str = Cookie(default=None)):
     con = get_connection()
     db_state = {r["key"]: r["state"] for r in con.execute("SELECT key, state FROM pp_features")}
     con.close()
-    # Feature keys unlocked via the caller's OWN group membership (app.groups) — a generic
-    # mechanism separate from the admin/testers/public rollout above: a future feature can ship
-    # visible only to specific alliance group(s) regardless of its normal state. Imported lazily
-    # to avoid a hard import-time dependency for a rarely-used path.
-    sess = _session_lookup(pp_session)
-    granted_keys: set[str] = set()
-    if sess:
-        from app.groups import caller_group_feature_keys
-        granted_keys = caller_group_feature_keys(sess[1])
     feats = [
         {"key": f["key"], "label": f["label"], "description": f["description"],
          "group": f.get("group") or "Other",
-         "state": db_state.get(f["key"]) or _default_state(f),
-         "group_granted": f["key"] in granted_keys}
+         "state": db_state.get(f["key"]) or _default_state(f)}
         for f in FEATURE_REGISTRY
     ]
     from app.main import GIT_COMMIT

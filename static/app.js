@@ -442,6 +442,10 @@ function renderFactorySplit(plan) {
 // ── Tab navigation ────────────────────────────────────────────────────────────
 
 function switchTab(name) {
+  // Defense-in-depth: nav buttons for a restricted page are hidden (_applyPageRestriction), but
+  // a stale localStorage 'activeTab' or a direct call could still reach here — bounce to the
+  // first page the caller's group actually allows instead of rendering a blocked page.
+  if (typeof _isPageRestricted === 'function' && _isPageRestricted(name)) name = _firstAllowedPage();
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
   document.querySelectorAll('.tab-panel').forEach(p => p.style.display = p.id === 'tab-' + name ? '' : 'none');
   // The Admin sub-nav (#adminNavGroup / mobile equivalent) tracks its own "which admin page" state

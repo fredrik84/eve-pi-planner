@@ -373,14 +373,19 @@ def list_characters(pp_session: str = Cookie(default=None)):
             "next_data_at":   next_data_at,
         })
     _admin, _tester = admin_and_tester_status_for_context(context_id)
-    from app.groups import managed_group_ids
+    from app.groups import managed_group_ids, caller_allowed_pages
     is_group_manager = bool(context_id and not _admin and managed_group_ids(context_id))
+    # Site admins always see every page regardless of any group's restriction (same "admin
+    # bypasses gating" convention used everywhere else in this app) — only a non-admin's own
+    # group restriction (if any) applies. None = unrestricted (the common case).
+    restricted_pages = None if (_admin or not context_id) else caller_allowed_pages(context_id)
     result = {
         "characters": chars,
         "configured": _is_configured(),
         "is_admin":   _admin,
         "is_tester":  _tester,
         "is_group_manager": is_group_manager,
+        "restricted_pages": restricted_pages,
     }
     if context_id:
         log.info("charlist cache MISS context=%s built in %.1fms", context_id, (time.monotonic() - t0) * 1000)

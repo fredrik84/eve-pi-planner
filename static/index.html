@@ -50,7 +50,7 @@
         <button class="tab" data-tab="planetary"><span class="nav-ico">PP</span><span class="nav-lbl">Planetary Planning</span></button>
         <button class="settings-mobile-tab" id="settingsMobileTab" style="display:none" onclick="openSettingsModal()"><span class="nav-ico">ST</span><span class="nav-lbl">Settings</span></button>
         <button class="tab" id="adminMobileTab" data-tab="admin"><span class="nav-ico">AD</span><span class="nav-lbl">Admin</span></button>
-        <div class="nav-group">
+        <div class="nav-group" id="piToolsNavGroup">
           <div class="nav-group-hd"><span class="nav-ico">PI</span><span class="nav-lbl">PI Tools</span></div>
           <button class="tab tab-sub" data-tab="planner" data-pimode="refill"><span class="nav-ico">RF</span><span class="nav-lbl">Refill a plan</span></button>
           <button class="tab tab-sub active" data-tab="planner" data-pimode="build"><span class="nav-ico">FB</span><span class="nav-lbl">Find Buildables</span></button>
@@ -908,7 +908,7 @@ PVF-N9    3         95                 60             80                  100   
         <div class="admin-subpage" data-page="groups" style="display:none">
           <section class="pp-card admin-section">
             <div class="pp-card-title">Alliance groups</div>
-            <div class="admin-hint">A group maps to one EVE alliance. Members of that alliance get its price sheet for Reactions (compared against live market prices — cheaper wins automatically); designated managers can edit the group's own price sheet and JF settings without being a full site admin. Manager assignment is manual for now.</div>
+            <div class="admin-hint">A group maps to one EVE alliance. Members get its price sheet for Reactions (compared against live market prices — cheaper wins automatically); designated managers can edit the group's own price sheet and JF settings without being a full site admin. Manager assignment is manual for now. Page access below is unrestricted by default — check any page to restrict the group's members to only those pages, even ones normally open to everyone.</div>
             <div class="admin-add-row">
               <input id="groupAddName" class="bug-input" placeholder="Group name" style="max-width:160px" type="text">
               <input id="groupAddAllianceId" class="bug-input" placeholder="Alliance ID" style="max-width:140px" type="number">
@@ -1279,10 +1279,10 @@ PVF-N9    3         95                 60             80                  100   
   </div>
 
   <script src="/utils.js?v=3"></script>
-  <script src="/app.js?v=33"></script>
-  <script src="/planetary.js?v=354"></script>
+  <script src="/app.js?v=34"></script>
+  <script src="/planetary.js?v=355"></script>
   <script src="/dashboard.js?v=15"></script>
-  <script src="/admin.js?v=14"></script>
+  <script src="/admin.js?v=15"></script>
   <script src="/planetdb.js?v=3"></script>
   <script src="/refill.js?v=3"></script>
   <script src="/analysis.js?v=24"></script>

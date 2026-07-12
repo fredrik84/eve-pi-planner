@@ -877,18 +877,18 @@ async function importMoonGoo() {
   }
 }
 
-// ── Groups (site-admin only — creates groups, assigns delegated managers/feature grants) ──
+// ── Groups (site-admin only — creates groups, assigns delegated managers, page restriction) ──
+let _groupPageRegistry = [];   // [{key, label}, ...] from the backend — see app.groups.PAGE_REGISTRY
+
 async function loadGroups() {
   const el = document.getElementById('groupsList');
   if (!el) return;
   el.innerHTML = '<div class="pp-empty">Loading…</div>';
   try {
-    // The feature-grants checkbox grid needs the full feature registry (labels) — usually
-    // already cached from boot, but load it defensively in case this is reached first.
-    if ((!_features || !Object.keys(_features).length) && typeof _loadFeatures === 'function') await _loadFeatures();
     const resp = await fetch('/api/admin/groups');
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data = await resp.json();
+    _groupPageRegistry = data.page_registry || [];
     renderGroups(data.groups || []);
   } catch (e) {
     el.innerHTML = `<div class="pp-empty">Failed to load: ${_esc(e.message)}</div>`;
@@ -899,13 +899,9 @@ function renderGroups(groups) {
   const el = document.getElementById('groupsList');
   if (!el) return;
   if (!groups.length) { el.innerHTML = '<div class="pp-empty">No groups yet — add one above.</div>'; return; }
-  // Every registered feature, as a checkbox grid (checked = granted to this group) — same
-  // on/off-list pattern as Settings' "Muted alerts"/"Notify kinds" grids, reused here instead
-  // of a one-at-a-time dropdown+button so every feature's state is visible and toggleable at
-  // a glance rather than hunting through a <select>.
-  const allFeatureKeys = _features ? Object.keys(_features).sort() : [];
   el.innerHTML = groups.map(g => {
-    const granted = new Set(g.features);
+    const allowed = new Set(g.allowed_pages);
+    const restricted = allowed.size > 0;
     return `
     <div class="admin-row" data-group-id="${g.id}" style="flex-direction:column;align-items:stretch;gap:6px">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
@@ -920,10 +916,12 @@ function renderGroups(groups) {
         <button onclick="addGroupManager(${g.id}, this)">Add manager</button>
       </div>
       <div>
-        <span class="pp-card-hint" style="margin:0 0 4px;display:block">Feature grants (this group gets access regardless of the feature's normal rollout state):</span>
-        ${allFeatureKeys.length ? `<div class="settings-toggle-grid">${allFeatureKeys.map(k =>
-          `<label class="settings-toggle-row"><input type="checkbox" class="grp-feat-cb" data-key="${_esc(k)}" ${granted.has(k) ? 'checked' : ''} onchange="toggleGroupFeature(${g.id}, '${_esc(k)}', this.checked, this)"> ${_esc(_features[k].label || k)}</label>`
-        ).join('')}</div>` : '<div class="pp-card-hint">No features registered yet.</div>'}
+        <span class="pp-card-hint" style="margin:0 0 4px;display:block">Page access — ${restricted
+          ? `restricted to only the checked pages below`
+          : `unrestricted (full access — check any page to switch this group to an allow-list)`}:</span>
+        ${_groupPageRegistry.length ? `<div class="settings-toggle-grid">${_groupPageRegistry.map(p =>
+          `<label class="settings-toggle-row"><input type="checkbox" class="grp-page-cb" data-key="${_esc(p.key)}" ${allowed.has(p.key) ? 'checked' : ''} onchange="toggleGroupPage(${g.id}, '${_esc(p.key)}', this.checked, this)"> ${_esc(p.label)}</label>`
+        ).join('')}</div>` : '<div class="pp-card-hint">No pages registered.</div>'}
       </div>
     </div>`;
   }).join('');
@@ -991,20 +989,23 @@ async function removeGroupManager(groupId, name) {
   }
 }
 
-async function toggleGroupFeature(groupId, key, granted, cb) {
+async function toggleGroupPage(groupId, key, allowed, cb) {
   cb.disabled = true;
   try {
-    const resp = granted
-      ? await fetch(`/api/admin/groups/${groupId}/features`, {
+    const resp = allowed
+      ? await fetch(`/api/admin/groups/${groupId}/pages`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ feature_key: key }),
+          body: JSON.stringify({ page_key: key }),
         })
-      : await fetch(`/api/admin/groups/${groupId}/features/${encodeURIComponent(key)}`, { method: 'DELETE' });
+      : await fetch(`/api/admin/groups/${groupId}/pages/${encodeURIComponent(key)}`, { method: 'DELETE' });
     if (!resp.ok) throw new Error((await resp.json().catch(() => ({}))).detail || `HTTP ${resp.status}`);
+    // Reload rather than patch in place — checking/unchecking the FIRST/LAST box flips the
+    // whole group between unrestricted and restricted, which changes the hint text above the
+    // grid too, not just this one checkbox.
+    loadGroups();
   } catch (e) {
     alert('Failed: ' + e.message);
-    cb.checked = !granted; // revert the checkbox on failure
-  } finally {
+    cb.checked = !allowed; // revert the checkbox on failure
     cb.disabled = false;
   }
 }

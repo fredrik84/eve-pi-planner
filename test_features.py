@@ -132,8 +132,8 @@ def test_groups_gated(base: str) -> bool:
     ok &= check(code == 403, f"anonymous group-create rejected (got HTTP {code})")
     code = post_status(f"{base}/api/admin/groups/1/managers", {"character_name": "x"})
     ok &= check(code == 403, f"anonymous manager-add rejected (got HTTP {code})")
-    code = post_status(f"{base}/api/admin/groups/1/features", {"feature_key": "reactions"})
-    ok &= check(code == 403, f"anonymous feature-grant rejected (got HTTP {code})")
+    code = post_status(f"{base}/api/admin/groups/1/pages", {"page_key": "reactions"})
+    ok &= check(code == 403, f"anonymous page-allow rejected (got HTTP {code})")
     # Caller-facing (require_context): 401 for anonymous, same convention as reactions above.
     code = get_status(f"{base}/api/groups/mine")
     ok &= check(code == 401, f"anonymous groups-mine rejected (got HTTP {code})")

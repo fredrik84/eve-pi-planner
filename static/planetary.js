@@ -172,7 +172,6 @@ async function _loadFeatures() {
 }
 function _featureActive(key, dflt = false) {
   const f = _features[key];
-  if (f && f.group_granted) return true; // this account's own alliance group was granted the feature directly
   const state = f ? (f.state || (f.enabled ? 'public' : 'admin')) : (dflt ? 'public' : 'admin');
   if (state === 'public') return true;
   if (state === 'testers') return _featuresIsAdmin || _featuresIsTester;
@@ -214,6 +213,7 @@ let _esiConfigured = false;
 let _loggedIn = false;
 let _isAdmin = false;
 let _isGroupManager = false;  // manages at least one alliance group's own data (app.groups) without being a full site admin
+let _restrictedPages = null;  // null = unrestricted; array = caller's group allows ONLY these pages (app.groups.PAGE_REGISTRY keys)
 let _sessionLoaded = false;   // true once /api/characters has resolved → _isAdmin/_loggedIn are real
 let _ppCharsData = [];   // last /api/characters payload, for the Setup Analysis tab
 let _ppSessionCharId = null;   // last session_character_id, so the cache-hint tick below can re-render without a fetch
@@ -233,6 +233,7 @@ async function loadCharacters() {
       _loggedIn = data.logged_in || false;
       _isAdmin = data.is_admin || false;
       _isGroupManager = data.is_group_manager || false;
+      _restrictedPages = data.restricted_pages || null;
       _ppCharsData = data.characters || [];
       _ppSessionCharId = data.session_character_id;
       renderCharacters(data.characters || [], _loggedIn);
@@ -243,6 +244,7 @@ async function loadCharacters() {
       // the admin tab to a mobile-visible tab (the old onAdminTabOpen bounce to the hidden planner
       // shuffled phones).
       if (!_isAdmin && !_isGroupManager && localStorage.getItem('activeTab') === 'admin' && typeof switchTab === 'function') switchTab('dashboard');
+      _applyPageRestriction();
       await _loadFeatures();
       // Re-render: renderCharacters()/renderHeaderSession() above ran BEFORE _loadFeatures()
       // resolved, so any _featureActive()-gated content (e.g. the esi_cache_skip "no new data
@@ -262,6 +264,39 @@ async function loadCharacters() {
   } finally {
     _loadCharactersInFlight = null;
   }
+}
+
+// Pages a group's page-restriction (app.groups.PAGE_REGISTRY) can actually apply to — Admin,
+// Characters, How it works, and Contribute are account-management/informational, never
+// restrictable. Keys match both PAGE_REGISTRY and switchTab()'s tab names directly.
+const _RESTRICTABLE_PAGES = ['dashboard', 'analyze', 'planetary', 'planner', 'layout', 'planetdb', 'reactions'];
+
+function _isPageRestricted(name) {
+  if (_restrictedPages === null || !_RESTRICTABLE_PAGES.includes(name)) return false;
+  return !_restrictedPages.includes(name);
+}
+
+function _firstAllowedPage() {
+  if (_restrictedPages === null) return 'dashboard';
+  const found = _RESTRICTABLE_PAGES.find(p => _restrictedPages.includes(p));
+  return found || 'dashboard'; // shouldn't happen in practice, but never leave the app with nowhere to land
+}
+
+// Hides nav buttons for any restricted page (UI staging, not a hard backend boundary — see
+// app.groups' module docstring). Setting style.display only when actually restricted (never
+// forcing it back to visible) means this layers cleanly on top of the existing nav-li/nav-adm
+// CSS-class visibility rules instead of fighting them.
+function _applyPageRestriction() {
+  _RESTRICTABLE_PAGES.forEach(key => {
+    const hidden = _isPageRestricted(key);
+    document.querySelectorAll(`.tab[data-tab="${key}"]`).forEach(el => { el.style.display = hidden ? 'none' : ''; });
+  });
+  const piGroup = document.getElementById('piToolsNavGroup');
+  if (piGroup) piGroup.style.display = _isPageRestricted('planner') ? 'none' : '';
+  // If the currently active tab just became restricted, bounce off it immediately rather than
+  // leaving a blocked page on screen.
+  const active = localStorage.getItem('activeTab');
+  if (active && _isPageRestricted(active) && typeof switchTab === 'function') switchTab(_firstAllowedPage());
 }
 
 function renderHeaderSession(loggedIn, chars, sessionCharId) {

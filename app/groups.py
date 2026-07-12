@@ -1,7 +1,7 @@
 """
 Generic alliance-scoped group management: a group maps to one EVE alliance, can have delegated
 managers (characters who can edit that group's own data without being a site admin), and can be
-granted access to specific gated features regardless of the feature's normal visibility state.
+restricted to a specific set of app pages.
 
 Started life as a one-off B0SS-alliance hardcode (app.esi's old B0SS_ALLIANCE_ID/is_b0ss_member)
 built for the Reactions moon-goo pricing tool. Generalized 2026-07-12 once a second real need for
@@ -15,13 +15,15 @@ group registration yet, by explicit user decision ("let's just let admins manage
 A group manager can edit ONLY their own group's owned data (moon-goo price sheet, reaction
 settings — see app.moon_goo / app.reactions for that actual data), never another group's.
 
-`pp_group_features` is a SEPARATE, generic capability requested alongside the pricing work: a
-group can be granted visibility into any registered feature (app.features.FEATURE_REGISTRY)
-regardless of that feature's normal admin/testers/public rollout state. Reactions itself does
-NOT need a grant here — it's already open to every logged-in user (require_context); group
-membership only ever changes which price sheet applies. This table is for FUTURE features that
-want to ship visible only to specific alliance(s).
-"""
+`pp_group_pages` is a real per-group PAGE-level access control (replaced an earlier, narrower
+"grant a specific internal feature flag" design 2026-07-12, per explicit user redirect — "I
+don't want people to enable or disable such specific features. Maybe just allow or disallow
+access to pages"): if a group has ANY rows here, its members are restricted to exactly those
+pages, even ones that would otherwise be open to everyone (Dashboard, Planetary Planning, etc.)
+— an empty/unconfigured group is the safe default (unrestricted, same as today, so nothing
+regresses for an existing group on deploy). Enforcement is frontend-only (hides the nav tab),
+matching how every other visibility gate in this app already works — not a hard backend
+security boundary; real authorization is still "this is your own data" via require_context."""
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -37,6 +39,22 @@ router = APIRouter()
 # unchanged after the generalization (see those modules' own migrations).
 _BOOTSTRAP_ALLIANCE_ID = 99007887
 _BOOTSTRAP_GROUP_NAME = "B0SS"
+
+# The app's main navigable pages/tabs that make sense to restrict per group — deliberately a
+# short, curated, user-recognizable list, NOT the full app.features.FEATURE_REGISTRY (that has
+# ~18 granular internal flags like "pad_fill"/"esi_cache_skip" that mean nothing to a group
+# admin picking which pages an alliance's members can reach). Keys match the DOM's data-tab
+# attributes (static/index.html) so the frontend can hide/show by direct selector.
+PAGE_REGISTRY = [
+    {"key": "dashboard", "label": "Dashboard"},
+    {"key": "analyze", "label": "Setup Analysis"},
+    {"key": "planetary", "label": "Planetary Planning"},
+    {"key": "planner", "label": "Find Buildables / Refill a Plan"},
+    {"key": "layout", "label": "Factory Layout"},
+    {"key": "planetdb", "label": "Planet DB"},
+    {"key": "reactions", "label": "Reactions"},
+]
+_PAGE_KEYS = {p["key"] for p in PAGE_REGISTRY}
 
 
 @ensure_once
@@ -59,10 +77,10 @@ def ensure_group_tables():
             )
         """)
         con.execute("""
-            CREATE TABLE IF NOT EXISTS pp_group_features (
-                group_id    INTEGER NOT NULL,
-                feature_key TEXT NOT NULL,
-                PRIMARY KEY (group_id, feature_key)
+            CREATE TABLE IF NOT EXISTS pp_group_pages (
+                group_id INTEGER NOT NULL,
+                page_key TEXT NOT NULL,
+                PRIMARY KEY (group_id, page_key)
             )
         """)
         con.commit()
@@ -151,21 +169,25 @@ def managed_group_ids(context_id: int) -> list[int]:
         con.close()
 
 
-def caller_group_feature_keys(context_id: int) -> set[str]:
-    """Feature keys unlocked for this context via ITS OWN group membership (member_group, not
-    managed_group_ids — a feature grant unlocks the feature for a group's real members, not
-    whoever happens to be delegated to manage the group's data)."""
+def caller_allowed_pages(context_id: int) -> list[str] | None:
+    """None = unrestricted (the safe default — either not a member of any group, or the group
+    has zero page restrictions configured, so nothing regresses for an existing group the first
+    time this ships). A list = the caller's group has restricted its members to exactly these
+    pages — checked via member_group (real alliance membership), not managed_group_ids, since
+    this is about what a group's actual MEMBERS can reach, not who manages the group's data."""
     group = member_group(context_id)
     if not group:
-        return set()
+        return None
     con = get_connection()
     try:
         rows = con.execute(
-            "SELECT feature_key FROM pp_group_features WHERE group_id=?", (group["id"],)
+            "SELECT page_key FROM pp_group_pages WHERE group_id=?", (group["id"],)
         ).fetchall()
     finally:
         con.close()
-    return {r["feature_key"] for r in rows}
+    if not rows:
+        return None
+    return [r["page_key"] for r in rows]
 
 
 # ── Admin CRUD (site admin only — group creation/manager assignment is manual for now) ─────
@@ -184,13 +206,13 @@ def list_groups(_: int = Depends(require_admin)):
             "SELECT id, name, alliance_id, created_at FROM pp_groups ORDER BY name COLLATE NOCASE"
         )]
         managers = con.execute("SELECT group_id, character_name FROM pp_group_managers").fetchall()
-        features = con.execute("SELECT group_id, feature_key FROM pp_group_features").fetchall()
+        pages = con.execute("SELECT group_id, page_key FROM pp_group_pages").fetchall()
     finally:
         con.close()
     for g in groups:
         g["managers"] = sorted(r["character_name"] for r in managers if r["group_id"] == g["id"])
-        g["features"] = sorted(r["feature_key"] for r in features if r["group_id"] == g["id"])
-    return {"groups": groups}
+        g["allowed_pages"] = sorted(r["page_key"] for r in pages if r["group_id"] == g["id"])
+    return {"groups": groups, "page_registry": PAGE_REGISTRY}
 
 
 @router.post("/api/admin/groups")
@@ -246,7 +268,7 @@ def delete_group(group_id: int, _: int = Depends(require_admin)):
     try:
         cur = con.execute("DELETE FROM pp_groups WHERE id=?", (group_id,))
         con.execute("DELETE FROM pp_group_managers WHERE group_id=?", (group_id,))
-        con.execute("DELETE FROM pp_group_features WHERE group_id=?", (group_id,))
+        con.execute("DELETE FROM pp_group_pages WHERE group_id=?", (group_id,))
         con.commit()
         changed = cur.rowcount
     finally:
@@ -298,23 +320,25 @@ def remove_group_manager(group_id: int, character_name: str, _: int = Depends(re
     return {"ok": True}
 
 
-class FeatureGrant(BaseModel):
-    feature_key: str
+class PageAllow(BaseModel):
+    page_key: str
 
 
-@router.post("/api/admin/groups/{group_id}/features")
-def grant_group_feature(group_id: int, req: FeatureGrant, _: int = Depends(require_admin)):
-    from app.features import _DEFAULTS
-    if req.feature_key not in _DEFAULTS:
-        raise HTTPException(status_code=404, detail="Unknown feature")
+@router.post("/api/admin/groups/{group_id}/pages")
+def allow_group_page(group_id: int, req: PageAllow, _: int = Depends(require_admin)):
+    """Adding the FIRST allowed page for a group flips it from unrestricted to restricted-to-
+    exactly-the-checked-pages (see caller_allowed_pages) — a group with zero rows here has full
+    access, matching how every group behaves today until an admin deliberately restricts one."""
+    if req.page_key not in _PAGE_KEYS:
+        raise HTTPException(status_code=404, detail="Unknown page")
     ensure_group_tables()
     con = get_connection()
     try:
         if not con.execute("SELECT 1 FROM pp_groups WHERE id=?", (group_id,)).fetchone():
             raise HTTPException(status_code=404, detail="Group not found")
         con.execute(
-            "INSERT OR IGNORE INTO pp_group_features (group_id, feature_key) VALUES (?,?)",
-            (group_id, req.feature_key),
+            "INSERT OR IGNORE INTO pp_group_pages (group_id, page_key) VALUES (?,?)",
+            (group_id, req.page_key),
         )
         con.commit()
     finally:
@@ -322,21 +346,24 @@ def grant_group_feature(group_id: int, req: FeatureGrant, _: int = Depends(requi
     return {"ok": True}
 
 
-@router.delete("/api/admin/groups/{group_id}/features/{feature_key}")
-def revoke_group_feature(group_id: int, feature_key: str, _: int = Depends(require_admin)):
+@router.delete("/api/admin/groups/{group_id}/pages/{page_key}")
+def disallow_group_page(group_id: int, page_key: str, _: int = Depends(require_admin)):
+    """Removing the LAST allowed page returns the group to fully unrestricted (zero rows), not
+    to zero-pages-reachable — a group is only ever restricted while it has at least one
+    explicitly allowed page; there's no way to configure "allow nothing" through this UI."""
     ensure_group_tables()
     con = get_connection()
     try:
         cur = con.execute(
-            "DELETE FROM pp_group_features WHERE group_id=? AND feature_key=?",
-            (group_id, feature_key),
+            "DELETE FROM pp_group_pages WHERE group_id=? AND page_key=?",
+            (group_id, page_key),
         )
         con.commit()
         changed = cur.rowcount
     finally:
         con.close()
     if not changed:
-        raise HTTPException(status_code=404, detail="Grant not found")
+        raise HTTPException(status_code=404, detail="Not found")
     return {"ok": True}
 
 
