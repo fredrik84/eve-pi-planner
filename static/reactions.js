@@ -337,7 +337,8 @@ function _renderReactionsDashboard(data) {
       return `
         <div class="rx-slot rx-slot-filled" title="${_esc(tip)}">
           <img class="rx-slot-icon" src="${icon}" alt="" onerror="this.style.visibility='hidden'">
-          <div class="rx-slot-timer">${_esc(timer)}${runsLabel ? ` <span class="rx-slot-runs">${_esc(runsLabel)}</span>` : ''}</div>
+          <div class="rx-slot-timer">${_esc(timer)}</div>
+          ${runsLabel ? `<span class="rx-slot-runs">${_esc(runsLabel)}</span>` : ''}
         </div>`;
     });
     // Assigned (via the wizard's "Assign") but ESI hasn't confirmed it's actually running yet —
@@ -357,7 +358,8 @@ function _renderReactionsDashboard(data) {
         <div class="rx-slot rx-slot-pending" title="Not running yet — install ${_esc(a.name)} ×${a.runs} in-game. Click to edit." onclick="_rxOpenEditAssign(${a.assignment_id}, '${c.character_id}')">
           <img class="rx-slot-icon" src="${pendingIcon}" alt="" onerror="this.style.visibility='hidden'">
           <span class="rx-slot-pending-badge" onclick="event.stopPropagation();_rxCancelAssignment(${a.assignment_id})" title="Cancel this assignment">⊘</span>
-          <div class="rx-slot-pending-label">${_esc(a.name)} <span class="rx-slot-runs">×${a.runs}</span></div>
+          <span class="rx-slot-runs">×${a.runs}</span>
+          <div class="rx-slot-pending-label">${_esc(a.name)}</div>
         </div>`);
     }
     for (let i = jobs.length + pending.length; i < c.slots; i++) {
