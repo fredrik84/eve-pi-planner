@@ -465,6 +465,17 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .basket-editor-actions { display: flex; gap: 8px; align-items: center; }
 
 /* ── Reactions: gamified per-character slot loadout ─────────────────────────── */
+/* Suggest-products call to action — used to be a tiny .pp-add-btn crammed into the "Reactions"
+   card's title bar alongside Clear all/Connect a character, easy to miss now that there are
+   TWO ways to fill a slot (this algorithm-driven suggestion flow, or clicking an empty "+" slot
+   directly for a manual pick). Its own row, plain <button> (the app's default prominent blue
+   gradient, not the small muted pp-add-btn treatment), with a hint pointing at the alternative. */
+.rx-suggest-cta {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 4px 2px 14px;
+}
+.rx-suggest-cta .pp-card-hint { flex: 1 1 260px; }
+
 .rx-char-row {
   display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
   padding: 10px 0; border-bottom: 1px solid var(--clr-border);

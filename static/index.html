@@ -25,7 +25,7 @@
   <link rel="stylesheet" href="/style-components.css?v=1">
   <link rel="stylesheet" href="/style-contribute.css?v=9">
   <link rel="stylesheet" href="/style-wizard.css?v=2">
-  <link rel="stylesheet" href="/style-layout-admin.css?v=10">
+  <link rel="stylesheet" href="/style-layout-admin.css?v=11">
   <link rel="stylesheet" href="/style-analysis-dashboard.css?v=7">
   <link rel="stylesheet" href="/style-misc-responsive.css?v=6">
 </head>
@@ -573,12 +573,16 @@
               </div>
             </section>
 
+            <div class="rx-suggest-cta">
+              <button onclick="wizRStart()">Suggest Reaction Products</button>
+              <span class="pp-card-hint">— let the optimizer pick profitable products for your budget, cadence and free slots. Prefer a specific product instead? Click any empty <b>+</b> slot below.</span>
+            </div>
+
             <section class="pp-card">
               <div class="pp-card-title">Reactions
                 <span class="pp-card-hint">— your reaction capacity and currently-running jobs</span>
                 <button class="pp-add-btn" id="rxConnectBtn" onclick="connectReactionsTracking()" style="display:none">Connect a character</button>
                 <button class="pp-add-btn" onclick="if (confirm('Clear every pending (not-yet-running) assignment?')) _rxClearAllAssignments();">Clear all</button>
-                <button class="pp-add-btn" onclick="wizRStart()">Add Reaction Product</button>
               </div>
               <div id="rxDashboardContent" class="pp-card-body">
                 <div class="pp-empty">Loading…</div>
@@ -621,7 +625,7 @@
         </div>
       </div><!-- /rxDashboard -->
 
-      <!-- Wizard: "Add Reaction Product" -->
+      <!-- Wizard: "Suggest Reaction Products" -->
       <div id="rxWizard" style="display:none">
         <div class="wiz-bar">
           <div class="wiz-steps">
