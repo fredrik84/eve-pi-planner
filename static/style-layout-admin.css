@@ -433,6 +433,16 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .admin-meta { font-size: 11px; color: var(--clr-text-dim); margin-left: auto; }
 .admin-tag { font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: #ffce6b; border: 1px solid #5a4416; border-radius: 4px; padding: 1px 6px; margin-left: auto; }
 
+.grp-mgr-chip {
+  display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--clr-text-dim);
+  background: #1c2030; border: 1px solid #2a3142; border-radius: 4px; padding: 2px 4px 2px 8px;
+}
+.grp-mgr-remove {
+  background: none; border: none; color: #b0b0b0; cursor: pointer; font-size: 13px; line-height: 1;
+  padding: 2px 4px; border-radius: 3px;
+}
+.grp-mgr-remove:hover { background: #3a2430; color: #ff8a8a; }
+
 /* basket editor */
 .basket-row { padding: 8px 10px; background: #161b28; border: 1px solid var(--clr-border); border-radius: 7px; margin-bottom: 6px; }
 .basket-row-head { display: flex; align-items: center; gap: 10px; }

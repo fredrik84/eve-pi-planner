@@ -85,7 +85,7 @@ function _loadRxShoppingList() {
         <div style="overflow-x:auto">
           <table class="pp-card-table" style="width:100%">
             <thead><tr><th>Material</th><th>Quantity</th><th>Unit price</th><th>Est. cost</th><th>Volume</th></tr></thead>
-            <tbody>${items.map(m => `<tr><td>${_esc(m.name)}</td><td>${m.quantity.toLocaleString()}</td><td>${_fmtIsk(m.unit_cost)}${priceDiff(m)}</td><td>${_fmtIsk(m.unit_cost * m.quantity)}</td><td>${Math.round(m.volume_m3 || 0).toLocaleString()} m³</td></tr>`).join('')}</tbody>
+            <tbody>${items.map(m => `<tr><td>${_esc(m.name)}</td><td>${_rxCopyQtyCell(m.quantity)}</td><td>${_fmtIsk(m.unit_cost)}${priceDiff(m)}</td><td>${_fmtIsk(m.unit_cost * m.quantity)}</td><td>${Math.round(m.volume_m3 || 0).toLocaleString()} m³</td></tr>`).join('')}</tbody>
           </table>
         </div>`;
       el.innerHTML = section('Fetch from your alliance', group)
@@ -95,25 +95,47 @@ function _loadRxShoppingList() {
     .catch(() => { card.style.display = 'none'; });
 }
 
+// A quantity cell that copies its raw integer to the clipboard on click — ready to paste
+// straight into EVE's multibuy quantity field. Reuses the same visual treatment as the PI
+// Refill tool's click-to-copy P1 amounts (style-wizard.css .p1-amt*).
+function _rxCopyQtyCell(qty) {
+  return `<b class="p1-amt p1-amt-set" onclick="_rxCopyQty(this)" title="Click to copy">${Math.round(qty).toLocaleString()}</b>`;
+}
+function _rxCopyQty(el) {
+  const n = el.textContent.replace(/[^\d]/g, '');
+  if (!n) return;
+  const done = () => { el.classList.add('p1-amt-copied'); setTimeout(() => el.classList.remove('p1-amt-copied'), 600); };
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(n).then(done).catch(done);
+  else done();
+}
+
+let _rxDiffStillShort = [];  // last-rendered "still short" rows — feeds _rxCopyReceivedDiff
+
 // Diffs a pasted partial delivery (alliance contract, market buy, whatever actually arrived)
 // against the shopping list totals — a contract rarely covers everything you asked for in one
 // go, so this shows what's still short per material instead of making you eyeball two lists.
-// Reuses the same parser as the PI Refill inventory paste (utils.js).
+// Reuses the same parser as the PI Refill inventory paste (utils.js). Always leaves a status
+// line behind (parsed count, matched count) so pasting never looks like a silent no-op —
+// whether the list matched perfectly, partially, or not at all.
 function _renderRxReceivedDiff() {
   const el = document.getElementById('rxReceivedDiff');
   const ta = document.getElementById('rxReceivedPaste');
   if (!el || !ta) return;
-  const text = ta.value || '';
-  if (!text.trim()) { el.innerHTML = ''; return; }
+  const text = (ta.value || '').replace(/ /g, ' ');  // normalize non-breaking spaces some clipboards insert
+  if (!text.trim()) { el.innerHTML = ''; _rxDiffStillShort = []; return; }
+  const lines = text.split('\n').filter(l => l.trim());
   const received = {};
-  for (const line of text.split('\n')) {
+  let parsedCount = 0;
+  for (const line of lines) {
     const parsed = _parseInventoryLine(line);
     if (!parsed) continue;
+    parsedCount++;
     const key = parsed[0].toLowerCase();
     received[key] = (received[key] || 0) + parsed[1];
   }
-  if (!Object.keys(received).length) {
-    el.innerHTML = '<div class="pp-empty">No recognizable "Name  Quantity" lines found.</div>';
+  if (!parsedCount) {
+    el.innerHTML = `<div class="pp-empty">Couldn't recognize any "Name  Quantity" lines in ${lines.length} pasted line${lines.length === 1 ? '' : 's'} — expecting EVE's inventory/contract copy format (name, then quantity, tab- or space-separated).</div>`;
+    _rxDiffStillShort = [];
     return;
   }
   const matched = new Set();
@@ -127,11 +149,13 @@ function _renderRxReceivedDiff() {
   const leftover = Object.keys(received).filter(k => !matched.has(k));
   const stillShort = rows.filter(r => r.remaining > 0);
   const covered = rows.filter(r => r.remaining <= 0 && r.needed > 0);
+  _rxDiffStillShort = stillShort;
   const rowHtml = r => `<tr class="${r.remaining <= 0 ? 'rx-diff-covered' : ''}">
       <td>${_esc(r.name)}</td><td>${r.needed.toLocaleString()}</td><td>${r.got.toLocaleString()}</td>
-      <td>${r.remaining > 0 ? r.remaining.toLocaleString() : 'Covered ✓'}</td>
+      <td>${r.remaining > 0 ? _rxCopyQtyCell(r.remaining) : 'Covered ✓'}</td>
       <td>${r.remaining > 0 ? _fmtIsk(r.remaining * r.unit_cost) : '—'}</td></tr>`;
   el.innerHTML = `
+    <div class="pp-card-hint" style="margin-bottom:6px">Parsed ${parsedCount} of ${lines.length} pasted line${lines.length === 1 ? '' : 's'} · matched ${matched.size} of ${rows.length} material${rows.length === 1 ? '' : 's'} on this list</div>
     <div style="overflow-x:auto">
       <table class="pp-card-table" style="width:100%">
         <thead><tr><th>Material</th><th>Needed</th><th>Received</th><th>Still short</th><th>Est. cost to finish</th></tr></thead>
@@ -141,7 +165,18 @@ function _renderRxReceivedDiff() {
     <div class="pp-card-hint" style="margin-top:8px">
       ${stillShort.length} material${stillShort.length === 1 ? '' : 's'} still short · ${covered.length} fully covered
       ${leftover.length ? ` · unrecognized/unneeded in your paste: ${leftover.map(_esc).join(', ')}` : ''}
-    </div>`;
+    </div>
+    ${stillShort.length ? `<div style="margin-top:8px"><button class="pp-add-btn" onclick="_rxCopyReceivedDiff(this)">Copy still-short for multibuy</button></div>` : ''}`;
+}
+
+function _rxCopyReceivedDiff(btn) {
+  const text = _rxDiffStillShort.map(r => `${r.name}\t${r.remaining}`).join('\n');
+  if (!text) return;
+  navigator.clipboard.writeText(text).then(() => {
+    const orig = btn.textContent;
+    btn.textContent = 'Copied ✓';
+    setTimeout(() => { btn.textContent = orig; }, 1500);
+  });
 }
 
 function _rxCopyShoppingList(btn) {

@@ -911,7 +911,7 @@ function renderGroups(groups) {
       </div>
       <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
         <span class="pp-card-hint" style="margin:0">Managers:</span>
-        ${g.managers.map(m => `<span class="admin-meta">${_esc(m)} <a href="#" onclick="removeGroupManager(${g.id},'${_esc(m)}',this);return false;" title="Remove">×</a></span>`).join('') || '<span class="pp-card-hint">none</span>'}
+        ${g.managers.map(m => `<span class="grp-mgr-chip">${_esc(m)} <button class="grp-mgr-remove" onclick="removeGroupManager(${g.id},'${_esc(m)}',this)" title="Remove manager">×</button></span>`).join('') || '<span class="pp-card-hint">none</span>'}
         <input type="text" class="bug-input grp-mgr-input" placeholder="Character name" style="max-width:160px">
         <button onclick="addGroupManager(${g.id}, this)">Add manager</button>
       </div>
