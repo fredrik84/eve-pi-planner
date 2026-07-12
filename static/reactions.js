@@ -316,10 +316,22 @@ function _renderReactionsDashboard(data) {
       </div>`;
   }).join('');
 
-  const todoNote = todoGroups.size
-    ? `<div class="rx-todo-list">${[...todoGroups.values()].map(g =>
-        `<div class="rx-todo-item"><span class="rx-todo-x">⊘</span> Install <b>${_esc(g.name)}</b> ×${g.runs}${g.count > 1 ? ` (×${g.count} jobs)` : ''} on <b>${_esc(g.character_name)}</b></div>`
-      ).join('')}</div>`
+  // Grouped per character, styled the same way the PI Dashboard groups its own "Needs
+  // attention" cards (dash-issue/dash-issue-char/dash-issue-items) — a flat list of "Install X
+  // on Y" lines got hard to scan once several characters each had a few pending installs.
+  const todoByChar = new Map();
+  for (const g of todoGroups.values()) {
+    if (!todoByChar.has(g.character_name)) todoByChar.set(g.character_name, []);
+    todoByChar.get(g.character_name).push(g);
+  }
+  const todoNote = todoByChar.size
+    ? `<div class="rx-todo-groups">${[...todoByChar.entries()].map(([charName, items]) => `
+        <div class="dash-issue dash-issue-warn">
+          <div class="dash-issue-char">${_esc(charName)}</div>
+          <ul class="dash-issue-items">${items.map(g =>
+            `<li class="dash-il-warn">Install <b>${_esc(g.name)}</b> ×${g.runs}${g.count > 1 ? ` <span class="an-of">×${g.count} jobs</span>` : ''}</li>`
+          ).join('')}</ul>
+        </div>`).join('')}</div>`
     : '';
 
   // Easy at-a-glance numbers, first thing on the page — same big-number-tile pattern as the PI

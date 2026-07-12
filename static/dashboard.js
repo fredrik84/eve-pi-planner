@@ -179,19 +179,29 @@ function _renderReactionAlerts(data) {
     if (a.severity === 'high') g.severity = 'high';
   });
   const groupList = [...groups.values()];
-  const groupSev = groupList.some(g => g.severity === 'high') ? 'high' : 'warn';
-  const rows = `<div class="dash-issue dash-issue-${groupSev}">
-      <div class="dash-issue-char">Assigned but not started</div>
-      <ul class="dash-issue-items">${groupList.map(g =>
-        `<li class="dash-il-${g.severity === 'high' ? 'high' : 'warn'}">${_esc(g.character_name)}: ${_esc(g.location)}${g.count > 1 ? ` <span class="an-of">×${g.count} jobs</span>` : ''}</li>`
-      ).join('')}</ul>
-    </div>`;
+  // Grouped per character (one dash-issue card per character, same shape as the "Needs
+  // attention" card below) instead of one combined "Assigned but not started" block — a player
+  // with several characters otherwise has to scan every line to find which ones are theirs.
+  const byChar = new Map();
+  groupList.forEach(g => {
+    if (!byChar.has(g.character_name)) byChar.set(g.character_name, []);
+    byChar.get(g.character_name).push(g);
+  });
+  const cards = [...byChar.entries()].map(([charName, gs]) => {
+    const sev = gs.some(g => g.severity === 'high') ? 'high' : 'warn';
+    return `<div class="dash-issue dash-issue-${sev}">
+        <div class="dash-issue-char">${_esc(charName)}</div>
+        <ul class="dash-issue-items">${gs.map(g =>
+          `<li class="dash-il-${g.severity === 'high' ? 'high' : 'warn'}">${_esc(g.location)}${g.count > 1 ? ` <span class="an-of">×${g.count} jobs</span>` : ''}</li>`
+        ).join('')}</ul>
+      </div>`;
+  }).join('');
   // Header count = lines actually shown (post-grouping), not raw alert-row count — otherwise
   // the header could say "11 things" while the body only shows 2 grouped lines, which reads
   // like a bug of its own.
   return `<section class="pp-card dash-issues">
       <div class="pp-card-title">Reactions <span class="pp-card-hint">— ${groupList.length} thing${groupList.length !== 1 ? 's' : ''} need attention</span></div>
-      <div class="pp-card-body">${rows}</div>
+      <div class="pp-card-body">${cards}</div>
     </section>`;
 }
 
