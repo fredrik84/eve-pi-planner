@@ -484,7 +484,7 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .rx-char-label { width: 130px; flex: 0 0 130px; font-weight: 600; color: #dbe1ee; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rx-slot-row { display: flex; gap: 8px; flex-wrap: wrap; }
 .rx-slot {
-  width: 60px; height: 60px; flex: 0 0 auto; position: relative;
+  width: 70px; height: 70px; flex: 0 0 auto; position: relative;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   border-radius: 8px; background: #161b28; border: 1px solid var(--clr-border);
 }
@@ -496,31 +496,34 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
   cursor: pointer;
 }
 .rx-slot-pending:hover { border-color: #a83a3a; }
-.rx-slot-icon { width: 32px; height: 32px; border-radius: 4px; }
-.rx-slot-timer { font-size: 9px; color: var(--clr-text-dim); margin-top: 3px; white-space: nowrap; }
+.rx-slot-icon { width: 36px; height: 36px; border-radius: 4px; }
+.rx-slot-timer { font-size: 10px; color: var(--clr-text-dim); margin-top: 3px; white-space: nowrap; }
 /* An overlay badge (like the ⊘ cancel badge), NOT inline text — a long product name already
    fills the single-line, ellipsis-truncated name/timer text to its max-width, so appending the
    run count there just got truncated away along with the overflowing name. Bottom-right corner
    keeps it clear of the ⊘ badge (top-right, pending slots only) and always visible regardless
    of how the name/timer text itself wraps or clips. */
 .rx-slot-runs {
-  position: absolute; bottom: -5px; right: -5px; font-size: 8px; line-height: 1;
+  position: absolute; bottom: -5px; right: -5px; font-size: 9px; line-height: 1;
   color: #cfe0f0; background: #12161f; border: 1px solid var(--clr-border); border-radius: 4px;
   padding: 2px 4px; white-space: nowrap;
 }
-.rx-slot-empty-mark { font-size: 20px; color: var(--clr-text-dim); }
+.rx-slot-empty-mark { font-size: 22px; color: var(--clr-text-dim); }
 .rx-slot-pending-badge {
   position: absolute; top: -5px; right: -5px; font-size: 13px; line-height: 1;
   color: #ff8a8a; background: #1a1010; border: 1px solid #7a2a2a; border-radius: 50%;
   width: 16px; height: 16px; display: flex; align-items: center; justify-content: center;
   cursor: pointer; transition: background 0.15s, border-color 0.15s;
   /* The ⊘ glyph's own ink sits below the vertical center of its em-box in most fonts (more
-     whitespace above than below) — flexbox centering alone still leaves it reading as bottom-
-     aligned inside the circle. Nudge up to actually optically center it. */
+     whitespace above than below) — flexbox centering + padding-bottom alone still left it
+     reading ~1px low. transform is a direct, predictable pixel nudge (unlike padding, which
+     only indirectly shifts the flex-centered position by half its value) — stack it with the
+     padding for the full correction. */
   padding-bottom: 2px;
+  transform: translateY(-1px);
 }
 .rx-slot-pending-badge:hover { background: #3a1515; border-color: #a83a3a; }
-.rx-slot-pending-label { font-size: 8px; color: #c87a7a; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 54px; }
+.rx-slot-pending-label { font-size: 9px; color: #c87a7a; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 62px; }
 
 /* A <details><summary class="pp-card-title"> used as a foldable card header: the plain
    .pp-card-title class alone renders fine as a <div>, but a <summary> defaults to
