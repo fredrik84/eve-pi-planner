@@ -62,12 +62,15 @@ function _loadRxShoppingList() {
       // material, so this list always reflects the cheaper source per item, not a static split.
       const group = _rxLastShoppingList.filter(m => m.source === 'group');
       const market = _rxLastShoppingList.filter(m => m.source !== 'group');
+      // Unit price is whichever source (alliance sheet or market) actually won for this
+      // material right now — a concrete number to check the real quote against, not just a
+      // bare quantity to go find a price for yourself.
       const section = (title, items) => !items.length ? '' : `
         <div class="rx-shop-sec-title">${title}</div>
         <div style="overflow-x:auto">
           <table class="pp-card-table" style="width:100%">
-            <thead><tr><th>Material</th><th>Quantity</th></tr></thead>
-            <tbody>${items.map(m => `<tr><td>${_esc(m.name)}</td><td>${m.quantity.toLocaleString()}</td></tr>`).join('')}</tbody>
+            <thead><tr><th>Material</th><th>Quantity</th><th>Unit price</th><th>Est. cost</th></tr></thead>
+            <tbody>${items.map(m => `<tr><td>${_esc(m.name)}</td><td>${m.quantity.toLocaleString()}</td><td>${_fmtIsk(m.unit_cost)}</td><td>${_fmtIsk(m.unit_cost * m.quantity)}</td></tr>`).join('')}</tbody>
           </table>
         </div>`;
       el.innerHTML = section('Fetch from your alliance', group)
@@ -262,7 +265,8 @@ function _rxClearAllAssignments() {
 }
 
 // ── Wizard: "Add Reaction Product" ──────────────────────────────────────────────────────────
-let _rxMaterials = []; // [{type_id, name}] — loaded once, reused across wizard opens
+let _rxMaterials = []; // [{type_id, name}] moon materials — loaded once, reused across wizard opens
+let _rxFuelBlocks = []; // [{type_id, name}] racial fuel blocks — same idea, separate category
 
 function wizRStart() {
   document.getElementById('rxDashboard').style.display = 'none';
@@ -275,24 +279,31 @@ function wizRStart() {
 function _loadRxMaterialFilter() {
   const el = document.getElementById('rxMaterialFilterList');
   if (!el) return;
-  if (_rxMaterials.length) { _renderRxMaterialFilter(); return; }
-  fetch('/api/moon-goo')
-    .then(r => r.ok ? r.json() : { prices: [] })
-    .then(d => {
-      _rxMaterials = (d.prices || []).map(p => ({ type_id: p.type_id, name: p.name }));
-      _renderRxMaterialFilter();
-    })
-    .catch(() => { el.innerHTML = '<div class="pp-empty">Could not load the material list.</div>'; });
+  if (_rxMaterials.length || _rxFuelBlocks.length) { _renderRxMaterialFilter(); return; }
+  Promise.all([
+    fetch('/api/moon-goo').then(r => r.ok ? r.json() : { prices: [] }),
+    fetch('/api/reactions/fuel-blocks').then(r => r.ok ? r.json() : { fuel_blocks: [] }),
+  ]).then(([goo, fb]) => {
+    _rxMaterials = (goo.prices || []).map(p => ({ type_id: p.type_id, name: p.name }));
+    _rxFuelBlocks = fb.fuel_blocks || [];
+    _renderRxMaterialFilter();
+  }).catch(() => { el.innerHTML = '<div class="pp-empty">Could not load the material list.</div>'; });
 }
 
 function _renderRxMaterialFilter() {
   const el = document.getElementById('rxMaterialFilterList');
   if (!el) return;
-  if (!_rxMaterials.length) { el.innerHTML = '<div class="pp-empty">No moon materials priced yet.</div>'; return; }
-  el.innerHTML = _rxMaterials.map(m => `
-    <label class="pp-label-check">
-      <input type="checkbox" class="rx-material-cb" value="${m.type_id}" checked> ${_esc(m.name)}
-    </label>`).join('');
+  if (!_rxMaterials.length && !_rxFuelBlocks.length) { el.innerHTML = '<div class="pp-empty">No materials priced yet.</div>'; return; }
+  // Two separate groups — a player's real access to moon goo and to each racial fuel block are
+  // independent concerns (e.g. cheap local Oxygen Fuel Block production, but unreliable
+  // Hydrogen supply), so they're not lumped into one undifferentiated checklist.
+  const group = (title, items) => !items.length ? '' : `
+    <div class="pp-card-hint" style="margin:8px 0 2px;font-weight:600">${title}</div>
+    ${items.map(m => `
+      <label class="pp-label-check">
+        <input type="checkbox" class="rx-material-cb" value="${m.type_id}" checked> ${_esc(m.name)}
+      </label>`).join('')}`;
+  el.innerHTML = group('Moon materials', _rxMaterials) + group('Fuel blocks', _rxFuelBlocks);
 }
 
 // Unchecked = excluded. Returns null (no restriction) when everything is checked, since that's
@@ -468,6 +479,9 @@ function _renderRxAdvisor(advisor) {
     items.push(`<li>Increase by ${_fmtIsk(a.extra_isk)} ISK to align <b>${_esc(a.name)}</b> to your cadence (keeps its slots busy the whole period instead of finishing early) — about +${_fmtIsk(a.extra_reward)} more profit
       <button class="rx-sugg-assign-btn" id="rxAlignBtn${i}" onclick="_rxApplyAlignHint(${i}, this)">Apply</button></li>`);
   });
+  for (const h of advisor.fuel_block_hints || []) {
+    items.push(`<li>Also allowing <b>${_esc(h.name)}</b> in the material filter would raise your expected profit by about ${h.extra_pct}% (+${_fmtIsk(h.extra_isk_per_day)}/day)</li>`);
+  }
   if (!items.length) return '';
   return `
     <div class="rx-advisor">

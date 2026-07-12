@@ -119,6 +119,8 @@ def test_reactions_gated(base: str) -> bool:
     ok &= check(code == 401, f"anonymous reactions-clear-all rejected (got HTTP {code})")
     code = get_status(f"{base}/api/reactions/shopping-list")
     ok &= check(code == 401, f"anonymous reactions-shopping-list rejected (got HTTP {code})")
+    code = get_status(f"{base}/api/reactions/fuel-blocks")
+    ok &= check(code == 401, f"anonymous reactions-fuel-blocks rejected (got HTTP {code})")
     return ok
 
 

@@ -345,7 +345,16 @@ def _load_goo_and_reached(context_id: int, allowed_material_ids: set[int] | None
     # manufactured leaf (fuel blocks etc., which have no reaction formula at all and stay
     # purchasable). Only real reaction products get this treatment; true leaves are unaffected.
     all_input_ids = {inp["type_id"] for inputs in inputs_by_reaction.values() for inp in inputs}
-    purchasable_ids = list({tid for tid in all_input_ids if tid not in reactions_by_output} | moon_material_ids)
+    purchasable_ids = {tid for tid in all_input_ids if tid not in reactions_by_output} | moon_material_ids
+    # Same "uncheck what you can't reliably get" filter as moon goo, applied to the racial fuel
+    # blocks too — each reaction formula needs one SPECIFIC fuel block (fixed by its SDE recipe),
+    # but a player's real access to each racial variant varies independently (e.g. cheap local
+    # Oxygen production, no reliable Hydrogen supply) — a chain needing an excluded fuel block
+    # becomes unreachable, same as an excluded moon material.
+    if allowed_material_ids:
+        fuel_block_ids = set(_fuel_block_ids(inputs_by_reaction, reactions_by_output, types))
+        purchasable_ids -= (fuel_block_ids - set(allowed_material_ids))
+    purchasable_ids = list(purchasable_ids)
     purchasable_market = fetch_market_data(purchasable_ids)
     purchasable = {
         tid: m["sell_price"] + settings["import_isk_per_m3"] * (types.get(tid, {}).get("volume") or 0.0)
@@ -419,6 +428,36 @@ def _build_opportunities(context_id: int, allowed_material_ids: set[int] | None 
 @router.get("/api/reactions/opportunities")
 def reactions_opportunities(context_id: int = Depends(require_context)):
     return {"opportunities": _build_opportunities(context_id)}
+
+
+def _fuel_block_ids(inputs_by_reaction: dict, reactions_by_output: dict, types: dict) -> dict[int, str]:
+    """The racial fuel-block variants (Hydrogen/Helium/Nitrogen/Oxygen) used as reaction inputs
+    — a second, distinct category from moon goo in the advanced material-availability filter.
+    Each formula's required fuel block is fixed by its SDE recipe, but a player's REAL access to
+    each racial variant can differ a lot (e.g. cheap local Oxygen production, but no reliable
+    Hydrogen supply) — same idea as "a Gas type your group doesn't stock" already applies to
+    moon goo, just for the other big recurring purchasable input. Detected dynamically (name
+    match + actually used as a reaction input, not itself a reaction product) rather than
+    hardcoded IDs, so it stays correct if the SDE's exact set ever changes."""
+    all_input_ids = {inp["type_id"] for inputs in inputs_by_reaction.values() for inp in inputs}
+    return {
+        tid: types.get(tid, {}).get("name", str(tid))
+        for tid in all_input_ids
+        if tid not in reactions_by_output and "Fuel Block" in (types.get(tid, {}).get("name") or "")
+    }
+
+
+@router.get("/api/reactions/fuel-blocks")
+def list_reaction_fuel_blocks(ctx: int = Depends(require_context)):
+    con = get_connection()
+    try:
+        reactions_by_output, inputs_by_reaction = _load_reaction_graph(con)
+    finally:
+        con.close()
+    types = load_pi_data()["types"]
+    ids = _fuel_block_ids(inputs_by_reaction, reactions_by_output, types)
+    rows = sorted(({"type_id": tid, "name": name} for tid, name in ids.items()), key=lambda r: r["name"])
+    return {"fuel_blocks": rows}
 
 
 def _explode_shopping_list(type_id: int, units_needed: float, reached: dict, out: dict[int, float]):
@@ -506,10 +545,14 @@ def reactions_shopping_list(context_id: int = Depends(require_context)):
     # sheet can lose to a better market rate on any given material, and a shopping-list entry
     # must follow whichever source is actually cheapest right now, or it'd send the player to
     # buy from the alliance when the market is the better (or for a non-member, the only) option.
+    # unit_cost is the SAME per-unit price _resolve_reachable already settled on for this leaf
+    # (whichever source won) — surfaced so the player has a concrete expected price to check the
+    # actual alliance/market quote against, not just a bare quantity.
     materials = [
         {
             "type_id": tid, "name": types.get(tid, {}).get("name", str(tid)),
             "quantity": math.ceil(qty), "source": reached.get(tid, {}).get("source", "market"),
+            "unit_cost": round(reached.get(tid, {}).get("unit_cost", 0.0), 2),
         }
         for tid, qty in totals.items()
     ]
@@ -1204,8 +1247,8 @@ _BUDGET_SENSITIVITY_STEP = 0.10  # "what if you raised your ISK budget by 10%?"
 
 
 def _build_advisor(context_id: int, isk_budget: float, max_chain_depth: int, cadence_hours: float,
-                    material_ids: set[int] | None, current_profit: float, current_binding: str,
-                    suggestions: list[dict]) -> dict:
+                    material_ids: set[int] | None, current_profit: float, current_profit_per_day: float | None,
+                    current_binding: str, suggestions: list[dict]) -> dict:
     """Cheap, easily-computable "how could this be better" hints — not a full analysis, just the
     obvious low-effort wins: missing skill training on already-tracked characters, whether a bit
     more ISK would actually buy meaningfully more profit right now (vs. there being nothing left
@@ -1271,7 +1314,36 @@ def _build_advisor(context_id: int, isk_budget: float, max_chain_depth: int, cad
         for s in suggestions if s.get("align_extra_isk", 0) > 0 and s["align_extra_reward"] > current_profit * 0.01
     ]
 
-    return {"skill_hints": skill_hints, "budget_hint": budget_hint, "align_hints": align_hints}
+    # Fuel-block breadth: if the caller restricted which racial fuel blocks to use (the advanced
+    # material filter, e.g. "only Oxygen — that's my cheap local one"), quantify what re-adding
+    # each EXCLUDED one would actually be worth, in the same ISK/day terms the rest of this tool
+    # already reports profit in — turns "I locked myself to one fuel block" from a guess into a
+    # real number ("+12% ISK/day if you also used Hydrogen Fuel Block") the player can weigh
+    # against how much of a hassle sourcing that second variant actually is for them.
+    fuel_block_hints = []
+    if material_ids is not None and current_profit_per_day:
+        con = get_connection()
+        try:
+            reactions_by_output, inputs_by_reaction = _load_reaction_graph(con)
+        finally:
+            con.close()
+        all_fuel_blocks = _fuel_block_ids(inputs_by_reaction, reactions_by_output, load_pi_data()["types"])
+        excluded = {tid: name for tid, name in all_fuel_blocks.items() if tid not in material_ids}
+        for tid, name in excluded.items():
+            widened = _suggest_reactions(context_id, isk_budget, max_chain_depth, cadence_hours,
+                                          material_ids | {tid})
+            widened_per_day = widened["totals"].get("net_profit_per_day") or 0.0
+            extra_per_day = widened_per_day - current_profit_per_day
+            if extra_per_day > current_profit_per_day * 0.01:
+                fuel_block_hints.append({
+                    "name": name,
+                    "extra_isk_per_day": round(extra_per_day, 2),
+                    "extra_pct": round(100 * extra_per_day / current_profit_per_day, 1),
+                })
+        fuel_block_hints.sort(key=lambda h: -h["extra_isk_per_day"])
+
+    return {"skill_hints": skill_hints, "budget_hint": budget_hint, "align_hints": align_hints,
+            "fuel_block_hints": fuel_block_hints}
 
 
 @router.post("/api/reactions/suggest")
@@ -1280,10 +1352,11 @@ def suggest_reactions(req: SuggestRequest, context_id: int = Depends(require_con
         return {"suggestions": [], "totals": {
             "isk_committed": 0.0, "isk_budget": req.isk_budget, "net_profit": 0.0, "net_profit_per_day": None,
             "output_value": 0.0, "output_m3": 0.0, "characters_used": 0, "completion_hours": None, "binding": "neither"},
-            "advisor": {"skill_hints": [], "budget_hint": None, "align_hints": []}}
+            "advisor": {"skill_hints": [], "budget_hint": None, "align_hints": [], "fuel_block_hints": []}}
     material_ids = set(req.material_ids) if req.material_ids else None
     result = _suggest_reactions(context_id, req.isk_budget, req.max_chain_depth, req.cadence_hours, material_ids)
     result["advisor"] = _build_advisor(context_id, req.isk_budget, req.max_chain_depth, req.cadence_hours,
-                                        material_ids, result["totals"]["net_profit"], result["totals"]["binding"],
+                                        material_ids, result["totals"]["net_profit"],
+                                        result["totals"].get("net_profit_per_day"), result["totals"]["binding"],
                                         result["suggestions"])
     return result
