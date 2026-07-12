@@ -950,6 +950,11 @@ def ensure_reaction_assignments_table():
             con.commit()
         except Exception:
             pass
+        try:
+            con.execute("ALTER TABLE pp_reaction_assignments ADD COLUMN output_value REAL NOT NULL DEFAULT 0")
+            con.commit()
+        except Exception:
+            pass
     finally:
         con.close()
 
@@ -969,6 +974,7 @@ class AssignRequest(BaseModel):
     job_count: int = 1  # how many separate in-game job installs this splits into (one per slot)
     input_cost: float
     reward: float
+    output_value: float = 0.0  # gross instant-sell value of the output — see "Expected output value"
     # Intermediate reactions this product's own formula needs (see _explode_chain_tiers in
     # _suggest_reactions), deepest-first — each becomes its own set of assignment rows the
     # player must install and let finish BEFORE the top-level reaction above can even start.
@@ -988,10 +994,10 @@ def assign_reaction(req: AssignRequest, context_id: int = Depends(require_contex
     Any chain_tiers (intermediate reactions this product's own formula needs, e.g. goo ->
     Ferrofluid -> this product — see _explode_chain_tiers) get their own assignment rows too,
     tagged with a LOWER tier_order so the dashboard can show them as "react this first." Their
-    input_cost/reward are recorded as 0 — the full chain's cost/profit is already rolled up into
-    the top-level row (unit_cost is computed recursively down to raw goo), so giving the
-    intermediate rows their own nonzero values would double-count it if anything ever sums
-    pp_reaction_assignments financially."""
+    input_cost/reward/output_value are recorded as 0 — the full chain's cost/profit/value is
+    already rolled up into the top-level row (unit_cost and instant_sell_value are both computed
+    recursively down to raw goo), so giving the intermediate rows their own nonzero values would
+    double-count it if anything ever sums pp_reaction_assignments financially."""
     ensure_reaction_assignments_table()
     con = get_connection()
     try:
@@ -1009,9 +1015,9 @@ def assign_reaction(req: AssignRequest, context_id: int = Depends(require_contex
             for _ in range(tier_job_count):
                 con.execute(
                     "INSERT INTO pp_reaction_assignments "
-                    "(character_id, type_id, name, runs, input_cost, reward, created_at, tier_order) "
-                    "VALUES (?,?,?,?,?,?,?,?)",
-                    (req.character_id, tier.type_id, tier.name, tier_runs_per_job, 0.0, 0.0, now, tier_order),
+                    "(character_id, type_id, name, runs, input_cost, reward, created_at, tier_order, output_value) "
+                    "VALUES (?,?,?,?,?,?,?,?,?)",
+                    (req.character_id, tier.type_id, tier.name, tier_runs_per_job, 0.0, 0.0, now, tier_order, 0.0),
                 )
 
         job_count = max(1, req.job_count)
@@ -1020,10 +1026,11 @@ def assign_reaction(req: AssignRequest, context_id: int = Depends(require_contex
         for _ in range(job_count):
             con.execute(
                 "INSERT INTO pp_reaction_assignments "
-                "(character_id, type_id, name, runs, input_cost, reward, created_at, tier_order) "
-                "VALUES (?,?,?,?,?,?,?,?)",
+                "(character_id, type_id, name, runs, input_cost, reward, created_at, tier_order, output_value) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
                 (req.character_id, req.type_id, req.name, runs_per_job,
-                 req.input_cost / job_count, req.reward / job_count, now, top_tier_order),
+                 req.input_cost / job_count, req.reward / job_count, now, top_tier_order,
+                 req.output_value / job_count),
             )
         con.commit()
     finally:
@@ -1097,8 +1104,8 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
         if char_ids:
             placeholders = ",".join("?" * len(char_ids))
             for r in con.execute(
-                f"SELECT id, character_id, type_id, name, runs, input_cost, reward, tier_order FROM pp_reaction_assignments "
-                f"WHERE character_id IN ({placeholders}) ORDER BY tier_order", char_ids,
+                f"SELECT id, character_id, type_id, name, runs, input_cost, reward, tier_order, output_value "
+                f"FROM pp_reaction_assignments WHERE character_id IN ({placeholders}) ORDER BY tier_order", char_ids,
             ):
                 assignments.setdefault(r["character_id"], []).append(dict(r))
         # output_type_id -> cycle hours, so a stored assignment (which only keeps `runs`, not its
@@ -1117,6 +1124,7 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
     tracked_any = False
     fulfilled_ids: list[int] = []
     pending_isk_committed = pending_net_profit = pending_net_profit_per_day = 0.0
+    pending_output_value = 0.0
     for c in chars:
         opted_in = "read_character_jobs" in (c["scopes"] or "")
         slots = reaction_slots(c)
@@ -1148,12 +1156,15 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
                 pending.append({
                     "assignment_id": a["id"], "type_id": a["type_id"], "name": a["name"], "runs": a["runs"],
                     "tier_order": a["tier_order"], "input_cost": a["input_cost"], "reward": a["reward"],
+                    "output_value": a["output_value"],
                 })
-                # Intermediate-tier rows are stored with input_cost/reward=0 (the full chain's
-                # cost/profit already lives on the top-level row — see assign_reaction), so
-                # summing every pending row never double-counts a multi-tier chain.
+                # Intermediate-tier rows are stored with input_cost/reward/output_value=0 (the
+                # full chain's cost/profit/value already lives on the top-level row — see
+                # assign_reaction), so summing every pending row never double-counts a
+                # multi-tier chain.
                 pending_isk_committed += a["input_cost"]
                 pending_net_profit += a["reward"]
+                pending_output_value += a["output_value"]
                 # Per-day rate for this specific job: its own real duration (runs × the
                 # product's own cycle time), not a shared cadence — once committed, an
                 # assignment's completion time is a fact, not a planning-time target.
@@ -1204,6 +1215,7 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
         "pending_isk_committed": round(pending_isk_committed, 2),
         "pending_net_profit": round(pending_net_profit, 2),
         "pending_net_profit_per_day": round(pending_net_profit_per_day, 2),
+        "pending_output_value": round(pending_output_value, 2),
     }
 
 
