@@ -1507,9 +1507,13 @@ function _rxOrderBarHtml(o) {
 function _renderRxOrdersList(orders) {
   const el = document.getElementById('rxOrdersContent');
   if (!el) return;
-  if (!orders.length) { el.innerHTML = '<div class="pp-empty">No customer orders yet — "+ New order" to track one.</div>'; return; }
   const open = orders.filter(o => o.status === 'open');
   const history = orders.filter(o => o.status !== 'open');
+  // Default fold state: collapsed when there's nothing open to act on, expanded when there is.
+  // Only sets the default (on tab-open / after an order mutation) — the user can still fold/unfold.
+  const det = document.getElementById('rxOrdersDetails');
+  if (det) det.open = open.length > 0;
+  if (!orders.length) { el.innerHTML = '<div class="pp-empty">No customer orders yet — "+ New order" to track one.</div>'; return; }
   const row = o => `
     <div class="rx-order-row" onclick="_rxOpenOrderDetail(${o.id})">
       <div class="rx-order-info">
