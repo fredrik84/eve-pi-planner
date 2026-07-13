@@ -172,6 +172,8 @@ def list_characters(pp_session: str = Cookie(default=None)):
             SELECT character_id, character_name, token_expiry, refresh_token,
                    interplanetary_consolidation, command_center_upgrades,
                    planetology, advanced_planetology, COALESCE(is_dummy, 0) AS is_dummy,
+                   COALESCE(mass_reactions, 0) AS mass_reactions,
+                   COALESCE(advanced_mass_reactions, 0) AS advanced_mass_reactions,
                    COALESCE(scopes, '') AS scopes
             FROM pp_characters WHERE context_id=?
         """, (context_id,)).fetchall()
@@ -223,6 +225,57 @@ def list_characters(pp_session: str = Cookie(default=None)):
                  "prog_days": y["prog_days"], "ts": y["scanned_ts"]})
     except Exception:
         yield_hist = {}
+
+    # Running reaction jobs per character — the Reactions tool tracks these in pp_char_industry_jobs;
+    # surfaced here so the Characters tab shows a toon's active reactions alongside its PI colonies
+    # (the parallel the user asked for). Only present for characters opted into job tracking and
+    # only after a jobs refresh has populated the table — absent otherwise, not an error. Same DB as
+    # the SDE `types` table, so product names resolve in one connection.
+    reaction_jobs_by_char: dict[int, list] = {}
+    try:
+        _raw_jobs: list[tuple] = []   # (character_id, job dict) for active reaction jobs
+        _needed_type_ids: set[int] = set()
+        for j in (con.execute("""
+            SELECT ij.character_id, ij.jobs_json
+            FROM pp_char_industry_jobs ij
+            JOIN pp_characters ch ON ch.character_id = ij.character_id
+            WHERE ch.context_id=?
+        """, (context_id,)).fetchall() if context_id else []):
+            try:
+                jobs = _json.loads(j["jobs_json"]) if j["jobs_json"] else []
+            except Exception:
+                continue
+            for job in jobs:
+                if job.get("activity_id") != 11 or job.get("status") not in ("active", "paused", "ready"):
+                    continue
+                _raw_jobs.append((j["character_id"], job))
+                if job.get("product_type_id"):
+                    _needed_type_ids.add(job["product_type_id"])
+        type_names: dict[int, str] = {}
+        if _needed_type_ids:
+            ph = ",".join("?" * len(_needed_type_ids))
+            type_names = {t["type_id"]: t["name"]
+                          for t in con.execute(f"SELECT type_id, name FROM types WHERE type_id IN ({ph})",
+                                               list(_needed_type_ids))}
+        for cid, job in _raw_jobs:
+            end = job.get("end_date")
+            hours_left = None
+            if end:
+                try:
+                    end_ts = datetime.fromisoformat(end.replace("Z", "+00:00")).timestamp()
+                    hours_left = round((end_ts - time.time()) / 3600.0, 1)
+                except Exception:
+                    pass
+            reaction_jobs_by_char.setdefault(cid, []).append({
+                "name": type_names.get(job.get("product_type_id"), str(job.get("product_type_id"))),
+                "runs": job.get("runs"),
+                "status": job.get("status"),
+                "facility_name": job.get("facility_name"),
+                "hours_left": hours_left,
+            })
+    except Exception:
+        reaction_jobs_by_char = {}
+
     con.close()
 
     char_planets: dict[int, list] = {}
@@ -371,6 +424,14 @@ def list_characters(pp_session: str = Cookie(default=None)):
             "adv_planetology":r["advanced_planetology"],
             "planets":        my_planets,
             "next_data_at":   next_data_at,
+            # Reaction skills + capacity (mirrors the PI skill stats above). reaction_slots =
+            # 1 base + 1/level of Mass Reactions + 1/level of Advanced Mass Reactions, capped at
+            # the game's real max of 11 (same formula as reactions.reaction_slots).
+            "mass_reactions":     r["mass_reactions"],
+            "adv_mass_reactions": r["advanced_mass_reactions"],
+            "reaction_slots":     min(11, 1 + r["mass_reactions"] + r["advanced_mass_reactions"]),
+            "reactions_opted_in": "read_character_jobs" in sc,
+            "reaction_jobs":      reaction_jobs_by_char.get(r["character_id"], []),
         })
     _admin, _tester = admin_and_tester_status_for_context(context_id)
     from app.groups import managed_group_ids, caller_allowed_pages

@@ -639,7 +639,22 @@ function renderCharacters(chars, loggedIn) {
         <span title="Command Center Upgrades level">CCU ${c.ccu}</span>
         ${c.planetology != null ? `<span title="Planetology skill">Planetology ${c.planetology}</span>` : ''}
         ${c.adv_planetology != null ? `<span title="Advanced Planetology skill">Adv ${c.adv_planetology}</span>` : ''}
+        ${_featureActive('reactions') && (c.reactions_opted_in || c.reaction_slots > 1)
+          ? `<span title="Reaction slots — 1 base + Mass Reactions + Advanced Mass Reactions">RX ${c.reaction_slots} slot${c.reaction_slots !== 1 ? 's' : ''}</span>` : ''}
       </div>`;
+
+    // Running reaction jobs, mirroring the PI colony list above — only for characters opted into
+    // job tracking (?reactions=1). Populated from pp_char_industry_jobs via list_characters; empty
+    // until a jobs refresh has run (tab-open / Rescan / the Reactions "Refresh jobs" button).
+    const rxJobs = Array.isArray(c.reaction_jobs) ? c.reaction_jobs : [];
+    const rxBlock = (_featureActive('reactions') && c.reactions_opted_in)
+      ? `<div class="pp-char-rx">
+           <div class="pp-char-rx-title">Reactions · ${rxJobs.length}/${c.reaction_slots} slot${c.reaction_slots !== 1 ? 's' : ''} running</div>
+           ${rxJobs.length
+             ? rxJobs.map(j => `<div class="pp-char-rx-job"><span class="pp-char-rx-name">${_esc(j.name)}</span><span class="pp-char-rx-meta">${j.runs != null ? j.runs + ' run' + (j.runs !== 1 ? 's' : '') : ''}${j.hours_left != null ? ' · ' + _fmtHours(j.hours_left) + ' left' : ''}${j.facility_name ? ' · ' + _esc(j.facility_name) : ''}</span></div>`).join('')
+             : '<div class="pp-char-rx-empty">No reaction jobs running — install some from the Reactions tab.</div>'}
+         </div>`
+      : '';
 
     // ESI caches each colony independently — next_data_at is only set when EVERY one of this
     // character's planets is still within its cache window, i.e. a rescan right now is
@@ -661,6 +676,7 @@ function renderCharacters(chars, loggedIn) {
         <div class="pp-char-body">
           ${stats}
           <div class="pp-char-planet-list">${planetRows}</div>
+          ${rxBlock}
           <div class="pp-char-actions">
             <button class="pp-char-rescan" ${c.token_ok ? '' : 'disabled'} onclick="rescanCharacter(${c.character_id}, this)" title="${c.token_ok ? "Re-scan just this character's colonies from ESI" : 'Token expired — re-add this character first'}">Rescan this character</button>
             ${cacheHint}

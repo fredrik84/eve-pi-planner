@@ -157,6 +157,14 @@
 .dummy-num { max-width: 90px; }
 .pp-char-del:hover { color: #e06060; background: none; }
 
+/* Running reaction jobs, shown under a character's PI colony list (Reactions-tool users only) */
+.pp-char-rx { margin-top: 6px; padding-top: 6px; border-top: 1px solid #161a26; }
+.pp-char-rx-title { font-size: 11px; color: var(--clr-stat-label); margin-bottom: 3px; }
+.pp-char-rx-job { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; font-size: 12px; padding: 1px 0; }
+.pp-char-rx-name { color: #c0b0e0; font-weight: 600; }
+.pp-char-rx-meta { color: #56607a; font-size: 11px; font-family: 'Consolas', monospace; }
+.pp-char-rx-empty { font-size: 11px; color: #56607a; font-style: italic; }
+
 .pp-target-form {
   padding: 12px 14px;
   display: grid;
