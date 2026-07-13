@@ -567,6 +567,12 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
         # output quantity for the live output-value estimate below.
         output_qty_by_type = {r["output_type_id"]: r["output_qty"]
                                for r in con.execute("SELECT output_type_id, output_qty FROM reactions")}
+        # Product names for the running-job display — a running job carries only its product
+        # type_id from ESI, and the frontend's opportunity-list name lookup misses anything not
+        # currently in that list (it showed "#16665" for Hexite). Bounded to reaction outputs
+        # (~68 rows), so this is cheap and always complete.
+        name_by_type = {r["type_id"]: r["name"] for r in con.execute(
+            "SELECT type_id, name FROM types WHERE type_id IN (SELECT output_type_id FROM reactions)")}
     finally:
         con.close()
 
@@ -682,6 +688,7 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
                 "character_id": c["character_id"],
                 "character_name": c["character_name"],
                 "product_type_id": tid,
+                "name": name_by_type.get(tid),
                 "runs": j.get("runs"),
                 "facility_name": j.get("facility_name"),
                 "status": j.get("status"),

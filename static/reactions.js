@@ -389,8 +389,9 @@ function _renderReactionsDashboard(data) {
     // Sorted by product name (running AND pending) so same-product squares cluster together in
     // the row instead of appearing in arbitrary insertion order — several interleaved products
     // was the actual "too messy to read off" complaint, not just the missing summary below.
+    const _jobName = j => j.name || _rxProductName(j.product_type_id);
     const jobs = (jobsByChar.get(c.character_name) || [])
-      .slice().sort((a, b) => _rxProductName(a.product_type_id).localeCompare(_rxProductName(b.product_type_id)));
+      .slice().sort((a, b) => _jobName(a).localeCompare(_jobName(b)));
     const pending = (c.pending || [])
       .slice().sort((a, b) => a.name.localeCompare(b.name) || a.runs - b.runs);
     const squares = jobs.map(j => {
@@ -400,7 +401,7 @@ function _renderReactionsDashboard(data) {
       // An "orphan" is a job running in-game with no plan slot (installed outside this tool). It's
       // valued in the totals but is NOT part of the recurring loadout until adopted — the ⊕ badge
       // adds it to the plan so it re-appears as "to install" (and joins the shopping list) next cycle.
-      const tip = `${_rxProductName(j.product_type_id)} — ${runsLabel ? runsLabel + ' runs — ' : ''}finished in ${timer}${j.facility_name ? ' — ' + j.facility_name : ''}${j.orphan ? ' — NOT in your plan (orphan)' : ''}`;
+      const tip = `${_jobName(j)} — ${runsLabel ? runsLabel + ' runs — ' : ''}finished in ${timer}${j.facility_name ? ' — ' + j.facility_name : ''}${j.orphan ? ' — NOT in your plan (orphan)' : ''}`;
       const orphanBadge = j.orphan
         ? `<span class="rx-slot-orphan-badge" title="Not in your plan — click to add it so it recurs next cycle" onclick="event.stopPropagation();_rxAdoptOrphan(${j.character_id}, ${j.product_type_id}, ${j.runs || 0}, this)">⊕ plan</span>`
         : '';
@@ -493,11 +494,17 @@ function _renderReactionsDashboard(data) {
   // resolution) was removed 2026-07-13; each pending slot's own red ⊘ square in the loadout
   // below is reference enough.
   const pendingCount = [...todoGroups.values()].reduce((sum, g) => sum + g.count, 0);
-  // Soonest-finishing running job — data.running is already sorted ascending by hours_left
-  // (see get_industry_jobs), so the first entry is "the next thing that'll need attention."
-  const soonest = (data.running || []).find(r => r.hours_left != null);
-  const timeLeftVal = soonest ? _fmtHours(soonest.hours_left) : '—';
-  const timeLeftLbl = soonest ? `Time left · ${_rxProductName(soonest.product_type_id)}` : 'Time left';
+  // "Middle of the road" completion, not the soonest: the earliest job finishing badly
+  // under-represents when the whole batch is actually done. Use the MEDIAN running job — a real
+  // job (real product + time), so it's honest rather than a synthetic average, and its name comes
+  // straight from the backend now (was showing a raw "#16665" via the opportunity-list fallback).
+  const _runTimed = (data.running || []).filter(r => r.hours_left != null).sort((a, b) => a.hours_left - b.hours_left);
+  const _medJob = _runTimed.length ? _runTimed[Math.floor(_runTimed.length / 2)] : null;
+  const timeLeftVal = _medJob ? _fmtHours(_medJob.hours_left) : '—';
+  const _medName = _medJob ? (_medJob.name || _rxProductName(_medJob.product_type_id)) : '';
+  const timeLeftLbl = _medJob
+    ? `Time left · ${_esc(_medName)}${_runTimed.length > 1 ? ` (median of ${_runTimed.length})` : ''}`
+    : 'Time left';
 
   const usedSlots = data.total_slots - data.free_slots;
   const overviewTiles = `<div class="an-stats">
