@@ -50,6 +50,14 @@ async function rescanAll() {
       if (!r.ok) failed.push(targets[i]);
     } catch (e) { failed.push(targets[i]); }
   }
+  // Reaction jobs live behind a separate ESI endpoint from colonies — pull them on a full rescan
+  // too, so the general Rescan button refreshes everything (not just PI) for anyone using the
+  // Reactions tool. force=1 (explicit user action); the endpoint no-ops for non-opted-in toons.
+  // Awaited BEFORE loadCharacters so the refreshed jobs are already in the charlist payload it
+  // fetches (refresh clears the charlist cache), surfacing them in the Characters tab immediately.
+  if (typeof _featureActive === 'function' && _featureActive('reactions') && typeof _rxRefreshJobs === 'function') {
+    try { await _rxRefreshJobs(true); } catch (e) { /* best-effort — never block the colony rescan */ }
+  }
   _rescanning = false;
   if (typeof loadCharacters === 'function') await loadCharacters();   // refresh _ppCharsData + header
   if (localStorage.getItem('activeTab') === 'dashboard' && typeof onDashboardTabOpen === 'function') await onDashboardTabOpen();

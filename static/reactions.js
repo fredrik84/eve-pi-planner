@@ -74,6 +74,11 @@ function onReactionsTabOpen() {
   const advDetails = document.getElementById('rxAdvancedDetails');
   if (advDetails && advDetails.open) _rxLoadAdvancedTable(true);
   _loadReactionsDashboard();
+  // Pull live job status from ESI in the background (respects ESI's ~5min cache server-side, so
+  // flipping tabs won't hammer it) and reload the dashboard if anything actually refreshed. The
+  // GET above only reads our cached job table — without this, a job you just installed in-game
+  // never appears, since nothing else triggers the ESI fetch.
+  _rxRefreshJobs(false);
   // Lazy: the shopping list is folded by default (see #rxShoppingDetails) and only worth
   // computing when actually visible — market-price lookups behind it can take a moment, and
   // most tab-opens/refreshes don't need this data recomputed at all. _onRxShoppingToggle
@@ -291,6 +296,20 @@ function _loadReactionsDashboard() {
     .catch(err => {
       el.innerHTML = `<div class="pp-empty">${_esc(err.message)}</div>`;
     });
+}
+
+// Trigger the ESI job-status fetch (POST /api/reactions/jobs/refresh) and reload the dashboard if
+// it actually pulled anything. force=true (manual "Refresh jobs" button) bypasses the server's
+// ~5min ESI-cache staleness guard; force=false (tab-open) lets the server skip characters still
+// within ESI's cache window. Best-effort — a failed refresh just leaves the cached view in place.
+function _rxRefreshJobs(force, btn) {
+  const orig = btn ? btn.textContent : null;
+  if (btn) { btn.disabled = true; btn.textContent = 'Refreshing…'; }
+  return fetch('/api/reactions/jobs/refresh' + (force ? '?force=1' : ''), { method: 'POST' })
+    .then(r => (r.ok ? r.json() : null))
+    .then(res => { if (res && (res.characters_refreshed > 0 || force)) _loadReactionsDashboard(); })
+    .catch(() => {})
+    .finally(() => { if (btn) { btn.disabled = false; btn.textContent = orig; } });
 }
 
 function _renderReactionsDashboard(data) {

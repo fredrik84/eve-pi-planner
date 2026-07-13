@@ -28,7 +28,7 @@ from pydantic import BaseModel
 from app.sde import get_connection, load_pi_data, ensure_once
 from app.market import fetch_market_data
 from app.industry_cost import fetch_system_cost_index, fetch_adjusted_prices
-from app.cache import cache_get_json, cache_set_json
+from app.cache import cache_get_json, cache_set_json, cache_invalidate, charlist_key
 from app.esi import require_context, ESI_BASE, _get_valid_token
 from app.groups import member_group, is_group_manager
 
@@ -954,12 +954,19 @@ def fetch_corp_industry_jobs(character_id: int, access_token: str) -> list[dict]
     return reaction_jobs
 
 
+# ESI's industry-jobs endpoint caches ~5 min; a plain tab-open refresh must not re-hit ESI more
+# often than that (both to respect CCP's cache and to keep the Reactions tab snappy). The manual
+# "Refresh jobs" button passes force=1 to bypass this and pull immediately.
+_JOBS_CACHE_TTL = 300
+
+
 @router.post("/api/reactions/jobs/refresh")
-def refresh_industry_jobs(context_id: int = Depends(require_context)):
-    """Refresh the caller's own characters' cached reaction-job list — only characters that
-    have actually granted the industry-jobs scope (opted in via ?reactions=1 login) are
+def refresh_industry_jobs(force: int = 0, context_id: int = Depends(require_context)):
+    """Refresh the caller's own characters' cached reaction-job list from ESI — only characters
+    that have actually granted the industry-jobs scope (opted in via ?reactions=1 login) are
     fetched; others are silently skipped, not an error, since most PI-planner accounts never
-    opt into this."""
+    opt into this. Called on Reactions tab-open (respecting ESI's ~5min cache via _JOBS_CACHE_TTL)
+    and by the manual "Refresh jobs" button (force=1, bypasses the staleness guard)."""
     ensure_industry_jobs_table()
     con = get_connection()
     try:
@@ -967,13 +974,24 @@ def refresh_industry_jobs(context_id: int = Depends(require_context)):
             "SELECT character_id, scopes FROM pp_characters WHERE context_id=? AND COALESCE(is_dummy,0)=0",
             (context_id,),
         ).fetchall()
+        # Last-fetch time per character, read up front (one connection, closed before the ESI loop
+        # below) so the staleness guard doesn't re-hit ESI for a character refreshed seconds ago.
+        fetched_at_by_char = {r["character_id"]: r["fetched_at"] for r in con.execute(
+            "SELECT character_id, fetched_at FROM pp_char_industry_jobs"
+        )}
     finally:
         con.close()
 
+    now = _time.time()
     refreshed = 0
+    skipped = 0
     for c in chars:
         scopes = c["scopes"] or ""
         if "read_character_jobs" not in scopes:
+            continue
+        prev = fetched_at_by_char.get(c["character_id"])
+        if not force and prev is not None and (now - prev) < _JOBS_CACHE_TTL:
+            skipped += 1  # still within ESI's own cache window — a re-fetch would return the same data
             continue
         token = _get_valid_token(c["character_id"])
         if not token:
@@ -997,7 +1015,12 @@ def refresh_industry_jobs(context_id: int = Depends(require_context)):
         finally:
             con.close()
         refreshed += 1
-    return {"ok": True, "characters_refreshed": refreshed}
+    # The Characters tab shows each toon's running reaction jobs (see list_characters), served
+    # from the same Redis-cached charlist payload — so a refresh that actually pulled new jobs must
+    # bust that cache or the tab keeps showing stale/absent jobs until the next colony rescan.
+    if refreshed:
+        cache_invalidate(charlist_key(context_id))
+    return {"ok": True, "characters_refreshed": refreshed, "characters_skipped": skipped}
 
 
 def reaction_slots(character_row: dict) -> int:
