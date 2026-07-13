@@ -27,7 +27,7 @@
   <link rel="stylesheet" href="/style-wizard.css?v=2">
   <link rel="stylesheet" href="/style-layout-admin.css?v=18">
   <link rel="stylesheet" href="/style-analysis-dashboard.css?v=7">
-  <link rel="stylesheet" href="/style-misc-responsive.css?v=6">
+  <link rel="stylesheet" href="/style-misc-responsive.css?v=7">
 </head>
 <body>
   <header>
@@ -46,19 +46,22 @@
     <aside class="sidebar" id="sidebar">
       <nav class="sidebar-nav">
         <button class="tab" data-tab="dashboard" id="dashboardNavTab"><span class="nav-ico">HM</span><span class="nav-lbl">Dashboard</span></button>
-        <button class="tab" data-tab="analyze"><span class="nav-ico">AN</span><span class="nav-lbl">Setup Analysis</span></button>
-        <button class="tab" data-tab="planetary"><span class="nav-ico">PP</span><span class="nav-lbl">Planetary Planning</span></button>
         <button class="settings-mobile-tab" id="settingsMobileTab" style="display:none" onclick="openSettingsModal()"><span class="nav-ico">ST</span><span class="nav-lbl">Settings</span></button>
         <button class="tab" id="adminMobileTab" data-tab="admin"><span class="nav-ico">AD</span><span class="nav-lbl">Admin</span></button>
-        <div class="nav-group" id="piToolsNavGroup">
-          <div class="nav-group-hd"><span class="nav-ico">PI</span><span class="nav-lbl">PI Tools</span></div>
+        <div class="nav-group nav-group-tabs" id="piNavGroup">
+          <div class="nav-group-hd"><span class="nav-ico">PI</span><span class="nav-lbl">Planetary Industry</span></div>
+          <button class="tab tab-sub" data-tab="analyze"><span class="nav-ico">AN</span><span class="nav-lbl">Setup Analysis</span></button>
+          <button class="tab tab-sub" data-tab="planetary"><span class="nav-ico">PP</span><span class="nav-lbl">Planetary Planning</span></button>
           <button class="tab tab-sub" data-tab="planner" data-pimode="refill"><span class="nav-ico">RF</span><span class="nav-lbl">Refill a plan</span></button>
           <button class="tab tab-sub active" data-tab="planner" data-pimode="build"><span class="nav-ico">FB</span><span class="nav-lbl">Find Buildables</span></button>
+          <button class="tab tab-sub" data-tab="layout"><span class="nav-ico">FL</span><span class="nav-lbl">Factory Layout</span></button>
+          <button class="tab tab-sub" data-tab="planetdb"><span class="nav-ico">DB</span><span class="nav-lbl">Planet DB</span></button>
+          <button class="tab tab-sub" data-tab="howitworks"><span class="nav-ico">i</span><span class="nav-lbl">How it works</span></button>
         </div>
-        <button class="tab" data-tab="layout"><span class="nav-ico">FL</span><span class="nav-lbl">Factory Layout</span></button>
-        <button class="tab" data-tab="planetdb"><span class="nav-ico">DB</span><span class="nav-lbl">Planet DB</span></button>
-        <button class="tab" data-tab="reactions"><span class="nav-ico">RX</span><span class="nav-lbl">Reactions</span></button>
-        <button class="tab" data-tab="howitworks"><span class="nav-ico">i</span><span class="nav-lbl">How it works</span></button>
+        <div class="nav-group nav-group-tabs" id="industryNavGroup">
+          <div class="nav-group-hd"><span class="nav-ico">IN</span><span class="nav-lbl">Industry</span></div>
+          <button class="tab tab-sub" data-tab="reactions"><span class="nav-ico">RX</span><span class="nav-lbl">Reactions</span></button>
+        </div>
         <button class="tab" data-tab="contribute"><span class="nav-ico">?</span><span class="nav-lbl">Contribute</span></button>
         <div class="nav-group" id="adminNavGroup">
           <div class="nav-group-hd"><span class="nav-ico">AD</span><span class="nav-lbl">Admin</span></div>
@@ -1410,7 +1413,7 @@ PVF-N9    3         95                 60             80                  100   
 
   <script src="/utils.js?v=4"></script>
   <script src="/app.js?v=34"></script>
-  <script src="/planetary.js?v=357"></script>
+  <script src="/planetary.js?v=358"></script>
   <script src="/dashboard.js?v=21"></script>
   <script src="/admin.js?v=16"></script>
   <script src="/planetdb.js?v=3"></script>

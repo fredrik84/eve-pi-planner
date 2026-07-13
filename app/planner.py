@@ -1772,11 +1772,17 @@ def dashboard(pp_session: str = Cookie(default=None)):
             reactions_net_profit = rx.get("pending_net_profit", 0.0)
             reactions_net_profit_per_day = rx.get("pending_net_profit_per_day", 0.0)
             reactions_isk_committed = rx.get("pending_isk_committed", 0.0)
-            soonest = next((r for r in (rx.get("running") or []) if r.get("hours_left") is not None), None)
-            if soonest:
-                reactions_time_left_hours = round(soonest["hours_left"], 1)
-                reactions_time_left_loc = types.get(soonest["product_type_id"], {}).get(
-                    "name", str(soonest["product_type_id"]))
+            # "Middle of the road" completion, not the soonest: the earliest-finishing job
+            # badly under-represents when the whole batch is actually done. Use the MEDIAN
+            # running job (a real job, so the reported time + product name stay honest) —
+            # matches the Reactions tab's own "Time left" tile.
+            timed = sorted((r for r in (rx.get("running") or []) if r.get("hours_left") is not None),
+                           key=lambda r: r["hours_left"])
+            if timed:
+                med = timed[len(timed) // 2]
+                reactions_time_left_hours = round(med["hours_left"], 1)
+                reactions_time_left_loc = med.get("name") or types.get(
+                    med["product_type_id"], {}).get("name", str(med["product_type_id"]))
     except Exception:
         pass
 

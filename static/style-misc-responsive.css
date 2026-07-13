@@ -132,12 +132,21 @@ body.nav-collapsed .admin-nav-item .nav-lbl { display: none; }
      button replaces it in the bottom bar. */
   .sidebar .nav-group,
   .sidebar [data-tab="planetary"],
+  .sidebar [data-tab="planner"],
   .sidebar [data-tab="layout"],
   .sidebar [data-tab="planetdb"],
   .sidebar [data-tab="contribute"],
   .sidebar [data-tab="characters"],
   .sidebar-discord { display: none !important; }
   .sidebar-donate { display: none !important; }
+
+  /* The desktop tab-groups (Planetary Industry / Industry) are purely visual — on phones
+     collapse them to display:contents so their child tabs sit directly on the bottom bar,
+     exactly as they did before grouping (Dashboard · Setup Analysis · How it works ·
+     Reactions · Admin). #adminNavGroup keeps the display:none above — it's replaced on the
+     bar by the dedicated #adminMobileTab button. */
+  .sidebar .nav-group.nav-group-tabs { display: contents !important; }
+  .sidebar .nav-group-tabs > .nav-group-hd { display: none !important; }
 
   /* Keep the Dashboard tab on the bar even when logged out — its panel is the
      login call-to-action, so the bar stays consistent and shows an active item.

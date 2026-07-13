@@ -291,8 +291,6 @@ function _applyPageRestriction() {
     const hidden = _isPageRestricted(key);
     document.querySelectorAll(`.tab[data-tab="${key}"]`).forEach(el => { el.style.display = hidden ? 'none' : ''; });
   });
-  const piGroup = document.getElementById('piToolsNavGroup');
-  if (piGroup) piGroup.style.display = _isPageRestricted('planner') ? 'none' : '';
   // If the currently active tab just became restricted, bounce off it immediately rather than
   // leaving a blocked page on screen.
   const active = localStorage.getItem('activeTab');
