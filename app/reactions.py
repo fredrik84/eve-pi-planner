@@ -1313,7 +1313,6 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
     total_slots = 0
     used_slots = 0
     tracked_any = False
-    fulfilled_ids: list[int] = []
     pending_isk_committed = pending_net_profit = pending_net_profit_per_day = 0.0
     pending_output_value = 0.0
     for c in chars:
@@ -1341,8 +1340,15 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
         pending = []
         for a in assignments.get(c["character_id"], []):
             if running_type_counts.get(a["type_id"], 0) > 0:
+                # A live ESI job of this product is running — this planned slot is TEMPORARILY
+                # covered by it, so it's hidden from the "to install" list (the running-job square
+                # already occupies that slot in the loadout). It is NOT deleted: the plan is a
+                # persistent loadout, so when the job finishes and drops out of ESI this row
+                # reappears as "to install" again. (Was a destructive DELETE — that silently wiped
+                # the plan the moment a job started, so slots vanished on refresh and never came
+                # back; see the count-aware matching note above for why this is per-job, not
+                # per-type.)
                 running_type_counts[a["type_id"]] -= 1
-                fulfilled_ids.append(a["id"])  # ESI now confirms this specific job is actually running — clear it
             else:
                 # Chain-tier rows (intermediate reactions) have no output value worth counting
                 # here — their product is consumed by the next tier up, not sold; only the
@@ -1400,15 +1406,6 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
                 "status": j.get("status"),
                 "hours_left": hours_left,
             })
-
-    if fulfilled_ids:
-        con = get_connection()
-        try:
-            placeholders = ",".join("?" * len(fulfilled_ids))
-            con.execute(f"DELETE FROM pp_reaction_assignments WHERE id IN ({placeholders})", fulfilled_ids)
-            con.commit()
-        finally:
-            con.close()
 
     return {
         "tracked": tracked_any,
