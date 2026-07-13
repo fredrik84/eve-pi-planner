@@ -1348,53 +1348,45 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
 
         pending = []
         for a in assignments.get(c["character_id"], []):
-            if running_type_counts.get(a["type_id"], 0) > 0:
-                # A live ESI job of this product is running — this planned slot is TEMPORARILY
-                # covered by it, so it's hidden from the "to install" list (the running-job square
-                # already occupies that slot in the loadout). It is NOT deleted: the plan is a
-                # persistent loadout, so when the job finishes and drops out of ESI this row
-                # reappears as "to install" again. (Was a destructive DELETE — that silently wiped
-                # the plan the moment a job started, so slots vanished on refresh and never came
-                # back; see the count-aware matching note above for why this is per-job, not
-                # per-type.)
+            # A live ESI job of this product covers a planned slot: it's hidden from the "to
+            # install" list (the running-job square already occupies that slot in the loadout) and
+            # NOT deleted — the plan is a persistent loadout, so when the job finishes and drops
+            # out of ESI this row reappears as "to install". Count-aware, so N running jobs cover
+            # exactly N of this product's planned rows.
+            is_running = running_type_counts.get(a["type_id"], 0) > 0
+            if is_running:
                 running_type_counts[a["type_id"]] -= 1
-            else:
-                # Chain-tier rows (intermediate reactions) have no output value worth counting
-                # here — their product is consumed by the next tier up, not sold; only the
-                # top-level row's own output is the thing you'd actually sell. assign_reaction
-                # always stores chain-tier rows with input_cost=reward=0.0 (the whole chain's
-                # cost/profit is already rolled into the top-level row), so that's also a
-                # reliable signal to skip pricing them here — matches the same convention that
-                # already lets input_cost/reward be summed flatly without filtering by tier.
-                # Real market data required otherwise (no live price = no guess), same
-                # "skip rather than guess" rule _build_opportunities already follows.
-                is_chain_tier = a["input_cost"] == 0 and a["reward"] == 0
-                m = market_by_type.get(a["type_id"])
-                out_qty_per_run = output_qty_by_type.get(a["type_id"], 0.0)
-                # Value the output at the Fuzzworks SELL (list) price — what the product is worth on
-                # the market if you sell it the normal way — matching the opportunity list's
-                # order_value. Was buy_price (instant-dump-to-buy-orders), which understated every
-                # planned batch vs. the same product's number in the Advanced/opportunity table.
-                row_output_value = (a["runs"] * out_qty_per_run * m["sell_price"]) if (m and out_qty_per_run and not is_chain_tier) else 0.0
+            # Chain-tier rows (intermediate reactions) carry no sellable output — their product is
+            # consumed by the next tier up; assign_reaction stores them with input_cost=reward=0,
+            # so they contribute 0 to every total below (the whole chain's cost/profit already
+            # lives on the top-level row) and can't double-count a multi-tier chain.
+            is_chain_tier = a["input_cost"] == 0 and a["reward"] == 0
+            m = market_by_type.get(a["type_id"])
+            out_qty_per_run = output_qty_by_type.get(a["type_id"], 0.0)
+            # Output valued at the Fuzzworks SELL (list) price — what the product is worth on the
+            # market sold the normal way — matching the opportunity list's order_value.
+            row_output_value = (a["runs"] * out_qty_per_run * m["sell_price"]) if (m and out_qty_per_run and not is_chain_tier) else 0.0
+            # The committed totals cover the WHOLE pipeline — running jobs AND not-yet-started
+            # plan rows — not just the "to install" ones. A running job is still committed ISK with
+            # output value coming; excluding it (the old behavior) made these numbers collapse the
+            # moment a job started. Real market data required to price it (no live price = no guess).
+            pending_isk_committed += a["input_cost"]
+            pending_net_profit += a["reward"]
+            pending_output_value += row_output_value
+            # Per-day rate for this specific job: its own real duration (runs × the product's own
+            # cycle time), not a shared cadence — a committed job's completion time is a fact.
+            if a["reward"] > 0:
+                duration_hours = a["runs"] * cycle_hours_by_type.get(a["type_id"], 0)
+                if duration_hours > 0:
+                    pending_net_profit_per_day += a["reward"] / (duration_hours / 24)
+            # Only NOT-yet-running rows show up as "to install" squares.
+            if not is_running:
                 pending.append({
                     "assignment_id": a["id"], "type_id": a["type_id"], "name": a["name"], "runs": a["runs"],
                     "tier_order": a["tier_order"], "input_cost": a["input_cost"], "reward": a["reward"],
                     "output_value": round(row_output_value, 2),
                     "order_id": a.get("order_id"), "order_label": order_labels.get(a.get("order_id")),
                 })
-                # Intermediate-tier rows are stored with input_cost/reward=0 (the full chain's
-                # cost/profit already lives on the top-level row — see assign_reaction), so
-                # summing every pending row never double-counts a multi-tier chain.
-                pending_isk_committed += a["input_cost"]
-                pending_net_profit += a["reward"]
-                pending_output_value += row_output_value
-                # Per-day rate for this specific job: its own real duration (runs × the
-                # product's own cycle time), not a shared cadence — once committed, an
-                # assignment's completion time is a fact, not a planning-time target.
-                if a["reward"] > 0:
-                    duration_hours = a["runs"] * cycle_hours_by_type.get(a["type_id"], 0)
-                    if duration_hours > 0:
-                        pending_net_profit_per_day += a["reward"] / (duration_hours / 24)
         used_slots += len(pending)
 
         characters.append({
