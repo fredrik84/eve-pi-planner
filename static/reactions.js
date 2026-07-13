@@ -1331,8 +1331,8 @@ function _rxSettingsFormHtml() {
       ${_rxTimeEffFieldHtml('rxSet', 'Time efficiency %')}
     </div>
     <div class="pp-card-hint" style="margin-top:2px">Reaction system + facility tax estimate real job-installation fees (EVE's system cost index × EIV, plus your structure's tax). Leave the system blank to skip this — nothing changes until it's set. Time efficiency % shortens every duration/runtime estimate the tool shows — there's no way to auto-detect this (ESI only reports a job's facility once it's already installed), so check your real in-game job duration against the formula's raw time and enter the % difference here.</div>
-    <div style="margin-top:8px">
-      <button class="pp-add-btn" onclick="_saveRxSettings()">Save</button>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:8px">
+      <button class="pp-add-btn" style="margin-left:0" onclick="_saveRxSettings()">Save</button>
       <span id="rxSettingsMsg" class="pp-card-hint"></span>
     </div>
     <div style="border-top:1px solid var(--clr-border);margin-top:16px"></div>`;
@@ -1397,8 +1397,8 @@ function _rxAccountSettingsFormHtml() {
       ${_rxTimeEffFieldHtml('rxAcct', 'Your time efficiency %')}
     </div>
     <div class="pp-card-hint" style="margin-top:2px">Reaction system + facility tax estimate real job-installation fees. Leave the system blank to skip this — nothing changes until it's set. Time efficiency % shortens every duration/runtime estimate — check your real in-game job duration against the formula's raw time and enter the % difference (we can't auto-detect this, ESI only reports a job's facility once it's already installed).</div>
-    <div style="margin-top:8px">
-      <button class="pp-add-btn" onclick="_saveRxAccountSettings()">Save my rate</button>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:8px">
+      <button class="pp-add-btn" style="margin-left:0" onclick="_saveRxAccountSettings()">Save my rate</button>
       <button class="pp-cancel-btn" onclick="_resetRxAccountSettings()">Use default instead</button>
       <span id="rxAcctSettingsMsg" class="pp-card-hint"></span>
     </div>`;
