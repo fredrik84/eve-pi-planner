@@ -62,7 +62,16 @@ WALLET_SCOPES = WALLET_SCOPE
 # rather than replacing them.
 INDUSTRY_JOBS_SCOPE  = "esi-industry.read_character_jobs.v1"
 STRUCTURES_SCOPE     = "esi-structures.read_character.v1"
-INDUSTRY_JOBS_SCOPES = f"{SCOPES} {INDUSTRY_JOBS_SCOPE} {STRUCTURES_SCOPE}"
+# A reaction installed "for corporation" (e.g. a shared corp hangar/reactor, not the character's
+# own personal jobs) only shows up via the CORPORATION industry-jobs endpoint, not the character
+# one above — confirmed 2026-07-13 (a real job installed at a corp POS never appeared under the
+# personal endpoint). Bundled into the same reactions opt-in rather than a separate login, since
+# anyone tracking reaction jobs at all plausibly has some installed this way. Requires the
+# character to actually hold the in-game Factory_Manager/Director corp role to read it — ESI
+# grants the OAuth scope regardless, but the corp jobs call itself 401s/403s without the role
+# (same "best-effort, skip don't error" shape as the wallet flow's role check).
+CORP_INDUSTRY_JOBS_SCOPE = "esi-industry.read_corporation_jobs.v1"
+INDUSTRY_JOBS_SCOPES = f"{SCOPES} {INDUSTRY_JOBS_SCOPE} {STRUCTURES_SCOPE} {CORP_INDUSTRY_JOBS_SCOPE}"
 
 # Wallet-only toons (corp-wallet scope, no planets scope) aren't PI characters. AND this into any
 # single-table pp_characters PI query to exclude them; legacy empty-scope chars are kept. Begins with

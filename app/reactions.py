@@ -922,6 +922,38 @@ def fetch_industry_jobs(character_id: int, access_token: str) -> list[dict]:
     return reaction_jobs
 
 
+def fetch_corp_industry_jobs(character_id: int, access_token: str) -> list[dict]:
+    """This character's reaction jobs installed FOR CORPORATION (a shared corp hangar/reactor,
+    not the character's personal jobs) — a real, confirmed gap: these never appear via the
+    per-character endpoint fetch_industry_jobs uses, only via the corp one, and only when the
+    character holds Factory_Manager/Director. Best-effort like the rest of this module: any
+    failure (missing role, no corp, network) returns [] rather than raising — one character's
+    corp-jobs lookup failing must never block their own personal jobs or any other character's
+    refresh. Filtered to `installer_id == character_id` — this reads the WHOLE corp's job queue
+    over ESI, but only this specific character's own installs are what a "my jobs" view should
+    show, not every corpmate's."""
+    try:
+        with httpx.Client(timeout=10) as client:
+            pub = client.get(f"{ESI_BASE}/characters/{character_id}/").json()
+            corp_id = pub.get("corporation_id")
+            if not corp_id:
+                return []
+            resp = client.get(
+                f"{ESI_BASE}/corporations/{corp_id}/industry/jobs/",
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
+            resp.raise_for_status()
+            jobs = resp.json()
+    except Exception:
+        return []
+
+    reaction_jobs = [j for j in jobs if j.get("activity_id") == 11 and j.get("installer_id") == character_id]
+    for j in reaction_jobs:
+        fac_id = j.get("facility_id")
+        j["facility_name"] = _resolve_structure_name(fac_id, access_token) if fac_id else "Unknown"
+    return reaction_jobs
+
+
 @router.post("/api/reactions/jobs/refresh")
 def refresh_industry_jobs(context_id: int = Depends(require_context)):
     """Refresh the caller's own characters' cached reaction-job list — only characters that
@@ -940,12 +972,20 @@ def refresh_industry_jobs(context_id: int = Depends(require_context)):
 
     refreshed = 0
     for c in chars:
-        if "read_character_jobs" not in (c["scopes"] or ""):
+        scopes = c["scopes"] or ""
+        if "read_character_jobs" not in scopes:
             continue
         token = _get_valid_token(c["character_id"])
         if not token:
             continue
         jobs = fetch_industry_jobs(c["character_id"], token)
+        # Only characters that re-authorised after the corp-jobs scope was added carry it —
+        # already-connected characters keep working (personal jobs only) until they reconnect,
+        # no forced re-auth. job_id is unique across BOTH endpoints (it's ESI's own job
+        # identifier), so a plain concat can't double-count even in the (shouldn't-happen) case
+        # of a job appearing in both responses.
+        if "read_corporation_jobs" in scopes:
+            jobs = jobs + fetch_corp_industry_jobs(c["character_id"], token)
         con = get_connection()
         try:
             con.execute(
