@@ -50,7 +50,18 @@ _RXS_DEFAULTS = {"import_isk_per_m3": 1200.0, "export_isk_per_m3": 1200.0, "expo
                   # No default reaction system on purpose — an unset system means job installation
                   # cost is skipped entirely (0 ISK effect), matching pre-feature behavior, rather
                   # than silently assuming some arbitrary system's cost index applies to you.
-                  "reaction_system": None, "facility_tax_pct": 0.0}
+                  "reaction_system": None, "facility_tax_pct": 0.0,
+                  # Real reaction job duration in-game is shorter than raw SDE cycle_time — reactor
+                  # efficiency rigs, skills, and structure/security bonuses all reduce it, and unlike
+                  # material consumption (REACTION_ME_REDUCTION, a single well-known T1 rig figure)
+                  # there's no one fixed number: it depends on the player's actual fit and where they
+                  # react, which we have NO way to detect (ESI only reports facility for a job
+                  # that's already installed, not one we're still planning, and a corp hangar
+                  # reachable from every character isn't tied to one structure anyway — confirmed
+                  # with the user 2026-07-13). So this is a manual figure, same pattern as
+                  # reaction_system/facility_tax_pct: 0% default (today's un-corrected behavior)
+                  # until a player sets their own observed reduction.
+                  "time_efficiency_pct": 0.0}
 _GLOBAL_SETTINGS_GROUP_ID = 0  # sentinel "no group" row — kept as a real (non-NULL) value since
 # a nullable PRIMARY KEY doesn't behave consistently across SQLite and Postgres.
 
@@ -85,7 +96,8 @@ def ensure_reaction_settings_table():
             )
         """)
         con.commit()
-        for coldef in ("reaction_system TEXT", "facility_tax_pct REAL NOT NULL DEFAULT 0"):
+        for coldef in ("reaction_system TEXT", "facility_tax_pct REAL NOT NULL DEFAULT 0",
+                       "time_efficiency_pct REAL NOT NULL DEFAULT 0"):
             try:
                 con.execute(f"ALTER TABLE pp_reaction_settings ADD COLUMN {coldef}")
                 con.commit()
@@ -118,7 +130,7 @@ def get_reaction_settings(group_id: int | None = None) -> dict:
     try:
         row = con.execute(
             "SELECT import_isk_per_m3, export_isk_per_m3, export_collateral_pct, "
-            "reaction_system, facility_tax_pct FROM pp_reaction_settings WHERE group_id=?", (gid,)
+            "reaction_system, facility_tax_pct, time_efficiency_pct FROM pp_reaction_settings WHERE group_id=?", (gid,)
         ).fetchone()
     finally:
         con.close()
@@ -130,6 +142,7 @@ def get_reaction_settings(group_id: int | None = None) -> dict:
         "export_collateral_pct": row["export_collateral_pct"],
         "reaction_system": row["reaction_system"],
         "facility_tax_pct": row["facility_tax_pct"] or 0.0,
+        "time_efficiency_pct": row["time_efficiency_pct"] or 0.0,
     }
 
 
@@ -145,7 +158,8 @@ def ensure_account_reaction_settings_table():
         )
     """)
     con.commit()
-    for coldef in ("reaction_system TEXT", "facility_tax_pct REAL NOT NULL DEFAULT 0"):
+    for coldef in ("reaction_system TEXT", "facility_tax_pct REAL NOT NULL DEFAULT 0",
+                   "time_efficiency_pct REAL NOT NULL DEFAULT 0"):
         try:
             con.execute(f"ALTER TABLE pp_account_reaction_settings ADD COLUMN {coldef}")
             con.commit()
@@ -160,7 +174,7 @@ def _account_reaction_settings_override(context_id: int) -> dict | None:
     try:
         row = con.execute(
             "SELECT import_isk_per_m3, export_isk_per_m3, export_collateral_pct, "
-            "reaction_system, facility_tax_pct FROM pp_account_reaction_settings WHERE context_id=?", (context_id,)
+            "reaction_system, facility_tax_pct, time_efficiency_pct FROM pp_account_reaction_settings WHERE context_id=?", (context_id,)
         ).fetchone()
     finally:
         con.close()
@@ -172,6 +186,7 @@ def _account_reaction_settings_override(context_id: int) -> dict | None:
         "export_collateral_pct": row["export_collateral_pct"],
         "reaction_system": row["reaction_system"],
         "facility_tax_pct": row["facility_tax_pct"] or 0.0,
+        "time_efficiency_pct": row["time_efficiency_pct"] or 0.0,
     }
 
 
@@ -196,6 +211,8 @@ class ReactionSettingsUpdate(BaseModel):
     # installation cost is skipped entirely rather than guessed.
     reaction_system: str | None = None
     facility_tax_pct: float = 0.0
+    # Fraction 0-1 (e.g. 0.532 for 53.2%) — see _RXS_DEFAULTS for why this can't be auto-detected.
+    time_efficiency_pct: float = 0.0
 
 
 @router.get("/api/reactions/settings")
@@ -240,13 +257,13 @@ def api_update_reaction_settings(req: ReactionSettingsUpdate, ctx: int = Depends
     try:
         con.execute(
             "INSERT INTO pp_reaction_settings (group_id, import_isk_per_m3, export_isk_per_m3, "
-            "export_collateral_pct, reaction_system, facility_tax_pct) "
-            "VALUES (?,?,?,?,?,?) ON CONFLICT (group_id) DO UPDATE SET "
+            "export_collateral_pct, reaction_system, facility_tax_pct, time_efficiency_pct) "
+            "VALUES (?,?,?,?,?,?,?) ON CONFLICT (group_id) DO UPDATE SET "
             "import_isk_per_m3=excluded.import_isk_per_m3, export_isk_per_m3=excluded.export_isk_per_m3, "
             "export_collateral_pct=excluded.export_collateral_pct, reaction_system=excluded.reaction_system, "
-            "facility_tax_pct=excluded.facility_tax_pct",
+            "facility_tax_pct=excluded.facility_tax_pct, time_efficiency_pct=excluded.time_efficiency_pct",
             (group["id"], req.import_isk_per_m3, req.export_isk_per_m3, req.export_collateral_pct,
-             (req.reaction_system or "").strip() or None, req.facility_tax_pct),
+             (req.reaction_system or "").strip() or None, req.facility_tax_pct, req.time_efficiency_pct),
         )
         con.commit()
     finally:
@@ -273,13 +290,13 @@ def api_update_account_reaction_settings(req: ReactionSettingsUpdate, ctx: int =
     try:
         con.execute(
             "INSERT INTO pp_account_reaction_settings (context_id, import_isk_per_m3, export_isk_per_m3, "
-            "export_collateral_pct, reaction_system, facility_tax_pct) "
-            "VALUES (?,?,?,?,?,?) ON CONFLICT (context_id) DO UPDATE SET "
+            "export_collateral_pct, reaction_system, facility_tax_pct, time_efficiency_pct) "
+            "VALUES (?,?,?,?,?,?,?) ON CONFLICT (context_id) DO UPDATE SET "
             "import_isk_per_m3=excluded.import_isk_per_m3, export_isk_per_m3=excluded.export_isk_per_m3, "
             "export_collateral_pct=excluded.export_collateral_pct, reaction_system=excluded.reaction_system, "
-            "facility_tax_pct=excluded.facility_tax_pct",
+            "facility_tax_pct=excluded.facility_tax_pct, time_efficiency_pct=excluded.time_efficiency_pct",
             (ctx, req.import_isk_per_m3, req.export_isk_per_m3, req.export_collateral_pct,
-             (req.reaction_system or "").strip() or None, req.facility_tax_pct),
+             (req.reaction_system or "").strip() or None, req.facility_tax_pct, req.time_efficiency_pct),
         )
         con.commit()
     finally:
@@ -301,12 +318,21 @@ def api_reset_account_reaction_settings(ctx: int = Depends(require_context)):
     return get_reaction_settings(group["id"] if group else None)
 
 
-def _load_reaction_graph(con) -> tuple[dict[int, list[dict]], dict[int, list[dict]]]:
+def _load_reaction_graph(con, time_efficiency_pct: float = 0.0) -> tuple[dict[int, list[dict]], dict[int, list[dict]]]:
     """Returns (reactions_by_output, inputs_by_reaction): reactions_by_output maps a product
     type_id to the list of reaction formulas that can produce it (usually 1, occasionally 2 —
     e.g. a small no-fuel batch vs. a large fuel-block-consuming batch of the same conversion;
     both are kept as separate candidate paths rather than picking one). Each formula dict is
-    {reaction_id, output_qty, cycle_time, inputs: [{type_id, quantity}]}."""
+    {reaction_id, output_qty, cycle_time, inputs: [{type_id, quantity}]}.
+
+    `cycle_time` here is the EFFECTIVE per-run duration (raw SDE value reduced by
+    time_efficiency_pct — see _RXS_DEFAULTS), applied once at the source so every downstream
+    consumer of a formula's cycle_time (chain-tier duration math, the Suggest wizard's cadence/
+    completion estimates, the customer-order time estimate, and the frontend's own
+    cycle_time-based runtime preview) gets the corrected figure automatically without each of
+    them needing its own settings-aware logic. 0.0 (the default) reproduces the raw SDE value —
+    unaware/non-context callers (e.g. list_reaction_fuel_blocks, which only needs formula
+    shape, not timing) are unaffected."""
     inputs_by_reaction: dict[int, list[dict]] = {}
     for r in con.execute("SELECT reaction_id, type_id, quantity FROM reaction_inputs"):
         inputs_by_reaction.setdefault(r["reaction_id"], []).append(
@@ -316,7 +342,8 @@ def _load_reaction_graph(con) -> tuple[dict[int, list[dict]], dict[int, list[dic
     for r in con.execute("SELECT reaction_id, output_type_id, output_qty, cycle_time FROM reactions"):
         formula = {
             "reaction_id": r["reaction_id"], "output_qty": r["output_qty"],
-            "cycle_time": r["cycle_time"], "inputs": inputs_by_reaction.get(r["reaction_id"], []),
+            "cycle_time": (r["cycle_time"] or 0) * (1 - time_efficiency_pct),
+            "inputs": inputs_by_reaction.get(r["reaction_id"], []),
         }
         reactions_by_output.setdefault(r["output_type_id"], []).append(formula)
     return reactions_by_output, inputs_by_reaction
@@ -479,6 +506,7 @@ def _load_goo_and_reached(context_id: int, allowed_material_ids: set[int] | None
     user (require_context) — group membership only changes which price(s) a material is costed
     at, not who can see the tool."""
     group = member_group(context_id)
+    settings = effective_reaction_settings(context_id)
 
     con = get_connection()
     try:
@@ -491,7 +519,7 @@ def _load_goo_and_reached(context_id: int, allowed_material_ids: set[int] | None
         own_goo_rows = (con.execute(
             "SELECT type_id, sell_price FROM pp_moon_goo_prices WHERE group_id=?", (group["id"],)
         ).fetchall() if group else [])
-        reactions_by_output, inputs_by_reaction = _load_reaction_graph(con)
+        reactions_by_output, inputs_by_reaction = _load_reaction_graph(con, settings.get("time_efficiency_pct", 0.0))
     finally:
         con.close()
 
@@ -507,7 +535,6 @@ def _load_goo_and_reached(context_id: int, allowed_material_ids: set[int] | None
 
     goo = {r["type_id"]: {"sell_price": r["sell_price"]} for r in own_goo_rows if r["type_id"] in moon_material_ids}
 
-    settings = effective_reaction_settings(context_id)
     pi = load_pi_data()
     types = pi["types"]
 
@@ -1172,7 +1199,12 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
         # output_type_id -> cycle hours, so a stored assignment (which only keeps `runs`, not its
         # own formula) can be turned into a real duration for the profit/day normalization below —
         # PI's headline number is already a rate (value_per_day), so Reactions' should be too.
-        cycle_hours_by_type = {r["output_type_id"]: (r["cycle_time"] or 0) / 3600.0
+        # Reduced by the caller's configured time_efficiency_pct (see _RXS_DEFAULTS) — this query
+        # bypasses _load_reaction_graph (which applies the same correction for the opportunity/
+        # suggestion/order paths), so the reduction has to be applied here too or a pending
+        # assignment's reported profit/day would understate itself using the slower raw SDE time.
+        time_eff = effective_reaction_settings(context_id).get("time_efficiency_pct", 0.0)
+        cycle_hours_by_type = {r["output_type_id"]: (r["cycle_time"] or 0) * (1 - time_eff) / 3600.0
                                 for r in con.execute("SELECT output_type_id, cycle_time FROM reactions")}
         # Same idea, output units per run — needed to turn a pending row's `runs` into an actual
         # output quantity for the live output-value estimate below.

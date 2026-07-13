@@ -1230,8 +1230,11 @@ function _rxSettingsFormHtml() {
 
       <label class="pp-label" for="rxSetTax">Facility tax %</label>
       <input type="number" id="rxSetTax" class="pp-num-input" style="width:100px" step="0.1">
+
+      <label class="pp-label" for="rxSetTimeEff" title="How much shorter real reaction job duration is than the raw formula time, from reactor efficiency rigs/skills/structure bonuses">Time efficiency %</label>
+      <input type="number" id="rxSetTimeEff" class="pp-num-input" style="width:100px" step="0.1" min="0" max="99">
     </div>
-    <div class="pp-card-hint" style="margin-top:2px">Reaction system + facility tax estimate real job-installation fees (EVE's system cost index × EIV, plus your structure's tax). Leave the system blank to skip this — nothing changes until it's set.</div>
+    <div class="pp-card-hint" style="margin-top:2px">Reaction system + facility tax estimate real job-installation fees (EVE's system cost index × EIV, plus your structure's tax). Leave the system blank to skip this — nothing changes until it's set. Time efficiency % shortens every duration/runtime estimate the tool shows — there's no way to auto-detect this (ESI only reports a job's facility once it's already installed), so check your real in-game job duration against the formula's raw time and enter the % difference here.</div>
     <div style="margin-top:8px">
       <button class="pp-add-btn" onclick="_saveRxSettings()">Save</button>
       <span id="rxSettingsMsg" class="pp-card-hint"></span>
@@ -1246,6 +1249,7 @@ function _loadRxSettings() {
     document.getElementById('rxSetCollateral').value = (s.export_collateral_pct * 100).toFixed(2);
     document.getElementById('rxSetSystem').value = s.reaction_system || '';
     document.getElementById('rxSetTax').value = ((s.facility_tax_pct || 0) * 100).toFixed(2);
+    document.getElementById('rxSetTimeEff').value = ((s.time_efficiency_pct || 0) * 100).toFixed(1);
   });
 }
 
@@ -1260,6 +1264,7 @@ function _saveRxSettings() {
       export_collateral_pct: (parseFloat(document.getElementById('rxSetCollateral').value) || 0) / 100,
       reaction_system: document.getElementById('rxSetSystem').value.trim() || null,
       facility_tax_pct: (parseFloat(document.getElementById('rxSetTax').value) || 0) / 100,
+      time_efficiency_pct: (parseFloat(document.getElementById('rxSetTimeEff').value) || 0) / 100,
     }),
   })
     .then(async r => { if (!r.ok) throw new Error((await r.json()).detail || 'Save failed'); return r.json(); })
@@ -1288,8 +1293,11 @@ function _rxAccountSettingsFormHtml() {
 
       <label class="pp-label" for="rxAcctTax">Your facility tax %</label>
       <input type="number" id="rxAcctTax" class="pp-num-input" style="width:100px" step="0.1">
+
+      <label class="pp-label" for="rxAcctTimeEff" title="How much shorter real reaction job duration is than the raw formula time, from your reactor efficiency rigs/skills/structure bonuses">Your time efficiency %</label>
+      <input type="number" id="rxAcctTimeEff" class="pp-num-input" style="width:100px" step="0.1" min="0" max="99">
     </div>
-    <div class="pp-card-hint" style="margin-top:2px">Reaction system + facility tax estimate real job-installation fees. Leave the system blank to skip this — nothing changes until it's set.</div>
+    <div class="pp-card-hint" style="margin-top:2px">Reaction system + facility tax estimate real job-installation fees. Leave the system blank to skip this — nothing changes until it's set. Time efficiency % shortens every duration/runtime estimate — check your real in-game job duration against the formula's raw time and enter the % difference (we can't auto-detect this, ESI only reports a job's facility once it's already installed).</div>
     <div style="margin-top:8px">
       <button class="pp-add-btn" onclick="_saveRxAccountSettings()">Save my rate</button>
       <button class="pp-cancel-btn" onclick="_resetRxAccountSettings()">Use default instead</button>
@@ -1306,6 +1314,7 @@ function _loadRxAccountSettings() {
     document.getElementById('rxAcctCollateral').value = (eff.export_collateral_pct * 100).toFixed(2);
     document.getElementById('rxAcctSystem').value = eff.reaction_system || '';
     document.getElementById('rxAcctTax').value = ((eff.facility_tax_pct || 0) * 100).toFixed(2);
+    document.getElementById('rxAcctTimeEff').value = ((eff.time_efficiency_pct || 0) * 100).toFixed(1);
     const hint = document.getElementById('rxAcctSettingsHint');
     if (hint) {
       hint.textContent = s.override
@@ -1326,6 +1335,7 @@ function _saveRxAccountSettings() {
       export_collateral_pct: (parseFloat(document.getElementById('rxAcctCollateral').value) || 0) / 100,
       reaction_system: document.getElementById('rxAcctSystem').value.trim() || null,
       facility_tax_pct: (parseFloat(document.getElementById('rxAcctTax').value) || 0) / 100,
+      time_efficiency_pct: (parseFloat(document.getElementById('rxAcctTimeEff').value) || 0) / 100,
     }),
   })
     .then(async r => { if (!r.ok) throw new Error((await r.json()).detail || 'Save failed'); return r.json(); })
