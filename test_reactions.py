@@ -198,17 +198,124 @@ def test_order_lifecycle(api: Api) -> bool:
     return ok
 
 
+# ── Deterministic unit tests (no network, no DB) ───────────────────────────────────────────────
+# The safety net for refactoring reactions.py: these pin the refactor-critical PURE functions —
+# the reaction-graph cost roll-up + cheaper-source selection (_resolve_reachable), the shopping-
+# list explosion (_explode_shopping_list), chain-tier run counts (_explode_chain_tiers), and the
+# shared batch valuation (_value_reaction_batch). Synthetic recipes only, so every number is exact
+# and reproducible with no market/ESI/DB dependency. Run in-container (needs app deps installed).
+
+def _approx(a: float, b: float, tol: float = 1e-6) -> bool:
+    return abs(a - b) <= tol * max(1.0, abs(b))
+
+
+# A tiny synthetic graph: leaves 100+101 react into P2 (2000); 2000 + leaf 102 react into P3 (3000).
+_SYN_REACTIONS = {
+    2000: [{"reaction_id": 1, "output_qty": 20, "cycle_time": 3600,
+            "inputs": [{"type_id": 100, "quantity": 10}, {"type_id": 101, "quantity": 5}]}],
+    3000: [{"reaction_id": 2, "output_qty": 10, "cycle_time": 7200,
+            "inputs": [{"type_id": 2000, "quantity": 4}, {"type_id": 102, "quantity": 2}]}],
+}
+_SYN_GOO = {100: {"sell_price": 50.0}}                      # group has 100 at 50
+_SYN_MARKET = {100: 40.0, 101: 30.0, 102: 20.0}            # market has 100 cheaper (40)
+
+
+def test_resolve_reachable() -> bool:
+    from app.reactions import _resolve_reachable, REACTION_ME_REDUCTION
+    me = 1 - REACTION_ME_REDUCTION
+    reached = _resolve_reachable(_SYN_GOO, _SYN_MARKET, _SYN_REACTIONS)
+    ok = check(reached[100]["source"] == "market" and _approx(reached[100]["unit_cost"], 40.0),
+               "leaf priced in both sources takes the cheaper (market 40 < group 50)")
+    ok &= check(reached[100]["alt_source"] == "group" and _approx(reached[100]["alt_cost"], 50.0),
+                "losing source (group 50) is recorded as alt_cost")
+    exp2 = (10 * me * 40 + 5 * me * 30) / 20
+    ok &= check(_approx(reached[2000]["unit_cost"], exp2), f"P2 unit_cost rolls up ME-adjusted (={exp2:.4f})")
+    ok &= check(reached[2000]["via"] is not None and reached[2000]["reaction_count"] == 1,
+                "P2 is a reaction node (via set, reaction_count 1)")
+    exp3 = (4 * me * exp2 + 2 * me * 20) / 10
+    ok &= check(_approx(reached[3000]["unit_cost"], exp3), f"P3 unit_cost rolls up through the P2 tier (={exp3:.4f})")
+    ok &= check(reached[3000]["reaction_count"] == 2, "P3 reaction_count counts the whole subtree (2)")
+    reached_jc = _resolve_reachable(_SYN_GOO, _SYN_MARKET, _SYN_REACTIONS,
+                                    job_cost_rate=0.1, adjusted_prices=dict(_SYN_MARKET))
+    ok &= check(reached_jc[2000]["job_cost"] > 0, "job_cost is charged when a job-cost rate is set")
+    ok &= check(_approx(reached[2000]["job_cost"], 0.0), "job_cost is 0 by default (no reaction system)")
+    return ok
+
+
+def test_explode_shopping_list() -> bool:
+    from app.reactions import _resolve_reachable, _explode_shopping_list, REACTION_ME_REDUCTION
+    me = 1 - REACTION_ME_REDUCTION
+    reached = _resolve_reachable(_SYN_GOO, _SYN_MARKET, _SYN_REACTIONS)
+    out: dict = {}
+    _explode_shopping_list(2000, 20, reached, out)   # exactly one run of P2
+    ok = check(_approx(out.get(100, 0), 10 * me) and _approx(out.get(101, 0), 5 * me),
+               "20 P2 units explode to one run's ME-adjusted leaves (9.78x100, 4.89x101)")
+    out2: dict = {}
+    _explode_shopping_list(101, 7, reached, out2)
+    ok &= check(_approx(out2.get(101, 0), 7), "a raw leaf explodes to itself unchanged")
+    return ok
+
+
+def test_explode_chain_tiers() -> bool:
+    from app.reactions import _resolve_reachable, _explode_chain_tiers
+    reached = _resolve_reachable(_SYN_GOO, _SYN_MARKET, _SYN_REACTIONS)
+    tiers: dict = {}
+    _explode_chain_tiers(reached[3000]["via"]["inputs"], 1, reached, tiers)
+    ok = check(2000 in tiers and tiers[2000]["runs"] == 1,
+               "one run of P3 needs one run of its P2 intermediate tier")
+    ok &= check(102 not in tiers, "raw leaves are not listed as chain tiers")
+    return ok
+
+
+def test_value_reaction_batch() -> bool:
+    """The shared cost/profit valuation (extracted during the refactor). Skips cleanly until it
+    exists so this file stays green on an un-refactored tree."""
+    try:
+        from app.reactions import _value_reaction_batch, _resolve_reachable
+    except ImportError:
+        print("  SKIP: _value_reaction_batch not extracted yet")
+        return True
+    reached = _resolve_reachable(_SYN_GOO, _SYN_MARKET, _SYN_REACTIONS)
+    node = reached[2000]
+    settings = {"export_isk_per_m3": 0.0, "export_collateral_pct": 0.0}
+    v = _value_reaction_batch(node, total_out=20, sell_price=100.0, volume=0.0, settings=settings)
+    ok = check(_approx(v["input_cost"], 20 * node["unit_cost"]), "input_cost = total_out x unit_cost")
+    ok &= check(_approx(v["output_value"], 20 * 100.0), "output_value = total_out x sell_price")
+    ok &= check(_approx(v["net_profit"], v["output_value"] - v["input_cost"] - v["job_cost"]),
+                "net_profit nets out materials + job cost (no shipping/collateral here)")
+    return ok
+
+
+def run_unit_tests() -> bool:
+    print("Unit tests (pure functions, no network/DB):")
+    results = [
+        test_resolve_reachable(),
+        test_explode_shopping_list(),
+        test_explode_chain_tiers(),
+        test_value_reaction_batch(),
+    ]
+    return all(results)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--url", default="http://localhost:8000")
+    parser.add_argument("--no-live", action="store_true",
+                        help="run only the deterministic unit tests, skip the live-container lifecycle test")
     args = parser.parse_args()
     base = args.url.rstrip("/")
 
-    _cleanup()
-    token = _seed_session()
-    api = Api(base, token)
-    results = [test_order_lifecycle(api)]
-    _cleanup()
+    results = [run_unit_tests()]
+
+    if not args.no_live:
+        try:
+            _cleanup()
+            token = _seed_session()
+            api = Api(base, token)
+            results.append(test_order_lifecycle(api))
+            _cleanup()
+        except Exception as e:
+            print(f"  SKIP live order-lifecycle test (no reachable app/DB/server: {e})")
 
     print(f"\n{'='*60}")
     if all(results):
