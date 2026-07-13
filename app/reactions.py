@@ -494,6 +494,39 @@ def _resolve_reachable(goo: dict[int, dict], purchasable: dict[int, float],
     return reached
 
 
+def _value_reaction_batch(node: dict, total_out: float, sell_price: float, volume: float,
+                          settings: dict, buy_price: float | None = None) -> dict:
+    """The economics of producing `total_out` output units of a reaction — the ONE place this math
+    lives. Opportunities, customer orders, orphan adoption, and the running-job totals all call it,
+    so a pricing change (the 4% SCC surcharge, sell-vs-buy, a new cost) can't silently drift between
+    them (it did, for four copies, before this was extracted).
+
+    Materials + job-install cost come from the recipe roll-up already on `node` (unit_cost/job_cost
+    from _resolve_reachable); shipping + collateral from the caller's effective settings. Output is
+    valued at `sell_price` (Fuzzworks sell/list — worth sold the normal way); pass `buy_price` too
+    for the instant-liquidation figures (dumping to buy orders). Collateral is charged against the
+    sell value consistently (the standard freight-collateral reference), regardless of sale method.
+    net_profit nets the sell value against every cost; net_profit_instant does so against buy."""
+    input_cost = total_out * node.get("unit_cost", 0.0)
+    job_cost = total_out * node.get("job_cost", 0.0)
+    shipping_volume = total_out * (volume or 0.0)
+    shipping = shipping_volume * settings.get("export_isk_per_m3", 0.0)
+    output_value = total_out * sell_price
+    collateral = output_value * settings.get("export_collateral_pct", 0.0)
+    fixed_costs = input_cost + job_cost + shipping + collateral
+    result = {
+        "input_cost": input_cost, "job_cost": job_cost,
+        "shipping_volume": shipping_volume, "shipping": shipping, "collateral": collateral,
+        "output_value": output_value, "fixed_costs": fixed_costs,
+        "net_profit": output_value - fixed_costs,
+    }
+    if buy_price is not None:
+        instant_value = total_out * buy_price
+        result["instant_value"] = instant_value
+        result["net_profit_instant"] = instant_value - fixed_costs
+    return result
+
+
 def _load_goo_and_reached(context_id: int, allowed_material_ids: set[int] | None = None):
     """Shared setup for both the profitability table and the shopping-list export: the alliance
     goo stock, the reaction graph, and the fixed-point `reached` expansion (see
@@ -648,17 +681,8 @@ def _build_opportunities_uncached(context_id: int, allowed_material_ids: set[int
             continue  # no live market data for this product — can't price it, skip rather than guess
 
         qty = node["max_qty"]
-        input_cost = qty * node["unit_cost"]
-        job_cost = qty * node.get("job_cost", 0.0)
-        ship_volume = qty * vol
-        shipping_cost = ship_volume * settings["export_isk_per_m3"]
-        # Collateral is a transport cost (courier contract), charged regardless of how the
-        # cargo is later sold — declared consistently against Jita sell (the standard
-        # freight-collateral reference value), not whichever sell method ends up chosen.
-        collateral_cost = qty * m["sell_price"] * settings["export_collateral_pct"]
-        instant_value = qty * m["buy_price"]
-        order_value = qty * m["sell_price"]
-        fixed_costs = input_cost + shipping_cost + collateral_cost + job_cost
+        v = _value_reaction_batch(node, qty, m["sell_price"], vol, settings, buy_price=m["buy_price"])
+        ship_volume = v["shipping_volume"]
 
         # Intermediate reactions this product's own formula needs BEFORE the top-level reaction
         # can even start (e.g. goo -> Ferrofluid -> this product) — computed once here at this
@@ -684,16 +708,16 @@ def _build_opportunities_uncached(context_id: int, allowed_material_ids: set[int
             "top_level_runs": node["top_level_runs"],
             "cycle_time": node["cycle_time"],
             "output_qty": qty,
-            "input_cost": round(input_cost, 2),
-            "job_cost": round(job_cost, 2),
+            "input_cost": round(v["input_cost"], 2),
+            "job_cost": round(v["job_cost"], 2),
             "shipping_volume_m3": round(ship_volume, 2),
-            "shipping_cost": round(shipping_cost, 2),
-            "collateral_cost": round(collateral_cost, 2),
-            "instant_sell_value": round(instant_value, 2),
-            "sell_order_value": round(order_value, 2),
-            "net_profit_instant": round(instant_value - fixed_costs, 2),
-            "net_profit_order": round(order_value - fixed_costs, 2),
-            "profit_per_m3_instant": round((instant_value - fixed_costs) / ship_volume, 2) if ship_volume > 0 else None,
+            "shipping_cost": round(v["shipping"], 2),
+            "collateral_cost": round(v["collateral"], 2),
+            "instant_sell_value": round(v["instant_value"], 2),
+            "sell_order_value": round(v["output_value"], 2),
+            "net_profit_instant": round(v["net_profit_instant"], 2),
+            "net_profit_order": round(v["net_profit"], 2),
+            "profit_per_m3_instant": round(v["net_profit_instant"] / ship_volume, 2) if ship_volume > 0 else None,
             "buy_volume": m["buy_volume"],
             "sell_volume": m["sell_volume"],
             "chain_tiers": chain_tiers,
@@ -1232,13 +1256,10 @@ def adopt_orphan_job(req: AdoptOrphanRequest, context_id: int = Depends(require_
     m = fetch_market_data([req.type_id]).get(req.type_id)
     out_qty = node["via"]["output_qty"]
     total_out = req.runs * out_qty
-    input_cost = total_out * node.get("unit_cost", 0.0)          # materials only (matches plan rows)
-    job_cost = total_out * node.get("job_cost", 0.0)
-    output_value = total_out * m["sell_price"] if m else 0.0
     vol = (types.get(req.type_id, {}).get("volume") or 0.0)
-    shipping = total_out * vol * settings.get("export_isk_per_m3", 0.0)
-    collateral = output_value * settings.get("export_collateral_pct", 0.0)
-    reward = output_value - input_cost - job_cost - shipping - collateral
+    v = _value_reaction_batch(node, total_out, m["sell_price"] if m else 0.0, vol, settings)
+    input_cost = v["input_cost"]   # materials only — matches how plan rows store input_cost
+    reward = v["net_profit"]
 
     # Chain tiers (intermediate reactions this formula needs), same as assign_reaction — recorded at
     # 0 cost since the whole chain's cost already rolls up into the top-level row's unit_cost.
@@ -1515,21 +1536,15 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
             # opportunity list follows.
             if not node or not node.get("via") or not m:
                 continue
-            out_qty = output_qty_by_type.get(tid, 0.0)
-            total_out = runs * out_qty
-            input_cost = total_out * node.get("unit_cost", 0.0)          # materials only (matches plan rows)
-            job_cost = total_out * node.get("job_cost", 0.0)
-            output_value = total_out * m["sell_price"]
+            total_out = runs * output_qty_by_type.get(tid, 0.0)
             vol = (types.get(tid, {}).get("volume") or 0.0)
-            shipping = total_out * vol * settings.get("export_isk_per_m3", 0.0)
-            collateral = output_value * settings.get("export_collateral_pct", 0.0)
-            net_profit = output_value - input_cost - job_cost - shipping - collateral
-            pending_isk_committed += input_cost
-            pending_output_value += output_value
-            pending_net_profit += net_profit
+            v = _value_reaction_batch(node, total_out, m["sell_price"], vol, settings)
+            pending_isk_committed += v["input_cost"]
+            pending_output_value += v["output_value"]
+            pending_net_profit += v["net_profit"]
             cyc = cycle_hours_by_type.get(tid, 0)
             if cyc > 0 and runs > 0:
-                pending_net_profit_per_day += net_profit / (runs * cyc / 24)
+                pending_net_profit_per_day += v["net_profit"] / (runs * cyc / 24)
 
     return {
         "tracked": tracked_any,
@@ -2039,11 +2054,13 @@ def _order_report(context_id: int, order: dict) -> dict:
     top_level_runs = order["top_level_runs"]
     target_qty = order["target_qty"]
 
-    material_cost = top_level_runs * output_qty * node["unit_cost"]
-    job_cost = top_level_runs * output_qty * node.get("job_cost", 0.0)
-    total_cost = material_cost + job_cost
+    # An order report is pure PRODUCTION cost (materials + job install) — no shipping/collateral and
+    # no markup (the user decides what to charge), so it uses _value_reaction_batch with empty
+    # settings: fixed_costs then reduces to material + job.
+    v = _value_reaction_batch(node, top_level_runs * output_qty, sell_price=0.0, volume=0.0, settings={})
+    total_cost = v["fixed_costs"]
     cost = {
-        "material_cost": round(material_cost, 2), "job_cost": round(job_cost, 2),
+        "material_cost": round(v["input_cost"], 2), "job_cost": round(v["job_cost"], 2),
         "total_cost": round(total_cost, 2),
         "cost_per_unit": round(total_cost / target_qty, 2) if target_qty else 0.0,
     }
