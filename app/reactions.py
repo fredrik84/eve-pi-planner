@@ -1165,6 +1165,14 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
     ensure_industry_jobs_table()
     ensure_reaction_assignments_table()
     ensure_reaction_orders_table()
+    # Fetched BEFORE opening the main connection below, not inside that try block — this opens
+    # its OWN connection internally (member_group/get_reaction_settings/account override), and
+    # holding two connections open at once per request is exactly what exhausted the pool under
+    # concurrency (see app.db._pg_pool's queue.Queue: bounded at pool size, get() waits up to 15s
+    # then raises) — a real production incident on 2026-07-13 traced to this exact pattern taking
+    # down unrelated endpoints (Dashboard, Setup Analysis) once the pool was saturated. Never hold
+    # a second get_connection() open while a first one from the same request is still live.
+    time_eff = effective_reaction_settings(context_id).get("time_efficiency_pct", 0.0)
     con = get_connection()
     try:
         chars = con.execute(
@@ -1199,11 +1207,10 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
         # output_type_id -> cycle hours, so a stored assignment (which only keeps `runs`, not its
         # own formula) can be turned into a real duration for the profit/day normalization below —
         # PI's headline number is already a rate (value_per_day), so Reactions' should be too.
-        # Reduced by the caller's configured time_efficiency_pct (see _RXS_DEFAULTS) — this query
+        # Reduced by time_eff (fetched above, before this connection was opened) — this query
         # bypasses _load_reaction_graph (which applies the same correction for the opportunity/
         # suggestion/order paths), so the reduction has to be applied here too or a pending
         # assignment's reported profit/day would understate itself using the slower raw SDE time.
-        time_eff = effective_reaction_settings(context_id).get("time_efficiency_pct", 0.0)
         cycle_hours_by_type = {r["output_type_id"]: (r["cycle_time"] or 0) * (1 - time_eff) / 3600.0
                                 for r in con.execute("SELECT output_type_id, cycle_time FROM reactions")}
         # Same idea, output units per run — needed to turn a pending row's `runs` into an actual
