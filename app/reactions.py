@@ -34,6 +34,11 @@ from app.groups import member_group, is_group_manager
 
 router = APIRouter()
 
+# Flat 4% SCC (Secure Commerce Commission) surcharge CCP applies to every industry job, on top of
+# the system cost index and the structure's facility tax. Not configurable — a fixed tax on the
+# job's estimated item value (EIV). See _load_goo_and_reached's job_cost_rate.
+SCC_SURCHARGE_PCT = 0.04
+
 # Standup L-Set Reactor Efficiency I (T1) — the rig actually fitted, confirmed via EVE Ref.
 # -2% material / -20% time base, x1.1 in null/WH space. Only the material figure matters here.
 REACTION_ME_REDUCTION = 0.022
@@ -583,7 +588,11 @@ def _load_goo_and_reached(context_id: int, allowed_material_ids: set[int] | None
     adjusted_prices: dict[int, float] = {}
     if reaction_system:
         cost_index = fetch_system_cost_index(_resolve_system_id(reaction_system))
-        job_cost_rate = cost_index + (settings.get("facility_tax_pct") or 0.0)
+        # CCP adds a flat 4% SCC (Secure Commerce Commission) surcharge to EVERY industry job,
+        # on top of the system cost index and the structure's facility tax — a fixed CCP tax, not
+        # configurable per structure/system. Without it our estimate understates every job by 4%
+        # of EIV; verified against the in-game breakdown (index + facility tax + 4% SCC = total).
+        job_cost_rate = cost_index + (settings.get("facility_tax_pct") or 0.0) + SCC_SURCHARGE_PCT
         if job_cost_rate > 0:
             adjusted_prices = fetch_adjusted_prices(list(all_input_ids))
 
