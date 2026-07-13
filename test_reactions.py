@@ -286,6 +286,28 @@ def test_value_reaction_batch() -> bool:
     return ok
 
 
+def test_no_undefined_names() -> bool:
+    """Static guard against the module-split failure mode: a submodule using a name it never
+    imported (member_group did exactly this and 500'd the prod shopping list — a NameError raised
+    only at CALL time, so import + our old live tests against a stale server missed it). pyflakes
+    catches it statically. Skips cleanly if pyflakes isn't installed."""
+    import glob
+    import os
+    import subprocess
+    try:
+        import pyflakes  # noqa: F401
+    except ImportError:
+        print("  SKIP: pyflakes not installed (pip install pyflakes to enable this guard)")
+        return True
+    root = os.path.dirname(os.path.abspath(__file__))
+    files = sorted(glob.glob(os.path.join(root, "app", "reactions", "*.py")))
+    out = subprocess.run([sys.executable, "-m", "pyflakes", *files], capture_output=True, text=True)
+    undefined = [ln for ln in out.stdout.splitlines() if "undefined name" in ln]
+    for ln in undefined:
+        print("   ", ln)
+    return check(not undefined, "no undefined names in app/reactions/*.py (module-split guard)")
+
+
 def run_unit_tests() -> bool:
     print("Unit tests (pure functions, no network/DB):")
     results = [
@@ -293,8 +315,27 @@ def run_unit_tests() -> bool:
         test_explode_shopping_list(),
         test_explode_chain_tiers(),
         test_value_reaction_batch(),
+        test_no_undefined_names(),
     ]
     return all(results)
+
+
+def test_pricing_endpoints_live(api: "Api") -> bool:
+    """Smoke the endpoints that go through _load_goo_and_reached end-to-end (opportunities +
+    shopping list). These 500'd in prod after the split when graph.py was missing an import — a
+    fresh-app run of THIS catches that class of bug (the old suite didn't hit these paths). A 200
+    with the right shape is all we assert; the numbers depend on live market data."""
+    print("\n" + "=" * 60)
+    print("  Live pricing endpoints (exercise _load_goo_and_reached)")
+    print("=" * 60)
+    ok = True
+    status, opps = api.get("/api/reactions/opportunities")
+    ok &= check(status == 200 and isinstance(opps, dict) and isinstance(opps.get("opportunities"), list),
+                f"GET opportunities returns 200 + an opportunities list (got {status})")
+    status, shop = api.get("/api/reactions/shopping-list")
+    ok &= check(status == 200 and isinstance(shop, dict) and "materials" in shop,
+                f"GET shopping-list returns 200 + a materials report (got {status})")
+    return ok
 
 
 def main() -> int:
@@ -313,6 +354,7 @@ def main() -> int:
             token = _seed_session()
             api = Api(base, token)
             results.append(test_order_lifecycle(api))
+            results.append(test_pricing_endpoints_live(api))
             _cleanup()
         except Exception as e:
             print(f"  SKIP live order-lifecycle test (no reachable app/DB/server: {e})")
