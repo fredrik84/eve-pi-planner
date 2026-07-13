@@ -1225,9 +1225,59 @@ function _rxCanEditSettings() {
   return (typeof _isAdmin !== 'undefined' && _isAdmin) || (typeof _isGroupManager !== 'undefined' && _isGroupManager);
 }
 
+// Round-number quick picks, not a claim about any specific EVE rig/skill combo — the real
+// stacking math for reactor time-efficiency (rigs + skills + structure/security bonuses) isn't
+// something we can verify precisely enough to label "T1"/"T2" etc. with confidence, so this is a
+// convenience picker over the underlying %, not an authoritative lookup table. "Custom" always
+// reveals the exact-number field for whatever a player has actually measured against their real
+// in-game job duration (see the caveat text below the field).
+const _RX_TIME_EFF_PRESETS = [0, 10, 20, 30, 40, 50, 60, 70];
+
+function _rxTimeEffFieldHtml(prefix, label) {
+  const opts = _RX_TIME_EFF_PRESETS.map(p => `<option value="${p}">${p}%</option>`).join('');
+  return `
+      <label class="pp-label" for="${prefix}TimeEffPreset" title="How much shorter real reaction job duration is than the raw formula time, from reactor efficiency rigs/skills/structure bonuses">${label}</label>
+      <div style="display:flex;align-items:center;gap:8px">
+        <select id="${prefix}TimeEffPreset" class="pp-select" style="width:140px" onchange="_rxTimeEffPresetChanged('${prefix}')">
+          ${opts}
+          <option value="custom">Custom…</option>
+        </select>
+        <input type="number" id="${prefix}TimeEff" class="pp-num-input" style="width:90px;display:none" step="0.1" min="0" max="99" oninput="document.getElementById('${prefix}TimeEffPreset').value='custom'">
+      </div>`;
+}
+
+// Selecting a preset hides the free-entry field and syncs its value (still the thing actually
+// sent on Save); picking "Custom" reveals it for an exact measured figure.
+function _rxTimeEffPresetChanged(prefix) {
+  const preset = document.getElementById(`${prefix}TimeEffPreset`).value;
+  const input = document.getElementById(`${prefix}TimeEff`);
+  if (preset === 'custom') {
+    input.style.display = '';
+    input.focus();
+  } else {
+    input.style.display = 'none';
+    input.value = preset;
+  }
+}
+
+// Sets both the preset dropdown and the underlying field from a saved fraction (0-1) — selects
+// the matching preset if the value lands on one exactly, else falls back to "Custom" with the
+// field shown so the precise figure is still visible, not silently rounded away.
+function _rxSetTimeEffValue(prefix, pct) {
+  const rounded = Math.round(pct * 10) / 10;
+  document.getElementById(`${prefix}TimeEff`).value = rounded;
+  const presetSelect = document.getElementById(`${prefix}TimeEffPreset`);
+  const match = _RX_TIME_EFF_PRESETS.includes(rounded);
+  presetSelect.value = match ? String(rounded) : 'custom';
+  document.getElementById(`${prefix}TimeEff`).style.display = match ? 'none' : '';
+}
+
 function _rxSettingsFormHtml() {
   return `
-    <div class="pp-target-form" style="margin-top:14px;border-top:1px solid var(--clr-border);padding-top:12px">
+    <div class="pp-card-title" style="font-size:13px;margin-top:4px">Group defaults
+      <span class="pp-card-hint">— your group's shared shipping/collateral/job-cost rate; members inherit this unless they set their own below</span>
+    </div>
+    <div class="pp-target-form" style="margin-top:8px">
       <label class="pp-label" for="rxSetImport">Import ISK/m³</label>
       <input type="number" id="rxSetImport" class="pp-num-input" style="width:120px">
 
@@ -1243,14 +1293,14 @@ function _rxSettingsFormHtml() {
       <label class="pp-label" for="rxSetTax">Facility tax %</label>
       <input type="number" id="rxSetTax" class="pp-num-input" style="width:100px" step="0.1">
 
-      <label class="pp-label" for="rxSetTimeEff" title="How much shorter real reaction job duration is than the raw formula time, from reactor efficiency rigs/skills/structure bonuses">Time efficiency %</label>
-      <input type="number" id="rxSetTimeEff" class="pp-num-input" style="width:100px" step="0.1" min="0" max="99">
+      ${_rxTimeEffFieldHtml('rxSet', 'Time efficiency %')}
     </div>
     <div class="pp-card-hint" style="margin-top:2px">Reaction system + facility tax estimate real job-installation fees (EVE's system cost index × EIV, plus your structure's tax). Leave the system blank to skip this — nothing changes until it's set. Time efficiency % shortens every duration/runtime estimate the tool shows — there's no way to auto-detect this (ESI only reports a job's facility once it's already installed), so check your real in-game job duration against the formula's raw time and enter the % difference here.</div>
     <div style="margin-top:8px">
       <button class="pp-add-btn" onclick="_saveRxSettings()">Save</button>
       <span id="rxSettingsMsg" class="pp-card-hint"></span>
-    </div>`;
+    </div>
+    <div style="border-top:1px solid var(--clr-border);margin-top:16px"></div>`;
 }
 
 function _loadRxSettings() {
@@ -1261,7 +1311,7 @@ function _loadRxSettings() {
     document.getElementById('rxSetCollateral').value = (s.export_collateral_pct * 100).toFixed(2);
     document.getElementById('rxSetSystem').value = s.reaction_system || '';
     document.getElementById('rxSetTax').value = ((s.facility_tax_pct || 0) * 100).toFixed(2);
-    document.getElementById('rxSetTimeEff').value = ((s.time_efficiency_pct || 0) * 100).toFixed(1);
+    _rxSetTimeEffValue('rxSet', (s.time_efficiency_pct || 0) * 100);
   });
 }
 
@@ -1289,8 +1339,11 @@ function _saveRxSettings() {
 // within one alliance. No override saved = use the group's rate (or the global default).
 function _rxAccountSettingsFormHtml() {
   return `
-    <div class="pp-target-form" style="margin-top:14px;border-top:1px solid var(--clr-border);padding-top:12px">
-      <div class="pp-card-hint" id="rxAcctSettingsHint" style="margin-bottom:8px"></div>
+    <div class="pp-card-title" style="font-size:13px;margin-top:4px">Your settings
+      <span class="pp-card-hint">— overrides the group default above for you personally only (real JF cost/reaction system/rig fit genuinely varies account to account)</span>
+    </div>
+    <div class="pp-target-form" style="margin-top:8px">
+      <div class="pp-card-hint" id="rxAcctSettingsHint" style="margin-bottom:8px;grid-column:1/-1"></div>
       <label class="pp-label" for="rxAcctImport">Your import ISK/m³</label>
       <input type="number" id="rxAcctImport" class="pp-num-input" style="width:120px">
 
@@ -1306,8 +1359,7 @@ function _rxAccountSettingsFormHtml() {
       <label class="pp-label" for="rxAcctTax">Your facility tax %</label>
       <input type="number" id="rxAcctTax" class="pp-num-input" style="width:100px" step="0.1">
 
-      <label class="pp-label" for="rxAcctTimeEff" title="How much shorter real reaction job duration is than the raw formula time, from your reactor efficiency rigs/skills/structure bonuses">Your time efficiency %</label>
-      <input type="number" id="rxAcctTimeEff" class="pp-num-input" style="width:100px" step="0.1" min="0" max="99">
+      ${_rxTimeEffFieldHtml('rxAcct', 'Your time efficiency %')}
     </div>
     <div class="pp-card-hint" style="margin-top:2px">Reaction system + facility tax estimate real job-installation fees. Leave the system blank to skip this — nothing changes until it's set. Time efficiency % shortens every duration/runtime estimate — check your real in-game job duration against the formula's raw time and enter the % difference (we can't auto-detect this, ESI only reports a job's facility once it's already installed).</div>
     <div style="margin-top:8px">
@@ -1326,7 +1378,7 @@ function _loadRxAccountSettings() {
     document.getElementById('rxAcctCollateral').value = (eff.export_collateral_pct * 100).toFixed(2);
     document.getElementById('rxAcctSystem').value = eff.reaction_system || '';
     document.getElementById('rxAcctTax').value = ((eff.facility_tax_pct || 0) * 100).toFixed(2);
-    document.getElementById('rxAcctTimeEff').value = ((eff.time_efficiency_pct || 0) * 100).toFixed(1);
+    _rxSetTimeEffValue('rxAcct', (eff.time_efficiency_pct || 0) * 100);
     const hint = document.getElementById('rxAcctSettingsHint');
     if (hint) {
       hint.textContent = s.override
