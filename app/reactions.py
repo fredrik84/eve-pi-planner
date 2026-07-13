@@ -1329,6 +1329,42 @@ def unassign_all_reactions(context_id: int = Depends(require_context)):
     return {"ok": True}
 
 
+def _unplanned_running_totals(context_id: int, unplanned_running: list[tuple[int, float]],
+                              output_qty_by_type: dict[int, float],
+                              cycle_hours_by_type: dict[int, float]) -> dict[str, float]:
+    """Committed-total deltas (ISK / output value / net profit / profit-per-day) for ORPHAN running
+    jobs — ones running in-game with no plan slot (see get_industry_jobs). ESI gives only product +
+    run count, so they're valued from our own SDE recipe via _value_reaction_batch, priced with the
+    caller's own settings (group sheet, reaction system, time efficiency) exactly like every other
+    path. Lazy: the (heavier) reaction cost graph loads only when there ARE such jobs, so a fully-
+    planned dashboard pays nothing. A product with no reachable recipe or no live market price is
+    skipped rather than guessed — same rule the opportunity list follows."""
+    totals = {"isk_committed": 0.0, "output_value": 0.0, "net_profit": 0.0, "net_profit_per_day": 0.0}
+    if not unplanned_running:
+        return totals
+    graph = _load_goo_and_reached(context_id)
+    reached = graph[1] if graph else {}
+    types = graph[4] if graph else {}
+    settings = effective_reaction_settings(context_id)
+    up_ids = list({tid for tid, _ in unplanned_running})
+    up_market = fetch_market_data(up_ids) if up_ids else {}
+    for tid, runs in unplanned_running:
+        node = reached.get(tid)
+        m = up_market.get(tid)
+        if not node or not node.get("via") or not m:
+            continue
+        total_out = runs * output_qty_by_type.get(tid, 0.0)
+        vol = (types.get(tid, {}).get("volume") or 0.0)
+        v = _value_reaction_batch(node, total_out, m["sell_price"], vol, settings)
+        totals["isk_committed"] += v["input_cost"]
+        totals["output_value"] += v["output_value"]
+        totals["net_profit"] += v["net_profit"]
+        cyc = cycle_hours_by_type.get(tid, 0)
+        if cyc > 0 and runs > 0:
+            totals["net_profit_per_day"] += v["net_profit"] / (runs * cyc / 24)
+    return totals
+
+
 @router.get("/api/reactions/jobs")
 def get_industry_jobs(context_id: int = Depends(require_context)):
     """Personal reaction-job status for the Reactions wizard's dashboard page: currently
@@ -1515,36 +1551,13 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
                 "orphan": is_orphan,
             })
 
-    # Value running jobs that had no plan slot (installed in-game outside the tool) from our OWN
-    # reaction recipe: ESI gives the product + run count, the SDE gives the formula, so materials
-    # cost, job cost and output value are all computable without a stored assignment. Lazy — only
-    # load the (heavier) reaction cost graph when such jobs actually exist, so the common case
-    # (everything running was planned here) pays nothing. Priced with the caller's own settings
-    # (group sheet, reaction system, time efficiency), same as every other path.
-    if unplanned_running:
-        graph = _load_goo_and_reached(context_id)
-        reached = graph[1] if graph else {}
-        types = graph[4] if graph else {}
-        settings = effective_reaction_settings(context_id)
-        up_ids = list({tid for tid, _ in unplanned_running})
-        up_market = fetch_market_data(up_ids) if up_ids else {}
-        for tid, runs in unplanned_running:
-            node = reached.get(tid)
-            m = up_market.get(tid)
-            # Skip anything we can't reliably value: a product with no reachable recipe (its inputs
-            # aren't priced for this caller) or no live market price — no guessing, same rule the
-            # opportunity list follows.
-            if not node or not node.get("via") or not m:
-                continue
-            total_out = runs * output_qty_by_type.get(tid, 0.0)
-            vol = (types.get(tid, {}).get("volume") or 0.0)
-            v = _value_reaction_batch(node, total_out, m["sell_price"], vol, settings)
-            pending_isk_committed += v["input_cost"]
-            pending_output_value += v["output_value"]
-            pending_net_profit += v["net_profit"]
-            cyc = cycle_hours_by_type.get(tid, 0)
-            if cyc > 0 and runs > 0:
-                pending_net_profit_per_day += v["net_profit"] / (runs * cyc / 24)
+    # Fold in running jobs that had no plan slot (see _unplanned_running_totals) — valued from our
+    # own SDE recipe so in-game/corp jobs still count toward the committed totals.
+    up = _unplanned_running_totals(context_id, unplanned_running, output_qty_by_type, cycle_hours_by_type)
+    pending_isk_committed += up["isk_committed"]
+    pending_output_value += up["output_value"]
+    pending_net_profit += up["net_profit"]
+    pending_net_profit_per_day += up["net_profit_per_day"]
 
     return {
         "tracked": tracked_any,
