@@ -743,6 +743,40 @@ def _explode_chain_tiers(formula_inputs: list[dict], runs: int, reached: dict, t
         _explode_chain_tiers(formula["inputs"], inp_runs, reached, tiers)  # this tier may itself be multi-level
 
 
+def _materials_report(totals: dict[int, float], reached: dict, types: dict) -> list[dict]:
+    """Turns a leaf-level {type_id: qty} total (as built by _explode_shopping_list) into the
+    display row shape both the pending-assignments shopping list and a customer order's own
+    materials report use — kept as one function so the two callers can't drift apart.
+
+    "source" reflects which price actually won for THIS specific leaf (see _resolve_reachable's
+    cheaper-wins note) — not just "is this material categorically moon goo." A group's own
+    sheet can lose to a better market rate on any given material, and a shopping-list entry
+    must follow whichever source is actually cheapest right now, or it'd send the player to
+    buy from the alliance when the market is the better (or for a non-member, the only) option.
+    unit_cost is the SAME per-unit price _resolve_reachable already settled on for this leaf
+    (whichever source won) — surfaced so the player has a concrete expected price to check the
+    actual alliance/market quote against, not just a bare quantity. alt_unit_cost/alt_source
+    is the LOSING price (if both a group sheet price and a market price were available for
+    this material) — the actual ISK/unit gap between them, not just an implicit "cheaper won."
+    Market prices always include the configured import shipping cost per m3 already baked in
+    (see the "market_data field names..." note in _load_goo_and_reached above) — never a bare
+    Jita quote."""
+    materials = [
+        {
+            "type_id": tid, "name": types.get(tid, {}).get("name", str(tid)),
+            "quantity": math.ceil(qty), "source": reached.get(tid, {}).get("source", "market"),
+            "unit_cost": round(reached.get(tid, {}).get("unit_cost", 0.0), 2),
+            "alt_unit_cost": (round(reached[tid]["alt_cost"], 2)
+                               if tid in reached and reached[tid].get("alt_cost") is not None else None),
+            "alt_source": reached.get(tid, {}).get("alt_source"),
+            "volume_m3": round(math.ceil(qty) * (types.get(tid, {}).get("volume") or 0.0), 2),
+        }
+        for tid, qty in totals.items()
+    ]
+    materials.sort(key=lambda m: (m["source"] != "group", m["name"]))
+    return materials
+
+
 @router.get("/api/reactions/shopping-list")
 def reactions_shopping_list(context_id: int = Depends(require_context)):
     """Total raw materials needed across every one of the caller's pending assignments (see
@@ -782,33 +816,7 @@ def reactions_shopping_list(context_id: int = Depends(require_context)):
         top_units = a["runs"] * node["via"]["output_qty"]
         _explode_shopping_list(a["type_id"], top_units, reached, totals)
 
-    # "source" reflects which price actually won for THIS specific leaf (see _resolve_reachable's
-    # cheaper-wins note) — not just "is this material categorically moon goo." A group's own
-    # sheet can lose to a better market rate on any given material, and a shopping-list entry
-    # must follow whichever source is actually cheapest right now, or it'd send the player to
-    # buy from the alliance when the market is the better (or for a non-member, the only) option.
-    # unit_cost is the SAME per-unit price _resolve_reachable already settled on for this leaf
-    # (whichever source won) — surfaced so the player has a concrete expected price to check the
-    # actual alliance/market quote against, not just a bare quantity. alt_unit_cost/alt_source
-    # is the LOSING price (if both a group sheet price and a market price were available for
-    # this material) — the actual ISK/unit gap between them, not just an implicit "cheaper won."
-    # Market prices always include the configured import shipping cost per m3 already baked in
-    # (see the "market_data field names..." note in _load_goo_and_reached above) — never a bare
-    # Jita quote.
-    materials = [
-        {
-            "type_id": tid, "name": types.get(tid, {}).get("name", str(tid)),
-            "quantity": math.ceil(qty), "source": reached.get(tid, {}).get("source", "market"),
-            "unit_cost": round(reached.get(tid, {}).get("unit_cost", 0.0), 2),
-            "alt_unit_cost": (round(reached[tid]["alt_cost"], 2)
-                               if tid in reached and reached[tid].get("alt_cost") is not None else None),
-            "alt_source": reached.get(tid, {}).get("alt_source"),
-            "volume_m3": round(math.ceil(qty) * (types.get(tid, {}).get("volume") or 0.0), 2),
-        }
-        for tid, qty in totals.items()
-    ]
-    materials.sort(key=lambda m: (m["source"] != "group", m["name"]))
-    return {"materials": materials}
+    return {"materials": _materials_report(totals, reached, types)}
 
 
 # ── Personal reaction-job tracking (opt-in scope, see app.esi.INDUSTRY_JOBS_SCOPES) ────────────
@@ -950,8 +958,69 @@ def ensure_reaction_assignments_table():
             con.commit()
         except Exception:
             pass
+        # order_id: tags every row (top-level AND its chain-tier rows) created on behalf of a
+        # fixed-unit customer order (see ensure_reaction_orders_table below) — NULL for every
+        # assignment created the normal way (manual-assign, suggest-and-assign), no behavior
+        # change there. Lets the dashboard label which slots are committed to a client job.
+        try:
+            con.execute("ALTER TABLE pp_reaction_assignments ADD COLUMN order_id INTEGER")
+            con.commit()
+        except Exception:
+            pass
     finally:
         con.close()
+
+
+# ── Fixed-unit customer orders ──────────────────────────────────────────────────────────────
+# A different framing from the day-cadence/profit-maximizing wizard above: sometimes another
+# player asks for a FIXED number of finished units (a one-off job), not an ongoing weekly
+# routine. An order is persistent (tracked across sessions, not a one-shot calculator) and
+# committing to it occupies real reaction slots the same way the suggestion/manual-assign flow
+# does — see _allocate_and_insert below, which reuses the exact slot-spreading logic
+# _suggest_reactions already has.
+
+@ensure_once
+def ensure_reaction_orders_table():
+    con = get_connection()
+    try:
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS pp_reaction_orders (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                context_id     INTEGER NOT NULL,
+                type_id        INTEGER NOT NULL,
+                name           TEXT NOT NULL,
+                target_qty     REAL NOT NULL,
+                top_level_runs INTEGER NOT NULL,
+                assigned_runs  INTEGER NOT NULL DEFAULT 0,
+                client_name    TEXT,
+                notes          TEXT,
+                status         TEXT NOT NULL DEFAULT 'open',
+                created_at     REAL NOT NULL
+            )
+        """)
+        con.commit()
+    finally:
+        con.close()
+
+
+def _insert_assignment_rows(con, character_id: int, type_id: int, name: str, runs: float,
+                             job_count: int, input_cost: float, reward: float, tier_order: int,
+                             now: float, order_id: int | None = None) -> None:
+    """One product's worth of a job commitment, split into `job_count` separate assignment rows
+    (one per actual in-game job install — see assign_reaction's own docstring for why). Shared by
+    assign_reaction (order_id always None there — no behavior change) and the customer-order
+    assign flow (_allocate_and_insert, order_id set) so the row-insertion shape can't drift
+    between the two callers."""
+    job_count = max(1, job_count)
+    runs_per_job = math.ceil(runs / job_count)
+    for _ in range(job_count):
+        con.execute(
+            "INSERT INTO pp_reaction_assignments "
+            "(character_id, type_id, name, runs, input_cost, reward, created_at, tier_order, order_id) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (character_id, type_id, name, runs_per_job, input_cost / job_count, reward / job_count,
+             now, tier_order, order_id),
+        )
 
 
 class ChainTier(BaseModel):
@@ -1005,27 +1074,12 @@ def assign_reaction(req: AssignRequest, context_id: int = Depends(require_contex
 
         now = _time.time()
         for tier_order, tier in enumerate(req.chain_tiers):
-            tier_job_count = max(1, tier.job_count)
-            tier_runs_per_job = math.ceil(tier.runs / tier_job_count)
-            for _ in range(tier_job_count):
-                con.execute(
-                    "INSERT INTO pp_reaction_assignments "
-                    "(character_id, type_id, name, runs, input_cost, reward, created_at, tier_order) "
-                    "VALUES (?,?,?,?,?,?,?,?)",
-                    (req.character_id, tier.type_id, tier.name, tier_runs_per_job, 0.0, 0.0, now, tier_order),
-                )
+            _insert_assignment_rows(con, req.character_id, tier.type_id, tier.name, tier.runs,
+                                     tier.job_count, 0.0, 0.0, tier_order, now)
 
-        job_count = max(1, req.job_count)
-        runs_per_job = math.ceil(req.runs / job_count)
         top_tier_order = len(req.chain_tiers)
-        for _ in range(job_count):
-            con.execute(
-                "INSERT INTO pp_reaction_assignments "
-                "(character_id, type_id, name, runs, input_cost, reward, created_at, tier_order) "
-                "VALUES (?,?,?,?,?,?,?,?)",
-                (req.character_id, req.type_id, req.name, runs_per_job,
-                 req.input_cost / job_count, req.reward / job_count, now, top_tier_order),
-            )
+        _insert_assignment_rows(con, req.character_id, req.type_id, req.name, req.runs,
+                                 req.job_count, req.input_cost, req.reward, top_tier_order, now)
         con.commit()
     finally:
         con.close()
@@ -1083,6 +1137,7 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
     same session), and each authorises the tracking scope independently."""
     ensure_industry_jobs_table()
     ensure_reaction_assignments_table()
+    ensure_reaction_orders_table()
     con = get_connection()
     try:
         chars = con.execute(
@@ -1098,10 +1153,22 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
         if char_ids:
             placeholders = ",".join("?" * len(char_ids))
             for r in con.execute(
-                f"SELECT id, character_id, type_id, name, runs, input_cost, reward, tier_order "
+                f"SELECT id, character_id, type_id, name, runs, input_cost, reward, tier_order, order_id "
                 f"FROM pp_reaction_assignments WHERE character_id IN ({placeholders}) ORDER BY tier_order", char_ids,
             ):
                 assignments.setdefault(r["character_id"], []).append(dict(r))
+        # Client-order labels for any pending row committed via a customer order (see
+        # _allocate_and_insert) — so the dashboard can show "Order: <client>" on those slots
+        # instead of just the product name, distinguishing client-committed jobs from
+        # speculative-profit ones at a glance.
+        order_ids = list({a["order_id"] for rows in assignments.values() for a in rows if a.get("order_id")})
+        order_labels: dict[int, str] = {}
+        if order_ids:
+            placeholders_o = ",".join("?" * len(order_ids))
+            for r in con.execute(
+                f"SELECT id, client_name FROM pp_reaction_orders WHERE id IN ({placeholders_o})", order_ids,
+            ):
+                order_labels[r["id"]] = r["client_name"] or f"Order #{r['id']}"
         # output_type_id -> cycle hours, so a stored assignment (which only keeps `runs`, not its
         # own formula) can be turned into a real duration for the profit/day normalization below —
         # PI's headline number is already a rate (value_per_day), so Reactions' should be too.
@@ -1176,6 +1243,7 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
                     "assignment_id": a["id"], "type_id": a["type_id"], "name": a["name"], "runs": a["runs"],
                     "tier_order": a["tier_order"], "input_cost": a["input_cost"], "reward": a["reward"],
                     "output_value": round(row_output_value, 2),
+                    "order_id": a.get("order_id"), "order_label": order_labels.get(a.get("order_id")),
                 })
                 # Intermediate-tier rows are stored with input_cost/reward=0 (the full chain's
                 # cost/profit already lives on the top-level row — see assign_reaction), so
@@ -1657,3 +1725,285 @@ def suggest_reactions(req: SuggestRequest, context_id: int = Depends(require_con
                                         result["totals"].get("net_profit_per_day"), result["totals"]["binding"],
                                         result["suggestions"])
     return result
+
+
+# ── Customer orders: committing a fixed order to real reaction slots ───────────────────────────
+
+def _allocate_and_insert(context_id: int, type_id: int, name: str, node: dict, reached: dict,
+                          types: dict, runs_needed: int, order_id: int) -> dict:
+    """Commits `runs_needed` top-level runs (plus any intermediate chain-tier reactions the
+    formula needs) onto ONE character with enough free reaction slots right now — deliberately
+    single-character, not spread across several like _suggest_reactions' stage 2: there's no
+    per-job runs cap in this app's model (assign_reaction already lets one job carry an
+    arbitrary run count), so a whole batch always fits in one job once a character has a free
+    slot for it, and an intermediate reaction's output has to be physically on the same
+    character as the job that consumes it anyway (same rule the manual-assign modal already
+    enforces). Repeated "assign next batch" calls naturally land on different characters over
+    time as each one's slots fill up, since this always re-reads free slots fresh."""
+    chars = [c for c in _character_capacities(context_id) if c["free_slots"] > 0]
+    if not chars or runs_needed <= 0:
+        return {"runs_assigned": 0, "characters": []}
+    chars.sort(key=lambda c: -c["free_slots"])
+
+    formula = node.get("via")
+    tier_runs: dict[int, dict] = {}
+    if formula:
+        _explode_chain_tiers(formula["inputs"], runs_needed, reached, tier_runs)
+    ordered_tiers = sorted(tier_runs.items(), key=lambda kv: reached.get(kv[0], {}).get("reaction_count", 0))
+    chain_job_slots = len(ordered_tiers)
+
+    pick = next((c for c in chars if c["free_slots"] >= chain_job_slots + 1), None)
+    if pick is None:
+        if chain_job_slots > 0:
+            return {"runs_assigned": 0, "characters": [], "error":
+                     f"Needs {chain_job_slots} intermediate reaction job slot(s) plus 1 for the product "
+                     f"itself, all on one character — none of your tracked characters has that much free "
+                     f"right now. Free up slots, or assign a smaller batch."}
+        pick = chars[0]
+
+    now = _time.time()
+    con = get_connection()
+    try:
+        for tier_order, (tid, info) in enumerate(ordered_tiers):
+            tname = types.get(tid, {}).get("name", str(tid))
+            _insert_assignment_rows(con, pick["character_id"], tid, tname, info["runs"], 1,
+                                     0.0, 0.0, tier_order, now, order_id)
+        unit_cost = node.get("unit_cost", 0.0) + node.get("job_cost", 0.0)
+        _insert_assignment_rows(con, pick["character_id"], type_id, name, runs_needed, 1,
+                                 unit_cost * runs_needed, 0.0, len(ordered_tiers), now, order_id)
+        con.commit()
+    finally:
+        con.close()
+    return {"runs_assigned": runs_needed,
+            "characters": [{"character_id": pick["character_id"], "character_name": pick["character_name"],
+                             "runs": runs_needed}]}
+
+
+def _order_report(context_id: int, order: dict) -> dict:
+    """Materials/cost/time report for a customer order — recomputed LIVE against current prices
+    and the order's OWN stored `top_level_runs`/`target_qty` (a fixed order doesn't rescale with
+    market conditions the way the day-cadence opportunity table does). No markup is applied to
+    cost — the user decides what to actually charge the client; this only reports what it costs
+    to produce."""
+    loaded = _load_goo_and_reached(context_id)
+    node = loaded[1].get(order["type_id"]) if loaded else None
+    if not node or node.get("via") is None:
+        return {
+            "materials": [], "chain_tiers": [],
+            "cost": {"material_cost": None, "job_cost": None, "total_cost": None, "cost_per_unit": None},
+            "time": {"tiers": [], "free_slots_now": 0, "estimated_hours": None, "caveat": None},
+            "stale": True,
+        }
+    goo, reached, reactions_by_output, inputs_by_reaction, types = loaded
+    formula = node["via"]
+    output_qty = formula["output_qty"]
+    top_level_runs = order["top_level_runs"]
+    target_qty = order["target_qty"]
+
+    material_cost = top_level_runs * output_qty * node["unit_cost"]
+    job_cost = top_level_runs * output_qty * node.get("job_cost", 0.0)
+    total_cost = material_cost + job_cost
+    cost = {
+        "material_cost": round(material_cost, 2), "job_cost": round(job_cost, 2),
+        "total_cost": round(total_cost, 2),
+        "cost_per_unit": round(total_cost / target_qty, 2) if target_qty else 0.0,
+    }
+
+    totals: dict[int, float] = {}
+    _explode_shopping_list(order["type_id"], target_qty, reached, totals)
+    materials = _materials_report(totals, reached, types)
+
+    tier_runs: dict[int, dict] = {}
+    _explode_chain_tiers(formula["inputs"], top_level_runs, reached, tier_runs)
+    ordered_tiers = sorted(tier_runs.items(), key=lambda kv: reached.get(kv[0], {}).get("reaction_count", 0))
+    chain_tiers = [
+        {"type_id": tid, "name": types.get(tid, {}).get("name", str(tid)), "runs": info["runs"],
+         "cycle_time": info["cycle_time"], "output_qty": info["output_qty"]}
+        for tid, info in ordered_tiers
+    ]
+
+    # Time estimate: chain tiers must finish before the tier above can even start (sequential,
+    # not parallel-with-each-other), so durations ADD across tiers — within a single tier, spread
+    # its own runs across however many free slots you have right now. An honest approximation,
+    # not a guarantee (see the caveat text) — matches this tool's "advice, not a tool" convention
+    # rather than presenting false precision.
+    free_slots_now = sum(c["free_slots"] for c in _character_capacities(context_id))
+    sequence = chain_tiers + [{"type_id": order["type_id"], "name": order["name"], "runs": top_level_runs,
+                                "cycle_time": node.get("cycle_time")}]
+    estimated_hours = 0.0
+    for tier in sequence:
+        cycle_hours = (tier["cycle_time"] or 3600) / 3600.0
+        jobs_used = min(free_slots_now, tier["runs"]) or 1
+        estimated_hours += math.ceil(tier["runs"] / jobs_used) * cycle_hours
+
+    time_report = {
+        "tiers": sequence, "free_slots_now": free_slots_now, "estimated_hours": round(estimated_hours, 1),
+        "caveat": "Assumes your current free reaction slots stay free until each tier finishes, run in "
+                  "sequence (each intermediate tier must finish before the next starts) — a rough "
+                  "estimate, not a guarantee.",
+    }
+
+    return {"materials": materials, "chain_tiers": chain_tiers, "cost": cost, "time": time_report, "stale": False}
+
+
+class OrderCreateRequest(BaseModel):
+    type_id: int
+    target_qty: float
+    client_name: str | None = None
+    notes: str | None = None
+
+
+@router.post("/api/reactions/orders")
+def create_reaction_order(req: OrderCreateRequest, context_id: int = Depends(require_context)):
+    if req.target_qty <= 0:
+        raise HTTPException(status_code=400, detail="Target quantity must be positive")
+    loaded = _load_goo_and_reached(context_id)
+    node = loaded[1].get(req.type_id) if loaded else None
+    if not node or node.get("via") is None:
+        raise HTTPException(status_code=404, detail="Not a reachable reaction product right now")
+    types = loaded[4]
+    name = types.get(req.type_id, {}).get("name", str(req.type_id))
+    output_qty = node["via"]["output_qty"]
+    top_level_runs = max(1, math.ceil(req.target_qty / output_qty))
+
+    ensure_reaction_orders_table()
+    con = get_connection()
+    try:
+        order_id = con.execute(
+            "INSERT INTO pp_reaction_orders (context_id, type_id, name, target_qty, top_level_runs, "
+            "assigned_runs, client_name, notes, status, created_at) VALUES (?,?,?,?,?,0,?,?,'open',?) "
+            "RETURNING id",
+            (context_id, req.type_id, name, req.target_qty, top_level_runs,
+             (req.client_name or "").strip() or None, (req.notes or "").strip() or None, _time.time()),
+        ).fetchone()[0]
+        con.commit()
+        order = dict(con.execute("SELECT * FROM pp_reaction_orders WHERE id=?", (order_id,)).fetchone())
+    finally:
+        con.close()
+    return {"order": order, **_order_report(context_id, order)}
+
+
+@router.get("/api/reactions/orders")
+def list_reaction_orders(context_id: int = Depends(require_context)):
+    ensure_reaction_orders_table()
+    con = get_connection()
+    try:
+        rows = con.execute(
+            "SELECT id, type_id, name, target_qty, top_level_runs, assigned_runs, client_name, notes, "
+            "status, created_at FROM pp_reaction_orders WHERE context_id=? "
+            "ORDER BY CASE WHEN status='open' THEN 0 ELSE 1 END, created_at DESC",
+            (context_id,),
+        ).fetchall()
+    finally:
+        con.close()
+    return {"orders": [dict(r) for r in rows]}
+
+
+def _get_order_or_404(con, order_id: int, context_id: int) -> dict:
+    row = con.execute(
+        "SELECT * FROM pp_reaction_orders WHERE id=? AND context_id=?", (order_id, context_id)
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Order not found")
+    return dict(row)
+
+
+@router.get("/api/reactions/orders/{order_id}")
+def get_reaction_order(order_id: int, context_id: int = Depends(require_context)):
+    ensure_reaction_orders_table()
+    con = get_connection()
+    try:
+        order = _get_order_or_404(con, order_id, context_id)
+    finally:
+        con.close()
+    return {"order": order, **_order_report(context_id, order)}
+
+
+class OrderAssignRequest(BaseModel):
+    runs: int | None = None  # None = assign everything still remaining
+
+
+@router.post("/api/reactions/orders/{order_id}/assign")
+def assign_reaction_order(order_id: int, req: OrderAssignRequest, context_id: int = Depends(require_context)):
+    """Commits the next batch of this order's remaining runs to a real reaction slot — see
+    _allocate_and_insert. Occupies slots the same way the suggestion/manual-assign flow does;
+    `assigned_runs` is monotonic (never decreases here) since committing a slot is a real
+    action taken, distinct from the order's own status (still `open` until the player marks it
+    delivered — see set_reaction_order_status)."""
+    ensure_reaction_orders_table()
+    con = get_connection()
+    try:
+        order = _get_order_or_404(con, order_id, context_id)
+    finally:
+        con.close()
+    if order["status"] != "open":
+        raise HTTPException(status_code=400, detail="This order isn't open")
+    remaining = order["top_level_runs"] - order["assigned_runs"]
+    if remaining <= 0:
+        raise HTTPException(status_code=400, detail="Every run for this order has already been assigned")
+    runs_to_assign = min(req.runs, remaining) if req.runs else remaining
+    if runs_to_assign <= 0:
+        raise HTTPException(status_code=400, detail="Nothing to assign")
+
+    loaded = _load_goo_and_reached(context_id)
+    node = loaded[1].get(order["type_id"]) if loaded else None
+    if not node or node.get("via") is None:
+        raise HTTPException(status_code=400, detail="This product isn't reachable right now — check priced materials")
+    reached, types = loaded[1], loaded[4]
+
+    result = _allocate_and_insert(context_id, order["type_id"], order["name"], node, reached, types,
+                                   runs_to_assign, order_id)
+    if result["runs_assigned"] <= 0:
+        raise HTTPException(status_code=400, detail=result.get("error") or "No free reaction slots right now")
+
+    con = get_connection()
+    try:
+        con.execute("UPDATE pp_reaction_orders SET assigned_runs = assigned_runs + ? WHERE id=?",
+                     (result["runs_assigned"], order_id))
+        con.commit()
+        order = dict(con.execute("SELECT * FROM pp_reaction_orders WHERE id=?", (order_id,)).fetchone())
+    finally:
+        con.close()
+    return {"order": order, "runs_assigned": result["runs_assigned"], "characters": result["characters"]}
+
+
+class OrderStatusRequest(BaseModel):
+    status: str  # 'completed' or 'cancelled'
+
+
+@router.post("/api/reactions/orders/{order_id}/status")
+def set_reaction_order_status(order_id: int, req: OrderStatusRequest, context_id: int = Depends(require_context)):
+    """Manual override — "I delivered the goods to the client" / "the client backed out". This
+    tool has no way to know a real reaction job finished or the goods actually changed hands, so
+    completion is always a deliberate player action, never inferred."""
+    if req.status not in ("completed", "cancelled"):
+        raise HTTPException(status_code=400, detail="status must be 'completed' or 'cancelled'")
+    ensure_reaction_orders_table()
+    con = get_connection()
+    try:
+        _get_order_or_404(con, order_id, context_id)
+        con.execute("UPDATE pp_reaction_orders SET status=? WHERE id=?", (req.status, order_id))
+        con.commit()
+        order = dict(con.execute("SELECT * FROM pp_reaction_orders WHERE id=?", (order_id,)).fetchone())
+    finally:
+        con.close()
+    return {"order": order}
+
+
+@router.delete("/api/reactions/orders/{order_id}")
+def delete_reaction_order(order_id: int, context_id: int = Depends(require_context)):
+    """Only when nothing's been committed yet (assigned_runs == 0) — once real reaction slots
+    have been claimed for this order, cancel it instead so the assignment history linked via
+    order_id never dangles."""
+    ensure_reaction_orders_table()
+    con = get_connection()
+    try:
+        order = _get_order_or_404(con, order_id, context_id)
+        if order["assigned_runs"] > 0:
+            raise HTTPException(status_code=400,
+                                 detail="Runs have already been assigned to this order — cancel it instead of deleting")
+        con.execute("DELETE FROM pp_reaction_orders WHERE id=?", (order_id,))
+        con.commit()
+    finally:
+        con.close()
+    return {"ok": True}

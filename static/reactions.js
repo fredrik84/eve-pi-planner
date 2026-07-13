@@ -81,6 +81,13 @@ function onReactionsTabOpen() {
   // this is a post-assign/cancel refresh and the user had it expanded), not on every tab open.
   const shopDetails = document.getElementById('rxShoppingDetails');
   if (shopDetails && shopDetails.open) _loadRxShoppingList();
+
+  const ordersCard = document.getElementById('rxOrdersCard');
+  if (ordersCard) {
+    const show = typeof _featureActive === 'function' && _featureActive('reaction_orders');
+    ordersCard.style.display = show ? '' : 'none';
+    if (show) _rxLoadOrders();
+  }
 }
 
 function _onRxAdvancedToggle(el) {
@@ -366,12 +373,18 @@ function _renderReactionsDashboard(data) {
       g.jobRuns.set(a.runs, (g.jobRuns.get(a.runs) || 0) + 1);
       g.ids.push(a.assignment_id);
       const pendingIcon = `https://images.evetech.net/types/${a.type_id}/icon?size=32`;
+      // A slot committed to a customer order (see the Customer orders card) carries the
+      // order's client label — lets a player tell client-committed slots apart from
+      // speculative-profit ones without opening the order itself.
+      const orderTag = a.order_label ? `<div class="rx-order-slot-tag" title="Committed to a customer order">Order: ${_esc(a.order_label)}</div>` : '';
+      const orderTip = a.order_label ? ` — for order "${a.order_label}"` : '';
       squares.push(`
-        <div class="rx-slot rx-slot-pending" title="Not running yet — install ${_esc(a.name)} ×${a.runs} in-game. Click to edit." onclick="_rxOpenEditAssign(${a.assignment_id}, '${c.character_id}')">
+        <div class="rx-slot rx-slot-pending" title="Not running yet — install ${_esc(a.name)} ×${a.runs} in-game${_esc(orderTip)}. Click to edit." onclick="_rxOpenEditAssign(${a.assignment_id}, '${c.character_id}')">
           <img class="rx-slot-icon" src="${pendingIcon}" alt="" onerror="this.style.visibility='hidden'">
           <span class="rx-slot-pending-badge" onclick="event.stopPropagation();_rxCancelAssignment(${a.assignment_id})" title="Cancel this assignment">⊘</span>
           <span class="rx-slot-runs">×${a.runs}</span>
           <div class="rx-slot-pending-label">${_esc(a.name)}</div>
+          ${orderTag}
         </div>`);
     }
     for (let i = jobs.length + pending.length; i < c.slots; i++) {
@@ -1326,4 +1339,287 @@ function _resetRxAccountSettings() {
     .then(r => { if (!r.ok) throw new Error('Reset failed'); return r.json(); })
     .then(() => { msg.textContent = 'Reverted to default.'; onReactionsTabOpen(); })
     .catch(err => { msg.textContent = err.message; });
+}
+
+// ── Customer orders: a fixed number of finished units for another player ───────────────────
+// A different framing from the day-cadence wizard above — "make me N units" instead of "keep me
+// busy at a good ISK/day." Persistent (list + detail fetched fresh each time, not a one-shot
+// calculator) and committing to it occupies real reaction slots the same way the suggestion/
+// manual-assign flow does (see app.reactions._allocate_and_insert).
+
+let _rxOrders = [];
+
+function _rxLoadOrders() {
+  const el = document.getElementById('rxOrdersContent');
+  if (!el) return;
+  fetch('/api/reactions/orders')
+    .then(r => {
+      if (!r.ok) throw new Error(r.status === 401 ? 'Log in to use Reactions' : 'Load failed');
+      return r.json();
+    })
+    .then(data => { _rxOrders = data.orders || []; _renderRxOrdersList(_rxOrders); })
+    .catch(err => { el.innerHTML = `<div class="pp-empty">${_esc(err.message)}</div>`; });
+}
+
+function _rxOrderBarHtml(o) {
+  const pct = o.top_level_runs > 0 ? Math.min(100, Math.round(100 * o.assigned_runs / o.top_level_runs)) : 0;
+  return `<div class="rx-order-bar" title="${pct}% of runs assigned"><div class="rx-order-bar-fill" style="width:${pct}%"></div></div>`;
+}
+
+function _renderRxOrdersList(orders) {
+  const el = document.getElementById('rxOrdersContent');
+  if (!el) return;
+  if (!orders.length) { el.innerHTML = '<div class="pp-empty">No customer orders yet — "+ New order" to track one.</div>'; return; }
+  const open = orders.filter(o => o.status === 'open');
+  const history = orders.filter(o => o.status !== 'open');
+  const row = o => `
+    <div class="rx-order-row" onclick="_rxOpenOrderDetail(${o.id})">
+      <div class="rx-order-info">
+        <div class="rx-order-name">${_esc(o.name)} <span class="pp-card-hint">× ${Math.round(o.target_qty).toLocaleString()} units</span></div>
+        <div class="pp-card-hint">${o.client_name ? _esc(o.client_name) + ' · ' : ''}${o.assigned_runs.toLocaleString()} / ${o.top_level_runs.toLocaleString()} runs assigned${o.status !== 'open' ? ' · ' + _esc(o.status) : ''}</div>
+      </div>
+      ${_rxOrderBarHtml(o)}
+    </div>`;
+  const openHtml = open.length ? open.map(row).join('') : '<div class="pp-empty">No open orders.</div>';
+  const historyHtml = history.length
+    ? `<details style="margin-top:10px"><summary class="pp-card-hint" style="cursor:pointer">History (${history.length})</summary>${history.map(row).join('')}</details>`
+    : '';
+  el.innerHTML = openHtml + historyHtml;
+}
+
+// ── New order modal — a separate small product-search combobox from the manual-assign one
+// above (new element ids), same datalist-search pattern, reusing the already-loaded _rxOpps list.
+
+function _rxOpenNewOrderModal() {
+  document.getElementById('rxOrderProduct').value = '';
+  document.getElementById('rxOrderQty').value = 100;
+  document.getElementById('rxOrderClient').value = '';
+  document.getElementById('rxOrderNotes').value = '';
+  document.getElementById('rxOrderCreateStatus').textContent = '';
+  _rxOrderHideProductDropdown();
+  document.getElementById('rxNewOrderModal').style.display = '';
+  const status = document.getElementById('rxOrderCreateStatus');
+  if (!_rxOppsLoaded) {
+    status.textContent = 'Loading the product list…';
+    _rxLoadOpportunities()
+      .then(() => { status.textContent = ''; })
+      .catch(err => { status.textContent = err.message; });
+  }
+}
+
+function _rxCloseNewOrderModal() {
+  document.getElementById('rxNewOrderModal').style.display = 'none';
+  _rxOrderHideProductDropdown();
+}
+
+function _rxOrderProductMatch() {
+  const name = document.getElementById('rxOrderProduct').value.trim();
+  return _rxOpps.find(o => o.name === name) || null;
+}
+
+let _rxOrderProductDropdownList = [];
+let _rxOrderProductDropdownIdx = -1;
+
+function _rxOrderProductDropdownFilter() {
+  const input = document.getElementById('rxOrderProduct');
+  const dd = document.getElementById('rxOrderProductDropdown');
+  if (!input || !dd) return;
+  const q = input.value.trim().toLowerCase();
+  const all = [..._rxOpps].sort((a, b) => a.name.localeCompare(b.name));
+  _rxOrderProductDropdownList = (q ? all.filter(o => o.name.toLowerCase().includes(q)) : all).slice(0, 200);
+  _rxOrderProductDropdownIdx = -1;
+  if (!_rxOrderProductDropdownList.length) {
+    dd.innerHTML = `<div class="rx-man-product-empty">${_rxOpps.length ? 'No matching product.' : 'Loading products…'}</div>`;
+  } else {
+    dd.innerHTML = _rxOrderProductDropdownList.map((o, i) => `
+      <div class="rx-man-product-row" data-idx="${i}" onmousedown="event.preventDefault();_rxOrderSelectProduct(${i})">
+        <img src="https://images.evetech.net/types/${o.type_id}/icon?size=32" alt="" onerror="this.style.visibility='hidden'">
+        ${_esc(o.name)}
+      </div>`).join('');
+  }
+  dd.style.display = '';
+}
+
+function _rxOrderSelectProduct(idx) {
+  const o = _rxOrderProductDropdownList[idx];
+  if (!o) return;
+  document.getElementById('rxOrderProduct').value = o.name;
+  _rxOrderHideProductDropdown();
+}
+
+function _rxOrderHideProductDropdown() {
+  const dd = document.getElementById('rxOrderProductDropdown');
+  if (dd) dd.style.display = 'none';
+  _rxOrderProductDropdownIdx = -1;
+}
+
+function _rxOrderProductDropdownKey(event) {
+  const dd = document.getElementById('rxOrderProductDropdown');
+  if (!dd || dd.style.display === 'none') return;
+  if (event.key === 'Escape') { _rxOrderHideProductDropdown(); return; }
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    event.preventDefault();
+    if (!_rxOrderProductDropdownList.length) return;
+    const dir = event.key === 'ArrowDown' ? 1 : -1;
+    _rxOrderProductDropdownIdx = (_rxOrderProductDropdownIdx + dir + _rxOrderProductDropdownList.length) % _rxOrderProductDropdownList.length;
+    [...dd.children].forEach((el, i) => el.classList.toggle('rx-man-product-active', i === _rxOrderProductDropdownIdx));
+    dd.children[_rxOrderProductDropdownIdx].scrollIntoView({ block: 'nearest' });
+  } else if (event.key === 'Enter') {
+    event.preventDefault();
+    _rxOrderSelectProduct(_rxOrderProductDropdownIdx >= 0 ? _rxOrderProductDropdownIdx : 0);
+  }
+}
+
+function _rxCreateOrder() {
+  const status = document.getElementById('rxOrderCreateStatus');
+  const o = _rxOrderProductMatch();
+  if (!o) { status.textContent = 'Pick a product from the list.'; return; }
+  const qty = parseFloat(document.getElementById('rxOrderQty').value);
+  if (!qty || qty <= 0) { status.textContent = 'Enter how many units the client wants.'; return; }
+  const clientName = document.getElementById('rxOrderClient').value.trim();
+  const notes = document.getElementById('rxOrderNotes').value.trim();
+  status.textContent = 'Creating…';
+  fetch('/api/reactions/orders', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type_id: o.type_id, target_qty: qty, client_name: clientName || null, notes: notes || null }),
+  })
+    .then(async r => { if (!r.ok) throw new Error((await r.json()).detail || 'Create failed'); return r.json(); })
+    .then(data => {
+      _rxCloseNewOrderModal();
+      _rxLoadOrders();
+      document.getElementById('rxOrderDetailModal').style.display = '';
+      _renderRxOrderDetail(data);
+    })
+    .catch(err => { status.textContent = err.message; });
+}
+
+// ── Order detail / report view ───────────────────────────────────────────────────────────────
+
+function _rxOpenOrderDetail(orderId) {
+  document.getElementById('rxOrderDetailModal').style.display = '';
+  document.getElementById('rxOrderDetailContent').innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Loading…</div>';
+  _rxFetchOrderDetail(orderId);
+}
+
+function _rxFetchOrderDetail(orderId) {
+  fetch(`/api/reactions/orders/${orderId}`)
+    .then(r => { if (!r.ok) throw new Error('Failed to load order'); return r.json(); })
+    .then(data => _renderRxOrderDetail(data))
+    .catch(err => {
+      document.getElementById('rxOrderDetailContent').innerHTML = `<div class="pp-empty">${_esc(err.message)}</div>`;
+    });
+}
+
+function _rxCloseOrderDetail() {
+  document.getElementById('rxOrderDetailModal').style.display = 'none';
+}
+
+function _renderRxOrderDetail(data) {
+  const o = data.order;
+  const el = document.getElementById('rxOrderDetailContent');
+  const titleEl = document.getElementById('rxOrderDetailTitle');
+  if (titleEl.firstChild) titleEl.firstChild.textContent = `${o.name} — order`;
+  const remaining = o.top_level_runs - o.assigned_runs;
+
+  const materialsHtml = !data.materials.length ? '<div class="pp-empty">Nothing needed right now.</div>' : `
+    <div style="overflow-x:auto">
+      <table class="pp-card-table" style="width:100%">
+        <thead><tr><th>Material</th><th>Quantity</th><th>Unit price</th><th>Est. cost</th><th>Volume</th></tr></thead>
+        <tbody>${data.materials.map(m => `<tr><td>${_esc(m.name)}</td><td>${_rxCopyQtyCell(m.quantity)}</td><td>${_fmtIsk(m.unit_cost)}</td><td>${_fmtIsk(m.unit_cost * m.quantity)}</td><td>${Math.round(m.volume_m3 || 0).toLocaleString()} m³</td></tr>`).join('')}</tbody>
+      </table>
+    </div>`;
+
+  const chainNote = !data.chain_tiers.length ? '' : `<div class="rx-manual-preview-chain" style="margin-top:6px">Also needs ${data.chain_tiers.length} intermediate reaction${data.chain_tiers.length === 1 ? '' : 's'} first: ${data.chain_tiers.map(t => `<b>${_esc(t.name)}</b> ×${t.runs.toLocaleString()}`).join(', ')}.</div>`;
+
+  const staleNote = data.stale ? '<div class="pp-card-hint" style="color:var(--clr-amber)">This product isn\'t priced/reachable right now — showing the order\'s stored numbers only, no live cost/materials breakdown.</div>' : '';
+
+  const actionButtons = o.status === 'open' ? `
+      ${remaining > 0 ? `<button id="rxOrderAssignBtn" onclick="_rxAssignOrderBatch(${o.id})">Assign next batch (${remaining.toLocaleString()} run${remaining === 1 ? '' : 's'} left)</button>` : '<span class="pp-card-hint">Every run has been assigned.</span>'}
+      <button class="pp-add-btn" onclick="_rxCompleteOrder(${o.id})">Mark completed</button>
+      <button class="pp-cancel-btn" onclick="_rxCancelOrder(${o.id})">Cancel order</button>
+      ${o.assigned_runs === 0 ? `<button class="pp-cancel-btn" onclick="_rxDeleteOrder(${o.id})">Delete</button>` : ''}
+    ` : `<span class="pp-card-hint">Order ${_esc(o.status)}.</span>`;
+
+  el.innerHTML = `
+    <div class="pp-card-hint">${o.client_name ? `For <b>${_esc(o.client_name)}</b> — ` : ''}${Math.round(o.target_qty).toLocaleString()} units needed → ${o.top_level_runs.toLocaleString()} reaction run${o.top_level_runs === 1 ? '' : 's'}</div>
+    ${o.notes ? `<div class="pp-card-hint" style="margin-top:2px">${_esc(o.notes)}</div>` : ''}
+    ${staleNote}
+
+    <div style="margin:10px 0 4px">${_rxOrderBarHtml(o)}</div>
+    <div class="pp-card-hint">${o.assigned_runs.toLocaleString()} / ${o.top_level_runs.toLocaleString()} runs assigned to characters</div>
+
+    ${!data.stale ? `
+    <div class="pp-card-title" style="margin-top:14px;font-size:14px">Cost to produce</div>
+    <div class="rx-manual-preview">
+      <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Materials</span><b>${_fmtIsk(data.cost.material_cost)}</b></div>
+      ${data.cost.job_cost ? `<div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Job install fees</span><b>${_fmtIsk(data.cost.job_cost)}</b></div>` : ''}
+      <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Total</span><b>${_fmtIsk(data.cost.total_cost)}</b></div>
+      <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Per unit</span><b>${_fmtIsk(data.cost.cost_per_unit)}</b></div>
+    </div>
+    <div class="pp-card-hint">No markup applied — decide what to charge the client yourself.</div>
+
+    <div class="pp-card-title" style="margin-top:14px;font-size:14px">Time estimate</div>
+    <div class="pp-card-hint">${data.time.free_slots_now} free slot${data.time.free_slots_now === 1 ? '' : 's'} right now → about ${_fmtHours(data.time.estimated_hours)} start to finish. ${_esc(data.time.caveat || '')}</div>
+    ${chainNote}
+
+    <div class="pp-card-title" style="margin-top:14px;font-size:14px">Materials to import (full chain, ${Math.round(o.target_qty).toLocaleString()} units)</div>
+    ${materialsHtml}
+    ` : ''}
+
+    <div class="pp-modal-actions" style="margin-top:14px;flex-wrap:wrap">
+      ${actionButtons}
+      <button class="pp-cancel-btn" onclick="_rxCloseOrderDetail()">Close</button>
+      <span id="rxOrderDetailStatus" class="bug-status-msg"></span>
+    </div>`;
+}
+
+function _rxAssignOrderBatch(orderId) {
+  const status = document.getElementById('rxOrderDetailStatus');
+  const btn = document.getElementById('rxOrderAssignBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Assigning…'; }
+  fetch(`/api/reactions/orders/${orderId}/assign`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}),
+  })
+    .then(async r => { if (!r.ok) throw new Error((await r.json()).detail || 'Assign failed'); return r.json(); })
+    .then(data => {
+      if (status) status.textContent = `Assigned ${data.runs_assigned.toLocaleString()} run${data.runs_assigned === 1 ? '' : 's'} to ${data.characters.map(c => c.character_name).join(', ')}.`;
+      _rxFetchOrderDetail(orderId);
+      _rxLoadOrders();
+      onReactionsTabOpen();
+    })
+    .catch(err => {
+      if (status) status.textContent = err.message;
+      if (btn) { btn.disabled = false; btn.textContent = 'Retry'; }
+    });
+}
+
+function _rxSetOrderStatus(orderId, newStatus) {
+  fetch(`/api/reactions/orders/${orderId}/status`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: newStatus }),
+  })
+    .then(async r => { if (!r.ok) throw new Error((await r.json()).detail || 'Failed'); return r.json(); })
+    .then(() => { _rxFetchOrderDetail(orderId); _rxLoadOrders(); })
+    .catch(err => {
+      const s = document.getElementById('rxOrderDetailStatus');
+      if (s) s.textContent = err.message;
+    });
+}
+
+function _rxCompleteOrder(orderId) { _rxSetOrderStatus(orderId, 'completed'); }
+
+function _rxCancelOrder(orderId) {
+  if (!confirm('Cancel this order? Already-assigned reaction slots are left as-is — cancel those separately from the dashboard if you want the slots freed too.')) return;
+  _rxSetOrderStatus(orderId, 'cancelled');
+}
+
+function _rxDeleteOrder(orderId) {
+  if (!confirm('Delete this order? This cannot be undone.')) return;
+  fetch(`/api/reactions/orders/${orderId}`, { method: 'DELETE' })
+    .then(async r => { if (!r.ok) throw new Error((await r.json()).detail || 'Delete failed'); })
+    .then(() => { _rxCloseOrderDetail(); _rxLoadOrders(); })
+    .catch(err => {
+      const s = document.getElementById('rxOrderDetailStatus');
+      if (s) s.textContent = err.message;
+    });
 }

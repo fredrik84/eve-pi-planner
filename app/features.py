@@ -107,6 +107,13 @@ FEATURE_REGISTRY = [
                     "logged-in user regardless of this flag's state, so rolling it to 'public' "
                     "just reveals the tab to everyone.",
      "default": False},
+    {"key": "reaction_orders", "label": "Reactions: customer orders", "group": "Reactions",
+     "description": "On the Reactions tab: track a fixed-unit order for another player — runs "
+                    "needed for the whole chain, materials to import, a cost breakdown (no "
+                    "markup applied — you decide what to charge), and a rough time estimate. "
+                    "Committing to an order occupies real reaction slots the same way the "
+                    "suggestion/manual-assign flow does.",
+     "default": False},
 ]
 GROUP_ORDER = ["Dashboard", "Setup Analysis", "Planner", "Planet DB", "Characters",
                "Notifications & Alerts", "Reactions"]

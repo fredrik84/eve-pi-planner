@@ -649,3 +649,21 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .rx-hint-row .rx-sugg-assign-btn { margin-top: 1px; }
 .rx-hint-text { flex: 1 1 240px; min-width: 0; }
 
+/* Customer orders (fixed-unit jobs for another player) */
+.rx-order-row {
+  display: flex; align-items: center; gap: 12px; padding: 9px 10px; background: #161b28;
+  border: 1px solid var(--clr-border); border-radius: 7px; margin-bottom: 6px; cursor: pointer;
+}
+.rx-order-row:hover { background: #1c2436; }
+.rx-order-info { flex: 1; min-width: 0; }
+.rx-order-name { font-size: 13px; color: var(--clr-text); }
+.rx-order-bar {
+  width: 90px; flex: 0 0 auto; height: 8px; background: #10141e; border: 1px solid var(--clr-border);
+  border-radius: 4px; overflow: hidden;
+}
+.rx-order-bar-fill { height: 100%; background: #3a7ac0; border-radius: 3px 0 0 3px; }
+.rx-order-slot-tag {
+  font-size: 9px; color: #e0c07a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  max-width: 100%;
+}
+
