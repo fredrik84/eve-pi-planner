@@ -1199,11 +1199,23 @@ function _renderReactions() {
       ${rows.length} opportunit${rows.length === 1 ? 'y' : 'ies'} · click a row for steps, job cost, sell-order
       price/profit, ISK/m³ and market depth · Output value/Profit use the instant-sell price ·
       Ship+collateral uses the configured import/export rates.
-    </div>
-    ${_rxCanEditSettings() ? _rxSettingsFormHtml() : ''}
-    ${_rxAccountSettingsFormHtml()}`;
+    </div>`;
+}
+
+// ── Settings modal (shipping/collateral/job-cost/time-efficiency) — a real "⚙ Settings" button
+// on the Metrics card, not buried at the bottom of the (collapsed-by-default) Advanced table,
+// which real feedback confirmed was undiscoverable ("Why is it there? That doesn't help me at
+// all.") once time-efficiency became something people actually need to configure up front.
+function _rxOpenSettingsModal() {
+  const el = document.getElementById('rxSettingsModalContent');
+  el.innerHTML = (_rxCanEditSettings() ? _rxSettingsFormHtml() : '') + _rxAccountSettingsFormHtml();
+  document.getElementById('rxSettingsModal').style.display = '';
   if (_rxCanEditSettings()) _loadRxSettings();
   _loadRxAccountSettings();
+}
+
+function _rxCloseSettingsModal() {
+  document.getElementById('rxSettingsModal').style.display = 'none';
 }
 
 // Site admins can always preview/edit; a non-admin sees the form only if they manage at least
