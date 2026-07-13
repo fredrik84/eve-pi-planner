@@ -323,12 +323,19 @@ function _renderReactionsDashboard(data) {
 
   // Pending assignments are one row per actual in-game job slot (see assign_reaction), so a
   // single big suggestion can produce a dozen identical-looking rows — group them back into ONE
-  // todo line per (character, product, runs) with a "×N jobs" count instead of repeating the
-  // same instruction over and over.
+  // todo line per (character, product) — even across different run-sizes, e.g. a batch split
+  // unevenly across jobs — with a job-count/total-runs breakdown, instead of repeating the same
+  // instruction over and over. Grouped by type_id (not name) so it can't accidentally merge two
+  // different products that happen to share a display name.
   const todoGroups = new Map();
   const rows = tracked.map(c => {
-    const jobs = jobsByChar.get(c.character_name) || [];
-    const pending = c.pending || [];
+    // Sorted by product name (running AND pending) so same-product squares cluster together in
+    // the row instead of appearing in arbitrary insertion order — several interleaved products
+    // was the actual "too messy to read off" complaint, not just the missing summary below.
+    const jobs = (jobsByChar.get(c.character_name) || [])
+      .slice().sort((a, b) => _rxProductName(a.product_type_id).localeCompare(_rxProductName(b.product_type_id)));
+    const pending = (c.pending || [])
+      .slice().sort((a, b) => a.name.localeCompare(b.name) || a.runs - b.runs);
     const squares = jobs.map(j => {
       const icon = `https://images.evetech.net/types/${j.product_type_id}/icon?size=32`;
       const timer = j.hours_left != null ? _fmtHours(j.hours_left) : '—';
@@ -346,12 +353,17 @@ function _renderReactionsDashboard(data) {
     // Click to cancel the assignment (e.g. changed your mind, or already did it under a
     // different product than planned).
     for (const a of pending) {
-      const key = `${c.character_name} ${a.name} ${a.runs}`;
+      const key = `${c.character_id}:${a.type_id}`;
       if (!todoGroups.has(key)) {
-        todoGroups.set(key, { character_name: c.character_name, name: a.name, runs: a.runs, count: 0, ids: [] });
+        todoGroups.set(key, {
+          character_name: c.character_name, type_id: a.type_id, name: a.name,
+          count: 0, totalRuns: 0, jobRuns: new Map(), ids: [],
+        });
       }
       const g = todoGroups.get(key);
       g.count++;
+      g.totalRuns += a.runs;
+      g.jobRuns.set(a.runs, (g.jobRuns.get(a.runs) || 0) + 1);
       g.ids.push(a.assignment_id);
       const pendingIcon = `https://images.evetech.net/types/${a.type_id}/icon?size=32`;
       squares.push(`
@@ -371,6 +383,37 @@ function _renderReactionsDashboard(data) {
         <div class="rx-slot-row">${squares.join('')}</div>
       </div>`;
   }).join('');
+
+  // A sorted, one-line-per-(character, product) checklist — the per-slot squares above are
+  // authoritative but easy to miscount at a glance once several products are interleaved across
+  // many small squares; this is the "exactly what do I install, and how many of each" reference
+  // to read off right before actually starting jobs in-game (real feedback: the square grid
+  // alone was too messy for that). Purely informational, not a nagging banner — the
+  // "Needs attention"-style banner this replaces a version of was removed for nagging about
+  // things you hadn't gotten to yet; this is a checklist you consult once while installing, not
+  // a persistent warning.
+  const todoRows = [...todoGroups.values()]
+    .sort((a, b) => a.character_name.localeCompare(b.character_name) || a.name.localeCompare(b.name));
+  const todoListHtml = !todoRows.length ? '' : `
+    <div class="pp-card-hint" style="font-weight:600;margin:2px 0 4px">
+      To install — ${todoRows.reduce((s, g) => s + g.totalRuns, 0).toLocaleString()} runs across ${todoRows.length} product${todoRows.length === 1 ? '' : 's'}
+    </div>
+    <div style="overflow-x:auto;margin-bottom:12px">
+      <table class="pp-card-table" style="width:100%">
+        <thead><tr><th>Character</th><th>Product</th><th>Jobs</th><th>Total runs</th></tr></thead>
+        <tbody>${todoRows.map(g => {
+          const jobBreakdown = [...g.jobRuns.entries()].sort((a, b) => b[0] - a[0])
+            .map(([runs, n]) => n > 1 ? `${n}×${runs} runs` : `${runs} runs`).join(' + ');
+          return `
+          <tr>
+            <td>${_esc(g.character_name)}</td>
+            <td><img src="https://images.evetech.net/types/${g.type_id}/icon?size=32" alt="" style="width:16px;height:16px;border-radius:3px;vertical-align:middle;margin-right:5px" onerror="this.style.display='none'">${_esc(g.name)}</td>
+            <td>${_esc(jobBreakdown)}</td>
+            <td><b>${g.totalRuns.toLocaleString()}</b></td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table>
+    </div>`;
 
   // Easy at-a-glance numbers, first thing on the page — same big-number-tile pattern as the PI
   // Dashboard's own "Overview" row (_dashTile, dashboard.js), not a small text line buried below
@@ -398,7 +441,7 @@ function _renderReactionsDashboard(data) {
 
   if (metricsEl) metricsEl.innerHTML = overviewTiles;
 
-  el.innerHTML = rows + untrackedNote;
+  el.innerHTML = todoListHtml + rows + untrackedNote;
 }
 
 function _rxCancelAssignment(assignmentId) {
