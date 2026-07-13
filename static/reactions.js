@@ -250,6 +250,22 @@ function _rxCopyShoppingList(btn) {
   });
 }
 
+// Same "name <tab> quantity" copy pattern as the general shopping list, scoped to one order's
+// own materials report (see _renderRxOrderDetail) — a customer order's needs are deliberately
+// kept separate from the general list (see reactions_shopping_list's own docstring), so it gets
+// its own copy button rather than reusing _rxLastShoppingList/_rxCopyShoppingList.
+let _rxLastOrderMaterials = [];
+
+function _rxCopyOrderMaterials(btn) {
+  const text = _rxLastOrderMaterials.map(m => `${m.name}\t${m.quantity}`).join('\n');
+  if (!text) return;
+  navigator.clipboard.writeText(text).then(() => {
+    const orig = btn.textContent;
+    btn.textContent = 'Copied ✓';
+    setTimeout(() => { btn.textContent = orig; }, 1500);
+  });
+}
+
 // Best-effort name lookup via whatever the opportunity list has already loaded — falls back to
 // the raw type_id (no dedicated type-name endpoint is worth adding just for this display).
 function _rxProductName(type_id) {
@@ -1596,6 +1612,7 @@ function _renderRxOrderDetail(data) {
   if (titleEl.firstChild) titleEl.firstChild.textContent = `${o.name} — order`;
   const remaining = o.top_level_runs - o.assigned_runs;
 
+  _rxLastOrderMaterials = data.materials;
   const materialsHtml = !data.materials.length ? '<div class="pp-empty">Nothing needed right now.</div>' : `
     <div style="overflow-x:auto">
       <table class="pp-card-table" style="width:100%">
@@ -1637,7 +1654,9 @@ function _renderRxOrderDetail(data) {
     <div class="pp-card-hint">${data.time.free_slots_now} free slot${data.time.free_slots_now === 1 ? '' : 's'} right now → about ${_fmtHours(data.time.estimated_hours)} start to finish. ${_esc(data.time.caveat || '')}</div>
     ${chainNote}
 
-    <div class="pp-card-title" style="margin-top:14px;font-size:14px">Materials to import (full chain, ${Math.round(o.target_qty).toLocaleString()} units)</div>
+    <div class="pp-card-title" style="margin-top:14px;font-size:14px">Materials to import (full chain, ${Math.round(o.target_qty).toLocaleString()} units)
+      ${data.materials.length ? `<button class="pp-add-btn" onclick="_rxCopyOrderMaterials(this)">Copy for Janice</button>` : ''}
+    </div>
     ${materialsHtml}
     ` : ''}
 

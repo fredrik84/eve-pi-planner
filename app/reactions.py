@@ -806,10 +806,17 @@ def _materials_report(totals: dict[int, float], reached: dict, types: dict) -> l
 
 @router.get("/api/reactions/shopping-list")
 def reactions_shopping_list(context_id: int = Depends(require_context)):
-    """Total raw materials needed across every one of the caller's pending assignments (see
-    assign_reaction) — moon goo AND any purchased materials (fuel blocks etc.), summed and
-    broken down to the same leaf level the profitability table prices from. Meant to be copied
-    straight into a Jita multibuy tool (Janice) or the alliance's goo buy channel."""
+    """Total raw materials needed across every one of the caller's pending SPECULATIVE-PROFIT
+    assignments (see assign_reaction) — moon goo AND any purchased materials (fuel blocks etc.),
+    summed and broken down to the same leaf level the profitability table prices from. Meant to
+    be copied straight into a Jita multibuy tool (Janice) or the alliance's goo buy channel.
+
+    Deliberately EXCLUDES order-linked assignments (order_id IS NOT NULL) — a customer order
+    already has its own materials report scoped to that specific order (GET
+    /api/reactions/orders/{id}, sized off the order's own target_qty, not whatever a partial
+    batch has been assigned so far), so folding it into this general list would both double-count
+    against the order's own report and mix a client's specific requirement into an unrelated
+    general shopping run."""
     ensure_reaction_assignments_table()
     con = get_connection()
     try:
@@ -821,7 +828,8 @@ def reactions_shopping_list(context_id: int = Depends(require_context)):
             return {"materials": []}
         placeholders = ",".join("?" * len(char_ids))
         assignments = con.execute(
-            f"SELECT type_id, runs FROM pp_reaction_assignments WHERE character_id IN ({placeholders})",
+            f"SELECT type_id, runs FROM pp_reaction_assignments "
+            f"WHERE character_id IN ({placeholders}) AND order_id IS NULL",
             char_ids,
         ).fetchall()
     finally:
