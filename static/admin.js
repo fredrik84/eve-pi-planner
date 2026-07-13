@@ -573,6 +573,16 @@ function renderAdminStats(s) {
       ],
     },
     {
+      heading: 'Reactions',
+      tiles: [
+        tile(s.reaction_characters ?? 0, 'characters using'),
+        tile(s.reaction_accounts ?? 0, 'accounts using'),
+        tile((s.reaction_jobs_planned ?? 0).toLocaleString(), 'jobs planned'),
+        tile((s.reaction_jobs_running ?? 0).toLocaleString(), 'jobs running'),
+        tile((s.reaction_orders_open ?? 0) + ' / ' + (s.reaction_orders_total ?? 0), 'orders open / total'),
+      ],
+    },
+    {
       heading: 'Raw data',
       tiles: [
         tile(s.char_planet_scans, 'colony scans'),

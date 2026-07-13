@@ -6,6 +6,7 @@ multi-product engine as the built-in Fuel Blocks basket (see `fuelblock_planner`
 logged-in user can pick a basket as a wizard target. Only admins create/edit/delete them.
 """
 import gc
+import json
 import os
 import sys
 from datetime import datetime, timezone
@@ -454,6 +455,35 @@ def admin_stats(_: int = Depends(require_admin)):
     s["sessions_stale_90d"] = con.execute(
         "SELECT COUNT(*) FROM pp_sessions WHERE created_at < datetime('now', '-90 days')"
     ).fetchone()[0]
+
+    # Reactions (moon-goo tool). Tables may not exist on a brand-new DB — ensure first.
+    from app.reactions.jobs import (
+        ensure_industry_jobs_table, ensure_reaction_assignments_table, ensure_reaction_orders_table,
+    )
+    ensure_industry_jobs_table()
+    ensure_reaction_assignments_table()
+    ensure_reaction_orders_table()
+    # "Uses it" = opted a character into reaction-job tracking (has the read_character_jobs scope).
+    s["reaction_characters"] = con.execute(
+        "SELECT COUNT(*) FROM pp_characters WHERE scopes LIKE '%read_character_jobs%'"
+    ).fetchone()[0]
+    s["reaction_accounts"] = con.execute(
+        "SELECT COUNT(DISTINCT context_id) FROM pp_characters WHERE scopes LIKE '%read_character_jobs%'"
+    ).fetchone()[0]
+    # Planned = persistent plan slots; running = live reaction jobs pulled from ESI (jobs_json is
+    # already filtered to activity 9 at fetch time, so a flat count across rows is the job total).
+    s["reaction_jobs_planned"] = con.execute("SELECT COUNT(*) FROM pp_reaction_assignments").fetchone()[0]
+    _rx_running = 0
+    for row in con.execute("SELECT jobs_json FROM pp_char_industry_jobs").fetchall():
+        try:
+            _rx_running += len(json.loads(row[0] or "[]"))
+        except Exception:
+            pass
+    s["reaction_jobs_running"] = _rx_running
+    s["reaction_orders_open"] = con.execute(
+        "SELECT COUNT(*) FROM pp_reaction_orders WHERE status='open'"
+    ).fetchone()[0]
+    s["reaction_orders_total"] = con.execute("SELECT COUNT(*) FROM pp_reaction_orders").fetchone()[0]
 
     con.close()
     cache_set_json(_ADMIN_STATS_CACHE_KEY, s, ttl=_ADMIN_STATS_TTL)
