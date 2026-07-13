@@ -1371,7 +1371,11 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
                 is_chain_tier = a["input_cost"] == 0 and a["reward"] == 0
                 m = market_by_type.get(a["type_id"])
                 out_qty_per_run = output_qty_by_type.get(a["type_id"], 0.0)
-                row_output_value = (a["runs"] * out_qty_per_run * m["buy_price"]) if (m and out_qty_per_run and not is_chain_tier) else 0.0
+                # Value the output at the Fuzzworks SELL (list) price — what the product is worth on
+                # the market if you sell it the normal way — matching the opportunity list's
+                # order_value. Was buy_price (instant-dump-to-buy-orders), which understated every
+                # planned batch vs. the same product's number in the Advanced/opportunity table.
+                row_output_value = (a["runs"] * out_qty_per_run * m["sell_price"]) if (m and out_qty_per_run and not is_chain_tier) else 0.0
                 pending.append({
                     "assignment_id": a["id"], "type_id": a["type_id"], "name": a["name"], "runs": a["runs"],
                     "tier_order": a["tier_order"], "input_cost": a["input_cost"], "reward": a["reward"],
