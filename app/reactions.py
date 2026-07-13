@@ -899,8 +899,16 @@ def _resolve_structure_name(structure_id: int, access_token: str) -> str:
     return name
 
 
+# EVE industry activity id for Reactions is 9 (Manufacturing=1, ME research=4, …). Verified
+# against live corp/character industry-jobs responses — a reaction-heavy corp's jobs are all
+# activity 9, and there is no activity 11 at all. An earlier value of 11 here was wrong but never
+# caught, because the jobs table was never populated (the refresh was unwired) so the filter never
+# actually ran against real data.
+REACTION_ACTIVITY_ID = 9
+
+
 def fetch_industry_jobs(character_id: int, access_token: str) -> list[dict]:
-    """Fetch this character's reaction jobs (activity_id 11) from ESI, resolving each distinct
+    """Fetch this character's reaction jobs (activity_id 9) from ESI, resolving each distinct
     facility to a readable name. Best-effort: returns [] on any failure rather than raising —
     a refresh failing for one character must not block the others."""
     try:
@@ -915,7 +923,7 @@ def fetch_industry_jobs(character_id: int, access_token: str) -> list[dict]:
     except Exception:
         return []
 
-    reaction_jobs = [j for j in jobs if j.get("activity_id") == 11]
+    reaction_jobs = [j for j in jobs if j.get("activity_id") == REACTION_ACTIVITY_ID]
     for j in reaction_jobs:
         fac_id = j.get("facility_id")
         j["facility_name"] = _resolve_structure_name(fac_id, access_token) if fac_id else "Unknown"
@@ -947,7 +955,7 @@ def fetch_corp_industry_jobs(character_id: int, access_token: str) -> list[dict]
     except Exception:
         return []
 
-    reaction_jobs = [j for j in jobs if j.get("activity_id") == 11 and j.get("installer_id") == character_id]
+    reaction_jobs = [j for j in jobs if j.get("activity_id") == REACTION_ACTIVITY_ID and j.get("installer_id") == character_id]
     for j in reaction_jobs:
         fac_id = j.get("facility_id")
         j["facility_name"] = _resolve_structure_name(fac_id, access_token) if fac_id else "Unknown"

@@ -246,7 +246,7 @@ def list_characters(pp_session: str = Cookie(default=None)):
             except Exception:
                 continue
             for job in jobs:
-                if job.get("activity_id") != 11 or job.get("status") not in ("active", "paused", "ready"):
+                if job.get("activity_id") != 9 or job.get("status") not in ("active", "paused", "ready"):  # 9 = Reactions
                     continue
                 _raw_jobs.append((j["character_id"], job))
                 if job.get("product_type_id"):
