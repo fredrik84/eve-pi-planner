@@ -525,6 +525,16 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .rx-slot-pending-badge:hover { background: #3a1515; border-color: #a83a3a; }
 .rx-slot-pending-label { font-size: 9px; color: #c87a7a; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 62px; }
 
+/* An orphan running job (installed in-game, not in the plan): amber dashed edge to set it apart
+   from a planned running slot, plus a small "⊕ plan" pill to adopt it into the recurring plan. */
+.rx-slot-orphan { border-style: dashed; border-color: #b08a3a; }
+.rx-slot-orphan-badge {
+  position: absolute; top: -7px; left: -5px; font-size: 8px; line-height: 1; white-space: nowrap;
+  color: #f0c860; background: #241d0e; border: 1px solid #7a5f2a; border-radius: 6px;
+  padding: 2px 4px; cursor: pointer; transition: background 0.15s, border-color 0.15s;
+}
+.rx-slot-orphan-badge:hover { background: #3a2f14; border-color: #b08a3a; color: #ffe08a; }
+
 /* A <details><summary class="pp-card-title"> used as a foldable card header: the plain
    .pp-card-title class alone renders fine as a <div>, but a <summary> defaults to
    display:list-item — without overriding that, the flex/full-width background from

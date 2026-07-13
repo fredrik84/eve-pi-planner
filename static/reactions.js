@@ -312,6 +312,21 @@ function _rxRefreshJobs(force, btn) {
     .finally(() => { if (btn) { btn.disabled = false; btn.textContent = orig; } });
 }
 
+// Adopt an orphan running job (installed in-game with no plan slot) into the recurring plan — the
+// server costs it from the SDE recipe and creates the plan rows, after which it counts as planned
+// (covers the running job now, reappears as "to install" and joins the shopping list next cycle).
+function _rxAdoptOrphan(characterId, typeId, runs, btn) {
+  if (btn) { btn.textContent = '…'; btn.style.pointerEvents = 'none'; }
+  fetch('/api/reactions/adopt-orphan', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ character_id: Number(characterId), type_id: Number(typeId), runs: Number(runs) }),
+  })
+    .then(async r => { if (!r.ok) throw new Error((await r.json()).detail || 'Failed to add to plan'); return r.json(); })
+    .then(() => { _rxLastDashboardData = null; _loadReactionsDashboard(); })
+    .catch(err => { alert(err.message); if (btn) { btn.textContent = '⊕ plan'; btn.style.pointerEvents = ''; } });
+}
+
 function _renderReactionsDashboard(data) {
   const el = document.getElementById('rxDashboardContent');
   const metricsEl = document.getElementById('rxMetricsContent');
@@ -382,12 +397,19 @@ function _renderReactionsDashboard(data) {
       const icon = `https://images.evetech.net/types/${j.product_type_id}/icon?size=32`;
       const timer = j.hours_left != null ? _fmtHours(j.hours_left) : '—';
       const runsLabel = j.runs != null ? `×${j.runs}` : '';
-      const tip = `${_rxProductName(j.product_type_id)} — ${runsLabel ? runsLabel + ' runs — ' : ''}finished in ${timer}${j.facility_name ? ' — ' + j.facility_name : ''}`;
+      // An "orphan" is a job running in-game with no plan slot (installed outside this tool). It's
+      // valued in the totals but is NOT part of the recurring loadout until adopted — the ⊕ badge
+      // adds it to the plan so it re-appears as "to install" (and joins the shopping list) next cycle.
+      const tip = `${_rxProductName(j.product_type_id)} — ${runsLabel ? runsLabel + ' runs — ' : ''}finished in ${timer}${j.facility_name ? ' — ' + j.facility_name : ''}${j.orphan ? ' — NOT in your plan (orphan)' : ''}`;
+      const orphanBadge = j.orphan
+        ? `<span class="rx-slot-orphan-badge" title="Not in your plan — click to add it so it recurs next cycle" onclick="event.stopPropagation();_rxAdoptOrphan(${j.character_id}, ${j.product_type_id}, ${j.runs || 0}, this)">⊕ plan</span>`
+        : '';
       return `
-        <div class="rx-slot rx-slot-filled" title="${_esc(tip)}">
+        <div class="rx-slot rx-slot-filled${j.orphan ? ' rx-slot-orphan' : ''}" title="${_esc(tip)}">
           <img class="rx-slot-icon" src="${icon}" alt="" onerror="this.style.visibility='hidden'">
           <div class="rx-slot-timer">${_esc(timer)}</div>
           ${runsLabel ? `<span class="rx-slot-runs">${_esc(runsLabel)}</span>` : ''}
+          ${orphanBadge}
         </div>`;
     });
     // Assigned (via the wizard's "Assign") but ESI hasn't confirmed it's actually running yet —

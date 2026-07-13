@@ -1201,6 +1201,73 @@ def assign_reaction(req: AssignRequest, context_id: int = Depends(require_contex
     return {"ok": True}
 
 
+class AdoptOrphanRequest(BaseModel):
+    character_id: int
+    type_id: int
+    runs: int
+
+
+@router.post("/api/reactions/adopt-orphan")
+def adopt_orphan_job(req: AdoptOrphanRequest, context_id: int = Depends(require_context)):
+    """Adopt an ORPHAN running job (one installed in-game with no plan slot — see get_industry_jobs'
+    `orphan` flag) INTO the recurring plan. Creates the same pp_reaction_assignments rows a normal
+    assign would (top-level + any chain tiers), costed entirely server-side from our own SDE recipe
+    — ESI only told us the product + run count, the recipe gives everything else. Once adopted it
+    matches (covers) the running job, so it stays hidden from "to install" while the job runs and
+    reappears as "to install" when the job finishes: it's now part of the recurring loadout and its
+    materials join the next-cycle shopping list. An orphan left un-adopted stays a one-off and never
+    becomes recurring."""
+    ensure_reaction_assignments_table()
+    # All own-connection helpers below run BEFORE the write connection is opened — never hold two at
+    # once (the 2026-07-13 pool-exhaustion incident).
+    loaded = _load_goo_and_reached(context_id)
+    if loaded is None:
+        raise HTTPException(status_code=400, detail="No priced materials to cost this reaction")
+    _goo, reached, _rbo, _ibr, types = loaded
+    node = reached.get(req.type_id)
+    if not node or not node.get("via"):
+        raise HTTPException(status_code=400, detail="Not a reachable reaction product")
+
+    settings = effective_reaction_settings(context_id)
+    m = fetch_market_data([req.type_id]).get(req.type_id)
+    out_qty = node["via"]["output_qty"]
+    total_out = req.runs * out_qty
+    input_cost = total_out * node.get("unit_cost", 0.0)          # materials only (matches plan rows)
+    job_cost = total_out * node.get("job_cost", 0.0)
+    output_value = total_out * m["sell_price"] if m else 0.0
+    vol = (types.get(req.type_id, {}).get("volume") or 0.0)
+    shipping = total_out * vol * settings.get("export_isk_per_m3", 0.0)
+    collateral = output_value * settings.get("export_collateral_pct", 0.0)
+    reward = output_value - input_cost - job_cost - shipping - collateral
+
+    # Chain tiers (intermediate reactions this formula needs), same as assign_reaction — recorded at
+    # 0 cost since the whole chain's cost already rolls up into the top-level row's unit_cost.
+    tier_runs: dict[int, dict] = {}
+    _explode_chain_tiers(node["via"]["inputs"], req.runs, reached, tier_runs)
+    ordered = sorted(tier_runs.items(), key=lambda kv: reached.get(kv[0], {}).get("reaction_count", 0))
+
+    con = get_connection()
+    try:
+        owner = con.execute(
+            "SELECT 1 FROM pp_characters WHERE character_id=? AND context_id=?",
+            (req.character_id, context_id),
+        ).fetchone()
+        if not owner:
+            raise HTTPException(status_code=403, detail="Not your character")
+        now = _time.time()
+        for tier_order, (tier_tid, info) in enumerate(ordered):
+            _insert_assignment_rows(con, req.character_id, tier_tid,
+                                     types.get(tier_tid, {}).get("name", str(tier_tid)),
+                                     info["runs"], 1, 0.0, 0.0, tier_order, now)
+        _insert_assignment_rows(con, req.character_id, req.type_id,
+                                 types.get(req.type_id, {}).get("name", str(req.type_id)),
+                                 req.runs, 1, input_cost, reward, len(ordered), now)
+        con.commit()
+    finally:
+        con.close()
+    return {"ok": True}
+
+
 @router.delete("/api/reactions/assign/{assignment_id}")
 def unassign_reaction(assignment_id: int, context_id: int = Depends(require_context)):
     ensure_reaction_assignments_table()
@@ -1392,22 +1459,22 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
                 })
         used_slots += len(pending)
 
-        # After matching, whatever remains in running_type_counts is running jobs with no plan row
-        # (installed in-game outside the tool). Pull the actual job objects (need their real `runs`)
-        # so they can be valued from the SDE recipe after the loop.
-        _leftover = dict(running_type_counts)
-        for j in active:
-            tid = j.get("product_type_id")
-            if _leftover.get(tid, 0) > 0:
-                _leftover[tid] -= 1
-                unplanned_running.append((tid, j.get("runs") or 0))
-
         characters.append({
             "character_id": c["character_id"], "character_name": c["character_name"], "tracked": True,
             "slots": slots, "free_slots": max(0, slots - len(active) - len(pending)),
             "pending": pending,
         })
+        # Whatever remains in running_type_counts after plan-row matching is ORPHAN jobs: running
+        # in-game with no plan slot (installed outside the tool's assign flow — e.g. a corp job).
+        # Flag each running job as orphan/planned here, collect orphans for SDE-recipe valuation
+        # after the loop, and carry character_id so the UI can offer "add to plan" on an orphan.
+        orphan_remaining = dict(running_type_counts)
         for j in active:
+            tid = j.get("product_type_id")
+            is_orphan = orphan_remaining.get(tid, 0) > 0
+            if is_orphan:
+                orphan_remaining[tid] -= 1
+                unplanned_running.append((tid, j.get("runs") or 0))
             end = j.get("end_date")
             hours_left = None
             if end:
@@ -1417,12 +1484,14 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
                 except Exception:
                     pass
             running.append({
+                "character_id": c["character_id"],
                 "character_name": c["character_name"],
-                "product_type_id": j.get("product_type_id"),
+                "product_type_id": tid,
                 "runs": j.get("runs"),
                 "facility_name": j.get("facility_name"),
                 "status": j.get("status"),
                 "hours_left": hours_left,
+                "orphan": is_orphan,
             })
 
     # Value running jobs that had no plan slot (installed in-game outside the tool) from our OWN
