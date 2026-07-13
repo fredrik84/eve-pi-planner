@@ -13,6 +13,7 @@ from app.market import fetch_market_data
 from app.industry_cost import fetch_system_cost_index, fetch_adjusted_prices
 from app.cache import cache_get_json, cache_set_json
 from app.esi import require_context
+from app.groups import member_group
 
 from app.reactions._router import router
 from app.reactions.settings import effective_reaction_settings, _resolve_system_id
@@ -555,6 +556,9 @@ def reactions_shopping_list(context_id: int = Depends(require_context)):
     batch has been assigned so far), so folding it into this general list would both double-count
     against the order's own report and mix a client's specific requirement into an unrelated
     general shopping run."""
+    # Deferred import: this reads the jobs-layer plan table, but jobs imports graph, so graph can
+    # only reach jobs at call time (not module load) without a circular import.
+    from app.reactions.jobs import ensure_reaction_assignments_table
     ensure_reaction_assignments_table()
     con = get_connection()
     try:
