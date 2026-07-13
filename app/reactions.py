@@ -1324,6 +1324,9 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
     tracked_any = False
     pending_isk_committed = pending_net_profit = pending_net_profit_per_day = 0.0
     pending_output_value = 0.0
+    unplanned_running: list[tuple[int, float]] = []  # (product_type_id, runs) of running jobs with
+    # no covering plan row — installed straight in-game (e.g. a corp job) rather than via the tool's
+    # assign flow. Valued after the loop from our own SDE recipe so they still count in the totals.
     for c in chars:
         opted_in = "read_character_jobs" in (c["scopes"] or "")
         slots = reaction_slots(c)
@@ -1389,6 +1392,16 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
                 })
         used_slots += len(pending)
 
+        # After matching, whatever remains in running_type_counts is running jobs with no plan row
+        # (installed in-game outside the tool). Pull the actual job objects (need their real `runs`)
+        # so they can be valued from the SDE recipe after the loop.
+        _leftover = dict(running_type_counts)
+        for j in active:
+            tid = j.get("product_type_id")
+            if _leftover.get(tid, 0) > 0:
+                _leftover[tid] -= 1
+                unplanned_running.append((tid, j.get("runs") or 0))
+
         characters.append({
             "character_id": c["character_id"], "character_name": c["character_name"], "tracked": True,
             "slots": slots, "free_slots": max(0, slots - len(active) - len(pending)),
@@ -1411,6 +1424,43 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
                 "status": j.get("status"),
                 "hours_left": hours_left,
             })
+
+    # Value running jobs that had no plan slot (installed in-game outside the tool) from our OWN
+    # reaction recipe: ESI gives the product + run count, the SDE gives the formula, so materials
+    # cost, job cost and output value are all computable without a stored assignment. Lazy — only
+    # load the (heavier) reaction cost graph when such jobs actually exist, so the common case
+    # (everything running was planned here) pays nothing. Priced with the caller's own settings
+    # (group sheet, reaction system, time efficiency), same as every other path.
+    if unplanned_running:
+        graph = _load_goo_and_reached(context_id)
+        reached = graph[1] if graph else {}
+        types = graph[4] if graph else {}
+        settings = effective_reaction_settings(context_id)
+        up_ids = list({tid for tid, _ in unplanned_running})
+        up_market = fetch_market_data(up_ids) if up_ids else {}
+        for tid, runs in unplanned_running:
+            node = reached.get(tid)
+            m = up_market.get(tid)
+            # Skip anything we can't reliably value: a product with no reachable recipe (its inputs
+            # aren't priced for this caller) or no live market price — no guessing, same rule the
+            # opportunity list follows.
+            if not node or not node.get("via") or not m:
+                continue
+            out_qty = output_qty_by_type.get(tid, 0.0)
+            total_out = runs * out_qty
+            input_cost = total_out * node.get("unit_cost", 0.0)          # materials only (matches plan rows)
+            job_cost = total_out * node.get("job_cost", 0.0)
+            output_value = total_out * m["sell_price"]
+            vol = (types.get(tid, {}).get("volume") or 0.0)
+            shipping = total_out * vol * settings.get("export_isk_per_m3", 0.0)
+            collateral = output_value * settings.get("export_collateral_pct", 0.0)
+            net_profit = output_value - input_cost - job_cost - shipping - collateral
+            pending_isk_committed += input_cost
+            pending_output_value += output_value
+            pending_net_profit += net_profit
+            cyc = cycle_hours_by_type.get(tid, 0)
+            if cyc > 0 and runs > 0:
+                pending_net_profit_per_day += net_profit / (runs * cyc / 24)
 
     return {
         "tracked": tracked_any,
