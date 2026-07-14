@@ -99,7 +99,7 @@ FEATURE_REGISTRY = [
      "description": "On Setup Analysis: each material row shows its P0 source name and a comfortable "
                     "P0/hr-per-planet target at a glance — a reference while reseating extractor heads.",
      "default": False},
-    {"key": "reactions", "label": "Alliance moon-goo reactions", "group": "Reactions",
+    {"key": "reactions", "label": "Reactions tracking", "group": "Reactions",
      "description": "Adds a Reactions tab: ranks the most profitable moon-goo reaction chains, "
                     "priced from your alliance's own price sheet if it has one (see Admin → "
                     "Groups) or live market prices otherwise, to ship and sell. This only "
