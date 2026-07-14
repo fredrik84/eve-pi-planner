@@ -548,6 +548,28 @@ document.addEventListener('keydown', e => {
   if (open.length) _dismissModal(open[open.length - 1]);
 });
 
+// ── Silent auto-refresh (Dashboard + Reactions) ────────────────────────────────
+// Values on these two views are time-derived (% complete meters, time-left, runtimes), so they go
+// stale as the clock advances even without new ESI data. Every 5 minutes we silently re-fetch and
+// re-render the ACTIVE one of the two — no spinner (the load functions only show one on first load,
+// which has long since happened) and no ESI rescan (just the cheap computed endpoint). Skipped when
+// the page is hidden, when logged out, or while a manual Rescan is running. Also fires once when the
+// page becomes visible again, so returning to a long-open tab snaps the numbers fresh.
+let _lastAutoRefresh = 0;
+function _autoRefreshTick() {
+  if (document.hidden || !_loggedIn) return;
+  if (typeof _rescanning !== 'undefined' && _rescanning) return;  // don't fight a manual rescan
+  const tab = localStorage.getItem('activeTab');
+  if (tab !== 'dashboard' && tab !== 'reactions') return;
+  _lastAutoRefresh = Date.now();
+  if (tab === 'dashboard' && typeof onDashboardTabOpen === 'function') onDashboardTabOpen();
+  else if (tab === 'reactions' && typeof _loadReactionsDashboard === 'function') _loadReactionsDashboard();
+}
+setInterval(_autoRefreshTick, 5 * 60 * 1000);
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && Date.now() - _lastAutoRefresh > 2 * 60 * 1000) _autoRefreshTick();
+});
+
 // ── Pull-to-refresh (mobile) ───────────────────────────────────────────────────
 // Dragging down from the very top of the page triggers a colony Rescan — the same
 // action as the header Rescan button (which only exists when logged in). Standalone
