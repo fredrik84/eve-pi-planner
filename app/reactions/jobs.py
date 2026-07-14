@@ -587,6 +587,9 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
     now = _time.time()
     running: list[dict] = []
     characters: list[dict] = []
+    # Time-weighted overall completion of all running jobs: Σ elapsed / Σ total duration.
+    running_elapsed_sec = 0.0
+    running_total_sec = 0.0
     total_slots = 0
     used_slots = 0
     tracked_any = False
@@ -677,11 +680,20 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
                 orphan_remaining[tid] -= 1
                 unplanned_running.append((tid, j.get("runs") or 0))
             end = j.get("end_date")
+            start = j.get("start_date")
             hours_left = None
+            progress_pct = None
             if end:
                 try:
                     end_ts = datetime.fromisoformat(end.replace("Z", "+00:00")).timestamp()
                     hours_left = round((end_ts - now) / 3600.0, 1)
+                    if start:
+                        start_ts = datetime.fromisoformat(start.replace("Z", "+00:00")).timestamp()
+                        total = end_ts - start_ts
+                        if total > 0:
+                            progress_pct = max(0.0, min(1.0, (now - start_ts) / total))
+                            running_elapsed_sec += max(0.0, min(total, now - start_ts))
+                            running_total_sec += total
                 except Exception:
                     pass
             running.append({
@@ -693,6 +705,7 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
                 "facility_name": j.get("facility_name"),
                 "status": j.get("status"),
                 "hours_left": hours_left,
+                "progress_pct": round(progress_pct, 4) if progress_pct is not None else None,
                 "orphan": is_orphan,
             })
 
@@ -708,6 +721,7 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
         "tracked": tracked_any,
         "characters": characters,
         "running": sorted(running, key=lambda r: r["hours_left"] if r["hours_left"] is not None else 1e9),
+        "running_progress_pct": round(running_elapsed_sec / running_total_sec, 4) if running_total_sec > 0 else None,
         "total_slots": total_slots,
         "free_slots": max(0, total_slots - used_slots),
         "pending_isk_committed": round(pending_isk_committed, 2),

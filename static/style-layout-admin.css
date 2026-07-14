@@ -492,6 +492,14 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 }
 .rx-char-row:last-child { border-bottom: none; }
 .rx-char-label { width: 130px; flex: 0 0 130px; font-weight: 600; color: #dbe1ee; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Reaction completion bars — job-detail modal + metrics "total complete" + dashboard. */
+.rx-prog-wrap { display: flex; flex-direction: column; gap: 8px; }
+.rx-prog-row { display: flex; flex-direction: column; gap: 3px; }
+.rx-prog-head { display: flex; justify-content: space-between; font-size: 11px; color: var(--clr-text-dim); }
+.rx-prog-track { height: 8px; background: #12161f; border: 1px solid var(--clr-border); border-radius: 5px; overflow: hidden; }
+.rx-prog-fill { height: 100%; background: linear-gradient(90deg, #3a7bd5, #5aa9e6); border-radius: 5px; transition: width 0.3s; }
+.rx-prog-fill.rx-prog-done { background: linear-gradient(90deg, #2f9e6f, #46c88a); }
+
 .rx-slot-row { display: flex; gap: 8px; flex-wrap: wrap; }
 .rx-slot {
   width: 70px; height: 70px; flex: 0 0 auto; position: relative;

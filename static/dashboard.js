@@ -316,10 +316,13 @@ function renderDashboard(data) {
   // 30k m³ buffer. The total meter (binding %) stays visible; the per-material breakdown folds.
   const fillFold = localStorage.getItem('dashFillMatsCollapsed') !== '0';   // breakdown folded by default
   const _pfCls = _pfShow ? (_pf.fill_pct >= 1 ? 'an-ok' : (_pf.fill_pct < 0.9 ? 'an-warn' : '')) : '';
-  const padFillHtml = _pfShow ? `
-    <section class="pp-card">
-      <div class="pp-card-title">Fill factories from pads <span class="pp-card-hint">— if you hauled your extractor P1 into your ${_pf.factories} factories</span></div>
-      <div class="pp-card-body">
+  // Reactions completion — overall progress of running reaction jobs (time-weighted, from the
+  // backend). Shown as a second bar row alongside the factory fill when reactions is in use.
+  const _rxTracked = _featureActive('reactions') && t.reactions_tracked;
+  const _rxProg = t.reactions_progress_pct;
+  const _rxProgShow = _rxTracked && _rxProg != null;
+  const factoryFillRow = _pfShow ? `
+        <div class="dash-prog-label">Factory fill <span class="pp-card-hint">— if you hauled your extractor P1 into your ${_pf.factories} factories</span></div>
         <div class="padfill-head">
           <span class="padfill-pct ${_pfCls}">${Math.round(_pf.fill_pct * 100)}%</span>
           <span class="padfill-sub">${_pf.fill_pct < 1 ? `to fully fill all <b>${_pf.factories}</b> factories — limited by <b>${_esc(_pf.binding)}</b>` : `every input covers all <b>${_pf.factories}</b> factories`}</span>
@@ -333,8 +336,20 @@ function renderDashboard(data) {
           return `<div class="padfill-row"><span class="padfill-name">${_esc(m.name)}</span>`
             + `<div class="padfill-bar"><div class="padfill-fill ${m.pct >= 1 ? 'pf-ok' : (m.pct < 0.9 ? 'pf-warn' : '')}" style="width:${Math.min(100, pct)}%"></div></div>`
             + `<span class="padfill-amt">${m.have.toLocaleString()} / ${m.need.toLocaleString()} · ${pct}%</span></div>`;
-        }).join('')}</div>
-      </div>
+        }).join('')}</div>` : '';
+  const _rxPct = Math.round((_rxProg || 0) * 100);
+  const _rxProgCls = _rxPct >= 100 ? 'an-ok' : '';
+  const reactionsRow = _rxProgShow ? `
+        <div class="dash-prog-label"${_pfShow ? ' style="margin-top:16px"' : ''}>Reactions complete <span class="pp-card-hint">— overall progress of your running reaction jobs</span></div>
+        <div class="padfill-head">
+          <span class="padfill-pct ${_rxProgCls}">${_rxPct}%</span>
+          <span class="padfill-sub">across all currently running reaction jobs</span>
+        </div>
+        <div class="padfill-meter"><div class="padfill-meter-fill ${_rxProgCls}" style="width:${Math.min(100, _rxPct)}%"></div></div>` : '';
+  const padFillHtml = (_pfShow || _rxProgShow) ? `
+    <section class="pp-card">
+      <div class="pp-card-title">Production progress</div>
+      <div class="pp-card-body">${factoryFillRow}${reactionsRow}</div>
     </section>` : '';
   el.innerHTML = _renderSyncWarn(data) + _renderReactionAlerts(data) + issuesHtml + expansionHtml + `
     <section class="pp-card">

@@ -1764,6 +1764,7 @@ def dashboard(pp_session: str = Cookie(default=None)):
     reactions_time_left_hours = reactions_net_profit = reactions_isk_committed = None
     reactions_net_profit_per_day = None
     reactions_time_left_loc = None
+    reactions_progress_pct = None
     try:
         from app.reactions import get_industry_jobs
         rx = get_industry_jobs(context_id)
@@ -1772,6 +1773,7 @@ def dashboard(pp_session: str = Cookie(default=None)):
             reactions_net_profit = rx.get("pending_net_profit", 0.0)
             reactions_net_profit_per_day = rx.get("pending_net_profit_per_day", 0.0)
             reactions_isk_committed = rx.get("pending_isk_committed", 0.0)
+            reactions_progress_pct = rx.get("running_progress_pct")
             # "Middle of the road" completion, not the soonest: the earliest-finishing job
             # badly under-represents when the whole batch is actually done. Use the MEDIAN
             # running job (a real job, so the reported time + product name stay honest) —
@@ -1815,6 +1817,7 @@ def dashboard(pp_session: str = Cookie(default=None)):
             "refill_factories_hours": round(refill_fac_h, 1) if refill_fac_h is not None else None,
             "refill_factories_loc": refill_fac_loc,
             "reactions_tracked": reactions_tracked,
+            "reactions_progress_pct": reactions_progress_pct,
             "reactions_time_left_hours": reactions_time_left_hours,
             "reactions_time_left_loc": reactions_time_left_loc,
             "reactions_net_profit": reactions_net_profit,

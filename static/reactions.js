@@ -412,7 +412,7 @@ function _renderReactionsDashboard(data) {
         ? `<span class="rx-slot-orphan-badge" title="Not in your plan — click to add it so it recurs next cycle" onclick="event.stopPropagation();_rxAdoptOrphan(${j.character_id}, ${j.product_type_id}, ${j.runs || 0}, this)">⊕ plan</span>`
         : '';
       return `
-        <div class="rx-slot rx-slot-filled${j.orphan ? ' rx-slot-orphan' : ''}" title="${_esc(tip)}" onclick="_rxOpenJobDetail(${j.product_type_id}, ${j.runs || 1})">
+        <div class="rx-slot rx-slot-filled${j.orphan ? ' rx-slot-orphan' : ''}" title="${_esc(tip)}" onclick="_rxOpenJobDetail(${j.product_type_id}, ${j.runs || 1}, ${j.progress_pct != null ? j.progress_pct : 'null'})">
           <div class="rx-slot-timer-corner" title="Finishes in ${_esc(timer)}">${_esc(timer)}</div>
           <img class="rx-slot-icon" src="${icon}" alt="" onerror="this.style.visibility='hidden'">
           ${runsLabel ? `<span class="rx-slot-runs">${_esc(runsLabel)}</span>` : ''}
@@ -523,7 +523,11 @@ function _renderReactionsDashboard(data) {
       ${_dashTile(timeLeftVal, timeLeftLbl)}
     </div>`;
 
-  if (metricsEl) metricsEl.innerHTML = overviewTiles;
+  // Overall completion of everything currently running — a "total complete" bar under the tiles.
+  const progressBar = data.running_progress_pct != null
+    ? `<div class="rx-prog-wrap" style="margin-top:10px">${_rxProgressBar(data.running_progress_pct, 'Reactions complete')}</div>`
+    : '';
+  if (metricsEl) metricsEl.innerHTML = overviewTiles + progressBar;
 
   el.innerHTML = todoListHtml + rows + untrackedNote;
 }
@@ -1734,8 +1738,19 @@ function _renderRxOrderDetail(data) {
 // runtime), priced live off /api/reactions/job-detail (same graph/economics as everything else).
 
 let _rxLastJobMaterials = [];
+let _rxJobDetailProgress = null;  // % complete of the specific clicked job (0-1), null if unknown
 
-function _rxOpenJobDetail(typeId, runs) {
+// A labeled progress bar (fraction 0-1) reused by the job-detail modal and the metrics section.
+function _rxProgressBar(frac, label) {
+  const p = Math.max(0, Math.min(100, Math.round((frac || 0) * 100)));
+  return `<div class="rx-prog-row">
+    <div class="rx-prog-head"><span>${_esc(label)}</span><span>${p}%</span></div>
+    <div class="rx-prog-track"><div class="rx-prog-fill${p >= 100 ? ' rx-prog-done' : ''}" style="width:${p}%"></div></div>
+  </div>`;
+}
+
+function _rxOpenJobDetail(typeId, runs, progressPct) {
+  _rxJobDetailProgress = (progressPct != null && !isNaN(progressPct)) ? progressPct : null;
   document.getElementById('rxJobDetailModal').style.display = '';
   document.getElementById('rxJobDetailContent').innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Loading…</div>';
   const titleEl = document.getElementById('rxJobDetailTitle');
@@ -1779,9 +1794,18 @@ function _renderRxJobDetail(d) {
         <tbody>${d.materials.map(m => `<tr><td>${_esc(m.name)}</td><td>${_rxCopyQtyCell(m.quantity)}</td><td>${_fmtIsk(m.unit_cost)}</td><td>${_fmtIsk(m.unit_cost * m.quantity)}</td><td>${Math.round(m.volume_m3 || 0).toLocaleString()} m³</td></tr>`).join('')}</tbody>
       </table>
     </div>`;
+  // Completion bars: this specific job's own progress (from the clicked slot) plus the overall
+  // "all running reactions" progress off the last dashboard load — same total the metrics bar shows.
+  const totalFrac = (_rxLastDashboardData && _rxLastDashboardData.running_progress_pct != null)
+    ? _rxLastDashboardData.running_progress_pct : null;
+  const barsHtml = (_rxJobDetailProgress != null || totalFrac != null) ? `<div class="rx-prog-wrap">`
+    + (_rxJobDetailProgress != null ? _rxProgressBar(_rxJobDetailProgress, 'This job complete') : '')
+    + (totalFrac != null ? _rxProgressBar(totalFrac, 'All reactions complete') : '')
+    + `</div>` : '';
   el.innerHTML = `
     <div class="pp-card-hint">${d.runs.toLocaleString()} run${d.runs === 1 ? '' : 's'} → ${Math.round(d.units).toLocaleString()} units · ${_fmtHours(d.runtime_hours)} total runtime</div>
     ${!d.priced ? '<div class="pp-card-hint" style="color:var(--clr-amber)">No live market price for this product — values may be incomplete.</div>' : ''}
+    ${barsHtml}
     <div class="rx-manual-preview" style="margin-top:10px">
       <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Input cost</span><b>${_fmtIsk(d.input_cost)}</b></div>
       ${d.job_cost ? `<div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Job install fees</span><b>${_fmtIsk(d.job_cost)}</b></div>` : ''}
