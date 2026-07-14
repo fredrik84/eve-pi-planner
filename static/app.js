@@ -576,8 +576,22 @@ function _autoRefreshTick() {
   const tab = localStorage.getItem('activeTab');
   if (tab !== 'dashboard' && tab !== 'reactions') return;
   _lastAutoRefresh = Date.now();
-  if (tab === 'dashboard' && typeof onDashboardTabOpen === 'function') onDashboardTabOpen();
-  else if (tab === 'reactions' && typeof _loadReactionsDashboard === 'function') _loadReactionsDashboard();
+  // Silent poll: re-render ONLY on a successful, still-logged-in response. A background poll can
+  // occasionally come back not-ok or logged_in:false (a transient blip — the real session is fine,
+  // proven by a manual tab switch recovering instantly); it must NOT clobber the view with a login
+  // screen. So on anything unexpected we skip this tick and try again next interval, rather than
+  // routing through the normal load functions (which render the logged-out state).
+  if (tab === 'dashboard') {
+    fetch('/api/dashboard')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d && d.logged_in && typeof renderDashboard === 'function') renderDashboard(d); })
+      .catch(() => {});
+  } else {
+    fetch('/api/reactions/jobs')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d && typeof _renderReactionsDashboard === 'function') { _rxLastDashboardData = d; _renderReactionsDashboard(d); } })
+      .catch(() => {});
+  }
 }
 _applyAutoRefresh();
 document.addEventListener('visibilitychange', () => {
