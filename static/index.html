@@ -1095,6 +1095,10 @@ PVF-N9    3         95                 60             80                  100   
 
         <!-- Left section nav -->
         <nav class="settings-modal-nav">
+          <button class="settings-nav-item" id="settingsNavGeneral" onclick="settingsSection('general')">
+            <span class="settings-nav-ico">GN</span>
+            <span class="settings-nav-lbl">General</span>
+          </button>
           <button class="settings-nav-item active" id="settingsNavCharacters" onclick="settingsSection('characters')">
             <span class="settings-nav-ico">CH</span>
             <span class="settings-nav-lbl">Characters</span>
@@ -1114,10 +1118,6 @@ PVF-N9    3         95                 60             80                  100   
           <button class="settings-nav-item" id="settingsNavAccount" onclick="settingsSection('account')" style="display:none">
             <span class="settings-nav-ico">AC</span>
             <span class="settings-nav-lbl">Account</span>
-          </button>
-          <button class="settings-nav-item" id="settingsNavGeneral" onclick="settingsSection('general')">
-            <span class="settings-nav-ico">GN</span>
-            <span class="settings-nav-lbl">General</span>
           </button>
         </nav>
 
