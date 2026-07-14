@@ -427,6 +427,16 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .delete-account-confirm-row { display: flex; flex-direction: column; gap: 6px; margin: 12px 0; }
 .delete-account-confirm-lbl { font-size: 12px; color: var(--clr-text-soft); }
 .admin-add-row { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+/* Labeled moon-goo add row: a title above each field, button aligned to the inputs' baseline. */
+.goo-add-row { align-items: flex-end; }
+.goo-field { display: flex; flex-direction: column; gap: 3px; }
+.goo-field-grow { flex: 1 1 240px; min-width: 200px; }
+.goo-field-grow .bug-input { width: 100%; }
+.goo-field-lbl { font-size: 11px; color: var(--clr-text-dim); }
+.goo-add-btn { align-self: flex-end; }
+/* Inline labels on each editable row so a saved material's ISK/unit + Quantity are titled too. */
+.goo-inline { display: flex; flex-direction: column; gap: 2px; }
+.goo-inline-lbl { font-size: 9.5px; color: var(--clr-text-dim); }
 .admin-list { display: flex; flex-direction: column; gap: 6px; }
 .admin-row { display: flex; align-items: center; gap: 10px; padding: 7px 10px; background: #161b28; border: 1px solid var(--clr-border); border-radius: 7px; }
 .admin-name { font-weight: 600; color: #dbe1ee; }

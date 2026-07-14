@@ -744,6 +744,8 @@ async function runCleanup() {
 // ── Moon-goo prices (group-scoped — a group's own alliance price sheet, feeds Reactions) ───
 let _moonGooGroups = [];   // groups the caller can manage (site admin: all; manager: their own)
 let _moonGooGroupId = null;
+let _moonGooMaterials = [];        // canonical [{type_id, name}] catalog of raw moon materials
+let _moonGooCurrentTypeIds = new Set();  // type_ids already on the selected group's sheet (excluded from the picker)
 
 async function loadMoonGoo() {
   const el = document.getElementById('moonGooList');
@@ -768,6 +770,12 @@ async function loadMoonGoo() {
       picker.innerHTML = _moonGooGroups.map(g => `<option value="${g.id}" ${g.id === _moonGooGroupId ? 'selected' : ''}>${_esc(g.name)}</option>`).join('');
     }
     if (pickerRow) pickerRow.style.display = _moonGooGroups.length > 1 ? '' : 'none';
+    if (!_moonGooMaterials.length) {
+      try {
+        const mResp = await fetch('/api/moon-goo-materials');
+        if (mResp.ok) _moonGooMaterials = (await mResp.json()).materials || [];
+      } catch (e) { /* non-fatal — picker just falls back to free text */ }
+    }
     await _fetchAndRenderMoonGoo();
   } catch (e) {
     el.innerHTML = `<div class="pp-empty">Failed to load: ${_esc(e.message)}</div>`;
@@ -798,16 +806,42 @@ async function _fetchAndRenderMoonGoo() {
 function renderMoonGoo(rows) {
   const el = document.getElementById('moonGooList');
   if (!el) return;
+  _moonGooCurrentTypeIds = new Set(rows.map(r => r.type_id));
+  _rebuildGooDatalist();
   if (!rows.length) { el.innerHTML = '<div class="pp-empty">No materials priced yet — add one above or paste an import.</div>'; return; }
   el.innerHTML = rows.map(r => `
     <div class="admin-row" data-type-id="${r.type_id}">
       <span class="admin-name">${_esc(r.name)}</span>
       <span class="admin-meta">#${r.type_id}</span>
-      <input type="number" class="bug-input goo-row-price" value="${r.sell_price}" style="max-width:120px" title="Sell price">
-      <input type="number" class="bug-input goo-row-stock" value="${r.stock}" style="max-width:100px" title="Stock (reference only — not used to cap suggestions)">
+      <label class="goo-inline"><span class="goo-inline-lbl">ISK / unit</span>
+        <input type="number" class="bug-input goo-row-price" value="${r.sell_price}" style="max-width:120px"></label>
+      <label class="goo-inline"><span class="goo-inline-lbl">Quantity</span>
+        <input type="number" class="bug-input goo-row-stock" value="${r.stock}" style="max-width:100px" title="Stock — reference only, not used to cap suggestions"></label>
       <button onclick="saveMoonGooRow(${r.type_id}, this)">Save</button>
       <button onclick="deleteMoonGooRow(${r.type_id}, this)">Delete</button>
     </div>`).join('');
+}
+
+// Rebuild the "add material" datalist from the catalog, excluding materials already on this
+// group's sheet (you can still edit those inline below — the picker is for adding NEW ones).
+function _rebuildGooDatalist() {
+  const dl = document.getElementById('gooMaterialsDatalist');
+  if (!dl) return;
+  const available = _moonGooMaterials.filter(m => !_moonGooCurrentTypeIds.has(m.type_id));
+  dl.innerHTML = available.map(m => `<option value="${_esc(m.name)}"></option>`).join('');
+}
+
+// Resolve the searchable text field to a type_id (exact name match, case-insensitive).
+function _gooSearchTypeId() {
+  const v = (document.getElementById('gooAddSearch').value || '').trim().toLowerCase();
+  if (!v) return null;
+  const hit = _moonGooMaterials.find(m => m.name.toLowerCase() === v);
+  return hit ? hit.type_id : null;
+}
+
+function _onGooSearchInput() {
+  const statusEl = document.getElementById('gooAddStatus');
+  if (statusEl && statusEl.textContent) statusEl.textContent = '';
 }
 
 async function saveMoonGooRow(typeId, btn) {
@@ -843,11 +877,11 @@ async function deleteMoonGooRow(typeId, btn) {
 }
 
 async function addMoonGooRow() {
-  const typeId = parseInt(document.getElementById('gooAddTypeId').value, 10);
+  const statusEl = document.getElementById('gooAddStatus');
+  const typeId = _gooSearchTypeId();
   const sell_price = parseFloat(document.getElementById('gooAddPrice').value) || 0;
   const stock = parseInt(document.getElementById('gooAddStock').value, 10) || 0;
-  const statusEl = document.getElementById('gooAddStatus');
-  if (!typeId) { statusEl.textContent = 'Enter a type ID.'; return; }
+  if (!typeId) { statusEl.textContent = 'Pick a material from the list.'; return; }
   if (!_moonGooGroupId) { statusEl.textContent = 'No group selected.'; return; }
   try {
     const resp = await fetch(`/api/moon-goo/${_moonGooGroupId}/row`, {
@@ -857,7 +891,7 @@ async function addMoonGooRow() {
     if (!resp.ok) throw new Error((await resp.json()).detail || `HTTP ${resp.status}`);
     const result = await resp.json();
     statusEl.textContent = `Added/updated: ${result.name}`;
-    document.getElementById('gooAddTypeId').value = '';
+    document.getElementById('gooAddSearch').value = '';
     document.getElementById('gooAddPrice').value = '';
     document.getElementById('gooAddStock').value = '';
     _fetchAndRenderMoonGoo();
