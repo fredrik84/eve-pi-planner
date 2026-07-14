@@ -1763,6 +1763,12 @@ function _renderRxJobDetail(d) {
   if (titleEl.firstChild) titleEl.firstChild.textContent = `${d.name} — running job`;
   _rxLastJobMaterials = d.materials || [];
   const profitCls = d.net_profit >= 0 ? 'an-ok' : 'an-warn';
+  // ROI = profit per ISK invested. net_profit = output_value - total cost (see _value_reaction_batch),
+  // so the total cost invested is output_value - net_profit — robust regardless of which cost
+  // components (materials, job, shipping) are present.
+  const totalCost = d.output_value - d.net_profit;
+  const roiPct = totalCost > 0 ? (d.net_profit / totalCost) * 100 : null;
+  const roiStr = roiPct != null ? `${roiPct >= 0 ? '+' : ''}${roiPct.toFixed(1)}%` : '';
   const materialsHtml = !d.materials.length ? '<div class="pp-empty">No materials data.</div>' : `
     <div style="overflow-x:auto">
       <table class="pp-card-table" style="width:100%">
@@ -1777,7 +1783,7 @@ function _renderRxJobDetail(d) {
       <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Input cost</span><b>${_fmtIsk(d.input_cost)}</b></div>
       ${d.job_cost ? `<div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Job install fees</span><b>${_fmtIsk(d.job_cost)}</b></div>` : ''}
       <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Output value</span><b>${_fmtIsk(d.output_value)} <span class="rx-manual-preview-units">(${Math.round(d.units).toLocaleString()} units)</span></b></div>
-      <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Profit</span><b class="${profitCls}">${_fmtIsk(d.net_profit)}</b></div>
+      <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Profit</span><b class="${profitCls}">${_fmtIsk(d.net_profit)}${roiStr ? ` <span class="rx-manual-preview-units">(${roiStr})</span>` : ''}</b></div>
     </div>
 
     <div class="pp-card-title" style="margin-top:14px;font-size:14px">Materials used
