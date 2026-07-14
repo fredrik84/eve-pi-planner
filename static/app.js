@@ -525,6 +525,29 @@ document.addEventListener('wheel', () => {
   }
 }, { passive: true });
 
+// ── Global modal dismissal: click the backdrop (outside the box) or press Escape ───────────────
+// Applies to every .pp-modal on the page. Each modal carries its own ✕ button (.pp-modal-close)
+// with the correct close+cleanup handler, so we invoke THAT rather than just hiding the element —
+// keeps per-modal state (e.g. _settingsOpen, dropdown resets) in sync. Falls back to display:none
+// if a modal ever lacks a close button.
+function _dismissModal(modal) {
+  const btn = modal.querySelector('.pp-modal-close');
+  if (btn) btn.click(); else modal.style.display = 'none';
+}
+document.addEventListener('click', e => {
+  // Only a click directly on the backdrop (the .pp-modal itself, not its inner box) closes it.
+  const t = e.target;
+  if (t.classList && t.classList.contains('pp-modal') && t.style.display !== 'none') _dismissModal(t);
+});
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  // A nested control (e.g. an open product-search dropdown) handles Escape first and stops
+  // propagation, so we only get here when nothing inner claimed it — then close the topmost
+  // (last in DOM) visible modal.
+  const open = Array.from(document.querySelectorAll('.pp-modal')).filter(m => m.style.display !== 'none');
+  if (open.length) _dismissModal(open[open.length - 1]);
+});
+
 // ── Pull-to-refresh (mobile) ───────────────────────────────────────────────────
 // Dragging down from the very top of the page triggers a colony Rescan — the same
 // action as the header Rescan button (which only exists when logged in). Standalone

@@ -685,7 +685,9 @@ function _rxHideProductDropdown() {
 function _rxProductDropdownKey(event) {
   const dd = document.getElementById('rxManProductDropdown');
   if (!dd || dd.style.display === 'none') return;
-  if (event.key === 'Escape') { _rxHideProductDropdown(); return; }
+  // Escape closes just this dropdown — stop it bubbling to the global handler that would
+  // otherwise also close the whole modal.
+  if (event.key === 'Escape') { event.stopPropagation(); _rxHideProductDropdown(); return; }
   if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
     event.preventDefault();
     if (!_rxProductDropdownList.length) return;
@@ -1605,7 +1607,8 @@ function _rxOrderHideProductDropdown() {
 function _rxOrderProductDropdownKey(event) {
   const dd = document.getElementById('rxOrderProductDropdown');
   if (!dd || dd.style.display === 'none') return;
-  if (event.key === 'Escape') { _rxOrderHideProductDropdown(); return; }
+  // Escape closes just this dropdown — don't let it bubble to the global modal-close handler.
+  if (event.key === 'Escape') { event.stopPropagation(); _rxOrderHideProductDropdown(); return; }
   if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
     event.preventDefault();
     if (!_rxOrderProductDropdownList.length) return;
