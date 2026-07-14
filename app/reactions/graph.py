@@ -6,7 +6,7 @@ opportunity ranking + shopping lists. Depends on settings for pricing config; ne
 so it imports first with no cycle."""
 import math
 
-from fastapi import Depends
+from fastapi import Depends, HTTPException
 
 from app.sde import get_connection, load_pi_data
 from app.market import fetch_market_data
@@ -436,6 +436,54 @@ def _build_opportunities_uncached(context_id: int, allowed_material_ids: set[int
 @router.get("/api/reactions/opportunities")
 def reactions_opportunities(context_id: int = Depends(require_context)):
     return {"opportunities": _build_opportunities(context_id)}
+
+
+@router.get("/api/reactions/job-detail")
+def reactions_job_detail(type_id: int, runs: int = 1, context_id: int = Depends(require_context)):
+    """Full breakdown for ONE running (or hypothetical) reaction job of `runs` runs of `type_id`:
+    the materials it consumes, input/job cost, output value and net profit, units produced and
+    total runtime — priced LIVE the same way the opportunity list is (Fuzzworks sell + the caller's
+    group/import settings), so the modal a player opens off a running slot agrees with the rest of
+    the tool. Reuses _value_reaction_batch (the single source of truth for reaction economics) and
+    the shopping-list explode rather than re-deriving any of it."""
+    runs = max(1, runs)
+    loaded = _load_goo_and_reached(context_id)
+    node = loaded[1].get(type_id) if loaded else None
+    if not node or node.get("via") is None:
+        raise HTTPException(status_code=404, detail="Not a reachable reaction product right now")
+    goo, reached, reactions_by_output, inputs_by_reaction, types = loaded
+    settings = effective_reaction_settings(context_id)
+    type_info = types.get(type_id, {})
+    vol = type_info.get("volume") or 0.0
+    output_qty_per_run = node["via"]["output_qty"]
+    total_out = output_qty_per_run * runs
+
+    market = fetch_market_data([type_id])
+    m = market.get(type_id)
+    sell_price = m["sell_price"] if m else 0.0
+    buy_price = m["buy_price"] if m else None
+    v = _value_reaction_batch(node, total_out, sell_price, vol, settings, buy_price=buy_price)
+
+    totals: dict[int, float] = {}
+    _explode_shopping_list(type_id, total_out, reached, totals)
+    materials = _materials_report(totals, reached, types)
+
+    cycle_time = node.get("cycle_time") or 0
+    return {
+        "type_id": type_id,
+        "name": type_info.get("name", str(type_id)),
+        "runs": runs,
+        "units": round(total_out, 2),
+        "output_qty_per_run": output_qty_per_run,
+        "runtime_hours": round(cycle_time * runs / 3600.0, 2),
+        "input_cost": round(v["input_cost"], 2),
+        "job_cost": round(v["job_cost"], 2),
+        "output_value": round(v["output_value"], 2),
+        "instant_value": round(v.get("instant_value", 0.0), 2),
+        "net_profit": round(v["net_profit"], 2),
+        "priced": m is not None,
+        "materials": materials,
+    }
 
 
 def _fuel_block_ids(inputs_by_reaction: dict, reactions_by_output: dict, types: dict) -> dict[int, str]:

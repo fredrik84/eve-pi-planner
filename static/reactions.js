@@ -406,15 +406,17 @@ function _renderReactionsDashboard(data) {
       // An "orphan" is a job running in-game with no plan slot (installed outside this tool). It's
       // valued in the totals but is NOT part of the recurring loadout until adopted — the ⊕ badge
       // adds it to the plan so it re-appears as "to install" (and joins the shopping list) next cycle.
-      const tip = `${_jobName(j)} — ${runsLabel ? runsLabel + ' runs — ' : ''}finished in ${timer}${j.facility_name ? ' — ' + j.facility_name : ''}${j.orphan ? ' — NOT in your plan (orphan)' : ''}`;
+      const nm = _jobName(j);
+      const tip = `${nm} — ${runsLabel ? runsLabel + ' runs — ' : ''}finished in ${timer}${j.facility_name ? ' — ' + j.facility_name : ''}${j.orphan ? ' — NOT in your plan (orphan)' : ''} — click for details`;
       const orphanBadge = j.orphan
         ? `<span class="rx-slot-orphan-badge" title="Not in your plan — click to add it so it recurs next cycle" onclick="event.stopPropagation();_rxAdoptOrphan(${j.character_id}, ${j.product_type_id}, ${j.runs || 0}, this)">⊕ plan</span>`
         : '';
       return `
-        <div class="rx-slot rx-slot-filled${j.orphan ? ' rx-slot-orphan' : ''}" title="${_esc(tip)}">
+        <div class="rx-slot rx-slot-filled${j.orphan ? ' rx-slot-orphan' : ''}" title="${_esc(tip)}" onclick="_rxOpenJobDetail(${j.product_type_id}, ${j.runs || 1})">
+          <div class="rx-slot-timer-corner" title="Finishes in ${_esc(timer)}">${_esc(timer)}</div>
           <img class="rx-slot-icon" src="${icon}" alt="" onerror="this.style.visibility='hidden'">
-          <div class="rx-slot-timer">${_esc(timer)}</div>
           ${runsLabel ? `<span class="rx-slot-runs">${_esc(runsLabel)}</span>` : ''}
+          <div class="rx-slot-filled-label">${_esc(nm)}</div>
           ${orphanBadge}
         </div>`;
     });
@@ -1721,6 +1723,70 @@ function _renderRxOrderDetail(data) {
       ${actionButtons}
       <button class="pp-cancel-btn" onclick="_rxCloseOrderDetail()">Close</button>
       <span id="rxOrderDetailStatus" class="bug-status-msg"></span>
+    </div>`;
+}
+
+// ── Running-job detail modal — a running slot never showed WHAT it's making beyond a countdown;
+// clicking it now opens the full breakdown (materials used, cost, output value, profit, units,
+// runtime), priced live off /api/reactions/job-detail (same graph/economics as everything else).
+
+let _rxLastJobMaterials = [];
+
+function _rxOpenJobDetail(typeId, runs) {
+  document.getElementById('rxJobDetailModal').style.display = '';
+  document.getElementById('rxJobDetailContent').innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Loading…</div>';
+  const titleEl = document.getElementById('rxJobDetailTitle');
+  if (titleEl.firstChild) titleEl.firstChild.textContent = 'Running job';
+  fetch(`/api/reactions/job-detail?type_id=${typeId}&runs=${runs || 1}`)
+    .then(r => { if (!r.ok) throw new Error(r.status === 404 ? "This product isn't priced/reachable right now" : 'Failed to load'); return r.json(); })
+    .then(d => _renderRxJobDetail(d))
+    .catch(err => { document.getElementById('rxJobDetailContent').innerHTML = `<div class="pp-empty">${_esc(err.message)}</div>`; });
+}
+
+function _rxCloseJobDetail() {
+  document.getElementById('rxJobDetailModal').style.display = 'none';
+}
+
+function _rxCopyJobMaterials(btn) {
+  const text = _rxLastJobMaterials.map(m => `${m.name}\t${m.quantity}`).join('\n');
+  if (!text) return;
+  navigator.clipboard.writeText(text).then(() => {
+    const orig = btn.textContent;
+    btn.textContent = 'Copied ✓';
+    setTimeout(() => { btn.textContent = orig; }, 1500);
+  });
+}
+
+function _renderRxJobDetail(d) {
+  const el = document.getElementById('rxJobDetailContent');
+  const titleEl = document.getElementById('rxJobDetailTitle');
+  if (titleEl.firstChild) titleEl.firstChild.textContent = `${d.name} — running job`;
+  _rxLastJobMaterials = d.materials || [];
+  const profitCls = d.net_profit >= 0 ? 'an-ok' : 'an-warn';
+  const materialsHtml = !d.materials.length ? '<div class="pp-empty">No materials data.</div>' : `
+    <div style="overflow-x:auto">
+      <table class="pp-card-table" style="width:100%">
+        <thead><tr><th>Material</th><th>Quantity</th><th>Unit price</th><th>Est. cost</th><th>Volume</th></tr></thead>
+        <tbody>${d.materials.map(m => `<tr><td>${_esc(m.name)}</td><td>${_rxCopyQtyCell(m.quantity)}</td><td>${_fmtIsk(m.unit_cost)}</td><td>${_fmtIsk(m.unit_cost * m.quantity)}</td><td>${Math.round(m.volume_m3 || 0).toLocaleString()} m³</td></tr>`).join('')}</tbody>
+      </table>
+    </div>`;
+  el.innerHTML = `
+    <div class="pp-card-hint">${d.runs.toLocaleString()} run${d.runs === 1 ? '' : 's'} → ${Math.round(d.units).toLocaleString()} units · ${_fmtHours(d.runtime_hours)} total runtime</div>
+    ${!d.priced ? '<div class="pp-card-hint" style="color:var(--clr-amber)">No live market price for this product — values may be incomplete.</div>' : ''}
+    <div class="rx-manual-preview" style="margin-top:10px">
+      <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Input cost</span><b>${_fmtIsk(d.input_cost)}</b></div>
+      ${d.job_cost ? `<div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Job install fees</span><b>${_fmtIsk(d.job_cost)}</b></div>` : ''}
+      <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Output value</span><b>${_fmtIsk(d.output_value)} <span class="rx-manual-preview-units">(${Math.round(d.units).toLocaleString()} units)</span></b></div>
+      <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Profit</span><b class="${profitCls}">${_fmtIsk(d.net_profit)}</b></div>
+    </div>
+
+    <div class="pp-card-title" style="margin-top:14px;font-size:14px">Materials used
+      ${d.materials.length ? `<button class="pp-add-btn" onclick="_rxCopyJobMaterials(this)">Copy for Janice</button>` : ''}
+    </div>
+    ${materialsHtml}
+
+    <div class="pp-modal-actions" style="margin-top:14px">
+      <button class="pp-cancel-btn" onclick="_rxCloseJobDetail()">Close</button>
     </div>`;
 }
 

@@ -335,6 +335,15 @@ def test_pricing_endpoints_live(api: "Api") -> bool:
     status, shop = api.get("/api/reactions/shopping-list")
     ok &= check(status == 200 and isinstance(shop, dict) and "materials" in shop,
                 f"GET shopping-list returns 200 + a materials report (got {status})")
+    # Running-job detail modal: pick a real reachable product off the opportunity list and assert
+    # the per-job breakdown comes back with the fields the modal renders.
+    reachable = (opps.get("opportunities") if isinstance(opps, dict) else None) or []
+    if reachable:
+        tid = reachable[0]["type_id"]
+        status, jd = api.get(f"/api/reactions/job-detail?type_id={tid}&runs=3")
+        fields = {"name", "runs", "units", "runtime_hours", "input_cost", "output_value", "net_profit", "materials"}
+        ok &= check(status == 200 and isinstance(jd, dict) and fields.issubset(jd.keys()) and jd.get("runs") == 3,
+                    f"GET job-detail returns 200 + a full per-job breakdown (got {status})")
     return ok
 
 

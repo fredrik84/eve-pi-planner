@@ -488,7 +488,17 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   border-radius: 8px; background: #161b28; border: 1px solid var(--clr-border);
 }
-.rx-slot-filled { border-color: #3a5a82; background: linear-gradient(160deg, #1b2a3d, #16202e); }
+.rx-slot-filled { border-color: #3a5a82; background: linear-gradient(160deg, #1b2a3d, #16202e); cursor: pointer; transition: border-color 0.15s; }
+.rx-slot-filled:hover { border-color: #5aa9e6; }
+/* Running slot now leads with the product NAME (below the icon, same spot a planned slot shows
+   it) and demotes the countdown to a small top-right corner badge — a running slot used to show
+   only the timer, never what it was making. */
+.rx-slot-filled-label { font-size: 9px; color: #8fb8dd; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 62px; }
+.rx-slot-timer-corner {
+  position: absolute; top: -6px; right: -5px; font-size: 8.5px; line-height: 1;
+  color: var(--clr-text-dim); background: #12161f; border: 1px solid var(--clr-border);
+  border-radius: 4px; padding: 2px 4px; white-space: nowrap;
+}
 .rx-slot-empty { border-style: dashed; opacity: 0.45; cursor: pointer; transition: opacity 0.15s, border-color 0.15s; }
 .rx-slot-empty:hover { opacity: 0.85; border-color: #5aa9e6; }
 .rx-slot-pending {
@@ -497,7 +507,6 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 }
 .rx-slot-pending:hover { border-color: #a83a3a; }
 .rx-slot-icon { width: 36px; height: 36px; border-radius: 4px; }
-.rx-slot-timer { font-size: 10px; color: var(--clr-text-dim); margin-top: 3px; white-space: nowrap; }
 /* An overlay badge (like the ⊘ cancel badge), NOT inline text — a long product name already
    fills the single-line, ellipsis-truncated name/timer text to its max-width, so appending the
    run count there just got truncated away along with the overflowing name. Bottom-right corner
