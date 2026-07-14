@@ -550,12 +550,26 @@ document.addEventListener('keydown', e => {
 
 // ── Silent auto-refresh (Dashboard + Reactions) ────────────────────────────────
 // Values on these two views are time-derived (% complete meters, time-left, runtimes), so they go
-// stale as the clock advances even without new ESI data. Every 5 minutes we silently re-fetch and
-// re-render the ACTIVE one of the two — no spinner (the load functions only show one on first load,
-// which has long since happened) and no ESI rescan (just the cheap computed endpoint). Skipped when
-// the page is hidden, when logged out, or while a manual Rescan is running. Also fires once when the
-// page becomes visible again, so returning to a long-open tab snaps the numbers fresh.
+// stale as the clock advances even without new ESI data. On a user-configurable interval (Settings
+// → General, default 300s, 0 = off) we silently re-fetch and re-render the ACTIVE one of the two —
+// no spinner (the load functions only show one on first load, which has long since happened) and no
+// ESI rescan (just the cheap computed endpoint). Skipped when the page is hidden, when logged out,
+// or while a manual Rescan is running. Also fires once when the page becomes visible again, so
+// returning to a long-open tab snaps the numbers fresh.
+const _AUTO_REFRESH_DEFAULT = 300;   // seconds
 let _lastAutoRefresh = 0;
+let _autoRefreshTimer = null;
+function _autoRefreshSeconds() {
+  const v = parseInt(localStorage.getItem('autoRefreshSeconds'), 10);
+  if (isNaN(v) || v < 0) return _AUTO_REFRESH_DEFAULT;
+  if (v > 0 && v < 30) return 30;    // floor so a typo can't hammer the endpoints
+  return v;                          // 0 = off
+}
+function _applyAutoRefresh() {
+  if (_autoRefreshTimer) { clearInterval(_autoRefreshTimer); _autoRefreshTimer = null; }
+  const secs = _autoRefreshSeconds();
+  if (secs > 0) _autoRefreshTimer = setInterval(_autoRefreshTick, secs * 1000);
+}
 function _autoRefreshTick() {
   if (document.hidden || !_loggedIn) return;
   if (typeof _rescanning !== 'undefined' && _rescanning) return;  // don't fight a manual rescan
@@ -565,9 +579,9 @@ function _autoRefreshTick() {
   if (tab === 'dashboard' && typeof onDashboardTabOpen === 'function') onDashboardTabOpen();
   else if (tab === 'reactions' && typeof _loadReactionsDashboard === 'function') _loadReactionsDashboard();
 }
-setInterval(_autoRefreshTick, 5 * 60 * 1000);
+_applyAutoRefresh();
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden && Date.now() - _lastAutoRefresh > 2 * 60 * 1000) _autoRefreshTick();
+  if (!document.hidden && _autoRefreshSeconds() > 0 && Date.now() - _lastAutoRefresh > 2 * 60 * 1000) _autoRefreshTick();
 });
 
 // ── Pull-to-refresh (mobile) ───────────────────────────────────────────────────

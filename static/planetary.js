@@ -2819,6 +2819,26 @@ function settingsSection(name, doLoad) {
   if (name === 'characters') _renderMoveCharacterSection();
   if (name === 'plans' && doLoad !== false) { loadProfiles(); renderSavedPlansBar(); }
   if (name === 'alerts' && doLoad !== false) loadAlertSettings();
+  if (name === 'general') _loadGeneralSettings();
+}
+
+// General settings — local (per-browser) UI preferences, no backend. Currently just the silent
+// auto-refresh interval for the Dashboard/Reactions views (see _applyAutoRefresh in app.js).
+function _loadGeneralSettings() {
+  const el = document.getElementById('genAutoRefresh');
+  if (el) el.value = (typeof _autoRefreshSeconds === 'function') ? _autoRefreshSeconds() : 300;
+}
+function _saveGeneralSettings() {
+  const el = document.getElementById('genAutoRefresh');
+  if (!el) return;
+  let v = parseInt(el.value, 10);
+  if (isNaN(v) || v < 0) v = 300;
+  if (v > 0 && v < 30) v = 30;   // floor so a typo can't hammer the endpoints
+  el.value = v;
+  try { localStorage.setItem('autoRefreshSeconds', String(v)); } catch (e) {}
+  if (typeof _applyAutoRefresh === 'function') _applyAutoRefresh();
+  const s = document.getElementById('genSettingsStatus');
+  if (s) { s.textContent = v === 0 ? 'Auto-refresh turned off' : `Saved — refreshing every ${v}s`; setTimeout(() => { s.textContent = ''; }, 2000); }
 }
 
 // Freezes today's /api/my-setup-plan read (one entry per deployed product) into named,
