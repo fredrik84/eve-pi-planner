@@ -89,9 +89,14 @@ function onReactionsTabOpen() {
 
   const ordersCard = document.getElementById('rxOrdersCard');
   if (ordersCard) {
-    const show = typeof _featureActive === 'function' && _featureActive('reaction_orders');
-    ordersCard.style.display = show ? '' : 'none';
-    if (show) _rxLoadOrders();
+    // Wait for the feature flags to be loaded before deciding — on a fresh page load _features
+    // isn't populated yet, so _featureActive('reaction_orders') (an admin-preview flag) returns
+    // false and the card stayed hidden until the tab was re-opened. Awaiting fixes that race.
+    Promise.resolve(typeof _loadFeatures === 'function' ? _loadFeatures() : null).then(() => {
+      const show = typeof _featureActive === 'function' && _featureActive('reaction_orders');
+      ordersCard.style.display = show ? '' : 'none';
+      if (show) _rxLoadOrders();
+    });
   }
 }
 
