@@ -599,14 +599,16 @@ document.addEventListener('visibilitychange', () => {
 });
 
 // ── Pull-to-refresh (mobile) ───────────────────────────────────────────────────
-// Dragging down from the very top of the page triggers a colony Rescan — the same
-// action as the header Rescan button (which only exists when logged in). Standalone
-// home-screen apps have no native pull-to-refresh, so we provide our own. Passive
-// listeners (we never block scrolling); a small banner slides in to signal state.
+// Two-stage gesture from the top of the page. Standalone home-screen apps have no browser refresh
+// button, so a SHORT pull just reloads the page (the common "get me a fresh page" need). Keep
+// pulling PAST a second, longer threshold to instead run a full ESI colony Rescan (heavier, and
+// only offered when logged in). Passive listeners (we never block scrolling); a small banner
+// slides in to signal which action a release will take.
 (function setupPullToRefresh() {
-  const THRESHOLD = 78;   // px of indicator travel needed to arm a refresh (stiffer)
-  const MAX_PULL = 110;
-  let startY = 0, pulling = false, armed = false, ind = null;
+  const RELOAD_THRESHOLD = 70;    // short pull → reload the page
+  const RESCAN_THRESHOLD = 150;   // keep pulling → full ESI rescan (logged in only)
+  const MAX_PULL = 180;
+  let startY = 0, pulling = false, mode = 0, ind = null;  // mode: 0 none · 1 reload · 2 rescan
 
   const isPhone = () => window.matchMedia('(max-width: 760px)').matches;
   const atTop = () => (window.scrollY || document.documentElement.scrollTop || 0) <= 0;
@@ -633,8 +635,8 @@ document.addEventListener('visibilitychange', () => {
   }
 
   window.addEventListener('touchstart', e => {
-    if (!isPhone() || !atTop() || !canRescan() || e.touches.length !== 1) { pulling = false; return; }
-    startY = e.touches[0].clientY; pulling = true; armed = false;
+    if (!isPhone() || !atTop() || e.touches.length !== 1) { pulling = false; return; }
+    startY = e.touches[0].clientY; pulling = true; mode = 0;
   }, { passive: true });
 
   window.addEventListener('touchmove', e => {
@@ -642,20 +644,28 @@ document.addEventListener('visibilitychange', () => {
     const dy = e.touches[0].clientY - startY;
     if (dy <= 0 || !atTop()) { pulling = false; hide(); return; }
     const pull = Math.min(dy * 0.5, MAX_PULL);     // damped
-    armed = pull >= THRESHOLD;
-    show(pull, armed ? '↻  Release to refresh' : '↓  Pull to refresh');
+    if (pull >= RESCAN_THRESHOLD && canRescan()) mode = 2;
+    else if (pull >= RELOAD_THRESHOLD) mode = 1;
+    else mode = 0;
+    const text = mode === 2 ? '⟳  Release to rescan (ESI)'
+               : mode === 1 ? '↻  Release to reload'
+               : (canRescan() ? '↓  Pull to reload · keep pulling to rescan' : '↓  Pull to reload');
+    show(pull, text);
   }, { passive: true });
 
   window.addEventListener('touchend', () => {
     if (!pulling) return;
     pulling = false;
-    if (armed && canRescan() && typeof rescanAll === 'function') {
-      show(MAX_PULL, '↻  Refreshing…');
+    if (mode === 2 && canRescan() && typeof rescanAll === 'function') {
+      show(MAX_PULL, '⟳  Rescanning…');
       rescanAll();
       setTimeout(hide, 900);
+    } else if (mode === 1) {
+      show(MAX_PULL, '↻  Reloading…');
+      setTimeout(() => location.reload(), 150);
     } else {
       hide();
     }
-    armed = false;
+    mode = 0;
   });
 })();

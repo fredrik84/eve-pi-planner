@@ -291,7 +291,7 @@ function _loadReactionsDashboard() {
   // Only show the loading flash on a genuinely first/cold load — a refresh after cancelling one
   // assignment updates the cached data in place instead (see _rxCancelAssignment), so this
   // full-reload path only runs on tab-open or after "Clear all", not on every small action.
-  if (!_rxLastDashboardData) el.innerHTML = '<div class="pp-empty">Loading…</div>';
+  if (!_rxLastDashboardData) el.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Loading…</div>';
   fetch('/api/reactions/jobs')
     .then(r => {
       if (!r.ok) throw new Error(r.status === 401 ? 'Log in to use Reactions' : 'Load failed');
