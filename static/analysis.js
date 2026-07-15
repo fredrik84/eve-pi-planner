@@ -154,7 +154,7 @@ async function onAnalyzeTabOpen() {
   ]);
   _analyzeSnaps = [...(derived || []), ...(saved || [])];
   // Skill ROI and expansion depend on _loadFeatures (via _featureActive) — run after phase 1.
-  await Promise.all([_fetchSkillRoi(), _fetchExpansion()]);
+  await Promise.all([_fetchSkillRoi(), _fetchExpansion(), _fetchRedeployCandidates()]);
   _renderAnalyzePlans();
   renderAnalysis();
 }
@@ -188,6 +188,62 @@ function _renderSkillRoiSection() {
         <div class="an-sug-note">What an extra skill level on each character would add at your current setup — your call whether the train (or an injector) is worth it.</div>
         <ul class="an-skill-list">${li}</ul>${note}
       </div>
+    </section>`;
+}
+
+// ── Redeploy advice (own-character collisions + depleting deposits) ───────────
+// Two independent "tear the CC down and rebuild it elsewhere" signals from GET /api/redeploy-
+// candidates, each gated by its OWN feature flag (redeploy_collision / redeploy_depletion). Fetched
+// only when at least one is active; the render skips whichever the flag hides.
+let _redeploy = null;
+async function _fetchRedeployCandidates() {
+  if (!_featureActive('redeploy_collision') && !_featureActive('redeploy_depletion')) { _redeploy = null; return; }
+  try { _redeploy = await (await fetch('/api/redeploy-candidates')).json(); }
+  catch (e) { _redeploy = null; }
+}
+
+function _renderRedeploySection() {
+  if (!_redeploy) return '';
+  const wantCol = _featureActive('redeploy_collision');
+  const wantDep = _featureActive('redeploy_depletion');
+  const collisions = wantCol ? (_redeploy.collisions || []) : [];
+  const depleting = wantDep ? (_redeploy.depleting || []) : [];
+  if (!collisions.length && !depleting.length) return '';
+
+  let body = '';
+  if (collisions.length) {
+    const li = collisions.map(c => {
+      const who = (c.occupants || []).map(o => `<b>${_esc(o.character)}</b>${o.p0_name ? ` (${_esc(o.p0_name)})` : ''}`).join(', ');
+      const why = c.shared_resource
+        ? `both pull the <b>same resource</b> here, so they split one depleting deposit — redeploy one to a different planet.`
+        : `share this planet's depletion — redeploy one to a different planet to stop them dragging each other down.`;
+      return `<li class="an-redeploy-row">
+          <span class="an-redeploy-loc"><b>${_esc(c.location)}</b>${c.shared_resource ? ' <span class="an-redeploy-tag an-redeploy-tag-hot">same P0</span>' : ''}</span>
+          <span class="an-redeploy-who">${who}</span>
+          <span class="an-sug-note">${why}</span>
+        </li>`;
+    }).join('');
+    body += `<div class="an-suggest an-suggest-redeploy">
+        <div class="an-suggest-h">Own-character collisions — ${collisions.length} planet${collisions.length > 1 ? 's' : ''}</div>
+        <div class="an-sug-note">Planetary resources deplete per-planet, shared across every extractor on them. Two of your own colonies on one planet cannibalise each other's yield.</div>
+        <ul class="an-redeploy-list">${li}</ul>
+      </div>`;
+  }
+  if (depleting.length) {
+    const li = depleting.map(d => `<li class="an-redeploy-row">
+        <span class="an-redeploy-loc"><b>${_esc(d.character)}</b> · ${_esc(d.location)}${d.p0_name ? ` <span class="an-redeploy-p0">${_esc(d.p0_name)}</span>` : ''}</span>
+        <span class="an-redeploy-who"><span class="an-redeploy-tag">${d.decline_pct}% down over ${d.programs} programs</span> ${d.peak_first.toLocaleString()} → ${d.peak_last.toLocaleString()} P0/day peak</span>
+        <span class="an-sug-note">The deposit is exhausting — its peak keeps falling, so a reseat only chases a sinking ceiling. Redeploy the CC to a fresh planet.</span>
+      </li>`).join('');
+    body += `<div class="an-suggest an-suggest-redeploy">
+        <div class="an-suggest-h">Depleting deposits — ${depleting.length} colon${depleting.length > 1 ? 'ies' : 'y'}</div>
+        <div class="an-sug-note">Measured across the last several extraction programs (one sample per restart). A steady-low planet isn't flagged — only a real downtrend.</div>
+        <ul class="an-redeploy-list">${li}</ul>
+      </div>`;
+  }
+  return `<section class="pp-card">
+      <div class="pp-card-title">Redeploy candidates <span class="tl-preview-tag">measured</span></div>
+      <div class="pp-card-body">${body}</div>
     </section>`;
 }
 
@@ -685,7 +741,7 @@ function renderAnalysis() {
       </section>`
     : '';
 
-  el.innerHTML = supplyCard + suggestCard + _hybridReseatSection() + _renderGrowSection() + _renderSkillRoiSection();
+  el.innerHTML = supplyCard + suggestCard + _renderRedeploySection() + _hybridReseatSection() + _renderGrowSection() + _renderSkillRoiSection();
 }
 
 // ── Extraction-runtime helper (decay-aware recommendation) ────────────────────

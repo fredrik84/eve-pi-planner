@@ -1068,6 +1068,113 @@ def skill_roi(pp_session: str = Cookie(default=None)):
     return {"suggestions": suggestions[:12], "note": note}
 
 
+# ── Redeploy advice (Setup Analysis) ─────────────────────────────────────────────
+# Two independent "tear the CC down and rebuild it somewhere fresh" signals, each behind its own
+# feature flag on the frontend:
+#   • Own-character collision (redeploy_collision) — two of your OWN extractor colonies sit on the
+#     same EVE planet. Planetary resource depletion is per-planet and shared across every extractor
+#     on it, so your own alts cannibalise each other's yield; worst when they pull the SAME P0.
+#   • Depleting deposit (redeploy_depletion) — a colony's install-yield (peak_day, one sample per
+#     reseat/restart, from pp_colony_yield) has trended DOWN across the last several programs. The
+#     best itself is falling, so a reseat only recovers toward a sinking ceiling — the fix is to
+#     redeploy the CC to a fresh planet, not reseat in place. This is the escalation of the burndown
+#     "reseat candidate" (a one-off dip a reseat DOES recover).
+_DEPLETE_WINDOW    = 6      # most recent programs considered for the trend
+_DEPLETE_MIN       = 5      # need at least this many programs before judging a downtrend
+_DEPLETE_DROP      = 0.15   # ≥15% peak decline start→current across the window = depleting
+_DEPLETE_MAX_UP    = 1      # tolerate one blip up within the window (measurement noise / a good reseat)
+
+
+def _depleting_trend(peaks: list[float]) -> dict | None:
+    """Given a colony's peak_day samples oldest→newest, decide if the deposit is exhausting.
+    Returns trend detail or None. Directional: net decline from window-start to current AND at most
+    one upward step, so a thin-but-STEADY planet (flat, no downtrend) is never flagged."""
+    w = [p for p in peaks if p and p > 0][-_DEPLETE_WINDOW:]
+    if len(w) < _DEPLETE_MIN or w[0] <= 0:
+        return None
+    drop = (w[0] - w[-1]) / w[0]
+    ups = sum(1 for i in range(len(w) - 1) if w[i + 1] > w[i])
+    if drop >= _DEPLETE_DROP and ups <= _DEPLETE_MAX_UP and w[-1] < w[0]:
+        return {"programs": len(w), "peak_first": round(w[0]), "peak_last": round(w[-1]),
+                "decline_pct": round(drop * 100)}
+    return None
+
+
+def derive_redeploy_candidates(context_id: int) -> dict:
+    """Both redeploy signals for one account (behind the endpoint below, factored out so tests can
+    call it for a fixture context). Extractor colonies only — depletion is an extraction concern."""
+    con = get_connection()
+    planets = con.execute("""
+        SELECT cp.character_id AS cid, c.character_name AS nm, cp.planet_id AS pid,
+               cp.planet_num AS pn, cp.p0_type_id AS p0, cp.p0_name AS p0name,
+               COALESCE(s.name, '') AS system
+        FROM pp_char_planets cp
+        JOIN pp_characters c ON c.character_id = cp.character_id
+        LEFT JOIN solar_systems s ON s.system_id = cp.solar_system_id
+        WHERE c.context_id=? AND COALESCE(c.is_dummy,0)=0 AND cp.is_extractor=1
+    """, (context_id,)).fetchall()
+    hist_rows = con.execute("""
+        SELECT y.character_id AS cid, y.planet_id AS pid, y.peak_day AS peak
+        FROM pp_colony_yield y
+        JOIN pp_characters c ON c.character_id = y.character_id
+        WHERE c.context_id=? AND y.peak_day > 0
+        ORDER BY y.character_id, y.planet_id, y.install_ts ASC
+    """, (context_id,)).fetchall()
+    con.close()
+
+    def _loc(r):
+        return (r["system"] or "?") + (f" P{r['pn']}" if r["pn"] is not None else "")
+
+    # ── Collision: ≥2 of the account's own extractor colonies on one planet_id ──
+    by_planet: dict = {}
+    for r in planets:
+        by_planet.setdefault(r["pid"], []).append(r)
+    collisions = []
+    for pid, occ in by_planet.items():
+        if len(occ) < 2:
+            continue
+        p0s = [o["p0"] for o in occ]
+        shared = len({p for p in p0s if p0s.count(p) > 1}) > 0   # ≥2 occupants pull the same P0
+        collisions.append({
+            "planet_id": pid,
+            "location": _loc(occ[0]),
+            "shared_resource": shared,
+            "occupants": [{"character": o["nm"], "p0_name": o["p0name"]} for o in occ],
+        })
+    # Same-resource contention (real yield theft) ahead of mere same-planet doubling-up.
+    collisions.sort(key=lambda c: (not c["shared_resource"], c["location"]))
+
+    # ── Depleting: multi-program downtrend on a still-deployed extractor colony ──
+    peaks_by: dict = {}
+    for h in hist_rows:
+        peaks_by.setdefault((h["cid"], h["pid"]), []).append(h["peak"])
+    depleting = []
+    for r in planets:
+        trend = _depleting_trend(peaks_by.get((r["cid"], r["pid"]), []))
+        if trend:
+            depleting.append({
+                "planet_id": r["pid"], "character": r["nm"], "location": _loc(r),
+                "p0_name": r["p0name"], **trend,
+            })
+    depleting.sort(key=lambda d: d["decline_pct"], reverse=True)
+    return {"collisions": collisions, "depleting": depleting}
+
+
+@router.get("/api/redeploy-candidates")
+def redeploy_candidates(pp_session: str = Cookie(default=None), debug_context_id: int | None = None):
+    """Setup Analysis 'redeploy the CC elsewhere' advice — own-character planet collisions and
+    depleting deposits. Strictly scoped to the session's context. DEBUG_PI gate (same convention as
+    /api/my-setup-plan) lets a test exercise it against a seeded fixture without a real session."""
+    import os as _os
+    context_id = session_context_id(pp_session)
+    if _os.environ.get("DEBUG_PI"):
+        env_ctx = _os.environ.get("DEBUG_CONTEXT_ID")
+        context_id = debug_context_id or (int(env_ctx) if env_ctx else None) or context_id
+    if not context_id:
+        return {"collisions": [], "depleting": []}
+    return derive_redeploy_candidates(context_id)
+
+
 def _expansion_capacity(context_id: int) -> dict:
     """Spare fleet capacity worth re-planning for: real characters with no colonies (idle), free
     planet slots (max_planets − deployed), and characters whose CCU/IC grew since the last plan was

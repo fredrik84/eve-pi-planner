@@ -99,6 +99,17 @@ FEATURE_REGISTRY = [
      "description": "On Setup Analysis: each material row shows its P0 source name and a comfortable "
                     "P0/hr-per-planet target at a glance — a reference while reseating extractor heads.",
      "default": False},
+    {"key": "redeploy_collision", "label": "Own-character planet collisions", "group": "Setup Analysis",
+     "description": "On Setup Analysis: flag when two of your own extractor colonies sit on the same "
+                    "planet — they share the planet's depletion and cannibalise each other's yield "
+                    "(worst when they pull the same P0). Suggests redeploying one elsewhere.",
+     "default": False},
+    {"key": "redeploy_depletion", "label": "Depleting-deposit redeploy advice", "group": "Setup Analysis",
+     "description": "On Setup Analysis: flag an extractor colony whose measured install-yield has "
+                    "trended down across the last several programs — the deposit is exhausting, so a "
+                    "reseat only chases a sinking ceiling and the fix is to redeploy the CC to a fresh "
+                    "planet.",
+     "default": False},
     {"key": "reactions", "label": "Reactions tracking", "group": "Reactions",
      "description": "Adds a Reactions tab: ranks the most profitable moon-goo reaction chains, "
                     "priced from your alliance's own price sheet if it has one (see Admin → "
