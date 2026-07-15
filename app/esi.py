@@ -614,9 +614,16 @@ def _fetch_planets(character_id: int, access_token: str) -> dict:
                                       for h in (ext.get("heads") or [])
                                       if h.get("latitude") is not None and h.get("longitude") is not None]
                             if _heads:
-                                ext_heads.append({"p0": p0_type_id,
-                                                  "r": round(ext.get("head_radius") or 0.0, 5),
-                                                  "h": _heads})
+                                _e = {"p0": p0_type_id,
+                                      "r": round(ext.get("head_radius") or 0.0, 5),
+                                      "h": _heads}
+                                # The ECU pin's own position centres the deployment's reachable area
+                                # (heads reseat WITHIN reach of it) — the anchor for the range-overlap
+                                # check, since two overlapping reachable areas keep competing however
+                                # the heads are reseated.
+                                if pin.get("latitude") is not None and pin.get("longitude") is not None:
+                                    _e["c"] = [round(pin["latitude"], 5), round(pin["longitude"], 5)]
+                                ext_heads.append(_e)
                         sch = pin.get("schematic_id") or (pin.get("factory_details") or {}).get("schematic_id")
                         if sch:
                             out = _sch_to_out.get(sch)

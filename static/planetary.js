@@ -2827,18 +2827,33 @@ function settingsSection(name, doLoad) {
 function _loadGeneralSettings() {
   const el = document.getElementById('genAutoRefresh');
   if (el) el.value = (typeof _autoRefreshSeconds === 'function') ? _autoRefreshSeconds() : 300;
+  const ov = document.getElementById('genHotspotOverlap');
+  if (ov) ov.value = (typeof _hotspotOverlapThreshold === 'function') ? _hotspotOverlapThreshold() : 50;
 }
 function _saveGeneralSettings() {
   const el = document.getElementById('genAutoRefresh');
-  if (!el) return;
-  let v = parseInt(el.value, 10);
-  if (isNaN(v) || v < 0) v = 300;
-  if (v > 0 && v < 30) v = 30;   // floor so a typo can't hammer the endpoints
-  el.value = v;
-  try { localStorage.setItem('autoRefreshSeconds', String(v)); } catch (e) {}
-  if (typeof _applyAutoRefresh === 'function') _applyAutoRefresh();
-  const s = document.getElementById('genSettingsStatus');
-  if (s) { s.textContent = v === 0 ? 'Auto-refresh turned off' : `Saved — refreshing every ${v}s`; setTimeout(() => { s.textContent = ''; }, 2000); }
+  if (el) {
+    let v = parseInt(el.value, 10);
+    if (isNaN(v) || v < 0) v = 300;
+    if (v > 0 && v < 30) v = 30;   // floor so a typo can't hammer the endpoints
+    el.value = v;
+    try { localStorage.setItem('autoRefreshSeconds', String(v)); } catch (e) {}
+    if (typeof _applyAutoRefresh === 'function') _applyAutoRefresh();
+    const s = document.getElementById('genSettingsStatus');
+    if (s) { s.textContent = v === 0 ? 'Auto-refresh turned off' : `Saved — refreshing every ${v}s`; setTimeout(() => { s.textContent = ''; }, 2000); }
+  }
+  const ov = document.getElementById('genHotspotOverlap');
+  if (ov) {
+    let o = parseInt(ov.value, 10);
+    if (isNaN(o) || o < 1) o = 50;
+    if (o > 100) o = 100;
+    ov.value = o;
+    try { localStorage.setItem('ppHotspotOverlap', String(o)); } catch (e) {}
+    const os = document.getElementById('genOverlapStatus');
+    if (os) { os.textContent = `Saved — flagging at ${o}% overlap`; setTimeout(() => { os.textContent = ''; }, 2000); }
+    // Re-render Setup Analysis live if it's the open tab, so the new threshold applies immediately.
+    if (typeof renderAnalysis === 'function' && document.getElementById('analyzeContent')) renderAnalysis();
+  }
 }
 
 // Freezes today's /api/my-setup-plan read (one entry per deployed product) into named,

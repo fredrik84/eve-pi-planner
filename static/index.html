@@ -1311,6 +1311,17 @@ PVF-N9    3         95                 60             80                  100   
               </div>
               <span id="genSettingsStatus" class="bug-status-msg"></span>
             </div>
+            <div class="settings-subsec">
+              <div class="settings-subsec-title">Extraction range overlap</div>
+              <div class="settings-subsec-hint">Setup Analysis flags two of your colonies on one planet whose reachable extraction areas overlap this much or more — they compete for the same hotspots and both yields decay. Lower = stricter (flags more); higher = only near-identical deployments. Default 50%.</div>
+              <div class="settings-field-list">
+                <div class="settings-field-row">
+                  <span class="settings-field-label">Flag when ranges overlap at least</span>
+                  <span class="settings-field-control"><input type="number" id="genHotspotOverlap" min="1" max="100" step="5" value="50" class="settings-field-input" onchange="_saveGeneralSettings()"> %</span>
+                </div>
+              </div>
+              <span id="genOverlapStatus" class="bug-status-msg"></span>
+            </div>
           </div>
 
         </div><!-- /settings-modal-content -->
@@ -1456,12 +1467,12 @@ PVF-N9    3         95                 60             80                  100   
 
   <script src="/utils.js?v=4"></script>
   <script src="/app.js?v=39"></script>
-  <script src="/planetary.js?v=359"></script>
+  <script src="/planetary.js?v=360"></script>
   <script src="/dashboard.js?v=22"></script>
   <script src="/admin.js?v=18"></script>
   <script src="/planetdb.js?v=3"></script>
   <script src="/refill.js?v=4"></script>
-  <script src="/analysis.js?v=26"></script>
+  <script src="/analysis.js?v=27"></script>
   <script src="/layout.js?v=1"></script>
   <script src="/reactions.js?v=75"></script>
 </body>

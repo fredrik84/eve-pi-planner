@@ -1,15 +1,18 @@
 """
 Tests for /api/redeploy-candidates — the two Setup Analysis extraction signals:
 
-  1. Same-hotspot proximity: two colonies on the same planet whose extractor heads (ESI lat/lon +
-     head_radius, captured in pp_char_planets.ext_heads) overlap the SAME resource hotspot — they
-     deplete that spot together. Sharing a planet is normal; only overlapping same-P0 head discs are
-     flagged. Heads far apart, heads pulling different P0s, a solo colony, and a factory sharing the
-     planet must all NOT be flagged.
+  1. Overlapping reachable ranges: two colonies on the same planet whose reachable extraction AREAS
+     (ECU centre + head spread + head_radius, from pp_char_planets.ext_heads) overlap for the same
+     P0 — they compete for the same hotspots and reseating can't escape it. The server returns EVERY
+     overlap above a tiny floor with its overlap_pct; the client applies the user's threshold. So a
+     range case with far-apart current heads is still flagged (footprint, not head position); far-
+     apart CCs, different-P0 areas, a solo colony, and a factory sharing the planet are not.
   2. Depleting deposits: an extractor colony whose install-yield (peak_day, one sample per program
      in pp_colony_yield) has trended DOWN across the last several programs — the deposit is
      exhausting, so a reseat only chases a sinking ceiling. A steady-low (thin-but-flat) planet is
      NOT flagged, nor is one with too few programs to judge, nor an up-trend.
+  3. Cross-link: when a colony is BOTH in a range overlap and depleting, the depleting character is
+     named as the precedence mover, and its depletion entry is tagged also_overlapping.
 
 Requires DEBUG_PI=true in the server's .env (the local docker-compose default) and the fixture
 seeded first:
@@ -26,6 +29,7 @@ import urllib.request
 
 CTX_PROXIMITY = 999005
 CTX_DEPLETION = 999006
+CTX_CROSS = 999007
 
 
 def get(url: str):
@@ -40,20 +44,40 @@ def check(cond: bool, msg: str) -> bool:
 
 
 def test_proximity(base: str) -> bool:
-    print(f"\n{'='*60}\n  Same-hotspot head overlap\n{'='*60}")
+    print(f"\n{'='*60}\n  Overlapping reachable ranges\n{'='*60}")
     status, data = get(f"{base}/api/redeploy-candidates?debug_context_id={CTX_PROXIMITY}")
     ok = check(status == 200, "200 OK")
     prox = data.get("proximity", [])
-    # Only planet 900001 (same P0, overlapping heads) qualifies. Far-apart heads, different-P0 heads,
-    # the solo colony, and the extractor+factory planet must all be excluded.
-    ok &= check(len(prox) == 1, f"exactly 1 overlapping-hotspot planet (got {len(prox)}: {[p['location'] for p in prox]})")
-    if prox:
-        p = prox[0]
-        ok &= check(p["location"] == "? P1", f"the same-spot planet is flagged (got {p['location']})")
-        ok &= check(set(p.get("characters", [])) == {"Test Gale", "Test Hana"},
-                    f"both characters named (got {p.get('characters')})")
-        ok &= check(p["overlap_pct"] == 100, f"coincident heads report 100% overlap (got {p['overlap_pct']})")
-        ok &= check(p.get("p0_name") == "Aqueous Liquids", f"the shared P0 is named (got {p.get('p0_name')})")
+    by_loc = {p["location"]: p for p in prox}
+    # Server returns every real overlap (client filters by threshold): P1 (coincident, 100%),
+    # P6 (~25%, below the 50% default), P8 (the range case). Far CCs / different-P0 / solo / factory
+    # must all be absent.
+    ok &= check(set(by_loc) == {"? P1", "? P6", "? P8"},
+                f"exactly the three overlapping planets returned (got {sorted(by_loc)})")
+    p1 = by_loc.get("? P1")
+    ok &= check(p1 and p1["overlap_pct"] == 100, f"coincident CCs report 100% overlap (got {p1 and p1['overlap_pct']})")
+    ok &= check(p1 and set(p1.get("characters", [])) == {"Test Gale", "Test Hana"}, "both characters named")
+    ok &= check(p1 and p1.get("p0_name") == "Aqueous Liquids", "the shared P0 is named")
+    p6 = by_loc.get("? P6")
+    ok &= check(p6 and p6["overlap_pct"] == 25, f"P6 reports 25% overlap, below the default (got {p6 and p6['overlap_pct']})")
+    # P8: current heads are 0.24 rad apart (no head overlap), but the reachable areas overlap heavily —
+    # this is the whole point of the range model over a head-position check.
+    p8 = by_loc.get("? P8")
+    ok &= check(p8 and p8["overlap_pct"] >= 50, f"P8 (far heads, overlapping ranges) flagged by footprint (got {p8 and p8['overlap_pct']}%)")
+    return ok
+
+
+def test_precedence(base: str) -> bool:
+    print(f"\n{'='*60}\n  Cross-link: depleting character takes precedence\n{'='*60}")
+    status, data = get(f"{base}/api/redeploy-candidates?debug_context_id={CTX_CROSS}")
+    ok = check(status == 200, "200 OK")
+    prox = data.get("proximity", [])
+    dep = data.get("depleting", [])
+    ok &= check(len(prox) == 1 and prox[0].get("precedence_character") == "Test Gill",
+                f"the depleting character is named as the precedence mover (got {prox and prox[0].get('precedence_character')})")
+    gill = next((d for d in dep if d["character"] == "Test Gill"), None)
+    ok &= check(gill is not None and gill.get("also_overlapping") is True,
+                "Gill's depletion entry is tagged also_overlapping")
     return ok
 
 
@@ -95,6 +119,7 @@ def main():
     results = [
         test_proximity(base),
         test_depletion(base),
+        test_precedence(base),
         test_no_cross_signal(base),
     ]
     print(f"\n{'='*60}")

@@ -191,11 +191,18 @@ function _renderSkillRoiSection() {
     </section>`;
 }
 
-// ── Redeploy advice (same-hotspot head overlap + depleting deposits) ──────────
+// ── Redeploy advice (overlapping reachable areas + depleting deposits) ────────
 // Two independent extraction signals from GET /api/redeploy-candidates, each gated by its OWN
 // feature flag (redeploy_proximity / redeploy_depletion). Fetched only when at least one is active;
-// the render skips whichever the flag hides.
+// the render skips whichever the flag hides. The proximity overlap % cutoff is a per-browser
+// preference (Settings → General, _hotspotOverlapThreshold) applied client-side, so the server
+// returns every overlap and the user's threshold decides what shows without a re-fetch.
 let _redeploy = null;
+const _HOTSPOT_OVERLAP_DEFAULT = 50;
+function _hotspotOverlapThreshold() {
+  const v = parseInt(localStorage.getItem('ppHotspotOverlap'), 10);
+  return (isNaN(v) || v < 1 || v > 100) ? _HOTSPOT_OVERLAP_DEFAULT : v;
+}
 async function _fetchRedeployCandidates() {
   if (!_featureActive('redeploy_proximity') && !_featureActive('redeploy_depletion')) { _redeploy = null; return; }
   try { _redeploy = await (await fetch('/api/redeploy-candidates')).json(); }
@@ -204,7 +211,9 @@ async function _fetchRedeployCandidates() {
 
 function _renderRedeploySection() {
   if (!_redeploy) return '';
-  const proximity = _featureActive('redeploy_proximity') ? (_redeploy.proximity || []) : [];
+  const thresh = _hotspotOverlapThreshold();
+  const proximity = _featureActive('redeploy_proximity')
+    ? (_redeploy.proximity || []).filter(p => p.overlap_pct >= thresh) : [];
   const depleting = _featureActive('redeploy_depletion') ? (_redeploy.depleting || []) : [];
   if (!proximity.length && !depleting.length) return '';
 
@@ -212,25 +221,32 @@ function _renderRedeploySection() {
   if (proximity.length) {
     const li = proximity.map(p => {
       const who = (p.characters || []).map(c => `<b>${_esc(c)}</b>`).join(' &amp; ');
+      const hot = p.p0_name ? _esc(p.p0_name) : 'resource';
+      // If one of the two is also depleting here, it's the one to move (needs a fresh deposit anyway),
+      // and moving it clears the overlap — so it takes precedence as the mover. Reseating heads won't
+      // help: they'd land back inside the same overlapping reach, so the fix is to redeploy the CC.
+      const note = p.precedence_character
+        ? `Their extraction ranges overlap on the same ${hot} area — reseating stays inside the overlap, so both keep depleting it. <b>${_esc(p.precedence_character)}</b> is also depleting here, so redeploy that one's command centre to a clear part of the planet (or another planet) — it fixes both.`
+        : `Their extraction ranges overlap on the same ${hot} area, so they keep competing for its hotspots however the heads are reseated. Redeploy one character's command centre to a clear part of the planet (or another planet).`;
       return `<li class="an-redeploy-row">
           <span class="an-redeploy-loc"><b>${_esc(p.location)}</b>${p.p0_name ? ` <span class="an-redeploy-p0">${_esc(p.p0_name)}</span>` : ''}</span>
-          <span class="an-redeploy-who">${who} · <span class="an-redeploy-tag">${p.overlap_pct}% head overlap</span></span>
-          <span class="an-sug-note">Their heads sit on the same ${p.p0_name ? _esc(p.p0_name) : 'resource'} hotspot, depleting it together. Spread one character's heads to a different area of the planet grid.</span>
+          <span class="an-redeploy-who">${who} · <span class="an-redeploy-tag">${p.overlap_pct}% range overlap</span></span>
+          <span class="an-sug-note">${note}</span>
         </li>`;
     }).join('');
     body += `<div class="an-suggest">
-        <div class="an-suggest-h">Overlapping hotspots — ${proximity.length} planet${proximity.length > 1 ? 's' : ''}</div>
-        <div class="an-sug-note">Sharing a planet is fine — but two colonies whose extractor heads land on the same resource hotspot drain it faster for both. Move the heads apart; no need to abandon the planet.</div>
+        <div class="an-suggest-h">Overlapping extraction ranges — ${proximity.length} planet${proximity.length > 1 ? 's' : ''}</div>
+        <div class="an-sug-note">Sharing a planet is fine — but two colonies whose reachable extraction areas overlap drain the same hotspots for both, and reseating heads can't escape the overlap. Threshold ${thresh}% (Settings → General).</div>
         <ul class="an-redeploy-list">${li}</ul>
       </div>`;
   } else if (_featureActive('redeploy_proximity') && _redeploy.proximity_unscanned) {
-    body += `<div class="an-suggest"><div class="an-sug-note">Rescan colonies in the Characters tab to capture extractor head positions — the same-hotspot overlap check needs them.</div></div>`;
+    body += `<div class="an-suggest"><div class="an-sug-note">Rescan colonies in the Characters tab to capture extractor positions — the range-overlap check needs them.</div></div>`;
   }
   if (depleting.length) {
     const li = depleting.map(d => `<li class="an-redeploy-row">
         <span class="an-redeploy-loc"><b>${_esc(d.character)}</b> · ${_esc(d.location)}${d.p0_name ? ` <span class="an-redeploy-p0">${_esc(d.p0_name)}</span>` : ''}</span>
         <span class="an-redeploy-who"><span class="an-redeploy-tag">${d.decline_pct}% down over ${d.programs} programs</span> ${d.peak_first.toLocaleString()} → ${d.peak_last.toLocaleString()} P0/day peak</span>
-        <span class="an-sug-note">The deposit is exhausting — its peak keeps falling, so a reseat only chases a sinking ceiling. Redeploy the CC to a fresh planet.</span>
+        <span class="an-sug-note">The deposit is exhausting — its peak keeps falling, so a reseat only chases a sinking ceiling. Redeploy the CC to a fresh planet.${d.also_overlapping ? ' Its extraction range also overlaps another colony here — moving it clears that too.' : ''}</span>
       </li>`).join('');
     body += `<div class="an-suggest">
         <div class="an-suggest-h">Depleting deposits — ${depleting.length} colon${depleting.length > 1 ? 'ies' : 'y'}</div>

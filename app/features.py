@@ -99,11 +99,12 @@ FEATURE_REGISTRY = [
      "description": "On Setup Analysis: each material row shows its P0 source name and a comfortable "
                     "P0/hr-per-planet target at a glance — a reference while reseating extractor heads.",
      "default": False},
-    {"key": "redeploy_proximity", "label": "Same-hotspot extractor overlap", "group": "Setup Analysis",
-     "description": "On Setup Analysis: flag when two colonies on the same planet have extractor "
-                    "heads sitting on the same resource hotspot (overlapping discs, same P0) — they "
-                    "deplete that spot together. Suggests spreading the heads to different areas of "
-                    "the planet grid. Needs a rescan to capture head positions.",
+    {"key": "redeploy_proximity", "label": "Overlapping extraction ranges", "group": "Setup Analysis",
+     "description": "On Setup Analysis: flag when two colonies on the same planet have overlapping "
+                    "reachable extraction areas for the same P0 — they compete for the same hotspots "
+                    "and reseating can't escape it, so it suggests redeploying one command centre to "
+                    "a clear area. Overlap % cutoff is set in Settings → General. Needs a rescan to "
+                    "capture extractor positions.",
      "default": False},
     {"key": "redeploy_depletion", "label": "Depleting-deposit redeploy advice", "group": "Setup Analysis",
      "description": "On Setup Analysis: flag an extractor colony whose measured install-yield has "

@@ -1087,12 +1087,20 @@ _DEPLETE_WINDOW    = 6      # most recent programs considered for the trend
 _DEPLETE_MIN       = 5      # need at least this many programs before judging a downtrend
 _DEPLETE_DROP      = 0.15   # ≥15% peak decline start→current across the window = depleting
 _DEPLETE_MAX_UP    = 1      # tolerate one blip up within the window (measurement noise / a good reseat)
+# The overlap that matters is between the two deployments' REACHABLE AREAS, not their current heads —
+# reseating just moves heads around within reach, so overlapping reachable areas keep competing for
+# the same hotspots and both averages decay the longer they share it. We return every overlap above a
+# tiny floor and let the client filter by the user's configured threshold (Settings → General), so
+# the cutoff is a live per-browser preference, not baked into the payload. overlap_pct =
+# (R_a+R_b − dist)/(R_a+R_b)×100 (footprint radii R, centres `dist` apart) → 100 = coincident areas.
+_HOTSPOT_OVERLAP_FLOOR = 1.0
+_HOTSPOT_OVERLAP_DEFAULT = 50.0   # the client default (documented here so the two stay in sync)
 
 
 def _gc_dist(a: tuple, b: tuple) -> float:
-    """Great-circle (angular) distance in radians between two (lat, lon) head positions. EVE reports
-    head coords in radians on the planet sphere; head_radius is in the same units, so an overlap test
-    is a direct distance-vs-radius comparison."""
+    """Great-circle (angular) distance in radians between two (lat, lon) positions. EVE reports planet
+    coords in radians on the sphere; head_radius is in the same units, so distance-vs-radius compares
+    directly."""
     import math
     la, lo_a = a
     lb, lo_b = b
@@ -1100,25 +1108,41 @@ def _gc_dist(a: tuple, b: tuple) -> float:
     return math.acos(max(-1.0, min(1.0, v)))
 
 
-def _head_overlap(ecus_a: list, ecus_b: list) -> dict | None:
-    """Worst same-P0 head-disc overlap between two colonies' ECUs. Returns {p0, overlap_pct} for the
-    tightest overlapping pair, or None if no same-P0 heads overlap. `ecus_*` = the parsed ext_heads
-    list ([{p0, r, h:[[lat,lon],...]}])."""
+def _footprint(ecu: dict) -> tuple | None:
+    """(centre, reach_radius) of one ECU's reachable extraction area, in radians. Centre = the ECU pin
+    position (`c`, where the command centre sits) if captured, else the head centroid (older scans).
+    reach = how far the deployment reaches = farthest current head from the centre + head_radius (a
+    conservative proxy for the area heads can be reseated across; we have no explicit max-reach)."""
+    heads = ecu.get("h") or []
+    if not heads:
+        return None
+    c = ecu.get("c")
+    if not c:
+        c = [sum(h[0] for h in heads) / len(heads), sum(h[1] for h in heads) / len(heads)]
+    reach = max(_gc_dist(c, h) for h in heads) + (ecu.get("r") or 0.0)
+    return (c, reach) if reach > 0 else None
+
+
+def _footprint_overlap(ecus_a: list, ecus_b: list) -> dict | None:
+    """Worst same-P0 reachable-AREA overlap between two colonies' ECUs. Returns {p0, overlap_pct} for
+    the most-overlapping same-P0 footprint pair (above the floor), or None. `ecus_*` = the parsed
+    ext_heads list ([{p0, r, c:[lat,lon], h:[[lat,lon],...]}])."""
     best = None
     for ea in ecus_a:
+        fa = _footprint(ea)
+        if not fa:
+            continue
         for eb in ecus_b:
             if ea.get("p0") != eb.get("p0"):
                 continue                     # different resource deposits — no competition
-            reach = (ea.get("r") or 0.0) + (eb.get("r") or 0.0)
-            if reach <= 0:
+            fb = _footprint(eb)
+            if not fb:
                 continue
-            for ha in ea.get("h") or []:
-                for hb in eb.get("h") or []:
-                    d = _gc_dist(ha, hb)
-                    if d < reach:
-                        pct = (reach - d) / reach * 100.0
-                        if best is None or pct > best["overlap_pct"]:
-                            best = {"p0": ea.get("p0"), "overlap_pct": round(pct)}
+            reach = fa[1] + fb[1]
+            d = _gc_dist(fa[0], fb[0])
+            pct = (reach - d) / reach * 100.0
+            if pct >= _HOTSPOT_OVERLAP_FLOOR and (best is None or pct > best["overlap_pct"]):
+                best = {"p0": ea.get("p0"), "overlap_pct": round(pct)}
     return best
 
 
@@ -1191,7 +1215,7 @@ def derive_redeploy_candidates(context_id: int) -> dict:
                 ob, eb = parsed[j]
                 if oa["cid"] == ob["cid"]:
                     continue                 # the game already min-separates one char's own heads
-                hit = _head_overlap(ea, eb)
+                hit = _footprint_overlap(ea, eb)
                 if hit:
                     proximity.append({
                         "planet_id": pid, "location": _loc(oa),
@@ -1214,6 +1238,22 @@ def derive_redeploy_candidates(context_id: int) -> dict:
                 "p0_name": r["p0name"], **trend,
             })
     depleting.sort(key=lambda d: d["decline_pct"], reverse=True)
+
+    # Cross-link the two signals. When a character caught in a same-hotspot overlap is ALSO the one
+    # whose yield is depleting on that planet, THAT character is the one to move (it needs a fresh
+    # deposit anyway) — moving it clears the overlap too, so it takes precedence as the mover. This
+    # keeps us from advising the wrong character to relocate, and avoids two disconnected nudges
+    # about the same planet.
+    depl_keys = {(d["planet_id"], d["character"]) for d in depleting}
+    for p in proximity:
+        movers = [c for c in p["characters"] if (p["planet_id"], c) in depl_keys]
+        if movers:
+            p["precedence_character"] = movers[0]
+    prox_keys = {(p["planet_id"], c) for p in proximity for c in p["characters"]}
+    for d in depleting:
+        if (d["planet_id"], d["character"]) in prox_keys:
+            d["also_overlapping"] = True
+
     return {"proximity": proximity, "proximity_unscanned": unscanned, "depleting": depleting}
 
 
