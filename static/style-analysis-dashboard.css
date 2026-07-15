@@ -475,11 +475,11 @@
 .an-redeploy-cl { padding: 8px 10px; border: 1px solid #1c2030; border-radius: 7px; background: #11151f; margin-bottom: 6px; }
 .an-redeploy-cl-h { font-size: 12.5px; color: var(--clr-text-bright); margin-bottom: 6px; }
 .an-redeploy-cl-h .an-redeploy-keep { margin-left: 2px; }
-.an-redeploy-checks { display: flex; flex-wrap: wrap; gap: 5px 16px; }
-.an-redeploy-chk { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; color: var(--clr-text); cursor: pointer; }
-.an-redeploy-chk input { cursor: pointer; margin: 0; }
-.an-redeploy-checked { color: #6b7280; text-decoration: line-through; }
-.an-redeploy-checked .an-redeploy-depl { text-decoration: none; }
+.an-redeploy-mvs { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.an-redeploy-mv-lbl { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; color: #8a93a5; }
+.an-redeploy-mv { display: inline-block; padding: 2px 9px; border-radius: 4px; background: #1a2130; border: 1px solid #232c3d;
+  font-size: 12.5px; color: var(--clr-text-bright); }
+.an-redeploy-mv-urgent { border-color: #6a4a1f; }
 .an-redeploy-later { margin-top: 8px; }
 .an-redeploy-later > summary { cursor: pointer; font-size: 12.5px; color: #8fb4d6; padding: 4px 0; }
 
