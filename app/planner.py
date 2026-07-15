@@ -657,6 +657,60 @@ def delete_plan_snapshot(snap_id: int, context_id: int = Depends(require_context
     return {"ok": True}
 
 
+def _char_footprint(con, context_id: int):
+    """Per real character: `foot` = systems the char operates in, `occ` = (system, planet_num) already
+    colonised. The reachability + no-double-book basis for 'where could this char redeploy'."""
+    rows = con.execute("""
+        SELECT cp.character_id AS cid, s.name AS system, cp.planet_num AS pn
+        FROM pp_char_planets cp
+        LEFT JOIN solar_systems s ON s.system_id = cp.solar_system_id
+        JOIN pp_characters c ON c.character_id = cp.character_id
+        WHERE c.context_id=? AND COALESCE(c.is_dummy,0)=0
+    """, (context_id,)).fetchall()
+    foot: dict[int, set] = {}
+    occ: dict[int, set] = {}
+    for r in rows:
+        if not r["system"]:
+            continue
+        foot.setdefault(r["cid"], set()).add(r["system"])
+        occ.setdefault(r["cid"], set()).add((r["system"], r["pn"]))
+    return foot, occ
+
+
+def _p0_available_by_char(con, p0_name: str | None, foot: dict, occ: dict, blend_on: bool) -> dict:
+    """Available same-P0 Planet-DB planets per character (cid) — carrying `p0_name`, in a system the
+    char operates in, not already colonised by them, richness-sorted (measured-yield blended when the
+    flag is on). The 'redeploy this colony to a fresh planet' candidate list. cid-keyed (int)."""
+    col = _p0_col(p0_name) if p0_name else None
+    if not col:
+        return {}
+    valid_types = _P0_PLANET_TYPES.get(p0_name, [])
+    type_filter = (" AND planet_type IN ({})".format(",".join("?" * len(valid_types)))) if valid_types else ""
+    planets = con.execute(
+        f'SELECT system, planet_num, planet_type, "{col}" AS r FROM pp_planets WHERE "{col}" > 0{type_filter}',
+        valid_types,
+    ).fetchall()
+    measured: dict[tuple, dict] = {}
+    if blend_on:
+        try:
+            measured = {(m["system"], m["planet_num"]): {"pct": m["measured_pct"], "n": m["sample_count"]}
+                        for m in con.execute(
+                            "SELECT system, planet_num, measured_pct, sample_count FROM pp_planet_yield_avg WHERE p0_name=?",
+                            (col,)).fetchall()}
+        except Exception:
+            pass
+    by_char: dict[int, list] = {}
+    for cid, systems in foot.items():
+        avail = [{"system": p["system"], "planet_num": p["planet_num"], "planet_type": p["planet_type"],
+                  "richness": round(_blend_value(p["r"] or 0, measured.get((p["system"], p["planet_num"]))))}
+                 for p in planets
+                 if p["system"] in systems and (p["system"], p["planet_num"]) not in occ.get(cid, set())]
+        avail.sort(key=lambda x: -x["richness"])
+        if avail:
+            by_char[cid] = avail
+    return by_char
+
+
 @router.post("/api/analyze-placements")
 def analyze_placements(body: dict = Body(...), pp_session: str = Cookie(default=None)):
     """For the given P1 type_ids, return — per real character — the Planet-DB planets that character
@@ -674,65 +728,17 @@ def analyze_placements(body: dict = Body(...), pp_session: str = Cookie(default=
     pi = load_pi_data()
     types, sch = pi["types"], pi["schematics"]
     con = get_connection()
-    rows = con.execute("""
-        SELECT cp.character_id AS cid, s.name AS system, cp.planet_num AS pn
-        FROM pp_char_planets cp
-        LEFT JOIN solar_systems s ON s.system_id = cp.solar_system_id
-        JOIN pp_characters c ON c.character_id = cp.character_id
-        WHERE c.context_id=? AND COALESCE(c.is_dummy,0)=0
-    """, (context_id,)).fetchall()
-    foot: dict[int, set] = {}   # cid -> systems the char operates in
-    occ: dict[int, set] = {}    # cid -> (system, planet_num) already colonised
-    for r in rows:
-        if not r["system"]:
-            continue
-        foot.setdefault(r["cid"], set()).add(r["system"])
-        occ.setdefault(r["cid"], set()).add((r["system"], r["pn"]))
+    foot, occ = _char_footprint(con, context_id)
     out = {}
     for tid in type_ids:
-        s = sch.get(tid) or {}
-        inputs = s.get("inputs") or []
+        inputs = (sch.get(tid) or {}).get("inputs") or []
         if not inputs:
             continue
         p0_name = types.get(inputs[0]["type_id"], {}).get("name")
-        col = _p0_col(p0_name) if p0_name else None
-        if not col:
+        if not _p0_col(p0_name or ""):
             continue
-        # col comes from the fixed _NAME_TO_COL map → safe to interpolate. Restrict to planet types that
-        # actually grow this P0 (guards against a bad row, e.g. Plasma carrying a stray Noble Gas value).
-        valid_types = _P0_PLANET_TYPES.get(p0_name, [])
-        type_filter = (" AND planet_type IN ({})".format(",".join("?" * len(valid_types)))) if valid_types else ""
-        planets = con.execute(
-            f'SELECT system, planet_num, planet_type, "{col}" AS r FROM pp_planets WHERE "{col}" > 0{type_filter}',
-            valid_types,
-        ).fetchall()
-        # Nudge each candidate's richness toward real pooled extraction yield (pp_planet_yield_avg,
-        # confidence-weighted by sample count — see planner_recommendations._blend_value) so a
-        # redeploy/add-colony estimate for a material the player has never grown reflects what other
-        # players actually measured on that planet, not just its static SDE value.
-        measured: dict[tuple, dict] = {}
-        if blend_on:
-            try:
-                measured = {
-                    (m["system"], m["planet_num"]): {"pct": m["measured_pct"], "n": m["sample_count"]}
-                    for m in con.execute(
-                        "SELECT system, planet_num, measured_pct, sample_count "
-                        "FROM pp_planet_yield_avg WHERE p0_name=?", (col,),
-                    ).fetchall()
-                }
-            except Exception:
-                pass
-        by_char = {}
-        for cid, systems in foot.items():
-            avail = [{"system": p["system"], "planet_num": p["planet_num"],
-                      "planet_type": p["planet_type"],
-                      "richness": round(_blend_value(p["r"] or 0, measured.get((p["system"], p["planet_num"]))))}
-                     for p in planets
-                     if p["system"] in systems and (p["system"], p["planet_num"]) not in occ.get(cid, set())]
-            avail.sort(key=lambda x: -x["richness"])
-            if avail:
-                by_char[str(cid)] = avail
-        out[str(tid)] = {"p0_name": p0_name, "by_char": by_char}
+        by_cid = _p0_available_by_char(con, p0_name, foot, occ, blend_on)
+        out[str(tid)] = {"p0_name": p0_name, "by_char": {str(cid): av for cid, av in by_cid.items()}}
     # Free Barren/Temperate planets each character could host a NEW factory on (any B/T planet works
     # — factories don't need a specific P0). In the char's footprint, not already colonised.
     bt = con.execute(
@@ -1087,6 +1093,12 @@ _DEPLETE_WINDOW    = 6      # most recent programs considered for the trend
 _DEPLETE_MIN       = 5      # need at least this many programs before judging a downtrend
 _DEPLETE_DROP      = 0.15   # ≥15% peak decline start→current across the window = depleting
 _DEPLETE_MAX_UP    = 1      # tolerate one blip up within the window (measurement noise / a good reseat)
+# Is a reseat still worth trying on a depleting colony, or is the deposit too far gone? A reseat only
+# starts a fresh program at the CURRENT install peak — it can't lift the peak, which is what's falling
+# here. So a reseat buys time only while the peak drops slowly and isn't already deep; past that,
+# reseating just chases a sinking ceiling and the real fix is a redeploy.
+_RESEAT_GIVEUP_PER_PROG = 8.0    # avg %/program peak decline above which a reseat won't meaningfully help
+_RESEAT_GIVEUP_TOTAL    = 45.0   # total peak decline (%) above which the deposit is too far gone to reseat
 # The overlap that matters is between the two deployments' REACHABLE AREAS, not their current heads —
 # reseating just moves heads around within reach, so overlapping reachable areas keep competing for
 # the same hotspots and both averages decay the longer they share it. We return every overlap above a
@@ -1156,8 +1168,11 @@ def _depleting_trend(peaks: list[float]) -> dict | None:
     drop = (w[0] - w[-1]) / w[0]
     ups = sum(1 for i in range(len(w) - 1) if w[i + 1] > w[i])
     if drop >= _DEPLETE_DROP and ups <= _DEPLETE_MAX_UP and w[-1] < w[0]:
+        per_prog = (drop * 100) / (len(w) - 1) if len(w) > 1 else drop * 100
+        reseat_worth = per_prog < _RESEAT_GIVEUP_PER_PROG and drop * 100 < _RESEAT_GIVEUP_TOTAL
         return {"programs": len(w), "peak_first": round(w[0]), "peak_last": round(w[-1]),
-                "decline_pct": round(drop * 100)}
+                "decline_pct": round(drop * 100), "per_program_pct": round(per_prog),
+                "reseat_worth": reseat_worth}
     return None
 
 
@@ -1255,7 +1270,33 @@ def derive_redeploy_candidates(context_id: int) -> dict:
         if (d["planet_id"], d["character"]) in prox_keys:
             d["also_overlapping"] = True
 
-    return {"proximity": proximity, "proximity_unscanned": unscanned, "depleting": depleting}
+    # Concrete redeploy destinations: for each resource involved, the best FREE same-P0 planet in each
+    # mover's OWN systems — so the UI can say "redeploy to <system Pn> (richness)" instead of a vague
+    # "fresh planet", and fall back to "relocate on the same planet" when no free one exists. Keyed
+    # p0_name → character_name → best planet. Best-effort (never blocks the core advice).
+    placements: dict = {}
+    try:
+        from app.features import feature_enabled
+        blend_on = feature_enabled("measured_yield_blend")
+        con2 = get_connection()
+        foot, occ = _char_footprint(con2, context_id)
+        nm_by_cid = {r["cid"]: r["nm"] for r in planets}
+        p0_names = ({p["p0_name"] for p in proximity if p.get("p0_name")}
+                    | {d["p0_name"] for d in depleting if d.get("p0_name")})
+        for p0n in p0_names:
+            per_char = {}
+            for cid, avail in _p0_available_by_char(con2, p0n, foot, occ, blend_on).items():
+                nm = nm_by_cid.get(cid)
+                if nm and avail:
+                    per_char[nm] = avail[0]      # best available in that character's systems
+            if per_char:
+                placements[p0n] = per_char
+        con2.close()
+    except Exception:
+        placements = {}
+
+    return {"proximity": proximity, "proximity_unscanned": unscanned, "depleting": depleting,
+            "placements": placements}
 
 
 @router.get("/api/redeploy-candidates")
@@ -1269,7 +1310,7 @@ def redeploy_candidates(pp_session: str = Cookie(default=None), debug_context_id
         env_ctx = _os.environ.get("DEBUG_CONTEXT_ID")
         context_id = debug_context_id or (int(env_ctx) if env_ctx else None) or context_id
     if not context_id:
-        return {"proximity": [], "proximity_unscanned": 0, "depleting": []}
+        return {"proximity": [], "proximity_unscanned": 0, "depleting": [], "placements": {}}
     return derive_redeploy_candidates(context_id)
 
 

@@ -90,17 +90,20 @@ def test_depletion(base: str) -> bool:
     status, data = get(f"{base}/api/redeploy-candidates?debug_context_id={CTX_DEPLETION}")
     ok = check(status == 200, "200 OK")
     dep = data.get("depleting", [])
-    # Only the clean downtrend (900010) and the one-blip downtrend (900014) qualify.
-    ok &= check(len(dep) == 2, f"exactly 2 depleting colonies (got {len(dep)}: {[d['location'] for d in dep]})")
-    locs = {d["location"] for d in dep}
-    ok &= check(locs == {"? P1", "? P5"}, f"the two downtrend colonies flagged (got {locs})")
-    # Biggest decline first; the clean 40000→26000 (35%) beats the blippy 40000→27000 (32%).
-    if len(dep) == 2:
-        ok &= check(dep[0]["decline_pct"] >= dep[1]["decline_pct"], "sorted by decline %, largest first")
-        clean = next((d for d in dep if d["location"] == "? P1"), None)
-        ok &= check(clean and clean["decline_pct"] == 35, f"clean downtrend reports 35% decline (got {clean and clean['decline_pct']})")
-        ok &= check(clean and clean["programs"] == 6 and clean["peak_last"] == 26000,
-                    "clean downtrend reports 6 programs, 26000 current peak")
+    by_loc = {d["location"]: d for d in dep}
+    # Clean (900010), one-blip (900014) and steep-crash (900016) downtrends qualify.
+    ok &= check(set(by_loc) == {"? P1", "? P5", "? P7"}, f"the three downtrend colonies flagged (got {sorted(by_loc)})")
+    ok &= check(dep[0]["decline_pct"] >= dep[-1]["decline_pct"], "sorted by decline %, largest first")
+    clean = by_loc.get("? P1")
+    ok &= check(clean and clean["decline_pct"] == 35, f"clean downtrend reports 35% decline (got {clean and clean['decline_pct']})")
+    ok &= check(clean and clean["programs"] == 6 and clean["peak_last"] == 26000,
+                "clean downtrend reports 6 programs, 26000 current peak")
+    # Reseat verdict: a gentle ~7%/program decline is still worth a reseat; the 75% crash isn't.
+    ok &= check(clean and clean.get("reseat_worth") is True, f"gentle decline is reseat-worth (per_program={clean and clean.get('per_program_pct')})")
+    crash = by_loc.get("? P7")
+    ok &= check(crash and crash.get("reseat_worth") is False, f"75% crash is NOT reseat-worth (decline={crash and crash.get('decline_pct')})")
+    # Placements map is wired (a dict) so the UI can name concrete redeploy destinations.
+    ok &= check(isinstance(data.get("placements"), dict), "response carries a placements map")
     return ok
 
 

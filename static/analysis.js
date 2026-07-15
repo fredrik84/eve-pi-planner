@@ -265,6 +265,15 @@ function _redeployCopyShopping(btn) {
   if (btn) { const t = btn.textContent; btn.textContent = 'Copied'; setTimeout(() => { btn.textContent = t; }, 1500); }
 }
 
+// The best FREE same-resource planet a character could redeploy this colony to, in their own systems
+// (from the server's placements map). null → no free planet, so the fix is to relocate on the SAME
+// planet (a clear area of the grid). Lets us name a concrete destination instead of "a fresh planet".
+function _redeployDest(p0Name, character) {
+  const pl = (_redeploy && _redeploy.placements) ? _redeploy.placements[p0Name] : null;
+  const d = pl && pl[character];
+  return d ? { loc: `${d.system} P${d.planet_num}`, r: `${d.planet_type} ${d.richness}%` } : null;
+}
+
 // Shared computation of the redeploy tiers — threshold filter, overlap clustering, and depletion
 // de-dup (a colony covered by a shown overlap cluster is dropped from the standalone-depletion list,
 // since fixing the overlap resolves it). Used by both the urgent block (blended into Suggestions) and
@@ -291,7 +300,13 @@ const _redeployNMoves = c => _clusterMoves(c).move.length;
 // chips (⚡ on the depleting one). Shared by the urgent + later renderers.
 function _redeployClusterBlock(c) {
   const { keep, move, depl } = _clusterMoves(c);
-  const chips = move.map(n => `<span class="an-redeploy-mv${depl.has(n) ? ' an-redeploy-mv-urgent' : ''}">${_esc(n)}${depl.has(n) ? ' <span class="an-redeploy-depl" title="also depleting — do this one first">⚡</span>' : ''}</span>`).join('');
+  const chips = move.map(n => {
+    const dest = _redeployDest(c.p0_name, n);
+    const to = dest
+      ? `<span class="an-redeploy-arrow">→</span> ${_esc(dest.loc)} <span class="an-redeploy-dest-r">${_esc(dest.r)}</span>`
+      : `<span class="an-redeploy-arrow">→</span> <span class="an-redeploy-same">same planet</span>`;
+    return `<span class="an-redeploy-mv${depl.has(n) ? ' an-redeploy-mv-urgent' : ''}">${_esc(n)}${depl.has(n) ? ' <span class="an-redeploy-depl" title="also depleting — do this one first">⚡</span>' : ''} ${to}</span>`;
+  }).join('');
   return `<div class="an-redeploy-cl">
       <div class="an-redeploy-cl-h"><b>${_esc(c.location)}</b>${c.p0_name ? ` <span class="an-redeploy-p0">${_esc(c.p0_name)}</span>` : ''}${c.planet_type ? ` · ${_esc(c.planet_type)}` : ''} <span class="an-redeploy-tag">up to ${c.overlap_pct}%</span> <span class="an-redeploy-keep">keep ${_esc(keep)}</span></div>
       <div class="an-redeploy-mvs"><span class="an-redeploy-mv-lbl">Redeploy</span>${chips}</div>
@@ -316,7 +331,7 @@ function _renderRedeployUrgent() {
   const count = t.urgent.reduce((n, c) => n + _redeployNMoves(c), 0);
   return `<div class="an-suggest an-suggest-redeploy-urgent">
       <div class="an-suggest-h">Relocate ${count} colon${count === 1 ? 'y' : 'ies'} — losing yield to overlap</div>
-      <div class="an-sug-note">These share a planet and their reachable areas overlap, so they drain each other's hotspots — that's why the yields keep dropping. Reseating won't escape it; move the listed command centres to a clear area (⚡ = the depleting one).</div>
+      <div class="an-sug-note">These share a planet and their reachable areas overlap, so they drain each other's hotspots — that's why the yields keep dropping. Reseating won't escape it: redeploy each command centre to the planet shown (a free same-resource planet in your systems), or a clear area of the same planet where none is free. ⚡ = the depleting one.</div>
       ${_redeployShopHtml(t.urgent)}
       ${t.urgent.map(_redeployClusterBlock).join('')}
       <div class="an-redeploy-tryalso">Rather try the other fixes first?<button type="button" class="an-lever-btn" onclick="_toggleLever('reseat')">Reseat heads</button><button type="button" class="an-lever-btn" onclick="_toggleLever('redeploy')">Redeploy a CC</button></div>
@@ -344,13 +359,24 @@ function _renderRedeploySection() {
     body += `<div class="an-suggest"><div class="an-sug-note">Rescan colonies in the Characters tab to capture extractor positions — the range-overlap check needs them.</div></div>`;
   }
   if (t.depleting.length) {
-    const li = t.depleting.map(d => `<li class="an-redeploy-row an-redeploy-cluster">
-        <div class="an-redeploy-loc"><b>${_esc(d.character)}</b> · ${_esc(d.location)}${d.p0_name ? ` <span class="an-redeploy-p0">${_esc(d.p0_name)}</span>` : ''} <span class="an-redeploy-tag">${d.decline_pct}% down</span></div>
-        <div class="an-redeploy-move"><span class="an-redeploy-move-lbl">Peak</span> ${d.peak_first.toLocaleString()} → ${d.peak_last.toLocaleString()} P0/day over ${d.programs} programs</div>
-      </li>`).join('');
+    const li = t.depleting.map(d => {
+      const dest = _redeployDest(d.p0_name, d.character);
+      const destTxt = dest
+        ? `redeploy to <b>${_esc(dest.loc)}</b> <span class="an-redeploy-dest-r">${_esc(dest.r)}</span>`
+        : `no free ${d.p0_name ? _esc(d.p0_name) : 'same-resource'} planet in your systems — relocate to a clear area of the same planet`;
+      const rate = d.per_program_pct != null ? ` (~${d.per_program_pct}%/program)` : '';
+      const fix = d.reseat_worth
+        ? `<span class="an-redeploy-fix-ok">A reseat still buys time${rate}</span> — but plan to ${destTxt}.`
+        : `<span class="an-redeploy-fix-no">Reseating won't recover this${rate}</span> — ${destTxt}.`;
+      return `<li class="an-redeploy-row an-redeploy-cluster">
+          <div class="an-redeploy-loc"><b>${_esc(d.character)}</b> · ${_esc(d.location)}${d.p0_name ? ` <span class="an-redeploy-p0">${_esc(d.p0_name)}</span>` : ''} <span class="an-redeploy-tag">${d.decline_pct}% down</span></div>
+          <div class="an-redeploy-move"><span class="an-redeploy-move-lbl">Peak</span> ${d.peak_first.toLocaleString()} → ${d.peak_last.toLocaleString()} P0/day over ${d.programs} programs</div>
+          <div class="an-redeploy-fix">${fix}</div>
+        </li>`;
+    }).join('');
     body += `<div class="an-suggest">
         <div class="an-suggest-h">Depleting deposits — ${t.depleting.length} colon${t.depleting.length > 1 ? 'ies' : 'y'}</div>
-        <div class="an-sug-note">These aren't in a flagged overlap — the deposit itself keeps yielding less across the last several programs, so reseating only chases a sinking ceiling. Redeploy the command centre to a fresh planet. A steady-low planet isn't flagged, only a real downtrend.</div>
+        <div class="an-sug-note">These aren't in a flagged overlap — the deposit itself keeps yielding less across the last several programs. A reseat only starts a fresh program at the current (falling) peak, so whether it's worth trying depends on how fast the peak is dropping. A steady-low planet isn't flagged, only a real downtrend.</div>
         <ul class="an-redeploy-list">${li}</ul>
       </div>`;
   }

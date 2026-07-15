@@ -129,8 +129,9 @@ _depl = [
     (900011, BASE_METALS, "Base Metals", [20000, 20000, 19500, 20000, 19800, 20000]),   # flat → no flag
     (900012, NOBLE_METALS, "Noble Metals", [40000, 30000, 20000]),                      # only 3 → no flag
     (900013, REACTIVE_GAS, "Reactive Gas", [26000, 29000, 32000, 35000, 38000, 40000]), # up-trend → no flag
-    (900014, AQUEOUS, "Aqueous Liquids", [40000, 37000, 38000, 34000, 30000, 27000]),   # 1 blip up → flag
+    (900014, AQUEOUS, "Aqueous Liquids", [40000, 37000, 38000, 34000, 30000, 27000]),   # 1 blip up → flag, reseat still worth (~6%/prog)
     (900015, BASE_METALS, "Base Metals", [40000, 42000, 36000, 38000, 33000, 30000]),   # 2 blips up → no flag
+    (900016, AQUEOUS, "Aqueous Liquids", [40000, 34000, 28000, 22000, 16000, 10000]),   # steep 75% crash → flag, reseat NOT worth
 ]
 for pn, (pid, p0, name, peaks) in enumerate(_depl, start=1):
     add_colony(IVAN, pid, pn, "Barren", 1, p0, name)
