@@ -218,7 +218,7 @@ function _clusterProximity(pairs, depletingList) {
   const groups = {};
   pairs.forEach(p => {
     const k = p.planet_id + '|' + (p.p0_name || '');
-    (groups[k] = groups[k] || { planet_id: p.planet_id, location: p.location, p0_name: p.p0_name, planet_type: p.planet_type, edges: [] }).edges.push(p);
+    (groups[k] = groups[k] || { planet_id: p.planet_id, location: p.location, p0_name: p.p0_name, p1_name: p.p1_name, planet_type: p.planet_type, edges: [] }).edges.push(p);
   });
   const out = [];
   Object.values(groups).forEach(g => {
@@ -233,8 +233,8 @@ function _clusterProximity(pairs, depletingList) {
       const mset = new Set(members);
       const maxOv = Math.max(...g.edges.filter(e => (e.characters || []).some(c => mset.has(c))).map(e => e.overlap_pct));
       const precedence = members.filter(c => depl.has(g.planet_id + '|' + c)).sort();
-      out.push({ planet_id: g.planet_id, location: g.location, p0_name: g.p0_name, planet_type: g.planet_type,
-                 characters: members.slice().sort(), overlap_pct: maxOv, precedence });
+      out.push({ planet_id: g.planet_id, location: g.location, p0_name: g.p0_name, p1_name: g.p1_name,
+                 planet_type: g.planet_type, characters: members.slice().sort(), overlap_pct: maxOv, precedence });
     });
   });
   return out.sort((a, b) => b.overlap_pct - a.overlap_pct);
@@ -307,8 +307,9 @@ function _redeployClusterBlock(c) {
       : `<span class="an-redeploy-arrow">→</span> <span class="an-redeploy-same">same planet</span>`;
     return `<span class="an-redeploy-mv${depl.has(n) ? ' an-redeploy-mv-urgent' : ''}">${_esc(n)}${depl.has(n) ? ' <span class="an-redeploy-depl" title="also depleting — do this one first">⚡</span>' : ''} ${to}</span>`;
   }).join('');
+  const mat = c.p1_name || c.p0_name;
   return `<div class="an-redeploy-cl">
-      <div class="an-redeploy-cl-h"><b>${_esc(c.location)}</b>${c.p0_name ? ` <span class="an-redeploy-p0">${_esc(c.p0_name)}</span>` : ''}${c.planet_type ? ` · ${_esc(c.planet_type)}` : ''} <span class="an-redeploy-tag">up to ${c.overlap_pct}%</span> <span class="an-redeploy-keep">keep ${_esc(keep)}</span></div>
+      <div class="an-redeploy-cl-h"><b>${_esc(c.location)}</b>${mat ? ` <span class="an-redeploy-p0">${_esc(mat)}</span>` : ''}${c.planet_type ? ` · ${_esc(c.planet_type)}` : ''} <span class="an-redeploy-tag">up to ${c.overlap_pct}%</span> <span class="an-redeploy-keep">keep ${_esc(keep)}</span></div>
       <div class="an-redeploy-mvs"><span class="an-redeploy-mv-lbl">Redeploy</span>${chips}</div>
     </div>`;
 }
@@ -360,16 +361,17 @@ function _renderRedeploySection() {
   }
   if (t.depleting.length) {
     const li = t.depleting.map(d => {
+      const mat = d.p1_name || d.p0_name;
       const dest = _redeployDest(d.p0_name, d.character);
       const destTxt = dest
         ? `redeploy to <b>${_esc(dest.loc)}</b> <span class="an-redeploy-dest-r">${_esc(dest.r)}</span>`
-        : `no free ${d.p0_name ? _esc(d.p0_name) : 'same-resource'} planet in your systems — relocate to a clear area of the same planet`;
+        : `no free ${mat ? _esc(mat) : 'same-resource'} planet in your systems — relocate to a clear area of the same planet`;
       const rate = d.per_program_pct != null ? ` (~${d.per_program_pct}%/program)` : '';
       const fix = d.reseat_worth
         ? `<span class="an-redeploy-fix-ok">A reseat still buys time${rate}</span> — but plan to ${destTxt}.`
         : `<span class="an-redeploy-fix-no">Reseating won't recover this${rate}</span> — ${destTxt}.`;
       return `<li class="an-redeploy-row an-redeploy-cluster">
-          <div class="an-redeploy-loc"><b>${_esc(d.character)}</b> · ${_esc(d.location)}${d.p0_name ? ` <span class="an-redeploy-p0">${_esc(d.p0_name)}</span>` : ''} <span class="an-redeploy-tag">${d.decline_pct}% down</span></div>
+          <div class="an-redeploy-loc"><b>${_esc(d.character)}</b> · ${_esc(d.location)}${mat ? ` <span class="an-redeploy-p0">${_esc(mat)}</span>` : ''} <span class="an-redeploy-tag">${d.decline_pct}% down</span></div>
           <div class="an-redeploy-move"><span class="an-redeploy-move-lbl">Peak</span> ${d.peak_first.toLocaleString()} → ${d.peak_last.toLocaleString()} P0/day over ${d.programs} programs</div>
           <div class="an-redeploy-fix">${fix}</div>
         </li>`;

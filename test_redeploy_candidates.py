@@ -58,6 +58,8 @@ def test_proximity(base: str) -> bool:
     ok &= check(p1 and p1["overlap_pct"] == 100, f"coincident CCs report 100% overlap (got {p1 and p1['overlap_pct']})")
     ok &= check(p1 and set(p1.get("characters", [])) == {"Test Gale", "Test Hana"}, "both characters named")
     ok &= check(p1 and p1.get("p0_name") == "Aqueous Liquids", "the shared P0 is named")
+    # The P1 the P0 refines to (what the player's templates are named by) is surfaced too.
+    ok &= check(bool(p1 and p1.get("p1_name")), f"the refined P1 name is surfaced (got {p1 and p1.get('p1_name')})")
     # planet_type drives the command-centre shopping list — must be returned per finding.
     ok &= check(p1 and p1.get("planet_type") == "Barren", f"P1 finding carries its planet type (got {p1 and p1.get('planet_type')})")
     p8 = by_loc.get("? P8")

@@ -1204,6 +1204,18 @@ def derive_redeploy_candidates(context_id: int) -> dict:
 
     p0name_by = {r["p0"]: r["p0name"] for r in planets if r["p0"]}
 
+    # P0 refines 1:1 into a single P1 — the name the player's own extractor templates use (e.g. Felsic
+    # Magma → Silicon). Surface that P1 name so the redeploy card matches the templates, not the raw
+    # resource. Built from the tier-1 schematics (a P1 output's sole input is its P0).
+    _pi = load_pi_data()
+    _types, _sch = _pi["types"], _pi["schematics"]
+    p1name_by: dict = {}
+    for _out, _s in _sch.items():
+        if (_types.get(_out, {}).get("pi_tier") or 0) == 1:
+            _inps = _s.get("inputs") or []
+            if _inps:
+                p1name_by[_inps[0]["type_id"]] = _types.get(_out, {}).get("name")
+
     # ── Proximity: heads of two colonies on ONE planet overlap the same resource hotspot ──
     by_planet: dict = {}
     for r in planets:
@@ -1236,6 +1248,7 @@ def derive_redeploy_candidates(context_id: int) -> dict:
                         "planet_id": pid, "location": _loc(oa),
                         "planet_type": oa["ptype"],
                         "p0_name": p0name_by.get(hit["p0"]) or oa["p0name"],
+                        "p1_name": p1name_by.get(hit["p0"]),
                         "overlap_pct": hit["overlap_pct"],
                         "characters": sorted({oa["nm"], ob["nm"]}),
                     })
@@ -1251,7 +1264,7 @@ def derive_redeploy_candidates(context_id: int) -> dict:
         if trend:
             depleting.append({
                 "planet_id": r["pid"], "character": r["nm"], "location": _loc(r),
-                "p0_name": r["p0name"], **trend,
+                "p0_name": r["p0name"], "p1_name": p1name_by.get(r["p0"]), **trend,
             })
     depleting.sort(key=lambda d: d["decline_pct"], reverse=True)
 
