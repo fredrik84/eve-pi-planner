@@ -209,34 +209,69 @@ async function _fetchRedeployCandidates() {
   catch (e) { _redeploy = null; }
 }
 
+// Condense the per-PAIR overlaps the server returns into ONE entry per planet + resource: union-find
+// the characters connected by pairwise overlaps (≥ the live threshold) into clusters, so a planet
+// where six alts all reach the same spot is a single row listing all six, not fifteen pair rows.
+// Overlap shown = the worst pair in the cluster; precedence = any cluster member also depleting here.
+function _clusterProximity(pairs, depletingList) {
+  const depl = new Set((depletingList || []).map(d => d.planet_id + '|' + d.character));
+  const groups = {};
+  pairs.forEach(p => {
+    const k = p.planet_id + '|' + (p.p0_name || '');
+    (groups[k] = groups[k] || { planet_id: p.planet_id, location: p.location, p0_name: p.p0_name, edges: [] }).edges.push(p);
+  });
+  const out = [];
+  Object.values(groups).forEach(g => {
+    const parent = {};
+    const find = x => { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
+    g.edges.forEach(e => (e.characters || []).forEach(c => { if (!(c in parent)) parent[c] = c; }));
+    g.edges.forEach(e => { const a = (e.characters || [])[0], b = (e.characters || [])[1]; if (a && b) parent[find(a)] = find(b); });
+    const comps = {};
+    Object.keys(parent).forEach(c => { const r = find(c); (comps[r] = comps[r] || []).push(c); });
+    Object.values(comps).forEach(members => {
+      if (members.length < 2) return;
+      const mset = new Set(members);
+      const maxOv = Math.max(...g.edges.filter(e => (e.characters || []).some(c => mset.has(c))).map(e => e.overlap_pct));
+      const precedence = members.filter(c => depl.has(g.planet_id + '|' + c)).sort();
+      out.push({ location: g.location, p0_name: g.p0_name, characters: members.slice().sort(),
+                 overlap_pct: maxOv, precedence });
+    });
+  });
+  return out.sort((a, b) => b.overlap_pct - a.overlap_pct);
+}
+
 function _renderRedeploySection() {
   if (!_redeploy) return '';
   const thresh = _hotspotOverlapThreshold();
-  const proximity = _featureActive('redeploy_proximity')
+  const pairs = _featureActive('redeploy_proximity')
     ? (_redeploy.proximity || []).filter(p => p.overlap_pct >= thresh) : [];
+  const clusters = _clusterProximity(pairs, _redeploy.depleting || []);
   const depleting = _featureActive('redeploy_depletion') ? (_redeploy.depleting || []) : [];
-  if (!proximity.length && !depleting.length) return '';
+  if (!clusters.length && !depleting.length) return '';
 
   let body = '';
-  if (proximity.length) {
-    const li = proximity.map(p => {
-      const who = (p.characters || []).map(c => `<b>${_esc(c)}</b>`).join(' &amp; ');
-      const hot = p.p0_name ? _esc(p.p0_name) : 'resource';
-      // If one of the two is also depleting here, it's the one to move (needs a fresh deposit anyway),
-      // and moving it clears the overlap — so it takes precedence as the mover. Reseating heads won't
-      // help: they'd land back inside the same overlapping reach, so the fix is to redeploy the CC.
-      const note = p.precedence_character
-        ? `Their extraction ranges overlap on the same ${hot} area — reseating stays inside the overlap, so both keep depleting it. <b>${_esc(p.precedence_character)}</b> is also depleting here, so redeploy that one's command centre to a clear part of the planet (or another planet) — it fixes both.`
-        : `Their extraction ranges overlap on the same ${hot} area, so they keep competing for its hotspots however the heads are reseated. Redeploy one character's command centre to a clear part of the planet (or another planet).`;
+  if (clusters.length) {
+    const li = clusters.map(c => {
+      const names = c.characters.map(n => `<b>${_esc(n)}</b>`);
+      const who = names.length > 2 ? names.slice(0, -1).join(', ') + ' &amp; ' + names[names.length - 1] : names.join(' &amp; ');
+      const hot = c.p0_name ? _esc(c.p0_name) : 'resource';
+      const lead = c.characters.length === 2 ? 'Both' : `All ${c.characters.length}`;
+      let note = `${lead} reach the same ${hot} area, so they compete for its hotspots and reseating can't escape it. `;
+      if (c.precedence.length) {
+        const pn = c.precedence.map(n => `<b>${_esc(n)}</b>`).join(', ');
+        note += `Start with ${pn} (also depleting) — redeploy ${c.precedence.length > 1 ? 'those' : 'that'} command centre${c.precedence.length > 1 ? 's' : ''} to a clear part of the planet (or another planet), then spread the rest out too.`;
+      } else {
+        note += `Redeploy all but one command centre to separate parts of the planet (or other planets).`;
+      }
       return `<li class="an-redeploy-row">
-          <span class="an-redeploy-loc"><b>${_esc(p.location)}</b>${p.p0_name ? ` <span class="an-redeploy-p0">${_esc(p.p0_name)}</span>` : ''}</span>
-          <span class="an-redeploy-who">${who} · <span class="an-redeploy-tag">${p.overlap_pct}% range overlap</span></span>
+          <span class="an-redeploy-loc"><b>${_esc(c.location)}</b>${c.p0_name ? ` <span class="an-redeploy-p0">${_esc(c.p0_name)}</span>` : ''}</span>
+          <span class="an-redeploy-who">${who} · <span class="an-redeploy-tag">up to ${c.overlap_pct}% range overlap</span></span>
           <span class="an-sug-note">${note}</span>
         </li>`;
     }).join('');
     body += `<div class="an-suggest">
-        <div class="an-suggest-h">Overlapping extraction ranges — ${proximity.length} planet${proximity.length > 1 ? 's' : ''}</div>
-        <div class="an-sug-note">Sharing a planet is fine — but two colonies whose reachable extraction areas overlap drain the same hotspots for both, and reseating heads can't escape the overlap. Threshold ${thresh}% (Settings → General).</div>
+        <div class="an-suggest-h">Overlapping extraction ranges — ${clusters.length} planet${clusters.length > 1 ? 's' : ''}</div>
+        <div class="an-sug-note">Sharing a planet is fine — but colonies whose reachable extraction areas overlap drain the same hotspots for each other, and reseating heads can't escape the overlap. Grouped by planet &amp; resource; threshold ${thresh}% (Settings → General).</div>
         <ul class="an-redeploy-list">${li}</ul>
       </div>`;
   } else if (_featureActive('redeploy_proximity') && _redeploy.proximity_unscanned) {
