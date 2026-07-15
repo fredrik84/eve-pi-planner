@@ -471,7 +471,6 @@
   background: #10202c; display: flex; align-items: center; gap: 8px 10px; flex-wrap: wrap; }
 .an-redeploy-shop-lbl { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; color: #6fb0dc; }
 .an-redeploy-shop-list { font-size: 13px; color: var(--clr-text-bright); flex: 1 1 auto; min-width: 120px; }
-.an-redeploy-subh { font-size: 12px; font-weight: 700; color: #e0a84a; margin: 12px 0 6px; }
 .an-redeploy-cl { padding: 8px 10px; border: 1px solid #1c2030; border-radius: 7px; background: #11151f; margin-bottom: 6px; }
 .an-redeploy-cl-h { font-size: 12.5px; color: var(--clr-text-bright); margin-bottom: 6px; }
 .an-redeploy-cl-h .an-redeploy-keep { margin-left: 2px; }
@@ -481,5 +480,13 @@
   font-size: 12.5px; color: var(--clr-text-bright); }
 .an-redeploy-mv-urgent { border-color: #6a4a1f; }
 .an-redeploy-later { margin-top: 8px; }
+/* Urgent overlap block blended into the Suggestions card + its "try the other fixes" buttons. */
+.an-suggest-redeploy-urgent { border-color: #6a5a1f; background: #1f1c12; }
+.an-suggest-redeploy-urgent .an-suggest-h { color: #e0c84a; }
+.an-redeploy-tryalso { margin-top: 9px; display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
+  font-size: 12.5px; color: #8a93a5; }
+.an-lever-btn { font-size: 12px; padding: 3px 11px; border-radius: 5px; border: 1px solid #2f3a4d;
+  background: #1a2130; color: var(--clr-text-bright); cursor: pointer; }
+.an-lever-btn:hover { border-color: #4a5a72; background: #202940; }
 .an-redeploy-later > summary { cursor: pointer; font-size: 12.5px; color: #8fb4d6; padding: 4px 0; }
 
