@@ -16,7 +16,10 @@ from app.reactions.graph import (
     _load_goo_and_reached, _explode_shopping_list, _explode_chain_tiers,
     _materials_report, _value_reaction_batch,
 )
-from app.reactions.jobs import _character_capacities, ensure_reaction_orders_table, _allocate_and_insert
+from app.reactions.jobs import (
+    _character_capacities, ensure_reaction_orders_table, ensure_reaction_assignments_table,
+    _allocate_and_insert,
+)
 
 
 def _order_report(context_id: int, order: dict) -> dict:
@@ -236,19 +239,28 @@ class OrderStatusRequest(BaseModel):
 def set_reaction_order_status(order_id: int, req: OrderStatusRequest, context_id: int = Depends(require_context)):
     """Manual override — "I delivered the goods to the client" / "the client backed out". This
     tool has no way to know a real reaction job finished or the goods actually changed hands, so
-    completion is always a deliberate player action, never inferred."""
+    completion is always a deliberate player action, never inferred. Either terminal state FREES the
+    reaction slots this order had reserved (its pp_reaction_assignments rows) — a completed order's
+    jobs are done and a cancelled one's are moot, so neither should keep occupying planned capacity."""
     if req.status not in ("completed", "cancelled"):
         raise HTTPException(status_code=400, detail="status must be 'completed' or 'cancelled'")
     ensure_reaction_orders_table()
+    ensure_reaction_assignments_table()
     con = get_connection()
     try:
         _get_order_or_404(con, order_id, context_id)
+        # Release the slots this order claimed (scoped to the account's own characters as defence in
+        # depth — the order is already ownership-checked above).
+        freed = con.execute(
+            "DELETE FROM pp_reaction_assignments WHERE order_id=? AND character_id IN "
+            "(SELECT character_id FROM pp_characters WHERE context_id=?)",
+            (order_id, context_id)).rowcount
         con.execute("UPDATE pp_reaction_orders SET status=? WHERE id=?", (req.status, order_id))
         con.commit()
         order = dict(con.execute("SELECT * FROM pp_reaction_orders WHERE id=?", (order_id,)).fetchone())
     finally:
         con.close()
-    return {"order": order}
+    return {"order": order, "freed_slots": freed}
 
 
 @router.delete("/api/reactions/orders/{order_id}")

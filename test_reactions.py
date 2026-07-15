@@ -184,6 +184,26 @@ def test_order_lifecycle(api: Api) -> bool:
     # auto-flip status just because assigned_runs caught up to top_level_runs.
     status, status_data = api.post(f"/api/reactions/orders/{order_id}/status", {"status": "completed"})
     ok &= check(status == 200 and status_data["order"]["status"] == "completed", "manual 'mark completed' works")
+    # Completing frees the slots this order reserved — free count returns to where it was before assign.
+    # (freed_slots counts assignment ROWS = reaction jobs, which may bundle multiple runs, so it's ≥1,
+    # not necessarily == top_level_runs; the authoritative check is free_slots returning to baseline.)
+    ok &= check(status_data.get("freed_slots", 0) >= 1,
+                f"completion frees the order's assignment rows (freed {status_data.get('freed_slots')})")
+    status, jobs_after_complete = api.get("/api/reactions/jobs")
+    ok &= check(jobs_after_complete["free_slots"] == free_before,
+                f"a completed order's reaction slots are released (free back to {free_before}, got {jobs_after_complete['free_slots']})")
+
+    # Cancelling a slot-committed order must ALSO free its slots.
+    status, order3_data = api.post("/api/reactions/orders", {"type_id": product["type_id"], "target_qty": per_run_yield})
+    if status == 200:
+        order3_id = order3_data["order"]["id"]
+        api.post(f"/api/reactions/orders/{order3_id}/assign", {"runs": 1})
+        status, mid_jobs = api.get("/api/reactions/jobs")
+        ok &= check(mid_jobs["free_slots"] == free_before - 1, "assigning to the cancel-test order took a slot")
+        status, cancel_data = api.post(f"/api/reactions/orders/{order3_id}/status", {"status": "cancelled"})
+        ok &= check(status == 200 and cancel_data.get("freed_slots", 0) >= 1, "cancel reports the freed slots")
+        status, jobs_after_cancel = api.get("/api/reactions/jobs")
+        ok &= check(jobs_after_cancel["free_slots"] == free_before, "a cancelled order's reaction slots are released")
 
     # A fresh, never-assigned order CAN be deleted outright.
     status, order2_data = api.post("/api/reactions/orders", {

@@ -1893,17 +1893,27 @@ function _rxSetOrderStatus(orderId, newStatus) {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: newStatus }),
   })
     .then(async r => { if (!r.ok) throw new Error((await r.json()).detail || 'Failed'); return r.json(); })
-    .then(() => { _rxFetchOrderDetail(orderId); _rxLoadOrders(); })
+    .then(() => {
+      // Completing/cancelling frees the order's reserved slots server-side — refresh the dashboard
+      // so those slots show as free again.
+      _rxLastDashboardData = null;
+      _rxFetchOrderDetail(orderId);
+      _rxLoadOrders();
+      if (typeof _loadReactionsDashboard === 'function') _loadReactionsDashboard();
+    })
     .catch(err => {
       const s = document.getElementById('rxOrderDetailStatus');
       if (s) s.textContent = err.message;
     });
 }
 
-function _rxCompleteOrder(orderId) { _rxSetOrderStatus(orderId, 'completed'); }
+function _rxCompleteOrder(orderId) {
+  if (!confirm('Mark this order completed? Any reaction slots reserved for it will be freed.')) return;
+  _rxSetOrderStatus(orderId, 'completed');
+}
 
 function _rxCancelOrder(orderId) {
-  if (!confirm('Cancel this order? Already-assigned reaction slots are left as-is — cancel those separately from the dashboard if you want the slots freed too.')) return;
+  if (!confirm('Cancel this order? Any reaction slots reserved for it will be freed.')) return;
   _rxSetOrderStatus(orderId, 'cancelled');
 }
 
