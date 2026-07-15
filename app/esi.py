@@ -247,6 +247,11 @@ def ensure_char_tables():
     # JSON to check it — mirrors the existing is_extractor precomputed-flag convention.
     _add_col("pp_char_planets", "product_chain TEXT")
     _add_col("pp_char_planets", "is_hybrid INTEGER DEFAULT 0")
+    # Extractor head positions per ECU (JSON: [{"p0":type_id,"r":head_radius,"h":[[lat,lon],...]}], all
+    # radians). Lets Setup Analysis flag colonies on the SAME planet whose heads overlap the same
+    # resource hotspot (own or cross-character) — the "everyone parked on the one good spot" problem.
+    # Only populated on a rescan after this shipped; older rows stay NULL (proximity check skips them).
+    _add_col("pp_char_planets", "ext_heads TEXT")
     # When ESI will next regenerate this character's skills (Expires header) — lets a rescan
     # skip a re-fetch that's guaranteed to return the same cached data.
     _add_col("pp_characters", "skills_expires REAL")
@@ -586,6 +591,7 @@ def _fetch_planets(character_id: int, access_token: str) -> dict:
                 esi_expires  = None             # when ESI will next regenerate it
                 products: dict[int, str] = {}   # output type_id → name (factory pins)
                 pads: dict[int, int] = {}       # stored item type_id → total amount
+                ext_heads: list = []            # per-ECU head coords (for the same-hotspot proximity check)
                 try:
                     pr = client.get(
                         f"{ESI_BASE}/characters/{character_id}/planets/{planet_id}/",
@@ -604,6 +610,13 @@ def _fetch_planets(character_id: int, access_token: str) -> dict:
                             is_extractor = 1
                             p0_type_id   = ext.get("product_type_id")
                             p0_name      = P0_TYPE_NAMES.get(p0_type_id)
+                            _heads = [[round(h["latitude"], 5), round(h["longitude"], 5)]
+                                      for h in (ext.get("heads") or [])
+                                      if h.get("latitude") is not None and h.get("longitude") is not None]
+                            if _heads:
+                                ext_heads.append({"p0": p0_type_id,
+                                                  "r": round(ext.get("head_radius") or 0.0, 5),
+                                                  "h": _heads})
                         sch = pin.get("schematic_id") or (pin.get("factory_details") or {}).get("schematic_id")
                         if sch:
                             out = _sch_to_out.get(sch)
@@ -626,6 +639,7 @@ def _fetch_planets(character_id: int, access_token: str) -> dict:
                 ]
                 product_chain_json = _json.dumps(product_chain) if product_chain else None
                 is_hybrid = 1 if (is_extractor and any(pc["tier"] >= 2 for pc in product_chain)) else 0
+                ext_heads_json = _json.dumps(ext_heads) if ext_heads else None
 
                 # Keep only the planet's highest-tier output (its end product) — the lower tiers
                 # are just intermediate steps in that planet's chain.
@@ -715,8 +729,8 @@ def _fetch_planets(character_id: int, access_token: str) -> dict:
                     INSERT INTO pp_char_planets
                         (character_id, planet_id, planet_type, solar_system_id,
                          upgrade_level, num_pins, is_extractor, p0_type_id, p0_name,
-                         planet_num, products, pad_contents, pad_inputs, sim_state, issues, scanned_at, checkpoint_at, storage, esi_modified, esi_expires, product_chain, is_hybrid)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                         planet_num, products, pad_contents, pad_inputs, sim_state, issues, scanned_at, checkpoint_at, storage, esi_modified, esi_expires, product_chain, is_hybrid, ext_heads)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     ON CONFLICT (character_id, planet_id) DO UPDATE SET
                       planet_type=EXCLUDED.planet_type, solar_system_id=EXCLUDED.solar_system_id,
                       upgrade_level=EXCLUDED.upgrade_level, num_pins=EXCLUDED.num_pins,
@@ -727,10 +741,11 @@ def _fetch_planets(character_id: int, access_token: str) -> dict:
                       issues=EXCLUDED.issues, scanned_at=EXCLUDED.scanned_at,
                       checkpoint_at=EXCLUDED.checkpoint_at, storage=EXCLUDED.storage,
                       esi_modified=EXCLUDED.esi_modified, esi_expires=EXCLUDED.esi_expires,
-                      product_chain=EXCLUDED.product_chain, is_hybrid=EXCLUDED.is_hybrid
+                      product_chain=EXCLUDED.product_chain, is_hybrid=EXCLUDED.is_hybrid,
+                      ext_heads=EXCLUDED.ext_heads
                 """, (character_id, planet_id, planet_type, solar_system_id,
                       upgrade_level, num_pins, is_extractor, p0_type_id, p0_name,
-                      planet_num, products_json, pads_json, pad_inputs_json, sim_state_json, issues_json, _scan_ts, checkpoint_at, storage_json, esi_modified, esi_expires, product_chain_json, is_hybrid))
+                      planet_num, products_json, pads_json, pad_inputs_json, sim_state_json, issues_json, _scan_ts, checkpoint_at, storage_json, esi_modified, esi_expires, product_chain_json, is_hybrid, ext_heads_json))
 
                 if is_extractor and _sim:      # log a per-program yield sample for the trend/burn-down
                     _record_yield_sample(con, character_id, planet_id, _sim, _scan_ts)

@@ -1069,11 +1069,15 @@ def skill_roi(pp_session: str = Cookie(default=None)):
 
 
 # ── Redeploy advice (Setup Analysis) ─────────────────────────────────────────────
-# Two independent "tear the CC down and rebuild it somewhere fresh" signals, each behind its own
-# feature flag on the frontend:
-#   • Own-character collision (redeploy_collision) — two of your OWN extractor colonies sit on the
-#     same EVE planet. Planetary resource depletion is per-planet and shared across every extractor
-#     on it, so your own alts cannibalise each other's yield; worst when they pull the SAME P0.
+# Two independent "move this extraction elsewhere" signals, each behind its own feature flag:
+#   • Same-hotspot proximity (redeploy_proximity) — sharing a planet is NORMAL and fine; the real
+#     waste is when extractor HEADS from two colonies on that planet are placed on the SAME resource
+#     hotspot (their extraction discs overlap on the same P0). When a whole fleet is deployed at once
+#     it's tempting to park every character's heads on the current best spot; that spot depletes for
+#     everyone at once. The fix is to spread the heads to different areas of the planet grid, not to
+#     abandon the planet. Detected from the ESI head coordinates (lat/lon + head_radius, radians)
+#     captured at scan time (pp_char_planets.ext_heads): two heads compete when their discs overlap
+#     (great-circle distance < r_a + r_b) AND they pull the same P0.
 #   • Depleting deposit (redeploy_depletion) — a colony's install-yield (peak_day, one sample per
 #     reseat/restart, from pp_colony_yield) has trended DOWN across the last several programs. The
 #     best itself is falling, so a reseat only recovers toward a sinking ceiling — the fix is to
@@ -1083,6 +1087,39 @@ _DEPLETE_WINDOW    = 6      # most recent programs considered for the trend
 _DEPLETE_MIN       = 5      # need at least this many programs before judging a downtrend
 _DEPLETE_DROP      = 0.15   # ≥15% peak decline start→current across the window = depleting
 _DEPLETE_MAX_UP    = 1      # tolerate one blip up within the window (measurement noise / a good reseat)
+
+
+def _gc_dist(a: tuple, b: tuple) -> float:
+    """Great-circle (angular) distance in radians between two (lat, lon) head positions. EVE reports
+    head coords in radians on the planet sphere; head_radius is in the same units, so an overlap test
+    is a direct distance-vs-radius comparison."""
+    import math
+    la, lo_a = a
+    lb, lo_b = b
+    v = math.sin(la) * math.sin(lb) + math.cos(la) * math.cos(lb) * math.cos(lo_a - lo_b)
+    return math.acos(max(-1.0, min(1.0, v)))
+
+
+def _head_overlap(ecus_a: list, ecus_b: list) -> dict | None:
+    """Worst same-P0 head-disc overlap between two colonies' ECUs. Returns {p0, overlap_pct} for the
+    tightest overlapping pair, or None if no same-P0 heads overlap. `ecus_*` = the parsed ext_heads
+    list ([{p0, r, h:[[lat,lon],...]}])."""
+    best = None
+    for ea in ecus_a:
+        for eb in ecus_b:
+            if ea.get("p0") != eb.get("p0"):
+                continue                     # different resource deposits — no competition
+            reach = (ea.get("r") or 0.0) + (eb.get("r") or 0.0)
+            if reach <= 0:
+                continue
+            for ha in ea.get("h") or []:
+                for hb in eb.get("h") or []:
+                    d = _gc_dist(ha, hb)
+                    if d < reach:
+                        pct = (reach - d) / reach * 100.0
+                        if best is None or pct > best["overlap_pct"]:
+                            best = {"p0": ea.get("p0"), "overlap_pct": round(pct)}
+    return best
 
 
 def _depleting_trend(peaks: list[float]) -> dict | None:
@@ -1102,12 +1139,13 @@ def _depleting_trend(peaks: list[float]) -> dict | None:
 
 def derive_redeploy_candidates(context_id: int) -> dict:
     """Both redeploy signals for one account (behind the endpoint below, factored out so tests can
-    call it for a fixture context). Extractor colonies only — depletion is an extraction concern."""
+    call it for a fixture context). Extractor colonies only — both are extraction concerns."""
+    ensure_char_tables()        # make sure the ext_heads column exists before we read it
     con = get_connection()
     planets = con.execute("""
         SELECT cp.character_id AS cid, c.character_name AS nm, cp.planet_id AS pid,
                cp.planet_num AS pn, cp.p0_type_id AS p0, cp.p0_name AS p0name,
-               COALESCE(s.name, '') AS system
+               cp.ext_heads AS ext_heads, COALESCE(s.name, '') AS system
         FROM pp_char_planets cp
         JOIN pp_characters c ON c.character_id = cp.character_id
         LEFT JOIN solar_systems s ON s.system_id = cp.solar_system_id
@@ -1125,24 +1163,43 @@ def derive_redeploy_candidates(context_id: int) -> dict:
     def _loc(r):
         return (r["system"] or "?") + (f" P{r['pn']}" if r["pn"] is not None else "")
 
-    # ── Collision: ≥2 of the account's own extractor colonies on one planet_id ──
+    p0name_by = {r["p0"]: r["p0name"] for r in planets if r["p0"]}
+
+    # ── Proximity: heads of two colonies on ONE planet overlap the same resource hotspot ──
     by_planet: dict = {}
     for r in planets:
         by_planet.setdefault(r["pid"], []).append(r)
-    collisions = []
+    proximity = []
+    unscanned = 0                            # colonies sharing a planet but with no head data yet
     for pid, occ in by_planet.items():
         if len(occ) < 2:
             continue
-        p0s = [o["p0"] for o in occ]
-        shared = len({p for p in p0s if p0s.count(p) > 1}) > 0   # ≥2 occupants pull the same P0
-        collisions.append({
-            "planet_id": pid,
-            "location": _loc(occ[0]),
-            "shared_resource": shared,
-            "occupants": [{"character": o["nm"], "p0_name": o["p0name"]} for o in occ],
-        })
-    # Same-resource contention (real yield theft) ahead of mere same-planet doubling-up.
-    collisions.sort(key=lambda c: (not c["shared_resource"], c["location"]))
+        parsed = []
+        for o in occ:
+            try:
+                ecus = _json.loads(o["ext_heads"]) if o["ext_heads"] else None
+            except Exception:
+                ecus = None
+            if ecus:
+                parsed.append((o, ecus))
+            else:
+                unscanned += 1
+        # Compare every pair of colonies on this planet from DIFFERENT characters.
+        for i in range(len(parsed)):
+            for j in range(i + 1, len(parsed)):
+                oa, ea = parsed[i]
+                ob, eb = parsed[j]
+                if oa["cid"] == ob["cid"]:
+                    continue                 # the game already min-separates one char's own heads
+                hit = _head_overlap(ea, eb)
+                if hit:
+                    proximity.append({
+                        "planet_id": pid, "location": _loc(oa),
+                        "p0_name": p0name_by.get(hit["p0"]) or oa["p0name"],
+                        "overlap_pct": hit["overlap_pct"],
+                        "characters": sorted({oa["nm"], ob["nm"]}),
+                    })
+    proximity.sort(key=lambda p: p["overlap_pct"], reverse=True)
 
     # ── Depleting: multi-program downtrend on a still-deployed extractor colony ──
     peaks_by: dict = {}
@@ -1157,13 +1214,13 @@ def derive_redeploy_candidates(context_id: int) -> dict:
                 "p0_name": r["p0name"], **trend,
             })
     depleting.sort(key=lambda d: d["decline_pct"], reverse=True)
-    return {"collisions": collisions, "depleting": depleting}
+    return {"proximity": proximity, "proximity_unscanned": unscanned, "depleting": depleting}
 
 
 @router.get("/api/redeploy-candidates")
 def redeploy_candidates(pp_session: str = Cookie(default=None), debug_context_id: int | None = None):
-    """Setup Analysis 'redeploy the CC elsewhere' advice — own-character planet collisions and
-    depleting deposits. Strictly scoped to the session's context. DEBUG_PI gate (same convention as
+    """Setup Analysis 'redeploy this extraction' advice — same-hotspot head overlap and depleting
+    deposits. Strictly scoped to the session's context. DEBUG_PI gate (same convention as
     /api/my-setup-plan) lets a test exercise it against a seeded fixture without a real session."""
     import os as _os
     context_id = session_context_id(pp_session)
@@ -1171,7 +1228,7 @@ def redeploy_candidates(pp_session: str = Cookie(default=None), debug_context_id
         env_ctx = _os.environ.get("DEBUG_CONTEXT_ID")
         context_id = debug_context_id or (int(env_ctx) if env_ctx else None) or context_id
     if not context_id:
-        return {"collisions": [], "depleting": []}
+        return {"proximity": [], "proximity_unscanned": 0, "depleting": []}
     return derive_redeploy_candidates(context_id)
 
 

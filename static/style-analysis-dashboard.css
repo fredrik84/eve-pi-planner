@@ -446,18 +446,15 @@
 .an-skill-gain { font-size: 13px; font-weight: 700; color: var(--clr-green); white-space: nowrap; text-align: right; }
 .an-skill-row .an-sug-note { grid-column: 1 / -1; margin-top: 2px; }
 
-/* Redeploy candidates (own-character collisions + depleting deposits) */
-.an-suggest-redeploy { border-color: #6a4a1f; background: #1c1710; }
-.an-suggest-redeploy + .an-suggest-redeploy { margin-top: 12px; }
-.an-suggest-redeploy .an-suggest-h { color: #e0a84a; }
+/* Redeploy candidates (same-hotspot head overlap + depleting deposits) — reuses the neutral
+   .an-suggest card styling so it matches the other Setup Analysis suggestion blocks. */
 .an-redeploy-list { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
 .an-redeploy-row { display: grid; grid-template-columns: 1fr auto; align-items: baseline; gap: 4px 16px;
-  padding: 9px 12px; border: 1px solid #2a2418; border-radius: 7px; background: #14110b; }
+  padding: 9px 12px; border: 1px solid #1c2030; border-radius: 7px; background: #11151f; }
 .an-redeploy-loc { font-size: 13px; color: var(--clr-text-bright); }
 .an-redeploy-who { font-size: 13px; color: var(--clr-text); white-space: nowrap; text-align: right; }
 .an-redeploy-p0 { color: #8fb4d6; }
 .an-redeploy-row .an-sug-note { grid-column: 1 / -1; margin-top: 2px; }
 .an-redeploy-tag { display: inline-block; font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 4px;
-  background: #3a2f14; color: #e0c84a; margin-right: 4px; }
-.an-redeploy-tag-hot { background: #4a2418; color: #ef9a6a; }
+  background: #1c2536; color: #6fb0dc; margin-left: 4px; }
 

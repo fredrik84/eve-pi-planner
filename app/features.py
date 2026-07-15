@@ -99,10 +99,11 @@ FEATURE_REGISTRY = [
      "description": "On Setup Analysis: each material row shows its P0 source name and a comfortable "
                     "P0/hr-per-planet target at a glance — a reference while reseating extractor heads.",
      "default": False},
-    {"key": "redeploy_collision", "label": "Own-character planet collisions", "group": "Setup Analysis",
-     "description": "On Setup Analysis: flag when two of your own extractor colonies sit on the same "
-                    "planet — they share the planet's depletion and cannibalise each other's yield "
-                    "(worst when they pull the same P0). Suggests redeploying one elsewhere.",
+    {"key": "redeploy_proximity", "label": "Same-hotspot extractor overlap", "group": "Setup Analysis",
+     "description": "On Setup Analysis: flag when two colonies on the same planet have extractor "
+                    "heads sitting on the same resource hotspot (overlapping discs, same P0) — they "
+                    "deplete that spot together. Suggests spreading the heads to different areas of "
+                    "the planet grid. Needs a rescan to capture head positions.",
      "default": False},
     {"key": "redeploy_depletion", "label": "Depleting-deposit redeploy advice", "group": "Setup Analysis",
      "description": "On Setup Analysis: flag an extractor colony whose measured install-yield has "
