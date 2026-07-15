@@ -847,16 +847,23 @@ function renderAnalysis() {
     rebal = `<div class="an-suggest an-suggest-free"><div class="an-suggest-h">Balanced — every material this plan needs is covered${leftover.length ? ', with a little to spare' : ''}.</div></div>`;
 
   // Levers head the advice; each reveals its own section. Reseat → yield burn-down, Redeploy → the
-  // rebalance moves above. "Add factories" (a distinct surplus opportunity) always shows.
-  // If the plan is SHORT and the user hasn't touched the levers yet, open the fix section for them —
-  // otherwise the "deploy on a free planet" advice stays hidden behind a collapsed accordion.
-  if (!_anLeverTouched && !_anLeverOpen.size && rows.some(r => r.ratio < 0.995)) _anLeverOpen.add('reseat');
+  // rebalance moves. "Add factories" (a distinct surplus opportunity) always shows. The Redeploy
+  // lever only appears when there's an actual move to suggest (a surplus colony that fits a reachable
+  // free planet) — with no free planets it can't recommend anything, so we hide it rather than reveal
+  // an empty "can't rebalance" note.
+  const hasRebalance = moves.length > 0;
   // Overlap-caused decline surfaces first among the suggestions — it's the actual culprit when a
   // material is short because two colonies fight over one planet, and the reseat/rebalance levers
   // below won't cure it (a reseat lands the heads back inside the same overlap).
-  let suggest = _renderRedeployUrgent() + _leverCards(binding.ratio, binding.name);
+  const urgentHtml = _renderRedeployUrgent();
+  // Auto-open Reseat only when it's the SOLE fix. If there's another concrete suggestion (an overlap
+  // redeploy block — which already offers a "try reseat" button — an add-factories opportunity, or an
+  // actionable rebalance), leave Reseat folded so we're not unfolding two things at once.
+  const hasOtherSuggestion = !!urgentHtml || !!addFactories || hasRebalance;
+  if (!_anLeverTouched && !_anLeverOpen.size && rows.some(r => r.ratio < 0.995) && !hasOtherSuggestion) _anLeverOpen.add('reseat');
+  let suggest = urgentHtml + _leverCards(binding.ratio, binding.name, hasRebalance);
   if (_anLeverOpen.has('reseat')) suggest += _burndownSection(rows);
-  if (_anLeverOpen.has('redeploy')) suggest += rebal;
+  if (hasRebalance && _anLeverOpen.has('redeploy')) suggest += rebal;
   if (addFactories) suggest += addFactories;
 
   // Extraction-runtime advice: longest program that keeps extraction above factory demand
@@ -972,7 +979,7 @@ function _toggleLever(k) {
 // burn-down (per-colony decline across programs); Redeploy a CC → the specific rebalance moves. Both
 // sections are hidden until the matching card is clicked. `headroom`/`bindName` come from the binding
 // (worst-fed) P1 so the reseat card can name it when something's short.
-function _leverCards(headroom, bindName) {
+function _leverCards(headroom, bindName, hasRebalance) {
   const short = headroom < 0.995;
   // No shortage → reseat/redeploy have nothing to act on (reseat only recovers lost yield, redeploy
   // only rebalances a short material). Hide the whole section rather than show empty levers.
@@ -988,13 +995,15 @@ function _leverCards(headroom, bindName) {
         <div class="an-lever-cta">${open ? `Hide ${hint} ▴` : `Show ${hint} ▾`}</div>
       </div>`;
   };
+  const cards = [card('reseat', 'an-lever-a', '⟳', 'Reseat heads', 'low effort', reseatTxt, 'reseat candidates')];
+  // The Redeploy lever only appears when there's an actual rebalance move to make — otherwise it can't
+  // suggest anything (no free planet to move a surplus colony onto), so we don't show an empty lever.
+  if (hasRebalance)
+    cards.push(card('redeploy', 'an-lever-b', '⇄', 'Redeploy a CC', 'rebalance', "If a material stays short while others overflow, move a surplus colony's command center onto it.", 'rebalance moves'));
   return `<div class="an-suggest an-suggest-levers">
-      <div class="an-suggest-h">Lift yields &amp; balance</div>
-      <div class="an-levers-lead">Figures track your heads' placement at the last scan and decay as a program runs — so they shift when you reseat or restart. Two levers:</div>
-      <div class="an-lever-row">
-        ${card('reseat', 'an-lever-a', '⟳', 'Reseat heads', 'low effort', reseatTxt, 'reseat candidates')}
-        ${card('redeploy', 'an-lever-b', '⇄', 'Redeploy a CC', 'rebalance', "If a material stays short while others overflow, move a surplus colony's command center onto it.", 'rebalance moves')}
-      </div>
+      <div class="an-suggest-h">Lift yields${hasRebalance ? ' &amp; balance' : ''}</div>
+      <div class="an-levers-lead">Figures track your heads' placement at the last scan and decay as a program runs — so they shift when you reseat or restart.</div>
+      <div class="an-lever-row">${cards.join('')}</div>
     </div>`;
 }
 
