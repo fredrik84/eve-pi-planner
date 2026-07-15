@@ -1551,6 +1551,7 @@ function _rxOpenNewOrderModal() {
   document.getElementById('rxOrderClient').value = '';
   document.getElementById('rxOrderNotes').value = '';
   document.getElementById('rxOrderCreateStatus').textContent = '';
+  _rxOrderResetReview();
   _rxOrderHideProductDropdown();
   document.getElementById('rxNewOrderModal').style.display = '';
   const status = document.getElementById('rxOrderCreateStatus');
@@ -1579,6 +1580,7 @@ function _rxOrderProductDropdownFilter() {
   const input = document.getElementById('rxOrderProduct');
   const dd = document.getElementById('rxOrderProductDropdown');
   if (!input || !dd) return;
+  _rxOrderResetReview();   // product changed → the shown review no longer matches; force a re-review
   const q = input.value.trim().toLowerCase();
   const all = [..._rxOpps].sort((a, b) => a.name.localeCompare(b.name));
   _rxOrderProductDropdownList = (q ? all.filter(o => o.name.toLowerCase().includes(q)) : all).slice(0, 200);
@@ -1626,6 +1628,38 @@ function _rxOrderProductDropdownKey(event) {
   }
 }
 
+// Review resets whenever the product or quantity changes, so a shown "Create order" always matches
+// the report the user actually reviewed (client/notes don't affect the report, so they don't reset).
+function _rxOrderResetReview() {
+  const rv = document.getElementById('rxOrderReview');
+  if (rv) rv.innerHTML = '';
+  const btn = document.getElementById('rxOrderCreateBtn');
+  if (btn) btn.style.display = 'none';
+}
+
+function _rxReviewOrder() {
+  const status = document.getElementById('rxOrderCreateStatus');
+  const o = _rxOrderProductMatch();
+  if (!o) { status.textContent = 'Pick a product from the list.'; return; }
+  const qty = parseFloat(document.getElementById('rxOrderQty').value);
+  if (!qty || qty <= 0) { status.textContent = 'Enter how many units the client wants.'; return; }
+  status.textContent = '';
+  const rv = document.getElementById('rxOrderReview');
+  rv.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Working out the order…</div>';
+  document.getElementById('rxOrderCreateBtn').style.display = 'none';
+  fetch('/api/reactions/orders/preview', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type_id: o.type_id, target_qty: qty }),
+  })
+    .then(async r => { if (!r.ok) throw new Error((await r.json()).detail || 'Preview failed'); return r.json(); })
+    .then(data => {
+      rv.innerHTML = `<div class="pp-card-hint" style="margin-top:12px">Review — <b>${_esc(data.order.name)}</b>: ${Math.round(data.order.target_qty).toLocaleString()} units → ${data.order.top_level_runs.toLocaleString()} run${data.order.top_level_runs === 1 ? '' : 's'}</div>${_rxOrderReportBody(data)}`;
+      document.getElementById('rxOrderCreateBtn').style.display = '';
+    })
+    .catch(err => { rv.innerHTML = ''; status.textContent = err.message; });
+}
+
 function _rxCreateOrder() {
   const status = document.getElementById('rxOrderCreateStatus');
   const o = _rxOrderProductMatch();
@@ -1671,25 +1705,55 @@ function _rxCloseOrderDetail() {
   document.getElementById('rxOrderDetailModal').style.display = 'none';
 }
 
-function _renderRxOrderDetail(data) {
+// The cost/time/materials report body, shared by the order-detail modal AND the pre-commit review
+// (so the two can't drift and the time-estimate contrast fix lives in one place). Sets
+// _rxLastOrderMaterials for the "Copy for Janice" button. Returns just the stale note when the
+// product isn't priced/reachable.
+function _rxOrderReportBody(data) {
   const o = data.order;
-  const el = document.getElementById('rxOrderDetailContent');
-  const titleEl = document.getElementById('rxOrderDetailTitle');
-  if (titleEl.firstChild) titleEl.firstChild.textContent = `${o.name} — order`;
-  const remaining = o.top_level_runs - o.assigned_runs;
+  _rxLastOrderMaterials = data.materials || [];
+  if (data.stale)
+    return '<div class="pp-card-hint" style="color:var(--clr-amber)">This product isn\'t priced/reachable right now — no live cost/materials breakdown.</div>';
 
-  _rxLastOrderMaterials = data.materials;
-  const materialsHtml = !data.materials.length ? '<div class="pp-empty">Nothing needed right now.</div>' : `
+  const materialsHtml = !(data.materials || []).length ? '<div class="pp-empty">Nothing needed right now.</div>' : `
     <div style="overflow-x:auto">
       <table class="pp-card-table" style="width:100%">
         <thead><tr><th>Material</th><th>Quantity</th><th>Unit price</th><th>Est. cost</th><th>Volume</th></tr></thead>
         <tbody>${data.materials.map(m => `<tr><td>${_esc(m.name)}</td><td>${_rxCopyQtyCell(m.quantity)}</td><td>${_fmtIsk(m.unit_cost)}</td><td>${_fmtIsk(m.unit_cost * m.quantity)}</td><td>${Math.round(m.volume_m3 || 0).toLocaleString()} m³</td></tr>`).join('')}</tbody>
       </table>
     </div>`;
+  const chainNote = !(data.chain_tiers || []).length ? '' : `<div class="rx-manual-preview-chain" style="margin-top:6px">Also needs ${data.chain_tiers.length} intermediate reaction${data.chain_tiers.length === 1 ? '' : 's'} first: ${data.chain_tiers.map(t => `<b>${_esc(t.name)}</b> ×${t.runs.toLocaleString()}`).join(', ')}.</div>`;
 
-  const chainNote = !data.chain_tiers.length ? '' : `<div class="rx-manual-preview-chain" style="margin-top:6px">Also needs ${data.chain_tiers.length} intermediate reaction${data.chain_tiers.length === 1 ? '' : 's'} first: ${data.chain_tiers.map(t => `<b>${_esc(t.name)}</b> ×${t.runs.toLocaleString()}`).join(', ')}.</div>`;
+  return `
+    <div class="pp-card-title" style="margin-top:14px;font-size:14px">Cost to produce</div>
+    <div class="rx-manual-preview">
+      <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Materials</span><b>${_fmtIsk(data.cost.material_cost)}</b></div>
+      ${data.cost.job_cost ? `<div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Job install fees</span><b>${_fmtIsk(data.cost.job_cost)}</b></div>` : ''}
+      <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Total</span><b>${_fmtIsk(data.cost.total_cost)}</b></div>
+      <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Per unit</span><b>${_fmtIsk(data.cost.cost_per_unit)}</b></div>
+    </div>
+    <div class="pp-card-hint">No markup applied — decide what to charge the client yourself.</div>
 
-  const staleNote = data.stale ? '<div class="pp-card-hint" style="color:var(--clr-amber)">This product isn\'t priced/reachable right now — showing the order\'s stored numbers only, no live cost/materials breakdown.</div>' : '';
+    <div class="pp-card-title" style="margin-top:14px;font-size:14px">Time estimate</div>
+    <div class="rx-manual-preview">
+      <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Start to finish</span><b>~${_fmtHours(data.time.estimated_hours)}</b></div>
+      <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Free slots now</span><b>${data.time.free_slots_now}</b></div>
+    </div>
+    <div class="pp-card-hint">${_esc(data.time.caveat || '')}</div>
+    ${chainNote}
+
+    <div class="pp-card-title" style="margin-top:14px;font-size:14px">Materials to import (full chain, ${Math.round(o.target_qty).toLocaleString()} units)
+      ${(data.materials || []).length ? `<button class="pp-add-btn" onclick="_rxCopyOrderMaterials(this)">Copy for Janice</button>` : ''}
+    </div>
+    ${materialsHtml}`;
+}
+
+function _renderRxOrderDetail(data) {
+  const o = data.order;
+  const el = document.getElementById('rxOrderDetailContent');
+  const titleEl = document.getElementById('rxOrderDetailTitle');
+  if (titleEl.firstChild) titleEl.firstChild.textContent = `${o.name} — order`;
+  const remaining = o.top_level_runs - o.assigned_runs;
 
   const actionButtons = o.status === 'open' ? `
       ${remaining > 0 ? `<button id="rxOrderAssignBtn" onclick="_rxAssignOrderBatch(${o.id})">Assign next batch (${remaining.toLocaleString()} run${remaining === 1 ? '' : 's'} left)</button>` : '<span class="pp-card-hint">Every run has been assigned.</span>'}
@@ -1701,30 +1765,11 @@ function _renderRxOrderDetail(data) {
   el.innerHTML = `
     <div class="pp-card-hint">${o.client_name ? `For <b>${_esc(o.client_name)}</b> — ` : ''}${Math.round(o.target_qty).toLocaleString()} units needed → ${o.top_level_runs.toLocaleString()} reaction run${o.top_level_runs === 1 ? '' : 's'}</div>
     ${o.notes ? `<div class="pp-card-hint" style="margin-top:2px">${_esc(o.notes)}</div>` : ''}
-    ${staleNote}
 
     <div style="margin:10px 0 4px">${_rxOrderBarHtml(o)}</div>
     <div class="pp-card-hint">${o.assigned_runs.toLocaleString()} / ${o.top_level_runs.toLocaleString()} runs assigned to characters</div>
 
-    ${!data.stale ? `
-    <div class="pp-card-title" style="margin-top:14px;font-size:14px">Cost to produce</div>
-    <div class="rx-manual-preview">
-      <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Materials</span><b>${_fmtIsk(data.cost.material_cost)}</b></div>
-      ${data.cost.job_cost ? `<div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Job install fees</span><b>${_fmtIsk(data.cost.job_cost)}</b></div>` : ''}
-      <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Total</span><b>${_fmtIsk(data.cost.total_cost)}</b></div>
-      <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Per unit</span><b>${_fmtIsk(data.cost.cost_per_unit)}</b></div>
-    </div>
-    <div class="pp-card-hint">No markup applied — decide what to charge the client yourself.</div>
-
-    <div class="pp-card-title" style="margin-top:14px;font-size:14px">Time estimate</div>
-    <div class="pp-card-hint">${data.time.free_slots_now} free slot${data.time.free_slots_now === 1 ? '' : 's'} right now → about ${_fmtHours(data.time.estimated_hours)} start to finish. ${_esc(data.time.caveat || '')}</div>
-    ${chainNote}
-
-    <div class="pp-card-title" style="margin-top:14px;font-size:14px">Materials to import (full chain, ${Math.round(o.target_qty).toLocaleString()} units)
-      ${data.materials.length ? `<button class="pp-add-btn" onclick="_rxCopyOrderMaterials(this)">Copy for Janice</button>` : ''}
-    </div>
-    ${materialsHtml}
-    ` : ''}
+    ${_rxOrderReportBody(data)}
 
     <div class="pp-modal-actions" style="margin-top:14px;flex-wrap:wrap">
       ${actionButtons}

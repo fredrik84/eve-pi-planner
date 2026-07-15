@@ -198,6 +198,38 @@ def test_order_lifecycle(api: Api) -> bool:
     return ok
 
 
+def test_order_preview(api: Api) -> bool:
+    print(f"\n{'='*60}\n  Customer order: pre-commit review (preview) endpoint\n{'='*60}")
+    ok = True
+    product = _find_test_product(api)
+    if not check(product is not None, "found a reachable single-tier product to test against"):
+        print("  (no priced moon goo sheet or no live market reachability right now — skipping)")
+        return ok
+    per_run_yield = product["output_qty"] / product["top_level_runs"]
+    target_qty = per_run_yield * 2 + 1
+
+    status, before = api.get("/api/reactions/orders")
+    n_before = len(before.get("orders", [])) if status == 200 else 0
+
+    status, data = api.post("/api/reactions/orders/preview", {
+        "type_id": product["type_id"], "target_qty": target_qty, "client_name": "Preview Client",
+    })
+    if not check(status == 200, f"preview succeeds (got {status}: {data})"):
+        return ok
+    ok &= check(data.get("preview") is True, "response is flagged as a preview")
+    ok &= check(data.get("order", {}).get("id") is None, "preview order has no persisted id (nothing created)")
+    ok &= check(len(data.get("materials", [])) > 0, "materials report is non-empty")
+    ok &= check(data.get("cost", {}).get("total_cost", 0) > 0, "cost report is non-empty")
+    # The whole point of the user's report: the time estimate must actually be populated.
+    est = data.get("time", {}).get("estimated_hours")
+    ok &= check(est is not None and est > 0, f"time estimate is populated (got {est})")
+
+    status, after = api.get("/api/reactions/orders")
+    n_after = len(after.get("orders", [])) if status == 200 else 0
+    ok &= check(n_after == n_before, f"preview did NOT persist an order (before {n_before}, after {n_after})")
+    return ok
+
+
 # ── Deterministic unit tests (no network, no DB) ───────────────────────────────────────────────
 # The safety net for refactoring reactions.py: these pin the refactor-critical PURE functions —
 # the reaction-graph cost roll-up + cheaper-source selection (_resolve_reachable), the shopping-
@@ -363,6 +395,7 @@ def main() -> int:
             token = _seed_session()
             api = Api(base, token)
             results.append(test_order_lifecycle(api))
+            results.append(test_order_preview(api))
             results.append(test_pricing_endpoints_live(api))
             _cleanup()
         except Exception as e:

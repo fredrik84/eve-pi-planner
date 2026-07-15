@@ -95,19 +95,38 @@ class OrderCreateRequest(BaseModel):
     notes: str | None = None
 
 
-@router.post("/api/reactions/orders")
-def create_reaction_order(req: OrderCreateRequest, context_id: int = Depends(require_context)):
+def _resolve_order_target(context_id: int, req: OrderCreateRequest) -> tuple[str, int]:
+    """Validate a target product + quantity and return (product name, top_level_runs). Shared by the
+    preview and create endpoints so they can't drift on reachability or the runs rounding."""
     if req.target_qty <= 0:
         raise HTTPException(status_code=400, detail="Target quantity must be positive")
     loaded = _load_goo_and_reached(context_id)
     node = loaded[1].get(req.type_id) if loaded else None
     if not node or node.get("via") is None:
         raise HTTPException(status_code=404, detail="Not a reachable reaction product right now")
-    types = loaded[4]
-    name = types.get(req.type_id, {}).get("name", str(req.type_id))
-    output_qty = node["via"]["output_qty"]
-    top_level_runs = max(1, math.ceil(req.target_qty / output_qty))
+    name = loaded[4].get(req.type_id, {}).get("name", str(req.type_id))
+    top_level_runs = max(1, math.ceil(req.target_qty / node["via"]["output_qty"]))
+    return name, top_level_runs
 
+
+@router.post("/api/reactions/orders/preview")
+def preview_reaction_order(req: OrderCreateRequest, context_id: int = Depends(require_context)):
+    """The review step: the full materials/cost/time report for a would-be order WITHOUT persisting
+    it or touching reaction slots. Same math as the created-order report — lets a player see what
+    an order needs before committing to it."""
+    name, top_level_runs = _resolve_order_target(context_id, req)
+    order = {
+        "id": None, "type_id": req.type_id, "name": name, "target_qty": req.target_qty,
+        "top_level_runs": top_level_runs, "assigned_runs": 0,
+        "client_name": (req.client_name or "").strip() or None,
+        "notes": (req.notes or "").strip() or None, "status": "preview",
+    }
+    return {"order": order, "preview": True, **_order_report(context_id, order)}
+
+
+@router.post("/api/reactions/orders")
+def create_reaction_order(req: OrderCreateRequest, context_id: int = Depends(require_context)):
+    name, top_level_runs = _resolve_order_target(context_id, req)
     ensure_reaction_orders_table()
     con = get_connection()
     try:
