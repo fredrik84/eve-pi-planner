@@ -274,14 +274,15 @@ function _renderRedeploySection() {
     body += `<div class="an-suggest"><div class="an-sug-note">Rescan colonies in the Characters tab to capture extractor positions — the range-overlap check needs them.</div></div>`;
   }
   if (depleting.length) {
-    const li = depleting.map(d => `<li class="an-redeploy-row">
-        <span class="an-redeploy-loc"><b>${_esc(d.character)}</b> · ${_esc(d.location)}${d.p0_name ? ` <span class="an-redeploy-p0">${_esc(d.p0_name)}</span>` : ''}</span>
-        <span class="an-redeploy-who"><span class="an-redeploy-tag">${d.decline_pct}% down over ${d.programs} programs</span> ${d.peak_first.toLocaleString()} → ${d.peak_last.toLocaleString()} P0/day peak</span>
-        <span class="an-sug-note">The deposit is exhausting — its peak keeps falling, so a reseat only chases a sinking ceiling. Redeploy the CC to a fresh planet.${d.also_overlapping ? ' Its extraction range also overlaps another colony here — moving it clears that too.' : ''}</span>
+    // Compact stacked row (like the range list): location + decline tag, peak trend below. The shared
+    // "why / what to do" explanation lives once in the section note, not repeated on every row.
+    const li = depleting.map(d => `<li class="an-redeploy-row an-redeploy-cluster">
+        <div class="an-redeploy-loc"><b>${_esc(d.character)}</b> · ${_esc(d.location)}${d.p0_name ? ` <span class="an-redeploy-p0">${_esc(d.p0_name)}</span>` : ''} <span class="an-redeploy-tag">${d.decline_pct}% down</span>${d.also_overlapping ? ' <span class="an-redeploy-depl" title="its extraction range also overlaps another colony — moving it clears both">⚡ overlap</span>' : ''}</div>
+        <div class="an-redeploy-move"><span class="an-redeploy-move-lbl">Peak</span> ${d.peak_first.toLocaleString()} → ${d.peak_last.toLocaleString()} P0/day over ${d.programs} programs</div>
       </li>`).join('');
     body += `<div class="an-suggest">
         <div class="an-suggest-h">Depleting deposits — ${depleting.length} colon${depleting.length > 1 ? 'ies' : 'y'}</div>
-        <div class="an-sug-note">Measured across the last several extraction programs (one sample per restart). A steady-low planet isn't flagged — only a real downtrend.</div>
+        <div class="an-sug-note">Measured peak yield keeps falling across the last several programs, so reseating only chases a sinking ceiling — redeploy the command centre to a fresh planet. A steady-low planet isn't flagged, only a real downtrend. ⚡ = its range also overlaps another colony (moving it clears both).</div>
         <ul class="an-redeploy-list">${li}</ul>
       </div>`;
   }
