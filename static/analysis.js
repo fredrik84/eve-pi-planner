@@ -218,7 +218,7 @@ function _clusterProximity(pairs, depletingList) {
   const groups = {};
   pairs.forEach(p => {
     const k = p.planet_id + '|' + (p.p0_name || '');
-    (groups[k] = groups[k] || { planet_id: p.planet_id, location: p.location, p0_name: p.p0_name, edges: [] }).edges.push(p);
+    (groups[k] = groups[k] || { planet_id: p.planet_id, location: p.location, p0_name: p.p0_name, planet_type: p.planet_type, edges: [] }).edges.push(p);
   });
   const out = [];
   Object.values(groups).forEach(g => {
@@ -233,11 +233,50 @@ function _clusterProximity(pairs, depletingList) {
       const mset = new Set(members);
       const maxOv = Math.max(...g.edges.filter(e => (e.characters || []).some(c => mset.has(c))).map(e => e.overlap_pct));
       const precedence = members.filter(c => depl.has(g.planet_id + '|' + c)).sort();
-      out.push({ location: g.location, p0_name: g.p0_name, characters: members.slice().sort(),
-                 overlap_pct: maxOv, precedence });
+      out.push({ planet_id: g.planet_id, location: g.location, p0_name: g.p0_name, planet_type: g.planet_type,
+                 characters: members.slice().sort(), overlap_pct: maxOv, precedence });
     });
   });
   return out.sort((a, b) => b.overlap_pct - a.overlap_pct);
+}
+
+// Which colony to keep vs relocate in a cluster: keep a non-depleting one if possible, move the rest,
+// depleting ones first (they're the urgent ones — already losing yield).
+function _clusterMoves(c) {
+  const depl = new Set(c.precedence);
+  const healthy = c.characters.filter(n => !depl.has(n));
+  const keep = healthy.length ? healthy[0] : c.characters[0];
+  const move = c.characters.filter(n => n !== keep)
+    .sort((a, b) => (depl.has(a) === depl.has(b)) ? a.localeCompare(b) : (depl.has(a) ? -1 : 1));
+  return { keep, move, depl };
+}
+
+// Persist which relocations are done (per browser), keyed by planet_id|character — a big redeploy
+// job stays trackable across sessions. Toggling only updates the one row + localStorage (no re-render,
+// so scroll position and the rest of the checklist are preserved).
+function _redeployDoneSet() {
+  try { return new Set(JSON.parse(localStorage.getItem('ppRedeployDone') || '[]')); } catch (e) { return new Set(); }
+}
+function _redeployToggleDone(cb) {
+  const s = _redeployDoneSet();
+  if (cb.checked) s.add(cb.dataset.key); else s.delete(cb.dataset.key);
+  try { localStorage.setItem('ppRedeployDone', JSON.stringify([...s])); } catch (e) {}
+  const row = cb.closest('.an-redeploy-chk');
+  if (row) row.classList.toggle('an-redeploy-checked', cb.checked);
+}
+
+// Command centres to buy = one per colony being relocated, grouped by planet type. The command centre
+// is the only market item a redeploy needs — the ECU/launchpad/factories are ISK-only in-game.
+function _redeployShopping(clusters) {
+  const by = {};
+  clusters.forEach(c => { const n = _clusterMoves(c).move.length; if (c.planet_type && n) by[c.planet_type] = (by[c.planet_type] || 0) + n; });
+  return Object.keys(by).sort().map(t => ({ name: `${t} Command Center`, qty: by[t] }));
+}
+let _redeployShopLast = [];
+function _redeployCopyShopping(btn) {
+  const text = _redeployShopLast.map(s => `${s.name}\t${s.qty}`).join('\n');
+  try { navigator.clipboard.writeText(text); } catch (e) {}
+  if (btn) { const t = btn.textContent; btn.textContent = 'Copied'; setTimeout(() => { btn.textContent = t; }, 1500); }
 }
 
 function _renderRedeploySection() {
@@ -251,24 +290,54 @@ function _renderRedeploySection() {
 
   let body = '';
   if (clusters.length) {
-    // One action line per planet+resource: keep one colony, redeploy the rest — depleting ones first
-    // (they must move anyway). Just the "what to move where" list, no repeated prose per row.
-    const li = clusters.map(c => {
-      const depl = new Set(c.precedence);
-      const healthy = c.characters.filter(n => !depl.has(n));
-      const keep = healthy.length ? healthy[0] : c.characters[0];
-      const move = c.characters.filter(n => n !== keep)
-        .sort((a, b) => (depl.has(a) === depl.has(b)) ? a.localeCompare(b) : (depl.has(a) ? -1 : 1));
-      const moveHtml = move.map(n => `<b>${_esc(n)}</b>${depl.has(n) ? ' <span class="an-redeploy-depl" title="also depleting — move first">⚡</span>' : ''}`).join(', ');
-      return `<li class="an-redeploy-row an-redeploy-cluster">
-          <div class="an-redeploy-loc"><b>${_esc(c.location)}</b>${c.p0_name ? ` <span class="an-redeploy-p0">${_esc(c.p0_name)}</span>` : ''} <span class="an-redeploy-tag">up to ${c.overlap_pct}%</span></div>
-          <div class="an-redeploy-move"><span class="an-redeploy-move-lbl">Redeploy</span> ${moveHtml} <span class="an-redeploy-keep">· keep ${_esc(keep)}</span></div>
-        </li>`;
-    }).join('');
+    // A grouped, tickable checklist — not a wall of prose. Split by urgency so you don't have to do
+    // it all at once: clusters already losing yield (a member is depleting) are "do soon"; the rest
+    // are "do whenever you next rebuild them". A command-centre shopping list totals what to buy.
+    const done = _redeployDoneSet();
+    const nMoves = c => _clusterMoves(c).move.length;
+    const clusterBlock = c => {
+      const { keep, move, depl } = _clusterMoves(c);
+      const checks = move.map(n => {
+        const key = c.planet_id + '|' + n;
+        const isDone = done.has(key);
+        return `<label class="an-redeploy-chk${isDone ? ' an-redeploy-checked' : ''}">
+            <input type="checkbox" data-key="${_esc(key)}"${isDone ? ' checked' : ''} onclick="_redeployToggleDone(this)">
+            <span>${_esc(n)}${depl.has(n) ? ' <span class="an-redeploy-depl" title="also depleting — do this one first">⚡</span>' : ''}</span>
+          </label>`;
+      }).join('');
+      return `<div class="an-redeploy-cl">
+          <div class="an-redeploy-cl-h"><b>${_esc(c.location)}</b>${c.p0_name ? ` <span class="an-redeploy-p0">${_esc(c.p0_name)}</span>` : ''}${c.planet_type ? ` · ${_esc(c.planet_type)}` : ''} <span class="an-redeploy-tag">up to ${c.overlap_pct}%</span> <span class="an-redeploy-keep">keep ${_esc(keep)}</span></div>
+          <div class="an-redeploy-checks">${checks}</div>
+        </div>`;
+    };
+
+    const urgent = clusters.filter(c => c.precedence.length);
+    const later = clusters.filter(c => !c.precedence.length);
+    const totalMoves = clusters.reduce((n, c) => n + nMoves(c), 0);
+    _redeployShopLast = _redeployShopping(clusters);
+    const shopHtml = _redeployShopLast.length ? `
+      <div class="an-redeploy-shop">
+        <span class="an-redeploy-shop-lbl">Command centres to buy</span>
+        <span class="an-redeploy-shop-list">${_redeployShopLast.map(s => `${s.qty}× ${_esc(s.name)}`).join(' · ')}</span>
+        <button class="pp-add-btn" onclick="_redeployCopyShopping(this)">Copy</button>
+      </div>` : '';
+
+    let inner = shopHtml;
+    if (urgent.length) {
+      inner += `<div class="an-redeploy-subh">Do soon — already losing yield (${urgent.reduce((n, c) => n + nMoves(c), 0)})</div>`
+        + urgent.map(clusterBlock).join('');
+    }
+    if (later.length) {
+      const laterMoves = later.reduce((n, c) => n + nMoves(c), 0);
+      const laterBody = later.map(clusterBlock).join('');
+      inner += urgent.length
+        ? `<details class="an-redeploy-later"><summary>${laterMoves} more — not losing yield yet, do these whenever you next rebuild them</summary>${laterBody}</details>`
+        : `<div class="an-sug-note">Nothing's actively losing yield yet, so there's no rush — just spread these out as you happen to rebuild each colony.</div><details class="an-redeploy-later" open><summary>${laterMoves} colonies to relocate over time</summary>${laterBody}</details>`;
+    }
     body += `<div class="an-suggest">
-        <div class="an-suggest-h">Overlapping extraction ranges — ${clusters.length} planet${clusters.length > 1 ? 's' : ''}</div>
-        <div class="an-sug-note">These colonies' reachable areas overlap the same resource, so they drain each other's hotspots and reseating can't escape it — redeploy the listed command centres to clear areas (⚡ = also depleting, move first). Threshold ${thresh}% (Settings → General).</div>
-        <ul class="an-redeploy-list">${li}</ul>
+        <div class="an-suggest-h">Overlapping extraction ranges — ${totalMoves} to relocate across ${clusters.length} planet${clusters.length > 1 ? 's' : ''}</div>
+        <div class="an-sug-note">Colonies sharing a planet whose reachable areas overlap slowly drain each other's hotspots. You don't have to fix them all at once — tick each off as you go (⚡ = already losing yield, do first). Threshold ${thresh}% (Settings → General).</div>
+        ${inner}
       </div>`;
   } else if (_featureActive('redeploy_proximity') && _redeploy.proximity_unscanned) {
     body += `<div class="an-suggest"><div class="an-sug-note">Rescan colonies in the Characters tab to capture extractor positions — the range-overlap check needs them.</div></div>`;

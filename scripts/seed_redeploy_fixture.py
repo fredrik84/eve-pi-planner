@@ -97,8 +97,8 @@ add_colony(GALE, 900006, 6, "Barren", 1, AQUEOUS, "Aqueous Liquids", heads=_ecu(
 add_colony(HANA, 900006, 6, "Barren", 1, AQUEOUS, "Aqueous Liquids", heads=_ecu(AQUEOUS, 1.03, 0.50))
 # planet 900008 — the RANGE case: current heads are FAR apart (0.90 vs 1.14 lat, no head overlap) but
 #   the reachable areas (CC ±0.10 spread) overlap heavily → flagged by footprint, NOT by head position
-add_colony(GALE, 900008, 8, "Barren", 1, AQUEOUS, "Aqueous Liquids", heads=_ecu(AQUEOUS, 1.00, 0.50, [[0.90, 0.50]]))
-add_colony(HANA, 900008, 8, "Barren", 1, AQUEOUS, "Aqueous Liquids", heads=_ecu(AQUEOUS, 1.04, 0.50, [[1.14, 0.50]]))
+add_colony(GALE, 900008, 8, "Lava", 1, AQUEOUS, "Aqueous Liquids", heads=_ecu(AQUEOUS, 1.00, 0.50, [[0.90, 0.50]]))
+add_colony(HANA, 900008, 8, "Lava", 1, AQUEOUS, "Aqueous Liquids", heads=_ecu(AQUEOUS, 1.04, 0.50, [[1.14, 0.50]]))
 # planet 900002 — same P0 but CCs FAR apart (Δlon ~2 rad) → no overlap → NOT flagged
 add_colony(GALE, 900002, 2, "Barren", 1, AQUEOUS, "Aqueous Liquids", heads=_ecu(AQUEOUS, 1.00, 0.50))
 add_colony(HANA, 900002, 2, "Barren", 1, AQUEOUS, "Aqueous Liquids", heads=_ecu(AQUEOUS, 1.00, 2.50))

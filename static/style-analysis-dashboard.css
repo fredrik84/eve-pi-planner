@@ -466,3 +466,20 @@
 .an-redeploy-keep { color: #8a93a5; }
 .an-redeploy-depl { color: #e0a84a; }
 
+/* Overlapping-ranges checklist: shopping list, urgency tiers, per-planet groups, tickable moves. */
+.an-redeploy-shop { margin: 10px 0; padding: 8px 10px; border: 1px solid #24405a; border-radius: 6px;
+  background: #10202c; display: flex; align-items: center; gap: 8px 10px; flex-wrap: wrap; }
+.an-redeploy-shop-lbl { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; color: #6fb0dc; }
+.an-redeploy-shop-list { font-size: 13px; color: var(--clr-text-bright); flex: 1 1 auto; min-width: 120px; }
+.an-redeploy-subh { font-size: 12px; font-weight: 700; color: #e0a84a; margin: 12px 0 6px; }
+.an-redeploy-cl { padding: 8px 10px; border: 1px solid #1c2030; border-radius: 7px; background: #11151f; margin-bottom: 6px; }
+.an-redeploy-cl-h { font-size: 12.5px; color: var(--clr-text-bright); margin-bottom: 6px; }
+.an-redeploy-cl-h .an-redeploy-keep { margin-left: 2px; }
+.an-redeploy-checks { display: flex; flex-wrap: wrap; gap: 5px 16px; }
+.an-redeploy-chk { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; color: var(--clr-text); cursor: pointer; }
+.an-redeploy-chk input { cursor: pointer; margin: 0; }
+.an-redeploy-checked { color: #6b7280; text-decoration: line-through; }
+.an-redeploy-checked .an-redeploy-depl { text-decoration: none; }
+.an-redeploy-later { margin-top: 8px; }
+.an-redeploy-later > summary { cursor: pointer; font-size: 12.5px; color: #8fb4d6; padding: 4px 0; }
+

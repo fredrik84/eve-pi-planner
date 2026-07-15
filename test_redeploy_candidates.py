@@ -58,6 +58,10 @@ def test_proximity(base: str) -> bool:
     ok &= check(p1 and p1["overlap_pct"] == 100, f"coincident CCs report 100% overlap (got {p1 and p1['overlap_pct']})")
     ok &= check(p1 and set(p1.get("characters", [])) == {"Test Gale", "Test Hana"}, "both characters named")
     ok &= check(p1 and p1.get("p0_name") == "Aqueous Liquids", "the shared P0 is named")
+    # planet_type drives the command-centre shopping list — must be returned per finding.
+    ok &= check(p1 and p1.get("planet_type") == "Barren", f"P1 finding carries its planet type (got {p1 and p1.get('planet_type')})")
+    p8 = by_loc.get("? P8")
+    ok &= check(p8 and p8.get("planet_type") == "Lava", f"P8 finding carries its (different) planet type (got {p8 and p8.get('planet_type')})")
     p6 = by_loc.get("? P6")
     ok &= check(p6 and p6["overlap_pct"] == 25, f"P6 reports 25% overlap, below the default (got {p6 and p6['overlap_pct']})")
     # P8: current heads are 0.24 rad apart (no head overlap), but the reachable areas overlap heavily —

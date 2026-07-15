@@ -1169,7 +1169,7 @@ def derive_redeploy_candidates(context_id: int) -> dict:
     planets = con.execute("""
         SELECT cp.character_id AS cid, c.character_name AS nm, cp.planet_id AS pid,
                cp.planet_num AS pn, cp.p0_type_id AS p0, cp.p0_name AS p0name,
-               cp.ext_heads AS ext_heads, COALESCE(s.name, '') AS system
+               cp.planet_type AS ptype, cp.ext_heads AS ext_heads, COALESCE(s.name, '') AS system
         FROM pp_char_planets cp
         JOIN pp_characters c ON c.character_id = cp.character_id
         LEFT JOIN solar_systems s ON s.system_id = cp.solar_system_id
@@ -1219,6 +1219,7 @@ def derive_redeploy_candidates(context_id: int) -> dict:
                 if hit:
                     proximity.append({
                         "planet_id": pid, "location": _loc(oa),
+                        "planet_type": oa["ptype"],
                         "p0_name": p0name_by.get(hit["p0"]) or oa["p0name"],
                         "overlap_pct": hit["overlap_pct"],
                         "characters": sorted({oa["nm"], ob["nm"]}),
