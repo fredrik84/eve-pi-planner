@@ -1274,14 +1274,10 @@ function _extRuntimeAdviceHtml(headroom, curDays) {
   for (let d = 1; d <= _EXT_MAX_DAYS; d++) if (buffer(d) >= 0) fedDay = d;
   const graph = _extDecayGraphSvg(headroom, L0, fedDay || 1, fedDay || 1);
 
-  // Healthy: comfortable buffer (≥10%). No graph — a flat sustainable curve is just noise; the graph
-  // only earns its space when the crossover matters (tight / deficit, below).
+  // Healthy: comfortable buffer (≥10%) — nothing to act on, so it's a one-line acknowledgement, not a
+  // full "here's the situation" card. (No graph either — a flat sustainable curve is just noise.)
   if (bL0 >= 0.10) {
-    return `<div class="an-suggest an-suggest-add an-rt-ok">
-        <div class="an-suggest-h">Extraction runtime <span class="an-rt-badge an-rt-badge-ok">✓ sustainable</span></div>
-        <div class="an-rt-pick"><b>+${Math.round(bL0 * 100)}%</b> above demand on ${L0lbl} programs — comfortable margin as heads decay.</div>
-        <div class="an-sug-note">Spare extraction is better spent on more factories than a shorter runtime.${detected ? '' : ' Length assumed 2d — rescan to detect yours.'}</div>
-      </div>`;
+    return `<div class="an-rt-note">Extraction runtime <span class="an-rt-badge an-rt-badge-ok">✓ sustainable</span> — <b>+${Math.round(bL0 * 100)}%</b> above demand on ${L0lbl} programs, comfortable margin as heads decay.${detected ? '' : ' Length assumed 2d — rescan to detect yours.'}</div>`;
   }
 
   // Tight: fed now, but a thin buffer that decay will eat before you reseat — surface as a WARNING.
