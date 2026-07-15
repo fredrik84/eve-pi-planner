@@ -251,27 +251,23 @@ function _renderRedeploySection() {
 
   let body = '';
   if (clusters.length) {
+    // One action line per planet+resource: keep one colony, redeploy the rest — depleting ones first
+    // (they must move anyway). Just the "what to move where" list, no repeated prose per row.
     const li = clusters.map(c => {
-      const names = c.characters.map(n => `<b>${_esc(n)}</b>`);
-      const who = names.length > 2 ? names.slice(0, -1).join(', ') + ' &amp; ' + names[names.length - 1] : names.join(' &amp; ');
-      const hot = c.p0_name ? _esc(c.p0_name) : 'resource';
-      const lead = c.characters.length === 2 ? 'Both' : `All ${c.characters.length}`;
-      let note = `${lead} reach the same ${hot} area, so they compete for its hotspots and reseating can't escape it. `;
-      if (c.precedence.length) {
-        const pn = c.precedence.map(n => `<b>${_esc(n)}</b>`).join(', ');
-        note += `Start with ${pn} (also depleting) — redeploy ${c.precedence.length > 1 ? 'those' : 'that'} command centre${c.precedence.length > 1 ? 's' : ''} to a clear part of the planet (or another planet), then spread the rest out too.`;
-      } else {
-        note += `Redeploy all but one command centre to separate parts of the planet (or other planets).`;
-      }
-      return `<li class="an-redeploy-row">
-          <span class="an-redeploy-loc"><b>${_esc(c.location)}</b>${c.p0_name ? ` <span class="an-redeploy-p0">${_esc(c.p0_name)}</span>` : ''}</span>
-          <span class="an-redeploy-who">${who} · <span class="an-redeploy-tag">up to ${c.overlap_pct}% range overlap</span></span>
-          <span class="an-sug-note">${note}</span>
+      const depl = new Set(c.precedence);
+      const healthy = c.characters.filter(n => !depl.has(n));
+      const keep = healthy.length ? healthy[0] : c.characters[0];
+      const move = c.characters.filter(n => n !== keep)
+        .sort((a, b) => (depl.has(a) === depl.has(b)) ? a.localeCompare(b) : (depl.has(a) ? -1 : 1));
+      const moveHtml = move.map(n => `<b>${_esc(n)}</b>${depl.has(n) ? ' <span class="an-redeploy-depl" title="also depleting — move first">⚡</span>' : ''}`).join(', ');
+      return `<li class="an-redeploy-row an-redeploy-cluster">
+          <div class="an-redeploy-loc"><b>${_esc(c.location)}</b>${c.p0_name ? ` <span class="an-redeploy-p0">${_esc(c.p0_name)}</span>` : ''} <span class="an-redeploy-tag">up to ${c.overlap_pct}%</span></div>
+          <div class="an-redeploy-move"><span class="an-redeploy-move-lbl">Redeploy</span> ${moveHtml} <span class="an-redeploy-keep">· keep ${_esc(keep)}</span></div>
         </li>`;
     }).join('');
     body += `<div class="an-suggest">
         <div class="an-suggest-h">Overlapping extraction ranges — ${clusters.length} planet${clusters.length > 1 ? 's' : ''}</div>
-        <div class="an-sug-note">Sharing a planet is fine — but colonies whose reachable extraction areas overlap drain the same hotspots for each other, and reseating heads can't escape the overlap. Grouped by planet &amp; resource; threshold ${thresh}% (Settings → General).</div>
+        <div class="an-sug-note">These colonies' reachable areas overlap the same resource, so they drain each other's hotspots and reseating can't escape it — redeploy the listed command centres to clear areas (⚡ = also depleting, move first). Threshold ${thresh}% (Settings → General).</div>
         <ul class="an-redeploy-list">${li}</ul>
       </div>`;
   } else if (_featureActive('redeploy_proximity') && _redeploy.proximity_unscanned) {
