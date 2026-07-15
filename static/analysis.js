@@ -301,11 +301,11 @@ const _redeployNMoves = c => _clusterMoves(c).move.length;
 function _redeployClusterBlock(c) {
   const { keep, move, depl } = _clusterMoves(c);
   const chips = move.map(n => {
+    // Only spell out a destination when there's a concrete free planet to name — otherwise just the
+    // name; the section note already says the fallback is to relocate on the same planet's grid.
     const dest = _redeployDest(c.p0_name, n);
-    const to = dest
-      ? `<span class="an-redeploy-arrow">→</span> ${_esc(dest.loc)} <span class="an-redeploy-dest-r">${_esc(dest.r)}</span>`
-      : `<span class="an-redeploy-arrow">→</span> <span class="an-redeploy-same">same planet</span>`;
-    return `<span class="an-redeploy-mv${depl.has(n) ? ' an-redeploy-mv-urgent' : ''}">${_esc(n)}${depl.has(n) ? ' <span class="an-redeploy-depl" title="also depleting — do this one first">⚡</span>' : ''} ${to}</span>`;
+    const to = dest ? ` <span class="an-redeploy-arrow">→</span> ${_esc(dest.loc)} <span class="an-redeploy-dest-r">${_esc(dest.r)}</span>` : '';
+    return `<span class="an-redeploy-mv${depl.has(n) ? ' an-redeploy-mv-urgent' : ''}">${_esc(n)}${depl.has(n) ? ' <span class="an-redeploy-depl" title="also depleting — do this one first">⚡</span>' : ''}${to}</span>`;
   }).join('');
   const mat = c.p1_name || c.p0_name;
   return `<div class="an-redeploy-cl">
