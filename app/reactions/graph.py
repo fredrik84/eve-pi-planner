@@ -398,10 +398,7 @@ def _build_opportunities_uncached(context_id: int, allowed_material_ids: set[int
         # single-tier product (the common case) — via is only set on reaction-product nodes.
         chain_tiers = []
         if node.get("via"):
-            tier_runs: dict[int, dict] = {}
-            _explode_chain_tiers(node["via"]["inputs"], node["top_level_runs"], reached, tier_runs)
-            ordered = sorted(tier_runs.items(), key=lambda kv: reached.get(kv[0], {}).get("reaction_count", 0))
-            for tier_tid, info in ordered:
+            for tier_tid, info in _ordered_chain_tiers(node["via"]["inputs"], node["top_level_runs"], reached):
                 chain_tiers.append({
                     "type_id": tier_tid, "name": types.get(tier_tid, {}).get("name", str(tier_tid)),
                     "runs": info["runs"], "cycle_time": info["cycle_time"], "output_qty": info["output_qty"],
@@ -555,6 +552,16 @@ def _explode_chain_tiers(formula_inputs: list[dict], runs: int, reached: dict, t
             tiers[tid] = {"runs": 0, "cycle_time": formula["cycle_time"], "output_qty": formula["output_qty"]}
         tiers[tid]["runs"] += inp_runs
         _explode_chain_tiers(formula["inputs"], inp_runs, reached, tiers)  # this tier may itself be multi-level
+
+
+def _ordered_chain_tiers(formula_inputs: list[dict], runs: int, reached: dict) -> list:
+    """Explode a formula's intermediate tiers (`_explode_chain_tiers`) and return them as a list of
+    (type_id, info) ordered deepest-first (by reaction_count) — the shape every assign/order/
+    opportunity path needs. Factored out so the accumulator + reaction_count sort can't drift across
+    its five call sites."""
+    tier_runs: dict[int, dict] = {}
+    _explode_chain_tiers(formula_inputs, runs, reached, tier_runs)
+    return sorted(tier_runs.items(), key=lambda kv: reached.get(kv[0], {}).get("reaction_count", 0))
 
 
 def _materials_report(totals: dict[int, float], reached: dict, types: dict) -> list[dict]:

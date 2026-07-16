@@ -13,7 +13,7 @@ from app.esi import require_context
 
 from app.reactions._router import router
 from app.reactions.graph import (
-    _load_goo_and_reached, _explode_shopping_list, _explode_chain_tiers,
+    _load_goo_and_reached, _explode_shopping_list, _ordered_chain_tiers,
     _materials_report, _value_reaction_batch,
 )
 from app.reactions.jobs import (
@@ -58,9 +58,7 @@ def _order_report(context_id: int, order: dict) -> dict:
     _explode_shopping_list(order["type_id"], target_qty, reached, totals)
     materials = _materials_report(totals, reached, types)
 
-    tier_runs: dict[int, dict] = {}
-    _explode_chain_tiers(formula["inputs"], top_level_runs, reached, tier_runs)
-    ordered_tiers = sorted(tier_runs.items(), key=lambda kv: reached.get(kv[0], {}).get("reaction_count", 0))
+    ordered_tiers = _ordered_chain_tiers(formula["inputs"], top_level_runs, reached)
     chain_tiers = [
         {"type_id": tid, "name": types.get(tid, {}).get("name", str(tid)), "runs": info["runs"],
          "cycle_time": info["cycle_time"], "output_qty": info["output_qty"]}
