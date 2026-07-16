@@ -1294,9 +1294,15 @@ function _extRuntimeAdviceHtml(headroom, curDays) {
   }
 
   // Deficit at the current runtime: factories fall behind. The least-work, LASTING fix is more yield
-  // (reseat / redeploy / add a colony) — that keeps the long runtime. Shortening trades runtime for
-  // more restarts (more work) and only masks the gap, so it's a stopgap, demoted to the note.
+  // (reseat / redeploy / add a colony) — that keeps the long runtime.
   const canShorten = fedDay >= 1 && fedDay < L0;
+  // When even daily cycles can't keep up, RUNTIME can't fix it — the only fixes are more yield, which
+  // already live in the reseat/redeploy/add suggestions above. Don't repeat them or draw an all-red
+  // graph; just a one-line status. (When shortening WOULD help, that's a real runtime lever → keep
+  // the full card + graph so the crossover is visible.)
+  if (!canShorten) {
+    return `<div class="an-rt-note an-rt-note-bad">Extraction runtime <span class="an-rt-badge an-rt-badge-bad">✕ falling behind</span> — ${L0lbl} programs cover only <b>${Math.round((bL0 + 1) * 100)}%</b> of demand, and shorter programs won't help. Fix it with more yield (reseat, redeploy, or add a colony), not runtime.</div>`;
+  }
   return `<div class="an-suggest an-suggest-fix">
       <div class="an-suggest-h">Extraction runtime <span class="an-rt-badge an-rt-badge-bad">✕ falling behind</span></div>
       <div class="an-rt-pick">${L0lbl} programs <b>over-extend</b> supply — extraction covers only <b>${Math.round((bL0 + 1) * 100)}%</b> of demand.</div>
@@ -1304,9 +1310,7 @@ function _extRuntimeAdviceHtml(headroom, curDays) {
         <li><b>Reseat</b> short colonies, <b>redeploy</b> a surplus colony onto the short material, or <b>add a colony</b>.</li>
       </ul>
       ${graph}
-      <div class="an-sug-note">${canShorten
-        ? `Shortening to ${fedDay}d (${_progDuration(fedDay)}) would help on fresher extraction — but means more restarts and masks the gap. Add extraction instead.`
-        : `Shorter programs won't help — even daily cycles can't keep up.`} Decay is an estimate — verify against your in-game ECU.</div>
+      <div class="an-sug-note">Shortening to ${fedDay}d (${_progDuration(fedDay)}) would help on fresher extraction — but means more restarts and masks the gap. Add extraction instead. Decay is an estimate — verify against your in-game ECU.</div>
     </div>`;
 }
 

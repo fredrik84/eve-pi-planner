@@ -440,6 +440,7 @@
 .an-rt-note { margin-top: 12px; padding: 7px 12px; font-size: 12.5px; color: var(--clr-text);
   border: 1px solid var(--clr-border); border-radius: 8px; background: #131a22; }
 .an-rt-note .an-rt-badge { margin-left: 4px; }
+.an-rt-note-bad { border-color: #5a2a30; background: rgba(224, 74, 84, 0.05); }
 
 /* ── Setup Analysis: skill-ROI advice ─────────────────────────────────────────── */
 .an-skill-list { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
