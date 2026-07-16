@@ -21,7 +21,7 @@ from app.reactions._router import router
 from app.reactions.settings import effective_reaction_settings
 from app.reactions.graph import (
     _load_goo_and_reached, _load_reaction_graph, _value_reaction_batch,
-    _explode_chain_tiers, _build_opportunities, _fuel_block_ids,
+    _ordered_chain_tiers, _build_opportunities, _fuel_block_ids,
 )
 
 
@@ -162,8 +162,8 @@ def refresh_industry_jobs(force: int = 0, context_id: int = Depends(require_cont
         con.close()
 
     now = _time.time()
-    refreshed = 0
     skipped = 0
+    fetched: list[tuple] = []          # (character_id, jobs_json, fetched_at) — written in one batch below
     for c in chars:
         scopes = c["scopes"] or ""
         if "read_character_jobs" not in scopes:
@@ -183,17 +183,21 @@ def refresh_industry_jobs(force: int = 0, context_id: int = Depends(require_cont
         # of a job appearing in both responses.
         if "read_corporation_jobs" in scopes:
             jobs = jobs + fetch_corp_industry_jobs(c["character_id"], token)
+        fetched.append((c["character_id"], _json.dumps(jobs), _time.time()))
+
+    # One connection for all the writes, after the (slow) ESI fetches are done — not one per char.
+    if fetched:
         con = get_connection()
         try:
-            con.execute(
+            con.executemany(
                 "INSERT INTO pp_char_industry_jobs (character_id, jobs_json, fetched_at) VALUES (?,?,?) "
                 "ON CONFLICT (character_id) DO UPDATE SET jobs_json=excluded.jobs_json, fetched_at=excluded.fetched_at",
-                (c["character_id"], _json.dumps(jobs), _time.time()),
+                fetched,
             )
             con.commit()
         finally:
             con.close()
-        refreshed += 1
+    refreshed = len(fetched)
     # The Characters tab shows each toon's running reaction jobs (see list_characters), served
     # from the same Redis-cached charlist payload — so a refresh that actually pulled new jobs must
     # bust that cache or the tab keeps showing stale/absent jobs until the next colony rescan.
@@ -401,9 +405,7 @@ def adopt_orphan_job(req: AdoptOrphanRequest, context_id: int = Depends(require_
 
     # Chain tiers (intermediate reactions this formula needs), same as assign_reaction — recorded at
     # 0 cost since the whole chain's cost already rolls up into the top-level row's unit_cost.
-    tier_runs: dict[int, dict] = {}
-    _explode_chain_tiers(node["via"]["inputs"], req.runs, reached, tier_runs)
-    ordered = sorted(tier_runs.items(), key=lambda kv: reached.get(kv[0], {}).get("reaction_count", 0))
+    ordered = _ordered_chain_tiers(node["via"]["inputs"], req.runs, reached)
 
     con = get_connection()
     try:
@@ -561,12 +563,13 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
         # bypasses _load_reaction_graph (which applies the same correction for the opportunity/
         # suggestion/order paths), so the reduction has to be applied here too or a pending
         # assignment's reported profit/day would understate itself using the slower raw SDE time.
-        cycle_hours_by_type = {r["output_type_id"]: (r["cycle_time"] or 0) * (1 - time_eff) / 3600.0
-                                for r in con.execute("SELECT output_type_id, cycle_time FROM reactions")}
         # Same idea, output units per run — needed to turn a pending row's `runs` into an actual
-        # output quantity for the live output-value estimate below.
-        output_qty_by_type = {r["output_type_id"]: r["output_qty"]
-                               for r in con.execute("SELECT output_type_id, output_qty FROM reactions")}
+        # output quantity for the live output-value estimate below. Both dicts come from one scan.
+        cycle_hours_by_type = {}
+        output_qty_by_type = {}
+        for r in con.execute("SELECT output_type_id, cycle_time, output_qty FROM reactions"):
+            cycle_hours_by_type[r["output_type_id"]] = (r["cycle_time"] or 0) * (1 - time_eff) / 3600.0
+            output_qty_by_type[r["output_type_id"]] = r["output_qty"]
         # Product names for the running-job display — a running job carries only its product
         # type_id from ESI, and the frontend's opportunity-list name lookup misses anything not
         # currently in that list (it showed "#16665" for Hexite). Bounded to reaction outputs
@@ -958,10 +961,8 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
         chain_tiers = []
         top_via = reached.get(c["type_id"], {}).get("via")
         if top_via:
-            tier_runs: dict[int, dict] = {}
-            _explode_chain_tiers(top_via["inputs"], runs_needed, reached, tier_runs)
             # Deepest (closest to raw goo) first — the one the player must react first.
-            ordered = sorted(tier_runs.items(), key=lambda kv: reached.get(kv[0], {}).get("reaction_count", 0))
+            ordered = _ordered_chain_tiers(top_via["inputs"], runs_needed, reached)
             for tid, info in ordered:
                 t_cycle_hours = info["cycle_time"] / 3600.0 if info["cycle_time"] else 1.0
                 t_ideal_slots = max(1, math.ceil(info["runs"] * t_cycle_hours / cadence_hours)) if cadence_hours > 0 else info["runs"]
@@ -1172,10 +1173,7 @@ def _allocate_and_insert(context_id: int, type_id: int, name: str, node: dict, r
     chars.sort(key=lambda c: -c["free_slots"])
 
     formula = node.get("via")
-    tier_runs: dict[int, dict] = {}
-    if formula:
-        _explode_chain_tiers(formula["inputs"], runs_needed, reached, tier_runs)
-    ordered_tiers = sorted(tier_runs.items(), key=lambda kv: reached.get(kv[0], {}).get("reaction_count", 0))
+    ordered_tiers = _ordered_chain_tiers(formula["inputs"], runs_needed, reached) if formula else []
     chain_job_slots = len(ordered_tiers)
 
     pick = next((c for c in chars if c["free_slots"] >= chain_job_slots + 1), None)

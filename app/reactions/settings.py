@@ -3,6 +3,8 @@ job-cost, facility tax, time efficiency). The base layer of the reactions packag
 on the DB, ESI auth, and group membership, never on the graph/jobs/orders submodules, so it can
 be imported first with no cycle. effective_reaction_settings() is the resolver everything else
 prices with (personal override -> group default -> global default)."""
+import time as _time
+
 from fastapi import Depends, HTTPException
 from pydantic import BaseModel
 
@@ -164,17 +166,43 @@ def _account_reaction_settings_override(context_id: int) -> dict | None:
     }
 
 
+_SETTINGS_CACHE: dict[int, tuple[float, dict]] = {}
+_SETTINGS_TTL = 30.0  # seconds — bounds staleness of a group-default edit (manager action, rare)
+
+
+def _invalidate_reaction_settings_cache(context_id: int | None = None) -> None:
+    """Drop one account's memoized settings (personal-override edit) or the whole cache (a group
+    default changed, which affects every member and can't be enumerated cheaply)."""
+    if context_id is None:
+        _SETTINGS_CACHE.clear()
+    else:
+        _SETTINGS_CACHE.pop(context_id, None)
+
+
 def effective_reaction_settings(context_id: int) -> dict:
     """The shipping/collateral rate actually used to price a specific account's reactions,
     resolved personal override -> group default -> global default. JF/import costs genuinely
     vary account to account even within one alliance (different home system, different courier
     arrangement), so a group's rate is only a starting point, not a mandate — a player can
-    override it for themselves in Settings without affecting anyone else in their group."""
+    override it for themselves in Settings without affecting anyone else in their group.
+
+    Memoized per process for a few seconds keyed on context_id: one suggest/opportunity request
+    resolves this several times (every _load_goo_and_reached, the value math, the job-cost math)
+    and each miss is 2-3 DB round-trips. The account-settings endpoints invalidate the caller's
+    entry on edit; the group-default case is bounded by _SETTINGS_TTL. Returns a fresh copy so a
+    caller can't mutate the cached dict."""
+    now = _time.monotonic()
+    hit = _SETTINGS_CACHE.get(context_id)
+    if hit and now - hit[0] < _SETTINGS_TTL:
+        return dict(hit[1])
     override = _account_reaction_settings_override(context_id)
     if override:
-        return override
-    group = member_group(context_id)
-    return get_reaction_settings(group["id"] if group else None)
+        result = override
+    else:
+        group = member_group(context_id)
+        result = get_reaction_settings(group["id"] if group else None)
+    _SETTINGS_CACHE[context_id] = (now, result)
+    return dict(result)
 
 
 class ReactionSettingsUpdate(BaseModel):
@@ -242,6 +270,7 @@ def api_update_reaction_settings(req: ReactionSettingsUpdate, ctx: int = Depends
         con.commit()
     finally:
         con.close()
+    _invalidate_reaction_settings_cache()  # a group default affects every member — clear all
     return get_reaction_settings(group["id"])
 
 
@@ -275,6 +304,7 @@ def api_update_account_reaction_settings(req: ReactionSettingsUpdate, ctx: int =
         con.commit()
     finally:
         con.close()
+    _invalidate_reaction_settings_cache(ctx)
     return {"ok": True}
 
 
@@ -288,5 +318,6 @@ def api_reset_account_reaction_settings(ctx: int = Depends(require_context)):
         con.commit()
     finally:
         con.close()
+    _invalidate_reaction_settings_cache(ctx)
     group = member_group(ctx)
     return get_reaction_settings(group["id"] if group else None)
