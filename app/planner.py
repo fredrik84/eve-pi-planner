@@ -677,38 +677,66 @@ def _char_footprint(con, context_id: int):
     return foot, occ
 
 
+def _p0_available_by_char_multi(con, p0_names, foot: dict, occ: dict, blend_on: bool) -> dict:
+    """Batch form of `_p0_available_by_char`: ONE pp_planets scan (+ one pp_planet_yield_avg query)
+    for a whole set of P0 names, returning `{p0_name: {cid: [avail...]}}`. The redeploy/placements
+    paths involve several P0s at once, so the per-P0 version was an N+1 (a full Planet-DB scan each);
+    this fetches every needed richness column in one query and partitions per P0/character in Python."""
+    cols: dict[str, str] = {}
+    for p0 in p0_names:
+        c = _p0_col(p0) if p0 else None
+        if c:
+            cols[p0] = c
+    if not cols:
+        return {}
+    distinct_cols = list(dict.fromkeys(cols.values()))   # dedupe, preserve order
+    alias = {c: f"c{i}" for i, c in enumerate(distinct_cols)}
+    select_cols = ", ".join(f'"{c}" AS {alias[c]}' for c in distinct_cols)
+    where_any = " OR ".join(f'"{c}" > 0' for c in distinct_cols)
+    planets = con.execute(
+        f"SELECT system, planet_num, planet_type, {select_cols} FROM pp_planets WHERE {where_any}"
+    ).fetchall()
+    # pp_planet_yield_avg.p0_name stores the COLUMN name (not the display P0 name) — same key the
+    # per-P0 version used. One IN() query covers every column we're about to blend.
+    measured_by_col: dict[str, dict] = {}
+    if blend_on and distinct_cols:
+        try:
+            qs = ",".join("?" * len(distinct_cols))
+            for m in con.execute(
+                f"SELECT system, planet_num, p0_name, measured_pct, sample_count "
+                f"FROM pp_planet_yield_avg WHERE p0_name IN ({qs})", distinct_cols).fetchall():
+                measured_by_col.setdefault(m["p0_name"], {})[(m["system"], m["planet_num"])] = \
+                    {"pct": m["measured_pct"], "n": m["sample_count"]}
+        except Exception:
+            pass
+    out: dict[str, dict] = {}
+    for p0, col in cols.items():
+        a = alias[col]
+        valid_types = _P0_PLANET_TYPES.get(p0, [])
+        measured = measured_by_col.get(col, {})
+        rows = [p for p in planets
+                if (p[a] or 0) > 0 and (not valid_types or p["planet_type"] in valid_types)]
+        by_char: dict[int, list] = {}
+        for cid, systems in foot.items():
+            occ_c = occ.get(cid, set())
+            avail = [{"system": p["system"], "planet_num": p["planet_num"], "planet_type": p["planet_type"],
+                      "richness": round(_blend_value(p[a] or 0, measured.get((p["system"], p["planet_num"]))))}
+                     for p in rows
+                     if p["system"] in systems and (p["system"], p["planet_num"]) not in occ_c]
+            avail.sort(key=lambda x: -x["richness"])
+            if avail:
+                by_char[cid] = avail
+        out[p0] = by_char
+    return out
+
+
 def _p0_available_by_char(con, p0_name: str | None, foot: dict, occ: dict, blend_on: bool) -> dict:
     """Available same-P0 Planet-DB planets per character (cid) — carrying `p0_name`, in a system the
     char operates in, not already colonised by them, richness-sorted (measured-yield blended when the
-    flag is on). The 'redeploy this colony to a fresh planet' candidate list. cid-keyed (int)."""
-    col = _p0_col(p0_name) if p0_name else None
-    if not col:
-        return {}
-    valid_types = _P0_PLANET_TYPES.get(p0_name, [])
-    type_filter = (" AND planet_type IN ({})".format(",".join("?" * len(valid_types)))) if valid_types else ""
-    planets = con.execute(
-        f'SELECT system, planet_num, planet_type, "{col}" AS r FROM pp_planets WHERE "{col}" > 0{type_filter}',
-        valid_types,
-    ).fetchall()
-    measured: dict[tuple, dict] = {}
-    if blend_on:
-        try:
-            measured = {(m["system"], m["planet_num"]): {"pct": m["measured_pct"], "n": m["sample_count"]}
-                        for m in con.execute(
-                            "SELECT system, planet_num, measured_pct, sample_count FROM pp_planet_yield_avg WHERE p0_name=?",
-                            (col,)).fetchall()}
-        except Exception:
-            pass
-    by_char: dict[int, list] = {}
-    for cid, systems in foot.items():
-        avail = [{"system": p["system"], "planet_num": p["planet_num"], "planet_type": p["planet_type"],
-                  "richness": round(_blend_value(p["r"] or 0, measured.get((p["system"], p["planet_num"]))))}
-                 for p in planets
-                 if p["system"] in systems and (p["system"], p["planet_num"]) not in occ.get(cid, set())]
-        avail.sort(key=lambda x: -x["richness"])
-        if avail:
-            by_char[cid] = avail
-    return by_char
+    flag is on). The 'redeploy this colony to a fresh planet' candidate list. cid-keyed (int). Thin
+    single-P0 wrapper over `_p0_available_by_char_multi`."""
+    return _p0_available_by_char_multi(
+        con, [p0_name] if p0_name else [], foot, occ, blend_on).get(p0_name, {})
 
 
 @router.post("/api/analyze-placements")
@@ -730,6 +758,7 @@ def analyze_placements(body: dict = Body(...), pp_session: str = Cookie(default=
     con = get_connection()
     foot, occ = _char_footprint(con, context_id)
     out = {}
+    tid_p0 = {}
     for tid in type_ids:
         inputs = (sch.get(tid) or {}).get("inputs") or []
         if not inputs:
@@ -737,7 +766,10 @@ def analyze_placements(body: dict = Body(...), pp_session: str = Cookie(default=
         p0_name = types.get(inputs[0]["type_id"], {}).get("name")
         if not _p0_col(p0_name or ""):
             continue
-        by_cid = _p0_available_by_char(con, p0_name, foot, occ, blend_on)
+        tid_p0[tid] = p0_name
+    avail_by_p0 = _p0_available_by_char_multi(con, set(tid_p0.values()), foot, occ, blend_on)
+    for tid, p0_name in tid_p0.items():
+        by_cid = avail_by_p0.get(p0_name, {})
         out[str(tid)] = {"p0_name": p0_name, "by_char": {str(cid): av for cid, av in by_cid.items()}}
     # Free Barren/Temperate planets each character could host a NEW factory on (any B/T planet works
     # — factories don't need a specific P0). In the char's footprint, not already colonised.
@@ -1296,9 +1328,9 @@ def derive_redeploy_candidates(context_id: int) -> dict:
         nm_by_cid = {r["cid"]: r["nm"] for r in planets}
         p0_names = ({p["p0_name"] for p in proximity if p.get("p0_name")}
                     | {d["p0_name"] for d in depleting if d.get("p0_name")})
-        for p0n in p0_names:
+        for p0n, by_char in _p0_available_by_char_multi(con2, p0_names, foot, occ, blend_on).items():
             per_char = {}
-            for cid, avail in _p0_available_by_char(con2, p0n, foot, occ, blend_on).items():
+            for cid, avail in by_char.items():
                 nm = nm_by_cid.get(cid)
                 if nm and avail:
                     per_char[nm] = avail[0]      # best available in that character's systems
