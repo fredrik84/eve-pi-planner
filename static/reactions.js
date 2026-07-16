@@ -240,8 +240,10 @@ function _renderRxReceivedDiff() {
     ${stillShort.length ? `<div style="margin-top:8px"><button class="pp-add-btn" onclick="_rxCopyReceivedDiff(this)">Copy still-short for multibuy</button></div>` : ''}`;
 }
 
-function _rxCopyReceivedDiff(btn) {
-  const text = _rxDiffStillShort.map(r => `${r.name}\t${r.remaining}`).join('\n');
+// Shared "copy this TSV to the clipboard, then flash the button" behaviour for the three copy
+// buttons below — they differ only in which rows/field they serialize, so only that one-line map
+// stays per-caller.
+function _rxCopyText(text, btn) {
   if (!text) return;
   navigator.clipboard.writeText(text).then(() => {
     const orig = btn.textContent;
@@ -250,14 +252,12 @@ function _rxCopyReceivedDiff(btn) {
   });
 }
 
+function _rxCopyReceivedDiff(btn) {
+  _rxCopyText(_rxDiffStillShort.map(r => `${r.name}\t${r.remaining}`).join('\n'), btn);
+}
+
 function _rxCopyShoppingList(btn) {
-  const text = _rxLastShoppingList.map(m => `${m.name}\t${m.quantity}`).join('\n');
-  if (!text) return;
-  navigator.clipboard.writeText(text).then(() => {
-    const orig = btn.textContent;
-    btn.textContent = 'Copied ✓';
-    setTimeout(() => { btn.textContent = orig; }, 1500);
-  });
+  _rxCopyText(_rxLastShoppingList.map(m => `${m.name}\t${m.quantity}`).join('\n'), btn);
 }
 
 // Same "name <tab> quantity" copy pattern as the general shopping list, scoped to one order's
@@ -267,13 +267,7 @@ function _rxCopyShoppingList(btn) {
 let _rxLastOrderMaterials = [];
 
 function _rxCopyOrderMaterials(btn) {
-  const text = _rxLastOrderMaterials.map(m => `${m.name}\t${m.quantity}`).join('\n');
-  if (!text) return;
-  navigator.clipboard.writeText(text).then(() => {
-    const orig = btn.textContent;
-    btn.textContent = 'Copied ✓';
-    setTimeout(() => { btn.textContent = orig; }, 1500);
-  });
+  _rxCopyText(_rxLastOrderMaterials.map(m => `${m.name}\t${m.quantity}`).join('\n'), btn);
 }
 
 // Best-effort name lookup via whatever the opportunity list has already loaded — falls back to
