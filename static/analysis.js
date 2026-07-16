@@ -12,10 +12,15 @@
 // factories refilled?" with headline stats + per-P1 bars.
 let _analyzeSnaps = [];
 
-// P1/day → P0/hour (1h extractor cycle, 150 P0 refines into 1 P1 in the basic-industry ratio this
-// app models throughout). Shared so the bar tooltips and the standalone extraction-targets
-// reference (below) can't drift apart.
-const _p0h = p1day => p1day * 150 / 24;
+// Basic-industry ratio (150 P0 refine into 1 P1) and the baseline P1/day of a 100%-richness ECU
+// (48,000 P0/cycle × 24 cycles ÷ 150). Hoisted so nothing below re-hardcodes these magic numbers.
+const _P0_PER_P1 = 150;
+const _EXT_BASELINE_P1_DAY = 7680;
+// P1/day → P0/hour (1h extractor cycle). Shared so the bar tooltips and the standalone
+// extraction-targets reference (below) can't drift apart. `_p0hR` is the rounded form the
+// reseat/burndown displays use (the tangible in-game ECU rate).
+const _p0h = p1day => p1day * _P0_PER_P1 / 24;
+const _p0hR = p1day => Math.round(_p0h(p1day));
 
 // Compact k/M number for the fixed-width extraction-avg column — the full "70,313" reads fine
 // alone but a "current → target" pair overflowed a 150px column badly.
@@ -472,6 +477,9 @@ function _renderGrowSection() {
 }
 
 function renderAnalysis() {
+  // Rebuild the per-material producer index from the current _ppCharsData for this render (see
+  // _buildProducersIndex) — invalidate here so a rescan between renders can't serve a stale bucket.
+  _producersIndex = null;
   // Status card (title + plan picker, static in index.html) holds the at-a-glance status badge;
   // everything else renders as its own separate pp-card in the bare #analyzeContent below it —
   // matching the Dashboard's multi-card layout instead of one large card with internal sub-boxes.
@@ -649,7 +657,7 @@ function renderAnalysis() {
   // PLANETS off each material's own per-planet output (a P1 not extracted yet falls back to the
   // average of what you do produce).
   const rates = needKeys.map(t => prod[t]).filter(p => p && p.planets > 0).map(p => p.perDay / p.planets);
-  const fallbackRate = rates.length ? rates.reduce((a, b) => a + b, 0) / rates.length : 7680;
+  const fallbackRate = rates.length ? rates.reduce((a, b) => a + b, 0) / rates.length : _EXT_BASELINE_P1_DAY;
   const perPlanet = t => (prod[t] && prod[t].planets > 0) ? prod[t].perDay / prod[t].planets : fallbackRate;
 
   const deficits = rows.filter(r => r.ratio < 0.995)
@@ -1013,25 +1021,39 @@ function _leverCards(headroom, bindName, hasRebalance) {
 // (a thin planet is steady-low; a depleting one trends DOWN). Density-free, fleet-independent.
 // Colonies producing P1 `t`, weakest output first, each annotated with its measured decline (from
 // yield_history) so we can flag the ones a reseat would actually recover vs ones that are just thin.
-function _producersOf(t) {
-  const out = [];
+// Built once per render (invalidated at the top of renderAnalysis) so _producersOf is a lookup
+// rather than a fresh full _ppCharsData walk each call — it's called per bar row, per rebalance
+// move, and per nudge, so the repeated triple-nested scans were the analysis render's hot spot.
+let _producersIndex = null;   // Map<String(type_id), Array(producers, weakest first)>
+
+function _buildProducersIndex() {
+  const idx = new Map();
   (_ppCharsData || []).forEach(ch => (ch.planets || []).forEach(p => {
     if (!p.is_extractor) return;
     (p.production || []).forEach(o => {
-      if (String(o.type_id) !== String(t)) return;
       // Self-consumed by a colocated on-planet factory (hybrid colony) — not real spare supply
       // for a rebalance suggestion to hand out.
       if (o.exportable === false) return;
+      const key = String(o.type_id);
       const h = (p.yield_history || []).filter(s => s.peak > 0).map(s => s.peak);
       const cur = h.length ? h[h.length - 1] : null, max = h.length ? Math.max(...h) : null;
-      out.push({ char: ch.name, system: p.system, planet_num: p.planet_num, p0: p.p0_name,
+      let arr = idx.get(key);
+      if (!arr) { arr = []; idx.set(key, arr); }
+      arr.push({ char: ch.name, system: p.system, planet_num: p.planet_num, p0: p.p0_name,
                  perDay: o.per_day || 0, full: o.full_per_day || o.per_day || 0,
                  extPerDay: o.ext_per_day || o.full_per_day || o.per_day || 0,
                  capped: !!o.capped, stale: !!o.stale,
                  n: h.length, decline: (max && max > 0) ? (max - cur) / max : 0 });
     });
   }));
-  return out.sort((a, b) => a.perDay - b.perDay);   // weakest producer first
+  for (const arr of idx.values()) arr.sort((a, b) => a.perDay - b.perDay);   // weakest producer first
+  _producersIndex = idx;
+  return idx;
+}
+
+function _producersOf(t) {
+  const idx = _producersIndex || _buildProducersIndex();
+  return (idx.get(String(t)) || []).slice();   // fresh copy — callers sort/filter their own array
 }
 
 // Reseat list, scoped to the materials the plan is SHORT on (reseating a surplus P0 is pointless).
@@ -1058,7 +1080,6 @@ function _fixNudge(r) {
   const band = pct < 0 ? 'short' : 'tight';
   const gap = Math.max(0, r.need * (1 + _HEALTHY_BUFFER) - extSupply);   // P1/day extra to reach +10%
   const landPct = added => r.need > 0 ? Math.round((extSupply + added) / r.need * 100 - 100) : 0;
-  const toP0h = p1day => Math.round(p1day * 150 / 24);   // P1/day → P0/hr (the tangible in-game ECU rate)
   const RECLAIM = 0.05;
   const prods = _producersOf(r.t);
   // Reseating recovers a colony's OWN lost yield — back toward the peak it has actually produced —
@@ -1072,7 +1093,7 @@ function _fixNudge(r) {
   const _loc = c => c.system ? `${_esc(c.char)} · ${_esc(c.system)}${c.planet_num != null ? ' P' + c.planet_num : ''}` : _esc(c.char);
   // One named colony to reseat: where it is, how far off its best, current → target extraction
   // (P0/hr, the in-game ECU rate) and the P1/day it adds (to compare against the page's figures).
-  const _reseatLine = c => `<div class="an-pd-fix-col"><span class="an-pd-fix-loc"><b>${_loc(c)}</b> <span class="an-pd-fix-why">${Math.round(c.decline * 100)}% off best</span></span><span class="an-pd-fix-rec">${toP0h(c.perDay).toLocaleString()} → ${toP0h(c.target).toLocaleString()} P0/hr <span class="an-pd-fix-p1">+${Math.round(c.target - c.perDay).toLocaleString()} P1/day</span></span></div>`;
+  const _reseatLine = c => `<div class="an-pd-fix-col"><span class="an-pd-fix-loc"><b>${_loc(c)}</b> <span class="an-pd-fix-why">${Math.round(c.decline * 100)}% off best</span></span><span class="an-pd-fix-rec">${_p0hR(c.perDay).toLocaleString()} → ${_p0hR(c.target).toLocaleString()} P0/hr <span class="an-pd-fix-p1">+${Math.round(c.target - c.perDay).toLocaleString()} P1/day</span></span></div>`;
 
   // Fewest colonies, each lifted only as far as the +10% gap needs — so we never recommend recovering
   // more than the shortfall calls for.
@@ -1113,7 +1134,7 @@ function _fixNudge(r) {
 function _estColonyP1(t, richness) {
   const prods = _producersOf(t).filter(c => c.perDay > 0);
   if (prods.length) return Math.round(prods.reduce((s, c) => s + c.perDay, 0) / prods.length);
-  return Math.round(Math.min(100, richness || 0) / 100 * 7680);
+  return Math.round(Math.min(100, richness || 0) / 100 * _EXT_BASELINE_P1_DAY);
 }
 
 // A pre-rate_sustained scan shows a colony's OPTIMISTIC full factory rate instead of its real
@@ -1138,8 +1159,6 @@ function _burndownSection(rows) {
     return `<div class="an-suggest an-suggest-burndown"><div class="an-suggest-h">Reseat candidates</div>`
       + `<div class="an-levers-lead">All materials covered — nothing short to fix. Reseating a depleting colony still extends runtime.</div></div>`;
 
-  const P0_PER_P1 = 150;   // basic-industry ratio: 3000 P0 → 20 P1 per cycle. Heads show P0, so target in P0.
-  const toP0h = p1day => Math.round(p1day * P0_PER_P1 / 24);   // P1/day → P0/hour (the ECU's extraction rate)
   const RECLAIM = 0.05;    // ignore sub-5% "decline" as scan noise
 
   const groups = short.map(r => {
@@ -1192,7 +1211,7 @@ function _burndownSection(rows) {
         : `▼ ${Math.round(c.decline * 100)}% off best — reseat recovers it`;
       return `<div class="an-bd-prod">
           <span class="an-bd-prod-loc">${_esc(c.char)}${loc ? ' · ' + loc : ''}</span>
-          <span class="an-bd-prod-val">${toP0h(c.perDay).toLocaleString()} → ${toP0h(c.target).toLocaleString()}<span class="an-bd-unit"> P0/hr</span></span>
+          <span class="an-bd-prod-val">${_p0hR(c.perDay).toLocaleString()} → ${_p0hR(c.target).toLocaleString()}<span class="an-bd-unit"> P0/hr</span></span>
           <span class="an-bd-prod-tag an-bd-down">${tag}</span>
         </div>`;
     }).join('');
@@ -1228,7 +1247,6 @@ function _burndownSection(rows) {
 // and only ever suggests reseating the planet it already has, never redeploying/relocating it.
 function _hybridReseatSection() {
   if (!_featureActive('hybrid_colonies')) return '';
-  const toP0h = p1day => Math.round(p1day * 150 / 24);   // P1/day -> P0/hr, the in-game ECU rate
   const rows = [];
   (_ppCharsData || []).forEach(ch => (ch.planets || []).forEach(p => {
     if (!p.is_hybrid) return;
@@ -1244,7 +1262,7 @@ function _hybridReseatSection() {
     const loc = p.system ? `${_esc(ch.name)} · ${_esc(p.system)}${p.planet_num != null ? ' P' + p.planet_num : ''}` : _esc(ch.name);
     rows.push(`<div class="an-bd-group">
         <div class="an-bd-group-h">${loc} <span class="an-bd-group-sub">its ${_esc(downstream.name)} line wants ~${need.toLocaleString()} ${_esc(upstream.name)}/day; its own extraction only sustains ~${Math.round(have).toLocaleString()} (${pct}% fed)</span></div>
-        <div class="an-bd-target">Reseat its heads toward <b>${toP0h(need).toLocaleString()} P0/hr</b> to fully feed the ${_esc(downstream.name)} line — this colony stays put, only its hotspots move.</div>
+        <div class="an-bd-target">Reseat its heads toward <b>${_p0hR(need).toLocaleString()} P0/hr</b> to fully feed the ${_esc(downstream.name)} line — this colony stays put, only its hotspots move.</div>
       </div>`);
   }));
   if (!rows.length) return '';
