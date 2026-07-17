@@ -217,26 +217,99 @@ function _redeployDest(p0Name, character) {
   return d ? { loc: `${d.system} P${d.planet_num}`, r: `${d.planet_type} ${d.richness}%` } : null;
 }
 
-// ── When a redeploy is actually warranted ────────────────────────────────────
-// A redeploy (tearing down a command centre and rebuilding on another planet) is the HEAVY fix, so
-// we recommend it ONLY where a reseat genuinely won't recover the colony: its deposit is measurably
-// exhausting (peak trending down across programs → reseat_worth=false from the depletion signal), so
-// a fresh program just restarts at the falling peak. Everything else — including plain overlaps — is
-// left to the reseat lever, which already picks the fewest colonies to reach healthy. Scoped to
-// materials that are actually SHORT, so we never move a command centre for something already fed.
-// Least action, most effect.
-function _redeployPlan(rows) {
-  if (!_redeploy || !_featureActive('redeploy_depletion')) return { chosen: [], materials: [] };
-  const shortMats = new Set(rows.filter(r => (_extSupplyOf(r.t) || r.have) < r.need).map(r => r.name));
-  const chosen = (_redeploy.depleting || []).filter(d =>
-    d.reseat_worth === false && shortMats.has(d.p1_name || d.p0_name));
-  const materials = [...new Set(chosen.map(d => d.p1_name || d.p0_name))];
-  return { chosen, materials };
+// Overlap clusters for one material (P1 name): union-find the characters sharing a planet+hotspot in
+// the server's proximity pairs, so a spot where three alts all reach the same deposit is ONE cluster.
+function _overlapClustersFor(p1name) {
+  const groups = {};
+  ((_redeploy && _redeploy.proximity) || []).forEach(p => {
+    if ((p.p1_name || p.p0_name) !== p1name) return;
+    const k = p.planet_id + '|' + (p.p0_name || '');
+    (groups[k] = groups[k] || { planet_id: p.planet_id, location: p.location, p0_name: p.p0_name, p1_name: p.p1_name, edges: [] }).edges.push(p);
+  });
+  const out = [];
+  Object.values(groups).forEach(g => {
+    const parent = {};
+    const find = x => { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
+    g.edges.forEach(e => (e.characters || []).forEach(c => { if (!(c in parent)) parent[c] = c; }));
+    g.edges.forEach(e => { const a = (e.characters || [])[0], b = (e.characters || [])[1]; if (a && b) parent[find(a)] = find(b); });
+    const comps = {};
+    Object.keys(parent).forEach(c => { const r = find(c); (comps[r] = comps[r] || []).push(c); });
+    Object.values(comps).forEach(members => {
+      if (members.length < 2) return;
+      const mset = new Set(members);
+      const ov = Math.max(...g.edges.filter(e => (e.characters || []).some(c => mset.has(c))).map(e => e.overlap_pct));
+      out.push({ planet_id: g.planet_id, location: g.location, p0_name: g.p0_name, p1_name: g.p1_name,
+                 characters: members.slice().sort(), overlap_pct: ov });
+    });
+  });
+  return out;
 }
 
-// The URGENT redeploy block — colonies whose deposit a reseat can't recover, dragging a short
-// material. Blended into the Suggestions card next to the reseat lever so the heavy fix sits beside
-// the light one, and the note points people at the reseat lever first for everything else.
+// ── When a redeploy/move is actually warranted (reseat-first, escalation only) ───────────────────
+// Reseat is the light fix and handles almost everything. We only escalate to a heavier fix when a
+// material is SHORT and reseating every recoverable colony back to its own peak STILL can't meet
+// demand — then something is structurally stuck, and we name the minimal set that closes the residual
+// gap, citing WHY:
+//   • overlap    → the colony competes with a neighbour for the same hotspots, so a reseat lands
+//                  right back in it. Fix = MOVE the extractor to a clear area of the SAME planet
+//                  (no planet change), keeping the other colony put.
+//   • depleting  → the deposit itself is exhausting (measured downtrend), so a fresh program just
+//                  chases a sinking peak. Fix = REBUILD on a fresh planet.
+// Least action, most effect: nothing fires while a reseat can still close the shortage.
+function _redeployPlan(rows) {
+  if (!_redeploy) return { chosen: [], materials: [] };
+  const proxOn = _featureActive('redeploy_proximity'), deplOn = _featureActive('redeploy_depletion');
+  if (!proxOn && !deplOn) return { chosen: [], materials: [] };
+  const RECLAIM = 0.05;   // ignore sub-5% "decline" as scan noise (matches the reseat lever)
+  const chosen = [];
+  rows.forEach(r => {
+    const extSupply = _extSupplyOf(r.t) || r.have;
+    if (extSupply >= r.need) return;                       // fed → any cushion is the reseat lever's job
+    const producers = _producersOf(r.t);
+    const outByKey = {};
+    producers.forEach(p => { outByKey[p.planet_id + '|' + p.char] = p.extPerDay || 0; });
+    // Best a reseat can do = every decayed colony restored to its own measured peak.
+    const reseatRec = producers.reduce((s, c) =>
+      s + ((c.n >= 2 && c.decline >= RECLAIM) ? c.perDay * c.decline / (1 - c.decline) : 0), 0);
+    let gap = r.need - (extSupply + reseatRec);
+    if (gap <= 0) return;                                  // reseat alone closes the shortage → nothing heavier
+
+    const depl = deplOn ? (_redeploy.depleting || []).filter(d =>
+      (d.p1_name || d.p0_name) === r.name && d.reseat_worth === false) : [];
+    const deplByKey = {};
+    depl.forEach(d => { deplByKey[d.planet_id + '|' + d.character] = d; });
+    const used = new Set();
+    const cands = [];
+    // Overlaps → move ONE side to a clear area of the same planet (prefer a depleting member as mover).
+    if (proxOn) _overlapClustersFor(r.name).forEach(c => {
+      const mover = c.characters.find(nm => deplByKey[c.planet_id + '|' + nm]) || c.characters[0];
+      const key = c.planet_id + '|' + mover;
+      used.add(key);
+      const d = deplByKey[key];
+      const tied = c.characters.reduce((s, nm) => s + (outByKey[c.planet_id + '|' + nm] || 0), 0);
+      cands.push({ reason: d ? 'both' : 'overlap', action: 'move', character: mover, planet_id: c.planet_id,
+                   location: c.location, p0_name: c.p0_name, p1_name: c.p1_name || r.name, overlap_pct: c.overlap_pct,
+                   neighbours: c.characters.filter(nm => nm !== mover),
+                   decline_pct: d ? d.decline_pct : null, per_program_pct: d ? d.per_program_pct : null,
+                   rec: tied * (c.overlap_pct / 100) });
+    });
+    // Dying deposits not already handled as an overlap mover → rebuild on a fresh planet.
+    depl.forEach(d => {
+      const key = d.planet_id + '|' + d.character;
+      if (used.has(key)) return;
+      cands.push({ reason: 'depleting', action: 'rebuild', character: d.character, planet_id: d.planet_id,
+                   location: d.location, p0_name: d.p0_name, p1_name: d.p1_name || r.name,
+                   decline_pct: d.decline_pct, per_program_pct: d.per_program_pct,
+                   rec: Math.max(outByKey[key] || 0, extSupply / Math.max(producers.length, 1)) });
+    });
+    cands.sort((a, b) => b.rec - a.rec);
+    for (const c of cands) { if (gap <= 0) break; chosen.push({ ...c, _forMat: r.name }); gap -= c.rec; }
+  });
+  return { chosen, materials: [...new Set(chosen.map(c => c._forMat))] };
+}
+
+// The escalation block — the few structural fixes a reseat can't cover on a short material. Blended
+// into the Suggestions card beside the reseat lever, with the note pointing people at reseat first.
 function _renderRedeployUrgent(rows) {
   const plan = _redeployPlan(rows);
   if (!plan.chosen.length) return '';
@@ -244,22 +317,34 @@ function _renderRedeployUrgent(rows) {
   const mats = plan.materials.map(m => `<b>${_esc(m)}</b>`);
   const matList = mats.length === 1 ? mats[0]
     : mats.slice(0, -1).join(', ') + ' and ' + mats[mats.length - 1];
-  const rowsHtml = plan.chosen.map(d => {
-    const mat = d.p1_name || d.p0_name;
-    const dest = _redeployDest(d.p0_name, d.character);
-    const destTxt = dest
-      ? `redeploy to <b>${_esc(dest.loc)}</b> <span class="an-redeploy-dest-r">${_esc(dest.r)}</span>`
-      : `rebuild on a fresh ${mat ? _esc(mat) : 'same-resource'} planet — none free in your systems`;
-    const rate = d.per_program_pct != null ? ` · ~${d.per_program_pct}%/program` : '';
-    const ov = d.also_overlapping ? ` <span class="an-redeploy-depl" title="also overlaps a neighbour, so a reseat lands back in the same competition">⚡ overlaps</span>` : '';
+  const rowsHtml = plan.chosen.map(c => {
+    const mat = c.p1_name || c.p0_name;
+    const rate = c.per_program_pct != null ? ` · ~${c.per_program_pct}%/program` : '';
+    let tag, verb, why;
+    if (c.action === 'move') {                          // overlap → move to a clear area of the SAME planet
+      const nb = (c.neighbours || []);
+      const nbTxt = nb.length ? ` away from ${nb.map(x => `<b>${_esc(x)}</b>`).join(', ')}` : '';
+      tag = `<span class="an-redeploy-tag">overlap ${c.overlap_pct}%</span>`;
+      verb = `Move <b>${_esc(c.character)}</b>'s extractor to a clear area of the same planet${nbTxt}`;
+      why = c.reason === 'both'
+        ? `they compete for the same hotspots <i>and</i> the deposit's declining (${c.decline_pct}% down${rate}) — a reseat lands back in the overlap either way. No need to change planets.`
+        : `they compete for the same hotspots, so a reseat just lands back in the overlap. No need to change planets — a clear spot on this one is enough.`;
+    } else {                                            // depleting → rebuild on a fresh planet
+      const dest = _redeployDest(c.p0_name, c.character);
+      const destTxt = dest ? ` — <b>${_esc(dest.loc)}</b> <span class="an-redeploy-dest-r">${_esc(dest.r)}</span>`
+                           : ` — no free ${mat ? _esc(mat) : 'same-resource'} planet in your systems, so any clear one`;
+      tag = `<span class="an-redeploy-tag">${c.decline_pct}% down${rate}</span>`;
+      verb = `Rebuild <b>${_esc(c.character)}</b>'s colony on a fresh planet${destTxt}`;
+      why = `the deposit itself is exhausting, so a reseat only restarts at the falling peak — this one has to move planets.`;
+    }
     return `<div class="an-redeploy-cl">
-        <div class="an-redeploy-cl-h"><b>${_esc(d.character)}</b> · ${_esc(d.location)}${mat ? ` <span class="an-redeploy-p0">${_esc(mat)}</span>` : ''} <span class="an-redeploy-tag">${d.decline_pct}% down${rate}</span>${ov}</div>
-        <div class="an-redeploy-fix"><span class="an-redeploy-fix-no">A reseat won't recover this</span> — ${destTxt}.</div>
+        <div class="an-redeploy-cl-h"><b>${_esc(c.location)}</b>${mat ? ` <span class="an-redeploy-p0">${_esc(mat)}</span>` : ''} ${tag}</div>
+        <div class="an-redeploy-fix">${verb} — ${why}</div>
       </div>`;
   }).join('');
   return `<div class="an-suggest an-suggest-redeploy-urgent">
-      <div class="an-suggest-h">Redeploy ${n} colon${n === 1 ? 'y' : 'ies'} — a reseat won't fix ${matList}</div>
-      <div class="an-sug-note">${matList} ${plan.materials.length === 1 ? 'is' : 'are'} short, and ${n === 1 ? "this colony's deposit is" : "these colonies' deposits are"} measurably exhausting — a reseat only restarts at the falling peak, so it can't recover ${plan.materials.length === 1 ? 'it' : 'them'}. Rebuild the command centre elsewhere. Anything else that's short just needs a reseat (open the Reseat lever below) — do those first, they're the low-effort fix.</div>
+      <div class="an-suggest-h">${n} fix${n === 1 ? '' : 'es'} a reseat can't cover — ${matList} still short</div>
+      <div class="an-sug-note">Reseating every colony you can back to its peak still wouldn't feed ${matList}, so ${n === 1 ? 'this one is' : 'these are'} structurally stuck. Most are just a <b>move to a clear area of the same planet</b> (no planet change) to escape an overlap; only an exhausting deposit needs a fresh planet. Everything else that's short just needs a reseat — open the Reseat lever below and do those first.</div>
       ${rowsHtml}
     </div>`;
 }
