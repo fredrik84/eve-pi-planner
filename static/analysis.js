@@ -285,21 +285,66 @@ function _redeployDest(p0Name, character) {
 // the lower "Redeploy candidates" card, so they can't drift.
 function _redeployTiers() {
   const thresh = _hotspotOverlapThreshold();
-  if (!_redeploy) return { thresh, proxActive: false, clusters: [], urgent: [], later: [], depleting: [] };
+  if (!_redeploy) return { thresh, proxActive: false, clusters: [], depleting: [] };
   const proxActive = _featureActive('redeploy_proximity');
   const pairs = proxActive ? (_redeploy.proximity || []).filter(p => p.overlap_pct >= thresh) : [];
   const clusters = _clusterProximity(pairs, _redeploy.depleting || []);
-  const covered = new Set();
-  clusters.forEach(c => c.characters.forEach(n => covered.add(c.planet_id + '|' + n)));
-  const depleting = (_featureActive('redeploy_depletion') ? (_redeploy.depleting || []) : [])
-    .filter(d => !covered.has(d.planet_id + '|' + d.character));
-  return {
-    thresh, proxActive, clusters, depleting,
-    urgent: clusters.filter(c => c.precedence.length),
-    later: clusters.filter(c => !c.precedence.length),
-  };
+  // Standalone depleting deposits (not filtered against overlaps here — the render de-dups against
+  // the CHOSEN minimal-redeploy set instead, so a depleting colony in an overlap we don't need to
+  // touch still surfaces as its own signal).
+  const depleting = _featureActive('redeploy_depletion') ? (_redeploy.depleting || []) : [];
+  return { thresh, proxActive, clusters, depleting };
 }
 const _redeployNMoves = c => _clusterMoves(c).move.length;
+
+// ── Minimal "redeploy to reach healthy" plan ─────────────────────────────────
+// Instead of listing EVERY overlapping colony (a restart can scatter heads into dozens of overlaps
+// at once), cross-reference the overlaps against the material-supply shortfall — the same +10%
+// "healthy" target the bars use — and pick the FEWEST overlap clusters whose redeploy closes each
+// short material's gap. Overlaps that aren't needed to reach healthy are dropped entirely (they're
+// costing nothing you need right now). Fixing an overlap = keep one colony, move the rest to a clear
+// deposit, so the whole cluster returns to un-competed extraction; we credit that cluster recovery.
+function _redeployPlan(rows) {
+  const t = _redeployTiers();
+  if (!t.proxActive || !t.clusters.length) return { chosen: [], count: 0, materials: [] };
+  // Map each material row to its shortfall (P1/day below the +10% healthy target). Only short/tight
+  // materials have a gap; healthy ones need no redeploy.
+  const rowByName = {};
+  rows.forEach(r => { rowByName[r.name] = r; });
+  const gapOf = r => Math.max(0, r.need * (1 + _HEALTHY_BUFFER) - (_extSupplyOf(r.t) || r.have));
+
+  // Group overlap clusters by the material (P1) they feed, keeping only those feeding a short material.
+  const byMat = {};
+  t.clusters.forEach(c => {
+    const r = rowByName[c.p1_name];
+    if (!r || gapOf(r) <= 0) return;                    // material already healthy → this overlap isn't needed
+    (byMat[r.t] = byMat[r.t] || { r, clusters: [] }).clusters.push(c);
+  });
+
+  const chosen = [];
+  Object.values(byMat).forEach(({ r, clusters }) => {
+    const outByKey = {};
+    _producersOf(r.t).forEach(p => { outByKey[p.planet_id + '|' + p.char] = p.extPerDay || 0; });
+    // Estimated recovery of clearing a cluster ≈ the extraction its colonies currently tie up,
+    // scaled by how badly they overlap (the server's reachable-area overlap %). Clearing it frees
+    // roughly that much competed yield back. An estimate, matching this tool's advice-not-precision
+    // convention — but it lets us rank clusters and stop once a material is back over the buffer.
+    const withRec = clusters.map(c => {
+      const tied = c.characters.reduce((s, nm) => s + (outByKey[c.planet_id + '|' + nm] || 0), 0);
+      return { c, rec: tied * (c.overlap_pct / 100) };
+    }).sort((a, b) => b.rec - a.rec);
+    let gap = gapOf(r);
+    for (const { c, rec } of withRec) {
+      if (gap <= 0) break;
+      chosen.push({ ...c, _forMat: r.name });
+      gap -= rec;
+    }
+  });
+
+  const count = chosen.reduce((n, c) => n + _redeployNMoves(c), 0);
+  const materials = [...new Set(chosen.map(c => c._forMat))];
+  return { chosen, count, materials };
+}
 
 // One planet's redeploy block: header (location · type · keep X · overlap) + the colonies to move as
 // chips (⚡ on the depleting one). Shared by the urgent + later renderers.
@@ -331,41 +376,41 @@ function _redeployShopHtml(clusters) {
 // The URGENT redeploy block — colonies already losing yield to an overlap. Blended into the
 // Suggestions card next to the reseat/redeploy levers so the real fix sits with the others; reseating
 // can't escape an overlap, so it also offers buttons to open those levers if the player wants to try.
-function _renderRedeployUrgent() {
-  const t = _redeployTiers();
-  if (!t.urgent.length) return '';
-  const count = t.urgent.reduce((n, c) => n + _redeployNMoves(c), 0);
+function _renderRedeployUrgent(rows) {
+  const plan = _redeployPlan(rows);
+  if (!plan.chosen.length) return '';
+  const count = plan.count;
+  const mats = plan.materials.map(m => `<b>${_esc(m)}</b>`);
+  const matList = mats.length === 1 ? mats[0]
+    : mats.slice(0, -1).join(', ') + ' and ' + mats[mats.length - 1];
   return `<div class="an-suggest an-suggest-redeploy-urgent">
-      <div class="an-suggest-h">Relocate ${count} colon${count === 1 ? 'y' : 'ies'} — losing yield to overlap</div>
-      <div class="an-sug-note">These share a planet and their reachable areas overlap, so they drain each other's hotspots — that's why the yields keep dropping. Reseating won't escape it: redeploy each command centre to the planet shown (a free same-resource planet in your systems), or a clear area of the same planet where none is free. ⚡ = the depleting one.</div>
-      ${_redeployShopHtml(t.urgent)}
-      ${t.urgent.map(_redeployClusterBlock).join('')}
+      <div class="an-suggest-h">Redeploy ${count} colon${count === 1 ? 'y' : 'ies'} to get ${matList} back to healthy</div>
+      <div class="an-sug-note">These overlaps are what's holding ${plan.materials.length === 1 ? 'this material' : 'these materials'} below the +${Math.round(_HEALTHY_BUFFER * 100)}% buffer: colonies share a planet and drain each other's hotspots. This is the smallest set of moves that gets you back over it — any other overlaps you have aren't costing you yield you need right now, so they're left off. Reseating won't escape an overlap: redeploy each command centre to the planet shown (a free same-resource planet in your systems), or a clear area of the same planet where none is free. ⚡ = also depleting.</div>
+      ${_redeployShopHtml(plan.chosen)}
+      ${plan.chosen.map(_redeployClusterBlock).join('')}
       <div class="an-redeploy-tryalso">Rather try the other fixes first?<button type="button" class="an-lever-btn" onclick="_toggleLever('reseat')">Reseat heads</button><button type="button" class="an-lever-btn" onclick="_toggleLever('redeploy')">Redeploy a CC</button></div>
     </div>`;
 }
 
-// The lower "Redeploy candidates" card — the NON-urgent tail: overlaps not yet losing yield (do them
-// opportunistically) + standalone depleting deposits (a genuinely poor spot, not an overlap). The
-// urgent overlaps live up in the Suggestions card via _renderRedeployUrgent.
-function _renderRedeploySection() {
+// The lower "Redeploy candidates" card — now just standalone depleting deposits (a genuinely poor
+// spot whose yield is trending down, independent of any overlap). The overlap-driven redeploys are
+// computed as the minimal "reach healthy" set in _renderRedeployUrgent (Suggestions card); overlaps
+// beyond that set are deliberately not shown. Depleting colonies already in that chosen set are
+// dropped here (they get redeployed anyway).
+function _renderRedeploySection(rows) {
   const t = _redeployTiers();
+  const chosenMembers = new Set();
+  _redeployPlan(rows).chosen.forEach(c => c.characters.forEach(n => chosenMembers.add(c.planet_id + '|' + n)));
+  const depleting = t.depleting.filter(d => !chosenMembers.has(d.planet_id + '|' + d.character));
   const unscanned = t.proxActive && _redeploy && _redeploy.proximity_unscanned && !t.clusters.length;
-  if (!t.later.length && !t.depleting.length && !unscanned) return '';
+  if (!depleting.length && !unscanned) return '';
 
   let body = '';
-  if (t.later.length) {
-    const laterMoves = t.later.reduce((n, c) => n + _redeployNMoves(c), 0);
-    const laterBody = t.later.map(_redeployClusterBlock).join('');
-    body += `<div class="an-suggest">
-        <div class="an-suggest-h">Overlapping ranges — not urgent (${laterMoves})</div>
-        <div class="an-sug-note">These overlap but aren't losing yield yet — no rush. Just place the command centre in a clear spot the next time you rebuild each colony anyway. Threshold ${t.thresh}% (Settings → General).</div>
-        <details class="an-redeploy-later"><summary>Show ${t.later.length} planet${t.later.length > 1 ? 's' : ''}</summary>${laterBody}</details>
-      </div>`;
-  } else if (unscanned) {
+  if (!t.clusters.length && unscanned) {
     body += `<div class="an-suggest"><div class="an-sug-note">Rescan colonies in the Characters tab to capture extractor positions — the range-overlap check needs them.</div></div>`;
   }
-  if (t.depleting.length) {
-    const li = t.depleting.map(d => {
+  if (depleting.length) {
+    const li = depleting.map(d => {
       const mat = d.p1_name || d.p0_name;
       const dest = _redeployDest(d.p0_name, d.character);
       const destTxt = dest
@@ -382,7 +427,7 @@ function _renderRedeploySection() {
         </li>`;
     }).join('');
     body += `<div class="an-suggest">
-        <div class="an-suggest-h">Depleting deposits — ${t.depleting.length} colon${t.depleting.length > 1 ? 'ies' : 'y'}</div>
+        <div class="an-suggest-h">Depleting deposits — ${depleting.length} colon${depleting.length > 1 ? 'ies' : 'y'}</div>
         <div class="an-sug-note">These aren't in a flagged overlap — the deposit itself keeps yielding less across the last several programs. A reseat only starts a fresh program at the current (falling) peak, so whether it's worth trying depends on how fast the peak is dropping. A steady-low planet isn't flagged, only a real downtrend.</div>
         <ul class="an-redeploy-list">${li}</ul>
       </div>`;
@@ -863,7 +908,7 @@ function renderAnalysis() {
   // Overlap-caused decline surfaces first among the suggestions — it's the actual culprit when a
   // material is short because two colonies fight over one planet, and the reseat/rebalance levers
   // below won't cure it (a reseat lands the heads back inside the same overlap).
-  const urgentHtml = _renderRedeployUrgent();
+  const urgentHtml = _renderRedeployUrgent(rows);
   // Auto-open Reseat only when it's the SOLE fix. If there's another concrete suggestion (an overlap
   // redeploy block — which already offers a "try reseat" button — an add-factories opportunity, or an
   // actionable rebalance), leave Reseat folded so we're not unfolding two things at once.
@@ -901,7 +946,7 @@ function renderAnalysis() {
       </section>`
     : '';
 
-  el.innerHTML = supplyCard + suggestCard + _renderRedeploySection() + _hybridReseatSection() + _renderGrowSection() + _renderSkillRoiSection();
+  el.innerHTML = supplyCard + suggestCard + _renderRedeploySection(rows) + _hybridReseatSection() + _renderGrowSection() + _renderSkillRoiSection();
 }
 
 // ── Extraction-runtime helper (decay-aware recommendation) ────────────────────
@@ -1039,7 +1084,7 @@ function _buildProducersIndex() {
       const cur = h.length ? h[h.length - 1] : null, max = h.length ? Math.max(...h) : null;
       let arr = idx.get(key);
       if (!arr) { arr = []; idx.set(key, arr); }
-      arr.push({ char: ch.name, system: p.system, planet_num: p.planet_num, p0: p.p0_name,
+      arr.push({ char: ch.name, planet_id: p.planet_id, system: p.system, planet_num: p.planet_num, p0: p.p0_name,
                  perDay: o.per_day || 0, full: o.full_per_day || o.per_day || 0,
                  extPerDay: o.ext_per_day || o.full_per_day || o.per_day || 0,
                  capped: !!o.capped, stale: !!o.stale,
