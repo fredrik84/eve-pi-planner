@@ -27,6 +27,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0      # full history + tags so the release step can diff against the previous tag
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -66,9 +68,31 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "${{ github.ref_name }}" \
-            --title "${{ github.ref_name }}" \
-            --generate-notes
+          # Build a categorized changelog from the commit log, NOT --generate-notes: this repo ships
+          # via direct pushes to main (no PRs), and --generate-notes itemizes merged PRs only, so it
+          # produced an empty "What's Changed" + a bare compare link. Our conventional commit
+          # messages ARE the release notes (see CONTRIBUTING), so group them by feat/fix/perf here.
+          set -euo pipefail
+          TAG="${{ github.ref_name }}"
+          PREV=$(git describe --tags --abbrev=0 --match 'v*' "${TAG}^" 2>/dev/null || true)
+          if [ -n "$PREV" ]; then RANGE="${PREV}..${TAG}"; else RANGE="$TAG"; fi
+          NOTES=$(mktemp)
+          echo "## What's Changed in ${TAG}" >> "$NOTES"
+          emit() {  # $1 = conventional-commit type, $2 = section heading
+            body=$(git log "$RANGE" --no-merges --format='%s' | sed -n "s/^$1: /- /p" || true)
+            if [ -n "$body" ]; then printf '\n### %s\n%s\n' "$2" "$body" >> "$NOTES"; fi
+          }
+          emit feat Features
+          emit fix Fixes
+          emit perf Performance
+          # Everything else (refactor/test/chore/docs/…) keeps its type prefix under one heading.
+          other=$(git log "$RANGE" --no-merges --format='%s' | grep -vE '^(feat|fix|perf): ' | sed 's/^/- /' || true)
+          if [ -n "$other" ]; then printf '\n### Maintenance\n%s\n' "$other" >> "$NOTES"; fi
+          if [ -n "$PREV" ]; then
+            printf '\n**Full Changelog**: %s/%s/compare/%s...%s\n' \
+              "${{ github.server_url }}" "${{ github.repository }}" "$PREV" "$TAG" >> "$NOTES"
+          fi
+          gh release create "$TAG" --title "$TAG" --notes-file "$NOTES"
 
       - name: Notify Discord
         if: success()
