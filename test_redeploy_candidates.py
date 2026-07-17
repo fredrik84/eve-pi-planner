@@ -88,22 +88,24 @@ def test_precedence(base: str) -> bool:
 
 
 def test_depletion(base: str) -> bool:
-    print(f"\n{'='*60}\n  Depleting deposits\n{'='*60}")
+    print(f"\n{'='*60}\n  Reseat exhausted (reseated repeatedly, still marginal)\n{'='*60}")
     status, data = get(f"{base}/api/redeploy-candidates?debug_context_id={CTX_DEPLETION}")
     ok = check(status == 200, "200 OK")
     dep = data.get("depleting", [])
     by_loc = {d["location"]: d for d in dep}
-    # Clean (900010), one-blip (900014) and steep-crash (900016) downtrends qualify.
-    ok &= check(set(by_loc) == {"? P1", "? P5", "? P7"}, f"the three downtrend colonies flagged (got {sorted(by_loc)})")
+    # Flagged = can't beat prior best across >=3 programs: the declining P1 and the flat-but-never-improving
+    # P4. NOT flagged: the up-trend P2 (a reseat is still helping) or the 2-program P3 (too little history).
+    ok &= check(set(by_loc) == {"? P1", "? P4"}, f"only the reseat-exhausted colonies flagged (got {sorted(by_loc)})")
     ok &= check(dep[0]["decline_pct"] >= dep[-1]["decline_pct"], "sorted by decline %, largest first")
     clean = by_loc.get("? P1")
-    ok &= check(clean and clean["decline_pct"] == 35, f"clean downtrend reports 35% decline (got {clean and clean['decline_pct']})")
-    ok &= check(clean and clean["programs"] == 6 and clean["peak_last"] == 26000,
-                "clean downtrend reports 6 programs, 26000 current peak")
-    # Reseat verdict: a gentle ~7%/program decline is still worth a reseat; the 75% crash isn't.
-    ok &= check(clean and clean.get("reseat_worth") is True, f"gentle decline is reseat-worth (per_program={clean and clean.get('per_program_pct')})")
-    crash = by_loc.get("? P7")
-    ok &= check(crash and crash.get("reseat_worth") is False, f"75% crash is NOT reseat-worth (decline={crash and crash.get('decline_pct')})")
+    ok &= check(clean and clean["decline_pct"] == 35 and clean["programs"] == 6 and clean["peak_last"] == 26000
+                and clean["peak_best"] == 40000, f"declining colony reports 35% off a 40000 best over 6 programs (got {clean})")
+    # Head movement confirms the reseats: P1's centroid moved every program (5 confirmed), P4's never did.
+    ok &= check(clean and clean.get("reseat_tracked") is True and clean.get("reseats_confirmed") == 5,
+                f"moved-heads colony shows 5 confirmed reseats (got {clean and clean.get('reseats_confirmed')})")
+    flat = by_loc.get("? P4")
+    ok &= check(flat and flat.get("reseat_tracked") is True and flat.get("reseats_confirmed") == 0,
+                f"never-moved colony is flagged but shows 0 confirmed reseats (got {flat and flat.get('reseats_confirmed')})")
     # Placements map is wired (a dict) so the UI can name concrete redeploy destinations.
     ok &= check(isinstance(data.get("placements"), dict), "response carries a placements map")
     return ok

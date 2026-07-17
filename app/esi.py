@@ -280,6 +280,11 @@ def ensure_char_tables():
             PRIMARY KEY (character_id, planet_id, install_ts)
         )
     """)
+    # Mean head position ("lat,lon") for THIS program — heads are re-placed each reseat, so a moved
+    # centroid between programs is a clear sign the player actually reseated (re-surveyed) rather than
+    # just restarting in place. Lets Setup Analysis tell "reseated repeatedly, still marginal → the
+    # planet's tapped, redeploy" from "hasn't really tried a fresh spot yet". NULL on pre-existing rows.
+    _add_col("pp_colony_yield", "head_centroid TEXT")
     con.execute("""
         CREATE TABLE IF NOT EXISTS pp_sessions (
             token        TEXT    PRIMARY KEY,
@@ -442,10 +447,22 @@ def _storage_summary(detail: dict, sim: dict | None, types: dict) -> dict | None
     return {"vol_m3": round(min(best["vol"], best["cap"]), 1), "cap_m3": best["cap"], "fill_m3_h": round(fill_h, 2)}
 
 
+def _heads_centroid(ext_heads: list | None) -> str | None:
+    """Mean (lat,lon) of every extractor head across this colony's ECUs, as "lat,lon" — the anchor
+    for detecting whether the heads MOVED between programs (a genuine reseat vs a same-spot restart)."""
+    pts = [h for e in (ext_heads or []) for h in (e.get("h") or []) if h]
+    if not pts:
+        return None
+    return f"{round(sum(p[0] for p in pts) / len(pts), 5)},{round(sum(p[1] for p in pts) / len(pts), 5)}"
+
+
 _YIELD_KEEP = 10    # programs of yield history kept per colony (bounded storage)
-def _record_yield_sample(con, character_id: int, planet_id: int, sim: dict | None, scan_ts: float) -> None:
+def _record_yield_sample(con, character_id: int, planet_id: int, sim: dict | None, scan_ts: float,
+                         head_centroid: str | None = None) -> None:
     """Log this colony's install-yield for the CURRENT program (deduped by install_ts), then prune to
-    the last _YIELD_KEEP programs. One row per reseat/restart — the measured trend the burn-down uses."""
+    the last _YIELD_KEEP programs. One row per reseat/restart — the measured trend the burn-down uses.
+    `head_centroid` ("lat,lon") records where the heads sat this program so a reseat (heads moved) can
+    be told from a same-spot restart."""
     try:
         if not sim:
             return
@@ -459,13 +476,14 @@ def _record_yield_sample(con, character_id: int, planet_id: int, sim: dict | Non
                 p0 = o.get("type_id"); break
         con.execute(
             "INSERT INTO pp_colony_yield "
-            "(character_id, planet_id, install_ts, p0_type_id, peak_day, prog_days, scanned_ts) "
-            "VALUES (?,?,?,?,?,?,?)"
+            "(character_id, planet_id, install_ts, p0_type_id, peak_day, prog_days, scanned_ts, head_centroid) "
+            "VALUES (?,?,?,?,?,?,?,?)"
             " ON CONFLICT (character_id, planet_id, install_ts) DO UPDATE SET"
             " p0_type_id=EXCLUDED.p0_type_id, peak_day=EXCLUDED.peak_day,"
-            " prog_days=EXCLUDED.prog_days, scanned_ts=EXCLUDED.scanned_ts",
+            " prog_days=EXCLUDED.prog_days, scanned_ts=EXCLUDED.scanned_ts,"
+            " head_centroid=COALESCE(EXCLUDED.head_centroid, pp_colony_yield.head_centroid)",
             (character_id, planet_id, float(install), p0, float(peak),
-             sim.get("program_days"), scan_ts))
+             sim.get("program_days"), scan_ts, head_centroid))
         # prune older programs beyond the cap (keep the newest _YIELD_KEEP by install_ts)
         con.execute(
             "DELETE FROM pp_colony_yield WHERE character_id=? AND planet_id=? AND install_ts NOT IN "
@@ -755,7 +773,8 @@ def _fetch_planets(character_id: int, access_token: str) -> dict:
                       planet_num, products_json, pads_json, pad_inputs_json, sim_state_json, issues_json, _scan_ts, checkpoint_at, storage_json, esi_modified, esi_expires, product_chain_json, is_hybrid, ext_heads_json))
 
                 if is_extractor and _sim:      # log a per-program yield sample for the trend/burn-down
-                    _record_yield_sample(con, character_id, planet_id, _sim, _scan_ts)
+                    _record_yield_sample(con, character_id, planet_id, _sim, _scan_ts,
+                                         _heads_centroid(ext_heads))
 
         con.commit()
         if _skip_cached:

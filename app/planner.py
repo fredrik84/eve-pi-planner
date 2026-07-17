@@ -1116,21 +1116,18 @@ def skill_roi(pp_session: str = Cookie(default=None)):
 #     abandon the planet. Detected from the ESI head coordinates (lat/lon + head_radius, radians)
 #     captured at scan time (pp_char_planets.ext_heads): two heads compete when their discs overlap
 #     (great-circle distance < r_a + r_b) AND they pull the same P0.
-#   • Depleting deposit (redeploy_depletion) — a colony's install-yield (peak_day, one sample per
-#     reseat/restart, from pp_colony_yield) has trended DOWN across the last several programs. The
-#     best itself is falling, so a reseat only recovers toward a sinking ceiling — the fix is to
-#     redeploy the CC to a fresh planet, not reseat in place. This is the escalation of the burndown
-#     "reseat candidate" (a one-off dip a reseat DOES recover).
-_DEPLETE_WINDOW    = 6      # most recent programs considered for the trend
-_DEPLETE_MIN       = 5      # need at least this many programs before judging a downtrend
-_DEPLETE_DROP      = 0.15   # ≥15% peak decline start→current across the window = depleting
-_DEPLETE_MAX_UP    = 1      # tolerate one blip up within the window (measurement noise / a good reseat)
-# Is a reseat still worth trying on a depleting colony, or is the deposit too far gone? A reseat only
-# starts a fresh program at the CURRENT install peak — it can't lift the peak, which is what's falling
-# here. So a reseat buys time only while the peak drops slowly and isn't already deep; past that,
-# reseating just chases a sinking ceiling and the real fix is a redeploy.
-_RESEAT_GIVEUP_PER_PROG = 8.0    # avg %/program peak decline above which a reseat won't meaningfully help
-_RESEAT_GIVEUP_TOTAL    = 45.0   # total peak decline (%) above which the deposit is too far gone to reseat
+#   • Reseat exhausted (redeploy_depletion) — a deposit never runs out: its hotspots drift around the
+#     planet and replenish, so a reseat (re-survey + re-place heads) generally lifts the peak a little.
+#     What we detect is when that stops paying off: across several programs the player has RESEATED
+#     (confirmed by the head centroid actually moving between programs, pp_colony_yield.head_centroid)
+#     yet the latest peak still can't beat the prior best by more than a hair. Reseating is then
+#     exhausted — THIS planet is just tapped — and the real fix is to redeploy to a genuinely richer
+#     planet (only when one is free). Not a reason to move on its own; the frontend gates it on the
+#     material being short AND a richer free planet existing.
+_RESEAT_WINDOW       = 6      # most recent programs considered
+_RESEAT_MIN_PROGRAMS = 3      # need this many programs (≥2 reseats) before calling reseating exhausted
+_RESEAT_MARGINAL     = 0.05   # latest reseat gaining <5% over the prior best = plateaued (marginal)
+_RESEAT_MOVE         = 0.01   # planar (lat,lon) head-centroid shift between programs that = a real reseat
 # The overlap that matters is between the two deployments' REACHABLE AREAS, not their current heads —
 # reseating just moves heads around within reach, so overlapping reachable areas keep competing for
 # the same hotspots and both averages decay the longer they share it. We return every overlap above a
@@ -1190,22 +1187,45 @@ def _footprint_overlap(ecus_a: list, ecus_b: list) -> dict | None:
     return best
 
 
-def _depleting_trend(peaks: list[float]) -> dict | None:
-    """Given a colony's peak_day samples oldest→newest, decide if the deposit is exhausting.
-    Returns trend detail or None. Directional: net decline from window-start to current AND at most
-    one upward step, so a thin-but-STEADY planet (flat, no downtrend) is never flagged."""
-    w = [p for p in peaks if p and p > 0][-_DEPLETE_WINDOW:]
-    if len(w) < _DEPLETE_MIN or w[0] <= 0:
+def _centroid_dist(a: str | None, b: str | None) -> float:
+    """Planar distance between two "lat,lon" head centroids (small-angle, same as the layout geometry —
+    EVE's planet space is a flat lat/lon plane). 0 when either is missing/unparseable."""
+    try:
+        la, lo = (float(x) for x in a.split(","))
+        lb, lob = (float(x) for x in b.split(","))
+        return ((la - lb) ** 2 + (lo - lob) ** 2) ** 0.5
+    except Exception:
+        return 0.0
+
+
+def _reseat_status(samples: list) -> dict | None:
+    """`samples` = [(peak_day, head_centroid), ...] oldest→newest, one per program (reseat/restart).
+    Decide whether reseating this colony has been EXHAUSTED — the player has genuinely reseated it
+    several times (heads moved between programs) yet the latest peak still can't beat the prior best by
+    more than a hair, so the planet is simply tapped and a richer one is the real fix. Returns detail
+    (incl. how many reseats we can confirm from head movement) or None when there's too little history
+    OR a recent reseat is still improving it (keep reseating — no escalation)."""
+    s = [(p, c) for (p, c) in samples if p and p > 0][-_RESEAT_WINDOW:]
+    if len(s) < _RESEAT_MIN_PROGRAMS:
         return None
-    drop = (w[0] - w[-1]) / w[0]
-    ups = sum(1 for i in range(len(w) - 1) if w[i + 1] > w[i])
-    if drop >= _DEPLETE_DROP and ups <= _DEPLETE_MAX_UP and w[-1] < w[0]:
-        per_prog = (drop * 100) / (len(w) - 1) if len(w) > 1 else drop * 100
-        reseat_worth = per_prog < _RESEAT_GIVEUP_PER_PROG and drop * 100 < _RESEAT_GIVEUP_TOTAL
-        return {"programs": len(w), "peak_first": round(w[0]), "peak_last": round(w[-1]),
-                "decline_pct": round(drop * 100), "per_program_pct": round(per_prog),
-                "reseat_worth": reseat_worth}
-    return None
+    peaks = [p for p, _ in s]
+    best_prior = max(peaks[:-1])
+    latest = peaks[-1]
+    recent_gain = (latest - best_prior) / best_prior if best_prior > 0 else 0.0
+    if recent_gain >= _RESEAT_MARGINAL:
+        return None                       # a recent reseat still beat the prior best → reseating works
+    # Marginal/negative gain. Count reseats we can CONFIRM by the head centroid actually moving.
+    moves, tracked = 0, False
+    for (_p0, c0), (_p1, c1) in zip(s, s[1:]):
+        if c0 and c1:
+            tracked = True
+            if _centroid_dist(c0, c1) > _RESEAT_MOVE:
+                moves += 1
+    drop = (peaks[0] - latest) / peaks[0] if peaks[0] > 0 else 0.0
+    return {"programs": len(s), "peak_first": round(peaks[0]), "peak_last": round(latest),
+            "peak_best": round(best_prior), "decline_pct": round(max(drop, 0.0) * 100),
+            "recent_gain_pct": round(recent_gain * 100),
+            "reseats_confirmed": moves, "reseat_tracked": tracked}
 
 
 def derive_redeploy_candidates(context_id: int) -> dict:
@@ -1223,7 +1243,7 @@ def derive_redeploy_candidates(context_id: int) -> dict:
         WHERE c.context_id=? AND COALESCE(c.is_dummy,0)=0 AND cp.is_extractor=1
     """, (context_id,)).fetchall()
     hist_rows = con.execute("""
-        SELECT y.character_id AS cid, y.planet_id AS pid, y.peak_day AS peak
+        SELECT y.character_id AS cid, y.planet_id AS pid, y.peak_day AS peak, y.head_centroid AS centroid
         FROM pp_colony_yield y
         JOIN pp_characters c ON c.character_id = y.character_id
         WHERE c.context_id=? AND y.peak_day > 0
@@ -1286,17 +1306,19 @@ def derive_redeploy_candidates(context_id: int) -> dict:
                     })
     proximity.sort(key=lambda p: p["overlap_pct"], reverse=True)
 
-    # ── Depleting: multi-program downtrend on a still-deployed extractor colony ──
-    peaks_by: dict = {}
+    # ── Reseat exhausted: reseated repeatedly (heads moved) but still marginal → planet tapped ──
+    # (JSON key stays `depleting` for compatibility; the meaning is now "reseating won't lift it".)
+    samples_by: dict = {}
     for h in hist_rows:
-        peaks_by.setdefault((h["cid"], h["pid"]), []).append(h["peak"])
+        samples_by.setdefault((h["cid"], h["pid"]), []).append((h["peak"], h["centroid"]))
     depleting = []
     for r in planets:
-        trend = _depleting_trend(peaks_by.get((r["cid"], r["pid"]), []))
-        if trend:
+        status = _reseat_status(samples_by.get((r["cid"], r["pid"]), []))
+        if status:
             depleting.append({
                 "planet_id": r["pid"], "character": r["nm"], "location": _loc(r),
-                "p0_name": r["p0name"], "p1_name": p1name_by.get(r["p0"]), **trend,
+                "system": r["system"], "planet_num": r["pn"],
+                "p0_name": r["p0name"], "p1_name": p1name_by.get(r["p0"]), **status,
             })
     depleting.sort(key=lambda d: d["decline_pct"], reverse=True)
 
@@ -1336,6 +1358,16 @@ def derive_redeploy_candidates(context_id: int) -> dict:
                     per_char[nm] = avail[0]      # best available in that character's systems
             if per_char:
                 placements[p0n] = per_char
+        # The reseat-exhausted colony's OWN current richness, so the UI only calls a redeploy worth it
+        # when a free planet is genuinely richer (else it's not — keep reseating / accept it).
+        for d in depleting:
+            col = _p0_col(d["p0_name"]) if d.get("p0_name") else None
+            if col and d.get("system") and d.get("planet_num") is not None:
+                row = con2.execute(
+                    f'SELECT "{col}" AS r FROM pp_planets WHERE system=? AND planet_num=?',
+                    (d["system"], d["planet_num"])).fetchone()
+                if row and row["r"]:
+                    d["current_richness"] = round(row["r"])
         con2.close()
     except Exception:
         placements = {}

@@ -69,12 +69,15 @@ def add_colony(cid, planet_id, pn, ptype, is_ext, p0_tid=None, p0_name=None, pro
          json.dumps(prods) if prods else None, json.dumps(heads) if heads else None))
 
 
-def add_yield_history(cid, planet_id, p0_tid, peaks, ts0=1_700_000_000):
+def add_yield_history(cid, planet_id, p0_tid, peaks, centroids=None, ts0=1_700_000_000):
+    """One pp_colony_yield row per program. `centroids` (optional, same length as peaks) = per-program
+    "lat,lon" head centroid — a moved centroid between programs is a confirmed reseat."""
     for i, peak in enumerate(peaks):
+        cent = centroids[i] if centroids and i < len(centroids) else None
         cur.execute(
             "INSERT INTO pp_colony_yield (character_id, planet_id, install_ts, p0_type_id, "
-            "peak_day, prog_days, scanned_ts) VALUES (?,?,?,?,?,?,?)",
-            (cid, planet_id, ts0 + i * 86400, p0_tid, float(peak), 5.0, ts0 + i * 86400))
+            "peak_day, prog_days, scanned_ts, head_centroid) VALUES (?,?,?,?,?,?,?,?)",
+            (cid, planet_id, ts0 + i * 86400, p0_tid, float(peak), 5.0, ts0 + i * 86400, cent))
 
 
 R = 0.02  # head_radius (radians)
@@ -119,23 +122,29 @@ add_char(HOPE, "Test Hope", CTX_CROSS)
 # precedence mover, and Gill's depletion entry is tagged also_overlapping.
 add_colony(GILL, 900020, 1, "Barren", 1, AQUEOUS, "Aqueous Liquids", heads=_ecu(AQUEOUS, 1.00, 0.50))
 add_colony(HOPE, 900020, 1, "Barren", 1, AQUEOUS, "Aqueous Liquids", heads=_ecu(AQUEOUS, 1.00, 0.50))
-add_yield_history(GILL, 900020, AQUEOUS, [40000, 38000, 35000, 32000, 29000, 26000])
+add_yield_history(GILL, 900020, AQUEOUS, [40000, 38000, 35000, 32000, 29000, 26000],
+                  ["1.0,0.5", "1.2,0.5", "1.4,0.5", "1.0,0.7", "1.2,0.7", "1.4,0.7"])
 
-# ── 999006: depleting deposits ───────────────────────────────────────────────
+# ── 999006: reseat-exhausted deposits ────────────────────────────────────────
+# The signal is "reseated repeatedly but the peak still can't beat its prior best" (marginal gain).
+# `centroids` moving between programs = reseats we can CONFIRM (reseats_confirmed).
 IVAN = 999220
 add_char(IVAN, "Test Ivan", CTX_DEPLETION)
+_moved = ["1.0,0.5", "1.2,0.5", "1.4,0.5", "1.0,0.7", "1.2,0.7", "1.4,0.7"]   # every program relocated → 5 moves
+_still = ["1.0,0.5"] * 6                                                       # never moved → 0 confirmed reseats
 _depl = [
-    (900010, AQUEOUS, "Aqueous Liquids", [40000, 38000, 35000, 32000, 29000, 26000]),   # clean downtrend → flag
-    (900011, BASE_METALS, "Base Metals", [20000, 20000, 19500, 20000, 19800, 20000]),   # flat → no flag
-    (900012, NOBLE_METALS, "Noble Metals", [40000, 30000, 20000]),                      # only 3 → no flag
-    (900013, REACTIVE_GAS, "Reactive Gas", [26000, 29000, 32000, 35000, 38000, 40000]), # up-trend → no flag
-    (900014, AQUEOUS, "Aqueous Liquids", [40000, 37000, 38000, 34000, 30000, 27000]),   # 1 blip up → flag, reseat still worth (~6%/prog)
-    (900015, BASE_METALS, "Base Metals", [40000, 42000, 36000, 38000, 33000, 30000]),   # 2 blips up → no flag
-    (900016, AQUEOUS, "Aqueous Liquids", [40000, 34000, 28000, 22000, 16000, 10000]),   # steep 75% crash → flag, reseat NOT worth
+    # exhausted: 6 programs, peak can't beat its best, heads moved every program → flagged, reseats_confirmed=5
+    (900010, AQUEOUS, "Aqueous Liquids", [40000, 38000, 35000, 32000, 29000, 26000], _moved),
+    # still improving: latest beats prior best by >5% → NOT flagged (keep reseating)
+    (900013, REACTIVE_GAS, "Reactive Gas", [26000, 29000, 32000, 35000, 38000, 40000], _moved),
+    # only 2 programs (<3) → too little history → NOT flagged
+    (900012, NOBLE_METALS, "Noble Metals", [40000, 30000], _moved[:2]),
+    # flat across 6 programs (marginal) but heads NEVER moved → flagged, reseat_tracked yet reseats_confirmed=0
+    (900011, BASE_METALS, "Base Metals", [20000, 20000, 19500, 20000, 19800, 20000], _still),
 ]
-for pn, (pid, p0, name, peaks) in enumerate(_depl, start=1):
+for pn, (pid, p0, name, peaks, cents) in enumerate(_depl, start=1):
     add_colony(IVAN, pid, pn, "Barren", 1, p0, name)
-    add_yield_history(IVAN, pid, p0, peaks)
+    add_yield_history(IVAN, pid, p0, peaks, cents)
 
 con.commit()
 con.close()
