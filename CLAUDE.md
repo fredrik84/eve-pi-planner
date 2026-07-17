@@ -77,13 +77,17 @@ These are standing rules for ALL changes. Follow them unless the user explicitly
    refresh tokens are single-use/rotating regardless of which of our systems asks for one. The
    `eve-pi` namespace still exists but now hosts only `eve-pi-ops` (donation-alert,
    pod-health-check) — an unrelated app that was never part of this migration; don't delete it.
-7. **Commit messages ARE the release notes — be extra vigilant.** Releases (below) are cut with
-   `gh release create --generate-notes`, which builds its changelog directly from commit/PR titles
-   since the last tag — verbatim, with no editing pass in between. A vague commit (`fix stuff`,
-   `wip`, `updates`) becomes a vague, useless line in the public changelog. Every commit message
-   must stand on its own as a one-line changelog entry: single-line `feat:`/`fix:`/`chore:`
-   description, no body, stating *why* the change was made, not just *what* changed. This is not
-   cosmetic — treat it as seriously as the code change itself.
+7. **Commit messages ARE the release notes — be extra vigilant.** The release step in
+   `.github/workflows/build.yml` builds the changelog **directly from the commit log** since the
+   previous tag (`git log <prev>..<tag>`), grouped into Features / Fixes / Performance / Maintenance
+   by the `feat:`/`fix:`/`perf:` prefix — verbatim, with no editing pass in between. (It used to use
+   `gh release create --generate-notes`, but that itemizes merged **PRs** only, so this repo's
+   direct-push-to-`main` flow got an empty "What's Changed" + a bare compare link — switched to the
+   commit-log build 2026-07-17.) A vague commit (`fix stuff`, `wip`, `updates`) becomes a vague,
+   useless line in the public changelog. Every commit message must stand on its own as a one-line
+   changelog entry: single-line `feat:`/`fix:`/`chore:` description, no body, stating *why* the
+   change was made, not just *what* changed. This is not cosmetic — treat it as seriously as the
+   code change itself.
    **Cutting a release** (after a batch of shipped changes on `main` is stable — not every commit,
    only on a meaningful milestone or when asked):
    ```
@@ -99,7 +103,9 @@ These are standing rules for ALL changes. Follow them unless the user explicitly
    a round-trip to confirm the version.
    Pushing the tag triggers `.github/workflows/build.yml`, which builds
    `ghcr.io/fredrik84/eve-pi-planner:vX.Y.Z` (alongside the usual `:latest`) and creates a GitHub
-   Release with auto-generated notes from commits since the previous tag. First release: `v0.1.0`.
+   Release whose notes are the categorized commit log since the previous tag (see rule 7). The
+   release step needs full history, so the workflow's checkout uses `fetch-depth: 0`. First
+   release: `v0.1.0`.
    This is independent of the `:latest`/ArgoCD deploy path — tagging does not trigger a new
    deploy, it only marks/publishes a version of whatever is already live on `main`.
 8. **Preserve user privacy.** User data is never exposed publicly. Every endpoint that returns
