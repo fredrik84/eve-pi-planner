@@ -220,6 +220,21 @@ function _redeployDest(p0Name, character) {
   return d ? { loc: `${d.system} P${d.planet_num}`, richness: d.richness, planet_type: d.planet_type } : null;
 }
 
+// Command centres to bring for the suggested moves: one per colony, grouped by the planet type it's
+// (re)built on — the colony's own type for a same-planet relocate/move, the destination's for a
+// redeploy. The CC is the only market item a move needs (ECU/launchpad/factories are ISK-only).
+let _redeployCCLast = [];
+function _redeployCCList(chosen) {
+  const by = {};
+  (chosen || []).forEach(c => { if (c.cc_type) by[c.cc_type] = (by[c.cc_type] || 0) + 1; });
+  return Object.keys(by).sort().map(t => ({ name: `${t} Command Center`, qty: by[t] }));
+}
+function _redeployCopyCC(btn) {
+  const text = _redeployCCLast.map(s => `${s.name}\t${s.qty}`).join('\n');
+  try { navigator.clipboard.writeText(text); } catch (e) {}
+  if (btn) { const t = btn.textContent; btn.textContent = 'Copied'; setTimeout(() => { btn.textContent = t; }, 1500); }
+}
+
 // Overlap clusters for one material (P1 name): union-find the characters sharing a planet+hotspot in
 // the server's proximity pairs, so a spot where three alts all reach the same deposit is ONE cluster.
 function _overlapClustersFor(p1name) {
@@ -227,7 +242,7 @@ function _overlapClustersFor(p1name) {
   ((_redeploy && _redeploy.proximity) || []).forEach(p => {
     if ((p.p1_name || p.p0_name) !== p1name) return;
     const k = p.planet_id + '|' + (p.p0_name || '');
-    (groups[k] = groups[k] || { planet_id: p.planet_id, location: p.location, p0_name: p.p0_name, p1_name: p.p1_name, edges: [] }).edges.push(p);
+    (groups[k] = groups[k] || { planet_id: p.planet_id, location: p.location, p0_name: p.p0_name, p1_name: p.p1_name, planet_type: p.planet_type, edges: [] }).edges.push(p);
   });
   const out = [];
   Object.values(groups).forEach(g => {
@@ -242,7 +257,7 @@ function _overlapClustersFor(p1name) {
       const mset = new Set(members);
       const ov = Math.max(...g.edges.filter(e => (e.characters || []).some(c => mset.has(c))).map(e => e.overlap_pct));
       out.push({ planet_id: g.planet_id, location: g.location, p0_name: g.p0_name, p1_name: g.p1_name,
-                 characters: members.slice().sort(), overlap_pct: ov });
+                 planet_type: g.planet_type, characters: members.slice().sort(), overlap_pct: ov });
     });
   });
   return out;
@@ -272,6 +287,7 @@ function _redeployPlan(rows) {
     producers.forEach(p => { outByKey[p.planet_id + '|' + p.char] = p.extPerDay || 0; });
     const used = new Set();
     const clusters = proxOn ? _overlapClustersFor(r.name) : [];
+    const blocked = _overlapBlockedKeys(r.name);   // overlapping colonies a reseat can't recover
     // 1) User-flagged "can't reach target" colonies ALWAYS surface for this short material — sourced
     //    from the CLIENT flag set so it appears the instant the button is pressed (the backend refetch
     //    then fills in a concrete richer-planet target). The FIRST fix is a same-planet relocate to a
@@ -288,15 +304,16 @@ function _redeployPlan(rows) {
       const richer = (raw && back.current_richness != null && raw.richness > back.current_richness) ? raw : null;
       const cl = clusters.find(g => g.planet_id === c.planet_id && g.characters.includes(c.char));
       chosen.push({ action: 'relocate', user_flagged: true, character: c.char, character_id: c.character_id,
-                    planet_id: c.planet_id, p0_name: c.p0, p1_name: r.name,
+                    planet_id: c.planet_id, p0_name: c.p0, p1_name: r.name, cc_type: c.planet_type,
                     location: back.location || (c.system ? `${c.system}${c.planet_num != null ? ' P' + c.planet_num : ''}` : c.char),
                     neighbours: cl ? cl.characters.filter(nm => nm !== c.char) : [],
                     dest: richer, current_richness: back.current_richness, _forMat: r.name });
     });
     // 2) Reseat-first gate: only escalate further if reseating the recoverable (non-flagged) colonies
     //    back to peak still can't feed it.
-    const reseatRec = producers.filter(c => !_isColonyFlagged(c)).reduce((s, c) =>
-      s + ((c.n >= 2 && c.decline >= RECLAIM) ? c.perDay * c.decline / (1 - c.decline) : 0), 0);
+    const reseatRec = producers
+      .filter(c => !_isColonyFlagged(c) && !blocked.has(c.planet_id + '|' + c.char))
+      .reduce((s, c) => s + ((c.n >= 2 && c.decline >= RECLAIM) ? c.perDay * c.decline / (1 - c.decline) : 0), 0);
     let gap = r.need - (extSupply + reseatRec);
     if (gap <= 0) return;
     const cands = [];
@@ -311,18 +328,20 @@ function _redeployPlan(rows) {
       used.add(key);
       cands.push({ action: 'redeploy', character: d.character, character_id: d.character_id, planet_id: d.planet_id,
                    location: d.location, p0_name: d.p0_name, p1_name: d.p1_name || r.name, dest,
-                   current_richness: d.current_richness, programs: d.programs,
+                   cc_type: dest.planet_type, current_richness: d.current_richness, programs: d.programs,
                    reseats_confirmed: d.reseats_confirmed, reseat_tracked: d.reseat_tracked,
                    rec: outByKey[key] || (extSupply / Math.max(producers.length, 1)) });
     });
-    // Overlaps → move the weaker side to a clear area of the same planet (skip a colony already redeploying).
-    clusters.forEach(c => {
+    // Overlaps → move the weaker side to a clear area of the same planet (skip a colony already
+    // redeploying). Only real overlaps (>= the floor) — reseat can't fix these, so they surface even
+    // when reseating the rest could "close" the gap on paper.
+    clusters.filter(c => c.overlap_pct >= _OVERLAP_RESEAT_FLOOR).forEach(c => {
       const mover = c.characters.slice().sort((a, b) =>
         (outByKey[c.planet_id + '|' + a] || 0) - (outByKey[c.planet_id + '|' + b] || 0))[0];
       if (used.has(c.planet_id + '|' + mover)) return;
       const tied = c.characters.reduce((s, nm) => s + (outByKey[c.planet_id + '|' + nm] || 0), 0);
       cands.push({ action: 'move', character: mover, planet_id: c.planet_id, location: c.location, p0_name: c.p0_name,
-                   p1_name: c.p1_name || r.name, overlap_pct: c.overlap_pct,
+                   p1_name: c.p1_name || r.name, overlap_pct: c.overlap_pct, cc_type: c.planet_type,
                    neighbours: c.characters.filter(nm => nm !== mover), rec: tied * (c.overlap_pct / 100) });
     });
     cands.sort((a, b) => b.rec - a.rec);
@@ -374,9 +393,16 @@ function _renderRedeployUrgent(rows) {
         <div class="an-redeploy-fix">Move <b>${_esc(c.character)}</b>'s extractor to a clear area of the same planet${nbTxt} — the two fight over the same hotspots, so a plain reseat lands right back in it. Same planet, just a clear spot.</div>
       </div>`;
   }).join('');
+  _redeployCCLast = _redeployCCList(plan.chosen);
+  const ccHtml = _redeployCCLast.length ? `<div class="an-redeploy-shop">
+      <span class="an-redeploy-shop-lbl">Command centres to bring</span>
+      <span class="an-redeploy-shop-list">${_redeployCCLast.map(s => `${s.qty}× ${_esc(s.name)}`).join(' · ')}</span>
+      <button class="pp-add-btn" onclick="_redeployCopyCC(this)">Copy</button>
+    </div>` : '';
   return `<div class="an-suggest an-suggest-redeploy-urgent">
       <div class="an-suggest-h">${n} fix${n === 1 ? '' : 'es'} to feed ${matList}</div>
       <div class="an-sug-note">Reseating every colony back to its peak still wouldn't feed ${matList}, so ${n === 1 ? 'this one needs' : 'these need'} more than a reseat. Most fixes stay on the SAME planet — move the extractor to a clear or non-overlapping spot; only a planet you've reseated repeatedly without gain, with a richer one free, is worth moving planets. Just enough to close the shortage — everything else short just needs a reseat.</div>
+      ${ccHtml}
       ${rowsHtml}
     </div>`;
 }
@@ -1027,7 +1053,7 @@ function _buildProducersIndex() {
       let arr = idx.get(key);
       if (!arr) { arr = []; idx.set(key, arr); }
       arr.push({ char: ch.name, character_id: ch.character_id, planet_id: p.planet_id,
-                 system: p.system, planet_num: p.planet_num, p0: p.p0_name,
+                 planet_type: p.planet_type, system: p.system, planet_num: p.planet_num, p0: p.p0_name,
                  perDay: o.per_day || 0, full: o.full_per_day || o.per_day || 0,
                  extPerDay: o.ext_per_day || o.full_per_day || o.per_day || 0,
                  capped: !!o.capped, stale: !!o.stale,
@@ -1071,18 +1097,34 @@ async function _toggleColonyFlag(characterId, planetId, flagged) {
   } catch (e) {}
 }
 
+// A colony in a real reachable-area overlap can't be recovered by a plain reseat — its heads re-land
+// inside the same overlap and keep competing. So those colonies are NOT reseat candidates; they need a
+// same-planet MOVE (surfaced automatically by _redeployPlan). Blocking them here is what lets all the
+// needed overlap moves show at once, instead of only whatever the player manually flagged.
+const _OVERLAP_RESEAT_FLOOR = 40;   // reachable-area overlap % at/above which a reseat can't fix it
+function _overlapBlockedKeys(p1name) {
+  const s = new Set();
+  if (!_featureActive('redeploy_proximity')) return s;
+  _overlapClustersFor(p1name).forEach(g => {
+    if (g.overlap_pct >= _OVERLAP_RESEAT_FLOOR) g.characters.forEach(nm => s.add(g.planet_id + '|' + nm));
+  });
+  return s;
+}
+
 // The colonies to RESEAT to help short material `r` — the SINGLE source of truth for both the bar
 // drilldown (_fixNudge) and the reseat lever (_burndownSection), so they can never show different
 // targets for the same colony. Each is lifted only far enough to close its share of the +10% gap and
 // never past its own proven peak (declined recovery — NOT the optimistic full-factory-rate lift a thin
 // planet can't actually reach by reseating). Strongest-recovery first, capped at _RESEAT_PER_P1 so we
-// never wall the player with 8 reseats. User-flagged colonies are dropped (they go to redeploy).
+// never wall the player with 8 reseats. Flagged AND overlapping colonies are dropped (they can't be
+// reseat-fixed — they go to the same-planet move / redeploy list instead).
 function _reseatPlan(r) {
   const RECLAIM = 0.05;
   const extSupply = _extSupplyOf(r.t) || r.have;
   const gap = Math.max(0, r.need * (1 + _HEALTHY_BUFFER) - extSupply);
+  const blocked = _overlapBlockedKeys(r.name);
   const recoverable = _producersOf(r.t)
-    .filter(c => !_isColonyFlagged(c))
+    .filter(c => !_isColonyFlagged(c) && !blocked.has(c.planet_id + '|' + c.char))
     .map(c => ({ ...c, rec: (c.n >= 2 && c.decline >= RECLAIM) ? c.perDay * c.decline / (1 - c.decline) : 0 }))
     .filter(c => c.rec > 0)
     .sort((a, b) => b.rec - a.rec);
