@@ -1312,15 +1312,32 @@ def derive_redeploy_candidates(context_id: int) -> dict:
     for h in hist_rows:
         samples_by.setdefault((h["cid"], h["pid"]), []).append((h["peak"], h["centroid"]))
     depleting = []
+    detected = set()
     for r in planets:
         status = _reseat_status(samples_by.get((r["cid"], r["pid"]), []))
         if status:
             depleting.append({
-                "planet_id": r["pid"], "character": r["nm"], "location": _loc(r),
+                "planet_id": r["pid"], "character": r["nm"], "character_id": r["cid"], "location": _loc(r),
                 "system": r["system"], "planet_num": r["pn"],
                 "p0_name": r["p0name"], "p1_name": p1name_by.get(r["p0"]), **status,
             })
-    depleting.sort(key=lambda d: d["decline_pct"], reverse=True)
+            detected.add((r["cid"], r["pid"]))
+    # Manual "a reseat can't reach the target here" marks — a user-asserted reseat-exhausted flag. Add
+    # any that the detector didn't already flag, so they get the same concrete redeploy treatment.
+    flagged = _flagged_colonies(context_id)
+    for r in planets:
+        if (r["cid"], r["pid"]) in flagged and (r["cid"], r["pid"]) not in detected:
+            depleting.append({
+                "planet_id": r["pid"], "character": r["nm"], "character_id": r["cid"], "location": _loc(r),
+                "system": r["system"], "planet_num": r["pn"], "p0_name": r["p0name"],
+                "p1_name": p1name_by.get(r["p0"]), "programs": 0, "peak_first": 0, "peak_last": 0,
+                "peak_best": 0, "decline_pct": 0, "recent_gain_pct": 0, "reseats_confirmed": 0,
+                "reseat_tracked": False, "user_flagged": True,
+            })
+    for d in depleting:
+        if (d.get("character_id"), d["planet_id"]) in flagged:
+            d["user_flagged"] = True
+    depleting.sort(key=lambda d: (bool(d.get("user_flagged")), d["decline_pct"]), reverse=True)
 
     # Cross-link the two signals. When a character caught in a same-hotspot overlap is ALSO the one
     # whose yield is depleting on that planet, THAT character is the one to move (it needs a fresh
@@ -1389,6 +1406,72 @@ def redeploy_candidates(pp_session: str = Cookie(default=None), debug_context_id
     if not context_id:
         return {"proximity": [], "proximity_unscanned": 0, "depleting": [], "placements": {}}
     return derive_redeploy_candidates(context_id)
+
+
+@ensure_once
+def ensure_colony_flags_table():
+    con = get_connection()
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS pp_colony_flags (
+            context_id   INTEGER NOT NULL,
+            character_id INTEGER NOT NULL,
+            planet_id    INTEGER NOT NULL,
+            created_at   REAL,
+            PRIMARY KEY (context_id, character_id, planet_id)
+        )
+    """)
+    con.commit()
+    con.close()
+
+
+def _flagged_colonies(context_id: int) -> set:
+    """(character_id, planet_id) pairs the user has manually marked 'a reseat can't reach the target
+    here' — a manual reseat-exhausted mark, so we stop suggesting a reseat and treat it as a redeploy."""
+    ensure_colony_flags_table()
+    con = get_connection()
+    try:
+        rows = con.execute(
+            "SELECT character_id, planet_id FROM pp_colony_flags WHERE context_id=?", (context_id,)
+        ).fetchall()
+    finally:
+        con.close()
+    return {(r["character_id"], r["planet_id"]) for r in rows}
+
+
+@router.get("/api/colony-flags")
+def get_colony_flags(context_id: int = Depends(require_context)):
+    """The caller's manually-flagged 'reseat can't reach target' colonies (own account only)."""
+    return {"flags": [[cid, pid] for cid, pid in sorted(_flagged_colonies(context_id))]}
+
+
+@router.post("/api/colony-flags")
+def set_colony_flag(body: dict = Body(...), context_id: int = Depends(require_context)):
+    """Toggle the 'reseat can't reach target' flag on one of the caller's OWN colonies."""
+    try:
+        character_id = int(body["character_id"]); planet_id = int(body["planet_id"])
+    except (KeyError, TypeError, ValueError):
+        return {"error": "character_id and planet_id required"}
+    flagged = bool(body.get("flagged"))
+    ensure_colony_flags_table()
+    con = get_connection()
+    try:
+        owner = con.execute(
+            "SELECT 1 FROM pp_characters WHERE character_id=? AND context_id=?", (character_id, context_id)
+        ).fetchone()
+        if not owner:
+            return {"error": "not your character"}
+        if flagged:
+            con.execute(
+                "INSERT INTO pp_colony_flags (context_id, character_id, planet_id, created_at) VALUES (?,?,?,?) "
+                "ON CONFLICT (context_id, character_id, planet_id) DO NOTHING",
+                (context_id, character_id, planet_id, _time.time()))
+        else:
+            con.execute("DELETE FROM pp_colony_flags WHERE context_id=? AND character_id=? AND planet_id=?",
+                        (context_id, character_id, planet_id))
+        con.commit()
+    finally:
+        con.close()
+    return {"ok": True, "flagged": flagged}
 
 
 def _expansion_capacity(context_id: int) -> dict:

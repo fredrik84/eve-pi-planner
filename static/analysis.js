@@ -159,7 +159,7 @@ async function onAnalyzeTabOpen() {
   ]);
   _analyzeSnaps = [...(derived || []), ...(saved || [])];
   // Skill ROI and expansion depend on _loadFeatures (via _featureActive) — run after phase 1.
-  await Promise.all([_fetchSkillRoi(), _fetchExpansion(), _fetchRedeployCandidates()]);
+  await Promise.all([_fetchSkillRoi(), _fetchExpansion(), _fetchRedeployCandidates(), _fetchColonyFlags()]);
   _renderAnalyzePlans();
   renderAnalysis();
 }
@@ -257,32 +257,50 @@ function _overlapClustersFor(p1name) {
 function _redeployPlan(rows) {
   if (!_redeploy) return { chosen: [], materials: [] };
   const proxOn = _featureActive('redeploy_proximity'), deplOn = _featureActive('redeploy_depletion');
-  if (!proxOn && !deplOn) return { chosen: [], materials: [] };
-  const RECLAIM = 0.05;   // ignore sub-5% "decline" as scan noise (matches the reseat lever)
   const chosen = [];
+  const RECLAIM = 0.05;   // ignore sub-5% "decline" as scan noise (matches the reseat lever)
+  const depl = () => (deplOn ? (_redeploy.depleting || []) : []);
+  const destFor = d => {
+    const x = _redeployDest(d.p0_name, d.character);
+    return (x && x.richness > (d.current_richness || 0)) ? x : null;   // only a GENUINELY richer planet
+  };
   rows.forEach(r => {
     const extSupply = _extSupplyOf(r.t) || r.have;
-    if (extSupply >= r.need) return;                       // fed → any cushion is the reseat lever's job
+    if (extSupply >= r.need) return;                       // fed → nothing to escalate
     const producers = _producersOf(r.t);
     const outByKey = {};
     producers.forEach(p => { outByKey[p.planet_id + '|' + p.char] = p.extPerDay || 0; });
-    const reseatRec = producers.reduce((s, c) =>
-      s + ((c.n >= 2 && c.decline >= RECLAIM) ? c.perDay * c.decline / (1 - c.decline) : 0), 0);
-    let gap = r.need - (extSupply + reseatRec);
-    if (gap <= 0) return;                                  // reseat alone closes the shortage → nothing heavier
     const used = new Set();
-    const cands = [];
-    // Reseat-exhausted colonies with a genuinely richer free planet → redeploy there.
-    if (deplOn) (_redeploy.depleting || []).forEach(d => {
-      if ((d.p1_name || d.p0_name) !== r.name) return;
-      if (d.reseat_tracked && d.reseats_confirmed < 2) return;   // hasn't really reseated yet — reseat lever's job
-      const dest = _redeployDest(d.p0_name, d.character);
-      if (!dest || !(dest.richness > (d.current_richness || 0))) return;   // no richer planet → moving won't help
+    // 1) User-flagged "can't reach target" colonies for this material ALWAYS surface (the user said a
+    //    reseat can't lift it) — with a named richer planet if one's free, else a generic redeploy.
+    depl().forEach(d => {
+      if ((d.p1_name || d.p0_name) !== r.name || !d.user_flagged) return;
       const key = d.planet_id + '|' + d.character;
       used.add(key);
-      cands.push({ action: 'redeploy', character: d.character, planet_id: d.planet_id, location: d.location,
-                   p0_name: d.p0_name, p1_name: d.p1_name || r.name, dest, current_richness: d.current_richness,
-                   programs: d.programs, reseats_confirmed: d.reseats_confirmed, reseat_tracked: d.reseat_tracked,
+      chosen.push({ action: 'redeploy', user_flagged: true, character: d.character, character_id: d.character_id,
+                    planet_id: d.planet_id, location: d.location, p0_name: d.p0_name, p1_name: d.p1_name || r.name,
+                    dest: destFor(d), current_richness: d.current_richness, _forMat: r.name });
+    });
+    // 2) Reseat-first gate: only escalate further if reseating the recoverable (non-flagged) colonies
+    //    back to peak still can't feed it.
+    const reseatRec = producers.filter(c => !_isColonyFlagged(c)).reduce((s, c) =>
+      s + ((c.n >= 2 && c.decline >= RECLAIM) ? c.perDay * c.decline / (1 - c.decline) : 0), 0);
+    let gap = r.need - (extSupply + reseatRec);
+    if (gap <= 0) return;
+    const cands = [];
+    // Auto-detected reseat-exhausted colonies WITH a genuinely richer free planet → redeploy there.
+    depl().forEach(d => {
+      if ((d.p1_name || d.p0_name) !== r.name || d.user_flagged) return;
+      if (d.reseat_tracked && d.reseats_confirmed < 2) return;   // hasn't really reseated yet — reseat lever's job
+      const dest = destFor(d);
+      if (!dest) return;                                          // no richer planet → moving won't help
+      const key = d.planet_id + '|' + d.character;
+      if (used.has(key)) return;
+      used.add(key);
+      cands.push({ action: 'redeploy', character: d.character, character_id: d.character_id, planet_id: d.planet_id,
+                   location: d.location, p0_name: d.p0_name, p1_name: d.p1_name || r.name, dest,
+                   current_richness: d.current_richness, programs: d.programs,
+                   reseats_confirmed: d.reseats_confirmed, reseat_tracked: d.reseat_tracked,
                    rec: outByKey[key] || (extSupply / Math.max(producers.length, 1)) });
     });
     // Overlaps → move the weaker side to a clear area of the same planet (skip a colony already redeploying).
@@ -313,12 +331,20 @@ function _renderRedeployUrgent(rows) {
   const rowsHtml = plan.chosen.map(c => {
     const mat = c.p1_name || c.p0_name;
     if (c.action === 'redeploy') {
-      const tried = c.reseat_tracked
-        ? `you've reseated it ${c.reseats_confirmed}× and the peak still won't beat its best`
-        : `reseating it across ${c.programs} programs still won't beat its best`;
+      const why = c.user_flagged
+        ? `you marked this one as unable to reach its target by reseating`
+        : (c.reseat_tracked
+            ? `you've reseated it ${c.reseats_confirmed}× and the peak still won't beat its best, so this planet's tapped`
+            : `reseating it across ${c.programs} programs still won't beat its best, so this planet's tapped`);
+      const destTxt = c.dest
+        ? `→ <b>${_esc(c.dest.loc)}</b> <span class="an-redeploy-dest-r">${_esc(c.dest.planet_type)} ${c.dest.richness}%${c.current_richness != null ? ` vs ${c.current_richness}% here` : ''}</span>`
+        : `to a richer planet <span class="an-redeploy-dest-r">— none free in your systems right now</span>`;
+      const undo = c.user_flagged
+        ? ` <button type="button" class="an-flag-btn an-flag-on" title="Undo — I'll reseat it after all" onclick="_toggleColonyFlag(${c.character_id},${c.planet_id},false)">undo</button>`
+        : '';
       return `<div class="an-redeploy-cl">
-          <div class="an-redeploy-cl-h"><b>${_esc(c.location)}</b>${mat ? ` <span class="an-redeploy-p0">${_esc(mat)}</span>` : ''} <span class="an-redeploy-tag">tapped</span></div>
-          <div class="an-redeploy-fix">Redeploy <b>${_esc(c.character)}</b>'s ${mat ? _esc(mat) + ' ' : ''}colony → <b>${_esc(c.dest.loc)}</b> <span class="an-redeploy-dest-r">${_esc(c.dest.planet_type)} ${c.dest.richness}%${c.current_richness != null ? ` vs ${c.current_richness}% here` : ''}</span> — ${tried}, so this planet's tapped. A richer one is free.</div>
+          <div class="an-redeploy-cl-h"><b>${_esc(c.location)}</b>${mat ? ` <span class="an-redeploy-p0">${_esc(mat)}</span>` : ''} <span class="an-redeploy-tag">${c.user_flagged ? 'marked maxed' : 'tapped'}</span></div>
+          <div class="an-redeploy-fix">Redeploy <b>${_esc(c.character)}</b>'s ${mat ? _esc(mat) + ' ' : ''}colony ${destTxt} — ${why}.${undo}</div>
         </div>`;
     }
     const nb = (c.neighbours || []);
@@ -980,7 +1006,8 @@ function _buildProducersIndex() {
       const cur = h.length ? h[h.length - 1] : null, max = h.length ? Math.max(...h) : null;
       let arr = idx.get(key);
       if (!arr) { arr = []; idx.set(key, arr); }
-      arr.push({ char: ch.name, planet_id: p.planet_id, system: p.system, planet_num: p.planet_num, p0: p.p0_name,
+      arr.push({ char: ch.name, character_id: ch.character_id, planet_id: p.planet_id,
+                 system: p.system, planet_num: p.planet_num, p0: p.p0_name,
                  perDay: o.per_day || 0, full: o.full_per_day || o.per_day || 0,
                  extPerDay: o.ext_per_day || o.full_per_day || o.per_day || 0,
                  capped: !!o.capped, stale: !!o.stale,
@@ -1000,7 +1027,57 @@ function _producersOf(t) {
 // Reseat list, scoped to the materials the plan is SHORT on (reseating a surplus P0 is pointless).
 // Grouped per short P1, showing the worst few producing colonies — those drag the shortage, so they're
 // where a reseat helps most. A measured decline is flagged "off best" (reseat recovers it).
-const _RESEAT_PER_P1 = 5;   // worst N colonies shown per short material
+const _RESEAT_PER_P1 = 5;   // cap on reseat suggestions per short material (8 was too many to act on)
+
+// User-flagged "a reseat can't reach the target here" colonies (character_id|planet_id). A manual
+// reseat-exhausted mark: excluded from reseat suggestions and escalated to the redeploy list.
+let _colonyFlags = new Set();
+async function _fetchColonyFlags() {
+  try {
+    const d = await (await fetch('/api/colony-flags')).json();
+    _colonyFlags = new Set((d.flags || []).map(([cid, pid]) => cid + '|' + pid));
+  } catch (e) { _colonyFlags = new Set(); }
+}
+const _isColonyFlagged = c => _colonyFlags.has((c.character_id != null ? c.character_id : c.cid) + '|' + c.planet_id);
+async function _toggleColonyFlag(characterId, planetId, flagged) {
+  const key = characterId + '|' + planetId;
+  if (flagged) _colonyFlags.add(key); else _colonyFlags.delete(key);   // optimistic
+  try {
+    await fetch('/api/colony-flags', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ character_id: characterId, planet_id: planetId, flagged }) });
+  } catch (e) {}
+  await _fetchRedeployCandidates();   // flagged colonies now come back as redeploy candidates
+  renderAnalysis();
+}
+
+// The colonies to RESEAT to help short material `r` — the SINGLE source of truth for both the bar
+// drilldown (_fixNudge) and the reseat lever (_burndownSection), so they can never show different
+// targets for the same colony. Each is lifted only far enough to close its share of the +10% gap and
+// never past its own proven peak (declined recovery — NOT the optimistic full-factory-rate lift a thin
+// planet can't actually reach by reseating). Strongest-recovery first, capped at _RESEAT_PER_P1 so we
+// never wall the player with 8 reseats. User-flagged colonies are dropped (they go to redeploy).
+function _reseatPlan(r) {
+  const RECLAIM = 0.05;
+  const extSupply = _extSupplyOf(r.t) || r.have;
+  const gap = Math.max(0, r.need * (1 + _HEALTHY_BUFFER) - extSupply);
+  const recoverable = _producersOf(r.t)
+    .filter(c => !_isColonyFlagged(c))
+    .map(c => ({ ...c, rec: (c.n >= 2 && c.decline >= RECLAIM) ? c.perDay * c.decline / (1 - c.decline) : 0 }))
+    .filter(c => c.rec > 0)
+    .sort((a, b) => b.rec - a.rec);
+  let remain = gap;
+  const use = [];
+  for (const c of recoverable) {
+    if (remain <= 0 || use.length >= _RESEAT_PER_P1) break;
+    const contrib = Math.min(c.rec, remain);
+    use.push({ ...c, target: c.perDay + contrib });
+    remain -= contrib;
+  }
+  return { gap, extSupply, use, recoverable,
+           covers: remain <= 0 && use.length > 0,        // the shown reseats close the gap
+           capHit: use.length >= _RESEAT_PER_P1 && remain > 0,   // more would help but we capped the list
+           landPct: added => r.need > 0 ? Math.round((extSupply + added) / r.need * 100 - 100) : 0 };
+}
 
 // Total UNCLIPPED extraction (P1/day) the heads sustain for material `t`, summed over its colonies.
 // rate_sustained clamps each colony at its factory rate, so a satisfied material reads +0 surplus even
@@ -1014,57 +1091,43 @@ function _extSupplyOf(t) {
 // reseat the most-recoverable colony (capped or declined) if reseating would help, else redeploy /
 // add a colony. Healthy materials get nothing (no noise).
 const _HEALTHY_BUFFER = 0.10;   // target over-production buffer that clears the "tight" band
+// Small "a reseat can't reach the target here?" toggle for a reseat row — flags the colony (manual
+// reseat-exhausted mark), dropping it from reseat suggestions and sending it to the redeploy list.
+function _flagBtn(c) {
+  const cid = c.character_id != null ? c.character_id : c.cid;
+  if (cid == null || c.planet_id == null) return '';
+  return `<button type="button" class="an-flag-btn" title="A reseat can't reach the target here? Mark it, and it moves to the redeploy list instead"`
+    + ` onclick="_toggleColonyFlag(${cid},${c.planet_id},true)">can't reach?</button>`;
+}
+
 function _fixNudge(r) {
-  const extSupply = _extSupplyOf(r.t) || r.have;
-  const pct = r.need > 0 ? Math.round((extSupply / r.need - 1) * 100) : 0;
+  const p = _reseatPlan(r);
+  const pct = r.need > 0 ? Math.round((p.extSupply / r.need - 1) * 100) : 0;
   if (pct >= _HEALTHY_BUFFER * 100) return '';      // already healthy — nothing to fix
   const band = pct < 0 ? 'short' : 'tight';
-  const gap = Math.max(0, r.need * (1 + _HEALTHY_BUFFER) - extSupply);   // P1/day extra to reach +10%
-  const landPct = added => r.need > 0 ? Math.round((extSupply + added) / r.need * 100 - 100) : 0;
-  const RECLAIM = 0.05;
   const prods = _producersOf(r.t);
-  // Reseating recovers a colony's OWN lost yield — back toward the peak it has actually produced —
-  // never beyond it, and never to the 48k full-bar baseline (no real planet reaches that). So a
-  // reseat fix is only offered for colonies measurably DECLINED from their own best; a colony already
-  // at its peak (just a thin planet) isn't a reseat candidate.
-  const recoverable = prods.map(c => {
-    const rec = (c.n >= 2 && c.decline >= RECLAIM) ? c.perDay * c.decline / (1 - c.decline) : 0;
-    return { ...c, rec };
-  }).filter(c => c.rec > 0).sort((a, b) => b.rec - a.rec);
   const _loc = c => c.system ? `${_esc(c.char)} · ${_esc(c.system)}${c.planet_num != null ? ' P' + c.planet_num : ''}` : _esc(c.char);
-  // One named colony to reseat: where it is, how far off its best, current → target extraction
-  // (P0/hr, the in-game ECU rate) and the P1/day it adds (to compare against the page's figures).
-  const _reseatLine = c => `<div class="an-pd-fix-col"><span class="an-pd-fix-loc"><b>${_loc(c)}</b> <span class="an-pd-fix-why">${Math.round(c.decline * 100)}% off best</span></span><span class="an-pd-fix-rec">${_p0hR(c.perDay).toLocaleString()} → ${_p0hR(c.target).toLocaleString()} P0/hr <span class="an-pd-fix-p1">+${Math.round(c.target - c.perDay).toLocaleString()} P1/day</span></span></div>`;
-
-  // Fewest colonies, each lifted only as far as the +10% gap needs — so we never recommend recovering
-  // more than the shortfall calls for.
-  let remain = gap; const use = [];
-  for (const c of recoverable) {
-    if (remain <= 0) break;
-    const contrib = Math.min(c.rec, remain);
-    use.push({ ...c, target: c.perDay + contrib });
-    remain -= contrib;
-  }
-  const covered = gap - remain;
-  const totalRec = recoverable.reduce((s, c) => s + c.rec, 0);
+  // One named colony to reseat: where it is, how far off its best, current → target extraction (P0/hr,
+  // the in-game ECU rate), the P1/day it adds, and a "can't reach?" flag.
+  const _reseatLine = c => `<div class="an-pd-fix-col"><span class="an-pd-fix-loc"><b>${_loc(c)}</b> <span class="an-pd-fix-why">${Math.round(c.decline * 100)}% off best</span></span><span class="an-pd-fix-rec">${_p0hR(c.perDay).toLocaleString()} → ${_p0hR(c.target).toLocaleString()} P0/hr <span class="an-pd-fix-p1">+${Math.round(c.target - c.perDay).toLocaleString()} P1/day</span>${_flagBtn(c)}</span></div>`;
+  const covered = p.use.reduce((s, c) => s + (c.target - c.perDay), 0);
 
   let fix;
-  if (remain <= 0 && use.length) {                   // recovering lost yield alone reaches +10% (trimmed)
-    fix = `Reseat ${use.length === 1 ? 'this colony' : `these ${use.length} colonies`} onto denser hotspots → recovers lost yield, lifting ${_esc(r.name)} to <b>+${landPct(covered)}%</b> (healthy), no new colony:`
-        + `<div class="an-pd-fix-list">${use.map(_reseatLine).join('')}</div>`;
-  } else if (totalRec > 0) {                          // recovering everything still falls short of +10%
-    const full = recoverable.map(c => ({ ...c, target: c.perDay + c.rec }));
-    fix = `Reseat ${full.length === 1 ? 'its declined colony' : `its ${full.length} declined colonies`} (recovers to only +${landPct(totalRec)}%), then <b>redeploy a surplus colony</b> onto ${_esc(r.name)} or <b>add one</b> to clear +10%:`
-        + `<div class="an-pd-fix-list">${full.map(_reseatLine).join('')}</div>`;
+  if (p.use.length) {
+    const suffix = p.covers
+      ? `recovers lost yield, lifting ${_esc(r.name)} to <b>+${p.landPct(covered)}%</b> (healthy), no new colony`
+      : `recovers the biggest ${p.use.length} — still short after, so <b>redeploy</b> a tapped colony to a richer planet or <b>add</b> one`;
+    fix = `Reseat ${p.use.length === 1 ? 'this colony' : `these ${p.use.length} colonies`} onto denser hotspots → ${suffix}:`
+        + `<div class="an-pd-fix-list">${p.use.map(_reseatLine).join('')}</div>`;
   } else if (!prods.length) {
     fix = `<b>Add a ${_esc(r.name)} colony</b> — nothing produces it yet.`;
   } else {                                            // colonies at their best — reseating won't lift it
     const colonyEst = _estColonyP1(r.t, 0);
-    const land = colonyEst > 0 ? landPct(colonyEst) : null;
+    const land = colonyEst > 0 ? p.landPct(colonyEst) : null;
     if (band === 'tight' && land != null && land > 25)
       fix = `Only mildly tight, and your colonies are near their best — a whole new colony would overshoot to ~+${land}%. Leave it; reseat when one decays.`;
     else
-      fix = `Your colonies are near their best, so reseating won't lift it — <b>redeploy a surplus colony</b> onto ${_esc(r.name)} or <b>add one</b> for a +10% buffer.`;
+      fix = `Your colonies are near their best, so reseating won't lift it — <b>redeploy</b> a colony to a richer planet or <b>add</b> one for a +10% buffer.`;
   }
   return `<div class="an-pd-fix an-pd-fix-${band}">🔧 ${fix}</div>`;
 }
@@ -1100,82 +1163,46 @@ function _burndownSection(rows) {
     return `<div class="an-suggest an-suggest-burndown"><div class="an-suggest-h">Reseat candidates</div>`
       + `<div class="an-levers-lead">All materials covered — nothing short to fix. Reseating a depleting colony still extends runtime.</div></div>`;
 
-  const RECLAIM = 0.05;    // ignore sub-5% "decline" as scan noise
-
   const groups = short.map(r => {
-    const prods = _producersOf(r.t);              // weakest first
     const shortBy = Math.max(0, Math.round(r.need - r.have));
-    const coveredAbove = '';
     const headH = `${_esc(r.name)} <span class="an-bd-group-sub">${Math.round(r.ratio * 100)}% fed · short ${shortBy.toLocaleString()}/day</span>`;
+    const prods = _producersOf(r.t);
     if (!prods.length)
       return `<div class="an-bd-group"><div class="an-bd-group-h">${_esc(r.name)} <span class="an-bd-group-sub">short ${shortBy.toLocaleString()}/day · no colony makes it yet</span></div>`
-        + `<div class="an-bd-target"><b>Add</b> a ${_esc(r.name)} colony${coveredAbove}.</div></div>`;
+        + `<div class="an-bd-target"><b>Add</b> a ${_esc(r.name)} colony.</div></div>`;
 
-    // Two ways reseating recovers a short material WITHOUT a new colony:
-    //  • DECLINED — a colony dropped below its own proven best; reseating recovers the lost yield.
-    //  • EXTRACTION-CAPPED — a colony never reaches its factory rate (thin/big planet); reseating onto
-    //    denser hotspots can lift it toward full rate (an UPPER bound — only if richer spots exist).
-    // A colony's full-rate headroom already subsumes any decline, so we never count both.
-    const withBest = prods.map(c => {
-      let recoverable = 0, reason = null;
-      if (c.capped && c.full > c.perDay) { recoverable = c.full - c.perDay; reason = 'capped'; }
-      else if (c.n >= 2 && c.decline >= RECLAIM) { recoverable = c.perDay * c.decline / (1 - c.decline); reason = 'declined'; }
-      return { ...c, recoverable, reason, best: c.perDay + recoverable };
-    });
-    const declined = withBest.filter(c => c.recoverable > 0).sort((a, b) => b.recoverable - a.recoverable);
-    const reclaimable = Math.round(declined.reduce((s, c) => s + c.recoverable, 0));
-    const hasUnknown = withBest.some(c => c.n < 2 && !c.capped);
-    const rem = Math.max(0, shortBy - reclaimable);
-    const colTail = coveredAbove ? coveredAbove.replace(' (see', ' — see').replace(')', '') : ` <b>redeploy</b> a surplus colony or <b>add</b> a ${_esc(r.name)} colony`;
-
-    // Suggest only the FEWEST colonies whose combined recovery covers the shortfall — and show each
-    // colony's target as only AS FAR AS THE GAP NEEDS, not its full ceiling (a 917/day gap must not read
-    // "21,819 → 48,000 P0/hr"). declined is sorted strongest-recovery first; the last colony takes just
-    // the remainder.
-    const covers = reclaimable >= shortBy && declined.length;
-    const need = [];
-    let remainGap = shortBy;
-    for (const c of declined) {
-      if (remainGap <= 0) break;
-      const contrib = Math.min(c.recoverable, remainGap);
-      need.push({ ...c, target: c.perDay + contrib });   // only lift it enough to close the gap
-      remainGap -= contrib;
-    }
-    const showSet = covers ? need : declined.map(c => ({ ...c, target: c.best }));   // can't cover → full best
-    const hasCapped = showSet.some(c => c.reason === 'capped');
-    const ifRicher = hasCapped ? ' (extraction-capped — only if those planets have richer hotspots; if they\'re just thin, add a second source)' : '';
-
-    const reseatRows = showSet.slice(0, _RESEAT_PER_P1).map(c => {
+    // SAME colonies + targets as the bar drilldown (_reseatPlan): declined colonies only, each lifted
+    // just enough to close its share of the +10% gap, strongest-recovery first, capped at _RESEAT_PER_P1.
+    const p = _reseatPlan(r);
+    const reseatRows = p.use.map(c => {
       const loc = c.system ? `${_esc(c.system)}${c.planet_num != null ? ' P' + c.planet_num : ''}` : '';
-      const tag = c.reason === 'capped'
-        ? `⚠ extraction-capped — reseat denser hotspots`
-        : `▼ ${Math.round(c.decline * 100)}% off best — reseat recovers it`;
       return `<div class="an-bd-prod">
           <span class="an-bd-prod-loc">${_esc(c.char)}${loc ? ' · ' + loc : ''}</span>
           <span class="an-bd-prod-val">${_p0hR(c.perDay).toLocaleString()} → ${_p0hR(c.target).toLocaleString()}<span class="an-bd-unit"> P0/hr</span></span>
-          <span class="an-bd-prod-tag an-bd-down">${tag}</span>
+          <span class="an-bd-prod-tag an-bd-down">▼ ${Math.round(c.decline * 100)}% off best${_flagBtn(c)}</span>
         </div>`;
     }).join('');
+    const hasUnknown = prods.some(c => c.n < 2 && !_isColonyFlagged(c));
+    const redeployTail = `<b>redeploy</b> a tapped colony to a richer planet or <b>add</b> a ${_esc(r.name)} colony`;
 
     let action, list = '';
-    if (covers) {
-      const one = need.length === 1;
-      action = `<b>Reseat</b> the ${one ? 'colony' : `${need.length} colonies`} below — covers the <b>${shortBy.toLocaleString()}/day</b> gap${ifRicher}.`;
+    if (p.use.length && p.covers) {
+      action = `<b>Reseat</b> the ${p.use.length === 1 ? 'colony' : `${p.use.length} colonies`} below — covers the <b>${shortBy.toLocaleString()}/day</b> gap.`;
       list = `<div class="an-bd-prod-list">${reseatRows}</div>`;
-    } else if (reclaimable > 0) {
-      action = `Reseating recovers ~${reclaimable.toLocaleString()}/day — still short <b>${rem.toLocaleString()}/day</b>.${ifRicher} ${hasUnknown ? 'Rescan may reveal more; otherwise ' : ''}${colTail.trim()}.`;
+    } else if (p.use.length) {
+      action = `<b>Reseat</b> the ${p.use.length} below (biggest recovery first) — still short after, so ${redeployTail}.`;
       list = `<div class="an-bd-prod-list">${reseatRows}</div>`;
     } else if (hasUnknown) {
-      action = `No decline measured — <b>try reseating</b>, then <b>Rescan</b>. If it doesn't add ~${shortBy.toLocaleString()}/day,${colTail}.`;
+      action = `No decline measured yet — <b>try reseating</b>, then <b>Rescan</b>. If it doesn't add ~${shortBy.toLocaleString()}/day, ${redeployTail}.`;
     } else {
-      action = `At peak — reseating won't close <b>${shortBy.toLocaleString()}/day</b>. ${colTail.trim()}.`;
+      action = `At peak — reseating won't close <b>${shortBy.toLocaleString()}/day</b>. ${redeployTail}.`;
     }
     return `<div class="an-bd-group"><div class="an-bd-group-h">${headH}</div><div class="an-bd-target">${action}</div>${list}</div>`;
   }).join('');
 
   return `<div class="an-suggest an-suggest-burndown">
       <div class="an-suggest-h">Fix short materials</div>
-      <div class="an-levers-lead">Short on <b>${short.map(r => _esc(r.name)).join('</b>, <b>')}</b>. Reseating recovers <em>lost</em> yield only — no help if a colony is already at its peak. If it's not enough, <b>add or redeploy</b>.</div>
+      <div class="an-levers-lead">Short on <b>${short.map(r => _esc(r.name)).join('</b>, <b>')}</b>. Reseating recovers <em>lost</em> yield only — no help once a colony is at its peak. If it's not enough, <b>redeploy or add</b>.</div>
       <div class="an-bd-groups">${groups}</div>
     </div>`;
 }
