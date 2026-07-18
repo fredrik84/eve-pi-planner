@@ -191,7 +191,7 @@ def list_characters(pp_session: str = Cookie(default=None)):
                 SELECT cp.character_id, cp.planet_id, cp.planet_type, cp.is_extractor, cp.p0_name, cp.upgrade_level,
                        cp.planet_num, cp.num_pins, cp.products, cp.pad_contents, cp.pad_inputs, cp.checkpoint_at,
                        cp.sim_state, cp.esi_modified, cp.esi_expires, COALESCE(cp.is_hybrid, 0) AS is_hybrid,
-                       COALESCE(ss.name, '') AS system_name
+                       cp.ext_heads, COALESCE(ss.name, '') AS system_name
                 FROM pp_char_planets cp
                 JOIN pp_characters ch ON ch.character_id = cp.character_id
                 LEFT JOIN solar_systems ss ON ss.system_id = cp.solar_system_id
@@ -201,7 +201,8 @@ def list_characters(pp_session: str = Cookie(default=None)):
             planet_rows = con.execute("""
                 SELECT cp.character_id, cp.planet_id, cp.planet_type, cp.is_extractor, cp.p0_name, cp.upgrade_level,
                        cp.planet_num, cp.num_pins, cp.products, cp.pad_contents, cp.pad_inputs, cp.checkpoint_at,
-                       cp.sim_state, cp.esi_modified, cp.esi_expires, COALESCE(cp.is_hybrid, 0) AS is_hybrid, '' AS system_name
+                       cp.sim_state, cp.esi_modified, cp.esi_expires, COALESCE(cp.is_hybrid, 0) AS is_hybrid,
+                       cp.ext_heads, '' AS system_name
                 FROM pp_char_planets cp
                 JOIN pp_characters ch ON ch.character_id = cp.character_id
                 WHERE ch.context_id=?
@@ -210,21 +211,27 @@ def list_characters(pp_session: str = Cookie(default=None)):
         rows = []
         planet_rows = []
 
-    # Per-colony yield history (oldest→newest), for the measured-decline burn-down.
+    # Per-colony yield history (oldest→newest), for the measured-decline burn-down. The parallel
+    # centroid series (install_ts + head centroid per program) dates the last reseat/redeploy below.
     yield_hist: dict[tuple, list] = {}
+    centroid_hist: dict[tuple, list] = {}
     try:
         for y in (con.execute("""
-            SELECT y.character_id, y.planet_id, y.install_ts, y.peak_day, y.prog_days, y.scanned_ts
+            SELECT y.character_id, y.planet_id, y.install_ts, y.peak_day, y.prog_days, y.scanned_ts,
+                   y.head_centroid
             FROM pp_colony_yield y
             JOIN pp_characters ch ON ch.character_id = y.character_id
             WHERE ch.context_id=?
             ORDER BY y.install_ts ASC
         """, (context_id,)).fetchall() if context_id else []):
-            yield_hist.setdefault((y["character_id"], y["planet_id"]), []).append(
+            key = (y["character_id"], y["planet_id"])
+            yield_hist.setdefault(key, []).append(
                 {"install": y["install_ts"], "peak": round(y["peak_day"] or 0),
                  "prog_days": y["prog_days"], "ts": y["scanned_ts"]})
+            centroid_hist.setdefault(key, []).append((y["install_ts"], y["head_centroid"]))
     except Exception:
         yield_hist = {}
+        centroid_hist = {}
 
     # Running reaction jobs per character — the Reactions tool tracks these in pp_char_industry_jobs;
     # surfaced here so the Characters tab shows a toon's active reactions alongside its PI colonies
@@ -277,6 +284,9 @@ def list_characters(pp_session: str = Cookie(default=None)):
         reaction_jobs_by_char = {}
 
     con.close()
+
+    # Local import (avoids a circular import at module load — planner imports esi, not esi_data).
+    from app.planner import reseat_redeploy_events
 
     char_planets: dict[int, list] = {}
     for p in planet_rows:
@@ -372,6 +382,13 @@ def list_characters(pp_session: str = Cookie(default=None)):
                 prog_expiry = sim.get("expiry")
             except Exception:
                 program_days = None
+        # Last reseat / redeploy dates from the head-centroid trail — when the heads last shuffled
+        # within reach (reseat) vs when the command centre last moved beyond it (redeploy).
+        try:
+            _ecus = _json.loads(p["ext_heads"]) if p["ext_heads"] else None
+        except Exception:
+            _ecus = None
+        _events = reseat_redeploy_events(centroid_hist.get((cid, p["planet_id"]), []), _ecus)
         char_planets.setdefault(cid, []).append({
             "planet_id":     p["planet_id"],
             "planet_type":   p["planet_type"],
@@ -391,6 +408,8 @@ def list_characters(pp_session: str = Cookie(default=None)):
             "esi_expires":   p["esi_expires"],
             "ext_p0_day":    ext_p0_day,
             "yield_history": yield_hist.get((cid, p["planet_id"]), []),
+            "reseat_at":     _events["reseat_at"],
+            "redeploy_at":   _events["redeploy_at"],
         })
 
     now = datetime.now(timezone.utc).isoformat()

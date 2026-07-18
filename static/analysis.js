@@ -1065,7 +1065,7 @@ function _buildProducersIndex() {
                  planet_type: p.planet_type, system: p.system, planet_num: p.planet_num, p0: p.p0_name,
                  perDay: o.per_day || 0, full: o.full_per_day || o.per_day || 0,
                  extPerDay: o.ext_per_day || o.full_per_day || o.per_day || 0,
-                 capped: !!o.capped, stale: !!o.stale,
+                 capped: !!o.capped, stale: !!o.stale, reseat_at: p.reseat_at, redeploy_at: p.redeploy_at,
                  n: h.length, decline: (max && max > 0) ? (max - cur) / max : 0 });
     });
   }));
@@ -1127,6 +1127,16 @@ function _rescanBtn(c) {
   if (cid == null || c.planet_id == null) return '';
   return `<button type="button" class="an-rescan-btn" title="Rescan just this planet from EVE to check progress"`
     + ` onclick="_rescanPlanetFromCard(${cid},${c.planet_id},this)">⟳ rescan</button>`;
+}
+
+// "reseated Jul 15 · redeployed Jun 30" — when the colony's heads last moved within reach vs when
+// the command centre last moved beyond it (from the per-program head-centroid trail). Empty until a
+// second scanned program gives something to compare against.
+function _reseatDates(c) {
+  const bits = [];
+  if (c.reseat_at) bits.push(`reseated ${_fmtEpochDate(c.reseat_at)}`);
+  if (c.redeploy_at) bits.push(`redeployed ${_fmtEpochDate(c.redeploy_at)}`);
+  return bits.length ? `<span class="an-reseat-dates" title="Last time the heads moved within extraction range (reseat) vs the command centre moved beyond it (redeploy)">${bits.join(' · ')}</span>` : '';
 }
 
 // Clear "can't reach target" flags that are no longer relevant — the material the colony feeds is no
@@ -1238,7 +1248,7 @@ function _fixNudge(r) {
   const _loc = c => c.system ? `${_esc(c.char)} · ${_esc(c.system)}${c.planet_num != null ? ' P' + c.planet_num : ''}` : _esc(c.char);
   // One named colony to reseat: where it is, how far off its best, current → target extraction (P0/hr,
   // the in-game ECU rate), the P1/day it adds, and a "can't reach?" flag.
-  const _reseatLine = c => `<div class="an-pd-fix-col"><span class="an-pd-fix-loc"><b>${_loc(c)}</b> <span class="an-pd-fix-why">${Math.round(c.decline * 100)}% off best</span></span><span class="an-pd-fix-rec">${_p0hR(c.perDay).toLocaleString()} → ${_p0hR(c.target).toLocaleString()} P0/hr <span class="an-pd-fix-p1">+${Math.round(c.target - c.perDay).toLocaleString()} P1/day</span>${_flagBtn(c)}${_rescanBtn(c)}</span></div>`;
+  const _reseatLine = c => `<div class="an-pd-fix-col"><span class="an-pd-fix-loc"><b>${_loc(c)}</b> <span class="an-pd-fix-why">${Math.round(c.decline * 100)}% off best</span>${_reseatDates(c)}</span><span class="an-pd-fix-rec">${_p0hR(c.perDay).toLocaleString()} → ${_p0hR(c.target).toLocaleString()} P0/hr <span class="an-pd-fix-p1">+${Math.round(c.target - c.perDay).toLocaleString()} P1/day</span>${_flagBtn(c)}${_rescanBtn(c)}</span></div>`;
   const covered = p.use.reduce((s, c) => s + (c.target - c.perDay), 0);
 
   let fix;
@@ -1307,7 +1317,7 @@ function _burndownSection(rows) {
     const reseatRows = p.use.map(c => {
       const loc = c.system ? `${_esc(c.system)}${c.planet_num != null ? ' P' + c.planet_num : ''}` : '';
       return `<div class="an-bd-prod">
-          <span class="an-bd-prod-loc">${_esc(c.char)}${loc ? ' · ' + loc : ''}</span>
+          <span class="an-bd-prod-loc">${_esc(c.char)}${loc ? ' · ' + loc : ''}${_reseatDates(c)}</span>
           <span class="an-bd-prod-val">${_p0hR(c.perDay).toLocaleString()} → ${_p0hR(c.target).toLocaleString()}<span class="an-bd-unit"> P0/hr</span></span>
           <span class="an-bd-prod-tag an-bd-down">▼ ${Math.round(c.decline * 100)}% off best${_flagBtn(c)}${_rescanBtn(c)}</span>
         </div>`;

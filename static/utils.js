@@ -61,6 +61,17 @@ function _fmtEpochClock(sec) {
   return new Date(sec * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
+// Unix epoch (seconds) → short local date, e.g. "Jul 15" (adds the year if it's not this one) —
+// used for "last reseated / last redeployed" hints on Setup Analysis colonies.
+function _fmtEpochDate(sec) {
+  if (!sec) return '';
+  const d = new Date(sec * 1000);
+  if (isNaN(d)) return '';
+  const opts = { month: 'short', day: 'numeric' };
+  if (d.getFullYear() !== new Date().getFullYear()) opts.year = 'numeric';
+  return d.toLocaleDateString([], opts);
+}
+
 // Parses one line of a pasted in-game inventory/asset list — name + quantity, tolerant of both
 // tab-separated (EVE's clipboard export: Name\tQty\tGroup\tCategory\t...) and multi-space-padded
 // paste variants. Returns [name, qty] or null for a blank/unparseable line. Shared by the PI

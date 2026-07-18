@@ -106,6 +106,12 @@ def test_depletion(base: str) -> bool:
     flat = by_loc.get("? P4")
     ok &= check(flat and flat.get("reseat_tracked") is True and flat.get("reseats_confirmed") == 0,
                 f"never-moved colony is flagged but shows 0 confirmed reseats (got {flat and flat.get('reseats_confirmed')})")
+    # Last-reseat date: the moved-heads colony's newest program install_ts (fixture ts0 + 5 days); the
+    # colony has no current ext_heads so reach is unknown → every move dates as a reseat, none a redeploy.
+    ok &= check(clean and clean.get("reseat_at") == 1_700_000_000 + 5 * 86400,
+                f"moved-heads colony dates its last reseat to the newest program (got {clean and clean.get('reseat_at')})")
+    ok &= check(clean and clean.get("redeploy_at") is None, "no redeploy dated without a reach yardstick")
+    ok &= check(flat and flat.get("reseat_at") is None, "never-moved colony reports no reseat date")
     # Placements map is wired (a dict) so the UI can name concrete redeploy destinations.
     ok &= check(isinstance(data.get("placements"), dict), "response carries a placements map")
     return ok

@@ -1228,6 +1228,45 @@ def _reseat_status(samples: list) -> dict | None:
             "reseats_confirmed": moves, "reseat_tracked": tracked}
 
 
+def _colony_reach(ext_heads) -> float | None:
+    """Largest reachable-area radius (radians) across a colony's current ECUs — the yardstick that
+    tells a reseat (heads shuffled WITHIN reach) from a redeploy (the command centre picked up and
+    dropped BEYOND reach). None when there's no current head data to size it from."""
+    reach = None
+    for ecu in (ext_heads or []):
+        fp = _footprint(ecu)
+        if fp and (reach is None or fp[1] > reach):
+            reach = fp[1]
+    return reach
+
+
+def reseat_redeploy_events(samples, ext_heads=None) -> dict:
+    """Date the LAST reseat and the LAST redeploy from a colony's per-program head-centroid history.
+    `samples` = [(install_ts, "lat,lon"), ...] oldest→newest (one per extraction program). Each
+    program-to-program transition is classified by how far the head centroid moved:
+      • d <= _RESEAT_MOVE           → a same-spot program restart (heads didn't really move)
+      • _RESEAT_MOVE < d <= reach   → a reseat (heads shuffled within the ECU's reachable area)
+      • d > reach                   → a redeploy (the command centre moved beyond extraction range)
+    `reach` is the colony's CURRENT reachable-area radius (`_colony_reach`, from `ext_heads`); with
+    no current head data reach is unknown, so a far jump can't be told from a reseat and every move
+    is counted as a reseat (redeploy stays undated). Returns {"reseat_at": ts|None, "redeploy_at":
+    ts|None} — the install_ts of the newer program in the most recent transition of each kind. NOTE
+    a redeploy to a DIFFERENT planet starts a fresh (character_id, planet_id) history, so only a
+    redeploy to another area of the SAME planet is datable here."""
+    s = [(t, c) for (t, c) in (samples or []) if t and c]
+    reach = _colony_reach(ext_heads)
+    reseat_at = redeploy_at = None
+    for (_t0, c0), (t1, c1) in zip(s, s[1:]):
+        d = _centroid_dist(c0, c1)
+        if d <= _RESEAT_MOVE:
+            continue                                  # same spot — a plain restart, not a move
+        if reach is not None and d > reach:
+            redeploy_at = t1
+        else:
+            reseat_at = t1
+    return {"reseat_at": reseat_at, "redeploy_at": redeploy_at}
+
+
 def derive_redeploy_candidates(context_id: int) -> dict:
     """Both redeploy signals for one account (behind the endpoint below, factored out so tests can
     call it for a fixture context). Extractor colonies only — both are extraction concerns."""
@@ -1243,7 +1282,8 @@ def derive_redeploy_candidates(context_id: int) -> dict:
         WHERE c.context_id=? AND COALESCE(c.is_dummy,0)=0 AND cp.is_extractor=1
     """, (context_id,)).fetchall()
     hist_rows = con.execute("""
-        SELECT y.character_id AS cid, y.planet_id AS pid, y.peak_day AS peak, y.head_centroid AS centroid
+        SELECT y.character_id AS cid, y.planet_id AS pid, y.install_ts AS install,
+               y.peak_day AS peak, y.head_centroid AS centroid
         FROM pp_colony_yield y
         JOIN pp_characters c ON c.character_id = y.character_id
         WHERE c.context_id=? AND y.peak_day > 0
@@ -1309,17 +1349,24 @@ def derive_redeploy_candidates(context_id: int) -> dict:
     # ── Reseat exhausted: reseated repeatedly (heads moved) but still marginal → planet tapped ──
     # (JSON key stays `depleting` for compatibility; the meaning is now "reseating won't lift it".)
     samples_by: dict = {}
+    date_samples_by: dict = {}       # (install_ts, centroid) per program → last reseat/redeploy dates
     for h in hist_rows:
         samples_by.setdefault((h["cid"], h["pid"]), []).append((h["peak"], h["centroid"]))
+        date_samples_by.setdefault((h["cid"], h["pid"]), []).append((h["install"], h["centroid"]))
     depleting = []
     detected = set()
     for r in planets:
         status = _reseat_status(samples_by.get((r["cid"], r["pid"]), []))
         if status:
+            try:
+                _ecus = _json.loads(r["ext_heads"]) if r["ext_heads"] else None
+            except Exception:
+                _ecus = None
+            events = reseat_redeploy_events(date_samples_by.get((r["cid"], r["pid"]), []), _ecus)
             depleting.append({
                 "planet_id": r["pid"], "character": r["nm"], "character_id": r["cid"], "location": _loc(r),
                 "system": r["system"], "planet_num": r["pn"],
-                "p0_name": r["p0name"], "p1_name": p1name_by.get(r["p0"]), **status,
+                "p0_name": r["p0name"], "p1_name": p1name_by.get(r["p0"]), **status, **events,
             })
             detected.add((r["cid"], r["pid"]))
     # Manual "a reseat can't reach the target here" marks — a user-asserted reseat-exhausted flag. Add
