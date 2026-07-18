@@ -373,6 +373,7 @@ def list_characters(pp_session: str = Cookie(default=None)):
             except Exception:
                 program_days = None
         char_planets.setdefault(cid, []).append({
+            "planet_id":     p["planet_id"],
             "planet_type":   p["planet_type"],
             "is_extractor":  bool(p["is_extractor"]),
             "is_hybrid":     bool(p["is_hybrid"]),
