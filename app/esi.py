@@ -56,12 +56,16 @@ WALLET_SCOPES = WALLET_SCOPE
 # Reactions-industry job tracking, requested only on the dedicated "connect for reactions
 # tracking" login (?reactions=1) — same opt-in shape as the wallet scope, since only accounts
 # actually using the Reactions tool should be prompted for this, not every PI-planner user.
-# esi-structures.read_character.v1 resolves a job's facility_id to a readable name/system.
-# Unlike the wallet flow (a dedicated read-only alt), this is the player's OWN PI character —
-# they still need normal PI planning to keep working, so this UNIONS with the base SCOPES
-# rather than replacing them.
+# esi-universe.read_structures.v1 resolves a job's facility_id (an Upwell structure) to a readable
+# name via GET /universe/structures/{id}/. NOTE: an earlier value here — "esi-structures.read_character.v1"
+# — is NOT a real ESI scope (verified against the SSO scope catalog); EVE SSO silently dropped it,
+# so no reactions token ever carried a working structure-read grant and every facility name fell back
+# to the raw "Structure #<id>". Characters must RE-authorise reactions (?reactions=1) to pick up the
+# corrected scope, same as the corp-jobs rollout below. Unlike the wallet flow (a dedicated read-only
+# alt), this is the player's OWN PI character — they still need normal PI planning to keep working, so
+# this UNIONS with the base SCOPES rather than replacing them.
 INDUSTRY_JOBS_SCOPE  = "esi-industry.read_character_jobs.v1"
-STRUCTURES_SCOPE     = "esi-structures.read_character.v1"
+STRUCTURES_SCOPE     = "esi-universe.read_structures.v1"
 # A reaction installed "for corporation" (e.g. a shared corp hangar/reactor, not the character's
 # own personal jobs) only shows up via the CORPORATION industry-jobs endpoint, not the character
 # one above — confirmed 2026-07-13 (a real job installed at a corp POS never appeared under the
