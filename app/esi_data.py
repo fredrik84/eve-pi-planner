@@ -609,3 +609,24 @@ def refresh_char_planets(character_id: int, context_id: int = Depends(require_co
     cache_invalidate(charlist_key(context_id))
     return {"ok": True, "skills_updated": bool(skills),
             "planets_fetched": scan["fetched"], "planets_skipped_cached": scan["skipped"]}
+
+
+@router.post("/api/characters/{character_id}/refresh-planet/{planet_id}")
+def refresh_one_planet(character_id: int, planet_id: int, context_id: int = Depends(require_context)):
+    """Rescan ONE colony from ESI — the per-card 'rescan this planet' button, so checking progress
+    on a single reseat/move doesn't force a full-account scan. Skips skills/alliance refresh (nothing
+    to do with one colony) and force-fetches (bypasses the cache-skip)."""
+    con = get_connection()
+    try:
+        ok = con.execute("SELECT 1 FROM pp_characters WHERE character_id=? AND context_id=?",
+                         (character_id, context_id)).fetchone()
+    finally:
+        con.close()
+    if not ok:
+        raise HTTPException(status_code=403, detail="Character not in your context")
+    token = _get_valid_token(character_id)
+    if not token:
+        raise HTTPException(status_code=400, detail="No valid token for character")
+    scan = _fetch_planets(character_id, token, only_planet_id=planet_id)
+    cache_invalidate(charlist_key(context_id))
+    return {"ok": True, "planets_fetched": scan["fetched"], "planets_skipped_cached": scan["skipped"]}

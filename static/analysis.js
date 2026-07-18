@@ -383,14 +383,14 @@ function _renderRedeployUrgent(rows) {
         : '';
       return `<div class="an-redeploy-cl">
           <div class="an-redeploy-cl-h"><b>${_esc(c.location)}</b>${mat ? ` <span class="an-redeploy-p0">${_esc(mat)}</span>` : ''} <span class="an-redeploy-tag">${c.user_flagged ? 'marked maxed' : 'tapped'}</span></div>
-          <div class="an-redeploy-fix">Move <b>${_esc(c.character)}</b>'s ${mat ? _esc(mat) + ' ' : ''}extractor to ${spot} — ${why}, so a plain reseat won't fix it.${orRedeploy}${undo}</div>
+          <div class="an-redeploy-fix">Move <b>${_esc(c.character)}</b>'s ${mat ? _esc(mat) + ' ' : ''}extractor to ${spot} — ${why}, so a plain reseat won't fix it.${orRedeploy}${undo}${_rescanBtn(c)}</div>
         </div>`;
     }
     const nb = (c.neighbours || []);                   // overlap → same-planet move
     const nbTxt = nb.length ? ` away from ${nb.map(x => `<b>${_esc(x)}</b>`).join(', ')}` : '';
     return `<div class="an-redeploy-cl">
         <div class="an-redeploy-cl-h"><b>${_esc(c.location)}</b>${mat ? ` <span class="an-redeploy-p0">${_esc(mat)}</span>` : ''} <span class="an-redeploy-tag">overlap ${c.overlap_pct}%</span></div>
-        <div class="an-redeploy-fix">Move <b>${_esc(c.character)}</b>'s extractor to a clear area of the same planet${nbTxt} — the two fight over the same hotspots, so a plain reseat lands right back in it. Same planet, just a clear spot.</div>
+        <div class="an-redeploy-fix">Move <b>${_esc(c.character)}</b>'s extractor to a clear area of the same planet${nbTxt} — the two fight over the same hotspots, so a plain reseat lands right back in it. Same planet, just a clear spot.${_rescanBtn(c)}</div>
       </div>`;
   }).join('');
   _redeployCCLast = _redeployCCList(plan.chosen);
@@ -529,6 +529,8 @@ function renderAnalysis() {
     const ratio = need > 0 ? have / need : (have > 0 ? Infinity : 1);
     return { t, name: needs[t].name, have, need, ratio };
   }).sort((a, b) => a.ratio - b.ratio);
+
+  _reconcileStaleFlags(rows);   // drop "can't reach" flags whose material is no longer short
 
   const binding = rows[0];
   const feedPct = Math.round(Math.min(1, binding.ratio) * 100);
@@ -1097,6 +1099,51 @@ async function _toggleColonyFlag(characterId, planetId, flagged) {
   } catch (e) {}
 }
 
+// Rescan just ONE colony from EVE (per-card button) to check progress on a reseat/move without a
+// full-account scan. Refreshes the analysis data and re-renders, so a material that's now healthy —
+// or a colony that's now recovered — drops off the suggestions automatically.
+async function _rescanPlanetFromCard(characterId, planetId, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = 'Rescanning…'; }
+  try {
+    const resp = await fetch(`/api/characters/${characterId}/refresh-planet/${planetId}`, { method: 'POST' });
+    if (!resp.ok) { const d = await resp.json().catch(() => ({})); throw new Error(d.detail || `HTTP ${resp.status}`); }
+    await loadCharacters();             // re-read the (now cache-busted) charlist → fresh _ppCharsData
+    await _fetchRedeployCandidates();    // overlap / tapped state may have changed
+    renderAnalysis();                    // recompute — resolved materials/colonies drop off
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = '⟳ rescan'; }
+    alert('Rescan failed: ' + e.message);
+  }
+}
+function _rescanBtn(c) {
+  const cid = c.character_id != null ? c.character_id : c.cid;
+  if (cid == null || c.planet_id == null) return '';
+  return `<button type="button" class="an-rescan-btn" title="Rescan just this planet from EVE to check progress"`
+    + ` onclick="_rescanPlanetFromCard(${cid},${c.planet_id},this)">⟳ rescan</button>`;
+}
+
+// Clear "can't reach target" flags that are no longer relevant — the material the colony feeds is no
+// longer short (fixed some other way, or the colony recovered), or the colony/material isn't in the
+// current plan at all. A flag is a per-shortage assertion; once the shortage is gone it's just stale.
+function _reconcileStaleFlags(rows) {
+  if (!_colonyFlags.size) return;
+  const needBy = {};
+  rows.forEach(r => { needBy[r.t] = r.need; });
+  const stillShort = t => needBy[t] != null && (_extSupplyOf(t) || 0) < needBy[t];   // unclipped, matches _redeployPlan
+  const keep = new Set();
+  (_ppCharsData || []).forEach(ch => (ch.planets || []).forEach(p => {
+    if (!p.is_extractor) return;
+    const key = ch.character_id + '|' + p.planet_id;
+    if (_colonyFlags.has(key) && (p.production || []).some(o => stillShort(o.type_id))) keep.add(key);
+  }));
+  [..._colonyFlags].filter(k => !keep.has(k)).forEach(k => {
+    _colonyFlags.delete(k);                       // local: won't show as maxed this render
+    const [cid, pid] = k.split('|');
+    fetch('/api/colony-flags', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ character_id: +cid, planet_id: +pid, flagged: false }) }).catch(() => {});
+  });
+}
+
 // A colony in a real reachable-area overlap can't be recovered by a plain reseat — its heads re-land
 // inside the same overlap and keep competing. So those colonies are NOT reseat candidates; they need a
 // same-planet MOVE (surfaced automatically by _redeployPlan). Blocking them here is what lets all the
@@ -1184,7 +1231,7 @@ function _fixNudge(r) {
   const _loc = c => c.system ? `${_esc(c.char)} · ${_esc(c.system)}${c.planet_num != null ? ' P' + c.planet_num : ''}` : _esc(c.char);
   // One named colony to reseat: where it is, how far off its best, current → target extraction (P0/hr,
   // the in-game ECU rate), the P1/day it adds, and a "can't reach?" flag.
-  const _reseatLine = c => `<div class="an-pd-fix-col"><span class="an-pd-fix-loc"><b>${_loc(c)}</b> <span class="an-pd-fix-why">${Math.round(c.decline * 100)}% off best</span></span><span class="an-pd-fix-rec">${_p0hR(c.perDay).toLocaleString()} → ${_p0hR(c.target).toLocaleString()} P0/hr <span class="an-pd-fix-p1">+${Math.round(c.target - c.perDay).toLocaleString()} P1/day</span>${_flagBtn(c)}</span></div>`;
+  const _reseatLine = c => `<div class="an-pd-fix-col"><span class="an-pd-fix-loc"><b>${_loc(c)}</b> <span class="an-pd-fix-why">${Math.round(c.decline * 100)}% off best</span></span><span class="an-pd-fix-rec">${_p0hR(c.perDay).toLocaleString()} → ${_p0hR(c.target).toLocaleString()} P0/hr <span class="an-pd-fix-p1">+${Math.round(c.target - c.perDay).toLocaleString()} P1/day</span>${_flagBtn(c)}${_rescanBtn(c)}</span></div>`;
   const covered = p.use.reduce((s, c) => s + (c.target - c.perDay), 0);
 
   let fix;
@@ -1255,7 +1302,7 @@ function _burndownSection(rows) {
       return `<div class="an-bd-prod">
           <span class="an-bd-prod-loc">${_esc(c.char)}${loc ? ' · ' + loc : ''}</span>
           <span class="an-bd-prod-val">${_p0hR(c.perDay).toLocaleString()} → ${_p0hR(c.target).toLocaleString()}<span class="an-bd-unit"> P0/hr</span></span>
-          <span class="an-bd-prod-tag an-bd-down">▼ ${Math.round(c.decline * 100)}% off best${_flagBtn(c)}</span>
+          <span class="an-bd-prod-tag an-bd-down">▼ ${Math.round(c.decline * 100)}% off best${_flagBtn(c)}${_rescanBtn(c)}</span>
         </div>`;
     }).join('');
     const hasUnknown = prods.some(c => c.n < 2 && !_isColonyFlagged(c));

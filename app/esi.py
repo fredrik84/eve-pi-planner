@@ -494,12 +494,16 @@ def _record_yield_sample(con, character_id: int, planet_id: int, sim: dict | Non
         pass
 
 
-def _fetch_planets(character_id: int, access_token: str) -> dict:
+def _fetch_planets(character_id: int, access_token: str, only_planet_id: int | None = None) -> dict:
     """Fetch planet list + pin details from ESI, store in pp_char_planets.
 
     Returns {"fetched": N, "skipped": N} (planets actually re-fetched vs. skipped because
     ESI's cache hadn't lapsed yet — see esi_cache_skip) so a caller can surface real numbers
-    instead of digging through server logs (which aren't even configured to emit INFO here)."""
+    instead of digging through server logs (which aren't even configured to emit INFO here).
+
+    `only_planet_id` scopes the scan to ONE planet (the per-planet 'rescan this planet' button):
+    the delete-missing-planets purge is skipped (we're not looking at the others) and the ESI
+    cache-skip is bypassed (the user explicitly asked to re-check this one)."""
     con = None   # closed in `finally` below, however this function exits — leaking a Postgres
                  # connection out of the (tiny, 8-per-pod) pool on any exception anywhere in this
                  # long function (many sequential ESI calls) previously required a full pod
@@ -515,6 +519,9 @@ def _fetch_planets(character_id: int, access_token: str) -> dict:
             )
             resp.raise_for_status()
             planet_list = resp.json()
+
+        if only_planet_id is not None:
+            planet_list = [p for p in planet_list if p.get("planet_id") == only_planet_id]
 
         # Resolve any new solar_system_id → name via ESI universe/names
         sys_ids = list({p.get("solar_system_id") for p in planet_list if p.get("solar_system_id")})
@@ -550,13 +557,15 @@ def _fetch_planets(character_id: int, access_token: str) -> dict:
         con = get_connection()
         # Purge only planets no longer owned — planets still present may be skip-eligible
         # below (cache_skip), so we can't blanket-delete before knowing which ones those are.
-        _current_ids = tuple(p["planet_id"] for p in planet_list)
-        if _current_ids:
-            _ph = ",".join("?" * len(_current_ids))
-            con.execute(f"DELETE FROM pp_char_planets WHERE character_id=? AND planet_id NOT IN ({_ph})",
-                        (character_id, *_current_ids))
-        else:
-            con.execute("DELETE FROM pp_char_planets WHERE character_id=?", (character_id,))
+        # Skipped entirely for a single-planet rescan (we're not looking at the others).
+        if only_planet_id is None:
+            _current_ids = tuple(p["planet_id"] for p in planet_list)
+            if _current_ids:
+                _ph = ",".join("?" * len(_current_ids))
+                con.execute(f"DELETE FROM pp_char_planets WHERE character_id=? AND planet_id NOT IN ({_ph})",
+                            (character_id, *_current_ids))
+            else:
+                con.execute("DELETE FROM pp_char_planets WHERE character_id=?", (character_id,))
 
         # Reuse the connection already open above rather than opening a second one via
         # feature_enabled() — this function already holds `con` for its whole (potentially
@@ -577,7 +586,7 @@ def _fetch_planets(character_id: int, access_token: str) -> dict:
                 "SELECT planet_id, esi_expires FROM pp_char_planets WHERE character_id=?",
                 (character_id,),
             )
-        } if _skip_cached else {}
+        } if (_skip_cached and only_planet_id is None) else {}
         _now = time.time()
 
         _scan_ts = time.time()        # anchor for projecting buffer depletion between scans
