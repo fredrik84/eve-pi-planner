@@ -271,15 +271,27 @@ function _redeployPlan(rows) {
     const outByKey = {};
     producers.forEach(p => { outByKey[p.planet_id + '|' + p.char] = p.extPerDay || 0; });
     const used = new Set();
-    // 1) User-flagged "can't reach target" colonies for this material ALWAYS surface (the user said a
-    //    reseat can't lift it) — with a named richer planet if one's free, else a generic redeploy.
-    depl().forEach(d => {
-      if ((d.p1_name || d.p0_name) !== r.name || !d.user_flagged) return;
-      const key = d.planet_id + '|' + d.character;
+    const clusters = proxOn ? _overlapClustersFor(r.name) : [];
+    // 1) User-flagged "can't reach target" colonies ALWAYS surface for this short material — sourced
+    //    from the CLIENT flag set so it appears the instant the button is pressed (the backend refetch
+    //    then fills in a concrete richer-planet target). The FIRST fix is a same-planet relocate to a
+    //    clear / non-overlapping spot (a plain reseat re-lands in the same area); redeploying to another
+    //    planet is only the fallback, and only when a genuinely richer one is free.
+    producers.forEach(c => {
+      if (!_isColonyFlagged(c)) return;
+      const key = c.planet_id + '|' + c.char;
+      if (used.has(key)) return;
       used.add(key);
-      chosen.push({ action: 'redeploy', user_flagged: true, character: d.character, character_id: d.character_id,
-                    planet_id: d.planet_id, location: d.location, p0_name: d.p0_name, p1_name: d.p1_name || r.name,
-                    dest: destFor(d), current_richness: d.current_richness, _forMat: r.name });
+      const back = depl().find(d => d.planet_id === c.planet_id
+        && (d.character_id === c.character_id || d.character === c.char)) || {};
+      const raw = _redeployDest(c.p0, c.char);
+      const richer = (raw && back.current_richness != null && raw.richness > back.current_richness) ? raw : null;
+      const cl = clusters.find(g => g.planet_id === c.planet_id && g.characters.includes(c.char));
+      chosen.push({ action: 'relocate', user_flagged: true, character: c.char, character_id: c.character_id,
+                    planet_id: c.planet_id, p0_name: c.p0, p1_name: r.name,
+                    location: back.location || (c.system ? `${c.system}${c.planet_num != null ? ' P' + c.planet_num : ''}` : c.char),
+                    neighbours: cl ? cl.characters.filter(nm => nm !== c.char) : [],
+                    dest: richer, current_richness: back.current_richness, _forMat: r.name });
     });
     // 2) Reseat-first gate: only escalate further if reseating the recoverable (non-flagged) colonies
     //    back to peak still can't feed it.
@@ -304,7 +316,7 @@ function _redeployPlan(rows) {
                    rec: outByKey[key] || (extSupply / Math.max(producers.length, 1)) });
     });
     // Overlaps → move the weaker side to a clear area of the same planet (skip a colony already redeploying).
-    if (proxOn) _overlapClustersFor(r.name).forEach(c => {
+    clusters.forEach(c => {
       const mover = c.characters.slice().sort((a, b) =>
         (outByKey[c.planet_id + '|' + a] || 0) - (outByKey[c.planet_id + '|' + b] || 0))[0];
       if (used.has(c.planet_id + '|' + mover)) return;
@@ -330,24 +342,32 @@ function _renderRedeployUrgent(rows) {
     : mats.slice(0, -1).join(', ') + ' and ' + mats[mats.length - 1];
   const rowsHtml = plan.chosen.map(c => {
     const mat = c.p1_name || c.p0_name;
-    if (c.action === 'redeploy') {
-      const why = c.user_flagged
-        ? `you marked this one as unable to reach its target by reseating`
-        : (c.reseat_tracked
-            ? `you've reseated it ${c.reseats_confirmed}× and the peak still won't beat its best, so this planet's tapped`
-            : `reseating it across ${c.programs} programs still won't beat its best, so this planet's tapped`);
-      const destTxt = c.dest
-        ? `→ <b>${_esc(c.dest.loc)}</b> <span class="an-redeploy-dest-r">${_esc(c.dest.planet_type)} ${c.dest.richness}%${c.current_richness != null ? ` vs ${c.current_richness}% here` : ''}</span>`
-        : `to a richer planet <span class="an-redeploy-dest-r">— none free in your systems right now</span>`;
-      const undo = c.user_flagged
-        ? ` <button type="button" class="an-flag-btn an-flag-on" title="Undo — I'll reseat it after all" onclick="_toggleColonyFlag(${c.character_id},${c.planet_id},false)">undo</button>`
+    const undo = c.user_flagged
+      ? ` <button type="button" class="an-flag-btn an-flag-on" title="Undo — I'll reseat it after all" onclick="_toggleColonyFlag(${c.character_id},${c.planet_id},false)">undo</button>`
+      : '';
+    if (c.action === 'relocate') {                     // user-flagged: same-planet relocate first
+      const nb = (c.neighbours || []);
+      const spot = nb.length
+        ? `a non-overlapping spot on the same planet, away from ${nb.map(x => `<b>${_esc(x)}</b>`).join(', ')}`
+        : `a clearer spot on the same planet`;
+      const orRedeploy = c.dest
+        ? ` If a fresh spot still can't reach it, redeploy to <b>${_esc(c.dest.loc)}</b> <span class="an-redeploy-dest-r">${_esc(c.dest.planet_type)} ${c.dest.richness}%${c.current_richness != null ? ` vs ${c.current_richness}% here` : ''}</span>.`
         : '';
       return `<div class="an-redeploy-cl">
-          <div class="an-redeploy-cl-h"><b>${_esc(c.location)}</b>${mat ? ` <span class="an-redeploy-p0">${_esc(mat)}</span>` : ''} <span class="an-redeploy-tag">${c.user_flagged ? 'marked maxed' : 'tapped'}</span></div>
-          <div class="an-redeploy-fix">Redeploy <b>${_esc(c.character)}</b>'s ${mat ? _esc(mat) + ' ' : ''}colony ${destTxt} — ${why}.${undo}</div>
+          <div class="an-redeploy-cl-h"><b>${_esc(c.location)}</b>${mat ? ` <span class="an-redeploy-p0">${_esc(mat)}</span>` : ''} <span class="an-redeploy-tag">marked maxed</span></div>
+          <div class="an-redeploy-fix">Move <b>${_esc(c.character)}</b>'s ${mat ? _esc(mat) + ' ' : ''}extractor to ${spot} — you marked it as unable to reach target by reseating, and a plain reseat re-lands in the same area.${orRedeploy}${undo}</div>
         </div>`;
     }
-    const nb = (c.neighbours || []);
+    if (c.action === 'redeploy') {                     // auto-detected tapped planet → richer planet
+      const why = c.reseat_tracked
+        ? `you've reseated it ${c.reseats_confirmed}× and the peak still won't beat its best, so this planet's tapped`
+        : `reseating it across ${c.programs} programs still won't beat its best, so this planet's tapped`;
+      return `<div class="an-redeploy-cl">
+          <div class="an-redeploy-cl-h"><b>${_esc(c.location)}</b>${mat ? ` <span class="an-redeploy-p0">${_esc(mat)}</span>` : ''} <span class="an-redeploy-tag">tapped</span></div>
+          <div class="an-redeploy-fix">Redeploy <b>${_esc(c.character)}</b>'s ${mat ? _esc(mat) + ' ' : ''}colony → <b>${_esc(c.dest.loc)}</b> <span class="an-redeploy-dest-r">${_esc(c.dest.planet_type)} ${c.dest.richness}%${c.current_richness != null ? ` vs ${c.current_richness}% here` : ''}</span> — ${why}. A richer one is free.</div>
+        </div>`;
+    }
+    const nb = (c.neighbours || []);                   // overlap → same-planet move
     const nbTxt = nb.length ? ` away from ${nb.map(x => `<b>${_esc(x)}</b>`).join(', ')}` : '';
     return `<div class="an-redeploy-cl">
         <div class="an-redeploy-cl-h"><b>${_esc(c.location)}</b>${mat ? ` <span class="an-redeploy-p0">${_esc(mat)}</span>` : ''} <span class="an-redeploy-tag">overlap ${c.overlap_pct}%</span></div>
@@ -356,7 +376,7 @@ function _renderRedeployUrgent(rows) {
   }).join('');
   return `<div class="an-suggest an-suggest-redeploy-urgent">
       <div class="an-suggest-h">${n} fix${n === 1 ? '' : 'es'} to feed ${matList}</div>
-      <div class="an-sug-note">Reseating every colony back to its peak still wouldn't feed ${matList}, so ${n === 1 ? 'this one needs' : 'these need'} more than a reseat. Overlaps just move to a clear area of the SAME planet; a colony you've already reseated repeatedly without gain is tapped, so it redeploys to a richer free planet. This is just enough to close the shortage — everything else short just needs a reseat.</div>
+      <div class="an-sug-note">Reseating every colony back to its peak still wouldn't feed ${matList}, so ${n === 1 ? 'this one needs' : 'these need'} more than a reseat. Most fixes stay on the SAME planet — move the extractor to a clear or non-overlapping spot; only a planet you've reseated repeatedly without gain, with a richer one free, is worth moving planets. Just enough to close the shortage — everything else short just needs a reseat.</div>
       ${rowsHtml}
     </div>`;
 }
@@ -1041,13 +1061,14 @@ async function _fetchColonyFlags() {
 const _isColonyFlagged = c => _colonyFlags.has((c.character_id != null ? c.character_id : c.cid) + '|' + c.planet_id);
 async function _toggleColonyFlag(characterId, planetId, flagged) {
   const key = characterId + '|' + planetId;
-  if (flagged) _colonyFlags.add(key); else _colonyFlags.delete(key);   // optimistic
+  if (flagged) _colonyFlags.add(key); else _colonyFlags.delete(key);
+  renderAnalysis();   // instant: the colony moves out of reseat and into the redeploy list right away
   try {
     await fetch('/api/colony-flags', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ character_id: characterId, planet_id: planetId, flagged }) });
+    await _fetchRedeployCandidates();   // refresh so the card can name a concrete richer-planet target
+    renderAnalysis();
   } catch (e) {}
-  await _fetchRedeployCandidates();   // flagged colonies now come back as redeploy candidates
-  renderAnalysis();
 }
 
 // The colonies to RESEAT to help short material `r` — the SINGLE source of truth for both the bar
