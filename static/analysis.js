@@ -1129,14 +1129,15 @@ function _rescanBtn(c) {
     + ` onclick="_rescanPlanetFromCard(${cid},${c.planet_id},this)">⟳ rescan</button>`;
 }
 
-// "reseated Jul 15 · redeployed Jun 30" — when the colony's heads last moved within reach vs when
-// the command centre last moved beyond it (from the per-program head-centroid trail). Empty until a
-// second scanned program gives something to compare against.
+// "reseated 3 weeks ago · redeployed 2 months ago" — how long since the colony's heads last moved
+// within reach vs since the command centre last moved beyond it (from the per-program head-centroid
+// trail). The exact dates sit in the hover tooltip. Empty until a second scanned program gives
+// something to compare against.
 function _reseatDates(c) {
-  const bits = [];
-  if (c.reseat_at) bits.push(`reseated ${_fmtEpochDate(c.reseat_at)}`);
-  if (c.redeploy_at) bits.push(`redeployed ${_fmtEpochDate(c.redeploy_at)}`);
-  return bits.length ? `<span class="an-reseat-dates" title="Last time the heads moved within extraction range (reseat) vs the command centre moved beyond it (redeploy)">${bits.join(' · ')}</span>` : '';
+  const bits = [], tip = [];
+  if (c.reseat_at) { bits.push(`reseated ${_fmtEpochAgo(c.reseat_at)}`); tip.push(`Last reseat (heads moved within extraction range): ${_fmtEpochDate(c.reseat_at)}`); }
+  if (c.redeploy_at) { bits.push(`redeployed ${_fmtEpochAgo(c.redeploy_at)}`); tip.push(`Last redeploy (command centre moved beyond range): ${_fmtEpochDate(c.redeploy_at)}`); }
+  return bits.length ? `<span class="an-reseat-dates" title="${_esc(tip.join(' | '))}">${bits.join(' · ')}</span>` : '';
 }
 
 // Clear "can't reach target" flags that are no longer relevant — the material the colony feeds is no

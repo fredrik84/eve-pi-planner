@@ -62,7 +62,7 @@ function _fmtEpochClock(sec) {
 }
 
 // Unix epoch (seconds) → short local date, e.g. "Jul 15" (adds the year if it's not this one) —
-// used for "last reseated / last redeployed" hints on Setup Analysis colonies.
+// used as the exact-date hover tooltip behind the relative "N days ago" hints below.
 function _fmtEpochDate(sec) {
   if (!sec) return '';
   const d = new Date(sec * 1000);
@@ -70,6 +70,25 @@ function _fmtEpochDate(sec) {
   const opts = { month: 'short', day: 'numeric' };
   if (d.getFullYear() !== new Date().getFullYear()) opts.year = 'numeric';
   return d.toLocaleDateString([], opts);
+}
+
+// Unix epoch (seconds) → coarse relative age, e.g. "3 weeks ago" — used for "last reseated / last
+// redeployed" hints on Setup Analysis colonies, where "how long ago" reads faster than a date.
+function _fmtEpochAgo(sec) {
+  if (!sec) return '';
+  const diff = Date.now() - sec * 1000;
+  if (isNaN(diff)) return '';
+  if (diff < 0) return 'just now';
+  const days = Math.floor(diff / 86400000);
+  if (days === 0) return 'today';
+  if (days === 1) return 'yesterday';
+  if (days < 7) return `${days} days ago`;
+  const weeks = Math.floor(days / 7);
+  if (weeks < 5) return weeks === 1 ? 'a week ago' : `${weeks} weeks ago`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return months === 1 ? 'a month ago' : `${months} months ago`;
+  const years = Math.floor(days / 365);
+  return years === 1 ? 'a year ago' : `${years} years ago`;
 }
 
 // Parses one line of a pasted in-game inventory/asset list — name + quantity, tolerant of both
