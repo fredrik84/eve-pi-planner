@@ -486,6 +486,15 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 }
 .rx-suggest-cta .pp-card-hint { flex: 1 1 260px; }
 
+.rx-reconnect-note {
+  margin-bottom: 10px; padding: 8px 10px; border-radius: 6px; font-size: 12px;
+  color: #e6b455; background: rgba(230, 180, 85, 0.08); border: 1px solid rgba(230, 180, 85, 0.25);
+}
+.rx-reconnect-btn {
+  background: none; border: none; padding: 0; font: inherit; color: #5ab4e6;
+  text-decoration: underline; cursor: pointer;
+}
+.rx-reconnect-btn:hover { color: #7cc6f0; }
 .rx-char-row {
   display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
   padding: 10px 0; border-bottom: 1px solid var(--clr-border);

@@ -451,6 +451,10 @@ def list_characters(pp_session: str = Cookie(default=None)):
             "adv_mass_reactions": r["advanced_mass_reactions"],
             "reaction_slots":     min(11, 1 + r["mass_reactions"] + r["advanced_mass_reactions"]),
             "reactions_opted_in": "read_character_jobs" in sc,
+            # Opted into job tracking but the token predates (or never got) the corrected
+            # structure-read scope — so facility names can't resolve and show as "Structure #<id>".
+            # The UI nudges these characters to re-authorise (see esi.STRUCTURES_SCOPE's note).
+            "reactions_needs_structures": ("read_character_jobs" in sc) and ("universe.read_structures" not in sc),
             "reaction_jobs":      reaction_jobs_by_char.get(r["character_id"], []),
         })
     _admin, _tester = admin_and_tester_status_for_context(context_id)

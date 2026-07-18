@@ -645,12 +645,19 @@ function renderCharacters(chars, loggedIn) {
     // job tracking (?reactions=1). Populated from pp_char_industry_jobs via list_characters; empty
     // until a jobs refresh has run (tab-open / Rescan / the Reactions "Refresh jobs" button).
     const rxJobs = Array.isArray(c.reaction_jobs) ? c.reaction_jobs : [];
+    // The character opted into job tracking but its token lacks the structure-read scope, so
+    // facility names come back as "Structure #<id>". One-click re-authorise fixes it (same popup
+    // as the initial connect — re-auth of an already-connected character just adds the new scope).
+    const rxReconnect = (c.reactions_needs_structures && rxJobs.length)
+      ? `<div class="pp-char-rx-reconnect">⚠ Facility names can't load — <button type="button" class="pp-char-rx-reconnect-btn" onclick="connectReactionsTracking()">reconnect this character</button> to show them.</div>`
+      : '';
     const rxBlock = (_featureActive('reactions') && c.reactions_opted_in)
       ? `<div class="pp-char-rx">
            <div class="pp-char-rx-title">Reactions · ${rxJobs.length}/${c.reaction_slots} slot${c.reaction_slots !== 1 ? 's' : ''} running</div>
            ${rxJobs.length
              ? rxJobs.map(j => `<div class="pp-char-rx-job"><span class="pp-char-rx-name">${_esc(j.name)}</span><span class="pp-char-rx-meta">${j.runs != null ? j.runs + ' run' + (j.runs !== 1 ? 's' : '') : ''}${j.hours_left != null ? ' · ' + _fmtHours(j.hours_left) + ' left' : ''}${j.facility_name ? ' · ' + _esc(j.facility_name) : ''}</span></div>`).join('')
              : '<div class="pp-char-rx-empty">No reaction jobs running — install some from the Reactions tab.</div>'}
+           ${rxReconnect}
          </div>`
       : '';
 

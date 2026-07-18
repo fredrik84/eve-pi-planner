@@ -164,6 +164,9 @@
 .pp-char-rx-name { color: #c0b0e0; font-weight: 600; }
 .pp-char-rx-meta { color: #56607a; font-size: 11px; font-family: 'Consolas', monospace; }
 .pp-char-rx-empty { font-size: 11px; color: #56607a; font-style: italic; }
+.pp-char-rx-reconnect { margin-top: 5px; font-size: 11px; color: #e6b455; }
+.pp-char-rx-reconnect-btn { background: none; border: none; padding: 0; font: inherit; color: #5ab4e6; text-decoration: underline; cursor: pointer; }
+.pp-char-rx-reconnect-btn:hover { color: #7cc6f0; }
 
 .pp-target-form {
   padding: 12px 14px;

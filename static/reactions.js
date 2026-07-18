@@ -523,7 +523,15 @@ function _renderReactionsDashboard(data) {
     : '';
   if (metricsEl) metricsEl.innerHTML = overviewTiles + progressBar;
 
-  el.innerHTML = todoListHtml + rows + untrackedNote;
+  // Characters whose token lacks the structure-read scope AND have a job running (so an unresolved
+  // "Structure #<id>" is actually visible) — one re-authorise adds the scope and resolves the names.
+  const needReconnect = tracked.filter(c => c.needs_structures
+    && (data.running || []).some(j => j.character_id === c.character_id));
+  const reconnectNote = needReconnect.length
+    ? `<div class="rx-reconnect-note">⚠ Facility names show as raw IDs for <b>${needReconnect.map(c => _esc(c.character_name)).join(', ')}</b> — <button type="button" class="rx-reconnect-btn" onclick="connectReactionsTracking()">reconnect</button> to resolve them.</div>`
+    : '';
+
+  el.innerHTML = reconnectNote + todoListHtml + rows + untrackedNote;
 }
 
 function _rxCancelAssignment(assignmentId) {

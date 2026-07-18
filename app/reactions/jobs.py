@@ -670,6 +670,10 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
             "character_id": c["character_id"], "character_name": c["character_name"], "tracked": True,
             "slots": slots, "free_slots": max(0, slots - len(active) - len(pending)),
             "pending": pending,
+            # Opted into tracking but the token lacks the structure-read scope — facility names
+            # can't resolve (show "Structure #<id>"); the UI nudges a re-authorise. See
+            # esi.STRUCTURES_SCOPE's note on why older tokens don't carry it.
+            "needs_structures": "universe.read_structures" not in (c["scopes"] or ""),
         })
         # Whatever remains in running_type_counts after plan-row matching is ORPHAN jobs: running
         # in-game with no plan slot (installed outside the tool's assign flow — e.g. a corp job).
