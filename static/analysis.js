@@ -1113,32 +1113,30 @@ function _overlapBlockedKeys(p1name) {
 
 // The colonies to RESEAT to help short material `r` — the SINGLE source of truth for both the bar
 // drilldown (_fixNudge) and the reseat lever (_burndownSection), so they can never show different
-// targets for the same colony. Each is lifted only far enough to close its share of the +10% gap and
-// never past its own proven peak (declined recovery — NOT the optimistic full-factory-rate lift a thin
-// planet can't actually reach by reseating). Strongest-recovery first, capped at _RESEAT_PER_P1 so we
-// never wall the player with 8 reseats. Flagged AND overlapping colonies are dropped (they can't be
-// reseat-fixed — they go to the same-planet move / redeploy list instead).
+// targets. Each is lifted to its OWN proven peak (declined recovery — NOT the optimistic full-factory-
+// rate lift a thin planet can't actually reach by reseating). A STABLE to-do list (all declined
+// colonies, strongest first, capped) rather than a shrinking gap-closing set, so working through it or
+// rescanning doesn't drop the ones you haven't done yet. Flagged AND overlapping colonies are dropped
+// (they can't be reseat-fixed — they go to the same-planet move / redeploy list instead).
 function _reseatPlan(r) {
   const RECLAIM = 0.05;
   const extSupply = _extSupplyOf(r.t) || r.have;
   const gap = Math.max(0, r.need * (1 + _HEALTHY_BUFFER) - extSupply);
   const blocked = _overlapBlockedKeys(r.name);
-  const recoverable = _producersOf(r.t)
+  // Every DECLINED colony dragging this material, strongest-recovery first, each with its OWN proven
+  // peak as the target. This is a STABLE to-do list, not a shrinking "just enough to close the gap"
+  // set: reseat one and only IT drops off (its decline resolves on rescan) — the others stay until
+  // you've done them (or the material goes healthy). Capped at _RESEAT_PER_P1 so it never walls you.
+  const declined = _producersOf(r.t)
     .filter(c => !_isColonyFlagged(c) && !blocked.has(c.planet_id + '|' + c.char))
     .map(c => ({ ...c, rec: (c.n >= 2 && c.decline >= RECLAIM) ? c.perDay * c.decline / (1 - c.decline) : 0 }))
     .filter(c => c.rec > 0)
     .sort((a, b) => b.rec - a.rec);
-  let remain = gap;
-  const use = [];
-  for (const c of recoverable) {
-    if (remain <= 0 || use.length >= _RESEAT_PER_P1) break;
-    const contrib = Math.min(c.rec, remain);
-    use.push({ ...c, target: c.perDay + contrib });
-    remain -= contrib;
-  }
-  return { gap, extSupply, use, recoverable,
-           covers: remain <= 0 && use.length > 0,        // the shown reseats close the gap
-           capHit: use.length >= _RESEAT_PER_P1 && remain > 0,   // more would help but we capped the list
+  const use = declined.slice(0, _RESEAT_PER_P1).map(c => ({ ...c, target: c.perDay + c.rec }));
+  const totalRec = declined.reduce((s, c) => s + c.rec, 0);
+  return { gap, extSupply, use, declined,
+           covers: totalRec >= gap && declined.length > 0,   // reseating them all reaches +10%
+           capHit: declined.length > _RESEAT_PER_P1,          // more declined colonies than we list
            landPct: added => r.need > 0 ? Math.round((extSupply + added) / r.need * 100 - 100) : 0 };
 }
 
@@ -1177,10 +1175,11 @@ function _fixNudge(r) {
 
   let fix;
   if (p.use.length) {
+    const lead = p.use.length === 1 ? `This colony is` : `These ${p.use.length} colonies are`;
     const suffix = p.covers
-      ? `recovers lost yield, lifting ${_esc(r.name)} to <b>+${p.landPct(covered)}%</b> (healthy), no new colony`
-      : `recovers the biggest ${p.use.length} — still short after, so <b>redeploy</b> a tapped colony to a richer planet or <b>add</b> one`;
-    fix = `Reseat ${p.use.length === 1 ? 'this colony' : `these ${p.use.length} colonies`} onto denser hotspots → ${suffix}:`
+      ? `reseat from the top until ${_esc(r.name)} is healthy (recovering them all reaches <b>+${p.landPct(covered)}%</b>)`
+      : `reseating them all still leaves ${_esc(r.name)} short, so also <b>redeploy</b> a tapped colony to a richer planet or <b>add</b> one`;
+    fix = `${lead} below their proven best — ${suffix}:`
         + `<div class="an-pd-fix-list">${p.use.map(_reseatLine).join('')}</div>`;
   } else if (!prods.length) {
     fix = `<b>Add a ${_esc(r.name)} colony</b> — nothing produces it yet.`;
@@ -1234,8 +1233,8 @@ function _burndownSection(rows) {
       return `<div class="an-bd-group"><div class="an-bd-group-h">${_esc(r.name)} <span class="an-bd-group-sub">short ${shortBy.toLocaleString()}/day · no colony makes it yet</span></div>`
         + `<div class="an-bd-target"><b>Add</b> a ${_esc(r.name)} colony.</div></div>`;
 
-    // SAME colonies + targets as the bar drilldown (_reseatPlan): declined colonies only, each lifted
-    // just enough to close its share of the +10% gap, strongest-recovery first, capped at _RESEAT_PER_P1.
+    // SAME colonies + targets as the bar drilldown (_reseatPlan): a stable list of the declined colonies
+    // dragging this material, strongest-recovery first, each to its own proven peak, capped.
     const p = _reseatPlan(r);
     const reseatRows = p.use.map(c => {
       const loc = c.system ? `${_esc(c.system)}${c.planet_num != null ? ' P' + c.planet_num : ''}` : '';
@@ -1250,10 +1249,10 @@ function _burndownSection(rows) {
 
     let action, list = '';
     if (p.use.length && p.covers) {
-      action = `<b>Reseat</b> the ${p.use.length === 1 ? 'colony' : `${p.use.length} colonies`} below — covers the <b>${shortBy.toLocaleString()}/day</b> gap.`;
+      action = `<b>Reseat</b> the ${p.use.length === 1 ? 'colony' : `${p.use.length} colonies`} below (strongest first) until ${_esc(r.name)} is healthy — do them at your pace, each drops off once done.`;
       list = `<div class="an-bd-prod-list">${reseatRows}</div>`;
     } else if (p.use.length) {
-      action = `<b>Reseat</b> the ${p.use.length} below (biggest recovery first) — still short after, so ${redeployTail}.`;
+      action = `<b>Reseat</b> the ${p.use.length} below — recovering them all still leaves ${_esc(r.name)} short, so also ${redeployTail}.`;
       list = `<div class="an-bd-prod-list">${reseatRows}</div>`;
     } else if (hasUnknown) {
       action = `No decline measured yet — <b>try reseating</b>, then <b>Rescan</b>. If it doesn't add ~${shortBy.toLocaleString()}/day, ${redeployTail}.`;
