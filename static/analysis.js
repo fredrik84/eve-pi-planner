@@ -220,19 +220,15 @@ function _redeployDest(p0Name, character) {
   return d ? { loc: `${d.system} P${d.planet_num}`, richness: d.richness, planet_type: d.planet_type } : null;
 }
 
-// Command centres to bring for the suggested moves: one per colony, grouped by the planet type it's
-// (re)built on — the colony's own type for a same-planet relocate/move, the destination's for a
-// redeploy. The CC is the only market item a move needs (ECU/launchpad/factories are ISK-only).
-let _redeployCCLast = [];
-function _redeployCCList(chosen) {
-  const by = {};
-  (chosen || []).forEach(c => { if (c.cc_type) by[c.cc_type] = (by[c.cc_type] || 0) + 1; });
-  return Object.keys(by).sort().map(t => ({ name: `${t} Command Center`, qty: by[t] }));
-}
-function _redeployCopyCC(btn) {
-  const text = _redeployCCLast.map(s => `${s.name}\t${s.qty}`).join('\n');
-  try { navigator.clipboard.writeText(text); } catch (e) {}
-  if (btn) { const t = btn.textContent; btn.textContent = 'Copied'; setTimeout(() => { btn.textContent = t; }, 1500); }
+// "Working on this" pins — colonies (character_id|planet_id) the player is actively fixing. Persisted
+// so the highlight survives rescans/re-renders, so you never lose the card you're mid-fix on.
+let _anWorking = new Set();
+try { _anWorking = new Set(JSON.parse(localStorage.getItem('anWorking') || '[]')); } catch (e) {}
+function _toggleWorking(cid, pid) {
+  const k = cid + '|' + pid;
+  if (_anWorking.has(k)) _anWorking.delete(k); else _anWorking.add(k);
+  try { localStorage.setItem('anWorking', JSON.stringify([..._anWorking])); } catch (e) {}
+  renderAnalysis();
 }
 
 // Overlap clusters for one material (P1 name): union-find the characters sharing a planet+hotspot in
@@ -283,8 +279,8 @@ function _redeployPlan(rows) {
     const extSupply = _extSupplyOf(r.t) || r.have;
     if (extSupply >= r.need) return;                       // fed → nothing to escalate
     const producers = _producersOf(r.t);
-    const outByKey = {}, ptypeByKey = {};
-    producers.forEach(p => { outByKey[p.planet_id + '|' + p.char] = p.extPerDay || 0; ptypeByKey[p.planet_id + '|' + p.char] = p.planet_type; });
+    const outByKey = {}, ptypeByKey = {}, cidByKey = {};
+    producers.forEach(p => { const k = p.planet_id + '|' + p.char; outByKey[k] = p.extPerDay || 0; ptypeByKey[k] = p.planet_type; cidByKey[k] = p.character_id; });
     const used = new Set();
     const clusters = proxOn ? _overlapClustersFor(r.name) : [];
     const blocked = _overlapBlockedKeys(r.name);   // overlapping colonies a reseat can't recover
@@ -344,7 +340,8 @@ function _redeployPlan(rows) {
         (outByKey[c.planet_id + '|' + a] || 0) - (outByKey[c.planet_id + '|' + b] || 0))[0];
       if (used.has(c.planet_id + '|' + mover)) return;
       const tied = c.characters.reduce((s, nm) => s + (outByKey[c.planet_id + '|' + nm] || 0), 0);
-      cands.push({ action: 'move', character: mover, planet_id: c.planet_id, location: c.location, p0_name: c.p0_name,
+      cands.push({ action: 'move', character: mover, character_id: cidByKey[c.planet_id + '|' + mover],
+                   planet_id: c.planet_id, location: c.location, p0_name: c.p0_name,
                    p1_name: c.p1_name || r.name, overlap_pct: c.overlap_pct, cc_type: c.planet_type,
                    neighbours: c.characters.filter(nm => nm !== mover), rec: tied * (c.overlap_pct / 100) });
     });
@@ -363,8 +360,14 @@ function _renderRedeployUrgent(rows) {
   const mats = plan.materials.map(m => `<b>${_esc(m)}</b>`);
   const matList = mats.length === 1 ? mats[0]
     : mats.slice(0, -1).join(', ') + ' and ' + mats[mats.length - 1];
-  const rowsHtml = plan.chosen.map(c => {
+  const rowHtml = c => {
     const mat = c.p1_name || c.p0_name;
+    const ptype = c.cc_type ? ` <span class="an-cc-tag">${_esc(c.cc_type)}</span>` : '';   // planet type → which template
+    const key = c.character_id + '|' + c.planet_id;
+    const working = _anWorking.has(key);
+    const pin = (c.character_id != null && c.planet_id != null)
+      ? ` <button type="button" class="an-work-btn${working ? ' an-work-on' : ''}" title="${working ? 'Working on this — click to unpin' : "Pin the one you're fixing now (stays highlighted across rescans)"}" onclick="_toggleWorking(${c.character_id},${c.planet_id})">${working ? '● working' : '○ working'}</button>`
+      : '';
     const undo = c.user_flagged
       ? ` <button type="button" class="an-flag-btn an-flag-on" title="Undo — I'll reseat it after all" onclick="_toggleColonyFlag(${c.character_id},${c.planet_id},false)">undo</button>`
       : '';
@@ -379,31 +382,35 @@ function _renderRedeployUrgent(rows) {
             ? `you've reseated it ${c.reseats_confirmed}× and it still won't beat its best`
             : `reseating it across ${c.programs} programs still won't beat its best`);
       const orRedeploy = c.dest
-        ? ` Only if a fresh area still can't reach it, redeploy to <b>${_esc(c.dest.loc)}</b> <span class="an-redeploy-dest-r">${_esc(c.dest.planet_type)} ${c.dest.richness}%${c.current_richness != null ? ` vs ${c.current_richness}% here` : ''}</span> — far more work (dismantle + haul, maybe another system), so a last resort.`
+        ? ` Only if a fresh area still can't reach it, redeploy to <b>${_esc(c.dest.loc)}</b> <span class="an-redeploy-dest-r">${_esc(c.dest.planet_type)} ${c.dest.richness}%${c.current_richness != null ? ` vs ${c.current_richness}% here` : ''}</span> — that one DOES need a new ${_esc(c.dest.planet_type)} Command Center + dismantle/haul (maybe another system), so a last resort.`
         : '';
-      return `<div class="an-redeploy-cl">
-          <div class="an-redeploy-cl-h"><b>${_esc(c.location)}</b>${mat ? ` <span class="an-redeploy-p0">${_esc(mat)}</span>` : ''} <span class="an-redeploy-tag">${c.user_flagged ? 'marked maxed' : 'tapped'}</span></div>
-          <div class="an-redeploy-fix">Move <b>${_esc(c.character)}</b>'s ${mat ? _esc(mat) + ' ' : ''}extractor to ${spot} — ${why}, so a plain reseat won't fix it.${orRedeploy}${undo}${_rescanBtn(c)}</div>
+      return `<div class="an-redeploy-cl${working ? ' an-working' : ''}">
+          <div class="an-redeploy-cl-h"><b>${_esc(c.location)}</b>${ptype}${mat ? ` <span class="an-redeploy-p0">${_esc(mat)}</span>` : ''} <span class="an-redeploy-tag">${c.user_flagged ? 'marked maxed' : 'tapped'}</span>${pin}</div>
+          <div class="an-redeploy-fix">Delete the ${mat ? _esc(mat) + ' ' : ''}extractor and drop a fresh template in ${spot} — ${why}, so a plain reseat won't fix it. No new command centre — you keep the one already there.${orRedeploy}${undo}${_rescanBtn(c)}</div>
         </div>`;
     }
     const nb = (c.neighbours || []);                   // overlap → same-planet move
     const nbTxt = nb.length ? ` away from ${nb.map(x => `<b>${_esc(x)}</b>`).join(', ')}` : '';
-    return `<div class="an-redeploy-cl">
-        <div class="an-redeploy-cl-h"><b>${_esc(c.location)}</b>${mat ? ` <span class="an-redeploy-p0">${_esc(mat)}</span>` : ''} <span class="an-redeploy-tag">overlap ${c.overlap_pct}%</span></div>
-        <div class="an-redeploy-fix">Move <b>${_esc(c.character)}</b>'s extractor to a clear area of the same planet${nbTxt} — the two fight over the same hotspots, so a plain reseat lands right back in it. Same planet, just a clear spot.${_rescanBtn(c)}</div>
+    return `<div class="an-redeploy-cl${working ? ' an-working' : ''}">
+        <div class="an-redeploy-cl-h"><b>${_esc(c.location)}</b>${ptype}${mat ? ` <span class="an-redeploy-p0">${_esc(mat)}</span>` : ''} <span class="an-redeploy-tag">overlap ${c.overlap_pct}%</span>${pin}</div>
+        <div class="an-redeploy-fix">Delete the extractor and drop a fresh template in a clear area of the same planet${nbTxt} — the two fight over the same hotspots, so a plain reseat lands right back in it. No new command centre needed.${_rescanBtn(c)}</div>
+      </div>`;
+  };
+  // Group by CHARACTER — in EVE you're logged into one at a time, so all of a character's fixes (and
+  // the CCs to bring for that session) belong together, minimizing log off/in trips.
+  const byChar = {};
+  plan.chosen.forEach(c => { (byChar[c.character] = byChar[c.character] || []).push(c); });
+  const groupsHtml = Object.keys(byChar).sort((a, b) => a.localeCompare(b, undefined, { numeric: true })).map(nm => {
+    const items = byChar[nm];
+    return `<div class="an-redeploy-char">
+        <div class="an-redeploy-char-h"><b>${_esc(nm)}</b> <span class="an-redeploy-char-sub">${items.length} fix${items.length === 1 ? '' : 'es'}, one login</span></div>
+        ${items.map(rowHtml).join('')}
       </div>`;
   }).join('');
-  _redeployCCLast = _redeployCCList(plan.chosen);
-  const ccHtml = _redeployCCLast.length ? `<div class="an-redeploy-shop">
-      <span class="an-redeploy-shop-lbl">Command centres to bring</span>
-      <span class="an-redeploy-shop-list">${_redeployCCLast.map(s => `${s.qty}× ${_esc(s.name)}`).join(' · ')}</span>
-      <button class="pp-add-btn" onclick="_redeployCopyCC(this)">Copy</button>
-    </div>` : '';
   return `<div class="an-suggest an-suggest-redeploy-urgent">
       <div class="an-suggest-h">${n} fix${n === 1 ? '' : 'es'} to feed ${matList}</div>
-      <div class="an-sug-note">Reseating every colony back to its peak still wouldn't feed ${matList}, so ${n === 1 ? 'this one needs' : 'these need'} more than a reseat. Every fix here stays on the SAME planet — move the extractor to a different, clearer (or non-overlapping) area. Changing planets is only ever a last resort, mentioned when a richer one happens to be free, because dismantling and hauling to another planet/system is far more work. Just enough to close the shortage — everything else short just needs a reseat.</div>
-      ${ccHtml}
-      ${rowsHtml}
+      <div class="an-sug-note">Reseating every colony back to its peak still wouldn't feed ${matList}, so ${n === 1 ? 'this one needs' : 'these need'} more than a reseat. Every fix stays on the SAME planet — <b>delete the extractor and drop a fresh template</b> in a different, clearer (or non-overlapping) area, keeping the command centre that’s already there (<b>no new CC</b>). Grouped by character so you can do each in a single login. Changing planets is a last resort (the one case that needs a new CC).</div>
+      ${groupsHtml}
     </div>`;
 }
 

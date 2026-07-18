@@ -506,5 +506,14 @@
   background: transparent; color: #6fb0dc; cursor: pointer; white-space: nowrap; opacity: 0.8; }
 .an-rescan-btn:hover:not(:disabled) { border-color: #4a5a72; background: #1a2130; opacity: 1; }
 .an-rescan-btn:disabled { opacity: 0.5; cursor: default; }
+.an-work-btn { font-size: 11px; margin-left: 8px; padding: 1px 7px; border-radius: 4px; border: 1px solid #2f3a4d;
+  background: transparent; color: #7f8da0; cursor: pointer; white-space: nowrap; opacity: 0.75; }
+.an-work-btn:hover { border-color: #b58f3a; color: #d6c28f; opacity: 1; }
+.an-work-btn.an-work-on { color: #f0c869; border-color: #7a6320; background: #2a2410; opacity: 1; }
+.an-redeploy-cl.an-working { border-left: 3px solid #f0c869; background: rgba(240,200,105,0.06); padding-left: 8px; }
+.an-redeploy-char { margin: 10px 0 4px; }
+.an-redeploy-char-h { font-size: 13px; font-weight: 700; color: var(--clr-text-bright); padding: 4px 0 2px;
+  border-bottom: 1px solid #23324a; margin-bottom: 4px; }
+.an-redeploy-char-sub { font-size: 11px; font-weight: 500; color: #7f8da0; margin-left: 6px; }
 .an-redeploy-later > summary { cursor: pointer; font-size: 12.5px; color: #8fb4d6; padding: 4px 0; }
 
