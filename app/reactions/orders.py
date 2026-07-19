@@ -28,7 +28,11 @@ def _order_report(context_id: int, order: dict) -> dict:
     market conditions the way the day-cadence opportunity table does). No markup is applied to
     cost — the user decides what to actually charge the client; this only reports what it costs
     to produce."""
-    loaded = _load_goo_and_reached(context_id)
+    # A customer order is a concrete thing you'll actually make, so market is the fallback default:
+    # a material the group sheet marks stock 0 ("alliance is out") is priced/sourced from the open
+    # market instead (exclude_out_of_stock — same as the shopping list). The alliance sheet is only
+    # a cheaper-when-available bonus, never assumed in stock.
+    loaded = _load_goo_and_reached(context_id, exclude_out_of_stock=True)
     node = loaded[1].get(order["type_id"]) if loaded else None
     if not node or node.get("via") is None:
         return {
@@ -101,7 +105,9 @@ def _resolve_order_target(context_id: int, req: OrderCreateRequest) -> tuple[str
     preview and create endpoints so they can't drift on reachability or the runs rounding."""
     if req.target_qty <= 0:
         raise HTTPException(status_code=400, detail="Target quantity must be positive")
-    loaded = _load_goo_and_reached(context_id)
+    # Reachability judged with the same market-fallback sourcing the order report will use, so a
+    # stock-0 material stays reachable via the market rather than falsely failing the order.
+    loaded = _load_goo_and_reached(context_id, exclude_out_of_stock=True)
     node = loaded[1].get(req.type_id) if loaded else None
     if not node or node.get("via") is None:
         raise HTTPException(status_code=404, detail="Not a reachable reaction product right now")
@@ -207,7 +213,8 @@ def assign_reaction_order(order_id: int, req: OrderAssignRequest, context_id: in
     if runs_to_assign <= 0:
         raise HTTPException(status_code=400, detail="Nothing to assign")
 
-    loaded = _load_goo_and_reached(context_id)
+    # Committed order cost uses the same market-fallback sourcing (stock 0 -> market) as the report.
+    loaded = _load_goo_and_reached(context_id, exclude_out_of_stock=True)
     node = loaded[1].get(order["type_id"]) if loaded else None
     if not node or node.get("via") is None:
         raise HTTPException(status_code=400, detail="This product isn't reachable right now — check priced materials")
