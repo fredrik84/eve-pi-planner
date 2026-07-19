@@ -1406,10 +1406,10 @@ function _burndownSection(rows) {
     if (p.cantReseat.length) {
       const hasRef = p.cantReseat.some(c => c.reason === 'refining');
       const hasFresh = p.cantReseat.some(c => c.reason === 'fresh');
-      const why = hasRef && hasFresh ? `they already extract more than the planet can refine, or were just redeployed`
+      const why = hasRef && hasFresh ? `they already extract more than the on-planet basics can refine, or were just redeployed`
                 : hasRef ? `they already extract more than the on-planet basics can refine — restoring extraction adds nothing`
                 : `they were just redeployed and are still settling`;
-      const fix = hasRef ? ` Raise <b>refining</b> instead (higher CC, smaller planet, storage-less extractor, or split the extraction), or redeploy to a richer planet if the planet itself is poor.`
+      const fix = hasRef ? ` <b>Add a Basic Industry Facility</b> — rebuild as a <b>storage-less</b> extractor (the launchpad becomes the hub) to free the power grid for one more basic. A very rich or large planet may still leave some extraction unrefined even then.`
                 : ` They're effectively already fixed — <b>Rescan</b> once they ramp.`;
       blocks.push(`<div class="an-bd-target"><b>Don't reseat</b> the ${p.cantReseat.length === 1 ? 'colony' : 'colonies'} below — ${why}.${fix}</div><div class="an-bd-prod-list">${cantRows}</div>`);
     }

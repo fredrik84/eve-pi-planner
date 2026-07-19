@@ -507,7 +507,7 @@ def build_flat_p2_template(product_id: int, n_fac: int, struct: dict,
 
 def build_extractor_template(p1_id: int, planet_type: str, struct: dict, pi_data: dict,
                              heads: int, n_basic: int, n_launchpads: int = 1,
-                             no_storage: bool = False) -> dict:
+                             no_storage: bool = False, diam: float | None = None) -> dict:
     """
     P0→P1 extractor planet: a hub at centre, surrounded by an Extractor Control Unit
     (extracting the P0), `n_basic` Basic Industry Facilities (making the P1) and the
@@ -562,7 +562,12 @@ def build_extractor_template(p1_id: int, planet_type: str, struct: dict, pi_data
     # Lead with the P0 — that's what you search/select in-game to find hotspots — then the P1.
     cmt = f"{types[p0_id]['name']} → {types[p1_id]['name']}"   # planet type omitted — templates are portable
     return {
-        "template": {"CmdCtrLv": CMD_CTR_LEVEL, "Cmt": cmt, "Diam": PLANET_DIAM.get(planet_type, 8000.0),
+        "template": {"CmdCtrLv": CMD_CTR_LEVEL, "Cmt": cmt,
+                     # Real per-planet diameter when known (from pp_planets.diameter) — the head-spoke
+                     # PG cost scales with radius, so using the planet TYPE default (Gas Ø40000) instead
+                     # of the actual planet (often smaller) needlessly dropped a basic. Falls back to the
+                     # type default when the caller has no real size.
+                     "Diam": float(diam) if diam else PLANET_DIAM.get(planet_type, 8000.0),
                      "Pln": struct["planet_type_id"], "P": pins, "L": links, "R": routes},
         "name": cmt, "p0_id": p0_id, "p0_name": types[p0_id]["name"], "n_basic": n_basic,
         "heads": heads, "n_launchpads": len(lps),
@@ -747,7 +752,8 @@ def _p0_planets(p0_name: str) -> list[str]:
 
 def generate_extractor_layout(p1_id: int, planet_type: str = "Barren", launchpads: int = 1,
                               heads: int = EXTRACTOR_HEADS, n_basic: int = EXTRACTOR_BASICS,
-                              cc_level: Optional[int] = None, no_storage: bool = False) -> dict:
+                              cc_level: Optional[int] = None, no_storage: bool = False,
+                              diam: Optional[float] = None) -> dict:
     """One importable P0→P1 extractor template for a chosen P1 product. `cc_level` sets the
     command-centre level (CPU/PG budget); all 10 extractor heads are always kept, and only the
     basic (P1) factory count is scaled down to fit a lower level. Defaults to CMD_CTR_LEVEL."""
@@ -768,7 +774,7 @@ def generate_extractor_layout(p1_id: int, planet_type: str = "Barren", launchpad
 
     def _build(h, nb):
         b = build_extractor_template(p1_id, planet_type, struct, pi_data, h, nb, n_launchpads=lp,
-                                     no_storage=no_storage)
+                                     no_storage=no_storage, diam=diam)
         b["template"]["CmdCtrLv"] = cc
         return b
 
@@ -906,7 +912,7 @@ def generate_layout(product_id: int, planet_type: str = "Barren",
 
     if tier == 1:
         return generate_extractor_layout(product_id, planet_type, launchpads=launchpads, cc_level=cc,
-                                         no_storage=no_storage)
+                                         no_storage=no_storage, diam=diam_override)
 
     if tier == 4 and planet_type not in P4_PLANET_TYPES:
         planet_type = "Barren"   # High-Tech Production Plant is Barren/Temperate only

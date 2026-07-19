@@ -2460,13 +2460,20 @@ function renderFinalPlan(data, opts = {}) {
         const cc = f.ccu || data.stats?.plan_cc || 5;
         combos.set(`f|${tid}|${ptype}|${cc}`, `${tid}:::${cc}:${ptype}`);
       }
-      // One P0→P1 extractor template per (P1, this toon's CCU); planet type from the slot.
+      // One P0→P1 extractor template per (P1, this toon's CCU, planet type, real diameter). The real
+      // per-planet diameter (from pp_planets, tagged server-side) sizes the basic-factory count to the
+      // ACTUAL planet — a smaller planet fits more basics than the planet-type default assumed, so two
+      // same-type planets of different size correctly get their own template. Token 6th field = diam.
       const ecc = a.effective_ccu || data.stats?.plan_cc || 5;
       for (const e of (a.extractors || [])) {
         const p1 = e.p1_type_id;
         if (!p1) continue;
         const ept = e.best_planet_type || (e.planet_types && e.planet_types[0]) || '';
-        combos.set(`e|${p1}|${ecc}|${ept}`, `${p1}:::${ecc}${ept ? ':' + ept : ''}`);
+        const diam = e.diameter ? Math.round(e.diameter) : '';
+        let tok = `${p1}:::${ecc}`;
+        if (ept || diam) tok += ':' + ept;         // keep the planet-type slot so diam lands at index 5
+        if (diam) tok += ':' + diam;
+        combos.set(`e|${p1}|${ecc}|${ept}|${diam}`, tok);
       }
     }
     const toks = [...combos.values()].join(',')

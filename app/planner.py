@@ -3867,6 +3867,17 @@ def _run_plan(req: PlanRequest, context_id: int) -> dict:
     for rec in sys_recs:
         rec["factory_capacity"] = {s: sys_fac_capacity.get(s, 0) for s in rec["systems_needed"]}
 
+    # Real per-planet diameter (pp_planets.diameter) keyed by (system, planet_num). Used to size each
+    # extractor colony's exported template to its ACTUAL planet — the head-spoke power grid scales with
+    # radius, so the planet-type default (Gas Ø40000) dropped a basic on the many smaller real planets.
+    # Guarded: a pre-populate install without the column just yields an empty map → type-default fallback.
+    diam_by_planet: dict[tuple, float] = {}
+    try:
+        for r in con.execute("SELECT system, planet_num, diameter FROM pp_planets WHERE diameter IS NOT NULL"):
+            diam_by_planet[(r["system"], r["planet_num"])] = r["diameter"]
+    except Exception:
+        pass
+
     con.close()
 
     char_planets: dict[int, list] = {}
@@ -3997,6 +4008,14 @@ def _run_plan(req: PlanRequest, context_id: int) -> dict:
                 factory_refill_hours = _factory_refill_hours(products_per_day, p1_fracs, factories)
 
     all_assignments = sorted(assignments, key=lambda a: a["character_name"].lower())
+    # Tag each pinned extractor with its real planet diameter so the PI-template export can size the
+    # basic-factory count to the actual planet (see diam_by_planet). Only pinned slots have a planet.
+    if diam_by_planet:
+        for a in all_assignments:
+            for e in a["extractors"]:
+                d = diam_by_planet.get((e.get("system"), e.get("planet_num")))
+                if d:
+                    e["diameter"] = d
     total_extractors = sum(len(a["extractors"]) for a in all_assignments)
     total_factory_planets = sum(a["factory_planets"] for a in all_assignments)
 

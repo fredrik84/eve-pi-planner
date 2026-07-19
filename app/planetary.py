@@ -255,7 +255,11 @@ def download_bundle(type_ids: str = "", expand: int = 0, splits: str = "", no_st
         cnt = int(parts[2]) if len(parts) > 2 and parts[2] else None
         cc = int(parts[3]) if len(parts) > 3 and parts[3] else None
         ptype = parts[4] if len(parts) > 4 and parts[4] else "Barren"
-        tokens.append((tid, lp, cnt, cc, ptype))
+        # Optional 6th field: the REAL per-planet diameter (km, from pp_planets.diameter). Extractor
+        # templates fit fewer basics on a bigger planet (head-spoke PG ∝ radius), so using the actual
+        # planet size instead of the planet-type default sizes each colony's basic count correctly.
+        diam = float(parts[5]) if len(parts) > 5 and parts[5] else None
+        tokens.append((tid, lp, cnt, cc, ptype, diam))
     split_tokens = []
     for tok in splits.split(","):
         tok = tok.strip()
@@ -274,20 +278,21 @@ def download_bundle(type_ids: str = "", expand: int = 0, splits: str = "", no_st
     items: list[tuple] = []
     seen: set[str] = set()
     try:
-        for tid, lp, cnt, cc, ptype in tokens:
+        for tid, lp, cnt, cc, ptype, diam in tokens:
             if expand:
                 # Scale the whole chain to the host CC: the factory takes the chosen planet
                 # type, each P0→P1 extractor keeps the planet type its P0 grows on.
                 pairs = bundle_templates(tid, cc_level=cc, planet_type=ptype, no_storage=bool(no_storage))
             else:
                 r = generate_layout(tid, planet_type=ptype, launchpads=lp, count=cnt, cc_level=cc,
-                                    no_storage=bool(no_storage))
+                                    no_storage=bool(no_storage), diam_override=diam)
                 pairs = [(r["planets"][0]["name"], r["planets"][0]["template"])]
             for name, tmpl in pairs:
-                # Disambiguate per (planet type, CC) variants so they don't collide in the zip. Key on
-                # the template's planet-type id (Pln), not the name — factory names no longer carry the
-                # type, but a Barren vs Temperate factory is a genuinely different template.
-                key = f"{name}|{tmpl.get('Pln')}|CC{tmpl.get('CmdCtrLv', 5)}"
+                # Disambiguate per (planet type, CC, real diameter) variants so they don't collide in
+                # the zip. Key on the template's planet-type id (Pln), not the name — factory names no
+                # longer carry the type — plus the rounded Diam so two same-type planets of different
+                # size (→ different basic count) each get their own template.
+                key = f"{name}|{tmpl.get('Pln')}|CC{tmpl.get('CmdCtrLv', 5)}|D{round(tmpl.get('Diam', 0))}"
                 if key not in seen:
                     seen.add(key)
                     items.append((name, tmpl))
