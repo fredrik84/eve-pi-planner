@@ -709,6 +709,9 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
                 "product_type_id": tid,
                 "name": name_by_type.get(tid),
                 "runs": j.get("runs"),
+                # Units produced per run (from our SDE recipe) so the dashboard can total the
+                # end product of every running job (runs × output_qty) into a copyable list.
+                "output_qty": output_qty_by_type.get(tid, 0.0),
                 "facility_name": j.get("facility_name"),
                 "status": j.get("status"),
                 "hours_left": hours_left,
