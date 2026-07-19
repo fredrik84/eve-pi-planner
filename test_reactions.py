@@ -399,6 +399,68 @@ def test_pricing_endpoints_live(api: "Api") -> bool:
     return ok
 
 
+TEST_ALLIANCE_ID = 990990051  # throwaway alliance so the fake character is a group member
+
+
+def test_stock_zero_falls_back_to_market() -> bool:
+    """A group member's moon material marked stock 0 on the price sheet is treated as 'alliance is
+    out' by the BUY-LIST path (exclude_out_of_stock=True): its group price is dropped so the
+    shopping list routes it to the open market instead of the alliance goo channel. The
+    suggestion/opportunity engine (exclude_out_of_stock=False) still uses the cheaper group price —
+    the 2026-07-12 price-only rule stays intact there. Seeds a temp group + membership + two goo
+    rows (one stock 0, one in stock) and asserts the source flips only for the buy list and only
+    for the out-of-stock material."""
+    print("\n" + "=" * 60)
+    print("  Stock 0 -> buy list falls back to market (group source honours stock)")
+    print("=" * 60)
+    from app.reactions import _load_goo_and_reached
+    now = datetime.now(timezone.utc).isoformat()
+    con = get_connection()
+    row = con.execute("SELECT id FROM pp_groups WHERE alliance_id=?", (TEST_ALLIANCE_ID,)).fetchone()
+    if row:
+        gid = row["id"]
+    else:
+        con.execute("INSERT INTO pp_groups (name, alliance_id, created_at) VALUES (?,?,?)",
+                    ("StockTest", TEST_ALLIANCE_ID, now))
+        gid = con.execute("SELECT id FROM pp_groups WHERE alliance_id=?", (TEST_ALLIANCE_ID,)).fetchone()["id"]
+    con.execute(
+        "INSERT INTO pp_characters (character_id, character_name, context_id, alliance_id, scopes, "
+        "mass_reactions, advanced_mass_reactions) VALUES (?,?,?,?,?,?,?) "
+        "ON CONFLICT (character_id) DO UPDATE SET context_id=excluded.context_id, "
+        "alliance_id=excluded.alliance_id, scopes=excluded.scopes",
+        (FAKE_CID, "Test Reactor", FAKE_CTX, TEST_ALLIANCE_ID, "read_character_jobs", 5, 0),
+    )
+    # Cheap group price (1 ISK) so the group source WINS when it's included — makes the source flip
+    # unambiguous. 16633 stock 0 (alliance out), 16634 in stock (control).
+    for tid, name, stock in ((16633, "Hydrocarbons", 0), (16634, "Atmospheric Gases", 100)):
+        con.execute(
+            "INSERT INTO pp_moon_goo_prices (group_id, type_id, name, sell_price, stock, updated_at) "
+            "VALUES (?,?,?,?,?,?) ON CONFLICT (group_id, type_id) DO UPDATE SET "
+            "sell_price=excluded.sell_price, stock=excluded.stock",
+            (gid, tid, name, 1.0, stock, now),
+        )
+    con.commit()
+    con.close()
+    ok = True
+    try:
+        reached_sug = _load_goo_and_reached(FAKE_CTX, exclude_out_of_stock=False)[1]
+        ok &= check(reached_sug.get(16633, {}).get("source") == "group",
+                    "suggestion path (stock ignored): cheap group price wins for a stock-0 material")
+        reached_buy = _load_goo_and_reached(FAKE_CTX, exclude_out_of_stock=True)[1]
+        ok &= check(reached_buy.get(16633, {}).get("source") == "market",
+                    "buy-list path: a stock-0 material drops the group price and falls back to market")
+        ok &= check(reached_buy.get(16634, {}).get("source") == "group",
+                    "buy-list path: an in-stock material keeps its group price")
+    finally:
+        con = get_connection()
+        con.execute("DELETE FROM pp_moon_goo_prices WHERE group_id=?", (gid,))
+        con.execute("DELETE FROM pp_groups WHERE alliance_id=?", (TEST_ALLIANCE_ID,))
+        con.execute("UPDATE pp_characters SET alliance_id=NULL WHERE character_id=?", (FAKE_CID,))
+        con.commit()
+        con.close()
+    return ok
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--url", default="http://localhost:8000")
@@ -417,6 +479,7 @@ def main() -> int:
             results.append(test_order_lifecycle(api))
             results.append(test_order_preview(api))
             results.append(test_pricing_endpoints_live(api))
+            results.append(test_stock_zero_falls_back_to_market())
             _cleanup()
         except Exception as e:
             print(f"  SKIP live order-lifecycle test (no reachable app/DB/server: {e})")

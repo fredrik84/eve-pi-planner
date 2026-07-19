@@ -972,8 +972,8 @@ PVF-N9    3         95                 60             80                  100   
                 <input id="gooAddPrice" class="bug-input" placeholder="0" style="max-width:140px" type="number">
               </div>
               <div class="goo-field">
-                <label class="goo-field-lbl" for="gooAddStock" title="Stock on hand — reference only, not used to cap suggestions">Quantity</label>
-                <input id="gooAddStock" class="bug-input" placeholder="0" style="max-width:120px" type="number" title="Stock on hand — reference only, not used to cap suggestions">
+                <label class="goo-field-lbl" for="gooAddStock" title="Stock on hand. Set to 0 to mark the material 'out' — the shopping list then routes it to the open market instead of the alliance. Does not affect which reactions are suggested (those always use the sheet price).">Quantity</label>
+                <input id="gooAddStock" class="bug-input" placeholder="0" style="max-width:120px" type="number" title="Stock on hand. Set to 0 to mark the material 'out' — the shopping list then routes it to the open market instead of the alliance. Does not affect which reactions are suggested (those always use the sheet price).">
               </div>
               <button class="goo-add-btn" onclick="addMoonGooRow()">Add / update</button>
               <span id="gooAddStatus" class="bug-status-msg"></span>
@@ -1461,7 +1461,7 @@ PVF-N9    3         95                 60             80                  100   
   <script src="/app.js?v=39"></script>
   <script src="/planetary.js?v=362"></script>
   <script src="/dashboard.js?v=22"></script>
-  <script src="/admin.js?v=18"></script>
+  <script src="/admin.js?v=19"></script>
   <script src="/planetdb.js?v=3"></script>
   <script src="/refill.js?v=4"></script>
   <script src="/analysis.js?v=54"></script>

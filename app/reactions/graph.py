@@ -233,7 +233,8 @@ def _value_reaction_batch(node: dict, total_out: float, sell_price: float, volum
     return result
 
 
-def _load_goo_and_reached(context_id: int, allowed_material_ids: set[int] | None = None):
+def _load_goo_and_reached(context_id: int, allowed_material_ids: set[int] | None = None,
+                          exclude_out_of_stock: bool = False):
     """Shared setup for both the profitability table and the shopping-list export: the alliance
     goo stock, the reaction graph, and the fixed-point `reached` expansion (see
     _resolve_reachable) from that goo through to every producible product. Returns
@@ -261,7 +262,7 @@ def _load_goo_and_reached(context_id: int, allowed_material_ids: set[int] | None
         # sheet price.
         all_goo_rows = con.execute("SELECT DISTINCT type_id FROM pp_moon_goo_prices").fetchall()
         own_goo_rows = (con.execute(
-            "SELECT type_id, sell_price FROM pp_moon_goo_prices WHERE group_id=?", (group["id"],)
+            "SELECT type_id, sell_price, stock FROM pp_moon_goo_prices WHERE group_id=?", (group["id"],)
         ).fetchall() if group else [])
         reactions_by_output, inputs_by_reaction = _load_reaction_graph(con, settings.get("time_efficiency_pct", 0.0))
     finally:
@@ -277,7 +278,17 @@ def _load_goo_and_reached(context_id: int, allowed_material_ids: set[int] | None
     if not moon_material_ids:
         return None  # no group has priced any moon material at all — nothing to react from
 
-    goo = {r["type_id"]: {"sell_price": r["sell_price"]} for r in own_goo_rows if r["type_id"] in moon_material_ids}
+    # `exclude_out_of_stock` (buy-list callers only, e.g. the shopping list): a material the group
+    # sheet marks as stock 0 is treated as "alliance is out" — its group price is dropped so the
+    # material falls back to the open-market price (source becomes "market"), telling the player to
+    # buy it from Jita instead of the alliance goo channel. Deliberately NOT applied to the
+    # suggestion/opportunity engine, whose price-only logic is protected by the 2026-07-12 decision
+    # (a stale zero there would wrongly hide a real opportunity — see _resolve_reachable's docstring).
+    goo = {
+        r["type_id"]: {"sell_price": r["sell_price"]}
+        for r in own_goo_rows
+        if r["type_id"] in moon_material_ids and not (exclude_out_of_stock and (r["stock"] or 0) <= 0)
+    }
 
     pi = load_pi_data()
     types = pi["types"]
@@ -635,7 +646,10 @@ def reactions_shopping_list(context_id: int = Depends(require_context)):
     if not assignments:
         return {"materials": []}
 
-    loaded = _load_goo_and_reached(context_id)
+    # Buy list: honour the sheet's stock 0 as "alliance is out" so it routes to market (see
+    # _load_goo_and_reached's exclude_out_of_stock note) — this is a "where do I actually buy it"
+    # report, unlike the opportunity table which stays price-only.
+    loaded = _load_goo_and_reached(context_id, exclude_out_of_stock=True)
     if loaded is None:
         return {"materials": []}
     goo, reached, _, _, types = loaded

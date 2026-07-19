@@ -816,7 +816,7 @@ function renderMoonGoo(rows) {
       <label class="goo-inline"><span class="goo-inline-lbl">ISK / unit</span>
         <input type="number" class="bug-input goo-row-price" value="${r.sell_price}" style="max-width:120px"></label>
       <label class="goo-inline"><span class="goo-inline-lbl">Quantity</span>
-        <input type="number" class="bug-input goo-row-stock" value="${r.stock}" style="max-width:100px" title="Stock — reference only, not used to cap suggestions"></label>
+        <input type="number" class="bug-input goo-row-stock" value="${r.stock}" style="max-width:100px" title="Stock on hand. Set to 0 to mark the material 'out' — the shopping list then routes it to the open market instead of the alliance. Does not affect which reactions are suggested (those always use the sheet price)."></label>
       <button onclick="saveMoonGooRow(${r.type_id}, this)">Save</button>
       <button onclick="deleteMoonGooRow(${r.type_id}, this)">Delete</button>
     </div>`).join('');
