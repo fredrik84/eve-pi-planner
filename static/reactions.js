@@ -273,10 +273,14 @@ function _rxCopyOrderMaterials(btn) {
 // "Copy all produced units" — the end result of every currently-running reaction, totalled per
 // product across all characters (Σ runs × output_qty per run), as a "name <tab> quantity" TSV
 // ready to paste into a multibuy/contract. Reads the last-rendered dashboard's running jobs.
+// EXCLUDES intermediate reactions consumed by another running job (`j.consumed`, set server-side):
+// their output feeds the next tier on-site, so pricing them would double-count value already in the
+// final product — this is the "end result", not every work-in-progress unit.
 function _rxCopyProducedUnits(btn) {
   const running = (_rxLastDashboardData && _rxLastDashboardData.running) || [];
   const byProduct = new Map();
   for (const j of running) {
+    if (j.consumed) continue;
     const qty = (j.runs || 0) * (j.output_qty || 0);
     if (!qty) continue;
     const name = j.name || _rxProductName(j.product_type_id);
@@ -539,9 +543,9 @@ function _renderReactionsDashboard(data) {
     : '';
   // "Copy all produced units" — the total end product of everything currently running, ready to
   // paste into a multibuy/contract. Only shown when something with a valued output is running.
-  const hasProduced = (data.running || []).some(j => (j.runs || 0) * (j.output_qty || 0) > 0);
+  const hasProduced = (data.running || []).some(j => !j.consumed && (j.runs || 0) * (j.output_qty || 0) > 0);
   const producedBtn = hasProduced
-    ? `<div style="margin-top:10px"><button class="pp-add-btn" onclick="_rxCopyProducedUnits(this)">Copy all produced units</button></div>`
+    ? `<div style="margin-top:10px"><button class="pp-add-btn" onclick="_rxCopyProducedUnits(this)" title="Final products only — intermediate reactions consumed by another running job are excluded">Copy all produced units</button></div>`
     : '';
   if (metricsEl) metricsEl.innerHTML = overviewTiles + progressBar + producedBtn;
 

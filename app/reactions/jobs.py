@@ -570,6 +570,17 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
         for r in con.execute("SELECT output_type_id, cycle_time, output_qty FROM reactions"):
             cycle_hours_by_type[r["output_type_id"]] = (r["cycle_time"] or 0) * (1 - time_eff) / 3600.0
             output_qty_by_type[r["output_type_id"]] = r["output_qty"]
+        # output_type_id -> set of its recipe's input type_ids, so a running job whose product is
+        # itself an input to ANOTHER running reaction can be flagged as an intermediate (its output
+        # is consumed on-site by the next tier, not a separately sellable end product). Used to keep
+        # the dashboard's "produced units" export to real end products only — see the `consumed`
+        # flag on each running job below.
+        reaction_inputs_by_output: dict[int, set[int]] = {}
+        for r in con.execute(
+            "SELECT r.output_type_id AS out, ri.type_id AS inp "
+            "FROM reactions r JOIN reaction_inputs ri ON ri.reaction_id = r.reaction_id"
+        ):
+            reaction_inputs_by_output.setdefault(r["out"], set()).add(r["inp"])
         # Product names for the running-job display — a running job carries only its product
         # type_id from ESI, and the frontend's opportunity-list name lookup misses anything not
         # currently in that list (it showed "#16665" for Hexite). Bounded to reaction outputs
@@ -718,6 +729,21 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
                 "progress_pct": round(progress_pct, 4) if progress_pct is not None else None,
                 "orphan": is_orphan,
             })
+
+    # Flag each running job that is an INTERMEDIATE consumed by another running reaction: its
+    # product is an input to some other running job's recipe, so its output feeds the next tier
+    # on-site rather than being a separately sellable end product. Lets the "produced units" export
+    # count only real end products — summing every running job (intermediates included) and pricing
+    # it double-counts value already embedded in the final product (a chain reaction's units are
+    # not additional sellable output). Purely running-set based, so it also covers orphan jobs.
+    running_output_types = {j["product_type_id"] for j in running}
+    consumed_types = {
+        inp for out in running_output_types
+        for inp in reaction_inputs_by_output.get(out, ())
+        if inp in running_output_types
+    }
+    for j in running:
+        j["consumed"] = j["product_type_id"] in consumed_types
 
     # Fold in running jobs that had no plan slot (see _unplanned_running_totals) — valued from our
     # own SDE recipe so in-game/corp jobs still count toward the committed totals.
