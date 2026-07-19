@@ -105,11 +105,12 @@ def _resolve_reachable(goo: dict[int, dict], purchasable: dict[int, float],
     Both `goo` (a group member's below-market alliance price sheet — see app.groups) and
     `purchasable` (Fuzzworks market price + import shipping — the only source for a non-member's
     moon materials, and for every reaction's non-goo inputs like fuel blocks regardless of group)
-    are treated as UNLIMITED supply. This was a deliberate 2026-07-12 decision: a group's price
-    sheet stock figures aren't a trustworthy enough signal to hard-cap on (no visibility into how
-    often any given sheet is actually maintained — a stale zero used to silently hide a real
-    opportunity, and a stale nonzero gave false confidence either way), so only price is trusted,
-    not quantity.
+    are treated as UNLIMITED supply as far as *quantity* goes — a nonzero sheet stock is never a
+    granular hard cap (a stock of 100 does NOT limit you to 100 units), per the 2026-07-12 decision
+    that sheet stock figures aren't a trustworthy enough signal to cap on. The ONE exception is a
+    stock of exactly 0: `_load_goo_and_reached` reads it as "the alliance is out" and simply doesn't
+    pass that material into `goo` at all, so it falls back to the market price here — market is the
+    always-available default, the alliance sheet only ever a cheaper-when-in-stock bonus on top.
 
     When a material is priced in BOTH dicts (a group member's own sheet AND the open market), the
     CHEAPER of the two wins automatically — so a group member is never stuck trusting a possibly-
@@ -233,8 +234,7 @@ def _value_reaction_batch(node: dict, total_out: float, sell_price: float, volum
     return result
 
 
-def _load_goo_and_reached(context_id: int, allowed_material_ids: set[int] | None = None,
-                          exclude_out_of_stock: bool = False):
+def _load_goo_and_reached(context_id: int, allowed_material_ids: set[int] | None = None):
     """Shared setup for both the profitability table and the shopping-list export: the alliance
     goo stock, the reaction graph, and the fixed-point `reached` expansion (see
     _resolve_reachable) from that goo through to every producible product. Returns
@@ -244,12 +244,14 @@ def _load_goo_and_reached(context_id: int, allowed_material_ids: set[int] | None
     A member of a priced group gets that group's below-market pp_moon_goo_prices sheet price for
     their moon materials AS WELL AS the open-market price (+ import shipping) — _resolve_reachable
     picks whichever is cheaper automatically, so a group member is never stuck trusting a
-    stale/high sheet price over a better market rate (2026-07-12: the sheet's stock figures were
-    dropped as a hard cap for the same reason — no reliable signal for how well-maintained it
-    actually is; price is trusted, quantity isn't). Everyone else only ever sees the market
-    price — no group deal to fall back to. The Reactions feature itself is open to any logged-in
-    user (require_context) — group membership only changes which price(s) a material is costed
-    at, not who can see the tool."""
+    stale/high sheet price over a better market rate. Market is always the fallback default: a
+    material the sheet marks stock 0 ("alliance is out") is dropped from `goo` so it's priced/
+    sourced from the market instead, consistently across suggestions, the shopping list, and
+    customer orders — the alliance sheet is only ever a cheaper-when-in-stock bonus. (A *nonzero*
+    stock is still NOT a granular quantity cap, per the 2026-07-12 decision — only exactly-0 is
+    read as unavailable.) Everyone else only ever sees the market price — no group deal to fall
+    back to. The Reactions feature itself is open to any logged-in user (require_context) — group
+    membership only changes which price(s) a material is costed at, not who can see the tool."""
     group = member_group(context_id)
     settings = effective_reaction_settings(context_id)
 
@@ -278,16 +280,16 @@ def _load_goo_and_reached(context_id: int, allowed_material_ids: set[int] | None
     if not moon_material_ids:
         return None  # no group has priced any moon material at all — nothing to react from
 
-    # `exclude_out_of_stock` (buy-list callers only, e.g. the shopping list): a material the group
-    # sheet marks as stock 0 is treated as "alliance is out" — its group price is dropped so the
-    # material falls back to the open-market price (source becomes "market"), telling the player to
-    # buy it from Jita instead of the alliance goo channel. Deliberately NOT applied to the
-    # suggestion/opportunity engine, whose price-only logic is protected by the 2026-07-12 decision
-    # (a stale zero there would wrongly hide a real opportunity — see _resolve_reachable's docstring).
+    # Stock 0 on the sheet = "alliance is out": the material is dropped from `goo` entirely so it
+    # falls back to the open-market price (source becomes "market"). Market is the always-available
+    # default everywhere in the tool — suggestions, shopping list, and customer orders alike — and
+    # the alliance sheet is only ever a cheaper-when-in-stock bonus layered on top (a nonzero stock
+    # is still treated as unlimited supply — see _resolve_reachable's docstring; only exactly-0 is
+    # this binary "not available" signal, not a granular quantity cap).
     goo = {
         r["type_id"]: {"sell_price": r["sell_price"]}
         for r in own_goo_rows
-        if r["type_id"] in moon_material_ids and not (exclude_out_of_stock and (r["stock"] or 0) <= 0)
+        if r["type_id"] in moon_material_ids and (r["stock"] or 0) > 0
     }
 
     pi = load_pi_data()
@@ -646,10 +648,7 @@ def reactions_shopping_list(context_id: int = Depends(require_context)):
     if not assignments:
         return {"materials": []}
 
-    # Buy list: honour the sheet's stock 0 as "alliance is out" so it routes to market (see
-    # _load_goo_and_reached's exclude_out_of_stock note) — this is a "where do I actually buy it"
-    # report, unlike the opportunity table which stays price-only.
-    loaded = _load_goo_and_reached(context_id, exclude_out_of_stock=True)
+    loaded = _load_goo_and_reached(context_id)
     if loaded is None:
         return {"materials": []}
     goo, reached, _, _, types = loaded
