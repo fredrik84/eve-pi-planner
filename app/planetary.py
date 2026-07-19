@@ -191,6 +191,8 @@ class LayoutRequest(BaseModel):
     count: Optional[int] = None         # production units on the planet; None → max that fits
     cc_level: Optional[int] = None      # command-centre level 1–5; None → CMD_CTR_LEVEL (5)
     no_storage: bool = False            # extractor: buffer in launchpad, no storage hub (frees PG)
+    diameter: Optional[float] = None    # REAL planet diameter (km); None → planet-type default. On an
+    # extractor, a smaller planet fits more basics (head-spoke PG ∝ radius), so pass the actual size.
 
 
 @router.post("/api/layout")
@@ -198,7 +200,8 @@ def factory_layout(req: LayoutRequest):
     from app.layout import generate_layout
     try:
         return generate_layout(req.type_id, req.planet_type, req.launchpads, req.count,
-                               cc_level=req.cc_level, no_storage=req.no_storage)
+                               cc_level=req.cc_level, no_storage=req.no_storage,
+                               diam_override=req.diameter)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -210,14 +213,15 @@ def _safe_filename(name: str) -> str:
 
 @router.get("/api/layout/download")
 def download_layout(type_id: int, planet_type: str = "Barren", launchpads: Optional[int] = None,
-                    count: int = 1, cc_level: Optional[int] = None, no_storage: int = 0):
+                    count: int = 1, cc_level: Optional[int] = None, no_storage: int = 0,
+                    diameter: Optional[float] = None):
     """Return a single planet template as a downloadable .json attachment."""
     import json
     from fastapi import Response
     from app.layout import generate_layout
     try:
         result = generate_layout(type_id, planet_type, launchpads, count, cc_level=cc_level,
-                                 no_storage=bool(no_storage))
+                                 no_storage=bool(no_storage), diam_override=diameter)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     tmpl = result["planets"][0]["template"]

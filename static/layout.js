@@ -124,7 +124,7 @@ async function _fetchLayout(entry) {
   try {
     const resp = await fetch('/api/layout', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type_id: entry.type_id, planet_type: entry.planet, launchpads: entry.launchpads, count: entry.count == null ? null : entry.count, cc_level: entry.cc || 5, no_storage: _layoutNoStorage }),
+      body: JSON.stringify({ type_id: entry.type_id, planet_type: entry.planet, launchpads: entry.launchpads, count: entry.count == null ? null : entry.count, cc_level: entry.cc || 5, no_storage: _layoutNoStorage, diameter: entry.diameter || null }),
     });
     if (!resp.ok) { const e = await resp.json().catch(() => ({})); throw new Error(e.detail || resp.status); }
     entry.data = await resp.json();
@@ -195,7 +195,7 @@ function _layoutBundleUrl() {
   // token: tid:lp:count:cc:ptype — include planet type + CC so the zip matches each card
   // (previously omitted, so "Download all" silently generated everything at Barren/CC5).
   const toks = _layoutSel.map(e =>
-    `${e.type_id}:${e.launchpads}:${e.count || 1}:${e.cc || 5}:${e.planet}`).join(',');
+    `${e.type_id}:${e.launchpads}:${e.count || 1}:${e.cc || 5}:${e.planet}${e.diameter ? ':' + Math.round(e.diameter) : ''}`).join(',');
   return `/api/layout/bundle?type_ids=${encodeURIComponent(toks)}&expand=0${_layoutNoStorage ? '&no_storage=1' : ''}`;
 }
 
@@ -238,7 +238,7 @@ function renderLayoutCard(entry) {
       <div class="layout-card-line">${outStr} · ${(s.buffer_m3 / 1000).toLocaleString()} km³ buffer · planet: ${_esc(s.planet_type)} · <b>CC${entry.cc || 5}</b></div>
       <div class="layout-card-meta">${_esc(s.imports_label)}: ${imports}</div>`;
   }
-  const url = `/api/layout/download?type_id=${entry.type_id}&planet_type=${encodeURIComponent(s.planet_type)}&launchpads=${entry.launchpads}&count=${entry.count || 1}&cc_level=${entry.cc || 5}${(_layoutNoStorage && entry.tier === 1) ? '&no_storage=1' : ''}`;
+  const url = `/api/layout/download?type_id=${entry.type_id}&planet_type=${encodeURIComponent(s.planet_type)}&launchpads=${entry.launchpads}&count=${entry.count || 1}&cc_level=${entry.cc || 5}${(_layoutNoStorage && entry.tier === 1) ? '&no_storage=1' : ''}${entry.diameter ? '&diameter=' + Math.round(entry.diameter) : ''}`;
   const countLabel = isExtractor ? 'Factories' : (entry.tier === 2 ? 'Factories' : 'Chains');
   const ccSel = `<label title="Command Center level — fewer facilities fit at lower levels">CC
     <select onchange="changeLayoutCcu('${entry.key}', this.value)">${[5,4,3,2,1].map(n => `<option value="${n}"${n === (entry.cc || 5) ? ' selected' : ''}>${n}</option>`).join('')}</select></label>`;
@@ -274,6 +274,8 @@ function renderLayoutCard(entry) {
           onwheel="_layoutWheelLp(event, this, '${entry.key}')"></label>
         ${planetSel}
         ${ccSel}
+        <label title="Your planet's REAL diameter (km). A smaller planet fits more basics (head power-grid scales with size); leave blank for the planet-type default. Find it in-game or on the Planet DB.">Ø km <input type="number" min="1000" max="120000" step="100" value="${entry.diameter || ''}" placeholder="${Math.round((p.template && p.template.Diam) || 0) || 'default'}"
+          onchange="changeLayoutDiameter('${entry.key}', this.value)"></label>
         <a class="layout-btn" href="${url}" download>Download .json</a>
         <button class="layout-btn" onclick="copyLayoutEntry('${entry.key}', this)">Copy JSON</button>
       </div>
@@ -307,6 +309,17 @@ async function changeLayoutPlanet(key, val) {
   if (!entry) return;
   entry.planet = val;
   entry.count = null;   // planet diameter changes how many facilities fit → re-resolve max
+  _saveLayoutState();
+  await _fetchLayout(entry);
+  renderLayoutSelections();
+}
+
+async function changeLayoutDiameter(key, val) {
+  const entry = _layoutSel.find(e => e.key === key);
+  if (!entry) return;
+  const d = parseFloat(val);
+  entry.diameter = (d && d > 0) ? d : null;   // blank/0 → planet-type default
+  entry.count = null;                          // diameter changes how many basics/facilities fit → re-resolve
   _saveLayoutState();
   await _fetchLayout(entry);
   renderLayoutSelections();
