@@ -44,9 +44,19 @@ function _toggleExtractAvgMode() {
 function _planetsForMaterial(t) {
   const out = [];
   (_ppCharsData || []).forEach(ch => (ch.planets || []).forEach(p => (p.production || []).forEach(o => {
-    if (String(o.type_id) === String(t))
-      out.push({ char: ch.name, system: p.system, planet_num: p.planet_num, perDay: o.per_day || 0,
-                 p0Hr: p.ext_p0_day ? Math.round(p.ext_p0_day / 24) : null });
+    if (String(o.type_id) === String(t)) {
+      const perDay = o.per_day || 0;
+      // P0/hr shown is the REFINED, EXPORTED rate (_p0h of the P1/day this colony actually contributes)
+      // — the SAME basis as the reseat card and the headline, NOT the raw ECU extraction. On a
+      // refining-limited colony the heads pull far more P0 than the basics can refine, so raw
+      // extraction (extP0Hr) overstates the real contribution — it was the "62,959 in the drilldown
+      // vs 42,000 in the suggestion" mismatch. We lead with the refined rate and surface extraction
+      // as labeled context when the two diverge.
+      const extP0Hr = p.ext_p0_day ? Math.round(p.ext_p0_day / 24) : null;
+      const refP0Hr = Math.round(_p0h(perDay));
+      out.push({ char: ch.name, system: p.system, planet_num: p.planet_num, perDay,
+                 refP0Hr, extP0Hr, refiningLtd: extP0Hr != null && extP0Hr > refP0Hr * 1.05 });
+    }
   })));
   out.sort((a, b) => a.perDay - b.perDay);   // underperforming (lowest output) first
   return out;
@@ -670,7 +680,7 @@ function renderAnalysis() {
     if (expanded) {
       const pls = _planetsForMaterial(r.t);
       const items = pls.length
-        ? pls.map(p => `<div class="an-pd-row"><span class="an-pd-char">${_esc(p.char)}</span><span class="an-pd-loc">${p.system ? _esc(p.system) + (p.planet_num != null ? ' P' + p.planet_num : '') : '—'}</span><span class="an-pd-p0">${p.p0Hr != null ? p.p0Hr.toLocaleString() + ' P0/hr' : ''}</span><span class="an-pd-val">${Math.round(p.perDay).toLocaleString()}/day</span></div>`).join('')
+        ? pls.map(p => `<div class="an-pd-row"><span class="an-pd-char">${_esc(p.char)}</span><span class="an-pd-loc">${p.system ? _esc(p.system) + (p.planet_num != null ? ' P' + p.planet_num : '') : '—'}</span><span class="an-pd-p0"${p.refiningLtd ? ` title="Heads extract ${p.extP0Hr.toLocaleString()} P0/hr but on-planet refining exports only ${p.refP0Hr.toLocaleString()} — refining-limited (add basics / higher CC / smaller planet)"` : ''}>${p.refP0Hr.toLocaleString()} P0/hr${p.refiningLtd ? ` <span class="an-of">of ${p.extP0Hr.toLocaleString()} ext</span>` : ''}</span><span class="an-pd-val">${Math.round(p.perDay).toLocaleString()}/day</span></div>`).join('')
         : '<div class="an-pd-empty">No colony is producing this yet.</div>';
       detail = `<div class="an-row-detail">${items}${_fixNudge(r)}</div>`;
     }
