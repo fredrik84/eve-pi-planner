@@ -622,11 +622,17 @@ function renderAnalysis() {
 
   const avgMode = _featureActive('extraction_targets') && _anShowExtractAvg;
   const barRows = rows.map(r => {
-    // Over/under-production %, measured on the UNCLIPPED extraction (so a factory-limited colony still
-    // shows its true head margin, not a flat +0). The % alone is meaningless without "good vs bad", so we
-    // band it: 10%+ = comfortable decay cushion (good), 0–10% = tight (hit it, will fade short), <0 = short.
+    // The displayed %/band is the REFINED, EXPORTED throughput (r.have / need) — the SAME number the
+    // headline "Plan fed at" uses, and what actually sustains the full production cycle. It is NOT the
+    // raw head extraction: a colony can over-extract yet fail to refine/export all of it, so showing
+    // the extraction margin would falsely read "healthy" while the cycle is starved — the exact
+    // headline-vs-drilldown contradiction this replaced. Raw extraction (extSupply) is kept only for
+    // the avg-P0/hr mode and the "what to fix" nudge (which needs to tell heads-limited from
+    // refining-limited). Band: 10%+ sustains with a decay cushion, 0–10% meets now but will dip short,
+    // <0 isn't sustaining the cycle.
     const extSupply = _extSupplyOf(r.t) || r.have;
-    const f = r.need > 0 ? extSupply / r.need - 1 : 0;
+    const supply = avgMode ? extSupply : r.have;
+    const f = r.need > 0 ? supply / r.need - 1 : 0;
     const pct = Math.round(f * 100);
     let band = 'an-ovr-ok', lbl = 'healthy';        // band on the DISPLAYED % so label/colour match it
     if (pct < 0) { band = 'an-ovr-short'; lbl = 'short'; }
@@ -653,7 +659,11 @@ function renderAnalysis() {
       cls = r.ratio >= 0.995 ? 'an-bar-ok' : (r.ratio >= 0.85 ? 'an-bar-warn' : 'an-bar-bad');
       barW = Math.max(2, Math.min(100, (r.have / r.need) * 100));
       numsHtml = `<b>${pct >= 0 ? '+' : ''}${pct}%</b> <span class="an-ovr-lbl">${lbl}</span>`;
-      numTitle = `Your heads extract ${pct >= 0 ? '+' + pct : pct}% vs what the factories consume (≈${Math.round(_p0h(extSupply)).toLocaleString()} of ${Math.round(_p0h(r.need)).toLocaleString()} P0/hr). 10%+ is a comfortable cushion as extraction decays; 0–10% is tight (you hit it, but it'll dip short as the heads fade); below 0 isn't keeping up.`;
+      const extPct = r.need > 0 ? Math.round((extSupply / r.need - 1) * 100) : 0;
+      const refiningLtd = extSupply >= r.need && r.have < r.need * 0.995;
+      numTitle = refiningLtd
+        ? `Only ${Math.round((r.have / r.need) * 100)}% of what your factories need is actually refined and exported, even though your heads extract +${extPct}% of the raw P0 (≈${Math.round(_p0h(extSupply)).toLocaleString()} of ${Math.round(_p0h(r.need)).toLocaleString()} P0/hr). This colony can't refine everything it pulls, so it can't sustain the full cycle — the fix is on-planet refining (higher Command Center level, a smaller planet, a storage-less extractor, or split the extraction), not more heads.`
+        : `${pct >= 0 ? '+' + pct : pct}% vs what your factories consume — the P1 actually refined and exported (${Math.round(_p0h(supply)).toLocaleString()} of ${Math.round(_p0h(r.need)).toLocaleString()} P0/hr). 10%+ is a cushion that holds as extraction decays; 0–10% is tight (you meet it now but it'll dip short as heads fade); below 0 isn't sustaining the cycle.`;
     }
     const expanded = _anExpanded.has(String(r.t));
     let detail = '';
@@ -1242,6 +1252,15 @@ function _flagBtn(c) {
 
 function _fixNudge(r) {
   const p = _reseatPlan(r);
+  // Refining-limited: the heads already extract enough (often MORE) but the colony can't refine and
+  // export it all, so throughput (r.have) stays below demand and the full cycle can't be sustained.
+  // Reseating or adding HEADS won't help — name the real fix. Checked BEFORE the extraction-only
+  // "looks healthy, nothing to do" early-out below, which would otherwise hide a short material whose
+  // heads happen to over-extract.
+  if (p.extSupply >= r.need && r.have < r.need * 0.995) {
+    const fed = Math.round((r.have / r.need) * 100);
+    return `<div class="an-pd-fix an-pd-fix-short">🔧 Your heads already extract enough for ${_esc(r.name)}, but this colony can't refine and export it all — only <b>${fed}%</b> of demand reaches your factories, so the cycle runs short. Raise on-planet <b>refining</b>: a higher Command Center level or a smaller planet fits more Basic Industry Facilities, a storage-less extractor frees power grid for one more, or split the extraction across two planets. Adding extractor heads won't help.</div>`;
+  }
   const pct = r.need > 0 ? Math.round((p.extSupply / r.need - 1) * 100) : 0;
   if (pct >= _HEALTHY_BUFFER * 100) return '';      // already healthy — nothing to fix
   const band = pct < 0 ? 'short' : 'tight';
@@ -1263,12 +1282,9 @@ function _fixNudge(r) {
   } else if (!prods.length) {
     fix = `<b>Add a ${_esc(r.name)} colony</b> — nothing produces it yet.`;
   } else {                                            // colonies at their best — reseating won't lift it
-    const colonyEst = _estColonyP1(r.t, 0);
-    const land = colonyEst > 0 ? p.landPct(colonyEst) : null;
-    if (band === 'tight' && land != null && land > 25)
-      fix = `Only mildly tight, and your colonies are near their best — a whole new colony would overshoot to ~+${land}%. Leave it; reseat when one decays.`;
-    else
-      fix = `Your colonies are near their best, so reseating won't lift it — <b>redeploy</b> a colony to a richer planet or <b>add</b> one for a +10% buffer.`;
+    // Always steer toward sustaining the full cycle — never "leave it, you'll only just miss". A
+    // redeploy to a richer planet lifts output without overshoot; adding a colony is the fallback.
+    fix = `Your colonies are near their best, so reseating won't lift it — <b>redeploy</b> a colony to a richer planet (more output, no overshoot) or <b>add</b> one to reach a +10% buffer that holds through decay.`;
   }
   return `<div class="an-pd-fix an-pd-fix-${band}">🔧 ${fix}</div>`;
 }
