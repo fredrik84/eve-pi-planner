@@ -276,6 +276,7 @@ def download_bundle(type_ids: str = "", expand: int = 0, splits: str = "", no_st
             int(p[0]), int(p[1]), int(p[2]), int(p[3]),
             int(p[4]) if len(p) > 4 and p[4] else None,
             p[5] if len(p) > 5 and p[5] else "Barren",
+            float(p[6]) if len(p) > 6 and p[6] else None,   # optional 7th field: real planet diameter (km)
         ))
     if not tokens and not split_tokens:
         raise HTTPException(status_code=400, detail="no type_ids or splits given")
@@ -300,11 +301,11 @@ def download_bundle(type_ids: str = "", expand: int = 0, splits: str = "", no_st
                 if key not in seen:
                     seen.add(key)
                     items.append((name, tmpl))
-        for p1a, p1b, ha, hb, cc, ptype in split_tokens:
+        for p1a, p1b, ha, hb, cc, ptype, diam in split_tokens:
             r = generate_split_extractor_layout(p1a, p1b, heads_a=ha, heads_b=hb,
-                                                planet_type=ptype, cc_level=cc)
+                                                planet_type=ptype, cc_level=cc, diam=diam)
             name, tmpl = r["planets"][0]["name"], r["planets"][0]["template"]
-            key = f"{name}|{tmpl.get('Pln')}|CC{tmpl.get('CmdCtrLv', 5)}"
+            key = f"{name}|{tmpl.get('Pln')}|CC{tmpl.get('CmdCtrLv', 5)}|D{round(tmpl.get('Diam', 0))}"
             if key not in seen:
                 seen.add(key)
                 items.append((name, tmpl))

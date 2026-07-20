@@ -576,7 +576,8 @@ def build_extractor_template(p1_id: int, planet_type: str, struct: dict, pi_data
 
 def build_split_extractor_template(p1a_id: int, p1b_id: int, planet_type: str, struct: dict,
                                    pi_data: dict, heads_a: int, heads_b: int,
-                                   n_basic_a: int, n_basic_b: int, n_launchpads: int = 1) -> dict:
+                                   n_basic_a: int, n_basic_b: int, n_launchpads: int = 1,
+                                   diam: float | None = None) -> dict:
     """Split P0→P1 extractor planet: TWO Extractor Control Units sharing one storage hub and
     launchpad, each with its own head count + Basic Industry line, producing two P1s. The host
     planet type must yield both P0s. Mirrors build_extractor_template's hub/ring topology."""
@@ -628,7 +629,9 @@ def build_split_extractor_template(p1a_id: int, p1b_id: int, planet_type: str, s
         p["La"], p["Lo"] = round(p["La"], 5), round(p["Lo"], 5)
     cmt = f"Split: {types[p0a]['name']} + {types[p0b]['name']}"   # planet type omitted — templates are portable
     return {
-        "template": {"CmdCtrLv": CMD_CTR_LEVEL, "Cmt": cmt, "Diam": PLANET_DIAM.get(planet_type, 8000.0),
+        "template": {"CmdCtrLv": CMD_CTR_LEVEL, "Cmt": cmt,
+                     # Real per-planet diameter when known (head-spoke PG ∝ radius) — else type default.
+                     "Diam": float(diam) if diam else PLANET_DIAM.get(planet_type, 8000.0),
                      "Pln": struct["planet_type_id"], "P": pins, "L": links, "R": routes},
         "name": cmt, "n_basic_a": n_basic_a, "n_basic_b": n_basic_b,
         "heads_a": heads_a, "heads_b": heads_b, "n_launchpads": len(lps),
@@ -637,7 +640,7 @@ def build_split_extractor_template(p1a_id: int, p1b_id: int, planet_type: str, s
 
 def generate_split_extractor_layout(p1a_id: int, p1b_id: int, heads_a: int = 5, heads_b: int = 5,
                                     planet_type: str = "Barren", launchpads: int = 1,
-                                    cc_level: Optional[int] = None) -> dict:
+                                    cc_level: Optional[int] = None, diam: Optional[float] = None) -> dict:
     """One importable two-ECU (split) extractor template producing P1 A and P1 B on a single
     planet. The planet type is coerced to one that yields BOTH P0s. Basic-factory counts start
     proportional to each line's heads and shrink to fit the command-centre CPU/PG budget; if it
@@ -662,7 +665,7 @@ def generate_split_extractor_layout(p1a_id: int, p1b_id: int, heads_a: int = 5, 
 
     def _build(a, b):
         t = build_split_extractor_template(p1a_id, p1b_id, planet_type, struct, pi_data, ha, hb,
-                                           a, b, n_launchpads=lp)
+                                           a, b, n_launchpads=lp, diam=diam)
         t["template"]["CmdCtrLv"] = cc
         return t
 

@@ -2481,8 +2481,10 @@ function renderFinalPlan(data, opts = {}) {
     templatesHref = toks ? `/api/layout/bundle?type_ids=${encodeURIComponent(toks)}&expand=0` : '';
   }
 
-  // Split-extraction planets → one two-ECU template each (p1a:p1b:headsA:headsB:cc:ptype),
-  // appended to whichever bundle URL was built above (single-product or fuel-block).
+  // Split-extraction planets → one two-ECU template each (p1a:p1b:headsA:headsB:cc:ptype[:diam]),
+  // appended to whichever bundle URL was built above (single-product or fuel-block). The 7th field
+  // is the real per-planet diameter (tagged server-side) so a split colony's basics fit its actual
+  // planet, not the type default — same fix as the single-ECU extractors.
   if (templatesHref) {
     const splitCombos = new Map();
     for (const a of (data.assignments || [])) {
@@ -2492,8 +2494,9 @@ function renderFinalPlan(data, opts = {}) {
         const [la, lb] = e.legs;
         if (!la.p1_type_id || !lb.p1_type_id) continue;
         const pt = e.planet_type || 'Barren';
-        splitCombos.set(`${la.p1_type_id}|${lb.p1_type_id}|${la.heads}|${lb.heads}|${ecc}|${pt}`,
-          `${la.p1_type_id}:${lb.p1_type_id}:${la.heads}:${lb.heads}:${ecc}:${pt}`);
+        const diam = e.diameter ? Math.round(e.diameter) : '';
+        splitCombos.set(`${la.p1_type_id}|${lb.p1_type_id}|${la.heads}|${lb.heads}|${ecc}|${pt}|${diam}`,
+          `${la.p1_type_id}:${lb.p1_type_id}:${la.heads}:${lb.heads}:${ecc}:${pt}${diam ? ':' + diam : ''}`);
       }
     }
     const splitToks = [...splitCombos.values()].join(',');
