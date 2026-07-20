@@ -54,7 +54,9 @@ function _planetsForMaterial(t) {
       // as labeled context when the two diverge.
       const extP0Hr = p.ext_p0_day ? Math.round(p.ext_p0_day / 24) : null;
       const refP0Hr = Math.round(_p0h(perDay));
-      out.push({ char: ch.name, system: p.system, planet_num: p.planet_num, perDay,
+      out.push({ char: ch.name, character_id: ch.character_id, planet_id: p.planet_id,
+                 system: p.system, planet_num: p.planet_num, perDay,
+                 reseat_at: p.reseat_at, redeploy_at: p.redeploy_at,
                  refP0Hr, extP0Hr, refiningLtd: extP0Hr != null && extP0Hr > refP0Hr * 1.05 });
     }
   })));
@@ -680,7 +682,11 @@ function renderAnalysis() {
     if (expanded) {
       const pls = _planetsForMaterial(r.t);
       const items = pls.length
-        ? pls.map(p => `<div class="an-pd-row"><span class="an-pd-char">${_esc(p.char)}</span><span class="an-pd-loc">${p.system ? _esc(p.system) + (p.planet_num != null ? ' P' + p.planet_num : '') : '—'}</span><span class="an-pd-p0"${p.refiningLtd ? ` title="Heads extract ${p.extP0Hr.toLocaleString()} P0/hr but on-planet refining exports only ${p.refP0Hr.toLocaleString()} — refining-limited (add basics / higher CC / smaller planet)"` : ''}>${p.refP0Hr.toLocaleString()} P0/hr${p.refiningLtd ? ` <span class="an-of">of ${p.extP0Hr.toLocaleString()} ext</span>` : ''}</span><span class="an-pd-val">${Math.round(p.perDay).toLocaleString()}/day</span></div>`).join('')
+        ? pls.map(p => {
+            const moveAt = Math.max(p.redeploy_at || 0, p.reseat_at || 0);
+            const moveTxt = moveAt ? `<span class="an-of"> · ${(p.redeploy_at || 0) >= (p.reseat_at || 0) ? 'redeployed' : 'reseated'} ${_fmtEpochAgo(moveAt)}</span>` : '';
+            return `<div class="an-pd-row"><span class="an-pd-char">${_esc(p.char)}</span><span class="an-pd-loc">${p.system ? _esc(p.system) + (p.planet_num != null ? ' P' + p.planet_num : '') : '—'}${moveTxt}</span><span class="an-pd-p0"${p.refiningLtd ? ` title="Heads extract ${p.extP0Hr.toLocaleString()} P0/hr but on-planet refining exports only ${p.refP0Hr.toLocaleString()} — extraction exceeds this planet's refining capacity"` : ''}>${p.refP0Hr.toLocaleString()} P0/hr${p.refiningLtd ? ` <span class="an-of">of ${p.extP0Hr.toLocaleString()} ext</span>` : ''}</span><span class="an-pd-val">${Math.round(p.perDay).toLocaleString()}/day${_rescanBtn(p)}</span></div>`;
+          }).join('')
         : '<div class="an-pd-empty">No colony is producing this yet.</div>';
       detail = `<div class="an-row-detail">${items}${_fixNudge(r)}</div>`;
     }
@@ -1401,22 +1407,16 @@ function _burndownSection(rows) {
       done.add(k);
       lines.push(_bdActionRow(r.name, c, `${_p0hR(c.perDay).toLocaleString()} → ${_p0hR(c.target).toLocaleString()} <span class="an-of">P0/hr</span>`, 'Reseat', sevCls));
     });
-    // One escalation row when reseating can't cover it: the clearest non-reseat fix.
+    // One escalation row when reseating can't cover it: redeploy the weakest colony ON ITS OWN PLANET
+    // (delete the extractor, drop a fresh template in a better area, KEEP the command centre) — never a
+    // move to another planet (the user redeploys in place; genuine relocations live in the top card).
+    // Skip refine-capped and freshly-moved colonies — reseating/relocating won't help them, and we don't
+    // suggest "add basics" (it often can't physically fit); the .find() then falls through to another
+    // character's colony that CAN actually be acted on.
     if (!p.covers) {
-      const pool = _producersOf(r.t).filter(c => !topHandled.has(c.planet_id + '|' + c.char) && !done.has(c.planet_id + '|' + c.char));
-      // Prefer redeploying the weakest colony that a reseat can't help but a richer planet would (not
-      // refine-capped, not freshly moved) — the "worst performer" the user wants moved.
-      const redeployC = pool.find(c => !_reseatWontHelp(c).blocked);
-      if (redeployC) {
-        const dest = _redeployDest(redeployC.p0, redeployC.char);
-        const richer = (dest && dest.richness > 0) ? dest : null;
-        lines.push(_bdActionRow(r.name, redeployC, richer ? `→ <b>${_esc(richer.loc)}</b> (${Math.round(richer.richness)}%)` : `to a richer planet`, 'Redeploy', sevCls));
-      } else {
-        // Only refine-capped colonies left dragging it → the fix is more on-planet refining, not a move.
-        const capC = pool.find(c => _reseatWontHelp(c).refiningLtd);
-        if (capC) lines.push(_bdActionRow(r.name, capC, `extracts more than it refines`, 'Add basics', sevCls));
-        // else: only freshly-moved colonies remain → still settling, no action.
-      }
+      const c = _producersOf(r.t).find(x =>
+        !topHandled.has(x.planet_id + '|' + x.char) && !done.has(x.planet_id + '|' + x.char) && !_reseatWontHelp(x).blocked);
+      if (c) lines.push(_bdActionRow(r.name, c, `move heads to a fresher spot — same planet, keep the CC`, 'Redeploy on-planet', sevCls));
     }
   });
 
