@@ -179,18 +179,32 @@ function _renderSyncWarn(data) {
 function _renderReactionAlerts(data) {
   const items = data.reaction_alerts;
   if (!_featureActive('reactions') || !items || !items.length) return '';
-  const cards = items.map(a => {
-    const msg = a.kind === 'reaction_completed'
-      ? `${(a.runs || 1).toLocaleString()} reaction${(a.runs || 1) === 1 ? '' : 's'} completed — collect the output and restart the slot`
-      : `Finishing in ${_fmtHours(a.hours_left)} — refill or start the next batch soon`;
-    return `<div class="dash-issue dash-issue-warn">
-        <div class="dash-issue-char">${_esc(a.character_name)}</div>
-        <ul class="dash-issue-items"><li class="dash-il-warn">${msg}</li></ul>
-      </div>`;
-  }).join('');
+  // ONE row per KIND (not per character) with an inline per-character tally — a whole fleet of
+  // completed reactions collapses to a single line instead of one card each, which filled the screen.
+  const done = items.filter(a => a.kind === 'reaction_completed');
+  const soon = items.filter(a => a.kind === 'reaction_finishing_soon');
+  const rows = [];
+  if (done.length) {
+    const totalRuns = done.reduce((s, a) => s + (a.runs || 1), 0);
+    const tally = done.slice().sort((a, b) => (b.runs || 1) - (a.runs || 1))
+      .map(a => `${_esc(a.character_name)} ×${(a.runs || 1).toLocaleString()}`).join(', ');
+    rows.push(`<div class="dash-issue dash-issue-warn">
+        <div class="dash-issue-char">${totalRuns.toLocaleString()} completed · ${done.length} character${done.length === 1 ? '' : 's'}</div>
+        <ul class="dash-issue-items"><li class="dash-il-warn">Collect the output and restart — ${tally}</li></ul>
+      </div>`);
+  }
+  if (soon.length) {
+    const tally = soon.slice().sort((a, b) => (a.hours_left ?? 1e9) - (b.hours_left ?? 1e9))
+      .map(a => `${_esc(a.character_name)} (${_fmtHours(a.hours_left)})`).join(', ');
+    rows.push(`<div class="dash-issue dash-issue-warn">
+        <div class="dash-issue-char">${soon.length} finishing soon</div>
+        <ul class="dash-issue-items"><li class="dash-il-warn">Refill or start the next batch — ${tally}</li></ul>
+      </div>`);
+  }
+  const nchar = new Set(items.map(a => a.character_name)).size;
   return `<section class="pp-card dash-issues">
-      <div class="pp-card-title">Reactions <span class="pp-card-hint">— ${items.length} character${items.length !== 1 ? 's' : ''} need attention</span></div>
-      <div class="pp-card-body">${cards}</div>
+      <div class="pp-card-title">Reactions <span class="pp-card-hint">— ${nchar} character${nchar !== 1 ? 's' : ''} need attention</span></div>
+      <div class="pp-card-body">${rows.join('')}</div>
     </section>`;
 }
 
