@@ -4,9 +4,12 @@ them against the persistent plan (pp_reaction_assignments), values everything vi
 and the wizard knapsack suggests what to react next. Depends on settings + graph; orders builds on
 top of this (so this must not import orders)."""
 import json as _json
+import logging
 import math
 import time as _time
 from datetime import datetime, timezone
+
+log = logging.getLogger(__name__)
 
 import httpx
 from fastapi import Depends, HTTPException
@@ -282,6 +285,168 @@ def ensure_reaction_orders_table():
         con.commit()
     finally:
         con.close()
+
+
+@ensure_once
+def ensure_reaction_completions_table():
+    """Forward-only ledger of FINISHED reaction jobs — one row per ESI job_id (globally unique), so a
+    completion is recorded exactly once however many times the sweep sees it. Feeds the account's
+    lifetime turnover / net-profit summary and the service-wide totals. Only jobs that actually
+    finished (end_date passed while still in the cached snapshot) are logged; a cancelled job that
+    drops out before its end_date never lands here. Values are locked in at completion time (the market
+    moves later), so this is 'value produced', not a live mark-to-market."""
+    con = get_connection()
+    try:
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS pp_reaction_completions (
+                job_id          BIGINT PRIMARY KEY,
+                context_id      INTEGER NOT NULL,
+                character_id    BIGINT,
+                product_type_id INTEGER,
+                runs            INTEGER,
+                output_value    REAL NOT NULL DEFAULT 0,
+                input_cost      REAL NOT NULL DEFAULT 0,
+                net_profit      REAL NOT NULL DEFAULT 0,
+                completed_at    REAL NOT NULL
+            )
+        """)
+        con.execute("CREATE INDEX IF NOT EXISTS idx_rxcomp_ctx ON pp_reaction_completions (context_id)")
+        con.commit()
+    finally:
+        con.close()
+
+
+def log_reaction_completions(context_id: int) -> int:
+    """Record any reaction jobs for this context that have FINISHED since the last sweep (end_date in
+    the past, still in the cached snapshot, not already logged). Idempotent — job_id is the PK and the
+    insert is ON CONFLICT DO NOTHING, so re-running is safe. Values each new completion once, at
+    completion, from the current recipe + market (locks the produced value). Returns the count logged.
+    Reads only the cached job snapshot — no ESI call — so it's cheap to run on the 15-minute tick."""
+    ensure_industry_jobs_table()
+    ensure_reaction_completions_table()
+    con = get_connection()
+    try:
+        rows = con.execute(
+            "SELECT j.character_id, j.jobs_json FROM pp_char_industry_jobs j "
+            "JOIN pp_characters c ON c.character_id = j.character_id WHERE c.context_id=?",
+            (context_id,),
+        ).fetchall()
+        known = {r["job_id"] for r in con.execute(
+            "SELECT job_id FROM pp_reaction_completions WHERE context_id=?", (context_id,))}
+    finally:
+        con.close()
+    if not rows:
+        return 0
+
+    now = _time.time()
+    pending: list[tuple] = []   # (job_id, character_id, product_type_id, runs, end_ts)
+    for r in rows:
+        try:
+            jobs = _json.loads(r["jobs_json"] or "[]")
+        except Exception:
+            continue
+        for j in jobs:
+            jid = j.get("job_id")
+            if jid is None or jid in known or j.get("status") not in ("active", "paused", "ready"):
+                continue
+            end = j.get("end_date")
+            if not end:
+                continue
+            try:
+                end_ts = datetime.fromisoformat(end.replace("Z", "+00:00")).timestamp()
+            except Exception:
+                continue
+            if end_ts <= now:   # finished
+                pending.append((jid, r["character_id"], j.get("product_type_id"), j.get("runs") or 0, end_ts))
+    if not pending:
+        return 0
+
+    # Value each finished job once, from the current recipe roll-up (materials + job fees) and market
+    # sell price. A reachable product gets full turnover + net; an unreachable one (goo unpriced) still
+    # contributes turnover from raw output × sell, with net left at 0 rather than overstated.
+    loaded = _load_goo_and_reached(context_id)
+    reached = loaded[1] if loaded else {}
+    pi = load_pi_data()
+    types = loaded[4] if loaded else pi["types"]
+    settings = effective_reaction_settings(context_id)
+    con = get_connection()
+    try:
+        out_qty_by_type = {r["output_type_id"]: r["output_qty"]
+                           for r in con.execute("SELECT output_type_id, output_qty FROM reactions")}
+    finally:
+        con.close()
+    prod_ids = list({tid for _, _, tid, _, _ in pending if tid})
+    market = fetch_market_data(prod_ids) if prod_ids else {}
+
+    con = get_connection()
+    logged = 0
+    try:
+        for jid, cid, tid, runs, end_ts in pending:
+            node = reached.get(tid)
+            sell = (market.get(tid) or {}).get("sell_price", 0.0) or 0.0
+            vol = (types.get(tid, {}) or {}).get("volume", 0.0) or 0.0
+            if node and node.get("via") and runs > 0:
+                total_out = runs * node["via"]["output_qty"]
+                v = _value_reaction_batch(node, total_out, sell_price=sell, volume=vol, settings=settings)
+                out_val, inp_cost, net = v["output_value"], v["input_cost"] + v["job_cost"], v["net_profit"]
+            else:
+                out_val = (runs * out_qty_by_type.get(tid, 0.0) * sell) if runs > 0 else 0.0
+                inp_cost = net = 0.0
+            con.execute(
+                "INSERT INTO pp_reaction_completions (job_id, context_id, character_id, product_type_id, "
+                "runs, output_value, input_cost, net_profit, completed_at) VALUES (?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT (job_id) DO NOTHING",
+                (jid, context_id, cid, tid, runs, round(out_val, 2), round(inp_cost, 2), round(net, 2), end_ts),
+            )
+            logged += 1
+        con.commit()
+    finally:
+        con.close()
+    return logged
+
+
+def log_all_reaction_completions() -> int:
+    """Sweep every context that tracks reaction jobs and log its new completions (see
+    log_reaction_completions). Scheduled every 15 min alongside the notification check. Per-context
+    failures are isolated so one bad account can't stall the sweep."""
+    ensure_industry_jobs_table()
+    con = get_connection()
+    try:
+        ctxs = [r["context_id"] for r in con.execute(
+            "SELECT DISTINCT c.context_id FROM pp_char_industry_jobs j "
+            "JOIN pp_characters c ON c.character_id = j.character_id")]
+    except Exception:
+        return 0
+    finally:
+        con.close()
+    total = 0
+    for ctx in ctxs:
+        try:
+            total += log_reaction_completions(ctx)
+        except Exception as exc:
+            log.warning("reaction-completion logging failed for context %s: %s", ctx, exc)
+    if total:
+        log.info("Logged %d new reaction completions across %d contexts", total, len(ctxs))
+    return total
+
+
+@router.get("/api/reactions/lifetime")
+def reactions_lifetime(context_id: int = Depends(require_context)):
+    """This account's lifetime reaction ledger: turnover (Σ produced output value), net profit
+    (Σ output − materials − job fees), job count, and the earliest logged completion ('since').
+    Forward-only — completions from before the ledger existed aren't captured (see
+    log_reaction_completions)."""
+    ensure_reaction_completions_table()
+    con = get_connection()
+    try:
+        row = con.execute(
+            "SELECT COALESCE(SUM(output_value),0) AS turnover, COALESCE(SUM(net_profit),0) AS net, "
+            "COUNT(*) AS jobs, MIN(completed_at) AS since "
+            "FROM pp_reaction_completions WHERE context_id=?", (context_id,)).fetchone()
+    finally:
+        con.close()
+    return {"turnover": round(row["turnover"] or 0, 2), "net_profit": round(row["net"] or 0, 2),
+            "jobs": row["jobs"] or 0, "since": row["since"]}
 
 
 def _insert_assignment_rows(con, character_id: int, type_id: int, name: str, runs: float,

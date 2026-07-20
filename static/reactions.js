@@ -315,7 +315,13 @@ function _loadReactionsDashboard() {
     .catch(err => {
       el.innerHTML = `<div class="pp-empty">${_esc(err.message)}</div>`;
     });
+  // Lifetime ledger (forward-only turnover + net profit) — separate, cheap DB-only call; re-renders
+  // the metrics once it lands so it never blocks the main dashboard.
+  fetch('/api/reactions/lifetime').then(r => r.ok ? r.json() : null).then(lt => {
+    if (lt) { _rxLifetime = lt; if (_rxLastDashboardData) _renderReactionsDashboard(_rxLastDashboardData); }
+  }).catch(() => {});
 }
+let _rxLifetime = null;
 
 // Trigger the ESI job-status fetch (POST /api/reactions/jobs/refresh) and reload the dashboard if
 // it actually pulled anything. force=true (manual "Refresh jobs" button) bypasses the server's
@@ -547,7 +553,19 @@ function _renderReactionsDashboard(data) {
   const producedBtn = hasProduced
     ? `<div style="margin-top:10px"><button class="pp-add-btn" onclick="_rxCopyProducedUnits(this)" title="Final products only — intermediate reactions consumed by another running job are excluded">Copy all produced units</button></div>`
     : '';
-  if (metricsEl) metricsEl.innerHTML = overviewTiles + progressBar + producedBtn;
+  // Lifetime ledger row — actual value PRODUCED by finished reactions (turnover) and net profit,
+  // accumulated from real completions (forward-only). Distinct from the "Expected" tiles above,
+  // which are the committed/in-flight pipeline. Shown once the ledger has anything in it.
+  let lifetimeTiles = '';
+  if (_rxLifetime && _rxLifetime.jobs > 0) {
+    const since = _rxLifetime.since ? new Date(_rxLifetime.since * 1000).toLocaleDateString() : null;
+    lifetimeTiles = `<div class="an-stats" style="margin-top:10px">
+        ${_dashTile(_fmtIsk(_rxLifetime.turnover), 'Lifetime turnover' + (since ? ` · since ${since}` : ''))}
+        ${_dashTile(_fmtIsk(_rxLifetime.net_profit), 'Lifetime net profit', 'an-ok')}
+        ${_dashTile(_rxLifetime.jobs.toLocaleString(), 'Reactions completed')}
+      </div>`;
+  }
+  if (metricsEl) metricsEl.innerHTML = overviewTiles + progressBar + producedBtn + lifetimeTiles;
 
   // Characters whose token lacks the structure-read scope AND have a job running (so an unresolved
   // "Structure #<id>" is actually visible) — one re-authorise adds the scope and resolves the names.

@@ -484,6 +484,17 @@ def admin_stats(_: int = Depends(require_admin)):
         "SELECT COUNT(*) FROM pp_reaction_orders WHERE status='open'"
     ).fetchone()[0]
     s["reaction_orders_total"] = con.execute("SELECT COUNT(*) FROM pp_reaction_orders").fetchone()[0]
+    # Service-wide reaction ledger totals (all accounts) — turnover = Σ produced output value, net =
+    # Σ profit after materials + job fees. Guarded: the ledger table may not exist yet on first deploy.
+    try:
+        _rx = con.execute(
+            "SELECT COALESCE(SUM(output_value),0) AS turnover, COALESCE(SUM(net_profit),0) AS net, "
+            "COUNT(*) AS jobs FROM pp_reaction_completions").fetchone()
+        s["reaction_turnover_total"] = round(_rx["turnover"] or 0, 2)
+        s["reaction_net_profit_total"] = round(_rx["net"] or 0, 2)
+        s["reaction_completions_total"] = _rx["jobs"] or 0
+    except Exception:
+        s["reaction_turnover_total"] = s["reaction_net_profit_total"] = s["reaction_completions_total"] = 0
 
     con.close()
     cache_set_json(_ADMIN_STATS_CACHE_KEY, s, ttl=_ADMIN_STATS_TTL)

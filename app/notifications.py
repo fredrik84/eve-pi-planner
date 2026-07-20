@@ -294,9 +294,12 @@ def _format_batch(kind: str, evs: list[dict]) -> tuple[str, str]:
 def make_scheduler():
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
     from app.yield_stats import aggregate_colony_yields
+    from app.reactions.jobs import log_all_reaction_completions
     sched = AsyncIOScheduler()
     sched.add_job(check_and_send_notifications, "interval", minutes=15, id="notify_check")
     sched.add_job(aggregate_colony_yields, "cron", hour=3, id="yield_aggregate")
+    # Forward-only reaction turnover/net-profit ledger — logs jobs that finished since the last tick.
+    sched.add_job(log_all_reaction_completions, "interval", minutes=15, id="reaction_completions")
     return sched
 
 

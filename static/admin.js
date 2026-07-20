@@ -580,6 +580,9 @@ function renderAdminStats(s) {
         tile((s.reaction_jobs_planned ?? 0).toLocaleString(), 'jobs planned'),
         tile((s.reaction_jobs_running ?? 0).toLocaleString(), 'jobs running'),
         tile((s.reaction_orders_open ?? 0) + ' / ' + (s.reaction_orders_total ?? 0), 'orders open / total'),
+        tile(_fmtIsk(s.reaction_turnover_total ?? 0), 'turnover (all accounts)'),
+        tile(_fmtIsk(s.reaction_net_profit_total ?? 0), 'net profit (all accounts)'),
+        tile((s.reaction_completions_total ?? 0).toLocaleString(), 'reactions completed'),
       ],
     },
     {
