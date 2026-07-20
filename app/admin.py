@@ -495,8 +495,14 @@ def admin_stats(_: int = Depends(require_admin)):
         s["reaction_completions_total"] = _rx["jobs"] or 0
     except Exception:
         s["reaction_turnover_total"] = s["reaction_net_profit_total"] = s["reaction_completions_total"] = 0
-
     con.close()
+    # Service-wide estimated PI produced value (all accounts) — recent extraction history refined to P1.
+    # Opens its OWN connection, so run it only AFTER con.close() (never hold two at once — pool rule).
+    try:
+        from app.planner import pi_lifetime_estimate
+        s["pi_produced_value_total"] = pi_lifetime_estimate(None).get("value", 0)
+    except Exception:
+        s["pi_produced_value_total"] = 0
     cache_set_json(_ADMIN_STATS_CACHE_KEY, s, ttl=_ADMIN_STATS_TTL)
     return s
 

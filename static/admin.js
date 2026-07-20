@@ -559,6 +559,7 @@ function renderAdminStats(s) {
         tile(s.systems_covered.toLocaleString(), 'systems'),
         tile(s.constellations_covered, 'constellations'),
         tile(s.pending_submissions, 'pending submissions'),
+        tile(_fmtIsk(s.pi_produced_value_total ?? 0), 'PI produced (est., all)'),
       ],
     },
     {

@@ -3832,6 +3832,72 @@ def _pick_factory_system(req, sys_fac_count: dict[str, int]):
     return None
 
 
+_PI_DECAY_K = 0.012   # per hour — matches analysis.js _EXT_DECAY_K (extraction front-loads then decays)
+
+
+def _pi_ext_eff(days: float) -> float:
+    """Average extraction as a fraction of peak over a program of `days` (per-cycle ≈ peak/(1+k·t))."""
+    from math import log
+    h = max(0.0, days or 0) * 24
+    return log(1 + _PI_DECAY_K * h) / (_PI_DECAY_K * h) if h > 0 else 1.0
+
+
+def pi_lifetime_estimate(context_id: int | None = None) -> dict:
+    """Estimated value of the P1 you refined from measured extraction, summed over the recorded
+    programs. NOTE pp_colony_yield keeps only the last ~10 programs per colony (bounded storage), so
+    this is a recent-history ESTIMATE, not a true all-time total. Per-account when context_id is set;
+    service-wide across every account when None. Each program's estimated total P0 = peak_p0_day ×
+    program-days × decay-average; valued at the P0's refined P1 (Jita sell). PI has no ISK input cost,
+    so this is both 'turnover' and 'net'."""
+    con = get_connection()
+    try:
+        if context_id is not None:
+            rows = con.execute(
+                "SELECT y.p0_type_id, y.peak_day, y.prog_days, y.install_ts FROM pp_colony_yield y "
+                "JOIN pp_characters c ON c.character_id = y.character_id WHERE c.context_id=?",
+                (context_id,)).fetchall()
+        else:
+            rows = con.execute("SELECT p0_type_id, peak_day, prog_days, install_ts FROM pp_colony_yield").fetchall()
+    except Exception:
+        return {"value": 0.0, "programs": 0, "since": None}
+    finally:
+        con.close()
+    if not rows:
+        return {"value": 0.0, "programs": 0, "since": None}
+    pi = load_pi_data()
+    types, schematics = pi["types"], pi["schematics"]
+    # p0_type_id -> (p1_type_id, P1-per-P0) from the tier-1 (single-input P0→P1) basic schematics.
+    p0_to_p1: dict[int, tuple] = {}
+    for out_id, sch in schematics.items():
+        if types.get(out_id, {}).get("pi_tier") == 1 and len(sch.get("inputs", [])) == 1:
+            inp = sch["inputs"][0]
+            if inp.get("quantity"):
+                p0_to_p1[inp["type_id"]] = (out_id, sch["output_qty"] / inp["quantity"])
+    p0_totals: dict[int, float] = {}
+    since = None
+    for r in rows:
+        d = r["prog_days"] or 0
+        p0_totals[r["p0_type_id"]] = p0_totals.get(r["p0_type_id"], 0.0) + (r["peak_day"] or 0) * d * _pi_ext_eff(d)
+        its = r["install_ts"]
+        if its and (since is None or its < since):
+            since = its
+    p1_ids = list({p0_to_p1[p0][0] for p0 in p0_totals if p0 in p0_to_p1})
+    prices = fetch_prices(p1_ids) if p1_ids else {}
+    value = 0.0
+    for p0, tot in p0_totals.items():
+        if p0 in p0_to_p1:
+            p1_id, ratio = p0_to_p1[p0]
+            value += tot * ratio * (prices.get(p1_id, 0.0) or 0.0)
+    return {"value": round(value, 2), "programs": len(rows), "since": since}
+
+
+@router.get("/api/pi-lifetime")
+def pi_lifetime(context_id: int = Depends(require_context)):
+    """This account's estimated PI produced value (see pi_lifetime_estimate) — recent-history
+    estimate, PI has no ISK input cost so value ≈ turnover ≈ net."""
+    return pi_lifetime_estimate(context_id)
+
+
 # ── Main plan runner ──────────────────────────────────────────────────────────
 
 def _run_plan(req: PlanRequest, context_id: int) -> dict:

@@ -370,7 +370,8 @@ function renderDashboard(data) {
       <div class="pp-card-title">Production progress</div>
       <div class="pp-card-body">${factoryFillRow}${reactionsRow}</div>
     </section>` : '';
-  el.innerHTML = _renderSyncWarn(data) + _renderReactionAlerts(data) + issuesHtml + expansionHtml + `
+  el.innerHTML = _renderSyncWarn(data) + _renderReactionAlerts(data) + issuesHtml + expansionHtml
+    + '<section class="pp-card" id="dashAccountValue" style="display:none"></section>' + `
     <section class="pp-card">
       <div class="pp-card-title">Overview <span class="pp-card-hint">— your PI at a glance · Rescan in the top bar pulls fresh data</span></div>
       <div class="pp-card-body"><div class="an-stats">${tiles}</div></div>
@@ -382,4 +383,30 @@ function renderDashboard(data) {
         <div class="dash-fac-list">${rows}</div>
       </div>
     </section>`;
+  _loadAccountValue();
+}
+
+// "Account value" card — the total value your account has PRODUCED. PI is an estimate from recent
+// extraction history (refined to P1; PI has no ISK input cost, so it's turnover ≈ net); reactions is
+// the exact forward-only ledger (turnover + net profit). Two cheap DB-backed calls, filled async so
+// they never block the dashboard; the card stays hidden until at least one has a number.
+function _loadAccountValue() {
+  const box = document.getElementById('dashAccountValue');
+  if (!box) return;
+  Promise.all([
+    fetch('/api/pi-lifetime').then(r => r.ok ? r.json() : null).catch(() => null),
+    fetch('/api/reactions/lifetime').then(r => r.ok ? r.json() : null).catch(() => null),
+  ]).then(([pi, rx]) => {
+    const tiles = [];
+    if (pi && pi.value > 0)
+      tiles.push(_dashTile(_fmtIsk(pi.value), 'PI produced (est.)', 'an-ok'));
+    if (rx && rx.jobs > 0) {
+      tiles.push(_dashTile(_fmtIsk(rx.turnover), 'Reactions turnover'));
+      tiles.push(_dashTile(_fmtIsk(rx.net_profit), 'Reactions net profit', 'an-ok'));
+    }
+    if (!tiles.length) return;   // nothing produced yet — leave the card hidden
+    box.style.display = '';
+    box.innerHTML = `<div class="pp-card-title">Account value <span class="pp-card-hint">— what you've produced${pi && pi.value > 0 ? ' · PI is an estimate from recent extraction history' : ''}</span></div>
+      <div class="pp-card-body"><div class="an-stats">${tiles.join('')}</div></div>`;
+  });
 }
