@@ -2202,8 +2202,8 @@ def dashboard(pp_session: str = Cookie(default=None)):
     # which product, which character — already lives via its own pending/todo display).
     reaction_alerts = [
         {"kind": a["kind"], "severity": a["severity"], "location": a["location"],
-         "character_name": a["character_name"], "runs": a.get("runs")}
-        for a in _colony_alerts if a["kind"] == "reaction_not_running"
+         "character_name": a["character_name"], "runs": a.get("runs"), "hours_left": a.get("hours_left")}
+        for a in _colony_alerts if a["kind"] in ("reaction_finishing_soon", "reaction_completed")
     ]
 
     # Reactions summary for the main Overview/Maintenance cards — naturally empty/None for

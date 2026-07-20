@@ -7,14 +7,14 @@ call `compute_colony_alerts()` — a single source of truth so a push notificati
 shown on screen can never drift apart, and both automatically respect each account's configured
 thresholds and muted kinds (app/alert_settings.py) without re-implementing that logic.
 
-Ten kinds (app.alert_settings.ALERT_KINDS): four threshold-based (expired, expiring,
+Eleven kinds (app.alert_settings.ALERT_KINDS): four threshold-based (expired, expiring,
 storage_full, factory_refill), four correctness-based, stored per-scan by
 app.esi._detect_colony_issues (ext_unrouted, fac_unfed, fac_output, p0_mismatch) — always
 "high" severity — schedule_sync (an extractor running a different program length than the
 fleet's norm), always "warn" severity, computed fleet-wide via _extractor_program_lengths() —
-and one Reactions-specific kind (reaction_finishing_soon, see _reaction_alerts() below),
-unrelated to PI colonies entirely but folded into the same flat list so it gets the same mute/
-severity/dashboard/push plumbing for free. The threshold-based kinds compute their own severity
+and two Reactions-specific kinds (reaction_finishing_soon, reaction_completed — see
+_reaction_alerts() below), unrelated to PI colonies entirely but folded into the same flat list
+so they get the same mute/severity/dashboard/push plumbing for free. The threshold-based kinds compute their own severity
 from the account's configured thresholds (see inline comments below).
 """
 import json as _json
@@ -46,6 +46,10 @@ def _reaction_alerts(context_id: int, muted: set, now: float) -> list[dict]:
       recomputed fresh against `now`, only the job LIST itself can go stale if a new job started
       since the last refresh (same staleness the Reactions tab's own "Refresh" button already
       exists to fix).
+    - reaction_completed: one or more of a character's running jobs have PASSED their end_date —
+      finished and sitting idle until you collect the output and restart the slot. Detected from
+      the same cached snapshot (a job's fixed end_date in the past), so no fresh ESI call is
+      needed; it re-nags on a cooldown until the job is delivered and drops out of the snapshot.
 
     (There used to be a kind here called reaction_not_running, warning when an assigned-but-not-
     yet-installed suggestion sat too long — removed 2026-07-12: it had no natural resolution
@@ -54,7 +58,9 @@ def _reaction_alerts(context_id: int, muted: set, now: float) -> list[dict]:
     earlier, a reaction_low_stock kind — removed for the alliance-sheet-stock-is-untrustworthy
     reason documented in app.reactions._resolve_reachable's docstring.)
     """
-    if "reaction_finishing_soon" in muted:
+    want_soon = "reaction_finishing_soon" not in muted
+    want_done = "reaction_completed" not in muted
+    if not want_soon and not want_done:
         return []
     con = get_connection()
     try:
@@ -79,7 +85,8 @@ def _reaction_alerts(context_id: int, muted: set, now: float) -> list[dict]:
             jobs = _json.loads(r["jobs_json"] or "[]")
         except Exception:
             continue
-        soonest_hours = None
+        soonest_running = None   # least hours_left among jobs STILL running (>0h left)
+        done_count = 0           # jobs whose end_date has passed — finished, awaiting collection/restart
         for j in jobs:
             if j.get("status") not in ("active", "paused", "ready"):
                 continue
@@ -91,14 +98,27 @@ def _reaction_alerts(context_id: int, muted: set, now: float) -> list[dict]:
             except Exception:
                 continue
             hours_left = (end_ts - now) / 3600.0
-            if soonest_hours is None or hours_left < soonest_hours:
-                soonest_hours = hours_left
-        if soonest_hours is not None and soonest_hours <= threshold_hours:
+            if hours_left <= 0:
+                done_count += 1
+            elif soonest_running is None or hours_left < soonest_running:
+                soonest_running = hours_left
+        # Finishing soon = a job still running with less than the threshold left (a lead-time warning).
+        # Already-finished jobs no longer count here — they're the reaction_completed alert below.
+        if want_soon and soonest_running is not None and soonest_running <= threshold_hours:
             alerts.append({
                 "kind": "reaction_finishing_soon",
                 "severity": "warn",
                 "character_id": r["character_id"], "character_name": r["character_name"],
-                "planet_id": None, "location": None, "hours_left": round(soonest_hours, 1),
+                "planet_id": None, "location": None, "hours_left": round(soonest_running, 1),
+            })
+        # Completed = one or more jobs finished and sitting idle — go collect the output and restart the
+        # slot. `runs` carries the finished-job count so the message can say how many.
+        if want_done and done_count > 0:
+            alerts.append({
+                "kind": "reaction_completed",
+                "severity": "warn",
+                "character_id": r["character_id"], "character_name": r["character_name"],
+                "planet_id": None, "location": None, "hours_left": None, "runs": done_count,
             })
 
     return alerts

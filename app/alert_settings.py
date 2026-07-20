@@ -46,6 +46,7 @@ ALERT_KINDS = [
     {"key": "p0_mismatch", "label": "Extracting something the factories don't use"},
     {"key": "schedule_sync", "label": "Extractor schedule out of sync"},
     {"key": "reaction_finishing_soon", "label": "Reactions finishing soon"},
+    {"key": "reaction_completed", "label": "Reactions completed"},
 ]
 _VALID_KINDS = {k["key"] for k in ALERT_KINDS}
 

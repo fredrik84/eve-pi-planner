@@ -1,7 +1,7 @@
 """Notification support: background scheduler + channel settings + event logic.
 
 Supported channels: Pushover, ntfy.sh, Discord webhook (see notifiers.py).
-Events: the same 9 alert kinds the Dashboard shows (app.alert_settings.ALERT_KINDS) — expired,
+Events: the same 11 alert kinds the Dashboard shows (app.alert_settings.ALERT_KINDS) — expired,
 expiring, storage_full, factory_refill, ext_unrouted, fac_unfed, fac_output, p0_mismatch,
 schedule_sync. Event detection itself lives in app.colony_alerts.compute_colony_alerts(); this
 module is purely a consumer (kind/severity filtering, cooldown, batching, sending) — it does not
@@ -158,6 +158,10 @@ _COOLDOWN_HOURS = {
     # approaches, and resolves itself once refilled) — same short cooldown, not the 24h
     # "persistent structural problem" category.
     "reaction_finishing_soon": 2.0,
+    # A finished-but-uncollected reaction stays "done" until you collect + restart it, so re-nag
+    # every 4h (like factory_refill) — long enough not to spam, short enough to remind you to reseat
+    # the slot so it isn't sitting idle.
+    "reaction_completed": 4.0,
 }
 
 
@@ -273,6 +277,7 @@ _KIND_LABELS = {
     "p0_mismatch":    ("Extracting something unused", "colony", "colonies"),
     "schedule_sync":  ("Extractor schedule out of sync", "extractor", "extractors"),
     "reaction_finishing_soon": ("Reactions finishing soon", "character", "characters"),
+    "reaction_completed": ("Reactions completed", "character", "characters"),
 }
 
 

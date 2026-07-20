@@ -171,18 +171,23 @@ function _renderSyncWarn(data) {
     </section>`;
 }
 
-// reaction_finishing_soon (app.colony_alerts._reaction_alerts): one alert per character, its
-// soonest-finishing RUNNING job has less than the configured reaction_refill_hours left —
-// already character-level (no per-product grouping needed, unlike the old reaction_not_running
-// kind this replaced 2026-07-13, which was removed for having no natural resolution condition:
-// an assigned-but-never-installed suggestion just sat there forever).
+// Reactions alerts (app.colony_alerts._reaction_alerts), one per character per kind:
+//  • reaction_finishing_soon — soonest RUNNING job has less than the configured
+//    reaction_refill_hours left (a lead-time warning).
+//  • reaction_completed — one or more jobs have FINISHED and are sitting idle; go collect the
+//    output and restart the slot.
 function _renderReactionAlerts(data) {
   const items = data.reaction_alerts;
   if (!_featureActive('reactions') || !items || !items.length) return '';
-  const cards = items.map(a => `<div class="dash-issue dash-issue-warn">
+  const cards = items.map(a => {
+    const msg = a.kind === 'reaction_completed'
+      ? `${(a.runs || 1).toLocaleString()} reaction${(a.runs || 1) === 1 ? '' : 's'} completed — collect the output and restart the slot`
+      : `Finishing in ${_fmtHours(a.hours_left)} — refill or start the next batch soon`;
+    return `<div class="dash-issue dash-issue-warn">
         <div class="dash-issue-char">${_esc(a.character_name)}</div>
-        <ul class="dash-issue-items"><li class="dash-il-warn">Finishing in ${_fmtHours(a.hours_left)} — refill or start the next batch soon</li></ul>
-      </div>`).join('');
+        <ul class="dash-issue-items"><li class="dash-il-warn">${msg}</li></ul>
+      </div>`;
+  }).join('');
   return `<section class="pp-card dash-issues">
       <div class="pp-card-title">Reactions <span class="pp-card-hint">— ${items.length} character${items.length !== 1 ? 's' : ''} need attention</span></div>
       <div class="pp-card-body">${cards}</div>
