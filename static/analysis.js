@@ -230,21 +230,6 @@ function _redeployDest(p0Name, character) {
   return d ? { loc: `${d.system} P${d.planet_num}`, richness: d.richness, planet_type: d.planet_type } : null;
 }
 
-// A CONCRETE "redeploy this one" line for when reseating can't help a material — names the WEAKEST
-// producing colony (most to gain from a richer planet, like the good "redeploy Sarmaras's silicon"
-// result), with a real richer destination when the redeploy data has one. Replaces the vague
-// "redeploy a tapped colony to a richer planet" that told the user to act without saying what.
-function _redeployWorst(r) {
-  const prods = _producersOf(r.t);   // _buildProducersIndex sorts weakest (lowest perDay) first
-  if (!prods.length) return `<b>add</b> a ${_esc(r.name)} colony — nothing produces it yet`;
-  const c = prods[0];
-  const loc = c.system ? `${_esc(c.char)} · ${_esc(c.system)}${c.planet_num != null ? ' P' + c.planet_num : ''}` : _esc(c.char);
-  const dest = _redeployDest(c.p0, c.char);
-  const richer = (dest && dest.richness > 0) ? dest : null;
-  const tgt = richer ? ` to <b>${_esc(richer.loc)}</b> (${Math.round(richer.richness)}% richness)` : ` to a richer planet`;
-  return `<b>redeploy</b> ${loc} — your weakest at ${_p0hR(c.perDay).toLocaleString()} P0/hr${tgt}, or <b>add</b> a colony`;
-}
-
 // "Working on this" pins — colonies (character_id|planet_id) the player is actively fixing. Persisted
 // so the highlight survives rescans/re-renders, so you never lose the card you're mid-fix on.
 let _anWorking = new Set();
@@ -1379,101 +1364,70 @@ function _willDipBeforeRestart(r) {
   return (_extSupplyOf(r.t) || r.have) * _extEff(_extProgramDays()) < r.need;
 }
 
+// One flat action row: <material> — <char · planet> | <detail> | <ACTION>. Reuses the existing
+// an-bd-prod 3-column layout. `c` is the colony (for the flag / rescan buttons).
+function _bdActionRow(mat, c, detail, tag, sevCls) {
+  const loc = c.system ? `${_esc(c.char)} · ${_esc(c.system)}${c.planet_num != null ? ' P' + c.planet_num : ''}` : _esc(c.char);
+  return `<div class="an-bd-prod">
+      <span class="an-bd-prod-loc"><b>${_esc(mat)}</b> — ${loc}</span>
+      <span class="an-bd-prod-val">${detail}</span>
+      <span class="an-bd-prod-tag ${sevCls}">${tag}${_flagBtn(c)}${_rescanBtn(c)}</span>
+    </div>`;
+}
+
 function _burndownSection(rows) {
   const progDays = _extProgramDays();
   const progTxt = progDays >= 1 ? `~${Math.round(progDays)}d` : `~${Math.round(progDays * 24)}h`;
   const targets = (rows || []).filter(r => r.ratio < 0.995 || _willDipBeforeRestart(r));
   if (!targets.length)
     return `<div class="an-suggest an-suggest-burndown"><div class="an-suggest-h">Reseat candidates</div>`
-      + `<div class="an-levers-lead">Every material holds above demand across its whole ${progTxt} program — nothing to act on right now. Reseating a depleting colony still extends runtime.</div></div>`;
+      + `<div class="an-levers-lead">Every material holds above demand across its whole ${progTxt} program — nothing to act on right now.</div></div>`;
 
-  const anyShort = targets.some(r => r.ratio < 0.995);
-  const groups = targets.map(r => {
-    const isShort = r.ratio < 0.995;
-    const extSupply = _extSupplyOf(r.t) || r.have;
-    const extBuf = r.need > 0 ? Math.round((extSupply / r.need - 1) * 100) : 0;
-    const shortBy = Math.max(0, Math.round(r.need - r.have));
-    // Short → urgent (below demand now). Otherwise it's meeting demand NOW but its extraction will
-    // decay below demand before the next restart — act before it dips, not an emergency yet.
-    const headH = `${_esc(r.name)} <span class="an-bd-group-sub">${isShort
-      ? `${Math.round(r.ratio * 100)}% fed · short ${shortBy.toLocaleString()}/day`
-      : `meeting demand now · +${extBuf}% — dips short before your ${progTxt} restart`}</span>`;
-    const prods = _producersOf(r.t);
-    if (!prods.length)
-      return isShort ? `<div class="an-bd-group"><div class="an-bd-group-h">${_esc(r.name)} <span class="an-bd-group-sub">short ${shortBy.toLocaleString()}/day · no colony makes it yet</span></div>`
-        + `<div class="an-bd-target"><b>Add</b> a ${_esc(r.name)} colony.</div></div>` : '';
+  // Colonies the top "redeploy to feed X" card already lists — never repeat them here.
+  let topHandled = new Set();
+  try { topHandled = new Set((_redeployPlan(targets).chosen || []).map(c => c.planet_id + '|' + (c.character || c.char))); } catch (e) {}
 
-    // SAME colonies + targets as the bar drilldown (_reseatPlan): a stable list of the declined colonies
-    // dragging this material, strongest-recovery first, each to its own proven peak, capped.
+  // ONE row per (material, colony) that needs an action, each with a SINGLE action — no prose.
+  const lines = [];
+  targets.forEach(r => {
+    const sevCls = r.ratio < 0.995 ? 'an-bd-down' : '';
     const p = _reseatPlan(r);
-    const reseatRows = p.use.map(c => {
-      const loc = c.system ? `${_esc(c.system)}${c.planet_num != null ? ' P' + c.planet_num : ''}` : '';
-      return `<div class="an-bd-prod">
-          <span class="an-bd-prod-loc">${_esc(c.char)}${loc ? ' · ' + loc : ''}${_reseatDates(c)}</span>
-          <span class="an-bd-prod-val">${_p0hR(c.perDay).toLocaleString()} → ${_p0hR(c.target).toLocaleString()}<span class="an-bd-unit"> P0/hr</span></span>
-          <span class="an-bd-prod-tag an-bd-down">▼ ${Math.round(c.decline * 100)}% off best${_flagBtn(c)}${_rescanBtn(c)}</span>
-        </div>`;
-    }).join('');
-    // Colonies reseating CAN'T fix — each tagged with WHY (refining cap vs fresh redeploy) and shown
-    // in refined-vs-extraction P0/hr so the wasted extraction is visible. These get the real fix, not
-    // a reseat.
-    const cantRows = p.cantReseat.map(c => {
-      const loc = c.system ? `${_esc(c.system)}${c.planet_num != null ? ' P' + c.planet_num : ''}` : '';
-      const ext = Math.round((c.extPerDay || 0) * _P0_PER_P1 / 24), ref = Math.round((c.perDay || 0) * _P0_PER_P1 / 24);
-      const val = c.reason === 'refining'
-        ? `${ref.toLocaleString()} <span class="an-of">of ${ext.toLocaleString()} ext</span><span class="an-bd-unit"> P0/hr</span>`
-        : `${ref.toLocaleString()}<span class="an-bd-unit"> P0/hr</span>`;
-      const _moveWord = (c.redeploy_at || 0) >= (c.reseat_at || 0) ? 'redeployed' : 'reseated';
-      const tag = c.reason === 'refining' ? 'refining-limited' : `${_moveWord} ${_fmtEpochAgo(Math.max(c.redeploy_at || 0, c.reseat_at || 0))}`;
-      return `<div class="an-bd-prod">
-          <span class="an-bd-prod-loc">${_esc(c.char)}${loc ? ' · ' + loc : ''}</span>
-          <span class="an-bd-prod-val">${val}</span>
-          <span class="an-bd-prod-tag an-bd-down">${tag}${_flagBtn(c)}${_rescanBtn(c)}</span>
-        </div>`;
-    }).join('');
-    const hasUnknown = prods.some(c => c.n < 2 && !_isColonyFlagged(c));
-    const redeployTail = _redeployWorst(r);   // names the weakest colony + a concrete richer target
+    const done = new Set();
+    // Reseat rows — declined colonies where reseating actually lifts output (_reseatPlan already drops
+    // refine-capped and freshly-moved colonies, so these are genuine "reseating is the fix" cases).
+    p.use.forEach(c => {
+      const k = c.planet_id + '|' + c.char;
+      if (topHandled.has(k)) return;
+      done.add(k);
+      lines.push(_bdActionRow(r.name, c, `${_p0hR(c.perDay).toLocaleString()} → ${_p0hR(c.target).toLocaleString()} <span class="an-of">P0/hr</span>`, 'Reseat', sevCls));
+    });
+    // One escalation row when reseating can't cover it: the clearest non-reseat fix.
+    if (!p.covers) {
+      const pool = _producersOf(r.t).filter(c => !topHandled.has(c.planet_id + '|' + c.char) && !done.has(c.planet_id + '|' + c.char));
+      // Prefer redeploying the weakest colony that a reseat can't help but a richer planet would (not
+      // refine-capped, not freshly moved) — the "worst performer" the user wants moved.
+      const redeployC = pool.find(c => !_reseatWontHelp(c).blocked);
+      if (redeployC) {
+        const dest = _redeployDest(redeployC.p0, redeployC.char);
+        const richer = (dest && dest.richness > 0) ? dest : null;
+        lines.push(_bdActionRow(r.name, redeployC, richer ? `→ <b>${_esc(richer.loc)}</b> (${Math.round(richer.richness)}%)` : `to a richer planet`, 'Redeploy', sevCls));
+      } else {
+        // Only refine-capped colonies left dragging it → the fix is more on-planet refining, not a move.
+        const capC = pool.find(c => _reseatWontHelp(c).refiningLtd);
+        if (capC) lines.push(_bdActionRow(r.name, capC, `extracts more than it refines`, 'Add basics', sevCls));
+        // else: only freshly-moved colonies remain → still settling, no action.
+      }
+    }
+  });
 
-    // Build the group as up to two blocks: the colonies to reseat, and the colonies NOT to reseat
-    // (with their real fix) — matching "try reseating this one, or redeploy/refine that one instead".
-    const blocks = [];
-    if (p.use.length) {
-      const lead = isShort
-        ? (p.covers
-            ? `<b>Reseat</b> the ${p.use.length === 1 ? 'colony' : `${p.use.length} colonies`} below (strongest first) until ${_esc(r.name)} is healthy — do them at your pace, each drops off once done.`
-            : `<b>Reseat</b> the ${p.use.length} below to recover lost yield.`)
-        : `<b>Reseat</b> the ${p.use.length === 1 ? 'colony' : `${p.use.length} colonies`} below to lift ${_esc(r.name)} back above demand for the whole ${progTxt} program, so it stops dipping short before your restart.`;
-      blocks.push(`<div class="an-bd-target">${lead}</div><div class="an-bd-prod-list">${reseatRows}</div>`);
-    }
-    if (p.cantReseat.length) {
-      const hasRef = p.cantReseat.some(c => c.reason === 'refining');
-      const hasFresh = p.cantReseat.some(c => c.reason === 'fresh');
-      const why = hasRef && hasFresh ? `they already extract more than the on-planet basics can refine, or were just reseated/redeployed`
-                : hasRef ? `they already extract more than the on-planet basics can refine — restoring extraction adds nothing`
-                : `their heads were just reseated or redeployed and are still settling`;
-      const fix = hasRef ? ` <b>Add a Basic Industry Facility</b> — rebuild as a <b>storage-less</b> extractor (the launchpad becomes the hub) to free the power grid for one more basic. A very rich or large planet may still leave some extraction unrefined even then.`
-                : ` They're effectively already fixed — <b>Rescan</b> once they ramp.`;
-      blocks.push(`<div class="an-bd-target"><b>Don't reseat</b> the ${p.cantReseat.length === 1 ? 'colony' : 'colonies'} below — ${why}.${fix}</div><div class="an-bd-prod-list">${cantRows}</div>`);
-    }
-    if (!blocks.length) {
-      blocks.push(hasUnknown
-        ? `<div class="an-bd-target">No decline measured yet — <b>try reseating</b>, then <b>Rescan</b>. If it doesn't ${isShort ? `add ~${shortBy.toLocaleString()}/day` : `keep it above demand through the program`}, ${redeployTail}.</div>`
-        : isShort
-          ? `<div class="an-bd-target">At peak — reseating won't close <b>${shortBy.toLocaleString()}/day</b>. ${redeployTail}.</div>`
-          : `<div class="an-bd-target">At peak — reseating won't stop the dip. To hold above demand through the ${progTxt} program, ${redeployTail}.</div>`);
-    } else if (p.use.length && !p.covers) {
-      blocks.push(isShort
-        ? `<div class="an-bd-target">If that still leaves ${_esc(r.name)} short, ${redeployTail}.</div>`
-        : `<div class="an-bd-target">If it still dips before your ${progTxt} restart, ${redeployTail}.</div>`);
-    }
-    return `<div class="an-bd-group"><div class="an-bd-group-h">${headH}</div>${blocks.join('')}</div>`;
-  }).join('');
+  if (!lines.length)
+    return `<div class="an-suggest an-suggest-burndown"><div class="an-suggest-h">Reseat candidates</div>`
+      + `<div class="an-levers-lead">The materials at risk are already covered by the redeploy fixes above.</div></div>`;
 
   return `<div class="an-suggest an-suggest-burndown">
-      <div class="an-suggest-h">${anyShort ? 'Fix short materials' : 'Top up extraction buffer'}</div>
-      <div class="an-levers-lead">Shown when a material is <b>short</b> now, or its extraction will <b>dip below demand before your ${progTxt} restart</b> (not just because it's a bit thin). Reseat first; <b>redeploy</b> the weakest colony only when it's tapped out.</div>
-      <div class="an-bd-groups">${groups}</div>
-      <div class="an-levers-lead" style="margin-top:8px">Still not hitting targets after reseating and redeploying? <b>Lower your extraction program cycle</b> — a shorter program raises the average P0/hr across <em>every</em> colony at once, a global lever when the per-colony fixes aren't enough.</div>
+      <div class="an-suggest-h">Fix short materials</div>
+      <div class="an-levers-lead">One row per colony that needs an action to keep a material fed through your ${progTxt} program.</div>
+      <div class="an-bd-prod-list">${lines.join('')}</div>
     </div>`;
 }
 
