@@ -1351,18 +1351,31 @@ function _staleSupplyNote(rows) {
 }
 
 function _burndownSection(rows) {
-  const short = (rows || []).filter(r => r.ratio < 0.995);   // materials below the plan's need
-  if (!short.length)
+  const buf = Math.round(_HEALTHY_BUFFER * 100);
+  // Surface any material that isn't comfortably sustained: below demand (short) OR meeting demand but
+  // with less than the +10% EXTRACTION buffer that holds through head decay. Suggesting fixes up to the
+  // buffer — not just when already short — lets you reseat/redeploy everything in one session instead of
+  // fixing one thing per decay cycle (the "I have to work every day to keep overproduction up" problem).
+  const targets = (rows || []).filter(r => r.ratio < 0.995 || (_extSupplyOf(r.t) || r.have) < r.need * (1 + _HEALTHY_BUFFER));
+  if (!targets.length)
     return `<div class="an-suggest an-suggest-burndown"><div class="an-suggest-h">Reseat candidates</div>`
-      + `<div class="an-levers-lead">All materials covered — nothing short to fix. Reseating a depleting colony still extends runtime.</div></div>`;
+      + `<div class="an-levers-lead">Every material has a healthy +${buf}% extraction buffer — nothing to reseat right now. Reseating a depleting colony still extends runtime.</div></div>`;
 
-  const groups = short.map(r => {
+  const anyShort = targets.some(r => r.ratio < 0.995);
+  const groups = targets.map(r => {
+    const isShort = r.ratio < 0.995;
+    const extSupply = _extSupplyOf(r.t) || r.have;
+    const extBuf = r.need > 0 ? Math.round((extSupply / r.need - 1) * 100) : 0;
     const shortBy = Math.max(0, Math.round(r.need - r.have));
-    const headH = `${_esc(r.name)} <span class="an-bd-group-sub">${Math.round(r.ratio * 100)}% fed · short ${shortBy.toLocaleString()}/day</span>`;
+    // Short → urgent (below demand). Otherwise it's meeting demand but the buffer is thin: a headroom
+    // top-up, not an emergency.
+    const headH = `${_esc(r.name)} <span class="an-bd-group-sub">${isShort
+      ? `${Math.round(r.ratio * 100)}% fed · short ${shortBy.toLocaleString()}/day`
+      : `meeting demand · +${extBuf}% buffer (aim +${buf}%)`}</span>`;
     const prods = _producersOf(r.t);
     if (!prods.length)
-      return `<div class="an-bd-group"><div class="an-bd-group-h">${_esc(r.name)} <span class="an-bd-group-sub">short ${shortBy.toLocaleString()}/day · no colony makes it yet</span></div>`
-        + `<div class="an-bd-target"><b>Add</b> a ${_esc(r.name)} colony.</div></div>`;
+      return isShort ? `<div class="an-bd-group"><div class="an-bd-group-h">${_esc(r.name)} <span class="an-bd-group-sub">short ${shortBy.toLocaleString()}/day · no colony makes it yet</span></div>`
+        + `<div class="an-bd-target"><b>Add</b> a ${_esc(r.name)} colony.</div></div>` : '';
 
     // SAME colonies + targets as the bar drilldown (_reseatPlan): a stable list of the declined colonies
     // dragging this material, strongest-recovery first, each to its own proven peak, capped.
@@ -1398,9 +1411,11 @@ function _burndownSection(rows) {
     // (with their real fix) — matching "try reseating this one, or redeploy/refine that one instead".
     const blocks = [];
     if (p.use.length) {
-      const lead = p.covers
-        ? `<b>Reseat</b> the ${p.use.length === 1 ? 'colony' : `${p.use.length} colonies`} below (strongest first) until ${_esc(r.name)} is healthy — do them at your pace, each drops off once done.`
-        : `<b>Reseat</b> the ${p.use.length} below to recover lost yield.`;
+      const lead = isShort
+        ? (p.covers
+            ? `<b>Reseat</b> the ${p.use.length === 1 ? 'colony' : `${p.use.length} colonies`} below (strongest first) until ${_esc(r.name)} is healthy — do them at your pace, each drops off once done.`
+            : `<b>Reseat</b> the ${p.use.length} below to recover lost yield.`)
+        : `<b>Reseat</b> the ${p.use.length === 1 ? 'colony' : `${p.use.length} colonies`} below to top ${_esc(r.name)} back up to a +${buf}% buffer — optional headroom, so it holds longer between restarts.`;
       blocks.push(`<div class="an-bd-target">${lead}</div><div class="an-bd-prod-list">${reseatRows}</div>`);
     }
     if (p.cantReseat.length) {
@@ -1415,18 +1430,23 @@ function _burndownSection(rows) {
     }
     if (!blocks.length) {
       blocks.push(hasUnknown
-        ? `<div class="an-bd-target">No decline measured yet — <b>try reseating</b>, then <b>Rescan</b>. If it doesn't add ~${shortBy.toLocaleString()}/day, ${redeployTail}.</div>`
-        : `<div class="an-bd-target">At peak — reseating won't close <b>${shortBy.toLocaleString()}/day</b>. ${redeployTail}.</div>`);
+        ? `<div class="an-bd-target">No decline measured yet — <b>try reseating</b>, then <b>Rescan</b>. If it doesn't ${isShort ? `add ~${shortBy.toLocaleString()}/day` : `lift the buffer to +${buf}%`}, ${redeployTail}.</div>`
+        : isShort
+          ? `<div class="an-bd-target">At peak — reseating won't close <b>${shortBy.toLocaleString()}/day</b>. ${redeployTail}.</div>`
+          : `<div class="an-bd-target">At peak — reseating won't add buffer. For more headroom that holds through decay, ${redeployTail} <span class="an-of">(optional)</span>.</div>`);
     } else if (p.use.length && !p.covers) {
-      blocks.push(`<div class="an-bd-target">If that still leaves ${_esc(r.name)} short, ${redeployTail}.</div>`);
+      blocks.push(isShort
+        ? `<div class="an-bd-target">If that still leaves ${_esc(r.name)} short, ${redeployTail}.</div>`
+        : `<div class="an-bd-target">For a full +${buf}% buffer, ${redeployTail} <span class="an-of">(optional)</span>.</div>`);
     }
     return `<div class="an-bd-group"><div class="an-bd-group-h">${headH}</div>${blocks.join('')}</div>`;
   }).join('');
 
   return `<div class="an-suggest an-suggest-burndown">
-      <div class="an-suggest-h">Fix short materials</div>
-      <div class="an-levers-lead">Short on <b>${short.map(r => _esc(r.name)).join('</b>, <b>')}</b>. Reseating recovers <em>lost</em> yield only — no help once a colony is at its peak. If it's not enough, <b>redeploy or add</b>.</div>
+      <div class="an-suggest-h">${anyShort ? 'Fix short materials' : 'Top up extraction buffer'}</div>
+      <div class="an-levers-lead">Reseat — and <b>redeploy</b> where a colony's tapped out — to bring every material to a <b>+${buf}% extraction buffer</b>, so overproduction holds between restarts instead of dipping short as heads decay. Below-demand materials are flagged <b>short</b>; the rest are optional headroom.</div>
       <div class="an-bd-groups">${groups}</div>
+      <div class="an-levers-lead" style="margin-top:8px">Still not hitting targets after reseating and redeploying? <b>Lower your extraction program cycle</b> — a shorter program raises the average P0/hr across <em>every</em> colony at once, a global lever when the per-colony fixes aren't enough.</div>
     </div>`;
 }
 
