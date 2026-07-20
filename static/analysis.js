@@ -230,6 +230,21 @@ function _redeployDest(p0Name, character) {
   return d ? { loc: `${d.system} P${d.planet_num}`, richness: d.richness, planet_type: d.planet_type } : null;
 }
 
+// A CONCRETE "redeploy this one" line for when reseating can't help a material — names the WEAKEST
+// producing colony (most to gain from a richer planet, like the good "redeploy Sarmaras's silicon"
+// result), with a real richer destination when the redeploy data has one. Replaces the vague
+// "redeploy a tapped colony to a richer planet" that told the user to act without saying what.
+function _redeployWorst(r) {
+  const prods = _producersOf(r.t);   // _buildProducersIndex sorts weakest (lowest perDay) first
+  if (!prods.length) return `<b>add</b> a ${_esc(r.name)} colony — nothing produces it yet`;
+  const c = prods[0];
+  const loc = c.system ? `${_esc(c.char)} · ${_esc(c.system)}${c.planet_num != null ? ' P' + c.planet_num : ''}` : _esc(c.char);
+  const dest = _redeployDest(c.p0, c.char);
+  const richer = (dest && dest.richness > 0) ? dest : null;
+  const tgt = richer ? ` to <b>${_esc(richer.loc)}</b> (${Math.round(richer.richness)}% richness)` : ` to a richer planet`;
+  return `<b>redeploy</b> ${loc} — your weakest at ${_p0hR(c.perDay).toLocaleString()} P0/hr${tgt}, or <b>add</b> a colony`;
+}
+
 // "Working on this" pins — colonies (character_id|planet_id) the player is actively fixing. Persisted
 // so the highlight survives rescans/re-renders, so you never lose the card you're mid-fix on.
 let _anWorking = new Set();
@@ -413,7 +428,7 @@ function _renderRedeployUrgent(rows) {
   const groupsHtml = Object.keys(byChar).sort((a, b) => a.localeCompare(b, undefined, { numeric: true })).map(nm => {
     const items = byChar[nm];
     return `<div class="an-redeploy-char">
-        <div class="an-redeploy-char-h"><b>${_esc(nm)}</b> <span class="an-redeploy-char-sub">${items.length} fix${items.length === 1 ? '' : 'es'}, one login</span></div>
+        <div class="an-redeploy-char-h"><b>${_esc(nm)}</b></div>
         ${items.map(rowHtml).join('')}
       </div>`;
   }).join('');
@@ -1216,17 +1231,20 @@ function _reseatExhaustedKeys() {
 // colonies, strongest first, capped) rather than a shrinking gap-closing set, so working through it or
 // rescanning doesn't drop the ones you haven't done yet. Flagged AND overlapping colonies are dropped
 // (they can't be reseat-fixed — they go to the same-planet move / redeploy list instead).
-const _REDEPLOY_FRESH_DAYS = 3;   // a colony redeployed this recently is still settling — its heads are
-// fresh, so any measured "decline" is ramp / old-config noise, not real decay. It's effectively
-// already fixed; reseating it does nothing.
+const _REDEPLOY_FRESH_DAYS = 3;   // a colony whose heads moved this recently is still settling — any
+// measured "decline" is ramp / old-config noise, not real decay. It's effectively already fixed;
+// reseating it again does nothing.
 
 // Why reseating a given colony can't help (so we never suggest it):
 //   • refining-limited — the heads already out-extract what the on-planet basics can refine, so
 //     restoring extraction adds ZERO refined output (extraction isn't the bottleneck). Fix = refining.
-//   • fresh redeploy — heads were just moved; the "decline" is settling noise, already fixed.
+//   • fresh move — heads were just reseated OR redeployed (either resets the extraction curve), so the
+//     "decline" is settling noise. Uses whichever of reseat_at/redeploy_at is more recent, because our
+//     centroid heuristic may log a user's redeploy as a reseat (or vice-versa) — either way it's fresh.
 function _reseatWontHelp(c) {
   const refiningLtd = (c.extPerDay || 0) > (c.perDay || 0) * 1.05;
-  const freshRedeploy = !!c.redeploy_at && (Date.now() / 1000 - c.redeploy_at) < _REDEPLOY_FRESH_DAYS * 86400;
+  const lastMove = Math.max(c.redeploy_at || 0, c.reseat_at || 0);
+  const freshRedeploy = lastMove > 0 && (Date.now() / 1000 - lastMove) < _REDEPLOY_FRESH_DAYS * 86400;
   return { refiningLtd, freshRedeploy, blocked: refiningLtd || freshRedeploy };
 }
 
@@ -1397,7 +1415,8 @@ function _burndownSection(rows) {
       const val = c.reason === 'refining'
         ? `${ref.toLocaleString()} <span class="an-of">of ${ext.toLocaleString()} ext</span><span class="an-bd-unit"> P0/hr</span>`
         : `${ref.toLocaleString()}<span class="an-bd-unit"> P0/hr</span>`;
-      const tag = c.reason === 'refining' ? 'refining-limited' : `redeployed ${_fmtEpochAgo(c.redeploy_at)}`;
+      const _moveWord = (c.redeploy_at || 0) >= (c.reseat_at || 0) ? 'redeployed' : 'reseated';
+      const tag = c.reason === 'refining' ? 'refining-limited' : `${_moveWord} ${_fmtEpochAgo(Math.max(c.redeploy_at || 0, c.reseat_at || 0))}`;
       return `<div class="an-bd-prod">
           <span class="an-bd-prod-loc">${_esc(c.char)}${loc ? ' · ' + loc : ''}</span>
           <span class="an-bd-prod-val">${val}</span>
@@ -1405,7 +1424,7 @@ function _burndownSection(rows) {
         </div>`;
     }).join('');
     const hasUnknown = prods.some(c => c.n < 2 && !_isColonyFlagged(c));
-    const redeployTail = `<b>redeploy</b> a tapped colony to a richer planet or <b>add</b> a ${_esc(r.name)} colony`;
+    const redeployTail = _redeployWorst(r);   // names the weakest colony + a concrete richer target
 
     // Build the group as up to two blocks: the colonies to reseat, and the colonies NOT to reseat
     // (with their real fix) — matching "try reseating this one, or redeploy/refine that one instead".
@@ -1421,9 +1440,9 @@ function _burndownSection(rows) {
     if (p.cantReseat.length) {
       const hasRef = p.cantReseat.some(c => c.reason === 'refining');
       const hasFresh = p.cantReseat.some(c => c.reason === 'fresh');
-      const why = hasRef && hasFresh ? `they already extract more than the on-planet basics can refine, or were just redeployed`
+      const why = hasRef && hasFresh ? `they already extract more than the on-planet basics can refine, or were just reseated/redeployed`
                 : hasRef ? `they already extract more than the on-planet basics can refine — restoring extraction adds nothing`
-                : `they were just redeployed and are still settling`;
+                : `their heads were just reseated or redeployed and are still settling`;
       const fix = hasRef ? ` <b>Add a Basic Industry Facility</b> — rebuild as a <b>storage-less</b> extractor (the launchpad becomes the hub) to free the power grid for one more basic. A very rich or large planet may still leave some extraction unrefined even then.`
                 : ` They're effectively already fixed — <b>Rescan</b> once they ramp.`;
       blocks.push(`<div class="an-bd-target"><b>Don't reseat</b> the ${p.cantReseat.length === 1 ? 'colony' : 'colonies'} below — ${why}.${fix}</div><div class="an-bd-prod-list">${cantRows}</div>`);
