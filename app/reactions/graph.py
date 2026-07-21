@@ -326,10 +326,17 @@ def _load_goo_and_reached(context_id: int, allowed_material_ids: set[int] | None
         purchasable_ids -= (fuel_block_ids - set(allowed_material_ids))
     purchasable_ids = list(purchasable_ids)
     purchasable_market = resolve_market_data(context_id, purchasable_ids)
-    purchasable = {
-        tid: m["sell_price"] + settings["import_isk_per_m3"] * (types.get(tid, {}).get("volume") or 0.0)
-        for tid, m in purchasable_market.items()
-    }
+    # Import freight = the cost to HAUL a bought input to the reaction site. It's only real for
+    # items bought from JITA (the remote fallback) — a material sourced from a followed local/
+    # alliance market is assumed to be at/near the reaction site, so no Jita import cost is added.
+    # If a user follows a far-off market they price their own transport into that market's numbers,
+    # not us (confirmed with the user 2026-07-21). `source` is set by resolve_market_data:
+    # "Jita" for the fallback, else the winning market's name.
+    purchasable = {}
+    for tid, m in purchasable_market.items():
+        vol = types.get(tid, {}).get("volume") or 0.0
+        freight = settings["import_isk_per_m3"] * vol if m.get("source") == "Jita" else 0.0
+        purchasable[tid] = m["sell_price"] + freight
 
     # Job installation cost: EIV x (system cost index + facility tax) — see _resolve_reachable's
     # job_cost roll-up. Both are 0 (no effect, current behavior preserved) unless the caller's
@@ -602,9 +609,10 @@ def _materials_report(totals: dict[int, float], reached: dict, types: dict) -> l
     actual alliance/market quote against, not just a bare quantity. alt_unit_cost/alt_source
     is the LOSING price (if both a group sheet price and a market price were available for
     this material) — the actual ISK/unit gap between them, not just an implicit "cheaper won."
-    Market prices always include the configured import shipping cost per m3 already baked in
-    (see the "market_data field names..." note in _load_goo_and_reached above) — never a bare
-    Jita quote."""
+    A JITA-sourced price includes the configured import shipping cost per m3 baked in (the haul to
+    the reaction site); a price from a followed LOCAL/alliance market does NOT — that market is
+    assumed at/near the reaction site, so no Jita import freight is added (see the freight note in
+    _load_goo_and_reached). `market_name` names which market actually priced the leaf."""
     materials = [
         {
             "type_id": tid, "name": types.get(tid, {}).get("name", str(tid)),

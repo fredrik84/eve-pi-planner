@@ -988,16 +988,28 @@ fuel blocks stay on Jita).
   label. **Drop-in for `fetch_market_data`** — the reactions call sites in `graph.py`/`jobs.py` were
   swapped to it (all already had `context_id` in scope). With no markets configured it returns
   exactly Jita, so behavior is unchanged for everyone until they set one up.
+- **Freight applies to Jita-sourced items only.** In `_load_goo_and_reached`, `purchasable`'s import
+  shipping (`import_isk_per_m3 × volume`) is added **only when `m["source"] == "Jita"`** — the haul
+  from the remote hub. A material sourced from a followed local/alliance market gets NO import
+  freight (the market is assumed at/near the reaction site; a user who follows a far-off market
+  prices their own transport into that market's own numbers). Moon goo from the group sheet already
+  had zero import cost (separate `goo` path). `_materials_report`'s `market_name` names the winning
+  market per leaf.
 - **Search** (`/api/markets/search?q=`): structures via `GET /characters/{id}/search/?categories=
   structure` (only ones the char can access) resolved to names via `/universe/structures/{id}/`;
   regions matched against SDE `constellations.region` names, resolved to ids via public
   `/universe/ids/`. Needs a connected market character for structure results.
-- **UI** (`reactions.js`, gated by `_featureActive('local_market')`): a `#rxMarketSetupCard` at the
-  top of the Reactions tab — full "Markets & freight setup" while unconfigured (search+add, priority
-  reorder, Jita pinned last, connect-char, link to the freight Settings modal), collapsing to a
-  one-line "Reaction pricing: A → B → Jita" summary once set. The leaf source name is threaded onto
-  each `reached` leaf node (`market_name`) in `_load_goo_and_reached` and surfaced by
-  `_materials_report`, rendered as a per-line **price-source badge** in the shopping list.
+- **UI** (`reactions.js`, gated by `_featureActive('local_market')`): a `#rxMarketSetupCard` bar at
+  the top of the Reactions tab drives a full-screen **onboarding wizard modal** (`#rxOnboardModal`,
+  `_rxOpenOnboard`/`_rxRenderOnboard`): 3 steps — (1) big "Connect a character" button
+  (`connectReactionsMarket`), (2) market search+add / priority reorder (Jita pinned last), (3) a
+  **foldable** freight form (reuses `_rxAccountSettingsFormHtml`/`_loadRxAccountSettings`). While
+  unconfigured the card is a "Get started" CTA and the modal **auto-opens once per session**
+  (`_rxOnboardShown`); once configured the card collapses to a one-line "Reaction pricing: A → B →
+  Jita" summary that re-opens the same modal. `_rxRefreshMarkets` re-renders whichever surface is
+  showing after each add/remove/reorder. The leaf source name is threaded onto each `reached` leaf
+  node (`market_name`) in `_load_goo_and_reached` and surfaced by `_materials_report`, rendered as a
+  per-line **price-source badge** in the shopping list.
 - Gating test `test_markets_gated` in `test_features.py`; `local_market` in the registry.
 
 ## Notifications (`app/notifications.py`, `app/notifiers.py`)

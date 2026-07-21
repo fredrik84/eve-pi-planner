@@ -1981,12 +1981,12 @@ function _rxDeleteOrder(orderId) {
 }
 
 // ── Local / alliance market pricing setup (local_market flag) ─────────────────────────
-// A card at the top of the Reactions tab to follow one or more markets (a player structure
-// market and/or a public region market) in priority order; reactions price against them, falling
-// back to Jita. Shown expanded while unconfigured, collapsed to a summary bar once set. Freight
-// reuses the existing reactions Settings modal; character add reuses the opt-in scope flow.
-let _rxMarketSetupOpen = false;
+// Follow one or more markets (a player structure market and/or a public region market) in a
+// priority order; reactions price against them, falling back to Jita. When nothing is set up yet
+// the Reactions tab shows a full-screen onboarding wizard in a modal (auto-opened once per
+// session); once configured it collapses to a one-line summary bar that re-opens the same modal.
 let _rxMarketData = null;
+let _rxOnboardShown = false;   // don't re-auto-open the wizard every tab switch this session
 
 async function _rxLoadMarketSetup() {
   const card = document.getElementById('rxMarketSetupCard');
@@ -2005,14 +2005,16 @@ async function _rxLoadMarketSetup() {
   _rxMarketData = d;
   card.style.display = '';
   const configured = (d.markets && d.markets.length) || (d.effective && d.effective.length);
-  if (configured && !_rxMarketSetupOpen) _rxRenderMarketSummary(card, d);
-  else _rxRenderMarketSetup(card, d);
+  if (configured) {
+    _rxRenderMarketSummary(card, d);
+  } else {
+    _rxRenderMarketCTA(card, d);
+    if (!_rxOnboardShown) { _rxOnboardShown = true; _rxOpenOnboard(); }
+  }
 }
 
 function _rxChainText(list) {
-  const parts = (list || []).map(m => _esc(m.name));
-  parts.push('Jita');
-  return parts.join(' → ');
+  return [...(list || []).map(m => _esc(m.name)), 'Jita'].join(' → ');
 }
 
 function _rxRenderMarketSummary(card, d) {
@@ -2021,65 +2023,107 @@ function _rxRenderMarketSummary(card, d) {
   card.innerHTML =
     `<div class="pp-card-title">Reaction pricing`
     + `<span class="pp-card-hint">— ${_rxChainText(d.effective)}</span>${note}`
-    + `<button class="pp-add-btn" onclick="_rxToggleMarketSetup(true)">Markets &amp; freight ▾</button>`
-    + `</div>`;
+    + `<button class="pp-add-btn" onclick="_rxOpenOnboard()">Markets &amp; freight ▾</button></div>`;
 }
 
-function _rxToggleMarketSetup(open) {
-  _rxMarketSetupOpen = !!open;
-  if (_rxMarketData) {
-    const card = document.getElementById('rxMarketSetupCard');
-    if (open) _rxRenderMarketSetup(card, _rxMarketData);
-    else _rxRenderMarketSummary(card, _rxMarketData);
+function _rxRenderMarketCTA(card, d) {
+  card.innerHTML =
+    `<div class="rx-onboard-cta">`
+    + `<div><div class="rx-onboard-cta-title">Set up market pricing</div>`
+    + `<div class="pp-card-hint">Price reactions from your alliance / local markets first, Jita as fallback — plus your freight cost.</div></div>`
+    + `<button class="rx-onboard-cta-btn" onclick="_rxOpenOnboard()">Get started</button></div>`;
+}
+
+// ── Onboarding wizard modal ──────────────────────────────────────────────────────────
+
+async function _rxOpenOnboard() {
+  const modal = document.getElementById('rxOnboardModal');
+  if (!modal) return;
+  modal.style.display = '';
+  const body = document.getElementById('rxOnboardBody');
+  body.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Loading…</div>';
+  await _rxRefreshMarkets();          // populates _rxMarketData + renders the modal
+  _loadRxAccountSettings();           // fills the foldable freight form
+}
+
+function _rxCloseOnboard() {
+  const modal = document.getElementById('rxOnboardModal');
+  if (modal) modal.style.display = 'none';
+  _rxLoadMarketSetup();               // refresh the summary/CTA bar behind it
+}
+
+// Re-fetch the followed markets and (re)render whichever surface is showing — the modal if it's
+// open, otherwise the summary/CTA bar. Called after every add/remove/reorder.
+async function _rxRefreshMarkets() {
+  try {
+    const r = await fetch('/api/markets');
+    if (r.ok) _rxMarketData = await r.json();
+  } catch (e) {}
+  const modal = document.getElementById('rxOnboardModal');
+  if (modal && modal.style.display !== 'none' && _rxMarketData) {
+    _rxRenderOnboard(_rxMarketData);
+  } else {
+    _rxLoadMarketSetup();
   }
 }
 
-function _rxRenderMarketSetup(card, d) {
+function _rxMarketRowsHtml(d) {
   const own = d.markets || [];
-  const inherited = !own.length && d.effective && d.effective.length;
-  const collapseBtn = ((own.length) || (d.effective && d.effective.length))
-    ? `<button class="pp-add-btn" onclick="_rxToggleMarketSetup(false)">Done ▴</button>` : '';
-
-  let rows = '';
   const list = own.length ? own : (d.effective || []);
+  let rows = '';
   list.forEach((m, i) => {
     const kindLbl = m.kind === 'structure' ? 'Structure' : 'Region';
     const controls = own.length
       ? `<span class="rx-mkt-ctrl">`
         + `<button class="pp-add-btn" ${i === 0 ? 'disabled' : ''} onclick="_rxMarketMove(${m.id},-1)" title="Higher priority">▲</button>`
         + `<button class="pp-add-btn" ${i === list.length - 1 ? 'disabled' : ''} onclick="_rxMarketMove(${m.id},1)" title="Lower priority">▼</button>`
-        + `<button class="pp-add-btn" onclick="_rxMarketRemove(${m.id})" title="Remove">✕</button>`
-        + `</span>` : '';
+        + `<button class="pp-add-btn" onclick="_rxMarketRemove(${m.id})" title="Remove">✕</button></span>`
+      : '';
     rows += `<div class="rx-mkt-row"><span class="rx-mkt-pri">${i + 1}</span>`
       + `<span class="rx-mkt-kind">${kindLbl}</span>`
       + `<span class="rx-mkt-name">${_esc(m.name)}</span>${controls}</div>`;
   });
   rows += `<div class="rx-mkt-row rx-mkt-jita"><span class="rx-mkt-pri">${list.length + 1}</span>`
     + `<span class="rx-mkt-kind">Fallback</span><span class="rx-mkt-name">Jita (always last)</span></div>`;
+  return rows;
+}
 
+function _rxRenderOnboard(d) {
+  const body = document.getElementById('rxOnboardBody');
+  if (!body) return;
+  const own = d.markets || [];
+  const inherited = !own.length && d.effective && d.effective.length;
   const inheritNote = inherited && d.group
     ? `<div class="pp-card-hint" style="margin:4px 0 8px">Using your group <b>${_esc(d.group.name)}</b>'s markets. Add one below to override for your account only.</div>` : '';
 
   const connectBlock = d.connected
-    ? `<span class="pp-card-hint">Market character connected. <a href="#" onclick="connectReactionsMarket();return false;">Add another</a></span>`
-    : `<button class="pp-add-btn" onclick="connectReactionsMarket()">Connect a character</button>`
-      + ` <span class="pp-card-hint">— needed to read private structure markets (you can also add characters from the Dashboard).</span>`;
+    ? `<div class="rx-onboard-connected">✓ Market character connected — <a href="#" onclick="connectReactionsMarket();return false;">add another</a></div>`
+    : `<button class="rx-onboard-connect" onclick="connectReactionsMarket()">Connect a character</button>`
+      + `<div class="pp-card-hint" style="margin-top:6px">Needed to read a private structure market. You can also add characters from the Dashboard — either works.</div>`;
 
-  card.innerHTML =
-    `<div class="pp-card-title">Markets &amp; freight setup`
-    + `<span class="pp-card-hint">— price reactions from your markets first, Jita as fallback</span>${collapseBtn}</div>`
-    + `<div class="pp-card-body">`
-    + inheritNote
-    + `<div class="rx-mkt-list">${rows}</div>`
+  body.innerHTML =
+    // Step 1 — character
+    `<div class="rx-onboard-step"><div class="rx-onboard-step-h"><span class="rx-onboard-num">1</span>Connect a character</div>`
+    + `<div class="rx-onboard-step-b">${connectBlock}</div></div>`
+    // Step 2 — markets
+    + `<div class="rx-onboard-step"><div class="rx-onboard-step-h"><span class="rx-onboard-num">2</span>Choose your markets`
+    + `<span class="pp-card-hint"> — searched in order, top first; Jita is always the last fallback</span></div>`
+    + `<div class="rx-onboard-step-b">${inheritNote}`
+    + `<div class="rx-mkt-list">${_rxMarketRowsHtml(d)}</div>`
     + `<div class="rx-mkt-search">`
     + `<input id="rxMarketSearchInput" placeholder="Search a structure or region…" onkeydown="if(event.key==='Enter')_rxMarketSearch()">`
     + `<button class="pp-add-btn" onclick="_rxMarketSearch()">Search</button>`
-    + `<div id="rxMarketSearchResults"></div></div>`
-    + `<div class="rx-mkt-foot">`
-    + `<div style="margin-bottom:6px">${connectBlock}</div>`
-    + `<button class="pp-add-btn" onclick="_rxOpenSettingsModal()">Freight &amp; collateral rates ⚙</button>`
-    + `</div></div>`;
+    + `<div id="rxMarketSearchResults"></div></div></div></div>`
+    // Step 3 — freight (foldable)
+    + `<div class="rx-onboard-step"><details><summary class="rx-onboard-step-h" style="cursor:pointer">`
+    + `<span class="rx-onboard-num">3</span>Freight &amp; collateral rates`
+    + `<span class="pp-card-hint"> — optional; used to cost hauling inputs/outputs</span></summary>`
+    + `<div class="rx-onboard-step-b" id="rxOnboardFreight">${_rxAccountSettingsFormHtml()}</div></details></div>`
+    // Finish
+    + `<div class="rx-onboard-foot"><button class="rx-onboard-connect" onclick="_rxCloseOnboard()">Done</button></div>`;
 }
+
+// ── Market search / mutations ─────────────────────────────────────────────────────────
 
 async function _rxMarketSearch() {
   const inp = document.getElementById('rxMarketSearchInput');
@@ -2093,10 +2137,9 @@ async function _rxMarketSearch() {
   catch (e) { box.innerHTML = '<div class="pp-card-hint">Search failed.</div>'; return; }
   const results = [...(d.structures || []), ...(d.regions || [])];
   if (!results.length) {
-    const hint = !d.connected
-      ? 'No matches. Structure search needs a connected market character — connect one above.'
-      : 'No matches.';
-    box.innerHTML = `<div class="pp-card-hint">${hint}</div>`;
+    box.innerHTML = `<div class="pp-card-hint">${!d.connected
+      ? 'No matches. Structure search needs a connected market character — connect one in step 1.'
+      : 'No matches.'}</div>`;
     return;
   }
   box.innerHTML = results.map(m => {
@@ -2116,17 +2159,13 @@ async function _rxMarketAdd(payload) {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     });
     if (!r.ok) { alert('Could not add that market.'); return; }
-    _rxMarketData = await r.json();
-    _rxMarketSetupOpen = true;
-    _rxRenderMarketSetup(document.getElementById('rxMarketSetupCard'), _rxMarketData);
-  } catch (e) { alert('Could not add that market.'); }
+  } catch (e) { alert('Could not add that market.'); return; }
+  _rxRefreshMarkets();
 }
 
 async function _rxMarketRemove(id) {
-  try {
-    await fetch('/api/markets/' + id + '?scope=account', { method: 'DELETE' });
-  } catch (e) {}
-  _rxLoadMarketSetup();
+  try { await fetch('/api/markets/' + id + '?scope=account', { method: 'DELETE' }); } catch (e) {}
+  _rxRefreshMarkets();
 }
 
 async function _rxMarketMove(id, dir) {
@@ -2142,5 +2181,5 @@ async function _rxMarketMove(id, dir) {
       body: JSON.stringify({ order: ids, scope: 'account' }),
     });
   } catch (e) {}
-  _rxLoadMarketSetup();
+  _rxRefreshMarkets();
 }
