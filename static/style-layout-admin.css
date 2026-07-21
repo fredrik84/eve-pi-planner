@@ -754,5 +754,7 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .rx-onboard-num { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px;
   border-radius: 50%; background: #2f6fb0; color: #fff; font-size: 12px; flex: 0 0 auto; }
 .rx-onboard-connected { color: #6fcf97; font-size: 13px; }
+.rx-onboard-opt { font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600;
+  color: var(--clr-text-soft); background: #232a3a; padding: 1px 7px; border-radius: 10px; margin-left: 8px; }
 .rx-onboard-foot { display: flex; justify-content: flex-end; margin-top: 4px; }
 .rx-onboard-foot .rx-onboard-connect { width: auto; min-width: 160px; }

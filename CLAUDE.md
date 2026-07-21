@@ -1001,14 +1001,19 @@ fuel blocks stay on Jita).
   `/universe/ids/`. Needs a connected market character for structure results.
 - **UI** (`reactions.js`, gated by `_featureActive('local_market')`): a `#rxMarketSetupCard` bar at
   the top of the Reactions tab drives a full-screen **onboarding wizard modal** (`#rxOnboardModal`,
-  `_rxOpenOnboard`/`_rxRenderOnboard`): 3 steps — (1) big "Connect a character" button
-  (`connectReactionsMarket`), (2) market search+add / priority reorder (Jita pinned last), (3) a
-  **foldable** freight form (reuses `_rxAccountSettingsFormHtml`/`_loadRxAccountSettings`). While
-  unconfigured the card is a "Get started" CTA and the modal **auto-opens once per session**
-  (`_rxOnboardShown`); once configured the card collapses to a one-line "Reaction pricing: A → B →
-  Jita" summary that re-opens the same modal. `_rxRefreshMarkets` re-renders whichever surface is
-  showing after each add/remove/reorder. The leaf source name is threaded onto each `reached` leaf
-  node (`market_name`) in `_load_goo_and_reached` and surfaced by `_materials_report`, rendered as a
+  `_rxOpenOnboard`/`_rxRenderOnboard`): 3 steps — **(1) Connect a character** (`connectReactionsMarket`,
+  FIRST because it grants the structure-search + structure-market scopes everything else depends on),
+  **(2) Add local markets** (optional), **(3) Configure freighting costs** (optional, foldable, reuses
+  `_rxAccountSettingsFormHtml`/`_loadRxAccountSettings`). While unconfigured the card is a "Get started"
+  CTA and the modal **auto-opens once per session** (`_rxOnboardShown`, never over an already-open
+  modal); once configured the card collapses to a one-line "Reaction pricing: A → B → Jita" summary
+  that re-opens the modal. The market list + search is a **reusable manager component**
+  (`_rxMarketManagerHtml` / `_rxMountMarkets` / `_rxRenderMarketManager`) mounted into EITHER the
+  wizard (`#rxOnboardMarkets`) or the **Reactions Settings modal** (`#rxSettingsMarkets`, above the
+  freight forms) — `_rxMarketMount` tracks which container is live so `_rxRefreshMarkets` re-renders
+  the right one after each add/remove/reorder; both modals wipe their body on close to avoid
+  duplicate-ID collisions. The leaf source name is threaded onto each `reached` leaf node
+  (`market_name`) in `_load_goo_and_reached` and surfaced by `_materials_report`, rendered as a
   per-line **price-source badge** in the shopping list.
 - Gating test `test_markets_gated` in `test_features.py`; `local_market` in the registry.
 

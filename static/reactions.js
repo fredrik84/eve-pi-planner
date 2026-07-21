@@ -1337,14 +1337,26 @@ function _renderReactions() {
 // all.") once time-efficiency became something people actually need to configure up front.
 function _rxOpenSettingsModal() {
   const el = document.getElementById('rxSettingsModalContent');
-  el.innerHTML = (_rxCanEditSettings() ? _rxSettingsFormHtml() : '') + _rxAccountSettingsFormHtml();
+  // Market management (local_market flag) shows above the freight forms so a configured user can
+  // add/reorder markets here too, not only via the onboarding wizard.
+  const marketSection = (typeof _featureActive === 'function' && _featureActive('local_market'))
+    ? `<div class="pp-card-title" style="font-size:13px;margin-top:4px">Local / alliance markets`
+      + `<span class="pp-card-hint">— priced in order, top first; Jita is always the last fallback</span></div>`
+      + `<div id="rxSettingsMarkets" class="pp-target-form" style="margin:8px 0 16px;display:block"><div class="pp-empty">Loading…</div></div>`
+      + `<div style="border-top:1px solid var(--clr-border);margin-bottom:8px"></div>`
+    : '';
+  el.innerHTML = marketSection + (_rxCanEditSettings() ? _rxSettingsFormHtml() : '') + _rxAccountSettingsFormHtml();
   document.getElementById('rxSettingsModal').style.display = '';
   if (_rxCanEditSettings()) _loadRxSettings();
   _loadRxAccountSettings();
+  if (marketSection) _rxMountMarkets('rxSettingsMarkets');
 }
 
 function _rxCloseSettingsModal() {
   document.getElementById('rxSettingsModal').style.display = 'none';
+  document.getElementById('rxSettingsModalContent').innerHTML = '';  // drop stale market-manager IDs
+  if (_rxMarketMount === 'rxSettingsMarkets') _rxMarketMount = null;
+  _rxLoadMarketSetup();  // refresh the top summary/CTA bar
 }
 
 // Site admins can always preview/edit; a non-admin sees the form only if they manage at least
@@ -1980,13 +1992,21 @@ function _rxDeleteOrder(orderId) {
     });
 }
 
-// ── Local / alliance market pricing setup (local_market flag) ─────────────────────────
+// ── Local / alliance market pricing (local_market flag) ───────────────────────────────
 // Follow one or more markets (a player structure market and/or a public region market) in a
-// priority order; reactions price against them, falling back to Jita. When nothing is set up yet
-// the Reactions tab shows a full-screen onboarding wizard in a modal (auto-opened once per
-// session); once configured it collapses to a one-line summary bar that re-opens the same modal.
+// priority order; reactions price against them, falling back to Jita. The market list + search is
+// a reusable "manager" component mounted into either the onboarding wizard (#rxOnboardModal) or
+// the Reactions Settings modal — only one is open at a time, and _rxMarketMount tracks which
+// container currently hosts it so mutations re-render the right place.
 let _rxMarketData = null;
-let _rxOnboardShown = false;   // don't re-auto-open the wizard every tab switch this session
+let _rxMarketMount = null;      // id of the element currently hosting the market manager, or null
+let _rxOnboardShown = false;    // don't re-auto-open the wizard every tab switch this session
+
+function _rxModalOpen() {
+  const a = document.getElementById('rxOnboardModal');
+  const b = document.getElementById('rxSettingsModal');
+  return (a && a.style.display !== 'none') || (b && b.style.display !== 'none');
+}
 
 async function _rxLoadMarketSetup() {
   const card = document.getElementById('rxMarketSetupCard');
@@ -1996,20 +2016,20 @@ async function _rxLoadMarketSetup() {
     card.style.display = 'none';
     return;
   }
-  let d;
   try {
     const r = await fetch('/api/markets');
     if (!r.ok) { card.style.display = 'none'; return; }
-    d = await r.json();
+    _rxMarketData = await r.json();
   } catch (e) { card.style.display = 'none'; return; }
-  _rxMarketData = d;
+  const d = _rxMarketData;
   card.style.display = '';
   const configured = (d.markets && d.markets.length) || (d.effective && d.effective.length);
   if (configured) {
     _rxRenderMarketSummary(card, d);
   } else {
     _rxRenderMarketCTA(card, d);
-    if (!_rxOnboardShown) { _rxOnboardShown = true; _rxOpenOnboard(); }
+    // Auto-open the wizard once per session — but never on top of an already-open modal.
+    if (!_rxOnboardShown && !_rxModalOpen()) { _rxOnboardShown = true; _rxOpenOnboard(); }
   }
 }
 
@@ -2034,38 +2054,7 @@ function _rxRenderMarketCTA(card, d) {
     + `<button class="rx-onboard-cta-btn" onclick="_rxOpenOnboard()">Get started</button></div>`;
 }
 
-// ── Onboarding wizard modal ──────────────────────────────────────────────────────────
-
-async function _rxOpenOnboard() {
-  const modal = document.getElementById('rxOnboardModal');
-  if (!modal) return;
-  modal.style.display = '';
-  const body = document.getElementById('rxOnboardBody');
-  body.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Loading…</div>';
-  await _rxRefreshMarkets();          // populates _rxMarketData + renders the modal
-  _loadRxAccountSettings();           // fills the foldable freight form
-}
-
-function _rxCloseOnboard() {
-  const modal = document.getElementById('rxOnboardModal');
-  if (modal) modal.style.display = 'none';
-  _rxLoadMarketSetup();               // refresh the summary/CTA bar behind it
-}
-
-// Re-fetch the followed markets and (re)render whichever surface is showing — the modal if it's
-// open, otherwise the summary/CTA bar. Called after every add/remove/reorder.
-async function _rxRefreshMarkets() {
-  try {
-    const r = await fetch('/api/markets');
-    if (r.ok) _rxMarketData = await r.json();
-  } catch (e) {}
-  const modal = document.getElementById('rxOnboardModal');
-  if (modal && modal.style.display !== 'none' && _rxMarketData) {
-    _rxRenderOnboard(_rxMarketData);
-  } else {
-    _rxLoadMarketSetup();
-  }
-}
+// ── Reusable market-manager component ─────────────────────────────────────────────────
 
 function _rxMarketRowsHtml(d) {
   const own = d.markets || [];
@@ -2088,39 +2077,101 @@ function _rxMarketRowsHtml(d) {
   return rows;
 }
 
-function _rxRenderOnboard(d) {
-  const body = document.getElementById('rxOnboardBody');
-  if (!body) return;
+// The inner HTML of the market manager (list + search). Rendered into whichever container is the
+// current mount. Search needs a connected market character, so the manager notes when there isn't
+// one and points at where to connect (the onboarding wizard's step 1).
+function _rxMarketManagerHtml(d) {
   const own = d.markets || [];
   const inherited = !own.length && d.effective && d.effective.length;
   const inheritNote = inherited && d.group
-    ? `<div class="pp-card-hint" style="margin:4px 0 8px">Using your group <b>${_esc(d.group.name)}</b>'s markets. Add one below to override for your account only.</div>` : '';
-
-  const connectBlock = d.connected
-    ? `<div class="rx-onboard-connected">✓ Market character connected — <a href="#" onclick="connectReactionsMarket();return false;">add another</a></div>`
-    : `<button class="rx-onboard-connect" onclick="connectReactionsMarket()">Connect a character</button>`
-      + `<div class="pp-card-hint" style="margin-top:6px">Needed to read a private structure market. You can also add characters from the Dashboard — either works.</div>`;
-
-  body.innerHTML =
-    // Step 1 — character
-    `<div class="rx-onboard-step"><div class="rx-onboard-step-h"><span class="rx-onboard-num">1</span>Connect a character</div>`
-    + `<div class="rx-onboard-step-b">${connectBlock}</div></div>`
-    // Step 2 — markets
-    + `<div class="rx-onboard-step"><div class="rx-onboard-step-h"><span class="rx-onboard-num">2</span>Choose your markets`
-    + `<span class="pp-card-hint"> — searched in order, top first; Jita is always the last fallback</span></div>`
-    + `<div class="rx-onboard-step-b">${inheritNote}`
+    ? `<div class="pp-card-hint" style="margin:0 0 8px">Using your group <b>${_esc(d.group.name)}</b>'s markets. Add one below to override for your account only.</div>` : '';
+  const connectNote = d.connected ? ''
+    : `<div class="pp-card-hint" style="margin:0 0 8px">Structure search needs a connected market character — use <a href="#" onclick="_rxOpenOnboard();return false;">Get started</a> to connect one (public regions work without it).</div>`;
+  return inheritNote + connectNote
     + `<div class="rx-mkt-list">${_rxMarketRowsHtml(d)}</div>`
     + `<div class="rx-mkt-search">`
     + `<input id="rxMarketSearchInput" placeholder="Search a structure or region…" onkeydown="if(event.key==='Enter')_rxMarketSearch()">`
     + `<button class="pp-add-btn" onclick="_rxMarketSearch()">Search</button>`
-    + `<div id="rxMarketSearchResults"></div></div></div></div>`
-    // Step 3 — freight (foldable)
+    + `<div id="rxMarketSearchResults"></div></div>`;
+}
+
+function _rxMountMarkets(containerId) {
+  _rxMarketMount = containerId;
+  _rxRenderMarketManager();
+}
+
+function _rxRenderMarketManager() {
+  if (!_rxMarketMount || !_rxMarketData) return;
+  const el = document.getElementById(_rxMarketMount);
+  if (el) el.innerHTML = _rxMarketManagerHtml(_rxMarketData);
+}
+
+// Re-fetch the followed markets, re-render the mounted manager (if any), and refresh the top bar.
+async function _rxRefreshMarkets() {
+  try {
+    const r = await fetch('/api/markets');
+    if (r.ok) _rxMarketData = await r.json();
+  } catch (e) {}
+  _rxRenderMarketManager();
+  // Keep the summary/CTA bar in sync without letting it auto-open a wizard over an open modal.
+  const card = document.getElementById('rxMarketSetupCard');
+  if (card && _rxMarketData) {
+    const d = _rxMarketData;
+    if ((d.markets && d.markets.length) || (d.effective && d.effective.length)) _rxRenderMarketSummary(card, d);
+    else _rxRenderMarketCTA(card, d);
+  }
+}
+
+// ── Onboarding wizard modal ──────────────────────────────────────────────────────────
+// Step 1 (Connect a character) is FIRST and deliberately so: the structure-search + structure-
+// market scopes come from connecting a character, so steps 2 and 3 are both optional and depend
+// on step 1 for private-structure features.
+
+async function _rxOpenOnboard() {
+  const modal = document.getElementById('rxOnboardModal');
+  if (!modal) return;
+  modal.style.display = '';
+  const body = document.getElementById('rxOnboardBody');
+  body.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Loading…</div>';
+  try {
+    const r = await fetch('/api/markets');
+    if (r.ok) _rxMarketData = await r.json();
+  } catch (e) {}
+  _rxRenderOnboard(_rxMarketData || { markets: [], effective: [], connected: false });
+  _loadRxAccountSettings();   // fills the foldable freight form (step 3)
+}
+
+function _rxCloseOnboard() {
+  const modal = document.getElementById('rxOnboardModal');
+  if (modal) modal.style.display = 'none';
+  document.getElementById('rxOnboardBody').innerHTML = '';  // drop stale market-manager IDs
+  if (_rxMarketMount === 'rxOnboardMarkets') _rxMarketMount = null;
+  _rxLoadMarketSetup();       // refresh the summary/CTA bar behind it
+}
+
+function _rxRenderOnboard(d) {
+  const body = document.getElementById('rxOnboardBody');
+  if (!body) return;
+  const connectBlock = d.connected
+    ? `<div class="rx-onboard-connected">✓ Market character connected — <a href="#" onclick="connectReactionsMarket();return false;">add another</a></div>`
+    : `<button class="rx-onboard-connect" onclick="connectReactionsMarket()">Connect a character</button>`
+      + `<div class="pp-card-hint" style="margin-top:6px">Grants structure-market search &amp; read. Public region markets work without it, but a private structure market needs it. You can also add characters from the Dashboard.</div>`;
+
+  body.innerHTML =
+    // Step 1 — connect (required for structure markets; must come first — it grants the scope)
+    `<div class="rx-onboard-step"><div class="rx-onboard-step-h"><span class="rx-onboard-num">1</span>Connect a character</div>`
+    + `<div class="rx-onboard-step-b">${connectBlock}</div></div>`
+    // Step 2 — markets (optional)
+    + `<div class="rx-onboard-step"><div class="rx-onboard-step-h"><span class="rx-onboard-num">2</span>Add local markets`
+    + `<span class="rx-onboard-opt">optional</span></div>`
+    + `<div class="rx-onboard-step-b"><div id="rxOnboardMarkets"></div></div></div>`
+    // Step 3 — freight (optional, foldable)
     + `<div class="rx-onboard-step"><details><summary class="rx-onboard-step-h" style="cursor:pointer">`
-    + `<span class="rx-onboard-num">3</span>Freight &amp; collateral rates`
-    + `<span class="pp-card-hint"> — optional; used to cost hauling inputs/outputs</span></summary>`
+    + `<span class="rx-onboard-num">3</span>Configure freighting costs<span class="rx-onboard-opt">optional</span></summary>`
     + `<div class="rx-onboard-step-b" id="rxOnboardFreight">${_rxAccountSettingsFormHtml()}</div></details></div>`
     // Finish
     + `<div class="rx-onboard-foot"><button class="rx-onboard-connect" onclick="_rxCloseOnboard()">Done</button></div>`;
+  _rxMountMarkets('rxOnboardMarkets');
 }
 
 // ── Market search / mutations ─────────────────────────────────────────────────────────
