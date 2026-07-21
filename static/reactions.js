@@ -2071,12 +2071,12 @@ function _rxCharListHtml(d) {
   const rows = chars.length ? chars.map(c => {
     const isReader = c.character_id === d.market_character_id;
     const ctrl = c.is_market
-      ? `<label class="rx-char-reader" title="This character's access reads the structure market">`
+      ? `<label class="rx-gate-reader" title="This character's access reads the structure market">`
         + `<input type="radio" name="rxReader" ${isReader ? 'checked' : ''} onchange="_rxSetMarketReader(${c.character_id})"> market character</label>`
-      : `<span class="rx-char-tag">slots only</span>`;
-    return `<div class="rx-char-row"><span class="rx-char-name">${_esc(c.character_name)}</span>${ctrl}</div>`;
+      : `<span class="rx-gate-tag">slots only</span>`;
+    return `<div class="rx-gate-charrow"><span class="rx-gate-charname">${_esc(c.character_name)}</span>${ctrl}</div>`;
   }).join('') : `<div class="pp-card-hint">No characters yet — connect the ones you want to run reactions on.</div>`;
-  return `<div class="rx-char-list">${rows}</div>`
+  return `<div class="rx-gate-charlist">${rows}</div>`
     + `<button class="rx-onboard-connect" style="margin-top:4px" onclick="connectReactionsMarket()">`
     + `${chars.length ? 'Connect another character' : 'Connect a character'}</button>`
     + `<div class="pp-card-hint" style="margin-top:6px">Characters connected here get reaction slots AND market access. The <b>market character</b> reads your structure market — pick one that can dock at it. You can also add characters from the Dashboard (those contribute slots but not market access).</div>`;
