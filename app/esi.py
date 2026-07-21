@@ -75,7 +75,8 @@ STRUCTURES_SCOPE     = "esi-universe.read_structures.v1"
 # grants the OAuth scope regardless, but the corp jobs call itself 401s/403s without the role
 # (same "best-effort, skip don't error" shape as the wallet flow's role check).
 CORP_INDUSTRY_JOBS_SCOPE = "esi-industry.read_corporation_jobs.v1"
-INDUSTRY_JOBS_SCOPES = f"{SCOPES} {INDUSTRY_JOBS_SCOPE} {STRUCTURES_SCOPE} {CORP_INDUSTRY_JOBS_SCOPE}"
+# INDUSTRY_JOBS_SCOPES is defined below as an alias of the unified REACTIONS_SCOPES (see there) —
+# it used to be a jobs-only set disjoint from MARKET_SCOPES, which caused the market/jobs scope silo.
 
 # Local/alliance market pricing (Reactions tab), requested only on the dedicated "connect for
 # market pricing" login (?market=1). MARKET_SCOPE reads a player-owned Upwell structure's market
@@ -88,7 +89,26 @@ INDUSTRY_JOBS_SCOPES = f"{SCOPES} {INDUSTRY_JOBS_SCOPE} {STRUCTURES_SCOPE} {CORP
 # the two new scopes; listing != requesting, so the public Login never asks for them.
 MARKET_SCOPE        = "esi-markets.structure_markets.v1"
 SEARCH_STRUCT_SCOPE = "esi-search.search_structures.v1"
-MARKET_SCOPES = f"{SCOPES} {MARKET_SCOPE} {SEARCH_STRUCT_SCOPE} {STRUCTURES_SCOPE}"
+
+# ── Unified reactions-ecosystem scope set (fixes the market/jobs scope silo) ──────────
+# A player's OWN reactions character is simultaneously a reaction-job/slot character AND a potential
+# local-market reader. Historically ?reactions=1 and ?market=1 requested DISJOINT sets
+# (INDUSTRY_JOBS_SCOPES had no market scope; MARKET_SCOPES had no read_character_jobs). Since a
+# character stores exactly one token/scope-set (EVE refresh tokens rotate — last auth wins), it could
+# only ever be one or the other: a market character supplied no reaction slots to the job engine, and
+# re-authing it as a reaction character silently DROPPED market access — with no way back, because
+# designating a market reader requires the very market scope the re-auth had just removed. Both flows
+# now request this single superset, so a character connected either way holds both capabilities and
+# re-authing via either preserves the other. Existing single-purpose characters pick up the missing
+# scopes on their next re-auth (same "must re-authorise" rollout as the corp-jobs/structures additions
+# above). Wallet stays deliberately separate — that's a read-only money alt, not a PI character.
+REACTIONS_SCOPES = (
+    f"{SCOPES} {INDUSTRY_JOBS_SCOPE} {CORP_INDUSTRY_JOBS_SCOPE} "
+    f"{MARKET_SCOPE} {SEARCH_STRUCT_SCOPE} {STRUCTURES_SCOPE}"
+)
+# Kept as aliases so any lingering reference can't resurrect the old disjoint behaviour.
+MARKET_SCOPES = REACTIONS_SCOPES
+INDUSTRY_JOBS_SCOPES = REACTIONS_SCOPES
 
 # Wallet-only toons (corp-wallet scope, no planets scope) aren't PI characters. AND this into any
 # single-table pp_characters PI query to exclude them; legacy empty-scope chars are kept. Begins with
@@ -847,8 +867,7 @@ def esi_login(wallet: int = 0, reactions: int = 0, market: int = 0, pp_session: 
     except Exception:
         pass
     scope_enc = (
-        MARKET_SCOPES if market else
-        INDUSTRY_JOBS_SCOPES if reactions else
+        REACTIONS_SCOPES if (market or reactions) else
         WALLET_SCOPES if wallet else
         SCOPES
     ).replace(" ", "%20")
