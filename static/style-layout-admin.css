@@ -758,3 +758,14 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
   color: var(--clr-text-soft); background: #232a3a; padding: 1px 7px; border-radius: 10px; margin-left: 8px; }
 .rx-onboard-foot { display: flex; justify-content: flex-end; margin-top: 4px; }
 .rx-onboard-foot .rx-onboard-connect { width: auto; min-width: 160px; }
+.rx-onboard-connect:disabled { background: #2a3242; color: var(--clr-text-soft); cursor: not-allowed; }
+.rx-gate-card { max-width: 720px; margin: 0 auto; }
+
+/* Character list + market-character picker (onboarding step 1) */
+.rx-char-list { margin-bottom: 8px; }
+.rx-char-row { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 8px 10px; border: 1px solid #232a3a; border-radius: 6px; margin-bottom: 4px; background: #141a26; }
+.rx-char-name { color: var(--clr-text); font-size: 13px; font-weight: 600; }
+.rx-char-reader { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #7fa8e0; cursor: pointer; }
+.rx-char-tag { font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--clr-text-soft);
+  background: #232a3a; padding: 1px 7px; border-radius: 10px; }

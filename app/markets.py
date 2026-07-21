@@ -58,6 +58,52 @@ def ensure_markets_table():
     con.close()
 
 
+@ensure_once
+def ensure_market_config_table():
+    """Per-context market config: which character reads the structure market (the designated
+    'market character' — defaults to the first that authorised the scope) and whether the user has
+    completed the one-time Reactions onboarding (added a character + saved)."""
+    con = get_connection()
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS pp_market_config (
+            context_id          INTEGER PRIMARY KEY,
+            market_character_id BIGINT,
+            onboarded           INTEGER NOT NULL DEFAULT 0
+        )
+    """)
+    con.commit()
+    con.close()
+
+
+def _market_config(context_id: int) -> dict:
+    ensure_market_config_table()
+    con = get_connection()
+    try:
+        row = con.execute(
+            "SELECT market_character_id, onboarded FROM pp_market_config WHERE context_id=?",
+            (context_id,),
+        ).fetchone()
+    finally:
+        con.close()
+    return dict(row) if row else {"market_character_id": None, "onboarded": 0}
+
+
+def _context_characters(context_id: int) -> list[dict]:
+    """Real (non-dummy) characters in this context, each flagged with whether it holds the market
+    scope (so it can serve as the market character)."""
+    con = get_connection()
+    try:
+        rows = con.execute(
+            "SELECT character_id, character_name, scopes FROM pp_characters "
+            "WHERE context_id=? AND COALESCE(is_dummy,0)=0 ORDER BY character_name",
+            (context_id,),
+        ).fetchall()
+    finally:
+        con.close()
+    return [{"character_id": r["character_id"], "character_name": r["character_name"],
+             "is_market": MARKET_SCOPE in (r["scopes"] or "").split()} for r in rows]
+
+
 def _list_markets(owner_kind: str, owner_id: int) -> list[dict]:
     ensure_markets_table()
     con = get_connection()
@@ -90,7 +136,9 @@ def effective_markets(context_id: int) -> list[dict]:
 # ── Structure / region character + token ─────────────────────────────────────────────
 
 def _market_character(context_id: int):
-    """First character in this context that authorised the structure-market scope, or None."""
+    """The character whose token reads the structure market: the user-designated one if it's set
+    and still holds the scope, else the first character that authorised it (back-compat default),
+    else None."""
     con = get_connection()
     try:
         rows = con.execute(
@@ -99,10 +147,15 @@ def _market_character(context_id: int):
         ).fetchall()
     finally:
         con.close()
-    for r in rows:
-        if MARKET_SCOPE in (r["scopes"] or "").split():
-            return r
-    return None
+    scoped = [r for r in rows if MARKET_SCOPE in (r["scopes"] or "").split()]
+    if not scoped:
+        return None
+    chosen = _market_config(context_id).get("market_character_id")
+    if chosen:
+        for r in scoped:
+            if r["character_id"] == chosen:
+                return r
+    return scoped[0]
 
 
 # ── Order-book aggregation (matches Fuzzwork's shape for a drop-in with fetch_market_data) ──
@@ -335,6 +388,10 @@ class MarketReorder(BaseModel):
     scope: str = "account"
 
 
+class MarketReader(BaseModel):
+    character_id: int
+
+
 def _owner_for_scope(context_id: int, scope: str) -> tuple[str, int]:
     """Resolve the (owner_kind, owner_id) a write targets, enforcing group-manager permission."""
     if scope == "group":
@@ -346,7 +403,8 @@ def _owner_for_scope(context_id: int, scope: str) -> tuple[str, int]:
 
 
 def _markets_payload(context_id: int) -> dict:
-    """The account's markets + the effective (resolved) chain + group-editing capability."""
+    """The account's markets + the effective (resolved) chain + group-editing capability + the
+    context's characters, the designated market reader, and the onboarding-complete flag."""
     own = _list_markets("account", context_id)
     group = member_group(context_id)
     can_manage = bool(group and is_group_manager(context_id, group["id"]))
@@ -357,12 +415,18 @@ def _markets_payload(context_id: int) -> dict:
         level = "group"
     else:
         level = "none"
+    characters = _context_characters(context_id)
+    reader = _market_character(context_id)
+    cfg = _market_config(context_id)
     return {
         "markets": own,
         "group_markets": group_markets,
         "effective": effective_markets(context_id),
         "effective_level": level,
-        "connected": _market_character(context_id) is not None,
+        "connected": reader is not None,
+        "characters": characters,
+        "market_character_id": reader["character_id"] if reader else None,
+        "onboarded": bool(cfg.get("onboarded")),
         "group": {"id": group["id"], "name": group["name"]} if group else None,
         "can_manage_group": can_manage,
     }
@@ -440,3 +504,44 @@ def reorder_markets(req: MarketReorder, context_id: int = Depends(require_contex
     finally:
         con.close()
     return {"ok": True}
+
+
+def _upsert_market_config(context_id: int, **cols) -> None:
+    """Insert-or-update the single pp_market_config row for this context (only the given columns)."""
+    ensure_market_config_table()
+    con = get_connection()
+    try:
+        exists = con.execute("SELECT 1 FROM pp_market_config WHERE context_id=?", (context_id,)).fetchone()
+        if exists:
+            sets = ", ".join(f"{k}=?" for k in cols)
+            con.execute(f"UPDATE pp_market_config SET {sets} WHERE context_id=?",
+                        (*cols.values(), context_id))
+        else:
+            keys = ", ".join(["context_id", *cols.keys()])
+            marks = ", ".join(["?"] * (1 + len(cols)))
+            con.execute(f"INSERT INTO pp_market_config ({keys}) VALUES ({marks})",
+                        (context_id, *cols.values()))
+        con.commit()
+    finally:
+        con.close()
+
+
+@router.post("/api/markets/reader")
+def set_market_reader(req: MarketReader, context_id: int = Depends(require_context)):
+    """Designate which character reads the structure market. Must be a character in this context
+    that holds the market scope."""
+    valid = {c["character_id"] for c in _context_characters(context_id) if c["is_market"]}
+    if req.character_id not in valid:
+        raise HTTPException(status_code=400, detail="That character can't read markets (no market scope)")
+    _upsert_market_config(context_id, market_character_id=req.character_id)
+    return _markets_payload(context_id)
+
+
+@router.post("/api/markets/complete")
+def complete_onboarding(context_id: int = Depends(require_context)):
+    """Mark the one-time Reactions onboarding done. Requires at least one character in the context
+    (reaction slots come from characters), so the tab isn't unblocked with nothing to run on."""
+    if not _context_characters(context_id):
+        raise HTTPException(status_code=400, detail="Add at least one character first")
+    _upsert_market_config(context_id, onboarded=1)
+    return _markets_payload(context_id)

@@ -1051,7 +1051,7 @@ function connectReactionsMarket() {
       window.removeEventListener('message', handler);
       if (w && !w.closed) w.close();
       loadCharacters();
-      if (typeof _rxLoadMarketSetup === 'function') _rxLoadMarketSetup();
+      if (typeof _rxAfterConnect === 'function') _rxAfterConnect();
     }
   });
 }

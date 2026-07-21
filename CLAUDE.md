@@ -977,6 +977,14 @@ fuel blocks stay on Jita).
   (require_context; group scope gated by `is_group_manager`). Mirrors the freight resolver in
   `app/reactions/settings.py` (`effective_reaction_settings`) — **freight was already built**, this
   reuses its account-settings UI.
+- **Per-context state** `pp_market_config(context_id, market_character_id, onboarded)`. The
+  **market character** (whose token reads the structure market) is user-designatable — `POST
+  /api/markets/reader {character_id}` (must be a context char holding `MARKET_SCOPE`);
+  `_market_character` returns the designated one if still scoped, else the first scoped char
+  (back-compat default). `onboarded` is the one-time first-run flag, set by `POST
+  /api/markets/complete` (requires ≥1 character in the context). `_markets_payload` also returns
+  `characters` (each with `is_market`) and `market_character_id` so the UI can list them + pick the
+  reader.
 - **Reads** (`app/markets.py`): `fetch_structure_market(context_id, structure_id)` paginates
   `GET /markets/structures/{id}/` via `_market_character`'s token (first char in the context holding
   `MARKET_SCOPE` — clone of `esi_data._wallet_character`), aggregates the whole book per type with
@@ -999,22 +1007,24 @@ fuel blocks stay on Jita).
   structure` (only ones the char can access) resolved to names via `/universe/structures/{id}/`;
   regions matched against SDE `constellations.region` names, resolved to ids via public
   `/universe/ids/`. Needs a connected market character for structure results.
-- **UI** (`reactions.js`, gated by `_featureActive('local_market')`): a `#rxMarketSetupCard` bar at
-  the top of the Reactions tab drives a full-screen **onboarding wizard modal** (`#rxOnboardModal`,
-  `_rxOpenOnboard`/`_rxRenderOnboard`): 3 steps — **(1) Connect a character** (`connectReactionsMarket`,
-  FIRST because it grants the structure-search + structure-market scopes everything else depends on),
-  **(2) Add local markets** (optional), **(3) Configure freighting costs** (optional, foldable, reuses
-  `_rxAccountSettingsFormHtml`/`_loadRxAccountSettings`). While unconfigured the card is a "Get started"
-  CTA and the modal **auto-opens once per session** (`_rxOnboardShown`, never over an already-open
-  modal); once configured the card collapses to a one-line "Reaction pricing: A → B → Jita" summary
-  that re-opens the modal. The market list + search is a **reusable manager component**
-  (`_rxMarketManagerHtml` / `_rxMountMarkets` / `_rxRenderMarketManager`) mounted into EITHER the
-  wizard (`#rxOnboardMarkets`) or the **Reactions Settings modal** (`#rxSettingsMarkets`, above the
-  freight forms) — `_rxMarketMount` tracks which container is live so `_rxRefreshMarkets` re-renders
-  the right one after each add/remove/reorder; both modals wipe their body on close to avoid
-  duplicate-ID collisions. The leaf source name is threaded onto each `reached` leaf node
-  (`market_name`) in `_load_goo_and_reached` and surfaced by `_materials_report`, rendered as a
-  per-line **price-source badge** in the shopping list.
+- **UI** (`reactions.js`, gated by `_featureActive('local_market')`): the whole Reactions tab is
+  **blocked behind an inline first-run gate** (`#rxGate`, `_rxApplyGate`/`_rxRenderGate`) until the
+  user has added ≥1 character and clicked **Save & continue** (`_rxCompleteOnboarding` → `POST
+  /api/markets/complete`). `onReactionsTabOpen` is async and returns early while gated (hides
+  `#rxDashboard`). The gate has 3 steps — **(1) Add your characters** (required; lists context chars
+  via `_rxCharListHtml` with a **market-character radio** among scope-holders → `_rxSetMarketReader`,
+  plus `connectReactionsMarket`), **(2) Add local markets** (optional), **(3) Configure freighting
+  costs** (optional, foldable, reuses `_rxAccountSettingsFormHtml`). `_rxApplyGate` **fails open** (no
+  gate) if the feature's off or the fetch fails, so a hiccup never locks the tab. Once `onboarded`,
+  the gate never shows again; `#rxMarketSetupCard` shows a one-line "Reaction pricing: A → B → Jita"
+  summary and **all edits go through the Reactions ⚙ Settings modal** (`_rxOpenSettingsModal`, which
+  hosts the market manager above the freight forms). The market list + search is a **reusable manager
+  component** (`_rxMarketManagerHtml` / `_rxMountMarkets` / `_rxRenderMarketManager`) mounted into
+  either the gate (`#rxOnboardMarkets`) or the Settings modal (`#rxSettingsMarkets`); `_rxMarketMount`
+  tracks which is live so `_rxRefreshMarkets` re-renders the right one. `connectReactionsMarket`'s
+  callback is `_rxAfterConnect` (refreshes gate / settings / tab depending on what's open). The leaf
+  source name is threaded onto each `reached` leaf node (`market_name`) in `_load_goo_and_reached` and
+  surfaced by `_materials_report`, rendered as a per-line **price-source badge** in the shopping list.
 - Gating test `test_markets_gated` in `test_features.py`; `local_market` in the registry.
 
 ## Notifications (`app/notifications.py`, `app/notifiers.py`)

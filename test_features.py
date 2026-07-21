@@ -146,6 +146,10 @@ def test_markets_gated(base: str) -> bool:
     ok &= check(code == 401, f"anonymous markets-delete rejected (got HTTP {code})")
     code = post_status(f"{base}/api/markets/reorder", {"order": [1], "scope": "account"})
     ok &= check(code == 401, f"anonymous markets-reorder rejected (got HTTP {code})")
+    code = post_status(f"{base}/api/markets/reader", {"character_id": 1})
+    ok &= check(code == 401, f"anonymous markets-reader rejected (got HTTP {code})")
+    code = post_status(f"{base}/api/markets/complete", {})
+    ok &= check(code == 401, f"anonymous markets-complete rejected (got HTTP {code})")
     return ok
 
 

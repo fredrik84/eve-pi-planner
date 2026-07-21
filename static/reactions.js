@@ -66,7 +66,11 @@ function _rxLoadOpportunities(force) {
   return _rxOppsLoading;
 }
 
-function onReactionsTabOpen() {
+async function onReactionsTabOpen() {
+  // First-run gate (local_market flag): block the whole tab until the user has added a character
+  // and saved. Returns true when the gate is showing, in which case we skip loading the dashboard.
+  if (await _rxApplyGate()) return;
+
   // Lazy, same idea as the shopping list fold: the Advanced table is collapsed by default and
   // its opportunity list is the single most expensive thing this tab can compute (full reaction
   // graph walk + a market fetch per candidate + job-cost ESI lookups) — only recompute it when
@@ -86,8 +90,6 @@ function onReactionsTabOpen() {
   // this is a post-assign/cancel refresh and the user had it expanded), not on every tab open.
   const shopDetails = document.getElementById('rxShoppingDetails');
   if (shopDetails && shopDetails.open) _loadRxShoppingList();
-
-  if (typeof _rxLoadMarketSetup === 'function') _rxLoadMarketSetup();
 
   const ordersCard = document.getElementById('rxOrdersCard');
   if (ordersCard) {
@@ -1356,7 +1358,7 @@ function _rxCloseSettingsModal() {
   document.getElementById('rxSettingsModal').style.display = 'none';
   document.getElementById('rxSettingsModalContent').innerHTML = '';  // drop stale market-manager IDs
   if (_rxMarketMount === 'rxSettingsMarkets') _rxMarketMount = null;
-  _rxLoadMarketSetup();  // refresh the top summary/CTA bar
+  _rxApplyGate();  // refresh the top summary bar / gate state
 }
 
 // Site admins can always preview/edit; a non-admin sees the form only if they manage at least
@@ -1993,68 +1995,157 @@ function _rxDeleteOrder(orderId) {
 }
 
 // ── Local / alliance market pricing (local_market flag) ───────────────────────────────
-// Follow one or more markets (a player structure market and/or a public region market) in a
-// priority order; reactions price against them, falling back to Jita. The market list + search is
-// a reusable "manager" component mounted into either the onboarding wizard (#rxOnboardModal) or
-// the Reactions Settings modal — only one is open at a time, and _rxMarketMount tracks which
-// container currently hosts it so mutations re-render the right place.
+// First-run flow: the Reactions tab is BLOCKED behind an inline onboarding gate (#rxGate) until
+// the user connects at least one character and clicks Save. After that the gate never shows again
+// (per-context `onboarded` flag) and all changes are made from the Reactions ⚙ Settings modal,
+// which hosts the same market manager + freight forms. The market list + search is a reusable
+// component mounted into either the gate (#rxOnboardMarkets) or the Settings modal
+// (#rxSettingsMarkets); _rxMarketMount tracks which one is live.
 let _rxMarketData = null;
-let _rxMarketMount = null;      // id of the element currently hosting the market manager, or null
-let _rxOnboardShown = false;    // don't re-auto-open the wizard every tab switch this session
-
-function _rxModalOpen() {
-  const a = document.getElementById('rxOnboardModal');
-  const b = document.getElementById('rxSettingsModal');
-  return (a && a.style.display !== 'none') || (b && b.style.display !== 'none');
-}
-
-async function _rxLoadMarketSetup() {
-  const card = document.getElementById('rxMarketSetupCard');
-  if (!card) return;
-  await Promise.resolve(typeof _loadFeatures === 'function' ? _loadFeatures() : null);
-  if (!(typeof _featureActive === 'function' && _featureActive('local_market'))) {
-    card.style.display = 'none';
-    return;
-  }
-  try {
-    const r = await fetch('/api/markets');
-    if (!r.ok) { card.style.display = 'none'; return; }
-    _rxMarketData = await r.json();
-  } catch (e) { card.style.display = 'none'; return; }
-  const d = _rxMarketData;
-  card.style.display = '';
-  const configured = (d.markets && d.markets.length) || (d.effective && d.effective.length);
-  if (configured) {
-    _rxRenderMarketSummary(card, d);
-  } else {
-    _rxRenderMarketCTA(card, d);
-    // Auto-open the wizard once per session — but never on top of an already-open modal.
-    if (!_rxOnboardShown && !_rxModalOpen()) { _rxOnboardShown = true; _rxOpenOnboard(); }
-  }
-}
+let _rxMarketMount = null;
 
 function _rxChainText(list) {
   return [...(list || []).map(m => _esc(m.name)), 'Jita'].join(' → ');
 }
 
-function _rxRenderMarketSummary(card, d) {
-  const inherited = (!d.markets || !d.markets.length) && d.effective && d.effective.length;
-  const note = inherited && d.group ? ` <span class="pp-card-hint">— from your group <b>${_esc(d.group.name)}</b></span>` : '';
+// Decide gate vs normal tab from /api/markets. Returns true when the gate is showing (caller
+// should skip the normal dashboard load). Fails OPEN (no gate) if the feature is off or the
+// request fails, so a hiccup never locks the user out of Reactions.
+async function _rxApplyGate() {
+  const gate = document.getElementById('rxGate');
+  const dash = document.getElementById('rxDashboard');
+  const show = (blocked) => {
+    if (gate) gate.style.display = blocked ? '' : 'none';
+    if (dash) dash.style.display = blocked ? 'none' : '';
+  };
+  await Promise.resolve(typeof _loadFeatures === 'function' ? _loadFeatures() : null);
+  if (!(typeof _featureActive === 'function' && _featureActive('local_market'))) { show(false); return false; }
+  try {
+    const r = await fetch('/api/markets');
+    if (!r.ok) { show(false); return false; }
+    _rxMarketData = await r.json();
+  } catch (e) { show(false); return false; }
+  if (!_rxMarketData.onboarded) {
+    show(true);
+    _rxRenderGate(_rxMarketData);
+    return true;
+  }
+  show(false);
+  _rxRenderMarketCard(_rxMarketData);
+  return false;
+}
+
+// Post-onboarding summary bar at the top of the tab — the effective pricing chain + a shortcut to
+// the Settings modal (the single place to change markets/freight from now on).
+function _rxRenderMarketCard(d) {
+  const card = document.getElementById('rxMarketSetupCard');
+  if (!card) return;
+  card.style.display = '';
   card.innerHTML =
     `<div class="pp-card-title">Reaction pricing`
-    + `<span class="pp-card-hint">— ${_rxChainText(d.effective)}</span>${note}`
-    + `<button class="pp-add-btn" onclick="_rxOpenOnboard()">Markets &amp; freight ▾</button></div>`;
+    + `<span class="pp-card-hint">— ${_rxChainText(d.effective)}</span>`
+    + `<button class="pp-add-btn" onclick="_rxOpenSettingsModal()">Markets &amp; freight ⚙</button></div>`;
 }
 
-function _rxRenderMarketCTA(card, d) {
-  card.innerHTML =
-    `<div class="rx-onboard-cta">`
-    + `<div><div class="rx-onboard-cta-title">Set up market pricing</div>`
-    + `<div class="pp-card-hint">Price reactions from your alliance / local markets first, Jita as fallback — plus your freight cost.</div></div>`
-    + `<button class="rx-onboard-cta-btn" onclick="_rxOpenOnboard()">Get started</button></div>`;
+// ── Onboarding gate (inline, blocks the tab) ──────────────────────────────────────────
+
+function _rxRenderGate(d) {
+  const gate = document.getElementById('rxGate');
+  if (!gate) return;
+  gate.innerHTML =
+    `<section class="pp-card rx-gate-card">`
+    + `<div class="pp-card-title">Set up Reactions`
+    + `<span class="pp-card-hint">— connect at least one character to run reactions on, then save. You can change everything later in ⚙ Settings.</span></div>`
+    // Step 1 — characters (required)
+    + `<div class="rx-onboard-step"><div class="rx-onboard-step-h"><span class="rx-onboard-num">1</span>Add your characters</div>`
+    + `<div class="rx-onboard-step-b" id="rxGateStep1"></div></div>`
+    // Step 2 — markets (optional)
+    + `<div class="rx-onboard-step"><div class="rx-onboard-step-h"><span class="rx-onboard-num">2</span>Add local markets<span class="rx-onboard-opt">optional</span></div>`
+    + `<div class="rx-onboard-step-b"><div id="rxOnboardMarkets"></div></div></div>`
+    // Step 3 — freight (optional, foldable)
+    + `<div class="rx-onboard-step"><details><summary class="rx-onboard-step-h" style="cursor:pointer">`
+    + `<span class="rx-onboard-num">3</span>Configure freighting costs<span class="rx-onboard-opt">optional</span></summary>`
+    + `<div class="rx-onboard-step-b">${_rxAccountSettingsFormHtml()}</div></details></div>`
+    // Save
+    + `<div class="rx-onboard-foot"><button id="rxGateSave" class="rx-onboard-connect" onclick="_rxCompleteOnboarding()">Save &amp; continue</button></div>`
+    + `</section>`;
+  _rxRenderStep1();
+  _rxMountMarkets('rxOnboardMarkets');
+  _loadRxAccountSettings();
+  _rxUpdateSaveBtn();
 }
 
-// ── Reusable market-manager component ─────────────────────────────────────────────────
+function _rxRenderStep1() {
+  const el = document.getElementById('rxGateStep1');
+  if (el && _rxMarketData) el.innerHTML = _rxCharListHtml(_rxMarketData);
+}
+
+// Character list with the market-character picker. Reaction slots come from every character;
+// exactly one (of those holding the market scope) reads the structure market — the rest are
+// "slots only". Defaults to the first market-capable character (see backend _market_character).
+function _rxCharListHtml(d) {
+  const chars = d.characters || [];
+  const rows = chars.length ? chars.map(c => {
+    const isReader = c.character_id === d.market_character_id;
+    const ctrl = c.is_market
+      ? `<label class="rx-char-reader" title="This character's access reads the structure market">`
+        + `<input type="radio" name="rxReader" ${isReader ? 'checked' : ''} onchange="_rxSetMarketReader(${c.character_id})"> market character</label>`
+      : `<span class="rx-char-tag">slots only</span>`;
+    return `<div class="rx-char-row"><span class="rx-char-name">${_esc(c.character_name)}</span>${ctrl}</div>`;
+  }).join('') : `<div class="pp-card-hint">No characters yet — connect the ones you want to run reactions on.</div>`;
+  return `<div class="rx-char-list">${rows}</div>`
+    + `<button class="rx-onboard-connect" style="margin-top:4px" onclick="connectReactionsMarket()">`
+    + `${chars.length ? 'Connect another character' : 'Connect a character'}</button>`
+    + `<div class="pp-card-hint" style="margin-top:6px">Characters connected here get reaction slots AND market access. The <b>market character</b> reads your structure market — pick one that can dock at it. You can also add characters from the Dashboard (those contribute slots but not market access).</div>`;
+}
+
+function _rxUpdateSaveBtn() {
+  const btn = document.getElementById('rxGateSave');
+  if (!btn) return;
+  const ok = _rxMarketData && (_rxMarketData.characters || []).length > 0;
+  btn.disabled = !ok;
+  btn.title = ok ? '' : 'Add at least one character first';
+}
+
+async function _rxSetMarketReader(id) {
+  try {
+    await fetch('/api/markets/reader', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ character_id: id }),
+    });
+  } catch (e) {}
+  await _rxReloadGateData();
+}
+
+async function _rxReloadGateData() {
+  try {
+    const r = await fetch('/api/markets');
+    if (r.ok) _rxMarketData = await r.json();
+  } catch (e) {}
+  _rxRenderStep1();
+  _rxRenderMarketManager();
+  _rxUpdateSaveBtn();
+}
+
+async function _rxCompleteOnboarding() {
+  try {
+    const r = await fetch('/api/markets/complete', { method: 'POST' });
+    if (!r.ok) { const e = await r.json().catch(() => ({})); alert(e.detail || 'Add at least one character first'); return; }
+    _rxMarketData = await r.json();
+  } catch (e) { alert('Could not save.'); return; }
+  onReactionsTabOpen();   // re-run: now onboarded, so the gate lifts and the tab loads
+}
+
+// Called by connectReactionsMarket (planetary.js) after a character is added — refresh whichever
+// surface is showing without a full tab reload.
+function _rxAfterConnect() {
+  const gate = document.getElementById('rxGate');
+  if (gate && gate.style.display !== 'none') { _rxReloadGateData(); return; }
+  const settings = document.getElementById('rxSettingsModal');
+  if (settings && settings.style.display !== 'none') { _rxRefreshMarkets(); return; }
+  if (typeof onReactionsTabOpen === 'function') onReactionsTabOpen();
+}
+
+// ── Reusable market-manager component (list + search) ─────────────────────────────────
 
 function _rxMarketRowsHtml(d) {
   const own = d.markets || [];
@@ -2077,16 +2168,13 @@ function _rxMarketRowsHtml(d) {
   return rows;
 }
 
-// The inner HTML of the market manager (list + search). Rendered into whichever container is the
-// current mount. Search needs a connected market character, so the manager notes when there isn't
-// one and points at where to connect (the onboarding wizard's step 1).
 function _rxMarketManagerHtml(d) {
   const own = d.markets || [];
   const inherited = !own.length && d.effective && d.effective.length;
   const inheritNote = inherited && d.group
     ? `<div class="pp-card-hint" style="margin:0 0 8px">Using your group <b>${_esc(d.group.name)}</b>'s markets. Add one below to override for your account only.</div>` : '';
   const connectNote = d.connected ? ''
-    : `<div class="pp-card-hint" style="margin:0 0 8px">Structure search needs a connected market character — use <a href="#" onclick="_rxOpenOnboard();return false;">Get started</a> to connect one (public regions work without it).</div>`;
+    : `<div class="pp-card-hint" style="margin:0 0 8px">Structure search needs a connected market character (public regions work without one).</div>`;
   return inheritNote + connectNote
     + `<div class="rx-mkt-list">${_rxMarketRowsHtml(d)}</div>`
     + `<div class="rx-mkt-search">`
@@ -2106,72 +2194,13 @@ function _rxRenderMarketManager() {
   if (el) el.innerHTML = _rxMarketManagerHtml(_rxMarketData);
 }
 
-// Re-fetch the followed markets, re-render the mounted manager (if any), and refresh the top bar.
 async function _rxRefreshMarkets() {
   try {
     const r = await fetch('/api/markets');
     if (r.ok) _rxMarketData = await r.json();
   } catch (e) {}
   _rxRenderMarketManager();
-  // Keep the summary/CTA bar in sync without letting it auto-open a wizard over an open modal.
-  const card = document.getElementById('rxMarketSetupCard');
-  if (card && _rxMarketData) {
-    const d = _rxMarketData;
-    if ((d.markets && d.markets.length) || (d.effective && d.effective.length)) _rxRenderMarketSummary(card, d);
-    else _rxRenderMarketCTA(card, d);
-  }
-}
-
-// ── Onboarding wizard modal ──────────────────────────────────────────────────────────
-// Step 1 (Connect a character) is FIRST and deliberately so: the structure-search + structure-
-// market scopes come from connecting a character, so steps 2 and 3 are both optional and depend
-// on step 1 for private-structure features.
-
-async function _rxOpenOnboard() {
-  const modal = document.getElementById('rxOnboardModal');
-  if (!modal) return;
-  modal.style.display = '';
-  const body = document.getElementById('rxOnboardBody');
-  body.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Loading…</div>';
-  try {
-    const r = await fetch('/api/markets');
-    if (r.ok) _rxMarketData = await r.json();
-  } catch (e) {}
-  _rxRenderOnboard(_rxMarketData || { markets: [], effective: [], connected: false });
-  _loadRxAccountSettings();   // fills the foldable freight form (step 3)
-}
-
-function _rxCloseOnboard() {
-  const modal = document.getElementById('rxOnboardModal');
-  if (modal) modal.style.display = 'none';
-  document.getElementById('rxOnboardBody').innerHTML = '';  // drop stale market-manager IDs
-  if (_rxMarketMount === 'rxOnboardMarkets') _rxMarketMount = null;
-  _rxLoadMarketSetup();       // refresh the summary/CTA bar behind it
-}
-
-function _rxRenderOnboard(d) {
-  const body = document.getElementById('rxOnboardBody');
-  if (!body) return;
-  const connectBlock = d.connected
-    ? `<div class="rx-onboard-connected">✓ Market character connected — <a href="#" onclick="connectReactionsMarket();return false;">add another</a></div>`
-    : `<button class="rx-onboard-connect" onclick="connectReactionsMarket()">Connect a character</button>`
-      + `<div class="pp-card-hint" style="margin-top:6px">Grants structure-market search &amp; read. Public region markets work without it, but a private structure market needs it. You can also add characters from the Dashboard.</div>`;
-
-  body.innerHTML =
-    // Step 1 — connect (required for structure markets; must come first — it grants the scope)
-    `<div class="rx-onboard-step"><div class="rx-onboard-step-h"><span class="rx-onboard-num">1</span>Connect a character</div>`
-    + `<div class="rx-onboard-step-b">${connectBlock}</div></div>`
-    // Step 2 — markets (optional)
-    + `<div class="rx-onboard-step"><div class="rx-onboard-step-h"><span class="rx-onboard-num">2</span>Add local markets`
-    + `<span class="rx-onboard-opt">optional</span></div>`
-    + `<div class="rx-onboard-step-b"><div id="rxOnboardMarkets"></div></div></div>`
-    // Step 3 — freight (optional, foldable)
-    + `<div class="rx-onboard-step"><details><summary class="rx-onboard-step-h" style="cursor:pointer">`
-    + `<span class="rx-onboard-num">3</span>Configure freighting costs<span class="rx-onboard-opt">optional</span></summary>`
-    + `<div class="rx-onboard-step-b" id="rxOnboardFreight">${_rxAccountSettingsFormHtml()}</div></details></div>`
-    // Finish
-    + `<div class="rx-onboard-foot"><button class="rx-onboard-connect" onclick="_rxCloseOnboard()">Done</button></div>`;
-  _rxMountMarkets('rxOnboardMarkets');
+  if (_rxMarketData && _rxMarketData.onboarded) _rxRenderMarketCard(_rxMarketData);
 }
 
 // ── Market search / mutations ─────────────────────────────────────────────────────────
