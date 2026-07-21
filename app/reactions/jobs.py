@@ -940,14 +940,17 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
 _MIN_LIQUIDITY = 1000  # order-book depth (both sides) a candidate must clear to be suggested —
 # fixed heuristic, not a UI knob, per "use liquidity as a selection filter, don't show it".
 _CANDIDATE_POOL_SIZE = 30  # how many of the liquidity-filtered opportunities feed the knapsack
-_ABSORB_FRACTION = 0.20  # cap a suggested batch so (this batch + what our own userbase already has
-# committed) never exceeds this fraction of the standing Jita buy-order depth for the product.
-# Beyond it you walk down the buy book and crash the price — the "I sold it all but exhausted the
-# reasonable buy orders" case. Conservative on purpose: the advisor then tells a player who wants
-# to push further exactly how much more they COULD make by filling more of the book. This is also
+_ABSORB_FRACTION = 0.50  # DEFAULT cap: a suggested batch, plus what our own userbase already has
+# committed, may fill up to this fraction of the standing Jita buy-order depth for the product.
+# Standing depth is a single snapshot, but a batch sells over the whole cadence window (buy orders
+# replenish repeatedly across a week), so a snapshot fraction UNDER-states real absorption — 20% was
+# too tight and collapsed suggestions to a tiny run of one product once the community-committed share
+# was subtracted. This is a floor a player can raise per-run via the advisor's "fill more of the buy
+# book" Apply (see absorb_fraction in _suggest_reactions), accepting deeper/cheaper fills. It's also
 # the main diversification lever — a thin-book or already-crowded product runs out of headroom and
-# the LP spends the budget on something else, so two different players stop getting the same list.
-# Tunable constant, not a UI knob, same as _MIN_LIQUIDITY.
+# the LP spends the budget elsewhere, so two players stop getting the same list. Tunable constant,
+# not a UI knob, same as _MIN_LIQUIDITY. (The principled long-term sizing is ESI market-history daily
+# traded volume × cadence-days, not a fraction of one snapshot — deferred "over time" signal.)
 _COMMITTED_CACHE_TTL = 90  # matches the opportunities cache — a slow-moving, soft nudge, so a short
 # stale window is harmless; keeps the cross-context aggregate off the hot path.
 
@@ -1036,7 +1039,13 @@ def _character_capacities(context_id: int) -> list[dict]:
 
 
 def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int, cadence_hours: float,
-                        material_ids: set[int] | None = None) -> dict:
+                        material_ids: set[int] | None = None, absorb_fraction: float | None = None) -> dict:
+    # How much of the standing Jita buy-order depth a batch is allowed to fill. Defaults to the
+    # conservative _ABSORB_FRACTION (sell without moving the price); the advisor's "fill more of the
+    # buy book" hint lets the player raise it per re-run to unlock a specific depth-bound product,
+    # accepting deeper/cheaper fills. Clamped to (0, 1] — you can't sell into more than the whole book.
+    frac = absorb_fraction if (absorb_fraction and absorb_fraction > 0) else _ABSORB_FRACTION
+    frac = min(1.0, frac)
     opportunities = _build_opportunities(context_id, allowed_material_ids=material_ids)
     # Needed again in stage 2 to walk each chosen candidate's own formula tree for chain_tiers
     # (the intermediate reactions a multi-tier product needs before its own reaction can even
@@ -1050,7 +1059,8 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
                   and o["steps"] <= max_chain_depth]
     empty = {"suggestions": [], "totals": {
         "isk_committed": 0.0, "isk_budget": isk_budget, "net_profit": 0.0, "net_profit_per_day": None,
-        "output_value": 0.0, "output_m3": 0.0, "characters_used": 0, "completion_hours": None, "binding": "neither"}}
+        "output_value": 0.0, "output_m3": 0.0, "characters_used": 0, "completion_hours": None,
+        "binding": "neither", "absorb_fill_pct": round(frac * 100)}}
     if not candidates:
         return empty
 
@@ -1072,12 +1082,14 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
         if max_runs_in_cadence <= 0:
             continue
         # Market-absorption cap: (this batch + what our userbase already committed) must stay under
-        # _ABSORB_FRACTION of the standing Jita buy-order depth, or you walk down the book. When
-        # this is the tighter of the two caps we record how many MORE runs the cadence would still
-        # allow — the advisor turns that into a "you could push further into the buy book for ~X
-        # more" nudge, but only for a batch that actually presses against the good buy-order depth.
+        # `frac` of the standing Jita buy-order depth, or you walk down the book. When this is the
+        # tighter of the two caps we record how many MORE runs the cadence would still allow — the
+        # advisor turns that into a "fill more of the buy book for ~X more" nudge (with an Apply that
+        # raises `frac`), but only for a batch that actually presses against the good buy-order depth.
+        buy_vol = o["buy_volume"] or 0.0
+        committed = committed_units.get(o["type_id"], 0.0)
         out_per_run = o["output_qty"] / o["top_level_runs"] if o["top_level_runs"] else 0.0
-        absorb_units = _ABSORB_FRACTION * (o["buy_volume"] or 0.0) - committed_units.get(o["type_id"], 0.0)
+        absorb_units = frac * buy_vol - committed
         max_runs_absorb = int(absorb_units / out_per_run) if out_per_run > 0 else 0
         hard_max_runs = min(max_runs_in_cadence, max_runs_absorb)
         if hard_max_runs <= 0:
@@ -1086,6 +1098,10 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
         # only nonzero when absorption (not cadence) is what bound this batch.
         absorb_extra_runs = max(0, max_runs_in_cadence - hard_max_runs)
         per_run_profit = o["net_profit_instant"] / o["top_level_runs"] if o["top_level_runs"] else 0.0
+        # The depth-fill fraction that would let THIS product reach its cadence cap — what the
+        # advisor's Apply jumps `frac` to. Capped at 1.0 (can't fill more than the whole book).
+        unlock_frac = ((max_runs_in_cadence * out_per_run + committed) / buy_vol) if buy_vol > 0 else frac
+        c_absorb_unlock_frac = min(1.0, max(frac, unlock_frac))
         if hard_max_runs >= o["top_level_runs"]:
             c2 = dict(o)
         else:
@@ -1102,6 +1118,7 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
         # which the advisor copy flags), mirroring how align_extra_reward is also a linear estimate.
         c2["_absorb_extra_runs"] = absorb_extra_runs
         c2["_absorb_extra_reward"] = absorb_extra_runs * per_run_profit
+        c2["_absorb_unlock_frac"] = c_absorb_unlock_frac
         capped.append(c2)
     candidates = capped
     if not candidates:
@@ -1299,7 +1316,8 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
             # roughly how much more profit, at current buy price) the cadence would still allow if
             # the player were willing to fill more of the standing buy orders. Nonzero only when
             # this batch is capped by buy-order depth, i.e. it presses against the good depth.
-            "absorb_fill_pct": round(_ABSORB_FRACTION * 100),
+            "absorb_fill_pct": round(frac * 100),
+            "absorb_next_pct": round(c.get("_absorb_unlock_frac", frac) * 100),
             "absorb_extra_runs": int(c.get("_absorb_extra_runs", 0)),
             "absorb_extra_reward": round(c.get("_absorb_extra_reward", 0.0), 2),
             "assigned_character": char_names.get(pick_id, "?"),
@@ -1328,6 +1346,7 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
             "characters_used": len(touched_chars),
             "completion_hours": round(max_completion_hours, 1) if suggestions else None,
             "binding": binding,
+            "absorb_fill_pct": round(frac * 100),
         },
     }
 
@@ -1337,6 +1356,8 @@ class SuggestRequest(BaseModel):
     max_chain_depth: int = 2
     cadence_hours: float = 168.0  # default weekly — how long you want a batch to run before checking back in
     material_ids: list[int] | None = None  # None/empty = no restriction, every priced material usable
+    absorb_fraction: float | None = None  # None = default _ABSORB_FRACTION; the "fill more of the buy
+    # book" advisor Apply raises it to unlock a depth-bound product. Clamped to (0, 1] server-side.
 
 
 _BUDGET_SENSITIVITY_STEP = 0.10  # "what if you raised your ISK budget by 10%?"
@@ -1344,7 +1365,7 @@ _BUDGET_SENSITIVITY_STEP = 0.10  # "what if you raised your ISK budget by 10%?"
 
 def _build_advisor(context_id: int, isk_budget: float, max_chain_depth: int, cadence_hours: float,
                     material_ids: set[int] | None, current_profit: float, current_profit_per_day: float | None,
-                    current_binding: str, suggestions: list[dict]) -> dict:
+                    current_binding: str, suggestions: list[dict], absorb_fraction: float | None = None) -> dict:
     """Cheap, easily-computable "how could this be better" hints — not a full analysis, just the
     obvious low-effort wins: whether a bit more ISK would actually buy meaningfully more profit
     right now (vs. there being nothing left worth spending it on within the current chain-depth/
@@ -1363,7 +1384,7 @@ def _build_advisor(context_id: int, isk_budget: float, max_chain_depth: int, cad
     budget_hint = None
     if current_binding == "isk" and current_profit > 0:
         bigger = _suggest_reactions(context_id, isk_budget * (1 + _BUDGET_SENSITIVITY_STEP),
-                                     max_chain_depth, cadence_hours, material_ids)
+                                     max_chain_depth, cadence_hours, material_ids, absorb_fraction)
         extra_profit = bigger["totals"]["net_profit"] - current_profit
         if extra_profit > current_profit * 0.01:
             budget_hint = {
@@ -1391,6 +1412,7 @@ def _build_advisor(context_id: int, isk_budget: float, max_chain_depth: int, cad
     if current_binding == "neither":
         absorb_hints = [
             {"name": s["name"], "fill_pct": s.get("absorb_fill_pct", 0),
+             "next_fill_pct": s.get("absorb_next_pct", s.get("absorb_fill_pct", 0)),
              "extra_runs": s["absorb_extra_runs"], "extra_reward": s["absorb_extra_reward"]}
             for s in suggestions
             if s.get("absorb_extra_runs", 0) > 0 and s.get("absorb_extra_reward", 0) > current_profit * 0.01
@@ -1413,7 +1435,7 @@ def _build_advisor(context_id: int, isk_budget: float, max_chain_depth: int, cad
         excluded = {tid: name for tid, name in all_fuel_blocks.items() if tid not in material_ids}
         for tid, name in excluded.items():
             widened = _suggest_reactions(context_id, isk_budget, max_chain_depth, cadence_hours,
-                                          material_ids | {tid})
+                                          material_ids | {tid}, absorb_fraction)
             widened_per_day = widened["totals"].get("net_profit_per_day") or 0.0
             extra_per_day = widened_per_day - current_profit_per_day
             if extra_per_day > current_profit_per_day * 0.01:
@@ -1436,11 +1458,12 @@ def suggest_reactions(req: SuggestRequest, context_id: int = Depends(require_con
             "output_value": 0.0, "output_m3": 0.0, "characters_used": 0, "completion_hours": None, "binding": "neither"},
             "advisor": {"budget_hint": None, "align_hints": [], "fuel_block_hints": [], "absorb_hints": []}}
     material_ids = set(req.material_ids) if req.material_ids else None
-    result = _suggest_reactions(context_id, req.isk_budget, req.max_chain_depth, req.cadence_hours, material_ids)
+    result = _suggest_reactions(context_id, req.isk_budget, req.max_chain_depth, req.cadence_hours,
+                                 material_ids, req.absorb_fraction)
     result["advisor"] = _build_advisor(context_id, req.isk_budget, req.max_chain_depth, req.cadence_hours,
                                         material_ids, result["totals"]["net_profit"],
                                         result["totals"].get("net_profit_per_day"), result["totals"]["binding"],
-                                        result["suggestions"])
+                                        result["suggestions"], req.absorb_fraction)
     return result
 
 
