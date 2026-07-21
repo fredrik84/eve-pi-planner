@@ -1,12 +1,17 @@
 import json
 import time
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 
 from app.cache import cache_mget_json, cache_mset_json
 
 FUZZWORKS_URL = "https://market.fuzzwork.co.uk/aggregates/"
+ESI_BASE = "https://esi.evetech.net/latest"
 JITA_STATION = 60003760
+THE_FORGE_REGION = 10000002  # Jita's region — where market history that matters trades
 CACHE_TTL = 900  # 15 minutes
+HISTORY_CACHE_TTL = 6 * 3600  # market history only updates ~daily, so cache it hard
+HISTORY_DAYS = 7  # average daily traded volume over the last N days
 
 # {type_id: (value, fetched_at)} — L1 cache, per-process. Fast (no network at all) but only
 # helps repeat calls hitting the SAME worker — prod runs multiple uvicorn workers with no
@@ -80,6 +85,69 @@ def _fetch_from_fuzzworks(type_ids: list[int]) -> dict[int, float]:
         int(tid): float(info.get("sell", {}).get("percentile", 0) or 0)
         for tid, info in data.items()
     }
+
+
+_history_cache: dict[int, tuple[float, float]] = {}
+
+
+def fetch_daily_volume(type_ids: list[int]) -> dict[int, float]:
+    """Average daily traded UNITS over the last HISTORY_DAYS days, per type, from ESI market history
+    for The Forge (Jita's region). This is real trade VELOCITY — how much actually changes hands —
+    the honest basis for "how much can I sell over a run period" (unlike a single order-book depth
+    snapshot). Public endpoint, one call per type (parallelised), cached HISTORY_CACHE_TTL since
+    history only updates ~daily. Missing/failed IDs are omitted (caller falls back to depth)."""
+    if not type_ids:
+        return {}
+    now = time.monotonic()
+    result: dict[int, float] = {}
+    missing: list[int] = []
+    for tid in type_ids:
+        entry = _history_cache.get(tid)
+        if entry and now - entry[1] < HISTORY_CACHE_TTL:
+            result[tid] = entry[0]
+        else:
+            missing.append(tid)
+    if not missing:
+        return result
+
+    redis_keys = [f"mkt:hist:{tid}" for tid in missing]
+    redis_hits = cache_mget_json(redis_keys)
+    still_missing = []
+    for tid in missing:
+        v = redis_hits.get(f"mkt:hist:{tid}")
+        if v is not None:
+            _history_cache[tid] = (v, now)
+            result[tid] = v
+        else:
+            still_missing.append(tid)
+    if still_missing:
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            fetched = dict(zip(still_missing, pool.map(_fetch_one_history, still_missing)))
+        to_cache = {}
+        for tid, vol in fetched.items():
+            if vol is None:
+                continue
+            _history_cache[tid] = (vol, now)
+            result[tid] = vol
+            to_cache[f"mkt:hist:{tid}"] = vol
+        if to_cache:
+            cache_mset_json(to_cache, ttl=HISTORY_CACHE_TTL)
+    return result
+
+
+def _fetch_one_history(type_id: int) -> float | None:
+    url = f"{ESI_BASE}/markets/{THE_FORGE_REGION}/history/?datasource=tranquility&type_id={type_id}"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "eve-pi-planner/1.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            rows = json.loads(resp.read())
+    except Exception:
+        return None
+    if not rows:
+        return 0.0
+    recent = rows[-HISTORY_DAYS:]  # ESI returns oldest→newest; take the last N days
+    vols = [float(r.get("volume", 0) or 0) for r in recent]
+    return (sum(vols) / len(vols)) if vols else 0.0
 
 
 def fetch_market_data(type_ids: list[int]) -> dict[int, dict]:

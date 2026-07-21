@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 from app.sde import get_connection, load_pi_data, ensure_once
 from app.markets import resolve_market_data
+from app.market import fetch_daily_volume
 from app.cache import cache_invalidate, charlist_key, cache_get_json, cache_set_json
 from app.esi import require_context, ESI_BASE, _get_valid_token
 
@@ -940,17 +941,15 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
 _MIN_LIQUIDITY = 1000  # order-book depth (both sides) a candidate must clear to be suggested —
 # fixed heuristic, not a UI knob, per "use liquidity as a selection filter, don't show it".
 _CANDIDATE_POOL_SIZE = 30  # how many of the liquidity-filtered opportunities feed the knapsack
-_ABSORB_FRACTION = 0.50  # DEFAULT cap: a suggested batch, plus what our own userbase already has
-# committed, may fill up to this fraction of the standing Jita buy-order depth for the product.
-# Standing depth is a single snapshot, but a batch sells over the whole cadence window (buy orders
-# replenish repeatedly across a week), so a snapshot fraction UNDER-states real absorption — 20% was
-# too tight and collapsed suggestions to a tiny run of one product once the community-committed share
-# was subtracted. This is a floor a player can raise per-run via the advisor's "fill more of the buy
-# book" Apply (see absorb_fraction in _suggest_reactions), accepting deeper/cheaper fills. It's also
-# the main diversification lever — a thin-book or already-crowded product runs out of headroom and
-# the LP spends the budget elsewhere, so two players stop getting the same list. Tunable constant,
-# not a UI knob, same as _MIN_LIQUIDITY. (The principled long-term sizing is ESI market-history daily
-# traded volume × cadence-days, not a fraction of one snapshot — deferred "over time" signal.)
+_ABSORB_FRACTION = 0.50  # DEFAULT "Market fill" slider value: a suggested batch, plus what our own
+# userbase already has committed, may be up to this fraction of the product's realistic turnover over
+# the run period — real daily traded volume (ESI history, Jita) × cadence-days, falling back to the
+# standing buy-order-depth snapshot where there's no history. This is the honest "how much actually
+# moves in a week" basis; an order-book snapshot alone badly under-states turnover (20% of a snapshot
+# collapsed suggestions to a tiny single-product run once the community share was subtracted). It's a
+# per-run knob (the frontend "Market fill" slider → absorb_fraction in _suggest_reactions), and also
+# the main diversification lever — a thin or already-crowded product runs out of headroom and the LP
+# spends the budget elsewhere, so two players stop getting the same list.
 _COMMITTED_CACHE_TTL = 90  # matches the opportunities cache — a slow-moving, soft nudge, so a short
 # stale window is harmless; keeps the cross-context aggregate off the hot path.
 
@@ -1064,6 +1063,14 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
     if not candidates:
         return empty
 
+    # Rank by profit per step (the "least work most profitable" ordering) and truncate to a small
+    # pool BEFORE the cap loop — the batch caps below scale net_profit_instant and top_level_runs
+    # by the same factor, so the per-run ratio (this sort key) is cap-invariant and truncating here
+    # is identical to truncating after, but it means the market-history fetch only ever runs for the
+    # pool (≤ _CANDIDATE_POOL_SIZE types), not every reachable product.
+    candidates.sort(key=lambda o: -(o["net_profit_instant"] / o["top_level_runs"]))
+    candidates = candidates[:_CANDIDATE_POOL_SIZE]
+
     # Cap each candidate's usable batch size so a huge, cheap-per-unit chain doesn't get most of
     # the ISK budget allocated to a run count that could never actually finish within the
     # player's chosen cadence (e.g. "weekly") even using every free reaction slot at once — the
@@ -1073,6 +1080,12 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
     chars_for_cap = _character_capacities(context_id)
     max_slots_available = max((c["free_slots"] for c in chars_for_cap), default=0) or 1
     committed_units = _committed_production_units()
+    # Real daily traded volume (Jita/The Forge) per candidate — the market-absorption base. How much
+    # you can realistically sell over the run period is trade VELOCITY × the period, not a single
+    # order-book depth snapshot; a snapshot badly under-states a week of turnover. Falls back to
+    # standing buy-order depth for anything ESI has no history for (thin/new products).
+    cadence_days = cadence_hours / 24.0
+    daily_volume = fetch_daily_volume([o["type_id"] for o in candidates])
     capped = []
     for o in candidates:
         cycle_hours = o["cycle_time"] / 3600.0 if o["cycle_time"] else 0
@@ -1082,25 +1095,28 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
         if max_runs_in_cadence <= 0:
             continue
         # Market-absorption cap: (this batch + what our userbase already committed) must stay under
-        # `frac` of the standing Jita buy-order depth, or you walk down the book. When this is the
-        # tighter of the two caps we record how many MORE runs the cadence would still allow — the
-        # advisor turns that into a "fill more of the buy book for ~X more" nudge (with an Apply that
-        # raises `frac`), but only for a batch that actually presses against the good buy-order depth.
-        buy_vol = o["buy_volume"] or 0.0
+        # `frac` of the product's realistic turnover over the run period — daily traded volume ×
+        # cadence-days where ESI has history, else standing buy-order depth as a fallback. Beyond it
+        # you're a large share of the whole market and walk the price down. When this is the tighter
+        # of the two caps we record how many MORE runs the cadence would still allow — the advisor
+        # turns that into a "sell into more of the market for ~X more" nudge (with an Apply that
+        # raises `frac`), but only for a batch that actually presses against that absorption ceiling.
+        vol = daily_volume.get(o["type_id"])
+        absorb_base = (vol * cadence_days) if vol else (o["buy_volume"] or 0.0)
         committed = committed_units.get(o["type_id"], 0.0)
         out_per_run = o["output_qty"] / o["top_level_runs"] if o["top_level_runs"] else 0.0
-        absorb_units = frac * buy_vol - committed
+        absorb_units = frac * absorb_base - committed
         max_runs_absorb = int(absorb_units / out_per_run) if out_per_run > 0 else 0
         hard_max_runs = min(max_runs_in_cadence, max_runs_absorb)
         if hard_max_runs <= 0:
             continue
-        # Extra runs the cadence would permit if the player accepted filling more of the buy book —
+        # Extra runs the cadence would permit if the player accepted taking a bigger market share —
         # only nonzero when absorption (not cadence) is what bound this batch.
         absorb_extra_runs = max(0, max_runs_in_cadence - hard_max_runs)
         per_run_profit = o["net_profit_instant"] / o["top_level_runs"] if o["top_level_runs"] else 0.0
-        # The depth-fill fraction that would let THIS product reach its cadence cap — what the
-        # advisor's Apply jumps `frac` to. Capped at 1.0 (can't fill more than the whole book).
-        unlock_frac = ((max_runs_in_cadence * out_per_run + committed) / buy_vol) if buy_vol > 0 else frac
+        # The fill fraction that would let THIS product reach its cadence cap — what the advisor's
+        # Apply jumps `frac` to. Capped at 1.0 (can't sell into more than the whole market).
+        unlock_frac = ((max_runs_in_cadence * out_per_run + committed) / absorb_base) if absorb_base > 0 else frac
         c_absorb_unlock_frac = min(1.0, max(frac, unlock_frac))
         if hard_max_runs >= o["top_level_runs"]:
             c2 = dict(o)
@@ -1123,11 +1139,6 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
     candidates = capped
     if not candidates:
         return empty
-
-    # Rank by profit per step (the "least work most profitable" ordering) before truncating to
-    # a small pool — keeps the LP tiny regardless of how many opportunities Phase 2 finds.
-    candidates.sort(key=lambda o: -(o["net_profit_instant"] / o["top_level_runs"]))
-    candidates = candidates[:_CANDIDATE_POOL_SIZE]
 
     import highspy  # lazy: only ever needed here, keeps it off the cold-start path (matches app.optimizer)
     n = len(candidates)

@@ -1022,15 +1022,21 @@ function wizRGo(n) {
   }
 }
 
-// null = use the server's default buy-order-depth fill cap; a number (0–1) = the player raised it
-// via the advisor's "fill more of the buy book" Apply. Persists across re-runs within this session
-// until reset, so tweaking ISK/cadence doesn't silently drop back to the conservative default.
-let _rxAbsorbFraction = null;
+// Live label for the "Market fill" slider — what share of a product's market trade volume a
+// suggested batch may be. The slider IS the source of truth (read fresh in wizRSuggest); the
+// advisor's per-product "Fill N%" Apply just moves it.
+function _wizRFillLive() {
+  const s = document.getElementById('wizRFill');
+  const out = document.getElementById('wizRFillFmt');
+  if (s && out) out.textContent = `${s.value}%`;
+}
 
 function wizRSuggest() {
   const isk = parseFloat(document.getElementById('wizRIsk').value) || 0;
   const depth = parseInt(document.getElementById('wizRDepth').value, 10) || 2;
   const cadence = parseFloat(document.getElementById('wizRCadence').value) || 168;
+  const fillEl = document.getElementById('wizRFill');
+  const absorbFraction = fillEl ? (parseFloat(fillEl.value) || 50) / 100 : null;
   const materialIds = _rxSelectedMaterialIds();
   const el = document.getElementById('wizRSuggestionsContent');
   wizRGo(2);
@@ -1039,7 +1045,7 @@ function wizRSuggest() {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ isk_budget: isk, max_chain_depth: depth, cadence_hours: cadence,
-      material_ids: materialIds, absorb_fraction: _rxAbsorbFraction }),
+      material_ids: materialIds, absorb_fraction: absorbFraction }),
   })
     .then(r => {
       if (!r.ok) throw new Error(r.status === 401 ? 'Log in to use Reactions' : 'Suggest failed');
@@ -1077,10 +1083,10 @@ function _renderReactionsSuggestions(data) {
   const bindingNote = t.binding === 'isk'
     ? 'Used your full ISK budget.'
     : 'There weren\'t enough profitable, liquid reactions within the chain-depth limit to use the whole budget — try loosening "Max chain depth" or the material filter.';
-  // When the player has raised the buy-order-depth fill cap above the default, say so + offer a
-  // reset — otherwise there'd be no way back to the conservative sizing without reloading.
-  const absorbNote = _rxAbsorbFraction !== null
-    ? `<div class="pp-card-hint" style="margin-bottom:10px">Filling up to ${t.absorb_fill_pct}% of buy-order depth (deeper, cheaper fills) — <a href="#" onclick="_rxResetAbsorbFraction();return false">reset to default</a></div>`
+  // When the fill slider is off its 50% default, say so on the results page + offer a one-click
+  // reset (the slider itself lives on the input page, so this is the quick way back from here).
+  const absorbNote = (t.absorb_fill_pct != null && t.absorb_fill_pct !== 50)
+    ? `<div class="pp-card-hint" style="margin-bottom:10px">Sizing batches to ${t.absorb_fill_pct}% of each product's market volume — <a href="#" onclick="_rxResetAbsorbFraction();return false">reset to 50%</a></div>`
     : '';
   const budgetSummary = `<div class="pp-card-hint" style="margin-bottom:10px">${bindingNote}</div>${absorbNote}`;
 
@@ -1179,7 +1185,7 @@ function _renderRxAdvisor(advisor) {
       ? `<button class="rx-sugg-assign-btn" onclick="_rxApplyAbsorbHint(${h.next_fill_pct}, this)">Fill ${h.next_fill_pct}%</button>`
       : '';
     items.push(`<li><div class="rx-hint-row">
-      <span class="rx-hint-text"><b>${_esc(h.name)}</b> is sized to fill only ${h.fill_pct}% of Jita's buy orders to keep the price up — sell into deeper (cheaper) buy orders to run about ${h.extra_runs.toLocaleString()} more (up to +${_fmtIsk(h.extra_reward)}, less at the lower prices)</span>
+      <span class="rx-hint-text"><b>${_esc(h.name)}</b> is sized to only ${h.fill_pct}% of its market's trade volume to protect the price — take a bigger share to run about ${h.extra_runs.toLocaleString()} more (up to +${_fmtIsk(h.extra_reward)}, less as you sell into cheaper demand)</span>
       ${applyBtn}
     </div></li>`);
   });
@@ -1203,18 +1209,20 @@ function _rxApplyFuelBlockHint(typeId, btn) {
   wizRSuggest();
 }
 
-// Raises the buy-order-depth fill cap to `pct`% and re-runs — lets bigger, depth-bound batches
-// through (accepting deeper, cheaper fills). Global, so it can enlarge every depth-bound product,
-// hence a full recalculation like the budget/fuel-block applies rather than a local patch.
+// Moves the "Market fill" slider to `pct`% and re-runs — lets bigger, depth-bound batches through
+// (accepting deeper, cheaper fills). Global, so it can enlarge every depth-bound product, hence a
+// full recalculation like the budget/fuel-block applies rather than a local patch.
 function _rxApplyAbsorbHint(pct, btn) {
-  _rxAbsorbFraction = Math.min(1, Math.max(0.01, pct / 100));
+  const s = document.getElementById('wizRFill');
+  if (s) { s.value = Math.min(100, Math.max(5, Math.round(pct))); _wizRFillLive(); }
   if (btn) { btn.disabled = true; btn.textContent = '…'; }
   wizRSuggest();
 }
 
-// Reset the fill cap back to the server's conservative default and re-run.
+// Reset the slider back to the 50% default and re-run.
 function _rxResetAbsorbFraction() {
-  _rxAbsorbFraction = null;
+  const s = document.getElementById('wizRFill');
+  if (s) { s.value = 50; _wizRFillLive(); }
   wizRSuggest();
 }
 
