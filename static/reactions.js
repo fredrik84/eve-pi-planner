@@ -1440,7 +1440,7 @@ function _rxSettingsFormHtml() {
     </div>
     <div class="pp-card-hint" style="margin-top:2px">Reaction system + facility tax estimate real job-installation fees (EVE's system cost index × EIV, plus your structure's tax). Leave the system blank to skip this — nothing changes until it's set. Time efficiency % shortens every duration/runtime estimate the tool shows — there's no way to auto-detect this (ESI only reports a job's facility once it's already installed), so check your real in-game job duration against the formula's raw time and enter the % difference here.</div>
     <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:8px">
-      <button class="pp-add-btn" style="margin-left:0" onclick="_saveRxSettings()">Save</button>
+      <button onclick="_saveRxSettings()">Save</button>
       <span id="rxSettingsMsg" class="pp-card-hint"></span>
     </div>
     <div style="border-top:1px solid var(--clr-border);margin-top:16px"></div>`;
@@ -1506,7 +1506,7 @@ function _rxAccountSettingsFormHtml() {
     </div>
     <div class="pp-card-hint" style="margin-top:2px">Reaction system + facility tax estimate real job-installation fees. Leave the system blank to skip this — nothing changes until it's set. Time efficiency % shortens every duration/runtime estimate — check your real in-game job duration against the formula's raw time and enter the % difference (we can't auto-detect this, ESI only reports a job's facility once it's already installed).</div>
     <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:8px">
-      <button class="pp-add-btn" style="margin-left:0" onclick="_saveRxAccountSettings()">Save my rate</button>
+      <button onclick="_saveRxAccountSettings()">Save my rate</button>
       <button class="pp-cancel-btn" onclick="_resetRxAccountSettings()">Use default instead</button>
       <span id="rxAcctSettingsMsg" class="pp-card-hint"></span>
     </div>`;
@@ -2004,10 +2004,6 @@ function _rxDeleteOrder(orderId) {
 let _rxMarketData = null;
 let _rxMarketMount = null;
 
-function _rxChainText(list) {
-  return [...(list || []).map(m => _esc(m.name)), 'Jita'].join(' → ');
-}
-
 // Decide gate vs normal tab from /api/markets. Returns true when the gate is showing (caller
 // should skip the normal dashboard load). Fails OPEN (no gate) if the feature is off or the
 // request fails, so a hiccup never locks the user out of Reactions.
@@ -2031,20 +2027,7 @@ async function _rxApplyGate() {
     return true;
   }
   show(false);
-  _rxRenderMarketCard(_rxMarketData);
   return false;
-}
-
-// Post-onboarding summary bar at the top of the tab — the effective pricing chain + a shortcut to
-// the Settings modal (the single place to change markets/freight from now on).
-function _rxRenderMarketCard(d) {
-  const card = document.getElementById('rxMarketSetupCard');
-  if (!card) return;
-  card.style.display = '';
-  card.innerHTML =
-    `<div class="pp-card-title">Reaction pricing`
-    + `<span class="pp-card-hint">— ${_rxChainText(d.effective)}</span>`
-    + `<button class="pp-add-btn" onclick="_rxOpenSettingsModal()">Markets &amp; freight ⚙</button></div>`;
 }
 
 // ── Onboarding gate (inline, blocks the tab) ──────────────────────────────────────────
@@ -2200,7 +2183,6 @@ async function _rxRefreshMarkets() {
     if (r.ok) _rxMarketData = await r.json();
   } catch (e) {}
   _rxRenderMarketManager();
-  if (_rxMarketData && _rxMarketData.onboarded) _rxRenderMarketCard(_rxMarketData);
 }
 
 // ── Market search / mutations ─────────────────────────────────────────────────────────
