@@ -17,7 +17,7 @@ from pydantic import BaseModel
 
 from app.sde import get_connection, load_pi_data, ensure_once
 from app.markets import resolve_market_data
-from app.cache import cache_invalidate, charlist_key
+from app.cache import cache_invalidate, charlist_key, cache_get_json, cache_set_json
 from app.esi import require_context, ESI_BASE, _get_valid_token
 
 from app.reactions._router import router
@@ -940,6 +940,52 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
 _MIN_LIQUIDITY = 1000  # order-book depth (both sides) a candidate must clear to be suggested —
 # fixed heuristic, not a UI knob, per "use liquidity as a selection filter, don't show it".
 _CANDIDATE_POOL_SIZE = 30  # how many of the liquidity-filtered opportunities feed the knapsack
+_ABSORB_FRACTION = 0.20  # cap a suggested batch so (this batch + what our own userbase already has
+# committed) never exceeds this fraction of the standing Jita buy-order depth for the product.
+# Beyond it you walk down the buy book and crash the price — the "I sold it all but exhausted the
+# reasonable buy orders" case. Conservative on purpose: the advisor then tells a player who wants
+# to push further exactly how much more they COULD make by filling more of the book. This is also
+# the main diversification lever — a thin-book or already-crowded product runs out of headroom and
+# the LP spends the budget on something else, so two different players stop getting the same list.
+# Tunable constant, not a UI knob, same as _MIN_LIQUIDITY.
+_COMMITTED_CACHE_TTL = 90  # matches the opportunities cache — a slow-moving, soft nudge, so a short
+# stale window is harmless; keeps the cross-context aggregate off the hot path.
+
+
+def _committed_production_units() -> dict[int, float]:
+    """Across ALL contexts, the output UNITS of each reaction product our own userbase already has
+    committed to producing — pending suggestion/order assignments (pp_reaction_assignments) plus
+    active/paused/ready ESI reaction jobs (pp_char_industry_jobs). Aggregate counts only, never any
+    per-user data (privacy rule: aggregate is fine). The suggestion engine subtracts this from each
+    candidate's market-absorption headroom, so a product our community is already flooding into
+    Jita's buy orders gets throttled for the next player — that's what makes two different players
+    get genuinely different lists. Chain-intermediate rows are included; they're consumed rather
+    than sold, so this can slightly over-count pressure on intermediate goods — acceptable for a
+    soft nudge. Cached briefly since it changes slowly and only ever nudges."""
+    cached = cache_get_json("rx:committed_units")
+    if cached is not None:
+        return {int(k): v for k, v in cached.items()}
+    ensure_industry_jobs_table()
+    ensure_reaction_assignments_table()
+    runs_by_type: dict[int, float] = {}
+    con = get_connection()
+    try:
+        for r in con.execute("SELECT type_id, SUM(runs) AS runs FROM pp_reaction_assignments GROUP BY type_id"):
+            runs_by_type[r["type_id"]] = runs_by_type.get(r["type_id"], 0.0) + (r["runs"] or 0)
+        for r in con.execute("SELECT jobs_json FROM pp_char_industry_jobs"):
+            for j in _json.loads(r["jobs_json"] or "[]"):
+                if j.get("status") not in ("active", "paused", "ready"):
+                    continue
+                tid = j.get("product_type_id")
+                if tid:
+                    runs_by_type[tid] = runs_by_type.get(tid, 0.0) + (j.get("runs") or 0)
+        out_qty_per_run = {r["output_type_id"]: r["output_qty"]
+                           for r in con.execute("SELECT output_type_id, output_qty FROM reactions")}
+    finally:
+        con.close()
+    units = {tid: runs * out_qty_per_run.get(tid, 0.0) for tid, runs in runs_by_type.items()}
+    cache_set_json("rx:committed_units", {str(k): v for k, v in units.items()}, ttl=_COMMITTED_CACHE_TTL)
+    return units
 
 
 def _character_capacities(context_id: int) -> list[dict]:
@@ -1016,6 +1062,7 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
     # scale down linearly with runs (unit cost and unit price don't change with batch size).
     chars_for_cap = _character_capacities(context_id)
     max_slots_available = max((c["free_slots"] for c in chars_for_cap), default=0) or 1
+    committed_units = _committed_production_units()
     capped = []
     for o in candidates:
         cycle_hours = o["cycle_time"] / 3600.0 if o["cycle_time"] else 0
@@ -1024,17 +1071,37 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
         max_runs_in_cadence = int(max_slots_available * cadence_hours / cycle_hours)
         if max_runs_in_cadence <= 0:
             continue
-        if max_runs_in_cadence >= o["top_level_runs"]:
-            capped.append(o)
+        # Market-absorption cap: (this batch + what our userbase already committed) must stay under
+        # _ABSORB_FRACTION of the standing Jita buy-order depth, or you walk down the book. When
+        # this is the tighter of the two caps we record how many MORE runs the cadence would still
+        # allow — the advisor turns that into a "you could push further into the buy book for ~X
+        # more" nudge, but only for a batch that actually presses against the good buy-order depth.
+        out_per_run = o["output_qty"] / o["top_level_runs"] if o["top_level_runs"] else 0.0
+        absorb_units = _ABSORB_FRACTION * (o["buy_volume"] or 0.0) - committed_units.get(o["type_id"], 0.0)
+        max_runs_absorb = int(absorb_units / out_per_run) if out_per_run > 0 else 0
+        hard_max_runs = min(max_runs_in_cadence, max_runs_absorb)
+        if hard_max_runs <= 0:
             continue
-        scale = max_runs_in_cadence / o["top_level_runs"]
-        c2 = dict(o)
-        c2["top_level_runs"] = max_runs_in_cadence
-        c2["output_qty"] = o["output_qty"] * scale
-        c2["input_cost"] = o["input_cost"] * scale
-        c2["net_profit_instant"] = o["net_profit_instant"] * scale
-        c2["shipping_volume_m3"] = o["shipping_volume_m3"] * scale
-        c2["instant_sell_value"] = o["instant_sell_value"] * scale
+        # Extra runs the cadence would permit if the player accepted filling more of the buy book —
+        # only nonzero when absorption (not cadence) is what bound this batch.
+        absorb_extra_runs = max(0, max_runs_in_cadence - hard_max_runs)
+        per_run_profit = o["net_profit_instant"] / o["top_level_runs"] if o["top_level_runs"] else 0.0
+        if hard_max_runs >= o["top_level_runs"]:
+            c2 = dict(o)
+        else:
+            scale = hard_max_runs / o["top_level_runs"]
+            c2 = dict(o)
+            c2["top_level_runs"] = hard_max_runs
+            c2["output_qty"] = o["output_qty"] * scale
+            c2["input_cost"] = o["input_cost"] * scale
+            c2["net_profit_instant"] = o["net_profit_instant"] * scale
+            c2["shipping_volume_m3"] = o["shipping_volume_m3"] * scale
+            c2["instant_sell_value"] = o["instant_sell_value"] * scale
+        # Carried through stages 1→2 and onto the suggestion so _build_advisor can size the hint;
+        # valued at the current buy price (optimistic — the deeper fills actually sell for less,
+        # which the advisor copy flags), mirroring how align_extra_reward is also a linear estimate.
+        c2["_absorb_extra_runs"] = absorb_extra_runs
+        c2["_absorb_extra_reward"] = absorb_extra_runs * per_run_profit
         capped.append(c2)
     candidates = capped
     if not candidates:
@@ -1228,6 +1295,13 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
             "aligned_output_qty": round(c["output_qty"] * align_ratio, 1),
             "aligned_output_value": round(c["instant_sell_value"] * align_ratio, 2),
             "aligned_output_m3": round(c["shipping_volume_m3"] * align_ratio, 1),
+            # Market-depth headroom (see the absorption cap in stage 1): how many more runs (and
+            # roughly how much more profit, at current buy price) the cadence would still allow if
+            # the player were willing to fill more of the standing buy orders. Nonzero only when
+            # this batch is capped by buy-order depth, i.e. it presses against the good depth.
+            "absorb_fill_pct": round(_ABSORB_FRACTION * 100),
+            "absorb_extra_runs": int(c.get("_absorb_extra_runs", 0)),
+            "absorb_extra_reward": round(c.get("_absorb_extra_reward", 0.0), 2),
             "assigned_character": char_names.get(pick_id, "?"),
             "assigned_character_id": pick_id,
             "chain_tiers": chain_tiers,
@@ -1305,6 +1379,23 @@ def _build_advisor(context_id: int, isk_budget: float, max_chain_depth: int, cad
         for s in suggestions if s.get("align_extra_isk", 0) > 0 and s["align_extra_reward"] > current_profit * 0.01
     ]
 
+    # Market-depth headroom hints: a suggestion whose batch is held back by buy-order depth (not
+    # ISK) — surfaced only when ISK isn't the binding limit ("neither"), so it can't clash with the
+    # budget/align hints, and only for a batch that would actually exhaust the good buy-order depth
+    # (absorb_extra_runs > 0). Conservative by default (we cap at _ABSORB_FRACTION so the player
+    # sells without crashing the price); this just tells a player who wants to push that there's
+    # room to make more if they accept filling deeper, cheaper buy orders — in the same spirit as
+    # the existing "take on more risk for more profit" nudges. No auto-apply: there's no knob to
+    # flip, it's a judgment call the player makes when they place the sell.
+    absorb_hints = []
+    if current_binding == "neither":
+        absorb_hints = [
+            {"name": s["name"], "fill_pct": s.get("absorb_fill_pct", 0),
+             "extra_runs": s["absorb_extra_runs"], "extra_reward": s["absorb_extra_reward"]}
+            for s in suggestions
+            if s.get("absorb_extra_runs", 0) > 0 and s.get("absorb_extra_reward", 0) > current_profit * 0.01
+        ]
+
     # Fuel-block breadth: if the caller restricted which racial fuel blocks to use (the advanced
     # material filter, e.g. "only Oxygen — that's my cheap local one"), quantify what re-adding
     # each EXCLUDED one would actually be worth, in the same ISK/day terms the rest of this tool
@@ -1333,7 +1424,8 @@ def _build_advisor(context_id: int, isk_budget: float, max_chain_depth: int, cad
                 })
         fuel_block_hints.sort(key=lambda h: -h["extra_isk_per_day"])
 
-    return {"budget_hint": budget_hint, "align_hints": align_hints, "fuel_block_hints": fuel_block_hints}
+    return {"budget_hint": budget_hint, "align_hints": align_hints, "fuel_block_hints": fuel_block_hints,
+            "absorb_hints": absorb_hints}
 
 
 @router.post("/api/reactions/suggest")
@@ -1342,7 +1434,7 @@ def suggest_reactions(req: SuggestRequest, context_id: int = Depends(require_con
         return {"suggestions": [], "totals": {
             "isk_committed": 0.0, "isk_budget": req.isk_budget, "net_profit": 0.0, "net_profit_per_day": None,
             "output_value": 0.0, "output_m3": 0.0, "characters_used": 0, "completion_hours": None, "binding": "neither"},
-            "advisor": {"budget_hint": None, "align_hints": [], "fuel_block_hints": []}}
+            "advisor": {"budget_hint": None, "align_hints": [], "fuel_block_hints": [], "absorb_hints": []}}
     material_ids = set(req.material_ids) if req.material_ids else None
     result = _suggest_reactions(context_id, req.isk_budget, req.max_chain_depth, req.cadence_hours, material_ids)
     result["advisor"] = _build_advisor(context_id, req.isk_budget, req.max_chain_depth, req.cadence_hours,

@@ -1159,6 +1159,11 @@ function _renderRxAdvisor(advisor) {
       <button class="rx-sugg-assign-btn" onclick="_rxApplyFuelBlockHint(${h.type_id}, this)">Apply</button>
     </div></li>`);
   });
+  (advisor.absorb_hints || []).forEach(h => {
+    items.push(`<li><div class="rx-hint-row">
+      <span class="rx-hint-text"><b>${_esc(h.name)}</b> is sized to fill only ${h.fill_pct}% of Jita's buy orders to keep the price up — if you're willing to sell into deeper (cheaper) buy orders you could run about ${h.extra_runs.toLocaleString()} more (up to +${_fmtIsk(h.extra_reward)}, less at the lower prices)</span>
+    </div></li>`);
+  });
   if (!items.length) return '';
   return `
     <div class="rx-advisor">
