@@ -946,6 +946,22 @@ def esi_callback(
         context_id = row[0]
         con.commit()
 
+    # Only overwrite skill columns when the ESI skills fetch actually returned data. A transient
+    # ESI failure returns {} (see _fetch_skills) — writing that would zero a character's trained
+    # skills and silently drop their reaction slots / PI skill bonuses until the next good rescan.
+    # On a re-auth we therefore preserve the previously-stored skills; on a genuinely-new add with
+    # a failed fetch there's nothing to preserve, so it defaults to 0 (corrected on next rescan).
+    # This mirrors the `if skills:` guard the rescan path already uses (app.esi_data).
+    if not skills:
+        _SKILL_COLS = ("interplanetary_consolidation", "command_center_upgrades", "planetology",
+                       "advanced_planetology", "mass_reactions", "advanced_mass_reactions")
+        prev = con.execute(
+            f"SELECT {', '.join(_SKILL_COLS)} FROM pp_characters WHERE character_id=?",
+            (character_id,),
+        ).fetchone()
+        if prev:
+            skills = {c: prev[c] for c in _SKILL_COLS}
+
     con.execute("""
         INSERT INTO pp_characters
             (character_id, character_name, access_token, refresh_token, token_expiry,
