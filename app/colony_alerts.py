@@ -87,6 +87,7 @@ def _reaction_alerts(context_id: int, muted: set, now: float) -> list[dict]:
             continue
         soonest_running = None   # least hours_left among jobs STILL running (>0h left)
         done_count = 0           # jobs whose end_date has passed — finished, awaiting collection/restart
+        done_runs: dict[int, int] = {}  # finished output per product type_id — for the local-sale hint
         for j in jobs:
             if j.get("status") not in ("active", "paused", "ready"):
                 continue
@@ -100,6 +101,9 @@ def _reaction_alerts(context_id: int, muted: set, now: float) -> list[dict]:
             hours_left = (end_ts - now) / 3600.0
             if hours_left <= 0:
                 done_count += 1
+                tid = j.get("product_type_id")
+                if tid:
+                    done_runs[tid] = done_runs.get(tid, 0) + (j.get("runs") or 0)
             elif soonest_running is None or hours_left < soonest_running:
                 soonest_running = hours_left
         # Finishing soon = a job still running with less than the threshold left (a lead-time warning).
@@ -119,6 +123,9 @@ def _reaction_alerts(context_id: int, muted: set, now: float) -> list[dict]:
                 "severity": "warn",
                 "character_id": r["character_id"], "character_name": r["character_name"],
                 "planet_id": None, "location": None, "hours_left": None, "runs": done_count,
+                # Which products finished + their run counts — the notification layer turns this into
+                # a "sell it to a local buy order for more than hauling to Jita" hint (local_sell_hint).
+                "products": [{"type_id": tid, "runs": runs} for tid, runs in done_runs.items()],
             })
 
     return alerts

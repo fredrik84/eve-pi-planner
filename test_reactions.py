@@ -360,6 +360,37 @@ def test_no_undefined_names() -> bool:
     return check(not undefined, "no undefined names in app/reactions/*.py (module-split guard)")
 
 
+def test_local_sell_hint() -> bool:
+    """The 'reactions completed → sell to a local buy order' hint: a local buy that beats Jita AFTER
+    jump-freight produces a depth-capped sell line; a local buy that loses to Jita-net produces
+    nothing. Monkeypatches the market/settings lookups so it's deterministic and offline (the real
+    ones need followed markets + live ESI)."""
+    import app.features, app.markets, app.market, app.reactions.settings
+    from app.notifications import _reaction_completed_sale_hint
+    saved = (app.features.feature_enabled, app.markets.effective_markets, app.markets.best_local_buy,
+             app.market.fetch_market_data, app.reactions.settings.effective_reaction_settings)
+    ok = True
+    try:
+        app.features.feature_enabled = lambda k: True
+        app.markets.effective_markets = lambda ctx: [{"name": "Local Hub", "kind": "structure", "location_id": 1}]
+        app.market.fetch_market_data = lambda tids: {16662: {"buy_price": 50000.0}}
+        app.reactions.settings.effective_reaction_settings = lambda ctx: {"export_isk_per_m3": 1200.0}
+        evs = [{"products": [{"type_id": 16662, "runs": 50}], "character_name": "X"}]
+
+        # Local 52k beats Jita-net (~49.8k after freight); buy depth 8000 caps the sellable amount.
+        app.markets.best_local_buy = lambda ctx, tids: {16662: {"buy_price": 52000.0, "buy_volume": 8000.0, "market": "Local Hub"}}
+        hint = _reaction_completed_sale_hint(1, evs)
+        ok &= check("Local Hub" in hint and "8,000" in hint, "local buy beating Jita-after-freight yields a depth-capped sell line")
+
+        # Local 40k loses to Jita-net → no hint.
+        app.markets.best_local_buy = lambda ctx, tids: {16662: {"buy_price": 40000.0, "buy_volume": 8000.0, "market": "Local Hub"}}
+        ok &= check(_reaction_completed_sale_hint(1, evs) == "", "local buy below Jita-after-freight yields no hint")
+    finally:
+        (app.features.feature_enabled, app.markets.effective_markets, app.markets.best_local_buy,
+         app.market.fetch_market_data, app.reactions.settings.effective_reaction_settings) = saved
+    return ok
+
+
 def run_unit_tests() -> bool:
     print("Unit tests (pure functions, no network/DB):")
     results = [
@@ -367,6 +398,7 @@ def run_unit_tests() -> bool:
         test_explode_shopping_list(),
         test_explode_chain_tiers(),
         test_value_reaction_batch(),
+        test_local_sell_hint(),
         test_no_undefined_names(),
     ]
     return all(results)

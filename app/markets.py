@@ -312,6 +312,32 @@ def resolve_market_data(context_id: int, type_ids: list[int]) -> dict[int, dict]
     return {tid: {**m, "source": src} for tid, (m, src) in picked.items()}
 
 
+def best_local_buy(context_id: int, type_ids: list[int]) -> dict[int, dict]:
+    """Highest BUY price for each type across ALL the account's followed local markets (structure +
+    region), with the winning market's name and its total buy depth: {type_id: {buy_price,
+    buy_volume, market}}. Deliberately scans every followed market and keeps the max (not the
+    priority-first pick resolve_market_data uses) — for SELLING output you want the best bid you can
+    hit, wherever it is. Excludes Jita entirely: Jita is the comparison baseline (haul-and-sell), not
+    a local sell target. {} when the account follows no markets or none quote a buy for these types."""
+    type_ids = list(dict.fromkeys(int(t) for t in type_ids))
+    if not type_ids:
+        return {}
+    best: dict[int, dict] = {}
+    for mk in effective_markets(context_id):
+        if mk["kind"] == "structure":
+            book = fetch_structure_market(context_id, mk["location_id"])
+        else:
+            book = fetch_region_market(mk["location_id"], type_ids)
+        for tid in type_ids:
+            m = book.get(tid)
+            if not m or not m.get("buy_price"):
+                continue
+            if tid not in best or m["buy_price"] > best[tid]["buy_price"]:
+                best[tid] = {"buy_price": m["buy_price"], "buy_volume": m.get("buy_volume", 0.0),
+                             "market": mk["name"]}
+    return best
+
+
 # ── Search ────────────────────────────────────────────────────────────────────────────
 
 def _search_structures(context_id: int, q: str) -> list[dict]:

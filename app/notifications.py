@@ -235,6 +235,8 @@ def _process_context(con, context_id: int):
 
     for kind, evs in by_kind.items():
         title, body = _format_batch(kind, evs)
+        if kind == "reaction_completed":
+            body += _reaction_completed_sale_hint(context_id, evs)
         for setting in settings:
             status = "ok"
             try:
@@ -287,6 +289,86 @@ def _format_batch(kind: str, evs: list[dict]) -> tuple[str, str]:
     title, singular, plural = _KIND_LABELS.get(kind, (kind, "item", "items"))
     body = _collapse_line(evs, singular, plural)
     return title, body
+
+
+def _isk(n: float) -> str:
+    n = float(n)
+    if abs(n) >= 1e9:
+        return f"{n / 1e9:.2f}B"
+    if abs(n) >= 1e6:
+        return f"{n / 1e6:.1f}M"
+    if abs(n) >= 1e3:
+        return f"{n / 1e3:.0f}k"
+    return f"{n:.0f}"
+
+
+def _reaction_completed_sale_hint(context_id: int, evs: list[dict]) -> str:
+    """Extra body text for a 'reactions completed' push: for each finished product, if one of the
+    account's followed local/alliance markets has a buy order that BEATS hauling the output to Jita
+    (Jita buy price minus the jump-freight cost to get it there), tell the player how much they can
+    sell there and the ISK they'd gain by not hauling. Read-only, opt-in (local_sell_hint flag), and
+    a no-op for anyone with no followed markets — so it never fires for the common Jita-only user.
+    Best-effort: any lookup failure just yields no hint rather than blocking the completion push."""
+    try:
+        from app.features import feature_enabled
+        if not feature_enabled("local_sell_hint"):
+            return ""
+        from app.markets import effective_markets, best_local_buy
+        if not effective_markets(context_id):
+            return ""
+        # Finished output units per product across the whole batch.
+        runs_by_type: dict[int, int] = {}
+        for ev in evs:
+            for p in ev.get("products") or []:
+                tid = p.get("type_id")
+                if tid:
+                    runs_by_type[tid] = runs_by_type.get(tid, 0) + (p.get("runs") or 0)
+        if not runs_by_type:
+            return ""
+        tids = list(runs_by_type)
+
+        from app.market import fetch_market_data
+        from app.reactions.settings import effective_reaction_settings
+        from app.sde import load_pi_data
+        con = get_connection()
+        try:
+            out_qty = {r["output_type_id"]: r["output_qty"] for r in con.execute(
+                "SELECT output_type_id, output_qty FROM reactions WHERE output_type_id IN (%s)"
+                % ",".join("?" * len(tids)), tids)}
+        finally:
+            con.close()
+        local = best_local_buy(context_id, tids)
+        jita = fetch_market_data(tids)
+        export_isk_per_m3 = effective_reaction_settings(context_id).get("export_isk_per_m3", 0.0) or 0.0
+        types = load_pi_data()["types"]
+
+        lines = []
+        for tid, runs in runs_by_type.items():
+            loc = local.get(tid)
+            if not loc or not loc.get("buy_price"):
+                continue
+            units = runs * (out_qty.get(tid, 0.0) or 0.0)
+            if units < 1:
+                continue
+            vol_per_unit = (types.get(tid, {}) or {}).get("volume", 0.0) or 0.0
+            jita_buy = (jita.get(tid) or {}).get("buy_price", 0.0) or 0.0
+            jita_net = jita_buy - vol_per_unit * export_isk_per_m3   # what Jita nets AFTER freight
+            edge = loc["buy_price"] - jita_net
+            if edge <= 0:
+                continue
+            sellable = min(units, loc.get("buy_volume", 0.0) or 0.0)
+            if sellable < 1:
+                continue
+            extra = sellable * edge
+            name = (types.get(tid, {}) or {}).get("name", str(tid))
+            lines.append(f"  {int(sellable):,} {name} → {loc['market']} @ {_isk(loc['buy_price'])} "
+                         f"(+{_isk(extra)} vs hauling to Jita)")
+        if not lines:
+            return ""
+        return "\n\nSell locally instead of hauling to Jita:\n" + "\n".join(lines)
+    except Exception:
+        log.warning("local sell hint failed for context %s", context_id, exc_info=True)
+        return ""
 
 
 # ── Scheduler ─────────────────────────────────────────────────────────────────

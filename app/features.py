@@ -133,6 +133,12 @@ FEATURE_REGISTRY = [
                     "against them, falling back to Jita for anything not listed locally. Adds a "
                     "market & freight setup card and a per-line price-source badge.",
      "default": False},
+    {"key": "local_sell_hint", "label": "Reactions: local buy-order sell hint", "group": "Reactions",
+     "description": "In the 'reactions completed' alert: if one of your followed local/alliance "
+                    "markets has a buy order that beats hauling the output to Jita (after jump-freight "
+                    "cost), tell you how much you can sell there and the ISK you'd gain. Read-only — "
+                    "no auto-sell. Requires local / alliance market pricing to be set up.",
+     "default": False},
 ]
 GROUP_ORDER = ["Dashboard", "Setup Analysis", "Planner", "Planet DB", "Characters",
                "Notifications & Alerts", "Reactions"]
