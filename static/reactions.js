@@ -1086,7 +1086,7 @@ function _renderReactionsSuggestions(data) {
   // When the fill slider is off its 50% default, say so on the results page + offer a one-click
   // reset (the slider itself lives on the input page, so this is the quick way back from here).
   const absorbNote = (t.absorb_fill_pct != null && t.absorb_fill_pct !== 50)
-    ? `<div class="pp-card-hint" style="margin-bottom:10px">Sizing batches to ${t.absorb_fill_pct}% of each product's market volume — <a href="#" onclick="_rxResetAbsorbFraction();return false">reset to 50%</a></div>`
+    ? `<div style="margin-bottom:10px;color:var(--clr-text-soft);font-size:0.9em">Sizing batches to <b style="color:var(--clr-text-bright)">${t.absorb_fill_pct}%</b> of each product's market volume — <button type="button" onclick="_rxResetAbsorbFraction()" style="background:none;border:none;padding:0;font:inherit;color:var(--clr-accent);text-decoration:underline;cursor:pointer">reset to 50%</button></div>`
     : '';
   const budgetSummary = `<div class="pp-card-hint" style="margin-bottom:10px">${bindingNote}</div>${absorbNote}`;
 
