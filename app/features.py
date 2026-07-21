@@ -127,6 +127,12 @@ FEATURE_REGISTRY = [
                     "Committing to an order occupies real reaction slots the same way the "
                     "suggestion/manual-assign flow does.",
      "default": False},
+    {"key": "local_market", "label": "Reactions: local / alliance market pricing", "group": "Reactions",
+     "description": "On the Reactions tab: follow one or more markets (a player structure market "
+                    "and/or a public region market) in a priority order and price reactions "
+                    "against them, falling back to Jita for anything not listed locally. Adds a "
+                    "market & freight setup card and a per-line price-source badge.",
+     "default": False},
 ]
 GROUP_ORDER = ["Dashboard", "Setup Analysis", "Planner", "Planet DB", "Characters",
                "Notifications & Alerts", "Reactions"]

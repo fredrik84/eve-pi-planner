@@ -77,6 +77,19 @@ STRUCTURES_SCOPE     = "esi-universe.read_structures.v1"
 CORP_INDUSTRY_JOBS_SCOPE = "esi-industry.read_corporation_jobs.v1"
 INDUSTRY_JOBS_SCOPES = f"{SCOPES} {INDUSTRY_JOBS_SCOPE} {STRUCTURES_SCOPE} {CORP_INDUSTRY_JOBS_SCOPE}"
 
+# Local/alliance market pricing (Reactions tab), requested only on the dedicated "connect for
+# market pricing" login (?market=1). MARKET_SCOPE reads a player-owned Upwell structure's market
+# (GET /markets/structures/{id}/); SEARCH_STRUCT_SCOPE lets the character search structures it has
+# docking/market access to by name (GET /characters/{id}/search/?categories=structure); the shared
+# STRUCTURES_SCOPE resolves a structure_id to a readable name (GET /universe/structures/{id}/).
+# Like the reactions flow (and unlike the read-only wallet alt), this is the player's OWN character,
+# so it UNIONS with the base SCOPES — a character added from the market setup card is a full
+# PI + market character, not a stub. The EVE application (developers.eveonline.com) must also LIST
+# the two new scopes; listing != requesting, so the public Login never asks for them.
+MARKET_SCOPE        = "esi-markets.structure_markets.v1"
+SEARCH_STRUCT_SCOPE = "esi-search.search_structures.v1"
+MARKET_SCOPES = f"{SCOPES} {MARKET_SCOPE} {SEARCH_STRUCT_SCOPE} {STRUCTURES_SCOPE}"
+
 # Wallet-only toons (corp-wallet scope, no planets scope) aren't PI characters. AND this into any
 # single-table pp_characters PI query to exclude them; legacy empty-scope chars are kept. Begins with
 # "AND " so it appends directly after an existing WHERE predicate (mind the leading space at the join).
@@ -803,7 +816,7 @@ def _fetch_planets(character_id: int, access_token: str, only_planet_id: int | N
 # ── OAuth endpoints ───────────────────────────────────────────────────────────
 
 @router.get("/auth/login")
-def esi_login(wallet: int = 0, reactions: int = 0, pp_session: str = Cookie(default=None)):
+def esi_login(wallet: int = 0, reactions: int = 0, market: int = 0, pp_session: str = Cookie(default=None)):
     if not _is_configured():
         return HTMLResponse(
             "<h2>ESI not configured</h2>"
@@ -834,6 +847,7 @@ def esi_login(wallet: int = 0, reactions: int = 0, pp_session: str = Cookie(defa
     except Exception:
         pass
     scope_enc = (
+        MARKET_SCOPES if market else
         INDUSTRY_JOBS_SCOPES if reactions else
         WALLET_SCOPES if wallet else
         SCOPES

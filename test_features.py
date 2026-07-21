@@ -19,7 +19,7 @@ import urllib.error
 # state VALUE: an admin can change visibility at runtime, so the live state legitimately
 # diverges from the code default. The durable invariant is "the key exists and state is one of
 # the valid values" (app/features.py VALID_STATES: hidden/admin/testers/public).
-EXPECTED_FEATURES = ["timeline", "split_extraction", "baskets", "skill_roi", "move_character", "schedule_sync", "pad_fill", "measured_yield", "hybrid_colonies", "measured_yield_blend", "alert_settings"]
+EXPECTED_FEATURES = ["timeline", "split_extraction", "baskets", "skill_roi", "move_character", "schedule_sync", "pad_fill", "measured_yield", "hybrid_colonies", "measured_yield_blend", "alert_settings", "local_market"]
 VALID_STATES = {"hidden", "admin", "testers", "public"}
 
 
@@ -131,6 +131,24 @@ def test_reactions_gated(base: str) -> bool:
     return ok
 
 
+def test_markets_gated(base: str) -> bool:
+    # Followed-market config + local/structure market search are per-account (require_context),
+    # so anonymous requests get 401 — same shape as the reactions account-settings endpoints.
+    print(f"\n{'='*60}\n  Market config endpoints require login\n{'='*60}")
+    ok = True
+    code = get_status(f"{base}/api/markets")
+    ok &= check(code == 401, f"anonymous markets-list rejected (got HTTP {code})")
+    code = get_status(f"{base}/api/markets/search?q=jita")
+    ok &= check(code == 401, f"anonymous markets-search rejected (got HTTP {code})")
+    code = post_status(f"{base}/api/markets", {"kind": "region", "location_id": 1, "name": "x"})
+    ok &= check(code == 401, f"anonymous markets-add rejected (got HTTP {code})")
+    code = delete_status(f"{base}/api/markets/1")
+    ok &= check(code == 401, f"anonymous markets-delete rejected (got HTTP {code})")
+    code = post_status(f"{base}/api/markets/reorder", {"order": [1], "scope": "account"})
+    ok &= check(code == 401, f"anonymous markets-reorder rejected (got HTTP {code})")
+    return ok
+
+
 def test_groups_gated(base: str) -> bool:
     print(f"\n{'='*60}\n  Group management endpoints are gated\n{'='*60}")
     ok = True
@@ -237,6 +255,7 @@ def main():
         test_skill_roi_anon(base),
         test_corp_wallet_gated(base),
         test_reactions_gated(base),
+        test_markets_gated(base),
         test_groups_gated(base),
         test_delete_account_gated(base),
         test_cleanup_preview_gated(base),

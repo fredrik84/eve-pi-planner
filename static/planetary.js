@@ -1040,6 +1040,22 @@ function connectReactionsTracking() {
   });
 }
 
+// Opt-in: authorise a character WITH the structure-market pricing scopes (?market=1). Same popup
+// flow as the other connect clones — requested only from the Reactions market setup card, so the
+// public Login never asks for structure-market / structure-search access. A character added here
+// is a full PI + market character (MARKET_SCOPES unions the base scopes).
+function connectReactionsMarket() {
+  const w = window.open('/auth/login?market=1', 'EVE SSO', 'width=800,height=900');
+  window.addEventListener('message', function handler(e) {
+    if (e.data === 'esi-done') {
+      window.removeEventListener('message', handler);
+      if (w && !w.closed) w.close();
+      loadCharacters();
+      if (typeof _rxLoadMarketSetup === 'function') _rxLoadMarketSetup();
+    }
+  });
+}
+
 async function loadCorpWallet() {
   const el = document.getElementById('corpWalletContent');
   if (!el) return;

@@ -713,3 +713,25 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
   max-width: 100%;
 }
 
+
+/* Reactions local/alliance market setup card (local_market flag) */
+.rx-mkt-list { margin: 4px 0 12px; }
+.rx-mkt-row { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border: 1px solid #232a3a;
+  border-radius: 6px; margin-bottom: 4px; background: #141a26; }
+.rx-mkt-row.rx-mkt-jita { opacity: 0.65; border-style: dashed; }
+.rx-mkt-pri { min-width: 20px; text-align: center; color: var(--clr-text-soft); font-size: 12px; }
+.rx-mkt-kind { min-width: 66px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em;
+  color: var(--clr-text-soft); }
+.rx-mkt-name { flex: 1; color: var(--clr-text); font-size: 13px; }
+.rx-mkt-ctrl { display: flex; gap: 3px; }
+.rx-mkt-ctrl .pp-add-btn { padding: 2px 7px; }
+.rx-mkt-search { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 10px; }
+.rx-mkt-search input { flex: 1 1 240px; padding: 6px 9px; background: #10151f; border: 1px solid #2a3242;
+  border-radius: 6px; color: var(--clr-text); }
+#rxMarketSearchResults { flex-basis: 100%; }
+.rx-mkt-result { display: flex; align-items: center; gap: 10px; padding: 5px 8px; border-bottom: 1px solid #1e2532; }
+.rx-mkt-foot { border-top: 1px solid #1e2532; padding-top: 10px; }
+/* Per-line price source badge (which market priced a shopping-list / opportunity row) */
+.rx-price-source { font-size: 10px; text-transform: uppercase; letter-spacing: 0.03em; padding: 1px 6px;
+  border-radius: 4px; background: #1b2740; color: #7fa8e0; margin-left: 6px; }
+.rx-price-source.rx-src-jita { background: #232a3a; color: var(--clr-text-soft); }

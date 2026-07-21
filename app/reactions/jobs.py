@@ -16,7 +16,7 @@ from fastapi import Depends, HTTPException
 from pydantic import BaseModel
 
 from app.sde import get_connection, load_pi_data, ensure_once
-from app.market import fetch_market_data
+from app.markets import resolve_market_data
 from app.cache import cache_invalidate, charlist_key
 from app.esi import require_context, ESI_BASE, _get_valid_token
 
@@ -376,7 +376,7 @@ def log_reaction_completions(context_id: int) -> int:
     finally:
         con.close()
     prod_ids = list({tid for _, _, tid, _, _ in pending if tid})
-    market = fetch_market_data(prod_ids) if prod_ids else {}
+    market = resolve_market_data(context_id, prod_ids) if prod_ids else {}
 
     con = get_connection()
     logged = 0
@@ -560,7 +560,7 @@ def adopt_orphan_job(req: AdoptOrphanRequest, context_id: int = Depends(require_
         raise HTTPException(status_code=400, detail="Not a reachable reaction product")
 
     settings = effective_reaction_settings(context_id)
-    m = fetch_market_data([req.type_id]).get(req.type_id)
+    m = resolve_market_data(context_id, [req.type_id]).get(req.type_id)
     out_qty = node["via"]["output_qty"]
     total_out = req.runs * out_qty
     vol = (types.get(req.type_id, {}).get("volume") or 0.0)
@@ -652,7 +652,7 @@ def _unplanned_running_totals(context_id: int, unplanned_running: list[tuple[int
     types = graph[4] if graph else {}
     settings = effective_reaction_settings(context_id)
     up_ids = list({tid for tid, _ in unplanned_running})
-    up_market = fetch_market_data(up_ids) if up_ids else {}
+    up_market = resolve_market_data(context_id, up_ids) if up_ids else {}
     for tid, runs in unplanned_running:
         node = reached.get(tid)
         m = up_market.get(tid)
@@ -761,7 +761,7 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
     # rows anyway as prices move. One bulk fetch across every distinct assigned type_id, same
     # pattern _build_opportunities already uses.
     all_assigned_type_ids = list({r["type_id"] for rows in assignments.values() for r in rows})
-    market_by_type = fetch_market_data(all_assigned_type_ids) if all_assigned_type_ids else {}
+    market_by_type = resolve_market_data(context_id, all_assigned_type_ids) if all_assigned_type_ids else {}
 
     now = _time.time()
     running: list[dict] = []
@@ -994,7 +994,7 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
     opportunities = _build_opportunities(context_id, allowed_material_ids=material_ids)
     # Needed again in stage 2 to walk each chosen candidate's own formula tree for chain_tiers
     # (the intermediate reactions a multi-tier product needs before its own reaction can even
-    # start) — cheap to recompute (fetch_market_data's own cache absorbs the repeat cost).
+    # start) — cheap to recompute (resolve_market_data's own cache absorbs the repeat cost).
     _loaded = _load_goo_and_reached(context_id, material_ids)
     reached = _loaded[1] if _loaded else {}
     types = _loaded[4] if _loaded else {}

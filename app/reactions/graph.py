@@ -9,7 +9,7 @@ import math
 from fastapi import Depends, HTTPException
 
 from app.sde import get_connection, load_pi_data
-from app.market import fetch_market_data
+from app.markets import resolve_market_data
 from app.industry_cost import fetch_system_cost_index, fetch_adjusted_prices
 from app.cache import cache_get_json, cache_set_json
 from app.esi import require_context
@@ -325,7 +325,7 @@ def _load_goo_and_reached(context_id: int, allowed_material_ids: set[int] | None
         fuel_block_ids = set(_fuel_block_ids(inputs_by_reaction, reactions_by_output, types))
         purchasable_ids -= (fuel_block_ids - set(allowed_material_ids))
     purchasable_ids = list(purchasable_ids)
-    purchasable_market = fetch_market_data(purchasable_ids)
+    purchasable_market = resolve_market_data(context_id, purchasable_ids)
     purchasable = {
         tid: m["sell_price"] + settings["import_isk_per_m3"] * (types.get(tid, {}).get("volume") or 0.0)
         for tid, m in purchasable_market.items()
@@ -349,6 +349,16 @@ def _load_goo_and_reached(context_id: int, allowed_material_ids: set[int] | None
             adjusted_prices = fetch_adjusted_prices(list(all_input_ids))
 
     reached = _resolve_reachable(goo, purchasable, reactions_by_output, job_cost_rate, adjusted_prices)
+    # Tag each LEAF node with the human-readable market that priced it, so the shopping list /
+    # materials report can show a per-line source badge. A leaf priced from the group sheet reads
+    # "Group sheet"; a market-priced leaf carries the winning market's name (structure/region/Jita)
+    # from resolve_market_data's `source` field. Reaction-product nodes are always reacted, never
+    # bought, so they get no badge.
+    market_src = {tid: m.get("source", "Jita") for tid, m in purchasable_market.items()}
+    for tid, node in reached.items():
+        if node.get("via") is not None:
+            continue
+        node["market_name"] = "Group sheet" if node.get("source") == "group" else market_src.get(tid)
     return goo, reached, reactions_by_output, inputs_by_reaction, types
 
 
@@ -388,7 +398,7 @@ def _build_opportunities_uncached(context_id: int, allowed_material_ids: set[int
     if not candidate_ids:
         return []
 
-    market = fetch_market_data(candidate_ids)
+    market = resolve_market_data(context_id, candidate_ids)
 
     opportunities = []
     for tid in candidate_ids:
@@ -468,7 +478,7 @@ def reactions_job_detail(type_id: int, runs: int = 1, context_id: int = Depends(
     output_qty_per_run = node["via"]["output_qty"]
     total_out = output_qty_per_run * runs
 
-    market = fetch_market_data([type_id])
+    market = resolve_market_data(context_id, [type_id])
     m = market.get(type_id)
     sell_price = m["sell_price"] if m else 0.0
     buy_price = m["buy_price"] if m else None
@@ -599,6 +609,7 @@ def _materials_report(totals: dict[int, float], reached: dict, types: dict) -> l
         {
             "type_id": tid, "name": types.get(tid, {}).get("name", str(tid)),
             "quantity": math.ceil(qty), "source": reached.get(tid, {}).get("source", "market"),
+            "market_name": reached.get(tid, {}).get("market_name"),
             "unit_cost": round(reached.get(tid, {}).get("unit_cost", 0.0), 2),
             "alt_unit_cost": (round(reached[tid]["alt_cost"], 2)
                                if tid in reached and reached[tid].get("alt_cost") is not None else None),

@@ -956,6 +956,50 @@ only when opened, since it hits ESI). `connectCorpWallet()` mirrors `esiLogin()`
 Characters / may get PI-scanned — set `planet_limit=0` to exclude from plans if it clutters).
 Gating test in `test_features.py` (`test_corp_wallet_gated` → 403 for anonymous).
 
+## Local / alliance market pricing (`app/markets.py`, `local_market` flag)
+
+Reactions pricing can follow one or more **markets** in a priority chain — a player-owned Upwell
+**structure** market and/or a public NPC **region** market — falling back to **Jita** (Fuzzwork,
+`app.market`) for anything not listed locally. Built because an alliance selling inputs below Jita
+on its own structure market was invisible to the tool. Reactions-tab only for now (PI planner /
+fuel blocks stay on Jita).
+
+- **Opt-in scope** (`app/esi.py`): `MARKET_SCOPE = esi-markets.structure_markets.v1` +
+  `SEARCH_STRUCT_SCOPE = esi-search.search_structures.v1` (+ reused `STRUCTURES_SCOPE` for name
+  resolution). `MARKET_SCOPES` **unions** the base `SCOPES` (full PI+market char, like the reactions
+  flow). Requested only via `/auth/login?market=1` (`esi_login(market=1)`), never on public Login.
+  Frontend clone `connectReactionsMarket()` (`planetary.js`). **Prereq:** the two new scopes must be
+  LISTED on the EVE application at developers.eveonline.com (listing ≠ requesting, same as wallet).
+- **Config = per-account, group-seeded** — one table `pp_markets(owner_kind account|group, owner_id,
+  kind structure|region, location_id, name, priority, active)`. `effective_markets(context_id)` =
+  personal list → account's group-manager default list → `[]` (Jita only). Jita is NEVER a row (the
+  implicit last fallback). CRUD `GET/POST/DELETE /api/markets`, `POST /api/markets/reorder`
+  (require_context; group scope gated by `is_group_manager`). Mirrors the freight resolver in
+  `app/reactions/settings.py` (`effective_reaction_settings`) — **freight was already built**, this
+  reuses its account-settings UI.
+- **Reads** (`app/markets.py`): `fetch_structure_market(context_id, structure_id)` paginates
+  `GET /markets/structures/{id}/` via `_market_character`'s token (first char in the context holding
+  `MARKET_SCOPE` — clone of `esi_data._wallet_character`), aggregates the whole book per type with
+  `_wavg_percentile` (volume-weighted 5th percentile, robust to a lone 1-unit order — matches
+  Fuzzwork's shape so it's drop-in). Redis-cached by structure_id (book is identical whoever reads
+  it). `fetch_region_market(region_id, type_ids)` is public, per-type, Redis-cached per (region,type).
+  `resolve_market_data(context_id, type_ids)` walks `effective_markets` in priority order, takes the
+  first market quoting each type, else Jita `fetch_market_data`; each entry carries an extra `source`
+  label. **Drop-in for `fetch_market_data`** — the reactions call sites in `graph.py`/`jobs.py` were
+  swapped to it (all already had `context_id` in scope). With no markets configured it returns
+  exactly Jita, so behavior is unchanged for everyone until they set one up.
+- **Search** (`/api/markets/search?q=`): structures via `GET /characters/{id}/search/?categories=
+  structure` (only ones the char can access) resolved to names via `/universe/structures/{id}/`;
+  regions matched against SDE `constellations.region` names, resolved to ids via public
+  `/universe/ids/`. Needs a connected market character for structure results.
+- **UI** (`reactions.js`, gated by `_featureActive('local_market')`): a `#rxMarketSetupCard` at the
+  top of the Reactions tab — full "Markets & freight setup" while unconfigured (search+add, priority
+  reorder, Jita pinned last, connect-char, link to the freight Settings modal), collapsing to a
+  one-line "Reaction pricing: A → B → Jita" summary once set. The leaf source name is threaded onto
+  each `reached` leaf node (`market_name`) in `_load_goo_and_reached` and surfaced by
+  `_materials_report`, rendered as a per-line **price-source badge** in the shopping list.
+- Gating test `test_markets_gated` in `test_features.py`; `local_market` in the registry.
+
 ## Notifications (`app/notifications.py`, `app/notifiers.py`)
 
 Push alerts for any of the 8 colony-alert kinds (`app.alert_settings.ALERT_KINDS`), checked by an
