@@ -490,36 +490,23 @@ def test_stock_zero_falls_back_to_market() -> bool:
 
 
 def test_suggest_absorb_contract(api: Api) -> bool:
-    """The suggestion engine caps each batch at a fraction of Jita buy-order depth (minus what our
-    own userbase already has committed) and, when depth is what bound a batch, surfaces a
-    "you could fill more of the buy book for more" advisor hint. Assert the durable CONTRACT — that
-    every suggestion carries the absorb_* fields and the advisor always has an absorb_hints list —
-    not specific ISK values (those move with the live market). The seeded character has real
-    reaction slots, so a healthy market yields at least one suggestion to check the fields on."""
-    print(f"\n{'='*60}\n  Suggest: market-absorption cap + advisor contract\n{'='*60}")
+    """The suggestion engine caps each batch at a fraction (the "Market fill" slider, absorb_fraction)
+    of the product's real traded volume over the run period. Assert the durable CONTRACT — the
+    request honours absorb_fraction and totals echo it back as absorb_fill_pct — not specific ISK
+    values (those move with the live market). The seeded character has real reaction slots, so a
+    healthy market yields at least one suggestion."""
+    print(f"\n{'='*60}\n  Suggest: market-fill cap contract\n{'='*60}")
     ok = True
     status, data = api.post("/api/reactions/suggest", {
-        "isk_budget": 5_000_000_000, "max_chain_depth": 2, "cadence_hours": 168.0,
+        "isk_budget": 5_000_000_000, "max_chain_depth": 2, "cadence_hours": 168.0, "absorb_fraction": 0.3,
     })
     if not check(status == 200, f"suggest returns 200 (got {status})"):
         return ok
-    ok &= check(isinstance(data.get("advisor", {}).get("absorb_hints"), list),
-                "advisor always carries an absorb_hints list")
-    suggestions = data.get("suggestions", [])
-    if not suggestions:
-        print("  (no reachable/liquid products right now — skipping per-suggestion field checks)")
-        return ok
-    fields_ok = all(
-        "absorb_extra_runs" in s and "absorb_extra_reward" in s and "absorb_fill_pct" in s
-        for s in suggestions
-    )
-    ok &= check(fields_ok, "every suggestion carries absorb_extra_runs/reward/fill_pct")
-    # A hint only ever names a product whose batch was actually depth-bound (extra_runs > 0) — a
-    # cadence/ISK-bound batch must not produce one, or the advice would be wrong.
-    capped_names = {s["name"] for s in suggestions if s["absorb_extra_runs"] > 0}
-    hint_names = {h["name"] for h in data["advisor"]["absorb_hints"]}
-    ok &= check(hint_names <= capped_names,
-                "absorb hints only name depth-bound suggestions")
+    ok &= check(data.get("totals", {}).get("absorb_fill_pct") == 30,
+                "totals echo the requested Market-fill fraction (30%)")
+    adv = data.get("advisor", {})
+    ok &= check("absorb_hints" not in adv,
+                "advisor no longer emits the removed absorb_hints nudges")
     return ok
 
 

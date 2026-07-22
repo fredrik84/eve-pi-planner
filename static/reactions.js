@@ -1083,10 +1083,10 @@ function _renderReactionsSuggestions(data) {
   const bindingNote = t.binding === 'isk'
     ? 'Used your full ISK budget.'
     : 'There weren\'t enough profitable, liquid reactions within the chain-depth limit to use the whole budget — try loosening "Max chain depth" or the material filter.';
-  // When the fill slider is off its 50% default, say so on the results page + offer a one-click
-  // reset (the slider itself lives on the input page, so this is the quick way back from here).
+  // Echo the current Market-fill slider setting on the results page (the slider itself lives on the
+  // input page), with a one-click way back to default when it's been moved off 50%.
   const absorbNote = (t.absorb_fill_pct != null && t.absorb_fill_pct !== 50)
-    ? `<div style="margin-bottom:10px;color:var(--clr-text-soft);font-size:0.9em">Sizing batches to <b style="color:var(--clr-text-bright)">${t.absorb_fill_pct}%</b> of each product's market volume — <button type="button" onclick="_rxResetAbsorbFraction()" style="background:none;border:none;padding:0;font:inherit;color:var(--clr-accent);text-decoration:underline;cursor:pointer">reset to 50%</button></div>`
+    ? `<div style="margin-bottom:10px;color:var(--clr-text-soft);font-size:0.9em">Market fill set to <b style="color:var(--clr-text-bright)">${t.absorb_fill_pct}%</b> of each product's weekly trade volume — <button type="button" onclick="_rxResetAbsorbFraction()" style="background:none;border:none;padding:0;font:inherit;color:var(--clr-accent);text-decoration:underline;cursor:pointer">back to default</button></div>`
     : '';
   const budgetSummary = `<div class="pp-card-hint" style="margin-bottom:10px">${bindingNote}</div>${absorbNote}`;
 
@@ -1176,19 +1176,6 @@ function _renderRxAdvisor(advisor) {
       <button class="rx-sugg-assign-btn" onclick="_rxApplyFuelBlockHint(${h.type_id}, this)">Apply</button>
     </div></li>`);
   });
-  (advisor.absorb_hints || []).forEach(h => {
-    // Apply raises the buy-order-depth fill cap to h.next_fill_pct (the level that unlocks THIS
-    // product's cadence-limited batch) and re-runs — it's global, so it may enlarge other
-    // depth-bound products too. Only show the button when it actually raises the current cap.
-    const canPush = h.next_fill_pct > h.fill_pct;
-    const applyBtn = canPush
-      ? `<button class="rx-sugg-assign-btn" onclick="_rxApplyAbsorbHint(${h.next_fill_pct}, this)">Fill ${h.next_fill_pct}%</button>`
-      : '';
-    items.push(`<li><div class="rx-hint-row">
-      <span class="rx-hint-text"><b>${_esc(h.name)}</b> is sized to only ${h.fill_pct}% of its market's trade volume to protect the price — take a bigger share to run about ${h.extra_runs.toLocaleString()} more (up to +${_fmtIsk(h.extra_reward)}, less as you sell into cheaper demand)</span>
-      ${applyBtn}
-    </div></li>`);
-  });
   if (!items.length) return '';
   return `
     <div class="rx-advisor">
@@ -1205,16 +1192,6 @@ function _renderRxAdvisor(advisor) {
 function _rxApplyFuelBlockHint(typeId, btn) {
   const box = document.querySelector(`.rx-material-cb[value="${typeId}"]`);
   if (box) box.checked = true;
-  if (btn) { btn.disabled = true; btn.textContent = '…'; }
-  wizRSuggest();
-}
-
-// Moves the "Market fill" slider to `pct`% and re-runs — lets bigger, depth-bound batches through
-// (accepting deeper, cheaper fills). Global, so it can enlarge every depth-bound product, hence a
-// full recalculation like the budget/fuel-block applies rather than a local patch.
-function _rxApplyAbsorbHint(pct, btn) {
-  const s = document.getElementById('wizRFill');
-  if (s) { s.value = Math.min(100, Math.max(5, Math.round(pct))); _wizRFillLive(); }
   if (btn) { btn.disabled = true; btn.textContent = '…'; }
   wizRSuggest();
 }

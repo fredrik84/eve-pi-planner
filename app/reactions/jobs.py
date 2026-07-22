@@ -1411,23 +1411,11 @@ def _build_advisor(context_id: int, isk_budget: float, max_chain_depth: int, cad
         for s in suggestions if s.get("align_extra_isk", 0) > 0 and s["align_extra_reward"] > current_profit * 0.01
     ]
 
-    # Market-depth headroom hints: a suggestion whose batch is held back by buy-order depth (not
-    # ISK) — surfaced only when ISK isn't the binding limit ("neither"), so it can't clash with the
-    # budget/align hints, and only for a batch that would actually exhaust the good buy-order depth
-    # (absorb_extra_runs > 0). Conservative by default (we cap at _ABSORB_FRACTION so the player
-    # sells without crashing the price); this just tells a player who wants to push that there's
-    # room to make more if they accept filling deeper, cheaper buy orders — in the same spirit as
-    # the existing "take on more risk for more profit" nudges. No auto-apply: there's no knob to
-    # flip, it's a judgment call the player makes when they place the sell.
-    absorb_hints = []
-    if current_binding == "neither":
-        absorb_hints = [
-            {"name": s["name"], "fill_pct": s.get("absorb_fill_pct", 0),
-             "next_fill_pct": s.get("absorb_next_pct", s.get("absorb_fill_pct", 0)),
-             "extra_runs": s["absorb_extra_runs"], "extra_reward": s["absorb_extra_reward"]}
-            for s in suggestions
-            if s.get("absorb_extra_runs", 0) > 0 and s.get("absorb_extra_reward", 0) > current_profit * 0.01
-        ]
+    # (There used to be per-product "fill more of the buy book" nudges here, each with an Apply that
+    # bumped the market-fill fraction. Removed once the "Market fill" slider shipped: the slider is
+    # the single, honest control now, and the nudges perpetually pushed toward 100% — i.e. "be the
+    # entire market's weekly trade" — which is bad advice under volume-based sizing and made the
+    # slider's default never settle, since resetting it just re-triggered the nudges.)
 
     # Fuel-block breadth: if the caller restricted which racial fuel blocks to use (the advanced
     # material filter, e.g. "only Oxygen — that's my cheap local one"), quantify what re-adding
@@ -1457,8 +1445,7 @@ def _build_advisor(context_id: int, isk_budget: float, max_chain_depth: int, cad
                 })
         fuel_block_hints.sort(key=lambda h: -h["extra_isk_per_day"])
 
-    return {"budget_hint": budget_hint, "align_hints": align_hints, "fuel_block_hints": fuel_block_hints,
-            "absorb_hints": absorb_hints}
+    return {"budget_hint": budget_hint, "align_hints": align_hints, "fuel_block_hints": fuel_block_hints}
 
 
 @router.post("/api/reactions/suggest")
@@ -1467,7 +1454,7 @@ def suggest_reactions(req: SuggestRequest, context_id: int = Depends(require_con
         return {"suggestions": [], "totals": {
             "isk_committed": 0.0, "isk_budget": req.isk_budget, "net_profit": 0.0, "net_profit_per_day": None,
             "output_value": 0.0, "output_m3": 0.0, "characters_used": 0, "completion_hours": None, "binding": "neither"},
-            "advisor": {"budget_hint": None, "align_hints": [], "fuel_block_hints": [], "absorb_hints": []}}
+            "advisor": {"budget_hint": None, "align_hints": [], "fuel_block_hints": []}}
     material_ids = set(req.material_ids) if req.material_ids else None
     result = _suggest_reactions(context_id, req.isk_budget, req.max_chain_depth, req.cadence_hours,
                                  material_ids, req.absorb_fraction)
