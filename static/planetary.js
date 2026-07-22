@@ -2641,6 +2641,7 @@ function renderFinalPlan(data, opts = {}) {
   }
   const shopBtn = content.querySelector('#ppShoppingListBtn');
   if (shopBtn) shopBtn.addEventListener('click', () => renderShoppingList(data));
+  renderShoppingList(data, { initial: true });  // unfold the Command Centers list by default
 
   // Only scroll into view on the first render of a plan, not on in-place re-runs
   // (re-running from the overprod / factory controls otherwise jumps the page).
@@ -2686,7 +2687,7 @@ function _buildShoppingList(data) {
   return { perChar, totals };
 }
 
-function renderShoppingList(data) {
+function renderShoppingList(data, opts = {}) {
   const existing = document.getElementById('ppShoppingList');
   if (existing) { existing.remove(); return; }  // toggle off
 
@@ -2694,6 +2695,7 @@ function renderShoppingList(data) {
   const totalCount = Object.values(totals).reduce((s, n) => s + n, 0);
 
   if (!totalCount) {
+    if (opts.initial) return;  // nothing to buy → just leave it folded on first render
     alert('Nothing to buy — all planets are already set up correctly.');
     return;
   }
@@ -2713,7 +2715,7 @@ function renderShoppingList(data) {
     <table class="shop-table"><tbody>${rows}</tbody></table>`;
 
   document.getElementById('wizPlanContent').appendChild(div);
-  div.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  if (!opts.initial) div.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 // A shared plan is a READ-ONLY view of someone else's fleet — you can't recompute their ESI setup.
