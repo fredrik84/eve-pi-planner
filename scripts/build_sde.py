@@ -166,11 +166,16 @@ _DDL = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_reaction_inputs_type ON reaction_inputs (type_id)",
-    # Manufacturing blueprints — blueprints.yaml entries carrying an `activities.manufacturing`
-    # block. Same file and shape as reactions (one product per recipe), but a different activity
-    # key and time field, plus `maxProductionLimit` (the per-BPC run cap, which the Industry
-    # planner's batch splitter needs). ME/TE are NOT stored here — they're per-player (a researched
-    # BPO or a BPC's fixed values), supplied at plan time by the Industry blueprint library.
+]
+
+# Manufacturing blueprints — blueprints.yaml entries carrying an `activities.manufacturing`
+# block. Same file and shape as reactions (one product per recipe), but a different activity key
+# and time field, plus `maxProductionLimit` (the per-BPC run cap the Industry planner's batch
+# splitter needs). ME/TE are NOT stored here — they're per-player (a researched BPO or a BPC's
+# fixed values), supplied at plan time by the Industry blueprint library. Kept in its own DDL list
+# (not `_DDL`) so it can be backfilled onto an already-built DB without a full SDE rebuild — see
+# _manufacturing_built() / the incremental path in main().
+_MFG_DDL = [
     """
     CREATE TABLE IF NOT EXISTS blueprints (
         blueprint_type_id INTEGER PRIMARY KEY,
@@ -191,6 +196,63 @@ _DDL = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_bp_materials_type ON blueprint_materials (type_id)",
 ]
+
+
+def parse_manufacturing(blueprints_yaml: dict) -> list[dict]:
+    """Manufacturing recipes from blueprints.yaml: entries with an activities.manufacturing block.
+    Same one-product-per-recipe shape as reactions; a handful have no materials (special items) and
+    are skipped — they aren't buildable from inputs."""
+    _log("Parsing manufacturing blueprints from blueprints.yaml...")
+    out: list[dict] = []
+    for bp_id, bp_attrs in blueprints_yaml.items():
+        if not isinstance(bp_attrs, dict):
+            continue
+        mfg = (bp_attrs.get("activities") or {}).get("manufacturing")
+        if not mfg:
+            continue
+        materials = mfg.get("materials") or []
+        products = mfg.get("products") or []
+        if len(products) != 1 or not materials:
+            continue
+        out.append({
+            "blueprint_type_id": int(bp_id),
+            "product_type_id": products[0]["typeID"],
+            "output_qty": products[0]["quantity"],
+            "base_time": mfg.get("time", 0) or 0,
+            "max_runs": bp_attrs.get("maxProductionLimit", 0) or 0,
+            "inputs": [{"type_id": m["typeID"], "quantity": m["quantity"]} for m in materials],
+        })
+    _log(f"Found {len(out)} manufacturing blueprints.")
+    return out
+
+
+def write_manufacturing(con, blueprints: list[dict]) -> None:
+    """Create the blueprint tables (idempotent) and insert the parsed recipes. Own commit so the
+    incremental backfill path is self-contained."""
+    for stmt in _MFG_DDL:
+        con.execute(stmt)
+    for b in blueprints:
+        con.execute(
+            "INSERT INTO blueprints VALUES (?, ?, ?, ?, ?)",
+            (b["blueprint_type_id"], b["product_type_id"], b["output_qty"],
+             b["base_time"], b["max_runs"]),
+        )
+        for inp in b["inputs"]:
+            con.execute(
+                "INSERT INTO blueprint_materials VALUES (?, ?, ?)",
+                (b["blueprint_type_id"], inp["type_id"], inp["quantity"]),
+            )
+    con.commit()
+
+
+def _manufacturing_built(con) -> bool:
+    """Whether the manufacturing tables exist AND are populated (mirrors _already_built's data
+    presence check, so a crash mid-backfill re-runs)."""
+    try:
+        row = con.execute("SELECT COUNT(*) AS n FROM blueprints").fetchone()
+        return bool(row and row["n"] > 0)
+    except Exception:
+        return False
 
 
 def _already_built(con) -> bool:
@@ -281,30 +343,7 @@ def build_db(con, type_data: dict, schematics_yaml: dict, blueprints_yaml: dict)
         })
     _log(f"Found {len(reactions)} reaction formulas.")
 
-    # Parse manufacturing blueprints: blueprints.yaml entries with an activities.manufacturing
-    # block. Same one-product-per-recipe shape as reactions. A handful of blueprints have no
-    # materials (e.g. some special items) — skip those, they aren't buildable from inputs.
-    _log("Parsing manufacturing blueprints from blueprints.yaml...")
-    blueprints: list[dict] = []
-    for bp_id, bp_attrs in blueprints_yaml.items():
-        if not isinstance(bp_attrs, dict):
-            continue
-        mfg = (bp_attrs.get("activities") or {}).get("manufacturing")
-        if not mfg:
-            continue
-        materials = mfg.get("materials") or []
-        products = mfg.get("products") or []
-        if len(products) != 1 or not materials:
-            continue
-        blueprints.append({
-            "blueprint_type_id": int(bp_id),
-            "product_type_id": products[0]["typeID"],
-            "output_qty": products[0]["quantity"],
-            "base_time": mfg.get("time", 0) or 0,
-            "max_runs": bp_attrs.get("maxProductionLimit", 0) or 0,
-            "inputs": [{"type_id": m["typeID"], "quantity": m["quantity"]} for m in materials],
-        })
-    _log(f"Found {len(blueprints)} manufacturing blueprints.")
+    blueprints = parse_manufacturing(blueprints_yaml)
 
     _log("Creating tables...")
     for stmt in _DDL:
@@ -338,19 +377,8 @@ def build_db(con, type_data: dict, schematics_yaml: dict, blueprints_yaml: dict)
                 (r["reaction_id"], inp["type_id"], inp["quantity"]),
             )
 
-    for b in blueprints:
-        con.execute(
-            "INSERT INTO blueprints VALUES (?, ?, ?, ?, ?)",
-            (b["blueprint_type_id"], b["product_type_id"], b["output_qty"],
-             b["base_time"], b["max_runs"]),
-        )
-        for inp in b["inputs"]:
-            con.execute(
-                "INSERT INTO blueprint_materials VALUES (?, ?, ?)",
-                (b["blueprint_type_id"], inp["type_id"], inp["quantity"]),
-            )
-
     con.commit()
+    write_manufacturing(con, blueprints)
 
     # Summary
     tier_counts = {}
@@ -371,7 +399,24 @@ def main() -> None:
             con.execute("SELECT pg_advisory_lock(?)", (_ADVISORY_LOCK_KEY,))
         try:
             if _already_built(con):
-                _log("SDE already built — skipping.")
+                if _manufacturing_built(con):
+                    _log("SDE already built — skipping.")
+                    return
+                # Types are present but the manufacturing tables are missing (an SDE built before
+                # the Industry planner existed). Backfill ONLY those from blueprints.yaml — no need
+                # to re-parse the 50k-entry types.yaml (~886s) — and leave everything else intact so
+                # there's no SDE-less window for the running app.
+                _log("Manufacturing blueprints missing — backfilling from blueprints.yaml only...")
+                tmp_path = Path(tempfile.mktemp(suffix=".zip"))
+                try:
+                    download_sde(tmp_path)
+                    with zipfile.ZipFile(tmp_path) as zf:
+                        blueprints_yaml = parse_yaml(zf, "fsd/blueprints.yaml")
+                        write_manufacturing(con, parse_manufacturing(blueprints_yaml))
+                    _log("Manufacturing backfill complete.")
+                finally:
+                    if tmp_path.exists():
+                        tmp_path.unlink()
                 return
 
             tmp_path = Path(tempfile.mktemp(suffix=".zip"))
