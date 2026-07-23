@@ -23,3 +23,4 @@ from app.industry.schedule import (  # noqa: F401 — importing registers /api/i
 from app.industry.slots import (  # noqa: F401 — importing registers /api/industry/slots
     manufacturing_slots, reaction_slots, _slot_pool,
 )
+from app.industry import orders as _orders  # noqa: F401 — registers the build-queue endpoints
