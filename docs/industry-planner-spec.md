@@ -227,16 +227,24 @@ Admin → Features when ready. No public per-user endpoints (rule 8): every endp
 
 ## 13. Phasing
 
-- **Phase 0** — SDE manufacturing tables + manufacturing cost-index. Pure data, no UI.
-- **Phase 1** — recursive make-or-buy (spanning manufacturing ∪ reaction graphs for correct cost
-  totals) + cost metrics + priced shopping list. Read-only, no scheduling, no slots. Highest value
-  / lowest risk; answers "how much does this cost."
-- **Phase 2** — scheduler: time metrics, parallel waves, demand aggregation + excess ledger.
+- **Phase 0 — SHIPPED.** SDE manufacturing tables (`blueprints`, `blueprint_materials`, parsed in
+  `scripts/build_sde.py`) + per-activity cost-index in `app/industry_cost.py`. Requires an SDE
+  rebuild to populate on an already-built DB.
+- **Phase 1 — SHIPPED.** Recursive make-or-buy spanning manufacturing ∪ reaction graphs
+  (`app/industry/graph.py`), cost metrics, priced shopping list. `POST /api/industry/plan`.
+- **Phase 2 — SHIPPED.** Demand aggregation (MRP low-level-code explosion → shared-batch costs),
+  excess/stock ledger + `on_hand` netting, resource-constrained dual-pool list scheduler
+  (`app/industry/schedule.py`): makespan, waves, BPC-run-cap job splitting.
+  `POST /api/industry/plan-queue`. All in `test_industry.py` (51 in-process checks).
 - **Phase 3** — persistent queue + slot system + live ESI job tracking + "to install" checklist +
-  alerting + **spawning real reaction orders** (dual-pool scheduling).
+  alerting + **spawning real reaction orders** (dual-pool scheduling) + the first frontend tab.
 - **Phase 4** — blueprint library UI (manual BPC costs, owned-BPO ME/TE) + treat items you already
-  produce (PI / Reactions output) or hold in stock as available inputs.
+  produce (PI / Reactions output) or hold in stock as available inputs (`on_hand` is already wired).
 - **Phase 5 (deferred)** — invention-cost BPCs, contract scanning, T3 reverse-engineering.
+
+**Not yet wired (defaults in place, real values are later phases):** ME/TE come from request
+params (Phase 4 library supplies per-blueprint); slot counts are request params (Phase 3 derives
+per-character from ESI skills); freight cost isn't in the totals yet (Phase 4).
 
 ## 14. Risks / open questions
 
