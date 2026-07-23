@@ -24,7 +24,10 @@ _ADJUSTED_PRICE_TTL = 24 * 3600  # CCP updates these roughly daily
 # (value, fetched_at) — per-process L1, mirrors app.market's rationale: avoids a Redis round
 # trip on every single request even when Redis is warm, and is the only cache tier at all when
 # REDIS_URL isn't set (e.g. local dev).
-_cost_index_cache: tuple[dict[int, float], float] | None = None
+# {activity: {system_id: index}}, fetched_at — one ESI call returns every activity for every
+# system, so we parse them all into one nested blob rather than one call per activity (the
+# manufacturing planner needs the "manufacturing" index; reactions need "reaction").
+_cost_index_cache: tuple[dict[str, dict[int, float]], float] | None = None
 _adjusted_price_cache: tuple[dict[int, float], float] | None = None
 
 
@@ -37,39 +40,43 @@ def _fetch_json(url: str):
         return None
 
 
-def _all_reaction_cost_indices() -> dict[int, float]:
+def _all_cost_indices() -> dict[str, dict[int, float]]:
+    """{activity: {system_id: cost_index}} across every system, all activities (manufacturing,
+    reaction, invention, copying, ...). Cached as one blob keyed by activity."""
     global _cost_index_cache
     now = time.monotonic()
     if _cost_index_cache and now - _cost_index_cache[1] < _COST_INDEX_TTL:
         return _cost_index_cache[0]
     cached = cache_get_json("industry:cost_indices")
     if cached is not None:
-        result = {int(k): v for k, v in cached.items()}
+        result = {act: {int(k): v for k, v in sysmap.items()} for act, sysmap in cached.items()}
         _cost_index_cache = (result, now)
         return result
     data = _fetch_json(f"{ESI_BASE}/industry/systems/?datasource=tranquility")
     if not data:
         return _cost_index_cache[0] if _cost_index_cache else {}
-    result = {}
+    result: dict[str, dict[int, float]] = {}
     for row in data:
         sid = row.get("solar_system_id")
         if not sid:
             continue
         for ci in row.get("cost_indices", []):
-            if ci.get("activity") == "reaction":
-                result[sid] = ci.get("cost_index", 0.0) or 0.0
-                break
+            act = ci.get("activity")
+            if not act:
+                continue
+            result.setdefault(act, {})[sid] = ci.get("cost_index", 0.0) or 0.0
     cache_set_json("industry:cost_indices", result, ttl=_COST_INDEX_TTL)
     _cost_index_cache = (result, now)
     return result
 
 
-def fetch_system_cost_index(system_id: int | None) -> float:
-    """Reaction cost index for one system (e.g. 0.0192 = 1.92%), 0.0 if unset/unknown/
-    unavailable — the safe no-job-cost-effect default."""
+def fetch_system_cost_index(system_id: int | None, activity: str = "reaction") -> float:
+    """Cost index for one system + activity (e.g. 0.0192 = 1.92%), 0.0 if unset/unknown/
+    unavailable — the safe no-job-cost-effect default. `activity` defaults to "reaction" for the
+    existing reactions callers; the Industry planner passes "manufacturing"."""
     if not system_id:
         return 0.0
-    return _all_reaction_cost_indices().get(system_id, 0.0)
+    return _all_cost_indices().get(activity, {}).get(system_id, 0.0)
 
 
 def _all_adjusted_prices() -> dict[int, float]:

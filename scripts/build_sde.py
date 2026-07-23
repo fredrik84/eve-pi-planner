@@ -10,6 +10,11 @@ Tables built:
   reactions          - reaction_id, output_type_id, output_qty, cycle_time (seconds; from
                         fsd/blueprints.yaml's activities.reaction, not planetSchematics)
   reaction_inputs    - reaction_id, type_id, quantity
+  blueprints         - blueprint_type_id, product_type_id, output_qty, base_time, max_runs
+                        (manufacturing recipes, from fsd/blueprints.yaml's activities.manufacturing
+                        — same file as reactions, different activity block; drives the Industry
+                        make-or-buy planner)
+  blueprint_materials- blueprint_type_id, type_id, quantity
 """
 
 import sys
@@ -161,6 +166,30 @@ _DDL = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_reaction_inputs_type ON reaction_inputs (type_id)",
+    # Manufacturing blueprints — blueprints.yaml entries carrying an `activities.manufacturing`
+    # block. Same file and shape as reactions (one product per recipe), but a different activity
+    # key and time field, plus `maxProductionLimit` (the per-BPC run cap, which the Industry
+    # planner's batch splitter needs). ME/TE are NOT stored here — they're per-player (a researched
+    # BPO or a BPC's fixed values), supplied at plan time by the Industry blueprint library.
+    """
+    CREATE TABLE IF NOT EXISTS blueprints (
+        blueprint_type_id INTEGER PRIMARY KEY,
+        product_type_id   INTEGER NOT NULL,
+        output_qty        INTEGER NOT NULL,
+        base_time         INTEGER NOT NULL,
+        max_runs          INTEGER NOT NULL DEFAULT 0
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_blueprints_product ON blueprints (product_type_id)",
+    """
+    CREATE TABLE IF NOT EXISTS blueprint_materials (
+        blueprint_type_id INTEGER NOT NULL,
+        type_id           INTEGER NOT NULL,
+        quantity          INTEGER NOT NULL,
+        PRIMARY KEY (blueprint_type_id, type_id)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_bp_materials_type ON blueprint_materials (type_id)",
 ]
 
 
@@ -252,6 +281,31 @@ def build_db(con, type_data: dict, schematics_yaml: dict, blueprints_yaml: dict)
         })
     _log(f"Found {len(reactions)} reaction formulas.")
 
+    # Parse manufacturing blueprints: blueprints.yaml entries with an activities.manufacturing
+    # block. Same one-product-per-recipe shape as reactions. A handful of blueprints have no
+    # materials (e.g. some special items) — skip those, they aren't buildable from inputs.
+    _log("Parsing manufacturing blueprints from blueprints.yaml...")
+    blueprints: list[dict] = []
+    for bp_id, bp_attrs in blueprints_yaml.items():
+        if not isinstance(bp_attrs, dict):
+            continue
+        mfg = (bp_attrs.get("activities") or {}).get("manufacturing")
+        if not mfg:
+            continue
+        materials = mfg.get("materials") or []
+        products = mfg.get("products") or []
+        if len(products) != 1 or not materials:
+            continue
+        blueprints.append({
+            "blueprint_type_id": int(bp_id),
+            "product_type_id": products[0]["typeID"],
+            "output_qty": products[0]["quantity"],
+            "base_time": mfg.get("time", 0) or 0,
+            "max_runs": bp_attrs.get("maxProductionLimit", 0) or 0,
+            "inputs": [{"type_id": m["typeID"], "quantity": m["quantity"]} for m in materials],
+        })
+    _log(f"Found {len(blueprints)} manufacturing blueprints.")
+
     _log("Creating tables...")
     for stmt in _DDL:
         con.execute(stmt)
@@ -284,6 +338,18 @@ def build_db(con, type_data: dict, schematics_yaml: dict, blueprints_yaml: dict)
                 (r["reaction_id"], inp["type_id"], inp["quantity"]),
             )
 
+    for b in blueprints:
+        con.execute(
+            "INSERT INTO blueprints VALUES (?, ?, ?, ?, ?)",
+            (b["blueprint_type_id"], b["product_type_id"], b["output_qty"],
+             b["base_time"], b["max_runs"]),
+        )
+        for inp in b["inputs"]:
+            con.execute(
+                "INSERT INTO blueprint_materials VALUES (?, ?, ?)",
+                (b["blueprint_type_id"], inp["type_id"], inp["quantity"]),
+            )
+
     con.commit()
 
     # Summary
@@ -294,6 +360,7 @@ def build_db(con, type_data: dict, schematics_yaml: dict, blueprints_yaml: dict)
     _log(f"PI schematics: {len(schematics)}")
     _log(f"PI tier distribution: { {f'P{k}': v for k,v in sorted(tier_counts.items())} }")
     _log(f"Reactions: {len(reactions)}")
+    _log(f"Manufacturing blueprints: {len(blueprints)}")
 
 
 def main() -> None:
