@@ -25,7 +25,7 @@
   <link rel="stylesheet" href="/style-components.css?v=1">
   <link rel="stylesheet" href="/style-contribute.css?v=11">
   <link rel="stylesheet" href="/style-wizard.css?v=2">
-  <link rel="stylesheet" href="/style-layout-admin.css?v=30">
+  <link rel="stylesheet" href="/style-layout-admin.css?v=31">
   <link rel="stylesheet" href="/style-analysis-dashboard.css?v=22">
   <link rel="stylesheet" href="/style-misc-responsive.css?v=7">
 </head>
@@ -725,13 +725,19 @@
         <div id="indSlots" class="ind-slots"></div>
         <div id="indBlueprints" class="ind-bp-row"></div>
         <div class="ind-plan-form">
-          <div class="ind-search-wrap">
-            <input type="text" id="indSearch" placeholder="Search a buildable (e.g. Hobgoblin II)…" autocomplete="off">
-            <div id="indSearchResults" class="ind-search-results" style="display:none"></div>
+          <div class="ind-field ind-field-grow">
+            <label for="indSearch">Product to build</label>
+            <div class="ind-search-wrap">
+              <input type="text" id="indSearch" placeholder="Search any buildable — e.g. Hobgoblin II, Revelation, Nitrogen Fuel Block" autocomplete="off">
+              <div id="indSearchResults" class="ind-search-results" style="display:none"></div>
+            </div>
           </div>
-          <input type="number" id="indQty" min="1" value="1" title="Quantity">
-          <button id="indPlanBtn" onclick="indRunPlan()" disabled>Plan build</button>
-          <button class="pp-add-btn" id="indQueueBtn" onclick="indAddToQueue()" disabled title="Add this product to your build queue">+ Queue</button>
+          <div class="ind-field">
+            <label for="indQty">Quantity</label>
+            <input type="number" id="indQty" min="1" value="1">
+          </div>
+          <button class="ind-primary-btn" id="indPlanBtn" onclick="indRunPlan()" disabled>Plan build</button>
+          <button class="ind-secondary-btn" id="indQueueBtn" onclick="indAddToQueue()" disabled title="Add this product to your build queue">+ Queue</button>
         </div>
         <div id="indPickHint" class="ind-pick-hint"></div>
       </div>

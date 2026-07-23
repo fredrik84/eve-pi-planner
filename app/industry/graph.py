@@ -370,12 +370,14 @@ def industry_search(q: str, ctx: int = Depends(require_context)):
         return {"results": []}
     con = get_connection()
     try:
+        # LOWER(...) both sides so the match is case-insensitive on Postgres too (its LIKE is
+        # case-sensitive, unlike SQLite's) — otherwise "revelation" finds nothing on prod.
         rows = con.execute(
             "SELECT t.type_id, t.name FROM types t "
-            "WHERE t.name LIKE ? AND (t.type_id IN (SELECT product_type_id FROM blueprints) "
+            "WHERE LOWER(t.name) LIKE ? AND (t.type_id IN (SELECT product_type_id FROM blueprints) "
             "OR t.type_id IN (SELECT output_type_id FROM reactions)) "
             "ORDER BY LENGTH(t.name), t.name LIMIT 25",
-            (f"%{q}%",),
+            (f"%{q.lower()}%",),
         ).fetchall()
         return {"results": [{"type_id": r["type_id"], "name": r["name"]} for r in rows]}
     finally:
