@@ -1,0 +1,18 @@
+"""Industry / manufacturing make-or-buy planner (see docs/industry-planner-spec.md).
+
+Given a target buildable + quantity, decides build-vs-buy for every component, prices a shopping
+list off the account's markets (local → Jita, reusing the Reactions pricing stack), and reports
+cost + time metrics. The recipe graph spans manufacturing blueprints AND reactions so capital /
+T2 / T3 builds that mix both are costed honestly.
+
+Phase 1 (this): read-only cost engine + `/api/industry/plan`. Later phases add scheduling, the
+slot system, a persistent queue, alerting, and spawning real reaction orders into the Reactions
+service. Structured to mirror app/reactions/: the shared `router` lives in _router.py so submodules
+register on it without a circular import through this __init__.
+"""
+from app.industry._router import router  # noqa: F401 — mounted by app.main
+from app.industry.graph import (  # noqa: F401 — importing registers /api/industry/plan
+    SCC_SURCHARGE_PCT, REACTION_ME_REDUCTION, BuildParams,
+    load_manufacturing_graph, load_reaction_graph, collect_reachable,
+    effective_material_qty, resolve_unit_costs, build_plan, IndustryPlanRequest,
+)

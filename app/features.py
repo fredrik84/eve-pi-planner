@@ -139,9 +139,16 @@ FEATURE_REGISTRY = [
                     "cost), tell you how much you can sell there and the ISK you'd gain. Read-only — "
                     "no auto-sell. Requires local / alliance market pricing to be set up.",
      "default": False},
+    {"key": "industry", "label": "Industry / manufacturing planner", "group": "Industry",
+     "description": "Adds an Industry tab: pick a buildable (module up to a capital) and a "
+                    "quantity, and it decides build-vs-buy for every component, prices a shopping "
+                    "list against your followed markets (local → Jita), and reports what it costs "
+                    "and how long it takes. Spans manufacturing AND reactions for deep builds. "
+                    "Admin-preview while it's built out.",
+     "default": False},
 ]
 GROUP_ORDER = ["Dashboard", "Setup Analysis", "Planner", "Planet DB", "Characters",
-               "Notifications & Alerts", "Reactions"]
+               "Notifications & Alerts", "Reactions", "Industry"]
 _DEFAULTS = {f["key"]: f for f in FEATURE_REGISTRY}
 VALID_STATES = {"hidden", "admin", "testers", "public"}
 
