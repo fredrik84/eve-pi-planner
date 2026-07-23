@@ -32,9 +32,9 @@ def reaction_slots(row) -> int:
 
 
 def _slot_pool(context_id: int) -> dict:
-    """Per-character + total manufacturing and reaction slots for the account's real characters.
-    TODO (job-tracking slice): subtract running ESI jobs per character for *free* slots, like
-    app.reactions._character_capacities does for reactions."""
+    """Per-character + total manufacturing and reaction slots for the account's real characters,
+    plus how many are FREE right now (total − currently-running ESI jobs). Free counts fall back to
+    total for characters with no cached jobs (nothing known to be running)."""
     con = get_connection()
     try:
         chars = con.execute(
@@ -49,22 +49,26 @@ def _slot_pool(context_id: int) -> dict:
     finally:
         con.close()
 
+    from app.industry.jobs import running_counts   # local import avoids a slots↔jobs cycle
+    running = running_counts(context_id)
+
     per_char = []
-    mfg_total = 0
-    rx_total = 0
+    mfg_total = rx_total = mfg_free = rx_free = 0
     for c in chars:
-        ms = manufacturing_slots(c)
-        rs = reaction_slots(c)
-        mfg_total += ms
-        rx_total += rs
+        ms, rs = manufacturing_slots(c), reaction_slots(c)
+        run = running.get(c["character_id"], {"manufacturing": 0, "reaction": 0})
+        mf = max(0, ms - run["manufacturing"])
+        rf = max(0, rs - run["reaction"])
+        mfg_total += ms; rx_total += rs; mfg_free += mf; rx_free += rf
         per_char.append({
             "character_id": c["character_id"], "character_name": c["character_name"],
             "manufacturing_slots": ms, "reaction_slots": rs,
+            "manufacturing_free": mf, "reaction_free": rf,
         })
     return {
         "characters": per_char,
-        "manufacturing_slots": mfg_total,
-        "reaction_slots": rx_total,
+        "manufacturing_slots": mfg_total, "reaction_slots": rx_total,
+        "manufacturing_free": mfg_free, "reaction_free": rx_free,
     }
 
 

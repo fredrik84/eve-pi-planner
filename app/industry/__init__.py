@@ -26,4 +26,7 @@ from app.industry.slots import (  # noqa: F401 — importing registers /api/indu
 from app.industry.blueprints import (  # noqa: F401 — registers the blueprint auto-read endpoints
     ensure_char_blueprints_table, owned_blueprints, fetch_character_blueprints,
 )
+from app.industry.jobs import (  # noqa: F401 — registers the live manufacturing-job endpoints
+    ensure_manufacturing_jobs_table, running_counts, running_jobs, fetch_manufacturing_jobs,
+)
 from app.industry import orders as _orders  # noqa: F401 — registers the build-queue endpoints

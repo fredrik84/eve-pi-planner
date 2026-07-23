@@ -177,10 +177,10 @@ class QueuePlanRequest(BaseModel):
     rx_slots: int | None = None
 
 
-@router.post("/api/industry/queue-plan")
-def queue_plan(req: QueuePlanRequest, ctx: int = Depends(require_context)):
-    """Aggregate demand across ALL of the account's queued build orders and schedule them together
-    against the account's slot pool — the honest, shared-batch plan for the whole queue."""
+def _run_queue_plan(ctx: int, req: QueuePlanRequest) -> dict:
+    """Shared core of the whole-queue plan: aggregate every queued order's demand and schedule it.
+    Returns the plan_queue result, or {"empty": True} when the queue is empty. Used by both the
+    queue-plan endpoint and the to-install checklist."""
     ensure_industry_orders_table()
     con = get_connection()
     try:
@@ -218,3 +218,42 @@ def queue_plan(req: QueuePlanRequest, ctx: int = Depends(require_context)):
     rx_slots = req.rx_slots if req.rx_slots is not None else pool["reaction_slots"]
     pools = {"manufacturing": max(1, mfg_slots), "reaction": max(1, rx_slots)}
     return plan_queue(targets, mfg, rx, prices, adjusted, params, names, pools)
+
+
+@router.post("/api/industry/queue-plan")
+def queue_plan(req: QueuePlanRequest, ctx: int = Depends(require_context)):
+    """Aggregate demand across ALL of the account's queued build orders and schedule them together
+    against the account's slot pool — the honest, shared-batch plan for the whole queue."""
+    return _run_queue_plan(ctx, req)
+
+
+@router.get("/api/industry/to-install")
+def to_install(ctx: int = Depends(require_context)):
+    """What to start RIGHT NOW: the ready wave of the queue plan (jobs whose inputs are all
+    available), your free slot counts, and how many of the ready jobs fit those free slots. The
+    actionable, least-effort answer to 'what should I be doing'."""
+    res = _run_queue_plan(ctx, QueuePlanRequest())
+    if res.get("empty"):
+        return {"empty": True}
+    from app.industry.slots import _slot_pool
+    pool = _slot_pool(ctx)
+    free = {"manufacturing": pool["manufacturing_free"], "reaction": pool["reaction_free"]}
+    waves = res["schedule"]["waves"]
+    ready = list(waves[0]["tasks"]) if waves else []
+    # Annotate each ready job with whether a free slot of its pool is available (greedy fill, most
+    # critical first — the schedule already ordered wave 0 by priority within the wave).
+    remaining = dict(free)
+    for t in ready:
+        pool_key = t["activity"]
+        if remaining.get(pool_key, 0) > 0:
+            t["fits_now"] = True
+            remaining[pool_key] -= 1
+        else:
+            t["fits_now"] = False
+    return {
+        "ready": ready,
+        "free": free,
+        "fit_count": sum(1 for t in ready if t.get("fits_now")),
+        "makespan_hours": res["metrics"]["makespan_hours"],
+        "later_waves": max(0, len(waves) - 1),
+    }

@@ -15,6 +15,8 @@ async function onIndustryTabOpen() {
   indLoadSlots();
   indLoadBlueprints();
   indLoadQueue();
+  indLoadInstall();
+  indLoadRunning();
 }
 
 // ── Blueprint auto-read (ME/TE + ownership from ESI) ────────────────────────────────────────
@@ -63,9 +65,12 @@ async function indLoadSlots() {
     const d = await r.json();
     const chips = (d.characters || []).map(c =>
       `<span class="ind-slot-chip" title="${_esc(c.character_name)}">${_esc(c.character_name)}: `
-      + `${c.manufacturing_slots}<span class="ind-slot-sub">mfg</span> · ${c.reaction_slots}<span class="ind-slot-sub">rx</span></span>`
+      + `${c.manufacturing_free}/${c.manufacturing_slots}<span class="ind-slot-sub">mfg</span> · `
+      + `${c.reaction_free}/${c.reaction_slots}<span class="ind-slot-sub">rx</span></span>`
     ).join('');
-    el.innerHTML = `<div class="ind-slot-tot"><b>${d.manufacturing_slots}</b> manufacturing · <b>${d.reaction_slots}</b> reaction slots across your characters</div>`
+    el.innerHTML = `<div class="ind-slot-tot"><b>${d.manufacturing_free}/${d.manufacturing_slots}</b> manufacturing · `
+      + `<b>${d.reaction_free}/${d.reaction_slots}</b> reaction slots free `
+      + `<button class="ind-bp-btn" onclick="indRefreshJobs()" title="Re-read running jobs from ESI">Refresh jobs</button></div>`
       + `<div class="ind-slot-chips">${chips || '<span class="pp-sub">No characters — add one to get real slot counts.</span>'}</div>`;
   } catch (e) { el.innerHTML = ''; }
 }
@@ -217,6 +222,7 @@ async function indAddToQueue() {
     });
     if (!r.ok) { const e = await r.json().catch(() => ({})); alert(e.detail || 'Could not queue'); return; }
     indLoadQueue();
+    indLoadInstall();
   } catch (e) { alert(String(e)); }
 }
 
@@ -240,6 +246,56 @@ async function indLoadQueue() {
 async function indRemoveOrder(id) {
   try { await fetch('/api/industry/orders/' + id, { method: 'DELETE' }); } catch (e) {}
   indLoadQueue();
+  indLoadInstall();
+}
+
+// ── "To install now" checklist + in-progress jobs ───────────────────────────────────────────
+async function indRefreshJobs() {
+  try { await fetch('/api/industry/jobs/refresh', { method: 'POST' }); } catch (e) {}
+  indLoadSlots();
+  indLoadInstall();
+  indLoadRunning();
+}
+
+async function indLoadInstall() {
+  const el = document.getElementById('indInstall');
+  if (!el) return;
+  try {
+    const r = await fetch('/api/industry/to-install');
+    if (!r.ok) { el.innerHTML = ''; return; }
+    const d = await r.json();
+    if (d.empty || !d.ready || !d.ready.length) { el.innerHTML = ''; return; }
+    const rows = d.ready.map(t => {
+      const fit = t.fits_now ? '<span class="ind-fit-yes">slot free</span>' : '<span class="ind-fit-no">wait for a slot</span>';
+      return `<div class="ind-install-row"><span class="ind-tree-name">${_esc(t.name)}</span> `
+        + `<span class="ind-tree-qty">×${t.runs}${t.activity === 'reaction' ? ' rx' : ''}</span> `
+        + `<span class="ind-tree-cost">${_fmtHours(t.duration_hours)}</span> ${fit}</div>`;
+    }).join('');
+    el.innerHTML = `<h3 class="ind-install-title">Install now — ${d.fit_count} of ${d.ready.length} ready jobs fit your free slots`
+      + `<span class="ind-install-free">${d.free.manufacturing} mfg · ${d.free.reaction} rx free</span></h3>`
+      + rows
+      + (d.later_waves ? `<div class="pp-sub ind-later">+${d.later_waves} more wave(s) unlock as these finish · full makespan ${_fmtHours(d.makespan_hours)}</div>` : '');
+  } catch (e) { el.innerHTML = ''; }
+}
+
+async function indLoadRunning() {
+  const el = document.getElementById('indRunning');
+  if (!el) return;
+  try {
+    const r = await fetch('/api/industry/jobs');
+    if (!r.ok) { el.innerHTML = ''; return; }
+    const d = await r.json();
+    if (!d.jobs || !d.jobs.length) { el.innerHTML = ''; return; }
+    const rows = d.jobs.map(j => {
+      const ends = j.end_date ? new Date(j.end_date) : null;
+      const left = ends ? Math.max(0, (ends - Date.now()) / 3.6e6) : null;
+      return `<div class="ind-install-row"><span class="ind-tree-name">${_esc(j.name)}</span> `
+        + `<span class="ind-tree-qty">×${j.runs}</span> `
+        + `<span class="ind-run-char">${_esc(j.character_name)}</span> `
+        + `<span class="ind-tree-cost">${left != null ? (left > 0 ? _fmtHours(left) + ' left' : 'ready') : _esc(j.status)}</span></div>`;
+    }).join('');
+    el.innerHTML = `<h3 class="ind-install-title">In progress — ${d.jobs.length} job(s)</h3>${rows}`;
+  } catch (e) { el.innerHTML = ''; }
 }
 
 async function indPlanQueue() {
