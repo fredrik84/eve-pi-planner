@@ -245,6 +245,11 @@ async function loadCharacters() {
       // the admin tab to a mobile-visible tab (the old onAdminTabOpen bounce to the hidden planner
       // shuffled phones).
       if (!_isAdmin && !_isGroupManager && localStorage.getItem('activeTab') === 'admin' && typeof switchTab === 'function') switchTab('dashboard');
+      // ...and conversely, an admin/manager who refreshed straight ONTO the admin tab had
+      // onAdminTabOpen() run at boot with _isAdmin still false, so its sections (Features, etc.)
+      // never loaded. Now that roles are known, re-invoke it so the page isn't blank until a
+      // manual nav click.
+      else if ((_isAdmin || _isGroupManager) && localStorage.getItem('activeTab') === 'admin' && typeof onAdminTabOpen === 'function') onAdminTabOpen();
       _applyPageRestriction();
       await _loadFeatures();
       // Re-render: renderCharacters()/renderHeaderSession() above ran BEFORE _loadFeatures()
