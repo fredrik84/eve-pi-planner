@@ -133,6 +133,7 @@ a.plan-action-btn { text-decoration: none; display: inline-block; }
 .tab[data-tab="planetdb"],
 .tab[data-tab="layout"],
 .tab[data-tab="reactions"],
+.tab[data-tab="industry"],
 .tab[data-pimode="refill"] { display: none; }
 
 html.nav-li #dashboardNavTab,
@@ -150,6 +151,7 @@ html.nav-grpmgr #adminNavGroup { display: flex; }
 html.nav-feat-layout .tab[data-tab="layout"] { display: flex; }
 html.nav-li.nav-feat-pdb .tab[data-tab="planetdb"] { display: flex; }
 html.nav-li.nav-feat-reactions .tab[data-tab="reactions"] { display: flex; }
+html.nav-li.nav-feat-industry .tab[data-tab="industry"] { display: flex; }
 
 /* Donation note pinned to the bottom of the sticky sidebar — always on screen,
    no scrolling to the page foot to find it. */
@@ -771,3 +773,53 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .rx-gate-reader { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #7fa8e0; cursor: pointer; }
 .rx-gate-tag { font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--clr-text-soft);
   background: #232a3a; padding: 1px 7px; border-radius: 10px; }
+
+/* ── Industry / Manufacturing planner tab ─────────────────────────────────────────────────── */
+.admin-preview-tag { font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--clr-text-soft);
+  background: #232a3a; padding: 1px 7px; border-radius: 10px; vertical-align: middle; }
+.ind-slots { margin: 4px 0 14px; }
+.ind-slot-tot { font-size: 13px; color: var(--clr-text-soft); margin-bottom: 6px; }
+.ind-slot-tot b { color: #fff; }
+.ind-slot-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.ind-slot-chip { background: #161b28; border: 1px solid var(--clr-border); border-radius: 12px; padding: 2px 10px; font-size: 12px; color: #cdd6e6; }
+.ind-slot-sub { color: var(--clr-text-soft); font-size: 10px; margin-left: 2px; }
+.ind-plan-form { display: flex; gap: 8px; align-items: flex-start; flex-wrap: wrap; }
+.ind-search-wrap { position: relative; flex: 1 1 320px; }
+.ind-search-wrap input { width: 100%; }
+.ind-plan-form input[type="number"] { width: 90px; }
+.ind-search-results { position: absolute; z-index: 30; left: 0; right: 0; top: 100%; margin-top: 2px;
+  background: #10141e; border: 1px solid var(--clr-border); border-radius: 8px; max-height: 320px; overflow-y: auto; box-shadow: 0 8px 24px rgba(0,0,0,.5); }
+.ind-search-row { padding: 7px 12px; cursor: pointer; font-size: 13px; color: #cdd6e6; }
+.ind-search-row:hover { background: #1b2233; color: #fff; }
+.ind-search-empty { padding: 8px 12px; font-size: 12px; color: var(--clr-text-soft); }
+.ind-pick-hint { font-size: 12px; color: var(--clr-text-soft); margin-top: 6px; }
+.an-stat-lbl { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--clr-text-soft); margin-bottom: 3px; }
+.ind-res-title { margin: 0 0 12px; font-size: 16px; color: #fff; }
+.ind-details { margin-top: 12px; }
+.ind-details > summary { cursor: pointer; font-size: 13px; font-weight: 600; color: #9fb4d8; padding: 4px 0; }
+.ind-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 6px; }
+.ind-table th { text-align: left; color: var(--clr-text-soft); font-weight: 600; padding: 4px 8px; border-bottom: 1px solid var(--clr-border); }
+.ind-table td { padding: 4px 8px; border-bottom: 1px solid #1a2030; color: #cdd6e6; }
+.ind-table .ind-num { text-align: right; font-variant-numeric: tabular-nums; }
+.ind-table .ind-src { color: var(--clr-text-soft); font-size: 12px; }
+.ind-tree { margin-top: 6px; font-size: 13px; }
+.ind-tree-row { padding: 2px 0; color: #cdd6e6; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ind-tree-name { color: #fff; }
+.ind-tree-qty { color: var(--clr-text-soft); font-variant-numeric: tabular-nums; }
+.ind-tree-cost { color: var(--clr-accent); font-size: 12px; margin-left: auto; }
+.ind-badge { font-size: 10px; text-transform: uppercase; letter-spacing: .03em; padding: 1px 6px; border-radius: 8px; }
+.ind-build { background: #163524; color: #7fdca6; }
+.ind-buy { background: #2a2130; color: #d9a7e0; }
+.ind-unres { background: #3a2226; color: #e69aa0; }
+.ind-waves { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.ind-wave { display: flex; gap: 10px; align-items: flex-start; }
+.ind-wave-hd { flex: 0 0 64px; color: var(--clr-accent); font-size: 12px; font-variant-numeric: tabular-nums; padding-top: 2px; }
+.ind-wave-jobs { display: flex; flex-wrap: wrap; gap: 6px; }
+.ind-wave-job { background: #161b28; border: 1px solid var(--clr-border); border-radius: 8px; padding: 2px 8px; font-size: 12px; color: #cdd6e6; }
+.ind-queue-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid #1a2030; }
+.ind-queue-name { color: #fff; font-size: 14px; }
+.ind-queue-qty { color: var(--clr-text-soft); font-variant-numeric: tabular-nums; }
+.ind-queue-del { margin-left: auto; background: none; border: none; color: #e69aa0; cursor: pointer; font-size: 14px; padding: 2px 8px; }
+.ind-queue-del:hover { color: #ff6b74; }
+.ind-queue-actions { margin-top: 12px; }
+.ind-inner-card { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--clr-border); }

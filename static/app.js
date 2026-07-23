@@ -461,6 +461,7 @@ function switchTab(name) {
   if (name === 'planetary' && typeof onPlanetaryTabOpen === 'function') onPlanetaryTabOpen();
   if (name === 'planetdb' && typeof onPlanetDbTabOpen === 'function') onPlanetDbTabOpen();
   if (name === 'reactions' && typeof onReactionsTabOpen === 'function') onReactionsTabOpen();
+  if (name === 'industry' && typeof onIndustryTabOpen === 'function') onIndustryTabOpen();
   if (name === 'layout' && typeof onLayoutTabOpen === 'function') onLayoutTabOpen();
   if (name === 'characters' && typeof loadCharacters === 'function') loadCharacters();
   if (name === 'analyze' && typeof onAnalyzeTabOpen === 'function') onAnalyzeTabOpen();

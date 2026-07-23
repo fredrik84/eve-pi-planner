@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <script>try{var _cl=document.documentElement.classList;if(localStorage.getItem('ppNavLoggedIn')==='1')_cl.add('nav-li');if(localStorage.getItem('ppNavIsAdmin')==='1')_cl.add('nav-adm');if(localStorage.getItem('ppNavIsGroupMgr')==='1')_cl.add('nav-grpmgr');if(localStorage.getItem('ppNavFeatLayout')==='1')_cl.add('nav-feat-layout');if(localStorage.getItem('ppNavFeatPdb')==='1')_cl.add('nav-feat-pdb');if(localStorage.getItem('ppNavFeatRx')==='1')_cl.add('nav-feat-reactions');}catch(e){}</script>
+  <script>try{var _cl=document.documentElement.classList;if(localStorage.getItem('ppNavLoggedIn')==='1')_cl.add('nav-li');if(localStorage.getItem('ppNavIsAdmin')==='1')_cl.add('nav-adm');if(localStorage.getItem('ppNavIsGroupMgr')==='1')_cl.add('nav-grpmgr');if(localStorage.getItem('ppNavFeatLayout')==='1')_cl.add('nav-feat-layout');if(localStorage.getItem('ppNavFeatPdb')==='1')_cl.add('nav-feat-pdb');if(localStorage.getItem('ppNavFeatRx')==='1')_cl.add('nav-feat-reactions');if(localStorage.getItem('ppNavFeatIndustry')==='1')_cl.add('nav-feat-industry');}catch(e){}</script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>EVE PI Planner</title>
@@ -25,7 +25,7 @@
   <link rel="stylesheet" href="/style-components.css?v=1">
   <link rel="stylesheet" href="/style-contribute.css?v=11">
   <link rel="stylesheet" href="/style-wizard.css?v=2">
-  <link rel="stylesheet" href="/style-layout-admin.css?v=27">
+  <link rel="stylesheet" href="/style-layout-admin.css?v=28">
   <link rel="stylesheet" href="/style-analysis-dashboard.css?v=22">
   <link rel="stylesheet" href="/style-misc-responsive.css?v=7">
 </head>
@@ -62,6 +62,7 @@
         <div class="nav-group nav-group-tabs" id="industryNavGroup">
           <div class="nav-group-hd"><span class="nav-ico">IN</span><span class="nav-lbl">Industry</span></div>
           <button class="tab tab-sub" data-tab="reactions"><span class="nav-ico">RX</span><span class="nav-lbl">Reactions</span></button>
+          <button class="tab tab-sub" data-tab="industry"><span class="nav-ico">MF</span><span class="nav-lbl">Manufacturing</span></button>
         </div>
         <div class="nav-group" id="adminNavGroup">
           <div class="nav-group-hd"><span class="nav-ico">AD</span><span class="nav-lbl">Admin</span></div>
@@ -715,6 +716,37 @@
         </div>
       </div><!-- /rxWizard -->
     </div><!-- /tab-reactions -->
+
+    <!-- ── Tab: Manufacturing (Industry planner) ───────────────────────────────── -->
+    <div id="tab-industry" class="tab-panel" style="display:none">
+      <div class="pp-card">
+        <h2 class="pp-card-title">Manufacturing planner <span class="admin-preview-tag" id="indPreviewTag" style="display:none">admin preview</span></h2>
+        <p class="pp-sub">Pick a product and a quantity — it decides build-vs-buy for every component, prices the shopping list against your markets (local → Jita), and reports what it costs and how long it takes. Add products to your build queue to plan them all together across your job slots.</p>
+        <div id="indSlots" class="ind-slots"></div>
+        <div class="ind-plan-form">
+          <div class="ind-search-wrap">
+            <input type="text" id="indSearch" placeholder="Search a buildable (e.g. Hobgoblin II)…" autocomplete="off">
+            <div id="indSearchResults" class="ind-search-results" style="display:none"></div>
+          </div>
+          <input type="number" id="indQty" min="1" value="1" title="Quantity">
+          <button id="indPlanBtn" onclick="indRunPlan()" disabled>Plan build</button>
+          <button class="pp-add-btn" id="indQueueBtn" onclick="indAddToQueue()" disabled title="Add this product to your build queue">+ Queue</button>
+        </div>
+        <div id="indPickHint" class="ind-pick-hint"></div>
+      </div>
+
+      <div id="indResult"></div>
+
+      <div class="pp-card" id="indQueueCard">
+        <h2 class="pp-card-title">Build queue</h2>
+        <p class="pp-sub">Everything queued is planned together — shared components batch into one build. </p>
+        <div id="indQueueList"></div>
+        <div class="ind-queue-actions">
+          <button id="indQueuePlanBtn" onclick="indPlanQueue()">Plan whole queue</button>
+        </div>
+        <div id="indQueueResult"></div>
+      </div>
+    </div><!-- /tab-industry -->
 
     <!-- ── Tab: Contribute ─────────────────────────────────────────────────────── -->
     <div id="tab-contribute" class="tab-panel" style="display:none">
@@ -1467,8 +1499,8 @@ PVF-N9    3         95                 60             80                  100   
   </div>
 
   <script src="/utils.js?v=6"></script>
-  <script src="/app.js?v=39"></script>
-  <script src="/planetary.js?v=367"></script>
+  <script src="/app.js?v=40"></script>
+  <script src="/planetary.js?v=368"></script>
   <script src="/dashboard.js?v=25"></script>
   <script src="/admin.js?v=21"></script>
   <script src="/planetdb.js?v=3"></script>
@@ -1476,5 +1508,6 @@ PVF-N9    3         95                 60             80                  100   
   <script src="/analysis.js?v=62"></script>
   <script src="/layout.js?v=2"></script>
   <script src="/reactions.js?v=93"></script>
+  <script src="/industry.js?v=1"></script>
 </body>
 </html>

@@ -183,6 +183,7 @@ function _applyTabGates() {
     { key: 'factory_layout', storageKey: 'ppNavFeatLayout', cls: 'nav-feat-layout', tab: 'layout' },
     { key: 'planet_db',      storageKey: 'ppNavFeatPdb',    cls: 'nav-feat-pdb',    tab: 'planetdb' },
     { key: 'reactions',      storageKey: 'ppNavFeatRx',     cls: 'nav-feat-reactions', tab: 'reactions' },
+    { key: 'industry',       storageKey: 'ppNavFeatIndustry', cls: 'nav-feat-industry', tab: 'industry' },
   ];
   const cur = localStorage.getItem('activeTab');
   let needRedirect = false;

@@ -308,6 +308,27 @@ class IndustryPlanRequest(BaseModel):
     facility_tax_pct: float = 0.0
 
 
+@router.get("/api/industry/search")
+def industry_search(q: str, ctx: int = Depends(require_context)):
+    """Buildable products (manufacturing or reaction) whose name matches `q` — the product picker.
+    Shortest names first so an exact-ish match surfaces above longer variants."""
+    q = (q or "").strip()
+    if len(q) < 2:
+        return {"results": []}
+    con = get_connection()
+    try:
+        rows = con.execute(
+            "SELECT t.type_id, t.name FROM types t "
+            "WHERE t.name LIKE ? AND (t.type_id IN (SELECT product_type_id FROM blueprints) "
+            "OR t.type_id IN (SELECT output_type_id FROM reactions)) "
+            "ORDER BY LENGTH(t.name), t.name LIMIT 25",
+            (f"%{q}%",),
+        ).fetchall()
+        return {"results": [{"type_id": r["type_id"], "name": r["name"]} for r in rows]}
+    finally:
+        con.close()
+
+
 @router.post("/api/industry/plan")
 def industry_plan(req: IndustryPlanRequest, ctx: int = Depends(require_context)):
     """Read-only make-or-buy plan for one product+quantity: build tree, priced shopping list, and

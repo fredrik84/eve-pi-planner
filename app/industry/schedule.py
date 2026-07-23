@@ -287,6 +287,9 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
     deps = _built_deps(agg, mfg, rx)
     priority = _critical_priority(agg, deps, mfg, rx, params)
     sched = schedule(tasks, by_type, deps, pools, priority)
+    for w in sched["waves"]:                       # enrich wave tasks with readable names
+        for t in w["tasks"]:
+            t["name"] = names.get(t["type_id"], str(t["type_id"]))
 
     # Cost roll-up from the aggregated demand (single batch per type — the honest, shared-batch cost).
     materials_cost = 0.0
