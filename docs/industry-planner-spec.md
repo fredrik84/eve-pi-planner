@@ -236,8 +236,13 @@ Admin → Features when ready. No public per-user endpoints (rule 8): every endp
   excess/stock ledger + `on_hand` netting, resource-constrained dual-pool list scheduler
   (`app/industry/schedule.py`): makespan, waves, BPC-run-cap job splitting.
   `POST /api/industry/plan-queue`. All in `test_industry.py` (51 in-process checks).
-- **Phase 3** — persistent queue + slot system + live ESI job tracking + "to install" checklist +
-  alerting + **spawning real reaction orders** (dual-pool scheduling) + the first frontend tab.
+- **Phase 3 — IN PROGRESS.** Done: per-character manufacturing slot pools from ESI skills
+  (`app/industry/slots.py`, Mass Production / Advanced Mass Production added to the skill fetch) +
+  the scheduler defaulting its pools to the account; the persistent build queue
+  (`pp_industry_orders` + CRUD in `app/industry/orders.py`) + `/api/industry/queue-plan` that
+  aggregates all queued orders and schedules them together. Remaining: live ESI manufacturing-job
+  tracking (activity_id 1) → *free* slots, "to install" checklist, alerting (5 kinds into
+  `compute_colony_alerts`), **spawning real reaction orders**, and the first frontend tab.
 - **Phase 4** — blueprint library UI (manual BPC costs, owned-BPO ME/TE) + treat items you already
   produce (PI / Reactions output) or hold in stock as available inputs (`on_hand` is already wired).
 - **Phase 5 (deferred)** — invention-cost BPCs, contract scanning, T3 reverse-engineering.
