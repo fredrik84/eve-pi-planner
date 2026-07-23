@@ -16,3 +16,7 @@ from app.industry.graph import (  # noqa: F401 — importing registers /api/indu
     load_manufacturing_graph, load_reaction_graph, collect_reachable,
     effective_material_qty, resolve_unit_costs, build_plan, IndustryPlanRequest,
 )
+from app.industry.schedule import (  # noqa: F401 — importing registers /api/industry/plan-queue
+    aggregate_demand, build_tasks, schedule, plan_queue, Task,
+    IndustryQueueRequest, QueueTarget,
+)

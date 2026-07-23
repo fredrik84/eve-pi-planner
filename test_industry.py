@@ -15,7 +15,11 @@ sys.path.insert(0, ".")
 
 from app.industry.graph import (
     BuildParams, effective_material_qty, load_manufacturing_graph, load_reaction_graph,
-    collect_reachable, build_plan,
+    collect_reachable, build_plan, resolve_unit_costs,
+)
+from app.industry.schedule import (
+    aggregate_demand, build_tasks, schedule, plan_queue, Task, _split_runs, _built_deps,
+    _critical_priority,
 )
 
 # ── Synthetic graph ───────────────────────────────────────────────────────────────────────────
@@ -157,6 +161,97 @@ def test_quantity_scales_and_excess():
     check("goo for 1 run", goo == 10)
 
 
+def _agg_for(targets):
+    con = _seed_con()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+    memo, unit = resolve_unit_costs(mfg, rx, _prices(SELL), ADJ, BuildParams())
+    for tid, _ in targets:
+        unit(tid, frozenset())
+    return aggregate_demand(targets, memo, mfg, rx, BuildParams()), mfg, rx
+
+
+def test_demand_aggregation_shares_batches():
+    print("test_demand_aggregation_shares_batches")
+    # Two Widgets: Gadget demand = 2 widgets × 2 = 4 → ONE Gadget batch of 4 runs, not two of 2.
+    agg, mfg, rx = _agg_for([(100, 2)])
+    check("widget runs 2", agg[100]["runs"] == 2)
+    check("gadget batched to 4", agg[101]["runs"] == 4)
+    check("sprocket runs 2", agg[102]["runs"] == 2)          # 4 needed / 2-per-run
+    check("mineralA gross 20", agg[200]["gross"] == 20)
+    # Two separate orders for the same product aggregate identically to one order of the sum.
+    agg2, _, _ = _agg_for([(100, 1), (100, 1)])
+    check("split orders == combined", agg2[101]["runs"] == 4)
+
+
+def test_excess_ledger():
+    print("test_excess_ledger (reaction output 2 → 1 leftover on odd demand)")
+    agg, _, _ = _agg_for([(101, 1)])                          # 1 Gadget → 1 Sprocket needed
+    check("sprocket produced 2", agg[102]["produced"] == 2)
+    check("sprocket leftover 1", agg[102]["leftover"] == 1)
+
+
+def test_on_hand_reduces_builds():
+    print("test_on_hand_reduces_builds (stock nets out net demand)")
+    con = _seed_con()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+    memo, unit = resolve_unit_costs(mfg, rx, _prices(SELL), ADJ, BuildParams())
+    unit(101, frozenset())
+    # Need 4 Gadgets but 3 already in stock → build only 1.
+    agg = aggregate_demand([(101, 4)], memo, mfg, rx, BuildParams(), on_hand={101: 3})
+    check("gadget net 1", agg[101]["net"] == 1)
+    check("gadget runs 1", agg[101]["runs"] == 1)
+
+
+def test_split_runs():
+    print("test_split_runs (BPC run cap)")
+    check("unlimited", _split_runs(50, 0) == [50])
+    check("under cap", _split_runs(5, 10) == [5])
+    check("even split", _split_runs(20, 10) == [10, 10])
+    check("uneven balanced", _split_runs(25, 10) == [9, 8, 8])
+
+
+def test_scheduler_linear_chain():
+    print("test_scheduler_linear_chain (Sprocket→Gadget→Widget, 2h each, serial)")
+    agg, mfg, rx = _agg_for([(100, 2)])
+    tasks, by_type = build_tasks(agg, mfg, rx, BuildParams())
+    deps = _built_deps(agg, mfg, rx)
+    prio = _critical_priority(agg, deps, mfg, rx, BuildParams())
+    sched = schedule(tasks, by_type, deps, {"manufacturing": 10, "reaction": 5}, prio)
+    # Each tier is 2h; the chain is strictly serial regardless of free slots → 6h makespan.
+    check("makespan 6h", approx(sched["makespan_hours"], 6.0))
+    check("three waves", len(sched["waves"]) == 3)
+    check("nothing unscheduled", sched["unscheduled"] == [])
+    check("wave0 is reaction", sched["waves"][0]["tasks"][0]["type_id"] == 102)
+
+
+def test_scheduler_slot_contention():
+    print("test_scheduler_slot_contention (4 independent 1h jobs, 2 slots → 2h)")
+    tasks = [Task(f"t{i}", 900 + i, "manufacturing", 1, 3600.0) for i in range(4)]
+    by_type = {t.type_id: [t] for t in tasks}
+    deps = {t.type_id: set() for t in tasks}          # all independent, all ready at t=0
+    prio = {t.type_id: 1.0 for t in tasks}
+    sched = schedule(tasks, by_type, deps, {"manufacturing": 2, "reaction": 0}, prio)
+    check("makespan 2h", approx(sched["makespan_hours"], 2.0))    # 4 jobs / 2 slots = 2 rounds
+    check("two start waves", len(sched["waves"]) == 2)
+    # With infinite slots the same 4 jobs finish in 1h.
+    sched2 = schedule([Task(f"t{i}", 900 + i, "manufacturing", 1, 3600.0) for i in range(4)],
+                      by_type, deps, {"manufacturing": 4, "reaction": 0}, prio)
+    check("wide makespan 1h", approx(sched2["makespan_hours"], 1.0))
+
+
+def test_plan_queue_end_to_end():
+    print("test_plan_queue_end_to_end")
+    con = _seed_con()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+    res = plan_queue([(100, 2)], mfg, rx, _prices(SELL), ADJ, BuildParams(), NAMES,
+                     {"manufacturing": 10, "reaction": 5})
+    check("job_count 3", res["metrics"]["job_count"] == 3)
+    check("makespan 6h", approx(res["metrics"]["makespan_hours"], 6.0))
+    # materials for 2 widgets: MineralA 20×100 + MineralB 20×50 + Goo 20×20 = 3400
+    check("materials 3400", approx(res["metrics"]["materials_cost"], 3400.0))
+    check("shopping 3 raws", len(res["shopping_list"]) == 3)
+
+
 def main():
     test_material_formula()
     test_graph_loaders()
@@ -164,6 +259,13 @@ def main():
     test_make_or_buy_flips()
     test_root_forced_build()
     test_quantity_scales_and_excess()
+    test_demand_aggregation_shares_batches()
+    test_excess_ledger()
+    test_on_hand_reduces_builds()
+    test_split_runs()
+    test_scheduler_linear_chain()
+    test_scheduler_slot_contention()
+    test_plan_queue_end_to_end()
     print(f"\nAll {_passed} checks passed.")
 
 
