@@ -239,6 +239,19 @@ def test_scheduler_slot_contention():
     check("wide makespan 1h", approx(sched2["makespan_hours"], 1.0))
 
 
+def test_manufacturing_slots():
+    print("test_manufacturing_slots (skill → slot formula)")
+    from app.industry.slots import manufacturing_slots, reaction_slots
+    def row(mp, amp, mr=0, amr=0):
+        return {"mass_production": mp, "advanced_mass_production": amp,
+                "mass_reactions": mr, "advanced_mass_reactions": amr}
+    check("base only", manufacturing_slots(row(0, 0)) == 1)
+    check("MP5", manufacturing_slots(row(5, 0)) == 6)
+    check("MP5+AMP5 capped 11", manufacturing_slots(row(5, 5)) == 11)
+    check("over-cap still 11", manufacturing_slots(row(5, 8)) == 11)
+    check("reaction slots independent", reaction_slots(row(5, 5, 4, 3)) == 8)
+
+
 def test_plan_queue_end_to_end():
     print("test_plan_queue_end_to_end")
     con = _seed_con()
@@ -265,6 +278,7 @@ def main():
     test_split_runs()
     test_scheduler_linear_chain()
     test_scheduler_slot_contention()
+    test_manufacturing_slots()
     test_plan_queue_end_to_end()
     print(f"\nAll {_passed} checks passed.")
 

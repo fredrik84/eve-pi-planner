@@ -35,6 +35,7 @@ from app.industry.graph import (
     BuildParams, load_manufacturing_graph, load_reaction_graph, collect_reachable,
     effective_material_qty, resolve_unit_costs, SCC_SURCHARGE_PCT,
 )
+from app.industry.slots import _slot_pool
 
 
 # ── Demand aggregation (MRP explosion) ────────────────────────────────────────────────────────
@@ -341,8 +342,8 @@ class IndustryQueueRequest(BaseModel):
     te_pct: float = 0.0
     system_id: int | None = None
     facility_tax_pct: float = 0.0
-    mfg_slots: int = 10                 # Phase 3 will derive these from the account's characters
-    rx_slots: int = 5
+    mfg_slots: int | None = None        # None → derive from the account's characters' skills
+    rx_slots: int | None = None
 
 
 @router.post("/api/industry/plan-queue")
@@ -378,6 +379,11 @@ def industry_plan_queue(req: IndustryQueueRequest, ctx: int = Depends(require_co
         rx_cost_index=fetch_system_cost_index(req.system_id, "reaction"),
         facility_tax_pct=req.facility_tax_pct,
     )
-    pools = {"manufacturing": max(1, req.mfg_slots), "reaction": max(1, req.rx_slots)}
+    # Slot pools: use the request overrides, else derive from the account's characters' skills
+    # (falling back to 1 each so a brand-new account with no manufacturing skills still schedules).
+    pool = _slot_pool(ctx)
+    mfg_slots = req.mfg_slots if req.mfg_slots is not None else pool["manufacturing_slots"]
+    rx_slots = req.rx_slots if req.rx_slots is not None else pool["reaction_slots"]
+    pools = {"manufacturing": max(1, mfg_slots), "reaction": max(1, rx_slots)}
     targets = [(t.type_id, t.quantity) for t in req.targets]
     return plan_queue(targets, mfg, rx, prices, adjusted, params, names, pools)

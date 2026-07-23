@@ -20,3 +20,6 @@ from app.industry.schedule import (  # noqa: F401 — importing registers /api/i
     aggregate_demand, build_tasks, schedule, plan_queue, Task,
     IndustryQueueRequest, QueueTarget,
 )
+from app.industry.slots import (  # noqa: F401 — importing registers /api/industry/slots
+    manufacturing_slots, reaction_slots, _slot_pool,
+)

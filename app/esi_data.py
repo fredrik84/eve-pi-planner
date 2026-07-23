@@ -174,6 +174,8 @@ def list_characters(pp_session: str = Cookie(default=None)):
                    planetology, advanced_planetology, COALESCE(is_dummy, 0) AS is_dummy,
                    COALESCE(mass_reactions, 0) AS mass_reactions,
                    COALESCE(advanced_mass_reactions, 0) AS advanced_mass_reactions,
+                   COALESCE(mass_production, 0) AS mass_production,
+                   COALESCE(advanced_mass_production, 0) AS advanced_mass_production,
                    COALESCE(scopes, '') AS scopes
             FROM pp_characters WHERE context_id=?
         """, (context_id,)).fetchall()
@@ -450,6 +452,11 @@ def list_characters(pp_session: str = Cookie(default=None)):
             "mass_reactions":     r["mass_reactions"],
             "adv_mass_reactions": r["advanced_mass_reactions"],
             "reaction_slots":     min(11, 1 + r["mass_reactions"] + r["advanced_mass_reactions"]),
+            # Manufacturing skills + capacity (Industry planner). manufacturing_slots =
+            # 1 base + 1/level of Mass Production + 1/level of Advanced Mass Production, capped 11.
+            "mass_production":       r["mass_production"],
+            "adv_mass_production":   r["advanced_mass_production"],
+            "manufacturing_slots":   min(11, 1 + r["mass_production"] + r["advanced_mass_production"]),
             "reactions_opted_in": "read_character_jobs" in sc,
             # Opted into job tracking but the token predates (or never got) the corrected
             # structure-read scope — so facility names can't resolve and show as "Structure #<id>".
@@ -603,7 +610,8 @@ def refresh_char_planets(character_id: int, context_id: int = Depends(require_co
         con = get_connection()
         con.execute(
             "UPDATE pp_characters SET interplanetary_consolidation=?, command_center_upgrades=?, "
-            "planetology=?, advanced_planetology=?, mass_reactions=?, advanced_mass_reactions=? "
+            "planetology=?, advanced_planetology=?, mass_reactions=?, advanced_mass_reactions=?, "
+            "mass_production=?, advanced_mass_production=? "
             "WHERE character_id=?",
             (
                 skills.get("interplanetary_consolidation", 0),
@@ -612,6 +620,8 @@ def refresh_char_planets(character_id: int, context_id: int = Depends(require_co
                 skills.get("advanced_planetology", 0),
                 skills.get("mass_reactions", 0),
                 skills.get("advanced_mass_reactions", 0),
+                skills.get("mass_production", 0),
+                skills.get("advanced_mass_production", 0),
                 character_id,
             ),
         )
