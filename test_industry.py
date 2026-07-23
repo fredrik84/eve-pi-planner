@@ -252,6 +252,23 @@ def test_manufacturing_slots():
     check("reaction slots independent", reaction_slots(row(5, 5, 4, 3)) == 8)
 
 
+def test_per_product_me_from_blueprints():
+    print("test_per_product_me_from_blueprints (owned ME reduces that product's inputs)")
+    con = _seed_con()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+    # Own a Widget BPO at ME10 → Widget's inputs drop ~10%; Gadget (no owned BP) stays at ME0.
+    params = BuildParams(me_by_product={100: (10.0, 20.0)}, owned={100: {"kind": "bpo", "me": 10, "te": 20}})
+    res = build_plan(100, 1, mfg, rx, _prices(SELL), ADJ, params, NAMES)
+    # Widget needs 10 MineralA at ME0; at ME10 → 9. Gadget input unchanged (ME0 → 2).
+    shop = {s["type_id"]: s["qty"] for s in res["shopping_list"]}
+    check("mineralA reduced by ME10", shop[200] == 9)
+    check("gadget-side mineralB unchanged", shop[201] == 10)   # 5/run × 2 gadget runs, ME0
+    check("me_te_for owned", params.me_te_for(100, "manufacturing") == (10.0, 20.0))
+    check("me_te_for fallback", params.me_te_for(101, "manufacturing") == (0.0, 0.0))
+    check("me_te_for reaction zero", params.me_te_for(102, "reaction") == (0.0, 0.0))
+    check("tree shows owned", res["tree"]["owned"] == {"kind": "bpo", "me": 10, "te": 20})
+
+
 def test_plan_queue_end_to_end():
     print("test_plan_queue_end_to_end")
     con = _seed_con()
@@ -279,6 +296,7 @@ def main():
     test_scheduler_linear_chain()
     test_scheduler_slot_contention()
     test_manufacturing_slots()
+    test_per_product_me_from_blueprints()
     test_plan_queue_end_to_end()
     print(f"\nAll {_passed} checks passed.")
 

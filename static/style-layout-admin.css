@@ -823,3 +823,11 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-queue-del:hover { color: #ff6b74; }
 .ind-queue-actions { margin-top: 12px; }
 .ind-inner-card { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--clr-border); }
+.ind-bp-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 14px; font-size: 12px; }
+.ind-bp-ok { color: #7fdca6; }
+.ind-bp-hint { color: var(--clr-text-soft); }
+.ind-bp-btn { background: #161b28; border: 1px solid var(--clr-border); color: #9fb4d8; border-radius: 6px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
+.ind-bp-btn:hover { background: #1b2233; color: #fff; }
+.ind-bp-connect { background: #163524; border-color: #2c6a44; color: #7fdca6; }
+.ind-bp-connect:hover { background: #1c4a30; }
+.ind-owned { font-size: 10px; background: #163a3a; color: #7fe0d0; padding: 1px 6px; border-radius: 8px; }

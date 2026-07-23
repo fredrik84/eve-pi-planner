@@ -13,7 +13,44 @@ async function onIndustryTabOpen() {
     tag.style.display = (!pub && typeof _featuresIsAdmin !== 'undefined' && _featuresIsAdmin) ? '' : 'none';
   }
   indLoadSlots();
+  indLoadBlueprints();
   indLoadQueue();
+}
+
+// ── Blueprint auto-read (ME/TE + ownership from ESI) ────────────────────────────────────────
+async function indLoadBlueprints() {
+  const el = document.getElementById('indBlueprints');
+  if (!el) return;
+  try {
+    const r = await fetch('/api/industry/blueprints');
+    if (!r.ok) { el.innerHTML = ''; return; }
+    const d = await r.json();
+    if (d.connected) {
+      el.innerHTML = `<span class="ind-bp-ok">✓ ${d.owned_count} blueprint${d.owned_count === 1 ? '' : 's'} detected — using your real ME/TE</span>`
+        + `<button class="ind-bp-btn" onclick="indRefreshBlueprints()">Refresh</button>`;
+    } else {
+      el.innerHTML = `<span class="ind-bp-hint">Connect a character to auto-read your blueprints’ ME/TE and which BPOs you own — no manual entry.</span>`
+        + `<button class="ind-bp-btn ind-bp-connect" onclick="indConnectBlueprints()">Connect blueprints</button>`;
+    }
+  } catch (e) { el.innerHTML = ''; }
+}
+
+function indConnectBlueprints() {
+  const w = window.open('/auth/login?industry=1', 'EVE SSO', 'width=800,height=900');
+  window.addEventListener('message', function handler(e) {
+    if (e.data === 'esi-done') {
+      window.removeEventListener('message', handler);
+      if (w && !w.closed) w.close();
+      indRefreshBlueprints();
+    }
+  });
+}
+
+async function indRefreshBlueprints() {
+  const el = document.getElementById('indBlueprints');
+  if (el) el.innerHTML = '<span class="ind-bp-hint">Reading blueprints…</span>';
+  try { await fetch('/api/industry/blueprints/refresh', { method: 'POST' }); } catch (e) {}
+  indLoadBlueprints();
 }
 
 // ── Slot pool ───────────────────────────────────────────────────────────────────────────────
@@ -118,9 +155,11 @@ function _indTreeNode(n, depth) {
     : n.decision === 'buy' ? '<span class="ind-badge ind-buy">buy</span>'
     : '<span class="ind-badge ind-unres">no price</span>';
   const cost = n.unit_cost != null ? fmtIsk((n.unit_cost || 0) * (n.qty || 0)) : '';
+  const owned = n.owned
+    ? `<span class="ind-owned" title="You own this ${n.owned.kind.toUpperCase()} (ME${n.owned.me}/TE${n.owned.te})">${n.owned.kind.toUpperCase()} ME${n.owned.me}</span>` : '';
   let html = `<div class="ind-tree-row" style="padding-left:${pad}px">`
     + `<span class="ind-tree-name">${_esc(n.name)}</span> `
-    + `<span class="ind-tree-qty">×${Math.round(n.qty).toLocaleString()}</span> ${badge}`
+    + `<span class="ind-tree-qty">×${Math.round(n.qty).toLocaleString()}</span> ${badge} ${owned}`
     + (cost ? `<span class="ind-tree-cost">${cost}</span>` : '')
     + `</div>`;
   (n.inputs || []).forEach(c => { html += _indTreeNode(c, depth + 1); });

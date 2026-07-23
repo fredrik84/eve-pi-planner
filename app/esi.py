@@ -110,6 +110,17 @@ REACTIONS_SCOPES = (
 MARKET_SCOPES = REACTIONS_SCOPES
 INDUSTRY_JOBS_SCOPES = REACTIONS_SCOPES
 
+# Industry (Manufacturing planner) opt-in: read the character's owned blueprints (ME/TE + which
+# BPOs/BPCs they hold) so the planner uses their REAL blueprints with zero manual entry, plus the
+# manufacturing-job scope so a later slice can read live jobs for free-slot math. Requested only via
+# the "connect for Industry" login (?industry=1); UNIONS with the base SCOPES like the others. The
+# blueprint scope must be LISTED on the EVE application at developers.eveonline.com (listing ≠
+# requesting — same as wallet/market).
+BLUEPRINTS_SCOPE = "esi-characters.read_blueprints.v1"
+INDUSTRY_SCOPES = (
+    f"{SCOPES} {BLUEPRINTS_SCOPE} {INDUSTRY_JOBS_SCOPE} {CORP_INDUSTRY_JOBS_SCOPE} {STRUCTURES_SCOPE}"
+)
+
 # Wallet-only toons (corp-wallet scope, no planets scope) aren't PI characters. AND this into any
 # single-table pp_characters PI query to exclude them; legacy empty-scope chars are kept. Begins with
 # "AND " so it appends directly after an existing WHERE predicate (mind the leading space at the join).
@@ -842,7 +853,7 @@ def _fetch_planets(character_id: int, access_token: str, only_planet_id: int | N
 # ── OAuth endpoints ───────────────────────────────────────────────────────────
 
 @router.get("/auth/login")
-def esi_login(wallet: int = 0, reactions: int = 0, market: int = 0, pp_session: str = Cookie(default=None)):
+def esi_login(wallet: int = 0, reactions: int = 0, market: int = 0, industry: int = 0, pp_session: str = Cookie(default=None)):
     if not _is_configured():
         return HTMLResponse(
             "<h2>ESI not configured</h2>"
@@ -874,6 +885,7 @@ def esi_login(wallet: int = 0, reactions: int = 0, market: int = 0, pp_session: 
         pass
     scope_enc = (
         REACTIONS_SCOPES if (market or reactions) else
+        INDUSTRY_SCOPES if industry else
         WALLET_SCOPES if wallet else
         SCOPES
     ).replace(" ", "%20")

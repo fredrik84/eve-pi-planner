@@ -90,7 +90,7 @@ def aggregate_demand(targets: list[tuple[int, int]], memo: dict, mfg: dict, rx: 
     for tid in built:
         recipe = mfg.get(tid) or rx.get(tid)
         activity = "manufacturing" if tid in mfg else "reaction"
-        me = params.me_pct if activity == "manufacturing" else 0.0
+        me, _te = params.me_te_for(tid, activity)
         mult = (params.struct_material_mult if activity == "manufacturing"
                 else params.reaction_material_mult)
         output_qty = recipe["output_qty"]
@@ -150,7 +150,7 @@ def build_tasks(agg: dict, mfg: dict, rx: dict, params: BuildParams) -> tuple[li
             continue
         recipe = mfg.get(tid) or rx.get(tid)
         max_runs = mfg[tid]["max_runs"] if tid in mfg else 0
-        te = params.te_pct if info["activity"] == "manufacturing" else 0.0
+        _me, te = params.me_te_for(tid, info["activity"])
         per_run = recipe["base_time"] * (1 - te / 100.0)
         for i, r in enumerate(_split_runs(info["runs"], max_runs)):
             t = Task(f"{tid}-{i}", tid, info["activity"], r, r * per_run)
@@ -183,7 +183,7 @@ def _critical_priority(agg: dict, deps: dict, mfg: dict, rx: dict, params: Build
     def type_dur(tid: int) -> float:
         info = agg[tid]
         recipe = mfg.get(tid) or rx.get(tid)
-        te = params.te_pct if info["activity"] == "manufacturing" else 0.0
+        _me, te = params.me_te_for(tid, info["activity"])
         return info["runs"] * recipe["base_time"] * (1 - te / 100.0)
 
     memo: dict[int, float] = {}

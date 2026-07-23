@@ -23,4 +23,7 @@ from app.industry.schedule import (  # noqa: F401 — importing registers /api/i
 from app.industry.slots import (  # noqa: F401 — importing registers /api/industry/slots
     manufacturing_slots, reaction_slots, _slot_pool,
 )
+from app.industry.blueprints import (  # noqa: F401 — registers the blueprint auto-read endpoints
+    ensure_char_blueprints_table, owned_blueprints, fetch_character_blueprints,
+)
 from app.industry import orders as _orders  # noqa: F401 — registers the build-queue endpoints

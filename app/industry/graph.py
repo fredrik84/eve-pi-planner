@@ -21,7 +21,7 @@ docs/industry-planner-spec.md. For now a reaction node is costed generically her
 it through app.reactions for the authoritative economics + slot allocation.
 """
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from fastapi import Depends, HTTPException
 from pydantic import BaseModel
@@ -57,6 +57,21 @@ class BuildParams:
     rx_cost_index: float = 0.0                # system reaction cost index
     facility_tax_pct: float = 0.0             # structure facility tax %
     build_margin: float = 0.0                 # build must beat buy by this fraction to be chosen
+    # Per-product ME/TE from the account's actual owned blueprints (product_type_id -> (me, te)).
+    # When a product is here, its real researched efficiency is used instead of the global me_pct/
+    # te_pct fallback. `owned` carries the same map's ownership detail for display.
+    me_by_product: dict = field(default_factory=dict)
+    owned: dict = field(default_factory=dict)
+
+    def me_te_for(self, type_id: int, activity: str) -> tuple[float, float]:
+        """(me_pct, te_pct) for a manufacturing product: its owned-blueprint values if known, else
+        the global fallback. Reactions have no blueprint ME/TE (rig-based, via the material mult),
+        so they return (0, 0)."""
+        if activity != "manufacturing":
+            return (0.0, 0.0)
+        if type_id in self.me_by_product:
+            return self.me_by_product[type_id]
+        return (self.me_pct, self.te_pct)
 
 
 # ── SDE recipe graph loaders ──────────────────────────────────────────────────────────────────
@@ -161,7 +176,7 @@ def resolve_unit_costs(mfg: dict, rx: dict, prices: dict, adjusted: dict,
         activity, recipe = _producer(type_id, mfg, rx)
         build_uc = None
         if recipe and type_id not in stack:
-            me = params.me_pct if activity == "manufacturing" else 0.0
+            me, _te = params.me_te_for(type_id, activity)
             mult = (params.struct_material_mult if activity == "manufacturing"
                     else params.reaction_material_mult)
             ci = params.mfg_cost_index if activity == "manufacturing" else params.rx_cost_index
@@ -233,7 +248,7 @@ def build_plan(target: int, quantity: int, mfg: dict, rx: dict, prices: dict, ad
                 "source": node.get("source"),
             }
 
-        me = params.me_pct if activity == "manufacturing" else 0.0
+        me, te = params.me_te_for(type_id, activity)
         mult = (params.struct_material_mult if activity == "manufacturing"
                 else params.reaction_material_mult)
         ci = params.mfg_cost_index if activity == "manufacturing" else params.rx_cost_index
@@ -249,7 +264,7 @@ def build_plan(target: int, quantity: int, mfg: dict, rx: dict, prices: dict, ad
             eiv += inp["quantity"] * runs * adjusted.get(inp["type_id"], 0.0)
             children.append(explode(inp["type_id"], need))
         job_cost = eiv * (ci + params.facility_tax_pct / 100.0 + SCC_SURCHARGE_PCT)
-        job_seconds = recipe["base_time"] * runs * (1 - params.te_pct / 100.0)
+        job_seconds = recipe["base_time"] * runs * (1 - te / 100.0)
         totals["job_cost"] += job_cost
         totals["job_seconds"] += job_seconds
         jobs.append({
@@ -262,7 +277,7 @@ def build_plan(target: int, quantity: int, mfg: dict, rx: dict, prices: dict, ad
             "decision": "build", "activity": activity, "qty": qty, "runs": runs,
             "produced": produced, "excess": produced - qty,
             "unit_cost": node["build_unit_cost"], "buy_unit_cost": node["buy_unit_cost"],
-            "job_cost": job_cost, "inputs": children,
+            "job_cost": job_cost, "owned": params.owned.get(type_id), "inputs": children,
         }
 
     tree = explode(target, quantity, is_root=True)
@@ -331,11 +346,18 @@ def resolve_build_params(context_id: int, me_pct: float, te_pct: float,
     d_sid, d_tax = account_build_defaults(context_id)
     sid = system_id if system_id is not None else d_sid
     tax = facility_tax_pct if facility_tax_pct is not None else d_tax
+    # Auto per-product ME/TE from the account's real owned blueprints (empty if not connected).
+    try:
+        from app.industry.blueprints import owned_blueprints
+        owned = owned_blueprints(context_id)
+    except Exception:
+        owned = {}
+    me_by_product = {p: (o["me"], o["te"]) for p, o in owned.items()}
     return BuildParams(
         me_pct=me_pct, te_pct=te_pct,
         mfg_cost_index=fetch_system_cost_index(sid, "manufacturing"),
         rx_cost_index=fetch_system_cost_index(sid, "reaction"),
-        facility_tax_pct=tax,
+        facility_tax_pct=tax, me_by_product=me_by_product, owned=owned,
     )
 
 
