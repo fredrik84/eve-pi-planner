@@ -304,8 +304,39 @@ class IndustryPlanRequest(BaseModel):
     quantity: int = 1
     me_pct: float = 0.0
     te_pct: float = 0.0
-    system_id: int | None = None       # build system, for the live cost indices; None = 0 indices
-    facility_tax_pct: float = 0.0
+    system_id: int | None = None       # None → derive from the account's Reactions build system
+    facility_tax_pct: float | None = None
+
+
+def account_build_defaults(context_id: int) -> tuple[int | None, float]:
+    """Zero-config build context: reuse the system + facility tax the account already configured
+    for Reactions as the default build location, so the Industry planner gets real cost indices
+    and tax with no separate setup. Least-effort by design — the player configured this once; a
+    dedicated industry build-system override can come later. Returns (system_id, facility_tax_pct);
+    (None, 0.0) if Reactions was never configured (safe no-cost-effect default)."""
+    try:
+        from app.reactions.settings import effective_reaction_settings, _resolve_system_id
+        s = effective_reaction_settings(context_id)
+        sid = _resolve_system_id(s.get("reaction_system"))
+        return sid, (s.get("facility_tax_pct") or 0.0)
+    except Exception:
+        return None, 0.0
+
+
+def resolve_build_params(context_id: int, me_pct: float, te_pct: float,
+                         system_id: int | None, facility_tax_pct: float | None) -> BuildParams:
+    """Build the resolver's params, auto-deriving the build system + tax from the account's
+    Reactions settings when the request didn't override them — so the caller needn't supply a
+    system id or tax by hand."""
+    d_sid, d_tax = account_build_defaults(context_id)
+    sid = system_id if system_id is not None else d_sid
+    tax = facility_tax_pct if facility_tax_pct is not None else d_tax
+    return BuildParams(
+        me_pct=me_pct, te_pct=te_pct,
+        mfg_cost_index=fetch_system_cost_index(sid, "manufacturing"),
+        rx_cost_index=fetch_system_cost_index(sid, "reaction"),
+        facility_tax_pct=tax,
+    )
 
 
 @router.get("/api/industry/search")
@@ -351,10 +382,5 @@ def industry_plan(req: IndustryPlanRequest, ctx: int = Depends(require_context))
 
     prices = resolve_market_data(ctx, list(ids))
     adjusted = fetch_adjusted_prices(list(ids))
-    params = BuildParams(
-        me_pct=req.me_pct, te_pct=req.te_pct,
-        mfg_cost_index=fetch_system_cost_index(req.system_id, "manufacturing"),
-        rx_cost_index=fetch_system_cost_index(req.system_id, "reaction"),
-        facility_tax_pct=req.facility_tax_pct,
-    )
+    params = resolve_build_params(ctx, req.me_pct, req.te_pct, req.system_id, req.facility_tax_pct)
     return build_plan(req.type_id, req.quantity, mfg, rx, prices, adjusted, params, names)

@@ -18,12 +18,12 @@ from pydantic import BaseModel
 
 from app.sde import get_connection, ensure_once
 from app.markets import resolve_market_data
-from app.industry_cost import fetch_system_cost_index, fetch_adjusted_prices
+from app.industry_cost import fetch_adjusted_prices
 from app.esi import require_context
 
 from app.industry._router import router
 from app.industry.graph import (
-    BuildParams, load_manufacturing_graph, load_reaction_graph, collect_reachable,
+    load_manufacturing_graph, load_reaction_graph, collect_reachable, resolve_build_params,
 )
 from app.industry.schedule import plan_queue
 from app.industry.slots import _slot_pool
@@ -172,7 +172,7 @@ class QueuePlanRequest(BaseModel):
     system_id: int | None = None
     me_pct: float = 0.0
     te_pct: float = 0.0
-    facility_tax_pct: float = 0.0
+    facility_tax_pct: float | None = None
     mfg_slots: int | None = None
     rx_slots: int | None = None
 
@@ -212,12 +212,7 @@ def queue_plan(req: QueuePlanRequest, ctx: int = Depends(require_context)):
 
     prices = resolve_market_data(ctx, list(ids))
     adjusted = fetch_adjusted_prices(list(ids))
-    params = BuildParams(
-        me_pct=req.me_pct, te_pct=req.te_pct,
-        mfg_cost_index=fetch_system_cost_index(req.system_id, "manufacturing"),
-        rx_cost_index=fetch_system_cost_index(req.system_id, "reaction"),
-        facility_tax_pct=req.facility_tax_pct,
-    )
+    params = resolve_build_params(ctx, req.me_pct, req.te_pct, req.system_id, req.facility_tax_pct)
     pool = _slot_pool(ctx)
     mfg_slots = req.mfg_slots if req.mfg_slots is not None else pool["manufacturing_slots"]
     rx_slots = req.rx_slots if req.rx_slots is not None else pool["reaction_slots"]

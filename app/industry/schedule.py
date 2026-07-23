@@ -27,13 +27,13 @@ from pydantic import BaseModel
 
 from app.sde import get_connection
 from app.markets import resolve_market_data
-from app.industry_cost import fetch_system_cost_index, fetch_adjusted_prices
+from app.industry_cost import fetch_adjusted_prices
 from app.esi import require_context
 
 from app.industry._router import router
 from app.industry.graph import (
     BuildParams, load_manufacturing_graph, load_reaction_graph, collect_reachable,
-    effective_material_qty, resolve_unit_costs, SCC_SURCHARGE_PCT,
+    effective_material_qty, resolve_unit_costs, SCC_SURCHARGE_PCT, resolve_build_params,
 )
 from app.industry.slots import _slot_pool
 
@@ -344,7 +344,7 @@ class IndustryQueueRequest(BaseModel):
     me_pct: float = 0.0
     te_pct: float = 0.0
     system_id: int | None = None
-    facility_tax_pct: float = 0.0
+    facility_tax_pct: float | None = None
     mfg_slots: int | None = None        # None → derive from the account's characters' skills
     rx_slots: int | None = None
 
@@ -376,12 +376,7 @@ def industry_plan_queue(req: IndustryQueueRequest, ctx: int = Depends(require_co
 
     prices = resolve_market_data(ctx, list(ids))
     adjusted = fetch_adjusted_prices(list(ids))
-    params = BuildParams(
-        me_pct=req.me_pct, te_pct=req.te_pct,
-        mfg_cost_index=fetch_system_cost_index(req.system_id, "manufacturing"),
-        rx_cost_index=fetch_system_cost_index(req.system_id, "reaction"),
-        facility_tax_pct=req.facility_tax_pct,
-    )
+    params = resolve_build_params(ctx, req.me_pct, req.te_pct, req.system_id, req.facility_tax_pct)
     # Slot pools: use the request overrides, else derive from the account's characters' skills
     # (falling back to 1 each so a brand-new account with no manufacturing skills still schedules).
     pool = _slot_pool(ctx)
