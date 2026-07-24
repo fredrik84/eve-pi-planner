@@ -587,6 +587,15 @@ function renderAdminStats(s) {
       ],
     },
     {
+      heading: 'Manufacturing',
+      tiles: [
+        tile((s.manufacturing_users_total ?? 0).toLocaleString(), 'accounts used'),
+        tile(_fmtIsk(s.manufacturing_turnover_total ?? 0), 'turnover (all accounts)'),
+        tile(_fmtIsk(s.manufacturing_net_profit_total ?? 0), 'net profit (all accounts)'),
+        tile((s.manufacturing_completions_total ?? 0).toLocaleString(), 'jobs completed'),
+      ],
+    },
+    {
       heading: 'Raw data',
       tiles: [
         tile(s.char_planet_scans, 'colony scans'),

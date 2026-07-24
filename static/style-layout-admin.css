@@ -868,3 +868,5 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-link-btn { background: none; border: none; color: var(--clr-accent); cursor: pointer; font-size: 12px; padding: 0; text-decoration: underline; text-underline-offset: 2px; }
 .ind-modal-section { margin-top: 16px; }
 .ind-modal-h { font-size: 13px; color: #9fb4d8; margin: 0 0 8px; }
+.ind-lifetime { margin: 4px 0 14px; }
+.ind-lifetime:empty { margin: 0; }

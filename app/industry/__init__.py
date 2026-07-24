@@ -28,5 +28,7 @@ from app.industry.blueprints import (  # noqa: F401 — registers the blueprint 
 )
 from app.industry.jobs import (  # noqa: F401 — registers the live manufacturing-job endpoints
     ensure_manufacturing_jobs_table, running_counts, running_jobs, fetch_manufacturing_jobs,
+    ensure_manufacturing_completions_table, log_manufacturing_completions,
+    log_all_manufacturing_completions,
 )
 from app.industry import orders as _orders  # noqa: F401 — registers the build-queue endpoints

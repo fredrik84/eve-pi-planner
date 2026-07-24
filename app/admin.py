@@ -495,6 +495,19 @@ def admin_stats(_: int = Depends(require_admin)):
         s["reaction_completions_total"] = _rx["jobs"] or 0
     except Exception:
         s["reaction_turnover_total"] = s["reaction_net_profit_total"] = s["reaction_completions_total"] = 0
+    # Service-wide manufacturing ledger totals (all accounts) + how many distinct accounts have ever
+    # completed a manufacturing job (the "users who used manufacturing" metric).
+    try:
+        _mf = con.execute(
+            "SELECT COALESCE(SUM(output_value),0) AS turnover, COALESCE(SUM(net_profit),0) AS net, "
+            "COUNT(*) AS jobs, COUNT(DISTINCT context_id) AS users FROM pp_industry_completions").fetchone()
+        s["manufacturing_turnover_total"] = round(_mf["turnover"] or 0, 2)
+        s["manufacturing_net_profit_total"] = round(_mf["net"] or 0, 2)
+        s["manufacturing_completions_total"] = _mf["jobs"] or 0
+        s["manufacturing_users_total"] = _mf["users"] or 0
+    except Exception:
+        s["manufacturing_turnover_total"] = s["manufacturing_net_profit_total"] = 0
+        s["manufacturing_completions_total"] = s["manufacturing_users_total"] = 0
     con.close()
     # Service-wide estimated PI produced value (all accounts) — recent extraction history refined to P1.
     # Opens its OWN connection, so run it only AFTER con.close() (never hold two at once — pool rule).

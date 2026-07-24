@@ -13,9 +13,30 @@ async function onIndustryTabOpen() {
     tag.style.display = (!pub && typeof _featuresIsAdmin !== 'undefined' && _featuresIsAdmin) ? '' : 'none';
   }
   indLoadSetupSummary();
+  indLoadLifetime();
   indLoadQueue();
   indLoadInstall();
   indLoadRunning();
+}
+
+// Lifetime manufacturing ledger tiles — shown ONLY once the account has actually completed a
+// manufacturing job (opt-in-by-use), so the stats never clutter the tab for someone who hasn't
+// used it. Forward-only turnover + net profit from real completions.
+async function indLoadLifetime() {
+  const el = document.getElementById('indLifetime');
+  if (!el) return;
+  try {
+    const r = await fetch('/api/industry/lifetime');
+    if (!r.ok) { el.innerHTML = ''; return; }
+    const d = await r.json();
+    if (!d.used) { el.innerHTML = ''; return; }
+    const since = d.since ? new Date(d.since * 1000).toLocaleDateString() : '';
+    el.innerHTML = `<div class="an-stats">`
+      + `<div class="an-stat"><div class="an-stat-lbl">Lifetime turnover${since ? ' · since ' + _esc(since) : ''}</div><div class="an-stat-val">${fmtIsk(d.turnover)}</div></div>`
+      + `<div class="an-stat an-ok"><div class="an-stat-lbl">Lifetime net profit</div><div class="an-stat-val">${fmtIsk(d.net_profit)}</div></div>`
+      + `<div class="an-stat"><div class="an-stat-lbl">Jobs completed</div><div class="an-stat-val">${d.jobs}</div></div>`
+      + `</div>`;
+  } catch (e) { el.innerHTML = ''; }
 }
 
 // ── Setup & slots (modal) + compact tab summary ─────────────────────────────────────────────

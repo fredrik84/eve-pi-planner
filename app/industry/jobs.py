@@ -12,6 +12,7 @@ reaction pool's free count is honest too, without importing app/reactions.
 """
 import json as _json
 import time as _time
+from datetime import datetime
 
 import httpx
 from fastapi import Depends
@@ -166,6 +167,169 @@ def running_jobs(context_id: int, names: dict[int, str] | None = None) -> list[d
                 "runs": j.get("runs"), "status": j.get("status"), "end_date": j.get("end_date"),
             })
     return out
+
+
+# ── Completions ledger (turnover / net profit) ──────────────────────────────────────────────
+# Forward-only ledger of FINISHED manufacturing jobs, one row per ESI job_id — mirrors
+# app.reactions' pp_reaction_completions so both tools feed the same turnover/profit surfaces.
+
+@ensure_once
+def ensure_manufacturing_completions_table():
+    con = get_connection()
+    try:
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS pp_industry_completions (
+                job_id          BIGINT PRIMARY KEY,
+                context_id      INTEGER NOT NULL,
+                character_id    BIGINT,
+                product_type_id INTEGER,
+                runs            INTEGER,
+                output_value    REAL NOT NULL DEFAULT 0,
+                input_cost      REAL NOT NULL DEFAULT 0,
+                net_profit      REAL NOT NULL DEFAULT 0,
+                completed_at    REAL NOT NULL
+            )
+        """)
+        con.execute("CREATE INDEX IF NOT EXISTS idx_indcomp_ctx ON pp_industry_completions (context_id)")
+        con.commit()
+    finally:
+        con.close()
+
+
+def log_manufacturing_completions(context_id: int) -> int:
+    """Record manufacturing jobs for this context that FINISHED since the last sweep (end_date
+    passed, still in the cached snapshot, not already logged). Idempotent (job_id PK, INSERT ON
+    CONFLICT DO NOTHING). Values each completion once at completion from the current recipe +
+    market: output_value = product sell × produced; input_cost ≈ materials (ME0) + job fee; net =
+    output − input. DB-only (reads the cached snapshot), cheap for the 15-min tick. Returns count."""
+    ensure_manufacturing_jobs_table()
+    ensure_manufacturing_completions_table()
+    con = get_connection()
+    try:
+        rows = con.execute(
+            "SELECT j.character_id, j.jobs_json FROM pp_char_manufacturing_jobs j "
+            "JOIN pp_characters c ON c.character_id = j.character_id WHERE c.context_id=?",
+            (context_id,),
+        ).fetchall()
+        known = {r["job_id"] for r in con.execute(
+            "SELECT job_id FROM pp_industry_completions WHERE context_id=?", (context_id,))}
+    finally:
+        con.close()
+    if not rows:
+        return 0
+
+    now = _time.time()
+    pending = []   # (job_id, character_id, product_type_id, runs, end_ts)
+    for r in rows:
+        try:
+            jobs = _json.loads(r["jobs_json"] or "[]")
+        except Exception:
+            continue
+        for j in jobs:
+            jid = j.get("job_id")
+            if jid is None or jid in known or j.get("status") not in _OCCUPYING:
+                continue
+            end = j.get("end_date")
+            if not end:
+                continue
+            try:
+                end_ts = datetime.fromisoformat(end.replace("Z", "+00:00")).timestamp()
+            except Exception:
+                continue
+            if end_ts <= now:
+                pending.append((jid, r["character_id"], j.get("product_type_id"), j.get("runs") or 0, end_ts))
+    if not pending:
+        return 0
+
+    # Value each finished job from the manufacturing recipe + market (locks value at completion).
+    from app.industry.graph import (
+        load_manufacturing_graph, effective_material_qty, resolve_build_params, SCC_SURCHARGE_PCT,
+    )
+    from app.markets import resolve_market_data
+    from app.industry_cost import fetch_adjusted_prices
+    con = get_connection()
+    try:
+        mfg = load_manufacturing_graph(con)
+    finally:
+        con.close()
+    need_ids = set()
+    for _, _, tid, _, _ in pending:
+        if tid in mfg:
+            need_ids.add(tid)
+            for inp in mfg[tid]["inputs"]:
+                need_ids.add(inp["type_id"])
+    prices = resolve_market_data(context_id, list(need_ids)) if need_ids else {}
+    adjusted = fetch_adjusted_prices(list(need_ids)) if need_ids else {}
+    params = resolve_build_params(context_id, 0.0, 0.0, None, None)
+
+    inserted = 0
+    con = get_connection()
+    try:
+        for jid, cid, tid, runs, end_ts in pending:
+            recipe = mfg.get(tid)
+            output_value = input_cost = 0.0
+            if recipe and runs > 0:
+                produced = runs * (recipe["output_qty"] or 1)
+                output_value = ((prices.get(tid) or {}).get("sell_price") or 0.0) * produced
+                me, _te = params.me_te_for(tid, "manufacturing")
+                eiv = 0.0
+                for inp in recipe["inputs"]:
+                    qty = effective_material_qty(inp["quantity"], runs, me, 1.0)
+                    input_cost += ((prices.get(inp["type_id"]) or {}).get("sell_price") or 0.0) * qty
+                    eiv += inp["quantity"] * runs * adjusted.get(inp["type_id"], 0.0)
+                input_cost += eiv * (params.mfg_cost_index + params.facility_tax_pct / 100.0 + SCC_SURCHARGE_PCT)
+            con.execute(
+                "INSERT INTO pp_industry_completions (job_id, context_id, character_id, "
+                "product_type_id, runs, output_value, input_cost, net_profit, completed_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT (job_id) DO NOTHING",
+                (jid, context_id, cid, tid, runs, round(output_value, 2), round(input_cost, 2),
+                 round(output_value - input_cost, 2), end_ts),
+            )
+            inserted += 1
+        con.commit()
+    finally:
+        con.close()
+    return inserted
+
+
+def log_all_manufacturing_completions() -> int:
+    """Sweep every context that tracks manufacturing jobs and log new completions. Scheduled every
+    15 min alongside the notification check. Per-context failures are isolated."""
+    ensure_manufacturing_jobs_table()
+    con = get_connection()
+    try:
+        ctxs = [r["context_id"] for r in con.execute(
+            "SELECT DISTINCT c.context_id FROM pp_char_manufacturing_jobs j "
+            "JOIN pp_characters c ON c.character_id = j.character_id")]
+    except Exception:
+        return 0
+    finally:
+        con.close()
+    total = 0
+    for ctx in ctxs:
+        try:
+            total += log_manufacturing_completions(ctx)
+        except Exception:
+            continue
+    return total
+
+
+@router.get("/api/industry/lifetime")
+def manufacturing_lifetime(context_id: int = Depends(require_context)):
+    """This account's lifetime manufacturing ledger: turnover (Σ produced output value), net profit,
+    job count, and earliest completion. Forward-only. `used` flags whether they've ever completed a
+    manufacturing job (drives whether the stats show at all)."""
+    ensure_manufacturing_completions_table()
+    con = get_connection()
+    try:
+        row = con.execute(
+            "SELECT COALESCE(SUM(output_value),0) AS turnover, COALESCE(SUM(net_profit),0) AS net, "
+            "COUNT(*) AS jobs, MIN(completed_at) AS since "
+            "FROM pp_industry_completions WHERE context_id=?", (context_id,)).fetchone()
+    finally:
+        con.close()
+    return {"turnover": round(row["turnover"] or 0, 2), "net_profit": round(row["net"] or 0, 2),
+            "jobs": row["jobs"] or 0, "since": row["since"], "used": (row["jobs"] or 0) > 0}
 
 
 @router.get("/api/industry/jobs")
