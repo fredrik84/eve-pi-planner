@@ -102,24 +102,21 @@ SEARCH_STRUCT_SCOPE = "esi-search.search_structures.v1"
 # re-authing via either preserves the other. Existing single-purpose characters pick up the missing
 # scopes on their next re-auth (same "must re-authorise" rollout as the corp-jobs/structures additions
 # above). Wallet stays deliberately separate — that's a read-only money alt, not a PI character.
+# Industry (Manufacturing planner): read the character's owned blueprints (ME/TE + which BPOs/BPCs
+# they hold). Folded into the SAME unified superset below — NOT a separate set. An earlier version
+# gave ?industry=1 its own scope list that omitted the market scope, which re-broke the exact silo
+# this superset exists to prevent: connecting a market character for blueprints stripped its market
+# access (EVE tokens carry only the last auth's scopes). Every opt-in flow must request the full set.
+BLUEPRINTS_SCOPE = "esi-characters.read_blueprints.v1"
 REACTIONS_SCOPES = (
     f"{SCOPES} {INDUSTRY_JOBS_SCOPE} {CORP_INDUSTRY_JOBS_SCOPE} "
-    f"{MARKET_SCOPE} {SEARCH_STRUCT_SCOPE} {STRUCTURES_SCOPE}"
+    f"{MARKET_SCOPE} {SEARCH_STRUCT_SCOPE} {STRUCTURES_SCOPE} {BLUEPRINTS_SCOPE}"
 )
-# Kept as aliases so any lingering reference can't resurrect the old disjoint behaviour.
+# All opt-in "connect a character" flows request this ONE superset so re-authing a character for
+# any tool never drops the scopes another relies on. Wallet stays deliberately separate.
 MARKET_SCOPES = REACTIONS_SCOPES
 INDUSTRY_JOBS_SCOPES = REACTIONS_SCOPES
-
-# Industry (Manufacturing planner) opt-in: read the character's owned blueprints (ME/TE + which
-# BPOs/BPCs they hold) so the planner uses their REAL blueprints with zero manual entry, plus the
-# manufacturing-job scope so a later slice can read live jobs for free-slot math. Requested only via
-# the "connect for Industry" login (?industry=1); UNIONS with the base SCOPES like the others. The
-# blueprint scope must be LISTED on the EVE application at developers.eveonline.com (listing ≠
-# requesting — same as wallet/market).
-BLUEPRINTS_SCOPE = "esi-characters.read_blueprints.v1"
-INDUSTRY_SCOPES = (
-    f"{SCOPES} {BLUEPRINTS_SCOPE} {INDUSTRY_JOBS_SCOPE} {CORP_INDUSTRY_JOBS_SCOPE} {STRUCTURES_SCOPE}"
-)
+INDUSTRY_SCOPES = REACTIONS_SCOPES
 
 # Wallet-only toons (corp-wallet scope, no planets scope) aren't PI characters. AND this into any
 # single-table pp_characters PI query to exclude them; legacy empty-scope chars are kept. Begins with
