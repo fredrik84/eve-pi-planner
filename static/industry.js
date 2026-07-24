@@ -219,22 +219,70 @@ function _indShoppingTable(list) {
   return `<table class="ind-table"><thead><tr><th>Material</th><th class="ind-num">Qty</th><th>Source</th><th class="ind-num">Cost</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
-function _indTreeNode(n, depth) {
-  const pad = depth * 14;
+// Compact tree row label (shared by leaves and collapsible nodes).
+function _indTreeLabel(n) {
   const badge = n.decision === 'build'
-    ? `<span class="ind-badge ind-build">build${n.activity === 'reaction' ? ' (rx)' : ''}${n.runs ? ' ×' + n.runs : ''}</span>`
+    ? `<span class="ind-badge ind-build">build${n.activity === 'reaction' ? ' rx' : ''}${n.runs ? ' ×' + n.runs : ''}</span>`
     : n.decision === 'buy' ? '<span class="ind-badge ind-buy">buy</span>'
     : '<span class="ind-badge ind-unres">no price</span>';
-  const cost = n.unit_cost != null ? fmtIsk((n.unit_cost || 0) * (n.qty || 0)) : '';
+  const cost = n.unit_cost != null ? `<span class="ind-tree-cost">${fmtIsk((n.unit_cost || 0) * (n.qty || 0))}</span>` : '';
   const owned = n.owned
-    ? `<span class="ind-owned" title="You own this ${n.owned.kind.toUpperCase()} (ME${n.owned.me}/TE${n.owned.te})">${n.owned.kind.toUpperCase()} ME${n.owned.me}</span>` : '';
-  let html = `<div class="ind-tree-row" style="padding-left:${pad}px">`
-    + `<span class="ind-tree-name">${_esc(n.name)}</span> `
-    + `<span class="ind-tree-qty">×${Math.round(n.qty).toLocaleString()}</span> ${badge} ${owned}`
-    + (cost ? `<span class="ind-tree-cost">${cost}</span>` : '')
-    + `</div>`;
-  (n.inputs || []).forEach(c => { html += _indTreeNode(c, depth + 1); });
-  return html;
+    ? ` <span class="ind-owned" title="You own this ${n.owned.kind.toUpperCase()} (ME${n.owned.me}/TE${n.owned.te})">${n.owned.kind.toUpperCase()} ME${n.owned.me}</span>` : '';
+  return `<span class="ind-tree-name">${_esc(n.name)}</span> <span class="ind-tree-qty">×${Math.round(n.qty).toLocaleString()}</span> ${badge}${owned}${cost}`;
+}
+
+// Collapsible tree via native nested <details>: a node WITH built children folds (open only near
+// the top so a deep build isn't a wall of text); leaves render as plain rows. Indent comes from
+// the nesting, not per-row padding.
+function _indTreeNode(n, depth) {
+  const kids = (n.inputs || []).filter(c => c.decision === 'build' || (c.inputs && c.inputs.length));
+  const leaves = (n.inputs || []).filter(c => !(c.decision === 'build' || (c.inputs && c.inputs.length)));
+  if (!kids.length && !leaves.length) return `<div class="ind-tree-leaf">${_indTreeLabel(n)}</div>`;
+  const open = depth < 1 ? ' open' : '';
+  const childHtml = kids.map(c => _indTreeNode(c, depth + 1)).join('')
+    + leaves.map(c => `<div class="ind-tree-leaf">${_indTreeLabel(c)}</div>`).join('');
+  return `<details class="ind-tree-node"${open}><summary class="ind-tree-sum">${_indTreeLabel(n)}</summary>`
+    + `<div class="ind-tree-kids">${childHtml}</div></details>`;
+}
+
+// Group a schedule wave's parallel split-jobs back into one entry per product.
+function _indWaveGroup(w) {
+  const b = {};
+  (w.tasks || []).forEach(t => {
+    const g = b[t.type_id] || (b[t.type_id] = { name: t.name || _indName(t.type_id), runs: 0, activity: t.activity, dur: 0 });
+    g.runs += t.runs; g.dur = Math.max(g.dur, t.duration_hours);
+  });
+  return Object.values(b).sort((a, b) => b.dur - a.dur);
+}
+function _indJobChips(g) {
+  return g.map(x => `<span class="ind-wave-job">${_esc(x.name)} ×${x.runs}${x.activity === 'reaction' ? ' rx' : ''} · ${_fmtHours(x.dur)}</span>`).join('');
+}
+
+// Step-by-step "what to do right now": buy your materials, start the first wave of jobs now, then
+// each later wave as the previous finishes. The prominent, plain-language answer to "what am I
+// supposed to be doing" — the tree/schedule below are just the detail behind it.
+function _indStepsHtml(d) {
+  const waves = (d.schedule && d.schedule.waves) || [];
+  if (!waves.length) return '';
+  const shop = d.shopping_list || [];
+  let n = 0;
+  let html = '<div class="ind-steps"><div class="ind-steps-title">Step by step</div>';
+  if (shop.length) {
+    n++;
+    html += `<div class="ind-step"><div class="ind-step-hd"><span class="ind-step-num">${n}</span>Buy your materials</div>`
+      + `<div class="ind-step-body">${shop.length} item${shop.length > 1 ? 's' : ''} · ${fmtIsk(d.metrics.materials_cost)} — full list below.</div></div>`;
+  }
+  n++;
+  html += `<div class="ind-step ind-step-now"><div class="ind-step-hd"><span class="ind-step-num">${n}</span>Start these jobs now <span class="ind-step-tag">do this now</span></div>`
+    + `<div class="ind-step-body ind-wave-jobs">${_indJobChips(_indWaveGroup(waves[0]))}</div></div>`;
+  if (waves.length > 1) {
+    const later = waves.slice(1).map((w, i) =>
+      `<div class="ind-step ind-step-later"><div class="ind-step-hd"><span class="ind-step-num">${n + 1 + i}</span>After that batch finishes <span class="ind-step-when">≈ +${_fmtHours(w.start_hours)}</span></div>`
+      + `<div class="ind-step-body ind-wave-jobs">${_indJobChips(_indWaveGroup(w))}</div></div>`).join('');
+    html += `<details class="ind-details ind-steps-more"><summary>Then, as each batch finishes — ${waves.length - 1} more step${waves.length > 2 ? 's' : ''}</summary>${later}</details>`;
+  }
+  html += `<div class="ind-step ind-step-done"><div class="ind-step-hd"><span class="ind-step-num">✓</span>Done — ${_esc(d.target ? d.target.name : 'product')} built in ≈ ${_fmtHours(d.metrics.makespan_hours)}</div></div>`;
+  return html + '</div>';
 }
 
 function _indRenderPlan(d, title) {
@@ -246,13 +294,17 @@ function _indRenderPlan(d, title) {
       + d.leftovers.map(l => `<div class="ind-tree-row"><span class="ind-tree-name">${_esc(l.name)}</span> `
         + `<span class="ind-tree-qty">×${Math.round(l.qty).toLocaleString()}</span>`
         + (l.value ? `<span class="ind-tree-cost">${fmtIsk(l.value)}</span>` : '') + `</div>`).join('') + `</details>` : '';
-  const tree = d.tree ? `<details class="ind-details" open><summary>Build tree</summary><div class="ind-tree">${_indTreeNode(d.tree, 0)}</div></details>` : '';
+  const treeKids = d.tree && (d.tree.inputs || []).length
+    ? (d.tree.inputs || []).map(c => _indTreeNode(c, 0)).join('') : '';
+  const tree = treeKids
+    ? `<details class="ind-details"><summary>Build tree</summary><div class="ind-tree">${treeKids}</div></details>` : '';
   return `<div class="pp-card">
     <h2 class="pp-card-title">${title}</h2>
     ${_indMetricTiles(d.metrics)}
     ${unres}
-    ${sched}
+    ${_indStepsHtml(d)}
     <details class="ind-details" open><summary>Shopping list (${(d.shopping_list || []).length})</summary>${_indShoppingTable(d.shopping_list)}</details>
+    ${sched}
     ${tree}
     ${leftovers}
   </div>`;
@@ -260,13 +312,10 @@ function _indRenderPlan(d, title) {
 
 function _indScheduleHtml(s) {
   if (!s || !s.waves || !s.waves.length) return '';
-  const waves = s.waves.map((w, i) => {
-    const jobs = w.tasks.map(t =>
-      `<span class="ind-wave-job">${_esc(t.name || _indName(t.type_id))} ×${t.runs}${t.activity === 'reaction' ? ' (rx)' : ''} · ${_fmtHours(t.duration_hours)}</span>`
-    ).join('');
-    return `<div class="ind-wave"><div class="ind-wave-hd">+${_fmtHours(w.start_hours)}</div><div class="ind-wave-jobs">${jobs}</div></div>`;
-  }).join('');
-  return `<details class="ind-details" open><summary>Schedule — ${s.waves.length} wave(s), makespan ${_fmtHours(s.makespan_hours)}</summary><div class="ind-waves">${waves}</div></details>`;
+  const waves = s.waves.map(w =>
+    `<div class="ind-wave"><div class="ind-wave-hd">+${_fmtHours(w.start_hours)}</div><div class="ind-wave-jobs">${_indJobChips(_indWaveGroup(w))}</div></div>`
+  ).join('');
+  return `<details class="ind-details"><summary>Full schedule — ${s.waves.length} wave(s), makespan ${_fmtHours(s.makespan_hours)}</summary><div class="ind-waves">${waves}</div></details>`;
 }
 
 // Task waves only carry type_id; keep a name cache from the last plan's shopping/tree so waves read nicely.

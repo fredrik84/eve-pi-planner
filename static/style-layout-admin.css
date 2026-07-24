@@ -870,3 +870,27 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-modal-h { font-size: 13px; color: #9fb4d8; margin: 0 0 8px; }
 .ind-lifetime { margin: 4px 0 14px; }
 .ind-lifetime:empty { margin: 0; }
+/* Collapsible build tree (nested <details>) */
+.ind-tree-node > .ind-tree-sum { cursor: pointer; list-style: none; padding: 3px 0; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 13px; }
+.ind-tree-node > .ind-tree-sum::-webkit-details-marker { display: none; }
+.ind-tree-node > .ind-tree-sum::before { content: '\25B8'; color: var(--clr-text-soft); font-size: 10px; width: 10px; display: inline-block; }
+.ind-tree-node[open] > .ind-tree-sum::before { content: '\25BE'; }
+.ind-tree-node > .ind-tree-sum:hover { color: #fff; }
+.ind-tree-kids { padding-left: 14px; margin-left: 4px; border-left: 1px solid #1a2030; }
+.ind-tree-leaf { padding: 3px 0 3px 16px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 13px; color: #cdd6e6; }
+/* Step-by-step "what to do now" */
+.ind-steps { margin: 14px 0; }
+.ind-steps-title { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--clr-text-soft); margin-bottom: 8px; }
+.ind-step { padding: 10px 12px; border: 1px solid var(--clr-border); border-radius: 8px; background: #12161f; margin-bottom: 8px; }
+.ind-step-now { border-color: #2c6a44; background: linear-gradient(180deg,#13241a,#12161f); }
+.ind-step-later { opacity: .92; }
+.ind-step-done { border-style: dashed; background: none; }
+.ind-step-hd { display: flex; align-items: center; gap: 9px; font-size: 14px; color: #fff; font-weight: 600; flex-wrap: wrap; }
+.ind-step-num { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 50%; background: #1e3a5f; color: var(--clr-accent); font-size: 12px; font-weight: 700; flex-shrink: 0; }
+.ind-step-now .ind-step-num { background: #1c4a30; color: #7fdca6; }
+.ind-step-tag { font-size: 10px; text-transform: uppercase; letter-spacing: .03em; background: #163524; color: #7fdca6; padding: 1px 7px; border-radius: 8px; font-weight: 600; }
+.ind-step-when { font-size: 11px; color: var(--clr-text-soft); font-weight: 400; }
+.ind-step-body { margin-top: 7px; font-size: 13px; color: #cdd6e6; }
+.ind-step-body.ind-wave-jobs { display: flex; flex-wrap: wrap; gap: 6px; }
+.ind-steps-more { margin-bottom: 8px; }
+.ind-steps-more > summary { font-size: 12px; color: #9fb4d8; cursor: pointer; padding: 4px 0; }
