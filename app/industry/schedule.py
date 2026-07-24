@@ -93,8 +93,14 @@ def aggregate_demand(targets: list[tuple[int, int]], memo: dict, mfg: dict, rx: 
     built = [tid for tid in depth if is_built(tid)]
     built.sort(key=lambda t: depth[t])
 
+    # Total rolled-up build cost of the whole order, for the "saving is negligible vs the whole
+    # product" test — from the targets' own build unit costs (cost-optimal estimate).
+    total_build_value = sum((memo.get(t) or {}).get("build_unit_cost", 0.0) * qty for t, qty in targets)
+    marginal_abs = params.marginal_pct_of_total / 100.0 * total_build_value if params.marginal_pct_of_total > 0 else 0.0
+
     result: dict[int, dict] = {}
-    flipped: set[int] = set()
+    flipped: set[int] = set()             # bought for speed (slow to build)
+    flipped_marginal: set[int] = set()    # bought because building saves a trivial amount
     for tid in built:
         recipe = mfg.get(tid) or rx.get(tid)
         activity = "manufacturing" if tid in mfg else "reaction"
@@ -116,6 +122,20 @@ def aggregate_demand(targets: list[tuple[int, int]], memo: dict, mfg: dict, rx: 
                 flipped.add(tid)          # falls through to the bought loop; inputs not exploded
                 continue
 
+        # Marginal-saving flip: buy if building saves a trivial amount — negligible vs the whole
+        # product, or a tiny % of the component's own buy price. Not worth a job.
+        node = memo.get(tid) or {}
+        buc, byc = node.get("build_unit_cost"), node.get("buy_unit_cost")
+        if runs > 0 and tid not in target_ids and buc is not None and byc is not None:
+            total_saving = (byc - buc) * net
+            total_buy = byc * net
+            if total_saving > 0 and (
+                    (marginal_abs > 0 and total_saving < marginal_abs)
+                    or (params.min_saving_pct > 0 and total_buy > 0
+                        and total_saving < params.min_saving_pct / 100.0 * total_buy)):
+                flipped_marginal.add(tid)
+                continue
+
         result[tid] = {
             "type_id": tid, "activity": activity, "build": True,
             "gross": gross[tid], "net": net, "runs": runs, "produced": produced,
@@ -130,7 +150,7 @@ def aggregate_demand(targets: list[tuple[int, int]], memo: dict, mfg: dict, rx: 
             continue
         result[tid] = {"type_id": tid, "activity": None, "build": False, "gross": qty,
                        "net": qty, "runs": 0, "produced": 0, "leftover": 0, "output_qty": 0,
-                       "bought_for_speed": tid in flipped}
+                       "bought_for_speed": tid in flipped, "bought_marginal": tid in flipped_marginal}
     return result
 
 
@@ -348,6 +368,7 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
                 "unit_price": price, "source": (prices.get(tid) or {}).get("source"),
                 "line_cost": line if price else None,
                 "bought_for_speed": info.get("bought_for_speed", False),
+                "bought_marginal": info.get("bought_marginal", False),
             })
     shopping.sort(key=lambda r: r["line_cost"] or 0.0, reverse=True)
 

@@ -894,3 +894,4 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-step-body.ind-wave-jobs { display: flex; flex-wrap: wrap; gap: 6px; }
 .ind-steps-more { margin-bottom: 8px; }
 .ind-steps-more > summary { font-size: 12px; color: #9fb4d8; cursor: pointer; padding: 4px 0; }
+.ind-marginal-badge { font-size: 10px; background: #2a2a30; color: #b8c0cc; padding: 1px 6px; border-radius: 8px; }

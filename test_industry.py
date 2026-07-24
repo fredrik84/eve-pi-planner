@@ -256,6 +256,22 @@ def test_time_aware_make_or_buy():
     check("sprocket built without cap", cost[102]["build"] is True)
 
 
+def test_marginal_buy():
+    print("test_marginal_buy (buy when building saves a trivial %)")
+    con = _seed_con()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+    # Sprocket builds for ~104; price its market at 106 → building saves <2%, under a 4% floor.
+    sell = {**SELL, 102: 106.0}
+    memo, unit = resolve_unit_costs(mfg, rx, _prices(sell), ADJ, BuildParams())
+    unit(101, frozenset())
+    pools = {"manufacturing": 1, "reaction": 1}
+    agg = aggregate_demand([(101, 10)], memo, mfg, rx, BuildParams(min_saving_pct=4.0), pools=pools)
+    check("sprocket bought (low saving)", agg[102]["build"] is False and agg[102]["bought_marginal"])
+    # Without the threshold, the cheaper option (build, 104<106) wins.
+    agg2 = aggregate_demand([(101, 10)], memo, mfg, rx, BuildParams(), pools=pools)
+    check("sprocket built without threshold", agg2[102]["build"] is True)
+
+
 def test_manufacturing_slots():
     print("test_manufacturing_slots (skill → slot formula)")
     from app.industry.slots import manufacturing_slots, reaction_slots
@@ -316,6 +332,7 @@ def main():
     test_scheduler_linear_chain()
     test_scheduler_slot_contention()
     test_time_aware_make_or_buy()
+    test_marginal_buy()
     test_manufacturing_slots()
     test_per_product_me_from_blueprints()
     test_plan_queue_end_to_end()

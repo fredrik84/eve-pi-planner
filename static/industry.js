@@ -211,7 +211,9 @@ function _indPrioSpeed() {
 function _indShoppingTable(list) {
   if (!list || !list.length) return '<p class="pp-sub">Nothing to buy — built entirely from stock/recipes.</p>';
   const rows = list.map(s =>
-    `<tr><td>${_esc(s.name)}${s.bought_for_speed ? ' <span class="ind-speed-badge" title="Bought instead of built to save time">for speed</span>' : ''}</td>`
+    `<tr><td>${_esc(s.name)}`
+    + `${s.bought_for_speed ? ' <span class="ind-speed-badge" title="Bought instead of built to save time">for speed</span>' : ''}`
+    + `${s.bought_marginal ? ' <span class="ind-marginal-badge" title="Building this would save too little to be worth a job">low saving</span>' : ''}</td>`
     + `<td class="ind-num">${Math.round(s.qty).toLocaleString()}</td>`
     + `<td class="ind-src">${s.source ? _esc(s.source) : '<span class="pp-warn">no price</span>'}</td>`
     + `<td class="ind-num">${s.line_cost != null ? fmtIsk(s.line_cost) : '—'}</td></tr>`

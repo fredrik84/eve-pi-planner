@@ -59,6 +59,11 @@ class BuildParams:
     build_margin: float = 0.0                 # build must beat buy by this fraction to be chosen
     max_build_hours: float = 0.0              # >0 → buy any component whose batch would take longer
                                               # than this wall-clock to build (time-priority mode)
+    # Marginal-saving buy: don't bother building a component when the ISK it saves over buying is
+    # trivial — either as a fraction of the WHOLE product's build cost (many tiny savings add up,
+    # but each one isn't worth a job) or as a fraction of the component's own buy price.
+    marginal_pct_of_total: float = 0.0        # buy if build saves < this % of total product cost
+    min_saving_pct: float = 0.0               # buy if build saves < this % of the component's buy price
     # Per-product ME/TE from the account's actual owned blueprints (product_type_id -> (me, te)).
     # When a product is here, its real researched efficiency is used instead of the global me_pct/
     # te_pct fallback. `owned` carries the same map's ownership detail for display.
@@ -334,6 +339,13 @@ class IndustryPlanRequest(BaseModel):
 # make-or-buy buys it instead. ~1 day: builds fast components, buys the multi-day bulk marathons.
 SPEED_BUILD_CAP_HOURS = 24.0
 
+# Marginal-saving thresholds (always on): buy a component the cost engine would build if building
+# it saves less than 0.1% of the total product cost OR less than 4% of its own buy price — the
+# "not worth reacting Fluxed Condensates to shave pennies off a 2.35b Revelation" rule. Auto-scales
+# with product size, so it barely touches small builds but trims the long tail on capitals.
+MARGINAL_BUILD_PCT_OF_TOTAL = 0.1
+MIN_BUILD_SAVING_PCT = 4.0
+
 
 def account_build_defaults(context_id: int) -> tuple[int | None, float]:
     """Zero-config build context: reuse the system + facility tax the account already configured
@@ -372,6 +384,7 @@ def resolve_build_params(context_id: int, me_pct: float, te_pct: float,
         rx_cost_index=fetch_system_cost_index(sid, "reaction"),
         facility_tax_pct=tax, me_by_product=me_by_product, owned=owned,
         max_build_hours=max_build_hours,
+        marginal_pct_of_total=MARGINAL_BUILD_PCT_OF_TOTAL, min_saving_pct=MIN_BUILD_SAVING_PCT,
     )
 
 
