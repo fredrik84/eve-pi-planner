@@ -339,12 +339,12 @@ class IndustryPlanRequest(BaseModel):
 # make-or-buy buys it instead. ~1 day: builds fast components, buys the multi-day bulk marathons.
 SPEED_BUILD_CAP_HOURS = 24.0
 
-# Marginal-saving thresholds (always on): buy a component the cost engine would build if building
-# it saves less than 0.1% of the total product cost OR less than 4% of its own buy price — the
-# "not worth reacting Fluxed Condensates to shave pennies off a 2.35b Revelation" rule. Auto-scales
-# with product size, so it barely touches small builds but trims the long tail on capitals.
+# Marginal-saving threshold (always on): buy a component the cost engine would build if building it
+# saves less than this % of the TOTAL product cost. Measured against the whole build — NOT a
+# per-component percentage, which doesn't scale (4% of an Ishtar component is a sub-1m difference
+# that shouldn't drive a decision, while 4% of a Revelation component is real money). This one
+# lens auto-scales: it trims the long tail on a 2.35b capital but barely touches a 147m cruiser.
 MARGINAL_BUILD_PCT_OF_TOTAL = 0.1
-MIN_BUILD_SAVING_PCT = 4.0
 
 
 def account_build_defaults(context_id: int) -> tuple[int | None, float]:
@@ -384,7 +384,7 @@ def resolve_build_params(context_id: int, me_pct: float, te_pct: float,
         rx_cost_index=fetch_system_cost_index(sid, "reaction"),
         facility_tax_pct=tax, me_by_product=me_by_product, owned=owned,
         max_build_hours=max_build_hours,
-        marginal_pct_of_total=MARGINAL_BUILD_PCT_OF_TOTAL, min_saving_pct=MIN_BUILD_SAVING_PCT,
+        marginal_pct_of_total=MARGINAL_BUILD_PCT_OF_TOTAL,   # min_saving_pct stays 0 (per-component % doesn't scale)
     )
 
 
