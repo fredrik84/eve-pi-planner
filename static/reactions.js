@@ -1363,19 +1363,15 @@ function _renderReactions() {
 // all.") once time-efficiency became something people actually need to configure up front.
 function _rxOpenSettingsModal() {
   const el = document.getElementById('rxSettingsModalContent');
-  // Market management (local_market flag) shows above the freight forms so a configured user can
-  // add/reorder markets here too, not only via the onboarding wizard.
-  const marketSection = (typeof _featureActive === 'function' && _featureActive('local_market'))
-    ? `<div class="pp-card-title" style="font-size:13px;margin-top:4px">Local / alliance markets`
-      + `<span class="pp-card-hint">— priced in order, top first; Jita is always the last fallback</span></div>`
-      + `<div id="rxSettingsMarkets" class="pp-target-form" style="margin:8px 0 16px;display:block"><div class="pp-empty">Loading…</div></div>`
-      + `<div style="border-top:1px solid var(--clr-border);margin-bottom:8px"></div>`
-    : '';
-  el.innerHTML = marketSection + (_rxCanEditSettings() ? _rxSettingsFormHtml() : '') + _rxAccountSettingsFormHtml();
+  // Markets + your personal freight/system rates moved to the global Settings → Markets & Logistics
+  // section (shared with Manufacturing). Leave a redirect here; keep the group-manager DEFAULTS
+  // (an alliance-wide setting) in Reactions where group management lives.
+  const redirect = `<div class="pp-card-hint" style="margin-bottom:12px">Your markets &amp; freight/system rates moved to `
+    + `<button class="ind-link-btn" onclick="_rxCloseSettingsModal();openSettingsModal('markets')">Settings → Markets &amp; Logistics</button>`
+    + ` — now shared with the Manufacturing planner.</div>`;
+  el.innerHTML = redirect + (_rxCanEditSettings() ? _rxSettingsFormHtml() : '');
   document.getElementById('rxSettingsModal').style.display = '';
   if (_rxCanEditSettings()) _loadRxSettings();
-  _loadRxAccountSettings();
-  if (marketSection) _rxMountMarkets('rxSettingsMarkets');
 }
 
 function _rxCloseSettingsModal() {

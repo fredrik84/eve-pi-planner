@@ -2830,6 +2830,11 @@ function openSettingsModal(section) {
   if (alertsNav) alertsNav.style.display = (_loggedIn && _featureActive('alert_settings')) ? '' : 'none';
   const acctNav = document.getElementById('settingsNavAccount');
   if (acctNav) acctNav.style.display = _loggedIn ? '' : 'none';
+  // Markets & Logistics (shared by Reactions + Manufacturing) — shown to logged-in users of either.
+  const mktNav = document.getElementById('settingsNavMarkets');
+  const mktAvail = _loggedIn && (_featureActive('reactions') || _featureActive('industry') || _featureActive('local_market'));
+  if (mktNav) mktNav.style.display = mktAvail ? '' : 'none';
+  if (section === 'markets' && !mktAvail) section = 'characters';
   // If the requested section is gated and not available, fall back to characters.
   if (section === 'plans' && !_loggedIn) section = 'characters';
   if (section === 'notifications' && !((_loggedIn && _featureActive('notifications')))) section = 'characters';
@@ -2860,7 +2865,29 @@ function settingsSection(name, doLoad) {
   if (name === 'characters') _renderMoveCharacterSection();
   if (name === 'plans' && doLoad !== false) { loadProfiles(); renderSavedPlansBar(); }
   if (name === 'alerts' && doLoad !== false) loadAlertSettings();
+  if (name === 'markets' && doLoad !== false) _loadMarketsSettings();
   if (name === 'general') _loadGeneralSettings();
+}
+
+// Markets & Logistics settings — the shared market-follow list + jump-freight costs, relocated
+// here from the Reactions tab so both Reactions and Manufacturing read one source. Reuses the
+// reactions component builders (loaded from reactions.js; global functions, resolved at call time).
+function _loadMarketsSettings() {
+  const body = document.getElementById('settingsSecMarketsBody');
+  if (!body) return;
+  const hasMarkets = typeof _featureActive === 'function' && _featureActive('local_market');
+  const marketMgr = hasMarkets
+    ? `<div class="settings-subsec-title">Local / alliance markets <span class="pp-card-hint">— priced in order, top first; Jita is always the last fallback</span></div>`
+      + `<div id="settingsMarketsMgr" class="pp-target-form" style="margin:8px 0 16px;display:block"><div class="pp-empty">Loading…</div></div>`
+      + `<div style="border-top:1px solid var(--clr-border);margin-bottom:12px"></div>`
+    : '';
+  const freight = (typeof _rxAccountSettingsFormHtml === 'function') ? _rxAccountSettingsFormHtml() : '';
+  body.innerHTML = marketMgr + freight;
+  if (typeof _loadRxAccountSettings === 'function') _loadRxAccountSettings();
+  if (hasMarkets && typeof _rxMountMarkets === 'function') {
+    _rxMountMarkets('settingsMarketsMgr');
+    if (typeof _rxRefreshMarkets === 'function') _rxRefreshMarkets();
+  }
 }
 
 // General settings — local (per-browser) UI preferences, no backend. Currently just the silent
