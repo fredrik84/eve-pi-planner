@@ -12,11 +12,43 @@ async function onIndustryTabOpen() {
     const pub = typeof _features !== 'undefined' && _features.industry && _features.industry.enabled;
     tag.style.display = (!pub && typeof _featuresIsAdmin !== 'undefined' && _featuresIsAdmin) ? '' : 'none';
   }
-  indLoadSlots();
-  indLoadBlueprints();
+  indLoadSetupSummary();
   indLoadQueue();
   indLoadInstall();
   indLoadRunning();
+}
+
+// ── Setup & slots (modal) + compact tab summary ─────────────────────────────────────────────
+async function indLoadSetupSummary() {
+  const sum = document.getElementById('indSetupSummary');
+  const rem = document.getElementById('indConnectReminder');
+  let slots = null, bp = null;
+  try { const r = await fetch('/api/industry/slots'); if (r.ok) slots = await r.json(); } catch (e) {}
+  try { const r = await fetch('/api/industry/blueprints'); if (r.ok) bp = await r.json(); } catch (e) {}
+  if (sum) {
+    const s = slots ? `<b>${slots.manufacturing_free}/${slots.manufacturing_slots}</b> mfg · <b>${slots.reaction_free}/${slots.reaction_slots}</b> rx slots free` : '';
+    const b = bp ? (bp.connected ? ` · <span class="ind-bp-ok">${bp.owned_count} blueprints</span>` : '') : '';
+    sum.innerHTML = s + b;
+  }
+  if (rem) {
+    if (bp && !bp.connected) {
+      rem.style.display = '';
+      rem.innerHTML = `Using default ME/TE. <button class="ind-link-btn" onclick="indOpenSetup()">Connect a character</button> to plan with your real blueprints and slots.`;
+    } else {
+      rem.style.display = 'none';
+    }
+  }
+}
+
+function indOpenSetup() {
+  document.getElementById('indSetupModal').style.display = '';
+  indLoadSlots();
+  indLoadBlueprints();
+}
+
+function indCloseSetup() {
+  document.getElementById('indSetupModal').style.display = 'none';
+  indLoadSetupSummary();   // reflect any changes (e.g. just connected) back on the tab
 }
 
 // ── Blueprint auto-read (ME/TE + ownership from ESI) ────────────────────────────────────────

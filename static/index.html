@@ -25,7 +25,7 @@
   <link rel="stylesheet" href="/style-components.css?v=1">
   <link rel="stylesheet" href="/style-contribute.css?v=11">
   <link rel="stylesheet" href="/style-wizard.css?v=2">
-  <link rel="stylesheet" href="/style-layout-admin.css?v=33">
+  <link rel="stylesheet" href="/style-layout-admin.css?v=34">
   <link rel="stylesheet" href="/style-analysis-dashboard.css?v=22">
   <link rel="stylesheet" href="/style-misc-responsive.css?v=7">
 </head>
@@ -722,8 +722,11 @@
       <div class="pp-card ind-planner-card">
         <h2 class="pp-card-title">Manufacturing planner <span class="admin-preview-tag" id="indPreviewTag" style="display:none">admin preview</span></h2>
         <p class="pp-sub">Pick a product and a quantity — it decides build-vs-buy for every component, prices the shopping list against your markets (local → Jita), and reports what it costs and how long it takes. Add products to your build queue to plan them all together across your job slots.</p>
-        <div id="indSlots" class="ind-slots"></div>
-        <div id="indBlueprints" class="ind-bp-row"></div>
+        <div class="ind-setup-bar">
+          <div id="indSetupSummary" class="ind-setup-summary"></div>
+          <button class="ind-secondary-btn" onclick="indOpenSetup()">Setup &amp; slots</button>
+        </div>
+        <div id="indConnectReminder" class="ind-connect-reminder" style="display:none"></div>
         <div class="ind-plan-form">
           <div class="ind-field ind-field-grow">
             <label for="indSearch">Product to build</label>
@@ -1443,6 +1446,24 @@ PVF-N9    3         95                 60             80                  100   
   </div>
 
   <!-- Reactions: settings modal (shipping/collateral/job-cost/time-efficiency) -->
+  <!-- Industry: setup & slots modal -->
+  <div id="indSetupModal" class="pp-modal" style="display:none" onclick="if(event.target===this)indCloseSetup()">
+    <div class="pp-modal-box pp-modal-box-wide" style="overflow-y:auto">
+      <div class="pp-modal-title">Manufacturing setup &amp; slots
+        <button class="pp-modal-close" onclick="indCloseSetup()">✕</button>
+      </div>
+      <div class="pp-modal-hint">Your manufacturing &amp; reaction job slots (from each character's skills), and connecting a character so the planner can read your real blueprints (ME/TE) and running jobs. Nothing here is required to plan — it just makes the numbers your own.</div>
+      <div class="ind-modal-section">
+        <h3 class="ind-modal-h">Job slots</h3>
+        <div id="indSlots" class="ind-slots"></div>
+      </div>
+      <div class="ind-modal-section">
+        <h3 class="ind-modal-h">Blueprints &amp; jobs</h3>
+        <div id="indBlueprints" class="ind-bp-row"></div>
+      </div>
+    </div>
+  </div>
+
   <div id="rxSettingsModal" class="pp-modal" style="display:none">
     <div class="pp-modal-box pp-modal-box-wide" style="overflow-y:auto">
       <div class="pp-modal-title">Reactions settings
@@ -1518,6 +1539,6 @@ PVF-N9    3         95                 60             80                  100   
   <script src="/analysis.js?v=62"></script>
   <script src="/layout.js?v=2"></script>
   <script src="/reactions.js?v=93"></script>
-  <script src="/industry.js?v=6"></script>
+  <script src="/industry.js?v=7"></script>
 </body>
 </html>
