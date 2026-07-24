@@ -64,12 +64,19 @@ def _depths(targets: list[int], mfg: dict, rx: dict) -> dict[int, int]:
 
 
 def aggregate_demand(targets: list[tuple[int, int]], memo: dict, mfg: dict, rx: dict,
-                     params: BuildParams, on_hand: dict[int, float] | None = None) -> dict[int, dict]:
+                     params: BuildParams, on_hand: dict[int, float] | None = None,
+                     pools: dict[str, int] | None = None) -> dict[int, dict]:
     """Combined per-type demand across all order targets. Targets are always built; every other
     type follows its make-or-buy decision in `memo`. Returns {type_id: {activity, build, gross,
-    net, runs, produced, leftover, output_qty}} — built types carry runs/produced/leftover; bought
-    types carry gross (the shopping quantity)."""
+    net, runs, produced, leftover, output_qty, bought_for_speed}}.
+
+    TIME-AWARE make-or-buy: when `params.max_build_hours > 0`, a component the cost engine would
+    build is flipped to BUY if producing its whole batch would take longer than that wall-clock cap
+    (runs × cycle ÷ pool slots) and it's purchasable — so the slow bulk marathons (thousands of
+    reaction runs) come off the market instead of dominating the makespan, while everything that
+    builds fast is still produced. Prioritizes time-to-completion over cost, per the design goal."""
     on_hand = dict(on_hand or {})
+    pools = pools or {}
     target_ids = {t for t, _ in targets}
     depth = _depths([t for t, _ in targets], mfg, rx)
 
@@ -87,20 +94,32 @@ def aggregate_demand(targets: list[tuple[int, int]], memo: dict, mfg: dict, rx: 
     built.sort(key=lambda t: depth[t])
 
     result: dict[int, dict] = {}
+    flipped: set[int] = set()
     for tid in built:
         recipe = mfg.get(tid) or rx.get(tid)
         activity = "manufacturing" if tid in mfg else "reaction"
-        me, _te = params.me_te_for(tid, activity)
+        me, te = params.me_te_for(tid, activity)
         mult = (params.struct_material_mult if activity == "manufacturing"
                 else params.reaction_material_mult)
         output_qty = recipe["output_qty"]
         net = max(0.0, gross[tid] - on_hand.get(tid, 0.0))
         runs = max(0, math.ceil(net / output_qty)) if net > 0 else 0
         produced = runs * output_qty
+
+        # Time-aware flip: buy this batch instead of building if it's slow AND purchasable (never
+        # flip a target — the user asked to build that).
+        if (params.max_build_hours > 0 and runs > 0 and tid not in target_ids
+                and (memo.get(tid) or {}).get("buy_unit_cost") is not None):
+            P = max(1, pools.get(activity, 1))
+            wall_h = runs * recipe["base_time"] * (1 - te / 100.0) / P / 3600.0
+            if wall_h > params.max_build_hours:
+                flipped.add(tid)          # falls through to the bought loop; inputs not exploded
+                continue
+
         result[tid] = {
             "type_id": tid, "activity": activity, "build": True,
             "gross": gross[tid], "net": net, "runs": runs, "produced": produced,
-            "leftover": produced - net, "output_qty": output_qty,
+            "leftover": produced - net, "output_qty": output_qty, "bought_for_speed": False,
         }
         for inp in recipe["inputs"]:
             gross[inp["type_id"]] += effective_material_qty(inp["quantity"], runs, me, mult)
@@ -110,7 +129,8 @@ def aggregate_demand(targets: list[tuple[int, int]], memo: dict, mfg: dict, rx: 
         if tid in result or qty <= 0:
             continue
         result[tid] = {"type_id": tid, "activity": None, "build": False, "gross": qty,
-                       "net": qty, "runs": 0, "produced": 0, "leftover": 0, "output_qty": 0}
+                       "net": qty, "runs": 0, "produced": 0, "leftover": 0, "output_qty": 0,
+                       "bought_for_speed": tid in flipped}
     return result
 
 
@@ -299,7 +319,7 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
     for tid, _ in targets:
         unit(tid, frozenset())
 
-    agg = aggregate_demand(targets, memo, mfg, rx, params, on_hand)
+    agg = aggregate_demand(targets, memo, mfg, rx, params, on_hand, pools)
     tasks, by_type = build_tasks(agg, mfg, rx, params, pools)
     deps = _built_deps(agg, mfg, rx)
     priority = _critical_priority(agg, deps, mfg, rx, params)
@@ -327,6 +347,7 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
                 "type_id": tid, "name": names.get(tid, str(tid)), "qty": info["gross"],
                 "unit_price": price, "source": (prices.get(tid) or {}).get("source"),
                 "line_cost": line if price else None,
+                "bought_for_speed": info.get("bought_for_speed", False),
             })
     shopping.sort(key=lambda r: r["line_cost"] or 0.0, reverse=True)
 
@@ -378,6 +399,7 @@ class IndustryQueueRequest(BaseModel):
     facility_tax_pct: float | None = None
     mfg_slots: int | None = None        # None → derive from the account's characters' skills
     rx_slots: int | None = None
+    prioritize_speed: bool = True
 
 
 @router.post("/api/industry/plan-queue")
@@ -407,7 +429,9 @@ def industry_plan_queue(req: IndustryQueueRequest, ctx: int = Depends(require_co
 
     prices = resolve_market_data(ctx, list(ids))
     adjusted = fetch_adjusted_prices(list(ids))
-    params = resolve_build_params(ctx, req.me_pct, req.te_pct, req.system_id, req.facility_tax_pct)
+    from app.industry.graph import SPEED_BUILD_CAP_HOURS
+    mbh = SPEED_BUILD_CAP_HOURS if req.prioritize_speed else 0.0
+    params = resolve_build_params(ctx, req.me_pct, req.te_pct, req.system_id, req.facility_tax_pct, mbh)
     # Slot pools: use the request overrides, else derive from the account's characters' skills
     # (falling back to 1 each so a brand-new account with no manufacturing skills still schedules).
     pool = _slot_pool(ctx)

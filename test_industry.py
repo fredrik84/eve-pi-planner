@@ -239,6 +239,23 @@ def test_scheduler_slot_contention():
     check("wide makespan 1h", approx(sched2["makespan_hours"], 1.0))
 
 
+def test_time_aware_make_or_buy():
+    print("test_time_aware_make_or_buy (buy the slow bulk component when prioritizing speed)")
+    con = _seed_con()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+    memo, unit = resolve_unit_costs(mfg, rx, _prices(SELL), ADJ, BuildParams())
+    unit(101, frozenset())
+    pools = {"manufacturing": 1, "reaction": 1}
+    # 100 Gadgets → ~50 Sprocket runs (reaction, 1h each) = 50h build → exceeds a 24h cap → buy it.
+    speed = aggregate_demand([(101, 100)], memo, mfg, rx, BuildParams(max_build_hours=24.0), pools=pools)
+    check("sprocket bought for speed", speed[102]["build"] is False and speed[102]["bought_for_speed"])
+    check("goo not built (sprocket bought)", 202 not in speed)
+    check("gadget still built (target)", speed[101]["build"] is True)
+    # Without the cap, the cheaper option (build) wins.
+    cost = aggregate_demand([(101, 100)], memo, mfg, rx, BuildParams(), pools=pools)
+    check("sprocket built without cap", cost[102]["build"] is True)
+
+
 def test_manufacturing_slots():
     print("test_manufacturing_slots (skill → slot formula)")
     from app.industry.slots import manufacturing_slots, reaction_slots
@@ -298,6 +315,7 @@ def main():
     test_split_runs()
     test_scheduler_linear_chain()
     test_scheduler_slot_contention()
+    test_time_aware_make_or_buy()
     test_manufacturing_slots()
     test_per_product_me_from_blueprints()
     test_plan_queue_end_to_end()

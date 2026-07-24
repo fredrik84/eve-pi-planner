@@ -858,3 +858,6 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-planner-card { position: relative; z-index: 5; }
 #indResult { display: block; margin-top: 16px; }
 #indResult:empty { margin-top: 0; }
+.ind-opt-check { display: inline-flex; align-items: center; gap: 7px; margin-top: 10px; font-size: 12px; color: var(--clr-text-soft); cursor: pointer; }
+.ind-opt-check input { width: auto; margin: 0; }
+.ind-speed-badge { font-size: 10px; background: #2a2130; color: #d9a7e0; padding: 1px 6px; border-radius: 8px; }

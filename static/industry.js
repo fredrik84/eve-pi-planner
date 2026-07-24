@@ -120,7 +120,7 @@ async function indRunPlan() {
   try {
     const r = await fetch('/api/industry/plan', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type_id: _indPicked.type_id, quantity: qty }),
+      body: JSON.stringify({ type_id: _indPicked.type_id, quantity: qty, prioritize_speed: _indPrioSpeed() }),
     });
     if (!r.ok) { const e = await r.json().catch(() => ({})); out.innerHTML = `<div class="pp-card"><p class="pp-warn">${_esc(e.detail || 'Plan failed')}</p></div>`; return; }
     const d = await r.json();
@@ -150,10 +150,16 @@ function _indMetricTiles(m) {
     `<div class="an-stat"${t ? ` title="${_esc(t)}"` : ''}><div class="an-stat-lbl">${l}</div><div class="an-stat-val">${v}</div></div>`).join('') + `</div>`;
 }
 
+function _indPrioSpeed() {
+  const el = document.getElementById('indPrioSpeed');
+  return el ? el.checked : true;
+}
+
 function _indShoppingTable(list) {
   if (!list || !list.length) return '<p class="pp-sub">Nothing to buy — built entirely from stock/recipes.</p>';
   const rows = list.map(s =>
-    `<tr><td>${_esc(s.name)}</td><td class="ind-num">${Math.round(s.qty).toLocaleString()}</td>`
+    `<tr><td>${_esc(s.name)}${s.bought_for_speed ? ' <span class="ind-speed-badge" title="Bought instead of built to save time">for speed</span>' : ''}</td>`
+    + `<td class="ind-num">${Math.round(s.qty).toLocaleString()}</td>`
     + `<td class="ind-src">${s.source ? _esc(s.source) : '<span class="pp-warn">no price</span>'}</td>`
     + `<td class="ind-num">${s.line_cost != null ? fmtIsk(s.line_cost) : '—'}</td></tr>`
   ).join('');
@@ -312,7 +318,8 @@ async function indPlanQueue() {
   out.innerHTML = '<p class="pp-sub">Planning queue…</p>';
   try {
     const r = await fetch('/api/industry/queue-plan', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}),
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prioritize_speed: _indPrioSpeed() }),
     });
     if (!r.ok) { const e = await r.json().catch(() => ({})); out.innerHTML = `<p class="pp-warn">${_esc(e.detail || 'Queue plan failed')}</p>`; return; }
     const d = await r.json();
@@ -329,6 +336,8 @@ document.addEventListener('DOMContentLoaded', () => {
   if (s) {
     s.addEventListener('input', indOnSearchInput);
     s.addEventListener('blur', () => setTimeout(_indHideResults, 150));
-    document.getElementById('indQty').addEventListener('input', () => {});
   }
+  const ps = document.getElementById('indPrioSpeed');
+  // Re-run the current plan when the speed priority flips, so the effect is immediate.
+  if (ps) ps.addEventListener('change', () => { if (_indPicked && document.getElementById('indResult').innerHTML.trim()) indRunPlan(); });
 });
