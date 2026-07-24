@@ -96,7 +96,10 @@ def aggregate_demand(targets: list[tuple[int, int]], memo: dict, mfg: dict, rx: 
     # Total rolled-up build cost of the whole order, for the "saving is negligible vs the whole
     # product" test — from the targets' own build unit costs (cost-optimal estimate).
     total_build_value = sum((memo.get(t) or {}).get("build_unit_cost", 0.0) * qty for t, qty in targets)
-    marginal_abs = params.marginal_pct_of_total / 100.0 * total_build_value if params.marginal_pct_of_total > 0 else 0.0
+    marginal_pct_abs = params.marginal_pct_of_total / 100.0 * total_build_value if params.marginal_pct_of_total > 0 else 0.0
+    # Buy a component if building saves less than this — the larger of an absolute "worth a slot"
+    # floor and a % of the whole product (so big capitals scale up).
+    marginal_abs = max(marginal_pct_abs, params.min_saving_isk)
 
     result: dict[int, dict] = {}
     flipped: set[int] = set()             # bought for speed (slow to build)

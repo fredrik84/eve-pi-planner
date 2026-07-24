@@ -263,6 +263,16 @@ function _indJobChips(g) {
 // Step-by-step "what to do right now": buy your materials, start the first wave of jobs now, then
 // each later wave as the previous finishes. The prominent, plain-language answer to "what am I
 // supposed to be doing" — the tree/schedule below are just the detail behind it.
+// "N jobs · M runs" — the concise per-wave summary the user asked for (not a chip per job).
+function _indStepSummary(g) {
+  const runs = g.reduce((s, x) => s + x.runs, 0);
+  return `${g.length} job${g.length > 1 ? 's' : ''} · ${runs.toLocaleString()} runs`;
+}
+function _indStepItems(g, open) {
+  return `<details class="ind-step-items"${open ? ' open' : ''}><summary>show items</summary>`
+    + `<div class="ind-wave-jobs">${_indJobChips(g)}</div></details>`;
+}
+
 function _indStepsHtml(d) {
   const waves = (d.schedule && d.schedule.waves) || [];
   if (!waves.length) return '';
@@ -275,12 +285,15 @@ function _indStepsHtml(d) {
       + `<div class="ind-step-body">${shop.length} item${shop.length > 1 ? 's' : ''} · ${fmtIsk(d.metrics.materials_cost)} — full list below.</div></div>`;
   }
   n++;
-  html += `<div class="ind-step ind-step-now"><div class="ind-step-hd"><span class="ind-step-num">${n}</span>Start these jobs now <span class="ind-step-tag">do this now</span></div>`
-    + `<div class="ind-step-body ind-wave-jobs">${_indJobChips(_indWaveGroup(waves[0]))}</div></div>`;
+  const now = _indWaveGroup(waves[0]);
+  html += `<div class="ind-step ind-step-now"><div class="ind-step-hd"><span class="ind-step-num">${n}</span>Start ${_indStepSummary(now)} now <span class="ind-step-tag">do this now</span></div>`
+    + _indStepItems(now, true) + `</div>`;
   if (waves.length > 1) {
-    const later = waves.slice(1).map((w, i) =>
-      `<div class="ind-step ind-step-later"><div class="ind-step-hd"><span class="ind-step-num">${n + 1 + i}</span>After that batch finishes <span class="ind-step-when">≈ +${_fmtHours(w.start_hours)}</span></div>`
-      + `<div class="ind-step-body ind-wave-jobs">${_indJobChips(_indWaveGroup(w))}</div></div>`).join('');
+    const later = waves.slice(1).map((w, i) => {
+      const g = _indWaveGroup(w);
+      return `<div class="ind-step ind-step-later"><div class="ind-step-hd"><span class="ind-step-num">${n + 1 + i}</span>Then start ${_indStepSummary(g)} <span class="ind-step-when">≈ +${_fmtHours(w.start_hours)}</span></div>`
+        + _indStepItems(g, false) + `</div>`;
+    }).join('');
     html += `<details class="ind-details ind-steps-more"><summary>Then, as each batch finishes — ${waves.length - 1} more step${waves.length > 2 ? 's' : ''}</summary>${later}</details>`;
   }
   html += `<div class="ind-step ind-step-done"><div class="ind-step-hd"><span class="ind-step-num">✓</span>Done — ${_esc(d.target ? d.target.name : 'product')} built in ≈ ${_fmtHours(d.metrics.makespan_hours)}</div></div>`;

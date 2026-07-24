@@ -63,6 +63,8 @@ class BuildParams:
     # trivial — either as a fraction of the WHOLE product's build cost (many tiny savings add up,
     # but each one isn't worth a job) or as a fraction of the component's own buy price.
     marginal_pct_of_total: float = 0.0        # buy if build saves < this % of total product cost
+    min_saving_isk: float = 0.0               # buy if build saves < this absolute ISK (build isn't
+                                              # worth the extra job/time for less)
     min_saving_pct: float = 0.0               # buy if build saves < this % of the component's buy price
     # Per-product ME/TE from the account's actual owned blueprints (product_type_id -> (me, te)).
     # When a product is here, its real researched efficiency is used instead of the global me_pct/
@@ -345,6 +347,12 @@ SPEED_BUILD_CAP_HOURS = 24.0
 # that shouldn't drive a decision, while 4% of a Revelation component is real money). This one
 # lens auto-scales: it trims the long tail on a 2.35b capital but barely touches a 147m cruiser.
 MARGINAL_BUILD_PCT_OF_TOTAL = 0.1
+# Absolute floor: a build step isn't worth its slot/time unless it saves at least this much ISK,
+# so anything cheaper to build by less than this is bought (prioritize time). This is what makes a
+# cheap ship — where most components each save only a little — mostly BUY-and-assemble rather than
+# a multi-day build. The effective threshold is max(this, MARGINAL_BUILD_PCT_OF_TOTAL × total), so
+# big capitals still trim their long tail proportionally.
+MIN_BUILD_SAVING_ISK = 5_000_000
 
 
 def account_build_defaults(context_id: int) -> tuple[int | None, float]:
@@ -385,6 +393,7 @@ def resolve_build_params(context_id: int, me_pct: float, te_pct: float,
         facility_tax_pct=tax, me_by_product=me_by_product, owned=owned,
         max_build_hours=max_build_hours,
         marginal_pct_of_total=MARGINAL_BUILD_PCT_OF_TOTAL,   # min_saving_pct stays 0 (per-component % doesn't scale)
+        min_saving_isk=MIN_BUILD_SAVING_ISK,
     )
 
 

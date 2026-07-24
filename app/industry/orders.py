@@ -98,14 +98,15 @@ def create_order(req: OrderCreate, ctx: int = Depends(require_context)):
         ).fetchone()
         if not buildable:
             raise HTTPException(status_code=400, detail="that type has no manufacturing or reaction recipe")
-        cur = con.execute(
+        # RETURNING id — cur.lastrowid is None on Postgres (prod), which made the follow-up lookup
+        # 404 ("order not found") even though the insert committed.
+        oid = con.execute(
             "INSERT INTO pp_industry_orders (context_id, product_type_id, name, quantity, mode, "
-            "priority, status, created_at) VALUES (?,?,?,?,?,?, 'queued', ?)",
+            "priority, status, created_at) VALUES (?,?,?,?,?,?, 'queued', ?) RETURNING id",
             (ctx, req.product_type_id, name or str(req.product_type_id), req.quantity, req.mode,
              int(_time.time()), _time.time()),
-        )
+        ).fetchone()[0]
         con.commit()
-        oid = cur.lastrowid
         return _order_row(con, oid, ctx)
     finally:
         con.close()

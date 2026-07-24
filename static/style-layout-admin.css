@@ -895,3 +895,10 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-steps-more { margin-bottom: 8px; }
 .ind-steps-more > summary { font-size: 12px; color: #9fb4d8; cursor: pointer; padding: 4px 0; }
 .ind-marginal-badge { font-size: 10px; background: #2a2a30; color: #b8c0cc; padding: 1px 6px; border-radius: 8px; }
+.ind-step-items > summary { font-size: 11px; color: var(--clr-text-soft); cursor: pointer; padding: 4px 0 0; list-style: none; }
+.ind-step-items > summary::-webkit-details-marker { display: none; }
+.ind-step-items > summary::before { content: '\25B8 '; }
+.ind-step-items[open] > summary::before { content: '\25BE '; }
+.ind-step-items[open] > .ind-wave-jobs { margin-top: 6px; }
+#indQueueResult { margin-top: 12px; }
+#indQueueResult:empty { margin-top: 0; }

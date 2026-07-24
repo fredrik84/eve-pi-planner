@@ -2830,11 +2830,11 @@ function openSettingsModal(section) {
   if (alertsNav) alertsNav.style.display = (_loggedIn && _featureActive('alert_settings')) ? '' : 'none';
   const acctNav = document.getElementById('settingsNavAccount');
   if (acctNav) acctNav.style.display = _loggedIn ? '' : 'none';
-  // Markets & Logistics (shared by Reactions + Manufacturing) — shown to logged-in users of either.
+  // Markets & Logistics (shared by Reactions + Manufacturing) — freight rates + followed markets
+  // are account-wide, so show it to any logged-in user.
   const mktNav = document.getElementById('settingsNavMarkets');
-  const mktAvail = _loggedIn && (_featureActive('reactions') || _featureActive('industry') || _featureActive('local_market'));
-  if (mktNav) mktNav.style.display = mktAvail ? '' : 'none';
-  if (section === 'markets' && !mktAvail) section = 'characters';
+  if (mktNav) mktNav.style.display = _loggedIn ? '' : 'none';
+  if (section === 'markets' && !_loggedIn) section = 'characters';
   // If the requested section is gated and not available, fall back to characters.
   if (section === 'plans' && !_loggedIn) section = 'characters';
   if (section === 'notifications' && !((_loggedIn && _featureActive('notifications')))) section = 'characters';
@@ -2875,16 +2875,17 @@ function settingsSection(name, doLoad) {
 function _loadMarketsSettings() {
   const body = document.getElementById('settingsSecMarketsBody');
   if (!body) return;
-  const hasMarkets = typeof _featureActive === 'function' && _featureActive('local_market');
-  const marketMgr = hasMarkets
-    ? `<div class="settings-subsec-title">Local / alliance markets <span class="pp-card-hint">— priced in order, top first; Jita is always the last fallback</span></div>`
-      + `<div id="settingsMarketsMgr" class="pp-target-form" style="margin:8px 0 16px;display:block"><div class="pp-empty">Loading…</div></div>`
-      + `<div style="border-top:1px solid var(--clr-border);margin-bottom:12px"></div>`
-    : '';
+  // Always show the market manager — following a market is useful to anyone and drives both
+  // Reactions and Manufacturing pricing. Structure markets need a connected character (button
+  // below); public region markets work without one.
+  const marketMgr = `<div class="settings-subsec-title">Markets to price against <span class="pp-card-hint">— priced top-first; Jita is always the last fallback</span></div>`
+    + `<div class="pp-card-hint" style="margin:6px 0 8px">Follow a public region market and/or a player structure market. <button class="ind-link-btn" onclick="connectReactionsMarket()">Connect a market character</button> (needed for structure markets).</div>`
+    + `<div id="settingsMarketsMgr" class="pp-target-form" style="margin:8px 0 16px;display:block"><div class="pp-empty">Loading…</div></div>`
+    + `<div style="border-top:1px solid var(--clr-border);margin-bottom:12px"></div>`;
   const freight = (typeof _rxAccountSettingsFormHtml === 'function') ? _rxAccountSettingsFormHtml() : '';
   body.innerHTML = marketMgr + freight;
   if (typeof _loadRxAccountSettings === 'function') _loadRxAccountSettings();
-  if (hasMarkets && typeof _rxMountMarkets === 'function') {
+  if (typeof _rxMountMarkets === 'function') {
     _rxMountMarkets('settingsMarketsMgr');
     if (typeof _rxRefreshMarkets === 'function') _rxRefreshMarkets();
   }
