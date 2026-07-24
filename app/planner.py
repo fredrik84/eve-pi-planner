@@ -2241,6 +2241,21 @@ def dashboard(pp_session: str = Cookie(default=None)):
     except Exception:
         pass
 
+    # Soonest manufacturing job completion (Industry planner) — same defensive shape as reactions
+    # above; a problem on the Industry side must never take down the core PI dashboard.
+    manufacturing_tracked = False
+    manufacturing_time_left_hours = None
+    manufacturing_time_left_loc = None
+    try:
+        from app.industry.jobs import next_manufacturing_completion
+        mf = next_manufacturing_completion(context_id)
+        if mf:
+            manufacturing_tracked = True
+            manufacturing_time_left_hours = mf["hours_left"]
+            manufacturing_time_left_loc = mf.get("name")
+    except Exception:
+        pass
+
     return {
         "logged_in": True,
         "factories": factories,
@@ -2276,6 +2291,9 @@ def dashboard(pp_session: str = Cookie(default=None)):
             "reactions_net_profit": reactions_net_profit,
             "reactions_net_profit_per_day": reactions_net_profit_per_day,
             "reactions_isk_committed": reactions_isk_committed,
+            "manufacturing_tracked": manufacturing_tracked,
+            "manufacturing_time_left_hours": manufacturing_time_left_hours,
+            "manufacturing_time_left_loc": manufacturing_time_left_loc,
         },
         "top_pi": top_pi,
     }

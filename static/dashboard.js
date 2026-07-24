@@ -104,6 +104,9 @@ function _renderTimelineCard(t) {
     ...(_featureActive('reactions') && t.reactions_tracked
       ? [{ lbl: 'Reactions done', due: t.reactions_time_left_hours, loc: t.reactions_time_left_loc }]
       : []),
+    ...(_featureActive('industry') && t.manufacturing_tracked
+      ? [{ lbl: 'Manufacturing done', due: t.manufacturing_time_left_hours, loc: t.manufacturing_time_left_loc }]
+      : []),
   ].filter(j => j.due != null && j.due >= 0).sort((a, b) => a.due - b.due);
   if (!jobs.length) return '';   // no live colony timing yet
 
@@ -320,7 +323,8 @@ function renderDashboard(data) {
   const timelineHtml = _featureActive('timeline') ? _renderTimelineCard(t) : '';
 
   const showReactionsTile = _featureActive('reactions') && t.reactions_tracked;
-  const routineHtml = (t.empty_pads_hours != null || t.refill_factories_hours != null || t.restart_extractors_hours != null || showReactionsTile) ? `
+  const showMfgTile = _featureActive('industry') && t.manufacturing_tracked;
+  const routineHtml = (t.empty_pads_hours != null || t.refill_factories_hours != null || t.restart_extractors_hours != null || showReactionsTile || showMfgTile) ? `
     <section class="pp-card">
       <div class="pp-card-title">Maintenance routine <span class="pp-card-hint">— countdown to the next job · cadence below</span></div>
       <div class="pp-card-body"><div class="an-stats">
@@ -328,6 +332,7 @@ function renderDashboard(data) {
         ${_rtTile(t.empty_due_hours, t.empty_pads_hours, isMobile ? 'Empty pads' : 'Empty extractor pads', t.empty_due_loc || t.empty_pads_loc)}
         ${_rtTile(t.refill_due_hours, t.refill_factories_hours, isMobile ? 'Refill factories' : 'Refill factory inputs', t.refill_due_loc || t.refill_factories_loc)}
         ${showReactionsTile ? _rtTile(t.reactions_time_left_hours, null, 'Reactions done', t.reactions_time_left_loc) : ''}
+        ${showMfgTile ? _rtTile(t.manufacturing_time_left_hours, null, 'Next manufacturing job', t.manufacturing_time_left_loc) : ''}
       </div></div>
     </section>` : '';
 

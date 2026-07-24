@@ -332,6 +332,38 @@ def manufacturing_lifetime(context_id: int = Depends(require_context)):
             "jobs": row["jobs"] or 0, "since": row["since"], "used": (row["jobs"] or 0) > 0}
 
 
+def next_manufacturing_completion(context_id: int) -> dict | None:
+    """The soonest-finishing running manufacturing job for this account: {hours_left, name,
+    tracked}, or None if nothing is running/tracked. Feeds the dashboard 'Up next' + maintenance
+    routine. Reads the cached snapshot only (no ESI)."""
+    jobs = running_jobs(context_id)
+    now = _time.time()
+    timed = []
+    for j in jobs:
+        end = j.get("end_date")
+        if not end:
+            continue
+        try:
+            end_ts = datetime.fromisoformat(end.replace("Z", "+00:00")).timestamp()
+        except Exception:
+            continue
+        timed.append((max(0.0, (end_ts - now) / 3600.0), j))
+    if not timed:
+        return None
+    timed.sort(key=lambda x: x[0])
+    h, j = timed[0]
+    name = j.get("name")
+    if (not name or name == str(j.get("product_type_id"))) and j.get("product_type_id"):
+        con = get_connection()
+        try:
+            r = con.execute("SELECT name FROM types WHERE type_id=?", (j["product_type_id"],)).fetchone()
+            if r:
+                name = r["name"]
+        finally:
+            con.close()
+    return {"hours_left": round(h, 1), "name": name, "tracked": True}
+
+
 @router.get("/api/industry/jobs")
 def get_manufacturing_jobs(context_id: int = Depends(require_context)):
     """The account's currently-running manufacturing jobs (with product names resolved)."""
