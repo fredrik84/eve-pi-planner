@@ -2176,8 +2176,13 @@ function _rxMarketManagerHtml(d) {
   const inherited = !own.length && d.effective && d.effective.length;
   const inheritNote = inherited && d.group
     ? `<div class="pp-card-hint" style="margin:0 0 8px">Using your group <b>${_esc(d.group.name)}</b>'s markets. Add one below to override for your account only.</div>` : '';
-  const connectNote = d.connected ? ''
-    : `<div class="pp-card-hint" style="margin:0 0 8px">Structure search needs a connected market character (public regions work without one).</div>`;
+  // A configured STRUCTURE market can only be read by a character with the market scope + docking
+  // access. Without one, structure prices silently fall back to Jita — warn loudly instead.
+  const structs = (own.length ? own : (d.effective || [])).filter(m => m.kind === 'structure');
+  const unreadable = structs.length && !d.connected;
+  const connectNote = unreadable
+    ? `<div class="pp-warn" style="margin:0 0 8px">⚠ Your structure market${structs.length > 1 ? 's' : ''} can't be read — no connected character has market access, so pricing falls back to Jita (in Reactions <b>and</b> Manufacturing). Connect a market character to fix it.</div>`
+    : (d.connected ? '' : `<div class="pp-card-hint" style="margin:0 0 8px">Structure search needs a connected market character (public regions work without one).</div>`);
   return inheritNote + connectNote
     + `<div class="rx-mkt-list">${_rxMarketRowsHtml(d)}</div>`
     + `<div class="rx-mkt-search">`
