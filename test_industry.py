@@ -275,9 +275,12 @@ def test_plan_queue_end_to_end():
     mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
     res = plan_queue([(100, 2)], mfg, rx, _prices(SELL), ADJ, BuildParams(), NAMES,
                      {"manufacturing": 10, "reaction": 5})
-    check("job_count 3", res["metrics"]["job_count"] == 3)
-    check("makespan 6h", approx(res["metrics"]["makespan_hours"], 6.0))
-    # materials for 2 widgets: MineralA 20×100 + MineralB 20×50 + Goo 20×20 = 3400
+    # With 10 mfg / 5 rx slots each tier's runs split to run in parallel: Sprocket(2 runs→2 jobs,
+    # 1h) → Gadget(4→4 jobs, 0.5h) → Widget(2→2 jobs, 1h) = 2.5h makespan. 8 jobs, 3 build steps.
+    check("build_steps 3", res["metrics"]["build_steps"] == 3)
+    check("job_count 8 (parallel split)", res["metrics"]["job_count"] == 8)
+    check("makespan 2.5h parallel", approx(res["metrics"]["makespan_hours"], 2.5))
+    # materials for 2 widgets: MineralA 20×100 + MineralB 20×50 + Goo 20×20 = 3400 (split-invariant)
     check("materials 3400", approx(res["metrics"]["materials_cost"], 3400.0))
     check("shopping 3 raws", len(res["shopping_list"]) == 3)
 

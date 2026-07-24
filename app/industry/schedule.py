@@ -140,20 +140,37 @@ def _split_runs(total: int, max_runs: int) -> list[int]:
     return [base + 1 if i < extra else base for i in range(n)]
 
 
-def build_tasks(agg: dict, mfg: dict, rx: dict, params: BuildParams) -> tuple[list[Task], dict]:
-    """One or more Task instances per built type (split by BPC run cap). Returns (tasks,
-    tasks_by_type)."""
+def _balanced(total: int, n: int) -> list[int]:
+    base, extra = divmod(total, n)
+    return [base + 1 if i < extra else base for i in range(n)]
+
+
+def build_tasks(agg: dict, mfg: dict, rx: dict, params: BuildParams,
+                pools: dict[str, int] | None = None) -> tuple[list[Task], dict]:
+    """One or more Task instances per built type. A type's runs are split so they can run in
+    PARALLEL across the pool's slots — up to `pool_size` concurrent jobs — while still respecting
+    the per-BPC run cap (`max_runs`). This is what lets a big reaction (thousands of runs, no BPC
+    cap → otherwise one multi-month job) actually spread across your reaction slots the way you'd
+    run it in-game. Returns (tasks, tasks_by_type)."""
+    pools = pools or {}
     tasks: list[Task] = []
     by_type: dict[int, list[Task]] = {}
     for tid, info in agg.items():
         if not info["build"] or info["runs"] <= 0:
             continue
         recipe = mfg.get(tid) or rx.get(tid)
+        activity = info["activity"]
         max_runs = mfg[tid]["max_runs"] if tid in mfg else 0
-        _me, te = params.me_te_for(tid, info["activity"])
+        _me, te = params.me_te_for(tid, activity)
         per_run = recipe["base_time"] * (1 - te / 100.0)
-        for i, r in enumerate(_split_runs(info["runs"], max_runs)):
-            t = Task(f"{tid}-{i}", tid, info["activity"], r, r * per_run)
+        R = info["runs"]
+        P = max(1, pools.get(activity, 1))
+        cap = max_runs if max_runs else R
+        # Split into enough jobs to (a) fill up to P slots concurrently and (b) never exceed the
+        # per-job run cap — whichever forces MORE jobs.
+        n = max(min(P, R), math.ceil(R / cap))
+        for i, r in enumerate(_balanced(R, n)):
+            t = Task(f"{tid}-{i}", tid, activity, r, r * per_run)
             tasks.append(t)
             by_type.setdefault(tid, []).append(t)
     return tasks, by_type
@@ -283,7 +300,7 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
         unit(tid, frozenset())
 
     agg = aggregate_demand(targets, memo, mfg, rx, params, on_hand)
-    tasks, by_type = build_tasks(agg, mfg, rx, params)
+    tasks, by_type = build_tasks(agg, mfg, rx, params, pools)
     deps = _built_deps(agg, mfg, rx)
     priority = _critical_priority(agg, deps, mfg, rx, params)
     sched = schedule(tasks, by_type, deps, pools, priority)
@@ -313,10 +330,21 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
             })
     shopping.sort(key=lambda r: r["line_cost"] or 0.0, reverse=True)
 
-    leftovers = [
-        {"type_id": tid, "name": names.get(tid, str(tid)), "qty": info["leftover"]}
-        for tid, info in agg.items() if info.get("leftover", 0) > 0
-    ]
+    # Leftover intermediates (batch-rounding overproduction) are reusable/sellable inventory, not a
+    # cost of the finished product — value them at their build unit cost and credit that back so the
+    # net product cost excludes what we can recycle.
+    leftovers = []
+    leftover_value = 0.0
+    for tid, info in agg.items():
+        if info.get("leftover", 0) <= 0:
+            continue
+        uc = (memo.get(tid) or {}).get("build_unit_cost") or 0.0
+        val = info["leftover"] * uc
+        leftover_value += val
+        leftovers.append({"type_id": tid, "name": names.get(tid, str(tid)),
+                          "qty": info["leftover"], "value": round(val, 2)})
+    leftovers.sort(key=lambda r: r["value"], reverse=True)
+    total_cost = materials_cost + job_cost
     return {
         "targets": [{"type_id": t, "name": names.get(t, str(t)), "quantity": q} for t, q in targets],
         "schedule": sched,
@@ -326,8 +354,11 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
         "metrics": {
             "materials_cost": round(materials_cost, 2),
             "job_cost": round(job_cost, 2),
-            "total_cost": round(materials_cost + job_cost, 2),
+            "total_cost": round(total_cost, 2),
+            "leftover_value": round(leftover_value, 2),
+            "net_cost": round(total_cost - leftover_value, 2),
             "job_count": len(tasks),
+            "build_steps": len(by_type),      # distinct things to build (parallel splits collapsed)
             "makespan_hours": sched["makespan_hours"],
             "slots": pools,
         },

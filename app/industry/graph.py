@@ -229,7 +229,7 @@ def build_plan(target: int, quantity: int, mfg: dict, rx: dict, prices: dict, ad
 
     shopping: dict[int, float] = {}
     jobs: list[dict] = []
-    totals = {"materials_cost": 0.0, "job_cost": 0.0, "job_seconds": 0.0}
+    totals = {"materials_cost": 0.0, "job_cost": 0.0, "job_seconds": 0.0, "leftover_value": 0.0}
 
     def explode(type_id: int, qty: float, is_root: bool = False) -> dict:
         node = memo[type_id]
@@ -255,6 +255,8 @@ def build_plan(target: int, quantity: int, mfg: dict, rx: dict, prices: dict, ad
         output_qty = recipe["output_qty"]
         runs = max(1, math.ceil(qty / output_qty))
         produced = runs * output_qty
+        if produced > qty:   # batch-rounding overproduction is reusable inventory, credit it back
+            totals["leftover_value"] += (produced - qty) * (node["build_unit_cost"] or 0.0)
 
         children = []
         eiv = 0.0
@@ -305,6 +307,8 @@ def build_plan(target: int, quantity: int, mfg: dict, rx: dict, prices: dict, ad
             "materials_cost": round(totals["materials_cost"], 2),
             "job_cost": round(totals["job_cost"], 2),
             "total_cost": round(total_cost, 2),
+            "leftover_value": round(totals["leftover_value"], 2),
+            "net_cost": round(total_cost - totals["leftover_value"], 2),
             "job_count": len(jobs),
             "total_job_hours": round(totals["job_seconds"] / 3600.0, 2),
         },
@@ -407,4 +411,19 @@ def industry_plan(req: IndustryPlanRequest, ctx: int = Depends(require_context))
     prices = resolve_market_data(ctx, list(ids))
     adjusted = fetch_adjusted_prices(list(ids))
     params = resolve_build_params(ctx, req.me_pct, req.te_pct, req.system_id, req.facility_tax_pct)
-    return build_plan(req.type_id, req.quantity, mfg, rx, prices, adjusted, params, names)
+
+    # Schedule the single build across the account's real slot pools (manufacturing + separate
+    # reaction pool) for an honest MAKESPAN with parallelism — build_plan alone only sums job time
+    # serially, which massively overstates wall-clock for a big build (a Nyx's 46 jobs are mostly
+    # parallel). plan_queue gives schedule + batched cost + net-cost; build_plan supplies the tree.
+    # Local imports avoid a graph↔schedule/slots import cycle.
+    from app.industry.schedule import plan_queue
+    from app.industry.slots import _slot_pool
+    pool = _slot_pool(ctx)
+    pools = {"manufacturing": max(1, pool["manufacturing_slots"]),
+             "reaction": max(1, pool["reaction_slots"])}
+    result = plan_queue([(req.type_id, req.quantity)], mfg, rx, prices, adjusted, params, names, pools)
+    result["target"] = {"type_id": req.type_id, "name": names.get(req.type_id, str(req.type_id)),
+                        "quantity": req.quantity}
+    result["tree"] = build_plan(req.type_id, req.quantity, mfg, rx, prices, adjusted, params, names)["tree"]
+    return result

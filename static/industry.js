@@ -131,16 +131,23 @@ async function indRunPlan() {
 }
 
 function _indMetricTiles(m) {
-  const tiles = [
-    ['Total cost', fmtIsk(m.total_cost)],
-    ['Materials', fmtIsk(m.materials_cost)],
-    ['Job fees', fmtIsk(m.job_cost)],
-    ['Jobs', m.job_count],
-  ];
-  if (m.makespan_hours != null) tiles.push(['Makespan', _fmtHours(m.makespan_hours)]);
-  else if (m.total_job_hours != null) tiles.push(['Total job time', _fmtHours(m.total_job_hours)]);
-  return `<div class="an-stats">` + tiles.map(([l, v]) =>
-    `<div class="an-stat"><div class="an-stat-lbl">${l}</div><div class="an-stat-val">${v}</div></div>`).join('') + `</div>`;
+  const tiles = [];
+  // When batch rounding overproduces reusable intermediates, lead with the net product cost and
+  // show the total outlay + the recyclable leftover credit separately.
+  if (m.net_cost != null && (m.leftover_value || 0) > 0.5) {
+    tiles.push(['Net cost', fmtIsk(m.net_cost), 'Cost attributable to the finished units, after crediting back reusable leftovers'],
+               ['Total spend', fmtIsk(m.total_cost), 'Everything you pay upfront to run this build'],
+               ['Leftover credit', fmtIsk(m.leftover_value), 'Value of excess intermediates you can reuse or sell']);
+  } else {
+    tiles.push(['Total cost', fmtIsk(m.total_cost), '']);
+  }
+  const steps = m.build_steps != null ? m.build_steps : m.job_count;
+  tiles.push(['Materials', fmtIsk(m.materials_cost), ''], ['Job fees', fmtIsk(m.job_cost), ''],
+             ['Build steps', steps, 'Distinct things to build — each may split into parallel jobs across your slots']);
+  if (m.makespan_hours != null) tiles.push(['Makespan', _fmtHours(m.makespan_hours), 'Wall-clock time with jobs running in parallel across your slots']);
+  else if (m.total_job_hours != null) tiles.push(['Total job time', _fmtHours(m.total_job_hours), '']);
+  return `<div class="an-stats">` + tiles.map(([l, v, t]) =>
+    `<div class="an-stat"${t ? ` title="${_esc(t)}"` : ''}><div class="an-stat-lbl">${l}</div><div class="an-stat-val">${v}</div></div>`).join('') + `</div>`;
 }
 
 function _indShoppingTable(list) {
@@ -176,11 +183,13 @@ function _indRenderPlan(d, title) {
     ? `<p class="pp-warn">${d.unresolved.length} material(s) had no market price — cost is a floor.</p>` : '';
   const sched = d.schedule ? _indScheduleHtml(d.schedule) : '';
   const leftovers = (d.leftovers && d.leftovers.length)
-    ? `<details class="ind-details"><summary>Leftover output (${d.leftovers.length})</summary>`
-      + d.leftovers.map(l => `<div class="ind-tree-row">${_esc(l.name)} ×${Math.round(l.qty).toLocaleString()}</div>`).join('') + `</details>` : '';
+    ? `<details class="ind-details"><summary>Reusable leftovers (${d.leftovers.length}) — ${fmtIsk(d.metrics.leftover_value || 0)} credited</summary>`
+      + d.leftovers.map(l => `<div class="ind-tree-row"><span class="ind-tree-name">${_esc(l.name)}</span> `
+        + `<span class="ind-tree-qty">×${Math.round(l.qty).toLocaleString()}</span>`
+        + (l.value ? `<span class="ind-tree-cost">${fmtIsk(l.value)}</span>` : '') + `</div>`).join('') + `</details>` : '';
   const tree = d.tree ? `<details class="ind-details" open><summary>Build tree</summary><div class="ind-tree">${_indTreeNode(d.tree, 0)}</div></details>` : '';
   return `<div class="pp-card">
-    <h3 class="ind-res-title">${title}</h3>
+    <h2 class="pp-card-title">${title}</h2>
     ${_indMetricTiles(d.metrics)}
     ${unres}
     ${sched}
