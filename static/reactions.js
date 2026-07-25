@@ -78,6 +78,7 @@ async function onReactionsTabOpen() {
   const advDetails = document.getElementById('rxAdvancedDetails');
   if (advDetails && advDetails.open) _rxLoadAdvancedTable(true);
   _loadReactionsDashboard();
+  _rxStructureRecommend();
   // Pull live job status from ESI in the background (respects ESI's ~5min cache server-side, so
   // flipping tabs won't hammer it) and reload the dashboard if anything actually refreshed. The
   // GET above only reads our cached job table — without this, a job you just installed in-game
@@ -2201,6 +2202,30 @@ function _rxBuildCfgHtml(m) {
     <div class="rx-rig-row">ME rig <select id="brme-${m.id}">${_rigOpts(m.rx_me_rig)}</select> · TE rig <select id="brte-${m.id}">${_rigOpts(m.rx_te_rig)}</select></div>
     <button class="pp-add-btn" onclick="_rxSaveBuild(${m.id})">Save build settings</button>
   </div>`;
+}
+
+// Non-blocking nudge: recommend (never require) setting up a reaction structure so reaction ME/TE
+// is accurate. Dismissible; stays dismissed. Unlike Manufacturing, Reactions works fine without it.
+async function _rxStructureRecommend() {
+  const el = document.getElementById('rxStructReco');
+  if (!el) return;
+  if (localStorage.getItem('rxStructRecoDismissed') === '1') { el.style.display = 'none'; return; }
+  try {
+    const r = await fetch('/api/markets');
+    if (!r.ok) { el.style.display = 'none'; return; }
+    const d = await r.json();
+    const hasRx = (d.markets || []).some(m => m.kind === 'structure' && m.build_rx);
+    if (hasRx) { el.style.display = 'none'; return; }
+    el.style.display = '';
+    el.innerHTML = `For accurate reaction ME/TE, set up your reaction structure — `
+      + `<button class="ind-link-btn" onclick="openSettingsModal('markets')">Markets &amp; Logistics</button> → 🔨 → React here. `
+      + `<button class="ind-link-btn" onclick="_rxDismissStructReco()">Dismiss</button>`;
+  } catch (e) { el.style.display = 'none'; }
+}
+function _rxDismissStructReco() {
+  try { localStorage.setItem('rxStructRecoDismissed', '1'); } catch (e) {}
+  const el = document.getElementById('rxStructReco');
+  if (el) el.style.display = 'none';
 }
 
 function _rxToggleBuild(id) {

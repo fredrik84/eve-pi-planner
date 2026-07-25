@@ -945,3 +945,6 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .rx-build-chk input { width: auto; margin: 0; }
 .rx-rig-row { font-size: 12px; color: var(--clr-text-soft); margin: 2px 0 6px 22px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .rx-rig-row select { background: #141720; color: var(--clr-text); border: 1px solid var(--clr-border); border-radius: 4px; padding: 3px 6px; font-size: 12px; }
+.ind-gate-steps { margin: 10px 0 16px; padding-left: 20px; color: #cdd6e6; font-size: 14px; line-height: 1.9; }
+.ind-gate-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.ind-gate-note { margin-top: 14px; font-size: 12px; opacity: 0.85; }

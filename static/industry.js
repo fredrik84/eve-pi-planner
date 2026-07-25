@@ -12,12 +12,42 @@ async function onIndustryTabOpen() {
     const pub = typeof _features !== 'undefined' && _features.industry && _features.industry.enabled;
     tag.style.display = (!pub && typeof _featuresIsAdmin !== 'undefined' && _featuresIsAdmin) ? '' : 'none';
   }
-  indPopulateFacility();
+  // Manufacturing requires at least one structure you build in (it sets your ME/TE). Gate the tool
+  // until one exists — but don't re-ask for markets/freight if Reactions already set those up
+  // (they live in the shared Markets & Logistics settings). indPopulateFacility fills the facility
+  // map with your structures, so we can tell from it whether a build structure exists yet.
+  await indPopulateFacility();
+  const hasStructure = Object.keys(_indFacilityMap).some(k => k.startsWith('s:'));
+  indApplyGate(hasStructure);
+  if (!hasStructure) return;
+
   indLoadSetupSummary();
   indLoadLifetime();
   indLoadQueue();
   indLoadInstall();
   indLoadRunning();
+}
+
+function indApplyGate(hasStructure) {
+  const gate = document.getElementById('indGate');
+  const content = document.getElementById('indContent');
+  if (!gate || !content) return;
+  if (hasStructure) { gate.style.display = 'none'; content.style.display = ''; return; }
+  content.style.display = 'none';
+  gate.style.display = '';
+  gate.innerHTML = `<div class="pp-card"><div class="pp-card-title">Set up manufacturing</div><div class="ind-body">
+    <p class="pp-sub">To plan builds, add at least one <b>structure you manufacture in</b> — its rigs set your material &amp; time efficiency, which every cost and time figure depends on.</p>
+    <ol class="ind-gate-steps">
+      <li>Open <b>Settings → Markets &amp; Logistics</b>.</li>
+      <li>Search and add your structure, then hit <b>🔨</b> and turn on <b>Manufacture here</b> with its rig tiers.</li>
+      <li>Come back and continue — that's it.</li>
+    </ol>
+    <div class="ind-gate-actions">
+      <button class="ind-primary-btn" onclick="openSettingsModal('markets')">Open Markets &amp; Logistics</button>
+      <button class="ind-secondary-btn" onclick="onIndustryTabOpen()">I've added it — continue</button>
+    </div>
+    <p class="pp-sub ind-gate-note">Only reactions? You don't need this — Manufacturing just stays gated until you build something.</p>
+  </div></div>`;
 }
 
 // Lifetime manufacturing ledger tiles — shown ONLY once the account has actually completed a
