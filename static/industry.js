@@ -347,12 +347,22 @@ function indPick(typeId, name) {
   document.getElementById('indPickHint').textContent = '';
 }
 
+// A roomy, centered loading card. Planning a capital walks the whole recipe tree and schedules
+// hundreds of jobs, so this is on screen long enough to be worth not looking like a stray line of
+// text — and sizing it near the finished plan's height stops the page collapsing then jumping.
+function _indLoadingHtml(msg, sub) {
+  return `<div class="ind-loading"><div class="ind-spinner" aria-hidden="true"></div>`
+    + `<div class="ind-loading-msg">${_esc(msg)}</div>`
+    + `<div class="ind-loading-sub">${_esc(sub || '')}</div></div>`;
+}
+
 // ── Single-product plan ─────────────────────────────────────────────────────────────────────
 async function indRunPlan() {
   if (!_indPicked) return;
   const qty = Math.max(1, parseInt(document.getElementById('indQty').value) || 1);
   const out = document.getElementById('indResult');
-  out.innerHTML = '<div class="pp-card"><p class="pp-sub">Planning…</p></div>';
+  out.innerHTML = `<div class="pp-card">${_indLoadingHtml('Planning your build…',
+    'Costing every component, deciding build vs buy, then scheduling the jobs across your slots.')}</div>`;
   try {
     const r = await fetch('/api/industry/plan', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1045,7 +1055,8 @@ async function indLoadRunning() {
 
 async function indPlanQueue() {
   const out = document.getElementById('indQueueResult');
-  out.innerHTML = '<p class="pp-sub">Planning queue…</p>';
+  out.innerHTML = _indLoadingHtml('Planning the whole queue…',
+    'Combining every order into shared batches, then scheduling them across your slots.');
   await indLoadProgress();   // so the pipeline renders with live state, not just the plan
   try {
     const r = await fetch('/api/industry/queue-plan', {

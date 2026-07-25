@@ -1039,3 +1039,12 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-field-marg label b { color: var(--clr-accent); font-variant-numeric: tabular-nums; }
 .ind-field-marg input[type=range] { width: 100%; accent-color: var(--clr-accent); margin: 0; padding: 0; }
 .ind-marg-hint { font-size: 11px; color: var(--clr-text-soft); margin-top: 3px; }
+/* Planning loader — centered, and tall enough that the page doesn't collapse then jump */
+.ind-loading { display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px; min-height: 220px; padding: 32px 20px; text-align: center; }
+.ind-spinner { width: 30px; height: 30px; border-radius: 50%; border: 3px solid #1e2636;
+  border-top-color: var(--clr-accent); animation: indSpin .8s linear infinite; }
+@keyframes indSpin { to { transform: rotate(360deg); } }
+.ind-loading-msg { font-size: 15px; font-weight: 600; color: #eef2f8; }
+.ind-loading-sub { font-size: 12px; color: var(--clr-text-soft); max-width: 420px; line-height: 1.5; }
+@media (prefers-reduced-motion: reduce) { .ind-spinner { animation-duration: 2.4s; } }
