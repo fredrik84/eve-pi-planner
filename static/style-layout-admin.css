@@ -826,9 +826,6 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-build { background: #163524; color: #7fdca6; }
 .ind-buy { background: #2a2130; color: #d9a7e0; }
 .ind-unres { background: #3a2226; color: #e69aa0; }
-.ind-waves { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
-.ind-wave { display: flex; gap: 10px; align-items: flex-start; }
-.ind-wave-hd { flex: 0 0 64px; color: var(--clr-accent); font-size: 12px; font-variant-numeric: tabular-nums; padding-top: 2px; }
 .ind-wave-jobs { display: flex; flex-wrap: wrap; gap: 6px; }
 .ind-wave-job { background: #161b28; border: 1px solid var(--clr-border); border-radius: 8px; padding: 2px 8px; font-size: 12px; color: #cdd6e6; }
 .ind-queue-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid #1a2030; }
@@ -858,6 +855,7 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-planner-card { position: relative; z-index: 5; }
 #indResult { display: block; margin-top: 16px; }
 #indResult:empty { margin-top: 0; }
+#indResult:not(:empty) { margin-bottom: 18px; }
 .ind-opt-check { display: inline-flex; align-items: center; gap: 7px; margin-top: 10px; font-size: 12px; color: var(--clr-text-soft); cursor: pointer; }
 .ind-opt-check input { width: auto; margin: 0; }
 .ind-speed-badge { font-size: 10px; background: #2a2130; color: #d9a7e0; padding: 1px 6px; border-radius: 8px; }
@@ -935,8 +933,16 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-pipe-final .ind-pipe-hd span { background: #1e3a5f; color: var(--clr-accent); }
 .ind-pipe-final .ind-pipe-card { border-color: #2d5a8a; border-left-color: var(--clr-accent); background: linear-gradient(180deg, #16233a, #12161f); }
 .ind-pipe-more { font-size: 11px; color: var(--clr-text-soft); padding: 5px 2px; }
-.ind-pipe-buys { border-style: dashed; border-left-style: solid; border-left-color: #7a6a8a; background: #15121b; }
+.ind-pipe-buys { border-style: dashed; border-left-style: solid; border-left-color: #7a6a8a; background: #15121b; cursor: pointer; }
+.ind-pipe-buys:hover { border-color: var(--clr-accent); background: #191527; }
 .ind-pipe-buys .ind-pipe-name { color: #cbb8d6; }
+/* Shopping list split by build stage — matches the pipeline's "Buy" stage numbering */
+.ind-shop-stage { margin-top: 16px; }
+.ind-shop-stage:first-of-type { margin-top: 4px; }
+.ind-shop-stage-hd { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12px; font-weight: 600; color: #9fb4d8; padding: 4px 0; border-bottom: 1px solid #1a2030; }
+.ind-copy-sm { padding: 3px 9px; font-size: 11px; }
+.ind-shop-flash { animation: indShopFlash 1.2s ease-out; }
+@keyframes indShopFlash { 0% { background: #1e3a5f; } 100% { background: transparent; } }
 .ind-pipe-buys .ind-pipe-meta { color: #8a7a96; font-size: 10px; }
 /* Build-structure config in the market manager */
 .rx-mkt-build-badge { font-size: 10px; color: #7fdca6; margin-left: 8px; }

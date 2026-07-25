@@ -285,32 +285,91 @@ function indOnFacilityChange() {
 }
 
 let _indLastPlan = null;   // last rendered plan, for the shopping-list copy features
+let _indShopStageData = {};   // stage key (tier) -> [{name, qty}], for per-stage multibuy copy
 
-function _indShoppingTable(list) {
-  if (!list || !list.length) return '<p class="pp-sub">Nothing to buy — built entirely from stock/recipes.</p>';
-  const rows = list.map(s =>
-    `<tr><td>${_esc(s.name)}`
+// Walk the build tree once into { byType (with tier + type_id), tiers (tier -> [entries]), maxT }.
+// Shared by the pipeline visualization and the per-stage shopping list so their stage numbering
+// always matches — a "Buy" card in the pipeline links to the exact same stage in the list below.
+function _indComputeTiers(tree) {
+  const byType = {};
+  (function walk(n, depth) {
+    if (!n) return;
+    const e = byType[n.type_id] || (byType[n.type_id] = { type_id: n.type_id, name: n.name, decision: n.decision, activity: n.activity, owned: n.owned, qty: 0, tier: depth });
+    e.qty += n.qty || 0;
+    e.tier = Math.max(e.tier, depth);
+    if (n.decision === 'build' || n.decision === 'buy') e.decision = n.decision;
+    (n.inputs || []).forEach(c => walk(c, depth + 1));
+  })(tree, 0);
+  const tiers = {};
+  Object.values(byType).forEach(e => (tiers[e.tier] = tiers[e.tier] || []).push(e));
+  const maxT = Object.keys(tiers).length ? Math.max(...Object.keys(tiers).map(Number)) : 0;
+  return { byType, tiers, maxT };
+}
+
+function _indStageLabel(t, maxT, hasBuilds) {
+  if (t === 0) return 'Finished';
+  return hasBuilds ? `Stage ${maxT - t}` : `Buy — stage ${maxT - t}`;
+}
+
+function _indShopRowHtml(s) {
+  return `<tr><td>${_esc(s.name)}`
     + `${s.bought_for_speed ? ' <span class="ind-speed-badge" title="Bought instead of built to save time">for speed</span>' : ''}`
     + `${s.bought_marginal ? ' <span class="ind-marginal-badge" title="Building this would save too little to be worth a job">low saving</span>' : ''}</td>`
     + `<td class="ind-num">${Math.round(s.qty).toLocaleString()}</td>`
     + `<td class="ind-src">${s.source ? _esc(s.source) : '<span class="pp-warn">no price</span>'}</td>`
-    + `<td class="ind-num">${s.line_cost != null ? fmtIsk(s.line_cost) : '—'}</td></tr>`
-  ).join('');
-  return `<div class="ind-shop-bar"><button class="ind-copy-btn" onclick="indCopyMultibuy()">Copy for EVE Multibuy</button>`
-    + `<span class="ind-shop-tot">${list.length} items · ${fmtIsk(list.reduce((a, s) => a + (s.line_cost || 0), 0))}</span></div>`
-    + `<table class="ind-table"><thead><tr><th>Material</th><th class="ind-num">Qty</th><th>Source</th><th class="ind-num">Cost</th></tr></thead><tbody>${rows}</tbody></table>`;
+    + `<td class="ind-num">${s.line_cost != null ? fmtIsk(s.line_cost) : '—'}</td></tr>`;
 }
 
-// Copy the shopping list in EVE's Multibuy paste format ("Item Name<tab>qty" per line) so the whole
-// buy can be pasted straight into the in-game Multibuy window.
-function indCopyMultibuy() {
-  const list = (_indLastPlan && _indLastPlan.shopping_list) || [];
+// The shopping list split by build stage — buy just what the next step needs, or everything at
+// once. Stage numbering/labels match the pipeline's "Buy N materials" cards exactly, since both
+// are derived from the same _indComputeTiers() walk.
+function _indShoppingSections(d, tiersData) {
+  const list = d.shopping_list || [];
+  if (!list.length) return '<p class="pp-sub">Nothing to buy — built entirely from stock/recipes.</p>';
+  const { tiers, maxT } = tiersData;
+  const byId = {};
+  list.forEach(s => { byId[s.type_id] = s; });
+  _indShopStageData = {};
+  let sections = '';
+  for (let t = maxT; t >= 0; t--) {
+    const entries = (tiers[t] || []).filter(e => e.decision !== 'build');
+    const rows = entries.map(e => byId[e.type_id]).filter(Boolean);
+    if (!rows.length) continue;
+    const hasBuilds = (tiers[t] || []).some(e => e.decision === 'build');
+    const label = _indStageLabel(t, maxT, hasBuilds);
+    _indShopStageData[t] = rows.map(r => ({ name: r.name, qty: r.qty }));
+    const stageCost = rows.reduce((a, s) => a + (s.line_cost || 0), 0);
+    sections += `<div class="ind-shop-stage" id="ind-shop-stage-${t}">`
+      + `<div class="ind-shop-stage-hd"><span>${_esc(label)} — ${rows.length} item${rows.length > 1 ? 's' : ''} · ${fmtIsk(stageCost)}</span>`
+      + `<button class="ind-copy-btn ind-copy-sm" onclick="indCopyMultibuy(${t})">Copy this stage</button></div>`
+      + `<table class="ind-table"><thead><tr><th>Material</th><th class="ind-num">Qty</th><th>Source</th><th class="ind-num">Cost</th></tr></thead><tbody>${rows.map(_indShopRowHtml).join('')}</tbody></table></div>`;
+  }
+  const totalCost = list.reduce((a, s) => a + (s.line_cost || 0), 0);
+  return `<div class="ind-shop-bar"><button class="ind-copy-btn" onclick="indCopyMultibuy()">Copy everything</button>`
+    + `<span class="ind-shop-tot">${list.length} items · ${fmtIsk(totalCost)}</span></div>${sections}`;
+}
+
+// Copy a shopping list (or one stage of it, if `stage` is given) in EVE's Multibuy paste format
+// ("Item Name<tab>qty" per line) so it can be pasted straight into the in-game Multibuy window.
+function indCopyMultibuy(stage) {
+  const list = (stage !== undefined && _indShopStageData[stage]) ? _indShopStageData[stage] : ((_indLastPlan && _indLastPlan.shopping_list) || []);
   if (!list.length) return;
   const text = list.map(s => `${s.name}\t${Math.ceil(s.qty)}`).join('\n');
   const btn = event && event.target;
   const done = () => { if (btn) { const t = btn.textContent; btn.textContent = 'Copied ✓'; setTimeout(() => { btn.textContent = t; }, 1500); } };
   if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done).catch(() => {});
   else { const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select(); try { document.execCommand('copy'); done(); } catch (e) {} document.body.removeChild(ta); }
+}
+
+// Jump from a pipeline "Buy N materials" card down to that exact stage in the shopping list below.
+function _indJumpToStage(t) {
+  const el = document.getElementById('ind-shop-stage-' + t);
+  if (!el) return;
+  const details = el.closest('details');
+  if (details) details.open = true;
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  el.classList.add('ind-shop-flash');
+  setTimeout(() => el.classList.remove('ind-shop-flash'), 1200);
 }
 
 // Compact tree row label (shared by leaves and collapsible nodes).
@@ -395,31 +454,20 @@ function _indStepsHtml(d) {
 // The build as a horizontal PRODUCTION PIPELINE: raw materials on the left flow rightward through
 // each build stage to the finished product. Each type appears once (at its deepest stage), coloured
 // by build vs buy. An assembly line rather than an indented list — reads the way EVE industry works.
-function _indPipelineHtml(d) {
+function _indPipelineHtml(d, tiersData) {
   const tree = d.tree;
   if (!tree || !(tree.inputs || []).length) return '';
-  const byType = {};
-  (function walk(n, depth) {
-    if (!n) return;
-    const e = byType[n.type_id] || (byType[n.type_id] = { name: n.name, decision: n.decision, activity: n.activity, owned: n.owned, qty: 0, tier: depth });
-    e.qty += n.qty || 0;
-    e.tier = Math.max(e.tier, depth);
-    if (n.decision === 'build' || n.decision === 'buy') e.decision = n.decision;
-    (n.inputs || []).forEach(c => walk(c, depth + 1));
-  })(tree, 0);
-
-  const tiers = {};
-  Object.values(byType).forEach(e => (tiers[e.tier] = tiers[e.tier] || []).push(e));
-  const maxT = Math.max(...Object.keys(tiers).map(Number));
-  // A build step gets its own card; bought items aren't steps, so they collapse into one card.
+  const { tiers, maxT } = tiersData;
+  // A build step gets its own card; bought items aren't steps, so they collapse into one card
+  // that links straight down to its stage in the shopping list (click, or hover for the names).
   const buildCard = e => {
     const owned = e.owned ? `<span class="ind-owned" title="You own this ${e.owned.kind.toUpperCase()}">${e.owned.kind.toUpperCase()}</span>` : '';
     return `<div class="ind-pipe-card ind-pipe-build"><span class="ind-pipe-name">${_esc(e.name)}</span>`
       + `<span class="ind-pipe-meta">×${Math.round(e.qty).toLocaleString()} <span class="ind-pipe-tag ind-t-build">build${e.activity === 'reaction' ? ' rx' : ''}</span>${owned}</span></div>`;
   };
-  const buyCard = buys => {
+  const buyCard = (buys, t) => {
     const names = buys.slice(0, 25).map(b => b.name).join(', ') + (buys.length > 25 ? '…' : '');
-    return `<div class="ind-pipe-card ind-pipe-buys" title="${_esc(names)}"><span class="ind-pipe-name">Buy ${buys.length} material${buys.length > 1 ? 's' : ''}</span>`
+    return `<div class="ind-pipe-card ind-pipe-buys" title="${_esc(names)} — click to jump to this stage's shopping list" onclick="_indJumpToStage(${t})"><span class="ind-pipe-name">Buy ${buys.length} material${buys.length > 1 ? 's' : ''}</span>`
       + `<span class="ind-pipe-meta">in shopping list ↓</span></div>`;
   };
   let cols = '';
@@ -431,8 +479,8 @@ function _indPipelineHtml(d) {
     const shown = builds.slice(0, 12);
     let cards = shown.map(buildCard).join('');
     if (builds.length > 12) cards += `<div class="ind-pipe-more">+${builds.length - 12} more built</div>`;
-    if (buys.length) cards += buyCard(buys);
-    const label = t === 0 ? 'Finished' : (!builds.length ? 'Buy' : `Stage ${maxT - t}`);
+    if (buys.length) cards += buyCard(buys, t);
+    const label = _indStageLabel(t, maxT, !!builds.length);
     const count = builds.length ? `<span>${builds.length}</span>` : '';
     cols += `<div class="ind-pipe-col${t === 0 ? ' ind-pipe-final' : ''}"><div class="ind-pipe-hd">${label}${count}</div>`
       + `<div class="ind-pipe-items">${cards}</div></div>`;
@@ -444,37 +492,28 @@ function _indPipelineHtml(d) {
 function _indRenderPlan(d, title) {
   const unres = (d.unresolved && d.unresolved.length)
     ? `<p class="pp-warn">${d.unresolved.length} material(s) had no market price — cost is a floor.</p>` : '';
-  const sched = d.schedule ? _indScheduleHtml(d.schedule) : '';
   const leftovers = (d.leftovers && d.leftovers.length)
     ? `<details class="ind-details"><summary>Reusable leftovers (${d.leftovers.length}) — ${fmtIsk(d.metrics.leftover_value || 0)} credited</summary>`
       + d.leftovers.map(l => `<div class="ind-tree-row"><span class="ind-tree-name">${_esc(l.name)}</span> `
         + `<span class="ind-tree-qty">×${Math.round(l.qty).toLocaleString()}</span>`
         + (l.value ? `<span class="ind-tree-cost">${fmtIsk(l.value)}</span>` : '') + `</div>`).join('') + `</details>` : '';
+  const tiersData = d.tree ? _indComputeTiers(d.tree) : { byType: {}, tiers: {}, maxT: 0 };
   const treeKids = d.tree && (d.tree.inputs || []).length
     ? (d.tree.inputs || []).map(c => _indTreeNode(c, 0)).join('') : '';
   const tree = treeKids
-    ? `<details class="ind-details"><summary>Build tree (list)</summary><div class="ind-tree">${treeKids}</div></details>` : '';
+    ? `<details class="ind-details"><summary>Debug: full build tree</summary><div class="ind-tree">${treeKids}</div></details>` : '';
   return `<div class="pp-card">
     <h2 class="pp-card-title">${title}</h2>
     <div class="ind-body">
       ${_indMetricTiles(d.metrics)}
       ${unres}
       ${_indStepsHtml(d)}
-      ${_indPipelineHtml(d)}
-      <details class="ind-details" open><summary>Shopping list (${(d.shopping_list || []).length})</summary>${_indShoppingTable(d.shopping_list)}</details>
-      ${sched}
+      ${_indPipelineHtml(d, tiersData)}
+      <details class="ind-details" open><summary>Shopping list (${(d.shopping_list || []).length})</summary>${_indShoppingSections(d, tiersData)}</details>
       ${tree}
       ${leftovers}
     </div>
   </div>`;
-}
-
-function _indScheduleHtml(s) {
-  if (!s || !s.waves || !s.waves.length) return '';
-  const waves = s.waves.map(w =>
-    `<div class="ind-wave"><div class="ind-wave-hd">+${_fmtHours(w.start_hours)}</div><div class="ind-wave-jobs">${_indJobChips(_indWaveGroup(w))}</div></div>`
-  ).join('');
-  return `<details class="ind-details"><summary>Full schedule — ${s.waves.length} wave(s), makespan ${_fmtHours(s.makespan_hours)}</summary><div class="ind-waves">${waves}</div></details>`;
 }
 
 // Task waves only carry type_id; keep a name cache from the last plan's shopping/tree so waves read nicely.
