@@ -37,7 +37,7 @@ from fastapi import Depends
 from pydantic import BaseModel
 
 from app.db import get_connection
-from app.esi import ESI_BASE, require_context, _get_valid_token
+from app.esi import ESI_BASE, require_context, _get_valid_token, ASSETS_SCOPE
 from app.industry._router import router
 
 # Personal hangar flags — assets in a ship fit, delivery hangar or contract are NOT usable stock.
@@ -77,6 +77,29 @@ def ensure_asset_tables():
         con.commit()
     finally:
         con.close()
+
+
+def chars_by_scope(context_id: int) -> tuple[list[dict], list[dict]]:
+    """(can_scan, needs_reauth) for this account's characters.
+
+    An EVE token only carries the scopes granted at its last authorisation, so a character connected
+    before the assets scope existed holds a perfectly valid token that simply cannot read assets —
+    it would 403. Checking the stored `scp` claim up front lets us name exactly who needs
+    reconnecting instead of reporting a vague failure.
+    """
+    con = get_connection()
+    try:
+        rows = con.execute(
+            "SELECT character_id, character_name, scopes FROM pp_characters WHERE context_id = ?",
+            (context_id,),
+        ).fetchall()
+    finally:
+        con.close()
+    ok, need = [], []
+    for r in rows:
+        entry = {"character_id": r["character_id"], "character_name": r["character_name"]}
+        (ok if ASSETS_SCOPE in (r["scopes"] or "").split() else need).append(entry)
+    return ok, need
 
 
 def _paginate(client: httpx.Client, url: str, token: str, cap: int = 30):
@@ -215,15 +238,7 @@ def refresh_assets(context_id: int) -> dict:
     """Re-read personal assets and rediscover the selectable sources. Existing on/off choices are
     preserved. Corp hangars are not read here — see the module docstring."""
     ensure_asset_tables()
-    con = get_connection()
-    try:
-        chars = con.execute(
-            "SELECT character_id, character_name FROM pp_characters WHERE context_id = ?",
-            (context_id,),
-        ).fetchall()
-    finally:
-        con.close()
-
+    chars, needs = chars_by_scope(context_id)
     ok, failed = 0, 0
     for c in chars:
         cid, cname = c["character_id"], c["character_name"]
@@ -254,7 +269,8 @@ def refresh_assets(context_id: int) -> dict:
         except Exception:
             failed += 1
 
-    return {"characters": len(chars), "refreshed": ok, "failed": failed}
+    return {"characters": len(chars), "refreshed": ok, "failed": failed,
+            "needs_reauth": [c["character_name"] for c in needs]}
 
 
 def add_pasted_source(context_id: int, name: str, text: str) -> dict:
@@ -366,6 +382,7 @@ def owned_quantities(context_id: int) -> dict[int, float]:
 
 
 def assets_status(context_id: int) -> dict:
+    _ok, needs = chars_by_scope(context_id)
     srcs = list_sources(context_id)
     owned = owned_quantities(context_id)
     con = get_connection()
@@ -382,6 +399,9 @@ def assets_status(context_id: int) -> dict:
         "sources": srcs,
         "enabled_sources": sum(1 for s in srcs if s["enabled"]),
         "distinct_types": len(owned),
+        # Characters whose stored token predates the assets scope — they need one re-auth each.
+        "needs_reauth": [c["character_name"] for c in needs],
+        "scannable": len(_ok),
     }
 
 

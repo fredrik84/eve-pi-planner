@@ -102,6 +102,32 @@ function indOpenSetup() {
 // ── Stock on hand (ESI assets) ──────────────────────────────────────────────────────────────
 // Scanning assets makes plans subtract what you already own, and lets progress report "done"
 // without guessing a start date. Opt-in and manual — a full asset list is a heavy ESI call.
+// EVE tokens carry only the scopes granted at their last login, so characters connected before the
+// assets scope existed hold valid tokens that simply can't read assets. Name them and offer the
+// re-auth — one login per character, and the callback stores the new scope set.
+function _indReauthHtml(names) {
+  if (!names || !names.length) return '';
+  return `<div class="ind-reauth"><span class="ind-reauth-txt">`
+    + `<b>${names.length} character${names.length === 1 ? '' : 's'}</b> can't be scanned yet: `
+    + `${names.map(_esc).join(', ')}. They were connected before asset access was added — `
+    + `log each one in once to grant it.</span>`
+    + `<button class="ind-bp-btn ind-bp-connect" onclick="indReauthAssets()">Reconnect a character</button></div>`;
+}
+
+// Same SSO flow the blueprint connect uses — it requests the full unified scope set, so one login
+// brings the character up to date on every scope at once.
+function indReauthAssets() {
+  const w = window.open('/auth/login?industry=1', 'EVE SSO', 'width=800,height=900');
+  window.addEventListener('message', function handler(e) {
+    if (e.data === 'esi-done') {
+      window.removeEventListener('message', handler);
+      if (w && !w.closed) w.close();
+      indLoadAssets();
+      indLoadSetupSummary();
+    }
+  });
+}
+
 async function indLoadAssets() {
   const el = document.getElementById('indAssets');
   if (!el) return;
@@ -112,7 +138,9 @@ async function indLoadAssets() {
     if (!d.connected) {
       el.innerHTML = `<span class="ind-bp-hint">Tell the planner what you already own so it stops asking you to build it, `
         + `and progress can tell what's finished.</span>`
-        + `<div class="ind-src-actions"><button class="ind-bp-btn ind-bp-connect" onclick="indRefreshAssets()">Scan assets</button>`
+        + _indReauthHtml(d.needs_reauth)
+        + `<div class="ind-src-actions">`
+        + (d.scannable ? `<button class="ind-bp-btn ind-bp-connect" onclick="indRefreshAssets()">Scan assets</button>` : '')
         + `<button class="ind-bp-btn" onclick="indOpenPaste()">Paste a hangar</button></div>`
         + _indPasteFormHtml();
       return;
@@ -137,6 +165,7 @@ async function indLoadAssets() {
       + `<button class="ind-bp-btn" onclick="indRefreshAssets()">Rescan</button></div>`
       + `<p class="ind-src-help">Tick the hangars and containers the planner may take materials from. Nothing is used until you pick it.</p>`
       + `<div class="ind-src-list">${rows || '<span class="ind-bp-hint">No usable hangars found.</span>'}</div>`
+      + _indReauthHtml(d.needs_reauth)
       + `<div class="ind-src-actions"><button class="ind-bp-btn" onclick="indOpenPaste()">Paste a hangar</button></div>`
       + _indPasteFormHtml();
   } catch (e) { el.innerHTML = ''; }
@@ -212,10 +241,8 @@ async function indRefreshAssets() {
   if (el) el.innerHTML = '<span class="ind-bp-hint">Reading assets… (a full asset list can take a moment)</span>';
   let d = null;
   try { const r = await fetch('/api/industry/assets/refresh', { method: 'POST' }); if (r.ok) d = await r.json(); } catch (e) {}
-  if (d && !d.connected && el) {
-    // A character authorised before the assets scope existed can't be read until it reconnects.
-    el.innerHTML = `<span class="pp-warn">Couldn't read any assets — reconnect your characters to grant the assets scope.</span>`
-      + `<button class="ind-bp-btn ind-bp-connect" onclick="indConnectBlueprints()">Reconnect</button>`;
+  if (d && !d.connected && (d.needs_reauth || []).length && el) {
+    el.innerHTML = _indReauthHtml(d.needs_reauth) + _indPasteFormHtml();
     return;
   }
   indLoadAssets();
