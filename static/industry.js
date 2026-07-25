@@ -571,12 +571,21 @@ function _indPipelineHtml(d, tiersData, model) {
 
   // No "build" tag on the card — the row it sits in already says Reactions vs Manufacturing, so
   // repeating it just costs width. Qty and runs are what actually differ per card.
+  const prog = _indProgTypeMap();
   const buildCard = e => {
     const owned = e.owned ? `<span class="ind-owned" title="You own this ${e.owned.kind.toUpperCase()}">${e.owned.kind.toUpperCase()}</span>` : '';
     const runs = e.runs ? `<span class="ind-pipe-runs">${e.runs.toLocaleString()}&nbsp;run${e.runs > 1 ? 's' : ''}</span>` : '';
     const qty = `×${Math.round(e.qty).toLocaleString()}`;
-    return `<div class="ind-pipe-card ind-pipe-build" data-tid="${e.type_id}" title="${_esc(e.name)} — ${qty}${e.runs ? ', ' + e.runs + ' runs' : ''}. Hover to trace its chain."><span class="ind-pipe-name">${_esc(e.name)}</span>`
-      + `<span class="ind-pipe-meta"><span class="ind-pipe-qty">${qty}</span>${runs}${owned}</span></div>`;
+    // Live state from real ESI jobs, when we have it — the pipeline doubles as a progress board.
+    const p = prog[e.type_id];
+    let state = '', cls = '';
+    if (p && p.required_runs) {
+      if (p.done_runs >= p.required_runs) { state = '<span class="ind-pipe-state ind-st-done">done</span>'; cls = ' ind-pipe-is-done'; }
+      else if (p.running_runs > 0) { state = `<span class="ind-pipe-state ind-st-run">${p.running_runs} running</span>`; cls = ' ind-pipe-is-run'; }
+      else if (p.done_runs > 0) { state = `<span class="ind-pipe-state ind-st-part">${p.done_runs}/${p.required_runs}</span>`; cls = ' ind-pipe-is-run'; }
+    }
+    return `<div class="ind-pipe-card ind-pipe-build${cls}" data-tid="${e.type_id}" title="${_esc(e.name)} — ${qty}${e.runs ? ', ' + e.runs + ' runs' : ''}. Hover to trace its chain."><span class="ind-pipe-name">${_esc(e.name)}</span>`
+      + `<span class="ind-pipe-meta"><span class="ind-pipe-qty">${qty}</span>${runs}${owned}${state}</span></div>`;
   };
   const buyCard = (buys, t) => {
     const names = buys.slice(0, 25).map(b => b.name).join(', ') + (buys.length > 25 ? '…' : '');
@@ -588,7 +597,14 @@ function _indPipelineHtml(d, tiersData, model) {
   // Header row: empty corner over the building labels, then one label per stage.
   let html = `<div class="ind-pipe-corner"></div>`;
   cols.forEach((col, i) => {
-    const count = col.builds.length ? `<span>${col.builds.length}</span>` : '';
+    // With live progress, the counter becomes "done/total jobs" for the stage instead of a bare
+    // count of things to build.
+    let count = col.builds.length ? `<span>${col.builds.length}</span>` : '';
+    if (col.builds.length && Object.keys(prog).length) {
+      let need = 0, did = 0;
+      col.builds.forEach(b => { const p = prog[b.type_id]; if (p) { need += p.required_runs; did += p.done_runs; } });
+      if (need) count = `<span class="${did >= need ? 'ind-hd-done' : ''}" title="${did} of ${need} jobs done in this stage">${did}/${need}</span>`;
+    }
     html += `<div class="ind-pipe-hd${col.t === 0 ? ' ind-pipe-hd-final' : ''}${i < cols.length - 1 ? ' ind-pipe-hd-flow' : ''}">${col.label}${count}</div>`;
   });
 
@@ -734,6 +750,35 @@ async function indAddToQueue() {
   } catch (e) { alert(String(e)); }
 }
 
+// Live queue progress, keyed by type_id — populated by indLoadProgress() and read by the pipeline
+// so its cards/stages can show what's actually done rather than just what's planned.
+let _indProgress = null;
+
+async function indLoadProgress() {
+  try {
+    const r = await fetch('/api/industry/progress');
+    _indProgress = r.ok ? await r.json() : null;
+    if (_indProgress && _indProgress.empty) _indProgress = null;
+  } catch (e) { _indProgress = null; }
+  return _indProgress;
+}
+
+function _indProgTypeMap() {
+  const m = {};
+  ((_indProgress && _indProgress.types) || []).forEach(t => { m[t.type_id] = t; });
+  return m;
+}
+
+function _indOrderProgHtml(p) {
+  if (!p) return '';
+  const cls = p.status === 'complete' ? 'ind-prog-done' : p.status === 'building' ? 'ind-prog-run' : 'ind-prog-wait';
+  const label = p.status === 'complete' ? 'done'
+    : p.status === 'building' ? `${p.done_units}/${p.quantity} built${p.running_units ? ` · ${p.running_units} running` : ''}`
+    : 'not started';
+  return `<div class="ind-prog"><div class="ind-prog-bar"><span class="${cls}" style="width:${Math.min(100, p.pct)}%"></span></div>`
+    + `<span class="ind-prog-lbl">${_esc(label)}</span></div>`;
+}
+
 async function indLoadQueue() {
   const el = document.getElementById('indQueueList');
   if (!el) return;
@@ -743,10 +788,19 @@ async function indLoadQueue() {
     const d = await r.json();
     if (!d.orders || !d.orders.length) { el.innerHTML = '<p class="pp-sub">Queue is empty. Search a product above and hit “+ Queue”.</p>'; document.getElementById('indQueuePlanBtn').disabled = true; return; }
     document.getElementById('indQueuePlanBtn').disabled = false;
-    el.innerHTML = d.orders.map(o =>
+    await indLoadProgress();
+    const byOrder = {};
+    ((_indProgress && _indProgress.orders) || []).forEach(o => { byOrder[o.id] = o; });
+    const tot = _indProgress && _indProgress.totals;
+    const head = tot && tot.required
+      ? `<div class="ind-queue-sum">Queue progress: <b>${_indProgress.pct}%</b> — ${tot.done} of ${tot.required} jobs done`
+        + `${tot.running ? ` · ${tot.running} running` : ''}${tot.waiting ? ` · ${tot.waiting} waiting` : ''}</div>`
+      : '';
+    el.innerHTML = head + d.orders.map(o =>
       `<div class="ind-queue-row"><span class="ind-queue-name">${_esc(o.name)}</span>`
       + `<span class="ind-queue-qty">×${o.quantity}</span>`
-      + `<button class="ind-queue-del" title="Remove" onclick="indRemoveOrder(${o.id})">✕</button></div>`
+      + `<button class="ind-queue-del" title="Remove" onclick="indRemoveOrder(${o.id})">✕</button>`
+      + _indOrderProgHtml(byOrder[o.id]) + `</div>`
     ).join('');
   } catch (e) { el.innerHTML = ''; }
 }
@@ -763,6 +817,7 @@ async function indRefreshJobs() {
   indLoadSlots();
   indLoadInstall();
   indLoadRunning();
+  indLoadQueue();      // fresh ESI jobs ⇒ recompute queue progress
 }
 
 async function indLoadInstall() {
@@ -809,6 +864,7 @@ async function indLoadRunning() {
 async function indPlanQueue() {
   const out = document.getElementById('indQueueResult');
   out.innerHTML = '<p class="pp-sub">Planning queue…</p>';
+  await indLoadProgress();   // so the pipeline renders with live state, not just the plan
   try {
     const r = await fetch('/api/industry/queue-plan', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
