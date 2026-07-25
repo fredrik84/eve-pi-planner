@@ -20,6 +20,12 @@ Sources are FLAT: an item belongs to exactly one source, the container it sits i
 the hangar itself. There is deliberately no "enabling a division also enables its containers" rule,
 which keeps every toggle unambiguous.
 
+Not everyone can use the corp read: ESI gates `/corporations/{id}/assets/` behind the **Director**
+role and offers nothing weaker, so most members of a real corp simply cannot query it. For them a
+pasted source is a first-class equivalent — paste the hangar contents out of the EVE client and it
+becomes a source like any other, selectable and counted identically. The role is a shortcut for
+Directors, never a requirement for using stock.
+
 Assets are read on demand and cached, like the blueprint and job caches — never polled, since a full
 asset list is a heavy call.
 """
@@ -298,6 +304,68 @@ def refresh_assets(context_id: int, corp: bool = True) -> dict:
     return {"characters": len(chars), "refreshed": ok, "failed": failed, "corp_error": corp_err}
 
 
+def add_pasted_source(context_id: int, name: str, text: str) -> dict:
+    """Turn an EVE inventory paste into a stock source.
+
+    The corp assets endpoint needs Director, which most corp members will never have — pasting the
+    hangar is the equivalent that works for everyone. Reuses the same paste parser the PI tools use,
+    then resolves names to type_ids against the SDE. Pasted sources are enabled on creation: you
+    just went to the trouble of pasting it, so meaning to use it is a safe assumption.
+    """
+    from app.pi import parse_inventory
+
+    ensure_asset_tables()
+    parsed = parse_inventory(text or "")
+    if not parsed:
+        return {"added": 0, "unknown": [], "error": "empty"}
+
+    con = get_connection()
+    try:
+        lookup = {}
+        names = list(parsed)
+        for i in range(0, len(names), 400):
+            chunk = names[i:i + 400]
+            marks = ",".join("?" * len(chunk))
+            for r in con.execute(
+                f"SELECT type_id, name FROM types WHERE LOWER(name) IN ({marks})",
+                tuple(n.lower() for n in chunk),
+            ).fetchall():
+                lookup[r["name"].lower()] = r["type_id"]
+    finally:
+        con.close()
+
+    stock: dict[int, float] = {}
+    unknown: list[str] = []
+    for nm, qty in parsed.items():
+        tid = lookup.get(nm.lower())
+        if tid is None:
+            unknown.append(nm)
+            continue
+        stock[int(tid)] = stock.get(int(tid), 0.0) + float(qty)
+    if not stock:
+        return {"added": 0, "unknown": unknown, "error": "unrecognized"}
+
+    key = f"paste:{abs(hash((name or 'Pasted stock').strip().lower())) % 10**12}"
+    label = (name or "").strip() or "Pasted stock"
+    _store(context_id, {key: {"kind": "paste", "name": label, "parent": "pasted"}},
+           {key: stock}, {key})
+    set_sources(context_id, [key], True)
+    return {"added": len(stock), "unknown": unknown, "key": key, "name": label}
+
+
+def delete_source(context_id: int, key: str) -> None:
+    """Remove a source entirely. Only meaningful for pasted ones — ESI-derived sources come back on
+    the next scan."""
+    ensure_asset_tables()
+    con = get_connection()
+    try:
+        con.execute("DELETE FROM pp_asset_sources WHERE context_id = ? AND key = ?", (context_id, key))
+        con.execute("DELETE FROM pp_asset_stock WHERE context_id = ? AND key = ?", (context_id, key))
+        con.commit()
+    finally:
+        con.close()
+
+
 def list_sources(context_id: int) -> list[dict]:
     ensure_asset_tables()
     con = get_connection()
@@ -386,4 +454,24 @@ class SourceToggle(BaseModel):
 def industry_assets_sources(req: SourceToggle, ctx: int = Depends(require_context)):
     """Choose which hangars/containers the planner may draw materials from."""
     set_sources(ctx, req.keys, req.enabled)
+    return assets_status(ctx)
+
+
+class PasteStock(BaseModel):
+    name: str = ""
+    text: str
+
+
+@router.post("/api/industry/assets/paste")
+def industry_assets_paste(req: PasteStock, ctx: int = Depends(require_context)):
+    """Add a stock source by pasting hangar contents from the EVE client — the path for anyone
+    without the Director role the corp assets endpoint demands."""
+    res = add_pasted_source(ctx, req.name, req.text)
+    res.update(assets_status(ctx))
+    return res
+
+
+@router.delete("/api/industry/assets/sources/{key}")
+def industry_assets_source_delete(key: str, ctx: int = Depends(require_context)):
+    delete_source(ctx, key)
     return assets_status(ctx)

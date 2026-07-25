@@ -110,9 +110,11 @@ async function indLoadAssets() {
     if (!r.ok) { el.innerHTML = ''; return; }
     const d = await r.json();
     if (!d.connected) {
-      el.innerHTML = `<span class="ind-bp-hint">Scan your hangars so plans stop asking you to build things you already own, `
+      el.innerHTML = `<span class="ind-bp-hint">Tell the planner what you already own so it stops asking you to build it, `
         + `and progress can tell what's finished.</span>`
-        + `<button class="ind-bp-btn ind-bp-connect" onclick="indRefreshAssets()">Scan assets</button>`;
+        + `<div class="ind-src-actions"><button class="ind-bp-btn ind-bp-connect" onclick="indRefreshAssets()">Scan assets</button>`
+        + `<button class="ind-bp-btn" onclick="indOpenPaste()">Paste a hangar</button></div>`
+        + _indPasteFormHtml();
       return;
     }
     const when = d.fetched_at ? new Date(d.fetched_at * 1000).toLocaleString() : '';
@@ -120,19 +122,79 @@ async function indLoadAssets() {
     // planner build too little, which is worse than ignoring stock altogether.
     const rows = (d.sources || []).map(sc => {
       const sub = sc.kind === 'container'
-        ? `container${sc.parent ? ' in ' + _esc(sc.parent) : ''}` : 'hangar';
+        ? `container${sc.parent ? ' in ' + _esc(sc.parent) : ''}`
+        : sc.kind === 'paste' ? 'pasted' : 'hangar';
+      const del = sc.kind === 'paste'
+        ? `<button class="ind-src-del" title="Remove this pasted stock" onclick="event.preventDefault();indDeleteSource('${_esc(sc.key)}')">✕</button>` : '';
       return `<label class="ind-src-row"><input type="checkbox" ${sc.enabled ? 'checked' : ''} `
         + `onchange="indToggleSource('${_esc(sc.key)}', this.checked)">`
         + `<span class="ind-src-name">${_esc(sc.name)}</span>`
-        + `<span class="ind-src-meta">${sub} · ${sc.item_count} item type${sc.item_count === 1 ? '' : 's'}</span></label>`;
+        + `<span class="ind-src-meta">${sub} · ${sc.item_count} item type${sc.item_count === 1 ? '' : 's'}</span>${del}</label>`;
     }).join('');
     el.innerHTML = `<div class="ind-src-hd"><span class="ind-bp-ok">✓ ${d.enabled_sources} of ${(d.sources || []).length} `
       + `source${(d.sources || []).length === 1 ? '' : 's'} in use · ${d.distinct_types} item type${d.distinct_types === 1 ? '' : 's'} counted`
       + `${when ? ' · scanned ' + _esc(when) : ''}</span>`
       + `<button class="ind-bp-btn" onclick="indRefreshAssets()">Rescan</button></div>`
       + `<p class="ind-src-help">Tick the hangars and containers the planner may take materials from. Nothing is used until you pick it.</p>`
-      + `<div class="ind-src-list">${rows || '<span class="ind-bp-hint">No usable hangars found.</span>'}</div>`;
+      + `<div class="ind-src-list">${rows || '<span class="ind-bp-hint">No usable hangars found.</span>'}</div>`
+      + `<div class="ind-src-actions"><button class="ind-bp-btn" onclick="indOpenPaste()">Paste a hangar</button></div>`
+      + _indPasteFormHtml();
   } catch (e) { el.innerHTML = ''; }
+}
+
+// Pasting is the equal-footing path to the corp read, not a consolation prize: ESI gates corp
+// assets behind the Director role and offers nothing weaker, so most corp members can only get
+// their corp hangar in here by pasting it.
+function _indPasteFormHtml() {
+  return `<div id="indPasteForm" class="ind-paste" style="display:none">
+    <p class="ind-src-help">In the EVE client, open the hangar, select all (Ctrl+A), copy (Ctrl+C), paste below.
+      Works for a corp hangar you can see but can't read over the API.</p>
+    <input type="text" id="indPasteName" placeholder="Name this stock — e.g. Corp hangar: Industry Materials">
+    <textarea id="indPasteText" rows="6" placeholder="Tritanium&#9;1 000 000&#10;Pyerite&#9;500 000"></textarea>
+    <div class="ind-src-actions">
+      <button class="ind-primary-btn" onclick="indSavePaste()">Add as stock</button>
+      <button class="ind-bp-btn" onclick="indClosePaste()">Cancel</button>
+      <span id="indPasteMsg" class="ind-src-meta"></span>
+    </div>
+  </div>`;
+}
+
+function indOpenPaste() {
+  const f = document.getElementById('indPasteForm');
+  if (f) { f.style.display = ''; const t = document.getElementById('indPasteText'); if (t) t.focus(); }
+}
+function indClosePaste() {
+  const f = document.getElementById('indPasteForm');
+  if (f) f.style.display = 'none';
+}
+
+async function indSavePaste() {
+  const name = (document.getElementById('indPasteName') || {}).value || '';
+  const text = (document.getElementById('indPasteText') || {}).value || '';
+  const msg = document.getElementById('indPasteMsg');
+  if (!text.trim()) { if (msg) msg.textContent = 'Paste something first.'; return; }
+  if (msg) msg.textContent = 'Reading…';
+  try {
+    const r = await fetch('/api/industry/assets/paste', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, text }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || d.error) {
+      if (msg) msg.textContent = d.error === 'unrecognized' ? "Couldn't match any item names." : 'Nothing readable in that paste.';
+      return;
+    }
+    const skipped = (d.unknown || []).length;
+    if (msg) msg.textContent = `Added ${d.added} item type${d.added === 1 ? '' : 's'}${skipped ? ` · ${skipped} name(s) not recognised` : ''}.`;
+    indLoadAssets();
+    indLoadQueue();
+  } catch (e) { if (msg) msg.textContent = String(e); }
+}
+
+async function indDeleteSource(key) {
+  try { await fetch('/api/industry/assets/sources/' + encodeURIComponent(key), { method: 'DELETE' }); } catch (e) {}
+  indLoadAssets();
+  indLoadQueue();
 }
 
 async function indToggleSource(key, on) {
@@ -162,7 +224,8 @@ async function indRefreshAssets() {
   if (d && d.corp_error === 'role') {
     const w = document.getElementById('indAssets');
     if (w) w.insertAdjacentHTML('beforeend',
-      '<p class="ind-src-help pp-warn">Corp hangars need a character with the <b>Director</b> role — only personal hangars were read.</p>');
+      '<p class="ind-src-help">Only personal hangars were read — ESI only exposes corp assets to a character with the '
+      + '<b>Director</b> role, and offers nothing weaker. Use <b>Paste a hangar</b> above for corp stock instead.</p>');
   }
 }
 
