@@ -345,6 +345,48 @@ function _indStepsHtml(d) {
   return html + '</div>';
 }
 
+// The build as a horizontal PRODUCTION PIPELINE: raw materials on the left flow rightward through
+// each build stage to the finished product. Each type appears once (at its deepest stage), coloured
+// by build vs buy. An assembly line rather than an indented list — reads the way EVE industry works.
+function _indPipelineHtml(d) {
+  const tree = d.tree;
+  if (!tree || !(tree.inputs || []).length) return '';
+  const byType = {};
+  (function walk(n, depth) {
+    if (!n) return;
+    const e = byType[n.type_id] || (byType[n.type_id] = { name: n.name, decision: n.decision, activity: n.activity, owned: n.owned, qty: 0, tier: depth });
+    e.qty += n.qty || 0;
+    e.tier = Math.max(e.tier, depth);
+    if (n.decision === 'build' || n.decision === 'buy') e.decision = n.decision;
+    (n.inputs || []).forEach(c => walk(c, depth + 1));
+  })(tree, 0);
+
+  const tiers = {};
+  Object.values(byType).forEach(e => (tiers[e.tier] = tiers[e.tier] || []).push(e));
+  const maxT = Math.max(...Object.keys(tiers).map(Number));
+  const card = e => {
+    const badge = e.decision === 'build'
+      ? `<span class="ind-pipe-tag ind-t-build">build${e.activity === 'reaction' ? ' rx' : ''}</span>`
+      : e.decision === 'buy' ? '<span class="ind-pipe-tag ind-t-buy">buy</span>'
+      : '<span class="ind-pipe-tag ind-t-unres">no price</span>';
+    const owned = e.owned ? `<span class="ind-owned" title="You own this ${e.owned.kind.toUpperCase()}">${e.owned.kind.toUpperCase()}</span>` : '';
+    return `<div class="ind-pipe-card ind-pipe-${e.decision}"><span class="ind-pipe-name">${_esc(e.name)}</span>`
+      + `<span class="ind-pipe-meta">×${Math.round(e.qty).toLocaleString()} ${badge}${owned}</span></div>`;
+  };
+  let cols = '';
+  for (let t = maxT; t >= 0; t--) {
+    const items = (tiers[t] || []).sort((a, b) => (b.qty || 0) - (a.qty || 0));
+    if (!items.length) continue;
+    const label = t === 0 ? 'Finished' : t === maxT ? 'Raw &amp; bought' : `Stage ${maxT - t}`;
+    const shown = items.slice(0, 14);
+    const more = items.length > 14 ? `<div class="ind-pipe-more">+${items.length - 14} more</div>` : '';
+    cols += `<div class="ind-pipe-col${t === 0 ? ' ind-pipe-final' : ''}"><div class="ind-pipe-hd">${label}<span>${items.length}</span></div>`
+      + `<div class="ind-pipe-items">${shown.map(card).join('')}${more}</div></div>`;
+    if (t > 0) cols += '<div class="ind-pipe-arrow">›</div>';
+  }
+  return `<details class="ind-details" open><summary>Build pipeline</summary><div class="ind-pipe">${cols}</div></details>`;
+}
+
 function _indRenderPlan(d, title) {
   const unres = (d.unresolved && d.unresolved.length)
     ? `<p class="pp-warn">${d.unresolved.length} material(s) had no market price — cost is a floor.</p>` : '';
@@ -357,13 +399,14 @@ function _indRenderPlan(d, title) {
   const treeKids = d.tree && (d.tree.inputs || []).length
     ? (d.tree.inputs || []).map(c => _indTreeNode(c, 0)).join('') : '';
   const tree = treeKids
-    ? `<details class="ind-details"><summary>Build tree</summary><div class="ind-tree">${treeKids}</div></details>` : '';
+    ? `<details class="ind-details"><summary>Build tree (list)</summary><div class="ind-tree">${treeKids}</div></details>` : '';
   return `<div class="pp-card">
     <h2 class="pp-card-title">${title}</h2>
     <div class="ind-body">
       ${_indMetricTiles(d.metrics)}
       ${unres}
       ${_indStepsHtml(d)}
+      ${_indPipelineHtml(d)}
       <details class="ind-details" open><summary>Shopping list (${(d.shopping_list || []).length})</summary>${_indShoppingTable(d.shopping_list)}</details>
       ${sched}
       ${tree}

@@ -914,3 +914,24 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-copy-btn { background: #1e3a5f; color: var(--clr-accent); border: 1px solid #2d5a8a; border-radius: 5px; padding: 5px 12px; font-size: 12px; cursor: pointer; }
 .ind-copy-btn:hover { background: #254a78; }
 .ind-shop-tot { font-size: 12px; color: var(--clr-text-soft); }
+/* Build pipeline — horizontal production flow (signature visual) */
+.ind-pipe { display: flex; align-items: stretch; gap: 2px; overflow-x: auto; padding: 12px 2px 14px; }
+.ind-pipe-col { flex: 0 0 auto; width: 184px; display: flex; flex-direction: column; }
+.ind-pipe-hd { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--clr-text-soft); padding: 0 4px 8px; display: flex; justify-content: space-between; align-items: center; }
+.ind-pipe-hd span { background: #1c2030; color: #9fb4d8; border-radius: 8px; padding: 0 7px; font-size: 10px; }
+.ind-pipe-items { display: flex; flex-direction: column; gap: 5px; }
+.ind-pipe-card { border: 1px solid var(--clr-border); border-left: 3px solid var(--clr-border); border-radius: 6px; padding: 6px 9px; background: #12161f; }
+.ind-pipe-build { border-left-color: #3a9668; }
+.ind-pipe-buy { border-left-color: #9a6ab0; }
+.ind-pipe-unresolved { border-left-color: #b05a5a; }
+.ind-pipe-name { display: block; color: #eef2f8; font-size: 12px; line-height: 1.3; }
+.ind-pipe-meta { display: flex; align-items: center; gap: 6px; margin-top: 3px; font-size: 11px; color: var(--clr-text-soft); flex-wrap: wrap; }
+.ind-pipe-tag { font-size: 9px; text-transform: uppercase; letter-spacing: 0.03em; padding: 1px 5px; border-radius: 7px; }
+.ind-t-build { background: #163524; color: #7fdca6; }
+.ind-t-buy { background: #2a2130; color: #d9a7e0; }
+.ind-t-unres { background: #3a2226; color: #e69aa0; }
+.ind-pipe-arrow { flex: 0 0 auto; display: flex; align-items: center; justify-content: center; width: 16px; color: var(--clr-text-soft); font-size: 20px; opacity: 0.45; }
+.ind-pipe-final .ind-pipe-hd { color: var(--clr-accent); }
+.ind-pipe-final .ind-pipe-hd span { background: #1e3a5f; color: var(--clr-accent); }
+.ind-pipe-final .ind-pipe-card { border-color: #2d5a8a; border-left-color: var(--clr-accent); background: linear-gradient(180deg, #16233a, #12161f); }
+.ind-pipe-more { font-size: 11px; color: var(--clr-text-soft); padding: 5px 2px; }
