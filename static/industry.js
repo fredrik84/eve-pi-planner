@@ -219,17 +219,34 @@ const IND_FACILITIES = [
   { id: 't2_me_null', label: 'Structure + T2 ME rig, null/WH — ME 6% / TE 15%', me: 6, te: 15 },
   { id: 't2_te_null', label: 'Structure + T2 TE rig, null/WH — ME 1% / TE 44%', me: 1, te: 44 },
 ];
-function indPopulateFacility() {
+let _indFacilityMap = {};   // option value → {me, te}
+async function indPopulateFacility() {
   const sel = document.getElementById('indFacility');
-  if (!sel || sel.options.length) return;
-  sel.innerHTML = IND_FACILITIES.map(f => `<option value="${f.id}">${_esc(f.label)}</option>`).join('');
+  if (!sel) return;
+  _indFacilityMap = {};
+  let structOpts = '';
+  try {
+    const r = await fetch('/api/markets');
+    if (r.ok) {
+      const d = await r.json();
+      (d.markets || []).filter(m => m.kind === 'structure' && m.build_mfg && m.mfg_bonus).forEach(m => {
+        const val = 's:' + m.id;
+        _indFacilityMap[val] = { me: m.mfg_bonus.me, te: m.mfg_bonus.te };
+        structOpts += `<option value="${val}">${_esc(m.name)} — ME ${m.mfg_bonus.me}% / TE ${m.mfg_bonus.te}%</option>`;
+      });
+    }
+  } catch (e) {}
+  const presetOpts = IND_FACILITIES.map(f => { _indFacilityMap['p:' + f.id] = { me: f.me, te: f.te }; return `<option value="p:${f.id}">${_esc(f.label)}</option>`; }).join('');
+  sel.innerHTML = (structOpts ? `<optgroup label="Your build structures">${structOpts}</optgroup>` : '')
+    + `<optgroup label="Generic presets">${presetOpts}</optgroup>`;
   const saved = localStorage.getItem('indFacility');
-  if (saved && IND_FACILITIES.some(f => f.id === saved)) sel.value = saved;
+  if (saved && _indFacilityMap[saved]) sel.value = saved;
+  else if (structOpts) sel.selectedIndex = 0;   // default to your first real structure when you have one
 }
 function _indFacilityBonus() {
   const sel = document.getElementById('indFacility');
-  const f = IND_FACILITIES.find(x => x.id === (sel ? sel.value : 'none')) || IND_FACILITIES[0];
-  return { struct_material_pct: f.me, struct_time_pct: f.te };
+  const b = _indFacilityMap[sel ? sel.value : ''] || { me: 0, te: 0 };
+  return { struct_material_pct: b.me, struct_time_pct: b.te };
 }
 function indOnFacilityChange() {
   const sel = document.getElementById('indFacility');

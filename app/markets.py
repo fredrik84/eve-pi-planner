@@ -116,18 +116,67 @@ def _context_characters(context_id: int) -> list[dict]:
              "is_market": MARKET_SCOPE in (r["scopes"] or "").split()} for r in rows]
 
 
+# Engineering Complex / Refinery hull type_ids → our hull key (for ESI auto-detect on add).
+STRUCTURE_HULLS = {35825: "raitaru", 35826: "azbel", 35827: "sotiyo",
+                   35835: "athanor", 35836: "tatara"}
+
+
 def _list_markets(owner_kind: str, owner_id: int) -> list[dict]:
     ensure_markets_table()
+    from app.industry.structures import manufacturing_bonus, reaction_bonus
     con = get_connection()
     try:
         rows = con.execute(
-            "SELECT id, kind, location_id, name, priority, active FROM pp_markets "
+            "SELECT id, kind, location_id, name, priority, active, "
+            "COALESCE(build_mfg,0) AS build_mfg, COALESCE(build_rx,0) AS build_rx, hull, security, "
+            "COALESCE(me_rig,0) AS me_rig, COALESCE(te_rig,0) AS te_rig, "
+            "COALESCE(rx_me_rig,0) AS rx_me_rig, COALESCE(rx_te_rig,0) AS rx_te_rig FROM pp_markets "
             "WHERE owner_kind=? AND owner_id=? AND active=1 ORDER BY priority, id",
             (owner_kind, owner_id),
         ).fetchall()
     finally:
         con.close()
-    return [dict(r) for r in rows]
+    out = []
+    for r in rows:
+        d = dict(r)
+        if d["kind"] == "structure":
+            mme, mte = manufacturing_bonus(d["hull"], d["me_rig"], d["te_rig"], d["security"])
+            rme, rte = reaction_bonus(d["hull"], d["rx_me_rig"], d["rx_te_rig"], d["security"])
+            d["mfg_bonus"] = {"me": mme, "te": mte}
+            d["rx_bonus"] = {"me": rme, "te": rte}
+        out.append(d)
+    return out
+
+
+def _detect_structure_meta(context_id: int, structure_id: int) -> tuple[str | None, str | None]:
+    """ESI-detect a structure's (hull, security_band) from /universe/structures + its system's
+    security. Rigs are NOT exposed by ESI (no fitting endpoint), so those stay a manual pick.
+    Best-effort: (None, None) if it can't be read."""
+    ch = _market_character(context_id)
+    if not ch:
+        return (None, None)
+    token = _get_valid_token(ch["character_id"])
+    if not token:
+        return (None, None)
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        with httpx.Client(timeout=12) as client:
+            s = client.get(f"{ESI_BASE}/universe/structures/{structure_id}/?datasource=tranquility",
+                           headers=headers)
+            if s.status_code != 200:
+                return (None, None)
+            sj = s.json() or {}
+            hull = STRUCTURE_HULLS.get(sj.get("type_id"))
+            sys_id = sj.get("solar_system_id")
+            sec = None
+            if sys_id:
+                sy = client.get(f"{ESI_BASE}/universe/systems/{sys_id}/?datasource=tranquility")
+                if sy.status_code == 200:
+                    v = (sy.json() or {}).get("security_status")
+                    sec = "high" if (v or 0) >= 0.45 else "low" if (v or 0) > 0 else "null"
+            return (hull, sec)
+    except Exception:
+        return (None, None)
 
 
 def effective_markets(context_id: int) -> list[dict]:
@@ -500,11 +549,51 @@ def add_market(req: MarketAdd, context_id: int = Depends(require_context)):
             (owner_kind, owner_id),
         ).fetchone()
         nxt = (row["m"] if row else -1) + 1
+        # ESI-detect hull + security for a structure so the build-bonus is ready to configure.
+        hull = sec = None
+        if req.kind == "structure":
+            hull, sec = _detect_structure_meta(context_id, req.location_id)
         con.execute(
-            "INSERT INTO pp_markets (owner_kind, owner_id, kind, location_id, name, priority, active) "
-            "VALUES (?,?,?,?,?,?,1)",
-            (owner_kind, owner_id, req.kind, req.location_id, req.name.strip()[:120], nxt),
+            "INSERT INTO pp_markets (owner_kind, owner_id, kind, location_id, name, priority, active, "
+            "hull, security) VALUES (?,?,?,?,?,?,1,?,?)",
+            (owner_kind, owner_id, req.kind, req.location_id, req.name.strip()[:120], nxt, hull, sec),
         )
+        con.commit()
+    finally:
+        con.close()
+    return _markets_payload(context_id)
+
+
+class MarketBuildConfig(BaseModel):
+    build_mfg: bool = False
+    build_rx: bool = False
+    me_rig: int = 0
+    te_rig: int = 0
+    rx_me_rig: int = 0
+    rx_te_rig: int = 0
+    hull: str | None = None       # optional manual override if ESI couldn't detect it
+    security: str | None = None
+    scope: str = "account"
+
+
+@router.post("/api/markets/{market_id}/build")
+def set_market_build(market_id: int, req: MarketBuildConfig, context_id: int = Depends(require_context)):
+    """Configure a structure as a BUILD facility: whether you manufacture / react there and the
+    fitted rig tiers (0=none, 1=T1, 2=T2). Hull + security stay as ESI-detected unless overridden."""
+    owner_kind, owner_id = _owner_for_scope(context_id, req.scope)
+    ensure_markets_table()
+    clamp = lambda v: max(0, min(2, int(v)))
+    con = get_connection()
+    try:
+        sets = ["build_mfg=?", "build_rx=?", "me_rig=?", "te_rig=?", "rx_me_rig=?", "rx_te_rig=?"]
+        vals = [1 if req.build_mfg else 0, 1 if req.build_rx else 0,
+                clamp(req.me_rig), clamp(req.te_rig), clamp(req.rx_me_rig), clamp(req.rx_te_rig)]
+        if req.hull is not None:
+            sets.append("hull=?"); vals.append(req.hull or None)
+        if req.security is not None:
+            sets.append("security=?"); vals.append(req.security or None)
+        vals += [market_id, owner_kind, owner_id]
+        con.execute(f"UPDATE pp_markets SET {', '.join(sets)} WHERE id=? AND owner_kind=? AND owner_id=?", vals)
         con.commit()
     finally:
         con.close()

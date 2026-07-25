@@ -2150,25 +2150,79 @@ function _rxAfterConnect() {
 
 // ── Reusable market-manager component (list + search) ─────────────────────────────────
 
+function _rigOpts(sel) {
+  return [0, 1, 2].map(t => `<option value="${t}" ${sel == t ? 'selected' : ''}>${t === 0 ? 'None' : 'T' + t}</option>`).join('');
+}
+
 function _rxMarketRowsHtml(d) {
   const own = d.markets || [];
   const list = own.length ? own : (d.effective || []);
   let rows = '';
   list.forEach((m, i) => {
     const kindLbl = m.kind === 'structure' ? 'Structure' : 'Region';
+    const isStruct = m.kind === 'structure' && own.length;
+    const bparts = [];
+    if (m.build_mfg && m.mfg_bonus) bparts.push(`build: ME ${m.mfg_bonus.me}% / TE ${m.mfg_bonus.te}%`);
+    if (m.build_rx && m.rx_bonus) bparts.push(`react: ME ${m.rx_bonus.me}% / TE ${m.rx_bonus.te}%`);
+    const badge = bparts.length ? `<span class="rx-mkt-build-badge">${bparts.join(' · ')}</span>` : '';
     const controls = own.length
       ? `<span class="rx-mkt-ctrl">`
+        + (isStruct ? `<button class="pp-add-btn" onclick="_rxToggleBuild(${m.id})" title="Build here?">🔨</button>` : '')
         + `<button class="pp-add-btn" ${i === 0 ? 'disabled' : ''} onclick="_rxMarketMove(${m.id},-1)" title="Higher priority">▲</button>`
         + `<button class="pp-add-btn" ${i === list.length - 1 ? 'disabled' : ''} onclick="_rxMarketMove(${m.id},1)" title="Lower priority">▼</button>`
         + `<button class="pp-add-btn" onclick="_rxMarketRemove(${m.id})" title="Remove">✕</button></span>`
       : '';
     rows += `<div class="rx-mkt-row"><span class="rx-mkt-pri">${i + 1}</span>`
       + `<span class="rx-mkt-kind">${kindLbl}</span>`
-      + `<span class="rx-mkt-name">${_esc(m.name)}</span>${controls}</div>`;
+      + `<span class="rx-mkt-name">${_esc(m.name)}${badge}</span>${controls}</div>`;
+    if (isStruct) rows += _rxBuildCfgHtml(m);
   });
   rows += `<div class="rx-mkt-row rx-mkt-jita"><span class="rx-mkt-pri">${list.length + 1}</span>`
     + `<span class="rx-mkt-kind">Fallback</span><span class="rx-mkt-name">Jita (always last)</span></div>`;
   return rows;
+}
+
+function _rxBuildCfgHtml(m) {
+  const hullNote = m.hull
+    ? `Detected: <b>${_esc(m.hull)}</b> in ${_esc(m.security || '?')}-sec`
+    : `Couldn't read the structure type from ESI — pick it:`;
+  const manual = m.hull ? '' :
+    `<div class="rx-rig-row">Structure <select id="bhull-${m.id}"><option value="">—</option>`
+    + ['raitaru', 'azbel', 'sotiyo', 'athanor', 'tatara'].map(h => `<option ${m.hull === h ? 'selected' : ''}>${h}</option>`).join('')
+    + `</select> in <select id="bsec-${m.id}">`
+    + ['high', 'low', 'null'].map(s => `<option value="${s}" ${m.security === s ? 'selected' : ''}>${s}</option>`).join('')
+    + `</select></div>`;
+  return `<div class="rx-mkt-build-cfg" id="mktbuild-${m.id}" style="display:none">
+    <div class="rx-mkt-hint">${hullNote} — ESI can't read rigs, so pick the fitted tiers:</div>
+    ${manual}
+    <label class="rx-build-chk"><input type="checkbox" id="bm-${m.id}" ${m.build_mfg ? 'checked' : ''}> Manufacture here</label>
+    <div class="rx-rig-row">ME rig <select id="bmme-${m.id}">${_rigOpts(m.me_rig)}</select> · TE rig <select id="bmte-${m.id}">${_rigOpts(m.te_rig)}</select></div>
+    <label class="rx-build-chk"><input type="checkbox" id="br-${m.id}" ${m.build_rx ? 'checked' : ''}> React here</label>
+    <div class="rx-rig-row">ME rig <select id="brme-${m.id}">${_rigOpts(m.rx_me_rig)}</select> · TE rig <select id="brte-${m.id}">${_rigOpts(m.rx_te_rig)}</select></div>
+    <button class="pp-add-btn" onclick="_rxSaveBuild(${m.id})">Save build settings</button>
+  </div>`;
+}
+
+function _rxToggleBuild(id) {
+  const el = document.getElementById('mktbuild-' + id);
+  if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+
+async function _rxSaveBuild(id) {
+  const v = s => document.getElementById(s + '-' + id);
+  const body = {
+    build_mfg: v('bm').checked, build_rx: v('br').checked,
+    me_rig: +v('bmme').value, te_rig: +v('bmte').value,
+    rx_me_rig: +v('brme').value, rx_te_rig: +v('brte').value,
+    scope: (typeof _rxMarketMount !== 'undefined' && _rxMarketMount === 'rxSettingsMarketsGroup') ? 'group' : 'account',
+  };
+  if (v('bhull')) body.hull = v('bhull').value || null;
+  if (v('bsec')) body.security = v('bsec').value || null;
+  try {
+    const r = await fetch(`/api/markets/${id}/build`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (r.ok) _rxMarketData = await r.json();
+  } catch (e) {}
+  _rxRenderMarketManager();
 }
 
 function _rxMarketManagerHtml(d) {
