@@ -912,28 +912,33 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-copy-btn { background: #1e3a5f; color: var(--clr-accent); border: 1px solid #2d5a8a; border-radius: 5px; padding: 5px 12px; font-size: 12px; cursor: pointer; }
 .ind-copy-btn:hover { background: #254a78; }
 .ind-shop-tot { font-size: 12px; color: var(--clr-text-soft); }
-/* Build pipeline — horizontal stage columns, each split into a section per facility */
+/* Build pipeline — a MATRIX: rows are buildings, columns are stages */
 .ind-pipe-hint { font-size: 11px; color: var(--clr-text-soft); margin: 6px 0 0; }
-.ind-pipe { display: flex; align-items: stretch; gap: 2px; overflow-x: auto; padding: 12px 0 14px; }
-/* A scrolling flex container drops its trailing padding, so the last column ends up flush against
-   the edge and looks clipped — this spacer guarantees breathing room at the end of the scroll. */
-.ind-pipe::after { content: ''; flex: 0 0 2px; }
-.ind-pipe-col { flex: 0 0 auto; width: 176px; display: flex; flex-direction: column; }
-.ind-pipe-hd { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--clr-text-soft); padding: 0 4px 8px; display: flex; justify-content: space-between; align-items: center; }
+.ind-pipe-scroll { overflow-x: auto; padding: 10px 0 12px; }
+.ind-pipe { display: grid; grid-template-columns: 104px repeat(var(--ind-cols), 168px);
+  column-gap: 4px; row-gap: 0; align-items: stretch; min-width: min-content; }
+.ind-pipe-corner { border-bottom: 1px solid var(--clr-border); }
+.ind-pipe-hd { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--clr-text-soft);
+  padding: 0 4px 6px; display: flex; justify-content: space-between; align-items: center; gap: 6px;
+  border-bottom: 1px solid var(--clr-border); }
 .ind-pipe-hd span { background: #1c2030; color: #9fb4d8; border-radius: 8px; padding: 0 7px; font-size: 10px; }
-.ind-pipe-items { display: flex; flex-direction: column; gap: 10px; }
-/* Per-facility section inside a stage column */
-.ind-pipe-grp { border-left: 2px solid #1a2030; padding-left: 7px; }
-.ind-grp-rx { border-left-color: #6a4d78; }
-.ind-grp-mfg { border-left-color: #2c6a44; }
-.ind-grp-buy { border-left-color: #4a4458; }
-.ind-pipe-grp-hd { padding: 0 0 4px; }
-.ind-pipe-grp-name { display: block; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
-.ind-grp-rx .ind-pipe-grp-name { color: #d9a7e0; }
-.ind-grp-mfg .ind-pipe-grp-name { color: #7fdca6; }
-.ind-grp-buy .ind-pipe-grp-name { color: #cbb8d6; }
-.ind-pipe-grp-sub { display: block; font-size: 10px; color: var(--clr-text-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ind-pipe-grp-items { display: flex; flex-direction: column; gap: 5px; }
+.ind-pipe-hd-flow::after { content: '\203A'; color: var(--clr-text-soft); opacity: .55; font-size: 15px; line-height: 1; }
+.ind-pipe-hd-final { color: var(--clr-accent); }
+.ind-pipe-hd-final span { background: #1e3a5f; color: var(--clr-accent); }
+/* Building row: a persistent labelled band you can read straight across */
+.ind-pipe-rowlbl { padding: 10px 8px 10px 0; border-right: 1px solid var(--clr-border);
+  border-bottom: 1px solid #1a2030; display: flex; flex-direction: column; justify-content: flex-start; }
+.ind-pipe-rowname { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.ind-pipe-rowsub { font-size: 10px; color: var(--clr-text-soft); margin-top: 2px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ind-row-rx .ind-pipe-rowname { color: #d9a7e0; }
+.ind-row-mfg .ind-pipe-rowname { color: #7fdca6; }
+.ind-row-buy .ind-pipe-rowname { color: #cbb8d6; }
+.ind-pipe-cell { display: flex; flex-direction: column; gap: 5px; padding: 10px 0;
+  border-bottom: 1px solid #1a2030; }
+/* Faint row tint so a building's band stays readable across empty stages */
+.ind-pipe-cell.ind-row-rx { background: linear-gradient(90deg, rgba(106,77,120,.07), transparent 70%); }
+.ind-pipe-cell.ind-row-mfg { background: linear-gradient(90deg, rgba(44,106,68,.07), transparent 70%); }
 .ind-pipe-card { border: 1px solid var(--clr-border); border-left: 3px solid var(--clr-border); border-radius: 6px; padding: 6px 9px; background: #12161f; transition: opacity .12s, border-color .12s, background .12s; }
 .ind-pipe-build { border-left-color: #3a9668; }
 .ind-pipe-buy { border-left-color: #9a6ab0; }
@@ -945,7 +950,6 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-pipe-runs { font-variant-numeric: tabular-nums; }
 .ind-t-buy { background: #2a2130; color: #d9a7e0; }
 .ind-t-unres { background: #3a2226; color: #e69aa0; }
-.ind-pipe-arrow { flex: 0 0 auto; display: flex; align-items: center; justify-content: center; width: 12px; color: var(--clr-text-soft); font-size: 20px; opacity: 0.45; }
 .ind-pipe-final .ind-pipe-hd { color: var(--clr-accent); }
 .ind-pipe-final .ind-pipe-hd span { background: #1e3a5f; color: var(--clr-accent); }
 .ind-pipe-final .ind-pipe-card { border-color: #2d5a8a; border-left-color: var(--clr-accent); background: linear-gradient(180deg, #16233a, #12161f); }
