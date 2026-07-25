@@ -327,9 +327,44 @@ function _indComputeTiers(tree) {
   return { byType, tiers, maxT, inputsOf, consumersOf };
 }
 
-function _indStageLabel(t, maxT, hasBuilds) {
-  if (t === 0) return 'Finished';
-  return hasBuilds ? `Stage ${maxT - t}` : `Buy — stage ${maxT - t}`;
+// The stage model both the pipeline and the shopping list render from, so their stage numbering
+// can never drift apart.
+//
+// Only BUILDS define a stage — buying isn't a step in the production chain, it's a prerequisite of
+// one. Bought materials therefore don't get columns of their own (which spread the pipeline out
+// with a leading "Stage 0" that was nothing but purchases); each one is filed under the stage that
+// actually consumes it. A material needed by several stages is filed under the EARLIEST one
+// (deepest tier), so the list reads "buy this before you start stage N".
+function _indStageModel(tiersData) {
+  const { byType, tiers, consumersOf } = tiersData;
+  const buildTiers = Object.keys(tiers)
+    .map(Number)
+    .filter(t => (tiers[t] || []).some(e => e.decision === 'build'))
+    .sort((a, b) => b - a);                       // deepest first = left to right
+  if (!buildTiers.length) return { cols: [], stageOf: {} };
+
+  const deepest = buildTiers[0];
+  const stageOf = {};                             // bought type_id -> stage tier it belongs to
+  Object.values(byType).forEach(e => {
+    if (e.decision === 'build') return;
+    let best = null;
+    (consumersOf[e.type_id] || []).forEach(cid => {
+      const c = byType[cid];
+      if (!c || c.decision !== 'build') return;
+      if (best === null || c.tier > best) best = c.tier;   // earliest consuming stage
+    });
+    // No build consumer (shouldn't happen — bought nodes are leaves): park it at the first stage.
+    stageOf[e.type_id] = best === null ? deepest : best;
+  });
+
+  const cols = buildTiers.map((t, i) => ({
+    t,
+    index: i,
+    label: t === 0 ? 'Finished' : `Stage ${i + 1}`,
+    builds: (tiers[t] || []).filter(e => e.decision === 'build'),
+    buys: Object.values(byType).filter(e => e.decision !== 'build' && stageOf[e.type_id] === t),
+  }));
+  return { cols, stageOf };
 }
 
 function _indShopRowHtml(s) {
@@ -341,29 +376,37 @@ function _indShopRowHtml(s) {
     + `<td class="ind-num">${s.line_cost != null ? fmtIsk(s.line_cost) : '—'}</td></tr>`;
 }
 
-// The shopping list split by build stage — buy just what the next step needs, or everything at
-// once. Stage numbering/labels match the pipeline's "Buy N materials" cards exactly, since both
-// are derived from the same _indComputeTiers() walk.
-function _indShoppingSections(d, tiersData) {
+// The shopping list grouped by the stage that needs each material — buy just what the next step
+// needs, or everything at once. Grouping/labels match the pipeline's "Buy N materials" cards
+// exactly, since both render from the same _indStageModel().
+function _indShoppingSections(d, model) {
   const list = d.shopping_list || [];
   if (!list.length) return '<p class="pp-sub">Nothing to buy — built entirely from stock/recipes.</p>';
-  const { tiers, maxT } = tiersData;
   const byId = {};
   list.forEach(s => { byId[s.type_id] = s; });
   _indShopStageData = {};
   let sections = '';
-  for (let t = maxT; t >= 0; t--) {
-    const entries = (tiers[t] || []).filter(e => e.decision !== 'build');
-    const rows = entries.map(e => byId[e.type_id]).filter(Boolean);
-    if (!rows.length) continue;
-    const hasBuilds = (tiers[t] || []).some(e => e.decision === 'build');
-    const label = _indStageLabel(t, maxT, hasBuilds);
-    _indShopStageData[t] = rows.map(r => ({ name: r.name, qty: r.qty }));
+  let listed = 0;
+  model.cols.forEach(col => {
+    const rows = col.buys.map(e => byId[e.type_id]).filter(Boolean);
+    if (!rows.length) return;
+    listed += rows.length;
+    _indShopStageData[col.t] = rows.map(r => ({ name: r.name, qty: r.qty }));
     const stageCost = rows.reduce((a, s) => a + (s.line_cost || 0), 0);
-    sections += `<div class="ind-shop-stage" id="ind-shop-stage-${t}">`
-      + `<div class="ind-shop-stage-hd"><span>${_esc(label)} — ${rows.length} item${rows.length > 1 ? 's' : ''} · ${fmtIsk(stageCost)}</span>`
-      + `<button class="ind-copy-btn ind-copy-sm" onclick="indCopyMultibuy(${t})">Copy this stage</button></div>`
+    sections += `<div class="ind-shop-stage" id="ind-shop-stage-${col.t}">`
+      + `<div class="ind-shop-stage-hd"><span>For ${_esc(col.label)} — ${rows.length} item${rows.length > 1 ? 's' : ''} · ${fmtIsk(stageCost)}</span>`
+      + `<button class="ind-copy-btn ind-copy-sm" onclick="indCopyMultibuy(${col.t})">Copy this stage</button></div>`
       + `<table class="ind-table"><thead><tr><th>Material</th><th class="ind-num">Qty</th><th>Source</th><th class="ind-num">Cost</th></tr></thead><tbody>${rows.map(_indShopRowHtml).join('')}</tbody></table></div>`;
+  });
+  // Anything the stage model didn't place (defensive — keeps the list complete no matter what).
+  const placed = new Set(model.cols.flatMap(c => c.buys.map(e => e.type_id)));
+  const rest = list.filter(s => !placed.has(s.type_id));
+  if (rest.length) {
+    _indShopStageData['other'] = rest.map(r => ({ name: r.name, qty: r.qty }));
+    sections += `<div class="ind-shop-stage" id="ind-shop-stage-other">`
+      + `<div class="ind-shop-stage-hd"><span>Other — ${rest.length} item${rest.length > 1 ? 's' : ''}</span>`
+      + `<button class="ind-copy-btn ind-copy-sm" onclick="indCopyMultibuy('other')">Copy this stage</button></div>`
+      + `<table class="ind-table"><thead><tr><th>Material</th><th class="ind-num">Qty</th><th>Source</th><th class="ind-num">Cost</th></tr></thead><tbody>${rest.map(_indShopRowHtml).join('')}</tbody></table></div>`;
   }
   const totalCost = list.reduce((a, s) => a + (s.line_cost || 0), 0);
   return `<div class="ind-shop-bar"><button class="ind-copy-btn" onclick="indCopyMultibuy()">Copy everything</button>`
@@ -480,29 +523,25 @@ function _indStepsHtml(d) {
 // Hovering a card traces its whole chain in both directions.
 let _indPipeGraph = { inputsOf: {}, consumersOf: {} };
 
-function _indPipelineHtml(d, tiersData) {
+function _indPipelineHtml(d, tiersData, model) {
   const tree = d.tree;
   if (!tree || !(tree.inputs || []).length) return '';
-  const { tiers, maxT, inputsOf, consumersOf } = tiersData;
+  const { inputsOf, consumersOf } = tiersData;
   _indPipeGraph = { inputsOf: inputsOf || {}, consumersOf: consumersOf || {} };
 
-  // Stage columns, deepest first so the finished product lands on the right.
-  const cols = [];
-  for (let t = maxT; t >= 0; t--) {
-    const items = tiers[t] || [];
-    if (items.length) cols.push({ t, items });
-  }
+  const cols = model.cols;
   if (!cols.length) return '';
 
-  const isRx = e => e.decision === 'build' && e.activity === 'reaction';
-  const isMfg = e => e.decision === 'build' && e.activity !== 'reaction';
-  const isBuy = e => e.decision !== 'build';
+  const isRx = e => e.activity === 'reaction';
+  const isMfg = e => e.activity !== 'reaction';
   // Row per building, in the order the work actually happens: react → manufacture → (buy feeds both).
   const rows = [
-    { key: 'rx', title: 'Reactions', sub: _indBuildingLabel('reaction') || 'reaction structure', match: isRx },
-    { key: 'mfg', title: 'Manufacturing', sub: _indBuildingLabel('manufacturing') || 'your structure', match: isMfg },
-    { key: 'buy', title: 'Buy', sub: 'from market', match: isBuy },
-  ].filter(r => cols.some(c => c.items.some(r.match)));
+    { key: 'rx', title: 'Reactions', sub: _indBuildingLabel('reaction') || 'reaction structure',
+      pick: c => c.builds.filter(isRx) },
+    { key: 'mfg', title: 'Manufacturing', sub: _indBuildingLabel('manufacturing') || 'your structure',
+      pick: c => c.builds.filter(isMfg) },
+    { key: 'buy', title: 'Buy', sub: 'from market', pick: c => c.buys },
+  ].filter(r => cols.some(c => r.pick(c).length));
 
   // No "build" tag on the card — the row it sits in already says Reactions vs Manufacturing, so
   // repeating it just costs width. Qty and runs are what actually differ per card.
@@ -522,30 +561,28 @@ function _indPipelineHtml(d, tiersData) {
 
   // Header row: empty corner over the building labels, then one label per stage.
   let html = `<div class="ind-pipe-corner"></div>`;
-  cols.forEach(({ t, items }, i) => {
-    const builds = items.filter(e => e.decision === 'build');
-    const label = _indStageLabel(t, maxT, !!builds.length);
-    const count = builds.length ? `<span>${builds.length}</span>` : '';
-    html += `<div class="ind-pipe-hd${t === 0 ? ' ind-pipe-hd-final' : ''}${i < cols.length - 1 ? ' ind-pipe-hd-flow' : ''}">${label}${count}</div>`;
+  cols.forEach((col, i) => {
+    const count = col.builds.length ? `<span>${col.builds.length}</span>` : '';
+    html += `<div class="ind-pipe-hd${col.t === 0 ? ' ind-pipe-hd-final' : ''}${i < cols.length - 1 ? ' ind-pipe-hd-flow' : ''}">${col.label}${count}</div>`;
   });
 
   // One grid row per building; empty cells keep every stage aligned across the rows.
   rows.forEach(r => {
     html += `<div class="ind-pipe-rowlbl ind-row-${r.key}"><span class="ind-pipe-rowname">${r.title}</span>`
       + `<span class="ind-pipe-rowsub" title="${_esc(r.sub)}">${_esc(r.sub)}</span></div>`;
-    cols.forEach(({ t, items }) => {
-      const mine = items.filter(r.match);
+    cols.forEach(col => {
+      const mine = r.pick(col);
       let cards = '';
       if (mine.length) {
         if (r.key === 'buy') {
-          cards = buyCard(mine, t);
+          cards = buyCard(mine, col.t);
         } else {
           const sorted = mine.slice().sort((a, b) => (b.qty || 0) - (a.qty || 0));
           cards = sorted.slice(0, 10).map(buildCard).join('');
           if (sorted.length > 10) cards += `<div class="ind-pipe-more">+${sorted.length - 10} more</div>`;
         }
       }
-      html += `<div class="ind-pipe-cell ind-row-${r.key}${t === 0 ? ' ind-pipe-final' : ''}">${cards}</div>`;
+      html += `<div class="ind-pipe-cell ind-row-${r.key}${col.t === 0 ? ' ind-pipe-final' : ''}">${cards}</div>`;
     });
   });
 
@@ -624,7 +661,9 @@ function _indRenderPlan(d, title) {
       + d.leftovers.map(l => `<div class="ind-tree-row"><span class="ind-tree-name">${_esc(l.name)}</span> `
         + `<span class="ind-tree-qty">×${Math.round(l.qty).toLocaleString()}</span>`
         + (l.value ? `<span class="ind-tree-cost">${fmtIsk(l.value)}</span>` : '') + `</div>`).join('') + `</details>` : '';
-  const tiersData = d.tree ? _indComputeTiers(d.tree) : { byType: {}, tiers: {}, maxT: 0 };
+  const tiersData = d.tree ? _indComputeTiers(d.tree)
+    : { byType: {}, tiers: {}, maxT: 0, inputsOf: {}, consumersOf: {} };
+  const stageModel = _indStageModel(tiersData);
   const treeKids = d.tree && (d.tree.inputs || []).length
     ? (d.tree.inputs || []).map(c => _indTreeNode(c, 0)).join('') : '';
   const tree = treeKids
@@ -635,8 +674,8 @@ function _indRenderPlan(d, title) {
       ${_indMetricTiles(d.metrics)}
       ${unres}
       ${_indStepsHtml(d)}
-      ${_indPipelineHtml(d, tiersData)}
-      <details class="ind-details" open><summary>Shopping list (${(d.shopping_list || []).length})</summary>${_indShoppingSections(d, tiersData)}</details>
+      ${_indPipelineHtml(d, tiersData, stageModel)}
+      <details class="ind-details" open><summary>Shopping list (${(d.shopping_list || []).length})</summary>${_indShoppingSections(d, stageModel)}</details>
       ${tree}
       ${leftovers}
     </div>
