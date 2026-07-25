@@ -398,6 +398,14 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
     total_cost = materials_cost + job_cost
     return {
         "targets": [{"type_id": t, "name": names.get(t, str(t)), "quantity": q} for t, q in targets],
+        # Per-type build requirements — what progress tracking compares real ESI jobs against.
+        # Exposed from `agg` because it's the only place the shared-batch run count exists.
+        "requirements": [
+            {"type_id": tid, "name": names.get(tid, str(tid)), "activity": info["activity"],
+             "runs": info["runs"], "output_qty": info["output_qty"],
+             "units": info["runs"] * info["output_qty"]}
+            for tid, info in agg.items() if info["build"] and info["runs"] > 0
+        ],
         "schedule": sched,
         "shopping_list": shopping,
         "leftovers": leftovers,

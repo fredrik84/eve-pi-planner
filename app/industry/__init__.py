@@ -32,3 +32,4 @@ from app.industry.jobs import (  # noqa: F401 — registers the live manufacturi
     log_all_manufacturing_completions,
 )
 from app.industry import orders as _orders  # noqa: F401 — registers the build-queue endpoints
+from app.industry import progress as _progress  # noqa: F401 — registers /api/industry/progress

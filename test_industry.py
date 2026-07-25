@@ -340,6 +340,27 @@ def test_unpriced_material_does_not_crash():
     check("cost is a finite floor", res["metrics"]["total_cost"] >= 0)
 
 
+def test_queue_progress_requirements():
+    """plan_queue must expose per-type build requirements — progress tracking compares real ESI
+    jobs against these, and nothing else in the payload carries the shared-batch run count."""
+    print("test_queue_progress_requirements")
+    con = _seed_con()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+    res = plan_queue([(100, 2)], mfg, rx, _prices(SELL), ADJ,
+                     BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0), NAMES,
+                     {"manufacturing": 10, "reaction": 5})
+    reqs = {r["type_id"]: r for r in res.get("requirements", [])}
+    check("requirements present", bool(reqs))
+    # Every built type in the schedule must appear, with runs matching the aggregated batch.
+    sched_types = {t["type_id"] for w in res["schedule"]["waves"] for t in w["tasks"]}
+    check("every scheduled type has a requirement", sched_types <= set(reqs))
+    check("widget requires 2 runs", reqs[100]["runs"] == 2)
+    check("units = runs x output_qty", all(
+        r["units"] == r["runs"] * r["output_qty"] for r in reqs.values()))
+    # Bought raws are NOT requirements (you don't run a job for them).
+    check("raw materials excluded", 200 not in reqs and 201 not in reqs)
+
+
 def main():
     test_material_formula()
     test_graph_loaders()
@@ -360,6 +381,7 @@ def main():
     test_per_product_me_from_blueprints()
     test_plan_queue_end_to_end()
     test_unpriced_material_does_not_crash()
+    test_queue_progress_requirements()
     print(f"\nAll {_passed} checks passed.")
 
 
