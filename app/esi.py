@@ -112,14 +112,14 @@ BLUEPRINTS_SCOPE = "esi-characters.read_blueprints.v1"
 # already sitting in your hangar and can report queue progress without guessing a start date.
 # Same rule as every scope above — it joins the ONE superset, never its own set.
 ASSETS_SCOPE = "esi-assets.read_assets.v1"
-# Corp hangars: for corp/alliance industry the materials usually sit in an Upwell corp hangar,
-# which the PERSONAL assets endpoint cannot see at all. Reading them needs the corp scope and a
-# character with the Director role (same shape as the corp industry-jobs read above).
-CORP_ASSETS_SCOPE = "esi-assets.read_corporation_assets.v1"
+# NOT requested: esi-assets.read_corporation_assets.v1. ESI gates corp assets behind the Director
+# role and offers nothing weaker, so for almost every corp member that endpoint can never answer —
+# asking for a permission we could not use for them is worse than not asking. Corp hangars are
+# covered by pasting them instead (app/industry/assets.py add_pasted_source), which works for
+# everyone regardless of role.
 REACTIONS_SCOPES = (
     f"{SCOPES} {INDUSTRY_JOBS_SCOPE} {CORP_INDUSTRY_JOBS_SCOPE} "
-    f"{MARKET_SCOPE} {SEARCH_STRUCT_SCOPE} {STRUCTURES_SCOPE} {BLUEPRINTS_SCOPE} "
-    f"{ASSETS_SCOPE} {CORP_ASSETS_SCOPE}"
+    f"{MARKET_SCOPE} {SEARCH_STRUCT_SCOPE} {STRUCTURES_SCOPE} {BLUEPRINTS_SCOPE} {ASSETS_SCOPE}"
 )
 # All opt-in "connect a character" flows request this ONE superset so re-authing a character for
 # any tool never drops the scopes another relies on. Wallet stays deliberately separate.

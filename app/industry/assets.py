@@ -9,22 +9,20 @@ Feeds two things the planner previously had to guess at:
 * **Epoch-free progress.** Job history can only answer "did I build this *recently*"; owning the
   output answers "is this done" outright, with no start-date guessing and surviving a re-queue.
 
-**Stock is per SOURCE, and every source is opt-in.** A source is one personal hangar, one corp
-hangar division, or one container. Nothing counts until you tick it. Being wrong here is asymmetric:
-counting a corp hangar you cannot actually draw from makes the planner build too little and the
-shopping list miss materials, which is worse than the over-build you get from ignoring stock. Corp
-hangars are invisible to the personal assets endpoint, so for corp/alliance industry — where the
-materials usually live — the corp read is the whole point.
+**Stock is per SOURCE, and every source is opt-in.** A source is one personal hangar, one container,
+or one pasted hangar. Nothing counts until you tick it. Being wrong here is asymmetric: counting
+stock you cannot actually draw from makes the planner build too little and the shopping list miss
+materials, which is worse than the over-build you get from ignoring stock entirely.
 
 Sources are FLAT: an item belongs to exactly one source, the container it sits in if any, otherwise
 the hangar itself. There is deliberately no "enabling a division also enables its containers" rule,
 which keeps every toggle unambiguous.
 
-Not everyone can use the corp read: ESI gates `/corporations/{id}/assets/` behind the **Director**
-role and offers nothing weaker, so most members of a real corp simply cannot query it. For them a
-pasted source is a first-class equivalent — paste the hangar contents out of the EVE client and it
-becomes a source like any other, selectable and counted identically. The role is a shortcut for
-Directors, never a requirement for using stock.
+Corp hangars come in by PASTING them, not over ESI. `/corporations/{id}/assets/` is gated behind the
+**Director** role with nothing weaker on offer, so for almost every corp member it can never answer;
+building on it would mean requesting a permission most users can't use, spending an ESI call per
+character to get a 403, and showing a role error nobody can act on. A pasted hangar is a source like
+any other — selectable, counted identically, and it works for everyone.
 
 Assets are read on demand and cached, like the blueprint and job caches — never polled, since a full
 asset list is a heavy call.
@@ -48,8 +46,6 @@ _USABLE_FLAGS = {"Hangar", "HangarAll"}
 # else nested — Cargo, DroneBay, a slot — means it's in a ship and can't be fed to a job without
 # unloading it first, so containment only counts through these.
 _CONTENT_FLAGS = {"AutoFit", "Unlocked", "Locked"}
-# Corp hangar divisions 1-7, only ever returned by the CORPORATION assets endpoint.
-_CORP_FLAGS = {f"CorpSAG{i}": i for i in range(1, 8)}
 
 
 def ensure_asset_tables():
@@ -215,9 +211,9 @@ def _store(context_id: int, sources: dict, stock: dict, scope_keys: set[str]) ->
         con.close()
 
 
-def refresh_assets(context_id: int, corp: bool = True) -> dict:
-    """Re-read personal (and, where the character is a Director, corp) assets and rediscover the
-    selectable sources. Existing on/off choices are preserved."""
+def refresh_assets(context_id: int) -> dict:
+    """Re-read personal assets and rediscover the selectable sources. Existing on/off choices are
+    preserved. Corp hangars are not read here — see the module docstring."""
     ensure_asset_tables()
     con = get_connection()
     try:
@@ -228,8 +224,7 @@ def refresh_assets(context_id: int, corp: bool = True) -> dict:
     finally:
         con.close()
 
-    ok, failed, corp_err = 0, 0, None
-    corps_done: set[int] = set()
+    ok, failed = 0, 0
     for c in chars:
         cid, cname = c["character_id"], c["character_name"]
         token = _get_valid_token(cid)
@@ -256,52 +251,10 @@ def refresh_assets(context_id: int, corp: bool = True) -> dict:
                     _store(context_id, srcs, stock, set(srcs))
                     ok += 1
 
-                if not corp:
-                    continue
-                pub = client.get(f"{ESI_BASE}/characters/{cid}/").json()
-                corp_id = pub.get("corporation_id")
-                if not corp_id or corp_id in corps_done:
-                    continue
-                crows = _paginate(client, f"{ESI_BASE}/corporations/{corp_id}/assets/", token)
-                if isinstance(crows, str):
-                    corp_err = corp_err or crows          # 'role' — needs Director
-                    continue
-                corps_done.add(corp_id)
-                # Division names are set by the corp ("Industry Materials"), so prefer them over
-                # the raw CorpSAG flag.
-                divnames: dict[int, str] = {}
-                try:
-                    dr = client.get(f"{ESI_BASE}/corporations/{corp_id}/divisions/",
-                                    headers={"Authorization": f"Bearer {token}"})
-                    if dr.status_code == 200:
-                        for h in (dr.json().get("hangar") or []):
-                            if h.get("name"):
-                                divnames[int(h["division"])] = h["name"]
-                except Exception:
-                    pass
-                srcs, stock, conts = _split_by_source(
-                    crows, set(_CORP_FLAGS),
-                    lambda f, _c=corp_id: f"corp:{_c}:{f}",
-                    lambda f: divnames.get(_CORP_FLAGS[f], f"Corp hangar {_CORP_FLAGS[f]}"),
-                )
-                if conts:
-                    nm = _names_for(client, f"{ESI_BASE}/corporations/{corp_id}/assets/names/",
-                                    token, conts)
-                    for k, meta in srcs.items():
-                        if k.startswith("cont:") and int(k.split(":")[1]) in nm:
-                            meta["name"] = nm[int(k.split(":")[1])]
-                _store(context_id, srcs, stock, set(srcs))
-                con2 = get_connection()
-                try:
-                    con2.execute("UPDATE pp_characters SET corporation_id = ? WHERE character_id = ?",
-                                 (corp_id, cid))
-                    con2.commit()
-                finally:
-                    con2.close()
         except Exception:
             failed += 1
 
-    return {"characters": len(chars), "refreshed": ok, "failed": failed, "corp_error": corp_err}
+    return {"characters": len(chars), "refreshed": ok, "failed": failed}
 
 
 def add_pasted_source(context_id: int, name: str, text: str) -> dict:
@@ -434,13 +387,13 @@ def assets_status(context_id: int) -> dict:
 
 @router.get("/api/industry/assets")
 def industry_assets(ctx: int = Depends(require_context)):
-    """Discovered stock sources (personal hangars, corp divisions, containers) and which are on."""
+    """Discovered stock sources (hangars, containers, pasted stock) and which of them are on."""
     return assets_status(ctx)
 
 
 @router.post("/api/industry/assets/refresh")
-def industry_assets_refresh(corp: int = 1, ctx: int = Depends(require_context)):
-    res = refresh_assets(ctx, corp=bool(corp))
+def industry_assets_refresh(ctx: int = Depends(require_context)):
+    res = refresh_assets(ctx)
     res.update(assets_status(ctx))
     return res
 

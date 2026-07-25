@@ -142,13 +142,12 @@ async function indLoadAssets() {
   } catch (e) { el.innerHTML = ''; }
 }
 
-// Pasting is the equal-footing path to the corp read, not a consolation prize: ESI gates corp
-// assets behind the Director role and offers nothing weaker, so most corp members can only get
-// their corp hangar in here by pasting it.
+// How corp/shared hangars get in: paste them. ESI can't read a corp hangar for ordinary members,
+// so pasting is the path that works for everyone, not a fallback.
 function _indPasteFormHtml() {
   return `<div id="indPasteForm" class="ind-paste" style="display:none">
     <p class="ind-src-help">In the EVE client, open the hangar, select all (Ctrl+A), copy (Ctrl+C), paste below.
-      Works for a corp hangar you can see but can't read over the API.</p>
+      Works for any hangar you can see in game — including corp and shared hangars.</p>
     <input type="text" id="indPasteName" placeholder="Name this stock — e.g. Corp hangar: Industry Materials">
     <textarea id="indPasteText" rows="6" placeholder="Tritanium&#9;1 000 000&#10;Pyerite&#9;500 000"></textarea>
     <div class="ind-src-actions">
@@ -221,12 +220,6 @@ async function indRefreshAssets() {
   }
   indLoadAssets();
   indLoadQueue();
-  if (d && d.corp_error === 'role') {
-    const w = document.getElementById('indAssets');
-    if (w) w.insertAdjacentHTML('beforeend',
-      '<p class="ind-src-help">Only personal hangars were read — ESI only exposes corp assets to a character with the '
-      + '<b>Director</b> role, and offers nothing weaker. Use <b>Paste a hangar</b> above for corp stock instead.</p>');
-  }
 }
 
 function indCloseSetup() {
