@@ -179,6 +179,21 @@ class QueuePlanRequest(BaseModel):
     prioritize_speed: bool = True
     struct_material_pct: float = 0.0
     struct_time_pct: float = 0.0
+    # Subtract what you already own from the demand. On for planning ("what's left to do"); the
+    # progress endpoint turns it OFF so it measures against the FULL requirement — otherwise the
+    # denominator would shrink as you acquire stock and the bar could never fill.
+    use_stock: bool = True
+
+
+def _stock_for(ctx: int, targets) -> dict[int, float]:
+    """Owned quantities to net off the demand, EXCLUDING the products being ordered. Owning a
+    Revelation must not make an order to build one plan zero jobs — you asked to build it. Only
+    intermediates and materials count as stock. Empty when assets were never fetched."""
+    from app.industry.assets import owned_quantities
+    stock = owned_quantities(ctx)
+    for tid, _ in targets:
+        stock.pop(tid, None)
+    return stock
 
 
 def _run_queue_plan(ctx: int, req: QueuePlanRequest) -> dict:
@@ -224,7 +239,8 @@ def _run_queue_plan(ctx: int, req: QueuePlanRequest) -> dict:
     mfg_slots = req.mfg_slots if req.mfg_slots is not None else pool["manufacturing_slots"]
     rx_slots = req.rx_slots if req.rx_slots is not None else pool["reaction_slots"]
     pools = {"manufacturing": max(1, mfg_slots), "reaction": max(1, rx_slots)}
-    return plan_queue(targets, mfg, rx, prices, adjusted, params, names, pools)
+    on_hand = _stock_for(ctx, targets) if req.use_stock else None
+    return plan_queue(targets, mfg, rx, prices, adjusted, params, names, pools, on_hand=on_hand)
 
 
 @router.post("/api/industry/queue-plan")

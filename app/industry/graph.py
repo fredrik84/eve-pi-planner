@@ -345,6 +345,7 @@ class IndustryPlanRequest(BaseModel):
     prioritize_speed: bool = True      # buy slow-to-build bulk components to minimize makespan
     struct_material_pct: float = 0.0   # facility ME bonus (material reduction %)
     struct_time_pct: float = 0.0       # facility TE bonus (time reduction %)
+    use_stock: bool = True             # net owned materials off the demand (needs an asset scan)
 
 
 # Wall-clock cap (hours) a single component's batch may take to build before the time-priority
@@ -493,7 +494,12 @@ def industry_plan(req: IndustryPlanRequest, ctx: int = Depends(require_context))
     pool = _slot_pool(ctx)
     pools = {"manufacturing": max(1, pool["manufacturing_slots"]),
              "reaction": max(1, pool["reaction_slots"])}
-    result = plan_queue([(req.type_id, req.quantity)], mfg, rx, prices, adjusted, params, names, pools)
+    # Net off what you already own (never the product itself — you asked to build that).
+    from app.industry.assets import owned_quantities
+    on_hand = owned_quantities(ctx) if req.use_stock else {}
+    on_hand.pop(req.type_id, None)
+    result = plan_queue([(req.type_id, req.quantity)], mfg, rx, prices, adjusted, params, names,
+                        pools, on_hand=on_hand)
     result["target"] = {"type_id": req.type_id, "name": names.get(req.type_id, str(req.type_id)),
                         "quantity": req.quantity}
     result["tree"] = build_plan(req.type_id, req.quantity, mfg, rx, prices, adjusted, params, names)["tree"]

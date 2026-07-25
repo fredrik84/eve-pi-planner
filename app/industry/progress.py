@@ -145,26 +145,38 @@ def queue_progress(context_id: int) -> dict:
         con.close()
     if not orders:
         return {"empty": True}
-    res = _run_queue_plan(context_id, QueuePlanRequest())
+    # use_stock=False: progress must measure against the FULL requirement. With stock netted off,
+    # the denominator would shrink as you acquire materials and the bar could never fill.
+    res = _run_queue_plan(context_id, QueuePlanRequest(use_stock=False))
     if res.get("empty"):
         return {"empty": True}
 
     since = _epoch(context_id)
-    done = _done_by_type(context_id, since)
+    completed = _done_by_type(context_id, since)
     running = _running_by_type(context_id, since)
+    # Two independent "done" signals, combined by taking whichever is higher:
+    #   * OWNING the output proves it's done, needs no epoch, and survives a re-queue — but it goes
+    #     to zero once the stuff is consumed by the next stage up.
+    #   * The completion ledgers still know you built it, but only within the queue's epoch.
+    # Either alone under-reports; the max of the two is right in both directions.
+    from app.industry.assets import owned_quantities
+    owned = owned_quantities(context_id)
 
     types = []
     tot = {"required": 0, "done": 0, "running": 0, "waiting": 0}
     for req in res.get("requirements", []):
         tid = int(req["type_id"])
         need = int(req["runs"])
-        d = min(done.get(tid, 0), need)                 # never report more than the plan asked for
+        oq = int(req["output_qty"]) or 1
+        from_stock = int(owned.get(tid, 0) // oq)      # whole runs' worth sitting in the hangar
+        d = min(max(completed.get(tid, 0), from_stock), need)   # cap at what the plan asked for
         r = min(running.get(tid, 0), max(0, need - d))
         w = max(0, need - d - r)
         types.append({
             "type_id": tid, "name": req["name"], "activity": req["activity"],
             "required_runs": need, "done_runs": d, "running_runs": r, "waiting_runs": w,
             "output_qty": req["output_qty"],
+            "in_stock": int(owned.get(tid, 0)),
             "pct": round(100.0 * d / need, 1) if need else 0.0,
         })
         tot["required"] += need
@@ -179,7 +191,8 @@ def queue_progress(context_id: int) -> dict:
         t = by_type.get(tid)
         oq = (t or {}).get("output_qty") or 1
         want = int(o["quantity"])
-        done_units = min(done.get(tid, 0) * oq, want)
+        have = max(completed.get(tid, 0) * oq, int(owned.get(tid, 0)))
+        done_units = min(have, want)
         run_units = min(running.get(tid, 0) * oq, max(0, want - done_units))
         status = ("complete" if done_units >= want
                   else "building" if run_units > 0 or done_units > 0

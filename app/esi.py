@@ -108,9 +108,13 @@ SEARCH_STRUCT_SCOPE = "esi-search.search_structures.v1"
 # this superset exists to prevent: connecting a market character for blueprints stripped its market
 # access (EVE tokens carry only the last auth's scopes). Every opt-in flow must request the full set.
 BLUEPRINTS_SCOPE = "esi-characters.read_blueprints.v1"
+# Assets: what the character actually owns, so the planner stops telling you to build components
+# already sitting in your hangar and can report queue progress without guessing a start date.
+# Same rule as every scope above — it joins the ONE superset, never its own set.
+ASSETS_SCOPE = "esi-assets.read_assets.v1"
 REACTIONS_SCOPES = (
     f"{SCOPES} {INDUSTRY_JOBS_SCOPE} {CORP_INDUSTRY_JOBS_SCOPE} "
-    f"{MARKET_SCOPE} {SEARCH_STRUCT_SCOPE} {STRUCTURES_SCOPE} {BLUEPRINTS_SCOPE}"
+    f"{MARKET_SCOPE} {SEARCH_STRUCT_SCOPE} {STRUCTURES_SCOPE} {BLUEPRINTS_SCOPE} {ASSETS_SCOPE}"
 )
 # All opt-in "connect a character" flows request this ONE superset so re-authing a character for
 # any tool never drops the scopes another relies on. Wallet stays deliberately separate.

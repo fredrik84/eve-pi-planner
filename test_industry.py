@@ -361,6 +361,33 @@ def test_queue_progress_requirements():
     check("raw materials excluded", 200 not in reqs and 201 not in reqs)
 
 
+def test_stock_reduces_plan_but_never_the_target():
+    """Owned stock nets off intermediate demand, but owning the PRODUCT must not make an order to
+    build it plan zero jobs — the user asked to build that. Guards the on_hand wiring."""
+    print("test_stock_reduces_plan_but_never_the_target")
+    con = _seed_con()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+    P = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0)
+    base = plan_queue([(100, 2)], mfg, rx, _prices(SELL), ADJ, P, NAMES,
+                      {"manufacturing": 10, "reaction": 5})
+    n_base = {r["type_id"]: r["runs"] for r in base["requirements"]}
+
+    # Owning the intermediate (Gadget 101) must cut its required runs.
+    withstock = plan_queue([(100, 2)], mfg, rx, _prices(SELL), ADJ, P, NAMES,
+                           {"manufacturing": 10, "reaction": 5}, on_hand={101: 999999})
+    n_stock = {r["type_id"]: r["runs"] for r in withstock["requirements"]}
+    check("stock removes the intermediate's runs", n_stock.get(101, 0) < n_base.get(101, 0))
+    check("target still built with stock present", n_stock.get(100, 0) == n_base.get(100, 0))
+
+    # The endpoint layer must strip the target from on_hand; simulate what _stock_for does.
+    stock = {100: 999999, 101: 999999}
+    stock.pop(100, None)
+    guarded = plan_queue([(100, 2)], mfg, rx, _prices(SELL), ADJ, P, NAMES,
+                         {"manufacturing": 10, "reaction": 5}, on_hand=stock)
+    g = {r["type_id"]: r["runs"] for r in guarded["requirements"]}
+    check("owning the product does not zero the order", g.get(100, 0) == n_base.get(100, 0))
+
+
 def main():
     test_material_formula()
     test_graph_loaders()
@@ -382,6 +409,7 @@ def main():
     test_plan_queue_end_to_end()
     test_unpriced_material_does_not_crash()
     test_queue_progress_requirements()
+    test_stock_reduces_plan_but_never_the_target()
     print(f"\nAll {_passed} checks passed.")
 
 
