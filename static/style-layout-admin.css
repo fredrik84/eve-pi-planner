@@ -915,36 +915,47 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 /* Build pipeline — a MATRIX: rows are buildings, columns are stages */
 .ind-pipe-hint { font-size: 11px; color: var(--clr-text-soft); margin: 6px 0 0; }
 .ind-pipe-scroll { overflow-x: auto; padding: 10px 0 12px; }
-.ind-pipe { display: grid; grid-template-columns: 104px repeat(var(--ind-cols), 168px);
-  column-gap: 4px; row-gap: 0; align-items: stretch; min-width: min-content; }
-.ind-pipe-corner { border-bottom: 1px solid var(--clr-border); }
-.ind-pipe-hd { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--clr-text-soft);
-  padding: 0 4px 6px; display: flex; justify-content: space-between; align-items: center; gap: 6px;
-  border-bottom: 1px solid var(--clr-border); }
+/* Columns FLEX to the available width (minmax with a 0 floor lets them shrink below content, which
+   `auto`/`min-content` would not) so the matrix fits the card instead of forcing a scrollbar. The
+   96px minimum is the readability floor — past that many stages it scrolls rather than squashing. */
+.ind-pipe { display: grid; grid-template-columns: 84px repeat(var(--ind-cols), minmax(96px, 1fr));
+  column-gap: 3px; row-gap: 0; align-items: stretch; width: 100%; }
+.ind-pipe-corner { border-bottom: 1px solid var(--clr-border); position: sticky; left: 0; background: #12141d; z-index: 2; }
+.ind-pipe-hd { font-size: 9px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--clr-text-soft);
+  padding: 0 3px 5px; display: flex; justify-content: space-between; align-items: center; gap: 4px;
+  border-bottom: 1px solid var(--clr-border); min-width: 0; }
+.ind-pipe-hd { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ind-pipe-hd span { background: #1c2030; color: #9fb4d8; border-radius: 8px; padding: 0 7px; font-size: 10px; }
 .ind-pipe-hd-flow::after { content: '\203A'; color: var(--clr-text-soft); opacity: .55; font-size: 15px; line-height: 1; }
 .ind-pipe-hd-final { color: var(--clr-accent); }
 .ind-pipe-hd-final span { background: #1e3a5f; color: var(--clr-accent); }
 /* Building row: a persistent labelled band you can read straight across */
-.ind-pipe-rowlbl { padding: 10px 8px 10px 0; border-right: 1px solid var(--clr-border);
-  border-bottom: 1px solid #1a2030; display: flex; flex-direction: column; justify-content: flex-start; }
-.ind-pipe-rowname { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.ind-pipe-rowlbl { padding: 8px 6px 8px 0; border-right: 1px solid var(--clr-border);
+  border-bottom: 1px solid #1a2030; display: flex; flex-direction: column; justify-content: flex-start;
+  position: sticky; left: 0; background: #12141d; z-index: 2; }
+.ind-pipe-rowname { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ind-pipe-rowsub { font-size: 10px; color: var(--clr-text-soft); margin-top: 2px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ind-row-rx .ind-pipe-rowname { color: #d9a7e0; }
 .ind-row-mfg .ind-pipe-rowname { color: #7fdca6; }
 .ind-row-buy .ind-pipe-rowname { color: #cbb8d6; }
-.ind-pipe-cell { display: flex; flex-direction: column; gap: 5px; padding: 10px 0;
-  border-bottom: 1px solid #1a2030; }
+.ind-pipe-cell { display: flex; flex-direction: column; gap: 4px; padding: 8px 0;
+  border-bottom: 1px solid #1a2030; min-width: 0; }
 /* Faint row tint so a building's band stays readable across empty stages */
 .ind-pipe-cell.ind-row-rx { background: linear-gradient(90deg, rgba(106,77,120,.07), transparent 70%); }
 .ind-pipe-cell.ind-row-mfg { background: linear-gradient(90deg, rgba(44,106,68,.07), transparent 70%); }
-.ind-pipe-card { border: 1px solid var(--clr-border); border-left: 3px solid var(--clr-border); border-radius: 6px; padding: 6px 9px; background: #12161f; transition: opacity .12s, border-color .12s, background .12s; }
+.ind-pipe-card { border: 1px solid var(--clr-border); border-left: 3px solid var(--clr-border); border-radius: 5px;
+  padding: 4px 6px; background: #12161f; min-width: 0; overflow: hidden;
+  transition: opacity .12s, border-color .12s, background .12s; }
 .ind-pipe-build { border-left-color: #3a9668; }
 .ind-pipe-buy { border-left-color: #9a6ab0; }
 .ind-pipe-unresolved { border-left-color: #b05a5a; }
-.ind-pipe-name { display: block; color: #eef2f8; font-size: 12px; line-height: 1.3; }
-.ind-pipe-meta { display: flex; align-items: center; gap: 6px; margin-top: 3px; font-size: 11px; color: var(--clr-text-soft); flex-wrap: wrap; }
+.ind-pipe-name { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden; color: #eef2f8; font-size: 11px; line-height: 1.25; overflow-wrap: anywhere; }
+.ind-pipe-meta { display: flex; align-items: center; gap: 5px; margin-top: 2px; font-size: 10px;
+  color: var(--clr-text-soft); flex-wrap: wrap; }
+.ind-pipe-qty { font-variant-numeric: tabular-nums; }
 .ind-pipe-tag { font-size: 9px; text-transform: uppercase; letter-spacing: 0.03em; padding: 1px 5px; border-radius: 7px; }
 .ind-t-build { background: #163524; color: #7fdca6; }
 .ind-pipe-runs { font-variant-numeric: tabular-nums; }

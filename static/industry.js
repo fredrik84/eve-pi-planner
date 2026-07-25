@@ -504,11 +504,14 @@ function _indPipelineHtml(d, tiersData) {
     { key: 'buy', title: 'Buy', sub: 'from market', match: isBuy },
   ].filter(r => cols.some(c => c.items.some(r.match)));
 
+  // No "build" tag on the card — the row it sits in already says Reactions vs Manufacturing, so
+  // repeating it just costs width. Qty and runs are what actually differ per card.
   const buildCard = e => {
     const owned = e.owned ? `<span class="ind-owned" title="You own this ${e.owned.kind.toUpperCase()}">${e.owned.kind.toUpperCase()}</span>` : '';
-    const runs = e.runs ? `<span class="ind-pipe-runs">${e.runs.toLocaleString()} run${e.runs > 1 ? 's' : ''}</span>` : '';
-    return `<div class="ind-pipe-card ind-pipe-build" data-tid="${e.type_id}" title="Hover to trace what this feeds"><span class="ind-pipe-name">${_esc(e.name)}</span>`
-      + `<span class="ind-pipe-meta">×${Math.round(e.qty).toLocaleString()} <span class="ind-pipe-tag ind-t-build">build${e.activity === 'reaction' ? ' rx' : ''}</span>${runs}${owned}</span></div>`;
+    const runs = e.runs ? `<span class="ind-pipe-runs">${e.runs.toLocaleString()}&nbsp;run${e.runs > 1 ? 's' : ''}</span>` : '';
+    const qty = `×${Math.round(e.qty).toLocaleString()}`;
+    return `<div class="ind-pipe-card ind-pipe-build" data-tid="${e.type_id}" title="${_esc(e.name)} — ${qty}${e.runs ? ', ' + e.runs + ' runs' : ''}. Hover to trace its chain."><span class="ind-pipe-name">${_esc(e.name)}</span>`
+      + `<span class="ind-pipe-meta"><span class="ind-pipe-qty">${qty}</span>${runs}${owned}</span></div>`;
   };
   const buyCard = (buys, t) => {
     const names = buys.slice(0, 25).map(b => b.name).join(', ') + (buys.length > 25 ? '…' : '');
