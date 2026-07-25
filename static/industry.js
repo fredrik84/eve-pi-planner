@@ -304,16 +304,28 @@ let _indShopStageData = {};   // stage key (tier) -> [{name, qty}], for per-stag
 // Walk the build tree once into { byType (with tier + type_id), tiers (tier -> [entries]), maxT }.
 // Shared by the pipeline visualization and the per-stage shopping list so their stage numbering
 // always matches — a "Buy" card in the pipeline links to the exact same stage in the list below.
-function _indComputeTiers(tree) {
+// `bought` = the type_ids that actually appear on the plan's shopping list, and it OVERRIDES the
+// tree's own decision. The tree comes from build_plan (pure cost-optimal) while the shopping list
+// comes from plan_queue, which additionally flips components to "buy" for speed or negligible
+// saving — so the tree alone would show a build step for something you're really purchasing. When
+// a type is bought we also stop descending: its sub-materials aren't yours to make any more.
+function _indComputeTiers(tree, bought) {
+  const buys = bought instanceof Set ? bought : new Set(bought || []);
   const byType = {};
   const inputsOf = {};      // type_id -> Set of type_ids it consumes
   const consumersOf = {};   // type_id -> Set of type_ids that consume it
   (function walk(n, depth) {
     if (!n) return;
+    const isBought = buys.has(n.type_id) && depth > 0;   // the root is always built
     const e = byType[n.type_id] || (byType[n.type_id] = { type_id: n.type_id, name: n.name, decision: n.decision, activity: n.activity, owned: n.owned, qty: 0, runs: 0, tier: depth });
     e.qty += n.qty || 0;
-    e.runs += n.runs || 0;
     e.tier = Math.max(e.tier, depth);
+    if (isBought) {
+      e.decision = 'buy';
+      e.runs = 0;
+      return;                                            // bought ⇒ a leaf; don't expand its inputs
+    }
+    e.runs += n.runs || 0;
     if (n.decision === 'build' || n.decision === 'buy') e.decision = n.decision;
     (n.inputs || []).forEach(c => {
       (inputsOf[n.type_id] || (inputsOf[n.type_id] = new Set())).add(c.type_id);
@@ -361,6 +373,8 @@ function _indStageModel(tiersData) {
     t,
     index: i,
     label: t === 0 ? 'Finished' : `Stage ${i + 1}`,
+    // "For Finished" reads wrong in the shopping list — name the act, not the column.
+    shopLabel: t === 0 ? 'the final build' : `Stage ${i + 1}`,
     builds: (tiers[t] || []).filter(e => e.decision === 'build'),
     buys: Object.values(byType).filter(e => e.decision !== 'build' && stageOf[e.type_id] === t),
   }));
@@ -394,7 +408,7 @@ function _indShoppingSections(d, model) {
     _indShopStageData[col.t] = rows.map(r => ({ name: r.name, qty: r.qty }));
     const stageCost = rows.reduce((a, s) => a + (s.line_cost || 0), 0);
     sections += `<div class="ind-shop-stage" id="ind-shop-stage-${col.t}">`
-      + `<div class="ind-shop-stage-hd"><span>For ${_esc(col.label)} — ${rows.length} item${rows.length > 1 ? 's' : ''} · ${fmtIsk(stageCost)}</span>`
+      + `<div class="ind-shop-stage-hd"><span>For ${_esc(col.shopLabel || col.label)} — ${rows.length} item${rows.length > 1 ? 's' : ''} · ${fmtIsk(stageCost)}</span>`
       + `<button class="ind-copy-btn ind-copy-sm" onclick="indCopyMultibuy(${col.t})">Copy this stage</button></div>`
       + `<table class="ind-table"><thead><tr><th>Material</th><th class="ind-num">Qty</th><th>Source</th><th class="ind-num">Cost</th></tr></thead><tbody>${rows.map(_indShopRowHtml).join('')}</tbody></table></div>`;
   });
@@ -404,7 +418,7 @@ function _indShoppingSections(d, model) {
   if (rest.length) {
     _indShopStageData['other'] = rest.map(r => ({ name: r.name, qty: r.qty }));
     sections += `<div class="ind-shop-stage" id="ind-shop-stage-other">`
-      + `<div class="ind-shop-stage-hd"><span>Other — ${rest.length} item${rest.length > 1 ? 's' : ''}</span>`
+      + `<div class="ind-shop-stage-hd"><span title="Not linked to a build stage — please report this">Not tied to a stage — ${rest.length} item${rest.length > 1 ? 's' : ''}</span>`
       + `<button class="ind-copy-btn ind-copy-sm" onclick="indCopyMultibuy('other')">Copy this stage</button></div>`
       + `<table class="ind-table"><thead><tr><th>Material</th><th class="ind-num">Qty</th><th>Source</th><th class="ind-num">Cost</th></tr></thead><tbody>${rest.map(_indShopRowHtml).join('')}</tbody></table></div>`;
   }
@@ -661,7 +675,8 @@ function _indRenderPlan(d, title) {
       + d.leftovers.map(l => `<div class="ind-tree-row"><span class="ind-tree-name">${_esc(l.name)}</span> `
         + `<span class="ind-tree-qty">×${Math.round(l.qty).toLocaleString()}</span>`
         + (l.value ? `<span class="ind-tree-cost">${fmtIsk(l.value)}</span>` : '') + `</div>`).join('') + `</details>` : '';
-  const tiersData = d.tree ? _indComputeTiers(d.tree)
+  const boughtIds = new Set((d.shopping_list || []).map(s => s.type_id));
+  const tiersData = d.tree ? _indComputeTiers(d.tree, boughtIds)
     : { byType: {}, tiers: {}, maxT: 0, inputsOf: {}, consumersOf: {} };
   const stageModel = _indStageModel(tiersData);
   const treeKids = d.tree && (d.tree.inputs || []).length
