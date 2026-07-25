@@ -472,10 +472,11 @@ function _indStepsHtml(d) {
   return html + '</div>';
 }
 
-// The build as a PRODUCTION PIPELINE: stages flow left→right (raw/reacted on the left, finished
-// product on the right), split into horizontal LANES by where the work physically happens —
-// reactions and manufacturing are different structures with separate job slots, and bought
-// materials aren't built anywhere. Hovering a card highlights what feeds it and what it feeds.
+// The build as a horizontal PRODUCTION PIPELINE: stage columns flow left→right (raw/reacted on the
+// left, finished product on the right), cards stacked inside each column. Each column is then split
+// into a section PER FACILITY — reactions and manufacturing run in different structures with
+// separate job slots, so a stage says plainly which building does which part of it. Hovering a card
+// highlights what feeds it and what it feeds.
 let _indPipeGraph = { inputsOf: {}, consumersOf: {} };
 
 function _indPipelineHtml(d, tiersData) {
@@ -484,22 +485,15 @@ function _indPipelineHtml(d, tiersData) {
   const { tiers, maxT, inputsOf, consumersOf } = tiersData;
   _indPipeGraph = { inputsOf: inputsOf || {}, consumersOf: consumersOf || {} };
 
-  // Columns, deepest stage first so the finished product lands on the right.
-  const cols = [];
-  for (let t = maxT; t >= 0; t--) {
-    const items = tiers[t] || [];
-    if (items.length) cols.push({ t, items });
-  }
-  if (!cols.length) return '';
-
   const isRx = e => e.decision === 'build' && e.activity === 'reaction';
   const isMfg = e => e.decision === 'build' && e.activity !== 'reaction';
   const isBuy = e => e.decision !== 'build';
-  const lanes = [
-    { key: 'mfg', title: 'Manufacturing', sub: _indBuildingLabel('manufacturing') || 'your structure', match: isMfg },
+  // Section order inside a column: what you react, what you manufacture, what you just buy.
+  const sections = [
     { key: 'rx', title: 'Reactions', sub: _indBuildingLabel('reaction') || 'reaction structure', match: isRx },
+    { key: 'mfg', title: 'Manufacturing', sub: _indBuildingLabel('manufacturing') || 'your structure', match: isMfg },
     { key: 'buy', title: 'Buy', sub: 'from market', match: isBuy },
-  ].filter(l => cols.some(c => c.items.some(l.match)));
+  ];
 
   const buildCard = e => {
     const owned = e.owned ? `<span class="ind-owned" title="You own this ${e.owned.kind.toUpperCase()}">${e.owned.kind.toUpperCase()}</span>` : '';
@@ -514,36 +508,40 @@ function _indPipelineHtml(d, tiersData) {
       + `<span class="ind-pipe-meta">in shopping list ↓</span></div>`;
   };
 
-  // Header row: one stage label per column (the lane-label column gets an empty corner cell).
-  let html = `<div class="ind-pipe-corner"></div>`;
-  cols.forEach(({ t, items }, i) => {
+  let cols = '';
+  for (let t = maxT; t >= 0; t--) {
+    const items = tiers[t] || [];
+    if (!items.length) continue;
     const builds = items.filter(e => e.decision === 'build');
-    const label = _indStageLabel(t, maxT, !!builds.length);
-    const count = builds.length ? `<span>${builds.length}</span>` : '';
-    html += `<div class="ind-pipe-hd${t === 0 ? ' ind-pipe-hd-final' : ''}${i < cols.length - 1 ? ' ind-pipe-hd-flow' : ''}">${label}${count}</div>`;
-  });
 
-  // One row per lane; empty cells keep every stage aligned across lanes.
-  lanes.forEach(l => {
-    html += `<div class="ind-pipe-lanelbl ind-lane-${l.key}"><span class="ind-pipe-lanename">${l.title}</span>`
-      + `<span class="ind-pipe-lanesub" title="${_esc(l.sub)}">${_esc(l.sub)}</span></div>`;
-    cols.forEach(({ t, items }) => {
-      const mine = items.filter(l.match);
-      let cards = '';
-      if (l.key === 'buy') {
-        if (mine.length) cards = buyCard(mine, t);
+    let body = '';
+    sections.forEach(s => {
+      const mine = items.filter(s.match);
+      if (!mine.length) return;
+      let cards;
+      if (s.key === 'buy') {
+        cards = buyCard(mine, t);
       } else {
         const sorted = mine.slice().sort((a, b) => (b.qty || 0) - (a.qty || 0));
-        cards = sorted.slice(0, 12).map(buildCard).join('');
-        if (sorted.length > 12) cards += `<div class="ind-pipe-more">+${sorted.length - 12} more</div>`;
+        cards = sorted.slice(0, 10).map(buildCard).join('');
+        if (sorted.length > 10) cards += `<div class="ind-pipe-more">+${sorted.length - 10} more</div>`;
       }
-      html += `<div class="ind-pipe-cell${t === 0 ? ' ind-pipe-final' : ''}">${cards}</div>`;
+      body += `<div class="ind-pipe-grp ind-grp-${s.key}">`
+        + `<div class="ind-pipe-grp-hd" title="${_esc(s.sub)}"><span class="ind-pipe-grp-name">${s.title}</span>`
+        + `<span class="ind-pipe-grp-sub">${_esc(s.sub)}</span></div>`
+        + `<div class="ind-pipe-grp-items">${cards}</div></div>`;
     });
-  });
+
+    const label = _indStageLabel(t, maxT, !!builds.length);
+    const count = builds.length ? `<span>${builds.length}</span>` : '';
+    cols += `<div class="ind-pipe-col${t === 0 ? ' ind-pipe-final' : ''}"><div class="ind-pipe-hd">${label}${count}</div>`
+      + `<div class="ind-pipe-items">${body}</div></div>`;
+    if (t > 0) cols += '<div class="ind-pipe-arrow">›</div>';
+  }
 
   return `<details class="ind-details" open><summary>Build pipeline</summary>`
-    + `<p class="ind-pipe-hint">Hover a step to trace what feeds it and what it feeds. Lanes are the structures the work happens in.</p>`
-    + `<div class="ind-pipe-scroll"><div class="ind-pipe-grid" style="--ind-cols:${cols.length}">${html}</div></div></details>`;
+    + `<p class="ind-pipe-hint">Hover a step to trace what feeds it and what it feeds. Each stage is split by the structure that does the work.</p>`
+    + `<div class="ind-pipe">${cols}</div></details>`;
 }
 
 // The type_ids a card stands for: a build card is one type, a condensed buy card is many.
@@ -556,7 +554,7 @@ function _indCardTids(card) {
 // Hover trace: dim the pipeline, then light up the hovered step, everything it FEEDS (downstream,
 // e.g. what a stage-1 component is used for in stage 2) and everything that feeds IT (upstream).
 function _indPipeHover(card) {
-  const grid = card.closest('.ind-pipe-grid');
+  const grid = card.closest('.ind-pipe');
   if (!grid) return;
   const { inputsOf, consumersOf } = _indPipeGraph;
   const self = new Set(_indCardTids(card));
@@ -589,12 +587,12 @@ document.addEventListener('mouseover', e => {
   const card = e.target.closest('.ind-pipe-card');
   if (card) { _indPipeHover(card); return; }
   // Moved into the pipeline but not onto a card (gap/lane label) — drop the trace.
-  const grid = e.target.closest('.ind-pipe-grid');
+  const grid = e.target.closest('.ind-pipe');
   if (grid) _indPipeClearHover(grid);
 });
 document.addEventListener('mouseout', e => {
   if (!e.target.closest) return;
-  const grid = e.target.closest('.ind-pipe-grid');
+  const grid = e.target.closest('.ind-pipe');
   if (grid && !grid.contains(e.relatedTarget)) _indPipeClearHover(grid);
 });
 
