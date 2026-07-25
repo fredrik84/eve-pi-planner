@@ -205,7 +205,8 @@ def build_tasks(agg: dict, mfg: dict, rx: dict, params: BuildParams,
         activity = info["activity"]
         max_runs = mfg[tid]["max_runs"] if tid in mfg else 0
         _me, te = params.me_te_for(tid, activity)
-        per_run = recipe["base_time"] * (1 - te / 100.0)
+        st = params.struct_time_mult if activity == "manufacturing" else 1.0
+        per_run = recipe["base_time"] * (1 - te / 100.0) * st
         R = info["runs"]
         P = max(1, pools.get(activity, 1))
         cap = max_runs if max_runs else R
@@ -244,7 +245,8 @@ def _critical_priority(agg: dict, deps: dict, mfg: dict, rx: dict, params: Build
         info = agg[tid]
         recipe = mfg.get(tid) or rx.get(tid)
         _me, te = params.me_te_for(tid, info["activity"])
-        return info["runs"] * recipe["base_time"] * (1 - te / 100.0)
+        st = params.struct_time_mult if info["activity"] == "manufacturing" else 1.0
+        return info["runs"] * recipe["base_time"] * (1 - te / 100.0) * st
 
     memo: dict[int, float] = {}
 
@@ -424,6 +426,8 @@ class IndustryQueueRequest(BaseModel):
     mfg_slots: int | None = None        # None → derive from the account's characters' skills
     rx_slots: int | None = None
     prioritize_speed: bool = True
+    struct_material_pct: float = 0.0
+    struct_time_pct: float = 0.0
 
 
 @router.post("/api/industry/plan-queue")
@@ -455,7 +459,8 @@ def industry_plan_queue(req: IndustryQueueRequest, ctx: int = Depends(require_co
     adjusted = fetch_adjusted_prices(list(ids))
     from app.industry.graph import SPEED_BUILD_CAP_HOURS
     mbh = SPEED_BUILD_CAP_HOURS if req.prioritize_speed else 0.0
-    params = resolve_build_params(ctx, req.me_pct, req.te_pct, req.system_id, req.facility_tax_pct, mbh)
+    params = resolve_build_params(ctx, req.me_pct, req.te_pct, req.system_id, req.facility_tax_pct, mbh,
+                                  req.struct_material_pct, req.struct_time_pct)
     # Slot pools: use the request overrides, else derive from the account's characters' skills
     # (falling back to 1 each so a brand-new account with no manufacturing skills still schedules).
     pool = _slot_pool(ctx)

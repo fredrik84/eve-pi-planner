@@ -902,3 +902,15 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-step-items[open] > .ind-wave-jobs { margin-top: 6px; }
 #indQueueResult { margin-top: 12px; }
 #indQueueResult:empty { margin-top: 0; }
+/* Industry card spacing + padded bodies (fixes squished cards) */
+#tab-industry .pp-card { margin-bottom: 18px; }
+#tab-industry .pp-card:last-child { margin-bottom: 0; }
+.ind-body { padding: 16px; }
+.ind-body > .pp-sub:first-child { margin-top: 0; }
+.ind-plan-opts { display: flex; gap: 22px; align-items: flex-end; flex-wrap: wrap; margin-top: 14px; }
+.ind-plan-opts select { background: #141720; color: var(--clr-text); border: 1px solid var(--clr-border); border-radius: 5px; padding: 8px 10px; font-size: 13px; min-width: 230px; }
+.ind-plan-opts .ind-opt-check { margin: 0 0 4px; }
+.ind-shop-bar { display: flex; align-items: center; gap: 12px; margin: 4px 0 10px; }
+.ind-copy-btn { background: #1e3a5f; color: var(--clr-accent); border: 1px solid #2d5a8a; border-radius: 5px; padding: 5px 12px; font-size: 12px; cursor: pointer; }
+.ind-copy-btn:hover { background: #254a78; }
+.ind-shop-tot { font-size: 12px; color: var(--clr-text-soft); }

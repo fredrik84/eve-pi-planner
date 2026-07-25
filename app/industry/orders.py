@@ -177,6 +177,8 @@ class QueuePlanRequest(BaseModel):
     mfg_slots: int | None = None
     rx_slots: int | None = None
     prioritize_speed: bool = True
+    struct_material_pct: float = 0.0
+    struct_time_pct: float = 0.0
 
 
 def _run_queue_plan(ctx: int, req: QueuePlanRequest) -> dict:
@@ -216,7 +218,8 @@ def _run_queue_plan(ctx: int, req: QueuePlanRequest) -> dict:
     adjusted = fetch_adjusted_prices(list(ids))
     from app.industry.graph import SPEED_BUILD_CAP_HOURS
     mbh = SPEED_BUILD_CAP_HOURS if req.prioritize_speed else 0.0
-    params = resolve_build_params(ctx, req.me_pct, req.te_pct, req.system_id, req.facility_tax_pct, mbh)
+    params = resolve_build_params(ctx, req.me_pct, req.te_pct, req.system_id, req.facility_tax_pct, mbh,
+                                  req.struct_material_pct, req.struct_time_pct)
     pool = _slot_pool(ctx)
     mfg_slots = req.mfg_slots if req.mfg_slots is not None else pool["manufacturing_slots"]
     rx_slots = req.rx_slots if req.rx_slots is not None else pool["reaction_slots"]

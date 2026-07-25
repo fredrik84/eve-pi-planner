@@ -51,7 +51,8 @@ class BuildParams:
     ME/TE per blueprint from the library and the cost indices from the configured build system."""
     me_pct: float = 0.0                       # manufacturing material efficiency (0–10)
     te_pct: float = 0.0                       # time efficiency (0–20)
-    struct_material_mult: float = 1.0         # structure+rig material multiplier (manufacturing)
+    struct_material_mult: float = 1.0         # structure+rig MATERIAL multiplier (facility ME bonus)
+    struct_time_mult: float = 1.0             # structure+rig TIME multiplier (facility TE bonus)
     reaction_material_mult: float = 1.0 - REACTION_ME_REDUCTION
     mfg_cost_index: float = 0.0               # system manufacturing cost index (0.0 = unknown)
     rx_cost_index: float = 0.0                # system reaction cost index
@@ -275,7 +276,8 @@ def build_plan(target: int, quantity: int, mfg: dict, rx: dict, prices: dict, ad
             eiv += inp["quantity"] * runs * adjusted.get(inp["type_id"], 0.0)
             children.append(explode(inp["type_id"], need))
         job_cost = eiv * (ci + params.facility_tax_pct / 100.0 + SCC_SURCHARGE_PCT)
-        job_seconds = recipe["base_time"] * runs * (1 - te / 100.0)
+        st = params.struct_time_mult if activity == "manufacturing" else 1.0
+        job_seconds = recipe["base_time"] * runs * (1 - te / 100.0) * st
         totals["job_cost"] += job_cost
         totals["job_seconds"] += job_seconds
         jobs.append({
@@ -335,6 +337,8 @@ class IndustryPlanRequest(BaseModel):
     system_id: int | None = None       # None → derive from the account's Reactions build system
     facility_tax_pct: float | None = None
     prioritize_speed: bool = True      # buy slow-to-build bulk components to minimize makespan
+    struct_material_pct: float = 0.0   # facility ME bonus (material reduction %)
+    struct_time_pct: float = 0.0       # facility TE bonus (time reduction %)
 
 
 # Wall-clock cap (hours) a single component's batch may take to build before the time-priority
@@ -372,7 +376,8 @@ def account_build_defaults(context_id: int) -> tuple[int | None, float]:
 
 def resolve_build_params(context_id: int, me_pct: float, te_pct: float,
                          system_id: int | None, facility_tax_pct: float | None,
-                         max_build_hours: float = 0.0) -> BuildParams:
+                         max_build_hours: float = 0.0,
+                         struct_material_pct: float = 0.0, struct_time_pct: float = 0.0) -> BuildParams:
     """Build the resolver's params, auto-deriving the build system + tax from the account's
     Reactions settings when the request didn't override them — so the caller needn't supply a
     system id or tax by hand."""
@@ -392,6 +397,8 @@ def resolve_build_params(context_id: int, me_pct: float, te_pct: float,
         rx_cost_index=fetch_system_cost_index(sid, "reaction"),
         facility_tax_pct=tax, me_by_product=me_by_product, owned=owned,
         max_build_hours=max_build_hours,
+        struct_material_mult=1.0 - struct_material_pct / 100.0,
+        struct_time_mult=1.0 - struct_time_pct / 100.0,
         marginal_pct_of_total=MARGINAL_BUILD_PCT_OF_TOTAL,   # min_saving_pct stays 0 (per-component % doesn't scale)
         min_saving_isk=MIN_BUILD_SAVING_ISK,
     )
@@ -443,7 +450,8 @@ def industry_plan(req: IndustryPlanRequest, ctx: int = Depends(require_context))
     prices = resolve_market_data(ctx, list(ids))
     adjusted = fetch_adjusted_prices(list(ids))
     mbh = SPEED_BUILD_CAP_HOURS if req.prioritize_speed else 0.0
-    params = resolve_build_params(ctx, req.me_pct, req.te_pct, req.system_id, req.facility_tax_pct, mbh)
+    params = resolve_build_params(ctx, req.me_pct, req.te_pct, req.system_id, req.facility_tax_pct, mbh,
+                                  req.struct_material_pct, req.struct_time_pct)
 
     # Schedule the single build across the account's real slot pools (manufacturing + separate
     # reaction pool) for an honest MAKESPAN with parallelism — build_plan alone only sums job time

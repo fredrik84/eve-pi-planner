@@ -12,6 +12,7 @@ async function onIndustryTabOpen() {
     const pub = typeof _features !== 'undefined' && _features.industry && _features.industry.enabled;
     tag.style.display = (!pub && typeof _featuresIsAdmin !== 'undefined' && _featuresIsAdmin) ? '' : 'none';
   }
+  indPopulateFacility();
   indLoadSetupSummary();
   indLoadLifetime();
   indLoadQueue();
@@ -173,10 +174,11 @@ async function indRunPlan() {
   try {
     const r = await fetch('/api/industry/plan', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type_id: _indPicked.type_id, quantity: qty, prioritize_speed: _indPrioSpeed() }),
+      body: JSON.stringify({ type_id: _indPicked.type_id, quantity: qty, prioritize_speed: _indPrioSpeed(), ..._indFacilityBonus() }),
     });
     if (!r.ok) { const e = await r.json().catch(() => ({})); out.innerHTML = `<div class="pp-card"><p class="pp-warn">${_esc(e.detail || 'Plan failed')}</p></div>`; return; }
     const d = await r.json();
+    _indLastPlan = d;
     out.innerHTML = _indRenderPlan(d, `Build ${qty}× ${_esc(d.target.name)}`);
   } catch (e) {
     out.innerHTML = `<div class="pp-card"><p class="pp-warn">${_esc(String(e))}</p></div>`;
@@ -208,6 +210,35 @@ function _indPrioSpeed() {
   return el ? el.checked : true;
 }
 
+// Facility presets → structure/rig material (ME) + time (TE) bonuses. Approximate real setups; the
+// value shown in the label is what's applied, so pick the one closest to your structure.
+const IND_FACILITIES = [
+  { id: 'none', label: 'NPC station — no bonus', me: 0, te: 0 },
+  { id: 't1_me', label: 'Structure + T1 ME rig — ME 3% / TE 15%', me: 3, te: 15 },
+  { id: 't1_te', label: 'Structure + T1 TE rig — ME 1% / TE 34%', me: 1, te: 34 },
+  { id: 't2_me_null', label: 'Structure + T2 ME rig, null/WH — ME 6% / TE 15%', me: 6, te: 15 },
+  { id: 't2_te_null', label: 'Structure + T2 TE rig, null/WH — ME 1% / TE 44%', me: 1, te: 44 },
+];
+function indPopulateFacility() {
+  const sel = document.getElementById('indFacility');
+  if (!sel || sel.options.length) return;
+  sel.innerHTML = IND_FACILITIES.map(f => `<option value="${f.id}">${_esc(f.label)}</option>`).join('');
+  const saved = localStorage.getItem('indFacility');
+  if (saved && IND_FACILITIES.some(f => f.id === saved)) sel.value = saved;
+}
+function _indFacilityBonus() {
+  const sel = document.getElementById('indFacility');
+  const f = IND_FACILITIES.find(x => x.id === (sel ? sel.value : 'none')) || IND_FACILITIES[0];
+  return { struct_material_pct: f.me, struct_time_pct: f.te };
+}
+function indOnFacilityChange() {
+  const sel = document.getElementById('indFacility');
+  if (sel) { try { localStorage.setItem('indFacility', sel.value); } catch (e) {} }
+  if (_indPicked && document.getElementById('indResult').innerHTML.trim()) indRunPlan();
+}
+
+let _indLastPlan = null;   // last rendered plan, for the shopping-list copy features
+
 function _indShoppingTable(list) {
   if (!list || !list.length) return '<p class="pp-sub">Nothing to buy — built entirely from stock/recipes.</p>';
   const rows = list.map(s =>
@@ -218,7 +249,21 @@ function _indShoppingTable(list) {
     + `<td class="ind-src">${s.source ? _esc(s.source) : '<span class="pp-warn">no price</span>'}</td>`
     + `<td class="ind-num">${s.line_cost != null ? fmtIsk(s.line_cost) : '—'}</td></tr>`
   ).join('');
-  return `<table class="ind-table"><thead><tr><th>Material</th><th class="ind-num">Qty</th><th>Source</th><th class="ind-num">Cost</th></tr></thead><tbody>${rows}</tbody></table>`;
+  return `<div class="ind-shop-bar"><button class="ind-copy-btn" onclick="indCopyMultibuy()">Copy for EVE Multibuy</button>`
+    + `<span class="ind-shop-tot">${list.length} items · ${fmtIsk(list.reduce((a, s) => a + (s.line_cost || 0), 0))}</span></div>`
+    + `<table class="ind-table"><thead><tr><th>Material</th><th class="ind-num">Qty</th><th>Source</th><th class="ind-num">Cost</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+// Copy the shopping list in EVE's Multibuy paste format ("Item Name<tab>qty" per line) so the whole
+// buy can be pasted straight into the in-game Multibuy window.
+function indCopyMultibuy() {
+  const list = (_indLastPlan && _indLastPlan.shopping_list) || [];
+  if (!list.length) return;
+  const text = list.map(s => `${s.name}\t${Math.ceil(s.qty)}`).join('\n');
+  const btn = event && event.target;
+  const done = () => { if (btn) { const t = btn.textContent; btn.textContent = 'Copied ✓'; setTimeout(() => { btn.textContent = t; }, 1500); } };
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done).catch(() => {});
+  else { const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select(); try { document.execCommand('copy'); done(); } catch (e) {} document.body.removeChild(ta); }
 }
 
 // Compact tree row label (shared by leaves and collapsible nodes).
@@ -315,13 +360,15 @@ function _indRenderPlan(d, title) {
     ? `<details class="ind-details"><summary>Build tree</summary><div class="ind-tree">${treeKids}</div></details>` : '';
   return `<div class="pp-card">
     <h2 class="pp-card-title">${title}</h2>
-    ${_indMetricTiles(d.metrics)}
-    ${unres}
-    ${_indStepsHtml(d)}
-    <details class="ind-details" open><summary>Shopping list (${(d.shopping_list || []).length})</summary>${_indShoppingTable(d.shopping_list)}</details>
-    ${sched}
-    ${tree}
-    ${leftovers}
+    <div class="ind-body">
+      ${_indMetricTiles(d.metrics)}
+      ${unres}
+      ${_indStepsHtml(d)}
+      <details class="ind-details" open><summary>Shopping list (${(d.shopping_list || []).length})</summary>${_indShoppingTable(d.shopping_list)}</details>
+      ${sched}
+      ${tree}
+      ${leftovers}
+    </div>
   </div>`;
 }
 
@@ -436,11 +483,12 @@ async function indPlanQueue() {
   try {
     const r = await fetch('/api/industry/queue-plan', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prioritize_speed: _indPrioSpeed() }),
+      body: JSON.stringify({ prioritize_speed: _indPrioSpeed(), ..._indFacilityBonus() }),
     });
     if (!r.ok) { const e = await r.json().catch(() => ({})); out.innerHTML = `<p class="pp-warn">${_esc(e.detail || 'Queue plan failed')}</p>`; return; }
     const d = await r.json();
     if (d.empty) { out.innerHTML = '<p class="pp-sub">Queue is empty.</p>'; return; }
+    _indLastPlan = d;
     _indCacheNames(d);
     const heads = (d.targets || []).map(t => `${t.quantity}× ${_esc(t.name)}`).join(', ');
     out.innerHTML = _indRenderPlan(d, 'Whole queue: ' + heads).replace('<div class="pp-card">', '<div class="ind-inner-card">').replace(/<\/div>\s*$/, '</div>');
