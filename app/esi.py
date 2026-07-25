@@ -140,6 +140,10 @@ SKILL_IDS = {
     # Manufacturing (Industry planner): manufacturing job slots = 1 base + 1/level each, max 11.
     3387: "mass_production",
     24625: "advanced_mass_production",
+    # Industry job TIME skills: Industry −4%/level (manufacturing), Advanced Industry −3%/level
+    # (all industry jobs incl. reactions) — drive the planner's makespan.
+    3380: "industry",
+    3388: "advanced_industry",
 }
 
 # P0 resource type IDs → display names
@@ -314,6 +318,9 @@ def ensure_char_tables():
     # Manufacturing job-slot skills (Industry planner) — same shape as the reaction ones above.
     _add_col("pp_characters", "mass_production INTEGER DEFAULT 0")
     _add_col("pp_characters", "advanced_mass_production INTEGER DEFAULT 0")
+    # Industry job-time skills (Industry planner makespan).
+    _add_col("pp_characters", "industry INTEGER DEFAULT 0")
+    _add_col("pp_characters", "advanced_industry INTEGER DEFAULT 0")
     _add_col("pp_characters", "alliance_id INTEGER")
     # Rolling per-colony yield samples: ONE row per extraction program (deduped by install_ts),
     # capped at _YIELD_KEEP per colony. Lets the analysis show the MEASURED install-yield trend
@@ -989,7 +996,7 @@ def esi_callback(
     if not skills:
         _SKILL_COLS = ("interplanetary_consolidation", "command_center_upgrades", "planetology",
                        "advanced_planetology", "mass_reactions", "advanced_mass_reactions",
-                       "mass_production", "advanced_mass_production")
+                       "mass_production", "advanced_mass_production", "industry", "advanced_industry")
         prev = con.execute(
             f"SELECT {', '.join(_SKILL_COLS)} FROM pp_characters WHERE character_id=?",
             (character_id,),
@@ -1002,9 +1009,9 @@ def esi_callback(
             (character_id, character_name, access_token, refresh_token, token_expiry,
              interplanetary_consolidation, command_center_upgrades, planetology,
              advanced_planetology, mass_reactions, advanced_mass_reactions,
-             mass_production, advanced_mass_production, alliance_id,
+             mass_production, advanced_mass_production, industry, advanced_industry, alliance_id,
              context_id, scopes)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT (character_id) DO UPDATE SET
           character_name=EXCLUDED.character_name, access_token=EXCLUDED.access_token,
           refresh_token=EXCLUDED.refresh_token, token_expiry=EXCLUDED.token_expiry,
@@ -1015,6 +1022,7 @@ def esi_callback(
           advanced_mass_reactions=EXCLUDED.advanced_mass_reactions,
           mass_production=EXCLUDED.mass_production,
           advanced_mass_production=EXCLUDED.advanced_mass_production,
+          industry=EXCLUDED.industry, advanced_industry=EXCLUDED.advanced_industry,
           alliance_id=COALESCE(EXCLUDED.alliance_id, pp_characters.alliance_id),
           context_id=EXCLUDED.context_id, scopes=EXCLUDED.scopes
     """, (
@@ -1027,6 +1035,8 @@ def esi_callback(
         skills.get("advanced_mass_reactions", 0),
         skills.get("mass_production", 0),
         skills.get("advanced_mass_production", 0),
+        skills.get("industry", 0),
+        skills.get("advanced_industry", 0),
         alliance_id,
         context_id, scopes_str,
     ))

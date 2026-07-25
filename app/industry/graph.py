@@ -53,6 +53,11 @@ class BuildParams:
     te_pct: float = 0.0                       # time efficiency (0–20)
     struct_material_mult: float = 1.0         # structure+rig MATERIAL multiplier (facility ME bonus)
     struct_time_mult: float = 1.0             # structure+rig TIME multiplier (facility TE bonus)
+    # Industry-skill time reduction, assumed maxed (the standard for anyone building seriously):
+    # manufacturing = Industry V (−20%) × Advanced Industry V (−15%) = 0.68; reactions get only
+    # Advanced Industry V (−15%) = 0.85. Without these the planner over-states job time by ~30%.
+    mfg_skill_time_mult: float = 0.68
+    rx_skill_time_mult: float = 0.85
     reaction_material_mult: float = 1.0 - REACTION_ME_REDUCTION
     mfg_cost_index: float = 0.0               # system manufacturing cost index (0.0 = unknown)
     rx_cost_index: float = 0.0                # system reaction cost index
@@ -277,7 +282,8 @@ def build_plan(target: int, quantity: int, mfg: dict, rx: dict, prices: dict, ad
             children.append(explode(inp["type_id"], need))
         job_cost = eiv * (ci + params.facility_tax_pct / 100.0 + SCC_SURCHARGE_PCT)
         st = params.struct_time_mult if activity == "manufacturing" else 1.0
-        job_seconds = recipe["base_time"] * runs * (1 - te / 100.0) * st
+        skill = params.mfg_skill_time_mult if activity == "manufacturing" else params.rx_skill_time_mult
+        job_seconds = recipe["base_time"] * runs * (1 - te / 100.0) * st * skill
         totals["job_cost"] += job_cost
         totals["job_seconds"] += job_seconds
         jobs.append({
@@ -359,6 +365,28 @@ MARGINAL_BUILD_PCT_OF_TOTAL = 0.1
 MIN_BUILD_SAVING_ISK = 5_000_000
 
 
+def account_industry_time_mults(context_id: int) -> tuple[float, float]:
+    """(manufacturing, reaction) job-time multipliers from the account's best Industry / Advanced
+    Industry levels — Industry −4%/level (manufacturing), Advanced Industry −3%/level (all jobs).
+    Uses the highest across the account's characters (you build on your best-skilled toon). Falls
+    back to V/V (the norm for anyone building) when no skill data is stored yet — a rescan replaces
+    the assumption with the real numbers."""
+    ind = adv = 0
+    try:
+        con = get_connection()
+        r = con.execute(
+            "SELECT COALESCE(MAX(industry),0) AS i, COALESCE(MAX(advanced_industry),0) AS a "
+            "FROM pp_characters WHERE context_id=? AND COALESCE(is_dummy,0)=0", (context_id,),
+        ).fetchone()
+        con.close()
+        ind, adv = int(r["i"] or 0), int(r["a"] or 0)
+    except Exception:
+        pass
+    if ind == 0 and adv == 0:
+        ind = adv = 5   # not fetched (or a fresh account) → assume trained, corrected on rescan
+    return ((1 - 0.04 * ind) * (1 - 0.03 * adv), (1 - 0.03 * adv))
+
+
 def account_build_defaults(context_id: int) -> tuple[int | None, float]:
     """Zero-config build context: reuse the system + facility tax the account already configured
     for Reactions as the default build location, so the Industry planner gets real cost indices
@@ -391,8 +419,10 @@ def resolve_build_params(context_id: int, me_pct: float, te_pct: float,
     except Exception:
         owned = {}
     me_by_product = {p: (o["me"], o["te"]) for p, o in owned.items()}
+    mfg_skill, rx_skill = account_industry_time_mults(context_id)
     return BuildParams(
         me_pct=me_pct, te_pct=te_pct,
+        mfg_skill_time_mult=mfg_skill, rx_skill_time_mult=rx_skill,
         mfg_cost_index=fetch_system_cost_index(sid, "manufacturing"),
         rx_cost_index=fetch_system_cost_index(sid, "reaction"),
         facility_tax_pct=tax, me_by_product=me_by_product, owned=owned,

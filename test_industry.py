@@ -106,7 +106,8 @@ def test_build_all():
     print("test_build_all (everything cheaper to build)")
     con = _seed_con()
     mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
-    res = build_plan(100, 1, mfg, rx, _prices(SELL), ADJ, BuildParams(), NAMES)
+    res = build_plan(100, 1, mfg, rx, _prices(SELL), ADJ,
+                     BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0), NAMES)
     m = res["metrics"]
     # Hand-computed: materials MineralA 10×100 + MineralB 10×50 + Goo 10×20 = 1700
     check("materials_cost", approx(m["materials_cost"], 1700.0))
@@ -213,9 +214,10 @@ def test_split_runs():
 def test_scheduler_linear_chain():
     print("test_scheduler_linear_chain (Sprocket→Gadget→Widget, 2h each, serial)")
     agg, mfg, rx = _agg_for([(100, 2)])
-    tasks, by_type = build_tasks(agg, mfg, rx, BuildParams())
+    P = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0)
+    tasks, by_type = build_tasks(agg, mfg, rx, P)
     deps = _built_deps(agg, mfg, rx)
-    prio = _critical_priority(agg, deps, mfg, rx, BuildParams())
+    prio = _critical_priority(agg, deps, mfg, rx, P)
     sched = schedule(tasks, by_type, deps, {"manufacturing": 10, "reaction": 5}, prio)
     # Each tier is 2h; the chain is strictly serial regardless of free slots → 6h makespan.
     check("makespan 6h", approx(sched["makespan_hours"], 6.0))
@@ -306,7 +308,8 @@ def test_plan_queue_end_to_end():
     print("test_plan_queue_end_to_end")
     con = _seed_con()
     mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
-    res = plan_queue([(100, 2)], mfg, rx, _prices(SELL), ADJ, BuildParams(), NAMES,
+    res = plan_queue([(100, 2)], mfg, rx, _prices(SELL), ADJ,
+                     BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0), NAMES,
                      {"manufacturing": 10, "reaction": 5})
     # With 10 mfg / 5 rx slots each tier's runs split to run in parallel: Sprocket(2 runs→2 jobs,
     # 1h) → Gadget(4→4 jobs, 0.5h) → Widget(2→2 jobs, 1h) = 2.5h makespan. 8 jobs, 3 build steps.

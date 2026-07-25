@@ -206,7 +206,8 @@ def build_tasks(agg: dict, mfg: dict, rx: dict, params: BuildParams,
         max_runs = mfg[tid]["max_runs"] if tid in mfg else 0
         _me, te = params.me_te_for(tid, activity)
         st = params.struct_time_mult if activity == "manufacturing" else 1.0
-        per_run = recipe["base_time"] * (1 - te / 100.0) * st
+        skill = params.mfg_skill_time_mult if activity == "manufacturing" else params.rx_skill_time_mult
+        per_run = recipe["base_time"] * (1 - te / 100.0) * st * skill
         R = info["runs"]
         P = max(1, pools.get(activity, 1))
         cap = max_runs if max_runs else R
@@ -246,7 +247,8 @@ def _critical_priority(agg: dict, deps: dict, mfg: dict, rx: dict, params: Build
         recipe = mfg.get(tid) or rx.get(tid)
         _me, te = params.me_te_for(tid, info["activity"])
         st = params.struct_time_mult if info["activity"] == "manufacturing" else 1.0
-        return info["runs"] * recipe["base_time"] * (1 - te / 100.0) * st
+        skill = params.mfg_skill_time_mult if info["activity"] == "manufacturing" else params.rx_skill_time_mult
+        return info["runs"] * recipe["base_time"] * (1 - te / 100.0) * st * skill
 
     memo: dict[int, float] = {}
 

@@ -611,7 +611,7 @@ def refresh_char_planets(character_id: int, context_id: int = Depends(require_co
         con.execute(
             "UPDATE pp_characters SET interplanetary_consolidation=?, command_center_upgrades=?, "
             "planetology=?, advanced_planetology=?, mass_reactions=?, advanced_mass_reactions=?, "
-            "mass_production=?, advanced_mass_production=? "
+            "mass_production=?, advanced_mass_production=?, industry=?, advanced_industry=? "
             "WHERE character_id=?",
             (
                 skills.get("interplanetary_consolidation", 0),
@@ -622,6 +622,8 @@ def refresh_char_planets(character_id: int, context_id: int = Depends(require_co
                 skills.get("advanced_mass_reactions", 0),
                 skills.get("mass_production", 0),
                 skills.get("advanced_mass_production", 0),
+                skills.get("industry", 0),
+                skills.get("advanced_industry", 0),
                 character_id,
             ),
         )
