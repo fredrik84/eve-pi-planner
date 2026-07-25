@@ -551,19 +551,29 @@ function _indCardTids(card) {
   return (card.dataset.members || '').split(',').filter(Boolean).map(Number);
 }
 
-// Hover trace: dim the pipeline, then light up the hovered step, everything it FEEDS (downstream,
-// e.g. what a stage-1 component is used for in stage 2) and everything that feeds IT (upstream).
+// Walk an edge map transitively from a set of seeds, returning everything reachable (excluding the
+// seeds). Cycle-guarded via the visited set.
+function _indReach(seeds, edges) {
+  const seen = new Set();
+  const stack = [...seeds];
+  while (stack.length) {
+    const cur = stack.pop();
+    (edges[cur] || []).forEach(n => { if (!seen.has(n)) { seen.add(n); stack.push(n); } });
+  }
+  seeds.forEach(s => seen.delete(s));
+  return seen;
+}
+
+// Hover trace: dim the pipeline, then light up the hovered step plus its WHOLE chain in both
+// directions — everything it ultimately feeds (so hovering stage 3 lights stage 2 *and* stage 1)
+// and everything that ultimately feeds it, not just the immediate neighbours.
 function _indPipeHover(card) {
   const grid = card.closest('.ind-pipe');
   if (!grid) return;
   const { inputsOf, consumersOf } = _indPipeGraph;
   const self = new Set(_indCardTids(card));
-  const feeds = new Set();    // downstream — what this is used for
-  const fedBy = new Set();    // upstream — what goes into this
-  self.forEach(tid => {
-    (consumersOf[tid] || []).forEach(x => feeds.add(x));
-    (inputsOf[tid] || []).forEach(x => fedBy.add(x));
-  });
+  const feeds = _indReach(self, consumersOf);   // downstream — all it ends up in
+  const fedBy = _indReach(self, inputsOf);      // upstream — everything that goes into it
   grid.classList.add('ind-pipe-focus');
   grid.querySelectorAll('.ind-pipe-card').forEach(c => {
     c.classList.remove('ind-hi-self', 'ind-hi-out', 'ind-hi-in');
