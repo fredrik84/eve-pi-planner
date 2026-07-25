@@ -357,12 +357,19 @@ SPEED_BUILD_CAP_HOURS = 24.0
 # per-component percentage, which doesn't scale (4% of an Ishtar component is a sub-1m difference
 # that shouldn't drive a decision, while 4% of a Revelation component is real money). This one
 # lens auto-scales: it trims the long tail on a 2.35b capital but barely touches a 147m cruiser.
-MARGINAL_BUILD_PCT_OF_TOTAL = 0.1
+#
+# Raised 0.1% -> 3% once the market-pricing fix let components actually be costed. At 0.1% the
+# threshold was ~2m on a Revelation, under the absolute floor below, so it never bound: the planner
+# built 18 component types / 471 jobs to save ~70m on a 2.4b hull. 3% (~72m there) keeps the builds
+# that genuinely move the number and buys the long tail, which is the stated priority — time first,
+# cost competitive but not at the price of days of clicking.
+MARGINAL_BUILD_PCT_OF_TOTAL = 3.0
 # Absolute floor: a build step isn't worth its slot/time unless it saves at least this much ISK,
 # so anything cheaper to build by less than this is bought (prioritize time). This is what makes a
 # cheap ship — where most components each save only a little — mostly BUY-and-assemble rather than
-# a multi-day build. The effective threshold is max(this, MARGINAL_BUILD_PCT_OF_TOTAL × total), so
-# big capitals still trim their long tail proportionally.
+# a multi-day build. The effective threshold is max(this, MARGINAL_BUILD_PCT_OF_TOTAL × total): the
+# floor governs small hulls (3% of a 147m Ishtar is ~4m, under it) while the percentage governs
+# capitals, so one rule covers both ends without a per-component percentage.
 MIN_BUILD_SAVING_ISK = 5_000_000
 
 

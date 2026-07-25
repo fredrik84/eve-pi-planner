@@ -388,6 +388,31 @@ def test_stock_reduces_plan_but_never_the_target():
     check("owning the product does not zero the order", g.get(100, 0) == n_base.get(100, 0))
 
 
+def test_marginal_threshold_scales_with_build_size():
+    """The 'saves too little, just buy it' threshold is max(3% of total, 5m). The percentage must
+    govern big builds and the floor must govern small ones — that's the whole point of one rule
+    covering an Augoror and a Revelation. Guards the constant against being re-tuned blindly."""
+    print("test_marginal_threshold_scales_with_build_size")
+    from app.industry.graph import MARGINAL_BUILD_PCT_OF_TOTAL, MIN_BUILD_SAVING_ISK
+    check("percentage is 3%", MARGINAL_BUILD_PCT_OF_TOTAL == 3.0)
+    check("absolute floor is 5m", MIN_BUILD_SAVING_ISK == 5_000_000)
+
+    def threshold(total):
+        return max(MARGINAL_BUILD_PCT_OF_TOTAL / 100.0 * total, MIN_BUILD_SAVING_ISK)
+
+    # Small hull: 3% is under the floor, so the floor binds (behaviour unchanged from before).
+    check("floor binds on a ~150m hull", threshold(157_000_000) == MIN_BUILD_SAVING_ISK)
+    check("floor binds on a ~9m hull", threshold(9_000_000) == MIN_BUILD_SAVING_ISK)
+    # Capital: the percentage binds and is far above the floor.
+    cap = threshold(2_474_000_000)
+    check("percentage binds on a ~2.5b capital", cap > MIN_BUILD_SAVING_ISK)
+    check("capital threshold is ~74m", abs(cap - 74_220_000) < 1_000_000)
+    # Monotonic: a bigger build never gets a smaller threshold.
+    check("threshold is monotonic", all(
+        threshold(a) <= threshold(b) for a, b in zip(
+            [1e7, 1e8, 5e8, 1e9, 5e9], [1e8, 5e8, 1e9, 5e9, 1e10])))
+
+
 def main():
     test_material_formula()
     test_graph_loaders()
@@ -410,6 +435,7 @@ def main():
     test_unpriced_material_does_not_crash()
     test_queue_progress_requirements()
     test_stock_reduces_plan_but_never_the_target()
+    test_marginal_threshold_scales_with_build_size()
     print(f"\nAll {_passed} checks passed.")
 
 
