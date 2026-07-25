@@ -2865,7 +2865,10 @@ function settingsSection(name, doLoad) {
   if (name === 'characters') _renderMoveCharacterSection();
   if (name === 'plans' && doLoad !== false) { loadProfiles(); renderSavedPlansBar(); }
   if (name === 'alerts' && doLoad !== false) loadAlertSettings();
-  if (name === 'markets' && doLoad !== false) _loadMarketsSettings();
+  // Always load — openSettingsModal(section) passes doLoad=false, and every jump-to-markets button
+  // (industry gate, Reactions redirect, recommendation) goes through it; without this the market
+  // manager stays stuck on "Loading…".
+  if (name === 'markets') _loadMarketsSettings();
   if (name === 'general') _loadGeneralSettings();
 }
 
