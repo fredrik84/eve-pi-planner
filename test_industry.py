@@ -333,10 +333,31 @@ def main():
     test_scheduler_slot_contention()
     test_time_aware_make_or_buy()
     test_marginal_buy()
+    test_structure_bonus()
     test_manufacturing_slots()
     test_per_product_me_from_blueprints()
     test_plan_queue_end_to_end()
     print(f"\nAll {_passed} checks passed.")
+
+
+
+
+def test_structure_bonus():
+    print("test_structure_bonus (hull + rigs + security → ME/TE)")
+    from app.industry.structures import manufacturing_bonus, reaction_bonus, _sec_band
+    check("sec band high", _sec_band(0.9) == "high")
+    check("sec band low", _sec_band(0.3) == "low")
+    check("sec band null", _sec_band(0.0) == "null")
+    # Raitaru (1% role ME) + T2 ME rig (2.4%) in hi-sec ×1.0 → 1 + 2.4 = 3.4% ME; no TE rig → 0
+    check("raitaru T2 ME hi", manufacturing_bonus("raitaru", 2, 0, "high") == (3.4, 0.0))
+    # Sotiyo + T2 ME rig in null ×2.1 → 1 + 2.4×2.1 = 6.04% ME
+    check("sotiyo T2 ME null", manufacturing_bonus("sotiyo", 2, 0, "null") == (6.04, 0.0))
+    # T2 TE rig in null → 24×2.1 = 50.4% TE
+    check("azbel T2 TE null", manufacturing_bonus("azbel", 0, 2, "null") == (1.0, 50.4))
+    # No structure → nothing
+    check("no hull no rig", manufacturing_bonus(None, 0, 0, "high") == (0.0, 0.0))
+    # Reaction: Tatara + T2 rig low ×1.9 → 2.4×1.9 = 4.56% ME
+    check("tatara T2 ME low", reaction_bonus("tatara", 2, 0, "low") == (4.56, 0.0))
 
 
 if __name__ == "__main__":

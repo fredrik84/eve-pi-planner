@@ -54,6 +54,18 @@ def ensure_markets_table():
             active      INTEGER NOT NULL DEFAULT 1
         )
     """)
+    # Unified structure list: a followed market row (kind='structure') can also be a BUILD structure
+    # for manufacturing and/or reactions, carrying the fitted rig tiers + hull + security ESI can't
+    # read as a fitting. Additive ALTER-COLUMN migration (this codebase's convention).
+    for coldef in ("build_mfg INTEGER NOT NULL DEFAULT 0", "build_rx INTEGER NOT NULL DEFAULT 0",
+                   "hull TEXT", "security TEXT",
+                   "me_rig INTEGER NOT NULL DEFAULT 0", "te_rig INTEGER NOT NULL DEFAULT 0",
+                   "rx_me_rig INTEGER NOT NULL DEFAULT 0", "rx_te_rig INTEGER NOT NULL DEFAULT 0"):
+        try:
+            con.execute(f"ALTER TABLE pp_markets ADD COLUMN {coldef}")
+            con.commit()
+        except Exception:
+            pass
     con.commit()
     con.close()
 
