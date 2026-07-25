@@ -353,28 +353,63 @@ def fetch_region_market(region_id: int, type_ids: list[int]) -> dict[int, dict]:
 def resolve_market_data(context_id: int, type_ids: list[int]) -> dict[int, dict]:
     """Like app.market.fetch_market_data, but walks the account's followed markets in priority
     order and takes the first that quotes each type, falling back to Jita. Each returned entry
-    carries an extra `source` label (market name / 'Jita') for UI transparency."""
+    carries an extra `source` label (market name / 'Jita') for UI transparency.
+
+    The two SIDES are resolved independently: a market only claims the SELL price (what it costs
+    you to acquire the item) if it actually has sell orders, and only claims the BUY price (what
+    you'd get instant-selling into it) if it actually has bids. Resolving them together was a real
+    bug — a structure holding only a buy order for Pyerite claimed the type outright and handed
+    back sell_price=0.0, which is falsy, so the material read as "no price" and poisoned every
+    build that used it. `source` labels where the SELL price came from, since that's the number
+    the shopping list spends."""
     type_ids = list(dict.fromkeys(int(t) for t in type_ids))
     if not type_ids:
         return {}
-    remaining = set(type_ids)
-    picked: dict[int, tuple[dict, str]] = {}
+    sell_pick: dict[int, tuple[dict, str]] = {}
+    buy_pick: dict[int, tuple[dict, str]] = {}
     for mk in effective_markets(context_id):
-        if not remaining:
+        # Stop early only when BOTH sides are settled for every type.
+        if len(sell_pick) == len(type_ids) and len(buy_pick) == len(type_ids):
             break
+        want = [t for t in type_ids if t not in sell_pick or t not in buy_pick]
         if mk["kind"] == "structure":
             book = fetch_structure_market(context_id, mk["location_id"])
         else:
-            book = fetch_region_market(mk["location_id"], list(remaining))
-        for tid in list(remaining):
+            book = fetch_region_market(mk["location_id"], want)
+        for tid in want:
             m = book.get(tid)
-            if m and (m.get("sell_price") or m.get("buy_price")):
-                picked[tid] = (m, mk["name"])
-                remaining.discard(tid)
-    if remaining:
-        for tid, m in fetch_market_data(list(remaining)).items():
-            picked[tid] = (m, "Jita")
-    return {tid: {**m, "source": src} for tid, (m, src) in picked.items()}
+            if not m:
+                continue
+            if tid not in sell_pick and (m.get("sell_price") or 0) > 0:
+                sell_pick[tid] = (m, mk["name"])
+            if tid not in buy_pick and (m.get("buy_price") or 0) > 0:
+                buy_pick[tid] = (m, mk["name"])
+    # Jita backfills any type no followed market could actually sell us.
+    missing = [t for t in type_ids if t not in sell_pick]
+    jita = fetch_market_data(missing) if missing else {}
+
+    out: dict[int, dict] = {}
+    for tid in type_ids:
+        base, src = sell_pick.get(tid, (None, None))
+        if base is None:
+            j = jita.get(tid)
+            if j is None:
+                # Nothing anywhere can sell it; still surface a local bid if one exists.
+                if tid in buy_pick:
+                    bm, bsrc = buy_pick[tid]
+                    out[tid] = {**bm, "sell_price": 0.0, "source": bsrc, "buy_source": bsrc}
+                continue
+            base, src = j, "Jita"
+        entry = {**base, "source": src}
+        if tid in buy_pick:
+            bm, bsrc = buy_pick[tid]
+            entry["buy_price"] = bm.get("buy_price")
+            entry["buy_volume"] = bm.get("buy_volume", entry.get("buy_volume"))
+            entry["buy_source"] = bsrc
+        else:
+            entry["buy_source"] = src
+        out[tid] = entry
+    return out
 
 
 def best_local_buy(context_id: int, type_ids: list[int]) -> dict[int, dict]:

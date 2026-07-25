@@ -321,6 +321,25 @@ def test_plan_queue_end_to_end():
     check("shopping 3 raws", len(res["shopping_list"]) == 3)
 
 
+def test_unpriced_material_does_not_crash():
+    """Regression: a material with no market price leaves build_unit_cost present-but-None, which
+    a `.get(key, 0.0)` default does NOT catch — it used to raise TypeError and 500 the endpoint
+    (real report: planning an Augoror failed). The plan must degrade to a floor cost instead."""
+    print("test_unpriced_material_does_not_crash")
+    con = _seed_con()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+    # Drop MineralA's price entirely -> Widget/Gadget/Sprocket can't be fully costed.
+    partial = {k: v for k, v in SELL.items() if k != 200}
+    res = plan_queue([(100, 2)], mfg, rx, _prices(partial), ADJ,
+                     BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0), NAMES,
+                     {"manufacturing": 10, "reaction": 5})
+    check("plan still returns", isinstance(res, dict) and "metrics" in res)
+    unres = res.get("unresolved") or []
+    ids = {u if isinstance(u, int) else u.get("type_id") for u in unres}
+    check("unpriced material flagged as unresolved", 200 in ids)
+    check("cost is a finite floor", res["metrics"]["total_cost"] >= 0)
+
+
 def main():
     test_material_formula()
     test_graph_loaders()
@@ -340,6 +359,7 @@ def main():
     test_manufacturing_slots()
     test_per_product_me_from_blueprints()
     test_plan_queue_end_to_end()
+    test_unpriced_material_does_not_crash()
     print(f"\nAll {_passed} checks passed.")
 
 
