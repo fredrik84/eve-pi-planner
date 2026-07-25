@@ -935,3 +935,6 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-pipe-final .ind-pipe-hd span { background: #1e3a5f; color: var(--clr-accent); }
 .ind-pipe-final .ind-pipe-card { border-color: #2d5a8a; border-left-color: var(--clr-accent); background: linear-gradient(180deg, #16233a, #12161f); }
 .ind-pipe-more { font-size: 11px; color: var(--clr-text-soft); padding: 5px 2px; }
+.ind-pipe-buys { border-style: dashed; border-left-style: solid; border-left-color: #7a6a8a; background: #15121b; }
+.ind-pipe-buys .ind-pipe-name { color: #cbb8d6; }
+.ind-pipe-buys .ind-pipe-meta { color: #8a7a96; font-size: 10px; }

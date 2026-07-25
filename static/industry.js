@@ -364,24 +364,31 @@ function _indPipelineHtml(d) {
   const tiers = {};
   Object.values(byType).forEach(e => (tiers[e.tier] = tiers[e.tier] || []).push(e));
   const maxT = Math.max(...Object.keys(tiers).map(Number));
-  const card = e => {
-    const badge = e.decision === 'build'
-      ? `<span class="ind-pipe-tag ind-t-build">build${e.activity === 'reaction' ? ' rx' : ''}</span>`
-      : e.decision === 'buy' ? '<span class="ind-pipe-tag ind-t-buy">buy</span>'
-      : '<span class="ind-pipe-tag ind-t-unres">no price</span>';
+  // A build step gets its own card; bought items aren't steps, so they collapse into one card.
+  const buildCard = e => {
     const owned = e.owned ? `<span class="ind-owned" title="You own this ${e.owned.kind.toUpperCase()}">${e.owned.kind.toUpperCase()}</span>` : '';
-    return `<div class="ind-pipe-card ind-pipe-${e.decision}"><span class="ind-pipe-name">${_esc(e.name)}</span>`
-      + `<span class="ind-pipe-meta">×${Math.round(e.qty).toLocaleString()} ${badge}${owned}</span></div>`;
+    return `<div class="ind-pipe-card ind-pipe-build"><span class="ind-pipe-name">${_esc(e.name)}</span>`
+      + `<span class="ind-pipe-meta">×${Math.round(e.qty).toLocaleString()} <span class="ind-pipe-tag ind-t-build">build${e.activity === 'reaction' ? ' rx' : ''}</span>${owned}</span></div>`;
+  };
+  const buyCard = buys => {
+    const names = buys.slice(0, 25).map(b => b.name).join(', ') + (buys.length > 25 ? '…' : '');
+    return `<div class="ind-pipe-card ind-pipe-buys" title="${_esc(names)}"><span class="ind-pipe-name">Buy ${buys.length} material${buys.length > 1 ? 's' : ''}</span>`
+      + `<span class="ind-pipe-meta">in shopping list ↓</span></div>`;
   };
   let cols = '';
   for (let t = maxT; t >= 0; t--) {
-    const items = (tiers[t] || []).sort((a, b) => (b.qty || 0) - (a.qty || 0));
-    if (!items.length) continue;
-    const label = t === 0 ? 'Finished' : t === maxT ? 'Raw &amp; bought' : `Stage ${maxT - t}`;
-    const shown = items.slice(0, 14);
-    const more = items.length > 14 ? `<div class="ind-pipe-more">+${items.length - 14} more</div>` : '';
-    cols += `<div class="ind-pipe-col${t === 0 ? ' ind-pipe-final' : ''}"><div class="ind-pipe-hd">${label}<span>${items.length}</span></div>`
-      + `<div class="ind-pipe-items">${shown.map(card).join('')}${more}</div></div>`;
+    const items = tiers[t] || [];
+    const builds = items.filter(e => e.decision === 'build').sort((a, b) => (b.qty || 0) - (a.qty || 0));
+    const buys = items.filter(e => e.decision !== 'build');
+    if (!builds.length && !buys.length) continue;
+    const shown = builds.slice(0, 12);
+    let cards = shown.map(buildCard).join('');
+    if (builds.length > 12) cards += `<div class="ind-pipe-more">+${builds.length - 12} more built</div>`;
+    if (buys.length) cards += buyCard(buys);
+    const label = t === 0 ? 'Finished' : (!builds.length ? 'Buy' : `Stage ${maxT - t}`);
+    const count = builds.length ? `<span>${builds.length}</span>` : '';
+    cols += `<div class="ind-pipe-col${t === 0 ? ' ind-pipe-final' : ''}"><div class="ind-pipe-hd">${label}${count}</div>`
+      + `<div class="ind-pipe-items">${cards}</div></div>`;
     if (t > 0) cols += '<div class="ind-pipe-arrow">›</div>';
   }
   return `<details class="ind-details" open><summary>Build pipeline</summary><div class="ind-pipe">${cols}</div></details>`;
