@@ -112,9 +112,14 @@ BLUEPRINTS_SCOPE = "esi-characters.read_blueprints.v1"
 # already sitting in your hangar and can report queue progress without guessing a start date.
 # Same rule as every scope above — it joins the ONE superset, never its own set.
 ASSETS_SCOPE = "esi-assets.read_assets.v1"
+# Corp hangars: for corp/alliance industry the materials usually sit in an Upwell corp hangar,
+# which the PERSONAL assets endpoint cannot see at all. Reading them needs the corp scope and a
+# character with the Director role (same shape as the corp industry-jobs read above).
+CORP_ASSETS_SCOPE = "esi-assets.read_corporation_assets.v1"
 REACTIONS_SCOPES = (
     f"{SCOPES} {INDUSTRY_JOBS_SCOPE} {CORP_INDUSTRY_JOBS_SCOPE} "
-    f"{MARKET_SCOPE} {SEARCH_STRUCT_SCOPE} {STRUCTURES_SCOPE} {BLUEPRINTS_SCOPE} {ASSETS_SCOPE}"
+    f"{MARKET_SCOPE} {SEARCH_STRUCT_SCOPE} {STRUCTURES_SCOPE} {BLUEPRINTS_SCOPE} "
+    f"{ASSETS_SCOPE} {CORP_ASSETS_SCOPE}"
 )
 # All opt-in "connect a character" flows request this ONE superset so re-authing a character for
 # any tool never drops the scopes another relies on. Wallet stays deliberately separate.
@@ -315,6 +320,9 @@ def ensure_char_tables():
     # log every alt in. is_dummy=1; their character_id is negative to avoid colliding with real
     # EVE ids. They contribute planet slots + CCU only.
     _add_col("pp_characters", "is_dummy INTEGER DEFAULT 0")
+    # Which corp a character is in — needed to attribute a corp hangar (pp_corp_assets) to the
+    # right account without counting an unrelated context's corp stock.
+    _add_col("pp_characters", "corporation_id BIGINT")
     # Reactions-industry skills (see SKILL_IDS below) and alliance affiliation — the latter picks
     # the Reactions tool's moon-goo pricing source, group deal vs. open market (see app.groups.member_group).
     _add_col("pp_characters", "mass_reactions INTEGER DEFAULT 0")

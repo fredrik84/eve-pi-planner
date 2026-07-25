@@ -1014,3 +1014,12 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-pipe-is-done .ind-pipe-name { text-decoration: line-through; text-decoration-color: #3a966855; }
 .ind-pipe-is-run { border-left-color: var(--clr-accent); }
 .ind-pipe-hd .ind-hd-done { background: #163524; color: #7fdca6; }
+/* Stock sources (hangars / containers you allow the planner to draw from) */
+.ind-src-hd { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ind-src-help { font-size: 11px; color: var(--clr-text-soft); margin: 6px 0 8px; }
+.ind-src-list { display: flex; flex-direction: column; gap: 2px; max-height: 260px; overflow-y: auto; }
+.ind-src-row { display: flex; align-items: center; gap: 9px; padding: 5px 6px; border-radius: 5px; cursor: pointer; font-size: 13px; }
+.ind-src-row:hover { background: #161b28; }
+.ind-src-row input { width: auto; margin: 0; }
+.ind-src-name { color: #eef2f8; }
+.ind-src-meta { margin-left: auto; font-size: 11px; color: var(--clr-text-soft); }

@@ -33,6 +33,6 @@ from app.industry.jobs import (  # noqa: F401 — registers the live manufacturi
 )
 from app.industry import orders as _orders  # noqa: F401 — registers the build-queue endpoints
 from app.industry.assets import (  # noqa: F401 — registers the asset endpoints
-    ensure_char_assets_table, owned_quantities, refresh_assets,
+    ensure_asset_tables, owned_quantities, refresh_assets, list_sources, set_sources,
 )
 from app.industry import progress as _progress  # noqa: F401 — registers /api/industry/progress

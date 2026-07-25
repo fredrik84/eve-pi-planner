@@ -109,30 +109,61 @@ async function indLoadAssets() {
     const r = await fetch('/api/industry/assets');
     if (!r.ok) { el.innerHTML = ''; return; }
     const d = await r.json();
-    const when = d.fetched_at ? new Date(d.fetched_at * 1000).toLocaleString() : '';
-    el.innerHTML = d.connected
-      ? `<span class="ind-bp-ok">✓ ${d.distinct_types} item type${d.distinct_types === 1 ? '' : 's'} in stock`
-        + `${when ? ' · scanned ' + _esc(when) : ''}</span>`
-        + `<button class="ind-bp-btn" onclick="indRefreshAssets()">Rescan</button>`
-      : `<span class="ind-bp-hint">Scan your hangars so plans stop asking you to build things you already own, `
+    if (!d.connected) {
+      el.innerHTML = `<span class="ind-bp-hint">Scan your hangars so plans stop asking you to build things you already own, `
         + `and progress can tell what's finished.</span>`
         + `<button class="ind-bp-btn ind-bp-connect" onclick="indRefreshAssets()">Scan assets</button>`;
+      return;
+    }
+    const when = d.fetched_at ? new Date(d.fetched_at * 1000).toLocaleString() : '';
+    // Every source is opt-in: counting a hangar you can't actually draw from would make the
+    // planner build too little, which is worse than ignoring stock altogether.
+    const rows = (d.sources || []).map(sc => {
+      const sub = sc.kind === 'container'
+        ? `container${sc.parent ? ' in ' + _esc(sc.parent) : ''}` : 'hangar';
+      return `<label class="ind-src-row"><input type="checkbox" ${sc.enabled ? 'checked' : ''} `
+        + `onchange="indToggleSource('${_esc(sc.key)}', this.checked)">`
+        + `<span class="ind-src-name">${_esc(sc.name)}</span>`
+        + `<span class="ind-src-meta">${sub} · ${sc.item_count} item type${sc.item_count === 1 ? '' : 's'}</span></label>`;
+    }).join('');
+    el.innerHTML = `<div class="ind-src-hd"><span class="ind-bp-ok">✓ ${d.enabled_sources} of ${(d.sources || []).length} `
+      + `source${(d.sources || []).length === 1 ? '' : 's'} in use · ${d.distinct_types} item type${d.distinct_types === 1 ? '' : 's'} counted`
+      + `${when ? ' · scanned ' + _esc(when) : ''}</span>`
+      + `<button class="ind-bp-btn" onclick="indRefreshAssets()">Rescan</button></div>`
+      + `<p class="ind-src-help">Tick the hangars and containers the planner may take materials from. Nothing is used until you pick it.</p>`
+      + `<div class="ind-src-list">${rows || '<span class="ind-bp-hint">No usable hangars found.</span>'}</div>`;
   } catch (e) { el.innerHTML = ''; }
+}
+
+async function indToggleSource(key, on) {
+  try {
+    await fetch('/api/industry/assets/sources', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ keys: [key], enabled: !!on }),
+    });
+  } catch (e) {}
+  indLoadAssets();
+  indLoadQueue();     // stock changes both the plan and the progress numbers
 }
 
 async function indRefreshAssets() {
   const el = document.getElementById('indAssets');
-  if (el) el.innerHTML = '<span class="ind-bp-hint">Reading assets…</span>';
+  if (el) el.innerHTML = '<span class="ind-bp-hint">Reading assets… (a full asset list can take a moment)</span>';
   let d = null;
   try { const r = await fetch('/api/industry/assets/refresh', { method: 'POST' }); if (r.ok) d = await r.json(); } catch (e) {}
-  // A character authorised before the assets scope existed can't be read until it reconnects.
-  if (d && d.failed && !d.refreshed && el) {
-    el.innerHTML = `<span class="pp-warn">Couldn't read assets — reconnect your characters to grant the assets scope.</span>`
+  if (d && !d.connected && el) {
+    // A character authorised before the assets scope existed can't be read until it reconnects.
+    el.innerHTML = `<span class="pp-warn">Couldn't read any assets — reconnect your characters to grant the assets scope.</span>`
       + `<button class="ind-bp-btn ind-bp-connect" onclick="indConnectBlueprints()">Reconnect</button>`;
     return;
   }
   indLoadAssets();
-  indLoadQueue();     // stock changes both the plan and the progress numbers
+  indLoadQueue();
+  if (d && d.corp_error === 'role') {
+    const w = document.getElementById('indAssets');
+    if (w) w.insertAdjacentHTML('beforeend',
+      '<p class="ind-src-help pp-warn">Corp hangars need a character with the <b>Director</b> role — only personal hangars were read.</p>');
+  }
 }
 
 function indCloseSetup() {
