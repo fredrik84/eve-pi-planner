@@ -96,6 +96,43 @@ function indOpenSetup() {
   document.getElementById('indSetupModal').style.display = '';
   indLoadSlots();
   indLoadBlueprints();
+  indLoadAssets();
+}
+
+// ── Stock on hand (ESI assets) ──────────────────────────────────────────────────────────────
+// Scanning assets makes plans subtract what you already own, and lets progress report "done"
+// without guessing a start date. Opt-in and manual — a full asset list is a heavy ESI call.
+async function indLoadAssets() {
+  const el = document.getElementById('indAssets');
+  if (!el) return;
+  try {
+    const r = await fetch('/api/industry/assets');
+    if (!r.ok) { el.innerHTML = ''; return; }
+    const d = await r.json();
+    const when = d.fetched_at ? new Date(d.fetched_at * 1000).toLocaleString() : '';
+    el.innerHTML = d.connected
+      ? `<span class="ind-bp-ok">✓ ${d.distinct_types} item type${d.distinct_types === 1 ? '' : 's'} in stock`
+        + `${when ? ' · scanned ' + _esc(when) : ''}</span>`
+        + `<button class="ind-bp-btn" onclick="indRefreshAssets()">Rescan</button>`
+      : `<span class="ind-bp-hint">Scan your hangars so plans stop asking you to build things you already own, `
+        + `and progress can tell what's finished.</span>`
+        + `<button class="ind-bp-btn ind-bp-connect" onclick="indRefreshAssets()">Scan assets</button>`;
+  } catch (e) { el.innerHTML = ''; }
+}
+
+async function indRefreshAssets() {
+  const el = document.getElementById('indAssets');
+  if (el) el.innerHTML = '<span class="ind-bp-hint">Reading assets…</span>';
+  let d = null;
+  try { const r = await fetch('/api/industry/assets/refresh', { method: 'POST' }); if (r.ok) d = await r.json(); } catch (e) {}
+  // A character authorised before the assets scope existed can't be read until it reconnects.
+  if (d && d.failed && !d.refreshed && el) {
+    el.innerHTML = `<span class="pp-warn">Couldn't read assets — reconnect your characters to grant the assets scope.</span>`
+      + `<button class="ind-bp-btn ind-bp-connect" onclick="indConnectBlueprints()">Reconnect</button>`;
+    return;
+  }
+  indLoadAssets();
+  indLoadQueue();     // stock changes both the plan and the progress numbers
 }
 
 function indCloseSetup() {
