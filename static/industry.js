@@ -243,17 +243,21 @@ function _indPrioSpeed() {
 // Facility presets → structure/rig material (ME) + time (TE) bonuses. Approximate real setups; the
 // value shown in the label is what's applied, so pick the one closest to your structure.
 const IND_FACILITIES = [
-  { id: 'none', label: 'NPC station — no bonus', me: 0, te: 0 },
-  { id: 't1_me', label: 'Structure + T1 ME rig — ME 3% / TE 15%', me: 3, te: 15 },
-  { id: 't1_te', label: 'Structure + T1 TE rig — ME 1% / TE 34%', me: 1, te: 34 },
-  { id: 't2_me_null', label: 'Structure + T2 ME rig, null/WH — ME 6% / TE 15%', me: 6, te: 15 },
-  { id: 't2_te_null', label: 'Structure + T2 TE rig, null/WH — ME 1% / TE 44%', me: 1, te: 44 },
+  { id: 'none', label: 'NPC station — no bonus', short: 'NPC station', me: 0, te: 0 },
+  { id: 't1_me', label: 'Structure + T1 ME rig — ME 3% / TE 15%', short: 'T1 ME structure', me: 3, te: 15 },
+  { id: 't1_te', label: 'Structure + T1 TE rig — ME 1% / TE 34%', short: 'T1 TE structure', me: 1, te: 34 },
+  { id: 't2_me_null', label: 'Structure + T2 ME rig, null/WH — ME 6% / TE 15%', short: 'T2 ME structure', me: 6, te: 15 },
+  { id: 't2_te_null', label: 'Structure + T2 TE rig, null/WH — ME 1% / TE 44%', short: 'T2 TE structure', me: 1, te: 44 },
 ];
-let _indFacilityMap = {};   // option value → {me, te}
+let _indFacilityMap = {};     // option value → {me, te}
+let _indFacilityLabel = {};   // option value → short display name, for the "in <building>" tag
+let _indRxFacilityLabel = null;   // name of the account's configured reaction-build structure, if any
 async function indPopulateFacility() {
   const sel = document.getElementById('indFacility');
   if (!sel) return;
   _indFacilityMap = {};
+  _indFacilityLabel = {};
+  _indRxFacilityLabel = null;
   let structOpts = '';
   try {
     const r = await fetch('/api/markets');
@@ -262,11 +266,14 @@ async function indPopulateFacility() {
       (d.markets || []).filter(m => m.kind === 'structure' && m.build_mfg && m.mfg_bonus).forEach(m => {
         const val = 's:' + m.id;
         _indFacilityMap[val] = { me: m.mfg_bonus.me, te: m.mfg_bonus.te };
+        _indFacilityLabel[val] = m.name;
         structOpts += `<option value="${val}">${_esc(m.name)} — ME ${m.mfg_bonus.me}% / TE ${m.mfg_bonus.te}%</option>`;
       });
+      const rx = (d.markets || []).find(m => m.kind === 'structure' && m.build_rx);
+      if (rx) _indRxFacilityLabel = rx.name;
     }
   } catch (e) {}
-  const presetOpts = IND_FACILITIES.map(f => { _indFacilityMap['p:' + f.id] = { me: f.me, te: f.te }; return `<option value="p:${f.id}">${_esc(f.label)}</option>`; }).join('');
+  const presetOpts = IND_FACILITIES.map(f => { _indFacilityMap['p:' + f.id] = { me: f.me, te: f.te }; _indFacilityLabel['p:' + f.id] = f.short; return `<option value="p:${f.id}">${_esc(f.label)}</option>`; }).join('');
   sel.innerHTML = (structOpts ? `<optgroup label="Your build structures">${structOpts}</optgroup>` : '')
     + `<optgroup label="Generic presets">${presetOpts}</optgroup>`;
   const saved = localStorage.getItem('indFacility');
@@ -277,6 +284,13 @@ function _indFacilityBonus() {
   const sel = document.getElementById('indFacility');
   const b = _indFacilityMap[sel ? sel.value : ''] || { me: 0, te: 0 };
   return { struct_material_pct: b.me, struct_time_pct: b.te };
+}
+// Which building a job actually happens in — the selected facility for manufacturing, or the
+// account's configured reaction structure for reactions (a separate, independently-set structure).
+function _indBuildingLabel(activity) {
+  if (activity === 'reaction') return _indRxFacilityLabel;
+  const sel = document.getElementById('indFacility');
+  return _indFacilityLabel[sel ? sel.value : ''] || null;
 }
 function indOnFacilityChange() {
   const sel = document.getElementById('indFacility');
@@ -294,8 +308,9 @@ function _indComputeTiers(tree) {
   const byType = {};
   (function walk(n, depth) {
     if (!n) return;
-    const e = byType[n.type_id] || (byType[n.type_id] = { type_id: n.type_id, name: n.name, decision: n.decision, activity: n.activity, owned: n.owned, qty: 0, tier: depth });
+    const e = byType[n.type_id] || (byType[n.type_id] = { type_id: n.type_id, name: n.name, decision: n.decision, activity: n.activity, owned: n.owned, qty: 0, runs: 0, tier: depth });
     e.qty += n.qty || 0;
+    e.runs += n.runs || 0;
     e.tier = Math.max(e.tier, depth);
     if (n.decision === 'build' || n.decision === 'buy') e.decision = n.decision;
     (n.inputs || []).forEach(c => walk(c, depth + 1));
@@ -462,8 +477,12 @@ function _indPipelineHtml(d, tiersData) {
   // that links straight down to its stage in the shopping list (click, or hover for the names).
   const buildCard = e => {
     const owned = e.owned ? `<span class="ind-owned" title="You own this ${e.owned.kind.toUpperCase()}">${e.owned.kind.toUpperCase()}</span>` : '';
+    const runs = e.runs ? `<span class="ind-pipe-runs">${e.runs.toLocaleString()} run${e.runs > 1 ? 's' : ''}</span>` : '';
+    const bldg = _indBuildingLabel(e.activity);
+    const loc = bldg ? `<span class="ind-pipe-loc">@ ${_esc(bldg)}</span>` : '';
     return `<div class="ind-pipe-card ind-pipe-build"><span class="ind-pipe-name">${_esc(e.name)}</span>`
-      + `<span class="ind-pipe-meta">×${Math.round(e.qty).toLocaleString()} <span class="ind-pipe-tag ind-t-build">build${e.activity === 'reaction' ? ' rx' : ''}</span>${owned}</span></div>`;
+      + `<span class="ind-pipe-meta">×${Math.round(e.qty).toLocaleString()} <span class="ind-pipe-tag ind-t-build">build${e.activity === 'reaction' ? ' rx' : ''}</span>${runs}${owned}</span>`
+      + (loc ? `<span class="ind-pipe-meta">${loc}</span>` : '') + `</div>`;
   };
   const buyCard = (buys, t) => {
     const names = buys.slice(0, 25).map(b => b.name).join(', ') + (buys.length > 25 ? '…' : '');
