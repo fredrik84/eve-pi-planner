@@ -912,13 +912,25 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-copy-btn { background: #1e3a5f; color: var(--clr-accent); border: 1px solid #2d5a8a; border-radius: 5px; padding: 5px 12px; font-size: 12px; cursor: pointer; }
 .ind-copy-btn:hover { background: #254a78; }
 .ind-shop-tot { font-size: 12px; color: var(--clr-text-soft); }
-/* Build pipeline — horizontal production flow (signature visual) */
-.ind-pipe { display: flex; align-items: stretch; gap: 2px; overflow-x: auto; padding: 12px 2px 14px; }
-.ind-pipe-col { flex: 0 0 auto; width: 184px; display: flex; flex-direction: column; }
-.ind-pipe-hd { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--clr-text-soft); padding: 0 4px 8px; display: flex; justify-content: space-between; align-items: center; }
+/* Build pipeline — stages left→right, split into lanes by the structure the work happens in */
+.ind-pipe-hint { font-size: 11px; color: var(--clr-text-soft); margin: 6px 0 0; }
+.ind-pipe-scroll { overflow-x: auto; padding: 10px 2px 14px; }
+.ind-pipe-grid { display: grid; grid-template-columns: 122px repeat(var(--ind-cols), 184px); gap: 6px 4px; align-items: start; min-width: min-content; }
+.ind-pipe-corner { }
+.ind-pipe-hd { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--clr-text-soft); padding: 0 4px 4px; display: flex; justify-content: space-between; align-items: center; gap: 6px; border-bottom: 1px solid #1a2030; }
 .ind-pipe-hd span { background: #1c2030; color: #9fb4d8; border-radius: 8px; padding: 0 7px; font-size: 10px; }
-.ind-pipe-items { display: flex; flex-direction: column; gap: 5px; }
-.ind-pipe-card { border: 1px solid var(--clr-border); border-left: 3px solid var(--clr-border); border-radius: 6px; padding: 6px 9px; background: #12161f; }
+.ind-pipe-hd-flow::after { content: '\203A'; color: var(--clr-text-soft); opacity: .5; font-size: 15px; line-height: 1; }
+.ind-pipe-hd-final { color: var(--clr-accent); }
+.ind-pipe-hd-final span { background: #1e3a5f; color: var(--clr-accent); }
+/* Lane label (which structure this row of work happens in) */
+.ind-pipe-lanelbl { padding: 4px 8px 4px 0; border-right: 1px solid #1a2030; min-height: 34px; }
+.ind-pipe-lanename { display: block; font-size: 11px; font-weight: 600; color: #cdd6e6; }
+.ind-pipe-lanesub { display: block; font-size: 10px; color: var(--clr-text-soft); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ind-lane-rx .ind-pipe-lanename { color: #d9a7e0; }
+.ind-lane-mfg .ind-pipe-lanename { color: #7fdca6; }
+.ind-lane-buy .ind-pipe-lanename { color: #cbb8d6; }
+.ind-pipe-cell { display: flex; flex-direction: column; gap: 5px; }
+.ind-pipe-card { border: 1px solid var(--clr-border); border-left: 3px solid var(--clr-border); border-radius: 6px; padding: 6px 9px; background: #12161f; transition: opacity .12s, border-color .12s, background .12s; }
 .ind-pipe-build { border-left-color: #3a9668; }
 .ind-pipe-buy { border-left-color: #9a6ab0; }
 .ind-pipe-unresolved { border-left-color: #b05a5a; }
@@ -927,17 +939,18 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-pipe-tag { font-size: 9px; text-transform: uppercase; letter-spacing: 0.03em; padding: 1px 5px; border-radius: 7px; }
 .ind-t-build { background: #163524; color: #7fdca6; }
 .ind-pipe-runs { font-variant-numeric: tabular-nums; }
-.ind-pipe-loc { display: block; width: 100%; color: #7a8aa8; font-size: 10px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ind-t-buy { background: #2a2130; color: #d9a7e0; }
 .ind-t-unres { background: #3a2226; color: #e69aa0; }
-.ind-pipe-arrow { flex: 0 0 auto; display: flex; align-items: center; justify-content: center; width: 16px; color: var(--clr-text-soft); font-size: 20px; opacity: 0.45; }
-.ind-pipe-final .ind-pipe-hd { color: var(--clr-accent); }
-.ind-pipe-final .ind-pipe-hd span { background: #1e3a5f; color: var(--clr-accent); }
 .ind-pipe-final .ind-pipe-card { border-color: #2d5a8a; border-left-color: var(--clr-accent); background: linear-gradient(180deg, #16233a, #12161f); }
 .ind-pipe-more { font-size: 11px; color: var(--clr-text-soft); padding: 5px 2px; }
 .ind-pipe-buys { border-style: dashed; border-left-style: solid; border-left-color: #7a6a8a; background: #15121b; cursor: pointer; }
 .ind-pipe-buys:hover { border-color: var(--clr-accent); background: #191527; }
 .ind-pipe-buys .ind-pipe-name { color: #cbb8d6; }
+/* Hover trace: dim everything, light up the hovered step + what it feeds / is fed by */
+.ind-pipe-focus .ind-pipe-card { opacity: .28; }
+.ind-pipe-focus .ind-hi-self { opacity: 1; border-color: var(--clr-accent); border-left-color: var(--clr-accent); background: #16233a; box-shadow: 0 0 0 1px var(--clr-accent); }
+.ind-pipe-focus .ind-hi-out { opacity: 1; border-color: #3a9668; border-left-color: #7fdca6; background: #13241a; }
+.ind-pipe-focus .ind-hi-in { opacity: 1; border-color: #7a6a8a; border-left-color: #cbb8d6; background: #191527; }
 /* Shopping list split by build stage — matches the pipeline's "Buy" stage numbering */
 .ind-shop-stage { margin-top: 16px; }
 .ind-shop-stage:first-of-type { margin-top: 4px; }

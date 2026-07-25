@@ -306,6 +306,8 @@ let _indShopStageData = {};   // stage key (tier) -> [{name, qty}], for per-stag
 // always matches — a "Buy" card in the pipeline links to the exact same stage in the list below.
 function _indComputeTiers(tree) {
   const byType = {};
+  const inputsOf = {};      // type_id -> Set of type_ids it consumes
+  const consumersOf = {};   // type_id -> Set of type_ids that consume it
   (function walk(n, depth) {
     if (!n) return;
     const e = byType[n.type_id] || (byType[n.type_id] = { type_id: n.type_id, name: n.name, decision: n.decision, activity: n.activity, owned: n.owned, qty: 0, runs: 0, tier: depth });
@@ -313,12 +315,16 @@ function _indComputeTiers(tree) {
     e.runs += n.runs || 0;
     e.tier = Math.max(e.tier, depth);
     if (n.decision === 'build' || n.decision === 'buy') e.decision = n.decision;
-    (n.inputs || []).forEach(c => walk(c, depth + 1));
+    (n.inputs || []).forEach(c => {
+      (inputsOf[n.type_id] || (inputsOf[n.type_id] = new Set())).add(c.type_id);
+      (consumersOf[c.type_id] || (consumersOf[c.type_id] = new Set())).add(n.type_id);
+      walk(c, depth + 1);
+    });
   })(tree, 0);
   const tiers = {};
   Object.values(byType).forEach(e => (tiers[e.tier] = tiers[e.tier] || []).push(e));
   const maxT = Object.keys(tiers).length ? Math.max(...Object.keys(tiers).map(Number)) : 0;
-  return { byType, tiers, maxT };
+  return { byType, tiers, maxT, inputsOf, consumersOf };
 }
 
 function _indStageLabel(t, maxT, hasBuilds) {
@@ -466,47 +472,131 @@ function _indStepsHtml(d) {
   return html + '</div>';
 }
 
-// The build as a horizontal PRODUCTION PIPELINE: raw materials on the left flow rightward through
-// each build stage to the finished product. Each type appears once (at its deepest stage), coloured
-// by build vs buy. An assembly line rather than an indented list — reads the way EVE industry works.
+// The build as a PRODUCTION PIPELINE: stages flow left→right (raw/reacted on the left, finished
+// product on the right), split into horizontal LANES by where the work physically happens —
+// reactions and manufacturing are different structures with separate job slots, and bought
+// materials aren't built anywhere. Hovering a card highlights what feeds it and what it feeds.
+let _indPipeGraph = { inputsOf: {}, consumersOf: {} };
+
 function _indPipelineHtml(d, tiersData) {
   const tree = d.tree;
   if (!tree || !(tree.inputs || []).length) return '';
-  const { tiers, maxT } = tiersData;
-  // A build step gets its own card; bought items aren't steps, so they collapse into one card
-  // that links straight down to its stage in the shopping list (click, or hover for the names).
+  const { tiers, maxT, inputsOf, consumersOf } = tiersData;
+  _indPipeGraph = { inputsOf: inputsOf || {}, consumersOf: consumersOf || {} };
+
+  // Columns, deepest stage first so the finished product lands on the right.
+  const cols = [];
+  for (let t = maxT; t >= 0; t--) {
+    const items = tiers[t] || [];
+    if (items.length) cols.push({ t, items });
+  }
+  if (!cols.length) return '';
+
+  const isRx = e => e.decision === 'build' && e.activity === 'reaction';
+  const isMfg = e => e.decision === 'build' && e.activity !== 'reaction';
+  const isBuy = e => e.decision !== 'build';
+  const lanes = [
+    { key: 'mfg', title: 'Manufacturing', sub: _indBuildingLabel('manufacturing') || 'your structure', match: isMfg },
+    { key: 'rx', title: 'Reactions', sub: _indBuildingLabel('reaction') || 'reaction structure', match: isRx },
+    { key: 'buy', title: 'Buy', sub: 'from market', match: isBuy },
+  ].filter(l => cols.some(c => c.items.some(l.match)));
+
   const buildCard = e => {
     const owned = e.owned ? `<span class="ind-owned" title="You own this ${e.owned.kind.toUpperCase()}">${e.owned.kind.toUpperCase()}</span>` : '';
     const runs = e.runs ? `<span class="ind-pipe-runs">${e.runs.toLocaleString()} run${e.runs > 1 ? 's' : ''}</span>` : '';
-    const bldg = _indBuildingLabel(e.activity);
-    const loc = bldg ? `<span class="ind-pipe-loc">@ ${_esc(bldg)}</span>` : '';
-    return `<div class="ind-pipe-card ind-pipe-build"><span class="ind-pipe-name">${_esc(e.name)}</span>`
-      + `<span class="ind-pipe-meta">×${Math.round(e.qty).toLocaleString()} <span class="ind-pipe-tag ind-t-build">build${e.activity === 'reaction' ? ' rx' : ''}</span>${runs}${owned}</span>`
-      + (loc ? `<span class="ind-pipe-meta">${loc}</span>` : '') + `</div>`;
+    return `<div class="ind-pipe-card ind-pipe-build" data-tid="${e.type_id}" title="Hover to trace what this feeds"><span class="ind-pipe-name">${_esc(e.name)}</span>`
+      + `<span class="ind-pipe-meta">×${Math.round(e.qty).toLocaleString()} <span class="ind-pipe-tag ind-t-build">build${e.activity === 'reaction' ? ' rx' : ''}</span>${runs}${owned}</span></div>`;
   };
   const buyCard = (buys, t) => {
     const names = buys.slice(0, 25).map(b => b.name).join(', ') + (buys.length > 25 ? '…' : '');
-    return `<div class="ind-pipe-card ind-pipe-buys" title="${_esc(names)} — click to jump to this stage's shopping list" onclick="_indJumpToStage(${t})"><span class="ind-pipe-name">Buy ${buys.length} material${buys.length > 1 ? 's' : ''}</span>`
+    const members = buys.map(b => b.type_id).join(',');
+    return `<div class="ind-pipe-card ind-pipe-buys" data-members="${members}" title="${_esc(names)} — click to jump to this stage's shopping list" onclick="_indJumpToStage(${t})"><span class="ind-pipe-name">Buy ${buys.length} material${buys.length > 1 ? 's' : ''}</span>`
       + `<span class="ind-pipe-meta">in shopping list ↓</span></div>`;
   };
-  let cols = '';
-  for (let t = maxT; t >= 0; t--) {
-    const items = tiers[t] || [];
-    const builds = items.filter(e => e.decision === 'build').sort((a, b) => (b.qty || 0) - (a.qty || 0));
-    const buys = items.filter(e => e.decision !== 'build');
-    if (!builds.length && !buys.length) continue;
-    const shown = builds.slice(0, 12);
-    let cards = shown.map(buildCard).join('');
-    if (builds.length > 12) cards += `<div class="ind-pipe-more">+${builds.length - 12} more built</div>`;
-    if (buys.length) cards += buyCard(buys, t);
+
+  // Header row: one stage label per column (the lane-label column gets an empty corner cell).
+  let html = `<div class="ind-pipe-corner"></div>`;
+  cols.forEach(({ t, items }, i) => {
+    const builds = items.filter(e => e.decision === 'build');
     const label = _indStageLabel(t, maxT, !!builds.length);
     const count = builds.length ? `<span>${builds.length}</span>` : '';
-    cols += `<div class="ind-pipe-col${t === 0 ? ' ind-pipe-final' : ''}"><div class="ind-pipe-hd">${label}${count}</div>`
-      + `<div class="ind-pipe-items">${cards}</div></div>`;
-    if (t > 0) cols += '<div class="ind-pipe-arrow">›</div>';
-  }
-  return `<details class="ind-details" open><summary>Build pipeline</summary><div class="ind-pipe">${cols}</div></details>`;
+    html += `<div class="ind-pipe-hd${t === 0 ? ' ind-pipe-hd-final' : ''}${i < cols.length - 1 ? ' ind-pipe-hd-flow' : ''}">${label}${count}</div>`;
+  });
+
+  // One row per lane; empty cells keep every stage aligned across lanes.
+  lanes.forEach(l => {
+    html += `<div class="ind-pipe-lanelbl ind-lane-${l.key}"><span class="ind-pipe-lanename">${l.title}</span>`
+      + `<span class="ind-pipe-lanesub" title="${_esc(l.sub)}">${_esc(l.sub)}</span></div>`;
+    cols.forEach(({ t, items }) => {
+      const mine = items.filter(l.match);
+      let cards = '';
+      if (l.key === 'buy') {
+        if (mine.length) cards = buyCard(mine, t);
+      } else {
+        const sorted = mine.slice().sort((a, b) => (b.qty || 0) - (a.qty || 0));
+        cards = sorted.slice(0, 12).map(buildCard).join('');
+        if (sorted.length > 12) cards += `<div class="ind-pipe-more">+${sorted.length - 12} more</div>`;
+      }
+      html += `<div class="ind-pipe-cell${t === 0 ? ' ind-pipe-final' : ''}">${cards}</div>`;
+    });
+  });
+
+  return `<details class="ind-details" open><summary>Build pipeline</summary>`
+    + `<p class="ind-pipe-hint">Hover a step to trace what feeds it and what it feeds. Lanes are the structures the work happens in.</p>`
+    + `<div class="ind-pipe-scroll"><div class="ind-pipe-grid" style="--ind-cols:${cols.length}">${html}</div></div></details>`;
 }
+
+// The type_ids a card stands for: a build card is one type, a condensed buy card is many.
+function _indCardTids(card) {
+  if (!card) return [];
+  if (card.dataset.tid) return [Number(card.dataset.tid)];
+  return (card.dataset.members || '').split(',').filter(Boolean).map(Number);
+}
+
+// Hover trace: dim the pipeline, then light up the hovered step, everything it FEEDS (downstream,
+// e.g. what a stage-1 component is used for in stage 2) and everything that feeds IT (upstream).
+function _indPipeHover(card) {
+  const grid = card.closest('.ind-pipe-grid');
+  if (!grid) return;
+  const { inputsOf, consumersOf } = _indPipeGraph;
+  const self = new Set(_indCardTids(card));
+  const feeds = new Set();    // downstream — what this is used for
+  const fedBy = new Set();    // upstream — what goes into this
+  self.forEach(tid => {
+    (consumersOf[tid] || []).forEach(x => feeds.add(x));
+    (inputsOf[tid] || []).forEach(x => fedBy.add(x));
+  });
+  grid.classList.add('ind-pipe-focus');
+  grid.querySelectorAll('.ind-pipe-card').forEach(c => {
+    c.classList.remove('ind-hi-self', 'ind-hi-out', 'ind-hi-in');
+    if (c === card) { c.classList.add('ind-hi-self'); return; }
+    const tids = _indCardTids(c);
+    if (tids.some(t => feeds.has(t))) c.classList.add('ind-hi-out');
+    else if (tids.some(t => fedBy.has(t))) c.classList.add('ind-hi-in');
+  });
+}
+
+function _indPipeClearHover(grid) {
+  if (!grid) return;
+  grid.classList.remove('ind-pipe-focus');
+  grid.querySelectorAll('.ind-pipe-card').forEach(c => c.classList.remove('ind-hi-self', 'ind-hi-out', 'ind-hi-in'));
+}
+
+// Delegated once at the document level — the pipeline is re-rendered via innerHTML on every plan,
+// so per-element listeners would be lost each time.
+document.addEventListener('mouseover', e => {
+  if (!e.target.closest) return;
+  const card = e.target.closest('.ind-pipe-card');
+  if (card) { _indPipeHover(card); return; }
+  // Moved into the pipeline but not onto a card (gap/lane label) — drop the trace.
+  const grid = e.target.closest('.ind-pipe-grid');
+  if (grid) _indPipeClearHover(grid);
+});
+document.addEventListener('mouseout', e => {
+  if (!e.target.closest) return;
+  const grid = e.target.closest('.ind-pipe-grid');
+  if (grid && !grid.contains(e.relatedTarget)) _indPipeClearHover(grid);
+});
 
 function _indRenderPlan(d, title) {
   const unres = (d.unresolved && d.unresolved.length)
