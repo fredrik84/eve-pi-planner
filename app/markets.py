@@ -60,7 +60,10 @@ def ensure_markets_table():
     for coldef in ("build_mfg INTEGER NOT NULL DEFAULT 0", "build_rx INTEGER NOT NULL DEFAULT 0",
                    "hull TEXT", "security TEXT",
                    "me_rig INTEGER NOT NULL DEFAULT 0", "te_rig INTEGER NOT NULL DEFAULT 0",
-                   "rx_me_rig INTEGER NOT NULL DEFAULT 0", "rx_te_rig INTEGER NOT NULL DEFAULT 0"):
+                   "rx_me_rig INTEGER NOT NULL DEFAULT 0", "rx_te_rig INTEGER NOT NULL DEFAULT 0",
+                   # price_from: is this a PRICING source (in the priority chain)? 1 by default so
+                   # existing market rows keep pricing; a build-only structure sets it 0.
+                   "price_from INTEGER NOT NULL DEFAULT 1"):
         try:
             con.execute(f"ALTER TABLE pp_markets ADD COLUMN {coldef}")
             con.commit()
@@ -127,7 +130,7 @@ def _list_markets(owner_kind: str, owner_id: int) -> list[dict]:
     con = get_connection()
     try:
         rows = con.execute(
-            "SELECT id, kind, location_id, name, priority, active, "
+            "SELECT id, kind, location_id, name, priority, active, COALESCE(price_from,1) AS price_from, "
             "COALESCE(build_mfg,0) AS build_mfg, COALESCE(build_rx,0) AS build_rx, hull, security, "
             "COALESCE(me_rig,0) AS me_rig, COALESCE(te_rig,0) AS te_rig, "
             "COALESCE(rx_me_rig,0) AS rx_me_rig, COALESCE(rx_te_rig,0) AS rx_te_rig FROM pp_markets "
@@ -183,12 +186,13 @@ def effective_markets(context_id: int) -> list[dict]:
     """Ordered market list actually used to price this account: personal list if any, else the
     account's alliance-group default list if any, else [] (Jita-only). Same personal->group->
     fallback shape as effective_reaction_settings()."""
-    own = _list_markets("account", context_id)
+    pricing = lambda ms: [m for m in ms if m.get("price_from", 1)]
+    own = pricing(_list_markets("account", context_id))
     if own:
         return own
     group = member_group(context_id)
     if group:
-        grp = _list_markets("group", group["id"])
+        grp = pricing(_list_markets("group", group["id"]))
         if grp:
             return grp
     return []
@@ -468,6 +472,13 @@ class MarketAdd(BaseModel):
     location_id: int
     name: str
     scope: str = "account"   # 'account' | 'group'
+    price_from: bool = True  # False → build-only structure (not in the pricing chain)
+    build_mfg: bool = False
+    build_rx: bool = False
+    me_rig: int = 0
+    te_rig: int = 0
+    rx_me_rig: int = 0
+    rx_te_rig: int = 0
 
 
 class MarketReorder(BaseModel):
@@ -553,10 +564,14 @@ def add_market(req: MarketAdd, context_id: int = Depends(require_context)):
         hull = sec = None
         if req.kind == "structure":
             hull, sec = _detect_structure_meta(context_id, req.location_id)
+        clamp = lambda v: max(0, min(2, int(v)))
         con.execute(
             "INSERT INTO pp_markets (owner_kind, owner_id, kind, location_id, name, priority, active, "
-            "hull, security) VALUES (?,?,?,?,?,?,1,?,?)",
-            (owner_kind, owner_id, req.kind, req.location_id, req.name.strip()[:120], nxt, hull, sec),
+            "hull, security, price_from, build_mfg, build_rx, me_rig, te_rig, rx_me_rig, rx_te_rig) "
+            "VALUES (?,?,?,?,?,?,1,?,?,?,?,?,?,?,?,?)",
+            (owner_kind, owner_id, req.kind, req.location_id, req.name.strip()[:120], nxt, hull, sec,
+             1 if req.price_from else 0, 1 if req.build_mfg else 0, 1 if req.build_rx else 0,
+             clamp(req.me_rig), clamp(req.te_rig), clamp(req.rx_me_rig), clamp(req.rx_te_rig)),
         )
         con.commit()
     finally:
@@ -573,6 +588,7 @@ class MarketBuildConfig(BaseModel):
     rx_te_rig: int = 0
     hull: str | None = None       # optional manual override if ESI couldn't detect it
     security: str | None = None
+    price_from: bool | None = None   # also toggle whether this structure is priced from
     scope: str = "account"
 
 
@@ -592,6 +608,8 @@ def set_market_build(market_id: int, req: MarketBuildConfig, context_id: int = D
             sets.append("hull=?"); vals.append(req.hull or None)
         if req.security is not None:
             sets.append("security=?"); vals.append(req.security or None)
+        if req.price_from is not None:
+            sets.append("price_from=?"); vals.append(1 if req.price_from else 0)
         vals += [market_id, owner_kind, owner_id]
         con.execute(f"UPDATE pp_markets SET {', '.join(sets)} WHERE id=? AND owner_kind=? AND owner_id=?", vals)
         con.commit()

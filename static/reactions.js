@@ -2155,52 +2155,47 @@ function _rigOpts(sel) {
   return [0, 1, 2].map(t => `<option value="${t}" ${sel == t ? 'selected' : ''}>${t === 0 ? 'None' : 'T' + t}</option>`).join('');
 }
 
-function _rxMarketRowsHtml(d) {
-  const own = d.markets || [];
-  const list = own.length ? own : (d.effective || []);
+function _rxPricingRowsHtml(pricing, editable) {
   let rows = '';
-  list.forEach((m, i) => {
+  pricing.forEach((m, i) => {
     const kindLbl = m.kind === 'structure' ? 'Structure' : 'Region';
-    const isStruct = m.kind === 'structure' && own.length;
-    const bparts = [];
-    if (m.build_mfg && m.mfg_bonus) bparts.push(`build: ME ${m.mfg_bonus.me}% / TE ${m.mfg_bonus.te}%`);
-    if (m.build_rx && m.rx_bonus) bparts.push(`react: ME ${m.rx_bonus.me}% / TE ${m.rx_bonus.te}%`);
-    const badge = bparts.length ? `<span class="rx-mkt-build-badge">${bparts.join(' · ')}</span>` : '';
-    const controls = own.length
+    const controls = editable
       ? `<span class="rx-mkt-ctrl">`
-        + (isStruct ? `<button class="pp-add-btn" onclick="_rxToggleBuild(${m.id})" title="Build here?">🔨</button>` : '')
         + `<button class="pp-add-btn" ${i === 0 ? 'disabled' : ''} onclick="_rxMarketMove(${m.id},-1)" title="Higher priority">▲</button>`
-        + `<button class="pp-add-btn" ${i === list.length - 1 ? 'disabled' : ''} onclick="_rxMarketMove(${m.id},1)" title="Lower priority">▼</button>`
+        + `<button class="pp-add-btn" ${i === pricing.length - 1 ? 'disabled' : ''} onclick="_rxMarketMove(${m.id},1)" title="Lower priority">▼</button>`
         + `<button class="pp-add-btn" onclick="_rxMarketRemove(${m.id})" title="Remove">✕</button></span>`
       : '';
     rows += `<div class="rx-mkt-row"><span class="rx-mkt-pri">${i + 1}</span>`
       + `<span class="rx-mkt-kind">${kindLbl}</span>`
-      + `<span class="rx-mkt-name">${_esc(m.name)}${badge}</span>${controls}</div>`;
-    if (isStruct) rows += _rxBuildCfgHtml(m);
+      + `<span class="rx-mkt-name">${_esc(m.name)}</span>${controls}</div>`;
   });
-  rows += `<div class="rx-mkt-row rx-mkt-jita"><span class="rx-mkt-pri">${list.length + 1}</span>`
+  rows += `<div class="rx-mkt-row rx-mkt-jita"><span class="rx-mkt-pri">${pricing.length + 1}</span>`
     + `<span class="rx-mkt-kind">Fallback</span><span class="rx-mkt-name">Jita (always last)</span></div>`;
   return rows;
 }
 
-function _rxBuildCfgHtml(m) {
-  const hullNote = m.hull
-    ? `Detected: <b>${_esc(m.hull)}</b> in ${_esc(m.security || '?')}-sec`
-    : `Couldn't read the structure type from ESI — pick it:`;
+// A build structure, configured inline (no ordering — building isn't a priority chain).
+function _rxBuildRowHtml(m) {
+  const hullNote = m.hull ? `<b>${_esc(m.hull)}</b> · ${_esc(m.security || '?')}-sec` : 'type not detected';
   const manual = m.hull ? '' :
     `<div class="rx-rig-row">Structure <select id="bhull-${m.id}"><option value="">—</option>`
     + ['raitaru', 'azbel', 'sotiyo', 'athanor', 'tatara'].map(h => `<option ${m.hull === h ? 'selected' : ''}>${h}</option>`).join('')
     + `</select> in <select id="bsec-${m.id}">`
     + ['high', 'low', 'null'].map(s => `<option value="${s}" ${m.security === s ? 'selected' : ''}>${s}</option>`).join('')
     + `</select></div>`;
-  return `<div class="rx-mkt-build-cfg" id="mktbuild-${m.id}" style="display:none">
-    <div class="rx-mkt-hint">${hullNote} — ESI can't read rigs, so pick the fitted tiers:</div>
+  const bonus = [];
+  if (m.build_mfg && m.mfg_bonus) bonus.push(`mfg ME ${m.mfg_bonus.me}% / TE ${m.mfg_bonus.te}%`);
+  if (m.build_rx && m.rx_bonus) bonus.push(`rx ME ${m.rx_bonus.me}% / TE ${m.rx_bonus.te}%`);
+  return `<div class="rx-build-card">
+    <div class="rx-build-hd"><span class="rx-mkt-name">${_esc(m.name)}</span><span class="pp-card-hint">${hullNote}</span>
+      <button class="pp-add-btn rx-build-rm" onclick="_rxMarketRemove(${m.id})" title="Remove">✕</button></div>
     ${manual}
     <label class="rx-build-chk"><input type="checkbox" id="bm-${m.id}" ${m.build_mfg ? 'checked' : ''}> Manufacture here</label>
     <div class="rx-rig-row">ME rig <select id="bmme-${m.id}">${_rigOpts(m.me_rig)}</select> · TE rig <select id="bmte-${m.id}">${_rigOpts(m.te_rig)}</select></div>
     <label class="rx-build-chk"><input type="checkbox" id="br-${m.id}" ${m.build_rx ? 'checked' : ''}> React here</label>
     <div class="rx-rig-row">ME rig <select id="brme-${m.id}">${_rigOpts(m.rx_me_rig)}</select> · TE rig <select id="brte-${m.id}">${_rigOpts(m.rx_te_rig)}</select></div>
-    <button class="pp-add-btn" onclick="_rxSaveBuild(${m.id})">Save build settings</button>
+    <label class="rx-build-chk"><input type="checkbox" id="bp-${m.id}" ${m.price_from ? 'checked' : ''}> Also price from here</label>
+    <div class="rx-build-foot"><button class="pp-add-btn" onclick="_rxSaveBuild(${m.id})">Save</button>${bonus.length ? `<span class="rx-mkt-build-badge">${bonus.join(' · ')}</span>` : ''}</div>
   </div>`;
 }
 
@@ -2228,11 +2223,6 @@ function _rxDismissStructReco() {
   if (el) el.style.display = 'none';
 }
 
-function _rxToggleBuild(id) {
-  const el = document.getElementById('mktbuild-' + id);
-  if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
-}
-
 async function _rxSaveBuild(id) {
   const v = s => document.getElementById(s + '-' + id);
   const body = {
@@ -2243,6 +2233,7 @@ async function _rxSaveBuild(id) {
   };
   if (v('bhull')) body.hull = v('bhull').value || null;
   if (v('bsec')) body.security = v('bsec').value || null;
+  if (v('bp')) body.price_from = v('bp').checked;
   try {
     const r = await fetch(`/api/markets/${id}/build`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     if (r.ok) _rxMarketData = await r.json();
@@ -2250,24 +2241,42 @@ async function _rxSaveBuild(id) {
   _rxRenderMarketManager();
 }
 
+// Add a structure straight into the BUILD list (not the pricing chain) — one step, then set rigs.
+async function _rxBuildAdd(payload) {
+  const body = JSON.parse(decodeURIComponent(payload));
+  body.scope = 'account'; body.price_from = false; body.build_mfg = true;
+  try {
+    const r = await fetch('/api/markets', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (!r.ok) { alert('Could not add that structure.'); return; }
+  } catch (e) { alert('Could not add that structure.'); return; }
+  _rxRefreshMarkets();
+}
+
 function _rxMarketManagerHtml(d) {
   const own = d.markets || [];
+  const list = own.length ? own : (d.effective || []);
+  const editable = own.length > 0;
+  const pricing = list.filter(m => m.price_from);
+  const build = list.filter(m => m.kind === 'structure' && (m.build_mfg || m.build_rx));
   const inherited = !own.length && d.effective && d.effective.length;
   const inheritNote = inherited && d.group
     ? `<div class="pp-card-hint" style="margin:0 0 8px">Using your group <b>${_esc(d.group.name)}</b>'s markets. Add one below to override for your account only.</div>` : '';
-  // A configured STRUCTURE market can only be read by a character with the market scope + docking
-  // access. Without one, structure prices silently fall back to Jita — warn loudly instead.
-  const structs = (own.length ? own : (d.effective || [])).filter(m => m.kind === 'structure');
+  // A structure priced from can only be read by a character with the market scope — warn if not.
+  const structs = pricing.filter(m => m.kind === 'structure');
   const unreadable = structs.length && !d.connected;
-  const connectNote = unreadable
+  const warn = unreadable
     ? `<div class="pp-warn" style="margin:0 0 8px">⚠ Your structure market${structs.length > 1 ? 's' : ''} can't be read — no connected character has market access, so pricing falls back to Jita (in Reactions <b>and</b> Manufacturing). Connect a market character to fix it.</div>`
     : (d.connected ? '' : `<div class="pp-card-hint" style="margin:0 0 8px">Structure search needs a connected market character (public regions work without one).</div>`);
-  return inheritNote + connectNote
-    + `<div class="rx-mkt-list">${_rxMarketRowsHtml(d)}</div>`
+  return inheritNote + warn
+    + `<div class="rx-mkt-sec"><div class="rx-mkt-sec-h">Price against — in priority order</div>`
+    + `<div class="rx-mkt-list">${_rxPricingRowsHtml(pricing, editable)}</div>`
     + `<div class="rx-mkt-search">`
     + `<input id="rxMarketSearchInput" placeholder="Search a structure or region…" onkeydown="if(event.key==='Enter')_rxMarketSearch()">`
     + `<button class="pp-add-btn" onclick="_rxMarketSearch()">Search</button>`
-    + `<div id="rxMarketSearchResults"></div></div>`;
+    + `<div id="rxMarketSearchResults"></div></div></div>`
+    + `<div class="rx-mkt-sec"><div class="rx-mkt-sec-h">Structures you build in <span class="pp-card-hint">their rigs set your ME &amp; TE — no ordering needed</span></div>`
+    + (build.length ? build.map(_rxBuildRowHtml).join('') : `<div class="pp-card-hint">None yet — search above and choose <b>+ Build</b> on a structure.</div>`)
+    + `</div>`;
 }
 
 function _rxMountMarkets(containerId) {
@@ -2311,9 +2320,10 @@ async function _rxMarketSearch() {
   box.innerHTML = results.map(m => {
     const kindLbl = m.kind === 'structure' ? 'Structure' : 'Region';
     const payload = encodeURIComponent(JSON.stringify({ kind: m.kind, location_id: m.location_id, name: m.name }));
+    const buildBtn = m.kind === 'structure' ? `<button class="pp-add-btn" onclick="_rxBuildAdd('${payload}')">+ Build</button>` : '';
     return `<div class="rx-mkt-result"><span class="rx-mkt-kind">${kindLbl}</span>`
       + `<span class="rx-mkt-name">${_esc(m.name)}</span>`
-      + `<button class="pp-add-btn" onclick="_rxMarketAdd('${payload}')">+ Follow</button></div>`;
+      + `<button class="pp-add-btn" onclick="_rxMarketAdd('${payload}')">+ Price</button>${buildBtn}</div>`;
   }).join('');
 }
 
