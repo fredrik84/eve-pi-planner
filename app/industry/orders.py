@@ -183,6 +183,7 @@ class QueuePlanRequest(BaseModel):
     # progress endpoint turns it OFF so it measures against the FULL requirement — otherwise the
     # denominator would shrink as you acquire stock and the bar could never fill.
     use_stock: bool = True
+    marginal_pct: float | None = None   # build only if it saves >= this % of the build
 
 
 def _stock_for(ctx: int, targets) -> dict[int, float]:
@@ -234,7 +235,7 @@ def _run_queue_plan(ctx: int, req: QueuePlanRequest) -> dict:
     from app.industry.graph import SPEED_BUILD_CAP_HOURS
     mbh = SPEED_BUILD_CAP_HOURS if req.prioritize_speed else 0.0
     params = resolve_build_params(ctx, req.me_pct, req.te_pct, req.system_id, req.facility_tax_pct, mbh,
-                                  req.struct_material_pct, req.struct_time_pct)
+                                  req.struct_material_pct, req.struct_time_pct, req.marginal_pct)
     pool = _slot_pool(ctx)
     mfg_slots = req.mfg_slots if req.mfg_slots is not None else pool["manufacturing_slots"]
     rx_slots = req.rx_slots if req.rx_slots is not None else pool["reaction_slots"]

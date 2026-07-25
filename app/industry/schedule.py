@@ -63,6 +63,23 @@ def _depths(targets: list[int], mfg: dict, rx: dict) -> dict[int, int]:
     return depth
 
 
+def marginal_threshold(memo: dict, targets: list[tuple[int, int]], params: BuildParams) -> float:
+    """ISK a component must save before building it is worth a job.
+
+    `max(marginal_pct_of_total % of the whole build, min_saving_isk)` — the percentage governs big
+    builds, the absolute floor governs small ones, so one rule covers an Augoror and a Revelation.
+    Shared by the decision itself and the figure reported back to the UI so the two can't drift.
+
+    NOTE `build_unit_cost` is present-but-None when a material couldn't be priced, so a
+    `.get(key, 0.0)` default does NOT save us here — it must be coerced with `or 0.0`.
+    """
+    total_build_value = sum(((memo.get(t) or {}).get("build_unit_cost") or 0.0) * qty
+                            for t, qty in targets)
+    pct_abs = (params.marginal_pct_of_total / 100.0 * total_build_value
+               if params.marginal_pct_of_total > 0 else 0.0)
+    return max(pct_abs, params.min_saving_isk)
+
+
 def aggregate_demand(targets: list[tuple[int, int]], memo: dict, mfg: dict, rx: dict,
                      params: BuildParams, on_hand: dict[int, float] | None = None,
                      pools: dict[str, int] | None = None) -> dict[int, dict]:
@@ -93,15 +110,7 @@ def aggregate_demand(targets: list[tuple[int, int]], memo: dict, mfg: dict, rx: 
     built = [tid for tid in depth if is_built(tid)]
     built.sort(key=lambda t: depth[t])
 
-    # Total rolled-up build cost of the whole order, for the "saving is negligible vs the whole
-    # product" test — from the targets' own build unit costs (cost-optimal estimate).
-    # NOTE `build_unit_cost` is present-but-None when a material couldn't be priced, so a
-    # `.get(key, 0.0)` default does NOT save us here — coerce with `or 0.0` (as line ~390 does).
-    total_build_value = sum(((memo.get(t) or {}).get("build_unit_cost") or 0.0) * qty for t, qty in targets)
-    marginal_pct_abs = params.marginal_pct_of_total / 100.0 * total_build_value if params.marginal_pct_of_total > 0 else 0.0
-    # Buy a component if building saves less than this — the larger of an absolute "worth a slot"
-    # floor and a % of the whole product (so big capitals scale up).
-    marginal_abs = max(marginal_pct_abs, params.min_saving_isk)
+    marginal_abs = marginal_threshold(memo, targets, params)
 
     result: dict[int, dict] = {}
     flipped: set[int] = set()             # bought for speed (slow to build)
@@ -420,6 +429,10 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
             "build_steps": len(by_type),      # distinct things to build (parallel splits collapsed)
             "makespan_hours": sched["makespan_hours"],
             "slots": pools,
+            # What the marginal rule actually resolved to for THIS build, so the UI can show the
+            # consequence of the setting in ISK rather than a bare percentage.
+            "marginal_threshold": round(marginal_threshold(memo, targets, params), 2),
+            "marginal_pct": params.marginal_pct_of_total,
         },
     }
 

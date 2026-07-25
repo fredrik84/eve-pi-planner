@@ -1033,3 +1033,9 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
   border: 1px solid #3a3322; border-radius: 6px; background: #241f14; }
 .ind-reauth-txt { flex: 1; min-width: 240px; font-size: 12px; color: #d8b46a; line-height: 1.45; }
 .ind-reauth-txt b { color: #f0d9a0; }
+/* Marginal-saving slider */
+.ind-field-marg { min-width: 300px; }
+.ind-field-marg label { display: block; font-size: 12px; color: var(--clr-text-soft); margin-bottom: 4px; }
+.ind-field-marg label b { color: var(--clr-accent); font-variant-numeric: tabular-nums; }
+.ind-field-marg input[type=range] { width: 100%; accent-color: var(--clr-accent); margin: 0; padding: 0; }
+.ind-marg-hint { font-size: 11px; color: var(--clr-text-soft); margin-top: 3px; }

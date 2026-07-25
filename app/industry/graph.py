@@ -346,6 +346,7 @@ class IndustryPlanRequest(BaseModel):
     struct_material_pct: float = 0.0   # facility ME bonus (material reduction %)
     struct_time_pct: float = 0.0       # facility TE bonus (time reduction %)
     use_stock: bool = True             # net owned materials off the demand (needs an asset scan)
+    marginal_pct: float | None = None  # build only if it saves >= this % of the build (None = default)
 
 
 # Wall-clock cap (hours) a single component's batch may take to build before the time-priority
@@ -413,7 +414,8 @@ def account_build_defaults(context_id: int) -> tuple[int | None, float]:
 def resolve_build_params(context_id: int, me_pct: float, te_pct: float,
                          system_id: int | None, facility_tax_pct: float | None,
                          max_build_hours: float = 0.0,
-                         struct_material_pct: float = 0.0, struct_time_pct: float = 0.0) -> BuildParams:
+                         struct_material_pct: float = 0.0, struct_time_pct: float = 0.0,
+                         marginal_pct: float | None = None) -> BuildParams:
     """Build the resolver's params, auto-deriving the build system + tax from the account's
     Reactions settings when the request didn't override them — so the caller needn't supply a
     system id or tax by hand."""
@@ -437,7 +439,11 @@ def resolve_build_params(context_id: int, me_pct: float, te_pct: float,
         max_build_hours=max_build_hours,
         struct_material_mult=1.0 - struct_material_pct / 100.0,
         struct_time_mult=1.0 - struct_time_pct / 100.0,
-        marginal_pct_of_total=MARGINAL_BUILD_PCT_OF_TOTAL,   # min_saving_pct stays 0 (per-component % doesn't scale)
+        # User-tunable: how much of the build's value a component must save to be worth building.
+        # None keeps the default. This is a genuine time-vs-cost preference the math can't settle,
+        # which is why it's a knob at all. min_saving_pct stays 0 (per-component % doesn't scale).
+        marginal_pct_of_total=(MARGINAL_BUILD_PCT_OF_TOTAL if marginal_pct is None
+                               else max(0.0, min(25.0, float(marginal_pct)))),
         min_saving_isk=MIN_BUILD_SAVING_ISK,
     )
 
@@ -489,7 +495,7 @@ def industry_plan(req: IndustryPlanRequest, ctx: int = Depends(require_context))
     adjusted = fetch_adjusted_prices(list(ids))
     mbh = SPEED_BUILD_CAP_HOURS if req.prioritize_speed else 0.0
     params = resolve_build_params(ctx, req.me_pct, req.te_pct, req.system_id, req.facility_tax_pct, mbh,
-                                  req.struct_material_pct, req.struct_time_pct)
+                                  req.struct_material_pct, req.struct_time_pct, req.marginal_pct)
 
     # Schedule the single build across the account's real slot pools (manufacturing + separate
     # reaction pool) for an honest MAKESPAN with parallelism — build_plan alone only sums job time

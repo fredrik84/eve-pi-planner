@@ -17,6 +17,7 @@ async function onIndustryTabOpen() {
   // (they live in the shared Markets & Logistics settings). indPopulateFacility fills the facility
   // map with your structures, so we can tell from it whether a build structure exists yet.
   await indPopulateFacility();
+  indRestoreMarginal();
   const hasStructure = Object.keys(_indFacilityMap).some(k => k.startsWith('s:'));
   indApplyGate(hasStructure);
   if (!hasStructure) return;
@@ -355,7 +356,7 @@ async function indRunPlan() {
   try {
     const r = await fetch('/api/industry/plan', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type_id: _indPicked.type_id, quantity: qty, prioritize_speed: _indPrioSpeed(), ..._indFacilityBonus() }),
+      body: JSON.stringify({ type_id: _indPicked.type_id, quantity: qty, prioritize_speed: _indPrioSpeed(), marginal_pct: _indMarginalPct(), ..._indFacilityBonus() }),
     });
     if (!r.ok) { const e = await r.json().catch(() => ({})); out.innerHTML = `<div class="pp-card"><p class="pp-warn">${_esc(e.detail || 'Plan failed')}</p></div>`; return; }
     const d = await r.json();
@@ -381,6 +382,9 @@ function _indMetricTiles(m) {
   tiles.push(['Materials', fmtIsk(m.materials_cost), ''], ['Job fees', fmtIsk(m.job_cost), ''],
              ['Build steps', steps, 'Distinct things to build — each may split into parallel jobs across your slots']);
   if (m.makespan_hours != null) tiles.push(['Makespan', _fmtHours(m.makespan_hours), 'Wall-clock time with jobs running in parallel across your slots']);
+  // Turn the percentage into the number it actually means for THIS build.
+  if (m.marginal_threshold) tiles.push(['Build threshold', fmtIsk(m.marginal_threshold),
+    `Anything that would save less than this by building is bought instead (${m.marginal_pct}% of the build, floor 5m). Adjust with the slider above.`]);
   else if (m.total_job_hours != null) tiles.push(['Total job time', _fmtHours(m.total_job_hours), '']);
   return `<div class="an-stats">` + tiles.map(([l, v, t]) =>
     `<div class="an-stat"${t ? ` title="${_esc(t)}"` : ''}><div class="an-stat-lbl">${l}</div><div class="an-stat-val">${v}</div></div>`).join('') + `</div>`;
@@ -389,6 +393,33 @@ function _indMetricTiles(m) {
 function _indPrioSpeed() {
   const el = document.getElementById('indPrioSpeed');
   return el ? el.checked : true;
+}
+
+// How much of the build's value a component must save before it's worth building. A genuine
+// time-vs-cost preference the math can't settle, so it's one of the few real knobs here — and it
+// reports the ISK it resolves to, because "3%" means nothing until you see it's 74m on a capital.
+const IND_MARGINAL_DEFAULT = 3;
+function _indMarginalPct() {
+  const el = document.getElementById('indMarginal');
+  return el ? parseFloat(el.value) : IND_MARGINAL_DEFAULT;
+}
+function indOnMarginalInput() {
+  const lbl = document.getElementById('indMarginalPct');
+  if (lbl) lbl.textContent = _indMarginalPct() + '%';
+}
+function indOnMarginalChange() {
+  try { localStorage.setItem('indMarginalPct', String(_indMarginalPct())); } catch (e) {}
+  indOnMarginalInput();
+  if (_indPicked && document.getElementById('indResult').innerHTML.trim()) indRunPlan();
+  if (document.getElementById('indQueueResult').innerHTML.trim()) indPlanQueue();
+}
+function indRestoreMarginal() {
+  const el = document.getElementById('indMarginal');
+  if (!el) return;
+  let v = null;
+  try { v = localStorage.getItem('indMarginalPct'); } catch (e) {}
+  if (v !== null && !isNaN(parseFloat(v))) el.value = parseFloat(v);
+  indOnMarginalInput();
 }
 
 // Facility presets → structure/rig material (ME) + time (TE) bonuses. Approximate real setups; the
@@ -1019,7 +1050,7 @@ async function indPlanQueue() {
   try {
     const r = await fetch('/api/industry/queue-plan', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prioritize_speed: _indPrioSpeed(), ..._indFacilityBonus() }),
+      body: JSON.stringify({ prioritize_speed: _indPrioSpeed(), marginal_pct: _indMarginalPct(), ..._indFacilityBonus() }),
     });
     if (!r.ok) { const e = await r.json().catch(() => ({})); out.innerHTML = `<p class="pp-warn">${_esc(e.detail || 'Queue plan failed')}</p>`; return; }
     const d = await r.json();
