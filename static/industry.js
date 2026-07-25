@@ -476,36 +476,43 @@ function _indTreeNode(n, depth) {
     + `<div class="ind-tree-kids">${childHtml}</div></details>`;
 }
 
-// Group a schedule wave's parallel split-jobs back into one entry per product.
-function _indWaveGroup(w) {
-  const b = {};
-  (w.tasks || []).forEach(t => {
-    const g = b[t.type_id] || (b[t.type_id] = { name: t.name || _indName(t.type_id), runs: 0, activity: t.activity, dur: 0 });
-    g.runs += t.runs; g.dur = Math.max(g.dur, t.duration_hours);
-  });
-  return Object.values(b).sort((a, b) => b.dur - a.dur);
-}
 function _indJobChips(g) {
   return g.map(x => `<span class="ind-wave-job">${_esc(x.name)} ×${x.runs}${x.activity === 'reaction' ? ' rx' : ''} · ${_fmtHours(x.dur)}</span>`).join('');
 }
 
-// Step-by-step "what to do right now": buy your materials, start the first wave of jobs now, then
-// each later wave as the previous finishes. The prominent, plain-language answer to "what am I
-// supposed to be doing" — the tree/schedule below are just the detail behind it.
-// "N jobs · M runs" — the concise per-wave summary the user asked for (not a chip per job).
-function _indStepSummary(g) {
-  const runs = g.reduce((s, x) => s + x.runs, 0);
-  return `${g.length} job${g.length > 1 ? 's' : ''} · ${runs.toLocaleString()} runs`;
-}
 function _indStepItems(g, open) {
   return `<details class="ind-step-items"${open ? ' open' : ''}><summary>show items</summary>`
     + `<div class="ind-wave-jobs">${_indJobChips(g)}</div></details>`;
 }
 
-function _indStepsHtml(d) {
+function _indStepsHtml(d, model) {
   const waves = (d.schedule && d.schedule.waves) || [];
   if (!waves.length) return '';
   const shop = d.shopping_list || [];
+
+  // Collapse the schedule onto STAGES. A wave is a scheduler artifact — jobs unlocking as slots
+  // free — so a 20-wave plan used to render 20 "steps", which is noise: you don't do 20 different
+  // things, you work through a handful of stages and refill slots as they open. One step per stage,
+  // with the batch count folded into it as a note.
+  const stageOfType = {};
+  (model.cols || []).forEach((c, i) => c.builds.forEach(b => { stageOfType[b.type_id] = i; }));
+  const byStage = {};
+  waves.forEach(w => {
+    (w.tasks || []).forEach(t => {
+      const key = stageOfType[t.type_id] === undefined ? 'x' : stageOfType[t.type_id];
+      const s = byStage[key] || (byStage[key] = { key, jobs: 0, runs: 0, start: Infinity, batches: new Set(), by: {} });
+      s.jobs += 1;
+      s.runs += t.runs;
+      s.start = Math.min(s.start, w.start_hours);
+      s.batches.add(w.start_hours);
+      const g = s.by[t.type_id] || (s.by[t.type_id] = { name: t.name || _indName(t.type_id), runs: 0, activity: t.activity, dur: 0 });
+      g.runs += t.runs;
+      g.dur = Math.max(g.dur, t.duration_hours);
+    });
+  });
+  const stages = Object.values(byStage).sort((a, b) => a.start - b.start);
+  if (!stages.length) return '';
+
   let n = 0;
   let html = '<div class="ind-steps"><div class="ind-steps-title">Step by step</div>';
   if (shop.length) {
@@ -513,18 +520,23 @@ function _indStepsHtml(d) {
     html += `<div class="ind-step"><div class="ind-step-hd"><span class="ind-step-num">${n}</span>Buy your materials</div>`
       + `<div class="ind-step-body">${shop.length} item${shop.length > 1 ? 's' : ''} · ${fmtIsk(d.metrics.materials_cost)} — full list below.</div></div>`;
   }
-  n++;
-  const now = _indWaveGroup(waves[0]);
-  html += `<div class="ind-step ind-step-now"><div class="ind-step-hd"><span class="ind-step-num">${n}</span>Start ${_indStepSummary(now)} now <span class="ind-step-tag">do this now</span></div>`
-    + _indStepItems(now, true) + `</div>`;
-  if (waves.length > 1) {
-    const later = waves.slice(1).map((w, i) => {
-      const g = _indWaveGroup(w);
-      return `<div class="ind-step ind-step-later"><div class="ind-step-hd"><span class="ind-step-num">${n + 1 + i}</span>Then start ${_indStepSummary(g)} <span class="ind-step-when">≈ +${_fmtHours(w.start_hours)}</span></div>`
-        + _indStepItems(g, false) + `</div>`;
-    }).join('');
-    html += `<details class="ind-details ind-steps-more"><summary>Then, as each batch finishes — ${waves.length - 1} more step${waves.length > 2 ? 's' : ''}</summary>${later}</details>`;
-  }
+  stages.forEach((s, i) => {
+    n++;
+    const col = model.cols[s.key];
+    const title = col ? col.label : 'Remaining jobs';
+    const items = Object.values(s.by).sort((a, b) => b.dur - a.dur);
+    const jobs = `${s.jobs} job${s.jobs > 1 ? 's' : ''} · ${s.runs.toLocaleString()} run${s.runs > 1 ? 's' : ''}`;
+    const first = i === 0 && s.start <= 0.01;
+    const when = first
+      ? '<span class="ind-step-tag">do this now</span>'
+      : `<span class="ind-step-when">≈ +${_fmtHours(s.start)}</span>`;
+    // Several batches = the same stage restarted as slots freed, not extra decisions to make.
+    const batches = s.batches.size > 1
+      ? `<span class="ind-step-note">in ${s.batches.size} batches as slots free</span>` : '';
+    html += `<div class="ind-step${first ? ' ind-step-now' : ' ind-step-later'}">`
+      + `<div class="ind-step-hd"><span class="ind-step-num">${n}</span>${_esc(title)} — ${jobs} ${when}${batches}</div>`
+      + _indStepItems(items, first) + `</div>`;
+  });
   html += `<div class="ind-step ind-step-done"><div class="ind-step-hd"><span class="ind-step-num">✓</span>Done — ${_esc(d.target ? d.target.name : 'product')} built in ≈ ${_fmtHours(d.metrics.makespan_hours)}</div></div>`;
   return html + '</div>';
 }
@@ -688,7 +700,7 @@ function _indRenderPlan(d, title) {
     <div class="ind-body">
       ${_indMetricTiles(d.metrics)}
       ${unres}
-      ${_indStepsHtml(d)}
+      ${_indStepsHtml(d, stageModel)}
       ${_indPipelineHtml(d, tiersData, stageModel)}
       <details class="ind-details" open><summary>Shopping list (${(d.shopping_list || []).length})</summary>${_indShoppingSections(d, stageModel)}</details>
       ${tree}
