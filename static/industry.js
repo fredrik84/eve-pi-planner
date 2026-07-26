@@ -1063,11 +1063,54 @@ function _indRenderPlan(d, title) {
 function _indBlueprintWarn(d) {
   const miss = (d.metrics && d.metrics.missing_blueprints) || [];
   if (!miss.length) return '';
-  return `<div class="ind-bp-warn"><b>You don't own a blueprint for ${miss.length === 1 ? 'this' : 'these'}:</b> `
-    + miss.map(_esc).join(', ')
-    + `<div class="ind-bp-warn-sub">These jobs can't be installed until you have the BPO or a BPC, and `
-    + `their cost is <b>not</b> in the total above — blueprint copies trade via contracts, which no `
-    + `market API exposes, so there's no honest price to add.</div></div>`;
+  const rows = miss.map(m =>
+    `<div class="ind-bp-row2"><span class="ind-bp-nm">${_esc(m.name)}</span>`
+    + `<span class="ind-bp-px" id="bpcpx-${m.type_id}">checking contracts…</span></div>`).join('');
+  // Fill the prices in after render — a cold contract index is a background scan, so the warning
+  // must never wait on it.
+  setTimeout(() => indLoadBpcPrices(miss.map(m => m.type_id)), 0);
+  return `<div class="ind-bp-warn"><b>You don't own a blueprint for ${miss.length === 1 ? 'this' : 'these'}:</b>`
+    + `<div class="ind-bp-rows">${rows}</div>`
+    + `<div class="ind-bp-warn-sub">These jobs can't be installed until you have the BPO or a BPC. `
+    + `Blueprint cost is <b>not</b> in the total above — a contract is one seller's ask, not a market `
+    + `rate, so folding it in would let a single listing swing your build-vs-buy decisions. `
+    + `Prices are from public contracts in Jita — use them to judge whether a local seller is a good deal.</div></div>`;
+}
+
+// Public-contract blueprint prices. Shows what's listed right now, and falls back to what they have
+// historically gone for — blueprints sell out constantly, so "nothing listed today" is the normal
+// case and still deserves an answer.
+async function indLoadBpcPrices(ids) {
+  if (!ids || !ids.length) return;
+  let d = null;
+  try {
+    const r = await fetch('/api/industry/bpc?type_ids=' + ids.join(','));
+    if (r.ok) d = await r.json();
+  } catch (e) {}
+  const scanning = d && d.scan && d.scan.busy;
+  ids.forEach(id => {
+    const el = document.getElementById('bpcpx-' + id);
+    if (!el) return;
+    const info = d && d.prices && d.prices[id];
+    const bpc = info && info.bpc;
+    if (bpc && bpc.live && bpc.live.count) {
+      const runs = bpc.live.median_per_run
+        ? ` · ${fmtIsk(bpc.live.median_per_run)}/run` : '';
+      el.innerHTML = `<b>${fmtIsk(bpc.live.cheapest)}</b> cheapest now`
+        + `<span class="ind-bp-sub2">${bpc.live.count} on contract · median ${fmtIsk(bpc.live.median)}${runs}</span>`;
+    } else if (bpc && bpc.history && bpc.history.count) {
+      const days = Math.max(0, Math.round((Date.now() / 1000 - bpc.history.last_seen) / 86400));
+      el.innerHTML = `<b>≈ ${fmtIsk(bpc.history.median)}</b> estimated`
+        + `<span class="ind-bp-sub2">none listed now · ${bpc.history.count} seen historically, `
+        + `last ${days === 0 ? 'today' : days + 'd ago'}</span>`;
+    } else if (info && info.bpo && (info.bpo.live || info.bpo.history)) {
+      const b = info.bpo.live || info.bpo.history;
+      el.innerHTML = `<span class="ind-bp-sub2">no copies seen — originals from ${fmtIsk(b.cheapest)}</span>`;
+    } else {
+      el.innerHTML = `<span class="ind-bp-sub2">${scanning
+        ? 'indexing Jita contracts — check back in a few minutes' : 'no contracts seen for this yet'}</span>`;
+    }
+  });
 }
 
 function _indRenderPlanBody(d) {

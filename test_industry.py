@@ -525,7 +525,7 @@ def test_missing_blueprints_are_reported():
     P = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0)
     res = plan_queue([(100, 1)], mfg, rx, _prices(SELL), ADJ, P, NAMES,
                      {"manufacturing": 5, "reaction": 5})
-    miss = res["metrics"]["missing_blueprints"]
+    miss = [m["name"] for m in res["metrics"]["missing_blueprints"]]
     check("manufactured steps flagged", "Widget" in miss and "Gadget" in miss)
     check("reaction never needs a blueprint", "Sprocket" not in miss)
     byid = {r["type_id"]: r for r in res["requirements"]}
@@ -537,7 +537,7 @@ def test_missing_blueprints_are_reported():
                      owned={100: {"me": 10, "te": 20, "kind": "bpo", "runs": -1}})
     res2 = plan_queue([(100, 1)], mfg, rx, _prices(SELL), ADJ, P2, NAMES,
                       {"manufacturing": 5, "reaction": 5})
-    miss2 = res2["metrics"]["missing_blueprints"]
+    miss2 = [m["name"] for m in res2["metrics"]["missing_blueprints"]]
     check("owned blueprint clears its own flag", "Widget" not in miss2)
     check("the still-unowned one stays flagged", "Gadget" in miss2)
     check("owned blueprint detail is carried", 
@@ -546,6 +546,39 @@ def test_missing_blueprints_are_reported():
     # The quoted cost must not silently gain a blueprint charge.
     check("cost excludes blueprints (unchanged by ownership)",
           approx(res["metrics"]["materials_cost"], res2["metrics"]["materials_cost"]))
+
+
+def test_bpc_price_summary():
+    """Blueprint contract pricing: what's listed NOW vs what it historically went for, since
+    blueprints sell out constantly and 'nothing listed today' is the normal case. The median must
+    survive the absurd outliers contract markets are full of, and a BPO must never be quoted as a
+    BPC price — they differ by orders of magnitude."""
+    print("test_bpc_price_summary")
+    from app.industry.bpc import _summarise
+    now = 1_000_000.0
+    live_cutoff = now - 100
+    rows = [
+        {"price": 300e6, "runs": 1, "last_seen": now},
+        {"price": 250e6, "runs": 1, "last_seen": now},          # cheapest live
+        {"price": 900e6, "runs": 10, "last_seen": now},
+        {"price": 9000e6, "runs": 1, "last_seen": now},         # hopeful seller
+        {"price": 240e6, "runs": 1, "last_seen": now - 40 * 86400},   # expired
+    ]
+    r = _summarise(rows, live_cutoff)
+    check("live excludes the expired listing", r["live"]["count"] == 4)
+    check("cheapest live is right", approx(r["live"]["cheapest"], 250e6))
+    # mean would be ~2.6b; median is 600m. That gap is the whole reason for using a median.
+    check("median resists the 9b outlier", r["live"]["median"] < 1000e6)
+    check("per-run normalises a 10-run copy", approx(r["live"]["median_per_run"], 275e6))
+    check("history keeps everything in window", r["history"]["count"] == 5)
+    check("history is cheaper than live here", r["history"]["cheapest"] < r["live"]["cheapest"])
+
+    # Nothing live -> history must still answer rather than returning nothing.
+    old = [{"price": 200e6, "runs": 1, "last_seen": now - 30 * 86400}]
+    r2 = _summarise(old, live_cutoff)
+    check("no live listings reports none", r2["live"] is None)
+    check("history still gives an estimate", r2["history"]["count"] == 1)
+    check("empty input returns nothing at all", _summarise([], live_cutoff) is None)
 
 
 def main():
@@ -574,6 +607,7 @@ def main():
     test_install_assignment_spreads_and_respects_free_slots()
     test_fifo_wins_contested_slots()
     test_missing_blueprints_are_reported()
+    test_bpc_price_summary()
     print(f"\nAll {_passed} checks passed.")
 
 

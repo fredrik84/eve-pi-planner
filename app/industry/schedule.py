@@ -475,9 +475,11 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
             # exposes, so there is no honest number to add. Report what's missing instead of
             # silently quoting a build you can't start.
             "missing_blueprints": sorted(
-                names.get(tid, str(tid)) for tid, info in agg.items()
-                if info["build"] and info["runs"] > 0
-                and info["activity"] == "manufacturing" and tid not in params.owned),
+                ({"type_id": tid, "name": names.get(tid, str(tid))}
+                 for tid, info in agg.items()
+                 if info["build"] and info["runs"] > 0
+                 and info["activity"] == "manufacturing" and tid not in params.owned),
+                key=lambda x: x["name"]),
             "slots": pools,
             # What the marginal rule actually resolved to for THIS build, so the UI can show the
             # consequence of the setting in ISK rather than a bare percentage.

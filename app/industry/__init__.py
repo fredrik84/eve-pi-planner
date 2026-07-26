@@ -36,4 +36,7 @@ from app.industry.assets import (  # noqa: F401 — registers the asset endpoint
     ensure_asset_tables, owned_quantities, refresh_assets, list_sources, set_sources,
     add_pasted_source, delete_source,
 )
+from app.industry.bpc import (  # noqa: F401 — registers the blueprint-contract endpoints
+    ensure_bpc_tables, bpc_prices, maybe_scan,
+)
 from app.industry import progress as _progress  # noqa: F401 — registers /api/industry/progress
