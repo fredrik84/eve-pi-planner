@@ -2214,10 +2214,15 @@ function renderFinalPlan(data, opts = {}) {
   const typeAbbr = facPtypes.map(t => t[0]).join('/');
   const typeNames = facPtypes.join('/');
 
+  // Two ways a factory can fail to exist: the placement pass couldn't find it a planet
+  // (`unplaced`), or the budget wanted more than any character could physically host, so the
+  // share was never handed out (`factories_unplaceable`). Both leave planet slots idle with no
+  // colony on them, so report them together — the stats bar already excludes them.
   const totalUnplacedFac = data.assignments.reduce((s, a) =>
-    s + (a.factory_assignments || []).filter(f => f.unplaced).length, 0);
+    s + (a.factory_assignments || []).filter(f => f.unplaced).length, 0)
+    + (data.factories_unplaceable || 0);
   const unplacedFacHtml = totalUnplacedFac
-    ? `<div class="plan-warning">${totalUnplacedFac} factory slot${totalUnplacedFac !== 1 ? 's' : ''} unplaced — not enough ${typeNames} planets in chosen system. Check character ext config if unexpected.</div>`
+    ? `<div class="plan-warning">${totalUnplacedFac} factory slot${totalUnplacedFac !== 1 ? 's' : ''} unplaced — a character can only host one colony per planet, and there aren't enough ${typeNames} planets in ${data.factory_system || 'the chosen system'} to go round. Output below already excludes ${totalUnplacedFac !== 1 ? 'them' : 'it'}. Add a factory character, widen the planet types, or pick a system with more ${typeNames}.</div>`
     : '';
   const oversized = data.factory_planets_oversized || 0;
   const droppedFacHtml = oversized

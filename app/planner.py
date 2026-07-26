@@ -2402,10 +2402,11 @@ def _compute_slot_budget(
     p1_fracs: dict,
     per_char_fac_cap: int | None = None,
     preferred_cids: list[int] | None = None,
-) -> tuple[int, int, dict[int, int], bool, float]:
+) -> tuple[int, int, dict[int, int], bool, float, int]:
     """
     Compute how many factory slots vs extractor slots to allocate.
-    Returns (ext_slots, factories, factory_shares, auto_mode, p0_per_factory_per_day).
+    Returns (ext_slots, factories, factory_shares, auto_mode, p0_per_factory_per_day,
+    factories_unbudgeted).
     """
     E = sum(
         (min(c["effective_planets"], c["extractor_limit"])
@@ -2440,7 +2441,22 @@ def _compute_slot_budget(
     else:
         factories, ext_slots = 1, E
 
-    return ext_slots, factories, _compute_factory_shares(char_list, factories, auto_mode, per_char_fac_cap, preferred_cids), auto_mode, p0_per_factory_day
+    shares = _compute_factory_shares(char_list, factories, auto_mode, per_char_fac_cap, preferred_cids)
+
+    # The equilibrium formula budgets factories against raw planet slots, but a share can only
+    # be handed to a character who can physically host it: per_char_fac_cap clips each char at
+    # the factory system's Barren/Temperate count (one colony per planet per char), and in
+    # explicit mode only chars with a non-zero extractor_limit can absorb the remainder. When
+    # both run out the leftover factories are dropped on the floor — budgeting output for a
+    # planet nobody can colonise inflates products_per_day. Report the placeable count instead,
+    # and hand the shortfall back so the UI can say why.
+    placeable = sum(shares.values())
+    factories_unbudgeted = max(0, factories - placeable)
+    if factories_unbudgeted and placeable > 0:
+        factories = placeable
+        ext_slots = E + F - factories
+
+    return ext_slots, factories, shares, auto_mode, p0_per_factory_day, factories_unbudgeted
 
 
 def _density_estimate(p1_info, p0_planet_lists, ext_slots, has_planet_db) -> dict[str, float]:
@@ -3989,7 +4005,7 @@ def _run_plan(req: PlanRequest, context_id: int) -> dict:
     effective_fph = _effective_fph(req.type_id, pi_data, req.factory_output_per_hour)
 
     # Compute slot budget
-    ext_slots, factories, factory_shares, auto_mode, p0_per_factory_day = _compute_slot_budget(
+    ext_slots, factories, factory_shares, auto_mode, p0_per_factory_day, factories_unbudgeted = _compute_slot_budget(
         char_list, req.overproduction_pct, effective_fph,
         cycle_time, output_qty, p1_fracs, _per_char_fac_cap,
         preferred_cids=req.factory_character_ids,
@@ -4103,6 +4119,20 @@ def _run_plan(req: PlanRequest, context_id: int) -> dict:
     total_extractors = sum(len(a["extractors"]) for a in all_assignments)
     total_factory_planets = sum(a["factory_planets"] for a in all_assignments)
 
+    # Placement is the ground truth: a factory the budget asked for but that no character could
+    # put on a planet (its planets all taken by extractors, or the system ran out of allowed
+    # types) does not produce anything. Re-derive every output stat from the factories that
+    # actually got a planet, so products/day can't describe a colony the plan never placed.
+    if total_factory_planets < factories:
+        factories_unbudgeted += factories - total_factory_planets
+        factories = total_factory_planets
+        products_per_day = round(prod_per_factory_day * factories)
+        p0_per_day = round(sum(frac * products_per_day * 150 for frac in p1_fracs.values()))
+        isk_per_day = round(products_per_day * sell_price, 2)
+        total_p1_per_day = products_per_day * sum(p1_fracs.values())
+        p1_m3_per_factory_day = (total_p1_per_day * _P1_VOLUME / factories) if factories else 0.0
+        factory_refill_hours = _factory_refill_hours(products_per_day, p1_fracs, factories)
+
     # P1 delivery split: every factory planet makes the final product and imports its full P1
     # set, so each P1 splits EVENLY across the placed factory planets. `share` lets the UI turn
     # a pasted P1 stack into whole-unit amounts to drop at each factory.
@@ -4184,6 +4214,7 @@ def _run_plan(req: PlanRequest, context_id: int) -> dict:
         "factory_system":           best_fac_system,
         "factory_system_options": factory_system_options,
         "factory_planets_needed": total_factory_planets,
+        "factories_unplaceable":  factories_unbudgeted,
         "factory_planets_by_system": [
             {"system": s, "count": c, "type": "Barren/Temperate"}
             for s, c in sorted(sys_fac_count.items(), key=lambda x: -x[1])

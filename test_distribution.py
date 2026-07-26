@@ -265,6 +265,54 @@ def run_fuelblock_invariants(base_url: str) -> bool:
     return ok
 
 
+def run_factory_budget_invariants() -> bool:
+    """In-process: the factory budget must never claim more factories than a character can
+    physically host. A char can only put one colony on a planet, so a factory-only char is
+    capped at the factory system's allowed-planet count; in explicit mode (extractor_limit
+    set) there's no one else to absorb the remainder, and it used to be dropped silently —
+    leaving stats.factories (and products/day) describing colonies the plan never placed.
+
+    Run this INSIDE the container (needs the app's deps); it does no DB or market I/O.
+    """
+    print(f"\n{'='*60}\n  Factory budget invariants (in-process)\n{'='*60}")
+    try:
+        from app.planner import _compute_slot_budget
+    except Exception as e:
+        print(f"  SKIP: not importable here ({e.__class__.__name__}) — run inside the container")
+        return True
+
+    ok = True
+    # 3 extractor chars + 1 factory-only char, 6 planets each; P4 (0.5/hr), 9 P1 inputs.
+    chars = [{"character_id": i, "effective_planets": 6, "extractor_limit": None} for i in (1, 2, 3)]
+    chars.append({"character_id": 4, "effective_planets": 6, "extractor_limit": 0})
+    p1_fracs = {i: (320.0 if i < 3 else 160.0) for i in range(9)}
+
+    for cap, label in ((4, "4 B/T planets in system"), (8, "8 B/T planets in system")):
+        ext, fac, shares, _auto, _p0fd, short = _compute_slot_budget(
+            chars, 10, 0.5, 3600, 1, p1_fracs, per_char_fac_cap=cap)
+        placeable = sum(shares.values())
+        print(f"  cap={cap} ({label}): factories={fac} shares={shares} unplaceable={short}")
+        if fac != placeable:
+            print(f"  FAIL: budgeted {fac} factories but only {placeable} shares were handed out")
+            ok = False
+        if any(v > cap for v in shares.values()):
+            print(f"  FAIL: a character got more factories than the {cap} planets it can colonise")
+            ok = False
+        if short < 0:
+            print("  FAIL: negative unplaceable count")
+            ok = False
+
+    # The capped case must actually report the shortfall (regression: it was dropped silently).
+    _e, _f, _s, _a, _p, short4 = _compute_slot_budget(
+        chars, 10, 0.5, 3600, 1, p1_fracs, per_char_fac_cap=4)
+    if short4 < 1:
+        print("  FAIL: clipped factories were not reported as unplaceable")
+        ok = False
+
+    print(f"\n  Result: {'PASS' if ok else 'FAIL'}")
+    return ok
+
+
 def run_smoke_tests(base_url: str) -> bool:
     """Smoke-test the non-planner features: PI product list, Factory Layout generator
     (P1/P2/P4 templates), and the PI Planner (tab-1 inventory analyzer)."""
@@ -336,6 +384,7 @@ def main():
         ok = run_case(base, case)
         results.append((case["name"], ok))
 
+    results.append(("Factory budget invariants", run_factory_budget_invariants()))
     results.append(("Fuel-block invariants", run_fuelblock_invariants(base)))
     results.append(("Feature smoke tests", run_smoke_tests(base)))
 
