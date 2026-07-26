@@ -35,17 +35,20 @@ function _indStatusVisible() {
   const c = document.getElementById('indStatusCard');
   return !!c && c.style.display !== 'none';
 }
-let _indPlannerOpen = null;   // null = decide from whether there's work; true/false = user's choice
+// Planning is a deliberate detour from checking on your build, so it opens in a modal rather than
+// pushing the live status down the page.
+function indOpenPlanner() {
+  const m = document.getElementById('indPlanModal');
+  if (!m) return;
+  m.style.display = '';
+  indRestoreMarginal();
+  const s = document.getElementById('indSearch');
+  if (s) setTimeout(() => s.focus(), 30);
+}
 
-function indTogglePlanner(force) {
-  const body = document.getElementById('indPlannerBody');
-  const caret = document.getElementById('indPlannerCaret');
-  if (!body) return;
-  _indPlannerOpen = (force === undefined) ? !(body.style.display !== 'none') : !!force;
-  body.style.display = _indPlannerOpen ? '' : 'none';
-  if (caret) caret.textContent = _indPlannerOpen ? '▾' : '▸';
-  const idle = document.getElementById('indSetupBarIdle');
-  if (idle) idle.style.display = document.getElementById('indStatusCard').style.display === 'none' ? '' : 'none';
+function indClosePlanner() {
+  const m = document.getElementById('indPlanModal');
+  if (m) m.style.display = 'none';
 }
 
 // The landing view: what's cooking, what's next, and the pipeline as the centrepiece.
@@ -59,13 +62,14 @@ async function indRefreshStatus() {
     if (r.ok) orders = (await r.json()).orders || [];
   } catch (e) {}
   _indOrders = orders;
+  const empty = document.getElementById('indEmptyCard');
   if (!orders.length) {
     card.style.display = 'none';
-    indTogglePlanner(true);                 // nothing to check — lead with planning
+    if (empty) empty.style.display = '';     // nothing to check — lead with the call to action
     return;
   }
   card.style.display = '';
-  if (_indPlannerOpen === null) indTogglePlanner(false);
+  if (empty) empty.style.display = 'none';
   body.innerHTML = _indLoadingHtml('Checking your build…', 'Pulling job status and re-planning what is left.');
   await indLoadProgress();
   try {
@@ -75,7 +79,7 @@ async function indRefreshStatus() {
     });
     if (!r.ok) { body.innerHTML = '<p class="pp-warn">Could not plan your queue.</p>'; return; }
     const d = await r.json();
-    if (d.empty) { card.style.display = 'none'; indTogglePlanner(true); return; }
+    if (d.empty) { card.style.display = 'none'; if (empty) empty.style.display = ''; return; }
     _indLastPlan = d;
     _indCacheNames(d);
     body.innerHTML = _indStatusHeadline(d)
@@ -113,6 +117,7 @@ function _indStatusHeadline(d) {
   }).join('');
   return sim
     + `<div class="ind-status-head"><div class="ind-order-chips">${chips}</div>`
+    + `<button class="ind-primary-btn" onclick="indOpenPlanner()">Plan a new build</button>`
     + `<button class="ind-bp-btn" onclick="indRefreshJobs()" title="Pull job status from EVE and re-plan">Refresh</button></div>`
     + `<div class="an-stats">` + tiles.map(([l, v, tip]) =>
         `<div class="an-stat" title="${_esc(tip)}"><div class="an-stat-lbl">${l}</div><div class="an-stat-val">${v}</div></div>`).join('')
@@ -1055,6 +1060,7 @@ async function indAddToQueue() {
     });
     if (!r.ok) { const e = await r.json().catch(() => ({})); alert(e.detail || 'Could not queue'); return; }
     document.getElementById('indResult').innerHTML = '';
+    indClosePlanner();
     await indLoadQueue();
     indLoadInstall();
     await indRefreshStatus();     // adding re-plans the whole queue together — the reason to queue

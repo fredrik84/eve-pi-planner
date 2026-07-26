@@ -25,7 +25,7 @@
   <link rel="stylesheet" href="/style-components.css?v=1">
   <link rel="stylesheet" href="/style-contribute.css?v=11">
   <link rel="stylesheet" href="/style-wizard.css?v=2">
-  <link rel="stylesheet" href="/style-layout-admin.css?v=64">
+  <link rel="stylesheet" href="/style-layout-admin.css?v=65">
   <link rel="stylesheet" href="/style-analysis-dashboard.css?v=22">
   <link rel="stylesheet" href="/style-misc-responsive.css?v=7">
 </head>
@@ -735,50 +735,19 @@
         </div>
       </div>
 
-      <!-- Planning is a deliberate action, not the landing view — collapsed once you have work. -->
-      <div class="pp-card ind-planner-card" id="indPlannerCard">
-        <h2 class="pp-card-title ind-planner-title" onclick="indTogglePlanner()">
-          <span id="indPlannerCaret">▾</span> Plan a new build <span class="admin-preview-tag" id="indPreviewTag" style="display:none">admin preview</span>
-          <span class="pp-card-hint">— price it, see the pipeline, then queue it</span>
-        </h2>
-        <div class="ind-body" id="indPlannerBody">
+      <div class="pp-card" id="indEmptyCard" style="display:none">
+        <h2 class="pp-card-title">Manufacturing <span class="admin-preview-tag" id="indPreviewTag" style="display:none">admin preview</span></h2>
+        <div class="ind-body">
           <div class="ind-setup-bar" id="indSetupBarIdle">
             <div id="indSetupSummaryIdle" class="ind-setup-summary"></div>
             <button class="ind-secondary-btn" onclick="indOpenSetup()">Setup &amp; slots</button>
           </div>
           <div id="indLifetime" class="ind-lifetime"></div>
-          <div class="ind-plan-form">
-            <div class="ind-field ind-field-grow">
-              <label for="indSearch">Product to build</label>
-              <div class="ind-search-wrap">
-                <input type="text" id="indSearch" placeholder="Search any buildable — e.g. Hobgoblin II, Revelation, Nitrogen Fuel Block" autocomplete="off">
-                <div id="indSearchResults" class="ind-search-results" style="display:none"></div>
-              </div>
-            </div>
-            <div class="ind-field">
-              <label for="indQty">Quantity</label>
-              <input type="number" id="indQty" min="1" value="1">
-            </div>
-            <button class="ind-primary-btn" id="indPlanBtn" onclick="indRunPlan()" disabled>Preview</button>
-            <button class="ind-secondary-btn" id="indQueueBtn" onclick="indAddToQueue()" disabled title="Add this product to your build queue and re-plan everything together">Add to build</button>
-          </div>
-          <div class="ind-plan-opts">
-            <div class="ind-field">
-              <label for="indFacility">Facility</label>
-              <select id="indFacility" onchange="indOnFacilityChange()"></select>
-            </div>
-            <label class="ind-opt-check"><input type="checkbox" id="indPrioSpeed" checked onchange=""> Prioritize speed — buy slow bulk materials to finish sooner</label>
-            <div class="ind-field ind-field-marg">
-              <label for="indMarginal">Build only if it saves <b id="indMarginalPct">3%</b> of the build</label>
-              <input type="range" id="indMarginal" min="0" max="10" step="0.5" value="3" oninput="indOnMarginalInput()" onchange="indOnMarginalChange()">
-              <div class="ind-marg-hint" id="indMarginalHint">Higher = buy more, build less: faster and simpler, slightly pricier.</div>
-            </div>
-          </div>
-          <div id="indPickHint" class="ind-pick-hint"></div>
-          <div id="indResult"></div>
+          <p class="pp-sub">Nothing building yet. Plan a product to see what it costs, what it needs
+            and how long it takes — then add it to your build.</p>
+          <button class="ind-primary-btn ind-big-btn" onclick="indOpenPlanner()">Plan a new build</button>
         </div>
       </div>
-
       </div><!-- /indContent -->
     </div><!-- /tab-industry -->
 
@@ -1479,6 +1448,44 @@ PVF-N9    3         95                 60             80                  100   
 
   <!-- Reactions: settings modal (shipping/collateral/job-cost/time-efficiency) -->
   <!-- Industry: setup & slots modal -->
+  <div id="indPlanModal" class="pp-modal" style="display:none" onclick="if(event.target===this)indClosePlanner()">
+    <div class="pp-modal-box pp-modal-box-wide" style="overflow-y:auto">
+      <div class="pp-modal-title">Plan a new build
+        <button class="pp-modal-close" onclick="indClosePlanner()">✕</button>
+      </div>
+      <div class="pp-modal-hint">Price it and see the full pipeline before you commit. <b>Add to build</b> puts it in your build and re-plans everything together, so components shared with what you already have build in one batch.</div>
+      <div class="ind-plan-form">
+        <div class="ind-field ind-field-grow">
+          <label for="indSearch">Product to build</label>
+          <div class="ind-search-wrap">
+            <input type="text" id="indSearch" placeholder="Search any buildable — e.g. Hobgoblin II, Revelation, Nitrogen Fuel Block" autocomplete="off">
+            <div id="indSearchResults" class="ind-search-results" style="display:none"></div>
+          </div>
+        </div>
+        <div class="ind-field">
+          <label for="indQty">Quantity</label>
+          <input type="number" id="indQty" min="1" value="1">
+        </div>
+        <button class="ind-primary-btn" id="indPlanBtn" onclick="indRunPlan()" disabled>Preview</button>
+        <button class="ind-secondary-btn" id="indQueueBtn" onclick="indAddToQueue()" disabled title="Add to your build and re-plan everything together">Add to build</button>
+      </div>
+      <div class="ind-plan-opts">
+        <div class="ind-field">
+          <label for="indFacility">Facility</label>
+          <select id="indFacility" onchange="indOnFacilityChange()"></select>
+        </div>
+        <label class="ind-opt-check"><input type="checkbox" id="indPrioSpeed" checked onchange=""> Prioritize speed — buy slow bulk materials to finish sooner</label>
+        <div class="ind-field ind-field-marg">
+          <label for="indMarginal">Build only if it saves <b id="indMarginalPct">3%</b> of the build</label>
+          <input type="range" id="indMarginal" min="0" max="10" step="0.5" value="3" oninput="indOnMarginalInput()" onchange="indOnMarginalChange()">
+          <div class="ind-marg-hint" id="indMarginalHint">Higher = buy more, build less: faster and simpler, slightly pricier.</div>
+        </div>
+      </div>
+      <div id="indPickHint" class="ind-pick-hint"></div>
+      <div id="indResult"></div>
+    </div>
+  </div>
+
   <div id="indSetupModal" class="pp-modal" style="display:none" onclick="if(event.target===this)indCloseSetup()">
     <div class="pp-modal-box pp-modal-box-wide" style="overflow-y:auto">
       <div class="pp-modal-title">Manufacturing setup &amp; slots
@@ -1586,6 +1593,6 @@ PVF-N9    3         95                 60             80                  100   
   <script src="/analysis.js?v=62"></script>
   <script src="/layout.js?v=2"></script>
   <script src="/reactions.js?v=98"></script>
-  <script src="/industry.js?v=41"></script>
+  <script src="/industry.js?v=42"></script>
 </body>
 </html>

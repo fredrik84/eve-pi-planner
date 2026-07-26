@@ -1103,11 +1103,17 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-pip-rx.ind-pip-fill { background: #d9a7e0; box-shadow: 0 0 4px rgba(217,167,224,.6); }
 .ind-pip-none { font-size: 10px; color: var(--clr-text-soft); }
 .ind-do-jobs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
-.ind-do-job { display: flex; align-items: center; gap: 7px; font-size: 12px; color: #cdd6e6; flex-wrap: wrap; }
-.ind-do-name { color: #eef2f8; }
+/* One line per job: the NAME is what gives (ellipsis), so a long one like "Radar-FTL Interlink
+   Communicator" can't push the runs/duration onto a second line. */
+.ind-do-job { display: flex; align-items: center; gap: 7px; font-size: 12px; color: #cdd6e6; flex-wrap: nowrap; min-width: 0; }
+.ind-do-name { color: #eef2f8; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ind-do-runs, .ind-do-act, .ind-do-dur { flex: 0 0 auto; white-space: nowrap; }
 .ind-do-runs { color: var(--clr-text-soft); font-variant-numeric: tabular-nums; }
 .ind-do-act { font-size: 9px; text-transform: uppercase; letter-spacing: .03em; padding: 1px 5px; border-radius: 7px; }
 .ind-do-manufacturing { background: #163524; color: #7fdca6; }
 .ind-do-reaction { background: #2a2130; color: #d9a7e0; }
 .ind-do-dur { margin-left: auto; color: var(--clr-text-soft); font-variant-numeric: tabular-nums; }
 .ind-do-blocked { font-size: 12px; color: #d8b46a; margin-top: 8px; }
+.ind-big-btn { font-size: 14px; padding: 10px 18px; margin-top: 6px; }
+#indPlanModal .ind-plan-form, #indPlanModal .ind-plan-opts { margin-top: 12px; }
+#indPlanModal #indResult:not(:empty) { margin-top: 14px; }
