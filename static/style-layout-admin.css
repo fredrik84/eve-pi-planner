@@ -1183,3 +1183,4 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-ord-btn:disabled { opacity: .3; cursor: default; }
 .ind-ord-btn:hover:not(:disabled) { background: #1b2233; color: #fff; }
 .ind-do-runs b { color: var(--clr-accent); font-variant-numeric: tabular-nums; }
+.ind-opt-muted { opacity: .45; }

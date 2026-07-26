@@ -223,6 +223,7 @@ class QueuePlanRequest(BaseModel):
     # denominator would shrink as you acquire stock and the bar could never fill.
     use_stock: bool = True
     marginal_pct: float | None = None   # build only if it saves >= this % of the build
+    force_build: bool = False           # build everything buildable, ignoring small-saving shortcuts
 
 
 def _stock_for(ctx: int, targets) -> dict[int, float]:
@@ -276,9 +277,10 @@ def _run_queue_plan(ctx: int, req: QueuePlanRequest) -> dict:
     prices = resolve_market_data(ctx, list(ids))
     adjusted = fetch_adjusted_prices(list(ids))
     from app.industry.graph import SPEED_BUILD_CAP_HOURS
-    mbh = SPEED_BUILD_CAP_HOURS if req.prioritize_speed else 0.0
+    mbh = 0.0 if req.force_build else (SPEED_BUILD_CAP_HOURS if req.prioritize_speed else 0.0)
     params = resolve_build_params(ctx, req.me_pct, req.te_pct, req.system_id, req.facility_tax_pct, mbh,
-                                  req.struct_material_pct, req.struct_time_pct, req.marginal_pct)
+                                  req.struct_material_pct, req.struct_time_pct, req.marginal_pct,
+                                  req.force_build)
     # What an unowned blueprint would cost to acquire, so building can be priced honestly and the
     # margin-saver can see it. Best-effort: an empty index just leaves the old behaviour.
     try:

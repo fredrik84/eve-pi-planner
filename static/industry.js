@@ -18,6 +18,7 @@ async function onIndustryTabOpen() {
   // map with your structures, so we can tell from it whether a build structure exists yet.
   await indPopulateFacility();
   indRestoreMarginal();
+  indRestoreForceBuild();
   const hasStructure = Object.keys(_indFacilityMap).some(k => k.startsWith('s:'));
   indApplyGate(hasStructure);
   if (!hasStructure) return;
@@ -42,6 +43,7 @@ function indOpenPlanner() {
   if (!m) return;
   m.style.display = '';
   indRestoreMarginal();
+  indRestoreForceBuild();
   const s = document.getElementById('indSearch');
   if (s) setTimeout(() => s.focus(), 30);
 }
@@ -75,7 +77,8 @@ async function indRefreshStatus() {
   try {
     const r = await fetch('/api/industry/queue-plan', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prioritize_speed: _indPrioSpeed(), marginal_pct: _indMarginalPct(), ..._indFacilityBonus() }),
+      body: JSON.stringify({ prioritize_speed: _indPrioSpeed(), marginal_pct: _indMarginalPct(),
+                             force_build: _indForceBuild(), ..._indFacilityBonus() }),
     });
     if (!r.ok) { body.innerHTML = '<p class="pp-warn">Could not plan your queue.</p>'; return; }
     const d = await r.json();
@@ -498,7 +501,8 @@ async function indRunPlan() {
   try {
     const r = await fetch('/api/industry/plan', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type_id: _indPicked.type_id, quantity: qty, prioritize_speed: _indPrioSpeed(), marginal_pct: _indMarginalPct(), ..._indFacilityBonus() }),
+      body: JSON.stringify({ type_id: _indPicked.type_id, quantity: qty, prioritize_speed: _indPrioSpeed(),
+                             marginal_pct: _indMarginalPct(), force_build: _indForceBuild(), ..._indFacilityBonus() }),
     });
     if (!r.ok) { const e = await r.json().catch(() => ({})); out.innerHTML = `<div class="pp-card"><p class="pp-warn">${_esc(e.detail || 'Plan failed')}</p></div>`; return; }
     const d = await r.json();
@@ -543,6 +547,39 @@ function _indMetricTiles(m) {
 function _indPrioSpeed() {
   const el = document.getElementById('indPrioSpeed');
   return el ? el.checked : true;
+}
+
+// "Build everything": drop BOTH shortcuts that buy components — the saving threshold (including its
+// 5m floor, which the slider can't reach) and the speed cap that buys slow bulk batches. Things
+// that are outright cheaper to buy are still bought; ignoring marginal savings means small gains
+// count, not that paying more to build makes sense.
+function _indForceBuild() {
+  const el = document.getElementById('indForceBuild');
+  return el ? el.checked : false;
+}
+
+function indOnForceBuild() {
+  const on = _indForceBuild();
+  try { localStorage.setItem('indForceBuild', on ? '1' : '0'); } catch (e) {}
+  // The savings slider and speed toggle have no effect while this is on — grey them out rather
+  // than leaving controls that silently do nothing.
+  ['indMarginal', 'indPrioSpeed'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.disabled = on;
+    const f = el && el.closest('.ind-field, .ind-opt-check');
+    if (f) f.classList.toggle('ind-opt-muted', on);
+  });
+  if (_indPicked && document.getElementById('indResult').innerHTML.trim()) indRunPlan();
+  if (_indStatusVisible()) indRefreshStatus();
+}
+
+function indRestoreForceBuild() {
+  const el = document.getElementById('indForceBuild');
+  if (!el) return;
+  let v = null;
+  try { v = localStorage.getItem('indForceBuild'); } catch (e) {}
+  el.checked = v === '1';
+  indOnForceBuild();
 }
 
 // How much of the build's value a component must save before it's worth building. A genuine

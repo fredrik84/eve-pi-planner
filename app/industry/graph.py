@@ -350,6 +350,7 @@ class IndustryPlanRequest(BaseModel):
     struct_time_pct: float = 0.0       # facility TE bonus (time reduction %)
     use_stock: bool = True             # net owned materials off the demand (needs an asset scan)
     marginal_pct: float | None = None  # build only if it saves >= this % of the build (None = default)
+    force_build: bool = False          # build everything buildable, ignoring small-saving shortcuts
 
 
 # Wall-clock cap (hours) a single component's batch may take to build before the time-priority
@@ -418,7 +419,7 @@ def resolve_build_params(context_id: int, me_pct: float, te_pct: float,
                          system_id: int | None, facility_tax_pct: float | None,
                          max_build_hours: float = 0.0,
                          struct_material_pct: float = 0.0, struct_time_pct: float = 0.0,
-                         marginal_pct: float | None = None) -> BuildParams:
+                         marginal_pct: float | None = None, force_build: bool = False) -> BuildParams:
     """Build the resolver's params, auto-deriving the build system + tax from the account's
     Reactions settings when the request didn't override them — so the caller needn't supply a
     system id or tax by hand."""
@@ -445,9 +446,15 @@ def resolve_build_params(context_id: int, me_pct: float, te_pct: float,
         # User-tunable: how much of the build's value a component must save to be worth building.
         # None keeps the default. This is a genuine time-vs-cost preference the math can't settle,
         # which is why it's a knob at all. min_saving_pct stays 0 (per-component % doesn't scale).
-        marginal_pct_of_total=(MARGINAL_BUILD_PCT_OF_TOTAL if marginal_pct is None
-                               else max(0.0, min(25.0, float(marginal_pct)))),
-        min_saving_isk=MIN_BUILD_SAVING_ISK,
+        #
+        # force_build drops BOTH shortcuts — the percentage and the absolute floor. Note the floor
+        # is why the slider alone can't express this: at 0% the 5m floor still applies, so small
+        # components keep getting bought. Building at an outright LOSS is still refused; "ignore
+        # marginal savings" means small gains count, not that paying more to build is sensible.
+        marginal_pct_of_total=(0.0 if force_build else
+                               (MARGINAL_BUILD_PCT_OF_TOTAL if marginal_pct is None
+                                else max(0.0, min(25.0, float(marginal_pct))))),
+        min_saving_isk=(0.0 if force_build else MIN_BUILD_SAVING_ISK),
     )
 
 
@@ -496,9 +503,12 @@ def industry_plan(req: IndustryPlanRequest, ctx: int = Depends(require_context))
 
     prices = resolve_market_data(ctx, list(ids))
     adjusted = fetch_adjusted_prices(list(ids))
-    mbh = SPEED_BUILD_CAP_HOURS if req.prioritize_speed else 0.0
+    # force_build also drops the speed shortcut: that one buys slow bulk components, which is
+    # exactly what someone asking to build everything does not want.
+    mbh = 0.0 if req.force_build else (SPEED_BUILD_CAP_HOURS if req.prioritize_speed else 0.0)
     params = resolve_build_params(ctx, req.me_pct, req.te_pct, req.system_id, req.facility_tax_pct, mbh,
-                                  req.struct_material_pct, req.struct_time_pct, req.marginal_pct)
+                                  req.struct_material_pct, req.struct_time_pct, req.marginal_pct,
+                                  req.force_build)
     # What an unowned blueprint would cost to acquire, so building can be priced honestly and the
     # margin-saver can see it. Best-effort: an empty index just leaves the old behaviour.
     try:

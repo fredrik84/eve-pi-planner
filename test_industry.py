@@ -965,6 +965,48 @@ def test_queue_plan_returns_trees():
           [t["type_id"] for t in trees2] == [100, 101])
 
 
+def test_force_build_ignores_the_shortcuts():
+    """"Build everything" drops both shortcuts that buy components: the saving threshold AND its
+    absolute floor. The floor is why the slider alone can't express this — at 0% the 5m floor still
+    buys every small component. It must NOT, however, build at a loss: ignoring marginal savings
+    means small gains count, not that paying more to build makes sense."""
+    print("test_force_build_ignores_the_shortcuts")
+    from app.industry.graph import (resolve_build_params, MARGINAL_BUILD_PCT_OF_TOTAL,
+                                    MIN_BUILD_SAVING_ISK)
+    con = _seed_con()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+    pools = {"manufacturing": 5, "reaction": 5}
+
+    # The knobs themselves.
+    normal = resolve_build_params(0, 0, 0, None, None, 0.0, 0, 0)
+    check("normally the percentage applies",
+          normal.marginal_pct_of_total == MARGINAL_BUILD_PCT_OF_TOTAL)
+    check("normally the floor applies", normal.min_saving_isk == MIN_BUILD_SAVING_ISK)
+    forced = resolve_build_params(0, 0, 0, None, None, 0.0, 0, 0, force_build=True)
+    check("force_build zeroes the percentage", forced.marginal_pct_of_total == 0.0)
+    check("force_build zeroes the floor too", forced.min_saving_isk == 0.0)
+    # The slider alone cannot: at 0% the floor still stands.
+    slider0 = resolve_build_params(0, 0, 0, None, None, 0.0, 0, 0, marginal_pct=0)
+    check("the slider at 0 still keeps the floor", slider0.min_saving_isk == MIN_BUILD_SAVING_ISK)
+
+    # A component whose saving is small: bought under the floor, built when forced.
+    P_floor = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0,
+                          min_saving_isk=1e9, marginal_pct_of_total=0.0)
+    r_floor = plan_queue([(100, 1)], mfg, rx, _prices(SELL), ADJ, P_floor, NAMES, pools)
+    P_force = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0,
+                          min_saving_isk=0.0, marginal_pct_of_total=0.0)
+    r_force = plan_queue([(100, 1)], mfg, rx, _prices(SELL), ADJ, P_force, NAMES, pools)
+    check("a big floor buys the components",
+          len(r_floor["requirements"]) < len(r_force["requirements"]))
+    check("forcing builds more of them", len(r_force["requirements"]) >= 2)
+
+    # Building at an outright loss is still refused: make the component dearer to build than to buy.
+    dear = {**SELL, 101: 1.0}          # buying a Gadget is nearly free, so building it loses money
+    r_loss = plan_queue([(100, 1)], mfg, rx, _prices(dear), ADJ, P_force, NAMES, pools)
+    check("a loss-making component is still bought",
+          101 not in {r["type_id"] for r in r_loss["requirements"]})
+
+
 def main():
     test_material_formula()
     test_graph_loaders()
@@ -989,6 +1031,7 @@ def main():
     test_queue_plan_returns_trees()
     test_stock_reduces_plan_but_never_the_target()
     test_marginal_threshold_scales_with_build_size()
+    test_force_build_ignores_the_shortcuts()
     test_install_assignment_spreads_and_respects_free_slots()
     test_fifo_wins_contested_slots()
     test_missing_blueprints_are_reported()
