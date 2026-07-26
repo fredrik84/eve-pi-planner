@@ -1054,3 +1054,19 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-sim-row input[type=range]:disabled { opacity: .4; }
 .ind-sim-banner { font-size: 12px; color: #d8b46a; background: #241f14; border: 1px solid #3a3322;
   border-radius: 6px; padding: 7px 12px; margin-bottom: 8px; }
+/* Status-first layout */
+.ind-planner-title { cursor: pointer; user-select: none; }
+.ind-planner-title:hover { color: #fff; }
+.ind-status-head { margin-bottom: 10px; }
+.ind-status-what { font-size: 14px; color: var(--clr-text-soft); }
+.ind-status-what b { color: #fff; }
+/* Pipeline card states — done / cooking / waiting, readable at a glance */
+.ind-pipe-is-done { border-color: #2c6a44; border-left-color: #3a9668; background: #101a14; }
+.ind-pipe-is-done .ind-pipe-name { color: #9fd8b8; }
+.ind-pipe-is-run { border-color: var(--clr-accent); border-left-color: var(--clr-accent);
+  background: #14203a; box-shadow: 0 0 0 1px rgba(90,160,255,.25); }
+.ind-pipe-is-run .ind-pipe-name { color: #dceaff; }
+.ind-pipe-is-wait { opacity: .5; border-style: dashed; }
+.ind-pipe-is-wait .ind-pipe-name { color: #93a0b4; }
+.ind-st-wait { background: #23262e; color: #93a0b4; }
+.ind-st-run { background: #1e3a5f; color: #8fc3ff; }

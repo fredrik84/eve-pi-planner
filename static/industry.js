@@ -24,9 +24,79 @@ async function onIndustryTabOpen() {
 
   indLoadSetupSummary();
   indLoadLifetime();
-  indLoadQueue();
+  await indLoadQueue();
   indLoadInstall();
   indLoadRunning();
+  // If something is already cooking, that's what you came to look at — show the live build first
+  // and fold the planner away. With an empty queue there's nothing to check, so lead with planning.
+  await indRefreshStatus();
+}
+
+let _indPlannerOpen = null;   // null = decide from whether there's work; true/false = user's choice
+
+function indTogglePlanner(force) {
+  const body = document.getElementById('indPlannerBody');
+  const caret = document.getElementById('indPlannerCaret');
+  if (!body) return;
+  _indPlannerOpen = (force === undefined) ? !(body.style.display !== 'none') : !!force;
+  body.style.display = _indPlannerOpen ? '' : 'none';
+  if (caret) caret.textContent = _indPlannerOpen ? '▾' : '▸';
+  const idle = document.getElementById('indSetupBarIdle');
+  if (idle) idle.style.display = document.getElementById('indStatusCard').style.display === 'none' ? '' : 'none';
+}
+
+// The landing view: what's cooking, what's next, and the pipeline as the centrepiece.
+async function indRefreshStatus() {
+  const card = document.getElementById('indStatusCard');
+  const body = document.getElementById('indStatusBody');
+  if (!card || !body) return;
+  let orders = [];
+  try {
+    const r = await fetch('/api/industry/orders');
+    if (r.ok) orders = (await r.json()).orders || [];
+  } catch (e) {}
+  if (!orders.length) {
+    card.style.display = 'none';
+    indTogglePlanner(true);                 // nothing to check — lead with planning
+    return;
+  }
+  card.style.display = '';
+  if (_indPlannerOpen === null) indTogglePlanner(false);
+  body.innerHTML = _indLoadingHtml('Checking your build…', 'Pulling job status and re-planning what is left.');
+  await indLoadProgress();
+  try {
+    const r = await fetch('/api/industry/queue-plan', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prioritize_speed: _indPrioSpeed(), marginal_pct: _indMarginalPct(), ..._indFacilityBonus() }),
+    });
+    if (!r.ok) { body.innerHTML = '<p class="pp-warn">Could not plan your queue.</p>'; return; }
+    const d = await r.json();
+    if (d.empty) { card.style.display = 'none'; indTogglePlanner(true); return; }
+    _indLastPlan = d;
+    _indCacheNames(d);
+    body.innerHTML = _indStatusHeadline(d) + _indRenderPlanBody(d);
+  } catch (e) { body.innerHTML = `<p class="pp-warn">${_esc(String(e))}</p>`; }
+}
+
+// One-line answer to "where am I": overall progress, what's in the cooker, what to do next.
+function _indStatusHeadline(d) {
+  const p = _indProgress;
+  const sim = p && p.simulated
+    ? '<div class="ind-sim-banner">Preview mode — this progress is made up so you can see the layout. Nothing here is real.</div>' : '';
+  const t = (p && p.totals) || null;
+  const tiles = [];
+  if (t && t.required) {
+    tiles.push(['Progress', `${p.pct}%`, `${t.done} of ${t.required} jobs delivered`]);
+    tiles.push(['In the cooker', String(t.running), 'Jobs running right now']);
+    tiles.push(['Still to start', String(t.waiting), 'Jobs not started yet']);
+  }
+  tiles.push(['Time left', _fmtHours(d.metrics.makespan_hours), 'Wall-clock for what remains, jobs in parallel']);
+  const heads = (d.targets || []).map(x => `${x.quantity}× ${_esc(x.name)}`).join(', ');
+  return sim
+    + `<div class="ind-status-head"><div class="ind-status-what">Building <b>${heads}</b></div></div>`
+    + `<div class="an-stats">` + tiles.map(([l, v, tip]) =>
+        `<div class="an-stat" title="${_esc(tip)}"><div class="an-stat-lbl">${l}</div><div class="an-stat-val">${v}</div></div>`).join('')
+    + `</div>`;
 }
 
 function indApplyGate(hasStructure) {
@@ -78,11 +148,14 @@ async function indLoadSetupSummary() {
   let slots = null, bp = null;
   try { const r = await fetch('/api/industry/slots'); if (r.ok) slots = await r.json(); } catch (e) {}
   try { const r = await fetch('/api/industry/blueprints'); if (r.ok) bp = await r.json(); } catch (e) {}
-  if (sum) {
+  const txt = (() => {
     const s = slots ? `<b>${slots.manufacturing_free}/${slots.manufacturing_slots}</b> mfg · <b>${slots.reaction_free}/${slots.reaction_slots}</b> rx slots free` : '';
     const b = bp ? (bp.connected ? ` · <span class="ind-bp-ok">${bp.owned_count} blueprints</span>` : '') : '';
-    sum.innerHTML = s + b;
-  }
+    return s + b;
+  })();
+  if (sum) sum.innerHTML = txt;
+  const idle = document.getElementById('indSetupSummaryIdle');
+  if (idle) idle.innerHTML = txt;
   if (rem) {
     if (bp && !bp.connected) {
       rem.style.display = '';
@@ -769,12 +842,21 @@ function _indPipelineHtml(d, tiersData, model) {
     const runs = e.runs ? `<span class="ind-pipe-runs">${e.runs.toLocaleString()}&nbsp;run${e.runs > 1 ? 's' : ''}</span>` : '';
     const qty = `×${Math.round(e.qty).toLocaleString()}`;
     // Live state from real ESI jobs, when we have it — the pipeline doubles as a progress board.
+    // Three states you can read at a glance: done (green border), in the cooker (accent + glow),
+    // waiting (greyed back). Anything with no progress data at all keeps the neutral card.
     const p = prog[e.type_id];
     let state = '', cls = '';
     if (p && p.required_runs) {
-      if (p.done_runs >= p.required_runs) { state = '<span class="ind-pipe-state ind-st-done">done</span>'; cls = ' ind-pipe-is-done'; }
-      else if (p.running_runs > 0) { state = `<span class="ind-pipe-state ind-st-run">${p.running_runs} running</span>`; cls = ' ind-pipe-is-run'; }
-      else if (p.done_runs > 0) { state = `<span class="ind-pipe-state ind-st-part">${p.done_runs}/${p.required_runs}</span>`; cls = ' ind-pipe-is-run'; }
+      if (p.done_runs >= p.required_runs) {
+        state = '<span class="ind-pipe-state ind-st-done">✓ done</span>'; cls = ' ind-pipe-is-done';
+      } else if (p.running_runs > 0) {
+        state = `<span class="ind-pipe-state ind-st-run">${p.running_runs} cooking</span>`; cls = ' ind-pipe-is-run';
+        if (p.done_runs > 0) state += `<span class="ind-pipe-state ind-st-part">${p.done_runs}/${p.required_runs}</span>`;
+      } else if (p.done_runs > 0) {
+        state = `<span class="ind-pipe-state ind-st-part">${p.done_runs}/${p.required_runs}</span>`; cls = ' ind-pipe-is-run';
+      } else {
+        state = '<span class="ind-pipe-state ind-st-wait">waiting</span>'; cls = ' ind-pipe-is-wait';
+      }
     }
     return `<div class="ind-pipe-card ind-pipe-build${cls}" data-tid="${e.type_id}" title="${_esc(e.name)} — ${qty}${e.runs ? ', ' + e.runs + ' runs' : ''}. Hover to trace its chain."><span class="ind-pipe-name">${_esc(e.name)}</span>`
       + `<span class="ind-pipe-meta"><span class="ind-pipe-qty">${qty}</span>${runs}${owned}${state}</span></div>`;
@@ -917,6 +999,21 @@ function _indRenderPlan(d, title) {
   </div>`;
 }
 
+// The plan's contents without the card chrome — the status view supplies its own heading and tiles,
+// so it renders the pipeline/steps/shopping list directly rather than a card inside a card.
+function _indRenderPlanBody(d) {
+  const tiersData = d.tree ? _indComputeTiers(d.tree, new Set((d.shopping_list || []).map(x => x.type_id)))
+    : { byType: {}, tiers: {}, maxT: 0, inputsOf: {}, consumersOf: {} };
+  const stageModel = _indStageModel(tiersData);
+  const unres = (d.unresolved && d.unresolved.length)
+    ? `<p class="pp-warn">${d.unresolved.length} material(s) had no market price — cost is a floor.</p>` : '';
+  return unres
+    + _indPipelineHtml(d, tiersData, stageModel)
+    + _indStepsHtml(d, stageModel)
+    + `<details class="ind-details"><summary>Shopping list (${(d.shopping_list || []).length})</summary>`
+    + _indShoppingSections(d, stageModel) + `</details>`;
+}
+
 // Task waves only carry type_id; keep a name cache from the last plan's shopping/tree so waves read nicely.
 let _indNameCache = {};
 function _indName(tid) { return _indNameCache[tid] || ('#' + tid); }
@@ -937,8 +1034,10 @@ async function indAddToQueue() {
       body: JSON.stringify({ product_type_id: _indPicked.type_id, quantity: qty }),
     });
     if (!r.ok) { const e = await r.json().catch(() => ({})); alert(e.detail || 'Could not queue'); return; }
-    indLoadQueue();
+    document.getElementById('indResult').innerHTML = '';
+    await indLoadQueue();
     indLoadInstall();
+    await indRefreshStatus();     // adding re-plans the whole queue together — the reason to queue
   } catch (e) { alert(String(e)); }
 }
 
@@ -1029,8 +1128,9 @@ async function indLoadQueue() {
 
 async function indRemoveOrder(id) {
   try { await fetch('/api/industry/orders/' + id, { method: 'DELETE' }); } catch (e) {}
-  indLoadQueue();
+  await indLoadQueue();
   indLoadInstall();
+  await indRefreshStatus();
 }
 
 // ── "To install now" checklist + in-progress jobs ───────────────────────────────────────────
@@ -1083,25 +1183,8 @@ async function indLoadRunning() {
   } catch (e) { el.innerHTML = ''; }
 }
 
-async function indPlanQueue() {
-  const out = document.getElementById('indQueueResult');
-  out.innerHTML = _indLoadingHtml('Planning the whole queue…',
-    'Combining every order into shared batches, then scheduling them across your slots.');
-  await indLoadProgress();   // so the pipeline renders with live state, not just the plan
-  try {
-    const r = await fetch('/api/industry/queue-plan', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prioritize_speed: _indPrioSpeed(), marginal_pct: _indMarginalPct(), ..._indFacilityBonus() }),
-    });
-    if (!r.ok) { const e = await r.json().catch(() => ({})); out.innerHTML = `<p class="pp-warn">${_esc(e.detail || 'Queue plan failed')}</p>`; return; }
-    const d = await r.json();
-    if (d.empty) { out.innerHTML = '<p class="pp-sub">Queue is empty.</p>'; return; }
-    _indLastPlan = d;
-    _indCacheNames(d);
-    const heads = (d.targets || []).map(t => `${t.quantity}× ${_esc(t.name)}`).join(', ');
-    out.innerHTML = _indRenderPlan(d, 'Whole queue: ' + heads).replace('<div class="pp-card">', '<div class="ind-inner-card">').replace(/<\/div>\s*$/, '</div>');
-  } catch (e) { out.innerHTML = `<p class="pp-warn">${_esc(String(e))}</p>`; }
-}
+async function indPlanQueue() { return indRefreshStatus(); }
+
 
 // wire the search input once the DOM is ready
 document.addEventListener('DOMContentLoaded', () => {
