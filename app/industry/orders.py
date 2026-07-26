@@ -50,6 +50,13 @@ def ensure_industry_orders_table():
             )
         """)
         con.execute("CREATE INDEX IF NOT EXISTS idx_ind_orders_ctx ON pp_industry_orders (context_id)")
+        # Who/what this order is for — a customer name, a contract, a fleet. Several identical
+        # Revelations are indistinguishable without it, which is exactly the case that matters.
+        try:
+            con.execute("ALTER TABLE pp_industry_orders ADD COLUMN label TEXT DEFAULT ''")
+            con.commit()
+        except Exception:
+            pass
         con.commit()
     finally:
         con.close()
@@ -59,11 +66,13 @@ class OrderCreate(BaseModel):
     product_type_id: int
     quantity: int = 1
     mode: str = "parallel"
+    label: str = ""          # free text: customer, contract, whatever makes it identifiable
 
 
 class OrderUpdate(BaseModel):
     quantity: int | None = None
     mode: str | None = None
+    label: str | None = None
     priority: int | None = None
     status: str | None = None
 
@@ -102,9 +111,9 @@ def create_order(req: OrderCreate, ctx: int = Depends(require_context)):
         # 404 ("order not found") even though the insert committed.
         oid = con.execute(
             "INSERT INTO pp_industry_orders (context_id, product_type_id, name, quantity, mode, "
-            "priority, status, created_at) VALUES (?,?,?,?,?,?, 'queued', ?) RETURNING id",
+            "priority, status, created_at, label) VALUES (?,?,?,?,?,?, 'queued', ?,?) RETURNING id",
             (ctx, req.product_type_id, name or str(req.product_type_id), req.quantity, req.mode,
-             int(_time.time()), _time.time()),
+             int(_time.time()), _time.time(), (req.label or "").strip()[:60]),
         ).fetchone()[0]
         con.commit()
         return _order_row(con, oid, ctx)
@@ -143,6 +152,8 @@ def update_order(order_id: int, req: OrderUpdate, ctx: int = Depends(require_con
             sets.append("mode=?"); params.append(req.mode)
         if req.priority is not None:
             sets.append("priority=?"); params.append(req.priority)
+        if req.label is not None:
+            sets.append("label=?"); params.append(req.label.strip()[:60])
         if req.status is not None:
             if req.status not in _VALID_STATUSES:
                 raise HTTPException(status_code=400, detail=f"status must be one of {_VALID_STATUSES}")

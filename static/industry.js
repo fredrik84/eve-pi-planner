@@ -111,7 +111,8 @@ function _indStatusHeadline(d) {
     const st = op ? op.status : 'waiting';
     const lbl = op ? (st === 'complete' ? 'done'
       : st === 'building' ? `${op.done_units}/${op.quantity}` : 'not started') : '';
-    return `<span class="ind-order-chip ind-oc-${st}"><b>${o.quantity}×</b> ${_esc(o.name)}`
+    const tag = (op && op.label) ? `<span class="ind-oc-for" title="This order is for ${_esc(op.label)}">${_esc(op.label)}</span>` : '';
+    return `<span class="ind-order-chip ind-oc-${st}">${tag}<b>${o.quantity}×</b> ${_esc(o.name)}`
       + (lbl ? `<span class="ind-oc-state">${lbl}</span>` : '')
       + `<button class="ind-oc-del" title="Remove from the build" onclick="indRemoveOrder(${o.id})">✕</button></span>`;
   }).join('');
@@ -1056,10 +1057,13 @@ async function indAddToQueue() {
   try {
     const r = await fetch('/api/industry/orders', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ product_type_id: _indPicked.type_id, quantity: qty }),
+      body: JSON.stringify({ product_type_id: _indPicked.type_id, quantity: qty,
+                             label: (document.getElementById('indLabel') || {}).value || '' }),
     });
     if (!r.ok) { const e = await r.json().catch(() => ({})); alert(e.detail || 'Could not queue'); return; }
     document.getElementById('indResult').innerHTML = '';
+    const lb = document.getElementById('indLabel');
+    if (lb) lb.value = '';          // don't inherit the last customer on the next order
     indClosePlanner();
     await indLoadQueue();
     indLoadInstall();

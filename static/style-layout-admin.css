@@ -1117,3 +1117,8 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-big-btn { font-size: 14px; padding: 10px 18px; margin-top: 6px; }
 #indPlanModal .ind-plan-form, #indPlanModal .ind-plan-opts { margin-top: 12px; }
 #indPlanModal #indResult:not(:empty) { margin-top: 14px; }
+.ind-field-label { min-width: 190px; }
+.ind-field-label input { width: 100%; }
+.ind-oc-for { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em;
+  background: #2a2130; color: #d9a7e0; padding: 1px 7px; border-radius: 8px; max-width: 140px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

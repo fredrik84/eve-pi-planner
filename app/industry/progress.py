@@ -137,7 +137,7 @@ def queue_progress(context_id: int) -> dict:
     con = get_connection()
     try:
         orders = con.execute(
-            "SELECT id, product_type_id, name, quantity FROM pp_industry_orders "
+            "SELECT id, product_type_id, name, quantity, COALESCE(label, '') AS label FROM pp_industry_orders "
             "WHERE context_id = ? ORDER BY priority DESC, id",
             (context_id,),
         ).fetchall()
@@ -198,7 +198,7 @@ def queue_progress(context_id: int) -> dict:
                   else "building" if run_units > 0 or done_units > 0
                   else "waiting")
         order_rows.append({
-            "id": o["id"], "name": o["name"], "product_type_id": tid, "quantity": want,
+            "id": o["id"], "name": o["name"], "label": o["label"], "product_type_id": tid, "quantity": want,
             "done_units": done_units, "running_units": run_units,
             "pct": round(100.0 * done_units / want, 1) if want else 0.0,
             "status": status,
@@ -231,7 +231,7 @@ def simulated_progress(context_id: int, pct: float) -> dict:
     con = get_connection()
     try:
         orders = con.execute(
-            "SELECT id, product_type_id, name, quantity FROM pp_industry_orders "
+            "SELECT id, product_type_id, name, quantity, COALESCE(label, '') AS label FROM pp_industry_orders "
             "WHERE context_id = ? ORDER BY priority DESC, id",
             (context_id,),
         ).fetchall()
@@ -308,7 +308,8 @@ def simulated_progress(context_id: int, pct: float) -> dict:
         run_units = min((t or {}).get("running_runs", 0) * oq, max(0, want - done_units))
         status = ("complete" if done_units >= want
                   else "building" if run_units > 0 or done_units > 0 else "waiting")
-        order_rows.append({"id": o["id"], "name": o["name"], "product_type_id": tid,
+        order_rows.append({"id": o["id"], "name": o["name"], "label": o["label"],
+                           "product_type_id": tid,
                            "quantity": want, "done_units": done_units, "running_units": run_units,
                            "pct": round(100.0 * done_units / want, 1) if want else 0.0,
                            "status": status})
