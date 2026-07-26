@@ -115,6 +115,8 @@ def aggregate_demand(targets: list[tuple[int, int]], memo: dict, mfg: dict, rx: 
     result: dict[int, dict] = {}
     flipped: set[int] = set()             # bought for speed (slow to build)
     flipped_marginal: set[int] = set()    # bought because building saves a trivial amount
+    flipped_no_bp: set[int] = set()       # bought because the blueprint costs more than it saves
+    blueprint_cost_total = 0.0
     for tid in built:
         recipe = mfg.get(tid) or rx.get(tid)
         activity = "manufacturing" if tid in mfg else "reaction"
@@ -136,17 +138,39 @@ def aggregate_demand(targets: list[tuple[int, int]], memo: dict, mfg: dict, rx: 
                 flipped.add(tid)          # falls through to the bought loop; inputs not exploded
                 continue
 
+        # Blueprint you don't own: building it isn't free, you have to acquire the print first.
+        # A BPC is a consumable, so its cost counts against this batch's saving. An original with no
+        # copies listed is a multi-billion durable asset — buying one to serve a single build is a
+        # different decision entirely, so the component is bought instead (a real case: a Radar-FTL
+        # BPO costs more than the whole Revelation the plan wanted it for).
+        bp = params.bp_acquire.get(tid)
+        bp_cost = 0.0
+        if bp and runs > 0 and tid not in params.owned:
+            if bp["kind"] == "bpo_only":
+                if tid not in target_ids and (memo.get(tid) or {}).get("buy_unit_cost") is not None:
+                    flipped_no_bp.add(tid)
+                    continue
+            else:
+                copies = math.ceil(runs / max(1, bp.get("runs_per_copy") or 1))
+                bp_cost = copies * bp["price"]
+                blueprint_cost_total += bp_cost
+
         # Marginal-saving flip: buy if building saves a trivial amount — negligible vs the whole
         # product, or a tiny % of the component's own buy price. Not worth a job.
         node = memo.get(tid) or {}
         buc, byc = node.get("build_unit_cost"), node.get("buy_unit_cost")
         if runs > 0 and tid not in target_ids and buc is not None and byc is not None:
-            total_saving = (byc - buc) * net
+            total_saving = (byc - buc) * net - bp_cost      # the print is part of building it
             total_buy = byc * net
-            if total_saving > 0 and (
-                    (marginal_abs > 0 and total_saving < marginal_abs)
-                    or (params.min_saving_pct > 0 and total_buy > 0
-                        and total_saving < params.min_saving_pct / 100.0 * total_buy)):
+            # `<= 0` matters now that the blueprint counts: the cost engine only ever proposes
+            # building when the MATERIALS are cheaper, so the saving used to be positive by
+            # construction and the old guard required that. Add the price of a print you don't own
+            # and it can go negative — building genuinely costs more than buying — which is the
+            # clearest possible reason to buy, and the old guard skipped exactly that case.
+            below_abs = marginal_abs > 0 and total_saving < marginal_abs
+            below_pct = (params.min_saving_pct > 0 and total_buy > 0
+                         and total_saving < params.min_saving_pct / 100.0 * total_buy)
+            if total_saving <= 0 or below_abs or below_pct:
                 flipped_marginal.add(tid)
                 continue
 
@@ -154,6 +178,7 @@ def aggregate_demand(targets: list[tuple[int, int]], memo: dict, mfg: dict, rx: 
             "type_id": tid, "activity": activity, "build": True,
             "gross": gross[tid], "net": net, "runs": runs, "produced": produced,
             "leftover": produced - net, "output_qty": output_qty, "bought_for_speed": False,
+            "blueprint_cost": bp_cost,
         }
         for inp in recipe["inputs"]:
             gross[inp["type_id"]] += effective_material_qty(inp["quantity"], runs, me, mult)
@@ -164,7 +189,8 @@ def aggregate_demand(targets: list[tuple[int, int]], memo: dict, mfg: dict, rx: 
             continue
         result[tid] = {"type_id": tid, "activity": None, "build": False, "gross": qty,
                        "net": qty, "runs": 0, "produced": 0, "leftover": 0, "output_qty": 0,
-                       "bought_for_speed": tid in flipped, "bought_marginal": tid in flipped_marginal}
+                       "bought_for_speed": tid in flipped, "bought_marginal": tid in flipped_marginal,
+                       "bought_no_blueprint": tid in flipped_no_bp}
     return result
 
 
@@ -420,8 +446,14 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
                 "line_cost": line if price else None,
                 "bought_for_speed": info.get("bought_for_speed", False),
                 "bought_marginal": info.get("bought_marginal", False),
+                "bought_no_blueprint": info.get("bought_no_blueprint", False),
             })
     shopping.sort(key=lambda r: r["line_cost"] or 0.0, reverse=True)
+
+    # Blueprints you don't own are a real cost of building, so they're part of the total — and they
+    # already counted against the margin-saver above, so a component whose print costs more than
+    # building saves was bought instead of appearing here.
+    blueprint_cost = sum(info.get("blueprint_cost", 0.0) for info in agg.values())
 
     # Leftover intermediates (batch-rounding overproduction) are reusable/sellable inventory, not a
     # cost of the finished product — value them at their build unit cost and credit that back so the
@@ -437,7 +469,7 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
         leftovers.append({"type_id": tid, "name": names.get(tid, str(tid)),
                           "qty": info["leftover"], "value": round(val, 2)})
     leftovers.sort(key=lambda r: r["value"], reverse=True)
-    total_cost = materials_cost + job_cost
+    total_cost = materials_cost + job_cost + blueprint_cost
     return {
         "targets": [{"type_id": t, "name": names.get(t, str(t)), "quantity": q,
                      "rank": i, "finish_hours": _finish_of(tasks, t)}
@@ -462,6 +494,7 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
         "metrics": {
             "materials_cost": round(materials_cost, 2),
             "job_cost": round(job_cost, 2),
+            "blueprint_cost": round(blueprint_cost, 2),
             "total_cost": round(total_cost, 2),
             "leftover_value": round(leftover_value, 2),
             "net_cost": round(total_cost - leftover_value, 2),
@@ -471,9 +504,8 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
             # When the FIRST queued order is done — the number that matters when you owe someone a
             # delivery, as distinct from when the whole queue drains.
             "first_delivery_hours": (_finish_of(tasks, targets[0][0]) if targets else 0.0),
-            # Blueprint cost is NOT in total_cost: BPCs trade on contracts, which no market API
-            # exposes, so there is no honest number to add. Report what's missing instead of
-            # silently quoting a build you can't start.
+            # Blueprints you don't own that the plan still builds — priced into total_cost above
+            # when copies are listed. Anything with no copies available was flipped to buy instead.
             "missing_blueprints": sorted(
                 ({"type_id": tid, "name": names.get(tid, str(tid))}
                  for tid, info in agg.items()

@@ -269,6 +269,44 @@ def bpc_prices(type_ids: list[int], region_id: int = THE_FORGE) -> dict[int, dic
     return out
 
 
+def acquisition_costs(type_ids: list[int], owned: dict, region_id: int = THE_FORGE) -> dict[int, dict]:
+    """What it would COST to get a blueprint you don't already have, per product type.
+
+    Returns {type_id: {kind, price, runs_per_copy, live}} where kind is:
+      * ``bpc``      — copies are listed; a consumable, so its price is fully attributable to this
+                       build (you buy however many copies the run count needs).
+      * ``bpo_only`` — no copies listed, only originals. An original is a durable asset costing
+                       billions; charging it to one build would be nonsense, and charging nothing
+                       hides that you can't start at all. The caller treats these as "buy the
+                       component instead", which is what a person would actually do.
+
+    Types already owned are omitted — you have the blueprint, so there is nothing to acquire.
+    """
+    wanted = [t for t in type_ids if t not in owned]
+    prices = bpc_prices(wanted, region_id)
+    out: dict[int, dict] = {}
+    for tid, info in prices.items():
+        bpc = info.get("bpc") or {}
+        live, hist = bpc.get("live"), bpc.get("history")
+        pick = live or hist
+        if pick:
+            # Cheapest for a live listing (what you'd actually pay right now); median for a
+            # historical estimate, which is outlier-resistant when nothing is on offer.
+            price = pick["cheapest"] if live else pick["median"]
+            per_copy = None
+            if pick.get("median_per_run") and pick["median_per_run"] > 0:
+                per_copy = max(1, round(price / pick["median_per_run"]))
+            out[tid] = {"kind": "bpc", "price": price, "runs_per_copy": per_copy or 1,
+                        "live": bool(live)}
+            continue
+        bpo = info.get("bpo") or {}
+        b = bpo.get("live") or bpo.get("history")
+        if b:
+            out[tid] = {"kind": "bpo_only", "price": b["cheapest"], "runs_per_copy": 0,
+                        "live": bool(bpo.get("live"))}
+    return out
+
+
 @router.get("/api/industry/bpc")
 def industry_bpc(type_ids: str = "", scan: int = 1, ctx: int = Depends(require_context)):
     """Blueprint contract prices for the given product type_ids (comma separated).

@@ -251,6 +251,13 @@ def _run_queue_plan(ctx: int, req: QueuePlanRequest) -> dict:
     mbh = SPEED_BUILD_CAP_HOURS if req.prioritize_speed else 0.0
     params = resolve_build_params(ctx, req.me_pct, req.te_pct, req.system_id, req.facility_tax_pct, mbh,
                                   req.struct_material_pct, req.struct_time_pct, req.marginal_pct)
+    # What an unowned blueprint would cost to acquire, so building can be priced honestly and the
+    # margin-saver can see it. Best-effort: an empty index just leaves the old behaviour.
+    try:
+        from app.industry.bpc import acquisition_costs
+        params.bp_acquire = acquisition_costs(list(ids), params.owned)
+    except Exception:
+        params.bp_acquire = {}
     pool = _slot_pool(ctx)
     mfg_slots = req.mfg_slots if req.mfg_slots is not None else pool["manufacturing_slots"]
     rx_slots = req.rx_slots if req.rx_slots is not None else pool["reaction_slots"]

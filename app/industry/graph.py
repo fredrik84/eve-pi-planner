@@ -77,6 +77,9 @@ class BuildParams:
     # te_pct fallback. `owned` carries the same map's ownership detail for display.
     me_by_product: dict = field(default_factory=dict)
     owned: dict = field(default_factory=dict)
+    # Blueprint acquisition cost for types NOT owned — {type_id: {kind, price, runs_per_copy}}.
+    # Empty means 'unknown', which leaves the old behaviour untouched.
+    bp_acquire: dict = field(default_factory=dict)
 
     def me_te_for(self, type_id: int, activity: str) -> tuple[float, float]:
         """(me_pct, te_pct) for a manufacturing product: its owned-blueprint values if known, else
@@ -496,6 +499,13 @@ def industry_plan(req: IndustryPlanRequest, ctx: int = Depends(require_context))
     mbh = SPEED_BUILD_CAP_HOURS if req.prioritize_speed else 0.0
     params = resolve_build_params(ctx, req.me_pct, req.te_pct, req.system_id, req.facility_tax_pct, mbh,
                                   req.struct_material_pct, req.struct_time_pct, req.marginal_pct)
+    # What an unowned blueprint would cost to acquire, so building can be priced honestly and the
+    # margin-saver can see it. Best-effort: an empty index just leaves the old behaviour.
+    try:
+        from app.industry.bpc import acquisition_costs
+        params.bp_acquire = acquisition_costs(list(ids), params.owned)
+    except Exception:
+        params.bp_acquire = {}
 
     # Schedule the single build across the account's real slot pools (manufacturing + separate
     # reaction pool) for an honest MAKESPAN with parallelism — build_plan alone only sums job time

@@ -581,6 +581,51 @@ def test_bpc_price_summary():
     check("empty input returns nothing at all", _summarise([], live_cutoff) is None)
 
 
+def test_blueprint_cost_affects_make_or_buy():
+    """A blueprint you don't own is a real cost of BUILDING, so it must (a) be priced into the
+    total and (b) count against the margin-saver — otherwise 'cheaper to build' can be quoted for a
+    component whose print costs more than the whole build. A print with no copies listed is a
+    multi-billion durable asset, so the component is bought instead."""
+    print("test_blueprint_cost_affects_make_or_buy")
+    con = _seed_con()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+    pools = {"manufacturing": 5, "reaction": 5}
+    base = dict(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, min_saving_isk=0.0,
+                marginal_pct_of_total=0.0)
+
+    # Baseline: Gadget (101) is worth building on materials alone.
+    P0 = BuildParams(**base)
+    r0 = plan_queue([(100, 1)], mfg, rx, _prices(SELL), ADJ, P0, NAMES, pools)
+    check("gadget built when blueprints are free", 101 in {r["type_id"] for r in r0["requirements"]})
+    check("no blueprint cost by default", r0["metrics"]["blueprint_cost"] == 0)
+
+    # A cheap BPC: still built, but the cost now shows up in the total.
+    P1 = BuildParams(**base, bp_acquire={101: {"kind": "bpc", "price": 1000.0, "runs_per_copy": 10}})
+    r1 = plan_queue([(100, 1)], mfg, rx, _prices(SELL), ADJ, P1, NAMES, pools)
+    check("cheap BPC keeps it built", 101 in {r["type_id"] for r in r1["requirements"]})
+    check("BPC cost is charged", r1["metrics"]["blueprint_cost"] > 0)
+    check("total_cost includes the blueprint",
+          r1["metrics"]["total_cost"] > r0["metrics"]["total_cost"])
+
+    # An expensive BPC: the margin-saver must see it and flip the component to buy.
+    P2 = BuildParams(**base, bp_acquire={101: {"kind": "bpc", "price": 5e9, "runs_per_copy": 1}})
+    r2 = plan_queue([(100, 1)], mfg, rx, _prices(SELL), ADJ, P2, NAMES, pools)
+    check("an unaffordable BPC flips it to buy", 101 not in {r["type_id"] for r in r2["requirements"]})
+    check("nothing is charged for a print we no longer buy", r2["metrics"]["blueprint_cost"] == 0)
+
+    # Only originals listed -> buy the component rather than a multi-billion BPO for one build.
+    P3 = BuildParams(**base, bp_acquire={101: {"kind": "bpo_only", "price": 4e9, "runs_per_copy": 0}})
+    r3 = plan_queue([(100, 1)], mfg, rx, _prices(SELL), ADJ, P3, NAMES, pools)
+    check("BPO-only flips the component to buy", 101 not in {r["type_id"] for r in r3["requirements"]})
+    check("the reason is reported", any(
+        s.get("bought_no_blueprint") for s in r3["shopping_list"] if s["type_id"] == 101))
+
+    # The TARGET is what you asked to build — never flipped away, whatever its print costs.
+    P4 = BuildParams(**base, bp_acquire={100: {"kind": "bpo_only", "price": 9e9, "runs_per_copy": 0}})
+    r4 = plan_queue([(100, 1)], mfg, rx, _prices(SELL), ADJ, P4, NAMES, pools)
+    check("the target is still built", 100 in {r["type_id"] for r in r4["requirements"]})
+
+
 def main():
     test_material_formula()
     test_graph_loaders()
@@ -608,6 +653,7 @@ def main():
     test_fifo_wins_contested_slots()
     test_missing_blueprints_are_reported()
     test_bpc_price_summary()
+    test_blueprint_cost_affects_make_or_buy()
     print(f"\nAll {_passed} checks passed.")
 
 
