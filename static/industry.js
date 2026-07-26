@@ -1060,27 +1060,41 @@ function _indRenderPlan(d, title) {
 // so it renders the pipeline/steps/shopping list directly rather than a card inside a card.
 // You can't install a manufacturing job without the blueprint. Say so plainly, and be explicit
 // that the quoted cost excludes it — a capital BPC is a large, invisible addition otherwise.
+// Each rendered warning gets its own instance id. The plan is rendered in TWO places — the status
+// view and the preview modal — and both can show the same missing blueprint at once. With a plain
+// `bpcpx-<type_id>` the two blocks collide, getElementById returns whichever is first in the
+// document (the status view, sitting behind the modal), and the modal's row sits on "checking
+// contracts…" forever. That was a real bug, not a hypothetical.
+let _indBpcSeq = 0;
+
 function _indBlueprintWarn(d) {
   const miss = (d.metrics && d.metrics.missing_blueprints) || [];
   if (!miss.length) return '';
+  const inst = ++_indBpcSeq;
   const rows = miss.map(m =>
     `<div class="ind-bp-row2"><span class="ind-bp-nm">${_esc(m.name)}</span>`
-    + `<span class="ind-bp-px" id="bpcpx-${m.type_id}">checking contracts…</span></div>`).join('');
+    + `<span class="ind-bp-px" id="bpcpx-${inst}-${m.type_id}">checking contracts…</span></div>`).join('');
   // Fill the prices in after render — a cold contract index is a background scan, so the warning
   // must never wait on it.
-  setTimeout(() => indLoadBpcPrices(miss.map(m => m.type_id)), 0);
-  return `<div class="ind-bp-warn"><b>You don't own a blueprint for ${miss.length === 1 ? 'this' : 'these'}:</b>`
+  setTimeout(() => indLoadBpcPrices(inst, miss.map(m => m.type_id)), 0);
+  const vis = (d.metrics && d.metrics.blueprint_visibility) || {};
+  const caveat = vis.total
+    ? `We can only see blueprints held <b>personally</b> by connected characters (${vis.connected} of ${vis.total}). `
+      + `Anything in a <b>corp hangar</b> is corp-owned, and ESI only exposes those to a character with the `
+      + `<b>Director</b> role — so prints you do have will often show up here.`
+    : `We can only see blueprints held personally by connected characters — anything in a corp hangar is `
+      + `invisible to ESI without the Director role.`;
+  return `<div class="ind-bp-note"><b>No blueprint found for ${miss.length === 1 ? 'this' : 'these'}</b>`
     + `<div class="ind-bp-rows">${rows}</div>`
-    + `<div class="ind-bp-warn-sub">These jobs can't be installed until you have the BPO or a BPC. `
-    + `Blueprint cost is <b>not</b> in the total above — a contract is one seller's ask, not a market `
-    + `rate, so folding it in would let a single listing swing your build-vs-buy decisions. `
-    + `Prices are from public contracts in Jita — use them to judge whether a local seller is a good deal.</div></div>`;
+    + `<div class="ind-bp-warn-sub">${caveat} Nothing is blocked and no build decision was changed by `
+    + `this — it's a heads-up plus a price so you can compare against a local seller. Copy prices, `
+    + `where copies are listed, are included in the total above.</div></div>`;
 }
 
 // Public-contract blueprint prices. Shows what's listed right now, and falls back to what they have
 // historically gone for — blueprints sell out constantly, so "nothing listed today" is the normal
 // case and still deserves an answer.
-async function indLoadBpcPrices(ids) {
+async function indLoadBpcPrices(inst, ids) {
   if (!ids || !ids.length) return;
   let d = null;
   try {
@@ -1089,7 +1103,7 @@ async function indLoadBpcPrices(ids) {
   } catch (e) {}
   const scanning = d && d.scan && d.scan.busy;
   ids.forEach(id => {
-    const el = document.getElementById('bpcpx-' + id);
+    const el = document.getElementById('bpcpx-' + inst + '-' + id);
     if (!el) return;
     const info = d && d.prices && d.prices[id];
     const bpc = info && info.bpc;

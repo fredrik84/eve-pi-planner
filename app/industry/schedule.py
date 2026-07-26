@@ -115,7 +115,6 @@ def aggregate_demand(targets: list[tuple[int, int]], memo: dict, mfg: dict, rx: 
     result: dict[int, dict] = {}
     flipped: set[int] = set()             # bought for speed (slow to build)
     flipped_marginal: set[int] = set()    # bought because building saves a trivial amount
-    flipped_no_bp: set[int] = set()       # bought because the blueprint costs more than it saves
     blueprint_cost_total = 0.0
     for tid in built:
         recipe = mfg.get(tid) or rx.get(tid)
@@ -138,22 +137,20 @@ def aggregate_demand(targets: list[tuple[int, int]], memo: dict, mfg: dict, rx: 
                 flipped.add(tid)          # falls through to the bought loop; inputs not exploded
                 continue
 
-        # Blueprint you don't own: building it isn't free, you have to acquire the print first.
-        # A BPC is a consumable, so its cost counts against this batch's saving. An original with no
-        # copies listed is a multi-billion durable asset — buying one to serve a single build is a
-        # different decision entirely, so the component is bought instead (a real case: a Radar-FTL
-        # BPO costs more than the whole Revelation the plan wanted it for).
+        # Blueprint you don't own: a COPY is a consumable, so its price is a genuine cost of this
+        # batch and counts against the saving like any other input.
+        #
+        # What it must NOT do is decide for you. Blueprint ownership is read per character, and only
+        # characters that granted the blueprints scope are visible — a corp-held print, or an alt
+        # that was never connected, looks identical to "you don't own one". Acting on that absence
+        # would silently refuse to build things the user owns the print for. So a missing blueprint
+        # is priced and surfaced, never used to force a buy.
         bp = params.bp_acquire.get(tid)
         bp_cost = 0.0
-        if bp and runs > 0 and tid not in params.owned:
-            if bp["kind"] == "bpo_only":
-                if tid not in target_ids and (memo.get(tid) or {}).get("buy_unit_cost") is not None:
-                    flipped_no_bp.add(tid)
-                    continue
-            else:
-                copies = math.ceil(runs / max(1, bp.get("runs_per_copy") or 1))
-                bp_cost = copies * bp["price"]
-                blueprint_cost_total += bp_cost
+        if bp and runs > 0 and tid not in params.owned and bp["kind"] != "bpo_only":
+            copies = math.ceil(runs / max(1, bp.get("runs_per_copy") or 1))
+            bp_cost = copies * bp["price"]
+            blueprint_cost_total += bp_cost
 
         # Marginal-saving flip: buy if building saves a trivial amount — negligible vs the whole
         # product, or a tiny % of the component's own buy price. Not worth a job.
@@ -189,8 +186,7 @@ def aggregate_demand(targets: list[tuple[int, int]], memo: dict, mfg: dict, rx: 
             continue
         result[tid] = {"type_id": tid, "activity": None, "build": False, "gross": qty,
                        "net": qty, "runs": 0, "produced": 0, "leftover": 0, "output_qty": 0,
-                       "bought_for_speed": tid in flipped, "bought_marginal": tid in flipped_marginal,
-                       "bought_no_blueprint": tid in flipped_no_bp}
+                       "bought_for_speed": tid in flipped, "bought_marginal": tid in flipped_marginal}
     return result
 
 
@@ -506,6 +502,9 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
             "first_delivery_hours": (_finish_of(tasks, targets[0][0]) if targets else 0.0),
             # Blueprints you don't own that the plan still builds — priced into total_cost above
             # when copies are listed. Anything with no copies available was flipped to buy instead.
+            # How much of the account we can actually see blueprints for. Without this the warning
+            # reads as fact when it may only mean "that character was never connected".
+            "blueprint_visibility": params.bp_visibility,
             "missing_blueprints": sorted(
                 ({"type_id": tid, "name": names.get(tid, str(tid))}
                  for tid, info in agg.items()

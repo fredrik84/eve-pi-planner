@@ -84,6 +84,31 @@ def _better(a: dict, b: dict) -> bool:
     return a["te"] > b["te"]
 
 
+def blueprint_visibility(context_id: int) -> dict:
+    """How complete our blueprint picture is: characters that granted the scope vs total.
+
+    Ownership is read per character, so a print held by an alt that was never connected — or by the
+    corp — is indistinguishable from one that doesn't exist. The UI needs to say which it is instead
+    of asserting "you don't own this".
+    """
+    from app.esi import BLUEPRINTS_SCOPE
+    con = get_connection()
+    try:
+        rows = con.execute(
+            "SELECT character_name, scopes FROM pp_characters "
+            "WHERE context_id=? AND COALESCE(is_dummy,0)=0", (context_id,),
+        ).fetchall()
+    except Exception:
+        return {"connected": 0, "total": 0, "missing": []}
+    finally:
+        con.close()
+    connected = [r["character_name"] for r in rows
+                 if BLUEPRINTS_SCOPE in (r["scopes"] or "").split()]
+    return {"connected": len(connected), "total": len(rows),
+            "missing": [r["character_name"] for r in rows
+                        if BLUEPRINTS_SCOPE not in (r["scopes"] or "").split()][:12]}
+
+
 def owned_blueprints(context_id: int) -> dict[int, dict]:
     """product_type_id -> {me, te, kind ('bpo'|'bpc'), runs} for the best blueprint the account owns
     for that product, across all its characters. Maps each blueprint's type_id to its product via

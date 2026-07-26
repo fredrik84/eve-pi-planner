@@ -609,18 +609,21 @@ def test_blueprint_cost_affects_make_or_buy():
     check("total_cost includes the blueprint",
           r1["metrics"]["total_cost"] > r0["metrics"]["total_cost"])
 
-    # An expensive BPC: the margin-saver must see it and flip the component to buy.
+    # An expensive BPC still reaches the margin-saver: a copy is a consumable you'd genuinely buy
+    # for this batch, so it's a real cost of building and the normal margin rule applies to it.
     P2 = BuildParams(**base, bp_acquire={101: {"kind": "bpc", "price": 5e9, "runs_per_copy": 1}})
     r2 = plan_queue([(100, 1)], mfg, rx, _prices(SELL), ADJ, P2, NAMES, pools)
     check("an unaffordable BPC flips it to buy", 101 not in {r["type_id"] for r in r2["requirements"]})
     check("nothing is charged for a print we no longer buy", r2["metrics"]["blueprint_cost"] == 0)
 
-    # Only originals listed -> buy the component rather than a multi-billion BPO for one build.
+    # Only originals listed: must NOT force a buy. Blueprint ownership is only visible for prints
+    # ESI will show us — anything in a corp hangar is corp-owned and needs the Director role, so
+    # "no blueprint found" routinely means "we can't see it". Deciding on that absence would refuse
+    # to build things the user owns the print for. It's priced and surfaced, never enforced.
     P3 = BuildParams(**base, bp_acquire={101: {"kind": "bpo_only", "price": 4e9, "runs_per_copy": 0}})
     r3 = plan_queue([(100, 1)], mfg, rx, _prices(SELL), ADJ, P3, NAMES, pools)
-    check("BPO-only flips the component to buy", 101 not in {r["type_id"] for r in r3["requirements"]})
-    check("the reason is reported", any(
-        s.get("bought_no_blueprint") for s in r3["shopping_list"] if s["type_id"] == 101))
+    check("BPO-only does NOT force a buy", 101 in {r["type_id"] for r in r3["requirements"]})
+    check("a durable original is not charged to one build", r3["metrics"]["blueprint_cost"] == 0)
 
     # The TARGET is what you asked to build — never flipped away, whatever its print costs.
     P4 = BuildParams(**base, bp_acquire={100: {"kind": "bpo_only", "price": 9e9, "runs_per_copy": 0}})
