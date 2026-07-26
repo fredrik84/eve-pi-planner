@@ -17,17 +17,11 @@ from fastapi import Depends, HTTPException
 from pydantic import BaseModel
 
 from app.sde import get_connection, ensure_once
-from app.markets import resolve_market_data
-from app.industry_cost import fetch_adjusted_prices
 from app.esi import require_context
 
 from app.industry._router import router
-from app.industry.graph import (
-    load_manufacturing_graph, load_reaction_graph, collect_reachable, resolve_build_params,
-    build_plan,
-)
+from app.industry.graph import BuildOptions, build_plan, prepare_plan_inputs
 from app.industry.schedule import plan_queue
-from app.industry.slots import _slot_pool
 
 _VALID_MODES = ("parallel", "serial")
 _VALID_STATUSES = ("queued", "done", "cancelled")
@@ -208,22 +202,15 @@ def delete_order(order_id: int, ctx: int = Depends(require_context)):
         con.close()
 
 
-class QueuePlanRequest(BaseModel):
-    system_id: int | None = None
-    me_pct: float = 0.0
-    te_pct: float = 0.0
-    facility_tax_pct: float | None = None
+class QueuePlanRequest(BuildOptions):
+    """BuildOptions (how to cost/schedule) plus the queue-only slot overrides. The targets aren't
+    in the request — they're whatever the account currently has queued.
+
+    Note `use_stock` is inherited: on for planning ("what's left to do"), but the progress endpoint
+    turns it OFF so it measures against the FULL requirement — otherwise the denominator would
+    shrink as you acquire stock and the bar could never fill."""
     mfg_slots: int | None = None
     rx_slots: int | None = None
-    prioritize_speed: bool = True
-    struct_material_pct: float = 0.0
-    struct_time_pct: float = 0.0
-    # Subtract what you already own from the demand. On for planning ("what's left to do"); the
-    # progress endpoint turns it OFF so it measures against the FULL requirement — otherwise the
-    # denominator would shrink as you acquire stock and the bar could never fill.
-    use_stock: bool = True
-    marginal_pct: float | None = None   # build only if it saves >= this % of the build
-    force_build: bool = False           # build everything buildable, ignoring small-saving shortcuts
 
 
 def _stock_for(ctx: int, targets) -> dict[int, float]:
@@ -259,46 +246,21 @@ def _run_queue_plan(ctx: int, req: QueuePlanRequest) -> dict:
         for o in orders:
             combined[o["product_type_id"]] = combined.get(o["product_type_id"], 0) + o["quantity"]
         targets = list(combined.items())
-
-        mfg = load_manufacturing_graph(con)
-        rx = load_reaction_graph(con)
-        ids: set[int] = set()
-        for tid, _ in targets:
-            if tid not in mfg and tid not in rx:
-                raise HTTPException(status_code=400, detail=f"queued order {tid} has no recipe")
-            ids |= collect_reachable(tid, mfg, rx)
-        names = {r["type_id"]: r["name"]
-                 for r in con.execute(
-                     f"SELECT type_id, name FROM types WHERE type_id IN ({','.join('?' * len(ids))})",
-                     tuple(ids))}
     finally:
         con.close()
 
-    prices = resolve_market_data(ctx, list(ids))
-    adjusted = fetch_adjusted_prices(list(ids))
-    from app.industry.graph import SPEED_BUILD_CAP_HOURS
-    mbh = 0.0 if req.force_build else (SPEED_BUILD_CAP_HOURS if req.prioritize_speed else 0.0)
-    params = resolve_build_params(ctx, req.me_pct, req.te_pct, req.system_id, req.facility_tax_pct, mbh,
-                                  req.struct_material_pct, req.struct_time_pct, req.marginal_pct,
-                                  req.force_build)
-    # What an unowned blueprint would cost to acquire, so building can be priced honestly and the
-    # margin-saver can see it. Best-effort: an empty index just leaves the old behaviour.
-    try:
-        from app.industry.bpc import acquisition_costs
-        params.bp_acquire = acquisition_costs(list(ids), params.owned)
-    except Exception:
-        params.bp_acquire = {}
-    pool = _slot_pool(ctx)
-    mfg_slots = req.mfg_slots if req.mfg_slots is not None else pool["manufacturing_slots"]
-    rx_slots = req.rx_slots if req.rx_slots is not None else pool["reaction_slots"]
-    pools = {"manufacturing": max(1, mfg_slots), "reaction": max(1, rx_slots)}
+    inp = prepare_plan_inputs(
+        ctx, targets, req, mfg_slots=req.mfg_slots, rx_slots=req.rx_slots,
+        missing_recipe_detail=lambda tid: f"queued order {tid} has no recipe")
     on_hand = _stock_for(ctx, targets) if req.use_stock else None
-    res = plan_queue(targets, mfg, rx, prices, adjusted, params, names, pools, on_hand=on_hand)
+    res = plan_queue(targets, inp.mfg, inp.rx, inp.prices, inp.adjusted, inp.params, inp.names,
+                     inp.pools, on_hand=on_hand)
     # The recipe tree per ordered product. plan_queue returns aggregated demand — correct for cost
     # and scheduling, but it has no structure, and the UI derives its build STAGES from the tree.
     # Without this the status view (the main screen) had no pipeline at all and lumped every job
     # into one unlabelled bucket, while the preview modal showed the real stages.
-    res["trees"] = [build_plan(t, q, mfg, rx, prices, adjusted, params, names)["tree"]
+    res["trees"] = [build_plan(t, q, inp.mfg, inp.rx, inp.prices, inp.adjusted, inp.params,
+                               inp.names)["tree"]
                     for t, q in targets]
     return res
 

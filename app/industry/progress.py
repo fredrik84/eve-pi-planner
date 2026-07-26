@@ -130,8 +130,12 @@ def _epoch(context_id: int) -> float:
     return float((row and row["t"]) or 0.0)
 
 
-def queue_progress(context_id: int) -> dict:
-    """Per-type and per-order progress for the account's current build queue."""
+def _queue_snapshot(context_id: int):
+    """(orders, plan) for the account's queue, or (None, None) if there's nothing to report.
+
+    Shared by the live and simulated progress paths: both need the same order rows in the same
+    queue order, and the same full-requirement plan to measure against.
+    """
     from app.industry.orders import QueuePlanRequest, _run_queue_plan
 
     con = get_connection()
@@ -144,11 +148,75 @@ def queue_progress(context_id: int) -> dict:
     finally:
         con.close()
     if not orders:
-        return {"empty": True}
+        return None, None
     # use_stock=False: progress must measure against the FULL requirement. With stock netted off,
     # the denominator would shrink as you acquire materials and the bar could never fill.
     res = _run_queue_plan(context_id, QueuePlanRequest(use_stock=False))
     if res.get("empty"):
+        return None, None
+    return orders, res
+
+
+def _type_row(tid: int, req, need: int, done: int, running: int, in_stock: int) -> dict:
+    """One per-type progress row. `req` is the plan requirement (name/activity/output_qty)."""
+    return {
+        "type_id": tid, "name": req["name"], "activity": req["activity"],
+        "required_runs": need, "done_runs": done, "running_runs": running,
+        "waiting_runs": max(0, need - done - running),
+        "output_qty": req["output_qty"], "in_stock": in_stock,
+        "pct": round(100.0 * done / need, 1) if need else 0.0,
+    }
+
+
+def _totals(types: list[dict]) -> dict:
+    """Roll the per-type run counts up to the queue-wide totals the progress bar reads."""
+    keys = (("required", "required_runs"), ("done", "done_runs"),
+            ("running", "running_runs"), ("waiting", "waiting_runs"))
+    return {k: sum(int(t[src]) for t in types) for k, src in keys}
+
+
+def _order_rows(orders, types: list[dict], units) -> list[dict]:
+    """One row per queued order: how many UNITS of that product are done / in flight.
+
+    `units(tid, type_row, output_qty, want) -> (done_units, running_units)` is the only thing that
+    differs between real progress (measured from completions + what's in the hangar) and simulated
+    progress (derived from the invented run counts), so it's the only thing passed in.
+    """
+    by_type = {t["type_id"]: t for t in types}
+    rows = []
+    for o in orders:
+        tid = int(o["product_type_id"])
+        t = by_type.get(tid)
+        oq = (t or {}).get("output_qty") or 1
+        want = int(o["quantity"])
+        done_units, run_units = units(tid, t, oq, want)
+        rows.append({
+            "id": o["id"], "name": o["name"], "label": o["label"], "product_type_id": tid,
+            "quantity": want, "done_units": done_units, "running_units": run_units,
+            "pct": round(100.0 * done_units / want, 1) if want else 0.0,
+            "status": ("complete" if done_units >= want
+                       else "building" if run_units > 0 or done_units > 0
+                       else "waiting"),
+        })
+    return rows
+
+
+def _progress_payload(types: list[dict], order_rows: list[dict], **extra) -> dict:
+    tot = _totals(types)
+    return {
+        "empty": False,
+        "totals": tot,
+        "pct": round(100.0 * tot["done"] / tot["required"], 1) if tot["required"] else 0.0,
+        "types": types,
+        "orders": order_rows,
+        **extra,
+    }
+
+
+def queue_progress(context_id: int) -> dict:
+    """Per-type and per-order progress for the account's current build queue."""
+    orders, res = _queue_snapshot(context_id)
+    if orders is None:
         return {"empty": True}
 
     since = _epoch(context_id)
@@ -163,7 +231,6 @@ def queue_progress(context_id: int) -> dict:
     owned = owned_quantities(context_id)
 
     types = []
-    tot = {"required": 0, "done": 0, "running": 0, "waiting": 0}
     for req in res.get("requirements", []):
         tid = int(req["type_id"])
         need = int(req["runs"])
@@ -171,47 +238,14 @@ def queue_progress(context_id: int) -> dict:
         from_stock = int(owned.get(tid, 0) // oq)      # whole runs' worth sitting in the hangar
         d = min(max(completed.get(tid, 0), from_stock), need)   # cap at what the plan asked for
         r = min(running.get(tid, 0), max(0, need - d))
-        w = max(0, need - d - r)
-        types.append({
-            "type_id": tid, "name": req["name"], "activity": req["activity"],
-            "required_runs": need, "done_runs": d, "running_runs": r, "waiting_runs": w,
-            "output_qty": req["output_qty"],
-            "in_stock": int(owned.get(tid, 0)),
-            "pct": round(100.0 * d / need, 1) if need else 0.0,
-        })
-        tot["required"] += need
-        tot["done"] += d
-        tot["running"] += r
-        tot["waiting"] += w
+        types.append(_type_row(tid, req, need, d, r, in_stock=int(owned.get(tid, 0))))
 
-    by_type = {t["type_id"]: t for t in types}
-    order_rows = []
-    for o in orders:
-        tid = int(o["product_type_id"])
-        t = by_type.get(tid)
-        oq = (t or {}).get("output_qty") or 1
-        want = int(o["quantity"])
+    def units(tid, _t, oq, want):
         have = max(completed.get(tid, 0) * oq, int(owned.get(tid, 0)))
         done_units = min(have, want)
-        run_units = min(running.get(tid, 0) * oq, max(0, want - done_units))
-        status = ("complete" if done_units >= want
-                  else "building" if run_units > 0 or done_units > 0
-                  else "waiting")
-        order_rows.append({
-            "id": o["id"], "name": o["name"], "label": o["label"], "product_type_id": tid, "quantity": want,
-            "done_units": done_units, "running_units": run_units,
-            "pct": round(100.0 * done_units / want, 1) if want else 0.0,
-            "status": status,
-        })
+        return done_units, min(running.get(tid, 0) * oq, max(0, want - done_units))
 
-    return {
-        "empty": False,
-        "since": since,
-        "totals": tot,
-        "pct": round(100.0 * tot["done"] / tot["required"], 1) if tot["required"] else 0.0,
-        "types": types,
-        "orders": order_rows,
-    }
+    return _progress_payload(types, _order_rows(orders, types, units), since=since)
 
 
 def simulated_progress(context_id: int, pct: float) -> dict:
@@ -226,21 +260,8 @@ def simulated_progress(context_id: int, pct: float) -> dict:
     feed lifetime turnover and profit, and seeding them with fiction to preview a UI would corrupt
     real numbers permanently. Every response is tagged `simulated` so it can't be mistaken for real.
     """
-    from app.industry.orders import QueuePlanRequest, _run_queue_plan
-
-    con = get_connection()
-    try:
-        orders = con.execute(
-            "SELECT id, product_type_id, name, quantity, COALESCE(label, '') AS label FROM pp_industry_orders "
-            "WHERE context_id = ? ORDER BY priority DESC, id",
-            (context_id,),
-        ).fetchall()
-    finally:
-        con.close()
-    if not orders:
-        return {"empty": True}
-    res = _run_queue_plan(context_id, QueuePlanRequest(use_stock=False))
-    if res.get("empty"):
+    orders, res = _queue_snapshot(context_id)
+    if orders is None:
         return {"empty": True}
 
     reqs = {int(r["type_id"]): r for r in res.get("requirements", [])}
@@ -281,43 +302,18 @@ def simulated_progress(context_id: int, pct: float) -> dict:
             done_runs.setdefault(tid, 0)
 
     types = []
-    tot = {"required": 0, "done": 0, "running": 0, "waiting": 0}
     for tid, r in reqs.items():
         need = int(r["runs"])
         d = min(done_runs.get(tid, 0), need)
         run = min(running_runs.get(tid, 0), max(0, need - d))
-        w = max(0, need - d - run)
-        types.append({"type_id": tid, "name": r["name"], "activity": r["activity"],
-                      "required_runs": need, "done_runs": d, "running_runs": run,
-                      "waiting_runs": w, "output_qty": r["output_qty"],
-                      "in_stock": 0,
-                      "pct": round(100.0 * d / need, 1) if need else 0.0})
-        tot["required"] += need
-        tot["done"] += d
-        tot["running"] += run
-        tot["waiting"] += w
+        types.append(_type_row(tid, r, need, d, run, in_stock=0))
 
-    by_type = {t["type_id"]: t for t in types}
-    order_rows = []
-    for o in orders:
-        tid = int(o["product_type_id"])
-        t = by_type.get(tid)
-        oq = (t or {}).get("output_qty") or 1
-        want = int(o["quantity"])
+    def units(_tid, t, oq, want):
         done_units = min((t or {}).get("done_runs", 0) * oq, want)
-        run_units = min((t or {}).get("running_runs", 0) * oq, max(0, want - done_units))
-        status = ("complete" if done_units >= want
-                  else "building" if run_units > 0 or done_units > 0 else "waiting")
-        order_rows.append({"id": o["id"], "name": o["name"], "label": o["label"],
-                           "product_type_id": tid,
-                           "quantity": want, "done_units": done_units, "running_units": run_units,
-                           "pct": round(100.0 * done_units / want, 1) if want else 0.0,
-                           "status": status})
+        return done_units, min((t or {}).get("running_runs", 0) * oq, max(0, want - done_units))
 
-    return {"empty": False, "simulated": True, "simulated_pct": pct, "since": None,
-            "totals": tot,
-            "pct": round(100.0 * tot["done"] / tot["required"], 1) if tot["required"] else 0.0,
-            "types": types, "orders": order_rows}
+    return _progress_payload(types, _order_rows(orders, types, units),
+                             simulated=True, simulated_pct=pct, since=None)
 
 
 @router.get("/api/industry/progress")

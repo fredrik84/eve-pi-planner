@@ -388,6 +388,82 @@ def test_queue_progress_requirements():
     check("raw materials excluded", 200 not in reqs and 201 not in reqs)
 
 
+def test_progress_rollup():
+    """Live and simulated progress both roll per-type runs into queue totals and per-order UNITS.
+
+    Neither path had a test, so the shared roll-up (_queue_snapshot / _type_row / _order_rows /
+    _progress_payload, extracted from two near-identical copies) could drift silently. The DB and
+    ESI edges are stubbed; what's under test is the arithmetic between them.
+    """
+    print("test_progress_rollup")
+    import app.industry.progress as PR
+    import app.industry.assets as ASSETS
+
+    orders = [{"id": 1, "product_type_id": 100, "name": "Widget", "quantity": 4, "label": "cust"}]
+    plan = {"requirements": [
+        {"type_id": 100, "name": "Widget", "activity": "manufacturing", "runs": 4, "output_qty": 1},
+        {"type_id": 110, "name": "Part", "activity": "reaction", "runs": 10, "output_qty": 2},
+    ], "schedule": {"waves": [{"tasks": [{"type_id": 110}, {"type_id": 100}]}]}}
+
+    orig = (PR._queue_snapshot, PR._epoch, PR._done_by_type, PR._running_by_type,
+            ASSETS.owned_quantities)
+    try:
+        PR._queue_snapshot = lambda ctx: (orders, plan)
+        PR._epoch = lambda ctx: 1234.0
+        PR._done_by_type = lambda ctx, since: {110: 6}      # 6 of the 10 Part runs done
+        PR._running_by_type = lambda ctx, since: {110: 2}   # 2 more in flight
+        ASSETS.owned_quantities = lambda ctx: {100: 1}      # one finished Widget in the hangar
+
+        live = PR.queue_progress(1)
+        by = {t["type_id"]: t for t in live["types"]}
+        check("live: ledger completions counted", by[110]["done_runs"] == 6)
+        check("live: running capped by what's left", by[110]["running_runs"] == 2)
+        check("live: waiting is the remainder", by[110]["waiting_runs"] == 2)
+        check("live: owned stock counts as done", by[100]["done_runs"] == 1)
+        check("live: totals sum the types",
+              live["totals"]["required"] == 14 and live["totals"]["done"] == 7)
+        check("live: pct from totals", approx(live["pct"], round(100.0 * 7 / 14, 1)))
+        check("live: epoch reported", live["since"] == 1234.0)
+        row = live["orders"][0]
+        check("live: order units, not runs", row["done_units"] == 1 and row["quantity"] == 4)
+        check("live: order partially built", row["status"] == "building")
+        check("live: order label preserved", row["label"] == "cust")
+
+        # A type's runs must never exceed what the plan asked for, however much is owned/logged.
+        ASSETS.owned_quantities = lambda ctx: {100: 99}
+        PR._done_by_type = lambda ctx, since: {100: 99, 110: 99}
+        capped = PR.queue_progress(1)
+        cby = {t["type_id"]: t for t in capped["types"]}
+        check("live: done never exceeds required",
+              all(t["done_runs"] <= t["required_runs"] for t in capped["types"]))
+        check("live: a finished order reads complete", capped["orders"][0]["status"] == "complete")
+        check("live: no negative waiting", all(t["waiting_runs"] >= 0 for t in capped["types"]))
+        check("live: 100% when everything is done", cby[100]["pct"] == 100.0)
+
+        sim = PR.simulated_progress(1, 50.0)
+        check("sim: tagged as simulated", sim.get("simulated") is True and sim["simulated_pct"] == 50.0)
+        check("sim: no epoch", sim["since"] is None)
+        check("sim: same required total as live", sim["totals"]["required"] == 14)
+        check("sim: roughly half done", 5 <= sim["totals"]["done"] <= 9)
+        check("sim: totals are consistent", all(
+            t["done_runs"] + t["running_runs"] + t["waiting_runs"] == t["required_runs"]
+            for t in sim["types"]))
+        check("sim: reports no stock", all(t["in_stock"] == 0 for t in sim["types"]))
+        check("sim: order row present", len(sim["orders"]) == 1)
+
+        check("sim: 0% is all waiting", PR.simulated_progress(1, 0.0)["totals"]["done"] == 0)
+        full = PR.simulated_progress(1, 100.0)
+        check("sim: 100% completes everything", full["totals"]["done"] == full["totals"]["required"])
+        check("sim: 100% leaves nothing waiting", full["totals"]["waiting"] == 0)
+
+        PR._queue_snapshot = lambda ctx: (None, None)
+        check("empty queue reports empty", PR.queue_progress(1) == {"empty": True}
+              and PR.simulated_progress(1, 50.0) == {"empty": True})
+    finally:
+        (PR._queue_snapshot, PR._epoch, PR._done_by_type, PR._running_by_type,
+         ASSETS.owned_quantities) = orig
+
+
 def test_stock_reduces_plan_but_never_the_target():
     """Owned stock nets off intermediate demand, but owning the PRODUCT must not make an order to
     build it plan zero jobs — the user asked to build that. Guards the on_hand wiring."""
@@ -1029,6 +1105,7 @@ def main():
     test_unpriced_material_does_not_crash()
     test_queue_progress_requirements()
     test_queue_plan_returns_trees()
+    test_progress_rollup()
     test_stock_reduces_plan_but_never_the_target()
     test_marginal_threshold_scales_with_build_size()
     test_force_build_ignores_the_shortcuts()

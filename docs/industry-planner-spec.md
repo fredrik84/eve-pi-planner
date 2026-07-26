@@ -234,8 +234,11 @@ Admin → Features when ready. No public per-user endpoints (rule 8): every endp
   (`app/industry/graph.py`), cost metrics, priced shopping list. `POST /api/industry/plan`.
 - **Phase 2 — SHIPPED.** Demand aggregation (MRP low-level-code explosion → shared-batch costs),
   excess/stock ledger + `on_hand` netting, resource-constrained dual-pool list scheduler
-  (`app/industry/schedule.py`): makespan, waves, BPC-run-cap job splitting.
-  `POST /api/industry/plan-queue`. All in `test_industry.py` (51 in-process checks).
+  (`app/industry/schedule.py`): makespan, waves, BPC-run-cap job splitting. All in
+  `test_industry.py`. `schedule.py` is pure — no endpoint, DB or market access; callers resolve
+  the inputs (see `graph.prepare_plan_inputs`) and hand them in. Its own `POST
+  /api/industry/plan-queue` endpoint (targets passed in the request) was superseded by Phase 3's
+  `/api/industry/queue-plan` (targets = the persisted queue) and has been removed.
 - **Phase 3 — IN PROGRESS.** Done: per-character manufacturing slot pools from ESI skills
   (`app/industry/slots.py`); the persistent build queue (`pp_industry_orders` + CRUD in
   `app/industry/orders.py`) + `/api/industry/queue-plan`; the **frontend Manufacturing tab**

@@ -14,28 +14,18 @@ Two problems on top of the Phase-1 make-or-buy cost core (graph.py):
    available at t=0). This front-loads every leaf build in parallel and pulls later-tier work
    forward as inputs land — reporting makespan, per-wave timeline, and slot occupancy.
 
-Pure/testable: every function takes prebuilt graphs + params. The endpoint wires real data.
-Slot counts are request parameters here; Phase 3 derives them per character from ESI skills and
-makes the schedule persistent + queueable.
+Pure/testable and deliberately I/O-free: every function takes prebuilt graphs + params, and this
+module owns no endpoint, DB handle or market lookup. Callers (graph.py's /api/industry/plan and
+orders.py's queue endpoints) resolve the real data and hand it in.
 """
 import math
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
-from fastapi import Depends, HTTPException
-from pydantic import BaseModel
-
-from app.sde import get_connection
-from app.markets import resolve_market_data
-from app.industry_cost import fetch_adjusted_prices
-from app.esi import require_context
-
-from app.industry._router import router
 from app.industry.graph import (
-    BuildParams, load_manufacturing_graph, load_reaction_graph, collect_reachable,
-    effective_material_qty, resolve_unit_costs, SCC_SURCHARGE_PCT, resolve_build_params,
+    BuildParams, collect_reachable, effective_material_qty, resolve_unit_costs,
+    SCC_SURCHARGE_PCT,
 )
-from app.industry.slots import _slot_pool
 
 
 # ── Demand aggregation (MRP explosion) ────────────────────────────────────────────────────────
@@ -329,9 +319,6 @@ def schedule(tasks: list[Task], by_type: dict, deps: dict, pools: dict[str, int]
     now = 0.0
     remaining = len(tasks)
 
-    def type_done(tid: int) -> bool:
-        return all(t.end and t.task_id in started for t in by_type[tid])
-
     while remaining > 0:
         # Start every ready task that fits a free slot in its pool, most-critical first.
         ready = sorted(
@@ -514,61 +501,3 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
         },
     }
 
-
-class QueueTarget(BaseModel):
-    type_id: int
-    quantity: int = 1
-
-
-class IndustryQueueRequest(BaseModel):
-    targets: list[QueueTarget]
-    me_pct: float = 0.0
-    te_pct: float = 0.0
-    system_id: int | None = None
-    facility_tax_pct: float | None = None
-    mfg_slots: int | None = None        # None → derive from the account's characters' skills
-    rx_slots: int | None = None
-    prioritize_speed: bool = True
-    struct_material_pct: float = 0.0
-    struct_time_pct: float = 0.0
-
-
-@router.post("/api/industry/plan-queue")
-def industry_plan_queue(req: IndustryQueueRequest, ctx: int = Depends(require_context)):
-    """Aggregate a queue of build orders, schedule the jobs across parallel slots, and report
-    makespan + waves + combined shopping list + cost metrics. Own-account scoped."""
-    if not req.targets:
-        raise HTTPException(status_code=400, detail="no targets")
-    if any(t.quantity < 1 for t in req.targets):
-        raise HTTPException(status_code=400, detail="quantities must be ≥ 1")
-    con = get_connection()
-    try:
-        mfg = load_manufacturing_graph(con)
-        rx = load_reaction_graph(con)
-        for t in req.targets:
-            if t.type_id not in mfg and t.type_id not in rx:
-                raise HTTPException(status_code=400, detail=f"No recipe for type {t.type_id}")
-        ids: set[int] = set()
-        for t in req.targets:
-            ids |= collect_reachable(t.type_id, mfg, rx)
-        names = {r["type_id"]: r["name"]
-                 for r in con.execute(
-                     f"SELECT type_id, name FROM types WHERE type_id IN ({','.join('?' * len(ids))})",
-                     tuple(ids))}
-    finally:
-        con.close()
-
-    prices = resolve_market_data(ctx, list(ids))
-    adjusted = fetch_adjusted_prices(list(ids))
-    from app.industry.graph import SPEED_BUILD_CAP_HOURS
-    mbh = SPEED_BUILD_CAP_HOURS if req.prioritize_speed else 0.0
-    params = resolve_build_params(ctx, req.me_pct, req.te_pct, req.system_id, req.facility_tax_pct, mbh,
-                                  req.struct_material_pct, req.struct_time_pct)
-    # Slot pools: use the request overrides, else derive from the account's characters' skills
-    # (falling back to 1 each so a brand-new account with no manufacturing skills still schedules).
-    pool = _slot_pool(ctx)
-    mfg_slots = req.mfg_slots if req.mfg_slots is not None else pool["manufacturing_slots"]
-    rx_slots = req.rx_slots if req.rx_slots is not None else pool["reaction_slots"]
-    pools = {"manufacturing": max(1, mfg_slots), "reaction": max(1, rx_slots)}
-    targets = [(t.type_id, t.quantity) for t in req.targets]
-    return plan_queue(targets, mfg, rx, prices, adjusted, params, names, pools)

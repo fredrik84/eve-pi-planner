@@ -241,18 +241,23 @@ function _indReauthHtml(names) {
     + `<button class="ind-bp-btn ind-bp-connect" onclick="indReauthAssets()">Reconnect a character</button></div>`;
 }
 
-// Same SSO flow the blueprint connect uses — it requests the full unified scope set, so one login
-// brings the character up to date on every scope at once.
-function indReauthAssets() {
+// One SSO popup for every industry scope: /auth/login?industry=1 requests the unified scope set, so
+// a single login brings the character up to date on assets, blueprints and jobs at once. `then` runs
+// when the popup reports back; the listener removes itself either way so repeated connects don't
+// stack up handlers that re-fire on the next login.
+function indEsiConnect(then) {
   const w = window.open('/auth/login?industry=1', 'EVE SSO', 'width=800,height=900');
   window.addEventListener('message', function handler(e) {
     if (e.data === 'esi-done') {
       window.removeEventListener('message', handler);
       if (w && !w.closed) w.close();
-      indLoadAssets();
-      indLoadSetupSummary();
+      then();
     }
   });
+}
+
+function indReauthAssets() {
+  indEsiConnect(() => { indLoadAssets(); indLoadSetupSummary(); });
 }
 
 async function indLoadAssets() {
@@ -400,14 +405,7 @@ async function indLoadBlueprints() {
 }
 
 function indConnectBlueprints() {
-  const w = window.open('/auth/login?industry=1', 'EVE SSO', 'width=800,height=900');
-  window.addEventListener('message', function handler(e) {
-    if (e.data === 'esi-done') {
-      window.removeEventListener('message', handler);
-      if (w && !w.closed) w.close();
-      indRefreshBlueprints();
-    }
-  });
+  indEsiConnect(indRefreshBlueprints);
 }
 
 async function indRefreshBlueprints() {
@@ -1286,16 +1284,6 @@ function _indProgTypeMap() {
   return m;
 }
 
-function _indOrderProgHtml(p) {
-  if (!p) return '';
-  const cls = p.status === 'complete' ? 'ind-prog-done' : p.status === 'building' ? 'ind-prog-run' : 'ind-prog-wait';
-  const label = p.status === 'complete' ? 'done'
-    : p.status === 'building' ? `${p.done_units}/${p.quantity} built${p.running_units ? ` · ${p.running_units} running` : ''}`
-    : 'not started';
-  return `<div class="ind-prog"><div class="ind-prog-bar"><span class="${cls}" style="width:${Math.min(100, p.pct)}%"></span></div>`
-    + `<span class="ind-prog-lbl">${_esc(label)}</span></div>`;
-}
-
 // The queue no longer has a card of its own — orders render as chips in the status header, so
 // "reload the queue" and "refresh the status" are the same operation.
 async function indLoadQueue() { return indRefreshStatus(); }
@@ -1544,8 +1532,6 @@ async function indLoadRunning() {
     el.innerHTML = `<h3 class="ind-install-title">In progress — ${d.jobs.length} job(s)</h3>${rows}`;
   } catch (e) { el.innerHTML = ''; }
 }
-
-async function indPlanQueue() { return indRefreshStatus(); }
 
 
 // wire the search input once the DOM is ready

@@ -14,14 +14,14 @@ import json as _json
 import time as _time
 from datetime import datetime
 
-import httpx
 from fastapi import Depends
 
 from app.sde import get_connection, ensure_once
 from app import esi_http
-from app.esi import require_context, ESI_BASE, _get_valid_token, INDUSTRY_JOBS_SCOPE
+from app.esi import require_context, INDUSTRY_JOBS_SCOPE
 
 from app.industry._router import router
+from app.industry.char_cache import refresh_character_cache
 
 MANUFACTURING_ACTIVITY_ID = 1
 # Job statuses that occupy a slot: active + paused + ready (done but not yet delivered — the slot
@@ -71,36 +71,9 @@ def refresh_manufacturing_jobs(context_id: int = Depends(require_context)):
     """Re-read manufacturing jobs from ESI for the caller's characters that granted the industry
     jobs scope. Best-effort per character."""
     ensure_manufacturing_jobs_table()
-    con = get_connection()
-    try:
-        chars = con.execute(
-            "SELECT character_id, scopes FROM pp_characters "
-            "WHERE context_id=? AND COALESCE(is_dummy,0)=0", (context_id,),
-        ).fetchall()
-        refreshed, skipped = 0, 0
-        for c in chars:
-            if INDUSTRY_JOBS_SCOPE not in (c["scopes"] or ""):
-                skipped += 1
-                continue
-            tok = _get_valid_token(c["character_id"])
-            if not tok:
-                skipped += 1
-                continue
-            jobs = fetch_manufacturing_jobs(c["character_id"], tok)
-            if jobs is None:
-                skipped += 1
-                continue
-            con.execute(
-                "INSERT INTO pp_char_manufacturing_jobs (character_id, jobs_json, fetched_at) "
-                "VALUES (?,?,?) ON CONFLICT(character_id) DO UPDATE SET "
-                "jobs_json=excluded.jobs_json, fetched_at=excluded.fetched_at",
-                (c["character_id"], _json.dumps(jobs), _time.time()),
-            )
-            refreshed += 1
-        con.commit()
-    finally:
-        con.close()
-    return {"refreshed": refreshed, "skipped": skipped}
+    return refresh_character_cache(
+        context_id, scope=INDUSTRY_JOBS_SCOPE, table="pp_char_manufacturing_jobs",
+        column="jobs_json", fetch=fetch_manufacturing_jobs)
 
 
 def _occupying(jobs: list[dict]) -> int:

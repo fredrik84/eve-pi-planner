@@ -338,9 +338,10 @@ def build_plan(target: int, quantity: int, mfg: dict, rx: dict, prices: dict, ad
 
 # ── Endpoint ──────────────────────────────────────────────────────────────────────────────────
 
-class IndustryPlanRequest(BaseModel):
-    type_id: int
-    quantity: int = 1
+class BuildOptions(BaseModel):
+    """Everything that shapes HOW a build is costed and scheduled, independent of WHAT is being
+    built. Shared base for the one-shot plan (a product + quantity) and the whole-queue plan (the
+    account's queued orders), which had drifted into two hand-maintained copies of this list."""
     me_pct: float = 0.0
     te_pct: float = 0.0
     system_id: int | None = None       # None → derive from the account's Reactions build system
@@ -351,6 +352,11 @@ class IndustryPlanRequest(BaseModel):
     use_stock: bool = True             # net owned materials off the demand (needs an asset scan)
     marginal_pct: float | None = None  # build only if it saves >= this % of the build (None = default)
     force_build: bool = False          # build everything buildable, ignoring small-saving shortcuts
+
+
+class IndustryPlanRequest(BuildOptions):
+    type_id: int
+    quantity: int = 1
 
 
 # Wall-clock cap (hours) a single component's batch may take to build before the time-priority
@@ -458,6 +464,79 @@ def resolve_build_params(context_id: int, me_pct: float, te_pct: float,
     )
 
 
+@dataclass
+class PlanInputs:
+    """Everything a scheduler run needs, resolved once: recipe graphs, names, live prices and the
+    build params + slot pools for this account."""
+    mfg: dict
+    rx: dict
+    names: dict[int, str]
+    ids: list[int]
+    prices: dict
+    adjusted: dict
+    params: BuildParams
+    pools: dict[str, int]
+
+
+def prepare_plan_inputs(ctx: int, targets: list[tuple[int, int]], opts: BuildOptions,
+                        mfg_slots: int | None = None, rx_slots: int | None = None,
+                        missing_recipe_detail=None) -> PlanInputs:
+    """Resolve the graphs, prices and parameters for a set of build targets.
+
+    /api/industry/plan and the queue endpoints ran identical 35-line preambles — load both graphs,
+    validate the targets, collect the reachable type ids, fetch names, price them, resolve the
+    build params, look up blueprint acquisition costs, size the slot pools. Three copies meant a
+    fix like the bp_acquire best-effort block had to be made three times (and once wasn't). One
+    resolver, and the endpoints are left holding only what actually differs between them.
+
+    `missing_recipe_detail(type_id)` builds the 400 message, since the wording is caller-specific.
+    """
+    from app.industry.slots import _slot_pool     # local: avoids a graph↔slots import cycle
+
+    con = get_connection()
+    try:
+        mfg = load_manufacturing_graph(con)
+        rx = load_reaction_graph(con)
+        ids: set[int] = set()
+        for tid, _qty in targets:
+            if tid not in mfg and tid not in rx:
+                detail = (missing_recipe_detail(tid) if missing_recipe_detail
+                          else f"No manufacturing or reaction recipe for type {tid}")
+                raise HTTPException(status_code=400, detail=detail)
+            ids |= collect_reachable(tid, mfg, rx)
+        names = {r["type_id"]: r["name"]
+                 for r in con.execute(
+                     f"SELECT type_id, name FROM types WHERE type_id IN ({','.join('?' * len(ids))})",
+                     tuple(ids))}
+    finally:
+        con.close()
+
+    id_list = list(ids)
+    prices = resolve_market_data(ctx, id_list)
+    adjusted = fetch_adjusted_prices(id_list)
+    # force_build also drops the speed shortcut: that one buys slow bulk components, which is
+    # exactly what someone asking to build everything does not want.
+    mbh = 0.0 if opts.force_build else (SPEED_BUILD_CAP_HOURS if opts.prioritize_speed else 0.0)
+    params = resolve_build_params(ctx, opts.me_pct, opts.te_pct, opts.system_id,
+                                  opts.facility_tax_pct, mbh, opts.struct_material_pct,
+                                  opts.struct_time_pct, opts.marginal_pct, opts.force_build)
+    # What an unowned blueprint would cost to acquire, so building can be priced honestly and the
+    # margin-saver can see it. Best-effort: an empty index just leaves the old behaviour.
+    try:
+        from app.industry.bpc import acquisition_costs
+        params.bp_acquire = acquisition_costs(id_list, params.owned)
+    except Exception:
+        params.bp_acquire = {}
+
+    pool = _slot_pool(ctx)
+    pools = {
+        "manufacturing": max(1, mfg_slots if mfg_slots is not None else pool["manufacturing_slots"]),
+        "reaction": max(1, rx_slots if rx_slots is not None else pool["reaction_slots"]),
+    }
+    return PlanInputs(mfg=mfg, rx=rx, names=names, ids=id_list, prices=prices,
+                      adjusted=adjusted, params=params, pools=pools)
+
+
 @router.get("/api/industry/search")
 def industry_search(q: str, ctx: int = Depends(require_context)):
     """Buildable products (manufacturing or reaction) whose name matches `q` — the product picker.
@@ -487,53 +566,25 @@ def industry_plan(req: IndustryPlanRequest, ctx: int = Depends(require_context))
     cost/time metrics. Own-account scoped (pricing follows the account's markets)."""
     if req.quantity < 1:
         raise HTTPException(status_code=400, detail="quantity must be ≥ 1")
-    con = get_connection()
-    try:
-        mfg = load_manufacturing_graph(con)
-        rx = load_reaction_graph(con)
-        if req.type_id not in mfg and req.type_id not in rx:
-            raise HTTPException(status_code=400, detail="No manufacturing or reaction recipe for that type")
-        ids = collect_reachable(req.type_id, mfg, rx)
-        names = {r["type_id"]: r["name"]
-                 for r in con.execute(
-                     f"SELECT type_id, name FROM types WHERE type_id IN ({','.join('?' * len(ids))})",
-                     tuple(ids))}
-    finally:
-        con.close()
-
-    prices = resolve_market_data(ctx, list(ids))
-    adjusted = fetch_adjusted_prices(list(ids))
-    # force_build also drops the speed shortcut: that one buys slow bulk components, which is
-    # exactly what someone asking to build everything does not want.
-    mbh = 0.0 if req.force_build else (SPEED_BUILD_CAP_HOURS if req.prioritize_speed else 0.0)
-    params = resolve_build_params(ctx, req.me_pct, req.te_pct, req.system_id, req.facility_tax_pct, mbh,
-                                  req.struct_material_pct, req.struct_time_pct, req.marginal_pct,
-                                  req.force_build)
-    # What an unowned blueprint would cost to acquire, so building can be priced honestly and the
-    # margin-saver can see it. Best-effort: an empty index just leaves the old behaviour.
-    try:
-        from app.industry.bpc import acquisition_costs
-        params.bp_acquire = acquisition_costs(list(ids), params.owned)
-    except Exception:
-        params.bp_acquire = {}
+    targets = [(req.type_id, req.quantity)]
+    inp = prepare_plan_inputs(
+        ctx, targets, req,
+        missing_recipe_detail=lambda _tid: "No manufacturing or reaction recipe for that type")
 
     # Schedule the single build across the account's real slot pools (manufacturing + separate
     # reaction pool) for an honest MAKESPAN with parallelism — build_plan alone only sums job time
     # serially, which massively overstates wall-clock for a big build (a Nyx's 46 jobs are mostly
     # parallel). plan_queue gives schedule + batched cost + net-cost; build_plan supplies the tree.
-    # Local imports avoid a graph↔schedule/slots import cycle.
+    # Local imports avoid a graph↔schedule/assets import cycle.
     from app.industry.schedule import plan_queue
-    from app.industry.slots import _slot_pool
-    pool = _slot_pool(ctx)
-    pools = {"manufacturing": max(1, pool["manufacturing_slots"]),
-             "reaction": max(1, pool["reaction_slots"])}
-    # Net off what you already own (never the product itself — you asked to build that).
     from app.industry.assets import owned_quantities
+    # Net off what you already own (never the product itself — you asked to build that).
     on_hand = owned_quantities(ctx) if req.use_stock else {}
     on_hand.pop(req.type_id, None)
-    result = plan_queue([(req.type_id, req.quantity)], mfg, rx, prices, adjusted, params, names,
-                        pools, on_hand=on_hand)
-    result["target"] = {"type_id": req.type_id, "name": names.get(req.type_id, str(req.type_id)),
-                        "quantity": req.quantity}
-    result["tree"] = build_plan(req.type_id, req.quantity, mfg, rx, prices, adjusted, params, names)["tree"]
+    result = plan_queue(targets, inp.mfg, inp.rx, inp.prices, inp.adjusted, inp.params, inp.names,
+                        inp.pools, on_hand=on_hand)
+    result["target"] = {"type_id": req.type_id, "quantity": req.quantity,
+                        "name": inp.names.get(req.type_id, str(req.type_id))}
+    result["tree"] = build_plan(req.type_id, req.quantity, inp.mfg, inp.rx, inp.prices,
+                                inp.adjusted, inp.params, inp.names)["tree"]
     return result

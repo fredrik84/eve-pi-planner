@@ -11,16 +11,14 @@ collapses the account's characters into one product→best-blueprint map the cos
 """
 import json as _json
 import logging
-import time as _time
-
-import httpx
 from fastapi import Depends
 
 from app.sde import get_connection, ensure_once
 from app import esi_http
-from app.esi import require_context, ESI_BASE, _get_valid_token, BLUEPRINTS_SCOPE
+from app.esi import require_context, BLUEPRINTS_SCOPE
 
 from app.industry._router import router
+from app.industry.char_cache import refresh_character_cache
 
 log = logging.getLogger(__name__)
 
@@ -125,36 +123,9 @@ def refresh_blueprints(context_id: int = Depends(require_context)):
     """Re-read owned blueprints from ESI for the caller's characters that granted the blueprint
     scope. Best-effort per character — one failure never blocks the others."""
     ensure_char_blueprints_table()
-    con = get_connection()
-    try:
-        chars = con.execute(
-            "SELECT character_id, scopes FROM pp_characters "
-            "WHERE context_id=? AND COALESCE(is_dummy,0)=0", (context_id,),
-        ).fetchall()
-        refreshed, skipped = 0, 0
-        for c in chars:
-            if BLUEPRINTS_SCOPE not in (c["scopes"] or ""):
-                skipped += 1
-                continue
-            tok = _get_valid_token(c["character_id"])
-            if not tok:
-                skipped += 1
-                continue
-            bps = fetch_character_blueprints(c["character_id"], tok)
-            if bps is None:
-                skipped += 1
-                continue
-            con.execute(
-                "INSERT INTO pp_char_blueprints (character_id, blueprints_json, fetched_at) "
-                "VALUES (?,?,?) ON CONFLICT(character_id) DO UPDATE SET "
-                "blueprints_json=excluded.blueprints_json, fetched_at=excluded.fetched_at",
-                (c["character_id"], _json.dumps(bps), _time.time()),
-            )
-            refreshed += 1
-        con.commit()
-    finally:
-        con.close()
-    return {"refreshed": refreshed, "skipped": skipped}
+    return refresh_character_cache(
+        context_id, scope=BLUEPRINTS_SCOPE, table="pp_char_blueprints",
+        column="blueprints_json", fetch=fetch_character_blueprints)
 
 
 @router.get("/api/industry/blueprints")
