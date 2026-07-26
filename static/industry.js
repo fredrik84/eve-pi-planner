@@ -1477,9 +1477,14 @@ async function indLoadInstall() {
     const cards = doers.map(c => {
       const groups = _indGroupJobs(c.jobs);
       const jobs = groups.map(g => {
+        // "9× 165–166 runs each" left the reader doing the multiplication and wondering why
+        // there was a range at all. Lead with the two numbers that mean something — how many
+        // jobs to queue and what they produce in total — and keep the per-job figure (the one
+        // you actually type into the industry window) as a clearly-labelled aside.
         const each = g.count > 1
-          ? `<span class="ind-do-runs"><b>${g.count}×</b> ${g.runs} runs each</span>`
-          : `<span class="ind-do-runs">${g.runs} run${g.maxRuns > 1 ? 's' : ''}</span>`;
+          ? `<span class="ind-do-runs"><b>${g.count} jobs</b> · ${g.totalRuns.toLocaleString()} runs`
+            + `<span class="ind-do-each">${g.runs} each</span></span>`
+          : `<span class="ind-do-runs"><b>${g.runs}</b> run${g.maxRuns > 1 ? 's' : ''}</span>`;
         return `<li class="ind-do-job"><span class="ind-do-name">${_esc(g.name)}</span>${each}`
           + `<span class="ind-do-act ind-do-${g.activity}">${g.activity === 'reaction' ? 'reaction' : 'industry'}</span>`
           + `<span class="ind-do-dur">${_fmtHours(g.dur)}</span></li>`;

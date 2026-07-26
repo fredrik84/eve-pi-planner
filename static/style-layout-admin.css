@@ -1104,12 +1104,19 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-pip-rx.ind-pip-fill { background: #d9a7e0; box-shadow: 0 0 4px rgba(217,167,224,.6); }
 .ind-pip-none { font-size: 10px; color: var(--clr-text-soft); }
 .ind-do-jobs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
-/* One line per job: the NAME is what gives (ellipsis), so a long one like "Radar-FTL Interlink
-   Communicator" can't push the runs/duration onto a second line. */
-.ind-do-job { display: flex; align-items: center; gap: 7px; font-size: 12px; color: #cdd6e6; flex-wrap: nowrap; min-width: 0; }
-.ind-do-name { color: #eef2f8; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Two lines per job: NAME on its own row, then runs/activity/duration beneath it. These cards
+   sit in a ~320px grid column, and sharing one row meant the name was the only flexible column
+   — ellipsis cut "Crystalline Carbonide Armor Plate" down to "Crystalline …", which doesn't
+   identify the product at all. Full-width name, no truncation, meta line reads left-to-right. */
+.ind-do-job { display: flex; align-items: center; gap: 4px 7px; font-size: 12px; color: #cdd6e6; flex-wrap: wrap; min-width: 0; }
+.ind-do-name { color: #eef2f8; flex: 1 1 100%; min-width: 0; overflow-wrap: anywhere; }
+.ind-do-dur { margin-left: auto; }   /* duration pins right on the meta line */
 .ind-do-runs, .ind-do-act, .ind-do-dur { flex: 0 0 auto; white-space: nowrap; }
 .ind-do-runs { color: var(--clr-text-soft); font-variant-numeric: tabular-nums; }
+/* Per-job run count: secondary to the totals, so it reads as a qualifier not a third number. */
+.ind-do-each { opacity: .7; font-size: 11px; margin-left: 5px; }
+.ind-do-each::before { content: '('; }
+.ind-do-each::after  { content: ')'; }
 .ind-do-act { font-size: 9px; text-transform: uppercase; letter-spacing: .03em; padding: 1px 5px; border-radius: 7px; }
 .ind-do-manufacturing { background: #163524; color: #7fdca6; }
 .ind-do-reaction { background: #2a2130; color: #d9a7e0; }
