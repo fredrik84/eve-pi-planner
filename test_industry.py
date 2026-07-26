@@ -20,7 +20,7 @@ from app.industry.graph import (
     collect_reachable, build_plan, resolve_unit_costs,
 )
 from app.industry.schedule import (order_ranks, 
-    aggregate_demand, build_tasks, schedule, plan_queue, Task, _split_runs, _built_deps,
+    aggregate_demand, build_tasks, schedule, plan_queue, Task, _built_deps,
     _critical_priority,
 )
 
@@ -205,12 +205,37 @@ def test_on_hand_reduces_builds():
     check("gadget runs 1", agg[101]["runs"] == 1)
 
 
-def test_split_runs():
-    print("test_split_runs (BPC run cap)")
-    check("unlimited", _split_runs(50, 0) == [50])
-    check("under cap", _split_runs(5, 10) == [5])
-    check("even split", _split_runs(20, 10) == [10, 10])
-    check("uneven balanced", _split_runs(25, 10) == [9, 8, 8])
+def test_job_split_respects_the_blueprint_cap():
+    """How a type's runs become jobs. Replaces a test of a helper that production stopped calling —
+    the real logic lives in build_tasks, and it has two hard rules: never lose runs, and never put
+    more runs in one job than the blueprint allows.
+
+    Also the reason a component can legitimately show thousands of runs: many T2 component
+    blueprints make ONE unit per run, so units and runs are the same number.
+    """
+    print("test_job_split_respects_the_blueprint_cap")
+    con = _seed_con()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+    agg = {101: {"type_id": 101, "activity": "manufacturing", "build": True, "gross": 100,
+                 "net": 100, "runs": 100, "produced": 100, "leftover": 0, "output_qty": 1}}
+
+    # Split across slots so the batch runs in parallel.
+    tasks, _ = build_tasks(agg, mfg, rx, BuildParams(), {"manufacturing": 10, "reaction": 5})
+    check("one job per free slot", len(tasks) == 10)
+    check("no runs lost", sum(t.runs for t in tasks) == 100)
+    check("evenly balanced", max(t.runs for t in tasks) - min(t.runs for t in tasks) <= 1)
+
+    # A single slot means a single job — parallelism is opportunistic, not mandatory.
+    tasks, _ = build_tasks(agg, mfg, rx, BuildParams(), {"manufacturing": 1, "reaction": 1})
+    check("one slot -> one job", len(tasks) == 1 and tasks[0].runs == 100)
+
+    # A blueprint's per-job cap must force MORE jobs than there are slots.
+    capped = dict(mfg[101]); capped["max_runs"] = 7
+    mfg2 = {**mfg, 101: capped}
+    tasks, _ = build_tasks(agg, mfg2, rx, BuildParams(), {"manufacturing": 10, "reaction": 5})
+    check("cap forces extra jobs", len(tasks) >= 15)
+    check("no job exceeds the cap", max(t.runs for t in tasks) <= 7)
+    check("still no runs lost", sum(t.runs for t in tasks) == 100)
 
 
 def test_scheduler_linear_chain():
@@ -950,7 +975,7 @@ def main():
     test_demand_aggregation_shares_batches()
     test_excess_ledger()
     test_on_hand_reduces_builds()
-    test_split_runs()
+    test_job_split_respects_the_blueprint_cap()
     test_scheduler_linear_chain()
     test_scheduler_slot_contention()
     test_time_aware_make_or_buy()

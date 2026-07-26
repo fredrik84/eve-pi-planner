@@ -208,18 +208,6 @@ class Task:
     slot: int = 0
 
 
-def _split_runs(total: int, max_runs: int) -> list[int]:
-    """Split a type's total runs into per-job-instance run counts, bounded by the BPC run cap
-    (`max_runs`, 0 = unlimited). Each instance is one in-game job install / one slot occupancy."""
-    if total <= 0:
-        return []
-    if not max_runs or total <= max_runs:
-        return [total]
-    n = math.ceil(total / max_runs)
-    base, extra = divmod(total, n)
-    return [base + 1 if i < extra else base for i in range(n)]
-
-
 def _balanced(total: int, n: int) -> list[int]:
     base, extra = divmod(total, n)
     return [base + 1 if i < extra else base for i in range(n)]
