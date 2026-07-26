@@ -518,8 +518,16 @@ function _indMetricTiles(m) {
     tiles.push(['Total cost', fmtIsk(m.total_cost), '']);
   }
   const steps = m.build_steps != null ? m.build_steps : m.job_count;
-  tiles.push(['Materials', fmtIsk(m.materials_cost), ''], ['Job fees', fmtIsk(m.job_cost), ''],
-             ['Build steps', steps, 'Distinct things to build — each may split into parallel jobs across your slots']);
+  tiles.push(['Materials', fmtIsk(m.materials_cost), ''], ['Job fees', fmtIsk(m.job_cost), '']);
+  // Show it whenever a print has to be bought, so Materials + Job fees + Blueprints visibly adds
+  // up to the total instead of the total quietly being larger than its parts.
+  if (m.blueprint_cost) {
+    tiles.push(['Blueprints', fmtIsk(m.blueprint_cost),
+      'Blueprint copies this build needs and you don\'t already own — priced from Jita contracts and '
+      + 'included in the total. Originals are not charged here: they\'re reusable, so billing one to a '
+      + 'single build would badly overstate it.']);
+  }
+  tiles.push(['Build steps', steps, 'Distinct things to build — each may split into parallel jobs across your slots']);
   if (m.makespan_hours != null) tiles.push(['Makespan', _fmtHours(m.makespan_hours), 'Wall-clock time with jobs running in parallel across your slots']);
   // Turn the percentage into the number it actually means for THIS build.
   if (m.marginal_threshold) tiles.push(['Build threshold', fmtIsk(m.marginal_threshold),

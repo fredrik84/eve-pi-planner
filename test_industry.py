@@ -545,8 +545,9 @@ def test_missing_blueprints_are_reported():
     check("owned blueprint detail is carried", 
           (byid2 := {r["type_id"]: r for r in res2["requirements"]})[100]["blueprint"]["kind"] == "bpo")
 
-    # The quoted cost must not silently gain a blueprint charge.
-    check("cost excludes blueprints (unchanged by ownership)",
+    # Materials must not move just because a blueprint is or isn't owned — the blueprint charge is
+    # its own line, not something folded into materials.
+    check("materials are unaffected by blueprint ownership",
           approx(res["metrics"]["materials_cost"], res2["metrics"]["materials_cost"]))
 
 
@@ -829,6 +830,38 @@ def test_run_now_trigger():
     con.close()
 
 
+def test_cost_breakdown_adds_up():
+    """Materials + job fees + blueprints must equal total_cost. The blueprint line was in the total
+    before it was in the breakdown, so the displayed parts summed to less than the total — the kind
+    of discrepancy that quietly destroys trust in every other number on the page."""
+    print("test_cost_breakdown_adds_up")
+    con = _seed_con()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+    pools = {"manufacturing": 5, "reaction": 5}
+    P = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, min_saving_isk=0.0,
+                    marginal_pct_of_total=0.0,
+                    # Cheap enough that the component is still worth building — a dear copy would
+                    # (correctly) flip it to buy and there'd be no charge to check.
+                    bp_acquire={101: {"kind": "bpc", "price": 500.0, "runs_per_copy": 5}})
+    r = plan_queue([(100, 2)], mfg, rx, _prices(SELL), ADJ, P, NAMES, pools)
+    m = r["metrics"]
+    check("a blueprint charge is present", m["blueprint_cost"] > 0)
+    parts = m["materials_cost"] + m["job_cost"] + m["blueprint_cost"]
+    check("the parts sum to the total", approx(parts, m["total_cost"]))
+    check("net cost still credits leftovers",
+          approx(m["net_cost"], m["total_cost"] - m["leftover_value"]))
+
+    # With nothing to buy, the blueprint line is zero rather than absent — the UI hides it, but the
+    # arithmetic must stay valid.
+    P0 = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, min_saving_isk=0.0,
+                     marginal_pct_of_total=0.0)
+    r0 = plan_queue([(100, 2)], mfg, rx, _prices(SELL), ADJ, P0, NAMES, pools)
+    m0 = r0["metrics"]
+    check("no blueprints to buy -> zero", m0["blueprint_cost"] == 0)
+    check("the parts still sum to the total",
+          approx(m0["materials_cost"] + m0["job_cost"], m0["total_cost"]))
+
+
 def main():
     test_material_formula()
     test_graph_loaders()
@@ -857,6 +890,7 @@ def main():
     test_missing_blueprints_are_reported()
     test_bpc_price_summary()
     test_blueprint_cost_affects_make_or_buy()
+    test_cost_breakdown_adds_up()
     test_scan_lease_is_single_writer_across_replicas()
     test_esi_budget_guard()
     test_job_runner_lease_and_toggle()
