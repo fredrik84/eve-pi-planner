@@ -1124,10 +1124,7 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-do-dur { margin-left: auto; }   /* duration pins right on the meta line */
 .ind-do-runs, .ind-do-act, .ind-do-dur { flex: 0 0 auto; white-space: nowrap; }
 .ind-do-runs { color: var(--clr-text-soft); font-variant-numeric: tabular-nums; }
-/* Per-job run count: secondary to the totals, so it reads as a qualifier not a third number. */
-.ind-do-each { opacity: .7; font-size: 11px; margin-left: 5px; }
-.ind-do-each::before { content: '('; }
-.ind-do-each::after  { content: ')'; }
+.ind-do-runs { cursor: help; }   /* title carries the job count + run total */
 .ind-do-act { font-size: 9px; text-transform: uppercase; letter-spacing: .03em; padding: 1px 5px; border-radius: 7px; }
 .ind-do-manufacturing { background: #163524; color: #7fdca6; }
 .ind-do-reaction { background: #2a2130; color: #d9a7e0; }

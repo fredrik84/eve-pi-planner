@@ -1439,18 +1439,25 @@ function _indGroupJobs(jobs) {
   (jobs || []).forEach(j => {
     const g = by[j.type_id] || (by[j.type_id] = {
       type_id: j.type_id, name: j.name || ('#' + j.type_id), activity: j.activity,
-      count: 0, minRuns: Infinity, maxRuns: 0, totalRuns: 0, dur: 0,
+      count: 0, minRuns: Infinity, maxRuns: 0, totalRuns: 0, dur: 0, runsList: [],
     });
     g.count += 1;
     g.minRuns = Math.min(g.minRuns, j.runs);
     g.maxRuns = Math.max(g.maxRuns, j.runs);
     g.totalRuns += j.runs;
+    g.runsList.push(j.runs);
     g.dur = Math.max(g.dur, j.duration_hours || 0);
   });
   return Object.values(by).map(g => ({
     ...g,
-    // "152–153" when the split isn't exactly even, rather than pretending it is.
-    runs: g.minRuns === g.maxRuns ? String(g.minRuns) : `${g.minRuns}–${g.maxRuns}`,
+    // Bucket the jobs by run count, biggest batch first. An uneven split used to render as a
+    // range ("165–166") or a total, and both leave the reader doing arithmetic to work out what
+    // to actually type into the industry window. The buckets ARE the instruction: start 8 jobs
+    // of 165 runs and 1 of 166. Usually one or two buckets, since the splitter divides a batch
+    // across free slots, but nothing here assumes that.
+    buckets: Object.entries(g.runsList.reduce((m, r) => (m[r] = (m[r] || 0) + 1, m), {}))
+      .map(([runs, n]) => ({ runs: Number(runs), n }))
+      .sort((a, b) => b.n - a.n || b.runs - a.runs),
   })).sort((a, b) => b.dur - a.dur);
 }
 
@@ -1477,14 +1484,14 @@ async function indLoadInstall() {
     const cards = doers.map(c => {
       const groups = _indGroupJobs(c.jobs);
       const jobs = groups.map(g => {
-        // "9× 165–166 runs each" left the reader doing the multiplication and wondering why
-        // there was a range at all. Lead with the two numbers that mean something — how many
-        // jobs to queue and what they produce in total — and keep the per-job figure (the one
-        // you actually type into the industry window) as a clearly-labelled aside.
-        const each = g.count > 1
-          ? `<span class="ind-do-runs"><b>${g.count} jobs</b> · ${g.totalRuns.toLocaleString()} runs`
-            + `<span class="ind-do-each">${g.runs} each</span></span>`
-          : `<span class="ind-do-runs"><b>${g.runs}</b> run${g.maxRuns > 1 ? 's' : ''}</span>`;
+        // Say exactly what to install. Neither "9× 165–166 runs each" nor a 1,486-run total
+        // tells you what to type — both hand the reader a division problem. One entry per
+        // distinct run count does: "8× 165 runs · 1× 166 runs" is nine installs, spelled out.
+        const each = `<span class="ind-do-runs" title="${g.count} job${g.count > 1 ? 's' : ''} · `
+          + `${g.totalRuns.toLocaleString()} runs in total">`
+          + g.buckets.map(b => (g.count > 1 ? `<b>${b.n}×</b> ${b.runs}` : `<b>${b.runs}</b>`)
+              + ` run${b.runs > 1 ? 's' : ''}`).join(' · ')
+          + `</span>`;
         return `<li class="ind-do-job"><span class="ind-do-name">${_esc(g.name)}</span>${each}`
           + `<span class="ind-do-act ind-do-${g.activity}">${g.activity === 'reaction' ? 'reaction' : 'industry'}</span>`
           + `<span class="ind-do-dur">${_fmtHours(g.dur)}</span></li>`;
