@@ -31,6 +31,32 @@ def reaction_slots(row) -> int:
     return min(11, 1 + (row["mass_reactions"] or 0) + (row["advanced_mass_reactions"] or 0))
 
 
+SKILLS_SCOPE = "esi-skills.read_skills.v1"
+
+
+def _eligibility(row) -> tuple[bool, bool, str]:
+    """(usable for manufacturing, usable for reactions, why not).
+
+    Two filters, both automatic — no knob:
+
+    * **No skills scope** → we have no skill data at all, so we'd be inventing capacity. This also
+      catches a wallet-only character, which isn't an industry character in the first place.
+    * **Never trained the pool's multiplier skill** → they have only the free base slot. Assigning
+      capital work to a toon that has never trained Mass Production produces an instruction they
+      can't act on, and it inflates the slot pool so every estimate comes out optimistic.
+
+    Judged PER POOL, which matters: a character with Mass Production 0 but Mass Reactions 4 is a
+    reaction pilot, and should keep their 5 reaction slots while staying out of manufacturing.
+    """
+    if SKILLS_SCOPE not in (row["scopes"] or "").split():
+        return False, False, "no skill data — connect this character, or it's a wallet-only account"
+    mfg_ok = (row["mass_production"] or 0) > 0 or (row["advanced_mass_production"] or 0) > 0
+    rx_ok = (row["mass_reactions"] or 0) > 0 or (row["advanced_mass_reactions"] or 0) > 0
+    if not mfg_ok and not rx_ok:
+        return False, False, "no industry or reaction slot skills trained"
+    return mfg_ok, rx_ok, ""
+
+
 def _slot_pool(context_id: int) -> dict:
     """Per-character + total manufacturing and reaction slots for the account's real characters,
     plus how many are FREE right now (total − currently-running ESI jobs). Free counts fall back to
@@ -38,7 +64,7 @@ def _slot_pool(context_id: int) -> dict:
     con = get_connection()
     try:
         chars = con.execute(
-            "SELECT character_id, character_name, "
+            "SELECT character_id, character_name, scopes, "
             "COALESCE(mass_production,0) AS mass_production, "
             "COALESCE(advanced_mass_production,0) AS advanced_mass_production, "
             "COALESCE(mass_reactions,0) AS mass_reactions, "
@@ -53,9 +79,16 @@ def _slot_pool(context_id: int) -> dict:
     running = running_counts(context_id)
 
     per_char = []
+    excluded = []
     mfg_total = rx_total = mfg_free = rx_free = 0
     for c in chars:
-        ms, rs = manufacturing_slots(c), reaction_slots(c)
+        mfg_ok, rx_ok, why = _eligibility(c)
+        if not mfg_ok and not rx_ok:
+            excluded.append({"character_id": c["character_id"],
+                             "character_name": c["character_name"], "reason": why})
+            continue
+        ms = manufacturing_slots(c) if mfg_ok else 0
+        rs = reaction_slots(c) if rx_ok else 0
         run = running.get(c["character_id"], {"manufacturing": 0, "reaction": 0})
         mf = max(0, ms - run["manufacturing"])
         rf = max(0, rs - run["reaction"])
@@ -67,6 +100,7 @@ def _slot_pool(context_id: int) -> dict:
         })
     return {
         "characters": per_char,
+        "excluded": excluded,
         "manufacturing_slots": mfg_total, "reaction_slots": rx_total,
         "manufacturing_free": mfg_free, "reaction_free": rx_free,
     }

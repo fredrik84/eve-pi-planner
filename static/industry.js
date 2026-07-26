@@ -103,17 +103,38 @@ function _indStatusHeadline(d) {
     tiles.push(['In the cooker', String(t.running), 'Jobs running right now']);
     tiles.push(['Still to start', String(t.waiting), 'Jobs not started yet']);
   }
-  tiles.push(['Time left', _fmtHours(d.metrics.makespan_hours), 'Wall-clock for what remains, jobs in parallel']);
+  const fd = d.metrics.first_delivery_hours;
+  // Two different questions: when can I hand over the first order, vs when am I finished entirely.
+  // Only worth splitting when they actually differ.
+  if (fd != null && d.metrics.makespan_hours - fd > 0.05) {
+    tiles.push(['First delivery', _fmtHours(fd), 'When the first order in line is finished and deliverable']);
+    tiles.push(['Whole queue', _fmtHours(d.metrics.makespan_hours), 'When everything queued is finished']);
+  } else {
+    tiles.push(['Time left', _fmtHours(d.metrics.makespan_hours), 'Wall-clock for what remains, jobs in parallel']);
+  }
   const byOrder = {};
   ((p && p.orders) || []).forEach(o => { byOrder[o.id] = o; });
-  const chips = (_indOrders || []).map(o => {
+  // Per-order ETA comes from the plan's own target finish times. Orders of the SAME product are
+  // aggregated into one target, so they legitimately share an ETA — don't imply otherwise.
+  const tgt = {};
+  (d.targets || []).forEach(t => { tgt[t.type_id] = t; });
+  const ordered = (_indOrders || []).slice().sort((a, b) => {
+    const ra = (tgt[a.product_type_id] || {}).rank, rb = (tgt[b.product_type_id] || {}).rank;
+    return (ra === undefined ? 99 : ra) - (rb === undefined ? 99 : rb) || a.id - b.id;
+  });
+  const chips = ordered.map(o => {
     const op = byOrder[o.id];
     const st = op ? op.status : 'waiting';
     const lbl = op ? (st === 'complete' ? 'done'
       : st === 'building' ? `${op.done_units}/${op.quantity}` : 'not started') : '';
     const tag = (op && op.label) ? `<span class="ind-oc-for" title="This order is for ${_esc(op.label)}">${_esc(op.label)}</span>` : '';
-    return `<span class="ind-order-chip ind-oc-${st}">${tag}<b>${o.quantity}×</b> ${_esc(o.name)}`
-      + (lbl ? `<span class="ind-oc-state">${lbl}</span>` : '')
+    const T = tgt[o.product_type_id];
+    const pos = T && T.rank != null
+      ? `<span class="ind-oc-pos" title="Position in line — first in line wins a contested slot">#${T.rank + 1}</span>` : '';
+    const eta = st === 'complete' ? ''
+      : (T && T.finish_hours ? `<span class="ind-oc-eta" title="Estimated finish for this order">${_fmtHours(T.finish_hours)}</span>` : '');
+    return `<span class="ind-order-chip ind-oc-${st}">${pos}${tag}<b>${o.quantity}×</b> ${_esc(o.name)}`
+      + (lbl ? `<span class="ind-oc-state">${lbl}</span>` : '') + eta
       + `<button class="ind-oc-del" title="Remove from the build" onclick="indRemoveOrder(${o.id})">✕</button></span>`;
   }).join('');
   return sim
@@ -400,13 +421,22 @@ async function indLoadSlots() {
     const d = await r.json();
     const chips = (d.characters || []).map(c =>
       `<span class="ind-slot-chip" title="${_esc(c.character_name)}">${_esc(c.character_name)}: `
-      + `${c.manufacturing_free}/${c.manufacturing_slots}<span class="ind-slot-sub">mfg</span> · `
-      + `${c.reaction_free}/${c.reaction_slots}<span class="ind-slot-sub">rx</span></span>`
+      + (c.manufacturing_slots ? `${c.manufacturing_free}/${c.manufacturing_slots}<span class="ind-slot-sub">mfg</span>` : '<span class="ind-slot-sub">no mfg</span>')
+      + ` · `
+      + (c.reaction_slots ? `${c.reaction_free}/${c.reaction_slots}<span class="ind-slot-sub">rx</span>` : '<span class="ind-slot-sub">no rx</span>')
+      + `</span>`
     ).join('');
     el.innerHTML = `<div class="ind-slot-tot"><b>${d.manufacturing_free}/${d.manufacturing_slots}</b> manufacturing · `
       + `<b>${d.reaction_free}/${d.reaction_slots}</b> reaction slots free `
       + `<button class="ind-bp-btn" onclick="indRefreshJobs()" title="Re-read running jobs from ESI">Refresh jobs</button></div>`
-      + `<div class="ind-slot-chips">${chips || '<span class="pp-sub">No characters — add one to get real slot counts.</span>'}</div>`;
+      + `<div class="ind-slot-chips">${chips || '<span class="pp-sub">No characters — add one to get real slot counts.</span>'}</div>`
+      // Never silently drop capacity: say who was left out and why.
+      + ((d.excluded || []).length
+        ? `<div class="ind-slot-excl"><b>Not used:</b> ` + d.excluded.map(c =>
+            `<span title="${_esc(c.reason)}">${_esc(c.character_name)}</span>`).join(', ')
+          + `<div class="ind-slot-excl-why">Characters with no slot skills trained (or no skill data) are left out — `
+          + `their single free slot would inflate every estimate and send you jobs they can't run.</div></div>`
+        : '');
   } catch (e) { el.innerHTML = ''; }
 }
 
