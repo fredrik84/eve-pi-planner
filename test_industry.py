@@ -9,6 +9,7 @@ Run: python3 test_industry.py
 """
 import math
 import sqlite3
+import time
 from app.db import get_connection
 import sys
 
@@ -764,6 +765,67 @@ def test_job_runner_lease_and_toggle():
     con.close()
 
 
+def test_run_now_trigger():
+    """"Run now" without giving the web pods Kubernetes API access: the admin sets a flag, and a
+    frequently-ticking CronJob picks it up. The tick must be a cheap no-op unless the job is
+    genuinely due, and one request must produce exactly one run."""
+    print("test_run_now_trigger")
+    import app.jobs as J
+    job = "unittest_due"
+    interval = 22 * 3600
+    con = get_connection()
+    for t in ("pp_job_runs", "pp_job_config", "pp_job_leases"):
+        try:
+            con.execute(f"DELETE FROM {t} WHERE job=?", (job,))
+        except Exception:
+            pass
+    con.commit()
+    con.close()
+
+    due, why = J.is_due(job, interval)
+    check("a job that never ran is due", due is True and why == "never run")
+
+    J.run_job(job, lambda: "ok")
+    due, _ = J.is_due(job, interval)
+    check("not due again inside the interval", due is False)
+
+    J.request_run(job)
+    due, why = J.is_due(job, interval)
+    check("Run now makes it due", due is True and why == "requested")
+
+    calls = []
+    J.run_job(job, lambda: (calls.append(1), "ran")[1])
+    check("the requested run executed", len(calls) == 1)
+    due, _ = J.is_due(job, interval)
+    check("the request is consumed after one run", due is False)
+
+    # A disabled job must never be due, even if someone queued it earlier.
+    J.request_run(job)
+    J.set_enabled(job, False)
+    due, why = J.is_due(job, interval)
+    check("a disabled job is never due", due is False and why == "disabled")
+    J.set_enabled(job, True)
+
+    # An elapsed interval makes it due again without anyone asking.
+    con = get_connection()
+    con.execute("UPDATE pp_job_runs SET started_at=? WHERE job=?",
+                (time.time() - interval - 60, job))
+    con.execute("UPDATE pp_job_config SET run_requested=NULL WHERE job=?", (job,))
+    con.commit()
+    con.close()
+    due, why = J.is_due(job, interval)
+    check("an elapsed interval is due on its own", due is True and "last ran" in why)
+
+    con = get_connection()
+    for t in ("pp_job_runs", "pp_job_config", "pp_job_leases"):
+        try:
+            con.execute(f"DELETE FROM {t} WHERE job=?", (job,))
+        except Exception:
+            pass
+    con.commit()
+    con.close()
+
+
 def main():
     test_material_formula()
     test_graph_loaders()
@@ -795,6 +857,7 @@ def main():
     test_scan_lease_is_single_writer_across_replicas()
     test_esi_budget_guard()
     test_job_runner_lease_and_toggle()
+    test_run_now_trigger()
     print(f"\nAll {_passed} checks passed.")
 
 

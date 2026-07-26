@@ -73,6 +73,14 @@ def ensure_job_tables():
                 updated_at REAL
             )
         """)
+        # "Run now" without giving the web pods access to the Kubernetes API: the admin sets a
+        # timestamp here, and the CronJob — which ticks often and exits immediately when there's
+        # nothing to do — picks it up on its next pass.
+        try:
+            con.execute("ALTER TABLE pp_job_config ADD COLUMN run_requested REAL")
+            con.commit()
+        except Exception:
+            pass
         con.commit()
     finally:
         con.close()
@@ -104,6 +112,72 @@ def set_enabled(job: str, enabled: bool) -> None:
         con.commit()
     finally:
         con.close()
+
+
+def request_run(job: str) -> None:
+    """Ask for `job` to run at the next opportunity."""
+    ensure_job_tables()
+    con = get_connection()
+    try:
+        con.execute(
+            "INSERT INTO pp_job_config (job, enabled, run_requested, updated_at) VALUES (?,1,?,?) "
+            "ON CONFLICT (job) DO UPDATE SET run_requested=excluded.run_requested",
+            (job, time.time(), time.time()),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+
+def _clear_request(job: str) -> None:
+    con = get_connection()
+    try:
+        con.execute("UPDATE pp_job_config SET run_requested=NULL WHERE job=?", (job,))
+        con.commit()
+    finally:
+        con.close()
+
+
+def run_state(job: str) -> dict:
+    """Everything the scheduler and the admin page need to know about one job's readiness."""
+    ensure_job_tables()
+    con = get_connection()
+    try:
+        cfg = con.execute("SELECT enabled, run_requested FROM pp_job_config WHERE job=?",
+                          (job,)).fetchone()
+        last = con.execute(
+            "SELECT started_at, ended_at, status FROM pp_job_runs "
+            "WHERE job=? AND status='ok' ORDER BY started_at DESC LIMIT 1", (job,)).fetchone()
+    except Exception:
+        return {"enabled": True, "requested": None, "last_ok": None}
+    finally:
+        con.close()
+    return {
+        "enabled": True if cfg is None else bool(cfg["enabled"]),
+        "requested": (cfg["run_requested"] if cfg else None),
+        "last_ok": (last["started_at"] if last else None),
+    }
+
+
+def is_due(job: str, min_interval: float) -> tuple[bool, str]:
+    """Should this job run right now? (due, why)
+
+    Folding the schedule in here means one frequently-ticking CronJob covers both cases: it runs
+    when a human asked, and otherwise no more often than `min_interval`. That's what makes "run now"
+    possible without a second schedule or Kubernetes API access.
+    """
+    st = run_state(job)
+    if not st["enabled"]:
+        return False, "disabled"
+    if st["requested"]:
+        return True, "requested"
+    last_ok = st["last_ok"]
+    if last_ok is None:
+        return True, "never run"
+    age = time.time() - last_ok
+    if age >= min_interval:
+        return True, f"last ran {age / 3600:.1f}h ago"
+    return False, f"ran {age / 3600:.1f}h ago, interval {min_interval / 3600:.0f}h"
 
 
 def owner_id() -> str:
@@ -200,6 +274,7 @@ def run_job(job: str, fn, ttl: int = DEFAULT_TTL) -> dict:
     owner = owner_id()
     if not claim(job, owner, ttl):
         return {"job": job, "ran": False, "reason": "held by another replica"}
+    _clear_request(job)      # consumed — clear before running so one request means one run
     run_id = _start_run(job, owner)
     try:
         detail = fn()
@@ -246,5 +321,7 @@ def job_summary() -> list[dict]:
     out = []
     for name, r in seen.items():
         label, cadence = known.get(name, ("", ""))
-        out.append({**r, "label": label, "cadence": cadence, "enabled": is_enabled(name)})
+        st = run_state(name)
+        out.append({**r, "label": label, "cadence": cadence,
+                    "enabled": st["enabled"], "requested": st["requested"]})
     return sorted(out, key=lambda x: (x["started_at"] is None, -(x["started_at"] or 0)))

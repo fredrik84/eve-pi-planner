@@ -80,6 +80,16 @@ function adminSubPage(key) {
 // work" needs somewhere to be visible.
 // A disabled job checks the flag before doing anything — it never takes the lease and never runs,
 // whether it fires from the in-process scheduler or a Kubernetes CronJob.
+// "Run now" only flags the job — the work runs in its own pod. The CronJob ticks every few
+// minutes and exits instantly unless something is due, so a request starts within that window.
+async function runJobNow(job) {
+  try {
+    const r = await fetch('/api/admin/jobs/' + encodeURIComponent(job) + '/run', { method: 'POST' });
+    if (!r.ok) { const e = await r.json().catch(() => ({})); alert(e.detail || 'Could not queue the job'); return; }
+  } catch (e) { alert(String(e)); return; }
+  loadAdminJobs();
+}
+
 async function toggleJob(job, enabled) {
   try {
     await fetch('/api/admin/jobs/' + encodeURIComponent(job), {
@@ -131,7 +141,11 @@ async function loadAdminJobs() {
     + `<td><span class="job-st job-${st}">${j.enabled === false ? 'disabled' : _esc(j.status)}</span></td>`
     + `<td>${ago(j.started_at)}</td><td>${dur(j)}</td>`
     + `<td class="job-detail">${_esc(j.detail || j.error || '')}</td>`
-    + `<td class="ind-num">${j.failures ? `<span class="pp-warn">${j.failures}</span>` : '0'}/${j.runs}</td></tr>`;
+    + `<td class="ind-num">${j.failures ? `<span class="pp-warn">${j.failures}</span>` : '0'}/${j.runs}</td>`
+    + `<td>${j.requested
+        ? '<span class="job-queued">queued…</span>'
+        : (j.enabled === false ? '' : `<button class="ind-bp-btn" onclick="runJobNow('${_esc(j.job)}')">Run now</button>`)}</td>`
+    + `</tr>`;
   }).join('');
 
   const recent = (d.recent || []).slice(0, 20).map(r =>
@@ -141,7 +155,7 @@ async function loadAdminJobs() {
 
   el.innerHTML = head
     + `<h3 class="ind-modal-h" style="margin-top:14px">Latest per job</h3>`
-    + (rows ? `<table class="ind-table"><thead><tr><th>Job</th><th>Enabled</th><th>Status</th><th>Last run</th><th>Took</th><th>Detail</th><th class="ind-num">Fails/runs</th></tr></thead><tbody>${rows}</tbody></table>`
+    + (rows ? `<table class="ind-table"><thead><tr><th>Job</th><th>Enabled</th><th>Status</th><th>Last run</th><th>Took</th><th>Detail</th><th class="ind-num">Fails/runs</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
             : '<p class="pp-sub">No job runs recorded yet.</p>')
     + `<h3 class="ind-modal-h" style="margin-top:16px">Recent history</h3>`
     + (recent ? `<table class="ind-table"><thead><tr><th>Job</th><th>Status</th><th>When</th><th>Took</th><th>Detail</th></tr></thead><tbody>${recent}</tbody></table>` : '');

@@ -25,18 +25,33 @@ def _contract_scan() -> str:
     return f"examined {st.get('seen', 0)} contracts, indexed {st.get('indexed', 0)} blueprints"
 
 
+# name -> (callable, minimum hours between scheduled runs)
 JOBS = {
-    "contract_scan": _contract_scan,
+    "contract_scan": (_contract_scan, 22.0),
 }
 
 
 def main() -> int:
-    if len(sys.argv) < 2 or sys.argv[1] not in JOBS:
-        print(f"usage: run_job.py <{'|'.join(JOBS)}>", file=sys.stderr)
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    flags = {a for a in sys.argv[1:] if a.startswith("--")}
+    if not args or args[0] not in JOBS:
+        print(f"usage: run_job.py <{'|'.join(JOBS)}> [--if-due]", file=sys.stderr)
         return 2
-    name = sys.argv[1]
-    from app.jobs import run_job
-    res = run_job(name, JOBS[name], ttl=3600)
+    name = args[0]
+    fn, interval_h = JOBS[name]
+
+    from app.jobs import run_job, is_due
+
+    # --if-due is what lets one frequently-ticking CronJob serve both the schedule AND "run now":
+    # it exits in milliseconds unless a human asked for a run or the interval has elapsed.
+    if "--if-due" in flags:
+        due, why = is_due(name, interval_h * 3600)
+        if not due:
+            print(f"{name}: not due ({why})")
+            return 0
+        print(f"{name}: due ({why})")
+
+    res = run_job(name, fn, ttl=3600)
     print(res)
     # A job skipped because another replica holds the lease is a success, not a failure — otherwise
     # Kubernetes would mark a perfectly healthy overlap as a failed run and start alerting.

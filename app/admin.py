@@ -654,6 +654,23 @@ def admin_job_toggle(job: str, req: JobToggle, _ctx: int = Depends(require_admin
     return {"ok": True, "summary": job_summary()}
 
 
+@router.post("/api/admin/jobs/{job}/run")
+def admin_job_run_now(job: str, _ctx: int = Depends(require_admin)):
+    """Ask for a job to run at the next opportunity.
+
+    This sets a flag rather than executing anything: the work belongs in its own pod, and the web
+    pods have no Kubernetes API access by design. The CronJob ticks every few minutes and exits
+    immediately unless something is due, so a requested run starts within that window.
+    """
+    from app.jobs import request_run, KNOWN_JOBS, job_summary, is_enabled
+    if job not in {name for name, _l, _c in KNOWN_JOBS}:
+        raise HTTPException(status_code=400, detail="unknown job")
+    if not is_enabled(job):
+        raise HTTPException(status_code=400, detail="job is disabled — enable it first")
+    request_run(job)
+    return {"ok": True, "summary": job_summary()}
+
+
 @router.get("/api/admin/cleanup/preview")
 def cleanup_preview(_: int = Depends(require_admin)):
     """Return per-category counts of what would be deleted — no writes."""
