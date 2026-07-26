@@ -512,6 +512,42 @@ def test_fifo_wins_contested_slots():
           roomy["metrics"]["makespan_hours"] <= solo["metrics"]["makespan_hours"] * 1.05)
 
 
+def test_missing_blueprints_are_reported():
+    """A manufacturing step you own no blueprint for cannot be installed, so the plan must say so
+    rather than quoting a build you can't start. Reactions need no blueprint and must never be
+    flagged. Blueprint cost is deliberately NOT added to total_cost — BPCs trade via contracts with
+    no market API, so there is no honest figure; the warning carries that instead."""
+    print("test_missing_blueprints_are_reported")
+    con = _seed_con()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+
+    # Own nothing: both manufactured types flagged, the reaction (102 Sprocket) never is.
+    P = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0)
+    res = plan_queue([(100, 1)], mfg, rx, _prices(SELL), ADJ, P, NAMES,
+                     {"manufacturing": 5, "reaction": 5})
+    miss = res["metrics"]["missing_blueprints"]
+    check("manufactured steps flagged", "Widget" in miss and "Gadget" in miss)
+    check("reaction never needs a blueprint", "Sprocket" not in miss)
+    byid = {r["type_id"]: r for r in res["requirements"]}
+    check("needs_blueprint set on the manufactured type", byid[100]["needs_blueprint"] is True)
+    check("needs_blueprint false for the reaction", byid[102]["needs_blueprint"] is False)
+
+    # Owning the Widget BPO clears only that one.
+    P2 = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0,
+                     owned={100: {"me": 10, "te": 20, "kind": "bpo", "runs": -1}})
+    res2 = plan_queue([(100, 1)], mfg, rx, _prices(SELL), ADJ, P2, NAMES,
+                      {"manufacturing": 5, "reaction": 5})
+    miss2 = res2["metrics"]["missing_blueprints"]
+    check("owned blueprint clears its own flag", "Widget" not in miss2)
+    check("the still-unowned one stays flagged", "Gadget" in miss2)
+    check("owned blueprint detail is carried", 
+          (byid2 := {r["type_id"]: r for r in res2["requirements"]})[100]["blueprint"]["kind"] == "bpo")
+
+    # The quoted cost must not silently gain a blueprint charge.
+    check("cost excludes blueprints (unchanged by ownership)",
+          approx(res["metrics"]["materials_cost"], res2["metrics"]["materials_cost"]))
+
+
 def main():
     test_material_formula()
     test_graph_loaders()
@@ -537,6 +573,7 @@ def main():
     test_marginal_threshold_scales_with_build_size()
     test_install_assignment_spreads_and_respects_free_slots()
     test_fifo_wins_contested_slots()
+    test_missing_blueprints_are_reported()
     print(f"\nAll {_passed} checks passed.")
 
 

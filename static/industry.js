@@ -1046,6 +1046,7 @@ function _indRenderPlan(d, title) {
     <div class="ind-body">
       ${_indMetricTiles(d.metrics)}
       ${unres}
+      ${_indBlueprintWarn(d)}
       ${_indStepsHtml(d, stageModel)}
       ${_indPipelineHtml(d, tiersData, stageModel)}
       <details class="ind-details" open><summary>Shopping list (${(d.shopping_list || []).length})</summary>${_indShoppingSections(d, stageModel)}</details>
@@ -1057,13 +1058,25 @@ function _indRenderPlan(d, title) {
 
 // The plan's contents without the card chrome — the status view supplies its own heading and tiles,
 // so it renders the pipeline/steps/shopping list directly rather than a card inside a card.
+// You can't install a manufacturing job without the blueprint. Say so plainly, and be explicit
+// that the quoted cost excludes it — a capital BPC is a large, invisible addition otherwise.
+function _indBlueprintWarn(d) {
+  const miss = (d.metrics && d.metrics.missing_blueprints) || [];
+  if (!miss.length) return '';
+  return `<div class="ind-bp-warn"><b>You don't own a blueprint for ${miss.length === 1 ? 'this' : 'these'}:</b> `
+    + miss.map(_esc).join(', ')
+    + `<div class="ind-bp-warn-sub">These jobs can't be installed until you have the BPO or a BPC, and `
+    + `their cost is <b>not</b> in the total above — blueprint copies trade via contracts, which no `
+    + `market API exposes, so there's no honest price to add.</div></div>`;
+}
+
 function _indRenderPlanBody(d) {
   const tiersData = d.tree ? _indComputeTiers(d.tree, new Set((d.shopping_list || []).map(x => x.type_id)))
     : { byType: {}, tiers: {}, maxT: 0, inputsOf: {}, consumersOf: {} };
   const stageModel = _indStageModel(tiersData);
   const unres = (d.unresolved && d.unresolved.length)
     ? `<p class="pp-warn">${d.unresolved.length} material(s) had no market price — cost is a floor.</p>` : '';
-  return unres
+  return unres + _indBlueprintWarn(d)
     + _indPipelineHtml(d, tiersData, stageModel)
     + _indStepsHtml(d, stageModel)
     + `<details class="ind-details"><summary>Shopping list (${(d.shopping_list || []).length})</summary>`

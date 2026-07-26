@@ -1131,3 +1131,7 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-slot-excl b { color: #9fb4d8; }
 .ind-slot-excl span { border-bottom: 1px dotted #4a5468; cursor: help; }
 .ind-slot-excl-why { font-size: 11px; margin-top: 3px; opacity: .85; }
+.ind-bp-warn { margin: 12px 0; padding: 10px 13px; border: 1px solid #5a3a3a; border-left: 3px solid #b05a5a;
+  border-radius: 6px; background: #241a1a; font-size: 13px; color: #e6b8b8; }
+.ind-bp-warn b { color: #ffd9d9; }
+.ind-bp-warn-sub { font-size: 11.5px; color: #c49a9a; margin-top: 5px; line-height: 1.5; }

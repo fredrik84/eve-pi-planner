@@ -447,7 +447,12 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
         "requirements": [
             {"type_id": tid, "name": names.get(tid, str(tid)), "activity": info["activity"],
              "runs": info["runs"], "output_qty": info["output_qty"],
-             "units": info["runs"] * info["output_qty"]}
+             "units": info["runs"] * info["output_qty"],
+             # You cannot install a job without the blueprint, so a build step you own nothing for
+             # isn't a plan — it's a shopping trip you haven't been told about. Reactions use a
+             # formula, not a blueprint, so they're never flagged.
+             "blueprint": params.owned.get(tid),
+             "needs_blueprint": info["activity"] == "manufacturing" and tid not in params.owned}
             for tid, info in agg.items() if info["build"] and info["runs"] > 0
         ],
         "schedule": sched,
@@ -466,6 +471,13 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
             # When the FIRST queued order is done — the number that matters when you owe someone a
             # delivery, as distinct from when the whole queue drains.
             "first_delivery_hours": (_finish_of(tasks, targets[0][0]) if targets else 0.0),
+            # Blueprint cost is NOT in total_cost: BPCs trade on contracts, which no market API
+            # exposes, so there is no honest number to add. Report what's missing instead of
+            # silently quoting a build you can't start.
+            "missing_blueprints": sorted(
+                names.get(tid, str(tid)) for tid, info in agg.items()
+                if info["build"] and info["runs"] > 0
+                and info["activity"] == "manufacturing" and tid not in params.owned),
             "slots": pools,
             # What the marginal rule actually resolved to for THIS build, so the UI can show the
             # consequence of the setting in ISK rather than a bare percentage.
