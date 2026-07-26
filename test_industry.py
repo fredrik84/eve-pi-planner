@@ -665,6 +665,44 @@ def test_scan_lease_is_single_writer_across_replicas():
     check("release records completion", bool(row["ended_at"]) and row["indexed"] == 3)
 
 
+def test_esi_budget_guard():
+    """Every ESI call goes through one wrapper because CCP bans on the ERROR budget, not on volume.
+    The guard must: pace when healthy, stop when the budget is nearly spent, and — the subtle one —
+    leave the budget untouched when a response carries no headers, since defaulting to 'plenty'
+    there would erase a real backoff."""
+    print("test_esi_budget_guard")
+    import time as _t
+    from app import esi_http as E
+
+    class Resp:
+        def __init__(self, headers, code=200):
+            self.headers = headers
+            self.status_code = code
+
+    E._record(Resp({"x-esi-error-limit-remain": "90", "x-esi-error-limit-reset": "60"}))
+    check("healthy budget recorded", E.budget()["remain"] == 90)
+    t0 = _t.time()
+    E._pre_request_wait()
+    check("healthy budget only paces", _t.time() - t0 < 0.5)
+
+    E._record(Resp({"x-esi-error-limit-remain": "2", "x-esi-error-limit-reset": "3"}))
+    check("low budget recorded", E.budget()["remain"] == 2)
+    t0 = _t.time()
+    E._pre_request_wait()
+    check("low budget waits out the window", _t.time() - t0 >= 3)
+
+    # The regression this caught: no headers used to write the default 100 and cancel the backoff.
+    E._record(Resp({"x-esi-error-limit-remain": "4", "x-esi-error-limit-reset": "30"}))
+    E._record(Resp({}))
+    check("a header-less response does not reset the budget", E.budget()["remain"] == 4)
+    E._record(Resp({"x-esi-error-limit-remain": "not-a-number"}))
+    check("a malformed header does not reset the budget", E.budget()["remain"] == 4)
+
+    check("requests are identified to CCP", "eve-pi-planner" in E.USER_AGENT)
+    # Reset so a low budget doesn't stall the rest of the suite.
+    E._record(Resp({"x-esi-error-limit-remain": "100", "x-esi-error-limit-reset": "0"}))
+
+
 def main():
     test_material_formula()
     test_graph_loaders()
@@ -694,6 +732,7 @@ def main():
     test_bpc_price_summary()
     test_blueprint_cost_affects_make_or_buy()
     test_scan_lease_is_single_writer_across_replicas()
+    test_esi_budget_guard()
     print(f"\nAll {_passed} checks passed.")
 
 

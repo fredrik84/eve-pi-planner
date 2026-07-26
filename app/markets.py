@@ -20,6 +20,7 @@ from pydantic import BaseModel
 
 from app.sde import get_connection, ensure_once
 from app.cache import cache_get_json, cache_set_json, cache_mget_json, cache_mset_json
+from app import esi_http
 from app.esi import (
     ESI_BASE, MARKET_SCOPE, _get_valid_token, require_context,
 )
@@ -164,7 +165,7 @@ def _detect_structure_meta(context_id: int, structure_id: int) -> tuple[str | No
     headers = {"Authorization": f"Bearer {token}"}
     try:
         with httpx.Client(timeout=12) as client:
-            s = client.get(f"{ESI_BASE}/universe/structures/{structure_id}/?datasource=tranquility",
+            s = esi_http.get(f"universe/structures/{structure_id}/?datasource=tranquility", client=client,
                            headers=headers)
             if s.status_code != 200:
                 return (None, None)
@@ -173,7 +174,7 @@ def _detect_structure_meta(context_id: int, structure_id: int) -> tuple[str | No
             sys_id = sj.get("solar_system_id")
             sec = None
             if sys_id:
-                sy = client.get(f"{ESI_BASE}/universe/systems/{sys_id}/?datasource=tranquility")
+                sy = esi_http.get(f"universe/systems/{sys_id}/?datasource=tranquility", client=client)
                 if sy.status_code == 200:
                     v = (sy.json() or {}).get("security_status")
                     sec = "high" if (v or 0) >= 0.45 else "low" if (v or 0) > 0 else "null"
@@ -493,7 +494,7 @@ def _search_regions(q: str) -> list[dict]:
         return []
     try:
         with httpx.Client(timeout=15) as client:
-            resp = client.post(f"{ESI_BASE}/universe/ids/?datasource=tranquility", json=names)
+            resp = esi_http.post("universe/ids/?datasource=tranquility", client=client, json=names)
             regions = (resp.json() or {}).get("regions", []) if resp.status_code == 200 else []
     except Exception:
         regions = []

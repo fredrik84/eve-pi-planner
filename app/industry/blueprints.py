@@ -17,6 +17,7 @@ import httpx
 from fastapi import Depends
 
 from app.sde import get_connection, ensure_once
+from app import esi_http
 from app.esi import require_context, ESI_BASE, _get_valid_token, BLUEPRINTS_SCOPE
 
 from app.industry._router import router
@@ -46,14 +47,11 @@ def fetch_character_blueprints(character_id: int, access_token: str) -> list[dic
     None on any failure so a bad fetch never wipes a good cache; [] means genuinely none."""
     out: list[dict] = []
     try:
-        with httpx.Client(timeout=15) as client:
+        with esi_http.client(timeout=15) as client:
             page = 1
             while True:
-                r = client.get(
-                    f"{ESI_BASE}/characters/{character_id}/blueprints/",
-                    headers={"Authorization": f"Bearer {access_token}"},
-                    params={"page": page},
-                )
+                r = esi_http.get(f"characters/{character_id}/blueprints/", client=client,
+                                 token=access_token, params={"page": page})
                 r.raise_for_status()
                 data = r.json()
                 if not data:

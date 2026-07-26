@@ -18,6 +18,7 @@ import httpx
 from fastapi import Depends
 
 from app.sde import get_connection, ensure_once
+from app import esi_http
 from app.esi import require_context, ESI_BASE, _get_valid_token, INDUSTRY_JOBS_SCOPE
 
 from app.industry._router import router
@@ -48,14 +49,10 @@ def fetch_manufacturing_jobs(character_id: int, access_token: str) -> list[dict]
     """This character's manufacturing jobs (activity_id 1). None on failure (never wipes a good
     cache); [] means genuinely none running."""
     try:
-        with httpx.Client(timeout=12) as client:
-            r = client.get(
-                f"{ESI_BASE}/characters/{character_id}/industry/jobs/",
-                headers={"Authorization": f"Bearer {access_token}"},
-                params={"include_completed": "true"},
-            )
-            r.raise_for_status()
-            jobs = r.json()
+        r = esi_http.get(f"characters/{character_id}/industry/jobs/", token=access_token,
+                         timeout=12, params={"include_completed": "true"})
+        r.raise_for_status()
+        jobs = r.json()
     except Exception:
         return None
     return [

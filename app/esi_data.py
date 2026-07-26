@@ -10,6 +10,8 @@ import time
 from datetime import datetime, timezone
 
 import httpx
+
+from app import esi_http
 from fastapi import APIRouter, Cookie, Depends, HTTPException
 from pydantic import BaseModel
 
@@ -38,7 +40,7 @@ def _resolve_names(ids: list[int], client: "httpx.Client") -> dict[int, str]:
     for i in range(0, len(ids), 1000):
         chunk = ids[i:i + 1000]
         try:
-            r = client.post(f"{ESI_BASE}/universe/names/?datasource=tranquility", json=chunk, timeout=15)
+            r = esi_http.post("universe/names/?datasource=tranquility", client=client, json=chunk)
             if r.status_code == 200:
                 for x in r.json():
                     out[x["id"]] = x["name"]
@@ -79,12 +81,12 @@ def corp_wallet_summary(context_id: int) -> dict:
     headers = {"Authorization": f"Bearer {token}"}
     try:
         with httpx.Client(timeout=15) as client:
-            pub = client.get(f"{ESI_BASE}/characters/{cid}/?datasource=tranquility").json()
+            pub = esi_http.get(f"characters/{cid}/?datasource=tranquility", client=client).json()
             corp_id = pub.get("corporation_id")
-            corp = client.get(f"{ESI_BASE}/corporations/{corp_id}/?datasource=tranquility").json()
+            corp = esi_http.get(f"corporations/{corp_id}/?datasource=tranquility", client=client).json()
             corp_name = corp.get("name")
 
-            wresp = client.get(f"{ESI_BASE}/corporations/{corp_id}/wallets/?datasource=tranquility", headers=headers)
+            wresp = esi_http.get(f"corporations/{corp_id}/wallets/?datasource=tranquility", client=client, token=token)
             if wresp.status_code in (401, 403):
                 # Authorised, but the character lacks the in-game role to read the corp wallet.
                 return {"connected": True, "character_name": name, "corp_id": corp_id,

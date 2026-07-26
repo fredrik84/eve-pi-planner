@@ -30,11 +30,11 @@ import statistics
 import threading
 import time
 
-import httpx
 from fastapi import Depends
 
 from app.db import get_connection
-from app.esi import ESI_BASE, require_context
+from app import esi_http
+from app.esi import require_context
 from app.industry._router import router
 
 THE_FORGE = 10000002          # Jita's region — where blueprint contracts actually are
@@ -45,30 +45,6 @@ _HISTORY_DAYS = 120           # how far back an estimate may draw
 _scan_lock = threading.Lock()
 _scanning: set[int] = set()
 
-# Politeness. CCP doesn't ban on request volume as such — it bans on burning the ERROR budget, so
-# the rules that matter are: watch the error-limit headers and back off before they run out, and
-# don't sustain a hammering rate. Combined with the single-writer lease and incremental fetching,
-# a steady day costs a few dozen requests rather than thousands.
-_REQ_DELAY = 0.05          # ~20/s ceiling, well under anything ESI objects to
-_ERR_FLOOR = 20            # back off while fewer than this many errors remain in the window
-
-
-def _throttle(resp) -> None:
-    """Pace requests, and yield hard if we're eating into ESI's error budget.
-
-    `X-ESI-Error-Limit-Remain` counts DOWN toward a ban; when it gets low the correct behaviour is
-    to stop until the window resets rather than keep probing, which is what actually gets a client
-    blocked.
-    """
-    try:
-        remain = int(resp.headers.get("x-esi-error-limit-remain", 100))
-        reset = int(resp.headers.get("x-esi-error-limit-reset", 60))
-    except (TypeError, ValueError):
-        remain, reset = 100, 60
-    if remain < _ERR_FLOOR:
-        time.sleep(min(reset + 1, 90))
-    else:
-        time.sleep(_REQ_DELAY)
 
 
 def ensure_bpc_tables():
@@ -226,11 +202,10 @@ def _run_scan(region_id: int) -> None:
         con.close()
     still_live: list[int] = []
     try:
-        with httpx.Client(timeout=30, headers={"User-Agent": "eve-pi-planner/1.0"}) as c:
+        with esi_http.client(timeout=30) as c:
             page, pages = 1, 1
             while page <= pages and page <= 60:
-                r = c.get(f"{ESI_BASE}/contracts/public/{region_id}/", params={"page": page})
-                _throttle(r)
+                r = esi_http.get(f"contracts/public/{region_id}/", client=c, params={"page": page})
                 if r.status_code != 200:
                     break
                 pages = int(r.headers.get("x-pages") or 1)
@@ -251,8 +226,7 @@ def _run_scan(region_id: int) -> None:
                         refreshed += 1
                         continue
                     try:
-                        ir = c.get(f"{ESI_BASE}/contracts/public/items/{x['contract_id']}/")
-                        _throttle(ir)
+                        ir = esi_http.get(f"contracts/public/items/{cid}/", client=c)
                         if ir.status_code != 200:
                             continue
                         items = ir.json() or []

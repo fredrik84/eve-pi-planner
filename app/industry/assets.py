@@ -32,12 +32,12 @@ from __future__ import annotations
 
 import time
 
-import httpx
 from fastapi import Depends
 from pydantic import BaseModel
 
 from app.db import get_connection
-from app.esi import ESI_BASE, require_context, _get_valid_token, ASSETS_SCOPE
+from app import esi_http
+from app.esi import require_context, _get_valid_token, ASSETS_SCOPE
 from app.industry._router import router
 
 # Personal hangar flags — assets in a ship fit, delivery hangar or contract are NOT usable stock.
@@ -107,7 +107,7 @@ def _paginate(client: httpx.Client, url: str, token: str, cap: int = 30):
     rows: list[dict] = []
     page = 1
     while page <= cap:
-        r = client.get(url, headers={"Authorization": f"Bearer {token}"}, params={"page": page})
+        r = esi_http.get(url, client=client, token=token, params={"page": page})
         if r.status_code in (401, 403):
             return "role"
         if r.status_code == 404:
@@ -129,8 +129,7 @@ def _names_for(client: httpx.Client, url: str, token: str, item_ids: list[int]) 
     out: dict[int, str] = {}
     for i in range(0, len(item_ids), 1000):
         try:
-            r = client.post(url, headers={"Authorization": f"Bearer {token}"},
-                            json=item_ids[i:i + 1000])
+            r = esi_http.post(url, client=client, token=token, json=item_ids[i:i + 1000])
             r.raise_for_status()
             for row in r.json():
                 if row.get("name"):
@@ -247,8 +246,8 @@ def refresh_assets(context_id: int) -> dict:
             failed += 1
             continue
         try:
-            with httpx.Client(timeout=25) as client:
-                rows = _paginate(client, f"{ESI_BASE}/characters/{cid}/assets/", token)
+            with esi_http.client(timeout=25) as client:
+                rows = _paginate(client, f"characters/{cid}/assets/", token)
                 if isinstance(rows, str):
                     failed += 1
                 else:
@@ -258,8 +257,7 @@ def refresh_assets(context_id: int) -> dict:
                         lambda _f, _n=cname: f"{_n} — personal hangar",
                     )
                     if conts:
-                        nm = _names_for(client, f"{ESI_BASE}/characters/{cid}/assets/names/",
-                                        token, conts)
+                        nm = _names_for(client, f"characters/{cid}/assets/names/", token, conts)
                         for k, meta in srcs.items():
                             if k.startswith("cont:") and int(k.split(":")[1]) in nm:
                                 meta["name"] = nm[int(k.split(":")[1])]

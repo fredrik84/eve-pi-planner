@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 log = logging.getLogger(__name__)
 
 import httpx
+
+from app import esi_http
 from fastapi import Depends, HTTPException
 from pydantic import BaseModel
 
@@ -117,7 +119,7 @@ def fetch_corp_industry_jobs(character_id: int, access_token: str) -> list[dict]
     show, not every corpmate's."""
     try:
         with httpx.Client(timeout=10) as client:
-            pub = client.get(f"{ESI_BASE}/characters/{character_id}/").json()
+            pub = esi_http.get(f"characters/{character_id}/", client=client).json()
             corp_id = pub.get("corporation_id")
             if not corp_id:
                 return []

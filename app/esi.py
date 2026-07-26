@@ -20,6 +20,8 @@ import time
 from datetime import datetime, timedelta, timezone
 
 import httpx
+
+from app import esi_http
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Response
 from pydantic import BaseModel
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -1323,8 +1325,7 @@ def _fetch_alliance_id(character_id: int) -> int | None:
     directly when the character's corp is in an alliance. Best-effort — a failure here must
     never block login/rescan, just leaves alliance_id unchanged."""
     try:
-        with httpx.Client() as client:
-            resp = client.get(f"{ESI_BASE}/characters/{character_id}/", timeout=10)
+        resp = esi_http.get(f"characters/{character_id}/", timeout=10)
         resp.raise_for_status()
         return resp.json().get("alliance_id")
     except Exception:
