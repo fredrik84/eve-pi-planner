@@ -640,10 +640,13 @@ let _indShopStageData = {};   // stage key (tier) -> [{name, qty}], for per-stag
 // a type is bought we also stop descending: its sub-materials aren't yours to make any more.
 function _indComputeTiers(tree, bought) {
   const buys = bought instanceof Set ? bought : new Set(bought || []);
+  // A queue can hold several products, so accept either one root or a list of them. Aggregated
+  // demand is shared across them, which is exactly what the tier walk already merges by type_id.
+  const roots = Array.isArray(tree) ? tree.filter(Boolean) : (tree ? [tree] : []);
   const byType = {};
   const inputsOf = {};      // type_id -> Set of type_ids it consumes
   const consumersOf = {};   // type_id -> Set of type_ids that consume it
-  (function walk(n, depth) {
+  const walk = ((n, depth) => {
     if (!n) return;
     const isBought = buys.has(n.type_id) && depth > 0;   // the root is always built
     const e = byType[n.type_id] || (byType[n.type_id] = { type_id: n.type_id, name: n.name, decision: n.decision, activity: n.activity, owned: n.owned, qty: 0, runs: 0, tier: depth });
@@ -661,7 +664,8 @@ function _indComputeTiers(tree, bought) {
       (consumersOf[c.type_id] || (consumersOf[c.type_id] = new Set())).add(n.type_id);
       walk(c, depth + 1);
     });
-  })(tree, 0);
+  });
+  roots.forEach(r => walk(r, 0));
   const tiers = {};
   Object.values(byType).forEach(e => (tiers[e.tier] = tiers[e.tier] || []).push(e));
   const maxT = Object.keys(tiers).length ? Math.max(...Object.keys(tiers).map(Number)) : 0;
@@ -879,8 +883,8 @@ function _indStepsHtml(d, model) {
 let _indPipeGraph = { inputsOf: {}, consumersOf: {} };
 
 function _indPipelineHtml(d, tiersData, model) {
-  const tree = d.tree;
-  if (!tree || !(tree.inputs || []).length) return '';
+  const roots = d.trees || (d.tree ? [d.tree] : []);
+  if (!roots.length || !roots.some(t => (t.inputs || []).length)) return '';
   const { inputsOf, consumersOf } = tiersData;
   _indPipeGraph = { inputsOf: inputsOf || {}, consumersOf: consumersOf || {} };
 
@@ -1042,11 +1046,12 @@ function _indRenderPlan(d, title) {
         + `<span class="ind-tree-qty">×${Math.round(l.qty).toLocaleString()}</span>`
         + (l.value ? `<span class="ind-tree-cost">${fmtIsk(l.value)}</span>` : '') + `</div>`).join('') + `</details>` : '';
   const boughtIds = new Set((d.shopping_list || []).map(s => s.type_id));
-  const tiersData = d.tree ? _indComputeTiers(d.tree, boughtIds)
+  const roots = d.trees || d.tree;
+  const tiersData = roots ? _indComputeTiers(roots, boughtIds)
     : { byType: {}, tiers: {}, maxT: 0, inputsOf: {}, consumersOf: {} };
   const stageModel = _indStageModel(tiersData);
-  const treeKids = d.tree && (d.tree.inputs || []).length
-    ? (d.tree.inputs || []).map(c => _indTreeNode(c, 0)).join('') : '';
+  const allRoots = d.trees || (d.tree ? [d.tree] : []);
+  const treeKids = allRoots.flatMap(t => (t.inputs || []).map(c => _indTreeNode(c, 0))).join('');
   const tree = treeKids
     ? `<details class="ind-details"><summary>Debug: full build tree</summary><div class="ind-tree">${treeKids}</div></details>` : '';
   return `<div class="pp-card">
@@ -1148,7 +1153,10 @@ async function indLoadBpcPrices(inst, ids, miss) {
 }
 
 function _indRenderPlanBody(d) {
-  const tiersData = d.tree ? _indComputeTiers(d.tree, new Set((d.shopping_list || []).map(x => x.type_id)))
+  // The queue plan carries one tree per ordered product (`trees`); a single-product preview carries
+  // one (`tree`). Either way the tier walk merges them by type, matching the aggregated demand.
+  const roots = d.trees || d.tree;
+  const tiersData = roots ? _indComputeTiers(roots, new Set((d.shopping_list || []).map(x => x.type_id)))
     : { byType: {}, tiers: {}, maxT: 0, inputsOf: {}, consumersOf: {} };
   const stageModel = _indStageModel(tiersData);
   const unres = (d.unresolved && d.unresolved.length)

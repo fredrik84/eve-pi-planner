@@ -24,6 +24,7 @@ from app.esi import require_context
 from app.industry._router import router
 from app.industry.graph import (
     load_manufacturing_graph, load_reaction_graph, collect_reachable, resolve_build_params,
+    build_plan,
 )
 from app.industry.schedule import plan_queue
 from app.industry.slots import _slot_pool
@@ -263,7 +264,14 @@ def _run_queue_plan(ctx: int, req: QueuePlanRequest) -> dict:
     rx_slots = req.rx_slots if req.rx_slots is not None else pool["reaction_slots"]
     pools = {"manufacturing": max(1, mfg_slots), "reaction": max(1, rx_slots)}
     on_hand = _stock_for(ctx, targets) if req.use_stock else None
-    return plan_queue(targets, mfg, rx, prices, adjusted, params, names, pools, on_hand=on_hand)
+    res = plan_queue(targets, mfg, rx, prices, adjusted, params, names, pools, on_hand=on_hand)
+    # The recipe tree per ordered product. plan_queue returns aggregated demand — correct for cost
+    # and scheduling, but it has no structure, and the UI derives its build STAGES from the tree.
+    # Without this the status view (the main screen) had no pipeline at all and lumped every job
+    # into one unlabelled bucket, while the preview modal showed the real stages.
+    res["trees"] = [build_plan(t, q, mfg, rx, prices, adjusted, params, names)["tree"]
+                    for t, q in targets]
+    return res
 
 
 @router.post("/api/industry/queue-plan")

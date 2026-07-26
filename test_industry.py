@@ -903,6 +903,43 @@ def test_blueprint_copies_cover_the_runs():
           cost_for_runs({"listings": [{"price": 1e6, "runs": 0}], "median_per_run": 0}, 3)["covered"] is False)
 
 
+def test_queue_plan_returns_trees():
+    """The status view is the main screen and builds its pipeline/stages from the recipe tree — but
+    plan_queue returns aggregated demand, which has no structure. Without a tree the status view
+    showed no stages at all and lumped every job into one unlabelled bucket, while the preview modal
+    (which calls a different endpoint) showed them correctly. The two must agree."""
+    print("test_queue_plan_returns_trees")
+    con = _seed_con()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+    P = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, min_saving_isk=0.0,
+                    marginal_pct_of_total=0.0)
+    pools = {"manufacturing": 5, "reaction": 5}
+
+    # plan_queue itself stays structure-free; the endpoint layer attaches the trees. Reproduce that
+    # here so the contract the UI depends on is pinned.
+    res = plan_queue([(100, 2)], mfg, rx, _prices(SELL), ADJ, P, NAMES, pools)
+    trees = [build_plan(t, q, mfg, rx, _prices(SELL), ADJ, P, NAMES)["tree"] for t, q in [(100, 2)]]
+    check("a tree is produced per target", len(trees) == 1 and trees[0]["type_id"] == 100)
+    check("the tree has structure", len(trees[0].get("inputs") or []) > 0)
+
+    # Every type the plan says to BUILD must appear in the tree, or the pipeline would omit a stage.
+    in_tree = set()
+    def walk(n):
+        in_tree.add(n["type_id"])
+        for c in n.get("inputs") or []:
+            walk(c)
+    walk(trees[0])
+    built = {r["type_id"] for r in res["requirements"]}
+    check("every built type is reachable in the tree", built <= in_tree)
+
+    # Several queued products -> one tree each, so a multi-product queue still renders stages.
+    multi = [(100, 1), (101, 1)]
+    trees2 = [build_plan(t, q, mfg, rx, _prices(SELL), ADJ, P, NAMES)["tree"] for t, q in multi]
+    check("one tree per queued product", len(trees2) == 2)
+    check("each tree is rooted at its own product",
+          [t["type_id"] for t in trees2] == [100, 101])
+
+
 def main():
     test_material_formula()
     test_graph_loaders()
@@ -924,6 +961,7 @@ def main():
     test_plan_queue_end_to_end()
     test_unpriced_material_does_not_crash()
     test_queue_progress_requirements()
+    test_queue_plan_returns_trees()
     test_stock_reduces_plan_but_never_the_target()
     test_marginal_threshold_scales_with_build_size()
     test_install_assignment_spreads_and_respects_free_slots()
