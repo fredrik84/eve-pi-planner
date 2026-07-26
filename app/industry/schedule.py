@@ -502,9 +502,6 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
             "first_delivery_hours": (_finish_of(tasks, targets[0][0]) if targets else 0.0),
             # Blueprints you don't own that the plan still builds — priced into total_cost above
             # when copies are listed. Anything with no copies available was flipped to buy instead.
-            # How much of the account we can actually see blueprints for. Without this the warning
-            # reads as fact when it may only mean "that character was never connected".
-            "blueprint_visibility": params.bp_visibility,
             "missing_blueprints": sorted(
                 ({"type_id": tid, "name": names.get(tid, str(tid))}
                  for tid, info in agg.items()

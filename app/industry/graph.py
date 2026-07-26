@@ -80,9 +80,6 @@ class BuildParams:
     # Blueprint acquisition cost for types NOT owned — {type_id: {kind, price, runs_per_copy}}.
     # Empty means 'unknown', which leaves the old behaviour untouched.
     bp_acquire: dict = field(default_factory=dict)
-    # How many characters we can actually read blueprints for — so "you don't own this" can be
-    # qualified rather than asserted.
-    bp_visibility: dict = field(default_factory=dict)
 
     def me_te_for(self, type_id: int, activity: str) -> tuple[float, float]:
         """(me_pct, te_pct) for a manufacturing product: its owned-blueprint values if known, else
@@ -430,12 +427,10 @@ def resolve_build_params(context_id: int, me_pct: float, te_pct: float,
     tax = facility_tax_pct if facility_tax_pct is not None else d_tax
     # Auto per-product ME/TE from the account's real owned blueprints (empty if not connected).
     try:
-        from app.industry.blueprints import owned_blueprints, blueprint_visibility
+        from app.industry.blueprints import owned_blueprints
         owned = owned_blueprints(context_id)
-        visibility = blueprint_visibility(context_id)
     except Exception:
         owned = {}
-        visibility = {}
     me_by_product = {p: (o["me"], o["te"]) for p, o in owned.items()}
     mfg_skill, rx_skill = account_industry_time_mults(context_id)
     return BuildParams(
@@ -444,7 +439,6 @@ def resolve_build_params(context_id: int, me_pct: float, te_pct: float,
         mfg_cost_index=fetch_system_cost_index(sid, "manufacturing"),
         rx_cost_index=fetch_system_cost_index(sid, "reaction"),
         facility_tax_pct=tax, me_by_product=me_by_product, owned=owned,
-        bp_visibility=visibility,
         max_build_hours=max_build_hours,
         struct_material_mult=1.0 - struct_material_pct / 100.0,
         struct_time_mult=1.0 - struct_time_pct / 100.0,

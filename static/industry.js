@@ -1077,18 +1077,14 @@ function _indBlueprintWarn(d) {
   // Fill the prices in after render — a cold contract index is a background scan, so the warning
   // must never wait on it.
   setTimeout(() => indLoadBpcPrices(inst, miss.map(m => m.type_id)), 0);
-  const vis = (d.metrics && d.metrics.blueprint_visibility) || {};
-  const caveat = vis.total
-    ? `We can only see blueprints held <b>personally</b> by connected characters (${vis.connected} of ${vis.total}). `
-      + `Anything in a <b>corp hangar</b> is corp-owned, and ESI only exposes those to a character with the `
-      + `<b>Director</b> role — so prints you do have will often show up here.`
-    : `We can only see blueprints held personally by connected characters — anything in a corp hangar is `
-      + `invisible to ESI without the Director role.`;
+  // No nagging about roles or connecting more characters — the user can't act on that and doesn't
+  // need to be told. Just say the list may be incomplete and give them the price.
   return `<div class="ind-bp-note"><b>No blueprint found for ${miss.length === 1 ? 'this' : 'these'}</b>`
     + `<div class="ind-bp-rows">${rows}</div>`
-    + `<div class="ind-bp-warn-sub">${caveat} Nothing is blocked and no build decision was changed by `
-    + `this — it's a heads-up plus a price so you can compare against a local seller. Copy prices, `
-    + `where copies are listed, are included in the total above.</div></div>`;
+    + `<div class="ind-bp-warn-sub">Blueprints in corp hangars aren't visible here, so prints you `
+    + `already have can still show up in this list. Nothing is blocked and no build decision was `
+    + `changed — it's a price so you can compare against a local seller. Copy prices, where copies `
+    + `are listed, are included in the total above.</div></div>`;
 }
 
 // Public-contract blueprint prices. Shows what's listed right now, and falls back to what they have
