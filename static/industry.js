@@ -24,14 +24,17 @@ async function onIndustryTabOpen() {
 
   indLoadSetupSummary();
   indLoadLifetime();
-  await indLoadQueue();
-  indLoadInstall();
-  indLoadRunning();
   // If something is already cooking, that's what you came to look at — show the live build first
   // and fold the planner away. With an empty queue there's nothing to check, so lead with planning.
   await indRefreshStatus();
 }
 
+let _indOrders = [];
+// The status card is the live view; when it's on screen, a setting change must re-plan it.
+function _indStatusVisible() {
+  const c = document.getElementById('indStatusCard');
+  return !!c && c.style.display !== 'none';
+}
 let _indPlannerOpen = null;   // null = decide from whether there's work; true/false = user's choice
 
 function indTogglePlanner(force) {
@@ -55,6 +58,7 @@ async function indRefreshStatus() {
     const r = await fetch('/api/industry/orders');
     if (r.ok) orders = (await r.json()).orders || [];
   } catch (e) {}
+  _indOrders = orders;
   if (!orders.length) {
     card.style.display = 'none';
     indTogglePlanner(true);                 // nothing to check — lead with planning
@@ -74,7 +78,12 @@ async function indRefreshStatus() {
     if (d.empty) { card.style.display = 'none'; indTogglePlanner(true); return; }
     _indLastPlan = d;
     _indCacheNames(d);
-    body.innerHTML = _indStatusHeadline(d) + _indRenderPlanBody(d);
+    body.innerHTML = _indStatusHeadline(d)
+      + `<div id="indInstall" class="ind-install"></div>`
+      + _indRenderPlanBody(d)
+      + `<div id="indRunning" class="ind-install"></div>`;
+    indLoadInstall();          // "do this now" sits directly under the numbers
+    indLoadRunning();          // what's already cooking goes under the pipeline
   } catch (e) { body.innerHTML = `<p class="pp-warn">${_esc(String(e))}</p>`; }
 }
 
@@ -91,9 +100,20 @@ function _indStatusHeadline(d) {
     tiles.push(['Still to start', String(t.waiting), 'Jobs not started yet']);
   }
   tiles.push(['Time left', _fmtHours(d.metrics.makespan_hours), 'Wall-clock for what remains, jobs in parallel']);
-  const heads = (d.targets || []).map(x => `${x.quantity}× ${_esc(x.name)}`).join(', ');
+  const byOrder = {};
+  ((p && p.orders) || []).forEach(o => { byOrder[o.id] = o; });
+  const chips = (_indOrders || []).map(o => {
+    const op = byOrder[o.id];
+    const st = op ? op.status : 'waiting';
+    const lbl = op ? (st === 'complete' ? 'done'
+      : st === 'building' ? `${op.done_units}/${op.quantity}` : 'not started') : '';
+    return `<span class="ind-order-chip ind-oc-${st}"><b>${o.quantity}×</b> ${_esc(o.name)}`
+      + (lbl ? `<span class="ind-oc-state">${lbl}</span>` : '')
+      + `<button class="ind-oc-del" title="Remove from the build" onclick="indRemoveOrder(${o.id})">✕</button></span>`;
+  }).join('');
   return sim
-    + `<div class="ind-status-head"><div class="ind-status-what">Building <b>${heads}</b></div></div>`
+    + `<div class="ind-status-head"><div class="ind-order-chips">${chips}</div>`
+    + `<button class="ind-bp-btn" onclick="indRefreshJobs()" title="Pull job status from EVE and re-plan">Refresh</button></div>`
     + `<div class="an-stats">` + tiles.map(([l, v, tip]) =>
         `<div class="an-stat" title="${_esc(tip)}"><div class="an-stat-lbl">${l}</div><div class="an-stat-val">${v}</div></div>`).join('')
     + `</div>`;
@@ -494,7 +514,7 @@ function indOnMarginalChange() {
   try { localStorage.setItem('indMarginalPct', String(_indMarginalPct())); } catch (e) {}
   indOnMarginalInput();
   if (_indPicked && document.getElementById('indResult').innerHTML.trim()) indRunPlan();
-  if (document.getElementById('indQueueResult').innerHTML.trim()) indPlanQueue();
+  if (_indStatusVisible()) indRefreshStatus();
 }
 function indRestoreMarginal() {
   const el = document.getElementById('indMarginal');
@@ -1057,7 +1077,7 @@ function indSimToggle() {
   _indSim = (on && on.checked) ? parseFloat(sl.value) : null;
   indSimInput();
   indLoadQueue();
-  if (document.getElementById('indQueueResult').innerHTML.trim()) indPlanQueue();
+  if (_indStatusVisible()) indRefreshStatus();
 }
 function indSimInput() {
   const sl = document.getElementById('indSim');
@@ -1070,7 +1090,7 @@ function indSimChange() {
   if (!(on && on.checked)) return;
   _indSim = parseFloat(sl.value);
   indLoadQueue();
-  if (document.getElementById('indQueueResult').innerHTML.trim()) indPlanQueue();
+  if (_indStatusVisible()) indRefreshStatus();
 }
 
 async function indLoadProgress() {
@@ -1098,33 +1118,9 @@ function _indOrderProgHtml(p) {
     + `<span class="ind-prog-lbl">${_esc(label)}</span></div>`;
 }
 
-async function indLoadQueue() {
-  const el = document.getElementById('indQueueList');
-  if (!el) return;
-  try {
-    const r = await fetch('/api/industry/orders');
-    if (!r.ok) { el.innerHTML = ''; return; }
-    const d = await r.json();
-    if (!d.orders || !d.orders.length) { el.innerHTML = '<p class="pp-sub">Queue is empty. Search a product above and hit “+ Queue”.</p>'; document.getElementById('indQueuePlanBtn').disabled = true; return; }
-    document.getElementById('indQueuePlanBtn').disabled = false;
-    await indLoadProgress();
-    const byOrder = {};
-    ((_indProgress && _indProgress.orders) || []).forEach(o => { byOrder[o.id] = o; });
-    const tot = _indProgress && _indProgress.totals;
-    const sim = _indProgress && _indProgress.simulated
-      ? `<div class="ind-sim-banner">Preview mode — this progress is made up so you can see the layout. Nothing here is real.</div>` : '';
-    const head = sim + (tot && tot.required
-      ? `<div class="ind-queue-sum">Queue progress: <b>${_indProgress.pct}%</b> — ${tot.done} of ${tot.required} jobs done`
-        + `${tot.running ? ` · ${tot.running} running` : ''}${tot.waiting ? ` · ${tot.waiting} waiting` : ''}</div>`
-      : '');
-    el.innerHTML = head + d.orders.map(o =>
-      `<div class="ind-queue-row"><span class="ind-queue-name">${_esc(o.name)}</span>`
-      + `<span class="ind-queue-qty">×${o.quantity}</span>`
-      + `<button class="ind-queue-del" title="Remove" onclick="indRemoveOrder(${o.id})">✕</button>`
-      + _indOrderProgHtml(byOrder[o.id]) + `</div>`
-    ).join('');
-  } catch (e) { el.innerHTML = ''; }
-}
+// The queue no longer has a card of its own — orders render as chips in the status header, so
+// "reload the queue" and "refresh the status" are the same operation.
+async function indLoadQueue() { return indRefreshStatus(); }
 
 async function indRemoveOrder(id) {
   try { await fetch('/api/industry/orders/' + id, { method: 'DELETE' }); } catch (e) {}
@@ -1137,9 +1133,8 @@ async function indRemoveOrder(id) {
 async function indRefreshJobs() {
   try { await fetch('/api/industry/jobs/refresh', { method: 'POST' }); } catch (e) {}
   indLoadSlots();
-  indLoadInstall();
-  indLoadRunning();
-  indLoadQueue();      // fresh ESI jobs ⇒ recompute queue progress
+  indLoadSetupSummary();
+  await indRefreshStatus();   // redraws install / pipeline / running from the fresh job data
 }
 
 async function indLoadInstall() {

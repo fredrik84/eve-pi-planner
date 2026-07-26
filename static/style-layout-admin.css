@@ -1070,3 +1070,19 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-pipe-is-wait .ind-pipe-name { color: #93a0b4; }
 .ind-st-wait { background: #23262e; color: #93a0b4; }
 .ind-st-run { background: #1e3a5f; color: #8fc3ff; }
+/* Order chips in the status header — each says where that order actually is */
+.ind-status-head { display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+.ind-order-chips { flex: 1; display: flex; flex-wrap: wrap; gap: 6px; min-width: 200px; }
+.ind-order-chip { display: inline-flex; align-items: center; gap: 7px; padding: 4px 6px 4px 10px;
+  border: 1px solid var(--clr-border); border-left: 3px solid var(--clr-border); border-radius: 6px;
+  background: #12161f; font-size: 13px; color: #eef2f8; }
+.ind-order-chip b { color: var(--clr-accent); font-variant-numeric: tabular-nums; }
+.ind-oc-complete { border-left-color: #3a9668; }
+.ind-oc-building { border-left-color: var(--clr-accent); }
+.ind-oc-waiting  { border-left-color: #4a4458; opacity: .8; }
+.ind-oc-state { font-size: 10px; text-transform: uppercase; letter-spacing: .03em; padding: 1px 6px;
+  border-radius: 8px; background: #1c2030; color: #9fb4d8; }
+.ind-oc-complete .ind-oc-state { background: #163524; color: #7fdca6; }
+.ind-oc-building .ind-oc-state { background: #1e3a5f; color: #8fc3ff; }
+.ind-oc-del { background: none; border: none; color: #6b7688; cursor: pointer; font-size: 12px; padding: 0 2px; }
+.ind-oc-del:hover { color: #ff6b74; }
