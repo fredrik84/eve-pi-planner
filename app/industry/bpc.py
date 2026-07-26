@@ -86,6 +86,25 @@ def _scan_state(region_id: int) -> dict:
     return dict(r) if r else {}
 
 
+def _flush(batch: list[tuple], region_id: int, seen: int, indexed: int) -> None:
+    """Write one page's observations plus a progress marker, in a single connection."""
+    con = get_connection()
+    try:
+        for row in batch:
+            con.execute(
+                "INSERT INTO pp_bpc_observations (contract_id, region_id, type_id, is_bpc, runs, "
+                "me, te, price, first_seen, last_seen) VALUES (?,?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT (contract_id) DO UPDATE SET last_seen=excluded.last_seen, "
+                "price=excluded.price",
+                row,
+            )
+        con.execute("UPDATE pp_bpc_scan SET seen=?, indexed=? WHERE region_id=?",
+                    (seen, indexed, region_id))
+        con.commit()
+    finally:
+        con.close()
+
+
 def _run_scan(region_id: int) -> None:
     """Walk a region's public contracts and index every single-blueprint one. Long-running by
     nature (~15k item lookups in The Forge), so it's only ever called on a background thread."""
@@ -102,6 +121,7 @@ def _run_scan(region_id: int) -> None:
         con.close()
 
     seen = indexed = 0
+    batch: list[tuple] = []
     try:
         with httpx.Client(timeout=30, headers={"User-Agent": "eve-pi-planner/1.0"}) as c:
             page, pages = 1, 1
@@ -130,23 +150,16 @@ def _run_scan(region_id: int) -> None:
                         continue      # a bundle isn't attributable to one blueprint's price
                     it = items[0]
                     now = time.time()
-                    con = get_connection()
-                    try:
-                        con.execute(
-                            "INSERT INTO pp_bpc_observations (contract_id, region_id, type_id, "
-                            "is_bpc, runs, me, te, price, first_seen, last_seen) "
-                            "VALUES (?,?,?,?,?,?,?,?,?,?) "
-                            "ON CONFLICT (contract_id) DO UPDATE SET last_seen=excluded.last_seen, "
-                            "price=excluded.price",
-                            (int(x["contract_id"]), region_id, int(it["type_id"]),
-                             1 if it.get("is_blueprint_copy") else 0,
-                             int(it.get("runs") or 0), int(it.get("material_efficiency") or 0),
-                             int(it.get("time_efficiency") or 0), float(x["price"]), now, now),
-                        )
-                        con.commit()
-                    finally:
-                        con.close()
+                    batch.append((int(x["contract_id"]), region_id, int(it["type_id"]),
+                                  1 if it.get("is_blueprint_copy") else 0,
+                                  int(it.get("runs") or 0), int(it.get("material_efficiency") or 0),
+                                  int(it.get("time_efficiency") or 0), float(x["price"]), now, now))
                     indexed += 1
+                # Flush per page rather than per row: a full scan is ~15k observations, and a
+                # connect/commit/close cycle each would dominate the runtime. Writing progress here
+                # too, so a running scan can report how far along it is instead of looking idle.
+                _flush(batch, region_id, seen, indexed)
+                batch = []
                 page += 1
     except Exception:
         pass
