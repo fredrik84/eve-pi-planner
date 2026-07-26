@@ -1157,3 +1157,15 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .job-never-run { background: #2a2620; color: #d8b46a; }
 .job-queued { font-size: 11px; color: var(--clr-accent); }
 .ind-bp-need { display: block; font-size: 10.5px; color: #8fa0b8; margin-top: 1px; }
+/* Inline order editing */
+.ind-oc-edit { background: none; border: none; color: #6b7688; cursor: pointer; font-size: 12px; padding: 0 2px; }
+.ind-oc-edit:hover { color: var(--clr-accent); }
+.ind-oc-editing { gap: 6px; padding: 5px 8px; border-left-color: var(--clr-accent); }
+.ind-oc-name { color: #eef2f8; font-size: 12px; }
+.ind-oc-qty { width: 56px; }
+.ind-oc-lbl { width: 170px; }
+.ind-oc-qty, .ind-oc-lbl { background: #141720; color: var(--clr-text); border: 1px solid var(--clr-border);
+  border-radius: 4px; padding: 3px 6px; font-size: 12px; margin: 0; }
+.ind-oc-ok { background: #1e3a5f; color: var(--clr-accent); border: 1px solid #2d5a8a; border-radius: 4px;
+  padding: 3px 10px; font-size: 11px; cursor: pointer; }
+.ind-oc-cancel { background: none; border: none; color: var(--clr-text-soft); font-size: 11px; cursor: pointer; }

@@ -133,8 +133,9 @@ function _indStatusHeadline(d) {
       ? `<span class="ind-oc-pos" title="Position in line — first in line wins a contested slot">#${T.rank + 1}</span>` : '';
     const eta = st === 'complete' ? ''
       : (T && T.finish_hours ? `<span class="ind-oc-eta" title="Estimated finish for this order">${_fmtHours(T.finish_hours)}</span>` : '');
-    return `<span class="ind-order-chip ind-oc-${st}">${pos}${tag}<b>${o.quantity}×</b> ${_esc(o.name)}`
+    return `<span class="ind-order-chip ind-oc-${st}" id="oc-${o.id}">${pos}${tag}<b>${o.quantity}×</b> ${_esc(o.name)}`
       + (lbl ? `<span class="ind-oc-state">${lbl}</span>` : '') + eta
+      + `<button class="ind-oc-edit" title="Rename or change the quantity" onclick="indEditOrder(${o.id})">✎</button>`
       + `<button class="ind-oc-del" title="Remove from the build" onclick="indRemoveOrder(${o.id})">✕</button></span>`;
   }).join('');
   return sim
@@ -1259,6 +1260,39 @@ function _indOrderProgHtml(p) {
 // The queue no longer has a card of its own — orders render as chips in the status header, so
 // "reload the queue" and "refresh the status" are the same operation.
 async function indLoadQueue() { return indRefreshStatus(); }
+
+// Edit in place rather than in a dialog: it's two fields, and re-planning the whole queue just to
+// show an edit form would be a needless several-second wait.
+function indEditOrder(id) {
+  const chip = document.getElementById('oc-' + id);
+  const o = (_indOrders || []).find(x => x.id === id);
+  if (!chip || !o) return;
+  const p = ((_indProgress && _indProgress.orders) || []).find(x => x.id === id) || {};
+  chip.classList.add('ind-oc-editing');
+  chip.innerHTML = `<span class="ind-oc-name">${_esc(o.name)}</span>`
+    + `<input type="number" min="1" class="ind-oc-qty" id="oce-qty-${id}" value="${o.quantity}" title="Quantity">`
+    + `<input type="text" maxlength="60" class="ind-oc-lbl" id="oce-lbl-${id}" `
+    + `value="${_esc(p.label || '')}" placeholder="For — customer, contract…">`
+    + `<button class="ind-oc-ok" onclick="indSaveOrder(${id})">Save</button>`
+    + `<button class="ind-oc-cancel" onclick="indRefreshStatus()">Cancel</button>`;
+  const q = document.getElementById('oce-lbl-' + id);
+  if (q) q.focus();
+}
+
+async function indSaveOrder(id) {
+  const qty = parseInt((document.getElementById('oce-qty-' + id) || {}).value, 10);
+  const label = (document.getElementById('oce-lbl-' + id) || {}).value || '';
+  const body = { label };
+  if (!isNaN(qty) && qty >= 1) body.quantity = qty;
+  try {
+    const r = await fetch('/api/industry/orders/' + id, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) { const e = await r.json().catch(() => ({})); alert(e.detail || 'Could not save'); return; }
+  } catch (e) { alert(String(e)); return; }
+  await indRefreshStatus();     // quantity changes the whole plan, so re-plan
+}
 
 async function indRemoveOrder(id) {
   try { await fetch('/api/industry/orders/' + id, { method: 'DELETE' }); } catch (e) {}
