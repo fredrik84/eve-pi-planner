@@ -247,6 +247,33 @@ def test_alert_settings_gated(base: str) -> bool:
     return ok
 
 
+def test_missing_api_route_404s(base: str) -> bool:
+    """An unmatched /api/* path must 404, not 405.
+
+    StaticFiles is mounted at "/", so before the catch-all every unmatched API path fell through to
+    it — and StaticFiles serves only GET/HEAD, so a POST came back "405 Method Not Allowed". That
+    reads as "the endpoint exists but not for this verb", sending you after a bug that isn't there;
+    the real cause is normally a replica that hasn't finished rolling out. Cost real debugging time
+    once, so it's pinned here.
+    """
+    print(f"\n{'='*60}\n  unmatched /api/* returns 404, not 405\n{'='*60}")
+    ok = True
+    for method in ("POST", "GET", "DELETE"):
+        req = urllib.request.Request(f"{base}/api/definitely/not/a/route", method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=15) as r:
+                code = r.status
+        except urllib.error.HTTPError as e:
+            code = e.code
+        except Exception:
+            code = 0
+        ok &= check(code == 404, f"{method} on a missing API path -> {code} (want 404)")
+    # A real endpoint must be unaffected by the catch-all.
+    code = get_status(f"{base}/api/features")
+    ok &= check(code == 200, f"a real API route still works (got HTTP {code})")
+    return ok
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--url", default="https://eve-pi.failed.name")
@@ -268,6 +295,7 @@ def main():
         test_debug_memory_gated(base),
         test_debug_user_gated(base),
         test_alert_settings_gated(base),
+        test_missing_api_route_404s(base),
     ]
     print(f"\n{'='*60}")
     passed = sum(results)

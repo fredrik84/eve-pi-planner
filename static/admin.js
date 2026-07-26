@@ -85,18 +85,34 @@ function adminSubPage(key) {
 async function runJobNow(job) {
   try {
     const r = await fetch('/api/admin/jobs/' + encodeURIComponent(job) + '/run', { method: 'POST' });
-    if (!r.ok) { const e = await r.json().catch(() => ({})); alert(e.detail || 'Could not queue the job'); return; }
+    if (!r.ok) { alert(await _adminErrText(r, 'Could not queue the job')); return; }
   } catch (e) { alert(String(e)); return; }
   loadAdminJobs();
 }
 
+// Turn a failed response into something that names the actual situation. 404/405 on an endpoint the
+// page just rendered a button for almost always means this pod hasn't finished rolling out — the
+// browser loaded new JS from one replica and called an older one. Saying "method not allowed" sends
+// you looking for a bug that isn't there.
+async function _adminErrText(r, fallback) {
+  let detail = '';
+  try { detail = (await r.json()).detail || ''; } catch (e) {}
+  if (r.status === 404 || r.status === 405) {
+    return 'That endpoint isn\'t available on the server yet — a deploy is probably still rolling out. '
+      + 'Give it a minute and try again.';
+  }
+  if (r.status === 403) return detail || 'Admin access required.';
+  return detail || `${fallback} (HTTP ${r.status})`;
+}
+
 async function toggleJob(job, enabled) {
   try {
-    await fetch('/api/admin/jobs/' + encodeURIComponent(job), {
+    const r = await fetch('/api/admin/jobs/' + encodeURIComponent(job), {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ enabled: !!enabled }),
     });
-  } catch (e) {}
+    if (!r.ok) { alert(await _adminErrText(r, 'Could not change the job')); }
+  } catch (e) { alert(String(e)); }
   loadAdminJobs();
 }
 

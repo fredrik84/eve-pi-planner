@@ -262,4 +262,22 @@ def share_preview(share_id: str, request: Request):
     return HTMLResponse(doc)
 
 
+# Unmatched /api/* must 404, not fall through to the static mount below.
+#
+# StaticFiles is mounted at "/", so anything no API route matched lands there — and StaticFiles only
+# serves GET/HEAD, so a POST to a missing endpoint came back "405 Method Not Allowed". That reads
+# like the endpoint exists but rejects your verb, which is exactly the wrong hint: the real cause is
+# usually a pod that hasn't rolled yet, mid-deploy, still missing the route. This catch-all is
+# registered BEFORE the mount so unmatched API paths say what actually happened.
+@app.api_route("/api/{rest:path}",
+               methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
+               include_in_schema=False)
+def _api_not_found(rest: str):
+    raise HTTPException(
+        status_code=404,
+        detail=f"No such API endpoint: /api/{rest}. If this worked a moment ago, a deploy may still "
+               f"be rolling out — retry shortly.",
+    )
+
+
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
