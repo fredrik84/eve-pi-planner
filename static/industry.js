@@ -1393,6 +1393,30 @@ async function indRefreshJobs() {
 // "Do this now", written as instructions rather than a status. We know which characters have free
 // slots and the plan knows which jobs are ready, so the checklist names WHO installs WHAT instead
 // of reporting that "a slot" is free somewhere and leaving you to work it out.
+// Collapse a character's assigned jobs to one line per PRODUCT. A big batch is split into one job
+// per free slot, so a character can be handed a dozen identical installs — listing each separately
+// turns one action ("start 12 of these") into twelve lines. Grouped, the checklist stays readable
+// whether the plan has 18 jobs or 300. Longest job first, since that's what gates the stage.
+function _indGroupJobs(jobs) {
+  const by = {};
+  (jobs || []).forEach(j => {
+    const g = by[j.type_id] || (by[j.type_id] = {
+      type_id: j.type_id, name: j.name || ('#' + j.type_id), activity: j.activity,
+      count: 0, minRuns: Infinity, maxRuns: 0, totalRuns: 0, dur: 0,
+    });
+    g.count += 1;
+    g.minRuns = Math.min(g.minRuns, j.runs);
+    g.maxRuns = Math.max(g.maxRuns, j.runs);
+    g.totalRuns += j.runs;
+    g.dur = Math.max(g.dur, j.duration_hours || 0);
+  });
+  return Object.values(by).map(g => ({
+    ...g,
+    // "152–153" when the split isn't exactly even, rather than pretending it is.
+    runs: g.minRuns === g.maxRuns ? String(g.minRuns) : `${g.minRuns}–${g.maxRuns}`,
+  })).sort((a, b) => b.dur - a.dur);
+}
+
 function _indSlotPips(used, free, assigned, cls) {
   const total = used + free;
   let out = '';
@@ -1414,18 +1438,24 @@ async function indLoadInstall() {
 
     const doers = (d.characters || []).filter(c => c.assigned > 0);
     const cards = doers.map(c => {
-      const jobs = c.jobs.map(j =>
-        `<li class="ind-do-job"><span class="ind-do-name">${_esc(j.name || ('#' + j.type_id))}</span>`
-        + `<span class="ind-do-runs">${j.runs} run${j.runs > 1 ? 's' : ''}</span>`
-        + `<span class="ind-do-act ind-do-${j.activity}">${j.activity === 'reaction' ? 'reaction' : 'industry'}</span>`
-        + `<span class="ind-do-dur">${_fmtHours(j.duration_hours)}</span></li>`).join('');
+      const groups = _indGroupJobs(c.jobs);
+      const jobs = groups.map(g => {
+        const each = g.count > 1
+          ? `<span class="ind-do-runs"><b>${g.count}×</b> ${g.runs} runs each</span>`
+          : `<span class="ind-do-runs">${g.runs} run${g.maxRuns > 1 ? 's' : ''}</span>`;
+        return `<li class="ind-do-job"><span class="ind-do-name">${_esc(g.name)}</span>${each}`
+          + `<span class="ind-do-act ind-do-${g.activity}">${g.activity === 'reaction' ? 'reaction' : 'industry'}</span>`
+          + `<span class="ind-do-dur">${_fmtHours(g.dur)}</span></li>`;
+      }).join('');
       const mUsed = c.manufacturing_slots - c.manufacturing_free;
       const rUsed = c.reaction_slots - c.reaction_free;
       const mAss = c.jobs.filter(j => j.activity !== 'reaction').length;
       const rAss = c.jobs.filter(j => j.activity === 'reaction').length;
       return `<div class="ind-do-char">
         <div class="ind-do-hd"><span class="ind-do-who">${_esc(c.character_name)}</span>
-          <span class="ind-do-count">start ${c.assigned} job${c.assigned > 1 ? 's' : ''}</span></div>
+          <span class="ind-do-count">start ${c.assigned} job${c.assigned > 1 ? 's' : ''}`
+          + (groups.length < c.assigned ? ` · ${groups.length} product${groups.length > 1 ? 's' : ''}` : '')
+          + `</span></div>
         <div class="ind-do-slots">
           ${c.manufacturing_slots ? `<span class="ind-slotset" title="${mUsed} busy · ${mAss} to start · ${c.manufacturing_slots} industry slots">${_indSlotPips(mUsed, c.manufacturing_free, mAss, 'mfg')}</span>` : ''}
           ${c.reaction_slots ? `<span class="ind-slotset" title="${rUsed} busy · ${rAss} to start · ${c.reaction_slots} reaction slots">${_indSlotPips(rUsed, c.reaction_free, rAss, 'rx')}</span>` : ''}
