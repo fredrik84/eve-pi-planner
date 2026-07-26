@@ -413,6 +413,54 @@ def test_marginal_threshold_scales_with_build_size():
             [1e7, 1e8, 5e8, 1e9, 5e9], [1e8, 5e8, 1e9, 5e9, 1e10])))
 
 
+def test_install_assignment_spreads_and_respects_free_slots():
+    """The 'do this now' checklist names WHICH character installs each job. It must never hand a
+    character more jobs than it has free slots, must skip a character with none, and should spread
+    work rather than piling it on one toon. Mirrors the greedy assignment in orders.to_install."""
+    print("test_install_assignment_spreads_and_respects_free_slots")
+
+    def assign(ready, chars):
+        avail = {c["character_id"]: dict(c) for c in chars}
+        out = []
+        for t in ready:
+            act = t["activity"]
+            pick = max(avail.items(), key=lambda kv: kv[1].get(act, 0), default=(None, None))
+            cid, info = pick
+            if cid is not None and info and info.get(act, 0) > 0:
+                info[act] -= 1
+                out.append((t["name"], cid))
+            else:
+                out.append((t["name"], None))
+        return out
+
+    chars = [
+        {"character_id": 1, "manufacturing": 4, "reaction": 2},
+        {"character_id": 2, "manufacturing": 2, "reaction": 2},
+        {"character_id": 3, "manufacturing": 0, "reaction": 0},   # full — must never be picked
+    ]
+    ready = [{"name": f"job{i}", "activity": "manufacturing"} for i in range(6)]
+    res = assign(ready, chars)
+    used = {}
+    for _n, cid in res:
+        if cid is not None:
+            used[cid] = used.get(cid, 0) + 1
+    check("full character never assigned", 3 not in used)
+    check("never exceeds char 1's 4 free slots", used.get(1, 0) <= 4)
+    check("never exceeds char 2's 2 free slots", used.get(2, 0) <= 2)
+    check("spreads across both usable characters", len(used) == 2)
+    check("all 6 jobs placed (4+2 capacity)", sum(used.values()) == 6)
+
+    # One more job than capacity -> the extra is reported blocked, not silently dropped.
+    over = assign([{"name": f"j{i}", "activity": "manufacturing"} for i in range(7)], chars)
+    check("overflow is left unassigned", sum(1 for _n, c in over if c is None) == 1)
+    check("overflow still returns every job", len(over) == 7)
+
+    # Reaction jobs draw on the reaction pool, independently of manufacturing.
+    rx = assign([{"name": f"r{i}", "activity": "reaction"} for i in range(5)], chars)
+    rxu = sum(1 for _n, c in rx if c is not None)
+    check("reaction pool capacity respected (2+2)", rxu == 4)
+
+
 def main():
     test_material_formula()
     test_graph_loaders()
@@ -436,6 +484,7 @@ def main():
     test_queue_progress_requirements()
     test_stock_reduces_plan_but_never_the_target()
     test_marginal_threshold_scales_with_build_size()
+    test_install_assignment_spreads_and_respects_free_slots()
     print(f"\nAll {_passed} checks passed.")
 
 

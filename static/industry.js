@@ -1137,6 +1137,19 @@ async function indRefreshJobs() {
   await indRefreshStatus();   // redraws install / pipeline / running from the fresh job data
 }
 
+// "Do this now", written as instructions rather than a status. We know which characters have free
+// slots and the plan knows which jobs are ready, so the checklist names WHO installs WHAT instead
+// of reporting that "a slot" is free somewhere and leaving you to work it out.
+function _indSlotPips(used, free, assigned, cls) {
+  const total = used + free;
+  let out = '';
+  for (let i = 0; i < total; i++) {
+    const k = i < used ? 'busy' : (i < used + assigned ? 'fill' : 'open');
+    out += `<span class="ind-pip ind-pip-${k} ind-pip-${cls}"></span>`;
+  }
+  return out || '<span class="ind-pip-none">no slots</span>';
+}
+
 async function indLoadInstall() {
   const el = document.getElementById('indInstall');
   if (!el) return;
@@ -1145,16 +1158,38 @@ async function indLoadInstall() {
     if (!r.ok) { el.innerHTML = ''; return; }
     const d = await r.json();
     if (d.empty || !d.ready || !d.ready.length) { el.innerHTML = ''; return; }
-    const rows = d.ready.map(t => {
-      const fit = t.fits_now ? '<span class="ind-fit-yes">slot free</span>' : '<span class="ind-fit-no">wait for a slot</span>';
-      return `<div class="ind-install-row"><span class="ind-tree-name">${_esc(t.name)}</span> `
-        + `<span class="ind-tree-qty">×${t.runs}${t.activity === 'reaction' ? ' rx' : ''}</span> `
-        + `<span class="ind-tree-cost">${_fmtHours(t.duration_hours)}</span> ${fit}</div>`;
+
+    const doers = (d.characters || []).filter(c => c.assigned > 0);
+    const cards = doers.map(c => {
+      const jobs = c.jobs.map(j =>
+        `<li class="ind-do-job"><span class="ind-do-name">${_esc(j.name || ('#' + j.type_id))}</span>`
+        + `<span class="ind-do-runs">${j.runs} run${j.runs > 1 ? 's' : ''}</span>`
+        + `<span class="ind-do-act ind-do-${j.activity}">${j.activity === 'reaction' ? 'reaction' : 'industry'}</span>`
+        + `<span class="ind-do-dur">${_fmtHours(j.duration_hours)}</span></li>`).join('');
+      const mUsed = c.manufacturing_slots - c.manufacturing_free;
+      const rUsed = c.reaction_slots - c.reaction_free;
+      const mAss = c.jobs.filter(j => j.activity !== 'reaction').length;
+      const rAss = c.jobs.filter(j => j.activity === 'reaction').length;
+      return `<div class="ind-do-char">
+        <div class="ind-do-hd"><span class="ind-do-who">${_esc(c.character_name)}</span>
+          <span class="ind-do-count">start ${c.assigned} job${c.assigned > 1 ? 's' : ''}</span></div>
+        <div class="ind-do-slots">
+          ${c.manufacturing_slots ? `<span class="ind-slotset" title="${mUsed} busy · ${mAss} to start · ${c.manufacturing_slots} industry slots">${_indSlotPips(mUsed, c.manufacturing_free, mAss, 'mfg')}</span>` : ''}
+          ${c.reaction_slots ? `<span class="ind-slotset" title="${rUsed} busy · ${rAss} to start · ${c.reaction_slots} reaction slots">${_indSlotPips(rUsed, c.reaction_free, rAss, 'rx')}</span>` : ''}
+        </div>
+        <ul class="ind-do-jobs">${jobs}</ul></div>`;
     }).join('');
-    el.innerHTML = `<h3 class="ind-install-title">Install now — ${d.fit_count} of ${d.ready.length} ready jobs fit your free slots`
-      + `<span class="ind-install-free">${d.free.manufacturing} mfg · ${d.free.reaction} rx free</span></h3>`
-      + rows
-      + (d.later_waves ? `<div class="pp-sub ind-later">+${d.later_waves} more wave(s) unlock as these finish · full makespan ${_fmtHours(d.makespan_hours)}</div>` : '');
+
+    const blocked = (d.unassigned || []).length;
+    const wait = blocked
+      ? `<div class="ind-do-blocked">${blocked} more job${blocked > 1 ? 's are' : ' is'} ready but every slot is busy — `
+        + `they start as jobs finish.</div>` : '';
+    const later = d.later_waves
+      ? `<div class="pp-sub ind-later">Then ${d.later_waves} more round${d.later_waves > 1 ? 's' : ''} unlock as these finish · about ${_fmtHours(d.makespan_hours)} to the end.</div>` : '';
+
+    el.innerHTML = doers.length
+      ? `<h3 class="ind-do-title">Do this now</h3><div class="ind-do-grid">${cards}</div>${wait}${later}`
+      : `<h3 class="ind-do-title">Nothing to start yet</h3>${wait}${later}`;
   } catch (e) { el.innerHTML = ''; }
 }
 

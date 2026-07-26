@@ -1086,3 +1086,28 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-oc-building .ind-oc-state { background: #1e3a5f; color: #8fc3ff; }
 .ind-oc-del { background: none; border: none; color: #6b7688; cursor: pointer; font-size: 12px; padding: 0 2px; }
 .ind-oc-del:hover { color: #ff6b74; }
+/* "Do this now" — per-character instructions with visible slots */
+.ind-do-title { font-size: 13px; color: #9fb4d8; margin: 14px 0 8px; }
+.ind-do-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
+.ind-do-char { border: 1px solid var(--clr-border); border-left: 3px solid var(--clr-accent);
+  border-radius: 7px; background: #12161f; padding: 10px 12px; }
+.ind-do-hd { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.ind-do-who { font-size: 14px; font-weight: 600; color: #fff; }
+.ind-do-count { font-size: 11px; color: var(--clr-accent); }
+.ind-do-slots { display: flex; gap: 10px; flex-wrap: wrap; margin: 7px 0 8px; }
+.ind-slotset { display: inline-flex; gap: 3px; align-items: center; }
+.ind-pip { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+.ind-pip-busy { background: #3a4252; }
+.ind-pip-open { background: #1c2030; border: 1px solid #2a3244; }
+.ind-pip-fill { background: var(--clr-accent); box-shadow: 0 0 4px rgba(90,160,255,.6); }
+.ind-pip-rx.ind-pip-fill { background: #d9a7e0; box-shadow: 0 0 4px rgba(217,167,224,.6); }
+.ind-pip-none { font-size: 10px; color: var(--clr-text-soft); }
+.ind-do-jobs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.ind-do-job { display: flex; align-items: center; gap: 7px; font-size: 12px; color: #cdd6e6; flex-wrap: wrap; }
+.ind-do-name { color: #eef2f8; }
+.ind-do-runs { color: var(--clr-text-soft); font-variant-numeric: tabular-nums; }
+.ind-do-act { font-size: 9px; text-transform: uppercase; letter-spacing: .03em; padding: 1px 5px; border-radius: 7px; }
+.ind-do-manufacturing { background: #163524; color: #7fdca6; }
+.ind-do-reaction { background: #2a2130; color: #d9a7e0; }
+.ind-do-dur { margin-left: auto; color: var(--clr-text-soft); font-variant-numeric: tabular-nums; }
+.ind-do-blocked { font-size: 12px; color: #d8b46a; margin-top: 8px; }

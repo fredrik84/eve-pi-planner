@@ -264,19 +264,55 @@ def to_install(ctx: int = Depends(require_context)):
     free = {"manufacturing": pool["manufacturing_free"], "reaction": pool["reaction_free"]}
     waves = res["schedule"]["waves"]
     ready = list(waves[0]["tasks"]) if waves else []
-    # Annotate each ready job with whether a free slot of its pool is available (greedy fill, most
-    # critical first — the schedule already ordered wave 0 by priority within the wave).
-    remaining = dict(free)
+
+    # Assign each ready job to a SPECIFIC character with a free slot, rather than just reporting
+    # that "a slot" exists somewhere. We know each character's free manufacturing/reaction slots, so
+    # the checklist can name who installs what — the difference between "slot free" and an
+    # instruction you can actually follow. Most-loaded-first keeps a single toon from hogging the
+    # list while others idle; the schedule already ordered wave 0 by criticality.
+    avail = {c["character_id"]: {"name": c["character_name"],
+                                 "manufacturing": c["manufacturing_free"],
+                                 "reaction": c["reaction_free"]}
+             for c in pool.get("characters", [])}
     for t in ready:
-        pool_key = t["activity"]
-        if remaining.get(pool_key, 0) > 0:
+        act = t["activity"]
+        pick = max(avail.items(), key=lambda kv: kv[1].get(act, 0), default=(None, None))
+        cid, info = pick
+        if cid is not None and info and info.get(act, 0) > 0:
+            info[act] -= 1
             t["fits_now"] = True
-            remaining[pool_key] -= 1
+            t["character_id"] = cid
+            t["character_name"] = info["name"]
         else:
             t["fits_now"] = False
+            t["character_id"] = None
+            t["character_name"] = None
+
+    # Per-character view so the UI can show slots the way the Reactions dashboard does: how many of
+    # each pool are busy, free, and about to be filled by this checklist.
+    assigned_by_char: dict[int, int] = {}
+    for t in ready:
+        if t.get("character_id") is not None:
+            assigned_by_char[t["character_id"]] = assigned_by_char.get(t["character_id"], 0) + 1
+    chars = []
+    for c in pool.get("characters", []):
+        cid = c["character_id"]
+        chars.append({
+            "character_id": cid, "character_name": c["character_name"],
+            "manufacturing_slots": c["manufacturing_slots"], "manufacturing_free": c["manufacturing_free"],
+            "reaction_slots": c["reaction_slots"], "reaction_free": c["reaction_free"],
+            "assigned": assigned_by_char.get(cid, 0),
+            "jobs": [{"name": t.get("name"), "type_id": t["type_id"], "runs": t["runs"],
+                      "activity": t["activity"], "duration_hours": t["duration_hours"]}
+                     for t in ready if t.get("character_id") == cid],
+        })
+    chars.sort(key=lambda c: (-c["assigned"], c["character_name"] or ""))
+
     return {
         "ready": ready,
         "free": free,
+        "characters": chars,
+        "unassigned": [t for t in ready if not t.get("fits_now")],
         "fit_count": sum(1 for t in ready if t.get("fits_now")),
         "makespan_hours": res["metrics"]["makespan_hours"],
         "later_waves": max(0, len(waves) - 1),
