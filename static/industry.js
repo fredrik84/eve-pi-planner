@@ -140,7 +140,7 @@ function _indStatusHeadline(d) {
   return sim
     + `<div class="ind-status-head"><div class="ind-order-chips">${chips}</div>`
     + `<button class="ind-primary-btn" onclick="indOpenPlanner()">Plan a new build</button>`
-    + `<button class="ind-bp-btn" onclick="indRefreshJobs()" title="Pull job status from EVE and re-plan">Refresh</button></div>`
+    + `<button class="ind-secondary-btn" onclick="indRefreshJobs()" title="Pull job status from EVE and re-plan">Refresh</button></div>`
     + `<div class="an-stats">` + tiles.map(([l, v, tip]) =>
         `<div class="an-stat" title="${_esc(tip)}"><div class="an-stat-lbl">${l}</div><div class="an-stat-val">${v}</div></div>`).join('')
     + `</div>`;

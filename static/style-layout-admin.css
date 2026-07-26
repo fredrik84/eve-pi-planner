@@ -1071,7 +1071,8 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-st-wait { background: #23262e; color: #93a0b4; }
 .ind-st-run { background: #1e3a5f; color: #8fc3ff; }
 /* Order chips in the status header — each says where that order actually is */
-.ind-status-head { display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+.ind-status-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.ind-status-head > button { flex: 0 0 auto; }
 .ind-order-chips { flex: 1; display: flex; flex-wrap: wrap; gap: 6px; min-width: 200px; }
 .ind-order-chip { display: inline-flex; align-items: center; gap: 7px; padding: 4px 6px 4px 10px;
   border: 1px solid var(--clr-border); border-left: 3px solid var(--clr-border); border-radius: 6px;

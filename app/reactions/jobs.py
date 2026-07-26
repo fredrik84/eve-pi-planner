@@ -216,6 +216,28 @@ def reaction_slots(character_row: dict) -> int:
     return min(11, 1 + (character_row.get("mass_reactions") or 0) + (character_row.get("advanced_mass_reactions") or 0))
 
 
+def reaction_capable(character_row: dict) -> tuple[bool, str]:
+    """(counts toward reaction capacity, why not).
+
+    Two conditions, both required:
+
+    * **Job-tracking scope** — without it we can't see what's already running, so we'd have no idea
+      how loaded the character is. (Also excludes a wallet-only character outright.)
+    * **A reaction slot skill actually trained** — every character has one free base slot, but a
+      character that has never trained Mass Reactions isn't running reactions. Counting those base
+      slots inflated capacity by one per idle alt, and the optimizer sizes its suggestions against
+      that ceiling, so it proposed work for characters that were never going to run it.
+
+    Matches app/industry/slots.py's `_eligibility` so the two tools report the same capacity.
+    """
+    if "read_character_jobs" not in (character_row["scopes"] or ""):
+        return False, "not connected for job tracking"
+    trained = (character_row["mass_reactions"] or 0) > 0 or (character_row["advanced_mass_reactions"] or 0) > 0
+    if not trained:
+        return False, "no reaction slot skills trained"
+    return True, ""
+
+
 @ensure_once
 def ensure_reaction_assignments_table():
     con = get_connection()
@@ -779,10 +801,11 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
     # no covering plan row — installed straight in-game (e.g. a corp job) rather than via the tool's
     # assign flow. Valued after the loop from our own SDE recipe so they still count in the totals.
     for c in chars:
-        opted_in = "read_character_jobs" in (c["scopes"] or "")
+        opted_in, why_not = reaction_capable(c)
         slots = reaction_slots(c)
         if not opted_in:
-            characters.append({"character_name": c["character_name"], "tracked": False, "slots": slots})
+            characters.append({"character_name": c["character_name"], "tracked": False,
+                               "slots": slots, "reason": why_not})
             continue
         tracked_any = True
         total_slots += slots
@@ -1023,7 +1046,7 @@ def _character_capacities(context_id: int) -> list[dict]:
 
     result = []
     for c in chars:
-        if "read_character_jobs" not in (c["scopes"] or ""):
+        if not reaction_capable(c)[0]:
             continue
         slots = reaction_slots(c)
         row = cached.get(c["character_id"])
