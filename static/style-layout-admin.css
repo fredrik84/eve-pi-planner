@@ -1156,3 +1156,4 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .job-off { background: #23262e; color: #93a0b4; }
 .job-never-run { background: #2a2620; color: #d8b46a; }
 .job-queued { font-size: 11px; color: var(--clr-accent); }
+.ind-bp-need { display: block; font-size: 10.5px; color: #8fa0b8; margin-top: 1px; }

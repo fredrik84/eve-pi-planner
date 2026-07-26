@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import os
 import socket
+import math
 import statistics
 import threading
 import time
@@ -351,10 +352,78 @@ def bpc_prices(type_ids: list[int], region_id: int = THE_FORGE) -> dict[int, dic
         originals = [r for r in rs if not r["is_bpc"]]
         info = {"blueprint_type_id": bp,
                 "bpc": _summarise(copies, live_cutoff),
-                "bpo": _summarise(originals, live_cutoff)}
+                "bpo": _summarise(originals, live_cutoff),
+                "bpc_listings": [{"price": r["price"], "runs": int(r["runs"] or 0)}
+                                 for r in copies if r["last_seen"] >= live_cutoff],
+                "bpc_listings_hist": [{"price": r["price"], "runs": int(r["runs"] or 0)}
+                                      for r in copies]}
         if info["bpc"] or info["bpo"]:
             out[prod] = info
     return out
+
+
+def cost_for_runs(info: dict, runs_needed: int) -> dict:
+    """Cheapest real way to buy `runs_needed` runs of a blueprint, using each listing at most once.
+
+    A copy carries a fixed number of runs and one contract is one item, so covering 40 runs from
+    10-run copies means buying four separate contracts.
+
+    Minimises TOTAL cost, not cost-per-run. Those differ, and the difference is expensive: needing a
+    single run, a greedy per-run pick takes a 300m 10-run copy over a 50m 1-run copy — six times the
+    price for runs you'll never use. A small bounded knapsack over the run count gets it right, and
+    the listing count is tiny (tens), so it's cheap.
+
+    If the market can't cover the batch, the shortfall is priced at the median per-run rate and
+    flagged, with the remaining copies estimated from the LARGEST copy on offer — the smallest would
+    imply an absurd number of purchases.
+    """
+    listings = [l for l in (info.get("listings") or []) if (l.get("runs") or 0) > 0]
+    need = max(0, int(runs_needed))
+    if need == 0:
+        return {"cost": 0.0, "copies": 0, "covered": True, "short_runs": 0}
+    if not listings:
+        # No per-listing detail. Price from the per-run median if we have one, else fall back to a
+        # single copy at the known price — never return 0, which would read as "free" and is the
+        # most damaging way to be wrong here.
+        per_run = info.get("median_per_run") or 0.0
+        if per_run:
+            return {"cost": round(need * per_run, 2), "copies": 1,
+                    "covered": False, "short_runs": need}
+        price = float(info.get("price") or 0.0)
+        return {"cost": round(price, 2), "copies": 1 if price else 0,
+                "covered": False, "short_runs": need}
+
+    # dp[r] = (cost, copies) to obtain at least r runs. Runs are capped at `need` because anything
+    # beyond it is waste we don't pay extra to model.
+    cap = min(need, 20000)                 # bound the table for a pathological batch size
+    INF = float("inf")
+    dp = [(INF, 0)] * (cap + 1)
+    dp[0] = (0.0, 0)
+    for l in listings:
+        gain = min(int(l["runs"]), cap)
+        price = float(l["price"])
+        for r in range(cap, -1, -1):       # 0/1: each contract can only be bought once
+            cost_r, n_r = dp[r]
+            if cost_r == INF:
+                continue
+            nxt = min(cap, r + gain)
+            if cost_r + price < dp[nxt][0]:
+                dp[nxt] = (cost_r + price, n_r + 1)
+
+    cost, copies = dp[cap]
+    if cost < INF:
+        return {"cost": round(cost, 2), "copies": copies, "covered": True, "short_runs": 0}
+
+    # Can't cover it from what's listed: take everything, then extrapolate the rest.
+    total_runs = sum(int(l["runs"]) for l in listings)
+    cost = sum(float(l["price"]) for l in listings)
+    copies = len(listings)
+    short = max(0, need - total_runs)
+    per_run = info.get("median_per_run") or (cost / total_runs if total_runs else 0.0)
+    biggest = max(int(l["runs"]) for l in listings)
+    cost += short * per_run
+    copies += math.ceil(short / biggest) if biggest else 0
+    return {"cost": round(cost, 2), "copies": copies, "covered": False, "short_runs": short}
 
 
 def acquisition_costs(type_ids: list[int], owned: dict, region_id: int = THE_FORGE) -> dict[int, dict]:
@@ -378,13 +447,12 @@ def acquisition_costs(type_ids: list[int], owned: dict, region_id: int = THE_FOR
         live, hist = bpc.get("live"), bpc.get("history")
         pick = live or hist
         if pick:
-            # Cheapest for a live listing (what you'd actually pay right now); median for a
-            # historical estimate, which is outlier-resistant when nothing is on offer.
-            price = pick["cheapest"] if live else pick["median"]
-            per_copy = None
-            if pick.get("median_per_run") and pick["median_per_run"] > 0:
-                per_copy = max(1, round(price / pick["median_per_run"]))
-            out[tid] = {"kind": "bpc", "price": price, "runs_per_copy": per_copy or 1,
+            out[tid] = {"kind": "bpc",
+                        "price": pick["cheapest"] if live else pick["median"],
+                        "median_per_run": pick.get("median_per_run"),
+                        # The real contracts, each with its own run count — what actually decides
+                        # how many you have to buy.
+                        "listings": (info.get("bpc_listings") if live else info.get("bpc_listings_hist")) or [],
                         "live": bool(live)}
             continue
         bpo = info.get("bpo") or {}

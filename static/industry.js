@@ -1079,12 +1079,16 @@ function _indBlueprintWarn(d) {
   const miss = (d.metrics && d.metrics.missing_blueprints) || [];
   if (!miss.length) return '';
   const inst = ++_indBpcSeq;
-  const rows = miss.map(m =>
-    `<div class="ind-bp-row2"><span class="ind-bp-nm">${_esc(m.name)}</span>`
-    + `<span class="ind-bp-px" id="bpcpx-${inst}-${m.type_id}">checking contracts…</span></div>`).join('');
+  const rows = miss.map(m => {
+    // How many runs this build needs of it — the thing that decides how many copies you must buy,
+    // since a copy carries a fixed number of runs and one contract is one item.
+    const need = m.runs_needed ? `<span class="ind-bp-need">${m.runs_needed} run${m.runs_needed > 1 ? 's' : ''} needed</span>` : '';
+    return `<div class="ind-bp-row2"><span class="ind-bp-nm">${_esc(m.name)}${need}</span>`
+    + `<span class="ind-bp-px" id="bpcpx-${inst}-${m.type_id}">checking contracts…</span></div>`;
+  }).join('');
   // Fill the prices in after render — a cold contract index is a background scan, so the warning
   // must never wait on it.
-  setTimeout(() => indLoadBpcPrices(inst, miss.map(m => m.type_id)), 0);
+  setTimeout(() => indLoadBpcPrices(inst, miss.map(m => m.type_id), miss), 0);
   // No nagging about roles or connecting more characters — the user can't act on that and doesn't
   // need to be told. Just say the list may be incomplete and give them the price.
   return `<div class="ind-bp-note"><b>No blueprint found for ${miss.length === 1 ? 'this' : 'these'}</b>`
@@ -1098,8 +1102,10 @@ function _indBlueprintWarn(d) {
 // Public-contract blueprint prices. Shows what's listed right now, and falls back to what they have
 // historically gone for — blueprints sell out constantly, so "nothing listed today" is the normal
 // case and still deserves an answer.
-async function indLoadBpcPrices(inst, ids) {
+async function indLoadBpcPrices(inst, ids, miss) {
   if (!ids || !ids.length) return;
+  const byId = {};
+  (miss || []).forEach(m => { byId[m.type_id] = m; });
   let d = null;
   try {
     const r = await fetch('/api/industry/bpc?type_ids=' + ids.join(','));
@@ -1112,10 +1118,20 @@ async function indLoadBpcPrices(inst, ids) {
     const info = d && d.prices && d.prices[id];
     const bpc = info && info.bpc;
     if (bpc && bpc.live && bpc.live.count) {
-      const runs = bpc.live.median_per_run
-        ? ` · ${fmtIsk(bpc.live.median_per_run)}/run` : '';
-      el.innerHTML = `<b>${fmtIsk(bpc.live.cheapest)}</b> cheapest now`
-        + `<span class="ind-bp-sub2">${bpc.live.count} on contract · median ${fmtIsk(bpc.live.median)}${runs}</span>`;
+      // Prefer what the plan actually worked out: the cheapest COMBINATION covering the runs this
+      // build needs, and how many contracts that is. A single cheapest price is misleading when one
+      // copy doesn't carry enough runs.
+      const need = byId[id] || {};
+      if (need.cost != null && need.copies) {
+        el.innerHTML = `<b>${fmtIsk(need.cost)}</b> for ${need.copies} cop${need.copies === 1 ? 'y' : 'ies'}`
+          + `<span class="ind-bp-sub2">${need.covered === false
+              ? `only ${bpc.live.count} listed — not enough runs, rest estimated`
+              : `covers ${need.runs_needed} run${need.runs_needed > 1 ? 's' : ''} · ${bpc.live.count} listed`}</span>`;
+      } else {
+        const runs = bpc.live.median_per_run ? ` · ${fmtIsk(bpc.live.median_per_run)}/run` : '';
+        el.innerHTML = `<b>${fmtIsk(bpc.live.cheapest)}</b> cheapest now`
+          + `<span class="ind-bp-sub2">${bpc.live.count} on contract · median ${fmtIsk(bpc.live.median)}${runs}</span>`;
+      }
     } else if (bpc && bpc.history && bpc.history.count) {
       const days = Math.max(0, Math.round((Date.now() / 1000 - bpc.history.last_seen) / 86400));
       el.innerHTML = `<b>≈ ${fmtIsk(bpc.history.median)}</b> estimated`

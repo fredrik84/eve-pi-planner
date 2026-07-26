@@ -147,9 +147,13 @@ def aggregate_demand(targets: list[tuple[int, int]], memo: dict, mfg: dict, rx: 
         # is priced and surfaced, never used to force a buy.
         bp = params.bp_acquire.get(tid)
         bp_cost = 0.0
+        bp_buy = None
         if bp and runs > 0 and tid not in params.owned and bp["kind"] != "bpo_only":
-            copies = math.ceil(runs / max(1, bp.get("runs_per_copy") or 1))
-            bp_cost = copies * bp["price"]
+            # Priced from the real listings: a copy carries a fixed number of runs and one contract
+            # is one item, so a 40-run batch off 10-run copies means buying four of them.
+            from app.industry.bpc import cost_for_runs
+            bp_buy = cost_for_runs(bp, runs)
+            bp_cost = bp_buy["cost"]
             blueprint_cost_total += bp_cost
 
         # Marginal-saving flip: buy if building saves a trivial amount — negligible vs the whole
@@ -175,7 +179,7 @@ def aggregate_demand(targets: list[tuple[int, int]], memo: dict, mfg: dict, rx: 
             "type_id": tid, "activity": activity, "build": True,
             "gross": gross[tid], "net": net, "runs": runs, "produced": produced,
             "leftover": produced - net, "output_qty": output_qty, "bought_for_speed": False,
-            "blueprint_cost": bp_cost,
+            "blueprint_cost": bp_cost, "blueprint_buy": bp_buy,
         }
         for inp in recipe["inputs"]:
             gross[inp["type_id"]] += effective_material_qty(inp["quantity"], runs, me, mult)
@@ -503,7 +507,13 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
             # Blueprints you don't own that the plan still builds — priced into total_cost above
             # when copies are listed. Anything with no copies available was flipped to buy instead.
             "missing_blueprints": sorted(
-                ({"type_id": tid, "name": names.get(tid, str(tid))}
+                ({"type_id": tid, "name": names.get(tid, str(tid)),
+                  "runs_needed": info["runs"],
+                  # None when nothing is listed to buy — the UI says "no copies listed" rather
+                  # than implying a number it doesn't have.
+                  "copies": (info.get("blueprint_buy") or {}).get("copies"),
+                  "cost": (info.get("blueprint_buy") or {}).get("cost"),
+                  "covered": (info.get("blueprint_buy") or {}).get("covered")}
                  for tid, info in agg.items()
                  if info["build"] and info["runs"] > 0
                  and info["activity"] == "manufacturing" and tid not in params.owned),

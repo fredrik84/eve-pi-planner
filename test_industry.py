@@ -603,7 +603,9 @@ def test_blueprint_cost_affects_make_or_buy():
     check("no blueprint cost by default", r0["metrics"]["blueprint_cost"] == 0)
 
     # A cheap BPC: still built, but the cost now shows up in the total.
-    P1 = BuildParams(**base, bp_acquire={101: {"kind": "bpc", "price": 1000.0, "runs_per_copy": 10}})
+    P1 = BuildParams(**base, bp_acquire={101: {"kind": "bpc", "price": 1000.0,
+                                               "listings": [{"price": 1000.0, "runs": 10}],
+                                               "median_per_run": 100.0}})
     r1 = plan_queue([(100, 1)], mfg, rx, _prices(SELL), ADJ, P1, NAMES, pools)
     check("cheap BPC keeps it built", 101 in {r["type_id"] for r in r1["requirements"]})
     check("BPC cost is charged", r1["metrics"]["blueprint_cost"] > 0)
@@ -612,7 +614,9 @@ def test_blueprint_cost_affects_make_or_buy():
 
     # An expensive BPC still reaches the margin-saver: a copy is a consumable you'd genuinely buy
     # for this batch, so it's a real cost of building and the normal margin rule applies to it.
-    P2 = BuildParams(**base, bp_acquire={101: {"kind": "bpc", "price": 5e9, "runs_per_copy": 1}})
+    P2 = BuildParams(**base, bp_acquire={101: {"kind": "bpc", "price": 5e9,
+                                               "listings": [{"price": 5e9, "runs": 1}],
+                                               "median_per_run": 5e9}})
     r2 = plan_queue([(100, 1)], mfg, rx, _prices(SELL), ADJ, P2, NAMES, pools)
     check("an unaffordable BPC flips it to buy", 101 not in {r["type_id"] for r in r2["requirements"]})
     check("nothing is charged for a print we no longer buy", r2["metrics"]["blueprint_cost"] == 0)
@@ -621,13 +625,13 @@ def test_blueprint_cost_affects_make_or_buy():
     # ESI will show us — anything in a corp hangar is corp-owned and needs the Director role, so
     # "no blueprint found" routinely means "we can't see it". Deciding on that absence would refuse
     # to build things the user owns the print for. It's priced and surfaced, never enforced.
-    P3 = BuildParams(**base, bp_acquire={101: {"kind": "bpo_only", "price": 4e9, "runs_per_copy": 0}})
+    P3 = BuildParams(**base, bp_acquire={101: {"kind": "bpo_only", "price": 4e9, "listings": []}})
     r3 = plan_queue([(100, 1)], mfg, rx, _prices(SELL), ADJ, P3, NAMES, pools)
     check("BPO-only does NOT force a buy", 101 in {r["type_id"] for r in r3["requirements"]})
     check("a durable original is not charged to one build", r3["metrics"]["blueprint_cost"] == 0)
 
     # The TARGET is what you asked to build — never flipped away, whatever its print costs.
-    P4 = BuildParams(**base, bp_acquire={100: {"kind": "bpo_only", "price": 9e9, "runs_per_copy": 0}})
+    P4 = BuildParams(**base, bp_acquire={100: {"kind": "bpo_only", "price": 9e9, "listings": []}})
     r4 = plan_queue([(100, 1)], mfg, rx, _prices(SELL), ADJ, P4, NAMES, pools)
     check("the target is still built", 100 in {r["type_id"] for r in r4["requirements"]})
 
@@ -842,7 +846,9 @@ def test_cost_breakdown_adds_up():
                     marginal_pct_of_total=0.0,
                     # Cheap enough that the component is still worth building — a dear copy would
                     # (correctly) flip it to buy and there'd be no charge to check.
-                    bp_acquire={101: {"kind": "bpc", "price": 500.0, "runs_per_copy": 5}})
+                    bp_acquire={101: {"kind": "bpc", "price": 500.0,
+                                      "listings": [{"price": 500.0, "runs": 5}],
+                                      "median_per_run": 100.0}})
     r = plan_queue([(100, 2)], mfg, rx, _prices(SELL), ADJ, P, NAMES, pools)
     m = r["metrics"]
     check("a blueprint charge is present", m["blueprint_cost"] > 0)
@@ -860,6 +866,41 @@ def test_cost_breakdown_adds_up():
     check("no blueprints to buy -> zero", m0["blueprint_cost"] == 0)
     check("the parts still sum to the total",
           approx(m0["materials_cost"] + m0["job_cost"], m0["total_cost"]))
+
+
+def test_blueprint_copies_cover_the_runs():
+    """A copy carries a fixed number of runs and one contract is one item, so a batch bigger than a
+    single copy means buying several. It must minimise TOTAL cost, not cost-per-run: needing one run,
+    a per-run greedy takes a 300m 10-run copy over a 50m 1-run copy — 6x the price for runs you'll
+    never use."""
+    print("test_blueprint_copies_cover_the_runs")
+    from app.industry.bpc import cost_for_runs
+    info = {"listings": [{"price": 50e6, "runs": 1},
+                         {"price": 300e6, "runs": 10},
+                         {"price": 200e6, "runs": 5}],
+            "median_per_run": 40e6}
+
+    check("1 run buys the cheap 1-run copy", approx(cost_for_runs(info, 1)["cost"], 50e6))
+    check("5 runs buys the 5-run copy", approx(cost_for_runs(info, 5)["cost"], 200e6))
+    check("10 runs buys the 10-run copy", approx(cost_for_runs(info, 10)["cost"], 300e6))
+    # 6 runs: the 5-run + 1-run pair (250m) beats the single 10-run copy (300m).
+    six = cost_for_runs(info, 6)
+    check("6 runs combines two cheap copies", approx(six["cost"], 250e6) and six["copies"] == 2)
+    check("16 runs needs all three copies", cost_for_runs(info, 16)["copies"] == 3)
+
+    # More runs than the market can supply: flagged, not silently under-priced.
+    big = cost_for_runs(info, 40)
+    check("an uncoverable batch is flagged", big["covered"] is False)
+    check("the shortfall is reported", big["short_runs"] == 24)
+    check("the shortfall is priced in", big["cost"] > 550e6)
+    check("copies stay a sane number", big["copies"] < 10)
+
+    # Degenerate inputs must not explode.
+    check("zero runs costs nothing", cost_for_runs(info, 0)["cost"] == 0)
+    none = cost_for_runs({"listings": [], "median_per_run": 0}, 5)
+    check("no listings -> not covered", none["covered"] is False and none["short_runs"] == 5)
+    check("a runs=0 listing is ignored",
+          cost_for_runs({"listings": [{"price": 1e6, "runs": 0}], "median_per_run": 0}, 3)["covered"] is False)
 
 
 def main():
@@ -891,6 +932,7 @@ def main():
     test_bpc_price_summary()
     test_blueprint_cost_affects_make_or_buy()
     test_cost_breakdown_adds_up()
+    test_blueprint_copies_cover_the_runs()
     test_scan_lease_is_single_writer_across_replicas()
     test_esi_budget_guard()
     test_job_runner_lease_and_toggle()
