@@ -946,9 +946,37 @@ async function indAddToQueue() {
 // so its cards/stages can show what's actually done rather than just what's planned.
 let _indProgress = null;
 
+// Preview mode: null = off, otherwise a 0-100 completion to fabricate. Kept in the Setup modal
+// rather than the main flow — it's a way to SEE the live views before you have live data, not a
+// setting anyone should leave on. The server writes nothing for it.
+let _indSim = null;
+
+function indSimToggle() {
+  const on = document.getElementById('indSimOn');
+  const sl = document.getElementById('indSim');
+  if (sl) sl.disabled = !(on && on.checked);
+  _indSim = (on && on.checked) ? parseFloat(sl.value) : null;
+  indSimInput();
+  indLoadQueue();
+  if (document.getElementById('indQueueResult').innerHTML.trim()) indPlanQueue();
+}
+function indSimInput() {
+  const sl = document.getElementById('indSim');
+  const lbl = document.getElementById('indSimPct');
+  if (lbl && sl) lbl.textContent = `${sl.value}% complete`;
+}
+function indSimChange() {
+  const on = document.getElementById('indSimOn');
+  const sl = document.getElementById('indSim');
+  if (!(on && on.checked)) return;
+  _indSim = parseFloat(sl.value);
+  indLoadQueue();
+  if (document.getElementById('indQueueResult').innerHTML.trim()) indPlanQueue();
+}
+
 async function indLoadProgress() {
   try {
-    const r = await fetch('/api/industry/progress');
+    const r = await fetch('/api/industry/progress' + (_indSim === null ? '' : '?simulate=' + _indSim));
     _indProgress = r.ok ? await r.json() : null;
     if (_indProgress && _indProgress.empty) _indProgress = null;
   } catch (e) { _indProgress = null; }
@@ -984,10 +1012,12 @@ async function indLoadQueue() {
     const byOrder = {};
     ((_indProgress && _indProgress.orders) || []).forEach(o => { byOrder[o.id] = o; });
     const tot = _indProgress && _indProgress.totals;
-    const head = tot && tot.required
+    const sim = _indProgress && _indProgress.simulated
+      ? `<div class="ind-sim-banner">Preview mode — this progress is made up so you can see the layout. Nothing here is real.</div>` : '';
+    const head = sim + (tot && tot.required
       ? `<div class="ind-queue-sum">Queue progress: <b>${_indProgress.pct}%</b> — ${tot.done} of ${tot.required} jobs done`
         + `${tot.running ? ` · ${tot.running} running` : ''}${tot.waiting ? ` · ${tot.waiting} waiting` : ''}</div>`
-      : '';
+      : '');
     el.innerHTML = head + d.orders.map(o =>
       `<div class="ind-queue-row"><span class="ind-queue-name">${_esc(o.name)}</span>`
       + `<span class="ind-queue-qty">×${o.quantity}</span>`

@@ -214,8 +214,119 @@ def queue_progress(context_id: int) -> dict:
     }
 
 
+def simulated_progress(context_id: int, pct: float) -> dict:
+    """The same payload `queue_progress` returns, but with the state invented at `pct` complete.
+
+    Purpose: someone who hasn't started manufacturing yet sees nothing but zeroes, so the live views
+    (stage counters, card badges, queue bars) can't be judged at all. This drives the REAL rendering
+    path with plausible state instead of a mock-up, so what you see is exactly what real jobs will
+    produce.
+
+    Deliberately READ-ONLY — it never touches the completion ledgers or job caches, because those
+    feed lifetime turnover and profit, and seeding them with fiction to preview a UI would corrupt
+    real numbers permanently. Every response is tagged `simulated` so it can't be mistaken for real.
+    """
+    from app.industry.orders import QueuePlanRequest, _run_queue_plan
+
+    con = get_connection()
+    try:
+        orders = con.execute(
+            "SELECT id, product_type_id, name, quantity FROM pp_industry_orders "
+            "WHERE context_id = ? ORDER BY priority DESC, id",
+            (context_id,),
+        ).fetchall()
+    finally:
+        con.close()
+    if not orders:
+        return {"empty": True}
+    res = _run_queue_plan(context_id, QueuePlanRequest(use_stock=False))
+    if res.get("empty"):
+        return {"empty": True}
+
+    reqs = {int(r["type_id"]): r for r in res.get("requirements", [])}
+    if not reqs:
+        return {"empty": True}
+
+    # Completion follows the SCHEDULE's own order, so a preview shows early stages finishing before
+    # later ones — the shape real progress actually takes — rather than a uniform fill.
+    order: list[int] = []
+    for w in (res.get("schedule") or {}).get("waves", []):
+        for t in w.get("tasks", []):
+            tid = int(t["type_id"])
+            if tid in reqs and tid not in order:
+                order.append(tid)
+    for tid in reqs:                                   # anything the schedule didn't mention
+        if tid not in order:
+            order.append(tid)
+
+    total_runs = sum(int(r["runs"]) for r in reqs.values())
+    budget = total_runs * max(0.0, min(100.0, pct)) / 100.0
+
+    done_runs: dict[int, int] = {}
+    running_runs: dict[int, int] = {}
+    for tid in order:
+        need = int(reqs[tid]["runs"])
+        if budget >= need:
+            done_runs[tid] = need
+            budget -= need
+        elif budget > 0:
+            d = int(budget)
+            done_runs[tid] = d
+            running_runs[tid] = max(1, min(need - d, max(1, need // 3)))
+            budget = 0
+        else:
+            # The first untouched type gets a couple of jobs in flight, so "running" is represented.
+            if not running_runs and need:
+                running_runs[tid] = max(1, min(need, 2))
+            done_runs.setdefault(tid, 0)
+
+    types = []
+    tot = {"required": 0, "done": 0, "running": 0, "waiting": 0}
+    for tid, r in reqs.items():
+        need = int(r["runs"])
+        d = min(done_runs.get(tid, 0), need)
+        run = min(running_runs.get(tid, 0), max(0, need - d))
+        w = max(0, need - d - run)
+        types.append({"type_id": tid, "name": r["name"], "activity": r["activity"],
+                      "required_runs": need, "done_runs": d, "running_runs": run,
+                      "waiting_runs": w, "output_qty": r["output_qty"],
+                      "in_stock": 0,
+                      "pct": round(100.0 * d / need, 1) if need else 0.0})
+        tot["required"] += need
+        tot["done"] += d
+        tot["running"] += run
+        tot["waiting"] += w
+
+    by_type = {t["type_id"]: t for t in types}
+    order_rows = []
+    for o in orders:
+        tid = int(o["product_type_id"])
+        t = by_type.get(tid)
+        oq = (t or {}).get("output_qty") or 1
+        want = int(o["quantity"])
+        done_units = min((t or {}).get("done_runs", 0) * oq, want)
+        run_units = min((t or {}).get("running_runs", 0) * oq, max(0, want - done_units))
+        status = ("complete" if done_units >= want
+                  else "building" if run_units > 0 or done_units > 0 else "waiting")
+        order_rows.append({"id": o["id"], "name": o["name"], "product_type_id": tid,
+                           "quantity": want, "done_units": done_units, "running_units": run_units,
+                           "pct": round(100.0 * done_units / want, 1) if want else 0.0,
+                           "status": status})
+
+    return {"empty": False, "simulated": True, "simulated_pct": pct, "since": None,
+            "totals": tot,
+            "pct": round(100.0 * tot["done"] / tot["required"], 1) if tot["required"] else 0.0,
+            "types": types, "orders": order_rows}
+
+
 @router.get("/api/industry/progress")
-def industry_progress(ctx: int = Depends(require_context)):
+def industry_progress(simulate: float | None = None, ctx: int = Depends(require_context)):
     """Live progress of the build queue: per-type done/running/waiting run counts and a per-order
-    roll-up. Own-account scoped."""
+    roll-up. Own-account scoped.
+
+    `simulate=0..100` returns invented state at that completion for previewing the UI. Read-only —
+    it writes nothing, so it can never leak into the real ledgers.
+    """
+    if simulate is not None:
+        return simulated_progress(ctx, float(simulate))
     return queue_progress(ctx)

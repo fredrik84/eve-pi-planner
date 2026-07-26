@@ -25,7 +25,7 @@
   <link rel="stylesheet" href="/style-components.css?v=1">
   <link rel="stylesheet" href="/style-contribute.css?v=11">
   <link rel="stylesheet" href="/style-wizard.css?v=2">
-  <link rel="stylesheet" href="/style-layout-admin.css?v=60">
+  <link rel="stylesheet" href="/style-layout-admin.css?v=61">
   <link rel="stylesheet" href="/style-analysis-dashboard.css?v=22">
   <link rel="stylesheet" href="/style-misc-responsive.css?v=7">
 </head>
@@ -1496,6 +1496,17 @@ PVF-N9    3         95                 60             80                  100   
         <h3 class="ind-modal-h">Stock on hand</h3>
         <div id="indAssets" class="ind-bp-row"></div>
       </div>
+      <div class="ind-modal-section">
+        <h3 class="ind-modal-h">Preview progress</h3>
+        <p class="ind-src-help">Haven't started building yet? Fill the queue's progress with example
+          state to see how the pipeline, stage counters and queue bars look once jobs are running.
+          Nothing is saved — your real numbers are untouched.</p>
+        <div class="ind-sim-row">
+          <label class="ind-opt-check"><input type="checkbox" id="indSimOn" onchange="indSimToggle()"> Preview mode</label>
+          <input type="range" id="indSim" min="0" max="100" step="5" value="45" oninput="indSimInput()" onchange="indSimChange()" disabled>
+          <span id="indSimPct" class="ind-src-meta">45% complete</span>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -1574,6 +1585,6 @@ PVF-N9    3         95                 60             80                  100   
   <script src="/analysis.js?v=62"></script>
   <script src="/layout.js?v=2"></script>
   <script src="/reactions.js?v=98"></script>
-  <script src="/industry.js?v=35"></script>
+  <script src="/industry.js?v=36"></script>
 </body>
 </html>
