@@ -231,6 +231,69 @@ def get(url: str) -> dict:
         raise RuntimeError(f"HTTP {e.code}: {e.read().decode()}") from e
 
 
+def run_sysrec_bottleneck() -> bool:
+    """In-process: a system's rank must respond to its WEAKEST input, not just its summed
+    richness. Output is a min() over the recipe's inputs, so a system that is rich on average
+    but has one starved resource runs the chain slower than a slightly poorer, balanced one.
+
+    Uses a throwaway in-memory pp_planets, so it needs no live Planet DB. Run inside the
+    container (needs the app's deps).
+    """
+    print(f"\n{'='*60}\n  System-rec bottleneck ranking (in-process)\n{'='*60}")
+    try:
+        import sqlite3
+        from app.planner_recommendations import _system_recommendations_impl
+    except Exception as e:
+        print(f"  SKIP: not importable here ({e.__class__.__name__}) — run inside the container")
+        return True
+
+    con = sqlite3.connect(":memory:")
+    con.row_factory = sqlite3.Row
+    con.execute("""CREATE TABLE pp_planets (system TEXT, constellation TEXT, planet_num INT,
+                   planet_type TEXT, reactive_gas INT DEFAULT 0, noble_metals INT DEFAULT 0)""")
+    # RICH: piles of Noble Metals, a single thin Reactive Gas planet (the binding input).
+    # BALANCED: less Noble Metals overall, but Reactive Gas actually available.
+    # Tuned so RICH clearly WINS the summed depth_score (104 vs 95) while losing badly on the
+    # binding input (4.0 vs 40.0) — otherwise the test would pass without the bottleneck term.
+    rows = [("RICH", "C", 1, "Gas", 12, 0)]
+    rows += [("RICH", "C", i, "Barren", 0, 100) for i in range(2, 8)]
+    rows += [("BALANCED", "C", i, "Gas", 55, 0) for i in range(1, 4)]
+    rows += [("BALANCED", "C", i, "Barren", 0, 40) for i in range(4, 7)]
+    con.executemany("INSERT INTO pp_planets VALUES (?,?,?,?,?,?)", rows)
+
+    p0 = ["Reactive Gas", "Noble Metals"]
+    recs = _system_recommendations_impl(p0, con, top_n=5, preferred_systems=1,
+                                        p0_needs={"Reactive Gas": 1.0, "Noble Metals": 1.0})
+    singles = [r for r in recs if len(r["systems_needed"]) == 1]
+    for r in singles:
+        print(f"  {r['systems_needed'][0]:<9} coverage={r['coverage']} "
+              f"depth={r['depth_score']:.0f} bottleneck={r['bottleneck_density']} "
+              f"({r['bottleneck_p0']})")
+
+    ok = True
+    if not singles:
+        print("  FAIL: no single-system recommendations produced")
+        return False
+    rich = next((r for r in singles if r["systems_needed"] == ["RICH"]), None)
+    bal = next((r for r in singles if r["systems_needed"] == ["BALANCED"]), None)
+    if not rich or not bal:
+        print("  FAIL: expected both test systems in the results")
+        return False
+    if rich["depth_score"] <= bal["depth_score"]:
+        print("  FAIL: test data no longer exercises the case (RICH must win on summed depth)")
+        ok = False
+    if rich["bottleneck_p0"] != "Reactive Gas":
+        print(f"  FAIL: RICH's bottleneck should be Reactive Gas, got {rich['bottleneck_p0']}")
+        ok = False
+    if singles[0]["systems_needed"] != ["BALANCED"]:
+        print(f"  FAIL: ranked {singles[0]['systems_needed']} first — the summed score won over "
+              "the starved input")
+        ok = False
+
+    print(f"\n  Result: {'PASS' if ok else 'FAIL'}")
+    return ok
+
+
 def run_fuelblock_invariants(base_url: str) -> bool:
     """Cross-request fuel-block sanity: material efficiency must raise the block rate
     (same PI makes more blocks), and importing a component must drop its factory line."""
@@ -385,6 +448,7 @@ def main():
         results.append((case["name"], ok))
 
     results.append(("Factory budget invariants", run_factory_budget_invariants()))
+    results.append(("System-rec bottleneck", run_sysrec_bottleneck()))
     results.append(("Fuel-block invariants", run_fuelblock_invariants(base)))
     results.append(("Feature smoke tests", run_smoke_tests(base)))
 

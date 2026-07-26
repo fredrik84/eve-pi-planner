@@ -904,9 +904,20 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 #tab-industry .pp-card:last-child { margin-bottom: 0; }
 .ind-body { padding: 16px; }
 .ind-body > .pp-sub:first-child { margin-top: 0; }
-.ind-plan-opts { display: flex; gap: 22px; align-items: flex-end; flex-wrap: wrap; margin-top: 14px; }
+/* Top-aligned: the options column is several rows tall now, and bottom-aligning the Facility
+   select against it stranded the select at the bottom with a hole above it. */
+.ind-plan-opts { display: flex; gap: 22px; align-items: flex-start; flex-wrap: wrap; margin-top: 14px; }
 .ind-plan-opts select { background: #141720; color: var(--clr-text); border: 1px solid var(--clr-border); border-radius: 5px; padding: 8px 10px; font-size: 13px; min-width: 230px; }
 .ind-plan-opts .ind-opt-check { margin: 0 0 4px; }
+/* "Build everything" is a master switch: it disables BOTH the speed toggle and the savings
+   slider. Sharing one flex row with them read as three peer controls (and bottom-aligning a
+   checkbox against a slider looked broken), so it now sits above them with the two things it
+   overrides indented beneath — the greying-out then reads as a consequence, not a glitch. */
+.ind-opt-group { display: flex; flex-direction: column; gap: 8px; flex: 1 1 320px; min-width: 0; }
+.ind-opt-master { font-weight: 600; color: var(--clr-text); }
+.ind-opt-governed { display: flex; flex-direction: column; gap: 8px;
+  padding-left: 11px; border-left: 2px solid #2b3446; }
+.ind-opt-governed .ind-field-marg { min-width: 0; }
 .ind-shop-bar { display: flex; align-items: center; gap: 12px; margin: 4px 0 10px; }
 .ind-copy-btn { background: #1e3a5f; color: var(--clr-accent); border: 1px solid #2d5a8a; border-radius: 5px; padding: 5px 12px; font-size: 12px; cursor: pointer; }
 .ind-copy-btn:hover { background: #254a78; }

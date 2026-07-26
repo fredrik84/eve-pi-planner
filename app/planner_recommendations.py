@@ -281,15 +281,34 @@ def _system_recommendations_impl(
         top = (vals.get(p0_name) or [])[:k]
         return sum(top) / k if k else 0.0
 
+    def _bottleneck(covered, vals):
+        """(density, p0_name) of the resource that will bind production here.
+
+        A PI chain consumes every input in a fixed ratio, so output is governed by the WEAKEST
+        one — the same min() the plan's supply_ratio reports. depth_score sums the resources
+        instead, which lets an abundant input mask a starved one: OP7-BP sums to 353 while its
+        Reactive Gas depth is 3.2 (one Gas planet at 19%, against a demand for six planets'
+        worth), and the plan built from it runs at 23% fed. Ranking needs the min as well.
+
+        `_depth_density` already divides by the demanded planet count K, so a resource with too
+        FEW planets is scored down as hard as one with thin planets — both starve the chain the
+        same way, and both are what this term is meant to catch."""
+        if not covered:
+            return 0.0, None
+        return min((_depth_density(n, vals), n) for n in covered)
+
     def make_result(sys_names, merged, vals):
         covered = [n for n in p0_names if n in merged]
         first_const = sys_data[sys_names[0]]["constellation"]
         same_const = all(sys_data[s]["constellation"] == first_const for s in sys_names)
+        bott_density, bott_p0 = _bottleneck(covered, vals)
         return {
             "constellation": first_const, "same_constellation": same_const,
             "coverage": len(covered), "total_p0": len(p0_names),
             "score": sum(d["value"] for d in merged.values()),
             "depth_score": sum(needs[n] * _depth_density(n, vals) for n in covered),
+            "bottleneck_density": round(bott_density, 1),
+            "bottleneck_p0": bott_p0,
             "systems_needed": sorted(sys_names),
             "missing": [n for n in p0_names if n not in merged],
             "assignments": [
@@ -373,16 +392,25 @@ def _system_recommendations_impl(
         results.append(r)
         return r
 
-    # Coverage first (must supply the P0s); then prefer neighbouring clusters; then
-    # closeness to the requested system count; then tightness; then need-weighted depth
-    # richness (a system with rich planets at the depth each resource needs beats one that's
-    # only rich at the very top), with flat best-planet richness as the final tiebreak.
+    # Coverage first (must supply the P0s); then prefer neighbouring clusters; then closeness
+    # to the requested system count; then tightness; then the BOTTLENECK resource, banded; then
+    # need-weighted depth richness; with flat best-planet richness as the final tiebreak.
+    #
+    # The bottleneck sits above depth_score because output is a min() over inputs, not a sum:
+    # among equal-coverage systems the summed score picked C3I-D5 (depth 377, binding resource
+    # at 2.5) over F18-AY (depth 328, binding at 13.0) — i.e. the one that would run ~5x more
+    # starved. It's banded in BOTTLENECK_BAND-wide steps so only a MATERIAL difference in the
+    # weakest input outranks overall richness; inside a band the existing depth ordering stands,
+    # which keeps this from churning the recommendation list over rounding-level noise.
+    BOTTLENECK_BAND = 5.0
+
     def rank_key(r):
         return (
             -r["coverage"],
             0 if r["within_jumps"] else 1,
             abs(len(r["systems_needed"]) - pref),
             r["jumps"] if r["jumps"] is not None else 99,
+            -int(r.get("bottleneck_density", 0) / BOTTLENECK_BAND),
             -r["depth_score"],
             -r["score"],
         )

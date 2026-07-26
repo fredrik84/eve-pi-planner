@@ -154,6 +154,10 @@
 .plan-jump-far    { font-size: 10px; background: #2a2018; color: #d8a06a; border: 1px solid #4a3420; border-radius: 3px; padding: 1px 6px; }
 .plan-jump-note   { font-size: 12px; color: #d8a06a; background: #1c1812; border: 1px solid #3a2c18; border-radius: 5px; padding: 8px 10px; margin-bottom: 10px; }
 .plan-cov-partial { font-size: 10px; background: #2a2010; color: #c88040; border: 1px solid #3a3010; border-radius: 3px; padding: 1px 6px; }
+/* Weakest input on a recommendation — amber warns, red means it will bind hard. Sits next to
+   "full coverage" precisely because coverage alone reads as "this system is fine". */
+.plan-rec-bott     { font-size: 10px; background: #2a2010; color: #c88040; border: 1px solid #3a3010; border-radius: 3px; padding: 1px 6px; cursor: help; }
+.plan-rec-bott-bad { background: #2c1618; color: #e08088; border-color: #4a2226; }
 .plan-rec-sys-count { font-size: 11px; color: var(--clr-label); }
 .plan-rec-missing { font-size: 11px; color: #9a6040; margin-bottom: 5px; }
 .plan-rec-rows { display: flex; flex-direction: column; gap: 2px; }

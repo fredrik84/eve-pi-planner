@@ -1966,6 +1966,14 @@ function renderRecommendations(data) {
           ? `<span class="plan-jump-ok">${(rec.jumps || 1) <= 1 ? 'adjacent' : rec.jumps + ' jumps'}</span>`
           : `<span class="plan-jump-far">not within ${maxJumps}</span>`)
       : '';
+    // Full coverage says every P0 is *present*, not that any of them is present in useful
+    // quantity. A system can cover all 9 and still run the chain at a fraction of its rate
+    // because one input sits on a single thin planet — so name the weakest input when it's
+    // low enough to bind. Absent on recommendations cached before this shipped.
+    const bd = rec.bottleneck_density;
+    const bottBadge = (rec.bottleneck_p0 && bd != null && bd < 25)
+      ? `<span class="plan-rec-bott${bd < 10 ? ' plan-rec-bott-bad' : ''}" title="${_esc(rec.bottleneck_p0)} is the weakest input here (depth ${bd} vs the planets this recipe wants). Output is capped by it, however rich the others are — adding a second system usually fixes it.">thin: ${_esc(rec.bottleneck_p0)}</span>`
+      : '';
     const missingHtml = rec.missing.length
       ? `<div class="plan-rec-missing">Missing: ${rec.missing.join(', ')}</div>` : '';
     const rows = (rec.assignments || []).map(a =>
@@ -1990,7 +1998,7 @@ function renderRecommendations(data) {
       <div class="plan-rec-card${i === 0 ? ' plan-rec-best' : ''}">
         <div class="plan-rec-header">
           <span class="plan-rec-name">${numSys === 1 ? sysList : numSys + ' systems: ' + sysList}</span>
-          ${covBadge}${jumpBadge}
+          ${covBadge}${jumpBadge}${bottBadge}
           <button class="wiz-choose-btn" onclick='wizardChooseSystems(${JSON.stringify(rec.systems_needed)})'>Choose →</button>
         </div>
         ${missingHtml}
