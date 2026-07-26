@@ -24,6 +24,8 @@ listing flip build decisions.
 
 from __future__ import annotations
 
+import os
+import socket
 import statistics
 import threading
 import time
@@ -42,6 +44,31 @@ _HISTORY_DAYS = 120           # how far back an estimate may draw
 
 _scan_lock = threading.Lock()
 _scanning: set[int] = set()
+
+# Politeness. CCP doesn't ban on request volume as such — it bans on burning the ERROR budget, so
+# the rules that matter are: watch the error-limit headers and back off before they run out, and
+# don't sustain a hammering rate. Combined with the single-writer lease and incremental fetching,
+# a steady day costs a few dozen requests rather than thousands.
+_REQ_DELAY = 0.05          # ~20/s ceiling, well under anything ESI objects to
+_ERR_FLOOR = 20            # back off while fewer than this many errors remain in the window
+
+
+def _throttle(resp) -> None:
+    """Pace requests, and yield hard if we're eating into ESI's error budget.
+
+    `X-ESI-Error-Limit-Remain` counts DOWN toward a ban; when it gets low the correct behaviour is
+    to stop until the window resets rather than keep probing, which is what actually gets a client
+    blocked.
+    """
+    try:
+        remain = int(resp.headers.get("x-esi-error-limit-remain", 100))
+        reset = int(resp.headers.get("x-esi-error-limit-reset", 60))
+    except (TypeError, ValueError):
+        remain, reset = 100, 60
+    if remain < _ERR_FLOOR:
+        time.sleep(min(reset + 1, 90))
+    else:
+        time.sleep(_REQ_DELAY)
 
 
 def ensure_bpc_tables():
@@ -71,6 +98,14 @@ def ensure_bpc_tables():
                 indexed    INTEGER NOT NULL DEFAULT 0
             )
         """)
+        # A thread lock only guards ONE process, and prod runs several replicas — so the lease that
+        # decides who scans has to live in the shared database, not in memory.
+        for col in ("lease_until REAL", "owner TEXT"):
+            try:
+                con.execute(f"ALTER TABLE pp_bpc_scan ADD COLUMN {col}")
+                con.commit()
+            except Exception:
+                pass
         con.commit()
     finally:
         con.close()
@@ -86,10 +121,78 @@ def _scan_state(region_id: int) -> dict:
     return dict(r) if r else {}
 
 
-def _flush(batch: list[tuple], region_id: int, seen: int, indexed: int) -> None:
-    """Write one page's observations plus a progress marker, in a single connection."""
+def _owner_id() -> str:
+    return f"{socket.gethostname()}:{os.getpid()}"
+
+
+_LEASE_TTL = 900          # 15 min; renewed every page, so a dead scanner frees the region
+
+
+def _claim(region_id: int, owner: str) -> bool:
+    """Win the right to scan this region, across every replica. True if we got it.
+
+    The conditional UPDATE is the whole mechanism: only one row exists per region, and only a
+    caller whose WHERE clause still matches an expired lease can take it. Postgres makes that
+    atomic, so two pods racing produce exactly one winner.
+    """
+    ensure_bpc_tables()
+    now = time.time()
     con = get_connection()
     try:
+        con.execute("INSERT INTO pp_bpc_scan (region_id, seen, indexed) VALUES (?,0,0) "
+                    "ON CONFLICT (region_id) DO NOTHING", (region_id,))
+        cur = con.execute(
+            "UPDATE pp_bpc_scan SET lease_until=?, owner=?, started_at=?, ended_at=NULL "
+            "WHERE region_id=? AND (lease_until IS NULL OR lease_until < ?)",
+            (now + _LEASE_TTL, owner, now, region_id, now),
+        )
+        won = (cur.rowcount or 0) == 1
+        con.commit()
+        return won
+    finally:
+        con.close()
+
+
+def _renew(region_id: int, owner: str) -> bool:
+    """Extend our lease. False means someone else now owns the region and we must stop — otherwise
+    a stalled scanner would keep writing over a healthy one's progress."""
+    con = get_connection()
+    try:
+        cur = con.execute(
+            "UPDATE pp_bpc_scan SET lease_until=? WHERE region_id=? AND owner=?",
+            (time.time() + _LEASE_TTL, region_id, owner),
+        )
+        con.commit()
+        return (cur.rowcount or 0) == 1
+    finally:
+        con.close()
+
+
+def _release(region_id: int, owner: str, seen: int, indexed: int) -> None:
+    con = get_connection()
+    try:
+        con.execute(
+            "UPDATE pp_bpc_scan SET ended_at=?, seen=?, indexed=?, lease_until=NULL "
+            "WHERE region_id=? AND owner=?",
+            (time.time(), seen, indexed, region_id, owner),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+
+def _flush(batch: list[tuple], region_id: int, seen: int, indexed: int,
+           still_live: list[int] | None = None) -> None:
+    """Write one page's observations plus a progress marker, in a single connection."""
+    now = time.time()
+    con = get_connection()
+    try:
+        # Contracts we'd already indexed only need their "still on offer" stamp refreshed.
+        for i in range(0, len(still_live or []), 500):
+            chunk = (still_live or [])[i:i + 500]
+            marks = ",".join("?" * len(chunk))
+            con.execute(f"UPDATE pp_bpc_observations SET last_seen=? WHERE contract_id IN ({marks})",
+                        (now, *chunk))
         for row in batch:
             con.execute(
                 "INSERT INTO pp_bpc_observations (contract_id, region_id, type_id, is_bpc, runs, "
@@ -108,25 +211,26 @@ def _flush(batch: list[tuple], region_id: int, seen: int, indexed: int) -> None:
 def _run_scan(region_id: int) -> None:
     """Walk a region's public contracts and index every single-blueprint one. Long-running by
     nature (~15k item lookups in The Forge), so it's only ever called on a background thread."""
-    started = time.time()
+    owner = _owner_id()
+    seen = indexed = refreshed = 0
+    batch: list[tuple] = []
+    # A contract_id is stable for the life of the contract, and blueprints sit on contract for days
+    # or weeks. So the expensive half of a scan — one item lookup per contract — is almost entirely
+    # re-fetching things we already know. Load what we've seen and skip those: the first scan costs
+    # ~15k lookups, every later one costs only the genuinely new contracts.
     con = get_connection()
     try:
-        con.execute(
-            "INSERT INTO pp_bpc_scan (region_id, started_at, seen, indexed) VALUES (?,?,0,0) "
-            "ON CONFLICT (region_id) DO UPDATE SET started_at=excluded.started_at",
-            (region_id, started),
-        )
-        con.commit()
+        known = {r["contract_id"] for r in con.execute(
+            "SELECT contract_id FROM pp_bpc_observations WHERE region_id=?", (region_id,))}
     finally:
         con.close()
-
-    seen = indexed = 0
-    batch: list[tuple] = []
+    still_live: list[int] = []
     try:
         with httpx.Client(timeout=30, headers={"User-Agent": "eve-pi-planner/1.0"}) as c:
             page, pages = 1, 1
             while page <= pages and page <= 60:
                 r = c.get(f"{ESI_BASE}/contracts/public/{region_id}/", params={"page": page})
+                _throttle(r)
                 if r.status_code != 200:
                     break
                 pages = int(r.headers.get("x-pages") or 1)
@@ -139,8 +243,16 @@ def _run_scan(region_id: int) -> None:
                         continue
                     if abs((x.get("volume") or 0) - _BP_VOLUME) > 1e-9:
                         continue      # not a lone blueprint — skip the item lookup entirely
+                    cid = int(x["contract_id"])
+                    if cid in known:
+                        # Already indexed: just mark it still on offer. A contract that stops
+                        # appearing simply stops being refreshed and ages out of "live" by itself.
+                        still_live.append(cid)
+                        refreshed += 1
+                        continue
                     try:
                         ir = c.get(f"{ESI_BASE}/contracts/public/items/{x['contract_id']}/")
+                        _throttle(ir)
                         if ir.status_code != 200:
                             continue
                         items = ir.json() or []
@@ -158,19 +270,16 @@ def _run_scan(region_id: int) -> None:
                 # Flush per page rather than per row: a full scan is ~15k observations, and a
                 # connect/commit/close cycle each would dominate the runtime. Writing progress here
                 # too, so a running scan can report how far along it is instead of looking idle.
-                _flush(batch, region_id, seen, indexed)
+                _flush(batch, region_id, seen, indexed, still_live)
                 batch = []
+                still_live = []
+                if not _renew(region_id, owner):
+                    break        # another replica took the region — stop rather than fight it
                 page += 1
     except Exception:
         pass
     finally:
-        con = get_connection()
-        try:
-            con.execute("UPDATE pp_bpc_scan SET ended_at=?, seen=?, indexed=? WHERE region_id=?",
-                        (time.time(), seen, indexed, region_id))
-            con.commit()
-        finally:
-            con.close()
+        _release(region_id, owner, seen, indexed)
         with _scan_lock:
             _scanning.discard(region_id)
 
@@ -181,13 +290,18 @@ def maybe_scan(region_id: int = THE_FORGE, force: bool = False) -> dict:
     ensure_bpc_tables()
     st = _scan_state(region_id)
     fresh = st.get("ended_at") and (time.time() - st["ended_at"]) < _SCAN_TTL
+    if fresh and not force:
+        return {"started": False, "busy": False, "fresh": True}
     with _scan_lock:
-        busy = region_id in _scanning
-        if not busy and (force or not fresh):
-            _scanning.add(region_id)
-            threading.Thread(target=_run_scan, args=(region_id,), daemon=True).start()
-            return {"started": True, "busy": True}
-    return {"started": False, "busy": busy, "fresh": bool(fresh)}
+        if region_id in _scanning:                 # this process is already on it
+            return {"started": False, "busy": True}
+        # The DB lease is the real gate — with several replicas the in-memory set only stops this
+        # process spawning twice. A replica that loses the race simply serves the existing index.
+        if not _claim(region_id, _owner_id()):
+            return {"started": False, "busy": True, "held_by_other": True}
+        _scanning.add(region_id)
+        threading.Thread(target=_run_scan, args=(region_id,), daemon=True).start()
+        return {"started": True, "busy": True}
 
 
 def _summarise(rows: list, live_cutoff: float) -> dict | None:

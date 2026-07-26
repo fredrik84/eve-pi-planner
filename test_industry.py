@@ -9,6 +9,7 @@ Run: python3 test_industry.py
 """
 import math
 import sqlite3
+from app.db import get_connection
 import sys
 
 sys.path.insert(0, ".")
@@ -626,6 +627,44 @@ def test_blueprint_cost_affects_make_or_buy():
     check("the target is still built", 100 in {r["type_id"] for r in r4["requirements"]})
 
 
+def test_scan_lease_is_single_writer_across_replicas():
+    """Prod runs several replicas, so the scan guard cannot live in process memory: every pod would
+    start its own ~15k-request scan, and their progress writes would overwrite each other. The lease
+    lives in the shared DB, and a crashed holder must not block the region forever."""
+    print("test_scan_lease_is_single_writer_across_replicas")
+    import time as _t
+    import app.industry.bpc as B
+    region = 99999998
+    B.ensure_bpc_tables()
+    con = get_connection()
+    con.execute("DELETE FROM pp_bpc_scan WHERE region_id=?", (region,))
+    con.commit()
+    con.close()
+
+    winners = [n for n in ("pod-a", "pod-b", "pod-c") if B._claim(region, n)]
+    check("exactly one replica wins the region", len(winners) == 1)
+    owner = winners[0]
+    check("the owner can renew", B._renew(region, owner) is True)
+    check("a non-owner cannot renew", B._renew(region, "impostor") is False)
+    check("a held region can't be re-claimed", B._claim(region, "late") is False)
+
+    # Simulate the holder dying mid-scan: the lease expires and another replica takes over.
+    con = get_connection()
+    con.execute("UPDATE pp_bpc_scan SET lease_until=? WHERE region_id=?", (_t.time() - 1, region))
+    con.commit()
+    con.close()
+    check("an expired lease is reclaimable", B._claim(region, "recovered") is True)
+
+    B._release(region, "recovered", seen=7, indexed=3)
+    con = get_connection()
+    row = dict(con.execute("SELECT * FROM pp_bpc_scan WHERE region_id=?", (region,)).fetchone())
+    con.execute("DELETE FROM pp_bpc_scan WHERE region_id=?", (region,))
+    con.commit()
+    con.close()
+    check("release frees the lease", row["lease_until"] is None)
+    check("release records completion", bool(row["ended_at"]) and row["indexed"] == 3)
+
+
 def main():
     test_material_formula()
     test_graph_loaders()
@@ -654,6 +693,7 @@ def main():
     test_missing_blueprints_are_reported()
     test_bpc_price_summary()
     test_blueprint_cost_affects_make_or_buy()
+    test_scan_lease_is_single_writer_across_replicas()
     print(f"\nAll {_passed} checks passed.")
 
 
