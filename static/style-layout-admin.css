@@ -1141,3 +1141,15 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-bp-px { flex: 0 0 auto; text-align: right; color: #e6d0b8; display: flex; flex-direction: column; align-items: flex-end; }
 .ind-bp-px b { color: #ffe0b0; font-variant-numeric: tabular-nums; }
 .ind-bp-sub2 { font-size: 11px; color: #b39a9a; }
+/* Background jobs admin page */
+.job-st { font-size: 10px; text-transform: uppercase; letter-spacing: .03em; padding: 1px 7px; border-radius: 8px; }
+.job-ok { background: #163524; color: #7fdca6; }
+.job-error { background: #3a2226; color: #e69aa0; }
+.job-running { background: #1e3a5f; color: #8fc3ff; }
+.job-detail { color: var(--clr-text-soft); font-size: 11.5px; max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.job-sub { font-size: 10.5px; color: var(--clr-text-soft); margin-top: 2px; }
+.job-toggle { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-size: 11px; color: var(--clr-text-soft); }
+.job-toggle input { width: auto; margin: 0; }
+.job-row-off { opacity: .55; }
+.job-off { background: #23262e; color: #93a0b4; }
+.job-never-run { background: #2a2620; color: #d8b46a; }

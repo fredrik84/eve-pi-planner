@@ -703,6 +703,67 @@ def test_esi_budget_guard():
     E._record(Resp({"x-esi-error-limit-remain": "100", "x-esi-error-limit-reset": "0"}))
 
 
+def test_job_runner_lease_and_toggle():
+    """Background jobs: exactly one replica runs each (the scheduler starts in every pod), every run
+    is recorded, a failure is captured rather than escaping, and a disabled job defers without
+    running or taking the lease."""
+    print("test_job_runner_lease_and_toggle")
+    import app.jobs as J
+    job = "unittest_job"
+    con = get_connection()
+    for t in ("pp_job_runs", "pp_job_leases", "pp_job_config"):
+        try:
+            con.execute(f"DELETE FROM {t} WHERE job=?", (job,))
+        except Exception:
+            pass
+    con.commit()
+    con.close()
+
+    calls = []
+    ok_fn = lambda: (calls.append(1), "did the thing")[1]
+
+    check("a job runs and reports detail", J.run_job(job, ok_fn)["detail"] == "did the thing")
+    check("the function actually ran", len(calls) == 1)
+
+    # Two replicas racing: only one may run.
+    held = J.claim(job, "other-pod")
+    check("another replica can hold the lease", held is True)
+    res = J.run_job(job, ok_fn)
+    check("a held job is skipped", res["ran"] is False)
+    check("the skipped job did NOT execute", len(calls) == 1)
+    J.release(job, "other-pod")
+
+    # A failure is recorded, not raised at the scheduler.
+    res = J.run_job(job, lambda: (_ for _ in ()).throw(RuntimeError("kaboom")))
+    check("a failing job returns instead of raising", res.get("error") == "kaboom")
+    last = [r for r in J.recent_runs(20) if r["job"] == job][0]
+    check("the failure is recorded", last["status"] == "error" and "kaboom" in (last["error"] or ""))
+
+    # Disabled: defers entirely.
+    J.set_enabled(job, False)
+    check("disabled is reflected", J.is_enabled(job) is False)
+    res = J.run_job(job, ok_fn)
+    check("a disabled job defers", res["ran"] is False and res["reason"] == "disabled")
+    check("a disabled job never executes", len(calls) == 1)
+    check("a disabled job takes no lease", J.claim(job, "anyone") is True)
+    J.release(job, "anyone")
+    J.set_enabled(job, True)
+    check("re-enabling restores it", J.is_enabled(job) is True)
+
+    # Every known job is listed even before its first run — a job that stopped firing must be visible.
+    names = {j["job"] for j in J.job_summary()}
+    check("all known jobs are listed", all(n in names for n, _l, _c in J.KNOWN_JOBS))
+
+    con = get_connection()
+    for t in ("pp_job_runs", "pp_job_leases", "pp_job_config"):
+        try:
+            con.execute(f"DELETE FROM {t} WHERE job=?", (job,))
+        except Exception:
+            pass
+    con.commit()
+    con.close()
+
+
 def main():
     test_material_formula()
     test_graph_loaders()
@@ -733,6 +794,7 @@ def main():
     test_blueprint_cost_affects_make_or_buy()
     test_scan_lease_is_single_writer_across_replicas()
     test_esi_budget_guard()
+    test_job_runner_lease_and_toggle()
     print(f"\nAll {_passed} checks passed.")
 
 

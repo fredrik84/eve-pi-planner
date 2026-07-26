@@ -72,6 +72,79 @@ function adminSubPage(key) {
   if (key === 'cleanup') loadCleanupPreview();
   if (key === 'groups' && typeof loadGroups === 'function') loadGroups();
   if (key === 'moongoo') loadMoonGoo();
+  if (key === 'jobs') loadAdminJobs();
+}
+
+// Background job health. Scheduled work runs in every replica (guarded by a DB lease) and some of
+// it now runs as Kubernetes CronJobs outside the web pods entirely — so "did it run, and did it
+// work" needs somewhere to be visible.
+// A disabled job checks the flag before doing anything — it never takes the lease and never runs,
+// whether it fires from the in-process scheduler or a Kubernetes CronJob.
+async function toggleJob(job, enabled) {
+  try {
+    await fetch('/api/admin/jobs/' + encodeURIComponent(job), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: !!enabled }),
+    });
+  } catch (e) {}
+  loadAdminJobs();
+}
+
+async function loadAdminJobs() {
+  const el = document.getElementById('adminJobs');
+  if (!el) return;
+  el.innerHTML = '<p class="pp-sub">Loading…</p>';
+  let d = null;
+  try {
+    const r = await fetch('/api/admin/jobs');
+    if (!r.ok) { el.innerHTML = '<p class="pp-warn">Could not load job status.</p>'; return; }
+    d = await r.json();
+  } catch (e) { el.innerHTML = `<p class="pp-warn">${_esc(String(e))}</p>`; return; }
+
+  const ago = t => {
+    if (!t) return '—';
+    const s = Math.max(0, Date.now() / 1000 - t);
+    return s < 90 ? `${Math.round(s)}s ago`
+      : s < 5400 ? `${Math.round(s / 60)}m ago`
+      : s < 172800 ? `${Math.round(s / 3600)}h ago` : `${Math.round(s / 86400)}d ago`;
+  };
+  const dur = r => (r.ended_at && r.started_at) ? `${(r.ended_at - r.started_at).toFixed(1)}s`
+    : (r.status === 'running' ? 'running…' : '—');
+
+  const b = d.esi_budget || {};
+  const low = (b.remain ?? 100) < 40;
+  const ci = d.contract_index || {};
+  const head = `<div class="an-stats">`
+    + `<div class="an-stat${low ? ' an-warn' : ''}"><div class="an-stat-lbl">ESI error budget</div>`
+    + `<div class="an-stat-val">${b.remain ?? '—'}</div></div>`
+    + `<div class="an-stat"><div class="an-stat-lbl">Budget resets in</div><div class="an-stat-val">${b.resets_in ?? 0}s</div></div>`
+    + `<div class="an-stat"><div class="an-stat-lbl">Blueprints indexed</div><div class="an-stat-val">${(ci.indexed || 0).toLocaleString()}</div></div>`
+    + `<div class="an-stat"><div class="an-stat-lbl">Contract scan</div><div class="an-stat-val">${ago(ci.ended_at)}</div></div>`
+    + `</div>`;
+
+  const rows = (d.summary || []).map(j => {
+    const st = j.enabled === false ? 'off' : j.status.replace(/\s/g, '-');
+    return `<tr class="${j.enabled === false ? 'job-row-off' : ''}">`
+    + `<td><b>${_esc(j.label || j.job)}</b><div class="job-sub">${_esc(j.job)}${j.cadence ? ' · ' + _esc(j.cadence) : ''}</div></td>`
+    + `<td><label class="job-toggle"><input type="checkbox" ${j.enabled === false ? '' : 'checked'} `
+    + `onchange="toggleJob('${_esc(j.job)}', this.checked)"><span>${j.enabled === false ? 'off' : 'on'}</span></label></td>`
+    + `<td><span class="job-st job-${st}">${j.enabled === false ? 'disabled' : _esc(j.status)}</span></td>`
+    + `<td>${ago(j.started_at)}</td><td>${dur(j)}</td>`
+    + `<td class="job-detail">${_esc(j.detail || j.error || '')}</td>`
+    + `<td class="ind-num">${j.failures ? `<span class="pp-warn">${j.failures}</span>` : '0'}/${j.runs}</td></tr>`;
+  }).join('');
+
+  const recent = (d.recent || []).slice(0, 20).map(r =>
+    `<tr><td>${_esc(r.job)}</td><td><span class="job-st job-${r.status}">${_esc(r.status)}</span></td>`
+    + `<td>${ago(r.started_at)}</td><td>${dur(r)}</td>`
+    + `<td class="job-detail">${_esc(r.error || r.detail || '')}</td></tr>`).join('');
+
+  el.innerHTML = head
+    + `<h3 class="ind-modal-h" style="margin-top:14px">Latest per job</h3>`
+    + (rows ? `<table class="ind-table"><thead><tr><th>Job</th><th>Enabled</th><th>Status</th><th>Last run</th><th>Took</th><th>Detail</th><th class="ind-num">Fails/runs</th></tr></thead><tbody>${rows}</tbody></table>`
+            : '<p class="pp-sub">No job runs recorded yet.</p>')
+    + `<h3 class="ind-modal-h" style="margin-top:16px">Recent history</h3>`
+    + (recent ? `<table class="ind-table"><thead><tr><th>Job</th><th>Status</th><th>When</th><th>Took</th><th>Detail</th></tr></thead><tbody>${recent}</tbody></table>` : '');
 }
 
 async function _loadCharNameSuggestions() {

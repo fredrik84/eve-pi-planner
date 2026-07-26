@@ -619,6 +619,41 @@ def _cleanup_preview_data(con) -> dict:
     return p
 
 
+@router.get("/api/admin/jobs")
+def admin_jobs(_ctx: int = Depends(require_admin)):
+    """Background job health: last run per job, recent history, and ESI's error budget.
+
+    Scheduled work used to be entirely invisible — no way to tell whether a job ran, how long it
+    took, or why it failed. That matters more now that some of it runs as Kubernetes CronJobs
+    outside the web pods.
+    """
+    from app.jobs import job_summary, recent_runs
+    from app import esi_http
+    out = {"summary": job_summary(), "recent": recent_runs(40), "esi_budget": esi_http.budget()}
+    try:
+        from app.industry.bpc import _scan_state, THE_FORGE
+        out["contract_index"] = _scan_state(THE_FORGE)
+    except Exception:
+        out["contract_index"] = {}
+    return out
+
+
+class JobToggle(BaseModel):
+    enabled: bool
+
+
+@router.post("/api/admin/jobs/{job}")
+def admin_job_toggle(job: str, req: JobToggle, _ctx: int = Depends(require_admin)):
+    """Turn a background job on or off. A disabled job checks this before doing anything, so it
+    costs nothing and never takes the lease — whether it fires from the in-process scheduler or a
+    Kubernetes CronJob."""
+    from app.jobs import set_enabled, KNOWN_JOBS, job_summary
+    if job not in {name for name, _l, _c in KNOWN_JOBS}:
+        raise HTTPException(status_code=400, detail="unknown job")
+    set_enabled(job, req.enabled)
+    return {"ok": True, "summary": job_summary()}
+
+
 @router.get("/api/admin/cleanup/preview")
 def cleanup_preview(_: int = Depends(require_admin)):
     """Return per-category counts of what would be deleted — no writes."""

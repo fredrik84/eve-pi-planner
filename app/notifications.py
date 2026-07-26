@@ -378,13 +378,26 @@ def make_scheduler():
     from app.yield_stats import aggregate_colony_yields
     from app.reactions.jobs import log_all_reaction_completions
     from app.industry.jobs import log_all_manufacturing_completions
+    from app.jobs import run_job
     sched = AsyncIOScheduler()
-    sched.add_job(check_and_send_notifications, "interval", minutes=15, id="notify_check")
-    sched.add_job(aggregate_colony_yields, "cron", hour=3, id="yield_aggregate")
+
+    # The scheduler starts in EVERY replica, so each job would otherwise fire once per pod. The
+    # completion ledgers are idempotent (they upsert on job_id) but the notification check is not:
+    # two pods can read the cooldown log simultaneously, both decide nothing was sent recently, and
+    # both push. Wrapping each job in a database lease makes exactly one replica run it.
+    def _leased(name, fn):
+        return lambda: run_job(name, fn)
+
+    sched.add_job(_leased("notify_check", check_and_send_notifications),
+                  "interval", minutes=15, id="notify_check")
+    sched.add_job(_leased("yield_aggregate", aggregate_colony_yields),
+                  "cron", hour=3, id="yield_aggregate")
     # Forward-only reaction turnover/net-profit ledger — logs jobs that finished since the last tick.
-    sched.add_job(log_all_reaction_completions, "interval", minutes=15, id="reaction_completions")
+    sched.add_job(_leased("reaction_completions", log_all_reaction_completions),
+                  "interval", minutes=15, id="reaction_completions")
     # Same, for manufacturing jobs (activity 1).
-    sched.add_job(log_all_manufacturing_completions, "interval", minutes=15, id="manufacturing_completions")
+    sched.add_job(_leased("manufacturing_completions", log_all_manufacturing_completions),
+                  "interval", minutes=15, id="manufacturing_completions")
     return sched
 
 

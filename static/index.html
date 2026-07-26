@@ -25,7 +25,7 @@
   <link rel="stylesheet" href="/style-components.css?v=1">
   <link rel="stylesheet" href="/style-contribute.css?v=11">
   <link rel="stylesheet" href="/style-wizard.css?v=2">
-  <link rel="stylesheet" href="/style-layout-admin.css?v=71">
+  <link rel="stylesheet" href="/style-layout-admin.css?v=73">
   <link rel="stylesheet" href="/style-analysis-dashboard.css?v=22">
   <link rel="stylesheet" href="/style-misc-responsive.css?v=7">
 </head>
@@ -67,6 +67,7 @@
         <div class="nav-group" id="adminNavGroup">
           <div class="nav-group-hd"><span class="nav-ico">AD</span><span class="nav-lbl">Admin</span></div>
           <button class="admin-nav-item" data-page="stats" onclick="adminNavTo('stats')"><span class="nav-ico">ST</span><span class="nav-lbl">System stats</span></button>
+          <button class="admin-nav-item" data-page="jobs" onclick="adminNavTo('jobs')"><span class="nav-ico">JB</span><span class="nav-lbl">Jobs</span></button>
           <button class="admin-nav-item" data-page="features" onclick="adminNavTo('features')"><span class="nav-ico">FT</span><span class="nav-lbl">Features</span></button>
           <button class="admin-nav-item" data-page="users" onclick="adminNavTo('users')"><span class="nav-ico">US</span><span class="nav-lbl">Users</span></button>
           <button class="admin-nav-item" data-page="submissions" onclick="adminNavTo('submissions')"><span class="nav-ico">PS</span><span class="nav-lbl">Submissions <span id="adminNavPsub" class="admin-nav-badge"></span></span></button>
@@ -946,7 +947,14 @@ PVF-N9    3         95                 60             80                  100   
       </div>
       <div class="admin-page">
 
-<div class="admin-subpage" data-page="stats" style="display:none">
+<div class="admin-subpage" data-page="jobs" style="display:none">
+          <section class="pp-card admin-section">
+            <div class="pp-card-title">Background jobs</div>
+            <div id="adminJobs" class="pp-card-body"></div>
+          </section>
+        </div>
+
+        <div class="admin-subpage" data-page="stats" style="display:none">
           <section class="pp-card admin-section">
             <div class="pp-card-title">System stats</div>
             <div id="adminStatsContent"></div>
@@ -1591,7 +1599,7 @@ PVF-N9    3         95                 60             80                  100   
   <script src="/app.js?v=40"></script>
   <script src="/planetary.js?v=373"></script>
   <script src="/dashboard.js?v=26"></script>
-  <script src="/admin.js?v=22"></script>
+  <script src="/admin.js?v=24"></script>
   <script src="/planetdb.js?v=3"></script>
   <script src="/refill.js?v=4"></script>
   <script src="/analysis.js?v=62"></script>
