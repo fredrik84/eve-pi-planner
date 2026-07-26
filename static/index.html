@@ -25,7 +25,7 @@
   <link rel="stylesheet" href="/style-components.css?v=1">
   <link rel="stylesheet" href="/style-contribute.css?v=11">
   <link rel="stylesheet" href="/style-wizard.css?v=2">
-  <link rel="stylesheet" href="/style-layout-admin.css?v=77">
+  <link rel="stylesheet" href="/style-layout-admin.css?v=78">
   <link rel="stylesheet" href="/style-analysis-dashboard.css?v=22">
   <link rel="stylesheet" href="/style-misc-responsive.css?v=7">
 </head>
@@ -1456,6 +1456,27 @@ PVF-N9    3         95                 60             80                  100   
 
   <!-- Reactions: settings modal (shipping/collateral/job-cost/time-efficiency) -->
   <!-- Industry: setup & slots modal -->
+  <div id="indOrderModal" class="pp-modal" style="display:none" onclick="if(event.target===this)indCloseOrder()">
+    <div class="pp-modal-box" style="overflow-y:auto">
+      <div class="pp-modal-title">Queue order
+        <button class="pp-modal-close" onclick="indCloseOrder()">✕</button>
+      </div>
+      <div class="pp-modal-hint">First in line wins a contested job slot, and its finish time is the
+        <b>first delivery</b> figure. With slots to spare everything still runs in parallel — order
+        only decides who yields when they compete.</div>
+      <div class="ind-ord-actions">
+        <button class="ind-bp-btn" onclick="indGroupByProduct()" title="Put identical products next to each other">Group by product</button>
+        <span class="ind-src-meta">Same products are built as one shared batch either way.</span>
+      </div>
+      <div id="indOrderList" class="ind-ord-list"></div>
+      <div class="ind-src-actions">
+        <button class="ind-primary-btn" onclick="indSaveOrderOrder()">Save order</button>
+        <button class="ind-bp-btn" onclick="indCloseOrder()">Cancel</button>
+        <span id="indOrderMsg" class="ind-src-meta"></span>
+      </div>
+    </div>
+  </div>
+
   <div id="indPlanModal" class="pp-modal" style="display:none" onclick="if(event.target===this)indClosePlanner()">
     <div class="pp-modal-box pp-modal-box-wide" style="overflow-y:auto">
       <div class="pp-modal-title">Plan a new build
@@ -1605,6 +1626,6 @@ PVF-N9    3         95                 60             80                  100   
   <script src="/analysis.js?v=62"></script>
   <script src="/layout.js?v=2"></script>
   <script src="/reactions.js?v=98"></script>
-  <script src="/industry.js?v=54"></script>
+  <script src="/industry.js?v=55"></script>
 </body>
 </html>

@@ -1169,3 +1169,16 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-oc-ok { background: #1e3a5f; color: var(--clr-accent); border: 1px solid #2d5a8a; border-radius: 4px;
   padding: 3px 10px; font-size: 11px; cursor: pointer; }
 .ind-oc-cancel { background: none; border: none; color: var(--clr-text-soft); font-size: 11px; cursor: pointer; }
+/* Queue order modal */
+.ind-ord-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 10px 0; }
+.ind-ord-list { display: flex; flex-direction: column; gap: 4px; margin: 8px 0 12px; max-height: 320px; overflow-y: auto; }
+.ind-ord-row { display: flex; align-items: center; gap: 9px; padding: 7px 9px; border: 1px solid var(--clr-border);
+  border-radius: 6px; background: #12161f; font-size: 13px; }
+.ind-ord-pos { flex: 0 0 22px; text-align: center; font-size: 11px; font-weight: 700; color: var(--clr-accent);
+  background: #1e3a5f; border-radius: 8px; padding: 1px 0; }
+.ind-ord-nm { flex: 1; color: #eef2f8; display: flex; align-items: center; gap: 7px; min-width: 0; }
+.ind-ord-nm b { color: var(--clr-accent); }
+.ind-ord-btn { background: #161b28; border: 1px solid var(--clr-border); color: #9fb4d8; border-radius: 4px;
+  padding: 2px 8px; cursor: pointer; font-size: 11px; }
+.ind-ord-btn:disabled { opacity: .3; cursor: default; }
+.ind-ord-btn:hover:not(:disabled) { background: #1b2233; color: #fff; }

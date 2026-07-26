@@ -136,6 +136,33 @@ def list_orders(ctx: int = Depends(require_context)):
         con.close()
 
 
+class OrderReorder(BaseModel):
+    order: list[int]          # order ids, first = first in line
+
+
+@router.post("/api/industry/orders/reorder")
+def reorder_orders(req: OrderReorder, ctx: int = Depends(require_context)):
+    """Set the queue order. First in the list is first in line.
+
+    This is not cosmetic: the scheduler ranks by queue position, so the first order wins a contested
+    slot and its ETA is the "first delivery" figure. Stored as a descending priority because the
+    queue reads `ORDER BY priority DESC, id`.
+    """
+    ensure_industry_orders_table()
+    con = get_connection()
+    try:
+        n = len(req.order)
+        for i, oid in enumerate(req.order):
+            con.execute(
+                "UPDATE pp_industry_orders SET priority=? WHERE id=? AND context_id=?",
+                (n - i, oid, ctx),
+            )
+        con.commit()
+    finally:
+        con.close()
+    return {"ok": True}
+
+
 @router.patch("/api/industry/orders/{order_id}")
 def update_order(order_id: int, req: OrderUpdate, ctx: int = Depends(require_context)):
     ensure_industry_orders_table()

@@ -141,6 +141,8 @@ function _indStatusHeadline(d) {
   return sim
     + `<div class="ind-status-head"><div class="ind-order-chips">${chips}</div>`
     + `<button class="ind-primary-btn" onclick="indOpenPlanner()">Plan a new build</button>`
+    + ((_indOrders || []).length > 1
+        ? `<button class="ind-secondary-btn" onclick="indOpenOrder()">Reorder</button>` : '')
     + `<button class="ind-secondary-btn" onclick="indRefreshJobs()" title="Pull job status from EVE and re-plan">Refresh</button></div>`
     + `<div class="an-stats">` + tiles.map(([l, v, tip]) =>
         `<div class="an-stat" title="${_esc(tip)}"><div class="an-stat-lbl">${l}</div><div class="an-stat-val">${v}</div></div>`).join('')
@@ -1260,6 +1262,85 @@ function _indOrderProgHtml(p) {
 // The queue no longer has a card of its own — orders render as chips in the status header, so
 // "reload the queue" and "refresh the status" are the same operation.
 async function indLoadQueue() { return indRefreshStatus(); }
+
+// ── Queue order ─────────────────────────────────────────────────────────────────────────────
+// Position is not cosmetic: the scheduler ranks by it, so the first order wins a contested slot and
+// its finish time is the "first delivery" number.
+let _indOrderDraft = [];
+
+function indOpenOrder() {
+  const m = document.getElementById('indOrderModal');
+  if (!m) return;
+  // Start from the order the status view shows, which is already rank-sorted.
+  const tgt = {};
+  ((_indLastPlan && _indLastPlan.targets) || []).forEach(t => { tgt[t.type_id] = t; });
+  _indOrderDraft = (_indOrders || []).slice().sort((a, b) => {
+    const ra = (tgt[a.product_type_id] || {}).rank, rb = (tgt[b.product_type_id] || {}).rank;
+    return (ra === undefined ? 99 : ra) - (rb === undefined ? 99 : rb) || a.id - b.id;
+  });
+  m.style.display = '';
+  _indRenderOrderList();
+}
+
+function indCloseOrder() {
+  const m = document.getElementById('indOrderModal');
+  if (m) m.style.display = 'none';
+}
+
+function _indRenderOrderList() {
+  const el = document.getElementById('indOrderList');
+  if (!el) return;
+  const byOrder = {};
+  ((_indProgress && _indProgress.orders) || []).forEach(o => { byOrder[o.id] = o; });
+  el.innerHTML = _indOrderDraft.map((o, i) => {
+    const p = byOrder[o.id] || {};
+    return `<div class="ind-ord-row">`
+      + `<span class="ind-ord-pos">${i + 1}</span>`
+      + `<span class="ind-ord-nm"><b>${o.quantity}×</b> ${_esc(o.name)}`
+      + (p.label ? `<span class="ind-oc-for">${_esc(p.label)}</span>` : '') + `</span>`
+      + `<button class="ind-ord-btn" title="Move up" ${i === 0 ? 'disabled' : ''} onclick="indMoveOrder(${i}, -1)">▲</button>`
+      + `<button class="ind-ord-btn" title="Move down" ${i === _indOrderDraft.length - 1 ? 'disabled' : ''} onclick="indMoveOrder(${i}, 1)">▼</button>`
+      + `</div>`;
+  }).join('');
+}
+
+function indMoveOrder(i, d) {
+  const j = i + d;
+  if (j < 0 || j >= _indOrderDraft.length) return;
+  const a = _indOrderDraft;
+  [a[i], a[j]] = [a[j], a[i]];
+  _indRenderOrderList();
+}
+
+// Group identical products together. They're built as one shared batch regardless, so this is about
+// reading the queue, not about changing what gets built.
+function indGroupByProduct() {
+  const seen = [];
+  _indOrderDraft.forEach(o => { if (!seen.includes(o.product_type_id)) seen.push(o.product_type_id); });
+  _indOrderDraft.sort((a, b) =>
+    seen.indexOf(a.product_type_id) - seen.indexOf(b.product_type_id) || a.id - b.id);
+  _indRenderOrderList();
+}
+
+async function indSaveOrderOrder() {
+  const msg = document.getElementById('indOrderMsg');
+  if (msg) msg.textContent = 'Saving…';
+  try {
+    const r = await fetch('/api/industry/orders/reorder', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ order: _indOrderDraft.map(o => o.id) }),
+    });
+    if (!r.ok) { if (msg) msg.textContent = await _indErrText(r); return; }
+  } catch (e) { if (msg) msg.textContent = String(e); return; }
+  indCloseOrder();
+  await indRefreshStatus();     // order changes ranks, ETAs and first delivery
+}
+
+function _indErrText(r) {
+  return r.status === 404 || r.status === 405
+    ? 'Not available yet — a deploy may still be rolling out.'
+    : `Could not save (HTTP ${r.status})`;
+}
 
 // Edit in place rather than in a dialog: it's two fields, and re-planning the whole queue just to
 // show an edit form would be a needless several-second wait.
