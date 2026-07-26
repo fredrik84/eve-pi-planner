@@ -215,13 +215,17 @@ def _run_queue_plan(ctx: int, req: QueuePlanRequest) -> dict:
     ensure_industry_orders_table()
     con = get_connection()
     try:
+        # FIFO: oldest order first, so the scheduler's rank matches the order you took the work in.
+        # Without an explicit ORDER BY the row order is whatever the DB returns, which would make
+        # "first in line" arbitrary.
         orders = con.execute(
             "SELECT product_type_id, quantity FROM pp_industry_orders "
-            "WHERE context_id=? AND status='queued'", (ctx,),
+            "WHERE context_id=? AND status='queued' ORDER BY priority DESC, id", (ctx,),
         ).fetchall()
         if not orders:
             return {"targets": [], "empty": True}
-        # Combine duplicate products into one target quantity.
+        # Combine duplicate products into one target quantity — insertion order is preserved, so the
+        # first time a product appears fixes its place in line.
         combined: dict[int, int] = {}
         for o in orders:
             combined[o["product_type_id"]] = combined.get(o["product_type_id"], 0) + o["quantity"]

@@ -17,7 +17,7 @@ from app.industry.graph import (
     BuildParams, effective_material_qty, load_manufacturing_graph, load_reaction_graph,
     collect_reachable, build_plan, resolve_unit_costs,
 )
-from app.industry.schedule import (
+from app.industry.schedule import (order_ranks, 
     aggregate_demand, build_tasks, schedule, plan_queue, Task, _split_runs, _built_deps,
     _critical_priority,
 )
@@ -461,6 +461,57 @@ def test_install_assignment_spreads_and_respects_free_slots():
     check("reaction pool capacity respected (2+2)", rxu == 4)
 
 
+def test_fifo_wins_contested_slots():
+    """Slot starvation is the case that matters: with plenty of slots everything runs at once and
+    ordering is moot. Squeeze the pool to ONE slot and the first-queued order must finish first, and
+    must not be held behind later work — while later orders still use whatever is left over."""
+    print("test_fifo_wins_contested_slots")
+    con = _seed_con()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+    P = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0)
+    prices, adj = _prices(SELL), ADJ
+
+    # Two INDEPENDENT products (110 Cog shares no inputs with 101 Gadget) — dependency must not be
+    # what decides the order, otherwise the test proves nothing about FIFO.
+    con.execute("INSERT INTO types VALUES (110, 'Cog')")
+    con.execute("INSERT INTO blueprints VALUES (1002, 110, 1, 1800, 100)")
+    con.execute("INSERT INTO blueprint_materials VALUES (1002, 201, 5)")
+    con.commit()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+    names = dict(NAMES); names[110] = "Cog"
+    pr = _prices({**SELL, 110: 900.0}); ad = {**ADJ, 110: 900.0}
+
+    one_slot = {"manufacturing": 1, "reaction": 1}
+    first = plan_queue([(110, 1), (101, 1)], mfg, rx, pr, ad, P, names, one_slot)
+    tgt = {t["type_id"]: t for t in first["targets"]}
+    check("first-queued gets rank 0", tgt[110]["rank"] == 0)
+    check("second-queued gets rank 1", tgt[101]["rank"] == 1)
+    check("first-queued finishes no later than second",
+          tgt[110]["finish_hours"] <= tgt[101]["finish_hours"])
+    check("first_delivery == the first order's finish",
+          approx(first["metrics"]["first_delivery_hours"], tgt[110]["finish_hours"]))
+
+    # Reversing the queue reverses who wins the contested slot — proves rank drives it, not the
+    # products' own durations or the order they happen to appear in the graph.
+    rev = plan_queue([(101, 1), (110, 1)], mfg, rx, pr, ad, P, names, one_slot)
+    rtgt = {t["type_id"]: t for t in rev["targets"]}
+    check("reversing the queue reverses the ranks", rtgt[101]["rank"] == 0 and rtgt[110]["rank"] == 1)
+    check("the newly-first order now starts first",
+          rtgt[101]["finish_hours"] <= first["targets"][1]["finish_hours"])
+
+    # A shared component inherits the EARLIEST rank that needs it, so shared batches stay urgent.
+    ranks = order_ranks([(100, 1), (101, 1)], mfg, rx)
+    check("target 100 is rank 0", ranks[100] == 0)
+    check("component shared with the first order keeps rank 0", ranks.get(102) == 0)
+
+    # With slots to spare, both finish as fast as they would alone — FIFO must not serialise work.
+    roomy = plan_queue([(110, 1), (101, 1)], mfg, rx, pr, ad, P, names,
+                       {"manufacturing": 20, "reaction": 20})
+    solo = plan_queue([(101, 1)], mfg, rx, pr, ad, P, names, {"manufacturing": 20, "reaction": 20})
+    check("spare slots still run the later order in parallel",
+          roomy["metrics"]["makespan_hours"] <= solo["metrics"]["makespan_hours"] * 1.05)
+
+
 def main():
     test_material_formula()
     test_graph_loaders()
@@ -485,6 +536,7 @@ def main():
     test_stock_reduces_plan_but_never_the_target()
     test_marginal_threshold_scales_with_build_size()
     test_install_assignment_spreads_and_respects_free_slots()
+    test_fifo_wins_contested_slots()
     print(f"\nAll {_passed} checks passed.")
 
 

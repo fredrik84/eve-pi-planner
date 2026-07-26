@@ -277,6 +277,32 @@ def _critical_priority(agg: dict, deps: dict, mfg: dict, rx: dict, params: Build
     return {tid: crit(tid, frozenset()) for tid in deps}
 
 
+def order_ranks(targets: list[tuple[int, int]], mfg: dict, rx: dict) -> dict[int, int]:
+    """type_id -> rank of the EARLIEST queued order that needs it (0 = first in line).
+
+    Demand is aggregated by type, so a component shared by orders 1 and 3 is one batch; it inherits
+    rank 0 because order 1 is waiting on it. That's the point: shared work keeps the efficiency of a
+    single batch while still being scheduled as urgently as the earliest order that needs it.
+    """
+    rank: dict[int, int] = {}
+    for i, (tid, _qty) in enumerate(targets):
+        for t in collect_reachable(tid, mfg, rx):
+            if t not in rank or i < rank[t]:
+                rank[t] = i
+    return rank
+
+
+def _fifo_priority(crit: dict[int, float], rank: dict[int, int]) -> dict[int, tuple]:
+    """Scheduling priority: first-in-line WINS a contested slot, critical path breaks ties.
+
+    Critical path alone minimises total makespan but is order-blind — when slots are scarce a later
+    order's long chain can take the slot the first order's next stage was waiting for, which is
+    exactly backwards for someone filling customer orders. Ranking first means order 1 is never held
+    behind order 2, while order 2 still gets every slot order 1 isn't using.
+    """
+    return {tid: (-rank.get(tid, 0), crit.get(tid, 0.0)) for tid in crit}
+
+
 def schedule(tasks: list[Task], by_type: dict, deps: dict, pools: dict[str, int],
              priority: dict[int, float]) -> dict:
     """Event-driven resource-constrained list scheduler. Fills each pool's free slots with the
@@ -297,7 +323,7 @@ def schedule(tasks: list[Task], by_type: dict, deps: dict, pools: dict[str, int]
         ready = sorted(
             (t for t in tasks if t.task_id not in started
              and all(d in completed for d in deps.get(t.type_id, ()))),
-            key=lambda t: priority.get(t.type_id, 0.0), reverse=True,
+            key=lambda t: priority.get(t.type_id, (0, 0.0)), reverse=True,
         )
         started_any = False
         for t in ready:
@@ -348,6 +374,12 @@ def schedule(tasks: list[Task], by_type: dict, deps: dict, pools: dict[str, int]
 
 # ── Orchestrator + endpoint ───────────────────────────────────────────────────────────────────
 
+def _finish_of(tasks: list, type_id: int) -> float:
+    """Hours until the last job producing `type_id` completes — i.e. that order is deliverable."""
+    ends = [t.end for t in tasks if t.type_id == type_id and t.end is not None]
+    return round(max(ends) / 3600.0, 2) if ends else 0.0
+
+
 def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict, adjusted: dict,
                params: BuildParams, names: dict[int, str], pools: dict[str, int],
                on_hand: dict[int, float] | None = None) -> dict:
@@ -360,8 +392,9 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
     agg = aggregate_demand(targets, memo, mfg, rx, params, on_hand, pools)
     tasks, by_type = build_tasks(agg, mfg, rx, params, pools)
     deps = _built_deps(agg, mfg, rx)
-    priority = _critical_priority(agg, deps, mfg, rx, params)
-    sched = schedule(tasks, by_type, deps, pools, priority)
+    crit = _critical_priority(agg, deps, mfg, rx, params)
+    ranks = order_ranks(targets, mfg, rx)
+    sched = schedule(tasks, by_type, deps, pools, _fifo_priority(crit, ranks))
     for w in sched["waves"]:                       # enrich wave tasks with readable names
         for t in w["tasks"]:
             t["name"] = names.get(t["type_id"], str(t["type_id"]))
@@ -406,7 +439,9 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
     leftovers.sort(key=lambda r: r["value"], reverse=True)
     total_cost = materials_cost + job_cost
     return {
-        "targets": [{"type_id": t, "name": names.get(t, str(t)), "quantity": q} for t, q in targets],
+        "targets": [{"type_id": t, "name": names.get(t, str(t)), "quantity": q,
+                     "rank": i, "finish_hours": _finish_of(tasks, t)}
+                    for i, (t, q) in enumerate(targets)],
         # Per-type build requirements — what progress tracking compares real ESI jobs against.
         # Exposed from `agg` because it's the only place the shared-batch run count exists.
         "requirements": [
@@ -428,6 +463,9 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
             "job_count": len(tasks),
             "build_steps": len(by_type),      # distinct things to build (parallel splits collapsed)
             "makespan_hours": sched["makespan_hours"],
+            # When the FIRST queued order is done — the number that matters when you owe someone a
+            # delivery, as distinct from when the whole queue drains.
+            "first_delivery_hours": (_finish_of(tasks, targets[0][0]) if targets else 0.0),
             "slots": pools,
             # What the marginal rule actually resolved to for THIS build, so the UI can show the
             # consequence of the setting in ISK rather than a bare percentage.
