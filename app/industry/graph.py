@@ -505,6 +505,11 @@ def prepare_plan_inputs(ctx: int, targets: list[tuple[int, int]], opts: BuildOpt
     `missing_recipe_detail(type_id)` builds the 400 message, since the wording is caller-specific.
     """
     from app.industry.slots import _slot_pool     # local: avoids a graph↔slots import cycle
+    from app.industry.settings import apply_account_build_options
+
+    # Anything the caller didn't explicitly set comes from the account's saved build options, so a
+    # plan run without a browser (share link, checklist) matches what the user actually builds with.
+    opts = apply_account_build_options(ctx, opts)
 
     con = get_connection()
     try:

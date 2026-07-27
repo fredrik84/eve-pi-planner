@@ -17,8 +17,11 @@ async function onIndustryTabOpen() {
   // (they live in the shared Markets & Logistics settings). indPopulateFacility fills the facility
   // map with your structures, so we can tell from it whether a build structure exists yet.
   await indPopulateFacility();
+  _indRestoringSettings = true;
+  await _indApplySavedSettings();
   indRestoreMarginal();
   indRestoreForceBuild();
+  _indRestoringSettings = false;
   const hasStructure = Object.keys(_indFacilityMap).some(k => k.startsWith('s:'));
   indApplyGate(hasStructure);
   if (!hasStructure) return;
@@ -42,8 +45,10 @@ function indOpenPlanner() {
   const m = document.getElementById('indPlanModal');
   if (!m) return;
   m.style.display = '';
+  _indRestoringSettings = true;
   indRestoreMarginal();
   indRestoreForceBuild();
+  _indRestoringSettings = false;
   const s = document.getElementById('indSearch');
   if (s) setTimeout(() => s.focus(), 30);
 }
@@ -56,6 +61,29 @@ function indClosePlanner() {
 // The landing view: what's cooking, what's next, and the pipeline as the centrepiece.
 // Every whole-queue request must be planned with the SAME options — the checklist and the plan
 // disagreeing about what's ready was exactly the bug that came from two hand-maintained bodies.
+// The options are ALSO stored server-side. They shape every number, and a plan run on the user's
+// behalf without a browser — a customer's share link, the start-now checklist — has no other way to
+// know them; running those with library defaults is what made the share link quote an ETA days off
+// the builder's own screen.
+let _indSaveSettingsTimer = null;
+// True while the form is being seeded. Without this, restoring the controls counts as a change and
+// writes the browser's own state back over the account's — including when the read that should have
+// corrected it failed.
+let _indRestoringSettings = false;
+function _indSaveSettings() {
+  if (_indRestoringSettings) return;
+  clearTimeout(_indSaveSettingsTimer);
+  _indSaveSettingsTimer = setTimeout(() => {
+    const sel = document.getElementById('indFacility');
+    const f = _indFacilityBonus();
+    fetch('/api/industry/settings', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...f, prioritize_speed: _indPrioSpeed(), marginal_pct: _indMarginalPct(),
+                             force_build: _indForceBuild(), facility_id: sel ? sel.value : '' }),
+    }).catch(() => {});          // best-effort: the plan on screen already has these values
+  }, 600);
+}
+
 function _indQueueBody() {
   return { prioritize_speed: _indPrioSpeed(), marginal_pct: _indMarginalPct(),
            force_build: _indForceBuild(), me_te_overrides: _indMeTeMap(), ..._indFacilityBonus() };
@@ -527,6 +555,7 @@ function _indQty() {
 // plan, so it re-plans and re-costs like the other knobs. It used to do nothing at all until the next
 // Preview, which made unchecking it look broken.
 function indOnPrioSpeed() {
+  _indSaveSettings();
   if (!_indPicked) return;
   if (document.getElementById('indResult').innerHTML.trim()) indRunPlan();
   else _indLoadSweep(_indQty());
@@ -615,6 +644,7 @@ function _indForceBuild() {
 function indOnForceBuild() {
   const on = _indForceBuild();
   try { localStorage.setItem('indForceBuild', on ? '1' : '0'); } catch (e) {}
+  _indSaveSettings();
   // The savings slider and speed toggle have no effect while this is on — grey them out rather
   // than leaving controls that silently do nothing.
   ['indMarginal', 'indPrioSpeed'].forEach(id => {
@@ -626,6 +656,35 @@ function indOnForceBuild() {
   if (_indPicked && document.getElementById('indResult').innerHTML.trim()) indRunPlan();
   if (_indStatusVisible()) indRefreshStatus();
   _indRenderMarginalLive();
+}
+
+// Seed the controls from the account's stored options before the localStorage restore, so what the
+// form shows is what a share link or checklist will be planned with. Anything not stored falls
+// through to this browser's own last choice.
+async function _indApplySavedSettings() {
+  let d = null;
+  try {
+    const r = await fetch('/api/industry/settings');
+    if (!r.ok) return;
+    d = (await r.json()).settings || null;
+  } catch (e) { return; }
+  if (!d) return;
+  const set = (id, val) => { const el = document.getElementById(id); if (el && val != null) el.value = val; };
+  const check = (id, val) => { const el = document.getElementById(id); if (el && val != null) el.checked = !!val; };
+  const sel = document.getElementById('indFacility');
+  if (sel && d.facility_id && _indFacilityMap[d.facility_id]) {
+    sel.value = d.facility_id;
+    try { localStorage.setItem('indFacility', d.facility_id); } catch (e) {}
+  }
+  if (d.marginal_pct != null) {
+    set('indMarginal', d.marginal_pct);
+    try { localStorage.setItem('indMarginalPct', String(d.marginal_pct)); } catch (e) {}
+  }
+  if (d.force_build != null) {
+    check('indForceBuild', d.force_build);
+    try { localStorage.setItem('indForceBuild', d.force_build ? '1' : '0'); } catch (e) {}
+  }
+  check('indPrioSpeed', d.prioritize_speed);
 }
 
 function indRestoreForceBuild() {
@@ -652,6 +711,7 @@ function indOnMarginalInput() {
 }
 function indOnMarginalChange() {
   try { localStorage.setItem('indMarginalPct', String(_indMarginalPct())); } catch (e) {}
+  _indSaveSettings();
   indOnMarginalInput();
   if (_indPicked && document.getElementById('indResult').innerHTML.trim()) indRunPlan();
   if (_indStatusVisible()) indRefreshStatus();
@@ -843,6 +903,7 @@ function _indBuildingLabel(activity) {
 function indOnFacilityChange() {
   const sel = document.getElementById('indFacility');
   if (sel) { try { localStorage.setItem('indFacility', sel.value); } catch (e) {} }
+  _indSaveSettings();
   if (_indPicked && document.getElementById('indResult').innerHTML.trim()) indRunPlan();
   else _indLoadSweep(_indQty());   // no preview to replan — just re-cost the slider read-out
 }

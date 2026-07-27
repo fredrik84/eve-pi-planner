@@ -1360,6 +1360,53 @@ def test_the_checklist_and_the_plan_agree_on_what_is_ready():
     check("so the two settings disagree about what to start", ready_bought != ready_built)
 
 
+def test_saved_build_options_reach_plans_run_without_a_browser():
+    """Build options shape every number, and they used to live only in the browser. A plan run on the
+    user's behalf — a customer's share link, the start-now checklist — therefore ran with library
+    defaults: no facility time bonus, a 3% threshold that buys components the user builds. That's how
+    a share link came to quote 14d 4h against an 8d 8h plan. Stored per account and applied in
+    prepare_plan_inputs, which every plan path goes through; an explicitly-sent field still wins."""
+    print("test_saved_build_options_reach_plans_run_without_a_browser")
+    import inspect
+    from app.industry.graph import BuildOptions, prepare_plan_inputs
+    from app.industry import settings as ind_settings
+
+    check("the saved options are applied where every plan resolves its inputs",
+          "apply_account_build_options" in inspect.getsource(prepare_plan_inputs))
+
+    # An untouched request takes the account's values...
+    saved = {"struct_time_pct": 44.0, "struct_material_pct": 6.0, "marginal_pct": 0.5,
+             "prioritize_speed": 0, "force_build": 1}
+    real_get = ind_settings.get_settings
+    ind_settings.get_settings = lambda ctx: dict(saved)          # no DB needed for the merge rule
+    try:
+        merged = ind_settings.apply_account_build_options(1, BuildOptions())
+        check("a bare request inherits the facility bonus", merged.struct_time_pct == 44.0)
+        check("and the saving threshold", merged.marginal_pct == 0.5)
+        check("and the speed shortcut", merged.prioritize_speed is False)
+        check("and build-everything", merged.force_build is True)
+
+        # ...but anything the caller set explicitly is untouched, or the live UI could never tweak a knob
+        # without saving it first. A value EQUAL to the pydantic default must still count as explicit.
+        explicit = ind_settings.apply_account_build_options(
+            1, BuildOptions(marginal_pct=8.0, prioritize_speed=True, force_build=False))
+        check("an explicit threshold wins", explicit.marginal_pct == 8.0)
+        check("an explicit speed choice wins", explicit.prioritize_speed is True)
+        check("an explicit force_build wins even at the default value", explicit.force_build is False)
+        check("unset fields still come from the account", explicit.struct_time_pct == 44.0)
+
+        # The share link plans with a bare BuildOptions apart from its own three fields, so it picks the
+        # account's options up the same way — that's the fix for the ETA mismatch.
+        from app.industry.shares import _order_plan
+        src = inspect.getsource(_order_plan)
+        check("the share sets only what is specific to the order",
+              "use_stock=False" in src and "force_build_ids=force_ids" in src
+              and "struct_time_pct" not in src)
+
+    finally:
+        ind_settings.get_settings = real_get
+
+
 def main():
     test_material_formula()
     test_graph_loaders()
@@ -1393,6 +1440,7 @@ def main():
     test_blueprint_me_te_comes_from_the_copy_you_would_buy()
     test_every_stage_gets_a_character_not_just_the_first()
     test_the_checklist_and_the_plan_agree_on_what_is_ready()
+    test_saved_build_options_reach_plans_run_without_a_browser()
     test_install_assignment_spreads_and_respects_free_slots()
     test_fifo_wins_contested_slots()
     test_missing_blueprints_are_reported()

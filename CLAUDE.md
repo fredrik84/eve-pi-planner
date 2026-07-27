@@ -683,6 +683,18 @@ order (`pp_industry_orders.me_te_overrides`), unioned across the queue exactly l
 A build buying several copies of MIXED research is approximated by the one representative value —
 that's what the per-product override is for.
 
+**Build options are stored per account** (`app/industry/settings.py`, `pp_industry_settings`) and
+applied in `prepare_plan_inputs` — the single point every plan path resolves through. They used to
+live only in the browser and travel as request fields, so any plan run WITHOUT a browser used library
+defaults (no facility time bonus, 3% threshold) and disagreed with what the user was looking at: the
+same bug produced the checklist naming a job the plan scheduled last, and a customer share link
+quoting 14d 4h against an 8d 8h plan. `apply_account_build_options(ctx, opts)` fills only fields the
+caller did NOT explicitly set — keyed on pydantic's `model_fields_set`, because a default and a
+deliberate value are otherwise indistinguishable and the live UI must still be able to tweak a knob
+without saving first. The frontend PUTs `/api/industry/settings` (debounced) whenever a knob moves and
+seeds the form from it on load, guarded by `_indRestoringSettings` so restoring controls never writes
+the browser's state back over the account's.
+
 **One set of build options for the whole queue.** `/api/industry/to-install` is a **POST** taking the
 same `QueuePlanRequest` as `/api/industry/queue-plan`, and the frontend builds both bodies from one
 `_indQueueBody()`. This is not tidiness: the checklist used to plan with DEFAULTS while the status
