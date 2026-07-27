@@ -1076,6 +1076,8 @@ function _indMeTeChip(typeId) {
 
 function _indJobChips(g) {
   return g.map(x => `<span class="ind-wave-job">${_esc(x.name)} ×${x.runs}${x.activity === 'reaction' ? ' rx' : ''} · ${_fmtHours(x.dur)}`
+    + ((x.who && x.who.length)
+        ? `<span class="ind-wave-who" title="Install this on ${_esc(x.who.join(', '))}">on ${_esc(x.who.join(', '))}</span>` : '')
     + _indMeTeChip(x.type_id) + `</span>`).join('');
 }
 
@@ -1142,9 +1144,12 @@ function _indStepsHtml(d, model) {
       s.runs += t.runs;
       s.start = Math.min(s.start, w.start_hours);
       s.batches.add(w.start_hours);
-      const g = s.by[t.type_id] || (s.by[t.type_id] = { name: t.name || _indName(t.type_id), runs: 0, activity: t.activity, dur: 0 });
+      const g = s.by[t.type_id] || (s.by[t.type_id] = { name: t.name || _indName(t.type_id), runs: 0, activity: t.activity, dur: 0, who: [], type_id: t.type_id });
       g.runs += t.runs;
       g.dur = Math.max(g.dur, t.duration_hours);
+      // Who installs it. A type's runs can be split across several toons' slots, so collect them
+      // all — "who do I log in as" is the question every stage after the first left unanswered.
+      if (t.character_name && !g.who.includes(t.character_name)) g.who.push(t.character_name);
     });
   });
   const stages = Object.values(byStage).sort((a, b) => a.start - b.start);

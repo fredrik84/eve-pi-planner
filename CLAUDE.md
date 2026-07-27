@@ -683,6 +683,19 @@ order (`pp_industry_orders.me_te_overrides`), unioned across the queue exactly l
 A build buying several copies of MIXED research is approximated by the one representative value —
 that's what the per-product override is for.
 
+**Who installs each job, at every stage.** `/api/industry/to-install` names a character for the jobs
+you can start *right now* (off FREE slots). Everything after that used to be anonymous — a plan said
+"stage 1: 12 jobs" and never said who runs them. `schedule.assign_characters(waves, characters)`
+(pure, I/O-free like the rest of that module) now stamps `character_id`/`character_name` on every
+scheduled job: it walks the waves in time order, releases a character's slot when that job ends, and
+gives each job to whoever has the most capacity free (which spreads work instead of hammering one
+toon). Safe by construction — the scheduler's pool sizes are the sum of the characters' own slots and
+slots are interchangeable, so an aggregate-feasible schedule is always assignable; a job with no
+capacity is left unassigned rather than given a fictional owner. Called by both plan paths
+(`/api/industry/plan` and `_run_queue_plan`) with `_slot_pool(ctx)["characters"]`. Note this uses
+TOTAL slots (the schedule spans days, busy slots free up) while to-install deliberately uses free
+ones.
+
 **Customer build-status links** (`app/industry/shares.py`, `industry_share` flag). A builder mints a
 login-free link per queued order (`POST /api/industry/orders/{id}/share`, idempotent; DELETE
 revokes) that the customer opens at **`/b/{share_id}`** — product, quantity, stage list, progress bar

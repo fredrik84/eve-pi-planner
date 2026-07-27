@@ -336,6 +336,11 @@ def _run_queue_plan(ctx: int, req: QueuePlanRequest) -> dict:
     res["trees"] = [build_plan(t, q, inp.mfg, inp.rx, inp.prices, inp.adjusted, inp.params,
                                inp.names)["tree"]
                     for t, q in targets]
+    # Who installs what, across the whole schedule. to-install still answers "right now" off the
+    # FREE slots; this answers "and then who does the rest", which every later stage lacked.
+    from app.industry.schedule import assign_characters
+    from app.industry.slots import _slot_pool
+    assign_characters(res["schedule"]["waves"], _slot_pool(ctx).get("characters") or [])
     return res
 
 

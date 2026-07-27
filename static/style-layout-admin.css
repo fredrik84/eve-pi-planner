@@ -909,6 +909,8 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-share-x { background: none; border: 0; color: var(--clr-text-soft); cursor: pointer; font-size: 12px; }
 /* ME/TE a build step was costed at — colour-coded by where the number came from, since "assumed
    from a contract copy" and "your own researched print" are very different confidence levels. */
+.ind-wave-who { font-size: 10px; margin-left: 6px; padding: 0 6px; border-radius: 8px;
+  background: #16202c; color: #8fb4d8; border: 1px solid #24344a; }
 .ind-mete { font-size: 10px; margin-left: 6px; padding: 0 6px; border-radius: 8px; cursor: pointer;
   background: #1a2030; color: var(--clr-text-soft); border: 1px solid #262d3d; }
 .ind-mete:hover { border-color: #3a4460; }

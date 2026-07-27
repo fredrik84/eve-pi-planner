@@ -1270,6 +1270,62 @@ def test_blueprint_me_te_comes_from_the_copy_you_would_buy():
           all(q["me_source"] == "reaction" for q in r1["requirements"] if q["activity"] == "reaction"))
 
 
+def test_every_stage_gets_a_character_not_just_the_first():
+    """The to-install checklist named a character for the jobs you can start NOW; every later stage
+    was anonymous, so a plan said "stage 1: 12 jobs" without ever saying who installs them. Slots are
+    interchangeable and the pools are the sum of the characters' own slots, so an aggregate-feasible
+    schedule is always assignable — walk the waves, release a slot when its job ends, hand each job
+    to whoever has the most capacity free."""
+    print("test_every_stage_gets_a_character_not_just_the_first")
+    from app.industry.schedule import assign_characters
+
+    chars = [{"character_id": 1, "character_name": "Alpha", "manufacturing_slots": 2, "reaction_slots": 0},
+             {"character_id": 2, "character_name": "Beta", "manufacturing_slots": 1, "reaction_slots": 2}]
+    waves = [
+        {"start_hours": 0.0, "tasks": [
+            {"type_id": 10, "activity": "manufacturing", "runs": 1, "duration_hours": 5.0},
+            {"type_id": 11, "activity": "manufacturing", "runs": 1, "duration_hours": 5.0},
+            {"type_id": 12, "activity": "manufacturing", "runs": 1, "duration_hours": 5.0},
+            {"type_id": 13, "activity": "reaction", "runs": 1, "duration_hours": 2.0}]},
+        {"start_hours": 6.0, "tasks": [
+            {"type_id": 20, "activity": "manufacturing", "runs": 1, "duration_hours": 3.0}]},
+    ]
+    assign_characters(waves, chars)
+    first = waves[0]["tasks"]
+    check("every job in the first wave has a character",
+          all(t["character_id"] is not None for t in first))
+    check("a later stage is assigned too", waves[1]["tasks"][0]["character_id"] is not None)
+    check("names come along for the UI", waves[1]["tasks"][0]["character_name"] in ("Alpha", "Beta"))
+    # 3 manufacturing jobs across 2+1 slots: nobody may be double-booked beyond their slot count.
+    mfg_load = {}
+    for t in first:
+        if t["activity"] == "manufacturing":
+            mfg_load[t["character_id"]] = mfg_load.get(t["character_id"], 0) + 1
+    check("Alpha is not given more than her 2 slots", mfg_load.get(1, 0) <= 2)
+    check("Beta is not given more than his 1 slot", mfg_load.get(2, 0) <= 1)
+    check("the reaction job went to the only reaction pilot",
+          [t for t in first if t["activity"] == "reaction"][0]["character_id"] == 2)
+
+    # Capacity is RELEASED: the 5h jobs are done by hour 6, so the later job reuses a slot.
+    check("a finished job frees its slot", waves[1]["tasks"][0]["character_id"] in (1, 2))
+
+    # More jobs than slots at one instant → the extra is left unassigned rather than invented.
+    tight = [{"start_hours": 0.0, "tasks": [
+        {"type_id": i, "activity": "manufacturing", "runs": 1, "duration_hours": 9.0} for i in range(5)]}]
+    assign_characters(tight, chars)
+    assigned = [t for t in tight[0]["tasks"] if t["character_id"] is not None]
+    check("assignment never exceeds real capacity", len(assigned) == 3)
+    check("the overflow is honest about having no slot",
+          all(t["character_name"] is None for t in tight[0]["tasks"] if t["character_id"] is None))
+
+    # No character data at all → nothing invented, and no crash.
+    plain = [{"start_hours": 0.0, "tasks": [{"type_id": 1, "activity": "manufacturing", "runs": 1,
+                                             "duration_hours": 1.0}]}]
+    assign_characters(plain, [])
+    check("no characters means no assignment, not a guess",
+          "character_id" not in plain[0]["tasks"][0])
+
+
 def main():
     test_material_formula()
     test_graph_loaders()
@@ -1301,6 +1357,7 @@ def main():
     test_order_overrides_persist_and_apply_to_the_queue()
     test_customer_build_status_leaks_nothing()
     test_blueprint_me_te_comes_from_the_copy_you_would_buy()
+    test_every_stage_gets_a_character_not_just_the_first()
     test_install_assignment_spreads_and_respects_free_slots()
     test_fifo_wins_contested_slots()
     test_missing_blueprints_are_reported()

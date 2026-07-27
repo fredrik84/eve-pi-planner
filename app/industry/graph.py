@@ -623,6 +623,10 @@ def industry_plan(req: IndustryPlanRequest, ctx: int = Depends(require_context))
                         "name": inp.names.get(req.type_id, str(req.type_id))}
     result["tree"] = build_plan(req.type_id, req.quantity, inp.mfg, inp.rx, inp.prices,
                                 inp.adjusted, inp.params, inp.names)["tree"]
+    # Name who installs each job, for every stage — not just the ones startable right now.
+    from app.industry.schedule import assign_characters
+    from app.industry.slots import _slot_pool
+    assign_characters(result["schedule"]["waves"], _slot_pool(ctx).get("characters") or [])
     return result
 
 

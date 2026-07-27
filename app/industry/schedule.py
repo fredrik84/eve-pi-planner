@@ -519,6 +519,66 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
 
 
 
+def assign_characters(waves: list[dict], characters: list[dict]) -> list[dict]:
+    """Stamp `character_id` / `character_name` onto every scheduled job, across the WHOLE schedule.
+
+    The to-install checklist already named a character for the jobs you can start right now, but
+    everything after that was anonymous: a plan would say "stage 1: 12 jobs" and never say who
+    installs them, which is not an instruction anyone can follow.
+
+    The scheduler places jobs into two anonymous slot pools whose sizes are the sum of the
+    characters' own slots, so an aggregate-feasible schedule is always assignable per character —
+    slots are interchangeable. This walks the waves in time order, releasing a character's slot when
+    that job ends, and gives each job to whoever has the most capacity free at that moment (which
+    spreads the work rather than hammering one toon).
+
+    Pure and I/O-free like everything else here: the caller supplies the characters. Jobs stay
+    unassigned when there's no capacity or no character data, rather than inventing an assignee.
+    """
+    cap: dict[tuple[int, str], int] = {}
+    names: dict[int, str] = {}
+    for c in characters or []:
+        cid = c.get("character_id")
+        if cid is None:
+            continue
+        names[cid] = c.get("character_name") or str(cid)
+        for act, key in (("manufacturing", "manufacturing_slots"), ("reaction", "reaction_slots")):
+            cap[(cid, act)] = max(0, int(c.get(key) or 0))
+    if not cap:
+        return waves
+
+    free = dict(cap)
+    releases: list[tuple[float, int, str]] = []      # (end_hours, character_id, activity)
+    for w in waves:
+        start = w.get("start_hours") or 0.0
+        # Hand back every slot whose job has finished by the time this wave starts.
+        still = []
+        for end, cid, act in releases:
+            if end <= start + 1e-9:
+                free[(cid, act)] = free.get((cid, act), 0) + 1
+            else:
+                still.append((end, cid, act))
+        releases = still
+        for t in w.get("tasks", []):
+            act = t.get("activity")
+            best, best_free = None, 0
+            for (cid, a), n in free.items():
+                if a != act or n <= 0:
+                    continue
+                # Most free capacity wins; character_id breaks ties so the result is deterministic.
+                if n > best_free or (n == best_free and best is not None and cid < best):
+                    best, best_free = cid, n
+            if best is None:
+                t["character_id"] = None
+                t["character_name"] = None
+                continue
+            free[(best, act)] -= 1
+            releases.append((start + (t.get("duration_hours") or 0.0), best, act))
+            t["character_id"] = best
+            t["character_name"] = names.get(best)
+    return waves
+
+
 # Slider stops the UI offers for the marginal-saving knob (0–10% in 0.5 steps).
 MARGINAL_SWEEP_PCTS = [round(i * 0.5, 1) for i in range(21)]
 
