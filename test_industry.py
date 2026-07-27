@@ -1417,6 +1417,14 @@ def test_saved_build_options_reach_plans_run_without_a_browser():
         check("an explicit force_build wins even at the default value", explicit.force_build is False)
         check("unset fields still come from the account", explicit.struct_time_pct == 44.0)
 
+        # A row that was never written must read as "no opinion", not as a row of zeros — zeros
+        # would look like a deliberate "no facility bonus, threshold 0" and be applied as such.
+        ind_settings.get_settings = lambda ctx: {}
+        untouched = ind_settings.apply_account_build_options(1, BuildOptions())
+        check("no saved row leaves the request exactly as it was",
+              untouched.struct_time_pct == 0.0 and untouched.marginal_pct is None)
+        ind_settings.get_settings = lambda ctx: dict(saved)
+
         # The share link plans with a bare BuildOptions apart from its own three fields, so it picks the
         # account's options up the same way — that's the fix for the ETA mismatch.
         from app.industry.shares import _order_plan

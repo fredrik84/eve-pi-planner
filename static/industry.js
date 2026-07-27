@@ -22,6 +22,11 @@ async function onIndustryTabOpen() {
   indRestoreMarginal();
   indRestoreForceBuild();
   _indRestoringSettings = false;
+  // Nothing has ever saved these — seed the account from what this browser has been using. Without
+  // it, a plan run on the user's behalf (a customer's share link, the checklist) keeps using library
+  // defaults until they happen to touch a knob, which is not a step anyone knows to take: the share
+  // quietly quoted 14d 4h off an un-bonused, buy-everything plan against an 8d 8h build.
+  if (!_indHasSavedSettings) _indSaveSettings();
   const hasStructure = Object.keys(_indFacilityMap).some(k => k.startsWith('s:'));
   indApplyGate(hasStructure);
   if (!hasStructure) return;
@@ -668,6 +673,7 @@ function indOnForceBuild() {
 // Seed the controls from the account's stored options before the localStorage restore, so what the
 // form shows is what a share link or checklist will be planned with. Anything not stored falls
 // through to this browser's own last choice.
+let _indHasSavedSettings = false;
 async function _indApplySavedSettings() {
   let d = null;
   try {
@@ -675,7 +681,8 @@ async function _indApplySavedSettings() {
     if (!r.ok) return;
     d = (await r.json()).settings || null;
   } catch (e) { return; }
-  if (!d) return;
+  _indHasSavedSettings = !!(d && d.updated_at);
+  if (!d || !d.updated_at) return;
   const set = (id, val) => { const el = document.getElementById(id); if (el && val != null) el.value = val; };
   const check = (id, val) => { const el = document.getElementById(id); if (el && val != null) el.checked = !!val; };
   const sel = document.getElementById('indFacility');
