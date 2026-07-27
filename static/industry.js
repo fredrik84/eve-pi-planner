@@ -1873,11 +1873,28 @@ function indEditOrder(id) {
     // That leaves editing it here as the only way to change one, so here it is.
     + `<span class="ind-oc-margin"><input type="number" min="0" max="100" step="0.5" class="ind-oc-mrg" `
     + `id="oce-mrg-${id}" value="${o.margin_pct != null ? o.margin_pct : _indMarginPct()}" `
-    + `title="Margin over net cost for this customer's quote">%</span>`
+    + `onwheel="indWheelStep(event, this)" `
+    + `title="Margin over net cost for this customer's quote — scroll to adjust">%</span>`
     + `<button class="ind-oc-ok" onclick="indSaveOrder(${id})">Save</button>`
     + `<button class="ind-oc-cancel" onclick="indRefreshStatus()">Cancel</button>`;
   const q = document.getElementById('oce-lbl-' + id);
   if (q) q.focus();
+}
+
+// A number input only responds to the wheel while focused, which nobody discovers, and the margin is
+// a nudge-until-it-looks-right number. Swallowing the scroll matters as much as stepping the value:
+// without preventDefault the card scrolls out from under the cursor mid-adjustment. Rounding to the
+// step keeps 12.5 + 0.5 from landing on 12.999999999999998.
+function indWheelStep(ev, el) {
+  ev.preventDefault();
+  const step = parseFloat(el.step) || 1;
+  const min = el.min === '' ? -Infinity : parseFloat(el.min);
+  const max = el.max === '' ? Infinity : parseFloat(el.max);
+  const cur = parseFloat(el.value);
+  const base = isNaN(cur) ? (isFinite(min) ? min : 0) : cur;
+  const next = base + (ev.deltaY < 0 ? step : -step);
+  el.value = Math.min(max, Math.max(min, Math.round(next / step) * step));
+  el.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
 async function indSaveOrder(id) {
