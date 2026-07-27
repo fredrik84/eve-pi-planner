@@ -134,24 +134,10 @@ function _indStatusHeadline(d) {
   const sim = p && p.simulated
     ? '<div class="ind-sim-banner">Preview mode — this progress is made up so you can see the layout. Nothing here is real.</div>' : '';
   const t = (p && p.totals) || null;
+  // Order is the point of this row: when it lands, then what it costs, then how far along it is.
+  // Time first because that's the question someone opening the page is actually asking; the two
+  // job counters go last — they're detail behind the headline percentage, not headlines themselves.
   const tiles = [];
-  if (t && t.required) {
-    tiles.push(['Progress', `${p.pct}%`, `${t.done} of ${t.required} jobs delivered`]);
-    tiles.push(['In the cooker', String(t.running), 'Jobs running right now']);
-    tiles.push(['Still to start', String(t.waiting), 'Jobs not started yet']);
-  }
-  const m = d.metrics || {};
-  if (m.total_cost != null) {
-    if (m.net_cost != null && (m.leftover_value || 0) > 0.5) {
-      tiles.push(['Net cost', fmtIsk(m.net_cost),
-                  'Cost of the finished units, after crediting back reusable leftovers']);
-      tiles.push(['Total spend', fmtIsk(m.total_cost), 'Everything this build costs you up front']);
-    } else {
-      tiles.push(['Total cost', fmtIsk(m.total_cost), 'Materials + job fees + any blueprint copies']);
-    }
-    tiles.push(['Materials', fmtIsk(m.materials_cost), 'What the shopping list comes to']);
-    tiles.push(['Job fees', fmtIsk(m.job_cost), 'Installation fees across every job in the plan']);
-  }
   const fd = d.metrics.first_delivery_hours;
   // Two different questions: when can I hand over the first order, vs when am I finished entirely.
   // Only worth splitting when they actually differ.
@@ -160,6 +146,27 @@ function _indStatusHeadline(d) {
     tiles.push(['Whole queue', _fmtHours(d.metrics.makespan_hours), 'When everything queued is finished']);
   } else {
     tiles.push(['Time left', _fmtHours(d.metrics.makespan_hours), 'Wall-clock for what remains, jobs in parallel']);
+  }
+  const m = d.metrics || {};
+  if (m.total_cost != null) {
+    // Net cost leads: what the finished units actually cost you once reusable leftovers are credited
+    // back. Total spend is the cash-out-of-pocket figure and sits after its parts.
+    if (m.net_cost != null && (m.leftover_value || 0) > 0.5) {
+      tiles.push(['Net cost', fmtIsk(m.net_cost),
+                  'Cost of the finished units, after crediting back reusable leftovers']);
+      tiles.push(['Materials', fmtIsk(m.materials_cost), 'What the shopping list comes to']);
+      tiles.push(['Total spend', fmtIsk(m.total_cost), 'Everything this build costs you up front']);
+      tiles.push(['Job fees', fmtIsk(m.job_cost), 'Installation fees across every job in the plan']);
+    } else {
+      tiles.push(['Total cost', fmtIsk(m.total_cost), 'Materials + job fees + any blueprint copies']);
+      tiles.push(['Materials', fmtIsk(m.materials_cost), 'What the shopping list comes to']);
+      tiles.push(['Job fees', fmtIsk(m.job_cost), 'Installation fees across every job in the plan']);
+    }
+  }
+  if (t && t.required) {
+    tiles.push(['Progress', `${p.pct}%`, `${t.done} of ${t.required} jobs delivered`]);
+    tiles.push(['In the cooker', String(t.running), 'Jobs running right now']);
+    tiles.push(['Still to start', String(t.waiting), 'Jobs not started yet']);
   }
   const byOrder = {};
   ((p && p.orders) || []).forEach(o => { byOrder[o.id] = o; });

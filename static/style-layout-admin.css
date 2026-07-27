@@ -1136,6 +1136,15 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-do-count { font-size: 11px; color: var(--clr-accent); }
 .ind-do-slots { display: flex; gap: 10px; flex-wrap: wrap; margin: 7px 0 8px; }
 .ind-slotset { display: inline-flex; gap: 3px; align-items: center; }
+/* Four tiles a row, max. The shared .an-stats is a free-wrapping flex row, which on a wide screen
+   strung seven or eight metrics into one long line nobody scans — a grid caps it and keeps the
+   tiles a consistent width instead of stretching the last one across the gap. */
+#indStatusBody .an-stats, #indResult .an-stats {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px;
+}
+@media (min-width: 761px) {
+  #indStatusBody .an-stats, #indResult .an-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
 .ind-do-slots { display: flex; flex-direction: column; gap: 3px; }
 .ind-slotrow { display: flex; align-items: center; gap: 8px; font-size: 10px; }
 .ind-slotlbl { width: 58px; flex: none; text-transform: uppercase; letter-spacing: .04em;
