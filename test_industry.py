@@ -35,6 +35,10 @@ ADJ = {200: 100.0, 201: 50.0, 202: 20.0, 101: 1000.0, 102: 500.0, 100: 90000.0}
 
 
 def _seed_con() -> sqlite3.Connection:
+    # The recipe graphs are cached per process now, so a test seeding its own synthetic SDE must
+    # drop that cache or it silently plans against whatever the previous test loaded.
+    from app.industry.graph import clear_graph_cache
+    clear_graph_cache()
     con = sqlite3.connect(":memory:")
     con.row_factory = sqlite3.Row
     con.executescript(

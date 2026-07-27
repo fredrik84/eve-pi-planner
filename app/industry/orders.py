@@ -347,8 +347,16 @@ def _run_queue_plan(ctx: int, req: QueuePlanRequest) -> dict:
 @router.post("/api/industry/queue-plan")
 def queue_plan(req: QueuePlanRequest, ctx: int = Depends(require_context)):
     """Aggregate demand across ALL of the account's queued build orders and schedule them together
-    against the account's slot pool — the honest, shared-batch plan for the whole queue."""
-    return _run_queue_plan(ctx, req)
+    against the account's slot pool — the honest, shared-batch plan for the whole queue.
+
+    Carries the start-now checklist inline (`install`), because it is a view OF THIS PLAN: the page
+    was fetching it separately, which planned the entire queue a second time to answer a question the
+    plan it already had could answer.
+    """
+    res = _run_queue_plan(ctx, req)
+    if not res.get("empty"):
+        res["install"] = install_block(ctx, res)
+    return res
 
 
 @router.post("/api/industry/to-install")
@@ -366,6 +374,16 @@ def to_install(req: QueuePlanRequest | None = None, ctx: int = Depends(require_c
     res = _run_queue_plan(ctx, req or QueuePlanRequest())
     if res.get("empty"):
         return {"empty": True}
+    return install_block(ctx, res)
+
+
+def install_block(ctx: int, res: dict) -> dict:
+    """The checklist, derived from an ALREADY-PLANNED queue.
+
+    Split out so the plan endpoint can return it inline: the page used to POST the plan and then POST
+    to-install, which planned the whole queue a second time — the single most expensive thing the
+    manufacturing page did, for an answer it had just been given.
+    """
     from app.industry.slots import _slot_pool
     pool = _slot_pool(ctx)
     free = {"manufacturing": pool["manufacturing_free"], "reaction": pool["reaction_free"]}

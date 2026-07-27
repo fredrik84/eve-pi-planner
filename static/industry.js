@@ -31,7 +31,7 @@ async function onIndustryTabOpen() {
   indApplyGate(hasStructure);
   if (!hasStructure) return;
 
-  indLoadSetupSummary();
+  indLoadSetupSummary();     // fire-and-forget: independent of the build status below
   indLoadLifetime();
   // If something is already cooking, that's what you came to look at — show the live build first
   // and fold the planner away. With an empty queue there's nothing to check, so lead with planning.
@@ -113,12 +113,14 @@ async function indRefreshStatus() {
   card.style.display = '';
   if (empty) empty.style.display = 'none';
   body.innerHTML = _indLoadingHtml('Checking your build…', 'Pulling job status and re-planning what is left.');
-  await indLoadProgress();
+  // Progress and the plan are independent server-side, and each is a second or more against a
+  // capital build — running them one after the other doubled the wait for no reason.
+  const planReq = fetch('/api/industry/queue-plan', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(_indQueueBody()),
+  });
   try {
-    const r = await fetch('/api/industry/queue-plan', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(_indQueueBody()),
-    });
+    const [, r] = await Promise.all([indLoadProgress(), planReq]);
     if (!r.ok) { body.innerHTML = '<p class="pp-warn">Could not plan your queue.</p>'; return; }
     const d = await r.json();
     if (d.empty) { card.style.display = 'none'; if (empty) empty.style.display = ''; return; }
@@ -128,7 +130,7 @@ async function indRefreshStatus() {
       + `<div id="indInstall" class="ind-install"></div>`
       + _indRenderPlanBody(d)
       + `<div id="indRunning" class="ind-install"></div>`;
-    indLoadInstall();          // "do this now" sits directly under the numbers
+    indRenderInstall(d.install);   // "do this now" — comes with the plan, no second round trip
     indLoadRunning();          // what's already cooking goes under the pipeline
   } catch (e) { body.innerHTML = `<p class="pp-warn">${_esc(String(e))}</p>`; }
 }
@@ -1591,7 +1593,6 @@ async function indAddToQueue() {
     if (lb) lb.value = '';          // don't inherit the last customer on the next order
     indClosePlanner();
     await indLoadQueue();
-    indLoadInstall();
     await indRefreshStatus();     // adding re-plans the whole queue together — the reason to queue
   } catch (e) { alert(String(e)); }
 }
@@ -1815,7 +1816,6 @@ async function indSaveOrder(id) {
 async function indRemoveOrder(id) {
   try { await fetch('/api/industry/orders/' + id, { method: 'DELETE' }); } catch (e) {}
   await indLoadQueue();
-  indLoadInstall();
   await indRefreshStatus();
 }
 
@@ -1887,16 +1887,13 @@ function _indSlotPips(used, free, assigned, cls) {
   return out || '<span class="ind-pip-none">no slots</span>';
 }
 
-async function indLoadInstall() {
+// `d` is the install block from the plan response. It's passed in rather than fetched: asking the
+// server for it meant re-planning the whole queue, which was the slowest thing on the page.
+function indRenderInstall(d) {
   const el = document.getElementById('indInstall');
   if (!el) return;
   try {
-    const r = await fetch('/api/industry/to-install', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(_indQueueBody()),
-    });
-    if (!r.ok) { el.innerHTML = ''; return; }
-    const d = await r.json();
+    if (!d) { el.innerHTML = ''; return; }
     if (d.empty || !d.ready || !d.ready.length) { el.innerHTML = ''; return; }
 
     const doers = (d.characters || []).filter(c => c.assigned > 0);

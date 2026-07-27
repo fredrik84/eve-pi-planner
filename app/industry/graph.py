@@ -101,7 +101,42 @@ class BuildParams:
 
 # ── SDE recipe graph loaders ──────────────────────────────────────────────────────────────────
 
+# The two recipe graphs are STATIC SDE data — ~4,800 blueprints and every material row — and they
+# were rebuilt from scratch on every plan call: 68ms locally, more against Postgres, and the
+# manufacturing page runs several plans per load. They're read-only to every consumer (verified: no
+# caller mutates a recipe), so one process-level copy serves all of them. The TTL is only a backstop
+# for an SDE rebuild under a long-lived process; a deploy restarts the pod anyway.
+_GRAPH_CACHE: dict[str, tuple[float, dict]] = {}
+_GRAPH_TTL = 900.0
+
+
+def _cached_graph(key: str, con, loader) -> dict[int, dict]:
+    import time as _t
+    hit = _GRAPH_CACHE.get(key)
+    now = _t.time()
+    if hit and now - hit[0] < _GRAPH_TTL:
+        return hit[1]
+    graph = loader(con)
+    _GRAPH_CACHE[key] = (now, graph)
+    return graph
+
+
+def clear_graph_cache():
+    """Drop the cached recipe graphs — for an SDE rebuild that has to take effect immediately."""
+    _GRAPH_CACHE.clear()
+
+
 def load_manufacturing_graph(con) -> dict[int, dict]:
+    """Cached wrapper — see `_cached_graph`. `_load_manufacturing_graph` does the real work."""
+    return _cached_graph("mfg", con, _load_manufacturing_graph)
+
+
+def load_reaction_graph(con) -> dict[int, dict]:
+    """Cached wrapper — see `_cached_graph`."""
+    return _cached_graph("rx", con, _load_reaction_graph)
+
+
+def _load_manufacturing_graph(con) -> dict[int, dict]:
     """product_type_id -> {blueprint_type_id, output_qty, base_time, max_runs, inputs}. If a
     product is (rarely) made by more than one blueprint, keep the lowest blueprint id so the graph
     is deterministic."""
@@ -126,7 +161,7 @@ def load_manufacturing_graph(con) -> dict[int, dict]:
     return graph
 
 
-def load_reaction_graph(con) -> dict[int, dict]:
+def _load_reaction_graph(con) -> dict[int, dict]:
     """product_type_id -> {reaction_id, output_qty, base_time, inputs}. Same tables app/reactions
     reads; loaded directly here (no cross-package import) to keep the make-or-buy core standalone.
     First formula wins on the rare double-output product."""

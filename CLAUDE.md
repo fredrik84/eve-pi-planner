@@ -683,6 +683,23 @@ order (`pp_industry_orders.me_te_overrides`), unioned across the queue exactly l
 A build buying several copies of MIXED research is approximated by the one representative value —
 that's what the per-product override is for.
 
+**Industry performance.** Two things dominated page and share-link load, both measured before
+changing anything:
+* The **recipe graphs are cached per process** (`graph._cached_graph`, 15-min TTL, `clear_graph_cache()`
+  to drop it). `load_manufacturing_graph` reads ~4,800 blueprints and every material row — 68ms
+  locally, more against Postgres — and it ran on EVERY plan call, several per page. Every consumer is
+  read-only (no caller mutates a recipe), so one copy serves them all. The TTL is a backstop for an
+  SDE rebuild under a long-lived process; a deploy restarts the pod anyway. **Tests that seed their
+  own synthetic SDE must call `clear_graph_cache()`** — `test_industry._seed_con` does.
+* The page ran **three full queue plans** per load (queue-plan, to-install, progress). The checklist
+  is a view of the plan, not a separate question, so `/api/industry/queue-plan` returns it inline as
+  `install` (built by the shared `orders.install_block(ctx, res)`, which `/api/industry/to-install`
+  also uses); the frontend renders from that instead of a second POST. Progress and the plan are
+  independent, so they now run concurrently (`Promise.all`).
+Measured on a Revelation: share link 706ms cold-process → **47ms** warm; page ≈73ms serial → ≈25ms.
+Keep it that way: anything that needs a whole-queue plan should take one that already exists rather
+than calling `_run_queue_plan` again.
+
 **Build options are stored per account** (`app/industry/settings.py`, `pp_industry_settings`) and
 applied in `prepare_plan_inputs` — the single point every plan path resolves through. They used to
 live only in the browser and travel as request fields, so any plan run WITHOUT a browser used library
