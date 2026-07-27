@@ -1318,6 +1318,28 @@ def test_every_stage_gets_a_character_not_just_the_first():
     check("the overflow is honest about having no slot",
           all(t["character_name"] is None for t in tight[0]["tasks"] if t["character_id"] is None))
 
+    # A manufacturing job may NEVER land on a reaction-only pilot, even when they are the only
+    # character with free capacity anywhere — the pools are separate skills and separate structures,
+    # and an instruction to build on a toon with no industry slot is one you cannot carry out.
+    rx_only = [{"character_id": 7, "character_name": "RxOnly",
+                "manufacturing_slots": 0, "reaction_slots": 5}]
+    mixed = [{"start_hours": 0.0, "tasks": [
+        {"type_id": 1, "activity": "manufacturing", "runs": 1, "duration_hours": 2.0},
+        {"type_id": 2, "activity": "reaction", "runs": 1, "duration_hours": 2.0}]}]
+    assign_characters(mixed, rx_only)
+    check("a reaction pilot is never given manufacturing work",
+          mixed[0]["tasks"][0]["character_id"] is None)
+    check("but still takes the reaction work", mixed[0]["tasks"][1]["character_id"] == 7)
+    # And the reverse: reaction slots do not pad out someone's manufacturing capacity.
+    both = [{"character_id": 8, "character_name": "Both",
+             "manufacturing_slots": 1, "reaction_slots": 3}]
+    three = [{"start_hours": 0.0, "tasks": [
+        {"type_id": i, "activity": "manufacturing", "runs": 1, "duration_hours": 9.0}
+        for i in range(3)]}]
+    assign_characters(three, both)
+    check("spare reaction slots never absorb manufacturing jobs",
+          sum(1 for t in three[0]["tasks"] if t["character_id"] is not None) == 1)
+
     # No character data at all → nothing invented, and no crash.
     plain = [{"start_hours": 0.0, "tasks": [{"type_id": 1, "activity": "manufacturing", "runs": 1,
                                              "duration_hours": 1.0}]}]
