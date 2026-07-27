@@ -18,6 +18,7 @@ Pure/testable and deliberately I/O-free: every function takes prebuilt graphs + 
 module owns no endpoint, DB handle or market lookup. Callers (graph.py's /api/industry/plan and
 orders.py's queue endpoints) resolve the real data and hand it in.
 """
+import copy
 import math
 from collections import defaultdict
 from dataclasses import dataclass
@@ -501,3 +502,47 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
         },
     }
 
+
+
+# Slider stops the UI offers for the marginal-saving knob (0–10% in 0.5 steps).
+MARGINAL_SWEEP_PCTS = [round(i * 0.5, 1) for i in range(21)]
+
+
+def sweep_marginal(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict,
+                   adjusted: dict, params: BuildParams, names: dict[int, str], pools: dict[str, int],
+                   on_hand: dict[int, float] | None = None,
+                   pcts: list[float] | None = None) -> list[dict]:
+    """Cost + makespan at every stop of the marginal-saving slider, so the UI can show what dragging
+    it actually buys you (time saved, ISK spent) without a round trip per pixel.
+
+    The knob only ever moves the ISK threshold `marginal_threshold()` resolves to, and that value
+    is floored at `min_saving_isk` — so on a small build every low percentage collapses to the same
+    threshold and therefore the same plan. Deduping by the resolved threshold means the sweep runs
+    a handful of plans, not one per stop."""
+    pcts = pcts if pcts is not None else MARGINAL_SWEEP_PCTS
+    # marginal_threshold needs a priced memo, and resolve_unit_costs is marginal-independent (the
+    # knob is applied later, in aggregate_demand) — so one memo serves every stop.
+    memo, unit = resolve_unit_costs(mfg, rx, prices, adjusted, params)
+    for tid, _ in targets:
+        unit(tid, frozenset())
+    by_threshold: dict[float, dict] = {}
+    out = []
+    for pct in pcts:
+        p = copy.copy(params)
+        p.marginal_pct_of_total = pct
+        thr = round(marginal_threshold(memo, targets, p), 2)
+        point = by_threshold.get(thr)
+        if point is None:
+            m = plan_queue(targets, mfg, rx, prices, adjusted, p, names, pools,
+                           on_hand=dict(on_hand or {}))["metrics"]
+            point = {
+                "threshold": thr,
+                "total_cost": m["total_cost"],
+                "net_cost": m["net_cost"],
+                "makespan_hours": m["makespan_hours"],
+                "build_steps": m["build_steps"],
+                "job_count": m["job_count"],
+            }
+            by_threshold[thr] = point
+        out.append({"pct": pct, **point})
+    return out

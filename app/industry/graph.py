@@ -588,3 +588,30 @@ def industry_plan(req: IndustryPlanRequest, ctx: int = Depends(require_context))
     result["tree"] = build_plan(req.type_id, req.quantity, inp.mfg, inp.rx, inp.prices,
                                 inp.adjusted, inp.params, inp.names)["tree"]
     return result
+
+
+@router.post("/api/industry/plan_sweep")
+def industry_plan_sweep(req: IndustryPlanRequest, ctx: int = Depends(require_context)):
+    """Cost + makespan for this product at every stop of the marginal-saving slider.
+
+    The slider is one of the few genuine knobs here, and "3%" says nothing about what it costs you
+    — so the UI reads the whole curve once and shows the time saved / ISK spent live as you drag,
+    instead of firing a full replan per pixel. `marginal_pct` on the request is ignored: the sweep
+    covers every value."""
+    if req.quantity < 1:
+        raise HTTPException(status_code=400, detail="quantity must be ≥ 1")
+    targets = [(req.type_id, req.quantity)]
+    # "Build everything" zeroes the threshold AND its floor — that's the point of it, but it would
+    # flatten the curve the slider is asking about, so the sweep always resolves params with the
+    # normal marginal rule in place.
+    req = req.model_copy(update={"force_build": False, "marginal_pct": None})
+    inp = prepare_plan_inputs(
+        ctx, targets, req,
+        missing_recipe_detail=lambda _tid: "No manufacturing or reaction recipe for that type")
+    from app.industry.schedule import sweep_marginal
+    from app.industry.assets import owned_quantities
+    on_hand = owned_quantities(ctx) if req.use_stock else {}
+    on_hand.pop(req.type_id, None)
+    points = sweep_marginal(targets, inp.mfg, inp.rx, inp.prices, inp.adjusted, inp.params,
+                            inp.names, inp.pools, on_hand=on_hand)
+    return {"points": points}

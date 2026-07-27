@@ -1083,6 +1083,54 @@ def test_force_build_ignores_the_shortcuts():
           101 not in {r["type_id"] for r in r_loss["requirements"]})
 
 
+def test_marginal_sweep_covers_every_slider_stop():
+    """The slider's live read-out is driven by a sweep of the whole curve. It must cover every stop,
+    stay monotone-ish in the direction the knob means (higher % = buy more = fewer build steps, never
+    more), and collapse stops that resolve to the same ISK threshold onto one identical plan — that
+    dedup is what keeps the sweep to a handful of plans instead of one per stop."""
+    print("test_marginal_sweep_covers_every_slider_stop")
+    from app.industry.schedule import sweep_marginal, MARGINAL_SWEEP_PCTS
+    con = _seed_con()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+    pools = {"manufacturing": 5, "reaction": 5}
+    P = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, min_saving_isk=0.0,
+                    marginal_pct_of_total=3.0)
+
+    pts = sweep_marginal([(100, 40)], mfg, rx, _prices(SELL), ADJ, P, NAMES, pools)
+    check("one point per slider stop", [p["pct"] for p in pts] == MARGINAL_SWEEP_PCTS)
+    check("every point carries cost and makespan",
+          all(p["total_cost"] > 0 and p["makespan_hours"] is not None and "threshold" in p
+              for p in pts))
+    check("raising the threshold never adds build steps",
+          all(a["build_steps"] >= b["build_steps"] for a, b in zip(pts, pts[1:])))
+    check("the threshold rises with the percentage",
+          all(a["threshold"] <= b["threshold"] for a, b in zip(pts, pts[1:])))
+    # Same resolved threshold => the same plan, which is what lets the UI say "same plan as below".
+    by_thr = {}
+    for p in pts:
+        by_thr.setdefault(p["threshold"], []).append(p)
+    check("stops sharing a threshold share a plan",
+          all(all(q["total_cost"] == g[0]["total_cost"] and q["build_steps"] == g[0]["build_steps"]
+                  for q in g) for g in by_thr.values()))
+
+    # The sweep must report the same numbers as a real plan run at that setting — the whole point is
+    # that the live preview matches what you get when you let go of the slider.
+    for pct in (0.0, 3.0, 10.0):
+        P_at = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, min_saving_isk=0.0,
+                           marginal_pct_of_total=pct)
+        m = plan_queue([(100, 40)], mfg, rx, _prices(SELL), ADJ, P_at, NAMES, pools)["metrics"]
+        pt = next(p for p in pts if p["pct"] == pct)
+        check(f"sweep at {pct}% matches a real plan",
+              pt["total_cost"] == m["total_cost"] and pt["makespan_hours"] == m["makespan_hours"])
+
+    # The floor dominates on a small build, so every low stop is literally the same plan.
+    P_floor = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, min_saving_isk=1e9,
+                          marginal_pct_of_total=3.0)
+    flat = sweep_marginal([(100, 1)], mfg, rx, _prices(SELL), ADJ, P_floor, NAMES, pools)
+    check("a floored build gives one flat curve",
+          len({p["threshold"] for p in flat}) == 1)
+
+
 def main():
     test_material_formula()
     test_graph_loaders()
@@ -1109,6 +1157,7 @@ def main():
     test_stock_reduces_plan_but_never_the_target()
     test_marginal_threshold_scales_with_build_size()
     test_force_build_ignores_the_shortcuts()
+    test_marginal_sweep_covers_every_slider_stop()
     test_install_assignment_spreads_and_respects_free_slots()
     test_fifo_wins_contested_slots()
     test_missing_blueprints_are_reported()

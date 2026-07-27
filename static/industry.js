@@ -506,6 +506,7 @@ async function indRunPlan() {
     const d = await r.json();
     _indLastPlan = d;
     out.innerHTML = _indRenderPlan(d, `Build ${qty}× ${_esc(d.target.name)}`);
+    _indLoadSweep(qty);
   } catch (e) {
     out.innerHTML = `<div class="pp-card"><p class="pp-warn">${_esc(String(e))}</p></div>`;
   }
@@ -569,6 +570,7 @@ function indOnForceBuild() {
   });
   if (_indPicked && document.getElementById('indResult').innerHTML.trim()) indRunPlan();
   if (_indStatusVisible()) indRefreshStatus();
+  _indRenderMarginalLive();
 }
 
 function indRestoreForceBuild() {
@@ -591,6 +593,7 @@ function _indMarginalPct() {
 function indOnMarginalInput() {
   const lbl = document.getElementById('indMarginalPct');
   if (lbl) lbl.textContent = _indMarginalPct() + '%';
+  _indRenderMarginalLive();
 }
 function indOnMarginalChange() {
   try { localStorage.setItem('indMarginalPct', String(_indMarginalPct())); } catch (e) {}
@@ -605,6 +608,78 @@ function indRestoreMarginal() {
   try { v = localStorage.getItem('indMarginalPct'); } catch (e) {}
   if (v !== null && !isNaN(parseFloat(v))) el.value = parseFloat(v);
   indOnMarginalInput();
+}
+
+// ── Live slider feedback ──────────────────────────────────────────────────────────────────────
+// The threshold is a time-vs-cost trade, and a bare "4%" tells you nothing about either side of it.
+// So once a preview exists we fetch the whole curve — cost + makespan at every slider stop — and
+// read it locally as the handle moves. Dragging then shows the actual consequence instantly, with
+// no replan per pixel; letting go still runs the real plan.
+let _indSweep = null;          // { key, points: [{pct, makespan_hours, total_cost, ...}] }
+let _indSweepPending = null;   // key of the request in flight, so a drag can't stack fetches
+
+function _indSweepKey(qty) {
+  const f = _indFacilityBonus();
+  return [_indPicked ? _indPicked.type_id : 0, qty, _indPrioSpeed() ? 1 : 0,
+          f.struct_material_pct, f.struct_time_pct].join('|');
+}
+
+async function _indLoadSweep(qty) {
+  if (!_indPicked) return;
+  const key = _indSweepKey(qty);
+  if (_indSweep && _indSweep.key === key) { _indRenderMarginalLive(); return; }
+  if (_indSweepPending === key) return;
+  _indSweepPending = key;
+  try {
+    const r = await fetch('/api/industry/plan_sweep', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type_id: _indPicked.type_id, quantity: qty,
+                             prioritize_speed: _indPrioSpeed(), ..._indFacilityBonus() }),
+    });
+    if (!r.ok) return;
+    const d = await r.json();
+    if (_indSweepKey(qty) !== key) return;      // options moved on while it was in flight
+    _indSweep = { key, points: d.points || [] };
+    _indRenderMarginalLive();
+  } catch (e) {
+    // A nicety, not the plan — a failure here just leaves the static hint in place.
+  } finally {
+    if (_indSweepPending === key) _indSweepPending = null;
+  }
+}
+
+function _indSweepPoint(pts, pct) {
+  return pts.reduce((best, c) => Math.abs(c.pct - pct) < Math.abs(best.pct - pct) ? c : best, pts[0]);
+}
+
+function _indRenderMarginalLive() {
+  const el = document.getElementById('indMarginalLive');
+  if (!el) return;
+  const qtyEl = document.getElementById('indQty');
+  const qty = Math.max(1, parseInt(qtyEl ? qtyEl.value : '1') || 1);
+  const pts = _indSweep && _indSweep.key === _indSweepKey(qty) ? _indSweep.points : null;
+  if (!pts || !pts.length || _indForceBuild()) { el.style.display = 'none'; el.innerHTML = ''; return; }
+
+  const p = _indSweepPoint(pts, _indMarginalPct());
+  // Compare against the plan on screen, so the numbers answer "what does moving it change?" rather
+  // than sitting in a vacuum. Before a plan exists, show the absolutes alone.
+  const basePct = _indLastPlan && _indLastPlan.metrics ? _indLastPlan.metrics.marginal_pct : null;
+  const base = basePct == null ? null : _indSweepPoint(pts, basePct);
+  const parts = [`<b>${_fmtHours(p.makespan_hours)}</b> build time`, `${fmtIsk(p.total_cost)} total`];
+  // Same resolved ISK threshold = literally the same plan, whatever the percentages read.
+  if (base && base.threshold !== p.threshold) {
+    const dh = base.makespan_hours - p.makespan_hours;      // + = this setting finishes sooner
+    const dc = p.total_cost - base.total_cost;              // + = this setting costs more
+    const time = Math.abs(dh) < 0.05 ? 'same time'
+      : `<b class="${dh > 0 ? 'ind-live-good' : 'ind-live-bad'}">${_fmtHours(Math.abs(dh))} ${dh > 0 ? 'faster' : 'slower'}</b>`;
+    const cost = Math.abs(dc) < 1 ? 'same cost'
+      : `${dc > 0 ? '+' : '−'}${fmtIsk(Math.abs(dc))} ${dc > 0 ? 'more' : 'less'}`;
+    parts.push(`${time}, ${cost} than the plan below`);
+  } else if (base) {
+    parts.push('same plan as below');
+  }
+  el.innerHTML = parts.join(' · ');
+  el.style.display = '';
 }
 
 // Facility presets → structure/rig material (ME) + time (TE) bonuses. Approximate real setups; the

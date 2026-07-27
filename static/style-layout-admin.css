@@ -903,7 +903,10 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
    overrides indented beneath — the greying-out then reads as a consequence, not a glitch. */
 .ind-opt-group { display: flex; flex-direction: column; gap: 8px; flex: 1 1 320px; min-width: 0; }
 .ind-opt-master { font-weight: 600; color: var(--clr-text); }
+/* The rule starts inside the master row (negative margin eaten back by the padding) so it reads as
+   a bracket hanging off "Build everything" rather than a line floating below it. */
 .ind-opt-governed { display: flex; flex-direction: column; gap: 8px;
+  margin-top: -17px; padding-top: 17px;
   padding-left: 11px; border-left: 2px solid #2b3446; }
 .ind-opt-governed .ind-field-marg { min-width: 0; }
 .ind-shop-bar { display: flex; align-items: center; gap: 12px; margin: 4px 0 10px; }
@@ -1023,6 +1026,11 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-field-marg label b { color: var(--clr-accent); font-variant-numeric: tabular-nums; }
 .ind-field-marg input[type=range] { width: 100%; accent-color: var(--clr-accent); margin: 0; padding: 0; }
 .ind-marg-hint { font-size: 11px; color: var(--clr-text-soft); margin-top: 3px; }
+/* Live read-out of what the slider position costs you — updates while dragging, off the sweep. */
+.ind-marg-live { font-size: 11px; color: var(--clr-text-soft); margin-top: 4px; font-variant-numeric: tabular-nums; }
+.ind-marg-live b { color: var(--clr-text); font-weight: 600; }
+.ind-marg-live b.ind-live-good { color: var(--clr-green); }
+.ind-marg-live b.ind-live-bad { color: var(--clr-amber); }
 /* Planning loader — centered, and tall enough that the page doesn't collapse then jump */
 .ind-loading { display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 10px; min-height: 220px; padding: 32px 20px; text-align: center; }
