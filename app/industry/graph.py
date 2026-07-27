@@ -87,6 +87,9 @@ class BuildParams:
     # heuristics about what's WORTH a job, and that's the user's call to make item by item — the
     # cost engine's own verdict (buying is outright cheaper) is untouched by this.
     force_build_ids: set = field(default_factory=set)
+    # What to charge over cost when quoting a customer. Priced off NET cost — the leftovers a build
+    # over-produces stay with the builder, so billing them to the customer would charge twice.
+    margin_pct: float = 0.0
 
     def me_te_for(self, type_id: int, activity: str) -> tuple[float, float]:
         """(me_pct, te_pct) for a manufacturing product: its owned-blueprint values if known, else
@@ -398,6 +401,7 @@ class BuildOptions(BaseModel):
     # Per-product ME/TE the user wants assumed, {"<type_id>": [me, te]} — JSON keys are strings.
     # Wins over everything: it's the user telling us which print they'll actually use.
     me_te_overrides: dict[str, list[int]] = {}
+    margin_pct: float | None = None    # markup over net cost for the customer price (None = default)
 
 
 class IndustryPlanRequest(BuildOptions):
@@ -408,6 +412,10 @@ class IndustryPlanRequest(BuildOptions):
 # Wall-clock cap (hours) a single component's batch may take to build before the time-priority
 # make-or-buy buys it instead. ~1 day: builds fast components, buys the multi-day bulk marathons.
 SPEED_BUILD_CAP_HOURS = 24.0
+
+# Default markup when quoting a build to a customer. A starting point, not a recommendation — it's
+# the one number here only the builder can know, so it's a knob with a sane default.
+MARGIN_DEFAULT_PCT = 10.0
 
 # Marginal-saving threshold (always on): buy a component the cost engine would build if building it
 # saves less than this % of the TOTAL product cost. Measured against the whole build — NOT a
@@ -472,7 +480,8 @@ def resolve_build_params(context_id: int, me_pct: float, te_pct: float,
                          max_build_hours: float = 0.0,
                          struct_material_pct: float = 0.0, struct_time_pct: float = 0.0,
                          marginal_pct: float | None = None, force_build: bool = False,
-                         force_build_ids: list[int] | None = None) -> BuildParams:
+                         force_build_ids: list[int] | None = None,
+                         margin_pct: float | None = None) -> BuildParams:
     """Build the resolver's params, auto-deriving the build system + tax from the account's
     Reactions settings when the request didn't override them — so the caller needn't supply a
     system id or tax by hand."""
@@ -509,6 +518,8 @@ def resolve_build_params(context_id: int, me_pct: float, te_pct: float,
                                 else max(0.0, min(25.0, float(marginal_pct))))),
         min_saving_isk=(0.0 if force_build else MIN_BUILD_SAVING_ISK),
         force_build_ids=set(force_build_ids or ()),
+        margin_pct=(MARGIN_DEFAULT_PCT if margin_pct is None
+                    else max(0.0, min(100.0, float(margin_pct)))),
     )
 
 
@@ -573,7 +584,7 @@ def prepare_plan_inputs(ctx: int, targets: list[tuple[int, int]], opts: BuildOpt
     params = resolve_build_params(ctx, opts.me_pct, opts.te_pct, opts.system_id,
                                   opts.facility_tax_pct, mbh, opts.struct_material_pct,
                                   opts.struct_time_pct, opts.marginal_pct, opts.force_build,
-                                  opts.force_build_ids)
+                                  opts.force_build_ids, opts.margin_pct)
     # What an unowned blueprint would cost to acquire, so building can be priced honestly and the
     # margin-saver can see it. Best-effort: an empty index just leaves the old behaviour.
     try:

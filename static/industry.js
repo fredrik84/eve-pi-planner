@@ -21,6 +21,7 @@ async function onIndustryTabOpen() {
   await _indApplySavedSettings();
   indRestoreMarginal();
   indRestoreForceBuild();
+  indRestoreMargin();
   _indRestoringSettings = false;
   // Nothing has ever saved these — seed the account from what this browser has been using. Without
   // it, a plan run on the user's behalf (a customer's share link, the checklist) keeps using library
@@ -53,6 +54,7 @@ function indOpenPlanner() {
   _indRestoringSettings = true;
   indRestoreMarginal();
   indRestoreForceBuild();
+  indRestoreMargin();
   _indRestoringSettings = false;
   const s = document.getElementById('indSearch');
   if (s) setTimeout(() => s.focus(), 30);
@@ -84,14 +86,16 @@ function _indSaveSettings() {
     fetch('/api/industry/settings', {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...f, prioritize_speed: _indPrioSpeed(), marginal_pct: _indMarginalPct(),
-                             force_build: _indForceBuild(), facility_id: sel ? sel.value : '' }),
+                             force_build: _indForceBuild(), margin_pct: _indMarginPct(),
+                             facility_id: sel ? sel.value : '' }),
     }).catch(() => {});          // best-effort: the plan on screen already has these values
   }, 600);
 }
 
 function _indQueueBody() {
   return { prioritize_speed: _indPrioSpeed(), marginal_pct: _indMarginalPct(),
-           force_build: _indForceBuild(), me_te_overrides: _indMeTeMap(), ..._indFacilityBonus() };
+           force_build: _indForceBuild(), me_te_overrides: _indMeTeMap(),
+           margin_pct: _indMarginPct(), ..._indFacilityBonus() };
 }
 
 async function indRefreshStatus() {
@@ -170,6 +174,10 @@ function _indStatusHeadline(d) {
       tiles.push(['Materials', fmtIsk(m.materials_cost), 'What the shopping list comes to']);
       tiles.push(['Job fees', fmtIsk(m.job_cost), 'Installation fees across every job in the plan']);
     }
+  }
+  if (m.total_cost != null) {
+    tiles.push(['Price', `<span data-ind-price>${fmtIsk(_indPriceOf(m))}</span>`,
+                `What to charge at ${_indMarginPct()}% over net cost — the figure your customer sees on a shared link`]);
   }
   if (t && t.required) {
     tiles.push(['Still to start', String(t.waiting), 'Jobs not started yet']);
@@ -633,6 +641,8 @@ function _indMetricTiles(m) {
   }
   tiles.push(['Build steps', steps, 'Distinct things to build — each may split into parallel jobs across your slots']);
   if (m.makespan_hours != null) tiles.push(['Makespan', _fmtHours(m.makespan_hours), 'Wall-clock time with jobs running in parallel across your slots']);
+  if (m.price != null) tiles.push(['Price', `<span data-ind-price>${fmtIsk(_indPriceOf(m))}</span>`,
+    `What to charge at ${_indMarginPct()}% over net cost. Adjust with the margin slider above.`]);
   // Turn the percentage into the number it actually means for THIS build.
   if (m.marginal_threshold) tiles.push(['Build threshold', fmtIsk(m.marginal_threshold),
     `Anything that would save less than this by building is bought instead (${m.marginal_pct}% of the build, floor 5m). Adjust with the slider above.`]);
@@ -692,6 +702,10 @@ async function _indApplySavedSettings() {
     sel.value = d.facility_id;
     try { localStorage.setItem('indFacility', d.facility_id); } catch (e) {}
   }
+  if (d.margin_pct != null) {
+    set('indMargin', d.margin_pct);
+    try { localStorage.setItem('indMarginPct', String(d.margin_pct)); } catch (e) {}
+  }
   if (d.marginal_pct != null) {
     set('indMarginal', d.marginal_pct);
     try { localStorage.setItem('indMarginalPct', String(d.marginal_pct)); } catch (e) {}
@@ -739,6 +753,64 @@ function indRestoreMarginal() {
   try { v = localStorage.getItem('indMarginalPct'); } catch (e) {}
   if (v !== null && !isNaN(parseFloat(v))) el.value = parseFloat(v);
   indOnMarginalInput();
+}
+
+// What to charge over cost. The one number the tool genuinely cannot work out for the user — it's
+// their business, their customer, their risk — so it's a knob with a sane default.
+const IND_MARGIN_DEFAULT = 10;
+function _indMarginPct() {
+  const el = document.getElementById('indMargin');
+  return el ? parseFloat(el.value) : IND_MARGIN_DEFAULT;
+}
+function indOnMarginInput() {
+  const lbl = document.getElementById('indMarginPct');
+  if (lbl) lbl.textContent = _indMarginPct() + '%';
+  _indRenderMarginLive();
+}
+function indOnMarginChange() {
+  try { localStorage.setItem('indMarginPct', String(_indMarginPct())); } catch (e) {}
+  indOnMarginInput();
+  _indSaveSettings();
+  // Margin changes the price, not the build — no re-plan needed, just re-price what's on screen.
+  if (_indLastPlan && _indLastPlan.metrics) _indRepriceRendered();
+}
+function indRestoreMargin() {
+  const el = document.getElementById('indMargin');
+  if (!el) return;
+  let v = null;
+  try { v = localStorage.getItem('indMarginPct'); } catch (e) {}
+  if (v !== null && !isNaN(parseFloat(v))) el.value = parseFloat(v);
+  indOnMarginInput();
+}
+
+// The price for the plan currently on screen, at the slider's current position. Recomputed client
+// side because margin is pure arithmetic on a cost the server already returned — re-planning a
+// capital to multiply by 1.1 would be absurd.
+function _indPriceOf(metrics, pct) {
+  const net = metrics.net_cost != null ? metrics.net_cost : metrics.total_cost;
+  if (net == null) return null;
+  return net * (1 + (pct == null ? _indMarginPct() : pct) / 100.0);
+}
+
+function _indRenderMarginLive() {
+  const el = document.getElementById('indMarginLive');
+  if (!el) return;
+  const m = _indLastPlan && _indLastPlan.metrics;
+  const price = m ? _indPriceOf(m) : null;
+  if (price == null) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  const net = m.net_cost != null ? m.net_cost : m.total_cost;
+  el.style.display = '';
+  el.innerHTML = `Quote <b>${fmtIsk(price)}</b> · you keep ${fmtIsk(price - net)}`;
+}
+
+// Live re-price without a round trip: the price tiles and the margin read-out both derive from the
+// rendered plan's cost.
+function _indRepriceRendered() {
+  _indRenderMarginLive();
+  document.querySelectorAll('[data-ind-price]').forEach(el => {
+    const m = _indLastPlan && _indLastPlan.metrics;
+    if (m) el.textContent = fmtIsk(_indPriceOf(m));
+  });
 }
 
 // ── Live slider feedback ──────────────────────────────────────────────────────────────────────
@@ -1584,7 +1656,8 @@ async function indAddToQueue() {
                              label: (document.getElementById('indLabel') || {}).value || '',
                              // The overrides were decided against THIS product — they ride along, or
                              // queueing would silently undo every one of them.
-                             force_build_ids: _indForceIds(), me_te_overrides: _indMeTeMap() }),
+                             force_build_ids: _indForceIds(), me_te_overrides: _indMeTeMap(),
+                             margin_pct: _indMarginPct() }),
     });
     if (!r.ok) { const e = await r.json().catch(() => ({})); alert(e.detail || 'Could not queue'); return; }
     document.getElementById('indResult').innerHTML = '';

@@ -25,7 +25,7 @@
   <link rel="stylesheet" href="/style-components.css?v=1">
   <link rel="stylesheet" href="/style-contribute.css?v=11">
   <link rel="stylesheet" href="/style-wizard.css?v=3">
-  <link rel="stylesheet" href="/style-layout-admin.css?v=94">
+  <link rel="stylesheet" href="/style-layout-admin.css?v=95">
   <link rel="stylesheet" href="/style-analysis-dashboard.css?v=22">
   <link rel="stylesheet" href="/style-misc-responsive.css?v=7">
 </head>
@@ -1522,6 +1522,14 @@ PVF-N9    3         95                 60             80                  100   
             </div>
           </div>
         </div>
+        <div class="ind-field ind-field-marg ind-field-margin">
+          <label for="indMargin">Charge <b id="indMarginPct">10%</b> over cost</label>
+          <input type="range" id="indMargin" min="0" max="50" step="1" value="10" oninput="indOnMarginInput()" onchange="indOnMarginChange()">
+          <div class="ind-marg-hint">What you quote a customer. Priced off net cost, so reusable leftovers stay yours.</div>
+          <div class="ind-marg-live" id="indMarginLive" style="display:none"></div>
+            </div>
+          </div>
+        </div>
       </div>
       <div id="indPickHint" class="ind-pick-hint"></div>
       <div id="indResult"></div>
@@ -1635,6 +1643,6 @@ PVF-N9    3         95                 60             80                  100   
   <script src="/analysis.js?v=62"></script>
   <script src="/layout.js?v=2"></script>
   <script src="/reactions.js?v=98"></script>
-  <script src="/industry.js?v=76"></script>
+  <script src="/industry.js?v=77"></script>
 </body>
 </html>

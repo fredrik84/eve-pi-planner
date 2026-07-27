@@ -514,6 +514,11 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
             # consequence of the setting in ISK rather than a bare percentage.
             "marginal_threshold": round(marginal_threshold(memo, targets, params), 2),
             "marginal_pct": params.marginal_pct_of_total,
+            # What to quote. Net cost is the base: the leftovers this build over-produces stay with
+            # the builder and are already credited out of it, so charging them to the customer would
+            # bill the same materials twice.
+            "margin_pct": params.margin_pct,
+            "price": round((total_cost - leftover_value) * (1 + params.margin_pct / 100.0), 2),
         },
     }
 

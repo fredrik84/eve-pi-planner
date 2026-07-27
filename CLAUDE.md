@@ -733,6 +733,21 @@ capacity is left unassigned rather than given a fictional owner. Called by both 
 TOTAL slots (the schedule spans days, busy slots free up) while to-install deliberately uses free
 ones.
 
+**Quoting a customer: margin → price.** `BuildParams.margin_pct` (default `MARGIN_DEFAULT_PCT` = 10,
+clamped 0–100) produces `metrics.price` alongside `metrics.margin_pct`. The base is **net cost, not
+total spend**: a build that over-produces reusable intermediates keeps them, and their value is
+already credited out of net cost, so quoting off total spend would bill the customer for materials
+the builder keeps. The margin is stored per account like the other build options AND snapshotted on
+the order (`pp_industry_orders.margin_pct`) when it's queued — a customer holding a quote must not
+see the price move because the builder changed their default afterwards; the share uses the order's
+value when it has one. The UI slider re-prices client-side (`_indPriceOf`) rather than re-planning:
+margin is arithmetic on a cost the server already returned.
+
+**The customer sees the PRICE, never the cost.** The share payload carries `price` and nothing else
+about money — not total/materials/job cost, not the margin. What it cost to build and what the
+builder makes on it are not the customer's business; the quote is. `test_customer_build_status_leaks_nothing`
+enforces both halves (banned cost words, `price` present).
+
 **Customer build-status links** (`app/industry/shares.py`, `industry_share` flag). A builder mints a
 login-free link per queued order (`POST /api/industry/orders/{id}/share`, idempotent; DELETE
 revokes) that the customer opens at **`/b/{share_id}`** — product, quantity, stage list, progress bar

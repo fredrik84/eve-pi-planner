@@ -38,10 +38,16 @@ def ensure_industry_settings_table():
                 prioritize_speed    INTEGER,
                 marginal_pct        REAL,
                 force_build         INTEGER,
+                margin_pct          REAL,
                 facility_id         TEXT,
                 updated_at          REAL
             )
         """)
+        # Added after the table shipped; additive ALTER is this codebase's migration convention.
+        try:
+            con.execute("ALTER TABLE pp_industry_settings ADD COLUMN margin_pct REAL")
+        except Exception:
+            pass
         con.commit()
     finally:
         con.close()
@@ -55,6 +61,7 @@ class IndustrySettings(BaseModel):
     prioritize_speed: bool | None = None
     marginal_pct: float | None = None
     force_build: bool | None = None
+    margin_pct: float | None = None      # markup over net cost when quoting a customer
     facility_id: str | None = None
 
 
@@ -81,7 +88,7 @@ def apply_account_build_options(context_id: int, opts):
         return opts
     sent = getattr(opts, "model_fields_set", set())
     update = {}
-    for field in ("struct_material_pct", "struct_time_pct", "marginal_pct"):
+    for field in ("struct_material_pct", "struct_time_pct", "marginal_pct", "margin_pct"):
         if field not in sent and saved.get(field) is not None:
             update[field] = float(saved[field])
     for field in ("prioritize_speed", "force_build"):
@@ -106,16 +113,18 @@ def write_industry_settings(req: IndustrySettings, ctx: int = Depends(require_co
     try:
         con.execute(
             "INSERT INTO pp_industry_settings (context_id, struct_material_pct, struct_time_pct, "
-            "prioritize_speed, marginal_pct, force_build, facility_id, updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(context_id) DO UPDATE SET "
+            "prioritize_speed, marginal_pct, force_build, margin_pct, facility_id, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(context_id) DO UPDATE SET "
             "struct_material_pct=excluded.struct_material_pct, struct_time_pct=excluded.struct_time_pct, "
             "prioritize_speed=excluded.prioritize_speed, marginal_pct=excluded.marginal_pct, "
-            "force_build=excluded.force_build, facility_id=excluded.facility_id, "
+            "force_build=excluded.force_build, margin_pct=excluded.margin_pct, "
+            "facility_id=excluded.facility_id, "
             "updated_at=excluded.updated_at",
             (ctx, req.struct_material_pct, req.struct_time_pct,
              None if req.prioritize_speed is None else int(req.prioritize_speed),
              req.marginal_pct,
              None if req.force_build is None else int(req.force_build),
+             req.margin_pct,
              (req.facility_id or "")[:40], time.time()))
         con.commit()
     finally:

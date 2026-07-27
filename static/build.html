@@ -35,6 +35,10 @@
     .bar i { display: block; height: 100%; }
     .bar .done { background: var(--green); }
     .bar .run { background: var(--accent); opacity: .55; }
+    .price { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border);
+      display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+    .price-lbl { font-size: 12px; color: var(--soft); text-transform: uppercase; letter-spacing: .06em; }
+    .price-val { font-size: 22px; font-weight: 700; }
     .eta { margin-top: 12px; font-size: 13px; color: var(--soft); }
     .eta b { color: var(--text); font-weight: 600; }
     .stages { margin-top: 4px; }
@@ -68,6 +72,15 @@ const ID = (window.__BUILD_ID__ || location.pathname.split('/').pop() || '').tri
 function esc(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, c =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// ISK the way EVE players read it: 2.57B, 850.0M, 12.3K.
+function fmtIsk(n) {
+  if (n == null) return null;
+  if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B';
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+  return Math.round(n).toLocaleString();
 }
 
 // Hours → "3d 4h" / "5h 20m" / "40m". Customers read a duration, not a decimal.
@@ -126,6 +139,8 @@ function render(d) {
       ${barHtml(d.jobs_done, (d.stages || []).reduce((a, s) => a + s.running_runs, 0), d.jobs_total)}
       <div class="eta">${eta}</div>
       ${d.current_stage ? `<div class="eta">Currently on <b>stage ${d.current_stage} of ${(d.stages || []).length}</b></div>` : ''}
+      ${d.price != null ? `<div class="price"><span class="price-lbl">Price</span>
+        <span class="price-val">${esc(fmtIsk(d.price))} ISK</span></div>` : ''}
     </div>
     <div class="card stages">${stages || '<div class="err">Nothing scheduled yet.</div>'}</div>
     <div class="foot">

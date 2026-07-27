@@ -67,6 +67,13 @@ def ensure_industry_orders_table():
             con.commit()
         except Exception:
             pass
+        # The margin this order was quoted at. Snapshotted rather than read live: a customer holding
+        # a price shouldn't see it move because the builder changed their default afterwards.
+        try:
+            con.execute("ALTER TABLE pp_industry_orders ADD COLUMN margin_pct REAL")
+            con.commit()
+        except Exception:
+            pass
         con.commit()
     finally:
         con.close()
@@ -79,12 +86,14 @@ class OrderCreate(BaseModel):
     label: str = ""          # free text: customer, contract, whatever makes it identifiable
     force_build_ids: list[int] = []   # components to build regardless of the buy-shortcuts
     me_te_overrides: dict[str, list[int]] = {}   # {"<type_id>": [me, te]} to assume when planning
+    margin_pct: float | None = None             # quote margin; None = the account's current default
 
 
 class OrderUpdate(BaseModel):
     quantity: int | None = None
     force_build_ids: list[int] | None = None
     me_te_overrides: dict[str, list[int]] | None = None
+    margin_pct: float | None = None
     mode: str | None = None
     label: str | None = None
     priority: int | None = None
@@ -158,12 +167,12 @@ def create_order(req: OrderCreate, ctx: int = Depends(require_context)):
         # 404 ("order not found") even though the insert committed.
         oid = con.execute(
             "INSERT INTO pp_industry_orders (context_id, product_type_id, name, quantity, mode, "
-            "priority, status, created_at, label, force_build_ids, me_te_overrides) "
-            "VALUES (?,?,?,?,?,?, 'queued', ?,?,?,?) RETURNING id",
+            "priority, status, created_at, label, force_build_ids, me_te_overrides, margin_pct) "
+            "VALUES (?,?,?,?,?,?, 'queued', ?,?,?,?,?) RETURNING id",
             (ctx, req.product_type_id, name or str(req.product_type_id), req.quantity, req.mode,
              int(_time.time()), _time.time(), (req.label or "").strip()[:60],
              json.dumps(sorted({int(t) for t in req.force_build_ids})),
-             json.dumps(req.me_te_overrides or {})),
+             json.dumps(req.me_te_overrides or {}), req.margin_pct),
         ).fetchone()[0]
         con.commit()
         return _order_row(con, oid, ctx)
@@ -237,6 +246,8 @@ def update_order(order_id: int, req: OrderUpdate, ctx: int = Depends(require_con
         if req.me_te_overrides is not None:
             sets.append("me_te_overrides=?")
             params.append(json.dumps(req.me_te_overrides))
+        if req.margin_pct is not None:
+            sets.append("margin_pct=?"); params.append(max(0.0, min(100.0, float(req.margin_pct))))
         if req.status is not None:
             if req.status not in _VALID_STATUSES:
                 raise HTTPException(status_code=400, detail=f"status must be one of {_VALID_STATUSES}")

@@ -1075,6 +1075,10 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-field-marg label b { color: var(--clr-accent); font-variant-numeric: tabular-nums; }
 .ind-field-marg input[type=range] { width: 100%; accent-color: var(--clr-accent); margin: 0; padding: 0; }
 .ind-marg-hint { font-size: 11px; color: var(--clr-text-soft); margin-top: 3px; }
+/* The quote knob sits alongside the build options rather than inside the governed block — it has
+   nothing to do with build-vs-buy, it's what you charge for the result. */
+.ind-field-margin { flex: 1 1 260px; }
+.ind-field-margin label b { color: var(--clr-green); }
 /* Live read-out of what the slider position costs you — updates while dragging, off the sweep. */
 .ind-marg-live { font-size: 11px; color: var(--clr-text-soft); margin-top: 4px; font-variant-numeric: tabular-nums; }
 .ind-marg-live b { color: var(--clr-text); font-weight: 600; }

@@ -1217,10 +1217,14 @@ def test_customer_build_status_leaks_nothing():
     import inspect
     from app.industry import shares
     src = inspect.getsource(shares.build_status)
-    banned = ["total_cost", "materials_cost", "job_cost", "net_cost", "shopping_list",
-              "character_name", "character_id", "system", "isk", "price", "leftover"]
+    # The customer gets the PRICE — that's what they're paying — and nothing about what it cost to
+    # make it or what the builder is making on it.
+    banned = ["total_cost", "materials_cost", "job_cost", "net_cost", "shopping_list", "margin",
+              "character_name", "character_id", "system", "leftover"]
+    payload_src = src.split("payload = ")[1]
     for word in banned:
-        check(f"the payload never mentions {word}", word not in src.split("payload = ")[1])
+        check(f"the payload never mentions {word}", word not in payload_src)
+    check("but it does carry the quoted price", '"price"' in payload_src)
     # The stage walk must be rooted at the shared order's own product, never the queue's targets.
     stage_src = inspect.getsource(shares._stage_of_types)
     check("stages are derived from the shared product alone", "_depths([target_id]" in stage_src)
@@ -1441,6 +1445,45 @@ def test_saved_build_options_reach_plans_run_without_a_browser():
         ind_settings.get_settings = real_get
 
 
+def test_price_is_net_cost_plus_margin():
+    """The quote. Priced off NET cost, not total spend: a build that over-produces reusable
+    intermediates keeps them, and they're already credited out of net cost — charging the customer
+    for them would bill the same materials twice. The margin is the one number the tool can't work
+    out for anyone, so it's a knob (default 10%)."""
+    print("test_price_is_net_cost_plus_margin")
+    from app.industry.graph import resolve_build_params, MARGIN_DEFAULT_PCT
+    con = _seed_con()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+    pools = {"manufacturing": 5, "reaction": 5}
+
+    P = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, min_saving_isk=0.0,
+                    marginal_pct_of_total=0.0, margin_pct=10.0)
+    r = plan_queue([(100, 7)], mfg, rx, _prices(SELL), ADJ, P, NAMES, pools)
+    m = r["metrics"]
+    net = m["total_cost"] - m["leftover_value"]
+    check("the price is net cost plus the margin", abs(m["price"] - net * 1.10) < 0.01)
+    check("and the margin is reported with it", m["margin_pct"] == 10.0)
+    check("leftovers are NOT charged to the customer", m["price"] < m["total_cost"] * 1.10
+          if m["leftover_value"] > 0 else True)
+
+    # Zero margin quotes cost — a legitimate setting (building for a corpmate at cost).
+    P0 = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, min_saving_isk=0.0,
+                     marginal_pct_of_total=0.0, margin_pct=0.0)
+    r0 = plan_queue([(100, 7)], mfg, rx, _prices(SELL), ADJ, P0, NAMES, pools)
+    check("0% margin quotes exactly net cost",
+          abs(r0["metrics"]["price"] - (r0["metrics"]["total_cost"] - r0["metrics"]["leftover_value"])) < 0.01)
+
+    # The default, and the clamp: nobody quotes -20%, and a fat-fingered 900% is not a price.
+    check("the default margin is 10%",
+          resolve_build_params(0, 0, 0, None, None, 0.0, 0, 0).margin_pct == MARGIN_DEFAULT_PCT)
+    check("a negative margin is clamped away",
+          resolve_build_params(0, 0, 0, None, None, 0.0, 0, 0, margin_pct=-5).margin_pct == 0.0)
+    check("an absurd margin is capped",
+          resolve_build_params(0, 0, 0, None, None, 0.0, 0, 0, margin_pct=900).margin_pct == 100.0)
+    check("an explicit 0 is honoured, not treated as unset",
+          resolve_build_params(0, 0, 0, None, None, 0.0, 0, 0, margin_pct=0).margin_pct == 0.0)
+
+
 def main():
     test_material_formula()
     test_graph_loaders()
@@ -1475,6 +1518,7 @@ def main():
     test_every_stage_gets_a_character_not_just_the_first()
     test_the_checklist_and_the_plan_agree_on_what_is_ready()
     test_saved_build_options_reach_plans_run_without_a_browser()
+    test_price_is_net_cost_plus_margin()
     test_install_assignment_spreads_and_respects_free_slots()
     test_fifo_wins_contested_slots()
     test_missing_blueprints_are_reported()
