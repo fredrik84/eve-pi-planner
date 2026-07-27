@@ -210,10 +210,13 @@ function _indStatusHeadline(d) {
     const forced = fb.length
       ? `<button class="ind-oc-forced" title="Building anyway: ${_esc(fb.map(f => f.name).join(', '))} — click to go back to buying them"`
         + ` onclick="indClearOrderForced(${o.id})">⚒ ${fb.length}</button>` : '';
+    // Shown when it differs from what the planner would quote today — otherwise it's noise.
+    const mrg = (o.margin_pct != null && Math.abs(o.margin_pct - _indMarginPct()) > 0.01)
+      ? `<span class="ind-oc-mrgtag" title="Quoted to the customer at ${o.margin_pct}% over cost">+${o.margin_pct}%</span>` : '';
     const share = _featureActive('industry_share')
       ? `<button class="ind-oc-share" title="Share a status link with the customer" onclick="indShareOrder(${o.id})">↗</button>` : '';
     return `<span class="ind-order-chip ind-oc-${st}" id="oc-${o.id}">${pos}${tag}<b>${o.quantity}×</b> ${_esc(o.name)}`
-      + (lbl ? `<span class="ind-oc-state">${lbl}</span>` : '') + eta + forced
+      + (lbl ? `<span class="ind-oc-state">${lbl}</span>` : '') + eta + mrg + forced
       + `<button class="ind-oc-edit" title="Rename or change the quantity" onclick="indEditOrder(${o.id})">✎</button>`
       + share
       + `<button class="ind-oc-del" title="Remove from the build" onclick="indRemoveOrder(${o.id})">✕</button></span>`;
@@ -1865,6 +1868,12 @@ function indEditOrder(id) {
     + `<input type="number" min="1" class="ind-oc-qty" id="oce-qty-${id}" value="${o.quantity}" title="Quantity">`
     + `<input type="text" maxlength="60" class="ind-oc-lbl" id="oce-lbl-${id}" `
     + `value="${_esc(p.label || '')}" placeholder="For — customer, contract…">`
+    // The margin this order is quoted at. It's snapshotted per order — the planner's slider sets it
+    // for NEW builds only, deliberately, so a quote a customer is holding can't move under them.
+    // That leaves editing it here as the only way to change one, so here it is.
+    + `<span class="ind-oc-margin"><input type="number" min="0" max="100" step="0.5" class="ind-oc-mrg" `
+    + `id="oce-mrg-${id}" value="${o.margin_pct != null ? o.margin_pct : _indMarginPct()}" `
+    + `title="Margin over net cost for this customer's quote">%</span>`
     + `<button class="ind-oc-ok" onclick="indSaveOrder(${id})">Save</button>`
     + `<button class="ind-oc-cancel" onclick="indRefreshStatus()">Cancel</button>`;
   const q = document.getElementById('oce-lbl-' + id);
@@ -1876,6 +1885,8 @@ async function indSaveOrder(id) {
   const label = (document.getElementById('oce-lbl-' + id) || {}).value || '';
   const body = { label };
   if (!isNaN(qty) && qty >= 1) body.quantity = qty;
+  const mrg = parseFloat((document.getElementById('oce-mrg-' + id) || {}).value);
+  if (!isNaN(mrg)) body.margin_pct = Math.max(0, Math.min(100, mrg));
   try {
     const r = await fetch('/api/industry/orders/' + id, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },

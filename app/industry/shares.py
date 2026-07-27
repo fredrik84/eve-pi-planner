@@ -126,6 +126,28 @@ def get_order_share(order_id: int, ctx: int = Depends(require_context)):
         con.close()
 
 
+def invalidate_order_shares(order_id: int):
+    """Drop the cached payload for every live link on this order.
+
+    Called when the order changes (quantity, margin, overrides): the page is cached for a minute, and
+    "I changed the quote but the customer's link still shows the old price" is exactly the kind of
+    doubt a status link exists to remove.
+    """
+    ensure_industry_shares_table()
+    con = get_connection()
+    try:
+        rows = con.execute("SELECT share_id FROM pp_industry_shares WHERE order_id=? AND revoked=0",
+                           (order_id,)).fetchall()
+    finally:
+        con.close()
+    for r in rows:
+        try:
+            from app.cache import cache_invalidate
+            cache_invalidate(f"indshare:{r['share_id']}")
+        except Exception:
+            pass                  # a stale page for up to a minute is not worth failing the edit
+
+
 def _stage_of_types(target_id: int, mfg: dict, rx: dict) -> dict[int, int]:
     """type_id → stage number, 1 = the deepest components, N = the final assembly.
 

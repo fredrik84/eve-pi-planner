@@ -256,6 +256,9 @@ def update_order(order_id: int, req: OrderUpdate, ctx: int = Depends(require_con
             params.extend([order_id, ctx])
             con.execute(f"UPDATE pp_industry_orders SET {', '.join(sets)} WHERE id=? AND context_id=?", params)
             con.commit()
+            # The customer's link is cached; an edit to the quote has to reach it now, not in a minute.
+            from app.industry.shares import invalidate_order_shares
+            invalidate_order_shares(order_id)
         return _order_row(con, order_id, ctx)
     finally:
         con.close()
