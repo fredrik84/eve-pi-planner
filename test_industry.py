@@ -1484,6 +1484,28 @@ def test_price_is_net_cost_plus_margin():
           resolve_build_params(0, 0, 0, None, None, 0.0, 0, 0, margin_pct=0).margin_pct == 0.0)
 
 
+def test_share_links_outlive_their_order():
+    """A link handed to a customer must not break when the build finishes and leaves the queue —
+    "404" is the worst possible answer to "did my ship get built?". Every successful render is
+    snapshotted onto the share row, and a missing order serves that snapshot, flagged archived. Only
+    an unknown or revoked id is a real 404."""
+    print("test_share_links_outlive_their_order")
+    import inspect
+    from app.industry import shares
+    src = inspect.getsource(shares.build_status)
+    check("the render is snapshotted onto the share",
+          "UPDATE pp_industry_shares SET last_payload" in src)
+    check("a missing order falls back to the snapshot", 'if snapshot:' in src)
+    check("and says so rather than pretending it is live", '"archived"' in src)
+    check("a revoked link is still a 404", "revoked=0" in src)
+    # The snapshot must be taken AFTER the payload is assembled, or it would store a half-built dict.
+    check("the snapshot is of the finished payload",
+          src.index("payload = {") < src.index("UPDATE pp_industry_shares SET last_payload"))
+    # The table has to carry the columns, and additively — this shipped after the table did.
+    ddl = inspect.getsource(shares.ensure_industry_shares_table)
+    check("the snapshot columns are added additively", "ADD COLUMN last_payload" in ddl)
+
+
 def main():
     test_material_formula()
     test_graph_loaders()
@@ -1519,6 +1541,7 @@ def main():
     test_the_checklist_and_the_plan_agree_on_what_is_ready()
     test_saved_build_options_reach_plans_run_without_a_browser()
     test_price_is_net_cost_plus_margin()
+    test_share_links_outlive_their_order()
     test_install_assignment_spreads_and_respects_free_slots()
     test_fifo_wins_contested_slots()
     test_missing_blueprints_are_reported()

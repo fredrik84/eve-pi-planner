@@ -176,7 +176,7 @@ function _indStatusHeadline(d) {
     }
   }
   if (m.total_cost != null) {
-    tiles.push(['Price', `<span data-ind-price>${fmtIsk(_indPriceOf(m))}</span>`,
+    tiles.push(['Sell price', `<span data-ind-price>${fmtIsk(_indPriceOf(m))}</span>`,
                 `What to charge at ${_indMarginPct()}% over net cost — the figure your customer sees on a shared link`]);
   }
   if (t && t.required) {
@@ -641,8 +641,8 @@ function _indMetricTiles(m) {
   }
   tiles.push(['Build steps', steps, 'Distinct things to build — each may split into parallel jobs across your slots']);
   if (m.makespan_hours != null) tiles.push(['Makespan', _fmtHours(m.makespan_hours), 'Wall-clock time with jobs running in parallel across your slots']);
-  if (m.price != null) tiles.push(['Price', `<span data-ind-price>${fmtIsk(_indPriceOf(m))}</span>`,
-    `What to charge at ${_indMarginPct()}% over net cost. Adjust with the margin slider above.`]);
+  if (m.price != null) tiles.push(['Sell price', `<span data-ind-price>${fmtIsk(_indPriceOf(m))}</span>`,
+    `What to quote the customer: ${_indMarginPct()}% over net cost. Adjust with the margin slider above.`]);
   // Turn the percentage into the number it actually means for THIS build.
   if (m.marginal_threshold) tiles.push(['Build threshold', fmtIsk(m.marginal_threshold),
     `Anything that would save less than this by building is bought instead (${m.marginal_pct}% of the build, floor 5m). Adjust with the slider above.`]);

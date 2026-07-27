@@ -13,7 +13,11 @@ account, and — importantly — no COST: not the total, not the materials, not 
 margin. The price is the one money figure the customer is entitled to; what it cost the builder to
 make, and what they are making on it, is not. Anything added here in future must clear that bar.
 
-The link is a random opaque id, revocable, and dies with its order.
+The link is a random opaque id and is revocable. It is otherwise PERMANENT: every successful render
+is snapshotted onto the share row, so when the order is finished and cleared from the queue the link
+keeps serving that last state (flagged `archived`) instead of breaking. A link you hand a customer
+has to survive the build being done — "404" is the worst possible answer to "did my ship get built?".
+Only an unknown or revoked id is a genuine 404.
 """
 from __future__ import annotations
 
@@ -50,6 +54,14 @@ def ensure_industry_shares_table():
             )
         """)
         con.execute("CREATE INDEX IF NOT EXISTS idx_ind_shares_order ON pp_industry_shares (order_id)")
+        # The last successfully-rendered payload, so the link outlives its order.
+        for ddl in ("ALTER TABLE pp_industry_shares ADD COLUMN last_payload TEXT",
+                    "ALTER TABLE pp_industry_shares ADD COLUMN last_at REAL"):
+            try:
+                con.execute(ddl)
+                con.commit()
+            except Exception:
+                pass
         con.commit()
     finally:
         con.close()
@@ -163,17 +175,25 @@ def build_status(share_id: str) -> dict:
     con = get_connection()
     try:
         row = con.execute(
-            "SELECT context_id, order_id FROM pp_industry_shares WHERE share_id=? AND revoked=0",
-            (share_id,)).fetchone()
+            "SELECT context_id, order_id, last_payload, last_at FROM pp_industry_shares "
+            "WHERE share_id=? AND revoked=0", (share_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="This build link is no longer available.")
         ctx, order_id = int(row["context_id"]), int(row["order_id"])
+        snapshot = row["last_payload"]
         order = con.execute(
             "SELECT id, product_type_id, name, quantity, COALESCE(label,'') AS label, status, "
             "COALESCE(force_build_ids,'') AS force_build_ids, "
             "COALESCE(me_te_overrides,'') AS me_te_overrides, margin_pct "
             "FROM pp_industry_orders WHERE id=? AND context_id=?", (order_id, ctx)).fetchone()
         if not order:
+            # The order is gone — finished and cleared, or deleted. The link still answers, with the
+            # last state it ever showed, because the customer's copy of it must not just break.
+            if snapshot:
+                final = _json.loads(snapshot)
+                final["archived"] = True
+                cache_set_json(f"indshare:{share_id}", final, ttl=_STATUS_TTL)
+                return final
             raise HTTPException(status_code=404, detail="This build link is no longer available.")
     finally:
         con.close()
@@ -282,6 +302,17 @@ def build_status(share_id: str) -> dict:
         "updated_at": now,
     }
     cache_set_json(f"indshare:{share_id}", payload, ttl=_STATUS_TTL)
+    # Snapshot it, so this link keeps working after the order leaves the queue. Written on a cache
+    # miss only, i.e. at most once a minute per link.
+    con = get_connection()
+    try:
+        con.execute("UPDATE pp_industry_shares SET last_payload=?, last_at=? WHERE share_id=?",
+                    (_json.dumps(payload), now, share_id))
+        con.commit()
+    except Exception:
+        pass                      # a link that renders but can't snapshot is still a working link
+    finally:
+        con.close()
     return payload
 
 

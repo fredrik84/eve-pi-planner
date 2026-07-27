@@ -743,6 +743,14 @@ see the price move because the builder changed their default afterwards; the sha
 value when it has one. The UI slider re-prices client-side (`_indPriceOf`) rather than re-planning:
 margin is arithmetic on a cost the server already returned.
 
+**Share links are permanent.** Every successful render is snapshotted onto the share row
+(`pp_industry_shares.last_payload/last_at`, written on a cache miss so at most once a minute), and a
+share whose ORDER has gone — finished and cleared, or deleted — serves that snapshot flagged
+`archived` instead of 404ing. A link handed to a customer has to survive the build being done; "404"
+is the worst possible answer to "did my ship get built?". The customer page shows a "final state"
+notice and stops polling. Only an unknown or REVOKED id is a genuine 404 — revoking is still a hard
+kill.
+
 **The customer sees the PRICE, never the cost.** The share payload carries `price` and nothing else
 about money — not total/materials/job cost, not the margin. What it cost to build and what the
 builder makes on it are not the customer's business; the quote is. `test_customer_build_status_leaks_nothing`

@@ -56,6 +56,8 @@
     .items span { display: inline-block; margin-right: 10px; }
     .items .ok { color: var(--green); }
     .items .now { color: var(--accent); }
+    .archived { font-size: 12px; color: var(--soft); background: #171b26; border: 1px solid var(--border);
+      border-radius: 8px; padding: 8px 12px; margin-bottom: 14px; }
     .foot { text-align: center; font-size: 11px; color: var(--soft); margin-top: 22px; line-height: 1.8; }
     .foot a { color: var(--soft); }
     .err { text-align: center; padding: 60px 20px; color: var(--soft); }
@@ -128,6 +130,7 @@ function render(d) {
     : `<b>${fmtHours(d.eta_hours)}</b> to go${d.eta_at ? ` · expected ${esc(fmtWhen(d.eta_at))}` : ''}`;
 
   document.getElementById('app').innerHTML = `
+    ${d.archived ? `<div class="archived">This build is no longer in the queue — showing its final state, last updated ${esc(fmtWhen(d.updated_at))}.</div>` : ''}
     <div class="brand">Build status</div>
     <h1>${d.quantity}× ${esc(d.product)}</h1>
     <div class="for">${d.label ? 'For ' + esc(d.label) : '&nbsp;'}</div>
@@ -144,7 +147,7 @@ function render(d) {
     </div>
     <div class="card stages">${stages || '<div class="err">Nothing scheduled yet.</div>'}</div>
     <div class="foot">
-      Updated ${esc(fmtWhen(d.updated_at))} · refreshes automatically<br>
+      ${d.archived ? 'Final update' : 'Updated'} ${esc(fmtWhen(d.updated_at))}${d.archived ? '' : ' · refreshes automatically'}<br>
       Built with <a href="/">EVE PI Planner</a>
     </div>`;
   document.title = `${Math.round(d.pct)}% — ${d.quantity}× ${d.product}`;
@@ -159,7 +162,9 @@ async function load() {
         `<div class="err">${esc(e.detail || 'This build link is no longer available.')}</div>`;
       return;
     }
-    render(await r.json());
+    const d = await r.json();
+    render(d);
+    return !!d.archived;
   } catch (e) {
     document.getElementById('app').innerHTML = '<div class="err">Could not load the build status.</div>';
   }
@@ -167,7 +172,11 @@ async function load() {
 
 load();
 // Jobs run for hours, so a slow poll is plenty — and the endpoint is cached for a minute anyway.
-setInterval(load, 120000);
+// An archived build can't change again, so stop asking.
+const poll = setInterval(async () => {
+  const done = await load();
+  if (done) clearInterval(poll);
+}, 120000);
 </script>
 </body>
 </html>
