@@ -478,6 +478,27 @@ function indPick(typeId, name) {
   document.getElementById('indPlanBtn').disabled = false;
   document.getElementById('indQueueBtn').disabled = false;
   document.getElementById('indPickHint').textContent = '';
+  // Cost and time land under the slider straight away — you shouldn't have to run a full preview
+  // to see what the threshold is worth on this product.
+  _indLoadSweep(_indQty());
+}
+
+let _indQtySweepTimer = null;
+function indOnQtyInput() {
+  clearTimeout(_indQtySweepTimer);
+  _indRenderMarginalLive();                       // marks the read-out stale for the new quantity
+  _indQtySweepTimer = setTimeout(() => _indLoadSweep(_indQty()), 400);
+}
+
+function _indQty() {
+  const el = document.getElementById('indQty');
+  return Math.max(1, parseInt(el ? el.value : '1') || 1);
+}
+
+// The speed toggle feeds the same cost/time curve, so flipping it has to re-cost the read-out or it
+// would sit there dimmed forever. It deliberately does NOT replan on its own — same as before.
+function indOnPrioSpeed() {
+  if (_indPicked) _indLoadSweep(_indQty());
 }
 
 // A roomy, centered loading card. Planning a capital walks the whole recipe tree and schedules
@@ -612,11 +633,12 @@ function indRestoreMarginal() {
 
 // ── Live slider feedback ──────────────────────────────────────────────────────────────────────
 // The threshold is a time-vs-cost trade, and a bare "4%" tells you nothing about either side of it.
-// So once a preview exists we fetch the whole curve — cost + makespan at every slider stop — and
-// read it locally as the handle moves. Dragging then shows the actual consequence instantly, with
-// no replan per pixel; letting go still runs the real plan.
+// So as soon as a product is picked (before any preview is run) we fetch the whole curve — cost +
+// makespan at every slider stop — and read it locally as the handle moves. Dragging then shows the
+// actual consequence instantly, with no replan per pixel; letting go still runs the real plan.
 let _indSweep = null;          // { key, points: [{pct, makespan_hours, total_cost, ...}] }
 let _indSweepPending = null;   // key of the request in flight, so a drag can't stack fetches
+let _indSweepFailed = null;    // key whose fetch failed — don't leave the line dimmed forever
 
 function _indSweepKey(qty) {
   const f = _indFacilityBonus();
@@ -629,20 +651,24 @@ async function _indLoadSweep(qty) {
   const key = _indSweepKey(qty);
   if (_indSweep && _indSweep.key === key) { _indRenderMarginalLive(); return; }
   if (_indSweepPending === key) return;
+  if (_indSweepFailed === key) return;      // already tried and failed for these options
   _indSweepPending = key;
+  _indRenderMarginalLive();      // shows the pending state (or dims the previous numbers)
   try {
     const r = await fetch('/api/industry/plan_sweep', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ type_id: _indPicked.type_id, quantity: qty,
                              prioritize_speed: _indPrioSpeed(), ..._indFacilityBonus() }),
     });
-    if (!r.ok) return;
+    if (!r.ok) { _indSweepFailed = key; _indRenderMarginalLive(); return; }
     const d = await r.json();
     if (_indSweepKey(qty) !== key) return;      // options moved on while it was in flight
     _indSweep = { key, points: d.points || [] };
     _indRenderMarginalLive();
   } catch (e) {
-    // A nicety, not the plan — a failure here just leaves the static hint in place.
+    // A nicety, not the plan — on failure the read-out steps aside and the static hint stands alone.
+    _indSweepFailed = key;
+    _indRenderMarginalLive();
   } finally {
     if (_indSweepPending === key) _indSweepPending = null;
   }
@@ -655,17 +681,33 @@ function _indSweepPoint(pts, pct) {
 function _indRenderMarginalLive() {
   const el = document.getElementById('indMarginalLive');
   if (!el) return;
-  const qtyEl = document.getElementById('indQty');
-  const qty = Math.max(1, parseInt(qtyEl ? qtyEl.value : '1') || 1);
+  // Nothing to say with no product picked, and the slider is inert under "Build everything".
+  if (!_indPicked || _indForceBuild()) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  el.style.display = '';
+
+  const qty = _indQty();
   const pts = _indSweep && _indSweep.key === _indSweepKey(qty) ? _indSweep.points : null;
-  if (!pts || !pts.length || _indForceBuild()) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  if (!pts || !pts.length) {
+    if (_indSweepFailed === _indSweepKey(qty)) { el.style.display = 'none'; el.innerHTML = ''; return; }
+    // Dim what's on screen while the curve for the new options is fetched instead of blanking the
+    // line — clearing it made the read-out flash out and back on every quantity change or replan.
+    el.classList.add('ind-marg-stale');
+    if (!el.innerHTML) el.innerHTML = 'Working out what this setting costs…';
+    return;
+  }
+  el.classList.remove('ind-marg-stale');
 
   const p = _indSweepPoint(pts, _indMarginalPct());
-  // Compare against the plan on screen, so the numbers answer "what does moving it change?" rather
-  // than sitting in a vacuum. Before a plan exists, show the absolutes alone.
-  const basePct = _indLastPlan && _indLastPlan.metrics ? _indLastPlan.metrics.marginal_pct : null;
-  const base = basePct == null ? null : _indSweepPoint(pts, basePct);
+  // Absolutes always, so the line says the same kind of thing whether or not a preview exists. The
+  // comparison against the rendered plan is an extra clause, not a replacement for them.
   const parts = [`<b>${_fmtHours(p.makespan_hours)}</b> build time`, `${fmtIsk(p.total_cost)} total`];
+  // Only a preview OF THIS product+quantity is a valid baseline — `_indLastPlan` is also set by the
+  // whole-queue status plan, and comparing against that would be nonsense.
+  const shown = _indLastPlan && _indLastPlan.target && _indLastPlan.metrics
+    && _indLastPlan.target.type_id === _indPicked.type_id
+    && _indLastPlan.target.quantity === qty ? _indLastPlan : null;
+  const basePct = shown ? shown.metrics.marginal_pct : null;
+  const base = basePct == null ? null : _indSweepPoint(pts, basePct);
   // Same resolved ISK threshold = literally the same plan, whatever the percentages read.
   if (base && base.threshold !== p.threshold) {
     const dh = base.makespan_hours - p.makespan_hours;      // + = this setting finishes sooner
@@ -676,10 +718,11 @@ function _indRenderMarginalLive() {
       : `${dc > 0 ? '+' : '−'}${fmtIsk(Math.abs(dc))} ${dc > 0 ? 'more' : 'less'}`;
     parts.push(`${time}, ${cost} than the plan below`);
   } else if (base) {
-    parts.push('same plan as below');
+    parts.push('applied below');
+  } else {
+    parts.push('estimate — <b>Preview</b> for the full plan');
   }
   el.innerHTML = parts.join(' · ');
-  el.style.display = '';
 }
 
 // Facility presets → structure/rig material (ME) + time (TE) bonuses. Approximate real setups; the
@@ -738,6 +781,7 @@ function indOnFacilityChange() {
   const sel = document.getElementById('indFacility');
   if (sel) { try { localStorage.setItem('indFacility', sel.value); } catch (e) {} }
   if (_indPicked && document.getElementById('indResult').innerHTML.trim()) indRunPlan();
+  else _indLoadSweep(_indQty());   // no preview to replan — just re-cost the slider read-out
 }
 
 let _indLastPlan = null;   // last rendered plan, for the shopping-list copy features

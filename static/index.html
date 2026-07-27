@@ -25,7 +25,7 @@
   <link rel="stylesheet" href="/style-components.css?v=1">
   <link rel="stylesheet" href="/style-contribute.css?v=11">
   <link rel="stylesheet" href="/style-wizard.css?v=3">
-  <link rel="stylesheet" href="/style-layout-admin.css?v=85">
+  <link rel="stylesheet" href="/style-layout-admin.css?v=86">
   <link rel="stylesheet" href="/style-analysis-dashboard.css?v=22">
   <link rel="stylesheet" href="/style-misc-responsive.css?v=7">
 </head>
@@ -1493,7 +1493,7 @@ PVF-N9    3         95                 60             80                  100   
         </div>
         <div class="ind-field">
           <label for="indQty">Quantity</label>
-          <input type="number" id="indQty" min="1" value="1">
+          <input type="number" id="indQty" min="1" value="1" oninput="indOnQtyInput()">
         </div>
         <div class="ind-field ind-field-label">
           <label for="indLabel">For <span class="pp-card-hint">— optional</span></label>
@@ -1510,7 +1510,7 @@ PVF-N9    3         95                 60             80                  100   
         <div class="ind-opt-group">
           <label class="ind-opt-check ind-opt-master"><input type="checkbox" id="indForceBuild" onchange="indOnForceBuild()"> Build everything — ignore small savings and slow batches</label>
           <div class="ind-opt-governed">
-            <label class="ind-opt-check"><input type="checkbox" id="indPrioSpeed" checked onchange=""> Prioritize speed — buy slow bulk materials to finish sooner</label>
+            <label class="ind-opt-check"><input type="checkbox" id="indPrioSpeed" checked onchange="indOnPrioSpeed()"> Prioritize speed — buy slow bulk materials to finish sooner</label>
             <div class="ind-field ind-field-marg">
               <label for="indMarginal">Build only if it saves <b id="indMarginalPct">3%</b> of the build</label>
               <input type="range" id="indMarginal" min="0" max="10" step="0.5" value="3" oninput="indOnMarginalInput()" onchange="indOnMarginalChange()">
@@ -1632,6 +1632,6 @@ PVF-N9    3         95                 60             80                  100   
   <script src="/analysis.js?v=62"></script>
   <script src="/layout.js?v=2"></script>
   <script src="/reactions.js?v=98"></script>
-  <script src="/industry.js?v=62"></script>
+  <script src="/industry.js?v=63"></script>
 </body>
 </html>
