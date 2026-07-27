@@ -1860,14 +1860,14 @@ function _indGroupJobs(jobs) {
 // pips are decoration on top of it.
 function _indSlotRow(label, cls, used, free, assigned, slots) {
   if (!slots) return '';
-  const bits = [];
-  if (assigned) bits.push(`<b>${assigned}</b> to start`);
-  if (used) bits.push(`${used} busy`);
-  bits.push(`${slots} slot${slots > 1 ? 's' : ''}`);
-  return `<div class="ind-slotrow ind-slotrow-${cls}">`
+  // The pips already say how many are busy, filling and free — spelling all three out again in
+  // words was longer than the card is wide. The label disambiguates the pool, one number gives the
+  // count at a glance, and the full breakdown stays in the tooltip.
+  return `<div class="ind-slotrow ind-slotrow-${cls}" title="${assigned} to start · ${used} busy`
+    + ` · ${slots} ${label.toLowerCase()} slot${slots > 1 ? 's' : ''}">`
     + `<span class="ind-slotlbl">${label}</span>`
     + `<span class="ind-slotset">${_indSlotPips(used, free, assigned, cls)}</span>`
-    + `<span class="ind-slotnum">${bits.join(' · ')}</span></div>`;
+    + `<span class="ind-slotnum"><b>${assigned}</b>/${slots}</span></div>`;
 }
 
 function _indSlotPips(used, free, assigned, cls) {

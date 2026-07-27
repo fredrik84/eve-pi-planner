@@ -1135,7 +1135,9 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-do-who { font-size: 14px; font-weight: 600; color: #fff; }
 .ind-do-count { font-size: 11px; color: var(--clr-accent); }
 .ind-do-slots { display: flex; gap: 10px; flex-wrap: wrap; margin: 7px 0 8px; }
-.ind-slotset { display: inline-flex; gap: 3px; align-items: center; }
+/* The pip strip is the flexible part: it shrinks and wraps rather than pushing the count out of
+   the card, since the count is the bit that has to stay readable. */
+.ind-slotset { display: flex; flex-wrap: wrap; gap: 3px; align-items: center; min-width: 0; flex: 1 1 auto; }
 /* Four tiles a row, max. The shared .an-stats is a free-wrapping flex row, which on a wide screen
    strung seven or eight metrics into one long line nobody scans — a grid caps it and keeps the
    tiles a consistent width instead of stretching the last one across the gap. */
@@ -1146,13 +1148,14 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
   #indStatusBody .an-stats, #indResult .an-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
 .ind-do-slots { display: flex; flex-direction: column; gap: 3px; }
-.ind-slotrow { display: flex; align-items: center; gap: 8px; font-size: 10px; }
-.ind-slotlbl { width: 58px; flex: none; text-transform: uppercase; letter-spacing: .04em;
+.ind-slotrow { display: flex; align-items: center; gap: 7px; font-size: 10px; min-width: 0; }
+.ind-slotlbl { width: 52px; flex: none; text-transform: uppercase; letter-spacing: .04em;
   color: var(--clr-text-soft); }
 .ind-slotrow-mfg .ind-slotlbl { color: #8fb4d8; }
 .ind-slotrow-rx .ind-slotlbl { color: #d9a7e0; }
 .ind-slotset { display: inline-flex; gap: 3px; align-items: center; }
-.ind-slotnum { color: var(--clr-text-soft); white-space: nowrap; }
+.ind-slotnum { color: var(--clr-text-soft); white-space: nowrap; flex: none;
+  font-variant-numeric: tabular-nums; }
 .ind-slotnum b { color: var(--clr-text); }
 .ind-pip { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
 .ind-pip-busy { background: #3a4252; }
