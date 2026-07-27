@@ -1847,6 +1847,22 @@ function _indGroupJobs(jobs) {
   })).sort((a, b) => b.dur - a.dur);
 }
 
+// One labelled line per slot POOL. The two pools used to be bare pip strips sitting side by side
+// with nothing naming them, so they read as one row of dots and the reaction pips looked like
+// manufacturing jobs spilling into reaction slots. The name and the count carry the meaning; the
+// pips are decoration on top of it.
+function _indSlotRow(label, cls, used, free, assigned, slots) {
+  if (!slots) return '';
+  const bits = [];
+  if (assigned) bits.push(`<b>${assigned}</b> to start`);
+  if (used) bits.push(`${used} busy`);
+  bits.push(`${slots} slot${slots > 1 ? 's' : ''}`);
+  return `<div class="ind-slotrow ind-slotrow-${cls}">`
+    + `<span class="ind-slotlbl">${label}</span>`
+    + `<span class="ind-slotset">${_indSlotPips(used, free, assigned, cls)}</span>`
+    + `<span class="ind-slotnum">${bits.join(' · ')}</span></div>`;
+}
+
 function _indSlotPips(used, free, assigned, cls) {
   const total = used + free;
   let out = '';
@@ -1895,8 +1911,8 @@ async function indLoadInstall() {
           + (groups.length < c.assigned ? ` · ${groups.length} product${groups.length > 1 ? 's' : ''}` : '')
           + `</span></div>
         <div class="ind-do-slots">
-          ${c.manufacturing_slots ? `<span class="ind-slotset" title="${mUsed} busy · ${mAss} to start · ${c.manufacturing_slots} industry slots">${_indSlotPips(mUsed, c.manufacturing_free, mAss, 'mfg')}</span>` : ''}
-          ${c.reaction_slots ? `<span class="ind-slotset" title="${rUsed} busy · ${rAss} to start · ${c.reaction_slots} reaction slots">${_indSlotPips(rUsed, c.reaction_free, rAss, 'rx')}</span>` : ''}
+          ${_indSlotRow('Industry', 'mfg', mUsed, c.manufacturing_free, mAss, c.manufacturing_slots)}
+          ${_indSlotRow('Reactions', 'rx', rUsed, c.reaction_free, rAss, c.reaction_slots)}
         </div>
         <ul class="ind-do-jobs">${jobs}</ul></div>`;
     }).join('');
