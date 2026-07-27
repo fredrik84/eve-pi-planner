@@ -80,6 +80,10 @@ class BuildParams:
     # Blueprint acquisition cost for types NOT owned — {type_id: {kind, price, runs_per_copy}}.
     # Empty means 'unknown', which leaves the old behaviour untouched.
     bp_acquire: dict = field(default_factory=dict)
+    # Per-component override: build these no matter what the shortcuts say. The shortcuts are
+    # heuristics about what's WORTH a job, and that's the user's call to make item by item — the
+    # cost engine's own verdict (buying is outright cheaper) is untouched by this.
+    force_build_ids: set = field(default_factory=set)
 
     def me_te_for(self, type_id: int, activity: str) -> tuple[float, float]:
         """(me_pct, te_pct) for a manufacturing product: its owned-blueprint values if known, else
@@ -352,6 +356,7 @@ class BuildOptions(BaseModel):
     use_stock: bool = True             # net owned materials off the demand (needs an asset scan)
     marginal_pct: float | None = None  # build only if it saves >= this % of the build (None = default)
     force_build: bool = False          # build everything buildable, ignoring small-saving shortcuts
+    force_build_ids: list[int] = []    # build THESE components regardless of the shortcuts
 
 
 class IndustryPlanRequest(BuildOptions):
@@ -425,7 +430,8 @@ def resolve_build_params(context_id: int, me_pct: float, te_pct: float,
                          system_id: int | None, facility_tax_pct: float | None,
                          max_build_hours: float = 0.0,
                          struct_material_pct: float = 0.0, struct_time_pct: float = 0.0,
-                         marginal_pct: float | None = None, force_build: bool = False) -> BuildParams:
+                         marginal_pct: float | None = None, force_build: bool = False,
+                         force_build_ids: list[int] | None = None) -> BuildParams:
     """Build the resolver's params, auto-deriving the build system + tax from the account's
     Reactions settings when the request didn't override them — so the caller needn't supply a
     system id or tax by hand."""
@@ -461,6 +467,7 @@ def resolve_build_params(context_id: int, me_pct: float, te_pct: float,
                                (MARGINAL_BUILD_PCT_OF_TOTAL if marginal_pct is None
                                 else max(0.0, min(25.0, float(marginal_pct))))),
         min_saving_isk=(0.0 if force_build else MIN_BUILD_SAVING_ISK),
+        force_build_ids=set(force_build_ids or ()),
     )
 
 
@@ -519,7 +526,8 @@ def prepare_plan_inputs(ctx: int, targets: list[tuple[int, int]], opts: BuildOpt
     mbh = 0.0 if opts.force_build else (SPEED_BUILD_CAP_HOURS if opts.prioritize_speed else 0.0)
     params = resolve_build_params(ctx, opts.me_pct, opts.te_pct, opts.system_id,
                                   opts.facility_tax_pct, mbh, opts.struct_material_pct,
-                                  opts.struct_time_pct, opts.marginal_pct, opts.force_build)
+                                  opts.struct_time_pct, opts.marginal_pct, opts.force_build,
+                                  opts.force_build_ids)
     # What an unowned blueprint would cost to acquire, so building can be priced honestly and the
     # margin-saver can see it. Best-effort: an empty index just leaves the old behaviour.
     try:

@@ -106,6 +106,7 @@ def aggregate_demand(targets: list[tuple[int, int]], memo: dict, mfg: dict, rx: 
     result: dict[int, dict] = {}
     flipped: set[int] = set()             # bought for speed (slow to build)
     flipped_marginal: set[int] = set()    # bought because building saves a trivial amount
+    marginal_saving: dict[int, float] = {}   # ISK building it WOULD have saved (negative = costs more)
     blueprint_cost_total = 0.0
     for tid in built:
         recipe = mfg.get(tid) or rx.get(tid)
@@ -121,6 +122,7 @@ def aggregate_demand(targets: list[tuple[int, int]], memo: dict, mfg: dict, rx: 
         # Time-aware flip: buy this batch instead of building if it's slow AND purchasable (never
         # flip a target — the user asked to build that).
         if (params.max_build_hours > 0 and runs > 0 and tid not in target_ids
+                and tid not in params.force_build_ids
                 and (memo.get(tid) or {}).get("buy_unit_cost") is not None):
             P = max(1, pools.get(activity, 1))
             wall_h = runs * recipe["base_time"] * (1 - te / 100.0) / P / 3600.0
@@ -162,8 +164,11 @@ def aggregate_demand(targets: list[tuple[int, int]], memo: dict, mfg: dict, rx: 
             below_abs = marginal_abs > 0 and total_saving < marginal_abs
             below_pct = (params.min_saving_pct > 0 and total_buy > 0
                          and total_saving < params.min_saving_pct / 100.0 * total_buy)
-            if total_saving <= 0 or below_abs or below_pct:
+            if (total_saving <= 0 or below_abs or below_pct) and tid not in params.force_build_ids:
                 flipped_marginal.add(tid)
+                # What the user gives up by taking the shortcut. Reported per material so "low
+                # saving" is an amount they can judge, not a verdict they have to trust.
+                marginal_saving[tid] = round(total_saving, 2)
                 continue
 
         result[tid] = {
@@ -181,7 +186,10 @@ def aggregate_demand(targets: list[tuple[int, int]], memo: dict, mfg: dict, rx: 
             continue
         result[tid] = {"type_id": tid, "activity": None, "build": False, "gross": qty,
                        "net": qty, "runs": 0, "produced": 0, "leftover": 0, "output_qty": 0,
-                       "bought_for_speed": tid in flipped, "bought_marginal": tid in flipped_marginal}
+                       "bought_for_speed": tid in flipped, "bought_marginal": tid in flipped_marginal,
+                       "marginal_saving": marginal_saving.get(tid),
+                       # Built only because the user overrode the shortcut — not the engine's call.
+                       "forced_build": False}
     return result
 
 
@@ -422,6 +430,7 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
                 "line_cost": line if price else None,
                 "bought_for_speed": info.get("bought_for_speed", False),
                 "bought_marginal": info.get("bought_marginal", False),
+                "marginal_saving": info.get("marginal_saving"),
                 "bought_no_blueprint": info.get("bought_no_blueprint", False),
             })
     shopping.sort(key=lambda r: r["line_cost"] or 0.0, reverse=True)

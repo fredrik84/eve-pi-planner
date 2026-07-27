@@ -1131,6 +1131,52 @@ def test_marginal_sweep_covers_every_slider_stop():
           len({p["threshold"] for p in flat}) == 1)
 
 
+def test_marginal_saving_is_reported_and_overridable():
+    """A "low saving" line has to say WHAT the saving was — a bare verdict asks the user to trust
+    it — and the user must be able to overrule the shortcut for that one component. The override is
+    per type_id and only defeats the shortcuts; it must not force a component the cost engine says
+    is outright cheaper to buy, and it must not touch anything else in the plan."""
+    print("test_marginal_saving_is_reported_and_overridable")
+    con = _seed_con()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+    pools = {"manufacturing": 5, "reaction": 5}
+    # A floor big enough that both components are bought for "low saving".
+    P = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, min_saving_isk=1e9,
+                    marginal_pct_of_total=0.0)
+    r = plan_queue([(100, 1)], mfg, rx, _prices(SELL), ADJ, P, NAMES, pools)
+    shop = {s["type_id"]: s for s in r["shopping_list"]}
+    check("the flipped component is on the shopping list", 101 in shop)
+    check("it is flagged low-saving", shop[101]["bought_marginal"] is True)
+    sv = shop[101]["marginal_saving"]
+    check("and reports the ISK it would have saved", sv is not None and sv > 0)
+    # The saving is (buy - build) × units: worth checking it's the real number, not a placeholder.
+    from app.industry.graph import resolve_unit_costs
+    memo, unit = resolve_unit_costs(mfg, rx, _prices(SELL), ADJ, P)
+    unit(100, frozenset())
+    node = memo[101]
+    check("the reported saving is (buy − build) × qty",
+          abs(sv - (node["buy_unit_cost"] - node["build_unit_cost"]) * shop[101]["qty"]) < 0.01)
+
+    # Override just that one component.
+    P_force = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, min_saving_isk=1e9,
+                          marginal_pct_of_total=0.0, force_build_ids={101})
+    r2 = plan_queue([(100, 1)], mfg, rx, _prices(SELL), ADJ, P_force, NAMES, pools)
+    built = {q["type_id"] for q in r2["requirements"]}
+    check("the overridden component is now built", 101 in built)
+    check("it left the shopping list", 101 not in {s["type_id"] for s in r2["shopping_list"]})
+    check("its own inputs are now bought instead", 201 in {s["type_id"] for s in r2["shopping_list"]})
+    check("nothing else was forced along with it",
+          built == {t["type_id"] for t in r["requirements"]} | {101})
+    check("building it is cheaper, as the saving promised",
+          r2["metrics"]["total_cost"] < r["metrics"]["total_cost"])
+
+    # An override never buys a loss: the engine's own build/buy verdict is untouched by it.
+    dear = {**SELL, 101: 1.0}          # buying a Gadget is nearly free → building it loses money
+    r3 = plan_queue([(100, 1)], mfg, rx, _prices(dear), ADJ, P_force, NAMES, pools)
+    check("a loss-making component is still bought",
+          101 not in {q["type_id"] for q in r3["requirements"]})
+
+
 def main():
     test_material_formula()
     test_graph_loaders()
@@ -1158,6 +1204,7 @@ def main():
     test_marginal_threshold_scales_with_build_size()
     test_force_build_ignores_the_shortcuts()
     test_marginal_sweep_covers_every_slider_stop()
+    test_marginal_saving_is_reported_and_overridable()
     test_install_assignment_spreads_and_respects_free_slots()
     test_fifo_wins_contested_slots()
     test_missing_blueprints_are_reported()

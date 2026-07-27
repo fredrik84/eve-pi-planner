@@ -880,6 +880,17 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-step-body { margin-top: 7px; font-size: 13px; color: #cdd6e6; }
 .ind-step-body.ind-wave-jobs { display: flex; flex-wrap: wrap; gap: 6px; }
 .ind-marginal-badge { font-size: 10px; background: #2a2a30; color: #b8c0cc; padding: 1px 6px; border-radius: 8px; }
+/* What the shortcut cost you on this line, and the way to overrule it for this one material. */
+.ind-shop-note { font-size: 11px; color: var(--clr-text-soft); }
+.ind-shop-force { font-size: 10px; background: #1e3a5f; color: var(--clr-accent); border: 1px solid #2d5a8a;
+  border-radius: 8px; padding: 1px 7px; cursor: pointer; }
+.ind-shop-force:hover { background: #254a78; }
+.ind-forced-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
+.ind-forced-lbl { font-size: 11px; color: var(--clr-text-soft); }
+.ind-forced-chip { font-size: 11px; background: #1b2a1e; color: var(--clr-green); border: 1px solid #2c4a33;
+  border-radius: 10px; padding: 2px 8px; cursor: pointer; }
+.ind-forced-chip:hover { background: #233a28; }
+.ind-forced-x { color: var(--clr-text-soft); margin-left: 2px; }
 .ind-step-items > summary { font-size: 11px; color: var(--clr-text-soft); cursor: pointer; padding: 4px 0 0; list-style: none; }
 .ind-step-items > summary::-webkit-details-marker { display: none; }
 .ind-step-items > summary::before { content: '\25B8 '; }

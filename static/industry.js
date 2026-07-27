@@ -472,6 +472,7 @@ function _indHideResults() {
 }
 
 function indPick(typeId, name) {
+  if (!_indPicked || _indPicked.type_id !== typeId) _indForcedTypes.clear();
   _indPicked = { type_id: typeId, name };
   document.getElementById('indSearch').value = name;
   _indHideResults();
@@ -521,7 +522,8 @@ async function indRunPlan() {
     const r = await fetch('/api/industry/plan', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ type_id: _indPicked.type_id, quantity: qty, prioritize_speed: _indPrioSpeed(),
-                             marginal_pct: _indMarginalPct(), force_build: _indForceBuild(), ..._indFacilityBonus() }),
+                             marginal_pct: _indMarginalPct(), force_build: _indForceBuild(),
+                             force_build_ids: _indForceIds(), ..._indFacilityBonus() }),
     });
     if (!r.ok) { const e = await r.json().catch(() => ({})); out.innerHTML = `<div class="pp-card"><p class="pp-warn">${_esc(e.detail || 'Plan failed')}</p></div>`; return; }
     const d = await r.json();
@@ -636,6 +638,26 @@ function indRestoreMarginal() {
 // So as soon as a product is picked (before any preview is run) we fetch the whole curve — cost +
 // makespan at every slider stop — and read it locally as the handle moves. Dragging then shows the
 // actual consequence instantly, with no replan per pixel; letting go still runs the real plan.
+// Components the user has overridden to BUILD despite a shortcut buying them (id -> name). Reset
+// when the product changes — an override is about this build, not a standing preference.
+let _indForcedTypes = new Map();
+
+function _indForceIds() { return [..._indForcedTypes.keys()]; }
+
+// Build this component anyway. The plan re-runs (and the slider curve is re-fetched) because
+// forcing one component changes the batch every other decision was weighed against.
+function indForceBuildType(typeId, name) {
+  _indForcedTypes.set(typeId, name || String(typeId));
+  _indSweep = null; _indSweepFailed = null;
+  indRunPlan();
+}
+
+function indUnforceBuildType(typeId) {
+  _indForcedTypes.delete(typeId);
+  _indSweep = null; _indSweepFailed = null;
+  indRunPlan();
+}
+
 let _indSweep = null;          // { key, points: [{pct, makespan_hours, total_cost, ...}] }
 let _indSweepPending = null;   // key of the request in flight, so a drag can't stack fetches
 let _indSweepFailed = null;    // key whose fetch failed — don't leave the line dimmed forever
@@ -643,7 +665,7 @@ let _indSweepFailed = null;    // key whose fetch failed — don't leave the lin
 function _indSweepKey(qty) {
   const f = _indFacilityBonus();
   return [_indPicked ? _indPicked.type_id : 0, qty, _indPrioSpeed() ? 1 : 0,
-          f.struct_material_pct, f.struct_time_pct].join('|');
+          f.struct_material_pct, f.struct_time_pct, _indForceIds().sort().join(',')].join('|');
 }
 
 async function _indLoadSweep(qty) {
@@ -658,7 +680,8 @@ async function _indLoadSweep(qty) {
     const r = await fetch('/api/industry/plan_sweep', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ type_id: _indPicked.type_id, quantity: qty,
-                             prioritize_speed: _indPrioSpeed(), ..._indFacilityBonus() }),
+                             prioritize_speed: _indPrioSpeed(), force_build_ids: _indForceIds(),
+                             ..._indFacilityBonus() }),
     });
     if (!r.ok) { _indSweepFailed = key; _indRenderMarginalLive(); return; }
     const d = await r.json();
@@ -871,19 +894,44 @@ function _indStageModel(tiersData) {
   return { cols, stageOf };
 }
 
-function _indShopRowHtml(s) {
+function _indShopRowHtml(s, allowForce) {
+  // "Low saving" is a verdict; on its own it asks the user to trust it. Say what building this one
+  // would actually have saved (or cost) and let them overrule it per material.
+  let marginal = '';
+  if (s.bought_marginal) {
+    const sv = s.marginal_saving;
+    const why = sv == null ? 'Building this would save too little to be worth a job'
+      : sv > 0 ? `Building this batch yourself would save ${fmtIsk(sv)} — under the threshold, so it's bought`
+      : `Building this batch yourself would cost ${fmtIsk(-sv)} MORE than buying it`;
+    marginal = ` <span class="ind-marginal-badge" title="${_esc(why)}">low saving</span>`
+      + (sv != null ? ` <span class="ind-shop-note">${sv > 0 ? `saves ${fmtIsk(sv)} if built`
+                                                             : `${fmtIsk(-sv)} dearer to build`}</span>` : '')
+      + (allowForce ? ` <button class="ind-shop-force" onclick="indForceBuildType(${s.type_id}, '${_esc(s.name).replace(/'/g, "\\'")}')"`
+      + ` title="Build this component in the plan anyway">Build it</button>` : '');
+  }
   return `<tr><td>${_esc(s.name)}`
     + `${s.bought_for_speed ? ' <span class="ind-speed-badge" title="Bought instead of built to save time">for speed</span>' : ''}`
-    + `${s.bought_marginal ? ' <span class="ind-marginal-badge" title="Building this would save too little to be worth a job">low saving</span>' : ''}</td>`
+    + `${marginal}</td>`
     + `<td class="ind-num">${Math.round(s.qty).toLocaleString()}</td>`
     + `<td class="ind-src">${s.source ? _esc(s.source) : '<span class="pp-warn">no price</span>'}</td>`
     + `<td class="ind-num">${s.line_cost != null ? fmtIsk(s.line_cost) : '—'}</td></tr>`;
 }
 
+// The components the user overruled, with a way back — once forced they vanish from the shopping
+// list (they're built now), so without this the override would be invisible and unrepeatable.
+function _indForcedChipsHtml() {
+  if (!_indForcedTypes.size) return '';
+  return `<div class="ind-forced-bar"><span class="ind-forced-lbl">Building anyway:</span>`
+    + [..._indForcedTypes.entries()].map(([tid, name]) =>
+        `<button class="ind-forced-chip" onclick="indUnforceBuildType(${tid})" title="Go back to buying it">`
+        + `${_esc(name)} <span class="ind-forced-x">✕</span></button>`).join('')
+    + `</div>`;
+}
+
 // The shopping list grouped by the stage that needs each material — buy just what the next step
 // needs, or everything at once. Grouping/labels match the pipeline's "Buy N materials" cards
 // exactly, since both render from the same _indStageModel().
-function _indShoppingSections(d, model) {
+function _indShoppingSections(d, model, allowForce) {
   const list = d.shopping_list || [];
   if (!list.length) return '<p class="pp-sub">Nothing to buy — built entirely from stock/recipes.</p>';
   const byId = {};
@@ -900,7 +948,7 @@ function _indShoppingSections(d, model) {
     sections += `<div class="ind-shop-stage" id="ind-shop-stage-${col.t}">`
       + `<div class="ind-shop-stage-hd"><span>For ${_esc(col.shopLabel || col.label)} — ${rows.length} item${rows.length > 1 ? 's' : ''} · ${fmtIsk(stageCost)}</span>`
       + `<button class="ind-copy-btn ind-copy-sm" onclick="indCopyMultibuy(${col.t})">Copy this stage</button></div>`
-      + `<table class="ind-table"><thead><tr><th>Material</th><th class="ind-num">Qty</th><th>Source</th><th class="ind-num">Cost</th></tr></thead><tbody>${rows.map(_indShopRowHtml).join('')}</tbody></table></div>`;
+      + `<table class="ind-table"><thead><tr><th>Material</th><th class="ind-num">Qty</th><th>Source</th><th class="ind-num">Cost</th></tr></thead><tbody>${rows.map(r => _indShopRowHtml(r, allowForce)).join('')}</tbody></table></div>`;
   });
   // Anything the stage model didn't place (defensive — keeps the list complete no matter what).
   const placed = new Set(model.cols.flatMap(c => c.buys.map(e => e.type_id)));
@@ -910,11 +958,12 @@ function _indShoppingSections(d, model) {
     sections += `<div class="ind-shop-stage" id="ind-shop-stage-other">`
       + `<div class="ind-shop-stage-hd"><span title="Not linked to a build stage — please report this">Not tied to a stage — ${rest.length} item${rest.length > 1 ? 's' : ''}</span>`
       + `<button class="ind-copy-btn ind-copy-sm" onclick="indCopyMultibuy('other')">Copy this stage</button></div>`
-      + `<table class="ind-table"><thead><tr><th>Material</th><th class="ind-num">Qty</th><th>Source</th><th class="ind-num">Cost</th></tr></thead><tbody>${rest.map(_indShopRowHtml).join('')}</tbody></table></div>`;
+      + `<table class="ind-table"><thead><tr><th>Material</th><th class="ind-num">Qty</th><th>Source</th><th class="ind-num">Cost</th></tr></thead><tbody>${rest.map(r => _indShopRowHtml(r, allowForce)).join('')}</tbody></table></div>`;
   }
   const totalCost = list.reduce((a, s) => a + (s.line_cost || 0), 0);
   return `<div class="ind-shop-bar"><button class="ind-copy-btn" onclick="indCopyMultibuy()">Copy everything</button>`
-    + `<span class="ind-shop-tot">${list.length} items · ${fmtIsk(totalCost)}</span></div>${sections}`;
+    + `<span class="ind-shop-tot">${list.length} items · ${fmtIsk(totalCost)}</span></div>`
+    + (allowForce ? _indForcedChipsHtml() : '') + sections;
 }
 
 // Copy a shopping list (or one stage of it, if `stage` is given) in EVE's Multibuy paste format
@@ -1219,7 +1268,7 @@ function _indRenderPlan(d, title) {
       ${_indBlueprintWarn(d)}
       ${_indStepsHtml(d, stageModel)}
       ${_indPipelineHtml(d, tiersData, stageModel)}
-      <details class="ind-details" open><summary>Shopping list (${(d.shopping_list || []).length})</summary>${_indShoppingSections(d, stageModel)}</details>
+      <details class="ind-details" open><summary>Shopping list (${(d.shopping_list || []).length})</summary>${_indShoppingSections(d, stageModel, true)}</details>
       ${tree}
       ${leftovers}
     </div>
