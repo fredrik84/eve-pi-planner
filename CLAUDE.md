@@ -652,6 +652,45 @@ it ignores CC level + planet size, so demand is over-stated for CC4 / big-planet
 path is to sum per-planet `component_factory_rate(product, pi_data, planet_type, ccu)` (fuelblocks.py)
 using each factory planet's stored `planet_type` + the character's `ccu`.
 
+## Industry: per-component build overrides + customer build-status links
+
+**"Build it anyway" overrides.** The make-or-buy engine has two shortcuts that BUY a component the
+cost engine would build: the marginal-saving threshold (the slider) and the speed cap. Both are
+judgements about what's *worth a job*, which is the user's call — so every "low saving" shopping-list
+row reports `marginal_saving` (the ISK building that batch would have saved, negative when an
+unowned blueprint copy makes building dearer) and offers a **Build it** button.
+`BuildParams.force_build_ids` / `BuildOptions.force_build_ids` defeat **only those two shortcuts** —
+a component the cost engine says is outright cheaper to buy is still bought, whatever the user
+clicks. Overrides persist on the order (`pp_industry_orders.force_build_ids`, a JSON id list) and
+are **unioned across the queue** in `_run_queue_plan`: the queue builds one shared batch per
+component, so an override can only be all-or-nothing for that component. The preview's own set lives
+in `_indForcedTypes` (frontend) and is cleared once the order carries it.
+
+**Customer build-status links** (`app/industry/shares.py`, `industry_share` flag). A builder mints a
+login-free link per queued order (`POST /api/industry/orders/{id}/share`, idempotent; DELETE
+revokes) that the customer opens at **`/b/{share_id}`** — product, quantity, stage list, progress bar
+and ETA, auto-refreshing. Served from **`static/build.html`**, a standalone document with no app JS
+and no session: the page must be incapable of showing account data even by accident. `/b/{id}` in
+`main.py` injects Open Graph tags (same pattern as `/s/{id}`) so the link unfurls in Discord.
+
+- **Privacy is the design** (rule 8): the payload in `build_status()` is assembled field by field,
+  never filtered from a plan. It carries NO character names, systems/structures, ISK of any kind
+  (cost, shopping list, margin), and nothing about the account's other orders. `test_industry.py`'s
+  `test_customer_build_status_leaks_nothing` asserts this against the function source, so adding a
+  leaky field fails the suite.
+- **Stages** = depth from the shared product (`_stage_of_types` reuses the scheduler's `_depths`),
+  so stage 1 is the deepest components and the last is "Final assembly" — the same ordering the
+  builder's pipeline shows.
+- **Two different plans on purpose:** structure/run counts come from a plan of THIS order alone
+  (`_order_plan`, `use_stock=False`) — the queue plan aggregates every order, which would both
+  misstate the customer's build and disclose the builder's other work — while the **ETA** comes from
+  the whole-queue schedule, because contention for slots is real and the customer feels it.
+- Progress reads the same ledgers the builder's own view does (`_done_by_type`/`_running_by_type` +
+  owned quantities, capped at need), so a customer can never see a rosier number than the builder.
+- Public reads are cached 60s (`indshare:<id>`); a public page whose every render costs two plans
+  would otherwise be an amplification lever.
+
+
 ## Bug reporting (`app/bugs.py`, `pp_bugs` table)
 
 Any logged-in pilot can file a report; only admins read/triage them. **Admin = account owns

@@ -146,6 +146,12 @@ FEATURE_REGISTRY = [
                     "and how long it takes. Spans manufacturing AND reactions for deep builds. "
                     "Admin-preview while it's built out.",
      "default": False},
+    {"key": "industry_share", "label": "Industry: customer build-status links", "group": "Industry",
+     "description": "Share a queued build with the person who ordered it: a login-free link showing "
+                    "what's being built, which stage it's on, a progress bar and an ETA. Deliberately "
+                    "carries no character names, systems or ISK — only the build's own progress. "
+                    "Revocable at any time.",
+     "default": False},
 ]
 GROUP_ORDER = ["Dashboard", "Setup Analysis", "Planner", "Planet DB", "Characters",
                "Notifications & Alerts", "Reactions", "Industry"]

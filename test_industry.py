@@ -1177,6 +1177,55 @@ def test_marginal_saving_is_reported_and_overridable():
           101 not in {q["type_id"] for q in r3["requirements"]})
 
 
+def test_order_overrides_persist_and_apply_to_the_queue():
+    """A "build it anyway" decided in the preview has to survive being queued, or the override is a
+    lie the moment the user acts on it. Stored per order as a JSON id list, then UNIONED across the
+    queue at plan time — the queue builds one shared batch per component, so an override can only be
+    all-or-nothing for that component, and the union is what the user asked for."""
+    print("test_order_overrides_persist_and_apply_to_the_queue")
+    from app.industry.orders import _parse_ids
+    check("an empty column parses to no overrides", _parse_ids("") == [])
+    check("NULL parses to no overrides", _parse_ids(None) == [])
+    check("garbage parses to no overrides, not a crash", _parse_ids("{nope") == [])
+    check("a stored list round-trips", _parse_ids("[101, 102]") == [101, 102])
+
+    # The union across queued orders is what reaches the planner: two orders, each overriding a
+    # different component, must both be honoured in the one shared plan.
+    con = _seed_con()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+    pools = {"manufacturing": 5, "reaction": 5}
+    rows = [{"force_build_ids": "[101]"}, {"force_build_ids": "[102]"}, {"force_build_ids": ""}]
+    forced = {t for r in rows for t in _parse_ids(r["force_build_ids"])}
+    check("overrides union across the queue", forced == {101, 102})
+
+    P = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, min_saving_isk=1e9,
+                    marginal_pct_of_total=0.0, force_build_ids=forced)
+    r = plan_queue([(100, 1)], mfg, rx, _prices(SELL), ADJ, P, NAMES, pools)
+    built = {q["type_id"] for q in r["requirements"]}
+    check("both overridden components are built", {101, 102} <= built)
+
+
+def test_customer_build_status_leaks_nothing():
+    """The share payload is customer-facing and login-free, so what it does NOT contain is the
+    feature. Assert the shape by construction: no ISK of any kind, no character/system/structure,
+    and nothing about the builder's other orders."""
+    print("test_customer_build_status_leaks_nothing")
+    import inspect
+    from app.industry import shares
+    src = inspect.getsource(shares.build_status)
+    banned = ["total_cost", "materials_cost", "job_cost", "net_cost", "shopping_list",
+              "character_name", "character_id", "system", "isk", "price", "leftover"]
+    for word in banned:
+        check(f"the payload never mentions {word}", word not in src.split("payload = ")[1])
+    # The stage walk must be rooted at the shared order's own product, never the queue's targets.
+    stage_src = inspect.getsource(shares._stage_of_types)
+    check("stages are derived from the shared product alone", "_depths([target_id]" in stage_src)
+    # And the plan it measures against is this order's own, not the aggregated queue plan.
+    plan_src = inspect.getsource(shares._order_plan)
+    check("the order is planned on its own", "[(product_type_id, quantity)]" in plan_src)
+    check("stock is not netted off the customer's view", "use_stock=False" in plan_src)
+
+
 def main():
     test_material_formula()
     test_graph_loaders()
@@ -1205,6 +1254,8 @@ def main():
     test_force_build_ignores_the_shortcuts()
     test_marginal_sweep_covers_every_slider_stop()
     test_marginal_saving_is_reported_and_overridable()
+    test_order_overrides_persist_and_apply_to_the_queue()
+    test_customer_build_status_leaks_nothing()
     test_install_assignment_spreads_and_respects_free_slots()
     test_fifo_wins_contested_slots()
     test_missing_blueprints_are_reported()

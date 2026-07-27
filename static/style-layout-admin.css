@@ -891,6 +891,20 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
   border-radius: 10px; padding: 2px 8px; cursor: pointer; }
 .ind-forced-chip:hover { background: #233a28; }
 .ind-forced-x { color: var(--clr-text-soft); margin-left: 2px; }
+/* Overrides carried by a queued order, and the customer status link. */
+.ind-oc-forced { font-size: 10px; background: #1b2a1e; color: var(--clr-green); border: 1px solid #2c4a33;
+  border-radius: 8px; padding: 0 6px; margin-left: 4px; cursor: pointer; }
+.ind-oc-share { background: none; border: 0; color: var(--clr-accent); cursor: pointer; font-size: 12px; padding: 0 3px; }
+.ind-oc-share:hover { color: #d5e4ff; }
+.ind-share-box { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; background: #141a26;
+  border: 1px solid var(--clr-border); border-radius: 8px; padding: 8px 10px; margin-bottom: 10px; }
+.ind-share-lbl { font-size: 11px; color: var(--clr-text-soft); text-transform: uppercase; letter-spacing: .06em; }
+.ind-share-url { flex: 1 1 260px; min-width: 0; background: #0e121b; color: var(--clr-text);
+  border: 1px solid var(--clr-border); border-radius: 5px; padding: 5px 8px; font-size: 12px; }
+.ind-share-open { font-size: 12px; color: var(--clr-accent); text-decoration: none; }
+.ind-share-revoke { font-size: 11px; background: none; color: var(--clr-red); border: 1px solid #4a2a2f;
+  border-radius: 5px; padding: 4px 9px; cursor: pointer; }
+.ind-share-x { background: none; border: 0; color: var(--clr-text-soft); cursor: pointer; font-size: 12px; }
 .ind-step-items > summary { font-size: 11px; color: var(--clr-text-soft); cursor: pointer; padding: 4px 0 0; list-style: none; }
 .ind-step-items > summary::-webkit-details-marker { display: none; }
 .ind-step-items > summary::before { content: '\25B8 '; }

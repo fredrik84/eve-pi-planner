@@ -136,9 +136,18 @@ function _indStatusHeadline(d) {
       ? `<span class="ind-oc-pos" title="Position in line — first in line wins a contested slot">#${T.rank + 1}</span>` : '';
     const eta = st === 'complete' ? ''
       : (T && T.finish_hours ? `<span class="ind-oc-eta" title="Estimated finish for this order">${_fmtHours(T.finish_hours)}</span>` : '');
+    // Overrides persisted with the order. Shown because a component being built against the
+    // engine's own shortcut is a decision worth seeing — and worth being able to take back.
+    const fb = o.force_build || [];
+    const forced = fb.length
+      ? `<button class="ind-oc-forced" title="Building anyway: ${_esc(fb.map(f => f.name).join(', '))} — click to go back to buying them"`
+        + ` onclick="indClearOrderForced(${o.id})">⚒ ${fb.length}</button>` : '';
+    const share = _featureActive('industry_share')
+      ? `<button class="ind-oc-share" title="Share a status link with the customer" onclick="indShareOrder(${o.id})">↗</button>` : '';
     return `<span class="ind-order-chip ind-oc-${st}" id="oc-${o.id}">${pos}${tag}<b>${o.quantity}×</b> ${_esc(o.name)}`
-      + (lbl ? `<span class="ind-oc-state">${lbl}</span>` : '') + eta
+      + (lbl ? `<span class="ind-oc-state">${lbl}</span>` : '') + eta + forced
       + `<button class="ind-oc-edit" title="Rename or change the quantity" onclick="indEditOrder(${o.id})">✎</button>`
+      + share
       + `<button class="ind-oc-del" title="Remove from the build" onclick="indRemoveOrder(${o.id})">✕</button></span>`;
   }).join('');
   return sim
@@ -1392,10 +1401,14 @@ async function indAddToQueue() {
     const r = await fetch('/api/industry/orders', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ product_type_id: _indPicked.type_id, quantity: qty,
-                             label: (document.getElementById('indLabel') || {}).value || '' }),
+                             label: (document.getElementById('indLabel') || {}).value || '',
+                             // The overrides were decided against THIS product — they ride along, or
+                             // queueing would silently undo every one of them.
+                             force_build_ids: _indForceIds() }),
     });
     if (!r.ok) { const e = await r.json().catch(() => ({})); alert(e.detail || 'Could not queue'); return; }
     document.getElementById('indResult').innerHTML = '';
+    _indForcedTypes.clear();       // they live on the order now
     const lb = document.getElementById('indLabel');
     if (lb) lb.value = '';          // don't inherit the last customer on the next order
     indClosePlanner();
@@ -1455,6 +1468,59 @@ function _indProgTypeMap() {
 // The queue no longer has a card of its own — orders render as chips in the status header, so
 // "reload the queue" and "refresh the status" are the same operation.
 async function indLoadQueue() { return indRefreshStatus(); }
+
+
+// ── Per-order overrides + customer share links ───────────────────────────────────────────────
+// Take back every "build it anyway" on one order. All of them at once: they were made together in
+// one preview, and a per-component undo on a chip in a header row is more UI than the case wants.
+async function indClearOrderForced(orderId) {
+  try {
+    const r = await fetch(`/api/industry/orders/${orderId}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ force_build_ids: [] }),
+    });
+    if (!r.ok) { alert(await _indErrText(r)); return; }
+  } catch (e) { alert(String(e)); return; }
+  await indRefreshStatus();     // the overrides change what gets built, so the whole plan moves
+}
+
+// A link the customer can open with no account: what's being built, which stage, how far, when.
+// Minting is idempotent server-side, so this is also "show me the link I already made".
+async function indShareOrder(orderId) {
+  const box = document.getElementById('indShareBox');
+  try {
+    const r = await fetch(`/api/industry/orders/${orderId}/share`, { method: 'POST' });
+    if (!r.ok) { alert(await _indErrText(r)); return; }
+    const d = await r.json();
+    const url = `${location.origin}/b/${d.share_id}`;
+    if (!box) { prompt('Share this with your customer:', url); return; }
+    box.style.display = '';
+    box.innerHTML = `<span class="ind-share-lbl">Customer link</span>`
+      + `<input class="ind-share-url" id="indShareUrl" readonly value="${_esc(url)}" onclick="this.select()">`
+      + `<button class="ind-copy-btn" onclick="indCopyShare()">Copy</button>`
+      + `<a class="ind-share-open" href="${_esc(url)}" target="_blank" rel="noopener">Open</a>`
+      + `<button class="ind-share-revoke" onclick="indRevokeShare(${orderId})" title="Kill this link — the customer's page stops working">Revoke</button>`
+      + `<button class="ind-share-x" onclick="document.getElementById('indShareBox').style.display='none'">✕</button>`;
+  } catch (e) { alert(String(e)); }
+}
+
+function indCopyShare() {
+  const el = document.getElementById('indShareUrl');
+  if (!el) return;
+  navigator.clipboard.writeText(el.value).then(() => {
+    const b = el.parentElement.querySelector('.ind-copy-btn');
+    if (b) { b.textContent = 'Copied'; setTimeout(() => { b.textContent = 'Copy'; }, 1500); }
+  }).catch(() => el.select());
+}
+
+async function indRevokeShare(orderId) {
+  if (!confirm('Revoke this link? The customer\'s page will stop working immediately.')) return;
+  try {
+    await fetch(`/api/industry/orders/${orderId}/share`, { method: 'DELETE' });
+  } catch (e) { /* revoking is best-effort from the UI's point of view */ }
+  const box = document.getElementById('indShareBox');
+  if (box) { box.innerHTML = '<span class="ind-share-lbl">Link revoked.</span>'; setTimeout(() => { box.style.display = 'none'; }, 2000); }
+}
 
 // ── Queue order ─────────────────────────────────────────────────────────────────────────────
 // Position is not cosmetic: the scheduler ranks by it, so the first order wins a contested slot and

@@ -262,6 +262,54 @@ def share_preview(share_id: str, request: Request):
     return HTMLResponse(doc)
 
 
+@app.get("/b/{share_id}")
+def build_status_page(share_id: str, request: Request):
+    """The customer-facing build status page for a shared order.
+
+    Served from its own minimal document, NOT the SPA: this page is opened by people with no account
+    and it must be incapable of showing account data even by accident. Open Graph tags are injected
+    the same way the plan share does it, so pasting the link into Discord unfurls with the product
+    and how far along it is — which is most of what the customer wanted to ask.
+    """
+    try:
+        with open("static/build.html", encoding="utf-8") as f:
+            doc = f.read()
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    title, desc = "Build status", "Follow this build's progress."
+    try:
+        from app.industry.shares import build_status
+        d = build_status(share_id)
+        title = f"{d['quantity']}× {d['product']} — {round(d['pct'])}% built"
+        desc = ("Finished — ready for handover." if d["status"] == "complete"
+                else f"{round(d['pct'])}% complete · stage {d['current_stage'] or 1} of "
+                     f"{len(d['stages']) or 1} · ~{round(d['eta_hours'] or 0)}h to go")
+    except Exception:
+        pass                       # a dead or unknown link still serves the page, which explains itself
+
+    t = _html.escape(title, quote=True)
+    dsc = _html.escape(desc, quote=True)
+    base = str(request.base_url).rstrip("/")
+    url = _html.escape(f"{base}/b/{share_id}", quote=True)
+    img = _html.escape(f"{base}/og-image.png?v=6", quote=True)
+    og = (
+        f'<meta property="og:type" content="website">\n'
+        f'  <meta property="og:site_name" content="EVE PI Planner">\n'
+        f'  <meta property="og:title" content="{t}">\n'
+        f'  <meta property="og:description" content="{dsc}">\n'
+        f'  <meta property="og:url" content="{url}">\n'
+        f'  <meta property="og:image" content="{img}">\n'
+        f'  <meta name="twitter:card" content="summary_large_image">\n'
+        f'  <meta name="twitter:title" content="{t}">\n'
+        f'  <meta name="twitter:description" content="{dsc}">\n'
+        f'  <meta name="description" content="{dsc}">\n'
+        f'  <script>window.__BUILD_ID__={_json.dumps(share_id)};</script>\n'
+    )
+    doc = doc.replace("<head>", "<head>\n  " + og, 1)
+    return HTMLResponse(doc)
+
+
 # Unmatched /api/* must 404, not fall through to the static mount below.
 #
 # StaticFiles is mounted at "/", so anything no API route matched lands there — and StaticFiles only

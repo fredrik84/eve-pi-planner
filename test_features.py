@@ -274,6 +274,33 @@ def test_missing_api_route_404s(base: str) -> bool:
     return ok
 
 
+def test_industry_share_gating(base: str) -> bool:
+    """The customer build-status link is the one deliberately PUBLIC industry read — a customer has
+    no account. So the two halves must be gated differently: minting/revoking a link is the
+    builder's own action (401 anonymous), while reading a status by share id is open and must 404
+    on an unknown id rather than leaking whether one exists as a different code."""
+    print(f"\n{'='*60}\n  Industry customer build-status links\n{'='*60}")
+    ok = True
+    code = post_status(f"{base}/api/industry/orders/1/share", {})
+    ok &= check(code == 401, f"anonymous share-mint rejected (got HTTP {code})")
+    code = delete_status(f"{base}/api/industry/orders/1/share")
+    ok &= check(code == 401, f"anonymous share-revoke rejected (got HTTP {code})")
+    code = get_status(f"{base}/api/industry/orders/1/share")
+    ok &= check(code == 401, f"anonymous share-lookup rejected (got HTTP {code})")
+    # Public by design, and an unknown id must be a plain 404.
+    code = get_status(f"{base}/api/industry/build-status/definitely-not-a-real-share-id")
+    ok &= check(code == 404, f"unknown build-status id -> 404 (got HTTP {code})")
+    # The page itself is served to anyone; it explains itself when the link is dead.
+    code = get_status(f"{base}/b/definitely-not-a-real-share-id")
+    ok &= check(code == 200, f"the customer page loads without a session (got HTTP {code})")
+    # The builder's own queue endpoints stay private.
+    code = get_status(f"{base}/api/industry/orders")
+    ok &= check(code == 401, f"anonymous order list rejected (got HTTP {code})")
+    code = get_status(f"{base}/api/industry/progress")
+    ok &= check(code == 401, f"anonymous progress read rejected (got HTTP {code})")
+    return ok
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--url", default="https://eve-pi.failed.name")
@@ -287,6 +314,7 @@ def main():
         test_corp_wallet_gated(base),
         test_reactions_gated(base),
         test_markets_gated(base),
+        test_industry_share_gating(base),
         test_groups_gated(base),
         test_delete_account_gated(base),
         test_cleanup_preview_gated(base),

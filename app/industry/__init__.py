@@ -26,4 +26,5 @@ from app.industry import (  # noqa: F401 — imported for endpoint registration 
     assets,         # /api/industry/assets*
     bpc,            # /api/industry/bpc[/scan]
     progress,       # /api/industry/progress
+    shares,         # customer build-status links: /api/industry/orders/{id}/share, /build-status
 )
