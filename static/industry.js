@@ -134,10 +134,12 @@ function _indStatusHeadline(d) {
   const sim = p && p.simulated
     ? '<div class="ind-sim-banner">Preview mode — this progress is made up so you can see the layout. Nothing here is real.</div>' : '';
   const t = (p && p.totals) || null;
-  // Order is the point of this row: when it lands, then what it costs, then how far along it is.
-  // Time first because that's the question someone opening the page is actually asking; the two
-  // job counters go last — they're detail behind the headline percentage, not headlines themselves.
+  // Order matters here: how far along → when it lands → what it costs → the job counters behind the
+  // headline percentage. Four to a row, so this reads as two tidy lines.
   const tiles = [];
+  if (t && t.required) {
+    tiles.push(['Progress', `${p.pct}%`, `${t.done} of ${t.required} jobs delivered`]);
+  }
   const fd = d.metrics.first_delivery_hours;
   // Two different questions: when can I hand over the first order, vs when am I finished entirely.
   // Only worth splitting when they actually differ.
@@ -149,8 +151,7 @@ function _indStatusHeadline(d) {
   }
   const m = d.metrics || {};
   if (m.total_cost != null) {
-    // Net cost leads: what the finished units actually cost you once reusable leftovers are credited
-    // back. Total spend is the cash-out-of-pocket figure and sits after its parts.
+    // Net cost leads: what the finished units really cost once reusable leftovers are credited back.
     if (m.net_cost != null && (m.leftover_value || 0) > 0.5) {
       tiles.push(['Net cost', fmtIsk(m.net_cost),
                   'Cost of the finished units, after crediting back reusable leftovers']);
@@ -164,9 +165,8 @@ function _indStatusHeadline(d) {
     }
   }
   if (t && t.required) {
-    tiles.push(['Progress', `${p.pct}%`, `${t.done} of ${t.required} jobs delivered`]);
-    tiles.push(['In the cooker', String(t.running), 'Jobs running right now']);
     tiles.push(['Still to start', String(t.waiting), 'Jobs not started yet']);
+    tiles.push(['In the cooker', String(t.running), 'Jobs running right now']);
   }
   const byOrder = {};
   ((p && p.orders) || []).forEach(o => { byOrder[o.id] = o; });
