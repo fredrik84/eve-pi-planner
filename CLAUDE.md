@@ -683,6 +683,14 @@ order (`pp_industry_orders.me_te_overrides`), unioned across the queue exactly l
 A build buying several copies of MIXED research is approximated by the one representative value —
 that's what the per-product override is for.
 
+**One set of build options for the whole queue.** `/api/industry/to-install` is a **POST** taking the
+same `QueuePlanRequest` as `/api/industry/queue-plan`, and the frontend builds both bodies from one
+`_indQueueBody()`. This is not tidiness: the checklist used to plan with DEFAULTS while the status
+card beside it planned with the user's real settings (facility, threshold, speed, ME/TE overrides),
+so the two disagreed about which jobs were even ready — the checklist said "start the Revelation" off
+a plan that bought every component, while the screen showed two stages of component jobs that nothing
+was telling anyone to start. Any new whole-queue endpoint must take the same options.
+
 **Who installs each job, at every stage.** `/api/industry/to-install` names a character for the jobs
 you can start *right now* (off FREE slots). Everything after that used to be anonymous — a plan said
 "stage 1: 12 jobs" and never said who runs them. `schedule.assign_characters(waves, characters)`

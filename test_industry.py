@@ -1326,6 +1326,40 @@ def test_every_stage_gets_a_character_not_just_the_first():
           "character_id" not in plain[0]["tasks"][0])
 
 
+def test_the_checklist_and_the_plan_agree_on_what_is_ready():
+    """The "start now" checklist and the plan beside it must be the SAME plan. to-install used to
+    run with default options while the screen used the user's real ones, so the checklist would name
+    a job the plan scheduled last — "start the Revelation" while two stages of component jobs sat
+    above it with nothing telling you to build them. Options change which jobs are ready, so both
+    callers have to pass them."""
+    print("test_the_checklist_and_the_plan_agree_on_what_is_ready")
+    import inspect
+    from app.industry import orders
+    sig = inspect.signature(orders.to_install)
+    check("to-install accepts build options", "req" in sig.parameters)
+    check("and they are the queue's own option shape",
+          sig.parameters["req"].annotation in (orders.QueuePlanRequest, "QueuePlanRequest | None",
+                                               orders.QueuePlanRequest | None))
+    src = inspect.getsource(orders.to_install)
+    check("the caller's options reach the plan", "_run_queue_plan(ctx, req or" in src)
+
+    # The invariant that makes this matter: options genuinely change which jobs are ready first.
+    con = _seed_con()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+    pools = {"manufacturing": 5, "reaction": 5}
+    bought = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, min_saving_isk=1e9,
+                         marginal_pct_of_total=0.0)
+    built = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, min_saving_isk=0.0,
+                        marginal_pct_of_total=0.0)
+    w_bought = plan_queue([(100, 1)], mfg, rx, _prices(SELL), ADJ, bought, NAMES, pools)["schedule"]["waves"]
+    w_built = plan_queue([(100, 1)], mfg, rx, _prices(SELL), ADJ, built, NAMES, pools)["schedule"]["waves"]
+    ready_bought = {t["type_id"] for t in w_bought[0]["tasks"]}
+    ready_built = {t["type_id"] for t in w_built[0]["tasks"]}
+    check("buying the components makes the product itself the ready job", ready_bought == {100})
+    check("building them makes a COMPONENT the ready job instead", 100 not in ready_built)
+    check("so the two settings disagree about what to start", ready_bought != ready_built)
+
+
 def main():
     test_material_formula()
     test_graph_loaders()
@@ -1358,6 +1392,7 @@ def main():
     test_customer_build_status_leaks_nothing()
     test_blueprint_me_te_comes_from_the_copy_you_would_buy()
     test_every_stage_gets_a_character_not_just_the_first()
+    test_the_checklist_and_the_plan_agree_on_what_is_ready()
     test_install_assignment_spreads_and_respects_free_slots()
     test_fifo_wins_contested_slots()
     test_missing_blueprints_are_reported()

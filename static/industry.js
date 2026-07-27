@@ -54,6 +54,13 @@ function indClosePlanner() {
 }
 
 // The landing view: what's cooking, what's next, and the pipeline as the centrepiece.
+// Every whole-queue request must be planned with the SAME options — the checklist and the plan
+// disagreeing about what's ready was exactly the bug that came from two hand-maintained bodies.
+function _indQueueBody() {
+  return { prioritize_speed: _indPrioSpeed(), marginal_pct: _indMarginalPct(),
+           force_build: _indForceBuild(), me_te_overrides: _indMeTeMap(), ..._indFacilityBonus() };
+}
+
 async function indRefreshStatus() {
   const card = document.getElementById('indStatusCard');
   const body = document.getElementById('indStatusBody');
@@ -77,9 +84,7 @@ async function indRefreshStatus() {
   try {
     const r = await fetch('/api/industry/queue-plan', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prioritize_speed: _indPrioSpeed(), marginal_pct: _indMarginalPct(),
-                             force_build: _indForceBuild(), me_te_overrides: _indMeTeMap(),
-                             ..._indFacilityBonus() }),
+      body: JSON.stringify(_indQueueBody()),
     });
     if (!r.ok) { body.innerHTML = '<p class="pp-warn">Could not plan your queue.</p>'; return; }
     const d = await r.json();
@@ -1795,7 +1800,10 @@ async function indLoadInstall() {
   const el = document.getElementById('indInstall');
   if (!el) return;
   try {
-    const r = await fetch('/api/industry/to-install');
+    const r = await fetch('/api/industry/to-install', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(_indQueueBody()),
+    });
     if (!r.ok) { el.innerHTML = ''; return; }
     const d = await r.json();
     if (d.empty || !d.ready || !d.ready.length) { el.innerHTML = ''; return; }

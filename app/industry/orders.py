@@ -351,12 +351,19 @@ def queue_plan(req: QueuePlanRequest, ctx: int = Depends(require_context)):
     return _run_queue_plan(ctx, req)
 
 
-@router.get("/api/industry/to-install")
-def to_install(ctx: int = Depends(require_context)):
+@router.post("/api/industry/to-install")
+def to_install(req: QueuePlanRequest | None = None, ctx: int = Depends(require_context)):
     """What to start RIGHT NOW: the ready wave of the queue plan (jobs whose inputs are all
     available), your free slot counts, and how many of the ready jobs fit those free slots. The
-    actionable, least-effort answer to 'what should I be doing'."""
-    res = _run_queue_plan(ctx, QueuePlanRequest())
+    actionable, least-effort answer to 'what should I be doing'.
+
+    TAKES THE SAME BUILD OPTIONS as the queue plan, and must: this used to plan with defaults while
+    the screen beside it planned with the user's real settings (facility, threshold, speed, ME/TE
+    overrides). The two then disagreed about what is even ready — the checklist would say "start the
+    Revelation" off a plan that bought every component, while the plan on screen showed two earlier
+    stages of component jobs that nothing was telling you to start.
+    """
+    res = _run_queue_plan(ctx, req or QueuePlanRequest())
     if res.get("empty"):
         return {"empty": True}
     from app.industry.slots import _slot_pool
