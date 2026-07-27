@@ -128,7 +128,8 @@ def _stage_of_types(target_id: int, mfg: dict, rx: dict) -> dict[int, int]:
     return {tid: deepest - d + 1 for tid, d in depth.items()}
 
 
-def _order_plan(ctx: int, product_type_id: int, quantity: int, force_ids: list[int]):
+def _order_plan(ctx: int, product_type_id: int, quantity: int, force_ids: list[int],
+                me_te: dict | None = None):
     """This order's OWN plan — requirements and stages for just what the customer ordered.
 
     Not the queue plan: that aggregates every order's demand into shared batches, so its run counts
@@ -137,7 +138,7 @@ def _order_plan(ctx: int, product_type_id: int, quantity: int, force_ids: list[i
     queue is real and the customer feels it."""
     from app.industry.graph import BuildOptions, prepare_plan_inputs
     from app.industry.schedule import plan_queue
-    opts = BuildOptions(use_stock=False, force_build_ids=force_ids)
+    opts = BuildOptions(use_stock=False, force_build_ids=force_ids, me_te_overrides=me_te or {})
     inp = prepare_plan_inputs(
         ctx, [(product_type_id, quantity)], opts,
         missing_recipe_detail=lambda tid: f"order {tid} has no recipe")
@@ -166,7 +167,8 @@ def build_status(share_id: str) -> dict:
         ctx, order_id = int(row["context_id"]), int(row["order_id"])
         order = con.execute(
             "SELECT id, product_type_id, name, quantity, COALESCE(label,'') AS label, status, "
-            "COALESCE(force_build_ids,'') AS force_build_ids "
+            "COALESCE(force_build_ids,'') AS force_build_ids, "
+            "COALESCE(me_te_overrides,'') AS me_te_overrides "
             "FROM pp_industry_orders WHERE id=? AND context_id=?", (order_id, ctx)).fetchone()
         if not order:
             raise HTTPException(status_code=404, detail="This build link is no longer available.")
@@ -178,8 +180,15 @@ def build_status(share_id: str) -> dict:
         force_ids = [int(v) for v in _json.loads(order["force_build_ids"] or "[]")]
     except Exception:
         force_ids = []
+    # The order's own ME/TE choices shape its run counts and times, so the customer's view has to be
+    # planned with them — otherwise the page's stages disagree with the builder's.
+    try:
+        me_te = _json.loads(order["me_te_overrides"] or "{}")
+        me_te = me_te if isinstance(me_te, dict) else {}
+    except Exception:
+        me_te = {}
 
-    res, inp = _order_plan(ctx, tid, qty, force_ids)
+    res, inp = _order_plan(ctx, tid, qty, force_ids, me_te)
     stage_of = _stage_of_types(tid, inp.mfg, inp.rx)
 
     # Progress comes from the same ledgers the builder's own view reads, so the customer can never

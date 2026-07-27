@@ -78,7 +78,8 @@ async function indRefreshStatus() {
     const r = await fetch('/api/industry/queue-plan', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ prioritize_speed: _indPrioSpeed(), marginal_pct: _indMarginalPct(),
-                             force_build: _indForceBuild(), ..._indFacilityBonus() }),
+                             force_build: _indForceBuild(), me_te_overrides: _indMeTeMap(),
+                             ..._indFacilityBonus() }),
     });
     if (!r.ok) { body.innerHTML = '<p class="pp-warn">Could not plan your queue.</p>'; return; }
     const d = await r.json();
@@ -548,7 +549,8 @@ async function indRunPlan() {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ type_id: _indPicked.type_id, quantity: qty, prioritize_speed: _indPrioSpeed(),
                              marginal_pct: _indMarginalPct(), force_build: _indForceBuild(),
-                             force_build_ids: _indForceIds(), ..._indFacilityBonus() }),
+                             force_build_ids: _indForceIds(), me_te_overrides: _indMeTeMap(),
+                             ..._indFacilityBonus() }),
     });
     if (!r.ok) { const e = await r.json().catch(() => ({})); out.innerHTML = `<div class="pp-card"><p class="pp-warn">${_esc(e.detail || 'Plan failed')}</p></div>`; return; }
     const d = await r.json();
@@ -687,10 +689,17 @@ let _indSweep = null;          // { key, points: [{pct, makespan_hours, total_co
 let _indSweepPending = null;   // key of the request in flight, so a drag can't stack fetches
 let _indSweepFailed = null;    // key whose fetch failed — don't leave the line dimmed forever
 
+function _indMeTeMap() {
+  const out = {};
+  Object.keys(_indMeTe).forEach(k => { out[String(k)] = _indMeTe[k]; });
+  return out;
+}
+
 function _indSweepKey(qty) {
   const f = _indFacilityBonus();
   return [_indPicked ? _indPicked.type_id : 0, qty, _indPrioSpeed() ? 1 : 0,
-          f.struct_material_pct, f.struct_time_pct, _indForceIds().sort().join(',')].join('|');
+          f.struct_material_pct, f.struct_time_pct, _indForceIds().sort().join(','),
+          JSON.stringify(_indMeTeMap())].join('|');
 }
 
 async function _indLoadSweep(qty) {
@@ -706,7 +715,7 @@ async function _indLoadSweep(qty) {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ type_id: _indPicked.type_id, quantity: qty,
                              prioritize_speed: _indPrioSpeed(), force_build_ids: _indForceIds(),
-                             ..._indFacilityBonus() }),
+                             me_te_overrides: _indMeTeMap(), ..._indFacilityBonus() }),
     });
     if (!r.ok) { _indSweepFailed = key; _indRenderMarginalLive(); return; }
     const d = await r.json();
@@ -1041,8 +1050,71 @@ function _indTreeNode(n, depth) {
     + `<div class="ind-tree-kids">${childHtml}</div></details>`;
 }
 
+// ME/TE actually used per build step, keyed by type_id — filled from the plan's requirements so a
+// job chip can show what it was costed at. An assumed efficiency that isn't visible is an invisible
+// input to every number on the page.
+let _indReqMeTe = {};
+// The user's own ME/TE per product. NOT cleared when the product changes: it's a fact about a
+// blueprint ("the copy I use is ME 10"), not about one build.
+let _indMeTe = {};
+
+const _IND_ME_SRC = {
+  owned: 'from your own blueprint',
+  contract: 'assumed from the contract copy this plan buys',
+  override: 'you set this',
+  default: 'un-researched — no blueprint of yours and none listed',
+};
+
+function _indMeTeChip(typeId) {
+  const r = _indReqMeTe[typeId];
+  if (!r || r.me_source === 'reaction') return '';     // reactions have no blueprint ME/TE
+  const src = _IND_ME_SRC[r.me_source] || '';
+  return `<button class="ind-mete ind-mete-${r.me_source}" id="mete-${typeId}"`
+    + ` title="ME ${r.me}% materials / TE ${r.te}% time — ${_esc(src)}. Click to set what you'll really use."`
+    + ` onclick="indEditMeTe(${typeId})">ME ${r.me} · TE ${r.te}</button>`;
+}
+
 function _indJobChips(g) {
-  return g.map(x => `<span class="ind-wave-job">${_esc(x.name)} ×${x.runs}${x.activity === 'reaction' ? ' rx' : ''} · ${_fmtHours(x.dur)}</span>`).join('');
+  return g.map(x => `<span class="ind-wave-job">${_esc(x.name)} ×${x.runs}${x.activity === 'reaction' ? ' rx' : ''} · ${_fmtHours(x.dur)}`
+    + _indMeTeChip(x.type_id) + `</span>`).join('');
+}
+
+// Edit in place on the chip: two numbers, and the plan re-runs against them. This is the "editing
+// the plan" half — the same override can be set before a plan exists via the same map.
+function indEditMeTe(typeId) {
+  const el = document.getElementById('mete-' + typeId);
+  if (!el) return;
+  const cur = _indReqMeTe[typeId] || { me: 0, te: 0 };
+  const wrap = document.createElement('span');
+  wrap.className = 'ind-mete-edit';
+  wrap.innerHTML = `ME <input type="number" min="0" max="10" value="${cur.me}" id="mete-me-${typeId}">`
+    + ` TE <input type="number" min="0" max="20" value="${cur.te}" id="mete-te-${typeId}">`
+    + ` <button class="ind-mete-ok" onclick="indApplyMeTe(${typeId})">Apply</button>`
+    + (_indMeTe[typeId] ? ` <button class="ind-mete-clr" onclick="indClearMeTe(${typeId})" title="Back to what the plan works out for itself">reset</button>` : '');
+  el.replaceWith(wrap);
+}
+
+function indApplyMeTe(typeId) {
+  const me = parseFloat((document.getElementById('mete-me-' + typeId) || {}).value);
+  const te = parseFloat((document.getElementById('mete-te-' + typeId) || {}).value);
+  if (isNaN(me) || isNaN(te)) return;
+  _indMeTe[typeId] = [Math.max(0, Math.min(10, me)), Math.max(0, Math.min(20, te))];
+  _indSweep = null; _indSweepFailed = null;      // efficiency moves both cost and time
+  _indReplanCurrent();
+}
+
+function indClearMeTe(typeId) {
+  delete _indMeTe[typeId];
+  _indSweep = null; _indSweepFailed = null;
+  _indReplanCurrent();
+}
+
+// Whichever view is on screen. The overrides feed both the preview and the queue plan, so the one
+// showing has to be the one that re-runs.
+function _indReplanCurrent() {
+  const out = document.getElementById('indResult');
+  if (_indPicked && out && out.innerHTML.trim()) indRunPlan();
+  if (_indStatusVisible()) indRefreshStatus();
 }
 
 function _indStepItems(g, open) {
@@ -1270,6 +1342,8 @@ document.addEventListener('mouseout', e => {
 });
 
 function _indRenderPlan(d, title) {
+  _indReqMeTe = {};
+  (d.requirements || []).forEach(r => { _indReqMeTe[r.type_id] = { me: r.me, te: r.te, me_source: r.me_source }; });
   const unres = (d.unresolved && d.unresolved.length)
     ? `<p class="pp-warn">${d.unresolved.length} material(s) had no market price — cost is a floor.</p>` : '';
   const leftovers = (d.leftovers && d.leftovers.length)
@@ -1385,6 +1459,8 @@ async function indLoadBpcPrices(inst, ids, miss) {
 }
 
 function _indRenderPlanBody(d) {
+  _indReqMeTe = {};
+  (d.requirements || []).forEach(r => { _indReqMeTe[r.type_id] = { me: r.me, te: r.te, me_source: r.me_source }; });
   // The queue plan carries one tree per ordered product (`trees`); a single-product preview carries
   // one (`tree`). Either way the tier walk merges them by type, matching the aggregated demand.
   const roots = d.trees || d.tree;
@@ -1421,7 +1497,7 @@ async function indAddToQueue() {
                              label: (document.getElementById('indLabel') || {}).value || '',
                              // The overrides were decided against THIS product — they ride along, or
                              // queueing would silently undo every one of them.
-                             force_build_ids: _indForceIds() }),
+                             force_build_ids: _indForceIds(), me_te_overrides: _indMeTeMap() }),
     });
     if (!r.ok) { const e = await r.json().catch(() => ({})); alert(e.detail || 'Could not queue'); return; }
     document.getElementById('indResult').innerHTML = '';

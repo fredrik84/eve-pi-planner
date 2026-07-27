@@ -353,9 +353,13 @@ def bpc_prices(type_ids: list[int], region_id: int = THE_FORGE) -> dict[int, dic
         info = {"blueprint_type_id": bp,
                 "bpc": _summarise(copies, live_cutoff),
                 "bpo": _summarise(originals, live_cutoff),
-                "bpc_listings": [{"price": r["price"], "runs": int(r["runs"] or 0)}
+                # ME/TE ride along with each listing: a contracted copy's research is what the build
+                # would actually run at, and it's already in the row — no extra query for it.
+                "bpc_listings": [{"price": r["price"], "runs": int(r["runs"] or 0),
+                                  "me": int(r["me"] or 0), "te": int(r["te"] or 0)}
                                  for r in copies if r["last_seen"] >= live_cutoff],
-                "bpc_listings_hist": [{"price": r["price"], "runs": int(r["runs"] or 0)}
+                "bpc_listings_hist": [{"price": r["price"], "runs": int(r["runs"] or 0),
+                                       "me": int(r["me"] or 0), "te": int(r["te"] or 0)}
                                       for r in copies]}
         if info["bpc"] or info["bpo"]:
             out[prod] = info
@@ -424,6 +428,30 @@ def cost_for_runs(info: dict, runs_needed: int) -> dict:
     cost += short * per_run
     copies += math.ceil(short / biggest) if biggest else 0
     return {"cost": round(cost, 2), "copies": copies, "covered": False, "short_runs": short}
+
+
+def representative_me_te(info: dict) -> tuple[int, int] | None:
+    """(me, te) the build should assume for a print it doesn't own — the research on the copy it
+    would actually buy.
+
+    Which copy is that? `cost_for_runs` minimises total price, so the copy the plan reaches for is
+    the cheapest per run; that listing's own ME/TE is what the build would really run at. Ties break
+    toward better research, since between two equally-priced copies you would take the researched
+    one.
+
+    ONE function decides this for both the costing pass and what the UI reports, because the
+    alternative — costing against one copy's price and another copy's efficiency — is exactly the
+    mismatch that makes a plan quietly wrong. A build that buys several copies of mixed research is
+    approximated by this single value; the per-product override exists for that case.
+
+    None when there's nothing to go on, which leaves the old behaviour (the global ME/TE fallback).
+    """
+    listings = [l for l in (info.get("listings") or []) if (l.get("runs") or 0) > 0]
+    if not listings:
+        return None
+    best = min(listings, key=lambda l: (l["price"] / l["runs"], -int(l.get("me") or 0),
+                                        -int(l.get("te") or 0)))
+    return (int(best.get("me") or 0), int(best.get("te") or 0))
 
 
 def acquisition_costs(type_ids: list[int], owned: dict, region_id: int = THE_FORGE) -> dict[int, dict]:

@@ -1226,6 +1226,50 @@ def test_customer_build_status_leaks_nothing():
     check("stock is not netted off the customer's view", "use_stock=False" in plan_src)
 
 
+def test_blueprint_me_te_comes_from_the_copy_you_would_buy():
+    """A print you don't own used to be costed at ME 0 / TE 0 — the un-researched worst case — even
+    though the contract index already knows the research on every listed copy. The rule: the copy
+    the plan would actually BUY (cheapest per run, ties to better research) sets the ME/TE, so price
+    and efficiency describe the same purchase. Precedence is override > owned > contract > default."""
+    print("test_blueprint_me_te_comes_from_the_copy_you_would_buy")
+    from app.industry.bpc import representative_me_te
+
+    check("nothing listed -> no opinion", representative_me_te({}) is None)
+    check("a listing with no runs is not a copy you can buy",
+          representative_me_te({"listings": [{"price": 1e6, "runs": 0, "me": 10, "te": 20}]}) is None)
+    # Cheapest PER RUN wins, not cheapest outright: a 300m 100-run copy beats a 50m 1-run copy.
+    listings = [{"price": 50e6, "runs": 1, "me": 0, "te": 0},
+                {"price": 300e6, "runs": 100, "me": 10, "te": 20}]
+    check("the copy the plan buys sets ME/TE", representative_me_te({"listings": listings}) == (10, 20))
+    # Equal price per run -> take the researched one; you would.
+    tie = [{"price": 100e6, "runs": 10, "me": 0, "te": 0},
+           {"price": 100e6, "runs": 10, "me": 9, "te": 18}]
+    check("ties break toward better research", representative_me_te({"listings": tie}) == (9, 18))
+
+    # ME genuinely changes the plan: same build, researched print, fewer materials.
+    con = _seed_con()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+    pools = {"manufacturing": 5, "reaction": 5}
+    base = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, min_saving_isk=0.0,
+                       marginal_pct_of_total=0.0)
+    researched = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, min_saving_isk=0.0,
+                             marginal_pct_of_total=0.0, me_by_product={100: (10, 20)},
+                             me_source={100: "contract"})
+    r0 = plan_queue([(100, 10)], mfg, rx, _prices(SELL), ADJ, base, NAMES, pools)
+    r1 = plan_queue([(100, 10)], mfg, rx, _prices(SELL), ADJ, researched, NAMES, pools)
+    check("a researched print costs less to build",
+          r1["metrics"]["total_cost"] < r0["metrics"]["total_cost"])
+    check("and finishes sooner", r1["metrics"]["makespan_hours"] < r0["metrics"]["makespan_hours"])
+
+    # The plan reports what it assumed and where it came from — an invisible assumption is the bug.
+    req = {q["type_id"]: q for q in r1["requirements"]}
+    check("the step reports its ME", req[100]["me"] == 10)
+    check("the step reports its TE", req[100]["te"] == 20)
+    check("and says where that came from", req[100]["me_source"] == "contract")
+    check("a reaction step is never given blueprint ME/TE",
+          all(q["me_source"] == "reaction" for q in r1["requirements"] if q["activity"] == "reaction"))
+
+
 def main():
     test_material_formula()
     test_graph_loaders()
@@ -1256,6 +1300,7 @@ def main():
     test_marginal_saving_is_reported_and_overridable()
     test_order_overrides_persist_and_apply_to_the_queue()
     test_customer_build_status_leaks_nothing()
+    test_blueprint_me_te_comes_from_the_copy_you_would_buy()
     test_install_assignment_spreads_and_respects_free_slots()
     test_fifo_wins_contested_slots()
     test_missing_blueprints_are_reported()

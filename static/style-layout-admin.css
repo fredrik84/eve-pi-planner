@@ -907,6 +907,22 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-share-revoke { font-size: 11px; background: none; color: var(--clr-red); border: 1px solid #4a2a2f;
   border-radius: 5px; padding: 4px 9px; cursor: pointer; }
 .ind-share-x { background: none; border: 0; color: var(--clr-text-soft); cursor: pointer; font-size: 12px; }
+/* ME/TE a build step was costed at — colour-coded by where the number came from, since "assumed
+   from a contract copy" and "your own researched print" are very different confidence levels. */
+.ind-mete { font-size: 10px; margin-left: 6px; padding: 0 6px; border-radius: 8px; cursor: pointer;
+  background: #1a2030; color: var(--clr-text-soft); border: 1px solid #262d3d; }
+.ind-mete:hover { border-color: #3a4460; }
+.ind-mete-owned { color: var(--clr-green); border-color: #2c4a33; background: #16211a; }
+.ind-mete-contract { color: var(--clr-accent); border-color: #2d4a6a; background: #151d2a; }
+.ind-mete-override { color: #e0b84a; border-color: #4a3f22; background: #221d12; }
+.ind-mete-default { color: var(--clr-red); border-color: #4a2a2f; background: #221316; }
+.ind-mete-edit { display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; font-size: 10px;
+  color: var(--clr-text-soft); }
+.ind-mete-edit input { width: 46px; background: #0e121b; color: var(--clr-text); border: 1px solid var(--clr-border);
+  border-radius: 4px; padding: 1px 4px; font-size: 11px; }
+.ind-mete-ok { font-size: 10px; background: #1e3a5f; color: var(--clr-accent); border: 1px solid #2d5a8a;
+  border-radius: 6px; padding: 1px 7px; cursor: pointer; }
+.ind-mete-clr { font-size: 10px; background: none; color: var(--clr-text-soft); border: 0; cursor: pointer; }
 .ind-step-items > summary { font-size: 11px; color: var(--clr-text-soft); cursor: pointer; padding: 4px 0 0; list-style: none; }
 .ind-step-items > summary::-webkit-details-marker { display: none; }
 .ind-step-items > summary::before { content: '\25B8 '; }

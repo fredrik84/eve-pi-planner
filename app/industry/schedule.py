@@ -465,6 +465,12 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
             {"type_id": tid, "name": names.get(tid, str(tid)), "activity": info["activity"],
              "runs": info["runs"], "output_qty": info["output_qty"],
              "units": info["runs"] * info["output_qty"],
+             # What this step was costed and timed at, and where that came from — so an assumed
+             # ME/TE is visible and correctable rather than an invisible input to every number.
+             "me": params.me_te_for(tid, info["activity"])[0],
+             "te": params.me_te_for(tid, info["activity"])[1],
+             "me_source": (params.me_source.get(tid, "default")
+                           if info["activity"] == "manufacturing" else "reaction"),
              # You cannot install a job without the blueprint, so a build step you own nothing for
              # isn't a plan — it's a shopping trip you haven't been told about. Reactions use a
              # formula, not a blueprint, so they're never flagged.

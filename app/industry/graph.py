@@ -77,6 +77,9 @@ class BuildParams:
     # te_pct fallback. `owned` carries the same map's ownership detail for display.
     me_by_product: dict = field(default_factory=dict)
     owned: dict = field(default_factory=dict)
+    # product_type_id -> "owned" | "contract" | "override". Purely for reporting: a plan that
+    # silently assumed ME 10 off a contract is one the user can't sanity-check.
+    me_source: dict = field(default_factory=dict)
     # Blueprint acquisition cost for types NOT owned — {type_id: {kind, price, runs_per_copy}}.
     # Empty means 'unknown', which leaves the old behaviour untouched.
     bp_acquire: dict = field(default_factory=dict)
@@ -357,6 +360,9 @@ class BuildOptions(BaseModel):
     marginal_pct: float | None = None  # build only if it saves >= this % of the build (None = default)
     force_build: bool = False          # build everything buildable, ignoring small-saving shortcuts
     force_build_ids: list[int] = []    # build THESE components regardless of the shortcuts
+    # Per-product ME/TE the user wants assumed, {"<type_id>": [me, te]} — JSON keys are strings.
+    # Wins over everything: it's the user telling us which print they'll actually use.
+    me_te_overrides: dict[str, list[int]] = {}
 
 
 class IndustryPlanRequest(BuildOptions):
@@ -531,10 +537,32 @@ def prepare_plan_inputs(ctx: int, targets: list[tuple[int, int]], opts: BuildOpt
     # What an unowned blueprint would cost to acquire, so building can be priced honestly and the
     # margin-saver can see it. Best-effort: an empty index just leaves the old behaviour.
     try:
-        from app.industry.bpc import acquisition_costs
+        from app.industry.bpc import acquisition_costs, representative_me_te
         params.bp_acquire = acquisition_costs(id_list, params.owned)
     except Exception:
         params.bp_acquire = {}
+    # A print you don't own was costed at ME 0 / TE 0 — the un-researched worst case — even though
+    # the copy you'd buy is usually researched, and its ME/TE is already sitting in the contract
+    # index we just priced against. That inflated both materials and job time on every component
+    # bought as a BPC. Owned blueprints still win: your own print is what you'd actually use.
+    for tid, info in (params.bp_acquire or {}).items():
+        if tid in params.me_by_product or info.get("kind") != "bpc":
+            continue
+        me_te = representative_me_te(info)
+        if me_te:
+            params.me_by_product[tid] = me_te
+            params.me_source[tid] = "contract"
+    for tid in params.owned:
+        params.me_source.setdefault(tid, "owned")
+    # The user's own call comes last — they know which print they're really using.
+    for key, val in (opts.me_te_overrides or {}).items():
+        try:
+            tid = int(key)
+            me, te = float(val[0]), float(val[1])
+        except Exception:
+            continue
+        params.me_by_product[tid] = (max(0.0, min(10.0, me)), max(0.0, min(20.0, te)))
+        params.me_source[tid] = "override"
 
     pool = _slot_pool(ctx)
     pools = {

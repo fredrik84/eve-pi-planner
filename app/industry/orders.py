@@ -11,7 +11,7 @@ next slices.
 persisted now; the scheduler treats everything as parallel in this slice — honouring `serial` (run
 the final assemblies one-after-another) is a follow-up. Own-account scoped throughout (rule 8).
 """
-import json as _json
+import json
 import time as _time
 
 from fastapi import Depends, HTTPException
@@ -60,6 +60,13 @@ def ensure_industry_orders_table():
             con.commit()
         except Exception:
             pass
+        # Per-product ME/TE the user set while planning. Same reasoning as the overrides above: a
+        # decision made in the preview that the queue silently dropped is worse than no decision.
+        try:
+            con.execute("ALTER TABLE pp_industry_orders ADD COLUMN me_te_overrides TEXT DEFAULT ''")
+            con.commit()
+        except Exception:
+            pass
         con.commit()
     finally:
         con.close()
@@ -71,21 +78,32 @@ class OrderCreate(BaseModel):
     mode: str = "parallel"
     label: str = ""          # free text: customer, contract, whatever makes it identifiable
     force_build_ids: list[int] = []   # components to build regardless of the buy-shortcuts
+    me_te_overrides: dict[str, list[int]] = {}   # {"<type_id>": [me, te]} to assume when planning
 
 
 class OrderUpdate(BaseModel):
     quantity: int | None = None
     force_build_ids: list[int] | None = None
+    me_te_overrides: dict[str, list[int]] | None = None
     mode: str | None = None
     label: str | None = None
     priority: int | None = None
     status: str | None = None
 
 
+def _parse_map(value) -> dict:
+    """The ME/TE column holds a JSON object; anything unparseable means no overrides."""
+    try:
+        d = json.loads(value or "{}")
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
 def _parse_ids(value) -> list[int]:
     """The overrides column holds a JSON array; '' / NULL / anything unparseable means none."""
     try:
-        return [int(v) for v in _json.loads(value or "[]")]
+        return [int(v) for v in json.loads(value or "[]")]
     except Exception:
         return []
 
@@ -96,6 +114,7 @@ def _order_dict(con, row) -> dict:
     d = dict(row)
     ids = _parse_ids(d.get("force_build_ids"))
     d["force_build_ids"] = ids
+    d["me_te_overrides"] = _parse_map(d.get("me_te_overrides"))
     d["force_build"] = []
     if ids:
         names = {r["type_id"]: r["name"] for r in con.execute(
@@ -139,11 +158,12 @@ def create_order(req: OrderCreate, ctx: int = Depends(require_context)):
         # 404 ("order not found") even though the insert committed.
         oid = con.execute(
             "INSERT INTO pp_industry_orders (context_id, product_type_id, name, quantity, mode, "
-            "priority, status, created_at, label, force_build_ids) "
-            "VALUES (?,?,?,?,?,?, 'queued', ?,?,?) RETURNING id",
+            "priority, status, created_at, label, force_build_ids, me_te_overrides) "
+            "VALUES (?,?,?,?,?,?, 'queued', ?,?,?,?) RETURNING id",
             (ctx, req.product_type_id, name or str(req.product_type_id), req.quantity, req.mode,
              int(_time.time()), _time.time(), (req.label or "").strip()[:60],
-             _json.dumps(sorted({int(t) for t in req.force_build_ids}))),
+             json.dumps(sorted({int(t) for t in req.force_build_ids})),
+             json.dumps(req.me_te_overrides or {})),
         ).fetchone()[0]
         con.commit()
         return _order_row(con, oid, ctx)
@@ -213,7 +233,10 @@ def update_order(order_id: int, req: OrderUpdate, ctx: int = Depends(require_con
             sets.append("label=?"); params.append(req.label.strip()[:60])
         if req.force_build_ids is not None:
             sets.append("force_build_ids=?")
-            params.append(_json.dumps(sorted({int(t) for t in req.force_build_ids})))
+            params.append(json.dumps(sorted({int(t) for t in req.force_build_ids})))
+        if req.me_te_overrides is not None:
+            sets.append("me_te_overrides=?")
+            params.append(json.dumps(req.me_te_overrides))
         if req.status is not None:
             if req.status not in _VALID_STATUSES:
                 raise HTTPException(status_code=400, detail=f"status must be one of {_VALID_STATUSES}")
@@ -273,7 +296,7 @@ def _run_queue_plan(ctx: int, req: QueuePlanRequest) -> dict:
         # Without an explicit ORDER BY the row order is whatever the DB returns, which would make
         # "first in line" arbitrary.
         orders = con.execute(
-            "SELECT product_type_id, quantity, force_build_ids FROM pp_industry_orders "
+            "SELECT product_type_id, quantity, force_build_ids, me_te_overrides FROM pp_industry_orders "
             "WHERE context_id=? AND status='queued' ORDER BY priority DESC, id", (ctx,),
         ).fetchall()
         if not orders:
@@ -282,6 +305,11 @@ def _run_queue_plan(ctx: int, req: QueuePlanRequest) -> dict:
         # a component is built once for everybody — so they can only be applied as a union. In
         # practice that's what the user meant: they asked for that component to be built.
         forced = {t for o in orders for t in _parse_ids(o["force_build_ids"])}
+        # Same union logic, and for the same reason: one shared batch per component means one ME/TE
+        # per component. A later order's explicit choice wins over an earlier one's.
+        me_te: dict = {}
+        for o in orders:
+            me_te.update(_parse_map(o["me_te_overrides"]))
         # Combine duplicate products into one target quantity — insertion order is preserved, so the
         # first time a product appears fixes its place in line.
         combined: dict[int, int] = {}
@@ -293,6 +321,8 @@ def _run_queue_plan(ctx: int, req: QueuePlanRequest) -> dict:
 
     if forced:
         req = req.model_copy(update={"force_build_ids": sorted(set(req.force_build_ids) | forced)})
+    if me_te:
+        req = req.model_copy(update={"me_te_overrides": {**me_te, **(req.me_te_overrides or {})}})
     inp = prepare_plan_inputs(
         ctx, targets, req, mfg_slots=req.mfg_slots, rx_slots=req.rx_slots,
         missing_recipe_detail=lambda tid: f"queued order {tid} has no recipe")

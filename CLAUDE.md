@@ -666,6 +666,23 @@ are **unioned across the queue** in `_run_queue_plan`: the queue builds one shar
 component, so an override can only be all-or-nothing for that component. The preview's own set lives
 in `_indForcedTypes` (frontend) and is cleared once the order carries it.
 
+**Blueprint ME/TE for prints you don't own.** A product with no owned blueprint used to be costed at
+the global fallback — **ME 0 / TE 0**, the un-researched worst case — which inflated materials AND job
+time on every component the plan buys a copy for. The contract index already stores each listing's
+research (`pp_bpc_observations.me/te`, captured by the existing scan — no extra ESI traffic), so
+`bpc.representative_me_te(info)` picks the copy the plan would actually buy (**cheapest per run**,
+ties toward better research) and its ME/TE seeds `params.me_by_product`. Price and efficiency then
+describe the same purchase; costing against one copy's price and another's research was the specific
+mismatch to avoid. Precedence: **user override > owned blueprint > contract copy > ME 0/TE 0**, with
+`params.me_source` recording which, so the plan can show it. Each build step in `requirements` carries
+`me`, `te`, `me_source` (`owned`/`contract`/`override`/`default`/`reaction`); the UI renders a
+colour-coded `ME n · TE n` chip on every job chip that opens an inline editor. Overrides live in
+`BuildOptions.me_te_overrides` (`{"<type_id>": [me, te]}`, string keys — JSON) and persist on the
+order (`pp_industry_orders.me_te_overrides`), unioned across the queue exactly like
+`force_build_ids`, and are threaded into the customer share so its stages match the builder's.
+A build buying several copies of MIXED research is approximated by the one representative value —
+that's what the per-product override is for.
+
 **Customer build-status links** (`app/industry/shares.py`, `industry_share` flag). A builder mints a
 login-free link per queued order (`POST /api/industry/orders/{id}/share`, idempotent; DELETE
 revokes) that the customer opens at **`/b/{share_id}`** — product, quantity, stage list, progress bar
