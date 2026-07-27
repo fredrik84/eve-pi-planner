@@ -106,6 +106,18 @@ function _indStatusHeadline(d) {
     tiles.push(['In the cooker', String(t.running), 'Jobs running right now']);
     tiles.push(['Still to start', String(t.waiting), 'Jobs not started yet']);
   }
+  const m = d.metrics || {};
+  if (m.total_cost != null) {
+    if (m.net_cost != null && (m.leftover_value || 0) > 0.5) {
+      tiles.push(['Net cost', fmtIsk(m.net_cost),
+                  'Cost of the finished units, after crediting back reusable leftovers']);
+      tiles.push(['Total spend', fmtIsk(m.total_cost), 'Everything this build costs you up front']);
+    } else {
+      tiles.push(['Total cost', fmtIsk(m.total_cost), 'Materials + job fees + any blueprint copies']);
+    }
+    tiles.push(['Materials', fmtIsk(m.materials_cost), 'What the shopping list comes to']);
+    tiles.push(['Job fees', fmtIsk(m.job_cost), 'Installation fees across every job in the plan']);
+  }
   const fd = d.metrics.first_delivery_hours;
   // Two different questions: when can I hand over the first order, vs when am I finished entirely.
   // Only worth splitting when they actually differ.
@@ -505,10 +517,14 @@ function _indQty() {
   return Math.max(1, parseInt(el ? el.value : '1') || 1);
 }
 
-// The speed toggle feeds the same cost/time curve, so flipping it has to re-cost the read-out or it
-// would sit there dimmed forever. It deliberately does NOT replan on its own — same as before.
+// The speed toggle decides whether slow bulk components are bought instead of built — it changes the
+// plan, so it re-plans and re-costs like the other knobs. It used to do nothing at all until the next
+// Preview, which made unchecking it look broken.
 function indOnPrioSpeed() {
-  if (_indPicked) _indLoadSweep(_indQty());
+  if (!_indPicked) return;
+  if (document.getElementById('indResult').innerHTML.trim()) indRunPlan();
+  else _indLoadSweep(_indQty());
+  if (_indStatusVisible()) indRefreshStatus();
 }
 
 // A roomy, centered loading card. Planning a capital walks the whole recipe tree and schedules
@@ -721,10 +737,11 @@ function _indRenderMarginalLive() {
   const pts = _indSweep && _indSweep.key === _indSweepKey(qty) ? _indSweep.points : null;
   if (!pts || !pts.length) {
     if (_indSweepFailed === _indSweepKey(qty)) { el.style.display = 'none'; el.innerHTML = ''; return; }
-    // Dim what's on screen while the curve for the new options is fetched instead of blanking the
-    // line — clearing it made the read-out flash out and back on every quantity change or replan.
+    // Keep the LINE (blanking it made the read-out flash in and out on every change) but never the
+    // stale NUMBERS: figures from the previous product or quantity sitting next to a fresh plan read
+    // as the tool contradicting itself.
     el.classList.add('ind-marg-stale');
-    if (!el.innerHTML) el.innerHTML = 'Working out what this setting costs…';
+    el.innerHTML = 'Working out what this setting costs…';
     return;
   }
   el.classList.remove('ind-marg-stale');

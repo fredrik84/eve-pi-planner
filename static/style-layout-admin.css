@@ -784,6 +784,8 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-slot-chip { background: #161b28; border: 1px solid var(--clr-border); border-radius: 12px; padding: 2px 10px; font-size: 12px; color: #cdd6e6; }
 .ind-slot-sub { color: var(--clr-text-soft); font-size: 10px; margin-left: 2px; }
 .ind-plan-form { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
+/* Preview and Add to build are one decision — wrapping them apart reads as two unrelated buttons. */
+.ind-plan-actions { display: flex; gap: 12px; align-items: flex-end; }
 .ind-field { display: flex; flex-direction: column; gap: 5px; }
 .ind-field-grow { flex: 1 1 320px; }
 .ind-field label { font-size: 11px; color: var(--clr-text-dim); text-transform: uppercase; letter-spacing: 0.04em; }
@@ -927,7 +929,11 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
    checkbox against a slider looked broken), so it now sits above them with the two things it
    overrides indented beneath — the greying-out then reads as a consequence, not a glitch. */
 .ind-opt-group { display: flex; flex-direction: column; gap: 8px; flex: 1 1 320px; min-width: 0; }
-.ind-opt-master { font-weight: 600; color: var(--clr-text); }
+.ind-opt-master { font-weight: 600; color: var(--clr-text);
+  /* Indented by exactly the governed block's border+padding so the two checkboxes line up in one
+     column, with the rule running down their left edge from this row — the master sits at the top
+     of the line it owns instead of beside it. */
+  padding-left: 13px; }
 /* The rule starts inside the master row (negative margin eaten back by the padding) so it reads as
    a bracket hanging off "Build everything" rather than a line floating below it. */
 .ind-opt-governed { display: flex; flex-direction: column; gap: 8px;
