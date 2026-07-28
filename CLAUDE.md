@@ -791,6 +791,22 @@ see the price move because the builder changed their default afterwards; the sha
 value when it has one. The UI slider re-prices client-side (`_indPriceOf`) rather than re-planning:
 margin is arithmetic on a cost the server already returned.
 
+**The whole-queue price uses each ORDER's margin, not one blanket rate** (`_blend_margin` in
+orders.py, called at the end of `_run_queue_plan`). `plan_queue` marks the entire queue up at
+`params.margin_pct`, which meant editing a customer's margin moved nothing on the builder's own
+"Your Build" sheet while the share link that customer holds already quoted the new figure — the two
+disagreeing about the same order. Queue cost is a shared-batch total with no per-order split, so
+each order's share is apportioned by its **standalone** cost (`targets[].unit_cost × quantity`,
+exposed by `plan_queue` from its own memoised unit costs); the shared-batch saving is spread
+pro-rata rather than invented per order, and `net_cost` stays the base every price derives from.
+With one margin across the queue it reduces exactly to the old formula. `metrics.margin_mixed` says
+whether the orders disagree and `metrics.margin_pct` is then the effective blended rate, so the
+number shown always explains the price. **The status tile renders `metrics.price` and must NOT carry
+`data-ind-price`** — that attribute is the planner slider's live re-price hook, and it was
+overwriting the queue's per-order price with the slider's rate (the slider deliberately sets the
+margin for NEW builds only). The single-product preview still re-prices live off the slider, which
+is correct there. Covered by `test_queue_price_uses_each_orders_own_margin`.
+
 **Share links are permanent.** Every successful render is snapshotted onto the share row
 (`pp_industry_shares.last_payload/last_at`, written on a cache miss so at most once a minute), and a
 share whose ORDER has gone — finished and cleared, or deleted — serves that snapshot flagged

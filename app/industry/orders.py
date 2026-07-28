@@ -299,6 +299,42 @@ def _stock_for(ctx: int, targets) -> dict[int, float]:
     return stock
 
 
+def _blend_margin(res: dict, order_margins: list, default_pct: float) -> None:
+    """Re-price the whole-queue plan using each ORDER's own margin.
+
+    `plan_queue` marks the entire queue up at one rate, but margin is snapshotted per order — so
+    changing one customer's quote moved nothing on the builder's own sheet while the share link
+    they were sent used the new figure. The two disagreeing about the same order is the bug.
+
+    The queue's cost is a shared-batch total with no per-order split (a component is built once for
+    everybody), so each order's share is apportioned by its STANDALONE cost — `unit_cost × quantity`
+    from the plan's own memoised unit costs. The shared-batch saving is thus spread pro-rata rather
+    than invented per order, and the sheet's net-cost tile stays the base every price derives from.
+    With one margin across the queue this reduces exactly to the old single-rate formula.
+    """
+    m = res.get("metrics")
+    if not m or not order_margins:
+        return
+    net = m.get("net_cost")
+    if net is None:
+        net = m.get("total_cost") or 0.0
+    unit_by_type = {t["type_id"]: (t.get("unit_cost") or 0.0) for t in res.get("targets", [])}
+    weights = [(unit_by_type.get(tid, 0.0) * qty,
+                default_pct if pct is None else float(pct)) for tid, qty, pct in order_margins]
+    total_w = sum(w for w, _ in weights)
+    if total_w <= 0:                      # no usable cost basis — fall back to an even split
+        weights = [(1.0, pct) for _, pct in weights]
+        total_w = float(len(weights))
+    price = sum((w / total_w) * net * (1 + pct / 100.0) for w, pct in weights)
+    rates = {round(pct, 4) for _, pct in weights}
+    m["price"] = round(price, 2)
+    m["margin_mixed"] = len(rates) > 1
+    # The single rate when they agree; otherwise the effective blended rate, so the number shown
+    # next to the price always explains the price.
+    m["margin_pct"] = round(rates.pop(), 4) if len(rates) == 1 else (
+        round((price / net - 1) * 100.0, 2) if net else 0.0)
+
+
 def _run_queue_plan(ctx: int, req: QueuePlanRequest) -> dict:
     """Shared core of the whole-queue plan: aggregate every queued order's demand and schedule it.
     Returns the plan_queue result, or {"empty": True} when the queue is empty. Used by both the
@@ -310,7 +346,8 @@ def _run_queue_plan(ctx: int, req: QueuePlanRequest) -> dict:
         # Without an explicit ORDER BY the row order is whatever the DB returns, which would make
         # "first in line" arbitrary.
         orders = con.execute(
-            "SELECT product_type_id, quantity, force_build_ids, me_te_overrides FROM pp_industry_orders "
+            "SELECT product_type_id, quantity, force_build_ids, me_te_overrides, margin_pct "
+            "FROM pp_industry_orders "
             "WHERE context_id=? AND status='queued' ORDER BY priority DESC, id", (ctx,),
         ).fetchall()
         if not orders:
@@ -330,6 +367,9 @@ def _run_queue_plan(ctx: int, req: QueuePlanRequest) -> dict:
         for o in orders:
             combined[o["product_type_id"]] = combined.get(o["product_type_id"], 0) + o["quantity"]
         targets = list(combined.items())
+        # Margin is snapshotted PER ORDER (a quote a customer holds must not move), so the queue's
+        # price can't be one blanket markup — see _blend_margin below.
+        order_margins = [(o["product_type_id"], o["quantity"], o["margin_pct"]) for o in orders]
     finally:
         con.close()
 
@@ -355,6 +395,7 @@ def _run_queue_plan(ctx: int, req: QueuePlanRequest) -> dict:
     from app.industry.schedule import assign_characters
     from app.industry.slots import _slot_pool
     assign_characters(res["schedule"]["waves"], _slot_pool(ctx).get("characters") or [])
+    _blend_margin(res, order_margins, inp.params.margin_pct)
     return res
 
 

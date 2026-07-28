@@ -456,8 +456,12 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
     leftovers.sort(key=lambda r: r["value"], reverse=True)
     total_cost = materials_cost + job_cost + blueprint_cost
     return {
+        # `unit_cost` is the standalone resolved cost of one unit (already memoised above). The
+        # aggregate cost below is a shared-batch figure with no per-order split, so this is what
+        # lets a caller apportion it — see the per-order margin blend in orders.py.
         "targets": [{"type_id": t, "name": names.get(t, str(t)), "quantity": q,
-                     "rank": i, "finish_hours": _finish_of(tasks, t)}
+                     "rank": i, "finish_hours": _finish_of(tasks, t),
+                     "unit_cost": round((unit(t, frozenset()) or {}).get("unit_cost") or 0.0, 2)}
                     for i, (t, q) in enumerate(targets)],
         # Per-type build requirements — what progress tracking compares real ESI jobs against.
         # Exposed from `agg` because it's the only place the shared-batch run count exists.

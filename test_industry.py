@@ -1484,6 +1484,67 @@ def test_price_is_net_cost_plus_margin():
           resolve_build_params(0, 0, 0, None, None, 0.0, 0, 0, margin_pct=0).margin_pct == 0.0)
 
 
+def test_queue_price_uses_each_orders_own_margin():
+    """The builder's own sheet must quote what the customers are quoted. Margin is snapshotted per
+    order, but the queue was marked up at ONE blanket rate — so editing a customer's margin moved
+    nothing on the Your Build sheet while the share link that customer holds already used the new
+    number. Cost is a shared-batch total with no per-order split, so each order's share is
+    apportioned by its standalone cost (unit_cost x quantity)."""
+    print("test_queue_price_uses_each_orders_own_margin")
+    from app.industry.orders import _blend_margin
+
+    def res(net, targets):
+        return {"metrics": {"net_cost": net, "total_cost": net}, "targets": targets}
+
+    T2 = [{"type_id": 100, "quantity": 2, "unit_cost": 300.0},
+          {"type_id": 200, "quantity": 1, "unit_cost": 400.0}]
+
+    # One margin across the queue → identical to the old single-rate formula.
+    r = res(1000.0, T2)
+    _blend_margin(r, [(100, 2, 20.0), (200, 1, 20.0)], 10.0)
+    check("a single margin prices exactly as before", abs(r["metrics"]["price"] - 1200.0) < 0.01)
+    check("and is not flagged mixed", r["metrics"]["margin_mixed"] is False)
+    check("the reported rate is that margin", r["metrics"]["margin_pct"] == 20.0)
+
+    # Two margins → cost-weighted blend. 600/1000 at 50%, 400/1000 at 0%.
+    r = res(1000.0, T2)
+    _blend_margin(r, [(100, 2, 50.0), (200, 1, 0.0)], 10.0)
+    check("mixed margins blend by each order's share of cost",
+          abs(r["metrics"]["price"] - (600 * 1.5 + 400 * 1.0)) < 0.01)
+    check("mixed margins are flagged", r["metrics"]["margin_mixed"] is True)
+    check("the reported rate explains the price",
+          abs(r["metrics"]["margin_pct"] - 30.0) < 0.01)
+
+    # An order with no margin of its own falls back to the account default, not to zero.
+    r = res(1000.0, T2)
+    _blend_margin(r, [(100, 2, None), (200, 1, None)], 10.0)
+    check("a null order margin uses the account default", abs(r["metrics"]["price"] - 1100.0) < 0.01)
+
+    # Changing one order's margin must move the price — the actual bug reported.
+    a = res(1000.0, T2); _blend_margin(a, [(100, 2, 10.0), (200, 1, 10.0)], 10.0)
+    b = res(1000.0, T2); _blend_margin(b, [(100, 2, 40.0), (200, 1, 10.0)], 10.0)
+    check("raising one order's margin raises the queue price",
+          b["metrics"]["price"] > a["metrics"]["price"])
+
+    # No cost basis (unpriced targets) must not divide by zero — fall back to an even split.
+    r = res(1000.0, [{"type_id": 100, "quantity": 2, "unit_cost": 0.0}])
+    _blend_margin(r, [(100, 2, 20.0)], 10.0)
+    check("a zero cost basis still prices without dividing by zero",
+          abs(r["metrics"]["price"] - 1200.0) < 0.01)
+
+    # And the end-to-end shape: the real engine must emit the unit_cost the blend needs.
+    con = _seed_con()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+    P = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, min_saving_isk=0.0,
+                    marginal_pct_of_total=0.0, margin_pct=10.0)
+    q = plan_queue([(100, 7)], mfg, rx, _prices(SELL), ADJ, P, NAMES,
+                   {"manufacturing": 5, "reaction": 5})
+    check("plan_queue exposes a per-target unit cost to apportion by",
+          all(t.get("unit_cost") is not None for t in q["targets"]))
+    check("and that unit cost is a number, not the resolver's node dict",
+          all(isinstance(t["unit_cost"], (int, float)) for t in q["targets"]))
+
+
 def test_share_links_outlive_their_order():
     """A link handed to a customer must not break when the build finishes and leaves the queue —
     "404" is the worst possible answer to "did my ship get built?". Every successful render is
@@ -1541,6 +1602,7 @@ def main():
     test_the_checklist_and_the_plan_agree_on_what_is_ready()
     test_saved_build_options_reach_plans_run_without_a_browser()
     test_price_is_net_cost_plus_margin()
+    test_queue_price_uses_each_orders_own_margin()
     test_share_links_outlive_their_order()
     test_install_assignment_spreads_and_respects_free_slots()
     test_fifo_wins_contested_slots()

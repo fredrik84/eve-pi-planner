@@ -177,8 +177,17 @@ function _indStatusHeadline(d) {
     }
   }
   if (m.total_cost != null) {
-    tiles.push(['Sell price', `<span data-ind-price>${fmtIsk(_indPriceOf(m))}</span>`,
-                `What to charge at ${_indMarginPct()}% over net cost — the figure your customer sees on a shared link`]);
+    // The QUEUE's price comes from the server, which prices each order at the margin snapshotted on
+    // it. Do NOT recompute it from the planner slider here (and do not tag it `data-ind-price`):
+    // the slider sets the margin for NEW builds only, so pricing the whole queue off it made an
+    // order's own margin — the thing the customer's share link quotes — invisible on this sheet.
+    const price = m.price != null ? m.price : _indPriceOf(m);
+    tiles.push(['Sell price', fmtIsk(price),
+                m.margin_mixed
+                  ? `What to charge across the whole build — each order at its own margin `
+                    + `(${m.margin_pct}% blended). Edit an order to change its quote.`
+                  : `What to charge at ${m.margin_pct != null ? m.margin_pct : _indMarginPct()}%`
+                    + ` over net cost — the figure your customer sees on a shared link`]);
   }
   if (t && t.required) {
     tiles.push(['Still to start', String(t.waiting), 'Jobs not started yet']);
