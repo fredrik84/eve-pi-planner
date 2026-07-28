@@ -714,6 +714,23 @@ order (`pp_industry_orders.me_te_overrides`), unioned across the queue exactly l
 A build buying several copies of MIXED research is approximated by the one representative value —
 that's what the per-product override is for.
 
+**Two places set an override, for two different moments.** The `ME n · TE n` chip on a job chip
+edits the SESSION map (`_indMeTe`) and re-plans what's on screen — that's the "while I'm planning"
+path. Once an order is queued the planner modal is no longer where you'd look, so the **order edit
+row** (`indEditOrder`, the ✎ on an order chip) also edits ME/TE — for the order's OWN product
+blueprint, the one a player is most likely to own or to have bought a copy of that doesn't match
+anything the plan can see. Components stay on their job chips. Rules that matter:
+- The inputs are **seeded with whatever the plan resolved** (`_indOrderMeTe` → order override, else
+  `_indReqMeTe`, else 0/0) and show the source in the tooltip. `indSaveOrder` therefore sends
+  `me_te_overrides` **only when the value actually moved** — sending it unconditionally would turn
+  every rename into a permanent override pinning today's guess, and the plan could then never
+  improve on it (e.g. once the player owns the print). Don't "simplify" that comparison away.
+- A save **merges** into the order's existing map, so component overrides on the same order survive
+  editing the product's; `indClearOrderMeTe` deletes just the product's key.
+- An override shows as an amber `ME n · TE n` tag on the order chip (same reasoning as the `⚒`
+  forced-build tag: an assumed efficiency drives every material number, so it can't be invisible).
+- Reactions have no blueprint ME/TE — the editor is omitted when `me_source == 'reaction'`.
+
 **Industry performance.** Two things dominated page and share-link load, both measured before
 changing anything:
 * The **recipe graphs are cached per process** (`graph._cached_graph`, 15-min TTL, `clear_graph_cache()`

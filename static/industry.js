@@ -214,11 +214,17 @@ function _indStatusHeadline(d) {
     // Shown when it differs from what the planner would quote today — otherwise it's noise.
     const mrg = (o.margin_pct != null && Math.abs(o.margin_pct - _indMarginPct()) > 0.01)
       ? `<span class="ind-oc-mrgtag" title="Quoted to the customer at ${o.margin_pct}% over cost">+${o.margin_pct}%</span>` : '';
+    // An efficiency you set by hand drives every material figure for this order — show it on the
+    // chip rather than only inside the editor.
+    const ovMt = (o.me_te_overrides || {})[String(o.product_type_id)];
+    const mete = ovMt
+      ? `<span class="ind-oc-metetag" title="Planned against your own blueprint: ME ${ovMt[0]}, TE ${ovMt[1]}">`
+        + `ME ${ovMt[0]} · TE ${ovMt[1]}</span>` : '';
     const share = _featureActive('industry_share')
       ? `<button class="ind-oc-share" title="Share a status link with the customer" onclick="indShareOrder(${o.id})">↗</button>` : '';
     return `<span class="ind-order-chip ind-oc-${st}" id="oc-${o.id}">${pos}${tag}<b>${o.quantity}×</b> ${_esc(o.name)}`
-      + (lbl ? `<span class="ind-oc-state">${lbl}</span>` : '') + eta + mrg + forced
-      + `<button class="ind-oc-edit" title="Rename or change the quantity" onclick="indEditOrder(${o.id})">✎</button>`
+      + (lbl ? `<span class="ind-oc-state">${lbl}</span>` : '') + eta + mrg + forced + mete
+      + `<button class="ind-oc-edit" title="Rename, change the quantity, margin or blueprint ME/TE" onclick="indEditOrder(${o.id})">✎</button>`
       + share
       + `<button class="ind-oc-del" title="Remove from the build" onclick="indRemoveOrder(${o.id})">✕</button></span>`;
   }).join('');
@@ -1908,11 +1914,36 @@ function _indErrText(r) {
 
 // Edit in place rather than in a dialog: it's two fields, and re-planning the whole queue just to
 // show an edit form would be a needless several-second wait.
+// What ME/TE this order's OWN blueprint is being planned at, and where that came from. An order
+// keeps its overrides in `me_te_overrides`; without one the plan resolves owned print → contract
+// copy → un-researched, and `_indReqMeTe` carries whatever it landed on.
+function _indOrderMeTe(o) {
+  const ov = (o.me_te_overrides || {})[String(o.product_type_id)];
+  if (ov) return { me: ov[0], te: ov[1], source: 'override', overridden: true };
+  const r = _indReqMeTe[o.product_type_id];
+  if (r) return { me: r.me, te: r.te, source: r.me_source, overridden: false };
+  return { me: 0, te: 0, source: 'default', overridden: false };
+}
+
 function indEditOrder(id) {
   const chip = document.getElementById('oc-' + id);
   const o = (_indOrders || []).find(x => x.id === id);
   if (!chip || !o) return;
   const p = ((_indProgress && _indProgress.orders) || []).find(x => x.id === id) || {};
+  const mt = _indOrderMeTe(o);
+  // A print you own or bought yourself needn't match anything the plan could see. Editing it here
+  // covers the top-level blueprint; components keep their own chips on the plan below.
+  const meTe = mt.source === 'reaction' ? '' :
+      `<span class="ind-oc-mete" title="Blueprint efficiency for ${_esc(o.name)} — ${_esc(_IND_ME_SRC[mt.source] || '')}. `
+    + `Set what your own copy actually is.">ME `
+    + `<input type="number" min="0" max="10" step="1" class="ind-oc-mt" id="oce-me-${id}" value="${mt.me}" `
+    + `onwheel="indWheelStep(event, this)"> TE `
+    + `<input type="number" min="0" max="20" step="2" class="ind-oc-mt" id="oce-te-${id}" value="${mt.te}" `
+    + `onwheel="indWheelStep(event, this)">`
+    + (mt.overridden
+        ? ` <button class="ind-mete-clr" title="Back to what the plan works out for itself" `
+          + `onclick="indClearOrderMeTe(${id})">reset</button>` : '')
+    + `</span>`;
   chip.classList.add('ind-oc-editing');
   chip.innerHTML = `<span class="ind-oc-name">${_esc(o.name)}</span>`
     + `<input type="number" min="1" class="ind-oc-qty" id="oce-qty-${id}" value="${o.quantity}" title="Quantity">`
@@ -1925,6 +1956,7 @@ function indEditOrder(id) {
     + `id="oce-mrg-${id}" value="${o.margin_pct != null ? o.margin_pct : _indMarginPct()}" `
     + `onwheel="indWheelStep(event, this)" `
     + `title="Margin over net cost for this customer's quote — scroll to adjust">%</span>`
+    + meTe
     + `<button class="ind-oc-ok" onclick="indSaveOrder(${id})">Save</button>`
     + `<button class="ind-oc-cancel" onclick="indRefreshStatus()">Cancel</button>`;
   const q = document.getElementById('oce-lbl-' + id);
@@ -1947,6 +1979,23 @@ function indWheelStep(ev, el) {
   el.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
+// Drop the order's own-blueprint override and let the plan resolve it again. Component overrides
+// on the same order are untouched.
+async function indClearOrderMeTe(id) {
+  const o = (_indOrders || []).find(x => x.id === id);
+  if (!o) return;
+  const next = { ...(o.me_te_overrides || {}) };
+  delete next[String(o.product_type_id)];
+  try {
+    const r = await fetch('/api/industry/orders/' + id, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ me_te_overrides: next }),
+    });
+    if (!r.ok) { const e = await r.json().catch(() => ({})); alert(e.detail || 'Could not save'); return; }
+  } catch (e) { alert(String(e)); return; }
+  await indRefreshStatus();
+}
+
 async function indSaveOrder(id) {
   const qty = parseInt((document.getElementById('oce-qty-' + id) || {}).value, 10);
   const label = (document.getElementById('oce-lbl-' + id) || {}).value || '';
@@ -1954,6 +2003,19 @@ async function indSaveOrder(id) {
   if (!isNaN(qty) && qty >= 1) body.quantity = qty;
   const mrg = parseFloat((document.getElementById('oce-mrg-' + id) || {}).value);
   if (!isNaN(mrg)) body.margin_pct = Math.max(0, Math.min(100, mrg));
+  // ME/TE goes only when it actually MOVED. The inputs are seeded with whatever the plan resolved,
+  // so sending them unconditionally would turn every rename into a permanent override pinning
+  // today's guess — and the plan could then never improve on it (e.g. once you own the print).
+  const o = (_indOrders || []).find(x => x.id === id);
+  const me = parseFloat((document.getElementById('oce-me-' + id) || {}).value);
+  const te = parseFloat((document.getElementById('oce-te-' + id) || {}).value);
+  if (o && !isNaN(me) && !isNaN(te)) {
+    const was = _indOrderMeTe(o);
+    const m = Math.max(0, Math.min(10, me)), t = Math.max(0, Math.min(20, te));
+    if (m !== was.me || t !== was.te) {
+      body.me_te_overrides = { ...(o.me_te_overrides || {}), [String(o.product_type_id)]: [m, t] };
+    }
+  }
   try {
     const r = await fetch('/api/industry/orders/' + id, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },

@@ -920,6 +920,13 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-oc-forced { font-size: 10px; background: #1b2a1e; color: var(--clr-green); border: 1px solid #2c4a33;
   border-radius: 8px; padding: 0 6px; margin-left: 4px; cursor: pointer; }
 .ind-oc-share { background: none; border: 0; color: var(--clr-accent); cursor: pointer; font-size: 12px; padding: 0 3px; }
+/* Blueprint ME/TE on a queued order: the tag on the chip, and the pair of inputs in the editor.
+   Amber rather than green — it's an assumption you made, not a saving the engine found. */
+.ind-oc-metetag { font-size: 10px; background: #241f16; color: #d8b46a; border: 1px solid #4a3f2c;
+  border-radius: 8px; padding: 0 6px; margin-left: 4px; white-space: nowrap; }
+.ind-oc-mete { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; color: var(--clr-text-dim); }
+.ind-oc-mt { width: 46px; background: #0e121b; color: var(--clr-text); border: 1px solid var(--clr-border);
+  border-radius: 4px; padding: 2px 4px; font-size: 11px; }
 .ind-oc-share:hover { color: #d5e4ff; }
 .ind-share-box { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; background: #141a26;
   border: 1px solid var(--clr-border); border-radius: 8px; padding: 8px 10px; margin-bottom: 10px; }
