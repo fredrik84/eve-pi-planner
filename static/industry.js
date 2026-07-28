@@ -56,6 +56,7 @@ function indOpenPlanner() {
   indRestoreForceBuild();
   indRestoreMargin();
   _indRestoringSettings = false;
+  _indSyncOptsVisible();
   const s = document.getElementById('indSearch');
   if (s) setTimeout(() => s.focus(), 30);
 }
@@ -577,6 +578,7 @@ function indPick(typeId, name) {
   document.getElementById('indPlanBtn').disabled = false;
   document.getElementById('indQueueBtn').disabled = false;
   document.getElementById('indPickHint').textContent = '';
+  _indSyncOptsVisible();
   // Cost and time land under the slider straight away — you shouldn't have to run a full preview
   // to see what the threshold is worth on this product.
   _indLoadSweep(_indQty());
@@ -636,6 +638,7 @@ async function indRunPlan() {
     // The plan renders below a tall form inside a scrolling modal, so on a laptop it can land
     // entirely below the fold — which reads as "the button did nothing". Bring it into view.
     out.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    _indRenderMarginLive();     // the quote read-out has a real plan to price now
     _indLoadSweep(qty);
   } catch (e) {
     out.innerHTML = `<div class="pp-card"><p class="pp-warn">${_esc(String(e))}</p></div>`;
@@ -816,15 +819,42 @@ function _indPriceOf(metrics, pct) {
   return net * (1 + (pct == null ? _indMarginPct() : pct) / 100.0);
 }
 
+// `_indLastPlan` is set by the single-product preview AND by the whole-queue status plan, so it is
+// only a valid basis for these read-outs when it describes exactly what's picked right now.
+// Without this check the margin slider quoted the entire queue's cost against a product the user
+// hadn't even chosen yet — a large, unexplained ISK figure sitting under the slider on open.
+function _indPlanForPick() {
+  const p = _indLastPlan;
+  return (p && p.target && p.metrics && _indPicked
+          && p.target.type_id === _indPicked.type_id
+          && p.target.quantity === _indQty()) ? p : null;
+}
+
 function _indRenderMarginLive() {
   const el = document.getElementById('indMarginLive');
   if (!el) return;
-  const m = _indLastPlan && _indLastPlan.metrics;
+  // Prefer the rendered plan; fall back to the threshold sweep so the quote appears as soon as a
+  // product is picked, instead of the slider sitting blank until a Preview is run.
+  const plan = _indPlanForPick();
+  let m = plan && plan.metrics, estimate = false;
+  if (!m && _indPicked) {
+    const pts = _indSweep && _indSweep.key === _indSweepKey(_indQty()) ? _indSweep.points : null;
+    if (pts && pts.length) { m = _indSweepPoint(pts, _indMarginalPct()); estimate = true; }
+  }
   const price = m ? _indPriceOf(m) : null;
   if (price == null) { el.style.display = 'none'; el.innerHTML = ''; return; }
   const net = m.net_cost != null ? m.net_cost : m.total_cost;
   el.style.display = '';
-  el.innerHTML = `Quote <b>${fmtIsk(price)}</b> · you keep ${fmtIsk(price - net)}`;
+  el.innerHTML = `Quote <b>${fmtIsk(price)}</b> · you keep ${fmtIsk(price - net)}`
+    + (estimate ? ' <span class="ind-marg-est">estimate</span>' : '');
+}
+
+// The sliders only mean anything against a chosen product — their read-outs are blank until one is
+// picked, which leaves two labelled controls that look broken. Hide them until there's a product.
+function _indSyncOptsVisible() {
+  document.querySelectorAll('#indPlanModal .ind-field-marg').forEach(f => {
+    f.style.display = _indPicked ? '' : 'none';
+  });
 }
 
 // Live re-price without a round trip: the price tiles and the margin read-out both derive from the
@@ -899,6 +929,7 @@ async function _indLoadSweep(qty) {
     if (_indSweepKey(qty) !== key) return;      // options moved on while it was in flight
     _indSweep = { key, points: d.points || [] };
     _indRenderMarginalLive();
+    _indRenderMarginLive();       // the quote can be estimated off the sweep now
   } catch (e) {
     // A nicety, not the plan — on failure the read-out steps aside and the static hint stands alone.
     _indSweepFailed = key;
@@ -938,9 +969,7 @@ function _indRenderMarginalLive() {
   const parts = [`<b>${_fmtHours(p.makespan_hours)}</b> build time`, `${fmtIsk(p.total_cost)} total`];
   // Only a preview OF THIS product+quantity is a valid baseline — `_indLastPlan` is also set by the
   // whole-queue status plan, and comparing against that would be nonsense.
-  const shown = _indLastPlan && _indLastPlan.target && _indLastPlan.metrics
-    && _indLastPlan.target.type_id === _indPicked.type_id
-    && _indLastPlan.target.quantity === qty ? _indLastPlan : null;
+  const shown = _indPlanForPick();
   const basePct = shown ? shown.metrics.marginal_pct : null;
   const base = basePct == null ? null : _indSweepPoint(pts, basePct);
   // Same resolved ISK threshold = literally the same plan, whatever the percentages read.

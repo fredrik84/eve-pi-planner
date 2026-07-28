@@ -1107,6 +1107,7 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-marg-live b { color: var(--clr-text); font-weight: 600; }
 /* Curve being refetched: dim what's shown rather than clearing the line (no flicker). */
 .ind-marg-live.ind-marg-stale { opacity: 0.45; }
+.ind-marg-est { color: var(--clr-text-dim); font-size: 11px; }
 .ind-marg-live b.ind-live-good { color: var(--clr-green); }
 .ind-marg-live b.ind-live-bad { color: var(--clr-amber); }
 /* Planning loader — centered, and tall enough that the page doesn't collapse then jump */
