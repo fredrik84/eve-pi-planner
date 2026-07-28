@@ -27,7 +27,7 @@ from pathlib import Path
 import yaml
 
 sys.path.insert(0, ".")
-from app.db import get_connection, _IS_POSTGRES
+from app.db import get_connection, add_columns, _IS_POSTGRES
 
 # CSafeLoader (libyaml's C parser) is 5-10x faster than pure-Python SafeLoader — matters here
 # since fsd/types.yaml is 50k+ entries and yaml.safe_load() is single-threaded (measured ~886s
@@ -255,6 +255,37 @@ def _manufacturing_built(con) -> bool:
         return False
 
 
+def _types_volume_built(con) -> bool:
+    """Whether `types.volume` exists AND is populated.
+
+    `volume` was added to the types DDL after the table already existed in deployed databases, and
+    `_already_built` only checks that `types` has rows — so those installs skipped the build
+    entirely and `CREATE TABLE IF NOT EXISTS` could never add the column. The result was a hard
+    500 on every endpoint that reads it (`/api/pi-products`, `/api/baskets`, anything calling
+    `load_pi_data`), permanently, with no way to self-heal. Found on the dev stack 2026-07-28.
+
+    Same shape as `_manufacturing_built`: presence AND data, so a crash mid-backfill re-runs."""
+    try:
+        row = con.execute("SELECT COUNT(volume) AS n FROM types").fetchone()
+        return bool(row and row["n"] > 0)
+    except Exception:
+        return False          # column missing entirely
+
+
+def _backfill_type_volumes(con, type_data: dict) -> None:
+    """Add `volume` if absent and populate it from types.yaml, leaving every other column alone."""
+    add_columns(con, "types", "volume REAL")
+    rows = []
+    for type_id, attrs in type_data.items():
+        vol = attrs.get("volume")
+        if vol is not None:
+            rows.append((vol, int(type_id)))
+    _log(f"Backfilling volume for {len(rows)} types...")
+    for i in range(0, len(rows), 1000):
+        con.executemany("UPDATE types SET volume=? WHERE type_id=?", rows[i:i + 1000])
+    con.commit()
+
+
 def _already_built(con) -> bool:
     """Data-presence check (works identically on SQLite dev / Postgres prod via get_connection())
     instead of a file-exists check — a Postgres table has no file to check, and this also
@@ -399,8 +430,24 @@ def main() -> None:
             con.execute("SELECT pg_advisory_lock(?)", (_ADVISORY_LOCK_KEY,))
         try:
             if _already_built(con):
-                if _manufacturing_built(con):
+                if _manufacturing_built(con) and _types_volume_built(con):
                     _log("SDE already built — skipping.")
+                    return
+                if not _types_volume_built(con):
+                    # types.volume missing/empty on a DB built before the column existed. Parse
+                    # ONLY types.yaml and backfill that one column — everything else stays put, so
+                    # there's no SDE-less window for the running app.
+                    _log("types.volume missing — backfilling from types.yaml only...")
+                    tmp_path = Path(tempfile.mktemp(suffix=".zip"))
+                    try:
+                        download_sde(tmp_path)
+                        with zipfile.ZipFile(tmp_path) as zf:
+                            _backfill_type_volumes(con, parse_yaml(zf, "fsd/types.yaml"))
+                        _log("Volume backfill complete.")
+                    finally:
+                        if tmp_path.exists():
+                            tmp_path.unlink()
+                if _manufacturing_built(con):
                     return
                 # Types are present but the manufacturing tables are missing (an SDE built before
                 # the Industry planner existed). Backfill ONLY those from blueprints.yaml — no need
