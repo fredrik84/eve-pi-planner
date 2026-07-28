@@ -24,7 +24,9 @@ These are standing rules for ALL changes. Follow them unless the user explicitly
    a live ESI login), `test_min_cc.py` (layout CPU/PG fitting: the FIT_HEADROOM promise, `min_cc`,
    the head-drop fallback — pure in-process layout math, run it in the container),
    `test_skill_enough.py` (the "already enough skill" half of `/api/skill-roi`, seeded rows +
-   fabricated cookie). Add to these or create a new
+   fabricated cookie), `test_page_access.py` (the per-group `require_page` backend gate — that a
+   group with no restrictions stays a no-op, that a restricted group really is 403'd, and that
+   the public customer build-status link is NOT gated). Add to these or create a new
    `test_*.py` in the same urllib/`--url` style. Assert
    *durable invariants*, not runtime state an admin can change (e.g. don't assert a flag's enabled
    value equals its code default — admins toggle it).

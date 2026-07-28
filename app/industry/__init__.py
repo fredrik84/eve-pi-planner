@@ -15,7 +15,7 @@ defines it (`from app.industry.graph import build_plan`), which is why there's n
 here — the one this file used to carry named 25 symbols that no caller ever imported from it, so
 it was pure surface area to keep in sync.
 """
-from app.industry._router import router  # noqa: F401 — mounted by app.main
+from app.industry._router import router, public_router  # noqa: F401 — both mounted by app.main
 
 from app.industry import (  # noqa: F401 — imported for endpoint registration only
     graph,          # /api/industry/plan, /api/industry/search

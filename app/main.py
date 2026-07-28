@@ -48,7 +48,7 @@ from app.alert_settings import router as alert_settings_router
 from app.internal import router as internal_router
 from app.moon_goo import router as moon_goo_router
 from app.reactions import router as reactions_router
-from app.industry import router as industry_router
+from app.industry import router as industry_router, public_router as industry_public_router
 from app.groups import router as groups_router
 from app.markets import router as markets_router
 
@@ -67,6 +67,7 @@ app.include_router(internal_router)
 app.include_router(moon_goo_router)
 app.include_router(reactions_router)
 app.include_router(industry_router)
+app.include_router(industry_public_router)   # ungated: the customer build-status link
 app.include_router(groups_router)
 app.include_router(markets_router)
 

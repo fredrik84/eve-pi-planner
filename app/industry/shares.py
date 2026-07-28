@@ -32,7 +32,7 @@ from app.sde import ensure_once, add_columns
 from app.esi import require_context
 from app.cache import cache_get_json, cache_set_json
 
-from app.industry._router import router
+from app.industry._router import router, public_router
 
 # A public page anyone can refresh, and each render costs two plans. 60s is well inside the rate at
 # which a build's state actually changes (jobs take hours) while stopping a shared link from being
@@ -332,7 +332,7 @@ def build_status(share_id: str) -> dict:
     return payload
 
 
-@router.get("/api/industry/build-status/{share_id}")
+@public_router.get("/api/industry/build-status/{share_id}")
 def public_build_status(share_id: str):
     """PUBLIC — no session. Deliberately so: the whole point is a customer with no account. Returns
     only the customer-facing fields assembled in `build_status`."""
