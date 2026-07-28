@@ -133,7 +133,14 @@ These are standing rules for ALL changes. Follow them unless the user explicitly
 
 ## Code layout
 
-`app/planner.py` is the core. `_run_plan(req, context_id)` orchestrates; the heavy lifting is in named helpers (refactored out of one giant function):
+`app/planner.py` is the core **planning algorithm**. The CRUD half it used to carry — per-character
+plan-config, `pp_shares`, profiles, plan snapshots and colony flags — now lives in
+**`app/planner_store.py`** (its own `APIRouter`, mounted by `main.py` next to the planner's).
+The dependency is one-directional: `planner.py` imports `ensure_plan_tables`,
+`ensure_profile_tables`, `ensure_share_table` and `_flagged_colonies` from `planner_store`,
+never the reverse, so there is no cycle. Add a new saved-plan field in `planner_store`.
+
+`_run_plan(req, context_id)` orchestrates; the heavy lifting is in named helpers (refactored out of one giant function):
 - `_compute_slot_budget` → factory count + `_compute_factory_shares`
 - `_build_need_list` → Bresenham-ordered extractor slots
 - `_assign_extractors` → Pass 1 (existing) → swap → Pass 2 → post-swap; calls `_run_swap_pass`

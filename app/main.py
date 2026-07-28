@@ -39,6 +39,7 @@ from app.planetary import router as planetary_router
 from app.esi import router as esi_router
 from app.esi_data import router as esi_data_router
 from app.planner import router as planner_router
+from app.planner_store import router as planner_store_router
 from app.fuelblock_planner import router as fuelblock_router
 from app.bugs import router as bugs_router
 from app.admin import router as admin_router
@@ -57,6 +58,7 @@ app.include_router(planetary_router)
 app.include_router(esi_router)
 app.include_router(esi_data_router)
 app.include_router(planner_router)
+app.include_router(planner_store_router)
 app.include_router(fuelblock_router)
 app.include_router(bugs_router)
 app.include_router(admin_router)
@@ -190,7 +192,7 @@ def _fmt_isk(n: float) -> str:
 
 def _share_meta(share_id: str):
     """Return (title, description) for a stored plan share, or generic defaults."""
-    from app.planner import get_connection, ensure_share_table
+    from app.planner_store import get_connection, ensure_share_table
 
     title = "EVE PI Planner"
     desc = "Plan your EVE Online Planetary Industry production chains."
