@@ -528,8 +528,26 @@ async function indLoadSlots() {
 function indOnSearchInput() {
   clearTimeout(_indSearchTimer);
   const q = document.getElementById('indSearch').value.trim();
+  // Typing is not picking: both buttons stay disabled until a result is chosen, and a disabled
+  // button gives no feedback at all — so say what's missing instead of leaving the click dead.
+  if (!_indPicked || _indPicked.name !== q) _indSetPickHint(q);
   if (q.length < 2) { _indHideResults(); return; }
   _indSearchTimer = setTimeout(() => _indSearch(q), 200);
+}
+
+function _indSetPickHint(q) {
+  const h = document.getElementById('indPickHint');
+  if (h) h.textContent = q.length >= 2 ? 'Pick a product from the list to price it.' : '';
+}
+
+// Enter on the search box takes the first match — otherwise typing a full product name and
+// hitting Enter looks like it selected something when nothing is selected at all.
+function indOnSearchKey(ev) {
+  if (ev.key !== 'Enter') return;
+  ev.preventDefault();
+  const box = document.getElementById('indSearchResults');
+  const first = box && box.style.display !== 'none' && box.querySelector('.ind-search-row');
+  if (first) first.click();
 }
 
 async function _indSearch(q) {
@@ -615,6 +633,9 @@ async function indRunPlan() {
     const d = await r.json();
     _indLastPlan = d;
     out.innerHTML = _indRenderPlan(d, `Build ${qty}× ${_esc(d.target.name)}`);
+    // The plan renders below a tall form inside a scrolling modal, so on a laptop it can land
+    // entirely below the fold — which reads as "the button did nothing". Bring it into view.
+    out.scrollIntoView({ behavior: 'smooth', block: 'start' });
     _indLoadSweep(qty);
   } catch (e) {
     out.innerHTML = `<div class="pp-card"><p class="pp-warn">${_esc(String(e))}</p></div>`;
@@ -2068,6 +2089,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const s = document.getElementById('indSearch');
   if (s) {
     s.addEventListener('input', indOnSearchInput);
+    s.addEventListener('keydown', indOnSearchKey);
     s.addEventListener('blur', () => setTimeout(_indHideResults, 150));
   }
   const ps = document.getElementById('indPrioSpeed');
