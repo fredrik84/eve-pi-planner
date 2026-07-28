@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Cookie, Depends, HTTPException
 from pydantic import BaseModel
 
-from app.sde import get_connection, ensure_once
+from app.sde import get_connection, ensure_once, add_columns
 from app.esi import require_admin, admin_and_tester_status
 
 router = APIRouter()
@@ -175,10 +175,7 @@ def ensure_features_table():
     )
     con.commit()
     # Add state column and migrate from boolean enabled if needed
-    try:
-        con.execute("ALTER TABLE pp_features ADD COLUMN state TEXT")
-    except Exception:
-        pass
+    add_columns(con, "pp_features", "state TEXT")
     con.execute(
         "UPDATE pp_features SET state = CASE WHEN enabled=1 THEN 'public' ELSE 'admin' END "
         "WHERE state IS NULL"

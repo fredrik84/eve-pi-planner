@@ -8,7 +8,7 @@ from math import gcd, ceil
 
 from fastapi import APIRouter, Body, Cookie, Depends, Request
 
-from app.sde import load_pi_data, get_connection, ensure_once
+from app.sde import load_pi_data, get_connection, ensure_once, add_columns
 from app.market import fetch_prices
 from app.esi import require_context, session_context_id, ensure_char_tables, PI_CHAR_SQL, natural_name_key
 from app.alert_settings import get_alert_settings
@@ -44,15 +44,9 @@ def ensure_plan_tables():
         )
     """)
     con.commit()
-    try:
-        con.execute("ALTER TABLE pp_plan_config ADD COLUMN extractor_limit INTEGER")
-    except Exception:
-        pass
-    try:
-        # Per-character command-centre level override (NULL = use the ESI value).
-        con.execute("ALTER TABLE pp_plan_config ADD COLUMN ccu INTEGER")
-    except Exception:
-        pass
+    add_columns(con, "pp_plan_config",
+                "extractor_limit INTEGER",
+                "ccu INTEGER")   # per-character command-centre override (NULL = use the ESI value)
     con.execute("""
         UPDATE pp_plan_config SET extractor_limit = 0
         WHERE factory_only = 1 AND extractor_limit IS NULL
@@ -440,10 +434,7 @@ def ensure_profile_tables():
             ("fleet_json",             "TEXT"),   # {char_id: [ccu, ic]} at save → staleness flag
         ]:
             if col not in cols:
-                try:
-                    con.execute(f"ALTER TABLE pp_profiles ADD COLUMN {col} {defval}")
-                except Exception:
-                    pass
+                add_columns(con, "pp_profiles", f"{col} {defval}")
     # Fleet skill baseline captured when a plan was last saved (one row per context). Lets the
     # dashboard flag "characters trained up since you planned" without storing skill history.
     con.execute("""

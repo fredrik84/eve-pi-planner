@@ -1,6 +1,6 @@
 from functools import lru_cache
 
-from app.db import get_connection, ensure_once  # re-export: all app code imports these from here
+from app.db import get_connection, ensure_once, add_columns  # re-export: all app code imports these from here
 
 
 @lru_cache(maxsize=1)

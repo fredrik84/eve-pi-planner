@@ -1563,8 +1563,12 @@ def test_share_links_outlive_their_order():
     check("the snapshot is of the finished payload",
           src.index("payload = {") < src.index("UPDATE pp_industry_shares SET last_payload"))
     # The table has to carry the columns, and additively — this shipped after the table did.
+    # Checked via the shared add_columns() migration helper (app/db.py), which is what every
+    # additive migration goes through now; the assertion is on the mechanism + the column name,
+    # not on a raw "ALTER TABLE ... ADD COLUMN" spelling that a refactor can legitimately change.
     ddl = inspect.getsource(shares.ensure_industry_shares_table)
-    check("the snapshot columns are added additively", "ADD COLUMN last_payload" in ddl)
+    check("the snapshot columns are added additively",
+          "add_columns(" in ddl and "last_payload" in ddl)
 
 
 def main():

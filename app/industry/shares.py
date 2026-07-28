@@ -28,7 +28,7 @@ import time as _time
 from fastapi import Depends, HTTPException
 
 from app.db import get_connection
-from app.sde import ensure_once
+from app.sde import ensure_once, add_columns
 from app.esi import require_context
 from app.cache import cache_get_json, cache_set_json
 
@@ -55,13 +55,7 @@ def ensure_industry_shares_table():
         """)
         con.execute("CREATE INDEX IF NOT EXISTS idx_ind_shares_order ON pp_industry_shares (order_id)")
         # The last successfully-rendered payload, so the link outlives its order.
-        for ddl in ("ALTER TABLE pp_industry_shares ADD COLUMN last_payload TEXT",
-                    "ALTER TABLE pp_industry_shares ADD COLUMN last_at REAL"):
-            try:
-                con.execute(ddl)
-                con.commit()
-            except Exception:
-                pass
+        add_columns(con, "pp_industry_shares", "last_payload TEXT", "last_at REAL")
         con.commit()
     finally:
         con.close()

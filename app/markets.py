@@ -17,7 +17,7 @@ import logging
 from fastapi import Depends, HTTPException
 from pydantic import BaseModel
 
-from app.sde import get_connection, ensure_once
+from app.sde import get_connection, ensure_once, add_columns
 from app.cache import cache_get_json, cache_set_json, cache_mget_json, cache_mset_json
 from app import esi_http
 from app.esi import (
@@ -57,18 +57,14 @@ def ensure_markets_table():
     # Unified structure list: a followed market row (kind='structure') can also be a BUILD structure
     # for manufacturing and/or reactions, carrying the fitted rig tiers + hull + security ESI can't
     # read as a fitting. Additive ALTER-COLUMN migration (this codebase's convention).
-    for coldef in ("build_mfg INTEGER NOT NULL DEFAULT 0", "build_rx INTEGER NOT NULL DEFAULT 0",
-                   "hull TEXT", "security TEXT",
-                   "me_rig INTEGER NOT NULL DEFAULT 0", "te_rig INTEGER NOT NULL DEFAULT 0",
-                   "rx_me_rig INTEGER NOT NULL DEFAULT 0", "rx_te_rig INTEGER NOT NULL DEFAULT 0",
-                   # price_from: is this a PRICING source (in the priority chain)? 1 by default so
-                   # existing market rows keep pricing; a build-only structure sets it 0.
-                   "price_from INTEGER NOT NULL DEFAULT 1"):
-        try:
-            con.execute(f"ALTER TABLE pp_markets ADD COLUMN {coldef}")
-            con.commit()
-        except Exception:
-            pass
+    add_columns(con, "pp_markets",
+                "build_mfg INTEGER NOT NULL DEFAULT 0", "build_rx INTEGER NOT NULL DEFAULT 0",
+                "hull TEXT", "security TEXT",
+                "me_rig INTEGER NOT NULL DEFAULT 0", "te_rig INTEGER NOT NULL DEFAULT 0",
+                "rx_me_rig INTEGER NOT NULL DEFAULT 0", "rx_te_rig INTEGER NOT NULL DEFAULT 0",
+                # price_from: is this a PRICING source (in the priority chain)? 1 by default so
+                # existing market rows keep pricing; a build-only structure sets it 0.
+                "price_from INTEGER NOT NULL DEFAULT 1")
     con.commit()
     con.close()
 

@@ -20,7 +20,7 @@ from fastapi import Depends
 from pydantic import BaseModel
 
 from app.db import get_connection
-from app.sde import ensure_once
+from app.sde import ensure_once, add_columns
 from app.esi import require_context
 
 from app.industry._router import router
@@ -44,10 +44,7 @@ def ensure_industry_settings_table():
             )
         """)
         # Added after the table shipped; additive ALTER is this codebase's migration convention.
-        try:
-            con.execute("ALTER TABLE pp_industry_settings ADD COLUMN margin_pct REAL")
-        except Exception:
-            pass
+        add_columns(con, "pp_industry_settings", "margin_pct REAL")
         con.commit()
     finally:
         con.close()
