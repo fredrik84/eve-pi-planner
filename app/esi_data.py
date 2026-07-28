@@ -9,8 +9,6 @@ import logging
 import time
 from datetime import datetime, timezone
 
-import httpx
-
 from app import esi_http
 from fastapi import APIRouter, Cookie, Depends, HTTPException
 from pydantic import BaseModel
@@ -18,7 +16,7 @@ from pydantic import BaseModel
 from app.sde import get_connection
 from app.cache import cache_get_json, cache_set_json, cache_invalidate, charlist_key
 from app.esi import (
-    ESI_BASE, WALLET_SCOPE,
+    WALLET_SCOPE,
     _session_lookup, _is_configured, admin_and_tester_status_for_context,
     require_context, _get_valid_token, _fetch_skills, _fetch_planets, _fetch_alliance_id,
     ensure_char_tables, natural_name_key,
@@ -33,7 +31,7 @@ _CHARLIST_TTL = 300
 
 # ── Corp wallet (admin: see donations without logging the toon into the game) ──────
 
-def _resolve_names(ids: list[int], client: "httpx.Client") -> dict[int, str]:
+def _resolve_names(ids: list[int], client) -> dict[int, str]:
     """Resolve character/corp ids to names via /universe/names/ (best-effort)."""
     out: dict[int, str] = {}
     ids = [int(i) for i in ids if i]
@@ -78,9 +76,8 @@ def corp_wallet_summary(context_id: int) -> dict:
     token = _get_valid_token(cid)
     if not token:
         return {"connected": True, "character_name": name, "error": "token"}
-    headers = {"Authorization": f"Bearer {token}"}
     try:
-        with httpx.Client(timeout=15) as client:
+        with esi_http.client(timeout=15) as client:
             pub = esi_http.get(f"characters/{cid}/?datasource=tranquility", client=client).json()
             corp_id = pub.get("corporation_id")
             corp = esi_http.get(f"corporations/{corp_id}/?datasource=tranquility", client=client).json()
@@ -105,9 +102,9 @@ def corp_wallet_summary(context_id: int) -> dict:
             journal_expires = None
             ref_types: dict[str, int] = {}
             try:
-                jresp = client.get(
-                    f"{ESI_BASE}/corporations/{corp_id}/wallets/1/journal/?datasource=tranquility",
-                    headers=headers,
+                jresp = esi_http.get(
+                    f"corporations/{corp_id}/wallets/1/journal/?datasource=tranquility",
+                    client=client, token=token,
                 )
                 journal_status = jresp.status_code
                 # ESI caches the corp journal ~1h; surface when its snapshot was taken / next refreshes

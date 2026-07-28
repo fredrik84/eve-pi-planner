@@ -137,7 +137,6 @@ PI_CHAR_SQL = ("AND NOT (COALESCE(scopes,'') LIKE '%read_corporation_wallets%' "
 
 EVE_AUTH_URL  = "https://login.eveonline.com/v2/oauth/authorize"
 EVE_TOKEN_URL = "https://login.eveonline.com/v2/oauth/token"
-ESI_BASE      = "https://esi.evetech.net/latest"
 
 # Skill type IDs relevant to Planetary Industry
 SKILL_IDS = {
@@ -582,15 +581,9 @@ def _fetch_planets(character_id: int, access_token: str, only_planet_id: int | N
                  # restart to recover, since the pool never got the connection back.
     _fetched, _skipped = 0, 0
     try:
-        headers = {"Authorization": f"Bearer {access_token}"}
-        with httpx.Client() as client:
-            resp = client.get(
-                f"{ESI_BASE}/characters/{character_id}/planets/",
-                headers=headers,
-                timeout=10,
-            )
-            resp.raise_for_status()
-            planet_list = resp.json()
+        resp = esi_http.get(f"characters/{character_id}/planets/", token=access_token, timeout=10)
+        resp.raise_for_status()
+        planet_list = resp.json()
 
         if only_planet_id is not None:
             planet_list = [p for p in planet_list if p.get("planet_id") == only_planet_id]
@@ -599,9 +592,8 @@ def _fetch_planets(character_id: int, access_token: str, only_planet_id: int | N
         sys_ids = list({p.get("solar_system_id") for p in planet_list if p.get("solar_system_id")})
         if sys_ids:
             try:
-                nr = httpx.post(
-                    f"{ESI_BASE}/universe/names/?datasource=tranquility",
-                    json=sys_ids, timeout=10,
+                nr = esi_http.post(
+                    "universe/names/?datasource=tranquility", json=sys_ids, timeout=10,
                 )
                 nr.raise_for_status()
                 ss_con = get_connection()
@@ -663,7 +655,7 @@ def _fetch_planets(character_id: int, access_token: str, only_planet_id: int | N
 
         _scan_ts = time.time()        # anchor for projecting buffer depletion between scans
 
-        with httpx.Client() as client:
+        with esi_http.client() as client:
             for planet in planet_list:
                 planet_id       = planet["planet_id"]
 
@@ -692,10 +684,9 @@ def _fetch_planets(character_id: int, access_token: str, only_planet_id: int | N
                 pads: dict[int, int] = {}       # stored item type_id → total amount
                 ext_heads: list = []            # per-ECU head coords (for the same-hotspot proximity check)
                 try:
-                    pr = client.get(
-                        f"{ESI_BASE}/characters/{character_id}/planets/{planet_id}/",
-                        headers=headers,
-                        timeout=10,
+                    pr = esi_http.get(
+                        f"characters/{character_id}/planets/{planet_id}/",
+                        client=client, token=access_token,
                     )
                     pr.raise_for_status()
                     _detail = pr.json()
@@ -820,10 +811,7 @@ def _fetch_planets(character_id: int, access_token: str, only_planet_id: int | N
 
                 # Fetch planet name to derive in-system ordinal (e.g. "01B-88 VIII" → 8)
                 try:
-                    pinfo = client.get(
-                        f"{ESI_BASE}/universe/planets/{planet_id}/",
-                        timeout=10,
-                    )
+                    pinfo = esi_http.get(f"universe/planets/{planet_id}/", client=client)
                     pinfo.raise_for_status()
                     pname = pinfo.json().get("name", "")
                     last_word = pname.strip().split()[-1] if pname.strip() else ""
@@ -939,8 +927,10 @@ def esi_callback(
         raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
     state_ctx = pending_row["context_id"] or 0
 
-    # Exchange code for tokens
-    with httpx.Client() as client:
+    # Exchange code for tokens. Deliberately NOT through esi_http: login.eveonline.com is the SSO
+    # service, not ESI — it sends no error-limit headers, and inheriting ESI's backoff would block
+    # logins for up to 90s whenever the ESI budget happened to be low. Only the User-Agent is shared.
+    with httpx.Client(headers={"User-Agent": esi_http.USER_AGENT}) as client:
         tok = client.post(
             EVE_TOKEN_URL,
             data={"grant_type": "authorization_code", "code": code,
@@ -1286,12 +1276,7 @@ def _http_date_to_epoch(value: str | None) -> float | None:
 
 def _fetch_skills(character_id: int, access_token: str) -> dict[str, int]:
     try:
-        with httpx.Client() as client:
-            resp = client.get(
-                f"{ESI_BASE}/characters/{character_id}/skills/",
-                headers={"Authorization": f"Bearer {access_token}"},
-                timeout=10,
-            )
+        resp = esi_http.get(f"characters/{character_id}/skills/", token=access_token, timeout=10)
         resp.raise_for_status()
         skill_data = resp.json()
         result: dict[str, int] = {}
@@ -1342,7 +1327,8 @@ def _refresh_token(character_id: int, refresh_token: str) -> str | None:
     whether a refresh_token is stored, not whether it still works) stayed green forever even for
     a permanently dead character — the red dot never caught up to reality."""
     try:
-        with httpx.Client() as client:
+        # Plain httpx, not esi_http — SSO is not ESI (see the token exchange in esi_callback).
+        with httpx.Client(headers={"User-Agent": esi_http.USER_AGENT}) as client:
             resp = client.post(
                 EVE_TOKEN_URL,
                 data={"grant_type": "refresh_token", "refresh_token": refresh_token},

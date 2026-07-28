@@ -11,7 +11,6 @@ from datetime import datetime, timezone
 
 log = logging.getLogger(__name__)
 
-import httpx
 
 from app import esi_http
 from fastapi import Depends, HTTPException
@@ -21,7 +20,7 @@ from app.sde import get_connection, load_pi_data, ensure_once
 from app.markets import resolve_market_data
 from app.market import fetch_daily_volume
 from app.cache import cache_invalidate, charlist_key, cache_get_json, cache_set_json
-from app.esi import require_context, ESI_BASE, _get_valid_token
+from app.esi import require_context, _get_valid_token
 
 from app.reactions._router import router
 from app.reactions.settings import effective_reaction_settings
@@ -61,15 +60,9 @@ def _resolve_structure_name(structure_id: int, access_token: str) -> str:
         return _structure_name_cache[structure_id]
     name = f"Structure #{structure_id}"
     try:
-        with httpx.Client() as client:
-            resp = client.get(
-                f"{ESI_BASE}/universe/structures/{structure_id}/",
-                headers={"Authorization": f"Bearer {access_token}"},
-                timeout=10,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-        name = data.get("name") or name
+        resp = esi_http.get(f"universe/structures/{structure_id}/", token=access_token, timeout=10)
+        resp.raise_for_status()
+        name = resp.json().get("name") or name
     except Exception:
         pass  # best-effort — an unresolvable structure just shows its raw ID, never blocks the fetch
     _structure_name_cache[structure_id] = name
@@ -89,14 +82,10 @@ def fetch_industry_jobs(character_id: int, access_token: str) -> list[dict]:
     facility to a readable name. Best-effort: returns [] on any failure rather than raising —
     a refresh failing for one character must not block the others."""
     try:
-        with httpx.Client() as client:
-            resp = client.get(
-                f"{ESI_BASE}/characters/{character_id}/industry/jobs/",
-                headers={"Authorization": f"Bearer {access_token}"},
-                timeout=10,
-            )
-            resp.raise_for_status()
-            jobs = resp.json()
+        resp = esi_http.get(f"characters/{character_id}/industry/jobs/",
+                            token=access_token, timeout=10)
+        resp.raise_for_status()
+        jobs = resp.json()
     except Exception:
         return []
 
@@ -118,15 +107,13 @@ def fetch_corp_industry_jobs(character_id: int, access_token: str) -> list[dict]
     over ESI, but only this specific character's own installs are what a "my jobs" view should
     show, not every corpmate's."""
     try:
-        with httpx.Client(timeout=10) as client:
+        with esi_http.client(timeout=10) as client:
             pub = esi_http.get(f"characters/{character_id}/", client=client).json()
             corp_id = pub.get("corporation_id")
             if not corp_id:
                 return []
-            resp = client.get(
-                f"{ESI_BASE}/corporations/{corp_id}/industry/jobs/",
-                headers={"Authorization": f"Bearer {access_token}"},
-            )
+            resp = esi_http.get(f"corporations/{corp_id}/industry/jobs/",
+                                client=client, token=access_token)
             resp.raise_for_status()
             jobs = resp.json()
     except Exception:
