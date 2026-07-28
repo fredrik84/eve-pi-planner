@@ -973,6 +973,16 @@ hiccup, omit it for new features (fail-closed). Call sites: `onDashboardTabOpen`
 (`loadAdminFeatures`/`toggleFeature`) flips flags. `FEATURE_REGISTRY` in `app/features.py` is the
 source of truth for the current flag set — don't duplicate the list here, it drifts.
 
+## Reactions suggestion engine (`app/reactions/advisor.py`)
+
+Split out of `app/reactions/jobs.py`, which had grown to ~1,500 lines covering three unrelated
+jobs (ESI job fetching, the persistent slot plan, and this). `advisor.py` holds the two-stage
+wizard engine — the knapsack over WHAT to run, then bin-packing onto WHO runs it — plus
+`/api/reactions/suggest`. It imports from `jobs.py` **one way only**; `_character_capacities`
+deliberately stayed in `jobs.py` (it's about slots, and the customer-order allocation path needs
+it too), which is what keeps the dependency acyclic. `__init__.py` imports jobs before advisor
+for the same reason.
+
 ## Shared colony-alert engine (`app/colony_alerts.py`) + configurable thresholds (`app/alert_settings.py`)
 
 **`compute_colony_alerts(context_id, rows=None, now=None)`** is the single source of truth for
