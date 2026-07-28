@@ -99,7 +99,7 @@ function hideLayoutResults() {
 async function addFuelBlockLayout() {
   await loadPiProducts();  // ensure _ppProducts is populated for addLayoutById
   if (!_fbBom) {
-    try { _fbBom = (await (await fetch('/api/fuelblock-bom')).json()).components || []; }
+    try { _fbBom = (await api('/api/fuelblock-bom')).components || []; }
     catch (e) { _fbBom = []; }
   }
   for (const c of _fbBom) {
@@ -135,12 +135,7 @@ async function addLayoutById(typeId) {
 
 async function _fetchLayout(entry) {
   try {
-    const resp = await fetch('/api/layout', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type_id: entry.type_id, planet_type: entry.planet, launchpads: entry.launchpads, count: entry.count == null ? null : entry.count, cc_level: entry.cc || 5, no_storage: _layoutNoStorage, diameter: entry.diameter || null }),
-    });
-    if (!resp.ok) { const e = await resp.json().catch(() => ({})); throw new Error(e.detail || resp.status); }
-    entry.data = await resp.json();
+    entry.data = await apiSend('POST', '/api/layout', { type_id: entry.type_id, planet_type: entry.planet, launchpads: entry.launchpads, count: entry.count == null ? null : entry.count, cc_level: entry.cc || 5, no_storage: _layoutNoStorage, diameter: entry.diameter || null });
     if (entry.data.summary && entry.data.summary.count != null) entry.count = entry.data.summary.count;  // resolve auto-max
     // Sync to the planet the backend actually used (it coerces to a type that yields the P0,
     // e.g. Reactive Gas → Gas), so the per-card selector, bundle and download all agree.

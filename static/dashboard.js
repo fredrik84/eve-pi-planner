@@ -8,7 +8,7 @@ async function onDashboardTabOpen() {
   const el = document.getElementById('dashboardContent');
   if (el && !_dashData) el.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Loading overview…</div>';
   try {
-    const [data] = await Promise.all([fetch('/api/dashboard').then(r => r.json()), _loadFeatures()]);
+    const [data] = await Promise.all([api('/api/dashboard'), _loadFeatures()]);
     renderDashboard(data);
   } catch (e) {
     if (el) el.innerHTML = '<section class="pp-card"><div class="pp-card-body"><div class="pp-empty">Failed to load dashboard.</div></div></section>';
@@ -46,8 +46,7 @@ async function rescanAll() {
     const b = document.getElementById('rescanBtn');
     if (b) b.textContent = `Rescanning ${i + 1}/${targets.length}…`;
     try {
-      const r = await fetch(`/api/characters/${targets[i].character_id}/refresh-planets`, { method: 'POST' });
-      if (!r.ok) failed.push(targets[i]);
+      await apiSend('POST', `/api/characters/${targets[i].character_id}/refresh-planets`);
     } catch (e) { failed.push(targets[i]); }
   }
   // Reaction jobs live behind a separate ESI endpoint from colonies — pull them on a full rescan
@@ -73,7 +72,7 @@ async function rescanAll() {
     let msg = '';
     if (dead.length) msg += `Needs re-login (token revoked): ${dead.map(c => c.character_name).join(', ')}.\n`;
     if (transient.length) msg += `Temporary failure, try again shortly: ${transient.map(c => c.character_name).join(', ')}.`;
-    alert(msg.trim());
+    toast(msg.trim().replace(/\n/g, ' '), 'error', 9000);
   }
 }
 
@@ -399,8 +398,8 @@ function _loadAccountValue() {
   const box = document.getElementById('dashAccountValue');
   if (!box) return;
   Promise.all([
-    fetch('/api/pi-lifetime').then(r => r.ok ? r.json() : null).catch(() => null),
-    fetch('/api/reactions/lifetime').then(r => r.ok ? r.json() : null).catch(() => null),
+    api('/api/pi-lifetime').catch(() => null),
+    api('/api/reactions/lifetime').catch(() => null),
   ]).then(([pi, rx]) => {
     const tiles = [];
     if (pi && pi.value > 0)

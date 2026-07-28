@@ -1,5 +1,71 @@
-// Shared formatting helpers used across app.js, planetary.js, dashboard.js, analysis.js
-// and refill.js. Loaded first so every feature file can rely on these being global.
+// Shared HTTP + formatting helpers, loaded first so every feature file can rely on these
+// being global.
+
+// ── API ───────────────────────────────────────────────────────────────────────────────
+// One place every API call goes through. Before this, ~170 call sites hand-rolled fetch and
+// only about half checked `resp.ok` at all — the rest handed a JSON error body to code
+// expecting data, so a 500 surfaced as an unrelated TypeError several frames later, or as a
+// silently empty panel. `api()` throws instead, carrying the server's own `detail` string
+// (which is what the FastAPI handlers actually put there, including main.py's "a deploy may
+// still be rolling out" hint on an unmatched /api/ path).
+//
+// Callers that genuinely want to ignore a failure still catch it — the difference is that
+// ignoring is now a deliberate `catch`, not the default.
+class ApiError extends Error {
+  constructor(message, status) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+  }
+}
+
+async function api(path, opts) {
+  const resp = await fetch(path, opts);
+  if (!resp.ok) {
+    let detail = '';
+    try { detail = ((await resp.json()) || {}).detail || ''; } catch (e) { /* non-JSON body */ }
+    throw new ApiError(detail || `HTTP ${resp.status}`, resp.status);
+  }
+  if (resp.status === 204) return null;
+  return resp.json().catch(() => null);   // some endpoints legitimately return an empty body
+}
+
+// The write half — POST/PUT/PATCH/DELETE with an optional JSON body. Omitting `body` sends no
+// content-type, which matters: several endpoints take no body and FastAPI rejects an empty one
+// declared as JSON.
+function apiSend(method, path, body) {
+  const opts = { method };
+  if (body !== undefined) {
+    opts.headers = { 'Content-Type': 'application/json' };
+    opts.body = JSON.stringify(body);
+  }
+  return api(path, opts);
+}
+
+// ── Toasts ────────────────────────────────────────────────────────────────────────────
+// Replaces the 55 blocking `alert()` calls this app used as its only error channel. Non-modal,
+// auto-dismissing, and stackable, so a failure during a bulk action (rescan-all, queue reorder)
+// reports without halting the loop the way alert() did.
+function toast(msg, kind = 'info', ms = 4500) {
+  let host = document.getElementById('toastHost');
+  if (!host) {
+    host = document.createElement('div');
+    host.id = 'toastHost';
+    document.body.appendChild(host);
+  }
+  const el = document.createElement('div');
+  el.className = `toast toast-${kind}`;
+  el.textContent = String(msg);
+  el.addEventListener('click', () => el.remove());
+  host.appendChild(el);
+  setTimeout(() => { el.classList.add('toast-out'); setTimeout(() => el.remove(), 250); }, ms);
+}
+
+// The common "an action failed" path: log for the console, tell the user what the server said.
+function toastError(e, prefix) {
+  const m = (e && e.message) ? e.message : String(e);
+  toast(prefix ? `${prefix}: ${m}` : m, 'error');
+}
 
 function fmtIsk(n) {
   if (n >= 1e9) return (n / 1e9).toFixed(2) + ' B';

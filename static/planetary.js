@@ -156,7 +156,7 @@ async function _loadFeatures() {
   if (_loadFeaturesInFlight) return _loadFeaturesInFlight;
   _loadFeaturesInFlight = (async () => {
     try {
-      const d = await (await fetch('/api/features')).json();
+      const d = await api('/api/features');
       _features = {}; (d.features || []).forEach(f => { _features[f.key] = f; });
       _featuresGroupOrder = d.group_order || [];
       _featuresIsAdmin = !!d.is_admin;
@@ -228,8 +228,7 @@ async function loadCharacters() {
   if (_loadCharactersInFlight) return _loadCharactersInFlight;
   _loadCharactersInFlight = (async () => {
     try {
-      const resp = await fetch('/api/characters');
-      const data = await resp.json();
+      const data = await api('/api/characters');
       _esiConfigured = data.configured;
       _loggedIn = data.logged_in || false;
       _isAdmin = data.is_admin || false;
@@ -391,11 +390,7 @@ async function confirmDeleteAccount() {
   btn.disabled = true;
   status.textContent = 'Deleting…';
   try {
-    const resp = await fetch('/api/me', { method: 'DELETE' });
-    if (!resp.ok) {
-      const d = await resp.json().catch(() => ({}));
-      throw new Error(d.detail || `HTTP ${resp.status}`);
-    }
+    await apiSend('DELETE', '/api/me');
     status.textContent = 'Done. Redirecting…';
     setTimeout(() => { window.location.href = '/'; }, 800);
   } catch (e) {
@@ -412,12 +407,12 @@ async function submitBug() {
   const btn = document.getElementById('bugSubmitBtn');
   btn.disabled = true; btn.textContent = 'Submitting…'; msg.textContent = '';
   try {
-    const resp = await fetch('/api/bugs', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title, description }),
-    });
-    if (resp.status === 401) { msg.textContent = 'Log in to report a bug.'; btn.disabled = false; btn.textContent = 'Submit'; return; }
-    if (!resp.ok) { const d = await resp.json().catch(() => ({})); throw new Error(d.detail || `HTTP ${resp.status}`); }
+    try {
+      await apiSend('POST', '/api/bugs', { title, description });
+    } catch (e) {
+      if (e.status === 401) { msg.textContent = 'Log in to report a bug.'; btn.disabled = false; btn.textContent = 'Submit'; return; }
+      throw e;
+    }
     btn.textContent = '✓ Thanks!';
     setTimeout(closeBugModal, 900);
   } catch (e) {
@@ -432,9 +427,7 @@ let _bugFilter = '';
 async function rescanCharacter(cid, btn) {
   if (btn) { btn.disabled = true; btn.textContent = 'Rescanning…'; }
   try {
-    const resp = await fetch(`/api/characters/${cid}/refresh-planets`, { method: 'POST' });
-    if (!resp.ok) { const d = await resp.json().catch(() => ({})); throw new Error(d.detail || `HTTP ${resp.status}`); }
-    const d = await resp.json().catch(() => ({}));
+    const d = (await apiSend('POST', `/api/characters/${cid}/refresh-planets`)) || {};
     // Briefly show real fetched-vs-cache-skipped counts before the repaint recreates this
     // button — the only way to see esi_cache_skip actually doing something, short of
     // reading server logs (which this deployment doesn't even emit at INFO level).
@@ -449,7 +442,7 @@ async function rescanCharacter(cid, btn) {
     await loadCharacters();   // repaint with fresh data (recreates the button)
   } catch (e) {
     if (btn) { btn.disabled = false; btn.textContent = 'Rescan this character'; }
-    alert('Rescan failed: ' + e.message);
+    toastError(e, 'Rescan failed');
   }
 }
 
@@ -471,7 +464,7 @@ function renderCharacters(chars, loggedIn) {
       addBtn.style.opacity = '0.4';
       addBtn.style.cursor = 'not-allowed';
       addBtn.title = 'Set EVE_CLIENT_ID and EVE_CLIENT_SECRET in .env';
-      addBtn.onclick = () => alert('ESI not configured.\n\nRegister an app at https://developers.eveonline.com\nthen set EVE_CLIENT_ID and EVE_CLIENT_SECRET in .env and redeploy.');
+      addBtn.onclick = () => toast('ESI not configured. Register an app at https://developers.eveonline.com, then set EVE_CLIENT_ID and EVE_CLIENT_SECRET in .env and redeploy.', 'error', 10000);
     }
     if (refreshBtn) refreshBtn.style.display = 'none';
   } else if (loggedIn) {
@@ -516,7 +509,7 @@ function renderCharacters(chars, loggedIn) {
       row.querySelectorAll('select[data-f]').forEach(sel =>
         sel.addEventListener('change', () => editDummyField(c.character_id, sel.dataset.f, parseInt(sel.value))));
       row.querySelector('.pp-char-del').addEventListener('click', async () => {
-        await fetch(`/api/characters/${c.character_id}`, { method: 'DELETE' });
+        await apiSend('DELETE', `/api/characters/${c.character_id}`);
         loadCharacters();
       });
       list.appendChild(row);
@@ -533,7 +526,7 @@ function renderCharacters(chars, loggedIn) {
         </div>
         <div class="pp-char-meta"><span style="color:#6a7390;font-size:12px">Corp-wallet viewer · see Admin → Corp wallet</span></div>`;
       row.querySelector('.pp-char-del').addEventListener('click', async () => {
-        await fetch(`/api/characters/${c.character_id}`, { method: 'DELETE' });
+        await apiSend('DELETE', `/api/characters/${c.character_id}`);
         loadCharacters();
       });
       list.appendChild(row);
@@ -699,7 +692,7 @@ function renderCharacters(chars, loggedIn) {
       if (del) del.addEventListener('click', async (e) => {
         e.preventDefault(); e.stopPropagation();
         if (!confirm(`Remove ${c.name}?`)) return;
-        await fetch(`/api/characters/${c.character_id}`, { method: 'DELETE' });
+        await apiSend('DELETE', `/api/characters/${c.character_id}`);
         loadCharacters();
       });
     }
@@ -783,8 +776,7 @@ async function _ensureFactoryFit(keys) {
   need.forEach(k => _facFitPending.add(k));
   const items = need.map(k => { const [tid, pt, ccu] = k.split('|'); return { type_id: Number(tid), planet_type: pt, ccu: Number(ccu) }; });
   try {
-    const r = await fetch('/api/factory-fit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items }) });
-    const j = await r.json();
+    const j = await apiSend('POST', '/api/factory-fit', { items });
     Object.assign(_facFit, j.fit || {});
   } catch (e) { /* unknown fit just shows nothing */ }
   need.forEach(k => _facFitPending.delete(k));
@@ -941,12 +933,7 @@ async function addDummyCharacters(btn) {
   status.textContent = 'Adding…';
   btn.disabled = true;
   try {
-    const resp = await fetch('/api/characters/dummy', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ count, max_planets, ccu, name_prefix }),
-    });
-    if (!resp.ok) throw new Error((await resp.json()).detail || `HTTP ${resp.status}`);
-    const d = await resp.json();
+    const d = await apiSend('POST', '/api/characters/dummy', { count, max_planets, ccu, name_prefix });
     status.textContent = `Added ${d.count}`;
     await loadCharacters();
   } catch (e) {
@@ -960,10 +947,7 @@ async function addDummyCharacters(btn) {
 async function editDummyField(id, field, value) {
   const body = {}; body[field] = value;
   try {
-    await fetch(`/api/characters/dummy/${id}`, {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
+    await apiSend('PUT', `/api/characters/dummy/${id}`, body);
   } catch (e) { /* best-effort; reload reflects truth */ }
   loadCharacters();
 }
@@ -983,8 +967,7 @@ async function refreshAllPlanets(btn) {
     const liveBtn = document.getElementById('ppRefreshBtn') || btn;
     liveBtn.textContent = `Refreshing ${i + 1}/${ids.length}…`;
     try {
-      const resp = await fetch(`/api/characters/${ids[i]}/refresh-planets`, { method: 'POST' });
-      if (!resp.ok) failed.push(ids[i]);
+      await apiSend('POST', `/api/characters/${ids[i]}/refresh-planets`);
     } catch (e) { failed.push(ids[i]); }
   }
   const liveBtn = document.getElementById('ppRefreshBtn') || btn;
@@ -1002,7 +985,7 @@ async function refreshAllPlanets(btn) {
     let msg = '';
     if (dead.length) msg += `Needs re-login (token revoked): ${dead.map(nameOf).join(', ')}.\n`;
     if (transient.length) msg += `Temporary failure, try again shortly: ${transient.map(nameOf).join(', ')}.`;
-    alert(msg.trim());
+    toast(msg.trim().replace(/\n/g, ' '), 'error', 9000);
   }
 }
 
@@ -1068,9 +1051,7 @@ async function loadCorpWallet() {
   el.innerHTML = '<div class="pp-empty">Loading…</div>';
   let d;
   try {
-    const r = await fetch('/api/corp-wallet');
-    if (!r.ok) { el.innerHTML = '<div class="pp-empty">Admin access required.</div>'; return; }
-    d = await r.json();
+    d = await api('/api/corp-wallet');
   } catch (e) { el.innerHTML = '<div class="pp-empty">Could not reach the wallet service.</div>'; return; }
 
   const reconnect = `<button onclick="connectCorpWallet()">Connect a character…</button>`;
@@ -1134,8 +1115,7 @@ async function loadCorpWallet() {
 async function loadPiProducts() {
   if (_ppProducts.length) return;
   try {
-    const resp = await fetch('/api/pi-products');
-    const data = await resp.json();
+    const data = await api('/api/pi-products');
     _ppProducts = data.products || [];
     const dl = document.getElementById('productList');
     dl.innerHTML = '';
@@ -1168,7 +1148,7 @@ async function _refreshBaskets() {
     if (dl) dl.querySelectorAll('option[data-basket-id]').forEach(o => o.remove());
     return;
   }
-  try { _baskets = (await (await fetch('/api/baskets')).json()).baskets || []; }
+  try { _baskets = (await api('/api/baskets')).baskets || []; }
   catch (e) { _baskets = []; }
   if (!dl) return;
   dl.querySelectorAll('option[data-basket-id]').forEach(o => o.remove());
@@ -1193,8 +1173,7 @@ async function _loadProductConfig(typeId, name) {
   document.getElementById('ppRolesCard').style.display = '';
   await renderBasketToggles();
   try {
-    const resp = await fetch(`/api/plan-config/${typeId}`);
-    const data = await resp.json();
+    const data = await api(`/api/plan-config/${typeId}`);
     renderRoles(data.configs, typeId);
   } catch (e) { console.error('Failed to load roles:', e); }
 }
@@ -1268,7 +1247,7 @@ async function renderBasketToggles() {
   if (builtinFb) initMfgInputs();
   if (!builtinFb) { card.style.display = 'none'; return; }
   if (!_fbBom) {
-    try { _fbBom = (await (await fetch('/api/fuelblock-bom')).json()).components || []; }
+    try { _fbBom = (await api('/api/fuelblock-bom')).components || []; }
     catch (e) { _fbBom = []; }
   }
   card.style.display = '';
@@ -1448,11 +1427,7 @@ async function saveRoles(typeId) {
     };
   });
   try {
-    await fetch(`/api/plan-config/${typeId}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ configs }),
-    });
+    await apiSend('POST', `/api/plan-config/${typeId}`, { configs });
   } catch (e) { console.error('Failed to save roles:', e); }
 }
 
@@ -1462,8 +1437,7 @@ let _ppProfiles = [];
 
 async function loadProfiles() {
   try {
-    const resp = await fetch('/api/profiles');
-    const data = await resp.json();
+    const data = await api('/api/profiles');
     _ppProfiles = data.profiles || [];
     renderProfilesBar(_ppProfiles);
   } catch (e) { console.error('Failed to load profiles:', e); }
@@ -1509,7 +1483,7 @@ async function settingsDeleteProfile(id) {
   const profile = _ppProfiles.find(p => p.id === id);
   if (!profile) return;
   if (!confirm(`Delete profile "${profile.name}"?`)) return;
-  await fetch(`/api/profiles/${id}`, { method: 'DELETE' });
+  await apiSend('DELETE', `/api/profiles/${id}`);
   loadProfiles();
 }
 
@@ -1553,7 +1527,7 @@ async function _applyProfile(profile) {
 }
 
 async function wizardSaveProfile() {
-  if (!_wiz.typeId) { alert('No product selected.'); return; }
+  if (!_wiz.typeId) { toast('No product selected.', 'error'); return; }
   // Suggest a name from what's being planned: the product/basket, plus the region if chosen.
   const base = (_wiz.productName || 'Plan').replace(/\s*\(basket\)\s*$/i, '');
   const region = (typeof _ppRegion !== 'undefined' && _ppRegion) ? ' · ' + _ppRegion : '';
@@ -1577,17 +1551,12 @@ async function wizardSaveProfile() {
     min_density_pct: _wiz.minDensity || 0,
   };
   try {
-    const resp = await fetch('/api/profiles', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    await apiSend('POST', '/api/profiles', payload);
     const btn = document.getElementById('wizSaveProfileBtn');
     btn.textContent = '✓ Saved';
     setTimeout(() => btn.textContent = 'Save as profile', 2000);
     loadProfiles();
-  } catch (e) { alert('Save failed: ' + e.message); }
+  } catch (e) { toastError(e, 'Save failed'); }
 }
 
 // ── Share URL (server-stored) ─────────────────────────────────────────────────
@@ -1644,12 +1613,7 @@ async function wizardShare(includeDetails = false) {
   btn.textContent = 'Sharing…';
   const payload = _buildPlanPayload();
   try {
-    const resp = await fetch('/api/pp-shares', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ payload, anonymize: !includeDetails }),
-    });
-    const data = await resp.json();
+    const data = await apiSend('POST', '/api/pp-shares', { payload, anonymize: !includeDetails });
     const url = location.origin + '/s/' + data.id;
     // Copy the link to the clipboard but deliberately DON'T put it in the owner's address
     // bar — leaving /s/<id> there would force the plan back open on the next refresh even
@@ -1660,7 +1624,7 @@ async function wizardShare(includeDetails = false) {
     btn.textContent = copied ? '✓ Copied' : 'Link ready';
     setTimeout(() => { btn.textContent = label; btn.disabled = false; }, 2000);
   } catch (e) {
-    alert('Share failed: ' + e.message);
+    toastError(e, 'Share failed');
     btn.textContent = label;
     btn.disabled = false;
   }
@@ -1678,9 +1642,7 @@ async function _tryRestoreFromHash() {
   if (!shareId && location.hash.startsWith('#s=')) shareId = location.hash.slice(3);
   if (!shareId) { await _tryRestoreLastPlan(); return; }
   try {
-    const resp = await fetch(`/api/pp-shares/${shareId}`);
-    if (!resp.ok) return;
-    const data = await resp.json();
+    const data = await api(`/api/pp-shares/${shareId}`);
     if (data.payload && data.payload.tid) {
       _shareConsumed = true;
       await _restoreFromPayload(data.payload, true);   // from a share → flag it
@@ -1825,7 +1787,7 @@ function _planRequest(systemNames) {
 }
 
 async function wizardFindSystems() {
-  if (!_wiz.typeId) { alert('Select a product first.'); return; }
+  if (!_wiz.typeId) { toast('Select a product first.', 'error'); return; }
   // Clear any stale plan from a previous run before fetching fresh data
   _wiz.lastRecsData = null;
   _wiz.lastPlanData = null;
@@ -1835,18 +1797,13 @@ async function wizardFindSystems() {
   btn.textContent = 'Finding…';
   try {
     const { url, body } = _planRequest([]);
-    const resp = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const data = await resp.json();
-    if (!resp.ok || data.error) throw new Error(data.error || `HTTP ${resp.status}`);
+    const data = await apiSend('POST', url, body);
+    if (data.error) throw new Error(data.error);   // 200 + {error} = a domain failure, not a transport one
     _wiz.lastRecsData = data;
     renderRecommendations(data);
     wizardGo(2);
   } catch (e) {
-    alert('Failed: ' + e.message);
+    toastError(e, 'Failed');
   } finally {
     btn.disabled = false;
     btn.textContent = 'Find Systems →';
@@ -1874,20 +1831,15 @@ async function wizardChooseSystems(systemNames) {
   _wiz.chosenSystems = systemNames;
   try {
     const { url, body } = _planRequest(systemNames);
-    const resp = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const data = await resp.json();
-    if (!resp.ok || data.error) throw new Error(data.error || `HTTP ${resp.status}`);
+    const data = await apiSend('POST', url, body);
+    if (data.error) throw new Error(data.error);
     _wiz.lastPlanData = data;
     const sysLabel = systemNames.length === 1 ? systemNames[0] : systemNames.join(' + ');
     document.getElementById('wizTitle3').textContent = data.product.name + ' · ' + sysLabel;
     renderFinalPlan(data);
     wizardGo(3);
   } catch (e) {
-    alert('Plan failed: ' + e.message);
+    toastError(e, 'Plan failed');
     document.querySelectorAll('.wiz-choose-btn').forEach(b => { b.disabled = false; });
   }
 }
@@ -2715,7 +2667,7 @@ function renderShoppingList(data, opts = {}) {
 
   if (!totalCount) {
     if (opts.initial) return;  // nothing to buy → just leave it folded on first render
-    alert('Nothing to buy — all planets are already set up correctly.');
+    toast('Nothing to buy — all planets are already set up correctly.', 'info');
     return;
   }
 
@@ -2778,16 +2730,11 @@ async function _rerunPlan(overrides = {}) {
   }
   try {
     const { url, body } = _planRequest(_wiz.chosenSystems);
-    const resp = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...body, ...overrides }),
-    });
-    const data = await resp.json();
-    if (!resp.ok || data.error) throw new Error(data.error || `HTTP ${resp.status}`);
+    const data = await apiSend('POST', url, { ...body, ...overrides });
+    if (data.error) throw new Error(data.error);
     _wiz.lastPlanData = data;
     renderFinalPlan(data, { scroll: false });
-  } catch (e) { alert('Re-run failed: ' + e.message); }
+  } catch (e) { toastError(e, 'Re-run failed'); }
 }
 
 async function _rerunWithFactorySystem(factorySystem) {
@@ -2940,8 +2887,7 @@ async function importCurrentSetupAsPlan(btn) {
   if (btn) btn.disabled = true;
   setStatus('Checking your deployed colonies…');
   try {
-    const resp = await fetch('/api/my-setup-plan');
-    const data = await resp.json();
+    const data = await api('/api/my-setup-plan');
     const plans = data.plans || [];
     if (!plans.length) {
       setStatus('No deployed factories found — nothing to import.');
@@ -2952,11 +2898,8 @@ async function importCurrentSetupAsPlan(btn) {
     for (const plan of plans) {
       const snap = { ...plan, name: `${plan.name} — imported ${dateTag}` };
       try {
-        const r = await fetch('/api/plan-snapshots', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: snap.name, snapshot: snap }),
-        });
-        if (r.ok) saved++; else failed++;
+        await apiSend('POST', '/api/plan-snapshots', { name: snap.name, snapshot: snap });
+        saved++;
       } catch (e) { failed++; }
     }
     setStatus(failed
@@ -3019,9 +2962,9 @@ async function loadNotifications() {
   notifTypeChanged(); // init fields for default type
   try {
     const [sData, pData, lData] = await Promise.all([
-      fetch('/api/notifications/settings').then(r => r.json()),
-      fetch('/api/notifications/prefs').then(r => r.json()),
-      fetch('/api/notifications/log').then(r => r.json()),
+      api('/api/notifications/settings'),
+      api('/api/notifications/prefs'),
+      api('/api/notifications/log'),
     ]);
     _renderNotifChannels(sData.settings || []);
     _renderNotifPrefs(pData);
@@ -3089,12 +3032,7 @@ async function notifAddChannel() {
   const status = document.getElementById('notifAddStatus');
   status.textContent = 'Saving...';
   try {
-    const r = await fetch('/api/notifications/settings', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ channel: type, config: cfg }),
-    });
-    if (!r.ok) { const e = await r.json(); throw new Error(e.detail || r.status); }
+    await apiSend('POST', '/api/notifications/settings', { channel: type, config: cfg });
     status.textContent = 'Saved.';
     await loadNotifications();
   } catch (e) {
@@ -3108,12 +3046,7 @@ async function notifSendTest() {
   const status = document.getElementById('notifAddStatus');
   status.textContent = 'Sending test...';
   try {
-    const r = await fetch('/api/notifications/test', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ channel: type, config: cfg }),
-    });
-    if (!r.ok) { const e = await r.json(); throw new Error(e.detail || r.status); }
+    await apiSend('POST', '/api/notifications/test', { channel: type, config: cfg });
     status.textContent = 'Test sent successfully.';
   } catch (e) {
     status.textContent = 'Error: ' + e.message;
@@ -3121,13 +3054,13 @@ async function notifSendTest() {
 }
 
 async function notifToggle(id) {
-  await fetch(`/api/notifications/settings/${id}`, { method: 'PATCH' });
+  await apiSend('PATCH', `/api/notifications/settings/${id}`);
   await loadNotifications();
 }
 
 async function notifDelete(id) {
   if (!confirm('Remove this notification channel?')) return;
-  await fetch(`/api/notifications/settings/${id}`, { method: 'DELETE' });
+  await apiSend('DELETE', `/api/notifications/settings/${id}`);
   await loadNotifications();
 }
 
@@ -3135,9 +3068,7 @@ async function notifResendLast() {
   const status = document.getElementById('notifPrefsStatus');
   status.textContent = 'Resending...';
   try {
-    const r = await fetch('/api/notifications/resend-last', { method: 'POST' });
-    const d = await r.json();
-    if (!r.ok) throw new Error(d.detail || r.status);
+    const d = await apiSend('POST', '/api/notifications/resend-last');
     if (d.errors && d.errors.length) {
       status.textContent = 'Send error: ' + d.errors.join('; ');
     } else {
@@ -3158,12 +3089,7 @@ async function notifSavePrefs() {
   };
   status.textContent = 'Saving...';
   try {
-    const r = await fetch('/api/notifications/prefs', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(prefs),
-    });
-    if (!r.ok) { const e = await r.json(); throw new Error(e.detail || r.status); }
+    await apiSend('PUT', '/api/notifications/prefs', prefs);
     status.textContent = 'Saved.';
   } catch (e) {
     status.textContent = 'Error: ' + e.message;
@@ -3193,9 +3119,7 @@ function _renderAlertSettings(s) {
 
 async function loadAlertSettings() {
   try {
-    const r = await fetch('/api/alert-settings');
-    const s = await r.json();
-    _renderAlertSettings(s);
+    _renderAlertSettings(await api('/api/alert-settings'));
   } catch (e) {
     console.error('Failed to load alert settings:', e);
   }
@@ -3215,12 +3139,7 @@ async function saveAlertSettings() {
   };
   status.textContent = 'Saving...';
   try {
-    const r = await fetch('/api/alert-settings', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    if (!r.ok) { const e = await r.json(); throw new Error(e.detail || r.status); }
+    await apiSend('PUT', '/api/alert-settings', body);
     status.textContent = 'Saved.';
   } catch (e) {
     status.textContent = 'Error: ' + e.message;
@@ -3231,10 +3150,7 @@ async function resetAlertSettings() {
   const status = document.getElementById('alertSettingsStatus');
   status.textContent = 'Resetting...';
   try {
-    const r = await fetch('/api/alert-settings/reset', { method: 'POST' });
-    const s = await r.json();
-    if (!r.ok) throw new Error(s.detail || r.status);
-    _renderAlertSettings(s);
+    _renderAlertSettings(await apiSend('POST', '/api/alert-settings/reset'));
     status.textContent = 'Reset to defaults.';
   } catch (e) {
     status.textContent = 'Error: ' + e.message;

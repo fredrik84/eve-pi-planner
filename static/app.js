@@ -24,12 +24,7 @@ function pct(used, available) {
 // ── Sharing ──────────────────────────────────────────────────────────────────
 
 async function createShareLink(inventoryText) {
-  const resp = await fetch('/api/share', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ inventory: inventoryText }),
-  });
-  const data = await resp.json();
+  const data = await apiSend('POST', '/api/share', { inventory: inventoryText });
   history.replaceState(null, '', '#s=' + data.id);
 }
 
@@ -46,9 +41,7 @@ async function loadFromHash() {
   const hash = location.hash;
   if (!hash.startsWith('#s=')) return;
   try {
-    const resp = await fetch('/api/share/' + hash.slice(3));
-    if (!resp.ok) return;
-    const data = await resp.json();
+    const data = await api('/api/share/' + hash.slice(3));
     document.getElementById('inv').value = data.inventory;
     analyze();
   } catch (e) { console.error('Failed to load share:', e); }
@@ -82,16 +75,7 @@ async function runAction(mode, payload, url) {
   status.className = '';
 
   try {
-    const resp = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    if (!resp.ok) {
-      const err = await resp.json().catch(() => ({}));
-      throw new Error(err.detail || `HTTP ${resp.status}`);
-    }
-    const data = await resp.json();
+    const data = await apiSend('POST', url, payload);
 
     renderInventoryPills(data);
 
@@ -583,13 +567,11 @@ function _autoRefreshTick() {
   // screen. So on anything unexpected we skip this tick and try again next interval, rather than
   // routing through the normal load functions (which render the logged-out state).
   if (tab === 'dashboard') {
-    fetch('/api/dashboard')
-      .then(r => r.ok ? r.json() : null)
+    api('/api/dashboard')
       .then(d => { if (d && d.logged_in && typeof renderDashboard === 'function') renderDashboard(d); })
       .catch(() => {});
   } else {
-    fetch('/api/reactions/jobs')
-      .then(r => r.ok ? r.json() : null)
+    api('/api/reactions/jobs')
       .then(d => { if (d && typeof _renderReactionsDashboard === 'function') { _rxLastDashboardData = d; _renderReactionsDashboard(d); } })
       .catch(() => {});
   }

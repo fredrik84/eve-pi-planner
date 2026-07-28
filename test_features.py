@@ -6,7 +6,7 @@ and the unauthenticated skill-roi response. Auth-only behaviour (a populated ski
 context) is left to manual checks, since it needs a logged-in session.
 
 Usage:
-    python test_features.py [--url https://eve-pi.failed.name]
+    python test_features.py [--url https://eve-pi-dev.failed.name]
 """
 
 import argparse
@@ -303,7 +303,11 @@ def test_industry_share_gating(base: str) -> bool:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--url", default="https://eve-pi.failed.name")
+    # Defaults to the LOCAL container, not production. These suites POST plans and read
+    # debug endpoints; pointing them at prod by default meant a plain `python3 test_x.py`
+    # ran against live users' service (and silently "passed" by testing prod, not your change).
+    # Pass --url explicitly to aim at a deployed environment.
+    parser.add_argument("--url", default="http://localhost:8000")
     args = parser.parse_args()
     base = args.url.rstrip("/")
 
