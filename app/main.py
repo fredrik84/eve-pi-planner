@@ -1,10 +1,23 @@
 import html as _html
 import json as _json
 import logging as _logging
+import re as _re
+import time as _time
 from typing import Optional
 
 import os as _os
 GIT_COMMIT = _os.environ.get("GIT_COMMIT", "unknown")
+
+# Cache-busting token for every static asset. index.html ships `?v=dev` on each script/stylesheet
+# and this replaces it at serve time, so one deploy invalidates exactly the assets that changed.
+# It replaces 18 hand-maintained `?v=N` numbers: bumping those was a manual step on every single
+# frontend change, and forgetting one served a browser stale JS against a new API — a failure that
+# looks like anything except a caching problem.
+#
+# Locally GIT_COMMIT is "unknown" (docker compose passes no build arg), so fall back to this
+# process's start time: every `docker compose up` then serves fresh assets, which is what local
+# iteration needs and what a fixed literal could never give.
+ASSET_VERSION = GIT_COMMIT if GIT_COMMIT != "unknown" else str(int(_time.time()))
 
 # Root logger defaults to WARNING with no handler, so every app.*.log.info(...) call
 # (charlist cache hit/miss, the plan-timing instrumentation, etc.) was silently dropped —
@@ -13,7 +26,7 @@ GIT_COMMIT = _os.environ.get("GIT_COMMIT", "unknown")
 _logging.basicConfig(level=_logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -225,41 +238,73 @@ def _share_meta(share_id: str):
     return title, desc
 
 
-@app.get("/s/{share_id}")
-def share_preview(share_id: str, request: Request):
-    """Serve the SPA with plan-specific Open Graph tags so link unfurlers
-    (Discord/Messenger/Slack/Twitter) show a rich preview. The fragment-based
-    `#s=` link is invisible to crawlers; this path-based link is not."""
+_ASSET_V = _re.compile(r'(\?v=)[A-Za-z0-9._-]*')
+
+
+def _page(filename: str) -> str:
+    """Read a static HTML document and stamp the running build onto its asset URLs."""
     try:
-        with open("static/index.html", encoding="utf-8") as f:
+        with open(f"static/{filename}", encoding="utf-8") as f:
             doc = f.read()
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Not found")
+    return _ASSET_V.sub(lambda m: m.group(1) + ASSET_VERSION, doc)
 
-    title, desc = _share_meta(share_id)
+
+def _with_og(doc: str, *, request: Request, path: str, title: str, desc: str,
+             script: str, twitter_image: bool = True) -> str:
+    """Inject Open Graph + Twitter meta right after <head>.
+
+    Position matters: crawlers take the FIRST title/description they see, so these have to precede
+    the generic ones index.html carries. `script` hands the share id to the page's own JS.
+    """
     t = _html.escape(title, quote=True)
     d = _html.escape(desc, quote=True)
     base = str(request.base_url).rstrip("/")
-    url = f"{base}/s/{share_id}"
-    img = f"{base}/og-image.png?v=6"
+    url = _html.escape(f"{base}{path}", quote=True)
+    img = _html.escape(f"{base}/og-image.png?v={ASSET_VERSION}", quote=True)
     og = (
         f'<meta property="og:type" content="website">\n'
         f'  <meta property="og:site_name" content="EVE PI Planner">\n'
         f'  <meta property="og:title" content="{t}">\n'
         f'  <meta property="og:description" content="{d}">\n'
-        f'  <meta property="og:url" content="{_html.escape(url, quote=True)}">\n'
-        f'  <meta property="og:image" content="{_html.escape(img, quote=True)}">\n'
+        f'  <meta property="og:url" content="{url}">\n'
+        f'  <meta property="og:image" content="{img}">\n'
         f'  <meta name="twitter:card" content="summary_large_image">\n'
         f'  <meta name="twitter:title" content="{t}">\n'
         f'  <meta name="twitter:description" content="{d}">\n'
-        f'  <meta name="twitter:image" content="{_html.escape(img, quote=True)}">\n'
-        f'  <meta name="description" content="{d}">\n'
-        f'  <script>window.__SHARE_ID__={_json.dumps(share_id)};</script>\n'
+        + (f'  <meta name="twitter:image" content="{img}">\n' if twitter_image else '')
+        + f'  <meta name="description" content="{d}">\n'
+        f'  {script}\n'
     )
-    # Inject right after <head> so the per-share og:title/description take
-    # precedence over the generic homepage defaults in index.html.
-    doc = doc.replace("<head>", "<head>\n  " + og, 1)
-    return HTMLResponse(doc)
+    return doc.replace("<head>", "<head>\n  " + og, 1)
+
+
+# Explicit index route, registered before the StaticFiles mount so the SPA's asset URLs get
+# stamped. Without it the mount would serve index.html verbatim, `?v=dev` and all.
+@app.get("/", include_in_schema=False)
+def index():
+    return HTMLResponse(_page("index.html"))
+
+
+# The StaticFiles mount would happily serve /index.html straight off disk — unstamped, so a
+# browser landing there would cache every asset under the literal key `dev` and never see an
+# update. Send it to the canonical path instead.
+@app.get("/index.html", include_in_schema=False)
+def index_html():
+    return RedirectResponse("/", status_code=301)
+
+
+@app.get("/s/{share_id}")
+def share_preview(share_id: str, request: Request):
+    """Serve the SPA with plan-specific Open Graph tags so link unfurlers
+    (Discord/Messenger/Slack/Twitter) show a rich preview. The fragment-based
+    `#s=` link is invisible to crawlers; this path-based link is not."""
+    title, desc = _share_meta(share_id)
+    return HTMLResponse(_with_og(
+        _page("index.html"), request=request, path=f"/s/{share_id}", title=title, desc=desc,
+        script=f"<script>window.__SHARE_ID__={_json.dumps(share_id)};</script>",
+    ))
 
 
 @app.get("/b/{share_id}")
@@ -271,12 +316,7 @@ def build_status_page(share_id: str, request: Request):
     the same way the plan share does it, so pasting the link into Discord unfurls with the product
     and how far along it is — which is most of what the customer wanted to ask.
     """
-    try:
-        with open("static/build.html", encoding="utf-8") as f:
-            doc = f.read()
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="Not found")
-
+    doc = _page("build.html")
     title, desc = "Build status", "Follow this build's progress."
     try:
         from app.industry.shares import build_status
@@ -288,26 +328,11 @@ def build_status_page(share_id: str, request: Request):
     except Exception:
         pass                       # a dead or unknown link still serves the page, which explains itself
 
-    t = _html.escape(title, quote=True)
-    dsc = _html.escape(desc, quote=True)
-    base = str(request.base_url).rstrip("/")
-    url = _html.escape(f"{base}/b/{share_id}", quote=True)
-    img = _html.escape(f"{base}/og-image.png?v=6", quote=True)
-    og = (
-        f'<meta property="og:type" content="website">\n'
-        f'  <meta property="og:site_name" content="EVE PI Planner">\n'
-        f'  <meta property="og:title" content="{t}">\n'
-        f'  <meta property="og:description" content="{dsc}">\n'
-        f'  <meta property="og:url" content="{url}">\n'
-        f'  <meta property="og:image" content="{img}">\n'
-        f'  <meta name="twitter:card" content="summary_large_image">\n'
-        f'  <meta name="twitter:title" content="{t}">\n'
-        f'  <meta name="twitter:description" content="{dsc}">\n'
-        f'  <meta name="description" content="{dsc}">\n'
-        f'  <script>window.__BUILD_ID__={_json.dumps(share_id)};</script>\n'
-    )
-    doc = doc.replace("<head>", "<head>\n  " + og, 1)
-    return HTMLResponse(doc)
+    return HTMLResponse(_with_og(
+        doc, request=request, path=f"/b/{share_id}", title=title, desc=desc,
+        script=f"<script>window.__BUILD_ID__={_json.dumps(share_id)};</script>",
+        twitter_image=False,       # this page never had one; keeping the unfurl shape unchanged
+    ))
 
 
 # Unmatched /api/* must 404, not fall through to the static mount below.
