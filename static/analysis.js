@@ -187,7 +187,8 @@ async function _fetchSkillRoi() {
 function _renderSkillRoiSection() {
   if (!_featureActive('skill_roi') || !_skillRoi) return '';
   const sugs = _skillRoi.suggestions || [];
-  if (!sugs.length) return '';
+  const enough = _skillRoi.enough || [];
+  if (!sugs.length && !enough.length) return '';
   const li = sugs.map(s => {
     const gain = [];
     if (s.add_isk_day) gain.push(`+${_fmtIsk(s.add_isk_day)}/day`);
@@ -199,13 +200,27 @@ function _renderSkillRoiSection() {
       </li>`;
   }).join('');
   const note = _skillRoi.note ? `<div class="an-sug-note">${_esc(_skillRoi.note)}</div>` : '';
-  return `<section class="pp-card">
+  // The other half of the answer: where a skill is already past what the setup needs. PI advice
+  // defaults to "train everything to V", which is a long haul on a rank-4 skill for a level most
+  // colonies never use — a character that's already covered should be told so.
+  const enoughLi = enough.map(s => `<li class="an-skill-row">
+      <span class="an-skill-main"><b>${_esc(s.char)}</b> · ${_esc(s.skill)}
+        <span class="an-skill-lvl an-skill-enough">${s.need_lvl} of ${s.have_lvl} used</span></span>
+      <span class="an-sug-note">${_esc(s.detail)}</span>
+    </li>`).join('');
+  const trainCard = sugs.length ? `
       <div class="pp-card-title">Train skills for more output <span class="tl-preview-tag">estimate</span></div>
       <div class="pp-card-body an-suggest an-suggest-skill">
         <div class="an-sug-note">What an extra skill level on each character would add at your current setup — your call whether the train (or an injector) is worth it.</div>
         <ul class="an-skill-list">${li}</ul>${note}
-      </div>
-    </section>`;
+      </div>` : '';
+  const enoughCard = enough.length ? `
+      <div class="pp-card-title">Already enough skill</div>
+      <div class="pp-card-body an-suggest an-suggest-skill">
+        <div class="an-sug-note">Levels your current colonies don't use. A command centre is sized by CPU and power grid, and extractor planets are power-grid-bound — most never need level V. Train past this only when you're adding or enlarging colonies.</div>
+        <ul class="an-skill-list">${enoughLi}</ul>
+      </div>` : '';
+  return `<section class="pp-card">${trainCard}${enoughCard}</section>`;
 }
 
 // ── Redeploy / move advice (concrete fixes a reseat can't cover) ─────────────

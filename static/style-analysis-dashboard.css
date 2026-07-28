@@ -449,6 +449,7 @@
   padding: 9px 12px; border: 1px solid #1c2030; border-radius: 7px; background: #11151f; }
 .an-skill-main { font-size: 13px; color: var(--clr-text-bright); }
 .an-skill-lvl { color: #5ab4e6; font-weight: 700; font-size: 12px; margin-left: 4px; }
+.an-skill-lvl.an-skill-enough { color: #7e9a7e; }
 .an-skill-gain { font-size: 13px; font-weight: 700; color: var(--clr-green); white-space: nowrap; text-align: right; }
 .an-skill-row .an-sug-note { grid-column: 1 / -1; margin-top: 2px; }
 
