@@ -40,6 +40,14 @@ from app.sde import load_pi_data
 
 CMD_CTR_LEVEL = 5
 
+# Keep this share of the command-centre budget FREE in anything we generate. Filling a planet to
+# 100% is a trap: our link/spoke costs are an estimate off idealised pin coordinates, the player's
+# real placement never matches to the watt, and EVE itself advises leaving ~10% spare. A template
+# that fits on paper and not in the client is worse than one facility fewer. Applies to every
+# fitting decision (basics, heads, packed factory units) AND to the min_cc advice, so what we
+# recommend, what we export, and what the planner assumes can't drift apart.
+FIT_HEADROOM = 0.10
+
 # ── CPU / Powergrid model (EVE values; see EVE University) ────────────────────
 # Command Center provides (cpu, pg) per upgrade level.
 CC_BUDGET = {
@@ -94,8 +102,32 @@ def compute_resources(template: dict, struct: dict) -> dict:
     return {
         "cpu": round(cpu), "pg": round(pg), "cpu_max": cpu_max, "pg_max": pg_max,
         "cpu_pct": round(cpu / cpu_max * 100), "pg_pct": round(pg / pg_max * 100),
-        "over": cpu > cpu_max or pg > pg_max, "cc_level": template.get("CmdCtrLv", 5),
+        # `over` = physically impossible (>100%). `over_fit` = past the headroom we build to —
+        # buildable, but tighter than we're willing to ship. Every fitting loop uses over_fit.
+        "over": cpu > cpu_max or pg > pg_max,
+        "over_fit": not _fits(cpu, pg, cpu_max, pg_max),
+        "cc_level": template.get("CmdCtrLv", 5),
+        "headroom_pct": round(FIT_HEADROOM * 100),
+        "min_cc": min_cc_for(cpu, pg), "binding": "cpu" if cpu / cpu_max > pg / pg_max else "pg",
     }
+
+
+def _fits(cpu: float, pg: float, cpu_max: float, pg_max: float) -> bool:
+    """Does this draw fit the budget with FIT_HEADROOM to spare?"""
+    room = 1.0 - FIT_HEADROOM
+    return cpu <= cpu_max * room and pg <= pg_max * room
+
+
+def min_cc_for(cpu: float, pg: float) -> Optional[int]:
+    """Lowest Command Center Upgrades level that runs this layout with the standard headroom — the
+    skill the player ACTUALLY needs, as opposed to the level they happen to have. None if it
+    doesn't fit even at 5. Levels above `min_cc` buy nothing for this template, which is the whole
+    point: CCU IV→V is the expensive half of the skill and plenty of colonies never need it."""
+    for lvl in range(1, CMD_CTR_LEVEL + 1):
+        cpu_max, pg_max = CC_BUDGET[lvl]
+        if _fits(cpu, pg, cpu_max, pg_max):
+            return lvl
+    return None
 
 # Launchpads per factory. Each launchpad holds 10,000 m3, so 3 = 30,000 m3 of P1
 # buffer. P1 is routed from every launchpad to each facility so they drain together.
@@ -670,7 +702,7 @@ def generate_split_extractor_layout(p1a_id: int, p1b_id: int, heads_a: int = 5, 
         return t
 
     built = _build(nba, nbb)
-    while (nba > 1 or nbb > 1) and compute_resources(built["template"], struct)["over"]:
+    while (nba > 1 or nbb > 1) and compute_resources(built["template"], struct)["over_fit"]:
         if nba >= nbb and nba > 1:
             nba -= 1
         elif nbb > 1:
@@ -691,6 +723,7 @@ def generate_split_extractor_layout(p1a_id: int, p1b_id: int, heads_a: int = 5, 
     sa, sb = pi_data["schematics"][p1a_id], pi_data["schematics"][p1b_id]
     summary = {
         "kind": "split-extractor", "planet_type": planet_type, "valid_planets": both,
+        "min_cc": res["min_cc"],
         "launchpads": built["n_launchpads"], "buffer_m3": built["n_launchpads"] * 10000,
         "lines": [
             {"product_id": p1a_id, "product_name": types[p1a_id]["name"], "extracts": p0a_name,
@@ -775,20 +808,45 @@ def generate_extractor_layout(p1_id: int, planet_type: str = "Barren", launchpad
     cc = CMD_CTR_LEVEL if cc_level is None else max(1, min(5, int(cc_level)))
     lp = max(1, min(MAX_LAUNCHPADS, launchpads))
 
-    def _build(h, nb):
+    def _build(h, nb, at_cc):
         b = build_extractor_template(p1_id, planet_type, struct, pi_data, h, nb, n_launchpads=lp,
                                      no_storage=no_storage, diam=diam)
-        b["template"]["CmdCtrLv"] = cc
+        b["template"]["CmdCtrLv"] = at_cc
         return b
 
-    # Keep all 10 extractor heads (full P0 extraction); scale ONLY the basic (P1) factories
-    # down to fit the command-centre budget. A lower-CC planet thus extracts the same P0 but
-    # converts fewer P1 on-site — so the planner places more such extractor planets.
-    heads, n_basic = max(1, heads), max(1, n_basic)
-    built = _build(heads, n_basic)
-    while n_basic > 1 and compute_resources(built["template"], struct)["over"]:
-        n_basic -= 1
-        built = _build(heads, n_basic)
+    def _fit(at_cc: int, want_heads: int, want_basics: int):
+        """Largest layout that fits level `at_cc` with headroom. Keeps all the extractor heads
+        (full P0 extraction) and scales ONLY the basic (P1) factories down — a lower-CC planet
+        extracts the same P0 but converts fewer P1 on-site, so the planner places more of them.
+        Heads are the last resort: at the 1-basic floor the ECU and its heads alone can still
+        blow a small budget (CC1/CC2, or a big planet with expensive head spokes), and dropping
+        one costs real extraction, so we do it only to avoid exporting a template the game will
+        refuse to build."""
+        h, nb = max(1, want_heads), max(1, want_basics)
+        b = _build(h, nb, at_cc)
+        while nb > 1 and compute_resources(b["template"], struct)["over_fit"]:
+            nb -= 1
+            b = _build(h, nb, at_cc)
+        while h > 1 and compute_resources(b["template"], struct)["over_fit"]:
+            h -= 1
+            b = _build(h, nb, at_cc)
+        return h, nb, b
+
+    req_heads = max(1, heads)
+    heads, n_basic, built = _fit(cc, heads, n_basic)
+    # What every OTHER command-centre level would give on this same planet. This is the answer to
+    # "how far do I actually need to train Command Center Upgrades?" — the levels are far from
+    # equal in training time, and a player who only needs 4 basics should be able to see that
+    # level III already covers it rather than assuming V is the price of entry.
+    p1_per_basic_hr = sch["output_qty"] * 3600.0 / sch["cycle_time"]
+    ladder = []
+    for lvl in range(1, CMD_CTR_LEVEL + 1):
+        lh, lnb, lb = (heads, n_basic, built) if lvl == cc else _fit(lvl, req_heads, EXTRACTOR_BASICS)
+        lres = compute_resources(lb["template"], struct)
+        ladder.append({"cc": lvl, "heads": lh, "basics": lnb,
+                       "product_per_hour": round(lnb * p1_per_basic_hr, 1),
+                       "pg_pct": lres["pg_pct"], "cpu_pct": lres["cpu_pct"],
+                       "over": lres["over"]})
     t = built["template"]
     planet = {
         "id": 1, "name": built["name"],
@@ -800,7 +858,8 @@ def generate_extractor_layout(p1_id: int, planet_type: str = "Barren", launchpad
     summary = {
         "product_name": types[p1_id]["name"], "product_id": p1_id, "kind": "extractor",
         "top_tier": 1, "planet_type": planet_type, "valid_planets": valid,
-        "extracts": p0_name, "heads": heads,
+        "extracts": p0_name, "heads": heads, "heads_requested": req_heads,
+        "min_cc": planet["resources"]["min_cc"], "cc_ladder": ladder,
         "launchpads": built["n_launchpads"], "buffer_m3": built["n_launchpads"] * 10000,
         "facilities_by_tier": {"P1": built["n_basic"]},
         "product_per_hour": round(built["n_basic"] * sch["output_qty"] * 3600.0 / sch["cycle_time"], 1),
@@ -840,7 +899,7 @@ def fitted_extractor_basics(planet_type: str, cc: int, no_storage: bool = False)
             return b
 
         built = _build(n)
-        while n > 1 and compute_resources(built["template"], struct)["over"]:
+        while n > 1 and compute_resources(built["template"], struct)["over_fit"]:
             n -= 1
             built = _build(n)
     except Exception:
@@ -936,7 +995,7 @@ def generate_layout(product_id: int, planet_type: str = "Barren",
     # Largest count that still fits the command-centre budget.
     max_count = 1
     for c in range(1, 41):
-        if compute_resources(_build(c)["template"], struct)["over"]:
+        if compute_resources(_build(c)["template"], struct)["over_fit"]:
             break
         max_count = c
 
@@ -965,6 +1024,9 @@ def generate_layout(product_id: int, planet_type: str = "Barren",
         "launchpads": launchpads,
         "count": count,
         "max_count": max_count,
+        # Lowest CCU level that runs THIS template (at this count) — levels above it add nothing
+        # unless you also raise the count.
+        "min_cc": planet["resources"]["min_cc"],
         "buffer_m3": launchpads * 10000,
         "facilities_by_tier": {f"P{t}": v for t, v in sorted(planet["facilities_by_tier"].items())},
         "product_per_hour": round(product_rate, 3),

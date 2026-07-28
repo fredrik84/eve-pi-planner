@@ -21,7 +21,10 @@ These are standing rules for ALL changes. Follow them unless the user explicitly
    the bare host, since `highspy`/`numpy` are only installed there), `test_colony_alerts.py`
    (the shared alert engine + notification prefs migration — seeds fake `pp_char_planets` rows
    and a fabricated `pp_sessions` cookie to exercise the real `/api/dashboard` endpoint without
-   a live ESI login). Add to these or create a new
+   a live ESI login), `test_min_cc.py` (layout CPU/PG fitting: the FIT_HEADROOM promise, `min_cc`,
+   the head-drop fallback — pure in-process layout math, run it in the container),
+   `test_skill_enough.py` (the "already enough skill" half of `/api/skill-roi`, seeded rows +
+   fabricated cookie). Add to these or create a new
    `test_*.py` in the same urllib/`--url` style. Assert
    *durable invariants*, not runtime state an admin can change (e.g. don't assert a flag's enabled
    value equals its code default — admins toggle it).
@@ -186,14 +189,42 @@ extractor token per `(p1_type_id, a.effective_ccu, best_planet_type)` from each 
 CCU, not the factory's (the old `expand=1` path leaked the factory CC onto extractors). The
 P1→P0 planet type comes from the slot's `best_planet_type`.
 
-**Extractor template = always 10 heads; basics scale.** `generate_extractor_layout` keeps all
-10 extractor heads (full P0 extraction, matching the planner's flat 48k P0/cycle model) and
-scales **only** the basic (P1) factory count down to fit a lower CC (8→6→3→1 at CC5→4→3→1).
-`generate_layout` passes `cc_level` into the tier-1 path (don't drop it — extractor templates
-must scale with the toon's real CC, not default to CC5). **Factory** planets still scale by CC — the packed facility
-count (`component_factory_rate`/`_packed_rate` → `generate_layout` `max_count`) drops at lower
-CC, so the planner places more factory planets. A genuinely impossible combo (e.g. Storm Ø30000
-at CC1) still overflows the grid — that's the physical reason B/T is the default.
+**Extractor template = 10 heads where possible; basics scale.** `generate_extractor_layout` keeps
+all 10 extractor heads (full P0 extraction, matching the planner's flat 48k P0/cycle model) and
+scales **only** the basic (P1) factory count down to fit a lower CC (8→6→4→1 at CC5→4→3→2 on a
+small planet). Heads are a **last-resort** lever, pulled only when even 1 basic doesn't fit (CC1/CC2,
+or a big planet with expensive head spokes) — before that we exported templates the client would
+reject. The summary reports `heads_requested` alongside `heads` so the UI can say what the low
+command centre cost. `generate_layout` passes `cc_level` into the tier-1 path (don't drop it —
+extractor templates must scale with the toon's real CC, not default to CC5). **Factory** planets
+still scale by CC — the packed facility count (`component_factory_rate`/`_packed_rate` →
+`generate_layout` `max_count`) drops at lower CC, so the planner places more factory planets.
+
+**Nothing is built to 100% of the budget (`FIT_HEADROOM = 0.10`).** Every fitting decision —
+extractor basics, heads, packed factory units — and the `min_cc` advice leave ~10% of BOTH the CPU
+and power-grid budgets free. Our link/head-spoke costs are an estimate off idealised pin
+coordinates and the player's real placement never matches to the watt, so a template that fits on
+paper and not in the client is worse than one facility fewer. `compute_resources` reports both
+`over` (physically impossible, >100% — the red OVER BUDGET state) and `over_fit` (past the
+headroom; buildable but tighter than we ship). **Every fitting loop uses `over_fit`.** Consequences
+to know: an 8-basic extractor now needs CC5 (87% PG; at CC4 it'd be 97%), CC4 gets 6 basics and CC3
+gets 4, and P2 `max_count` dropped 22→20. Changing this constant changes plan sizing — it feeds
+`fitted_extractor_basics` → `_basics_factor` → throughput — so **bump `_LAYOUT_CALC_VER`** in
+planner.py (v2 = the headroom change) to invalidate the 30-day Redis layout cache.
+
+**`min_cc` — the level a layout actually needs.** `min_cc_for(cpu, pg)` returns the lowest CC level
+whose budget fits the draw *with headroom* (None if nothing does); it's in every `compute_resources`
+result and in the extractor/factory/split summaries. Levels above it buy nothing for that template.
+Note a maximal template always reports `min_cc == cc_level` (the generator packs to the budget by
+design), so the actionable version for extractors is the **`cc_ladder`** in the extractor summary:
+what each of CC1–CC5 fits on this planet (`heads`, `basics`, `product_per_hour`, `pg_pct`/`cpu_pct`,
+`over`). That's the answer to "how far do I need to train Command Center Upgrades?" — rendered as
+the clickable ladder row on extractor cards. Cheap to compute (~6ms/level); do NOT build it by
+recursing into `generate_extractor_layout` (use the internal `_fit`).
+
+**Extractors are power-grid-bound, never CPU-bound** (~32-45% CPU at any level, vs 87-89% PG). The
+layout card leads with PG and mutes CPU on extractor cards for that reason; factories vary (a P4
+chain is CPU-bound at 78%/70%). `resources.binding` says which.
 
 **Storage-less extractor option + P0-led names.** `build_extractor_template(no_storage=)` /
 `generate_extractor_layout` / `generate_layout` / `bundle_templates` / `fitted_extractor_basics` all
@@ -984,6 +1015,25 @@ from `total_value_day / total_planets`) and **Command Center Upgrades** (<5 → 
 that pack onto each FACTORY planet, via `_units_per_planet` = layout-engine `max_count` at cc vs
 cc+1, × per-unit value). Gain-only (no SP/train cost — the user's spend decision). Sorted by ISK/day,
 top 12. Frontend: `_fetchSkillRoi()` + `_renderSkillRoiSection()` appended in `renderAnalysis`.
+
+**The response has TWO halves — the other one says "stop training".** `enough[]` (rendered as the
+"Already enough skill" card) is where a skill is already past what the character's colonies use.
+PI advice defaults to "train everything to V", which is a long haul on a rank-4 skill for a level
+plenty of colonies never touch. Two sources, in order:
+- **Command Center Upgrades** — preferred basis is `pp_char_planets.upgrade_level`, the level the
+  colonies are ACTUALLY upgraded to in-game (`basis: "deployed"`). Observed state can't over-claim:
+  a player who really did upgrade to V reports V and gets no advice. Falls back to a **modelled**
+  requirement (`_required_cc_extractor` / `_required_cc_factory` = lowest level fitting as many
+  basics / packing as many units) for scans predating the column — that fallback is against our
+  MAXIMAL archetype, so it's the conservative answer. Taken as the **max over ALL the character's
+  planets, extractors included** — characters are rarely pure-factory.
+- **Interplanetary Consolidation** — planet slots trained but not deployed. Related fix: the
+  gain-side IC suggestion is now suppressed while `free_slots > 0`; telling someone to train a
+  rank-4 skill for a slot while one sits empty is backwards.
+`_units_per_planet` returns **0** (not `max_count`'s floor of 1) when not even one unit fits the
+budget — otherwise the advice reads "this level runs your P4 planet" for a level that can't host it.
+Covered by `test_skill_enough.py` (seeds colonies deployed below the trained level + a character
+with idle slots, via a fabricated session cookie).
 **Limitations (v1):** flat per-unit factory rate (same model as `my-setup-plan`); P4 factories are
 1/planet so CCU shows no gain for them; **extractor-side CCU (more basics → more P0→P1 refining) is
 NOT modelled yet** — the documented follow-up. Returns nothing when all characters are IC5/CCU5

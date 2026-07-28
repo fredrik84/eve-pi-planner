@@ -20,8 +20,21 @@ async function onLayoutTabOpen() {
   _ppProducts.forEach(p => { _layoutTierMap[p.type_id] = p.tier; });
   const ns = document.getElementById('layoutNoStorage');
   if (ns) ns.checked = _layoutNoStorage;
+  _seedLayoutCcu();
   if (!_layoutSel.length) await _restoreLayoutState();
   renderLayoutSelections();
+}
+
+// Default the Command Center selector to the level the account actually HAS (the lowest across
+// its characters), not a hardcoded 5. Templates generated at CC5 for a fleet that isn't there
+// import over-budget, and they hide the fact that most colonies never need level 5 at all.
+// Only seeds the untouched default — a level the user picked themselves is left alone.
+function _seedLayoutCcu() {
+  const sel = document.getElementById('layoutCcu');
+  if (!sel || sel.dataset.userSet === '1') return;
+  const lvls = (_ppCharsData || []).map(c => parseInt(c.ccu, 10)).filter(n => n >= 1 && n <= 5);
+  if (!lvls.length) return;                       // logged out / unknown → leave at 5
+  sel.value = String(Math.min(...lvls));
 }
 
 // Storage-less extractors toggle (Factory Layout): buffer P0 in the launchpad, no storage hub.
@@ -184,11 +197,57 @@ function _economicsLine(e, isExtractor) {
     <span class="layout-sub">${_iskFmt(e.revenue_per_day)} gross − ${_iskFmt(e.input_cost_per_day)} P1</span></div>`;
 }
 
-function _resourcesLine(res) {
+// "How far do I need to train Command Center Upgrades?" — what each level yields on THIS planet.
+// The levels are nowhere near equal in training time, so a player whose planet is covered at III
+// should be able to see that instead of assuming V is the price of entry. Click one to rebuild.
+function _ccLadderRow(s, entry) {
+  const ladder = s.cc_ladder || [];
+  if (ladder.length < 2) return '';
+  const best = Math.max(...ladder.map(l => l.product_per_hour));
+  const cur = entry.cc || 5;
+  const cells = ladder.map(l => {
+    const same = ladder.find(o => o.cc === l.cc - 1);
+    const gains = !same || l.product_per_hour > same.product_per_hour || l.heads > same.heads;
+    const cls = ['layout-cc-step'];
+    if (l.cc === cur) cls.push('is-cur');
+    if (!gains) cls.push('is-flat');          // this level adds nothing over the one below it
+    if (l.over) cls.push('is-over');
+    const title = l.over
+      ? `A colony this size does not fit a level-${l.cc} command center at all.`
+      : `CC${l.cc}: ${l.heads} heads, ${l.basics} basic factories → ${l.product_per_hour}/hr`
+        + (gains ? '' : ` — no gain over CC${l.cc - 1}`);
+    return `<button type="button" class="${cls.join(' ')}" title="${title}"
+      onclick="changeLayoutCcu('${entry.key}', ${l.cc})">CC${l.cc}
+      <span>${l.basics}×</span></button>`;
+  }).join('');
+  const full = ladder.find(l => l.product_per_hour >= best);
+  const note = full && full.cc < 5
+    ? `level ${full.cc} already reaches this planet's full ${best}/hr`
+    : `basic factories that fit, by command centre level`;
+  return `<div class="layout-cc-ladder"><span class="layout-cc-lad-lbl">${_esc(note)}</span>${cells}</div>`;
+}
+
+function _resourcesLine(res, entry, isExtractor) {
   if (!res) return '';
-  const cls = res.over ? 'res-over' : (Math.max(res.cpu_pct, res.pg_pct) >= 90 ? 'res-warn' : '');
+  // We build to ~10% spare, so anything past that is worth flagging even though the game would
+  // still accept it — the player's real pin placement rarely matches our estimate to the watt.
+  const cls = res.over ? 'res-over' : (res.over_fit ? 'res-warn' : '');
   const k = v => (v / 1000).toFixed(v >= 10000 ? 0 : 1) + 'k';
-  return `<div class="layout-card-res ${cls}">CC${res.cc_level}: CPU <b>${res.cpu_pct}%</b> (${k(res.cpu)}/${k(res.cpu_max)}) · PG <b>${res.pg_pct}%</b> (${k(res.pg)}/${k(res.pg_max)})${res.over ? ' — OVER BUDGET' : ''}</div>`;
+  const cpu = `CPU <b>${res.cpu_pct}%</b> (${k(res.cpu)}/${k(res.cpu_max)})`;
+  const pg = `PG <b>${res.pg_pct}%</b> (${k(res.pg)}/${k(res.pg_max)})`;
+  // An extractor planet is power-grid-bound and never gets near its CPU budget (~30-40% at any
+  // level), so leading with CPU implies a constraint that isn't there. Lead with the number that
+  // decides what fits and mute the one that doesn't.
+  const parts = isExtractor ? [pg, `<span class="layout-sub">${cpu}</span>`] : [cpu, pg];
+  let hint = '';
+  if (!res.over && res.min_cc && res.min_cc < res.cc_level && entry) {
+    hint = ` · <a href="#" class="layout-mincc" onclick="changeLayoutCcu('${entry.key}', ${res.min_cc});return false;"
+      title="This layout fits inside a level-${res.min_cc} command center — levels above it buy nothing here. Click to rebuild at CC${res.min_cc}.">needs only CC${res.min_cc}</a>`;
+  }
+  const tight = res.over ? ' — OVER BUDGET'
+              : res.over_fit ? ` <span title="We build to ~${res.headroom_pct}% spare so the layout still fits once you place the pins yourself. This one is tighter than that.">— under ${res.headroom_pct}% spare</span>`
+              : '';
+  return `<div class="layout-card-res ${cls}">CC${res.cc_level}: ${parts.join(' · ')}${tight}${hint}</div>`;
 }
 
 function _layoutBundleUrl() {
@@ -229,9 +288,17 @@ function renderLayoutCard(entry) {
   let info;
   if (isExtractor) {
     const others = (s.valid_planets || []).filter(x => x !== s.planet_type);
+    // Heads are the last lever the generator pulls to fit a low command center, and unlike
+    // dropping basics it costs raw extraction — so say it out loud rather than quietly shipping
+    // a template that pulls less P0 than the player expects.
+    const lost = (s.heads_requested || s.heads) - s.heads;
+    const headNote = lost > 0
+      ? ` <span class="layout-warn" title="The command center can't power ${s.heads_requested} heads on this planet. Each head dropped is real extraction lost — raise the CC level or pick a smaller planet.">(${lost} dropped to fit CC${entry.cc || 5})</span>`
+      : '';
     info = `
-      <div class="layout-card-line">${outStr} · extracts <b>${_esc(s.extracts)}</b> · ${s.heads} heads</div>
-      <div class="layout-card-meta">planet: ${_esc(s.planet_type)} · <b>CC${entry.cc || 5}</b>${others.length ? ' · also: ' + others.map(_esc).join(', ') : ''}</div>`;
+      <div class="layout-card-line">${outStr} · extracts <b>${_esc(s.extracts)}</b> · ${s.heads} heads${headNote}</div>
+      <div class="layout-card-meta">planet: ${_esc(s.planet_type)} · <b>CC${entry.cc || 5}</b>${others.length ? ' · also: ' + others.map(_esc).join(', ') : ''}</div>
+      ${_ccLadderRow(s, entry)}`;
   } else {
     const imports = s.imports.map(i => `${_esc(i.name)} <b>${i.per_hour}/hr</b>`).join(', ');
     info = `
@@ -262,7 +329,7 @@ function renderLayoutCard(entry) {
           ${info}
           ${_economicsLine(s.economics, isExtractor)}
           <div class="layout-card-meta">${p.pins} pins · ${p.links} links · ${p.routes} routes · facilities (${byTier})</div>
-          ${_resourcesLine(p.resources)}
+          ${_resourcesLine(p.resources, entry, isExtractor)}
         </div>
       </div>
       <div class="layout-card-controls">
@@ -285,7 +352,9 @@ function renderLayoutCard(entry) {
 // Global Command Center selector: re-apply that level to every card (a "set all"),
 // re-resolving the max facilities that fit at the new level.
 async function applyGlobalCcu() {
-  const cc = Math.max(1, Math.min(5, parseInt(document.getElementById('layoutCcu').value, 10) || 5));
+  const sel = document.getElementById('layoutCcu');
+  if (sel) sel.dataset.userSet = '1';           // stop _seedLayoutCcu overriding a deliberate pick
+  const cc = Math.max(1, Math.min(5, parseInt(sel.value, 10) || 5));
   if (!_layoutSel.length) return;
   for (const e of _layoutSel) { e.cc = cc; e.count = null; }
   _saveLayoutState();

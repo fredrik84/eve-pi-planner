@@ -79,6 +79,24 @@ a.plan-action-btn { text-decoration: none; display: inline-block; }
 .layout-card-res.res-warn b { color: #ffce6b; }
 .layout-card-res.res-over { color: #e07a7a; font-weight: 600; }
 .layout-card-res.res-over b { color: #ff8a8a; }
+/* "needs only CCn" — the layout fits a lower command centre than the one selected. Muted CPU
+   readout on extractor cards (power grid is the real constraint there). */
+.layout-card-res .layout-sub { color: var(--clr-text-dim); opacity: .75; }
+.layout-mincc { color: #5ab4e6; text-decoration: none; border-bottom: 1px dotted #5ab4e6; }
+.layout-mincc:hover { color: #8fd0f5; }
+.layout-warn { color: #d8b46a; }
+/* Command-centre ladder on extractor cards: what each CCU level fits on this planet. */
+.layout-cc-ladder { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 5px; }
+.layout-cc-lad-lbl { font-size: 11px; color: var(--clr-text-dim); margin-right: 4px; }
+.layout-cc-step { font-size: 11px; line-height: 1.2; padding: 2px 6px; cursor: pointer;
+  border: 1px solid var(--clr-border); border-radius: 4px; background: transparent;
+  color: var(--clr-text-dim); }
+.layout-cc-step span { font-weight: 700; color: #9bd29b; margin-left: 3px; }
+.layout-cc-step:hover { border-color: #5ab4e6; color: #cfe6f5; }
+.layout-cc-step.is-cur { border-color: #5ab4e6; color: #cfe6f5; background: rgba(90,180,230,.12); }
+.layout-cc-step.is-flat span { color: var(--clr-text-dim); }
+.layout-cc-step.is-over { opacity: .5; }
+.layout-cc-step.is-over span { color: #e07a7a; }
 .layout-max { color: var(--clr-label); font-size: 10px; }
 /* controls bar pinned to the bottom of every card → aligns across the row */
 .layout-card-controls {

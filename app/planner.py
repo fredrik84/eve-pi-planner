@@ -955,7 +955,7 @@ def derive_setup_plans(context_id: int) -> list[dict]:
 # whole fleet's lifetime, not per-pod-per-cold-start; the in-process dict stays as a zero-latency
 # L1 hit for the (common) case of the same combo recurring within one request/process.
 # Bump _LAYOUT_CALC_VER if the layout engine's math ever changes, to invalidate stale values.
-_LAYOUT_CALC_VER = "v1"
+_LAYOUT_CALC_VER = "v2"   # v2: layouts build to FIT_HEADROOM, so packed counts differ from v1
 _LAYOUT_CALC_TTL = 30 * 86400  # 30 days
 
 
@@ -986,12 +986,47 @@ def _units_per_planet(product: int, planet_type: str, cc: int) -> int:
     def compute():
         from app.layout import generate_layout
         try:
-            return generate_layout(product, planet_type or "Barren", launchpads=3,
-                                    count=None, cc_level=cc)["summary"]["max_count"]
+            r = generate_layout(product, planet_type or "Barren", launchpads=3,
+                                count=None, cc_level=cc)
+            # A factory unit is indivisible: when not even ONE fits the budget, max_count still
+            # reports 1 (there's nothing smaller to build). Report 0 instead, or the skill advice
+            # reads "this level runs your P4 planet" for a level that cannot host it at all.
+            if r["planets"][0]["resources"]["over_fit"]:
+                return 0
+            return r["summary"]["max_count"]
         except Exception:
             return 0
 
     return _layout_cache_get_or_compute("units_per_planet", _UNITS_PER_PLANET, key, compute)
+
+
+def _required_cc_factory(product: int, planet_type: str, cc: int) -> int:
+    """Lowest CCU level that still packs as many factory units onto this planet as level `cc`
+    does. Levels above it are dead weight for this colony as it stands today."""
+    have = _units_per_planet(product, planet_type, cc)
+    if have <= 0:
+        return cc
+    for lvl in range(1, cc):
+        if _units_per_planet(product, planet_type, lvl) >= have:
+            return lvl
+    return cc
+
+
+def _required_cc_extractor(planet_type: str, cc: int, no_storage: bool = False) -> int:
+    """Lowest CCU level that fits as many Basic Industry Facilities alongside the 10 heads as
+    level `cc` does — i.e. refines just as much P1 on-site. Modelled against our MAXIMAL extractor
+    archetype, so it's the conservative answer: a player running a smaller colony (fewer basics,
+    which is most of them) needs less than this. Only a fallback — prefer the colony's real
+    upgrade_level from ESI where we have it."""
+    from app.layout import fitted_extractor_basics
+    try:
+        have = fitted_extractor_basics(planet_type, cc, no_storage)
+        for lvl in range(1, cc):
+            if fitted_extractor_basics(planet_type, lvl, no_storage) >= have:
+                return lvl
+    except Exception:
+        return cc
+    return cc
 
 
 @router.get("/api/skill-roi")
@@ -1005,7 +1040,7 @@ def skill_roi(pp_session: str = Cookie(default=None)):
     Estimates (flat per-unit factory rate); strictly scoped to the session's context."""
     context_id = session_context_id(pp_session)
     if not context_id:
-        return {"suggestions": [], "note": None}
+        return {"suggestions": [], "enough": [], "note": None}
     pi = load_pi_data()
     types = pi["types"]
     con = get_connection()
@@ -1017,7 +1052,7 @@ def skill_roi(pp_session: str = Cookie(default=None)):
                 + PI_CHAR_SQL, (context_id,)).fetchall()
     rows = con.execute(
         "SELECT cp.character_id AS cid, cp.is_extractor AS ext, cp.planet_type AS ptype, "
-        "       cp.products AS products "
+        "       cp.products AS products, COALESCE(cp.upgrade_level,0) AS cclvl "
         "FROM pp_char_planets cp JOIN pp_characters c ON c.character_id=cp.character_id "
         "WHERE c.context_id=? AND COALESCE(c.is_dummy,0)=0", (context_id,)).fetchall()
     con.close()
@@ -1027,9 +1062,12 @@ def skill_roi(pp_session: str = Cookie(default=None)):
     fac_products: set = set()
     for p in rows:
         total_used += 1
-        d = by_char.setdefault(p["cid"], {"ext": 0, "fac": []})
+        d = by_char.setdefault(p["cid"], {"ext": [], "fac": [], "deployed_cc": 0})
+        # The command-centre level this colony is ACTUALLY running at, straight from ESI. Observed
+        # state beats any model of what "should" fit — see _required_cc below.
+        d["deployed_cc"] = max(d["deployed_cc"], int(p["cclvl"] or 0))
         if p["ext"]:
-            d["ext"] += 1
+            d["ext"].append(p["ptype"] or "Barren")
         else:
             try:
                 prods = _json.loads(p["products"] or "[]")
@@ -1056,14 +1094,18 @@ def skill_roi(pp_session: str = Cookie(default=None)):
     single_label = (types.get(single_tid, {}).get("name") if single_tid else None)
 
     suggestions = []
+    enough = []
     for c in chars:
         d = by_char.get(c["cid"])
         if not d:
             continue                                    # idle character — nothing deployed to scale
-        n_planets = d["ext"] + len(d["fac"])
+        n_planets = len(d["ext"]) + len(d["fac"])
+        free_slots = max(0, (1 + (c["ic"] or 0)) - n_planets)
 
         # Interplanetary Consolidation → +1 planet (next level), valued at one colony's average.
-        if c["ic"] < 5 and n_planets > 0 and per_planet_value > 0:
+        # Only worth training once the slots they ALREADY have are in use — telling someone to
+        # train a rank-4 skill for a slot while one sits empty is backwards.
+        if c["ic"] < 5 and n_planets > 0 and per_planet_value > 0 and not free_slots:
             sug = {"char": c["nm"], "skill": "Interplanetary Consolidation",
                    "from_lvl": c["ic"], "to_lvl": c["ic"] + 1, "detail": "+1 planet slot",
                    "add_isk_day": round(per_planet_value, 2)}
@@ -1098,12 +1140,51 @@ def skill_roi(pp_session: str = Cookie(default=None)):
                     sug["unit_label"] = types.get(only, {}).get("name")
                 suggestions.append(sug)
 
+        # ── The other direction: what this character's setup actually REQUIRES. ──────────
+        # Preferred source is the command-centre level the colonies are ACTUALLY upgraded to
+        # (ESI). It can't over-claim — a player who did upgrade to V reports V and gets no
+        # advice — and it needs no assumptions about how big their colonies "should" be.
+        # Characters are rarely pure-factory, so a modelled fallback (used when the scan predates
+        # the column) takes the MAX across every planet they hold, extractors included.
+        if c["ccu"] and c["ccu"] > 1 and n_planets:
+            cc = max(1, min(5, c["ccu"]))
+            deployed = d["deployed_cc"]
+            if deployed:
+                req, why = deployed, "deployed"
+            else:
+                req = 1
+                for pt in d["ext"]:
+                    req = max(req, _required_cc_extractor(pt, cc))
+                for f in d["fac"]:
+                    req = max(req, _required_cc_factory(f["tid"], f["ptype"], cc))
+                why = "modelled"
+            if req < cc:
+                enough.append({
+                    "char": c["nm"], "skill": "Command Center Upgrades",
+                    "have_lvl": cc, "need_lvl": req, "basis": why,
+                    "detail": (f"every colony runs a level-{req} command centre"
+                               if why == "deployed" else
+                               f"level {req} runs all {n_planets} of these colonies as they are"),
+                    "planets": n_planets, "extractors": len(d["ext"]), "factories": len(d["fac"]),
+                })
+        # Idle planet slots are a live under-use of a skill already trained — worth more than any
+        # training suggestion, since it costs nothing but a deploy.
+        if free_slots and n_planets:
+            enough.append({
+                "char": c["nm"], "skill": "Interplanetary Consolidation",
+                "have_lvl": c["ic"], "need_lvl": max(0, n_planets - 1),
+                "detail": (f"{free_slots} planet slot{'s' if free_slots > 1 else ''} already "
+                           f"trained but not deployed"),
+                "planets": n_planets, "free_slots": free_slots,
+            })
+
     # Biggest gains first; keep ISK-bearing ones above pure-unit ones.
     suggestions.sort(key=lambda s: (s.get("add_isk_day") or 0, s.get("add_units_day") or 0), reverse=True)
     note = None
     if fac_products and not prices:
         note = "Market prices unavailable — showing extra output only."
-    return {"suggestions": suggestions[:12], "note": note}
+    enough.sort(key=lambda s: (s.get("need_lvl") or 0) - (s.get("have_lvl") or 0))  # biggest gap first
+    return {"suggestions": suggestions[:12], "enough": enough[:12], "note": note}
 
 
 # ── Redeploy advice (Setup Analysis) ─────────────────────────────────────────────
