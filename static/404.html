@@ -370,11 +370,17 @@
 </div>
 
 <script>
-  // Status code de-hardcoded: Starlette's own 404 fallback serves this file with no query
-  // string (defaults to 404 below); Traefik's errors middleware (5xx) passes ?code={status}.
-  // One page, every code — see project docs / evpi-gitops apps/eve-pi-planner/base/middleware.yaml.
+  // Status code de-hardcoded. Three ways in, in priority order:
+  //   1. window.__ERR_CODE__ — injected by the error-pages nginx from ?code={status} (see
+  //      evpi-gitops apps/eve-pi-planner/base/error-pages/default.conf). This is the only one
+  //      that works for Traefik's errors middleware: it fetches the page server-to-server, so
+  //      the query string never reaches the browser's location.
+  //   2. ?code= on the browser's own URL, if this page is ever linked/served directly.
+  //   3. 404 — Starlette's own not-found fallback serves this file with no query string at all.
   (function () {
-    var code = new URLSearchParams(window.location.search).get('code') || '404';
+    var code = String(window.__ERR_CODE__ || '').match(/^[1-5][0-9]{2}$/)
+      ? String(window.__ERR_CODE__)
+      : (new URLSearchParams(window.location.search).get('code') || '404');
     var COPY = {
       '404': {
         headline: 'This route drifted out of the cluster.',
