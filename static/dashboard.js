@@ -86,8 +86,9 @@ function _toggleDashFold(titleEl, key) {
   localStorage.setItem(key, collapsing ? '1' : '0');
 }
 
-function _dashTile(val, lbl, cls) {
-  return `<div class="an-stat"><div class="an-stat-val${cls ? ' ' + cls : ''}">${val}</div><div class="an-stat-lbl">${lbl}</div></div>`;
+function _dashTile(val, lbl, cls, title) {
+  const t = title ? ` title="${_esc(title)}"` : '';
+  return `<div class="an-stat"${t}><div class="an-stat-val${cls ? ' ' + cls : ''}">${val}</div><div class="an-stat-lbl">${lbl}</div></div>`;
 }
 
 
@@ -375,10 +376,10 @@ function renderDashboard(data) {
       <div class="pp-card-body">${factoryFillRow}${reactionsRow}</div>
     </section>` : '';
   el.innerHTML = _renderSyncWarn(data) + _renderReactionAlerts(data) + issuesHtml + expansionHtml
-    + '<section class="pp-card" id="dashAccountValue" style="display:none"></section>' + `
+    + `
     <section class="pp-card">
       <div class="pp-card-title">Overview <span class="pp-card-hint">— your PI at a glance · Rescan in the top bar pulls fresh data</span></div>
-      <div class="pp-card-body"><div class="an-stats">${tiles}</div></div>
+      <div class="pp-card-body"><div class="an-stats" id="dashOverviewStats">${tiles}</div></div>
     </section>` + routineHtml + timelineHtml + padFillHtml + `
     <section class="pp-card">
       <div class="pp-card-title">Factories <span class="pp-card-hint">— launchpad fill &amp; time to empty, projected forward from your last rescan (${facs.length})</span></div>
@@ -390,27 +391,35 @@ function renderDashboard(data) {
   _loadAccountValue();
 }
 
-// "Account value" card — the total value your account has PRODUCED. PI is an estimate from recent
+// Lifetime "account value" tiles — the total value your account has PRODUCED. These live at the
+// END of the Overview grid rather than in a card of their own (2026-07-29): three numbers didn't
+// warrant a separate section above the fold, and they read better beside the other headline stats. PI is an estimate from recent
 // extraction history (refined to P1; PI has no ISK input cost, so it's turnover ≈ net); reactions is
 // the exact forward-only ledger (turnover + net profit). Two cheap DB-backed calls, filled async so
 // they never block the dashboard; the card stays hidden until at least one has a number.
 function _loadAccountValue() {
-  const box = document.getElementById('dashAccountValue');
-  if (!box) return;
+  const grid = document.getElementById('dashOverviewStats');
+  if (!grid) return;
   Promise.all([
     api('/api/pi-lifetime').catch(() => null),
     api('/api/reactions/lifetime').catch(() => null),
   ]).then(([pi, rx]) => {
+    // Two async calls landing in a grid that was already painted — a second dashboard render can
+    // have another pair in flight, so clear our own tiles before adding them rather than stacking
+    // duplicates onto the end of the Overview.
+    grid.querySelectorAll('.dash-acct-tile').forEach(el => el.remove());
     const tiles = [];
     if (pi && pi.value > 0)
-      tiles.push(_dashTile(_fmtIsk(pi.value), 'PI produced (est.)', 'an-ok'));
+      tiles.push(_dashTile(_fmtIsk(pi.value), 'PI produced (est.)', 'an-ok',
+                           'Estimated from recent extraction history. PI has no ISK input cost, so turnover ≈ net.'));
     if (rx && rx.jobs > 0) {
-      tiles.push(_dashTile(_fmtIsk(rx.turnover), 'Reactions turnover'));
-      tiles.push(_dashTile(_fmtIsk(rx.net_profit), 'Reactions net profit', 'an-ok'));
+      tiles.push(_dashTile(_fmtIsk(rx.turnover), 'Reactions turnover', '',
+                           'Exact forward-only ledger of completed reaction jobs.'));
+      tiles.push(_dashTile(_fmtIsk(rx.net_profit), 'Reactions net profit', 'an-ok',
+                           'Output value minus materials and job fees, locked in at completion.'));
     }
-    if (!tiles.length) return;   // nothing produced yet — leave the card hidden
-    box.style.display = '';
-    box.innerHTML = `<div class="pp-card-title">Account value <span class="pp-card-hint">— what you've produced${pi && pi.value > 0 ? ' · PI is an estimate from recent extraction history' : ''}</span></div>
-      <div class="pp-card-body"><div class="an-stats">${tiles.join('')}</div></div>`;
+    if (!tiles.length) return;   // nothing produced yet — the Overview just stays as it is
+    grid.insertAdjacentHTML('beforeend',
+      tiles.join('').replace(/class="an-stat"/g, 'class="an-stat dash-acct-tile"'));
   });
 }
