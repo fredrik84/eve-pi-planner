@@ -139,11 +139,8 @@ def ensure_share_table():
             last_accessed TEXT
         )
     """)
-    # Migration: add last_accessed to existing tables that predate this column.
-    cols = {r["name"] for r in con.execute("PRAGMA table_info(pp_shares)")}
-    if "last_accessed" not in cols:
-        con.execute("ALTER TABLE pp_shares ADD COLUMN last_accessed TEXT")
-    con.commit()
+    # Migration: add last_accessed to tables that predate this column.
+    add_columns(con, "pp_shares", "last_accessed TEXT")
     con.close()
 
 

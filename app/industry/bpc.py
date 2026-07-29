@@ -33,7 +33,7 @@ import time
 
 from fastapi import Depends
 
-from app.db import get_connection
+from app.db import get_connection, add_columns
 from app import esi_http
 from app.esi import require_context
 from app.industry._router import router
@@ -77,13 +77,7 @@ def ensure_bpc_tables():
         """)
         # A thread lock only guards ONE process, and prod runs several replicas — so the lease that
         # decides who scans has to live in the shared database, not in memory.
-        for col in ("lease_until REAL", "owner TEXT"):
-            try:
-                con.execute(f"ALTER TABLE pp_bpc_scan ADD COLUMN {col}")
-                con.commit()
-            except Exception:
-                pass
-        con.commit()
+        add_columns(con, "pp_bpc_scan", "lease_until REAL", "owner TEXT")
     finally:
         con.close()
 

@@ -2221,15 +2221,37 @@ function _rxMarketManagerHtml(d) {
     + `</div>`;
 }
 
-function _rxMountMarkets(containerId) {
+async function _rxMountMarkets(containerId) {
   _rxMarketMount = containerId;
+  // Fetch on demand if nothing has loaded the market list yet. Previously this just called
+  // _rxRenderMarketManager(), which returns silently when _rxMarketData is null — so opening
+  // Settings -> Markets & Logistics WITHOUT first visiting the Reactions tab (the only thing
+  // that populated it) rendered an empty panel, and structure search appeared broken until you
+  // reloaded the page.
+  if (!_rxMarketData) {
+    const el = document.getElementById(containerId);
+    if (el) el.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Loading markets…</div>';
+    await _rxRefreshMarkets();
+    return;
+  }
   _rxRenderMarketManager();
 }
 
 function _rxRenderMarketManager() {
   if (!_rxMarketMount || !_rxMarketData) return;
   const el = document.getElementById(_rxMarketMount);
-  if (el) el.innerHTML = _rxMarketManagerHtml(_rxMarketData);
+  if (!el) return;
+  // Adding a market re-renders this whole panel, which used to wipe the search box and its
+  // results — so adding two structures meant typing the search twice. Carry both across.
+  const prevQ = (document.getElementById('rxMarketSearchInput') || {}).value || '';
+  const prevResults = (document.getElementById('rxMarketSearchResults') || {}).innerHTML || '';
+  el.innerHTML = _rxMarketManagerHtml(_rxMarketData);
+  if (prevQ) {
+    const inp = document.getElementById('rxMarketSearchInput');
+    if (inp) inp.value = prevQ;
+    const box = document.getElementById('rxMarketSearchResults');
+    if (box && prevResults) box.innerHTML = prevResults;
+  }
 }
 
 async function _rxRefreshMarkets() {

@@ -2841,17 +2841,23 @@ function _loadMarketsSettings() {
   // Always show the market manager — following a market is useful to anyone and drives both
   // Reactions and Manufacturing pricing. Structure markets need a connected character (button
   // below); public region markets work without one.
+  // The connect action used to be an inline text link buried mid-sentence in a hint paragraph,
+  // which read as prose rather than the required first step it actually is for structure markets.
+  // Promoted to a real button on its own row.
   const marketMgr = `<div class="settings-subsec-title">Markets to price against <span class="pp-card-hint">— priced top-first; Jita is always the last fallback</span></div>`
-    + `<div class="pp-card-hint" style="margin:6px 0 8px">Follow a public region market and/or a player structure market. <button class="ind-link-btn" onclick="connectReactionsMarket()">Connect a market character</button> (needed for structure markets).</div>`
+    + `<div class="pp-card-hint" style="margin:6px 0 8px">Follow a public region market and/or a player structure market.</div>`
+    + `<div class="settings-connect-row">`
+    +   `<button class="pp-connect-btn" onclick="connectReactionsMarket()">Connect a market character</button>`
+    +   `<span class="pp-card-hint">Required for structure markets — region markets work without one.</span>`
+    + `</div>`
     + `<div id="settingsMarketsMgr" class="pp-target-form" style="margin:8px 0 16px;display:block"><div class="pp-empty">Loading…</div></div>`
     + `<div style="border-top:1px solid var(--clr-border);margin-bottom:12px"></div>`;
   const freight = (typeof _rxAccountSettingsFormHtml === 'function') ? _rxAccountSettingsFormHtml() : '';
   body.innerHTML = marketMgr + freight;
   if (typeof _loadRxAccountSettings === 'function') _loadRxAccountSettings();
-  if (typeof _rxMountMarkets === 'function') {
-    _rxMountMarkets('settingsMarketsMgr');
-    if (typeof _rxRefreshMarkets === 'function') _rxRefreshMarkets();
-  }
+  // _rxMountMarkets fetches the list itself when nothing has loaded it yet, so this no longer
+  // needs a second _rxRefreshMarkets() alongside it (that fired two /api/markets calls per open).
+  if (typeof _rxMountMarkets === 'function') _rxMountMarkets('settingsMarketsMgr');
 }
 
 // General settings — local (per-browser) UI preferences, no backend. Currently just the silent

@@ -44,6 +44,19 @@ def add_columns(con, table: str, *coldefs: str) -> None:
     request that touched them). Nine call sites were still doing the bare try/except chain without
     the per-statement commit when this helper was introduced; they are all routed through here now.
     """
+    # Commit whatever DDL came before us — almost always the CREATE TABLE this migration extends —
+    # BEFORE risking an ALTER. Postgres aborts the entire transaction on a failed statement and the
+    # connection wrapper rolls it back, which silently discards an uncommitted CREATE TABLE. The
+    # result on a FRESH database is the table never existing at all: the CREATE runs, the very next
+    # ALTER fails because the column is already in the CREATE body, the rollback undoes both, and
+    # the trailing commit() commits nothing. Existing databases never showed it (their CREATE is a
+    # no-op and the ALTER genuinely adds the column) — it only bites a new install, which is exactly
+    # where nobody looks. Cost the dev stack its pp_industry_settings table (2026-07-29).
+    try:
+        con.commit()
+    except Exception:
+        pass
+
     for coldef in coldefs:
         try:
             con.execute(f"ALTER TABLE {table} ADD COLUMN {coldef}")

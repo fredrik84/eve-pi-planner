@@ -25,7 +25,7 @@ import time
 import traceback
 
 from app.db import get_connection
-from app.sde import ensure_once
+from app.sde import ensure_once, add_columns
 
 log = logging.getLogger(__name__)
 
@@ -76,12 +76,7 @@ def ensure_job_tables():
         # "Run now" without giving the web pods access to the Kubernetes API: the admin sets a
         # timestamp here, and the CronJob — which ticks often and exits immediately when there's
         # nothing to do — picks it up on its next pass.
-        try:
-            con.execute("ALTER TABLE pp_job_config ADD COLUMN run_requested REAL")
-            con.commit()
-        except Exception:
-            pass
-        con.commit()
+        add_columns(con, "pp_job_config", "run_requested REAL")
     finally:
         con.close()
 
