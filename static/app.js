@@ -24,8 +24,10 @@ function pct(used, available) {
 // ── Sharing ──────────────────────────────────────────────────────────────────
 
 async function createShareLink(inventoryText) {
-  const data = await apiSend('POST', '/api/share', { inventory: inventoryText });
-  history.replaceState(null, '', '#s=' + data.id);
+  try {
+    const data = await apiSend('POST', '/api/share', { inventory: inventoryText });
+    history.replaceState(null, '', '#s=' + data.id);
+  } catch (e) { toastError(e, 'Could not create the share link'); }
 }
 
 async function copyLink() {

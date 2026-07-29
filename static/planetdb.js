@@ -246,7 +246,9 @@ function _ppRenderChunk() {
 
 async function clearPlanets() {
   if (!confirm('Clear all planet data?')) return;
-  await apiSend('DELETE', '/api/planets');
+  try {
+    await apiSend('DELETE', '/api/planets');
+  } catch (e) { toastError(e, 'Could not clear the planet data'); return; }
   _ppPlanets = [];
   renderPlanetTable([]);
 }

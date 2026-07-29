@@ -595,7 +595,8 @@ function _rxCancelAssignment(assignmentId) {
         if (c.pending.length !== before) { c.free_slots++; _rxLastDashboardData.free_slots++; break; }
       }
       _renderReactionsDashboard(_rxLastDashboardData);
-    });
+    })
+    .catch(e => toastError(e, 'Could not clear that slot'));
 }
 
 function _rxClearAllAssignments() {

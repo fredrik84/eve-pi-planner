@@ -509,8 +509,9 @@ function renderCharacters(chars, loggedIn) {
       row.querySelectorAll('select[data-f]').forEach(sel =>
         sel.addEventListener('change', () => editDummyField(c.character_id, sel.dataset.f, parseInt(sel.value))));
       row.querySelector('.pp-char-del').addEventListener('click', async () => {
-        await apiSend('DELETE', `/api/characters/${c.character_id}`);
-        loadCharacters();
+        try { await apiSend('DELETE', `/api/characters/${c.character_id}`); }
+        catch (e) { toastError(e, 'Could not remove that character'); }
+        loadCharacters();   // refresh either way — the list is the source of truth
       });
       list.appendChild(row);
       return;
@@ -526,8 +527,9 @@ function renderCharacters(chars, loggedIn) {
         </div>
         <div class="pp-char-meta"><span style="color:#6a7390;font-size:12px">Corp-wallet viewer · see Admin → Corp wallet</span></div>`;
       row.querySelector('.pp-char-del').addEventListener('click', async () => {
-        await apiSend('DELETE', `/api/characters/${c.character_id}`);
-        loadCharacters();
+        try { await apiSend('DELETE', `/api/characters/${c.character_id}`); }
+        catch (e) { toastError(e, 'Could not remove that character'); }
+        loadCharacters();   // refresh either way — the list is the source of truth
       });
       list.appendChild(row);
       return;
@@ -692,8 +694,9 @@ function renderCharacters(chars, loggedIn) {
       if (del) del.addEventListener('click', async (e) => {
         e.preventDefault(); e.stopPropagation();
         if (!confirm(`Remove ${c.name}?`)) return;
-        await apiSend('DELETE', `/api/characters/${c.character_id}`);
-        loadCharacters();
+        try { await apiSend('DELETE', `/api/characters/${c.character_id}`); }
+        catch (e) { toastError(e, 'Could not remove that character'); }
+        loadCharacters();   // refresh either way — the list is the source of truth
       });
     }
     list.appendChild(row);
@@ -1483,8 +1486,9 @@ async function settingsDeleteProfile(id) {
   const profile = _ppProfiles.find(p => p.id === id);
   if (!profile) return;
   if (!confirm(`Delete profile "${profile.name}"?`)) return;
-  await apiSend('DELETE', `/api/profiles/${id}`);
-  loadProfiles();
+  try { await apiSend('DELETE', `/api/profiles/${id}`); }
+  catch (e) { toastError(e, 'Could not delete that profile'); }
+  loadProfiles();   // refresh either way, so the list always reflects the server
 }
 
 async function _applyProfile(profile) {
@@ -3060,13 +3064,15 @@ async function notifSendTest() {
 }
 
 async function notifToggle(id) {
-  await apiSend('PATCH', `/api/notifications/settings/${id}`);
+  try { await apiSend('PATCH', `/api/notifications/settings/${id}`); }
+  catch (e) { toastError(e, 'Could not change that channel'); }
   await loadNotifications();
 }
 
 async function notifDelete(id) {
   if (!confirm('Remove this notification channel?')) return;
-  await apiSend('DELETE', `/api/notifications/settings/${id}`);
+  try { await apiSend('DELETE', `/api/notifications/settings/${id}`); }
+  catch (e) { toastError(e, 'Could not remove that channel'); }
   await loadNotifications();
 }
 
