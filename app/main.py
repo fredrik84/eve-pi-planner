@@ -98,9 +98,57 @@ async def _startup():
     con.execute("SELECT 1")
     con.close()
 
+    _ensure_all_tables()
+
     global _scheduler
     _scheduler = make_scheduler()
     _scheduler.start()
+
+
+def _ensure_all_tables():
+    """Create every pp_* table at boot instead of lazily on first use.
+
+    Each `ensure_*_table` is `@ensure_once` and idempotent, so this costs one pass at startup and
+    nothing afterwards. It exists because the lazy scheme has a real failure mode: a table is only
+    created when someone hits the endpoint that owns it, but OTHER code queries those tables
+    directly. On a database where nobody had yet saved a plan share, `pp_shares` did not exist, and
+    Admin → System Stats and DB Cleanup both hard-500'd on `SELECT ... FROM pp_shares`. Found on
+    dev 2026-07-29; the same trap applies to any fresh install.
+
+    Failures are logged and skipped rather than raised — one bad migration must not stop the app
+    from booting, which would take the whole site down instead of one admin panel.
+    """
+    from app import (alert_settings, admin, bugs, features, groups, jobs, markets, moon_goo,
+                     notifications, planetary, planner_store, yield_stats)
+    from app.esi import ensure_char_tables, ensure_admin_table
+    from app.industry import blueprints as ind_bp, bpc, jobs as ind_jobs, orders as ind_orders, \
+        settings as ind_settings, shares as ind_shares, assets as ind_assets
+    from app.reactions import jobs as rx_jobs, settings as rx_settings
+
+    for fn in (
+        ensure_char_tables, ensure_admin_table,
+        planner_store.ensure_plan_tables, planner_store.ensure_share_table,
+        planner_store.ensure_profile_tables, planner_store.ensure_plan_snapshot_table,
+        planner_store.ensure_colony_flags_table,
+        planetary.ensure_tables, admin.ensure_basket_tables, bugs.ensure_bugs_table,
+        features.ensure_features_table, groups.ensure_group_tables, jobs.ensure_job_tables,
+        markets.ensure_markets_table, markets.ensure_market_config_table,
+        moon_goo.ensure_moon_goo_table, notifications.ensure_notification_tables,
+        alert_settings.ensure_alert_settings_table, yield_stats.ensure_yield_avg_table,
+        ind_bp.ensure_char_blueprints_table, bpc.ensure_bpc_tables,
+        ind_jobs.ensure_manufacturing_jobs_table, ind_jobs.ensure_manufacturing_completions_table,
+        ind_orders.ensure_industry_orders_table, ind_settings.ensure_industry_settings_table,
+        ind_shares.ensure_industry_shares_table, ind_assets.ensure_asset_tables,
+        rx_jobs.ensure_industry_jobs_table, rx_jobs.ensure_reaction_assignments_table,
+        rx_jobs.ensure_reaction_orders_table, rx_jobs.ensure_reaction_completions_table,
+        rx_settings.ensure_reaction_settings_table,
+        rx_settings.ensure_account_reaction_settings_table,
+    ):
+        try:
+            fn()
+        except Exception as e:
+            _logging.getLogger(__name__).warning("table ensure failed for %s: %s",
+                                                 getattr(fn, "__name__", fn), e)
 
 
 @app.on_event("shutdown")
