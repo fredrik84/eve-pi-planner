@@ -3,7 +3,6 @@ import json as _json
 import logging as _logging
 import re as _re
 import time as _time
-from typing import Optional
 
 import os as _os
 GIT_COMMIT = _os.environ.get("GIT_COMMIT", "unknown")
@@ -28,13 +27,8 @@ _logging.basicConfig(level=_logging.INFO, format="%(asctime)s %(name)s %(levelna
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
 
-from app.sde import load_pi_data
-from app.pi import calculate_production
-from app.optimizer import optimize_production
-from app.market import fetch_prices
-from app.shares import save_share, load_share
+from app.analyzer import router as analyzer_router
 from app.planetary import router as planetary_router
 from app.esi import router as esi_router
 from app.esi_data import router as esi_data_router
@@ -54,6 +48,7 @@ from app.groups import router as groups_router
 from app.markets import router as markets_router
 
 app = FastAPI(title="EVE PI Planner")
+app.include_router(analyzer_router)          # the original Find-Buildables analyzer
 app.include_router(planetary_router)
 app.include_router(esi_router)
 app.include_router(esi_data_router)
@@ -155,79 +150,6 @@ def _ensure_all_tables():
 async def _shutdown():
     if _scheduler and _scheduler.running:
         _scheduler.shutdown(wait=False)
-
-
-class AnalyzeRequest(BaseModel):
-    inventory: str
-
-
-class OptimizeRequest(BaseModel):
-    inventory: str
-    order: Optional[str] = ""
-
-
-@app.post("/api/analyze")
-def analyze(req: AnalyzeRequest):
-    try:
-        pi_data = load_pi_data()
-    except Exception as e:
-        raise HTTPException(status_code=503, detail=f"SDE not ready: {e}")
-
-    data = calculate_production(req.inventory, pi_data)
-
-    all_type_ids = [
-        item["type_id"]
-        for tier_items in data["results"].values()
-        for item in tier_items
-    ]
-    prices = fetch_prices(all_type_ids)
-
-    for tier_items in data["results"].values():
-        for item in tier_items:
-            sell_price = prices.get(item["type_id"], 0.0)
-            item["sell_price"] = round(sell_price, 2)
-            item["total_isk"] = round(sell_price * item["max_output"], 2)
-        tier_items.sort(key=lambda x: -x["total_isk"])
-
-    return data
-
-
-@app.post("/api/optimize")
-def optimize(req: OptimizeRequest):
-    try:
-        pi_data = load_pi_data()
-    except Exception as e:
-        raise HTTPException(status_code=503, detail=f"SDE not ready: {e}")
-
-    result = optimize_production(req.inventory, req.order or "", pi_data)
-
-    # Enrich plan with live prices
-    type_ids = [item["type_id"] for item in result["plan"]]
-    prices = fetch_prices(type_ids)
-
-    total_isk = 0.0
-    for item in result["plan"]:
-        price = prices.get(item["type_id"], 0.0)
-        item["sell_price"] = round(price, 2)
-        item["total_isk"] = round(price * item["quantity"], 2)
-        total_isk += item["total_isk"]
-
-    result["total_isk"] = round(total_isk, 2)
-    return result
-
-
-@app.post("/api/share")
-def create_share(req: AnalyzeRequest):
-    share_id = save_share(req.inventory)
-    return {"id": share_id}
-
-
-@app.get("/api/share/{share_id}")
-def get_share(share_id: str):
-    inventory = load_share(share_id)
-    if inventory is None:
-        raise HTTPException(status_code=404, detail="Share not found")
-    return {"inventory": inventory}
 
 
 def _fmt_isk(n: float) -> str:

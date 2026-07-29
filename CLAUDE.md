@@ -133,6 +133,16 @@ These are standing rules for ALL changes. Follow them unless the user explicitly
 
 ## Code layout
 
+`app/main.py` is **composition only** — routers, startup/shutdown, the page routes (`/`, `/s/{id}`,
+`/b/{id}`) and the `/api/*` catch-all. The original Find-Buildables analyzer (`/api/analyze`,
+`/api/optimize`, `/api/share`, `/api/share/{id}`) used to hang off the app object here; it now lives
+in **`app/analyzer.py`** like every other feature. Two things to know about it: its `/api/share` is
+the ORIGINAL inventory share (`app/shares.py`, its own tiny store), unrelated to the plan shares in
+`pp_shares` that `/s/{id}` serves — similar names, different features; and `/api/optimize` is the
+only caller of `highspy`+`numpy` (~55 MB of the image), lazily imported inside the solve so they
+cost nothing at startup. Retiring the feature = delete `analyzer.py`, `pi.py`, `optimizer.py`,
+`shares.py` and those two requirements.
+
 `app/planner.py` is the core **planning algorithm**. The CRUD half it used to carry — per-character
 plan-config, `pp_shares`, profiles, plan snapshots and colony flags — now lives in
 **`app/planner_store.py`** (its own `APIRouter`, mounted by `main.py` next to the planner's).
