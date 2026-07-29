@@ -8,6 +8,7 @@ import functools
 import os
 import re
 import sqlite3
+import time
 from pathlib import Path
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
@@ -227,19 +228,33 @@ class _PgConn:
     def rollback(self):
         self._conn.rollback()
 
+    # Both return paths below finish in a `finally`: on a dead connection the commit/rollback
+    # itself raises, and returning the slot has to happen anyway — otherwise the exception that
+    # tells us the DB went away is also the thing that permanently loses a slot.
+
     def close(self):
-        self._conn.rollback()  # leave no dangling transaction for the next borrower
-        _pg_pool().put(self._conn)
+        try:
+            self._conn.rollback()  # leave no dangling transaction for the next borrower
+        except Exception:
+            _pg_discard(self._conn)
+            raise
+        finally:
+            _pg_release(self._conn)
 
     def __enter__(self):
         return self
 
     def __exit__(self, exc_type, *_):
-        if exc_type:
-            self._conn.rollback()
-        else:
-            self._conn.commit()
-        _pg_pool().put(self._conn)
+        try:
+            if exc_type:
+                self._conn.rollback()
+            else:
+                self._conn.commit()
+        except Exception:
+            _pg_discard(self._conn)
+            raise
+        finally:
+            _pg_release(self._conn)
 
 
 def _sqlite_row_factory(cursor, row):
@@ -249,6 +264,57 @@ def _sqlite_row_factory(cursor, row):
 _PG_POOL_SIZE = 8
 _PG_POOL = None
 _PG_POOL_INIT_LOCK = None   # threading.Lock, created lazily to avoid importing threading for SQLite-only runs
+
+# How long a connection may sit idle in the pool before it gets a liveness ping on the way out.
+# The ping is a real round-trip, so it must not run on every borrow — under load connections are
+# recycled in milliseconds and the far end is provably alive (we just used it). Anything idle
+# longer than this is worth one cheap SELECT 1 to find out, since that is exactly the window in
+# which a Postgres pod can have moved without us noticing.
+_PG_IDLE_PING_AFTER = 30.0
+
+
+def _pg_discard(conn) -> None:
+    """Close a connection we're throwing away, ignoring the errors a dead socket raises."""
+    if conn is None:
+        return
+    try:
+        conn.close()
+    except Exception:
+        pass
+
+
+def _pg_usable(conn, idle_since: float) -> bool:
+    """Is this pooled connection still good? `conn.closed` only catches connections WE closed —
+    a Postgres that restarted or moved to another node leaves the socket looking fine until the
+    next statement fails, which is why a stale pool used to serve nothing but errors until the
+    app was restarted by hand."""
+    if conn is None or conn.closed:
+        return False
+    if time.monotonic() - idle_since < _PG_IDLE_PING_AFTER:
+        return True
+    try:
+        cur = conn.cursor()
+        try:
+            cur.execute("SELECT 1")
+        finally:
+            cur.close()
+        conn.rollback()  # the ping opens a transaction; don't hand over an idle-in-transaction conn
+        return True
+    except Exception:
+        return False
+
+
+def _pg_release(conn) -> None:
+    """Return a connection to its pool slot. A connection that died mid-request goes back as an
+    EMPTY slot rather than not at all: the slot count is what bounds concurrency, so silently
+    dropping one shrinks the pool for the life of the process — eight bad requests during a
+    Postgres restart used to be enough to strand every slot."""
+    q = _pg_pool()
+    if conn is None or conn.closed:
+        _pg_discard(conn)
+        q.put((None, 0.0))
+    else:
+        q.put((conn, time.monotonic()))
 
 
 def _pg_pool():
@@ -273,7 +339,14 @@ def _pg_pool():
     A queue.Queue sidesteps both: handoff is by plain object reference (no key/id bookkeeping to
     get out of sync), and put()/get() don't hold a pool-wide lock across a network call. get()
     blocks if the queue is empty (a burst beyond pool size waits for a free connection — graceful
-    backpressure) instead of ThreadedConnectionPool's immediate PoolError."""
+    backpressure) instead of ThreadedConnectionPool's immediate PoolError.
+
+    The queue holds SLOTS — `(connection_or_None, idle_since)` — not bare connections. An empty
+    slot is a permit to open one, so a connection can be thrown away the moment it looks dead
+    without shrinking the pool, and the replacement is opened lazily by whoever borrows the slot
+    next. That is what makes the pool survive a Postgres restart/move on its own; before this it
+    handed out its original eight connections forever and a DB move meant a manual
+    `rollout restart` of the app (cost real downtime on 2026-07-28)."""
     global _PG_POOL, _PG_POOL_INIT_LOCK
     if _PG_POOL is None:
         import threading
@@ -285,7 +358,12 @@ def _pg_pool():
                 import psycopg2
                 q = queue.Queue()
                 for _ in range(_PG_POOL_SIZE):
-                    q.put(psycopg2.connect(DATABASE_URL))
+                    # Warm the pool, but never let a DB that happens to be down at import time
+                    # abort pool creation — an empty slot connects on first use instead.
+                    try:
+                        q.put((psycopg2.connect(DATABASE_URL), time.monotonic()))
+                    except Exception:
+                        q.put((None, 0.0))
                 _PG_POOL = q
     return _PG_POOL
 
@@ -294,14 +372,25 @@ def get_connection():
     """Return a DB connection for user (pp_*) tables. Postgres when DATABASE_URL is set."""
     if _IS_POSTGRES:
         import queue
+        q = _pg_pool()
         try:
             # Bounded wait, not an unbounded block: queue.Queue.get() with no timeout would hang
             # a request forever if a connection ever genuinely leaks (some path skipping close()),
             # instead of failing clearly. 15s comfortably rides out a real concurrent burst
             # queueing for a free connection, without turning a real leak into a silent full hang.
-            conn = _pg_pool().get(timeout=15)
+            conn, idle_since = q.get(timeout=15)
         except queue.Empty:
             raise RuntimeError("Database connection pool exhausted (all connections busy for 15s)")
+        if not _pg_usable(conn, idle_since):
+            import psycopg2
+            _pg_discard(conn)
+            try:
+                conn = psycopg2.connect(DATABASE_URL)
+            except Exception:
+                # Hand the (empty) slot back before propagating, or a DB that is briefly
+                # unreachable would eat one slot per failed request and never give them back.
+                q.put((None, 0.0))
+                raise
         conn.autocommit = False
         return _PgConn(conn)
     con = sqlite3.connect(str(_SQLITE_PATH))
