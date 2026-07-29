@@ -114,7 +114,7 @@ def _ensure_all_tables():
     from booting, which would take the whole site down instead of one admin panel.
     """
     from app import (alert_settings, admin, bugs, features, groups, jobs, markets, moon_goo,
-                     notifications, planetary, planner_store, yield_stats)
+                     notifications, planetary, planner_store, shares, yield_stats)
     from app.esi import ensure_char_tables, ensure_admin_table
     from app.industry import blueprints as ind_bp, bpc, jobs as ind_jobs, orders as ind_orders, \
         settings as ind_settings, shares as ind_shares, assets as ind_assets
@@ -129,6 +129,7 @@ def _ensure_all_tables():
         features.ensure_features_table, groups.ensure_group_tables, jobs.ensure_job_tables,
         markets.ensure_markets_table, markets.ensure_market_config_table,
         moon_goo.ensure_moon_goo_table, notifications.ensure_notification_tables,
+        shares.ensure_inventory_shares_table,
         alert_settings.ensure_alert_settings_table, yield_stats.ensure_yield_avg_table,
         ind_bp.ensure_char_blueprints_table, bpc.ensure_bpc_tables,
         ind_jobs.ensure_manufacturing_jobs_table, ind_jobs.ensure_manufacturing_completions_table,
