@@ -14,15 +14,14 @@ the reading character is any character in the context that authorised the market
 """
 import logging
 
-import httpx
 from fastapi import Depends, HTTPException
 from pydantic import BaseModel
 
-from app.sde import get_connection, ensure_once
+from app.sde import get_connection, ensure_once, add_columns
 from app.cache import cache_get_json, cache_set_json, cache_mget_json, cache_mset_json
 from app import esi_http
 from app.esi import (
-    ESI_BASE, MARKET_SCOPE, _get_valid_token, require_context,
+    MARKET_SCOPE, _get_valid_token, require_context,
 )
 from app.groups import member_group, is_group_manager
 from app.market import fetch_market_data, CACHE_TTL
@@ -58,18 +57,14 @@ def ensure_markets_table():
     # Unified structure list: a followed market row (kind='structure') can also be a BUILD structure
     # for manufacturing and/or reactions, carrying the fitted rig tiers + hull + security ESI can't
     # read as a fitting. Additive ALTER-COLUMN migration (this codebase's convention).
-    for coldef in ("build_mfg INTEGER NOT NULL DEFAULT 0", "build_rx INTEGER NOT NULL DEFAULT 0",
-                   "hull TEXT", "security TEXT",
-                   "me_rig INTEGER NOT NULL DEFAULT 0", "te_rig INTEGER NOT NULL DEFAULT 0",
-                   "rx_me_rig INTEGER NOT NULL DEFAULT 0", "rx_te_rig INTEGER NOT NULL DEFAULT 0",
-                   # price_from: is this a PRICING source (in the priority chain)? 1 by default so
-                   # existing market rows keep pricing; a build-only structure sets it 0.
-                   "price_from INTEGER NOT NULL DEFAULT 1"):
-        try:
-            con.execute(f"ALTER TABLE pp_markets ADD COLUMN {coldef}")
-            con.commit()
-        except Exception:
-            pass
+    add_columns(con, "pp_markets",
+                "build_mfg INTEGER NOT NULL DEFAULT 0", "build_rx INTEGER NOT NULL DEFAULT 0",
+                "hull TEXT", "security TEXT",
+                "me_rig INTEGER NOT NULL DEFAULT 0", "te_rig INTEGER NOT NULL DEFAULT 0",
+                "rx_me_rig INTEGER NOT NULL DEFAULT 0", "rx_te_rig INTEGER NOT NULL DEFAULT 0",
+                # price_from: is this a PRICING source (in the priority chain)? 1 by default so
+                # existing market rows keep pricing; a build-only structure sets it 0.
+                "price_from INTEGER NOT NULL DEFAULT 1")
     con.commit()
     con.close()
 
@@ -162,11 +157,10 @@ def _detect_structure_meta(context_id: int, structure_id: int) -> tuple[str | No
     token = _get_valid_token(ch["character_id"])
     if not token:
         return (None, None)
-    headers = {"Authorization": f"Bearer {token}"}
     try:
-        with httpx.Client(timeout=12) as client:
-            s = esi_http.get(f"universe/structures/{structure_id}/?datasource=tranquility", client=client,
-                           headers=headers)
+        with esi_http.client(timeout=12) as client:
+            s = esi_http.get(f"universe/structures/{structure_id}/?datasource=tranquility",
+                             client=client, token=token)
             if s.status_code != 200:
                 return (None, None)
             sj = s.json() or {}
@@ -272,19 +266,18 @@ def _fetch_structure_orders(context_id: int, structure_id: int) -> list[dict] | 
     token = _get_valid_token(ch["character_id"])
     if not token:
         return None
-    headers = {"Authorization": f"Bearer {token}"}
-    base = f"{ESI_BASE}/markets/structures/{structure_id}/?datasource=tranquility"
+    base = f"markets/structures/{structure_id}/?datasource=tranquility"
     orders: list[dict] = []
     try:
-        with httpx.Client(timeout=20) as client:
-            r = client.get(f"{base}&page=1", headers=headers)
+        with esi_http.client(timeout=20) as client:
+            r = esi_http.get(f"{base}&page=1", client=client, token=token)
             if r.status_code in (401, 403, 404):
                 return None
             r.raise_for_status()
             orders.extend(r.json() or [])
             pages = int(r.headers.get("X-Pages", "1") or 1)
             for p in range(2, pages + 1):
-                rp = client.get(f"{base}&page={p}", headers=headers)
+                rp = esi_http.get(f"{base}&page={p}", client=client, token=token)
                 if rp.status_code != 200:
                     break
                 orders.extend(rp.json() or [])
@@ -332,12 +325,12 @@ def fetch_region_market(region_id: int, type_ids: list[int]) -> dict[int, dict]:
             missing.append(tid)
     if missing:
         to_cache = {}
-        with httpx.Client(timeout=20) as client:
+        with esi_http.client(timeout=20) as client:
             for tid in missing:
                 try:
-                    r = client.get(
-                        f"{ESI_BASE}/markets/{region_id}/orders/?datasource=tranquility"
-                        f"&order_type=all&type_id={tid}"
+                    r = esi_http.get(
+                        f"markets/{region_id}/orders/?datasource=tranquility"
+                        f"&order_type=all&type_id={tid}", client=client,
                     )
                     orders = r.json() if r.status_code == 200 else []
                 except Exception:
@@ -448,13 +441,11 @@ def _search_structures(context_id: int, q: str) -> list[dict]:
     token = _get_valid_token(ch["character_id"])
     if not token:
         return []
-    headers = {"Authorization": f"Bearer {token}"}
     try:
-        with httpx.Client(timeout=15) as client:
-            r = client.get(
-                f"{ESI_BASE}/characters/{ch['character_id']}/search/",
+        with esi_http.client(timeout=15) as client:
+            r = esi_http.get(
+                f"characters/{ch['character_id']}/search/", client=client, token=token,
                 params={"datasource": "tranquility", "categories": "structure", "search": q},
-                headers=headers,
             )
             if r.status_code != 200:
                 return []
@@ -462,10 +453,8 @@ def _search_structures(context_id: int, q: str) -> list[dict]:
             out = []
             for sid in ids:
                 try:
-                    d = client.get(
-                        f"{ESI_BASE}/universe/structures/{sid}/?datasource=tranquility",
-                        headers=headers,
-                    )
+                    d = esi_http.get(f"universe/structures/{sid}/?datasource=tranquility",
+                                     client=client, token=token)
                     if d.status_code == 200:
                         out.append({"kind": "structure", "location_id": int(sid),
                                     "name": (d.json() or {}).get("name", f"Structure {sid}")})
@@ -493,7 +482,7 @@ def _search_regions(q: str) -> list[dict]:
     if not names:
         return []
     try:
-        with httpx.Client(timeout=15) as client:
+        with esi_http.client(timeout=15) as client:
             resp = esi_http.post("universe/ids/?datasource=tranquility", client=client, json=names)
             regions = (resp.json() or {}).get("regions", []) if resp.status_code == 200 else []
     except Exception:

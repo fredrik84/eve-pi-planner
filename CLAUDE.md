@@ -24,7 +24,9 @@ These are standing rules for ALL changes. Follow them unless the user explicitly
    a live ESI login), `test_min_cc.py` (layout CPU/PG fitting: the FIT_HEADROOM promise, `min_cc`,
    the head-drop fallback — pure in-process layout math, run it in the container),
    `test_skill_enough.py` (the "already enough skill" half of `/api/skill-roi`, seeded rows +
-   fabricated cookie). Add to these or create a new
+   fabricated cookie), `test_page_access.py` (the per-group `require_page` backend gate — that a
+   group with no restrictions stays a no-op, that a restricted group really is 403'd, and that
+   the public customer build-status link is NOT gated). Add to these or create a new
    `test_*.py` in the same urllib/`--url` style. Assert
    *durable invariants*, not runtime state an admin can change (e.g. don't assert a flag's enabled
    value equals its code default — admins toggle it).
@@ -131,7 +133,14 @@ These are standing rules for ALL changes. Follow them unless the user explicitly
 
 ## Code layout
 
-`app/planner.py` is the core. `_run_plan(req, context_id)` orchestrates; the heavy lifting is in named helpers (refactored out of one giant function):
+`app/planner.py` is the core **planning algorithm**. The CRUD half it used to carry — per-character
+plan-config, `pp_shares`, profiles, plan snapshots and colony flags — now lives in
+**`app/planner_store.py`** (its own `APIRouter`, mounted by `main.py` next to the planner's).
+The dependency is one-directional: `planner.py` imports `ensure_plan_tables`,
+`ensure_profile_tables`, `ensure_share_table` and `_flagged_colonies` from `planner_store`,
+never the reverse, so there is no cycle. Add a new saved-plan field in `planner_store`.
+
+`_run_plan(req, context_id)` orchestrates; the heavy lifting is in named helpers (refactored out of one giant function):
 - `_compute_slot_budget` → factory count + `_compute_factory_shares`
 - `_build_need_list` → Bresenham-ordered extractor slots
 - `_assign_extractors` → Pass 1 (existing) → swap → Pass 2 → post-swap; calls `_run_swap_pass`
@@ -374,7 +383,7 @@ single-tier-per-planet and not what this generates.)
   storage round-trips — this generator routes intermediates tier-to-tier directly), and
   CPU/PG is not simulated.
 
-Frontend JS is split across files loaded in order from `index.html`: **`utils.js`** (loaded first — shared formatting helpers: `fmtIsk`/`_fmtIsk`/`_fmtHours`/`_fmtDHM`/`_esc`/`_fmtWalletDate`/`_fmtCacheTime`), **`app.js`** (tab nav, ESI login popup, mobile pull-to-refresh, DOMContentLoaded boot), **`planetary.js`** (the core — shared state + `_featureActive`, the PI-planner wizard + `renderFinalPlan`, Characters/header, profiles/shares, tab-entry hooks like `onPlanetDbTabOpen`), **`dashboard.js`** (Dashboard tab: overview, maintenance routine, spare-capacity, the global `rescanAll`), **`admin.js`** (Admin tab: planet submissions, feature flags, baskets, admin users, bug triage), **`planetdb.js`** (Planet DB tab: constellation/region filter, planet list + chunked table, import modal), **`refill.js`** (PI-Planner refill tool: saved-plans bar, build/refill mode, P1-stack distribution), **`analysis.js`** (Setup Analysis tab), and **`layout.js`** (Factory Layout tab). Feature files were carved out of `planetary.js` for maintainability. The split is load-order-safe because the JS is **all declarations except one top-level statement** (the `DOMContentLoaded` listener in core) — functions are global and resolve at call time, so feature files just load after `planetary.js`. When carving more out: cut only at top-level boundaries (verify each file with `node --check`), keep shared state/util in `planetary.js`, and never split a wizard/dashboard interdependency you can't trace. Bump the `?v=N` on **every** changed JS file in `index.html` (browsers cache aggressively). Deploy of static-only changes can be a `docker cp` into the container, but always `docker compose build && up -d --force-recreate` to bake in before calling it shipped.
+Frontend JS is split across files loaded in order from `index.html`: **`utils.js`** (loaded first — shared formatting helpers: `fmtIsk`/`_fmtIsk`/`_fmtHours`/`_fmtDHM`/`_esc`/`_fmtWalletDate`/`_fmtCacheTime`), **`app.js`** (tab nav, ESI login popup, mobile pull-to-refresh, DOMContentLoaded boot), **`planetary.js`** (the core — shared state + `_featureActive`, the PI-planner wizard + `renderFinalPlan`, Characters/header, profiles/shares, tab-entry hooks like `onPlanetDbTabOpen`), **`dashboard.js`** (Dashboard tab: overview, maintenance routine, spare-capacity, the global `rescanAll`), **`admin.js`** (Admin tab: planet submissions, feature flags, baskets, admin users, bug triage), **`planetdb.js`** (Planet DB tab: constellation/region filter, planet list + chunked table, import modal), **`refill.js`** (PI-Planner refill tool: saved-plans bar, build/refill mode, P1-stack distribution), **`analysis.js`** (Setup Analysis tab), and **`layout.js`** (Factory Layout tab). Feature files were carved out of `planetary.js` for maintainability. The split is load-order-safe because the JS is **all declarations except one top-level statement** (the `DOMContentLoaded` listener in core) — functions are global and resolve at call time, so feature files just load after `planetary.js`. When carving more out: cut only at top-level boundaries (verify each file with `node --check`), keep shared state/util in `planetary.js`, and never split a wizard/dashboard interdependency you can't trace. Asset cache-busting is automatic — `index.html` ships `?v=dev` and `app/main.py` stamps the running build's `GIT_COMMIT` onto every asset URL at serve time (`ASSET_VERSION`/`_page()`), so there is **no `?v=` number to bump** any more. Deploy of static-only changes can be a `docker cp` into the container, but always `docker compose build && up -d --force-recreate` to bake in before calling it shipped.
 
 CSS is likewise split into `style-*.css` files loaded in order from `index.html`, sliced at the
 original file's section-comment boundaries with **zero rule reordering** (each file is a contiguous
@@ -964,6 +973,16 @@ hiccup, omit it for new features (fail-closed). Call sites: `onDashboardTabOpen`
 (`loadAdminFeatures`/`toggleFeature`) flips flags. `FEATURE_REGISTRY` in `app/features.py` is the
 source of truth for the current flag set — don't duplicate the list here, it drifts.
 
+## Reactions suggestion engine (`app/reactions/advisor.py`)
+
+Split out of `app/reactions/jobs.py`, which had grown to ~1,500 lines covering three unrelated
+jobs (ESI job fetching, the persistent slot plan, and this). `advisor.py` holds the two-stage
+wizard engine — the knapsack over WHAT to run, then bin-packing onto WHO runs it — plus
+`/api/reactions/suggest`. It imports from `jobs.py` **one way only**; `_character_capacities`
+deliberately stayed in `jobs.py` (it's about slots, and the customer-order allocation path needs
+it too), which is what keeps the dependency acyclic. `__init__.py` imports jobs before advisor
+for the same reason.
+
 ## Shared colony-alert engine (`app/colony_alerts.py`) + configurable thresholds (`app/alert_settings.py`)
 
 **`compute_colony_alerts(context_id, rows=None, now=None)`** is the single source of truth for
@@ -1088,7 +1107,7 @@ the under-fill people hit was the stale `input_m3`, not the volume constant.
 `static/how-it-works.svg` (9:16 five-step infographic) is the hero on the How-it-works page, opened
 in an in-page dark lightbox (`openImageLightbox`/`closeImageLightbox` — generic, reusable) instead of
 the bare white file URL. The social/OG preview `static/og-image.png` (1200×630) is the 3:1 banner
-(`eve_pi_banner.svg`) centred on a matching dark canvas; bump `?v=` on the og:image meta in
+(`eve_pi_banner.svg`) centred on a matching dark canvas; the og:image `?v=` is stamped automatically alongside every other asset in
 `index.html` AND the `/s/{id}` OG injection in `main.py` when it changes. SVG source posters live in
 `~/Claude-Workspace/` (`eve_pi_planner.svg`, `eve_pi_banner.svg`); re-render the OG with cairosvg +
 Pillow.
@@ -1128,8 +1147,8 @@ of the `style-*.css` files loaded — see below) does the rest:
 still opens the plan view). `app.js` also adds **pull-to-refresh** (`setupPullToRefresh`): dragging
 down from `scrollTop 0` past a threshold triggers `rescanAll()` (only when the header `#rescanBtn`
 exists, i.e. logged in), with a `#ptr-indicator` banner. Standalone home-screen apps have no native
-pull-to-refresh, so this is ours. Bump the relevant `?v=` (the touched `style-*.css` file / app.js /
-planetary.js) on changes.
+pull-to-refresh, so this is ours. (No `?v=` bump needed on changes — the server stamps every asset
+URL with the running build; see the asset-stamping note above.)
 
 ## Admin → Corp wallet (donations)
 

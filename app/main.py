@@ -1,10 +1,23 @@
 import html as _html
 import json as _json
 import logging as _logging
+import re as _re
+import time as _time
 from typing import Optional
 
 import os as _os
 GIT_COMMIT = _os.environ.get("GIT_COMMIT", "unknown")
+
+# Cache-busting token for every static asset. index.html ships `?v=dev` on each script/stylesheet
+# and this replaces it at serve time, so one deploy invalidates exactly the assets that changed.
+# It replaces 18 hand-maintained `?v=N` numbers: bumping those was a manual step on every single
+# frontend change, and forgetting one served a browser stale JS against a new API — a failure that
+# looks like anything except a caching problem.
+#
+# Locally GIT_COMMIT is "unknown" (docker compose passes no build arg), so fall back to this
+# process's start time: every `docker compose up` then serves fresh assets, which is what local
+# iteration needs and what a fixed literal could never give.
+ASSET_VERSION = GIT_COMMIT if GIT_COMMIT != "unknown" else str(int(_time.time()))
 
 # Root logger defaults to WARNING with no handler, so every app.*.log.info(...) call
 # (charlist cache hit/miss, the plan-timing instrumentation, etc.) was silently dropped —
@@ -13,7 +26,7 @@ GIT_COMMIT = _os.environ.get("GIT_COMMIT", "unknown")
 _logging.basicConfig(level=_logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -26,6 +39,7 @@ from app.planetary import router as planetary_router
 from app.esi import router as esi_router
 from app.esi_data import router as esi_data_router
 from app.planner import router as planner_router
+from app.planner_store import router as planner_store_router
 from app.fuelblock_planner import router as fuelblock_router
 from app.bugs import router as bugs_router
 from app.admin import router as admin_router
@@ -35,7 +49,7 @@ from app.alert_settings import router as alert_settings_router
 from app.internal import router as internal_router
 from app.moon_goo import router as moon_goo_router
 from app.reactions import router as reactions_router
-from app.industry import router as industry_router
+from app.industry import router as industry_router, public_router as industry_public_router
 from app.groups import router as groups_router
 from app.markets import router as markets_router
 
@@ -44,6 +58,7 @@ app.include_router(planetary_router)
 app.include_router(esi_router)
 app.include_router(esi_data_router)
 app.include_router(planner_router)
+app.include_router(planner_store_router)
 app.include_router(fuelblock_router)
 app.include_router(bugs_router)
 app.include_router(admin_router)
@@ -54,6 +69,7 @@ app.include_router(internal_router)
 app.include_router(moon_goo_router)
 app.include_router(reactions_router)
 app.include_router(industry_router)
+app.include_router(industry_public_router)   # ungated: the customer build-status link
 app.include_router(groups_router)
 app.include_router(markets_router)
 
@@ -82,9 +98,57 @@ async def _startup():
     con.execute("SELECT 1")
     con.close()
 
+    _ensure_all_tables()
+
     global _scheduler
     _scheduler = make_scheduler()
     _scheduler.start()
+
+
+def _ensure_all_tables():
+    """Create every pp_* table at boot instead of lazily on first use.
+
+    Each `ensure_*_table` is `@ensure_once` and idempotent, so this costs one pass at startup and
+    nothing afterwards. It exists because the lazy scheme has a real failure mode: a table is only
+    created when someone hits the endpoint that owns it, but OTHER code queries those tables
+    directly. On a database where nobody had yet saved a plan share, `pp_shares` did not exist, and
+    Admin → System Stats and DB Cleanup both hard-500'd on `SELECT ... FROM pp_shares`. Found on
+    dev 2026-07-29; the same trap applies to any fresh install.
+
+    Failures are logged and skipped rather than raised — one bad migration must not stop the app
+    from booting, which would take the whole site down instead of one admin panel.
+    """
+    from app import (alert_settings, admin, bugs, features, groups, jobs, markets, moon_goo,
+                     notifications, planetary, planner_store, yield_stats)
+    from app.esi import ensure_char_tables, ensure_admin_table
+    from app.industry import blueprints as ind_bp, bpc, jobs as ind_jobs, orders as ind_orders, \
+        settings as ind_settings, shares as ind_shares, assets as ind_assets
+    from app.reactions import jobs as rx_jobs, settings as rx_settings
+
+    for fn in (
+        ensure_char_tables, ensure_admin_table,
+        planner_store.ensure_plan_tables, planner_store.ensure_share_table,
+        planner_store.ensure_profile_tables, planner_store.ensure_plan_snapshot_table,
+        planner_store.ensure_colony_flags_table,
+        planetary.ensure_tables, admin.ensure_basket_tables, bugs.ensure_bugs_table,
+        features.ensure_features_table, groups.ensure_group_tables, jobs.ensure_job_tables,
+        markets.ensure_markets_table, markets.ensure_market_config_table,
+        moon_goo.ensure_moon_goo_table, notifications.ensure_notification_tables,
+        alert_settings.ensure_alert_settings_table, yield_stats.ensure_yield_avg_table,
+        ind_bp.ensure_char_blueprints_table, bpc.ensure_bpc_tables,
+        ind_jobs.ensure_manufacturing_jobs_table, ind_jobs.ensure_manufacturing_completions_table,
+        ind_orders.ensure_industry_orders_table, ind_settings.ensure_industry_settings_table,
+        ind_shares.ensure_industry_shares_table, ind_assets.ensure_asset_tables,
+        rx_jobs.ensure_industry_jobs_table, rx_jobs.ensure_reaction_assignments_table,
+        rx_jobs.ensure_reaction_orders_table, rx_jobs.ensure_reaction_completions_table,
+        rx_settings.ensure_reaction_settings_table,
+        rx_settings.ensure_account_reaction_settings_table,
+    ):
+        try:
+            fn()
+        except Exception as e:
+            _logging.getLogger(__name__).warning("table ensure failed for %s: %s",
+                                                 getattr(fn, "__name__", fn), e)
 
 
 @app.on_event("shutdown")
@@ -176,7 +240,7 @@ def _fmt_isk(n: float) -> str:
 
 def _share_meta(share_id: str):
     """Return (title, description) for a stored plan share, or generic defaults."""
-    from app.planner import get_connection, ensure_share_table
+    from app.planner_store import get_connection, ensure_share_table
 
     title = "EVE PI Planner"
     desc = "Plan your EVE Online Planetary Industry production chains."
@@ -225,41 +289,73 @@ def _share_meta(share_id: str):
     return title, desc
 
 
-@app.get("/s/{share_id}")
-def share_preview(share_id: str, request: Request):
-    """Serve the SPA with plan-specific Open Graph tags so link unfurlers
-    (Discord/Messenger/Slack/Twitter) show a rich preview. The fragment-based
-    `#s=` link is invisible to crawlers; this path-based link is not."""
+_ASSET_V = _re.compile(r'(\?v=)[A-Za-z0-9._-]*')
+
+
+def _page(filename: str) -> str:
+    """Read a static HTML document and stamp the running build onto its asset URLs."""
     try:
-        with open("static/index.html", encoding="utf-8") as f:
+        with open(f"static/{filename}", encoding="utf-8") as f:
             doc = f.read()
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Not found")
+    return _ASSET_V.sub(lambda m: m.group(1) + ASSET_VERSION, doc)
 
-    title, desc = _share_meta(share_id)
+
+def _with_og(doc: str, *, request: Request, path: str, title: str, desc: str,
+             script: str, twitter_image: bool = True) -> str:
+    """Inject Open Graph + Twitter meta right after <head>.
+
+    Position matters: crawlers take the FIRST title/description they see, so these have to precede
+    the generic ones index.html carries. `script` hands the share id to the page's own JS.
+    """
     t = _html.escape(title, quote=True)
     d = _html.escape(desc, quote=True)
     base = str(request.base_url).rstrip("/")
-    url = f"{base}/s/{share_id}"
-    img = f"{base}/og-image.png?v=6"
+    url = _html.escape(f"{base}{path}", quote=True)
+    img = _html.escape(f"{base}/og-image.png?v={ASSET_VERSION}", quote=True)
     og = (
         f'<meta property="og:type" content="website">\n'
         f'  <meta property="og:site_name" content="EVE PI Planner">\n'
         f'  <meta property="og:title" content="{t}">\n'
         f'  <meta property="og:description" content="{d}">\n'
-        f'  <meta property="og:url" content="{_html.escape(url, quote=True)}">\n'
-        f'  <meta property="og:image" content="{_html.escape(img, quote=True)}">\n'
+        f'  <meta property="og:url" content="{url}">\n'
+        f'  <meta property="og:image" content="{img}">\n'
         f'  <meta name="twitter:card" content="summary_large_image">\n'
         f'  <meta name="twitter:title" content="{t}">\n'
         f'  <meta name="twitter:description" content="{d}">\n'
-        f'  <meta name="twitter:image" content="{_html.escape(img, quote=True)}">\n'
-        f'  <meta name="description" content="{d}">\n'
-        f'  <script>window.__SHARE_ID__={_json.dumps(share_id)};</script>\n'
+        + (f'  <meta name="twitter:image" content="{img}">\n' if twitter_image else '')
+        + f'  <meta name="description" content="{d}">\n'
+        f'  {script}\n'
     )
-    # Inject right after <head> so the per-share og:title/description take
-    # precedence over the generic homepage defaults in index.html.
-    doc = doc.replace("<head>", "<head>\n  " + og, 1)
-    return HTMLResponse(doc)
+    return doc.replace("<head>", "<head>\n  " + og, 1)
+
+
+# Explicit index route, registered before the StaticFiles mount so the SPA's asset URLs get
+# stamped. Without it the mount would serve index.html verbatim, `?v=dev` and all.
+@app.get("/", include_in_schema=False)
+def index():
+    return HTMLResponse(_page("index.html"))
+
+
+# The StaticFiles mount would happily serve /index.html straight off disk — unstamped, so a
+# browser landing there would cache every asset under the literal key `dev` and never see an
+# update. Send it to the canonical path instead.
+@app.get("/index.html", include_in_schema=False)
+def index_html():
+    return RedirectResponse("/", status_code=301)
+
+
+@app.get("/s/{share_id}")
+def share_preview(share_id: str, request: Request):
+    """Serve the SPA with plan-specific Open Graph tags so link unfurlers
+    (Discord/Messenger/Slack/Twitter) show a rich preview. The fragment-based
+    `#s=` link is invisible to crawlers; this path-based link is not."""
+    title, desc = _share_meta(share_id)
+    return HTMLResponse(_with_og(
+        _page("index.html"), request=request, path=f"/s/{share_id}", title=title, desc=desc,
+        script=f"<script>window.__SHARE_ID__={_json.dumps(share_id)};</script>",
+    ))
 
 
 @app.get("/b/{share_id}")
@@ -271,12 +367,7 @@ def build_status_page(share_id: str, request: Request):
     the same way the plan share does it, so pasting the link into Discord unfurls with the product
     and how far along it is — which is most of what the customer wanted to ask.
     """
-    try:
-        with open("static/build.html", encoding="utf-8") as f:
-            doc = f.read()
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="Not found")
-
+    doc = _page("build.html")
     title, desc = "Build status", "Follow this build's progress."
     try:
         from app.industry.shares import build_status
@@ -288,26 +379,11 @@ def build_status_page(share_id: str, request: Request):
     except Exception:
         pass                       # a dead or unknown link still serves the page, which explains itself
 
-    t = _html.escape(title, quote=True)
-    dsc = _html.escape(desc, quote=True)
-    base = str(request.base_url).rstrip("/")
-    url = _html.escape(f"{base}/b/{share_id}", quote=True)
-    img = _html.escape(f"{base}/og-image.png?v=6", quote=True)
-    og = (
-        f'<meta property="og:type" content="website">\n'
-        f'  <meta property="og:site_name" content="EVE PI Planner">\n'
-        f'  <meta property="og:title" content="{t}">\n'
-        f'  <meta property="og:description" content="{dsc}">\n'
-        f'  <meta property="og:url" content="{url}">\n'
-        f'  <meta property="og:image" content="{img}">\n'
-        f'  <meta name="twitter:card" content="summary_large_image">\n'
-        f'  <meta name="twitter:title" content="{t}">\n'
-        f'  <meta name="twitter:description" content="{dsc}">\n'
-        f'  <meta name="description" content="{dsc}">\n'
-        f'  <script>window.__BUILD_ID__={_json.dumps(share_id)};</script>\n'
-    )
-    doc = doc.replace("<head>", "<head>\n  " + og, 1)
-    return HTMLResponse(doc)
+    return HTMLResponse(_with_og(
+        doc, request=request, path=f"/b/{share_id}", title=title, desc=desc,
+        script=f"<script>window.__BUILD_ID__={_json.dumps(share_id)};</script>",
+        twitter_image=False,       # this page never had one; keeping the unfurl shape unchanged
+    ))
 
 
 # Unmatched /api/* must 404, not fall through to the static mount below.

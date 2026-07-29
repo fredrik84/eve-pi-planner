@@ -11,13 +11,11 @@ hasn't configured a reaction system (see app.reactions' effective_reaction_setti
 calls into this module, and a transient ESI outage for one who has just means job cost silently
 reads as 0 for that request, matching pre-feature behavior rather than breaking the page.
 """
-import json
 import time
-import urllib.request
 
+from app import esi_http
 from app.cache import cache_get_json, cache_set_json
 
-ESI_BASE = "https://esi.evetech.net/latest"
 _COST_INDEX_TTL = 6 * 3600       # cost indices drift with regional activity — hours-fresh is fine
 _ADJUSTED_PRICE_TTL = 24 * 3600  # CCP updates these roughly daily
 
@@ -31,11 +29,12 @@ _cost_index_cache: tuple[dict[str, dict[int, float]], float] | None = None
 _adjusted_price_cache: tuple[dict[int, float], float] | None = None
 
 
-def _fetch_json(url: str):
+def _fetch_json(path: str):
+    """Through esi_http like every other ESI call — these are real ESI endpoints and were
+    previously fetched with a bare urllib request, so they spent the shared error budget
+    without ever recording it."""
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "eve-pi-planner/1.0"})
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            return json.loads(resp.read())
+        return esi_http.get(path, timeout=15).json()
     except Exception:
         return None
 
@@ -52,7 +51,7 @@ def _all_cost_indices() -> dict[str, dict[int, float]]:
         result = {act: {int(k): v for k, v in sysmap.items()} for act, sysmap in cached.items()}
         _cost_index_cache = (result, now)
         return result
-    data = _fetch_json(f"{ESI_BASE}/industry/systems/?datasource=tranquility")
+    data = _fetch_json("industry/systems/?datasource=tranquility")
     if not data:
         return _cost_index_cache[0] if _cost_index_cache else {}
     result: dict[str, dict[int, float]] = {}
@@ -89,7 +88,7 @@ def _all_adjusted_prices() -> dict[int, float]:
         result = {int(k): v for k, v in cached.items()}
         _adjusted_price_cache = (result, now)
         return result
-    data = _fetch_json(f"{ESI_BASE}/markets/prices/?datasource=tranquility")
+    data = _fetch_json("markets/prices/?datasource=tranquility")
     if not data:
         return _adjusted_price_cache[0] if _adjusted_price_cache else {}
     result = {row["type_id"]: row.get("adjusted_price", 0.0) or 0.0 for row in data if "type_id" in row}

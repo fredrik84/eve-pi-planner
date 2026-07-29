@@ -17,7 +17,7 @@ Postgres instance during the migration: querying system_jumps for Jita's neighbo
 returned Perimeter, and _system_security('Jita') correctly returned 0.95.
 
 Usage:
-    python test_sde_migration.py [--url https://eve-pi.failed.name]
+    python test_sde_migration.py [--url https://eve-pi-dev.failed.name]
 """
 
 import argparse
@@ -52,7 +52,11 @@ def test_constellation_regions(base: str) -> bool:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--url", default="https://eve-pi.failed.name")
+    # Defaults to the LOCAL container, not production. These suites POST plans and read
+    # debug endpoints; pointing them at prod by default meant a plain `python3 test_x.py`
+    # ran against live users' service (and silently "passed" by testing prod, not your change).
+    # Pass --url explicitly to aim at a deployed environment.
+    parser.add_argument("--url", default="http://localhost:8000")
     args = parser.parse_args()
     base = args.url.rstrip("/")
 

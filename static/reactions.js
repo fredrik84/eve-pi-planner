@@ -48,14 +48,17 @@ function _rxToggleOppDetail(typeId) {
 let _rxOppsLoaded = false;
 let _rxOppsLoading = null;
 
+// A 401 on any Reactions load means "not logged in", which is far more useful to show than the
+// generic auth detail. Everything else keeps the server's own message.
+function _rxErr(e, fallback) {
+  return new Error(e && e.status === 401 ? 'Log in to use Reactions' : (fallback || e.message));
+}
+
 function _rxLoadOpportunities(force) {
   if (_rxOppsLoading) return _rxOppsLoading;
   if (_rxOppsLoaded && !force) return Promise.resolve(_rxOpps);
-  _rxOppsLoading = fetch('/api/reactions/opportunities')
-    .then(r => {
-      if (!r.ok) throw new Error(r.status === 401 ? 'Log in to use Reactions' : 'Load failed');
-      return r.json();
-    })
+  _rxOppsLoading = api('/api/reactions/opportunities')
+    .catch(e => { throw _rxErr(e, 'Load failed'); })
     .then(data => {
       _rxOpps = data.opportunities || [];
       _rxOppsLoaded = true;
@@ -128,8 +131,8 @@ function _loadRxShoppingList() {
   const el = document.getElementById('rxShoppingListContent');
   if (!el) return;
   el.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Loading shopping list…</div>';
-  fetch('/api/reactions/shopping-list')
-    .then(r => r.ok ? r.json() : { materials: [] })
+  api('/api/reactions/shopping-list')
+    .catch(() => ({ materials: [] }))
     .then(d => {
       _rxLastShoppingList = d.materials || [];
       if (!_rxLastShoppingList.length) {
@@ -315,18 +318,15 @@ function _loadReactionsDashboard() {
   // assignment updates the cached data in place instead (see _rxCancelAssignment), so this
   // full-reload path only runs on tab-open or after "Clear all", not on every small action.
   if (!_rxLastDashboardData) el.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Loading…</div>';
-  fetch('/api/reactions/jobs')
-    .then(r => {
-      if (!r.ok) throw new Error(r.status === 401 ? 'Log in to use Reactions' : 'Load failed');
-      return r.json();
-    })
+  api('/api/reactions/jobs')
+    .catch(e => { throw _rxErr(e, 'Load failed'); })
     .then(data => { _rxLastDashboardData = data; _renderReactionsDashboard(data); })
     .catch(err => {
       el.innerHTML = `<div class="pp-empty">${_esc(err.message)}</div>`;
     });
   // Lifetime ledger (forward-only turnover + net profit) — separate, cheap DB-only call; re-renders
   // the metrics once it lands so it never blocks the main dashboard.
-  fetch('/api/reactions/lifetime').then(r => r.ok ? r.json() : null).then(lt => {
+  api('/api/reactions/lifetime').catch(() => null).then(lt => {
     if (lt) { _rxLifetime = lt; if (_rxLastDashboardData) _renderReactionsDashboard(_rxLastDashboardData); }
   }).catch(() => {});
 }
@@ -339,8 +339,8 @@ let _rxLifetime = null;
 function _rxRefreshJobs(force, btn) {
   const orig = btn ? btn.textContent : null;
   if (btn) { btn.disabled = true; btn.textContent = 'Refreshing…'; }
-  return fetch('/api/reactions/jobs/refresh' + (force ? '?force=1' : ''), { method: 'POST' })
-    .then(r => (r.ok ? r.json() : null))
+  return apiSend('POST', '/api/reactions/jobs/refresh' + (force ? '?force=1' : ''))
+    .catch(() => null)
     .then(res => { if (res && (res.characters_refreshed > 0 || force)) _loadReactionsDashboard(); })
     .catch(() => {})
     .finally(() => { if (btn) { btn.disabled = false; btn.textContent = orig; } });
@@ -351,14 +351,10 @@ function _rxRefreshJobs(force, btn) {
 // (covers the running job now, reappears as "to install" and joins the shopping list next cycle).
 function _rxAdoptOrphan(characterId, typeId, runs, btn) {
   if (btn) { btn.textContent = '…'; btn.style.pointerEvents = 'none'; }
-  fetch('/api/reactions/adopt-orphan', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ character_id: Number(characterId), type_id: Number(typeId), runs: Number(runs) }),
-  })
-    .then(async r => { if (!r.ok) throw new Error((await r.json()).detail || 'Failed to add to plan'); return r.json(); })
+  apiSend('POST', '/api/reactions/adopt-orphan',
+          { character_id: Number(characterId), type_id: Number(typeId), runs: Number(runs) })
     .then(() => { _rxLastDashboardData = null; _loadReactionsDashboard(); })
-    .catch(err => { alert(err.message); if (btn) { btn.textContent = '⊕ plan'; btn.style.pointerEvents = ''; } });
+    .catch(err => { toastError(err); if (btn) { btn.textContent = '⊕ plan'; btn.style.pointerEvents = ''; } });
 }
 
 function _renderReactionsDashboard(data) {
@@ -588,9 +584,9 @@ function _renderReactionsDashboard(data) {
 }
 
 function _rxCancelAssignment(assignmentId) {
-  fetch(`/api/reactions/assign/${assignmentId}`, { method: 'DELETE' })
-    .then(r => {
-      if (!r.ok || !_rxLastDashboardData) return;
+  apiSend('DELETE', `/api/reactions/assign/${assignmentId}`)
+    .then(() => {
+      if (!_rxLastDashboardData) return;
       // Optimistic in-place update instead of a full refetch+re-render — a full reload here
       // was visibly flickery/slow for something as small as clearing one pending slot.
       for (const c of _rxLastDashboardData.characters || []) {
@@ -599,12 +595,14 @@ function _rxCancelAssignment(assignmentId) {
         if (c.pending.length !== before) { c.free_slots++; _rxLastDashboardData.free_slots++; break; }
       }
       _renderReactionsDashboard(_rxLastDashboardData);
-    });
+    })
+    .catch(e => toastError(e, 'Could not clear that slot'));
 }
 
 function _rxClearAllAssignments() {
-  fetch('/api/reactions/assign', { method: 'DELETE' })
-    .then(r => { if (r.ok) { _rxLastDashboardData = null; _loadReactionsDashboard(); } });
+  apiSend('DELETE', '/api/reactions/assign')
+    .then(() => { _rxLastDashboardData = null; _loadReactionsDashboard(); })
+    .catch(e => toastError(e, 'Clear failed'));
 }
 
 // ── Manual "assign a product to this empty slot" modal ─────────────────────────────────────
@@ -898,21 +896,17 @@ function _rxSubmitManualAssign() {
   // handle the same job-count-changed/chain-changed cases this already handles for a fresh
   // assign. If the delete fails, don't touch anything else.
   const deleteOld = _rxEditingAssignmentId
-    ? fetch(`/api/reactions/assign/${_rxEditingAssignmentId}`, { method: 'DELETE' })
-        .then(r => { if (!r.ok) throw new Error('Could not delete the old assignment'); })
+    ? apiSend('DELETE', `/api/reactions/assign/${_rxEditingAssignmentId}`)
+        .catch(() => { throw new Error('Could not delete the old assignment'); })
     : Promise.resolve();
 
   deleteOld
-    .then(() => Promise.all(allocations.map(a => fetch('/api/reactions/assign', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        character_id: a.char.character_id, type_id: o.type_id, name: o.name,
-        runs: a.jobs * runsPerJob, job_count: a.jobs,
-        input_cost: costPerRun * a.jobs * runsPerJob, reward: rewardPerRun * a.jobs * runsPerJob,
-        chain_tiers: a.chain_tiers,
-      }),
-    }).then(r => { if (!r.ok) throw new Error('Assign failed'); }))))
+    .then(() => Promise.all(allocations.map(a => apiSend('POST', '/api/reactions/assign', {
+      character_id: a.char.character_id, type_id: o.type_id, name: o.name,
+      runs: a.jobs * runsPerJob, job_count: a.jobs,
+      input_cost: costPerRun * a.jobs * runsPerJob, reward: rewardPerRun * a.jobs * runsPerJob,
+      chain_tiers: a.chain_tiers,
+    }).catch(() => { throw new Error('Assign failed'); }))))
     .then(() => { _rxCloseManualAssign(); onReactionsTabOpen(); })
     .catch(err => { status.textContent = err.message; });
 }
@@ -934,8 +928,8 @@ function _loadRxMaterialFilter() {
   if (!el) return;
   if (_rxMaterials.length || _rxFuelBlocks.length) { _renderRxMaterialFilter(); return; }
   Promise.all([
-    fetch('/api/moon-goo').then(r => r.ok ? r.json() : { prices: [] }),
-    fetch('/api/reactions/fuel-blocks').then(r => r.ok ? r.json() : { fuel_blocks: [] }),
+    api('/api/moon-goo').catch(() => ({ prices: [] })),
+    api('/api/reactions/fuel-blocks').catch(() => ({ fuel_blocks: [] })),
   ]).then(([goo, fb]) => {
     _rxMaterials = (goo.prices || []).map(p => ({ type_id: p.type_id, name: p.name }));
     _rxFuelBlocks = fb.fuel_blocks || [];
@@ -975,7 +969,7 @@ function _rxEnforceMaterialMinimum(cb) {
   if (!anyChecked) {
     cb.checked = true;
     const label = groupKey === 'fuel' ? 'fuel block' : 'moon material';
-    alert(`At least one ${label} must stay checked — every reaction needs one, so leaving none checked would make nothing suggestible at all.`);
+    toast(`At least one ${label} must stay checked — every reaction needs one, so leaving none checked would make nothing suggestible at all.`, 'error', 7000);
   }
 }
 
@@ -1042,16 +1036,9 @@ function wizRSuggest() {
   const el = document.getElementById('wizRSuggestionsContent');
   wizRGo(2);
   el.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Crunching the numbers…</div>';
-  fetch('/api/reactions/suggest', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ isk_budget: isk, max_chain_depth: depth, cadence_hours: cadence,
-      material_ids: materialIds, absorb_fraction: absorbFraction }),
-  })
-    .then(r => {
-      if (!r.ok) throw new Error(r.status === 401 ? 'Log in to use Reactions' : 'Suggest failed');
-      return r.json();
-    })
+  apiSend('POST', '/api/reactions/suggest', { isk_budget: isk, max_chain_depth: depth,
+      cadence_hours: cadence, material_ids: materialIds, absorb_fraction: absorbFraction })
+    .catch(e => { throw _rxErr(e, 'Suggest failed'); })
     .then(_renderReactionsSuggestions)
     .catch(err => {
       el.innerHTML = `<div class="pp-empty">${_esc(err.message)}</div>`;
@@ -1260,16 +1247,12 @@ function _rxAssignSuggestion(i, btn) {
   if (!s) return Promise.resolve();
   btn.disabled = true;
   btn.textContent = '…';
-  return fetch('/api/reactions/assign', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      character_id: s.assigned_character_id, type_id: s.type_id, name: s.name,
-      runs: s.runs, job_count: s.job_count || 1, input_cost: s.input_cost, reward: s.reward,
-      chain_tiers: s.chain_tiers || [],
-    }),
+  return apiSend('POST', '/api/reactions/assign', {
+    character_id: s.assigned_character_id, type_id: s.type_id, name: s.name,
+    runs: s.runs, job_count: s.job_count || 1, input_cost: s.input_cost, reward: s.reward,
+    chain_tiers: s.chain_tiers || [],
   })
-    .then(r => {
+    .then(() => {
       if (!r.ok) throw new Error();
       btn.textContent = 'Assigned ✓';
     })
@@ -1468,7 +1451,7 @@ function _rxSettingsFormHtml() {
 }
 
 function _loadRxSettings() {
-  fetch('/api/reactions/settings').then(r => r.ok ? r.json() : null).then(s => {
+  api('/api/reactions/settings').catch(() => null).then(s => {
     if (!s) return;
     document.getElementById('rxSetImport').value = s.import_isk_per_m3;
     document.getElementById('rxSetExport').value = s.export_isk_per_m3;
@@ -1481,19 +1464,14 @@ function _loadRxSettings() {
 
 function _saveRxSettings() {
   const msg = document.getElementById('rxSettingsMsg');
-  fetch('/api/reactions/settings', {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
+  apiSend('PUT', '/api/reactions/settings', {
       import_isk_per_m3: parseFloat(document.getElementById('rxSetImport').value) || 0,
       export_isk_per_m3: parseFloat(document.getElementById('rxSetExport').value) || 0,
       export_collateral_pct: (parseFloat(document.getElementById('rxSetCollateral').value) || 0) / 100,
       reaction_system: document.getElementById('rxSetSystem').value.trim() || null,
       facility_tax_pct: (parseFloat(document.getElementById('rxSetTax').value) || 0) / 100,
       time_efficiency_pct: (parseFloat(document.getElementById('rxSetTimeEff').value) || 0) / 100,
-    }),
   })
-    .then(async r => { if (!r.ok) throw new Error((await r.json()).detail || 'Save failed'); return r.json(); })
     .then(() => { msg.textContent = 'Saved.'; onReactionsTabOpen(); })
     .catch(err => { msg.textContent = err.message; });
 }
@@ -1534,7 +1512,7 @@ function _rxAccountSettingsFormHtml() {
 }
 
 function _loadRxAccountSettings() {
-  fetch('/api/reactions/account-settings').then(r => r.ok ? r.json() : null).then(s => {
+  api('/api/reactions/account-settings').catch(() => null).then(s => {
     if (!s) return;
     const eff = s.override || s.default;
     document.getElementById('rxAcctImport').value = eff.import_isk_per_m3;
@@ -1554,27 +1532,22 @@ function _loadRxAccountSettings() {
 
 function _saveRxAccountSettings() {
   const msg = document.getElementById('rxAcctSettingsMsg');
-  fetch('/api/reactions/account-settings', {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
+  apiSend('PUT', '/api/reactions/account-settings', {
       import_isk_per_m3: parseFloat(document.getElementById('rxAcctImport').value) || 0,
       export_isk_per_m3: parseFloat(document.getElementById('rxAcctExport').value) || 0,
       export_collateral_pct: (parseFloat(document.getElementById('rxAcctCollateral').value) || 0) / 100,
       reaction_system: document.getElementById('rxAcctSystem').value.trim() || null,
       facility_tax_pct: (parseFloat(document.getElementById('rxAcctTax').value) || 0) / 100,
       time_efficiency_pct: (parseFloat(document.getElementById('rxAcctTimeEff').value) || 0) / 100,
-    }),
   })
-    .then(async r => { if (!r.ok) throw new Error((await r.json()).detail || 'Save failed'); return r.json(); })
     .then(() => { msg.textContent = 'Saved.'; onReactionsTabOpen(); })
     .catch(err => { msg.textContent = err.message; });
 }
 
 function _resetRxAccountSettings() {
   const msg = document.getElementById('rxAcctSettingsMsg');
-  fetch('/api/reactions/account-settings', { method: 'DELETE' })
-    .then(r => { if (!r.ok) throw new Error('Reset failed'); return r.json(); })
+  apiSend('DELETE', '/api/reactions/account-settings')
+    .catch(() => { throw new Error('Reset failed'); })
     .then(() => { msg.textContent = 'Reverted to default.'; onReactionsTabOpen(); })
     .catch(err => { msg.textContent = err.message; });
 }
@@ -1590,11 +1563,8 @@ let _rxOrders = [];
 function _rxLoadOrders() {
   const el = document.getElementById('rxOrdersContent');
   if (!el) return;
-  fetch('/api/reactions/orders')
-    .then(r => {
-      if (!r.ok) throw new Error(r.status === 401 ? 'Log in to use Reactions' : 'Load failed');
-      return r.json();
-    })
+  api('/api/reactions/orders')
+    .catch(e => { throw _rxErr(e, 'Load failed'); })
     .then(data => { _rxOrders = data.orders || []; _renderRxOrdersList(_rxOrders); })
     .catch(err => { el.innerHTML = `<div class="pp-empty">${_esc(err.message)}</div>`; });
 }
@@ -1734,12 +1704,7 @@ function _rxReviewOrder() {
   const rv = document.getElementById('rxOrderReview');
   rv.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Working out the order…</div>';
   document.getElementById('rxOrderCreateBtn').style.display = 'none';
-  fetch('/api/reactions/orders/preview', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ type_id: o.type_id, target_qty: qty }),
-  })
-    .then(async r => { if (!r.ok) throw new Error((await r.json()).detail || 'Preview failed'); return r.json(); })
+  apiSend('POST', '/api/reactions/orders/preview', { type_id: o.type_id, target_qty: qty })
     .then(data => {
       rv.innerHTML = `<div class="pp-card-hint" style="margin-top:12px">Review — <b>${_esc(data.order.name)}</b>: ${Math.round(data.order.target_qty).toLocaleString()} units → ${data.order.top_level_runs.toLocaleString()} run${data.order.top_level_runs === 1 ? '' : 's'}</div>${_rxOrderReportBody(data)}`;
       document.getElementById('rxOrderCreateBtn').style.display = '';
@@ -1756,12 +1721,8 @@ function _rxCreateOrder() {
   const clientName = document.getElementById('rxOrderClient').value.trim();
   const notes = document.getElementById('rxOrderNotes').value.trim();
   status.textContent = 'Creating…';
-  fetch('/api/reactions/orders', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ type_id: o.type_id, target_qty: qty, client_name: clientName || null, notes: notes || null }),
-  })
-    .then(async r => { if (!r.ok) throw new Error((await r.json()).detail || 'Create failed'); return r.json(); })
+  apiSend('POST', '/api/reactions/orders',
+          { type_id: o.type_id, target_qty: qty, client_name: clientName || null, notes: notes || null })
     .then(data => {
       _rxCloseNewOrderModal();
       _rxLoadOrders();
@@ -1780,8 +1741,8 @@ function _rxOpenOrderDetail(orderId) {
 }
 
 function _rxFetchOrderDetail(orderId) {
-  fetch(`/api/reactions/orders/${orderId}`)
-    .then(r => { if (!r.ok) throw new Error('Failed to load order'); return r.json(); })
+  api(`/api/reactions/orders/${orderId}`)
+    .catch(() => { throw new Error('Failed to load order'); })
     .then(data => _renderRxOrderDetail(data))
     .catch(err => {
       document.getElementById('rxOrderDetailContent').innerHTML = `<div class="pp-empty">${_esc(err.message)}</div>`;
@@ -1887,8 +1848,8 @@ function _rxOpenJobDetail(typeId, runs, progressPct) {
   document.getElementById('rxJobDetailContent').innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Loading…</div>';
   const titleEl = document.getElementById('rxJobDetailTitle');
   if (titleEl.firstChild) titleEl.firstChild.textContent = 'Running job';
-  fetch(`/api/reactions/job-detail?type_id=${typeId}&runs=${runs || 1}`)
-    .then(r => { if (!r.ok) throw new Error(r.status === 404 ? "This product isn't priced/reachable right now" : 'Failed to load'); return r.json(); })
+  api(`/api/reactions/job-detail?type_id=${typeId}&runs=${runs || 1}`)
+    .catch(e => { throw new Error(e.status === 404 ? "This product isn't priced/reachable right now" : 'Failed to load'); })
     .then(d => _renderRxJobDetail(d))
     .catch(err => { document.getElementById('rxJobDetailContent').innerHTML = `<div class="pp-empty">${_esc(err.message)}</div>`; });
 }
@@ -1959,10 +1920,7 @@ function _rxAssignOrderBatch(orderId) {
   const status = document.getElementById('rxOrderDetailStatus');
   const btn = document.getElementById('rxOrderAssignBtn');
   if (btn) { btn.disabled = true; btn.textContent = 'Assigning…'; }
-  fetch(`/api/reactions/orders/${orderId}/assign`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}),
-  })
-    .then(async r => { if (!r.ok) throw new Error((await r.json()).detail || 'Assign failed'); return r.json(); })
+  apiSend('POST', `/api/reactions/orders/${orderId}/assign`, {})
     .then(data => {
       if (status) status.textContent = `Assigned ${data.runs_assigned.toLocaleString()} run${data.runs_assigned === 1 ? '' : 's'} to ${data.characters.map(c => c.character_name).join(', ')}.`;
       _rxFetchOrderDetail(orderId);
@@ -1976,10 +1934,7 @@ function _rxAssignOrderBatch(orderId) {
 }
 
 function _rxSetOrderStatus(orderId, newStatus) {
-  fetch(`/api/reactions/orders/${orderId}/status`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: newStatus }),
-  })
-    .then(async r => { if (!r.ok) throw new Error((await r.json()).detail || 'Failed'); return r.json(); })
+  apiSend('POST', `/api/reactions/orders/${orderId}/status`, { status: newStatus })
     .then(() => {
       // Completing/cancelling frees the order's reserved slots server-side — refresh the dashboard
       // so those slots show as free again.
@@ -2006,8 +1961,7 @@ function _rxCancelOrder(orderId) {
 
 function _rxDeleteOrder(orderId) {
   if (!confirm('Delete this order? This cannot be undone.')) return;
-  fetch(`/api/reactions/orders/${orderId}`, { method: 'DELETE' })
-    .then(async r => { if (!r.ok) throw new Error((await r.json()).detail || 'Delete failed'); })
+  apiSend('DELETE', `/api/reactions/orders/${orderId}`)
     .then(() => { _rxCloseOrderDetail(); _rxLoadOrders(); })
     .catch(err => {
       const s = document.getElementById('rxOrderDetailStatus');
@@ -2038,9 +1992,7 @@ async function _rxApplyGate() {
   await Promise.resolve(typeof _loadFeatures === 'function' ? _loadFeatures() : null);
   if (!(typeof _featureActive === 'function' && _featureActive('local_market'))) { show(false); return false; }
   try {
-    const r = await fetch('/api/markets');
-    if (!r.ok) { show(false); return false; }
-    _rxMarketData = await r.json();
+    _rxMarketData = await api('/api/markets');
   } catch (e) { show(false); return false; }
   if (!_rxMarketData.onboarded) {
     show(true);
@@ -2113,17 +2065,14 @@ function _rxUpdateSaveBtn() {
 
 async function _rxSetMarketReader(id) {
   try {
-    await fetch('/api/markets/reader', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ character_id: id }),
-    });
+    await apiSend('POST', '/api/markets/reader', { character_id: id });
   } catch (e) {}
   await _rxReloadGateData();
 }
 
 async function _rxReloadGateData() {
   try {
-    const r = await fetch('/api/markets');
-    if (r.ok) _rxMarketData = await r.json();
+    _rxMarketData = await api('/api/markets');
   } catch (e) {}
   _rxRenderStep1();
   _rxRenderMarketManager();
@@ -2132,10 +2081,8 @@ async function _rxReloadGateData() {
 
 async function _rxCompleteOnboarding() {
   try {
-    const r = await fetch('/api/markets/complete', { method: 'POST' });
-    if (!r.ok) { const e = await r.json().catch(() => ({})); alert(e.detail || 'Add at least one character first'); return; }
-    _rxMarketData = await r.json();
-  } catch (e) { alert('Could not save.'); return; }
+    _rxMarketData = await apiSend('POST', '/api/markets/complete');
+  } catch (e) { toastError(e, 'Could not save'); return; }
   onReactionsTabOpen();   // re-run: now onboarded, so the gate lifts and the tab loads
 }
 
@@ -2206,9 +2153,7 @@ async function _rxStructureRecommend() {
   if (!el) return;
   if (localStorage.getItem('rxStructRecoDismissed') === '1') { el.style.display = 'none'; return; }
   try {
-    const r = await fetch('/api/markets');
-    if (!r.ok) { el.style.display = 'none'; return; }
-    const d = await r.json();
+    const d = await api('/api/markets');
     const hasRx = (d.markets || []).some(m => m.kind === 'structure' && m.build_rx);
     if (hasRx) { el.style.display = 'none'; return; }
     el.style.display = '';
@@ -2235,8 +2180,7 @@ async function _rxSaveBuild(id) {
   if (v('bsec')) body.security = v('bsec').value || null;
   if (v('bp')) body.price_from = v('bp').checked;
   try {
-    const r = await fetch(`/api/markets/${id}/build`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    if (r.ok) _rxMarketData = await r.json();
+    _rxMarketData = await apiSend('POST', `/api/markets/${id}/build`, body);
   } catch (e) {}
   _rxRenderMarketManager();
 }
@@ -2246,9 +2190,8 @@ async function _rxBuildAdd(payload) {
   const body = JSON.parse(decodeURIComponent(payload));
   body.scope = 'account'; body.price_from = false; body.build_mfg = true;
   try {
-    const r = await fetch('/api/markets', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    if (!r.ok) { alert('Could not add that structure.'); return; }
-  } catch (e) { alert('Could not add that structure.'); return; }
+    await apiSend('POST', '/api/markets', body);
+  } catch (e) { toastError(e, 'Could not add that structure'); return; }
   _rxRefreshMarkets();
 }
 
@@ -2279,21 +2222,42 @@ function _rxMarketManagerHtml(d) {
     + `</div>`;
 }
 
-function _rxMountMarkets(containerId) {
+async function _rxMountMarkets(containerId) {
   _rxMarketMount = containerId;
+  // Fetch on demand if nothing has loaded the market list yet. Previously this just called
+  // _rxRenderMarketManager(), which returns silently when _rxMarketData is null — so opening
+  // Settings -> Markets & Logistics WITHOUT first visiting the Reactions tab (the only thing
+  // that populated it) rendered an empty panel, and structure search appeared broken until you
+  // reloaded the page.
+  if (!_rxMarketData) {
+    const el = document.getElementById(containerId);
+    if (el) el.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Loading markets…</div>';
+    await _rxRefreshMarkets();
+    return;
+  }
   _rxRenderMarketManager();
 }
 
 function _rxRenderMarketManager() {
   if (!_rxMarketMount || !_rxMarketData) return;
   const el = document.getElementById(_rxMarketMount);
-  if (el) el.innerHTML = _rxMarketManagerHtml(_rxMarketData);
+  if (!el) return;
+  // Adding a market re-renders this whole panel, which used to wipe the search box and its
+  // results — so adding two structures meant typing the search twice. Carry both across.
+  const prevQ = (document.getElementById('rxMarketSearchInput') || {}).value || '';
+  const prevResults = (document.getElementById('rxMarketSearchResults') || {}).innerHTML || '';
+  el.innerHTML = _rxMarketManagerHtml(_rxMarketData);
+  if (prevQ) {
+    const inp = document.getElementById('rxMarketSearchInput');
+    if (inp) inp.value = prevQ;
+    const box = document.getElementById('rxMarketSearchResults');
+    if (box && prevResults) box.innerHTML = prevResults;
+  }
 }
 
 async function _rxRefreshMarkets() {
   try {
-    const r = await fetch('/api/markets');
-    if (r.ok) _rxMarketData = await r.json();
+    _rxMarketData = await api('/api/markets');
   } catch (e) {}
   _rxRenderMarketManager();
 }
@@ -2308,7 +2272,7 @@ async function _rxMarketSearch() {
   if (q.length < 3) { box.innerHTML = '<div class="pp-card-hint">Type at least 3 characters.</div>'; return; }
   box.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Searching…</div>';
   let d;
-  try { d = await (await fetch('/api/markets/search?q=' + encodeURIComponent(q))).json(); }
+  try { d = await api('/api/markets/search?q=' + encodeURIComponent(q)); }
   catch (e) { box.innerHTML = '<div class="pp-card-hint">Search failed.</div>'; return; }
   const results = [...(d.structures || []), ...(d.regions || [])];
   if (!results.length) {
@@ -2331,16 +2295,13 @@ async function _rxMarketAdd(payload) {
   const body = JSON.parse(decodeURIComponent(payload));
   body.scope = 'account';
   try {
-    const r = await fetch('/api/markets', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-    });
-    if (!r.ok) { alert('Could not add that market.'); return; }
-  } catch (e) { alert('Could not add that market.'); return; }
+    await apiSend('POST', '/api/markets', body);
+  } catch (e) { toastError(e, 'Could not add that market'); return; }
   _rxRefreshMarkets();
 }
 
 async function _rxMarketRemove(id) {
-  try { await fetch('/api/markets/' + id + '?scope=account', { method: 'DELETE' }); } catch (e) {}
+  try { await apiSend('DELETE', '/api/markets/' + id + '?scope=account'); } catch (e) {}
   _rxRefreshMarkets();
 }
 
@@ -2352,10 +2313,7 @@ async function _rxMarketMove(id, dir) {
   if (idx < 0 || j < 0 || j >= ids.length) return;
   ids[idx] = ids[j]; ids[j] = id;
   try {
-    await fetch('/api/markets/reorder', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ order: ids, scope: 'account' }),
-    });
+    await apiSend('POST', '/api/markets/reorder', { order: ids, scope: 'account' });
   } catch (e) {}
   _rxRefreshMarkets();
 }

@@ -110,9 +110,7 @@ async function _ensurePlacements(typeIds) {
   if (_placementsKey === key) return;     // already loaded for this plan
   _placementsKey = key;
   try {
-    const r = await fetch('/api/analyze-placements', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                                                       body: JSON.stringify({ type_ids: typeIds.map(Number) }) });
-    const j = await r.json();
+    const j = await apiSend('POST', '/api/analyze-placements', { type_ids: typeIds.map(Number) });
     _placements = j.placements || {};
     _factorySites = j.factory_sites || {};
   } catch (e) { _placements = {}; _factorySites = {}; }
@@ -141,7 +139,7 @@ function _renderAnalyzePlans() {
 // the live colony scan), shaped like a saved snapshot so the Analyze comparison works unchanged.
 async function _fetchSetupPlans() {
   try {
-    const plans = ((await (await fetch('/api/my-setup-plan')).json()).plans) || [];
+    const plans = (await api('/api/my-setup-plan')).plans || [];
     return plans.map((p, i) => ({ ...p, id: 'setup:' + i, derived: true, saved: false, hasPayload: false }));
   } catch (e) { return []; }
 }
@@ -179,7 +177,7 @@ async function onAnalyzeTabOpen() {
 let _skillRoi = null;
 async function _fetchSkillRoi() {
   if (!_featureActive('skill_roi')) { _skillRoi = null; return; }
-  try { _skillRoi = await (await fetch('/api/skill-roi')).json(); }
+  try { _skillRoi = await api('/api/skill-roi'); }
   catch (e) { _skillRoi = null; }
 }
 
@@ -235,7 +233,7 @@ function _renderSkillRoiSection() {
 let _redeploy = null;
 async function _fetchRedeployCandidates() {
   if (!_featureActive('redeploy_depletion') && !_featureActive('redeploy_proximity')) { _redeploy = null; return; }
-  try { _redeploy = await (await fetch('/api/redeploy-candidates')).json(); }
+  try { _redeploy = await api('/api/redeploy-candidates'); }
   catch (e) { _redeploy = null; }
 }
 
@@ -448,7 +446,7 @@ let _expansion = null;
 let _expandDeploysByProduct = {};
 let _expandProduct = '';
 async function _fetchExpansion() {
-  try { _expansion = await (await fetch('/api/expansion')).json(); }
+  try { _expansion = await api('/api/expansion'); }
   catch (e) { _expansion = null; }
 }
 function _renderExpandCards(deploys) {
@@ -1130,7 +1128,7 @@ const _RESEAT_PER_P1 = 5;   // cap on reseat suggestions per short material (8 w
 let _colonyFlags = new Set();
 async function _fetchColonyFlags() {
   try {
-    const d = await (await fetch('/api/colony-flags')).json();
+    const d = await api('/api/colony-flags');
     _colonyFlags = new Set((d.flags || []).map(([cid, pid]) => cid + '|' + pid));
   } catch (e) { _colonyFlags = new Set(); }
 }
@@ -1140,8 +1138,7 @@ async function _toggleColonyFlag(characterId, planetId, flagged) {
   if (flagged) _colonyFlags.add(key); else _colonyFlags.delete(key);
   renderAnalysis();   // instant: the colony moves out of reseat and into the redeploy list right away
   try {
-    await fetch('/api/colony-flags', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ character_id: characterId, planet_id: planetId, flagged }) });
+    await apiSend('POST', '/api/colony-flags', { character_id: characterId, planet_id: planetId, flagged });
     await _fetchRedeployCandidates();   // refresh so the card can name a concrete richer-planet target
     renderAnalysis();
   } catch (e) {}
@@ -1153,14 +1150,13 @@ async function _toggleColonyFlag(characterId, planetId, flagged) {
 async function _rescanPlanetFromCard(characterId, planetId, btn) {
   if (btn) { btn.disabled = true; btn.textContent = 'Rescanning…'; }
   try {
-    const resp = await fetch(`/api/characters/${characterId}/refresh-planet/${planetId}`, { method: 'POST' });
-    if (!resp.ok) { const d = await resp.json().catch(() => ({})); throw new Error(d.detail || `HTTP ${resp.status}`); }
+    await apiSend('POST', `/api/characters/${characterId}/refresh-planet/${planetId}`);
     await loadCharacters();             // re-read the (now cache-busted) charlist → fresh _ppCharsData
     await _fetchRedeployCandidates();    // overlap / tapped state may have changed
     renderAnalysis();                    // recompute — resolved materials/colonies drop off
   } catch (e) {
     if (btn) { btn.disabled = false; btn.textContent = '⟳ rescan'; }
-    alert('Rescan failed: ' + e.message);
+    toastError(e, 'Rescan failed');
   }
 }
 function _rescanBtn(c) {
@@ -1198,8 +1194,7 @@ function _reconcileStaleFlags(rows) {
   [..._colonyFlags].filter(k => !keep.has(k)).forEach(k => {
     _colonyFlags.delete(k);                       // local: won't show as maxed this render
     const [cid, pid] = k.split('|');
-    fetch('/api/colony-flags', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ character_id: +cid, planet_id: +pid, flagged: false }) }).catch(() => {});
+    apiSend('POST', '/api/colony-flags', { character_id: +cid, planet_id: +pid, flagged: false }).catch(() => {});
   });
 }
 
@@ -1584,9 +1579,9 @@ function _storePlanSnapshot(data) {
 async function savePlanForRefills() {
   const data = _wiz.lastPlanData;
   const snap = data && _buildPlanSnapshot(data);
-  if (!snap) { alert('No placed factories in this plan to save.'); return; }
+  if (!snap) { toast('No placed factories in this plan to save.', 'error'); return; }
   if (!_loggedIn) {
-    alert('Log in to save plans across devices.\n\nYour last plan is already kept in this browser, so it\'s in the PI Planner tab without re-running the wizard.');
+    toast('Log in to save plans across devices. Your last plan is already kept in this browser, so it\'s in the PI Planner tab without re-running the wizard.', 'info', 8000);
     return;
   }
   const name = prompt('Save this plan as:', snap.name);
@@ -1595,19 +1590,15 @@ async function savePlanForRefills() {
   snap.payload = _buildPlanPayload();  // full plan so it can be reopened (not just refilled)
   const btn = document.getElementById('savePlanBtn');
   try {
-    const resp = await fetch('/api/plan-snapshots', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: snap.name, snapshot: snap }),
-    });
-    if (!resp.ok) throw new Error((await resp.json()).detail || `HTTP ${resp.status}`);
+    await apiSend('POST', '/api/plan-snapshots', { name: snap.name, snapshot: snap });
     if (btn) { const t = btn.textContent; btn.textContent = '✓ Saved'; setTimeout(() => { btn.textContent = t; }, 2000); }
     renderSavedPlansBar();  // keep the page-1 list current
-  } catch (e) { alert('Save failed: ' + e.message); }
+  } catch (e) { toastError(e, 'Save failed'); }
 }
 
 async function deletePlanSnapshot(srvId) {
   if (!confirm('Delete this saved plan?')) return;
-  try { await fetch(`/api/plan-snapshots/${srvId}`, { method: 'DELETE' }); } catch (e) {}
+  try { await apiSend('DELETE', `/api/plan-snapshots/${srvId}`); } catch (e) {}
   const el = document.getElementById('planDistSection');
   if (el) el.dataset.sel = '';
   renderPlanDistribution();

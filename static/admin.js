@@ -84,35 +84,15 @@ function adminSubPage(key) {
 // minutes and exits instantly unless something is due, so a request starts within that window.
 async function runJobNow(job) {
   try {
-    const r = await fetch('/api/admin/jobs/' + encodeURIComponent(job) + '/run', { method: 'POST' });
-    if (!r.ok) { alert(await _adminErrText(r, 'Could not queue the job')); return; }
-  } catch (e) { alert(String(e)); return; }
+    await apiSend('POST', '/api/admin/jobs/' + encodeURIComponent(job) + '/run');
+  } catch (e) { toastError(e, 'Could not queue the job'); return; }
   loadAdminJobs();
-}
-
-// Turn a failed response into something that names the actual situation. 404/405 on an endpoint the
-// page just rendered a button for almost always means this pod hasn't finished rolling out — the
-// browser loaded new JS from one replica and called an older one. Saying "method not allowed" sends
-// you looking for a bug that isn't there.
-async function _adminErrText(r, fallback) {
-  let detail = '';
-  try { detail = (await r.json()).detail || ''; } catch (e) {}
-  if (r.status === 404 || r.status === 405) {
-    return 'That endpoint isn\'t available on the server yet — a deploy is probably still rolling out. '
-      + 'Give it a minute and try again.';
-  }
-  if (r.status === 403) return detail || 'Admin access required.';
-  return detail || `${fallback} (HTTP ${r.status})`;
 }
 
 async function toggleJob(job, enabled) {
   try {
-    const r = await fetch('/api/admin/jobs/' + encodeURIComponent(job), {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ enabled: !!enabled }),
-    });
-    if (!r.ok) { alert(await _adminErrText(r, 'Could not change the job')); }
-  } catch (e) { alert(String(e)); }
+    await apiSend('POST', '/api/admin/jobs/' + encodeURIComponent(job), { enabled: !!enabled });
+  } catch (e) { toastError(e, 'Could not change the job'); }
   loadAdminJobs();
 }
 
@@ -122,10 +102,8 @@ async function loadAdminJobs() {
   el.innerHTML = '<p class="pp-sub">Loading…</p>';
   let d = null;
   try {
-    const r = await fetch('/api/admin/jobs');
-    if (!r.ok) { el.innerHTML = '<p class="pp-warn">Could not load job status.</p>'; return; }
-    d = await r.json();
-  } catch (e) { el.innerHTML = `<p class="pp-warn">${_esc(String(e))}</p>`; return; }
+    d = await api('/api/admin/jobs');
+  } catch (e) { el.innerHTML = `<p class="pp-warn">${_esc(e.message)}</p>`; return; }
 
   const ago = t => {
     if (!t) return '—';
@@ -181,7 +159,7 @@ async function _loadCharNameSuggestions() {
   const dl = document.getElementById('charNameSuggestions');
   if (!dl) return;
   try {
-    const { names } = await (await fetch('/api/character-names')).json();
+    const { names } = await api('/api/character-names');
     dl.innerHTML = (names || []).map(n => `<option value="${_esc(n)}">`).join('');
   } catch (e) { /* suggestions are best-effort */ }
 }
@@ -240,15 +218,11 @@ async function loadAdminFeatures() {
 
 async function setFeatureState(key, state) {
   try {
-    const resp = await fetch('/api/features/' + encodeURIComponent(key), {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ state }),
-    });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    await apiSend('POST', '/api/features/' + encodeURIComponent(key), { state });
     if (_features[key]) { _features[key].state = state; _features[key].enabled = state === 'public'; }
     loadAdminFeatures();
     _applyTabGates();
-  } catch (e) { alert('Failed to update feature: ' + e.message); }
+  } catch (e) { toastError(e, 'Failed to update feature'); }
 }
 
 // ── Tester management ─────────────────────────────────────────────────────────
@@ -256,7 +230,7 @@ async function loadTesters() {
   const el = document.getElementById('testerList');
   if (!el) return;
   try {
-    const data = await (await fetch('/api/testers')).json();
+    const data = await api('/api/testers');
     const rows = (data.testers || []).map(t =>
       `<div class="admin-row"><span class="admin-name">${_esc(t.character_name)}</span>`
       + `<span class="admin-meta">${t.added_by ? 'by ' + _esc(t.added_by) : ''}</span>`
@@ -272,11 +246,7 @@ async function addTester() {
   if (!name) return;
   status.textContent = 'Adding…';
   try {
-    const resp = await fetch('/api/testers', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ character_name: name }),
-    });
-    if (!resp.ok) throw new Error((await resp.json()).detail || `HTTP ${resp.status}`);
+    await apiSend('POST', '/api/testers', { character_name: name });
     inp.value = ''; status.textContent = '';
     loadTesters();
   } catch (e) { status.textContent = e.message; }
@@ -285,10 +255,9 @@ async function addTester() {
 async function removeTester(name) {
   if (!confirm(`Remove tester "${name}"?`)) return;
   try {
-    const resp = await fetch(`/api/testers/${encodeURIComponent(name)}`, { method: 'DELETE' });
-    if (!resp.ok) throw new Error((await resp.json()).detail || `HTTP ${resp.status}`);
+    await apiSend('DELETE', `/api/testers/${encodeURIComponent(name)}`);
     loadTesters();
-  } catch (e) { alert('Failed: ' + e.message); }
+  } catch (e) { toastError(e, 'Failed'); }
 }
 
 async function loadPlanetSubmissions() {
@@ -296,9 +265,7 @@ async function loadPlanetSubmissions() {
   if (!list) return;
   list.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span>Loading…</div>';
   try {
-    const resp = await fetch('/api/planet-submissions?status=pending');
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const data = await resp.json();
+    const data = await api('/api/planet-submissions?status=pending');
     renderPlanetSubmissions(data.submissions || []);
   } catch (e) {
     list.innerHTML = `<div class="pp-empty">Failed to load: ${_esc(e.message)}</div>`;
@@ -338,24 +305,22 @@ function renderPlanetSubmissions(subs) {
 async function reviewPlanetSubmission(id, action) {
   if (action === 'reject' && !confirm('Reject and discard this submission?')) return;
   try {
-    const resp = await fetch(`/api/planet-submissions/${id}/${action}`, { method: 'POST' });
-    const data = await resp.json();
-    if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
+    const data = await apiSend('POST', `/api/planet-submissions/${id}/${action}`);
     if (action === 'approve') {
       if (data.errors && data.errors.length)
-        alert(`Imported ${data.imported}, skipped ${data.skipped}.\n\nWarnings:\n` + data.errors.join('\n'));
+        toast(`Imported ${data.imported}, skipped ${data.skipped}. Warnings: ` + data.errors.join('; '), 'info', 9000);
       if (typeof loadPlanets === 'function') loadPlanets(true);
       if (typeof loadConstellations === 'function') loadConstellations();
     }
     loadPlanetSubmissions();
-  } catch (e) { alert('Failed: ' + e.message); }
+  } catch (e) { toastError(e, 'Failed'); }
 }
 
 async function loadAdmins() {
   const el = document.getElementById('adminList');
   if (!el) return;
   try {
-    const data = await (await fetch('/api/admins')).json();
+    const data = await api('/api/admins');
     const boot = (data.bootstrap || []).map(n =>
       `<div class="admin-row"><span class="admin-name">${_esc(n)}</span>`
       + `<span class="admin-tag">permanent</span></div>`).join('');
@@ -374,11 +339,7 @@ async function addAdmin() {
   if (!name) return;
   status.textContent = 'Adding…';
   try {
-    const resp = await fetch('/api/admins', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ character_name: name }),
-    });
-    if (!resp.ok) throw new Error((await resp.json()).detail || `HTTP ${resp.status}`);
+    await apiSend('POST', '/api/admins', { character_name: name });
     inp.value = ''; status.textContent = '';
     loadAdmins();
   } catch (e) { status.textContent = e.message; }
@@ -387,10 +348,9 @@ async function addAdmin() {
 async function removeAdmin(name) {
   if (!confirm(`Remove admin "${name}"?`)) return;
   try {
-    const resp = await fetch(`/api/admins/${encodeURIComponent(name)}`, { method: 'DELETE' });
-    if (!resp.ok) throw new Error((await resp.json()).detail || `HTTP ${resp.status}`);
+    await apiSend('DELETE', `/api/admins/${encodeURIComponent(name)}`);
     loadAdmins();
-  } catch (e) { alert('Failed: ' + e.message); }
+  } catch (e) { toastError(e, 'Failed'); }
 }
 
 // ── Production baskets (user-owned + global) ──────────────────────────────────
@@ -527,12 +487,7 @@ async function saveBasket() {
   status.textContent = 'Saving…';
   try {
     const url = _basketEditId ? `/api/baskets/${_basketEditId}` : '/api/baskets';
-    const resp = await fetch(url, {
-      method: _basketEditId ? 'PUT' : 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, run_size, unit_label, items, make_global }),
-    });
-    if (!resp.ok) throw new Error((await resp.json()).detail || `HTTP ${resp.status}`);
+    await apiSend(_basketEditId ? 'PUT' : 'POST', url, { name, run_size, unit_label, items, make_global });
     resetBasketEditor();
     loadBasketManager();
   } catch (e) { status.textContent = e.message; }
@@ -541,11 +496,10 @@ async function saveBasket() {
 async function deleteBasket(id, name) {
   if (!confirm(`Delete basket "${name}"? It will no longer be selectable in the planner.`)) return;
   try {
-    const resp = await fetch(`/api/baskets/${id}`, { method: 'DELETE' });
-    if (!resp.ok) throw new Error((await resp.json()).detail || `HTTP ${resp.status}`);
+    await apiSend('DELETE', `/api/baskets/${id}`);
     if (_basketEditId === id) resetBasketEditor();
     loadBasketManager();
-  } catch (e) { alert('Failed: ' + e.message); }
+  } catch (e) { toastError(e, 'Failed'); }
 }
 function filterBugs(status, btn) {
   _bugFilter = status;
@@ -559,9 +513,7 @@ async function loadBugs() {
   list.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span>Loading…</div>';
   try {
     const url = '/api/bugs' + (_bugFilter ? `?status=${_bugFilter}` : '');
-    const resp = await fetch(url);
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const data = await resp.json();
+    const data = await api(url);
     renderBugs(data.bugs || [], data.counts || {});
   } catch (e) {
     list.innerHTML = `<div class="pp-empty">Failed to load: ${_esc(e.message)}</div>`;
@@ -595,13 +547,9 @@ function renderBugs(bugs, counts) {
 
 async function setBugStatus(id, status) {
   try {
-    const resp = await fetch(`/api/bugs/${id}/status`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status }),
-    });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    await apiSend('POST', `/api/bugs/${id}/status`, { status });
     loadBugs();
-  } catch (e) { alert('Failed: ' + e.message); }
+  } catch (e) { toastError(e, 'Failed'); }
 }
 
 // ── System stats ─────────────────────────────────────────────────────────────
@@ -610,9 +558,7 @@ async function loadAdminStats() {
   if (!el) return;
   el.innerHTML = '<div class="pp-empty">Loading…</div>';
   try {
-    const resp = await fetch('/api/admin/stats');
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    renderAdminStats(await resp.json());
+    renderAdminStats(await api('/api/admin/stats'));
   } catch (e) {
     el.innerHTML = `<div class="pp-empty">Failed to load: ${_esc(e.message)}</div>`;
   }
@@ -623,6 +569,9 @@ async function _checkPrometheusStatus() {
   const el = document.getElementById('adminPrometheusStatus');
   if (!el) return;
   try {
+    // Raw fetch on purpose: every status code here means something different to the admin
+    // (404 = disabled, 401 = token-secured, 200 = open), so this reads the code rather than
+    // treating a non-2xx as a failure the way api() does.
     const resp = await fetch('/metrics');
     if (resp.status === 404) {
       el.innerHTML = '<span class="admin-prom-status admin-prom-off">Disabled — set PROMETHEUS_ENABLED=1 to enable</span>';
@@ -740,9 +689,7 @@ async function loadCleanupPreview() {
   if (!el) return;
   el.innerHTML = '<div class="pp-empty">Loading preview…</div>';
   try {
-    const resp = await fetch('/api/admin/cleanup/preview');
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    _cleanupPreview = await resp.json();
+    _cleanupPreview = await api('/api/admin/cleanup/preview');
     renderCleanupPreview(_cleanupPreview);
   } catch (e) {
     el.innerHTML = `<div class="pp-empty">Failed to load: ${_esc(e.message)}</div>`;
@@ -822,7 +769,7 @@ async function runCleanup() {
     const cb = document.getElementById('chk_' + key);
     return cb && cb.checked;
   });
-  if (!cats.length) { alert('Nothing selected.'); return; }
+  if (!cats.length) { toast('Nothing selected.', 'error'); return; }
 
   // Build confirm message
   const lines = cats.map(key => {
@@ -837,13 +784,7 @@ async function runCleanup() {
   document.querySelectorAll('.cleanup-run-btn').forEach(b => b.disabled = true);
 
   try {
-    const resp = await fetch('/api/admin/cleanup', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ categories: cats }),
-    });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const result = await resp.json();
+    const result = await apiSend('POST', '/api/admin/cleanup', { categories: cats });
     const deleted = result.deleted || {};
     const summary = Object.entries(deleted)
       .map(([k, n]) => `${_CLEANUP_LABELS[k]?.label || k}: ${n} deleted`)
@@ -870,9 +811,7 @@ async function loadMoonGoo() {
   if (!el) return;
   el.innerHTML = '<div class="pp-empty">Loading…</div>';
   try {
-    const resp = await fetch('/api/groups/mine');
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const data = await resp.json();
+    const data = await api('/api/groups/mine');
     _moonGooGroups = data.groups || [];
     if (!_moonGooGroups.length) {
       if (pickerRow) pickerRow.style.display = 'none';
@@ -888,8 +827,7 @@ async function loadMoonGoo() {
     if (pickerRow) pickerRow.style.display = _moonGooGroups.length > 1 ? '' : 'none';
     if (!_moonGooMaterials.length) {
       try {
-        const mResp = await fetch('/api/moon-goo-materials');
-        if (mResp.ok) _moonGooMaterials = (await mResp.json()).materials || [];
+        _moonGooMaterials = (await api('/api/moon-goo-materials')).materials || [];
       } catch (e) { /* non-fatal — picker just falls back to free text */ }
     }
     await _fetchAndRenderMoonGoo();
@@ -910,9 +848,7 @@ async function _fetchAndRenderMoonGoo() {
   if (!el || !_moonGooGroupId) return;
   el.innerHTML = '<div class="pp-empty">Loading…</div>';
   try {
-    const resp = await fetch(`/api/moon-goo/${_moonGooGroupId}`);
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const data = await resp.json();
+    const data = await api(`/api/moon-goo/${_moonGooGroupId}`);
     renderMoonGoo(data.prices || []);
   } catch (e) {
     el.innerHTML = `<div class="pp-empty">Failed to load: ${_esc(e.message)}</div>`;
@@ -966,15 +902,11 @@ async function saveMoonGooRow(typeId, btn) {
   const stock = parseInt(row.querySelector('.goo-row-stock').value, 10) || 0;
   btn.disabled = true;
   try {
-    const resp = await fetch(`/api/moon-goo/${_moonGooGroupId}/row`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type_id: typeId, sell_price, stock }),
-    });
-    if (!resp.ok) throw new Error((await resp.json()).detail || `HTTP ${resp.status}`);
+    await apiSend('POST', `/api/moon-goo/${_moonGooGroupId}/row`, { type_id: typeId, sell_price, stock });
     btn.textContent = 'Saved ✓';
     setTimeout(() => { btn.textContent = 'Save'; btn.disabled = false; }, 1200);
   } catch (e) {
-    alert('Failed: ' + e.message);
+    toastError(e, 'Failed');
     btn.disabled = false;
   }
 }
@@ -983,11 +915,10 @@ async function deleteMoonGooRow(typeId, btn) {
   if (!confirm('Remove this material from the price list?')) return;
   btn.disabled = true;
   try {
-    const resp = await fetch(`/api/moon-goo/${_moonGooGroupId}/${typeId}`, { method: 'DELETE' });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    await apiSend('DELETE', `/api/moon-goo/${_moonGooGroupId}/${typeId}`);
     _fetchAndRenderMoonGoo();
   } catch (e) {
-    alert('Failed: ' + e.message);
+    toastError(e, 'Failed');
     btn.disabled = false;
   }
 }
@@ -1000,12 +931,8 @@ async function addMoonGooRow() {
   if (!typeId) { statusEl.textContent = 'Pick a material from the list.'; return; }
   if (!_moonGooGroupId) { statusEl.textContent = 'No group selected.'; return; }
   try {
-    const resp = await fetch(`/api/moon-goo/${_moonGooGroupId}/row`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type_id: typeId, sell_price, stock }),
-    });
-    if (!resp.ok) throw new Error((await resp.json()).detail || `HTTP ${resp.status}`);
-    const result = await resp.json();
+    const result = await apiSend('POST', `/api/moon-goo/${_moonGooGroupId}/row`,
+                                 { type_id: typeId, sell_price, stock });
     statusEl.textContent = `Added/updated: ${result.name}`;
     document.getElementById('gooAddSearch').value = '';
     document.getElementById('gooAddPrice').value = '';
@@ -1022,12 +949,7 @@ async function importMoonGoo() {
   if (!text.trim()) { statusEl.textContent = 'Paste something first.'; return; }
   if (!_moonGooGroupId) { statusEl.textContent = 'No group selected.'; return; }
   try {
-    const resp = await fetch(`/api/moon-goo/${_moonGooGroupId}/import`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text }),
-    });
-    if (!resp.ok) throw new Error((await resp.json()).detail || `HTTP ${resp.status}`);
-    const result = await resp.json();
+    const result = await apiSend('POST', `/api/moon-goo/${_moonGooGroupId}/import`, { text });
     statusEl.textContent = `Imported ${result.imported} row${result.imported === 1 ? '' : 's'}.`
       + (result.errors.length ? ` ${result.errors.length} warning(s): ${result.errors.join('; ')}` : '');
     document.getElementById('gooImportText').value = '';
@@ -1045,9 +967,7 @@ async function loadGroups() {
   if (!el) return;
   el.innerHTML = '<div class="pp-empty">Loading…</div>';
   try {
-    const resp = await fetch('/api/admin/groups');
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const data = await resp.json();
+    const data = await api('/api/admin/groups');
     _groupPageRegistry = data.page_registry || [];
     renderGroups(data.groups || []);
   } catch (e) {
@@ -1093,11 +1013,7 @@ async function createGroup() {
   const statusEl = document.getElementById('groupAddStatus');
   if (!name || !allianceId) { statusEl.textContent = 'Name and alliance ID are required.'; return; }
   try {
-    const resp = await fetch('/api/admin/groups', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, alliance_id: allianceId }),
-    });
-    if (!resp.ok) throw new Error((await resp.json()).detail || `HTTP ${resp.status}`);
+    await apiSend('POST', '/api/admin/groups', { name, alliance_id: allianceId });
     statusEl.textContent = `Added: ${name}`;
     document.getElementById('groupAddName').value = '';
     document.getElementById('groupAddAllianceId').value = '';
@@ -1111,11 +1027,10 @@ async function deleteGroup(groupId, name, btn) {
   if (!confirm(`Delete group "${name}"? Its price sheet and reaction settings are left in place but become unreachable.`)) return;
   btn.disabled = true;
   try {
-    const resp = await fetch(`/api/admin/groups/${groupId}`, { method: 'DELETE' });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    await apiSend('DELETE', `/api/admin/groups/${groupId}`);
     loadGroups();
   } catch (e) {
-    alert('Failed: ' + e.message);
+    toastError(e, 'Failed');
     btn.disabled = false;
   }
 }
@@ -1127,25 +1042,20 @@ async function addGroupManager(groupId, btn) {
   if (!name) return;
   btn.disabled = true;
   try {
-    const resp = await fetch(`/api/admin/groups/${groupId}/managers`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ character_name: name }),
-    });
-    if (!resp.ok) throw new Error((await resp.json()).detail || `HTTP ${resp.status}`);
+    await apiSend('POST', `/api/admin/groups/${groupId}/managers`, { character_name: name });
     loadGroups();
   } catch (e) {
-    alert('Failed: ' + e.message);
+    toastError(e, 'Failed');
     btn.disabled = false;
   }
 }
 
 async function removeGroupManager(groupId, name) {
   try {
-    const resp = await fetch(`/api/admin/groups/${groupId}/managers/${encodeURIComponent(name)}`, { method: 'DELETE' });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    await apiSend('DELETE', `/api/admin/groups/${groupId}/managers/${encodeURIComponent(name)}`);
     loadGroups();
   } catch (e) {
-    alert('Failed: ' + e.message);
+    toastError(e, 'Failed');
   }
 }
 
@@ -1153,18 +1063,14 @@ async function toggleGroupPage(groupId, key, allowed, cb) {
   cb.disabled = true;
   try {
     const resp = allowed
-      ? await fetch(`/api/admin/groups/${groupId}/pages`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ page_key: key }),
-        })
-      : await fetch(`/api/admin/groups/${groupId}/pages/${encodeURIComponent(key)}`, { method: 'DELETE' });
-    if (!resp.ok) throw new Error((await resp.json().catch(() => ({}))).detail || `HTTP ${resp.status}`);
+      ? await apiSend('POST', `/api/admin/groups/${groupId}/pages`, { page_key: key })
+      : await apiSend('DELETE', `/api/admin/groups/${groupId}/pages/${encodeURIComponent(key)}`);
     // Reload rather than patch in place — checking/unchecking the FIRST/LAST box flips the
     // whole group between unrestricted and restricted, which changes the hint text above the
     // grid too, not just this one checkbox.
     loadGroups();
   } catch (e) {
-    alert('Failed: ' + e.message);
+    toastError(e, 'Failed');
     cb.checked = !allowed; // revert the checkbox on failure
     cb.disabled = false;
   }

@@ -231,3 +231,58 @@ tr:hover td { background: #181d2a; }
 /* Vertical card stack used by the PI Planner build/analyze results column. */
 .pi-stack { display: flex; flex-direction: column; gap: 16px; }
 
+
+/* ── Toasts ────────────────────────────────────────────────────────────────────
+   Non-blocking replacement for the alert() calls that used to be this app's only
+   error channel. Fixed to the bottom-right, above everything including modals. */
+#toastHost {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 4000;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: min(420px, calc(100vw - 36px));
+  pointer-events: none;
+}
+.toast {
+  pointer-events: auto;
+  cursor: pointer;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--clr-border);
+  background: #131722;
+  color: var(--clr-text);
+  font-size: 13px;
+  line-height: 1.4;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .45);
+  animation: toast-in .18s ease-out;
+  overflow-wrap: anywhere;
+}
+.toast-error   { border-left: 3px solid var(--clr-red); }
+.toast-success { border-left: 3px solid var(--clr-green); }
+.toast-info    { border-left: 3px solid var(--clr-accent); }
+.toast-out { opacity: 0; transform: translateY(4px); transition: opacity .25s, transform .25s; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+/* On phones the bar spans the width, clear of the fixed bottom tab bar. */
+@media (max-width: 760px) {
+  #toastHost { right: 10px; left: 10px; bottom: 74px; max-width: none; }
+}
+
+/* Connect-a-character row in Settings → Markets & Logistics. The action used to be an inline
+   text link inside a hint sentence, so the one required setup step read as prose. */
+.settings-connect-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 12px; }
+.pp-connect-btn {
+  background: #1a2740;
+  border: 1px solid var(--clr-focus);
+  color: var(--clr-accent);
+  border-radius: 6px;
+  padding: 6px 13px;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.pp-connect-btn:hover { background: #22314e; color: #cfe0ff; }

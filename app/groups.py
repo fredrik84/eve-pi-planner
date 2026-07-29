@@ -21,16 +21,22 @@ don't want people to enable or disable such specific features. Maybe just allow 
 access to pages"): if a group has ANY rows here, its members are restricted to exactly those
 pages, even ones that would otherwise be open to everyone (Dashboard, Planetary Planning, etc.)
 — an empty/unconfigured group is the safe default (unrestricted, same as today, so nothing
-regresses for an existing group on deploy). Enforcement is frontend-only (hides the nav tab),
-matching how every other visibility gate in this app already works — not a hard backend
-security boundary; real authorization is still "this is your own data" via require_context."""
+regresses for an existing group on deploy).
+
+Enforcement is **both** ends. The frontend hides the nav tab; the backend rejects the calls via
+`require_page(key)`, applied as a router-level dependency on the self-contained feature routers
+(app.reactions, app.industry). It used to be frontend-only, which meant a restricted member could
+still call the endpoints directly and get everything the tab would have shown — fine as a
+visibility gate, wrong for something the Admin UI presents as access control. Real authorization
+is still "this is your own data" via require_context; this is a second, coarser gate on top."""
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Cookie, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.sde import get_connection, ensure_once
-from app.esi import require_admin, require_context, admin_and_tester_status_for_context, _context_character_names
+from app.esi import (require_admin, require_context, session_context_id,
+                     admin_and_tester_status_for_context, _context_character_names)
 
 router = APIRouter()
 
@@ -53,6 +59,7 @@ PAGE_REGISTRY = [
     {"key": "layout", "label": "Factory Layout"},
     {"key": "planetdb", "label": "Planet DB"},
     {"key": "reactions", "label": "Reactions"},
+    {"key": "industry", "label": "Industry"},
 ]
 _PAGE_KEYS = {p["key"] for p in PAGE_REGISTRY}
 
@@ -188,6 +195,32 @@ def caller_allowed_pages(context_id: int) -> list[str] | None:
     if not rows:
         return None
     return [r["page_key"] for r in rows]
+
+
+def require_page(page_key: str):
+    """FastAPI dependency factory: 403 unless the caller's group may reach this page.
+
+    Page access used to be advertised to the SPA (`restricted_pages` on /api/characters) and
+    enforced ONLY by hiding tabs in the browser — so a restricted member could still call the
+    endpoints directly and get everything. The Admin UI presents this as access control, so it
+    has to actually control access.
+
+    `caller_allowed_pages` returns None for "unrestricted", which is what almost every account
+    gets (not in a group, or the group set no page restrictions) — so this is a no-op unless a
+    group manager has deliberately narrowed the list. Anonymous callers pass through untouched:
+    they have no group, and each endpoint's own require_context/require_admin still applies.
+    """
+    def _dep(pp_session: str = Cookie(default=None)) -> None:
+        context_id = session_context_id(pp_session)
+        if context_id is None:
+            return
+        allowed = caller_allowed_pages(context_id)
+        if allowed is not None and page_key not in allowed:
+            raise HTTPException(
+                status_code=403,
+                detail="Your group doesn't have access to this page.",
+            )
+    return _dep
 
 
 # ── Admin CRUD (site admin only — group creation/manager assignment is manual for now) ─────

@@ -30,7 +30,7 @@ function _loadPlanSnapshots() {
 // ones from this browser. Shared by the refill view and the page-1 "Saved plans" list.
 async function _fetchAllSnapshots() {
   let server = [];
-  try { server = (await (await fetch('/api/plan-snapshots')).json()).snapshots || []; } catch (e) {}
+  try { server = (await api('/api/plan-snapshots')).snapshots || []; } catch (e) {}
   const serverNames = new Set(server.map(s => s.name));
   return [
     ...server.map(s => ({ id: 'srv:' + s.id, srvId: s.id, name: s.name, factories: s.factories, consumption: s.consumption || {},
@@ -79,9 +79,9 @@ async function renderSavedPlansBar() {
 async function openSavedPlanFull(srvId) {
   if (!srvId) return;
   let payload = null;
-  try { payload = (await (await fetch(`/api/plan-snapshots/${srvId}`)).json()).payload; } catch (e) {}
+  try { payload = (await api(`/api/plan-snapshots/${srvId}`)).payload; } catch (e) {}
   if (!payload || !payload.plan) {
-    alert('This saved plan has no stored plan view — re-save it (Save plan) to enable Open.');
+    toast('This saved plan has no stored plan view — re-save it (Save plan) to enable Open.', 'error', 7000);
     return;
   }
   if (typeof closeSettingsModal === 'function') closeSettingsModal();
@@ -102,7 +102,7 @@ function openSavedPlanRefill(id) {
 async function deleteSavedPlan(id, srvId) {
   if (!confirm('Delete this saved plan?')) return;
   if (srvId) {
-    try { await fetch(`/api/plan-snapshots/${srvId}`, { method: 'DELETE' }); } catch (e) {}
+    try { await apiSend('DELETE', `/api/plan-snapshots/${srvId}`); } catch (e) {}
   } else {
     try { localStorage.setItem(_PLAN_SNAP_KEY, JSON.stringify(_loadPlanSnapshots().filter(s => s.id !== id))); } catch (e) {}
   }

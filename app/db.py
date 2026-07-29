@@ -32,6 +32,39 @@ def ensure_once(fn):
     return wrapper
 
 
+def add_columns(con, table: str, *coldefs: str) -> None:
+    """Additive schema migration — this codebase's only migration mechanism (never DROP COLUMN).
+    Adds each column if it isn't there yet; an already-existing column is a no-op.
+
+    **Each ADD COLUMN commits immediately on success, and that is not optional.** Postgres aborts
+    the WHOLE current transaction on any failed statement, so a later already-exists ALTER rolls
+    back the earlier ones that had genuinely just succeeded — leaving columns that the code is
+    certain it created and that are not actually in the database. This bit us for real once
+    (esi_expires/skills_expires silently erased by the next ALTER, then UndefinedColumn on every
+    request that touched them). Nine call sites were still doing the bare try/except chain without
+    the per-statement commit when this helper was introduced; they are all routed through here now.
+    """
+    # Commit whatever DDL came before us — almost always the CREATE TABLE this migration extends —
+    # BEFORE risking an ALTER. Postgres aborts the entire transaction on a failed statement and the
+    # connection wrapper rolls it back, which silently discards an uncommitted CREATE TABLE. The
+    # result on a FRESH database is the table never existing at all: the CREATE runs, the very next
+    # ALTER fails because the column is already in the CREATE body, the rollback undoes both, and
+    # the trailing commit() commits nothing. Existing databases never showed it (their CREATE is a
+    # no-op and the ALTER genuinely adds the column) — it only bites a new install, which is exactly
+    # where nobody looks. Cost the dev stack its pp_industry_settings table (2026-07-29).
+    try:
+        con.commit()
+    except Exception:
+        pass
+
+    for coldef in coldefs:
+        try:
+            con.execute(f"ALTER TABLE {table} ADD COLUMN {coldef}")
+            con.commit()
+        except Exception:
+            pass          # already exists — the only failure worth swallowing here
+
+
 class _Row(dict):
     """Dict with integer positional indexing for sqlite3.Row compatibility."""
     def __getitem__(self, key):

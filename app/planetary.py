@@ -8,7 +8,7 @@ from typing import Optional
 from fastapi import APIRouter, Cookie, Depends, HTTPException
 from pydantic import BaseModel
 
-from app.sde import get_connection, load_pi_data, ensure_once
+from app.sde import get_connection, load_pi_data, ensure_once, add_columns
 from app.cache import cache_get_json, cache_set_json, cache_invalidate
 from app.esi import require_context, is_admin, require_admin
 from app.notifiers import notify_admin_discord
@@ -100,10 +100,7 @@ def ensure_tables():
     """)
     con.commit()
     # Add solar_system_id if upgrading from older schema
-    try:
-        con.execute("ALTER TABLE pp_planets ADD COLUMN solar_system_id INTEGER")
-    except Exception:
-        pass
+    add_columns(con, "pp_planets", "solar_system_id INTEGER")
     # Populate from solar_systems table (created by SDE build)
     try:
         con.execute("""

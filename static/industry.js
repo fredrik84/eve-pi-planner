@@ -84,12 +84,10 @@ function _indSaveSettings() {
   _indSaveSettingsTimer = setTimeout(() => {
     const sel = document.getElementById('indFacility');
     const f = _indFacilityBonus();
-    fetch('/api/industry/settings', {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...f, prioritize_speed: _indPrioSpeed(), marginal_pct: _indMarginalPct(),
-                             force_build: _indForceBuild(), margin_pct: _indMarginPct(),
-                             facility_id: sel ? sel.value : '' }),
-    }).catch(() => {});          // best-effort: the plan on screen already has these values
+    apiSend('PUT', '/api/industry/settings',
+            { ...f, prioritize_speed: _indPrioSpeed(), marginal_pct: _indMarginalPct(),
+              force_build: _indForceBuild(), margin_pct: _indMarginPct(),
+              facility_id: sel ? sel.value : '' }).catch(() => {});          // best-effort: the plan on screen already has these values
   }, 600);
 }
 
@@ -105,8 +103,7 @@ async function indRefreshStatus() {
   if (!card || !body) return;
   let orders = [];
   try {
-    const r = await fetch('/api/industry/orders');
-    if (r.ok) orders = (await r.json()).orders || [];
+    orders = (await api('/api/industry/orders')).orders || [];
   } catch (e) {}
   _indOrders = orders;
   const empty = document.getElementById('indEmptyCard');
@@ -120,14 +117,10 @@ async function indRefreshStatus() {
   body.innerHTML = _indLoadingHtml('Checking your build…', 'Pulling job status and re-planning what is left.');
   // Progress and the plan are independent server-side, and each is a second or more against a
   // capital build — running them one after the other doubled the wait for no reason.
-  const planReq = fetch('/api/industry/queue-plan', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(_indQueueBody()),
-  });
+  const planReq = apiSend('POST', '/api/industry/queue-plan', _indQueueBody());
+  let d;
   try {
-    const [, r] = await Promise.all([indLoadProgress(), planReq]);
-    if (!r.ok) { body.innerHTML = '<p class="pp-warn">Could not plan your queue.</p>'; return; }
-    const d = await r.json();
+    [, d] = await Promise.all([indLoadProgress(), planReq]);
     if (d.empty) { card.style.display = 'none'; if (empty) empty.style.display = ''; return; }
     _indLastPlan = d;
     _indCacheNames(d);
@@ -137,7 +130,7 @@ async function indRefreshStatus() {
       + `<div id="indRunning" class="ind-install"></div>`;
     indRenderInstall(d.install);   // "do this now" — comes with the plan, no second round trip
     indLoadRunning();          // what's already cooking goes under the pipeline
-  } catch (e) { body.innerHTML = `<p class="pp-warn">${_esc(String(e))}</p>`; }
+  } catch (e) { body.innerHTML = `<p class="pp-warn">${_esc(e.message || "Could not plan your queue.")}</p>`; }
 }
 
 // One-line answer to "where am I": overall progress, what's in the cooker, what to do next.
@@ -277,9 +270,7 @@ async function indLoadLifetime() {
   const el = document.getElementById('indLifetime');
   if (!el) return;
   try {
-    const r = await fetch('/api/industry/lifetime');
-    if (!r.ok) { el.innerHTML = ''; return; }
-    const d = await r.json();
+    const d = await api('/api/industry/lifetime');
     if (!d.used) { el.innerHTML = ''; return; }
     const since = d.since ? new Date(d.since * 1000).toLocaleDateString() : '';
     el.innerHTML = `<div class="an-stats">`
@@ -295,8 +286,8 @@ async function indLoadSetupSummary() {
   const sum = document.getElementById('indSetupSummary');
   const rem = document.getElementById('indConnectReminder');
   let slots = null, bp = null;
-  try { const r = await fetch('/api/industry/slots'); if (r.ok) slots = await r.json(); } catch (e) {}
-  try { const r = await fetch('/api/industry/blueprints'); if (r.ok) bp = await r.json(); } catch (e) {}
+  try { slots = await api('/api/industry/slots'); } catch (e) {}
+  try { bp = await api('/api/industry/blueprints'); } catch (e) {}
   const txt = (() => {
     const s = slots ? `<b>${slots.manufacturing_free}/${slots.manufacturing_slots}</b> mfg · <b>${slots.reaction_free}/${slots.reaction_slots}</b> rx slots free` : '';
     const b = bp ? (bp.connected ? ` · <span class="ind-bp-ok">${bp.owned_count} blueprints</span>` : '') : '';
@@ -360,9 +351,7 @@ async function indLoadAssets() {
   const el = document.getElementById('indAssets');
   if (!el) return;
   try {
-    const r = await fetch('/api/industry/assets');
-    if (!r.ok) { el.innerHTML = ''; return; }
-    const d = await r.json();
+    const d = await api('/api/industry/assets');
     if (!d.connected) {
       el.innerHTML = `<span class="ind-bp-hint">Tell the planner what you already own so it stops asking you to build it, `
         + `and progress can tell what's finished.</span>`
@@ -431,12 +420,8 @@ async function indSavePaste() {
   if (!text.trim()) { if (msg) msg.textContent = 'Paste something first.'; return; }
   if (msg) msg.textContent = 'Reading…';
   try {
-    const r = await fetch('/api/industry/assets/paste', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, text }),
-    });
-    const d = await r.json().catch(() => ({}));
-    if (!r.ok || d.error) {
+    const d = (await apiSend('POST', '/api/industry/assets/paste', { name, text })) || {};
+    if (d.error) {
       if (msg) msg.textContent = d.error === 'unrecognized' ? "Couldn't match any item names." : 'Nothing readable in that paste.';
       return;
     }
@@ -448,17 +433,14 @@ async function indSavePaste() {
 }
 
 async function indDeleteSource(key) {
-  try { await fetch('/api/industry/assets/sources/' + encodeURIComponent(key), { method: 'DELETE' }); } catch (e) {}
+  try { await apiSend('DELETE', '/api/industry/assets/sources/' + encodeURIComponent(key)); } catch (e) {}
   indLoadAssets();
   indLoadQueue();
 }
 
 async function indToggleSource(key, on) {
   try {
-    await fetch('/api/industry/assets/sources', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ keys: [key], enabled: !!on }),
-    });
+    await apiSend('POST', '/api/industry/assets/sources', { keys: [key], enabled: !!on });
   } catch (e) {}
   indLoadAssets();
   indLoadQueue();     // stock changes both the plan and the progress numbers
@@ -468,7 +450,7 @@ async function indRefreshAssets() {
   const el = document.getElementById('indAssets');
   if (el) el.innerHTML = '<span class="ind-bp-hint">Reading assets… (a full asset list can take a moment)</span>';
   let d = null;
-  try { const r = await fetch('/api/industry/assets/refresh', { method: 'POST' }); if (r.ok) d = await r.json(); } catch (e) {}
+  try { d = await apiSend('POST', '/api/industry/assets/refresh'); } catch (e) {}
   if (d && !d.connected && (d.needs_reauth || []).length && el) {
     el.innerHTML = _indReauthHtml(d.needs_reauth) + _indPasteFormHtml();
     return;
@@ -487,9 +469,7 @@ async function indLoadBlueprints() {
   const el = document.getElementById('indBlueprints');
   if (!el) return;
   try {
-    const r = await fetch('/api/industry/blueprints');
-    if (!r.ok) { el.innerHTML = ''; return; }
-    const d = await r.json();
+    const d = await api('/api/industry/blueprints');
     if (d.connected) {
       el.innerHTML = `<span class="ind-bp-ok">✓ ${d.owned_count} blueprint${d.owned_count === 1 ? '' : 's'} detected — using your real ME/TE</span>`
         + `<button class="ind-bp-btn" onclick="indRefreshBlueprints()">Refresh</button>`;
@@ -507,7 +487,7 @@ function indConnectBlueprints() {
 async function indRefreshBlueprints() {
   const el = document.getElementById('indBlueprints');
   if (el) el.innerHTML = '<span class="ind-bp-hint">Reading blueprints…</span>';
-  try { await fetch('/api/industry/blueprints/refresh', { method: 'POST' }); } catch (e) {}
+  try { await apiSend('POST', '/api/industry/blueprints/refresh'); } catch (e) {}
   indLoadBlueprints();
 }
 
@@ -516,9 +496,7 @@ async function indLoadSlots() {
   const el = document.getElementById('indSlots');
   if (!el) return;
   try {
-    const r = await fetch('/api/industry/slots');
-    if (!r.ok) { el.innerHTML = ''; return; }
-    const d = await r.json();
+    const d = await api('/api/industry/slots');
     const chips = (d.characters || []).map(c =>
       `<span class="ind-slot-chip" title="${_esc(c.character_name)}">${_esc(c.character_name)}: `
       + (c.manufacturing_slots ? `${c.manufacturing_free}/${c.manufacturing_slots}<span class="ind-slot-sub">mfg</span>` : '<span class="ind-slot-sub">no mfg</span>')
@@ -568,9 +546,7 @@ function indOnSearchKey(ev) {
 
 async function _indSearch(q) {
   try {
-    const r = await fetch('/api/industry/search?q=' + encodeURIComponent(q));
-    if (!r.ok) return;
-    const d = await r.json();
+    const d = await api('/api/industry/search?q=' + encodeURIComponent(q));
     const box = document.getElementById('indSearchResults');
     if (!d.results || !d.results.length) { box.innerHTML = '<div class="ind-search-empty">No buildable match</div>'; box.style.display = ''; return; }
     box.innerHTML = d.results.map(x =>
@@ -639,15 +615,16 @@ async function indRunPlan() {
   out.innerHTML = `<div class="pp-card">${_indLoadingHtml('Planning your build…',
     'Costing every component, deciding build vs buy, then scheduling the jobs across your slots.')}</div>`;
   try {
-    const r = await fetch('/api/industry/plan', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type_id: _indPicked.type_id, quantity: qty, prioritize_speed: _indPrioSpeed(),
-                             marginal_pct: _indMarginalPct(), force_build: _indForceBuild(),
-                             force_build_ids: _indForceIds(), me_te_overrides: _indMeTeMap(),
-                             ..._indFacilityBonus() }),
-    });
-    if (!r.ok) { const e = await r.json().catch(() => ({})); out.innerHTML = `<div class="pp-card"><p class="pp-warn">${_esc(e.detail || 'Plan failed')}</p></div>`; return; }
-    const d = await r.json();
+    let d;
+    try {
+      d = await apiSend('POST', '/api/industry/plan',
+             { type_id: _indPicked.type_id, quantity: qty, prioritize_speed: _indPrioSpeed(),
+               marginal_pct: _indMarginalPct(), force_build: _indForceBuild(),
+               force_build_ids: _indForceIds(), me_te_overrides: _indMeTeMap(),
+               ..._indFacilityBonus() });
+    } catch (e) {
+      out.innerHTML = `<div class="pp-card"><p class="pp-warn">${_esc(e.message || 'Plan failed')}</p></div>`; return;
+    }
     _indLastPlan = d;
     out.innerHTML = _indRenderPlan(d, `Build ${qty}× ${_esc(d.target.name)}`);
     // The plan renders below a tall form inside a scrolling modal, so on a laptop it can land
@@ -731,9 +708,7 @@ let _indHasSavedSettings = false;
 async function _indApplySavedSettings() {
   let d = null;
   try {
-    const r = await fetch('/api/industry/settings');
-    if (!r.ok) return;
-    d = (await r.json()).settings || null;
+    d = (await api('/api/industry/settings')).settings || null;
   } catch (e) { return; }
   _indHasSavedSettings = !!(d && d.updated_at);
   if (!d || !d.updated_at) return;
@@ -933,14 +908,13 @@ async function _indLoadSweep(qty) {
   _indSweepPending = key;
   _indRenderMarginalLive();      // shows the pending state (or dims the previous numbers)
   try {
-    const r = await fetch('/api/industry/plan_sweep', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type_id: _indPicked.type_id, quantity: qty,
-                             prioritize_speed: _indPrioSpeed(), force_build_ids: _indForceIds(),
-                             me_te_overrides: _indMeTeMap(), ..._indFacilityBonus() }),
-    });
-    if (!r.ok) { _indSweepFailed = key; _indRenderMarginalLive(); return; }
-    const d = await r.json();
+    let d;
+    try {
+      d = await apiSend('POST', '/api/industry/plan_sweep',
+             { type_id: _indPicked.type_id, quantity: qty,
+               prioritize_speed: _indPrioSpeed(), force_build_ids: _indForceIds(),
+               me_te_overrides: _indMeTeMap(), ..._indFacilityBonus() });
+    } catch (e) { _indSweepFailed = key; _indRenderMarginalLive(); return; }
     if (_indSweepKey(qty) !== key) return;      // options moved on while it was in flight
     _indSweep = { key, points: d.points || [] };
     _indRenderMarginalLive();
@@ -1024,9 +998,8 @@ async function indPopulateFacility() {
   _indRxFacilityLabel = null;
   let structOpts = '';
   try {
-    const r = await fetch('/api/markets');
-    if (r.ok) {
-      const d = await r.json();
+    {
+      const d = await api('/api/markets');
       (d.markets || []).filter(m => m.kind === 'structure' && m.build_mfg && m.mfg_bonus).forEach(m => {
         const val = 's:' + m.id;
         _indFacilityMap[val] = { me: m.mfg_bonus.me, te: m.mfg_bonus.te };
@@ -1646,8 +1619,7 @@ async function indLoadBpcPrices(inst, ids, miss) {
   (miss || []).forEach(m => { byId[m.type_id] = m; });
   let d = null;
   try {
-    const r = await fetch('/api/industry/bpc?type_ids=' + ids.join(','));
-    if (r.ok) d = await r.json();
+    d = await api('/api/industry/bpc?type_ids=' + ids.join(','));
   } catch (e) {}
   const scanning = d && d.scan && d.scan.busy;
   ids.forEach(id => {
@@ -1718,16 +1690,13 @@ async function indAddToQueue() {
   if (!_indPicked) return;
   const qty = Math.max(1, parseInt(document.getElementById('indQty').value) || 1);
   try {
-    const r = await fetch('/api/industry/orders', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ product_type_id: _indPicked.type_id, quantity: qty,
-                             label: (document.getElementById('indLabel') || {}).value || '',
-                             // The overrides were decided against THIS product — they ride along, or
-                             // queueing would silently undo every one of them.
-                             force_build_ids: _indForceIds(), me_te_overrides: _indMeTeMap(),
-                             margin_pct: _indMarginPct() }),
-    });
-    if (!r.ok) { const e = await r.json().catch(() => ({})); alert(e.detail || 'Could not queue'); return; }
+    await apiSend('POST', '/api/industry/orders',
+      { product_type_id: _indPicked.type_id, quantity: qty,
+        label: (document.getElementById('indLabel') || {}).value || '',
+        // The overrides were decided against THIS product — they ride along, or
+        // queueing would silently undo every one of them.
+        force_build_ids: _indForceIds(), me_te_overrides: _indMeTeMap(),
+        margin_pct: _indMarginPct() });
     document.getElementById('indResult').innerHTML = '';
     _indForcedTypes.clear();       // they live on the order now
     const lb = document.getElementById('indLabel');
@@ -1735,7 +1704,7 @@ async function indAddToQueue() {
     indClosePlanner();
     await indLoadQueue();
     await indRefreshStatus();     // adding re-plans the whole queue together — the reason to queue
-  } catch (e) { alert(String(e)); }
+  } catch (e) { toastError(e, 'Could not queue'); }
 }
 
 // Live queue progress, keyed by type_id — populated by indLoadProgress() and read by the pipeline
@@ -1772,8 +1741,7 @@ function indSimChange() {
 
 async function indLoadProgress() {
   try {
-    const r = await fetch('/api/industry/progress' + (_indSim === null ? '' : '?simulate=' + _indSim));
-    _indProgress = r.ok ? await r.json() : null;
+    _indProgress = await api('/api/industry/progress' + (_indSim === null ? '' : '?simulate=' + _indSim));
     if (_indProgress && _indProgress.empty) _indProgress = null;
   } catch (e) { _indProgress = null; }
   return _indProgress;
@@ -1795,12 +1763,8 @@ async function indLoadQueue() { return indRefreshStatus(); }
 // one preview, and a per-component undo on a chip in a header row is more UI than the case wants.
 async function indClearOrderForced(orderId) {
   try {
-    const r = await fetch(`/api/industry/orders/${orderId}`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ force_build_ids: [] }),
-    });
-    if (!r.ok) { alert(await _indErrText(r)); return; }
-  } catch (e) { alert(String(e)); return; }
+    await apiSend('PATCH', `/api/industry/orders/${orderId}`, { force_build_ids: [] });
+  } catch (e) { toastError(e, 'Could not save'); return; }
   await indRefreshStatus();     // the overrides change what gets built, so the whole plan moves
 }
 
@@ -1809,9 +1773,7 @@ async function indClearOrderForced(orderId) {
 async function indShareOrder(orderId) {
   const box = document.getElementById('indShareBox');
   try {
-    const r = await fetch(`/api/industry/orders/${orderId}/share`, { method: 'POST' });
-    if (!r.ok) { alert(await _indErrText(r)); return; }
-    const d = await r.json();
+    const d = await apiSend('POST', `/api/industry/orders/${orderId}/share`);
     const url = `${location.origin}/b/${d.share_id}`;
     if (!box) { prompt('Share this with your customer:', url); return; }
     box.style.display = '';
@@ -1821,7 +1783,7 @@ async function indShareOrder(orderId) {
       + `<a class="ind-share-open" href="${_esc(url)}" target="_blank" rel="noopener">Open</a>`
       + `<button class="ind-share-revoke" onclick="indRevokeShare(${orderId})" title="Kill this link — the customer's page stops working">Revoke</button>`
       + `<button class="ind-share-x" onclick="document.getElementById('indShareBox').style.display='none'">✕</button>`;
-  } catch (e) { alert(String(e)); }
+  } catch (e) { toastError(e, 'Could not create the link'); }
 }
 
 function indCopyShare() {
@@ -1836,7 +1798,7 @@ function indCopyShare() {
 async function indRevokeShare(orderId) {
   if (!confirm('Revoke this link? The customer\'s page will stop working immediately.')) return;
   try {
-    await fetch(`/api/industry/orders/${orderId}/share`, { method: 'DELETE' });
+    await apiSend('DELETE', `/api/industry/orders/${orderId}/share`);
   } catch (e) { /* revoking is best-effort from the UI's point of view */ }
   const box = document.getElementById('indShareBox');
   if (box) { box.innerHTML = '<span class="ind-share-lbl">Link revoked.</span>'; setTimeout(() => { box.style.display = 'none'; }, 2000); }
@@ -1905,20 +1867,10 @@ async function indSaveOrderOrder() {
   const msg = document.getElementById('indOrderMsg');
   if (msg) msg.textContent = 'Saving…';
   try {
-    const r = await fetch('/api/industry/orders/reorder', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ order: _indOrderDraft.map(o => o.id) }),
-    });
-    if (!r.ok) { if (msg) msg.textContent = await _indErrText(r); return; }
-  } catch (e) { if (msg) msg.textContent = String(e); return; }
+    await apiSend('POST', '/api/industry/orders/reorder', { order: _indOrderDraft.map(o => o.id) });
+  } catch (e) { if (msg) msg.textContent = e.message; return; }
   indCloseOrder();
   await indRefreshStatus();     // order changes ranks, ETAs and first delivery
-}
-
-function _indErrText(r) {
-  return r.status === 404 || r.status === 405
-    ? 'Not available yet — a deploy may still be rolling out.'
-    : `Could not save (HTTP ${r.status})`;
 }
 
 // Edit in place rather than in a dialog: it's two fields, and re-planning the whole queue just to
@@ -1996,12 +1948,8 @@ async function indClearOrderMeTe(id) {
   const next = { ...(o.me_te_overrides || {}) };
   delete next[String(o.product_type_id)];
   try {
-    const r = await fetch('/api/industry/orders/' + id, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ me_te_overrides: next }),
-    });
-    if (!r.ok) { const e = await r.json().catch(() => ({})); alert(e.detail || 'Could not save'); return; }
-  } catch (e) { alert(String(e)); return; }
+    await apiSend('PATCH', '/api/industry/orders/' + id, { me_te_overrides: next });
+  } catch (e) { toastError(e, 'Could not save'); return; }
   await indRefreshStatus();
 }
 
@@ -2026,24 +1974,20 @@ async function indSaveOrder(id) {
     }
   }
   try {
-    const r = await fetch('/api/industry/orders/' + id, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    if (!r.ok) { const e = await r.json().catch(() => ({})); alert(e.detail || 'Could not save'); return; }
-  } catch (e) { alert(String(e)); return; }
+    await apiSend('PATCH', '/api/industry/orders/' + id, body);
+  } catch (e) { toastError(e, 'Could not save'); return; }
   await indRefreshStatus();     // quantity changes the whole plan, so re-plan
 }
 
 async function indRemoveOrder(id) {
-  try { await fetch('/api/industry/orders/' + id, { method: 'DELETE' }); } catch (e) {}
+  try { await apiSend('DELETE', '/api/industry/orders/' + id); } catch (e) {}
   await indLoadQueue();
   await indRefreshStatus();
 }
 
 // ── "To install now" checklist + in-progress jobs ───────────────────────────────────────────
 async function indRefreshJobs() {
-  try { await fetch('/api/industry/jobs/refresh', { method: 'POST' }); } catch (e) {}
+  try { await apiSend('POST', '/api/industry/jobs/refresh'); } catch (e) {}
   indLoadSlots();
   indLoadSetupSummary();
   await indRefreshStatus();   // redraws install / pipeline / running from the fresh job data
@@ -2167,9 +2111,7 @@ async function indLoadRunning() {
   const el = document.getElementById('indRunning');
   if (!el) return;
   try {
-    const r = await fetch('/api/industry/jobs');
-    if (!r.ok) { el.innerHTML = ''; return; }
-    const d = await r.json();
+    const d = await api('/api/industry/jobs');
     if (!d.jobs || !d.jobs.length) { el.innerHTML = ''; return; }
     const rows = d.jobs.map(j => {
       const ends = j.end_date ? new Date(j.end_date) : null;

@@ -102,7 +102,7 @@ def chars_by_scope(context_id: int) -> tuple[list[dict], list[dict]]:
     return ok, need
 
 
-def _paginate(client: httpx.Client, url: str, token: str, cap: int = 30):
+def _paginate(client, url: str, token: str, cap: int = 30):
     """All pages of an ESI asset list, or an error string ('role')."""
     rows: list[dict] = []
     page = 1
@@ -123,7 +123,7 @@ def _paginate(client: httpx.Client, url: str, token: str, cap: int = 30):
     return rows
 
 
-def _names_for(client: httpx.Client, url: str, token: str, item_ids: list[int]) -> dict[int, str]:
+def _names_for(client, url: str, token: str, item_ids: list[int]) -> dict[int, str]:
     """Resolve container names (ESI takes up to 1000 ids per call). Cosmetic — never fails a
     refresh, since an unnamed container is still a perfectly usable source."""
     out: dict[int, str] = {}

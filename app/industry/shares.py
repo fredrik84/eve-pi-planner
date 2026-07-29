@@ -28,11 +28,11 @@ import time as _time
 from fastapi import Depends, HTTPException
 
 from app.db import get_connection
-from app.sde import ensure_once
+from app.sde import ensure_once, add_columns
 from app.esi import require_context
 from app.cache import cache_get_json, cache_set_json
 
-from app.industry._router import router
+from app.industry._router import router, public_router
 
 # A public page anyone can refresh, and each render costs two plans. 60s is well inside the rate at
 # which a build's state actually changes (jobs take hours) while stopping a shared link from being
@@ -55,13 +55,7 @@ def ensure_industry_shares_table():
         """)
         con.execute("CREATE INDEX IF NOT EXISTS idx_ind_shares_order ON pp_industry_shares (order_id)")
         # The last successfully-rendered payload, so the link outlives its order.
-        for ddl in ("ALTER TABLE pp_industry_shares ADD COLUMN last_payload TEXT",
-                    "ALTER TABLE pp_industry_shares ADD COLUMN last_at REAL"):
-            try:
-                con.execute(ddl)
-                con.commit()
-            except Exception:
-                pass
+        add_columns(con, "pp_industry_shares", "last_payload TEXT", "last_at REAL")
         con.commit()
     finally:
         con.close()
@@ -338,7 +332,7 @@ def build_status(share_id: str) -> dict:
     return payload
 
 
-@router.get("/api/industry/build-status/{share_id}")
+@public_router.get("/api/industry/build-status/{share_id}")
 def public_build_status(share_id: str):
     """PUBLIC — no session. Deliberately so: the whole point is a customer with no account. Returns
     only the customer-facing fields assembled in `build_status`."""

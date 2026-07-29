@@ -12,8 +12,7 @@ let _ppSelected = new Set(); // selected constellation names (the filter)
 
 async function loadConstellations() {
   try {
-    const resp = await fetch('/api/constellations');
-    const data = await resp.json();
+    const data = await api('/api/constellations');
     _ppConstRegions = data.regions || {};
     _ppConstByRegion = {};
     (data.constellations || []).forEach(c => {
@@ -130,8 +129,7 @@ async function loadPlanets(force = false) {
   const container = document.getElementById('planetDbContent');
   container.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span>Loading planets…</div>';
   try {
-    const resp = await fetch('/api/planets');
-    const data = await resp.json();
+    const data = await api('/api/planets');
     _ppPlanets = data.planets || [];
     _ppLoaded = true;
     filterPlanets();
@@ -248,7 +246,9 @@ function _ppRenderChunk() {
 
 async function clearPlanets() {
   if (!confirm('Clear all planet data?')) return;
-  await fetch('/api/planets', { method: 'DELETE' });
+  try {
+    await apiSend('DELETE', '/api/planets');
+  } catch (e) { toastError(e, 'Could not clear the planet data'); return; }
   _ppPlanets = [];
   renderPlanetTable([]);
 }
@@ -278,23 +278,17 @@ async function submitPlanetImport() {
   btn.disabled = true;
   btn.textContent = 'Importing…';
   try {
-    const resp = await fetch('/api/planets/import', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text }),
-    });
-    const data = await resp.json();
-    if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
-    const warn = (data.errors && data.errors.length) ? '\n\nWarnings:\n' + data.errors.join('\n') : '';
+    const data = await apiSend('POST', '/api/planets/import', { text });
+    const warn = (data.errors && data.errors.length) ? ' Warnings: ' + data.errors.join('; ') : '';
     const importBtn = document.getElementById('ppImportBtn');
     if (data.queued) {
       // Non-admin: held for admin review, nothing written to the live DB yet.
-      alert(`Thanks! ${data.submitted} planet${data.submitted === 1 ? '' : 's'} submitted for review. `
-            + `An admin will approve them before they appear in the Planet DB.` + warn);
+      toast(`Thanks! ${data.submitted} planet${data.submitted === 1 ? '' : 's'} submitted for review. `
+            + `An admin will approve them before they appear in the Planet DB.` + warn, 'success', 9000);
       importBtn.textContent = `✓ submitted`;
       closePlanetImport();
     } else {
-      if (warn) alert(`Imported ${data.imported}, skipped ${data.skipped}.${warn}`);
+      if (warn) toast(`Imported ${data.imported}, skipped ${data.skipped}.${warn}`, 'info', 9000);
       closePlanetImport();
       await loadPlanets(true);
       loadConstellations();
@@ -302,7 +296,7 @@ async function submitPlanetImport() {
     }
     setTimeout(() => importBtn.textContent = 'Import', 2500);
   } catch (e) {
-    alert('Import failed: ' + e.message);
+    toastError(e, 'Import failed');
   } finally {
     btn.disabled = false;
     btn.textContent = 'Import';

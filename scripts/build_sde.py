@@ -27,7 +27,7 @@ from pathlib import Path
 import yaml
 
 sys.path.insert(0, ".")
-from app.db import get_connection, _IS_POSTGRES
+from app.db import get_connection, add_columns, _IS_POSTGRES
 
 # CSafeLoader (libyaml's C parser) is 5-10x faster than pure-Python SafeLoader — matters here
 # since fsd/types.yaml is 50k+ entries and yaml.safe_load() is single-threaded (measured ~886s
@@ -198,6 +198,56 @@ _MFG_DDL = [
 ]
 
 
+def parse_reactions(blueprints_yaml: dict) -> list[dict]:
+    """blueprints.yaml entries carrying an activities.reaction block. Every formula has exactly one
+    product (verified against the live SDE: 112 formulas, 0 with != 1 product) so output_type_id/
+    output_qty are scalars, same shape as pi_schematics. Material counts vary 2-6 per formula (fuel
+    blocks + named materials + bulk minerals all land in the same `materials` list) — no
+    fixed-shape assumption, just parse what's there.
+
+    Split out of build_db so a database missing ONLY the reaction tables can be backfilled without
+    re-parsing the 50k-entry types.yaml."""
+    _log("Parsing reactions from blueprints.yaml...")
+    reactions: list[dict] = []
+    for bp_id, bp_attrs in blueprints_yaml.items():
+        if not isinstance(bp_attrs, dict):
+            continue
+        reaction = (bp_attrs.get("activities") or {}).get("reaction")
+        if not reaction:
+            continue
+        materials = reaction.get("materials") or []
+        products = reaction.get("products") or []
+        if len(products) != 1 or not materials:
+            continue
+        reactions.append({
+            "reaction_id": int(bp_id),
+            "output_type_id": products[0]["typeID"],
+            "output_qty": products[0]["quantity"],
+            "cycle_time": reaction.get("time", 0),
+            "inputs": [{"type_id": m["typeID"], "quantity": m["quantity"]} for m in materials],
+        })
+    _log(f"Found {len(reactions)} reaction formulas.")
+    return reactions
+
+
+def write_reactions(con, reactions: list[dict]) -> None:
+    for r in reactions:
+        con.execute("INSERT INTO reactions VALUES (?, ?, ?, ?)",
+                    (r["reaction_id"], r["output_type_id"], r["output_qty"], r["cycle_time"]))
+        for inp in r["inputs"]:
+            con.execute("INSERT INTO reaction_inputs VALUES (?, ?, ?)",
+                        (r["reaction_id"], inp["type_id"], inp["quantity"]))
+    con.commit()
+
+
+def _reactions_built(con) -> bool:
+    try:
+        row = con.execute("SELECT COUNT(*) AS n FROM reactions").fetchone()
+        return bool(row and row["n"] > 0)
+    except Exception:
+        return False
+
+
 def parse_manufacturing(blueprints_yaml: dict) -> list[dict]:
     """Manufacturing recipes from blueprints.yaml: entries with an activities.manufacturing block.
     Same one-product-per-recipe shape as reactions; a handful have no materials (special items) and
@@ -253,6 +303,37 @@ def _manufacturing_built(con) -> bool:
         return bool(row and row["n"] > 0)
     except Exception:
         return False
+
+
+def _types_volume_built(con) -> bool:
+    """Whether `types.volume` exists AND is populated.
+
+    `volume` was added to the types DDL after the table already existed in deployed databases, and
+    `_already_built` only checks that `types` has rows — so those installs skipped the build
+    entirely and `CREATE TABLE IF NOT EXISTS` could never add the column. The result was a hard
+    500 on every endpoint that reads it (`/api/pi-products`, `/api/baskets`, anything calling
+    `load_pi_data`), permanently, with no way to self-heal. Found on the dev stack 2026-07-28.
+
+    Same shape as `_manufacturing_built`: presence AND data, so a crash mid-backfill re-runs."""
+    try:
+        row = con.execute("SELECT COUNT(volume) AS n FROM types").fetchone()
+        return bool(row and row["n"] > 0)
+    except Exception:
+        return False          # column missing entirely
+
+
+def _backfill_type_volumes(con, type_data: dict) -> None:
+    """Add `volume` if absent and populate it from types.yaml, leaving every other column alone."""
+    add_columns(con, "types", "volume REAL")
+    rows = []
+    for type_id, attrs in type_data.items():
+        vol = attrs.get("volume")
+        if vol is not None:
+            rows.append((vol, int(type_id)))
+    _log(f"Backfilling volume for {len(rows)} types...")
+    for i in range(0, len(rows), 1000):
+        con.executemany("UPDATE types SET volume=? WHERE type_id=?", rows[i:i + 1000])
+    con.commit()
 
 
 def _already_built(con) -> bool:
@@ -317,31 +398,7 @@ def build_db(con, type_data: dict, schematics_yaml: dict, blueprints_yaml: dict)
     # Compute PI tiers via topological sort
     pi_tiers = compute_pi_tiers(schematics)
 
-    # Parse reactions: blueprints.yaml entries carrying an activities.reaction block. Every
-    # formula has exactly one product (verified against the live SDE: 112 formulas, 0 with
-    # != 1 product) so this is a scalar output_type_id/output_qty, same shape as pi_schematics.
-    # Material counts vary 2-6 per formula (fuel blocks + named materials + bulk minerals all
-    # land in the same `materials` list) — no fixed-shape assumption, just parse what's there.
-    _log("Parsing reactions from blueprints.yaml...")
-    reactions: list[dict] = []
-    for bp_id, bp_attrs in blueprints_yaml.items():
-        if not isinstance(bp_attrs, dict):
-            continue
-        reaction = (bp_attrs.get("activities") or {}).get("reaction")
-        if not reaction:
-            continue
-        materials = reaction.get("materials") or []
-        products = reaction.get("products") or []
-        if len(products) != 1 or not materials:
-            continue
-        reactions.append({
-            "reaction_id": int(bp_id),
-            "output_type_id": products[0]["typeID"],
-            "output_qty": products[0]["quantity"],
-            "cycle_time": reaction.get("time", 0),
-            "inputs": [{"type_id": m["typeID"], "quantity": m["quantity"]} for m in materials],
-        })
-    _log(f"Found {len(reactions)} reaction formulas.")
+    reactions = parse_reactions(blueprints_yaml)
 
     blueprints = parse_manufacturing(blueprints_yaml)
 
@@ -366,18 +423,8 @@ def build_db(con, type_data: dict, schematics_yaml: dict, blueprints_yaml: dict)
                 (s["schematic_id"], inp["type_id"], inp["quantity"]),
             )
 
-    for r in reactions:
-        con.execute(
-            "INSERT INTO reactions VALUES (?, ?, ?, ?)",
-            (r["reaction_id"], r["output_type_id"], r["output_qty"], r["cycle_time"]),
-        )
-        for inp in r["inputs"]:
-            con.execute(
-                "INSERT INTO reaction_inputs VALUES (?, ?, ?)",
-                (r["reaction_id"], inp["type_id"], inp["quantity"]),
-            )
-
     con.commit()
+    write_reactions(con, reactions)
     write_manufacturing(con, blueprints)
 
     # Summary
@@ -392,42 +439,78 @@ def build_db(con, type_data: dict, schematics_yaml: dict, blueprints_yaml: dict)
 
 
 def main() -> None:
+    """Create every table, then backfill only the datasets that are actually missing.
+
+    This used to be all-or-nothing: `_already_built()` checks that `types` has rows, and if so the
+    whole build was skipped. That is wrong whenever the SCHEMA has moved on since a database was
+    first built — `CREATE TABLE IF NOT EXISTS` never ran again, so a table or column added later
+    could never appear. Two real outages came from exactly that on the dev stack (2026-07-28/29):
+    `types.volume` missing (hard 500 on /api/pi-products, /api/baskets and everything else calling
+    load_pi_data) and the whole `reactions`/`reaction_inputs` pair missing (Reactions tab dead,
+    metrics spinning, suggestions failing, and Industry product search broken too — it queries
+    `reactions` to find buildables).
+
+    So: the DDL is applied unconditionally (idempotent, cheap, and it means a query against a
+    not-yet-populated table returns empty instead of raising UndefinedTable), and each dataset is
+    then checked and backfilled on its own. blueprints.yaml covers BOTH reactions and manufacturing,
+    so those two share one download.
+    """
     con = get_connection()
     try:
         if _IS_POSTGRES:
             _log("Acquiring advisory lock (guards against multiple replicas building at once)...")
             con.execute("SELECT pg_advisory_lock(?)", (_ADVISORY_LOCK_KEY,))
         try:
-            if _already_built(con):
-                if _manufacturing_built(con):
-                    _log("SDE already built — skipping.")
-                    return
-                # Types are present but the manufacturing tables are missing (an SDE built before
-                # the Industry planner existed). Backfill ONLY those from blueprints.yaml — no need
-                # to re-parse the 50k-entry types.yaml (~886s) — and leave everything else intact so
-                # there's no SDE-less window for the running app.
-                _log("Manufacturing blueprints missing — backfilling from blueprints.yaml only...")
+            # Always ensure the schema exists, whatever state the data is in.
+            for stmt in _DDL + _MFG_DDL:
+                con.execute(stmt)
+            con.commit()
+            add_columns(con, "types", "volume REAL")
+
+            need_types    = not _already_built(con)
+            need_volumes  = not need_types and not _types_volume_built(con)
+            need_reactions = not _reactions_built(con)
+            need_mfg      = not _manufacturing_built(con)
+
+            if not (need_types or need_volumes or need_reactions or need_mfg):
+                _log("SDE already built — skipping.")
+                return
+
+            # A full types build subsumes every partial backfill below.
+            if need_types:
+                _log("Types missing — full SDE build...")
                 tmp_path = Path(tempfile.mktemp(suffix=".zip"))
                 try:
                     download_sde(tmp_path)
+                    _log("Extracting YAML files...")
                     with zipfile.ZipFile(tmp_path) as zf:
-                        blueprints_yaml = parse_yaml(zf, "fsd/blueprints.yaml")
-                        write_manufacturing(con, parse_manufacturing(blueprints_yaml))
-                    _log("Manufacturing backfill complete.")
+                        build_db(con,
+                                 parse_yaml(zf, "fsd/types.yaml"),
+                                 parse_yaml(zf, "fsd/planetSchematics.yaml"),
+                                 parse_yaml(zf, "fsd/blueprints.yaml"))
                 finally:
                     if tmp_path.exists():
                         tmp_path.unlink()
                 return
 
+            # Otherwise download once and backfill only what's missing. Leaving the populated
+            # tables untouched means there's no SDE-less window for the running app.
+            _log(f"Backfilling: volumes={need_volumes} reactions={need_reactions} manufacturing={need_mfg}")
             tmp_path = Path(tempfile.mktemp(suffix=".zip"))
             try:
                 download_sde(tmp_path)
-                _log("Extracting YAML files...")
                 with zipfile.ZipFile(tmp_path) as zf:
-                    type_data = parse_yaml(zf, "fsd/types.yaml")
-                    schematics_yaml = parse_yaml(zf, "fsd/planetSchematics.yaml")
-                    blueprints_yaml = parse_yaml(zf, "fsd/blueprints.yaml")
-                    build_db(con, type_data, schematics_yaml, blueprints_yaml)
+                    if need_volumes:
+                        _backfill_type_volumes(con, parse_yaml(zf, "fsd/types.yaml"))
+                        _log("Volume backfill complete.")
+                    if need_reactions or need_mfg:
+                        blueprints_yaml = parse_yaml(zf, "fsd/blueprints.yaml")
+                        if need_reactions:
+                            write_reactions(con, parse_reactions(blueprints_yaml))
+                            _log("Reaction backfill complete.")
+                        if need_mfg:
+                            write_manufacturing(con, parse_manufacturing(blueprints_yaml))
+                            _log("Manufacturing backfill complete.")
             finally:
                 if tmp_path.exists():
                     tmp_path.unlink()

@@ -11,8 +11,10 @@ those above it — a strict DAG, no cycles):
     graph.py     the reaction graph + pricing: cost every reachable product from priced leaves,
                  _value_reaction_batch() (the single source of truth for batch economics), the
                  opportunity ranking, and shopping lists.
-    jobs.py      live ESI industry-job tracking, the persistent plan (slots/orphans), and the
-                 wizard suggestion knapsack.
+    jobs.py      live ESI industry-job tracking, the persistent plan (slots/orphans) and
+                 per-character slot capacity.
+    advisor.py   the wizard suggestion engine (knapsack over what to run, then bin-packing onto
+                 real characters' free slots). Depends on jobs.py, never the reverse.
     orders.py    fixed-unit customer orders (target-quantity client jobs) built on top.
 
 This __init__ is pure wiring: it imports each layer (which registers its endpoints on the shared
@@ -37,15 +39,20 @@ from app.reactions.graph import (  # noqa: F401 — re-exported for the package'
     _build_opportunities, _build_opportunities_uncached, _fuel_block_ids,
     _explode_shopping_list, _explode_chain_tiers, _materials_report,
 )
-# Jobs/plan/suggest layer — importing it registers those endpoints and re-exports the helpers the
+# Jobs/plan layer — importing it registers those endpoints and re-exports the helpers the
 # customer-order endpoints below build on (slot allocation, assignment inserts, capacities).
 from app.reactions.jobs import (  # noqa: F401 — re-exported for the package's public surface
     get_industry_jobs, reaction_slots, refresh_industry_jobs, fetch_industry_jobs,
     fetch_corp_industry_jobs, ensure_industry_jobs_table, ensure_reaction_assignments_table,
     ensure_reaction_orders_table, _insert_assignment_rows, _character_capacities,
-    _allocate_and_insert, _suggest_reactions, _build_advisor, _unplanned_running_totals,
+    _allocate_and_insert, _unplanned_running_totals,
     assign_reaction, adopt_orphan_job, unassign_reaction, unassign_all_reactions,
-    ChainTier, AssignRequest, AdoptOrphanRequest, SuggestRequest,
+    ChainTier, AssignRequest, AdoptOrphanRequest,
+)
+# Suggestion engine — imported after jobs (it depends on it, never the reverse). Importing
+# registers /api/reactions/suggest.
+from app.reactions.advisor import (  # noqa: F401
+    _suggest_reactions, _build_advisor, SuggestRequest,
 )
 # Orders layer (top of the stack) — importing registers the customer-order endpoints.
 from app.reactions import orders as _orders  # noqa: F401

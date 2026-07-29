@@ -6,7 +6,6 @@ from concurrent.futures import ThreadPoolExecutor
 from app.cache import cache_mget_json, cache_mset_json
 
 FUZZWORKS_URL = "https://market.fuzzwork.co.uk/aggregates/"
-ESI_BASE = "https://esi.evetech.net/latest"
 JITA_STATION = 60003760
 THE_FORGE_REGION = 10000002  # Jita's region — where market history that matters trades
 CACHE_TTL = 900  # 15 minutes
@@ -136,11 +135,14 @@ def fetch_daily_volume(type_ids: list[int]) -> dict[int, float]:
 
 
 def _fetch_one_history(type_id: int) -> float | None:
-    url = f"{ESI_BASE}/markets/{THE_FORGE_REGION}/history/?datasource=tranquility&type_id={type_id}"
+    # ESI (unlike the Fuzzwork fetches elsewhere in this module), so it goes through esi_http and
+    # counts against the shared error budget.
+    from app import esi_http
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "eve-pi-planner/1.0"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            rows = json.loads(resp.read())
+        rows = esi_http.get(
+            f"markets/{THE_FORGE_REGION}/history/?datasource=tranquility&type_id={type_id}",
+            timeout=10,
+        ).json()
     except Exception:
         return None
     if not rows:

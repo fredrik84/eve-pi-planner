@@ -36,8 +36,8 @@ rather than inventing a new access pattern.
   flag that forks the function body.
 - **Frontend:** vanilla JS, no framework, no build step. Functions are global and load-order
   matters — see the "Frontend JS is split across files" note in CLAUDE.md before adding a new JS
-  file. Bump the `?v=N` query string on any static file you change (`index.html`) — the browser
-  cache is aggressive.
+  file. Cache-busting is automatic: `index.html` ships `?v=dev` and the server stamps the running
+  build's commit onto every asset URL, so there is no version number to bump by hand.
 - Match the existing tone: dense, comment-sparse code; comments explain *why* (a gotcha, a
   calibration, a non-obvious constraint), not *what*.
 

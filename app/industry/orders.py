@@ -17,7 +17,7 @@ import time as _time
 from fastapi import Depends, HTTPException
 from pydantic import BaseModel
 
-from app.sde import get_connection, ensure_once
+from app.sde import get_connection, ensure_once, add_columns
 from app.esi import require_context
 
 from app.industry._router import router
@@ -48,32 +48,19 @@ def ensure_industry_orders_table():
         con.execute("CREATE INDEX IF NOT EXISTS idx_ind_orders_ctx ON pp_industry_orders (context_id)")
         # Who/what this order is for — a customer name, a contract, a fleet. Several identical
         # Revelations are indistinguishable without it, which is exactly the case that matters.
-        try:
-            con.execute("ALTER TABLE pp_industry_orders ADD COLUMN label TEXT DEFAULT ''")
-            con.commit()
-        except Exception:
-            pass
-        # Per-component "build it anyway" overrides decided in the preview. Without this they were
-        # a property of the preview only, so queueing the order silently reverted every one of them.
-        try:
-            con.execute("ALTER TABLE pp_industry_orders ADD COLUMN force_build_ids TEXT DEFAULT ''")
-            con.commit()
-        except Exception:
-            pass
-        # Per-product ME/TE the user set while planning. Same reasoning as the overrides above: a
-        # decision made in the preview that the queue silently dropped is worse than no decision.
-        try:
-            con.execute("ALTER TABLE pp_industry_orders ADD COLUMN me_te_overrides TEXT DEFAULT ''")
-            con.commit()
-        except Exception:
-            pass
-        # The margin this order was quoted at. Snapshotted rather than read live: a customer holding
-        # a price shouldn't see it move because the builder changed their default afterwards.
-        try:
-            con.execute("ALTER TABLE pp_industry_orders ADD COLUMN margin_pct REAL")
-            con.commit()
-        except Exception:
-            pass
+        add_columns(
+            con, "pp_industry_orders",
+            "label TEXT DEFAULT ''",
+            # Per-component "build it anyway" overrides decided in the preview. Without this they
+            # were a property of the preview only, so queueing silently reverted every one of them.
+            "force_build_ids TEXT DEFAULT ''",
+            # Per-product ME/TE the user set while planning. Same reasoning: a decision made in the
+            # preview that the queue silently dropped is worse than no decision.
+            "me_te_overrides TEXT DEFAULT ''",
+            # The margin this order was quoted at. Snapshotted rather than read live: a customer
+            # holding a price shouldn't see it move because the builder changed their default.
+            "margin_pct REAL",
+        )
         con.commit()
     finally:
         con.close()

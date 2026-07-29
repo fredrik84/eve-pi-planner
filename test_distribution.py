@@ -2,7 +2,7 @@
 Distribution test suite for the PI planner.
 
 Usage:
-    python test_distribution.py [--url https://eve-pi.failed.name]
+    python test_distribution.py [--url https://eve-pi-dev.failed.name]
 
 Requires DEBUG_PI=true and DEBUG_CONTEXT_ID set in the server's .env.
 """
@@ -438,7 +438,11 @@ def run_smoke_tests(base_url: str) -> bool:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--url", default="https://eve-pi.failed.name")
+    # Defaults to the LOCAL container, not production. These suites POST plans and read
+    # debug endpoints; pointing them at prod by default meant a plain `python3 test_x.py`
+    # ran against live users' service (and silently "passed" by testing prod, not your change).
+    # Pass --url explicitly to aim at a deployed environment.
+    parser.add_argument("--url", default="http://localhost:8000")
     args = parser.parse_args()
     base = args.url.rstrip("/")
 
