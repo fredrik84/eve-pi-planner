@@ -51,6 +51,28 @@ Both documented in CLAUDE.md, neither with a demand signal yet:
 
 ---
 
+## 5. Job timestamps are stored at float4 precision (Postgres)
+
+`pp_job_runs.started_at` / `ended_at` and `pp_job_leases.lease_until` are declared `REAL`. On SQLite
+that's an 8-byte double, but on Postgres `real` is **float4** — about 7 significant digits, and a Unix
+epoch timestamp needs 10. Every stored job time is therefore quantised to ~64 seconds (measured on
+prod 2026-07-30: wrote `1785409464.304`, read back `1785409400.0`).
+
+Consequences, all on the admin Jobs page: displayed last-run times can be a minute off, and the
+run **duration** (`ended_at - started_at`) is meaningless for anything shorter than that — a 12s job
+shows as 0s or as ±64s. The lease is unaffected in practice (64s of slop against a 900s TTL).
+
+Fix is a widening migration, `ALTER TABLE ... ALTER COLUMN ... TYPE double precision` on the three
+columns — a table rewrite under an ACCESS EXCLUSIVE lock, but the table is a few thousand rows so it
+is effectively instant. Mind the fresh/stale-DB migration trap in CLAUDE.md: the ALTER must not share
+a transaction with the `CREATE TABLE IF NOT EXISTS` in `ensure_job_tables()`, or a failure takes the
+tables with it.
+
+Found while fixing the "healthy daily jobs reported as never run" bug (`job_summary`, 2026-07-30);
+left alone deliberately because that fix needed no schema change.
+
+---
+
 ## Perf regression protocol (fuel-block planner)
 
 The fuel-block slowness reported 2026-07-06 is **fixed** — verified in code 2026-07-30: the
