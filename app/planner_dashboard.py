@@ -209,8 +209,7 @@ def dashboard(pp_session: str = Cookie(default=None)):
     # severity) now lives in app.alerts.compute_alerts() — the same engine the
     # notification scheduler consumes, so a push and what's shown here can't drift apart. This
     # function only re-groups the flat alert list into display cards.
-    _alert = get_alert_settings(context_id)
-    _muted = set(_alert.get("muted_kinds") or [])
+    _alert = get_alert_settings(context_id)   # thresholds only — muting is applied inside compute_alerts()
     _all_alerts = compute_alerts(context_id, rows=rows, now=now)
     for a in _all_alerts:
         if a["character_id"] is not None:
