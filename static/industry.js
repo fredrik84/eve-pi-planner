@@ -1566,6 +1566,7 @@ function _indRenderPlan(d, title) {
       ${_indMetricTiles(d.metrics)}
       ${unres}
       ${_indBlueprintWarn(d)}
+      ${_indSkillWarn(d)}
       ${_indStepsHtml(d, stageModel)}
       ${_indPipelineHtml(d, tiersData, stageModel)}
       <details class="ind-details" open><summary>Shopping list (${(d.shopping_list || []).length})</summary>${_indShoppingSections(d, stageModel, true)}</details>
@@ -1608,6 +1609,60 @@ function _indBlueprintWarn(d) {
     + `already have can still show up in this list. Nothing is blocked and no build decision was `
     + `changed — it's a price so you can compare against a local seller. Copy prices, where copies `
     + `are listed, are included in the total above.</div></div>`;
+}
+
+// Skills you don't have to install the jobs this plan schedules. The server sends `skill_gaps` only
+// while the `required_skills` feature is on, so the absent key — not a flag check here — is what
+// keeps this silent when the feature is off.
+//
+// Stays quiet when there's nothing to say. A plan every character can already install produces no
+// panel at all; this is a blocker list, not a skill sheet.
+const _INDSK_ROMAN = ['0', 'I', 'II', 'III', 'IV', 'V'];
+const _indSkLvl = n => _INDSK_ROMAN[n] || String(n);
+
+function _indSkillWarn(d) {
+  const g = d.skill_gaps;
+  if (!g) return '';                       // feature off — server omitted the key
+  // The SDE predates the feature: say so rather than implying the account is fully skilled, which
+  // is the one wrong answer here (it reads as "you're good to go" when nothing was checked).
+  if (g.sde_ready === false) {
+    return `<div class="ind-sk-note ind-sk-info">Skill requirements aren't loaded yet — the SDE `
+      + `needs its <code>blueprint_skills</code> backfill. Nothing was checked against your characters.</div>`;
+  }
+  const unknown = g.characters_without_data || [];
+  // A character we've never read skills for is a DIFFERENT answer from one who lacks the skills,
+  // and it's the one the user can fix, so it gets said even when there are no gaps.
+  const unknownNote = unknown.length
+    ? `<div class="ind-sk-sub">No skill data yet for ${unknown.map(_esc).join(', ')} — `
+      + `rescan ${unknown.length === 1 ? 'that character' : 'those characters'} to include `
+      + `${unknown.length === 1 ? 'them' : 'them'} in this check.</div>`
+    : '';
+  if (!g.blocked_steps) {
+    return unknown.length
+      ? `<div class="ind-sk-note ind-sk-info"><b>Skills check</b>${unknownNote}</div>` : '';
+  }
+  const summary = (g.missing || []).map(m =>
+    `<span class="ind-sk-chip" title="Needed for ${m.steps} build step${m.steps === 1 ? '' : 's'}">`
+    + `${_esc(m.name)} ${_indSkLvl(m.level)}</span>`).join('');
+  const rows = (g.steps || []).map(s => {
+    const who = s.character_name
+      ? `<span class="ind-sk-who">closest: ${_esc(s.character_name)}</span>`
+      : `<span class="ind-sk-who">no character with skill data</span>`;
+    const miss = s.missing.map(m =>
+      `<span class="ind-sk-miss">${_esc(m.name)} <b>${_indSkLvl(m.need)}</b>`
+      + `<span class="ind-sk-have">have ${_indSkLvl(m.have)}</span></span>`).join('');
+    return `<div class="ind-sk-row"><span class="ind-sk-nm">${_esc(s.name)}</span>${who}`
+      + `<span class="ind-sk-misses">${miss}</span></div>`;
+  }).join('');
+  const n = g.blocked_steps;
+  return `<div class="ind-sk-note"><b>Missing skills for ${n} build step${n === 1 ? '' : 's'}</b>`
+    + `<div class="ind-sk-chips">${summary}</div>`
+    + `<details class="ind-details"><summary>Which steps, and who comes closest</summary>`
+    + `<div class="ind-sk-rows">${rows}</div></details>`
+    + `<div class="ind-sk-sub">Skills don't pool across characters — one character installs one `
+    + `job, so each step is checked against whichever of your characters comes closest. Costs and `
+    + `timings above are unchanged; this only tells you what you can't start yet.</div>`
+    + unknownNote + `</div>`;
 }
 
 // Public-contract blueprint prices. Shows what's listed right now, and falls back to what they have

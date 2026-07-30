@@ -9,17 +9,26 @@ cold.
 
 ---
 
-## 1. Required-skills-to-build (Industry)
+## 1. Required-skills-to-build (Industry) — SHIPPED 2026-07-30, behind `required_skills`
 
-The manufacturing plan should list the skills the account is **missing** to actually build the
-target — you can't make a Revelation without capital production skills, and today the plan happily
-schedules a job nobody can install.
+Built and live in admin-preview. `blueprint_skills` (SDE, from `activities.<activity>.skills` for
+BOTH manufacturing and reactions — 9,221 rows, 83 distinct skills), `pp_char_skills` (per-character
+full skill list), `app/industry/skills.py`, and a panel on the Industry plan. `test_required_skills.py`,
+19 assertions.
 
-- **Work:** parse `activities.manufacturing.skills` from blueprints.yaml into an SDE
-  `blueprint_skills` table via SDE backfill; fetch each character's FULL skill list (we currently map
-  only a handful in `SKILL_IDS`); gather required skills across the whole build tree; compare against
-  the account's best character; show missing skill + level.
-- **Size:** the largest open item — SDE backfill plus a new ESI fetch shape.
+One premise in the original write-up was wrong and worth remembering: **no new ESI fetch shape was
+needed**. `_fetch_skills` in app/esi.py was already pulling the character's entire skill list from
+`/characters/{id}/skills/` and discarding all but the ~10 in `SKILL_IDS`, so this needed no new call,
+no new scope, and no extra rate-limit budget — only somewhere to put the rest.
+
+Follow-ups, neither blocking:
+
+- **`assign_characters` is still skill-blind.** It assigns jobs on free slots alone, so it can name
+  a character who cannot install the job it just gave them. The skills panel reports the gap but does
+  not feed the assignment. Making it skill-aware is the obvious next step and is where this feature
+  stops being advice and starts being correct.
+- **Item 2 (skill-optimization advisor) is now unblocked** — it was waiting on the full-skill-list
+  fetch, which `pp_char_skills` now provides.
 
 ## 2. Skill-optimization advisor page (Industry)
 
@@ -29,7 +38,8 @@ Industry for job time. Extends the existing PI `skill_roi` advisor.
 
 - **Needs scoping first** — this is the vaguest item on the list. Include a "train X for Y SP →
   +Z% output" framing with a threshold so it doesn't nag someone already training toward max.
-- **Depends on** the full-skill-list fetch from item 1 (Required-skills-to-build); do them in that order.
+- **No longer blocked** (2026-07-30): the full skill list it was waiting on now lands in
+  `pp_char_skills` whenever `required_skills` is on. Scoping is the only thing left in the way.
 
 ## 3. Hand-built / custom colony layouts
 

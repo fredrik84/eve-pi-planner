@@ -146,6 +146,12 @@ FEATURE_REGISTRY = [
                     "and how long it takes. Spans manufacturing AND reactions for deep builds. "
                     "Admin-preview while it's built out.",
      "default": False},
+    {"key": "required_skills", "label": "Industry: required skills to build", "group": "Industry",
+     "description": "On the Industry plan: which skills the account is MISSING to actually install "
+                    "every job in the build tree, and which character comes closest. Needs the "
+                    "SDE blueprint_skills table and per-character full skill lists — both only "
+                    "populated while this is on, so turning it off costs nothing.",
+     "default": False},
     {"key": "industry_share", "label": "Industry: customer build-status links", "group": "Industry",
      "description": "Share a queued build with the person who ordered it: a login-free link showing "
                     "what's being built, which stage it's on, a progress bar and an ETA. Deliberately "

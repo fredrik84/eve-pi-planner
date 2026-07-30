@@ -27,5 +27,6 @@ from app.industry import (  # noqa: F401 — imported for endpoint registration 
     bpc,            # /api/industry/bpc[/scan]
     progress,       # /api/industry/progress
     settings,       # per-account build options: /api/industry/settings
+    skills,         # required-skills-to-build: /api/industry/skill-coverage
     shares,         # customer build-status links: /api/industry/orders/{id}/share, /build-status
 )

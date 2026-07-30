@@ -1376,10 +1376,21 @@ def _fetch_skills(character_id: int, access_token: str) -> dict[str, int]:
         resp.raise_for_status()
         skill_data = resp.json()
         result: dict[str, int] = {}
+        raw: dict[int, int] = {}
         for s in skill_data.get("skills", []):
+            raw[s["skill_id"]] = s.get("trained_skill_level", 0)
             field = SKILL_IDS.get(s["skill_id"])
             if field:
                 result[field] = s.get("trained_skill_level", 0)
+        # ESI already returned the character's ENTIRE skill list here and we were keeping ~10 of
+        # them; the Industry required-skills check needs the rest. Stored (and only stored) while
+        # its feature flag is on — see app/industry/skills.py. Never allowed to fail the fetch:
+        # this is a side-effect of a call whose real job is the PI skills above.
+        try:
+            from app.industry.skills import store_character_skills
+            store_character_skills(character_id, raw)
+        except Exception:
+            log.exception("storing full skill list failed for %s", character_id)
         # Record when ESI will next regenerate this character's skills, so a rescan can skip
         # re-fetching skills it already knows are still cache-fresh (see esi_cache_skip).
         # try/finally is load-bearing here: a connection obtained but not close()'d never goes

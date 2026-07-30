@@ -15,6 +15,9 @@ Tables built:
                         — same file as reactions, different activity block; drives the Industry
                         make-or-buy planner)
   blueprint_materials- blueprint_type_id, type_id, quantity
+  blueprint_skills   - blueprint_type_id, activity, skill_type_id, level (skills needed to INSTALL
+                        a manufacturing or reaction job; drives the Industry planner's
+                        required-skills check)
 """
 
 import sys
@@ -196,6 +199,74 @@ _MFG_DDL = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_bp_materials_type ON blueprint_materials (type_id)",
 ]
+
+
+# Skills required to INSTALL a job, from the same blueprints.yaml entries — `activities.<act>.skills`
+# is a list of {typeID, level}. One table covers both activities because `reactions.reaction_id` and
+# `blueprints.blueprint_type_id` are the same id space (both are blueprints.yaml keys), so `activity`
+# is what disambiguates a row, not a separate table.
+#
+# Measured against the live SDE (2026-07-30): 9,221 rows, 83 distinct skills, at most 5 skills on any
+# one blueprint — 4,691 of 4,828 manufacturing blueprints carry skills and all 112 reactions do. The
+# 137 without are genuinely skill-free in the SDE, so "no rows" means "no requirement", never "not
+# loaded" (the populated-check below is what distinguishes those two cases at the table level).
+_BP_SKILLS_DDL = [
+    """
+    CREATE TABLE IF NOT EXISTS blueprint_skills (
+        blueprint_type_id INTEGER NOT NULL,
+        activity          TEXT    NOT NULL,
+        skill_type_id     INTEGER NOT NULL,
+        level             INTEGER NOT NULL,
+        PRIMARY KEY (blueprint_type_id, activity, skill_type_id)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_bp_skills_skill ON blueprint_skills (skill_type_id)",
+]
+
+
+def parse_blueprint_skills(blueprints_yaml: dict) -> list[tuple]:
+    """(blueprint_type_id, activity, skill_type_id, level) for every manufacturing/reaction skill
+    requirement. Deduped on the primary key: a handful of entries list the same skill twice, and
+    the higher level is the binding one."""
+    _log("Parsing blueprint skill requirements from blueprints.yaml...")
+    best: dict[tuple, int] = {}
+    for bp_id, bp_attrs in blueprints_yaml.items():
+        if not isinstance(bp_attrs, dict):
+            continue
+        activities = bp_attrs.get("activities") or {}
+        for activity in ("manufacturing", "reaction"):
+            block = activities.get(activity)
+            if not block:
+                continue
+            for s in block.get("skills") or []:
+                tid, lvl = s.get("typeID"), s.get("level")
+                if not tid:
+                    continue
+                key = (int(bp_id), activity, int(tid))
+                best[key] = max(best.get(key, 0), int(lvl or 0))
+    out = [(k[0], k[1], k[2], v) for k, v in best.items()]
+    _log(f"Found {len(out)} blueprint skill requirements.")
+    return out
+
+
+def write_blueprint_skills(con, rows: list[tuple]) -> None:
+    """Create the table (idempotent) and insert. Own commit, so the incremental backfill path is
+    self-contained like the reaction/manufacturing ones."""
+    for stmt in _BP_SKILLS_DDL:
+        con.execute(stmt)
+    for r in rows:
+        con.execute("INSERT INTO blueprint_skills VALUES (?, ?, ?, ?)", r)
+    con.commit()
+
+
+def _blueprint_skills_built(con) -> bool:
+    """Whether the table exists AND is populated — same data-presence check as the others, so a
+    crash mid-backfill re-runs instead of leaving an empty table that reads as "no skills needed"."""
+    try:
+        row = con.execute("SELECT COUNT(*) AS n FROM blueprint_skills").fetchone()
+        return bool(row and row["n"] > 0)
+    except Exception:
+        return False
 
 
 def parse_reactions(blueprints_yaml: dict) -> list[dict]:
@@ -426,6 +497,7 @@ def build_db(con, type_data: dict, schematics_yaml: dict, blueprints_yaml: dict)
     con.commit()
     write_reactions(con, reactions)
     write_manufacturing(con, blueprints)
+    write_blueprint_skills(con, parse_blueprint_skills(blueprints_yaml))
 
     # Summary
     tier_counts = {}
@@ -462,7 +534,7 @@ def main() -> None:
             con.execute("SELECT pg_advisory_lock(?)", (_ADVISORY_LOCK_KEY,))
         try:
             # Always ensure the schema exists, whatever state the data is in.
-            for stmt in _DDL + _MFG_DDL:
+            for stmt in _DDL + _MFG_DDL + _BP_SKILLS_DDL:
                 con.execute(stmt)
             con.commit()
             add_columns(con, "types", "volume REAL")
@@ -471,8 +543,9 @@ def main() -> None:
             need_volumes  = not need_types and not _types_volume_built(con)
             need_reactions = not _reactions_built(con)
             need_mfg      = not _manufacturing_built(con)
+            need_bp_skills = not _blueprint_skills_built(con)
 
-            if not (need_types or need_volumes or need_reactions or need_mfg):
+            if not (need_types or need_volumes or need_reactions or need_mfg or need_bp_skills):
                 _log("SDE already built — skipping.")
                 return
 
@@ -495,7 +568,8 @@ def main() -> None:
 
             # Otherwise download once and backfill only what's missing. Leaving the populated
             # tables untouched means there's no SDE-less window for the running app.
-            _log(f"Backfilling: volumes={need_volumes} reactions={need_reactions} manufacturing={need_mfg}")
+            _log(f"Backfilling: volumes={need_volumes} reactions={need_reactions} "
+                 f"manufacturing={need_mfg} blueprint_skills={need_bp_skills}")
             tmp_path = Path(tempfile.mktemp(suffix=".zip"))
             try:
                 download_sde(tmp_path)
@@ -503,7 +577,7 @@ def main() -> None:
                     if need_volumes:
                         _backfill_type_volumes(con, parse_yaml(zf, "fsd/types.yaml"))
                         _log("Volume backfill complete.")
-                    if need_reactions or need_mfg:
+                    if need_reactions or need_mfg or need_bp_skills:
                         blueprints_yaml = parse_yaml(zf, "fsd/blueprints.yaml")
                         if need_reactions:
                             write_reactions(con, parse_reactions(blueprints_yaml))
@@ -511,6 +585,9 @@ def main() -> None:
                         if need_mfg:
                             write_manufacturing(con, parse_manufacturing(blueprints_yaml))
                             _log("Manufacturing backfill complete.")
+                        if need_bp_skills:
+                            write_blueprint_skills(con, parse_blueprint_skills(blueprints_yaml))
+                            _log("Blueprint-skill backfill complete.")
             finally:
                 if tmp_path.exists():
                     tmp_path.unlink()
