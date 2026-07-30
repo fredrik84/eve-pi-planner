@@ -28,7 +28,9 @@ These are standing rules for ALL changes. Follow them unless the user explicitly
    group with no restrictions stays a no-op, that a restricted group really is 403'd, and that
    the public customer build-status link is NOT gated), `test_disconnect_character.py`
    (`DELETE /api/characters/{id}` — that every per-character table is cleared, that another
-   account's character is untouchable, and that account-level history survives).
+   account's character is untouchable, and that account-level history survives),
+   `test_delete_account.py` (`DELETE /api/me` — that nothing keyed to the account survives, that a
+   second account is unaffected, and that bug reports are anonymised rather than deleted).
    Add to these or create a new
    `test_*.py` in the same urllib/`--url` style. Assert
    *durable invariants*, not runtime state an admin can change (e.g. don't assert a flag's enabled
@@ -986,6 +988,35 @@ what was missing was that it only cleared `pp_characters` + `pp_char_planets` an
   confirm names that specifically; everything else comes back on a rescan.
 - Covered by `test_disconnect_character.py` (in-process + a live HTTP layer for the
   `require_context` gate).
+
+## Deleting an account (`DELETE /api/me`)
+
+The account-level counterpart, in `app/esi.py`. It had the same bug in a worse place: it cleared
+three per-character tables and four context tables while orphaning rows in roughly twenty others —
+on the endpoint whose entire promise is "delete all my data".
+
+- Works from **two shared lists in `app/esi.py`**: `_CHAR_OWNED_TABLES` (also used by the
+  per-character disconnect, so the two can't drift) and `_CONTEXT_OWNED_TABLES`. Both are explicit
+  lists, **not** a reflective "every table with a context_id column" sweep — adding a table should
+  be a deliberate decision about whether an account deletion takes it, not something that starts
+  happening silently. **Add new per-account tables to `_CONTEXT_OWNED_TABLES`.**
+- **The opposite call to the per-character case on history:** the completions ledgers
+  (`pp_industry_completions`, `pp_reaction_completions`) and every per-character work record ARE
+  deleted here, because the account they belong to is itself going away.
+- **`pp_bugs` is anonymised, not deleted** — `context_id`/`character_id` nulled and the name
+  replaced with `(deleted account)`. The report is about the app, not the reporter, and admins
+  still need open bugs triaged after someone leaves; but nothing identifying the account may
+  survive.
+- **`pp_markets` is keyed `(owner_kind, owner_id)`** — only `owner_kind='account'` rows are the
+  user's. Group-level market lists survive; they belong to the group and are shared with other
+  members. Same reasoning for `pp_reaction_settings` and the `pp_group_*` tables.
+- **`pp_shares` / `pp_inventory_shares` cannot be cleaned by account** — they have no owner column
+  at all, by construction: a share is an opaque id plus a payload, deliberately unattributable to
+  the account that created it. There is nothing to delete by context, not an omission.
+- Missing tables are skipped via the same `_table_exists` probe, for the same Postgres
+  whole-transaction-abort reason described above.
+- Covered by `test_delete_account.py` (seeds rows by introspecting each table's NOT NULL columns,
+  so a new column can't silently turn a seed into a skipped assertion).
 
 ## Access control
 

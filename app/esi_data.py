@@ -20,6 +20,9 @@ from app.esi import (
     _session_lookup, _is_configured, admin_and_tester_status_for_context,
     require_context, _get_valid_token, _fetch_skills, _fetch_planets, _fetch_alliance_id,
     ensure_char_tables, natural_name_key, revoke_refresh_token,
+    # Shared with delete_account() in app.esi so the two deletion paths can't drift apart —
+    # see the comments beside the lists there for what each deliberately excludes.
+    _CHAR_OWNED_TABLES, _table_exists,
 )
 
 router = APIRouter()
@@ -486,43 +489,6 @@ def list_characters(pp_session: str = Cookie(default=None)):
         "logged_in": session_char is not None,
         "session_character_id": session_char,
     }
-
-
-def _table_exists(con, table: str) -> bool:
-    """Portable table probe. Several tables a disconnect touches belong to modules (industry,
-    reactions, markets) whose ensure_* may not have run in this process yet, and on Postgres a
-    statement against a missing table aborts the WHOLE transaction — rolling back the deletes
-    that already succeeded and failing the disconnect. Skipping absent tables is the difference
-    between "cleaned everything that exists" and "cleaned nothing". app.db._pg_translate rewrites
-    this sqlite_master probe into the information_schema equivalent."""
-    return bool(con.execute(
-        f"SELECT 1 FROM sqlite_master WHERE type='table' AND name='{table}'"
-    ).fetchone())
-
-
-# Per-character operational data, deleted wholesale when a character is disconnected. These are
-# all "this character's own working state" — re-created by a rescan if the character is ever
-# re-added. Every one is keyed by character_id alone (no context column), which is safe ONLY
-# because we verify the character belongs to the caller's context first; without that check this
-# list would let any logged-in user wipe any character's rows by guessing an id.
-_CHAR_OWNED_TABLES = [
-    "pp_char_planets",
-    "pp_char_assets",
-    "pp_char_blueprints",
-    "pp_char_industry_jobs",
-    "pp_char_manufacturing_jobs",
-    "pp_colony_flags",
-    "pp_colony_yield",
-    "pp_plan_config",
-    "pp_reaction_assignments",
-]
-
-# Deliberately NOT deleted, and why:
-#   pp_bugs                  — a support record for admins, not the character's data; it already
-#                              denormalises character_name, so it stays readable once the row is gone.
-#   pp_industry_completions  — the ACCOUNT's earnings ledger. character_id is provenance, not
-#   pp_reaction_completions    ownership; deleting these would silently rewrite the account's
-#                              historical profit, which is not what "disconnect a character" asks for.
 
 
 @router.delete("/api/characters/{character_id}")

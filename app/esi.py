@@ -1110,10 +1110,82 @@ def session_context_id(pp_session: str = Cookie(default=None)) -> int | None:
     return sess[1] if sess else None
 
 
+def _table_exists(con, table: str) -> bool:
+    """Portable table probe, shared by the two deletion paths (disconnect a character, delete an
+    account). Several tables they touch belong to modules (industry, reactions, markets) whose
+    ensure_* may not have run in this process yet, and on Postgres a statement against a missing
+    table aborts the WHOLE transaction — rolling back the deletes that already succeeded and
+    failing the whole operation. Skipping absent tables is the difference between "cleaned
+    everything that exists" and "cleaned nothing". app.db._pg_translate rewrites this
+    sqlite_master probe into the information_schema equivalent."""
+    return bool(con.execute(
+        f"SELECT 1 FROM sqlite_master WHERE type='table' AND name='{table}'"
+    ).fetchone())
+
+
+# Per-character operational data, deleted wholesale when a character is disconnected. These are
+# all "this character's own working state" — re-created by a rescan if the character is ever
+# re-added. Every one is keyed by character_id alone (no context column), which is safe ONLY
+# because we verify the character belongs to the caller's context first; without that check this
+# list would let any logged-in user wipe any character's rows by guessing an id.
+_CHAR_OWNED_TABLES = [
+    "pp_char_planets",
+    "pp_char_assets",
+    "pp_char_blueprints",
+    "pp_char_industry_jobs",
+    "pp_char_manufacturing_jobs",
+    "pp_colony_flags",
+    "pp_colony_yield",
+    "pp_plan_config",
+    "pp_reaction_assignments",
+]
+
+# Deliberately NOT deleted when a single CHARACTER is disconnected, and why:
+#   pp_bugs                  — a support record for admins, not the character's data; it already
+#                              denormalises character_name, so it stays readable once the row is gone.
+#   pp_industry_completions  — the ACCOUNT's earnings ledger. character_id is provenance, not
+#   pp_reaction_completions    ownership; deleting these would silently rewrite the account's
+#                              historical profit, which is not what "disconnect a character" asks for.
+# Deleting the whole ACCOUNT is the opposite case — see delete_account() below, where the account
+# they belong to is itself going away and all three ARE cleared.
+
+# Everything else keyed to a context_id, cleared when the whole account is deleted. Kept as an
+# explicit list rather than "every table with a context_id column" so that adding a table is a
+# deliberate decision about whether an account deletion should take it — a reflective sweep would
+# silently start deleting a future table nobody considered.
+_CONTEXT_OWNED_TABLES = [
+    "pp_plan_snapshots", "pp_plan_baseline", "pp_profiles",
+    "pp_alert_settings", "pp_notification_prefs", "pp_notification_settings", "pp_notification_log",
+    "pp_market_config", "pp_asset_sources", "pp_asset_stock",
+    "pp_industry_settings", "pp_industry_orders", "pp_industry_shares", "pp_industry_completions",
+    "pp_account_reaction_settings", "pp_reaction_orders", "pp_reaction_completions",
+    "pp_planet_submissions", "pp_oauth_pending",
+]
+
+# Context-scoped data NOT covered by the list above:
+#   pp_baskets/pp_basket_items — handled separately (needs the basket ids to cascade).
+#   pp_markets                 — keyed (owner_kind, owner_id); only the 'account' rows are ours.
+#   pp_bugs                    — anonymised rather than deleted (see delete_account).
+#   pp_shares, pp_inventory_shares — no owner column exists at all; a share is an opaque id with a
+#                                payload, unattributable to the account that created it. Nothing to
+#                                delete by context here, by construction.
+#   pp_reaction_settings, pp_group_* — group-scoped, not account-scoped; shared with other members.
+
+
 @router.delete("/api/me")
 def delete_account(context_id: int = Depends(require_context)):
     """Permanently delete all data for the calling user's account.
-    Runs in a single transaction; invalidates all sessions on success."""
+    Runs in a single transaction; invalidates all sessions on success.
+
+    This used to clear three per-character tables and four context tables, orphaning rows in
+    roughly twenty others — on the endpoint whose entire promise is "delete all my data". The
+    lists it works from (`_CHAR_OWNED_TABLES`, `_CONTEXT_OWNED_TABLES`) are shared with the
+    per-character disconnect so the two can't drift; the comments above them record what is
+    deliberately excluded and why.
+
+    Unlike disconnecting a single character, the earnings ledgers and per-character work records
+    DO go here — the account they belonged to is the thing being deleted.
+    """
     con = get_connection()
     try:
         char_ids = [r["character_id"] for r in
@@ -1121,13 +1193,13 @@ def delete_account(context_id: int = Depends(require_context)):
                                 (context_id,)).fetchall()]
         if char_ids:
             ph = ",".join("?" * len(char_ids))
-            con.execute(f"DELETE FROM pp_plan_config WHERE character_id IN ({ph})", char_ids)
-            con.execute(f"DELETE FROM pp_colony_yield WHERE character_id IN ({ph})", char_ids)
-            con.execute(f"DELETE FROM pp_char_planets WHERE character_id IN ({ph})", char_ids)
+            for table in _CHAR_OWNED_TABLES:
+                if _table_exists(con, table):
+                    con.execute(f"DELETE FROM {table} WHERE character_id IN ({ph})", char_ids)
 
-        con.execute("DELETE FROM pp_plan_snapshots WHERE context_id=?", (context_id,))
-        con.execute("DELETE FROM pp_plan_baseline WHERE context_id=?", (context_id,))
-        con.execute("DELETE FROM pp_profiles WHERE context_id=?", (context_id,))
+        for table in _CONTEXT_OWNED_TABLES:
+            if _table_exists(con, table):
+                con.execute(f"DELETE FROM {table} WHERE context_id=?", (context_id,))
 
         # Private baskets (context_id IS NOT NULL = owned by this context)
         basket_ids = [r["id"] for r in
@@ -1137,6 +1209,22 @@ def delete_account(context_id: int = Depends(require_context)):
             ph = ",".join("?" * len(basket_ids))
             con.execute(f"DELETE FROM pp_basket_items WHERE basket_id IN ({ph})", basket_ids)
         con.execute("DELETE FROM pp_baskets WHERE context_id=?", (context_id,))
+
+        # Followed markets are keyed (owner_kind, owner_id) — delete only this account's own list,
+        # never the group-level defaults it may have been seeded from (those belong to the group).
+        if _table_exists(con, "pp_markets"):
+            con.execute("DELETE FROM pp_markets WHERE owner_kind='account' AND owner_id=?",
+                        (context_id,))
+
+        # Bug reports are ANONYMISED, not deleted. The report is about the app, not the reporter —
+        # admins still need open bugs triaged after someone leaves — but nothing identifying the
+        # deleted account may survive, so the context/character link and the name all go.
+        if _table_exists(con, "pp_bugs"):
+            con.execute(
+                "UPDATE pp_bugs SET context_id=NULL, character_id=NULL, character_name=? "
+                "WHERE context_id=?",
+                ("(deleted account)", context_id),
+            )
 
         if char_ids:
             ph = ",".join("?" * len(char_ids))
@@ -1148,10 +1236,17 @@ def delete_account(context_id: int = Depends(require_context)):
     except Exception:
         con.rollback()
         con.close()
+        log.exception("account deletion failed for context %s", context_id)
         raise HTTPException(status_code=500, detail="Deletion failed — no data was changed")
 
     con.close()
     _invalidate_context_sessions(context_id)
+    # The character list is cached per context; a deleted account must not keep serving one.
+    try:
+        from app.cache import cache_invalidate, charlist_key
+        cache_invalidate(charlist_key(context_id))
+    except Exception:
+        pass
     return {"deleted": True}
 
 
