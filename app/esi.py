@@ -135,8 +135,9 @@ INDUSTRY_SCOPES = REACTIONS_SCOPES
 PI_CHAR_SQL = ("AND NOT (COALESCE(scopes,'') LIKE '%read_corporation_wallets%' "
                "AND COALESCE(scopes,'') NOT LIKE '%manage_planets%')")
 
-EVE_AUTH_URL  = "https://login.eveonline.com/v2/oauth/authorize"
-EVE_TOKEN_URL = "https://login.eveonline.com/v2/oauth/token"
+EVE_AUTH_URL   = "https://login.eveonline.com/v2/oauth/authorize"
+EVE_TOKEN_URL  = "https://login.eveonline.com/v2/oauth/token"
+EVE_REVOKE_URL = "https://login.eveonline.com/v2/oauth/revoke"
 
 # Skill type IDs relevant to Planetary Industry
 SKILL_IDS = {
@@ -1315,6 +1316,30 @@ def _fetch_alliance_id(character_id: int) -> int | None:
         return resp.json().get("alliance_id")
     except Exception:
         return None
+
+
+def revoke_refresh_token(refresh_token: str | None) -> bool:
+    """Best-effort: tell EVE SSO to invalidate this refresh token. Returns True if CCP accepted.
+
+    Deleting our stored copy already stops THIS app from using the token, so nothing in the
+    disconnect flow depends on this succeeding — but a token we merely forgot is still live at
+    CCP until it expires, and "disconnect this character" should mean the grant is actually
+    gone, not just invisible to us. Never raises: a disconnect must not fail because SSO is
+    having a bad day, and the user's data is deleted either way."""
+    if not refresh_token or not (CLIENT_ID and CLIENT_SECRET):
+        return False
+    try:
+        with httpx.Client(headers={"User-Agent": esi_http.USER_AGENT}) as client:
+            resp = client.post(
+                EVE_REVOKE_URL,
+                data={"token_type_hint": "refresh_token", "token": refresh_token},
+                auth=(CLIENT_ID, CLIENT_SECRET),
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                timeout=5,
+            )
+        return resp.status_code < 400
+    except Exception:
+        return False
 
 
 def _refresh_token(character_id: int, refresh_token: str) -> str | None:

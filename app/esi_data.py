@@ -19,7 +19,7 @@ from app.esi import (
     WALLET_SCOPE,
     _session_lookup, _is_configured, admin_and_tester_status_for_context,
     require_context, _get_valid_token, _fetch_skills, _fetch_planets, _fetch_alliance_id,
-    ensure_char_tables, natural_name_key,
+    ensure_char_tables, natural_name_key, revoke_refresh_token,
 )
 
 router = APIRouter()
@@ -488,17 +488,130 @@ def list_characters(pp_session: str = Cookie(default=None)):
     }
 
 
+def _table_exists(con, table: str) -> bool:
+    """Portable table probe. Several tables a disconnect touches belong to modules (industry,
+    reactions, markets) whose ensure_* may not have run in this process yet, and on Postgres a
+    statement against a missing table aborts the WHOLE transaction — rolling back the deletes
+    that already succeeded and failing the disconnect. Skipping absent tables is the difference
+    between "cleaned everything that exists" and "cleaned nothing". app.db._pg_translate rewrites
+    this sqlite_master probe into the information_schema equivalent."""
+    return bool(con.execute(
+        f"SELECT 1 FROM sqlite_master WHERE type='table' AND name='{table}'"
+    ).fetchone())
+
+
+# Per-character operational data, deleted wholesale when a character is disconnected. These are
+# all "this character's own working state" — re-created by a rescan if the character is ever
+# re-added. Every one is keyed by character_id alone (no context column), which is safe ONLY
+# because we verify the character belongs to the caller's context first; without that check this
+# list would let any logged-in user wipe any character's rows by guessing an id.
+_CHAR_OWNED_TABLES = [
+    "pp_char_planets",
+    "pp_char_assets",
+    "pp_char_blueprints",
+    "pp_char_industry_jobs",
+    "pp_char_manufacturing_jobs",
+    "pp_colony_flags",
+    "pp_colony_yield",
+    "pp_plan_config",
+    "pp_reaction_assignments",
+]
+
+# Deliberately NOT deleted, and why:
+#   pp_bugs                  — a support record for admins, not the character's data; it already
+#                              denormalises character_name, so it stays readable once the row is gone.
+#   pp_industry_completions  — the ACCOUNT's earnings ledger. character_id is provenance, not
+#   pp_reaction_completions    ownership; deleting these would silently rewrite the account's
+#                              historical profit, which is not what "disconnect a character" asks for.
+
+
 @router.delete("/api/characters/{character_id}")
 def remove_character(character_id: int, context_id: int = Depends(require_context)):
+    """Disconnect a character: forget its tokens and every piece of per-character state.
+
+    Hard delete, not a soft unlink. A row left behind with context_id cleared would still hold a
+    live refresh token — i.e. we could still read that character from ESI — which is the exact
+    thing a user clicking "disconnect" is asking us to stop doing (see rule 8). It also matches
+    what this endpoint has always done for placeholder and wallet-only characters.
+
+    Irreversible for measured history: pp_colony_yield samples (the per-colony yield trend across
+    reseats) cannot be re-derived by re-adding the character, since ESI only reports the CURRENT
+    program. The UI confirm names that explicitly.
+    """
     ensure_char_tables()
     con = get_connection()
-    con.execute("DELETE FROM pp_characters WHERE character_id=? AND context_id=?",
-                (character_id, context_id))
-    con.execute("DELETE FROM pp_char_planets WHERE character_id=?", (character_id,))
-    con.commit()
+
+    # Ownership check first — every delete below is keyed by character_id alone.
+    row = con.execute(
+        "SELECT character_name, refresh_token FROM pp_characters WHERE character_id=? AND context_id=?",
+        (character_id, context_id),
+    ).fetchone()
+    if not row:
+        con.close()
+        raise HTTPException(status_code=404, detail="No such character on this account")
+    char_name    = row["character_name"]
+    stored_token = row["refresh_token"]
+
+    try:
+        for table in _CHAR_OWNED_TABLES:
+            if not _table_exists(con, table):
+                continue
+            con.execute(f"DELETE FROM {table} WHERE character_id=?", (character_id,))
+
+        # The designated market-data reader. _market_character already falls back to the first
+        # scoped character, but leaving a dangling id here means the fallback silently decides
+        # something the user explicitly chose — clear it so the next pick is deliberate.
+        if _table_exists(con, "pp_market_config"):
+            con.execute(
+                "UPDATE pp_market_config SET market_character_id=NULL "
+                "WHERE context_id=? AND market_character_id=?",
+                (context_id, character_id),
+            )
+
+        # Saved plans store a factory-character priority list as a JSON id array. A stale id is a
+        # harmless no-op to the planner, but it's exactly the residue a disconnect should clear.
+        for prof in con.execute(
+            "SELECT id, factory_character_ids FROM pp_profiles WHERE context_id=?", (context_id,)
+        ).fetchall():
+            try:
+                ids = _json.loads(prof["factory_character_ids"] or "[]")
+            except (TypeError, ValueError):
+                continue
+            if character_id in ids:
+                con.execute("UPDATE pp_profiles SET factory_character_ids=? WHERE id=?",
+                            (_json.dumps([i for i in ids if i != character_id]), prof["id"]))
+
+        # Sessions are bound to the character you logged in WITH, but scoped to the account. If
+        # the disconnected character is that one, re-point the session at any remaining character
+        # rather than logging the user out mid-action; only a now-empty account ends the session.
+        survivor = con.execute(
+            "SELECT character_id FROM pp_characters WHERE context_id=? AND character_id!=? "
+            "ORDER BY character_id LIMIT 1",
+            (context_id, character_id),
+        ).fetchone()
+        if survivor:
+            con.execute("UPDATE pp_sessions SET character_id=? WHERE character_id=? AND context_id=?",
+                        (survivor["character_id"], character_id, context_id))
+        else:
+            con.execute("DELETE FROM pp_sessions WHERE character_id=? AND context_id=?",
+                        (character_id, context_id))
+
+        con.execute("DELETE FROM pp_characters WHERE character_id=? AND context_id=?",
+                    (character_id, context_id))
+        con.commit()
+    except Exception:
+        con.rollback()
+        con.close()
+        log.exception("disconnect character %s failed", character_id)
+        raise HTTPException(status_code=500, detail="Disconnect failed — no data was changed")
     con.close()
+
+    # After the commit: the user's data is gone regardless of whether CCP answers us.
+    revoked = revoke_refresh_token(stored_token)
+
     cache_invalidate(charlist_key(context_id))
-    return {"removed": character_id}
+    return {"removed": character_id, "name": char_name, "token_revoked": revoked,
+            "logged_out": survivor is None}
 
 
 # ── Dummy (synthetic) characters ─────────────────────────────────────────────

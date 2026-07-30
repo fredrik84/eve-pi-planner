@@ -26,7 +26,10 @@ These are standing rules for ALL changes. Follow them unless the user explicitly
    `test_skill_enough.py` (the "already enough skill" half of `/api/skill-roi`, seeded rows +
    fabricated cookie), `test_page_access.py` (the per-group `require_page` backend gate — that a
    group with no restrictions stays a no-op, that a restricted group really is 403'd, and that
-   the public customer build-status link is NOT gated). Add to these or create a new
+   the public customer build-status link is NOT gated), `test_disconnect_character.py`
+   (`DELETE /api/characters/{id}` — that every per-character table is cleared, that another
+   account's character is untouchable, and that account-level history survives).
+   Add to these or create a new
    `test_*.py` in the same urllib/`--url` style. Assert
    *durable invariants*, not runtime state an admin can change (e.g. don't assert a flag's enabled
    value equals its code default — admins toggle it).
@@ -942,6 +945,47 @@ block (`builtinFb = _wiz.fuelblock && !_wiz.basketId`).
 - **6 = max planets per character** → `max_planets = 1 + interplanetary_consolidation`
   (the character's skill, from the DB). Unrelated to `PLANET_P0_MAP`. Don't change one
   thinking it's the other.
+
+## Disconnecting a character (`DELETE /api/characters/{id}`)
+
+Removes one character from the calling account: a **hard delete**, not a soft unlink. A row left
+behind with `context_id` cleared would still hold a live refresh token — i.e. we could still read
+that character from ESI — which is exactly what a user clicking ✕ is asking us to stop doing
+(rule 8). The endpoint has always behaved this way for placeholder and wallet-only characters;
+what was missing was that it only cleared `pp_characters` + `pp_char_planets` and orphaned rows in
+**eight** other tables.
+
+- **`_CHAR_OWNED_TABLES`** (`app/esi_data.py`) is the delete list — per-character operational
+  state, all of it re-createable by a rescan if the character is re-added. **Add a new
+  `character_id`-keyed table to this list when you create one**, or a disconnect will silently
+  leave its rows behind.
+- **Ownership is checked FIRST** (`SELECT … WHERE character_id=? AND context_id=?`, 404 if it
+  doesn't match). Every delete below it is keyed by `character_id` **alone** — without that check
+  any logged-in user could wipe any character's rows by guessing an id.
+- **Missing tables are skipped, not fatal** (`_table_exists`). Several of these belong to modules
+  (industry, reactions, markets) whose `ensure_*` may not have run in this process yet, and on
+  Postgres a statement against a missing table aborts the WHOLE transaction — rolling back the
+  deletes that already succeeded. The probe is written in the `sqlite_master` form that
+  `app.db._pg_translate` rewrites to `information_schema`.
+- **References are cleared, not left dangling:** `pp_market_config.market_character_id` (else the
+  `_market_character` fallback silently re-decides something the user chose explicitly) and the
+  removed id is stripped out of every saved plan's `pp_profiles.factory_character_ids`.
+- **Sessions are re-pointed, not dropped.** `pp_sessions` binds the character you logged in *with*,
+  but is scoped to the account; if that's the character being removed, the session moves to any
+  surviving character rather than logging the user out mid-action. Only a now-empty account ends
+  the session (`logged_out: true` in the response).
+- **Not deleted, deliberately:** `pp_bugs` (an admin support record, not the character's data — it
+  already denormalises `character_name` so it stays readable) and
+  `pp_industry_completions`/`pp_reaction_completions` (the ACCOUNT's earnings ledger; `character_id`
+  is provenance, and deleting them would silently rewrite historical profit).
+- **The ESI grant is revoked** best-effort after the commit (`esi.revoke_refresh_token`, 5s timeout,
+  never raises). Dropping our copy already stops *us* using it, but the grant lives on at CCP until
+  it expires, and "disconnect" should mean it's actually gone. The disconnect never fails on it.
+- **Irreversible bit:** `pp_colony_yield` (measured yield per colony across reseats) cannot be
+  re-derived by re-adding the character — ESI only reports the CURRENT extraction program. The UI
+  confirm names that specifically; everything else comes back on a rescan.
+- Covered by `test_disconnect_character.py` (in-process + a live HTTP layer for the
+  `require_context` gate).
 
 ## Access control
 

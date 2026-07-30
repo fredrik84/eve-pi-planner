@@ -691,10 +691,25 @@ function renderCharacters(chars, loggedIn) {
       </details>`;
     if (loggedIn) {
       const del = row.querySelector('.pp-char-del');
+      // The old confirm was a bare "Remove X?" for an action that deletes colonies, plan roles and
+      // the whole measured-yield history, and revokes the ESI grant. Re-adding the character
+      // restores everything ESI can re-scan, but NOT the yield samples — ESI only ever reports the
+      // current extraction program, so the per-colony trend across past reseats is gone for good.
+      // That asymmetry is the one thing worth spelling out before someone clicks ✕ on an alt.
       if (del) del.addEventListener('click', async (e) => {
         e.preventDefault(); e.stopPropagation();
-        if (!confirm(`Remove ${c.name}?`)) return;
-        try { await apiSend('DELETE', `/api/characters/${c.character_id}`); }
+        if (!confirm(
+          `Disconnect ${c.name}?\n\n` +
+          `This deletes its colonies, plan roles and saved settings, and revokes this app's ESI access.\n` +
+          `You can re-add the character any time by logging in again — but its measured yield history ` +
+          `cannot be recovered, since ESI only reports the current extraction program.`
+        )) return;
+        try {
+          const r = (await apiSend('DELETE', `/api/characters/${c.character_id}`)) || {};
+          toast(r.logged_out
+            ? `${c.name} disconnected — that was your last character, so you're now logged out.`
+            : `${c.name} disconnected.`, 'success');
+        }
         catch (e) { toastError(e, 'Could not remove that character'); }
         loadCharacters();   // refresh either way — the list is the source of truth
       });

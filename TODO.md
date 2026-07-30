@@ -9,26 +9,23 @@ cold.
 
 ---
 
-## 1. Remove the dead `_muted` assignment
+## 1. `DELETE /api/me` has the same orphaned-rows bug disconnect just had
 
-`app/planner_dashboard.py:213` assigns `_muted` and never reads it. Pyflakes flags it. Left in place
-deliberately during the 2026-07-29 planner split so that change stayed a provable pure move.
+Found 2026-07-30 while completing the per-character disconnect. Account deletion (`app/esi.py`
+`delete_account`) clears only `pp_plan_config`, `pp_colony_yield` and `pp_char_planets` for the
+account's characters — it leaves rows behind in `pp_char_assets`, `pp_char_blueprints`,
+`pp_char_industry_jobs`, `pp_char_manufacturing_jobs`, `pp_colony_flags` and
+`pp_reaction_assignments`. This is the *account*-level "delete all my data" endpoint, so the
+leftovers are a data-retention problem, not just untidiness.
 
-- **First step:** delete the line; confirm `python3 -m pyflakes app/planner_dashboard.py` is clean.
+- **Work:** reuse `app/esi_data.py`'s `_CHAR_OWNED_TABLES` + `_table_exists` (both written for the
+  disconnect fix and already handle the Postgres missing-table abort). Decide explicitly whether
+  the completions ledgers and `pp_bugs` go too — for a whole-account delete the answer is probably
+  yes, unlike the per-character case where they are deliberately kept.
+- **Not bundled with the disconnect fix** on purpose: different endpoint, and it wipes an entire
+  account, so it wants its own review and its own test rather than riding along.
 
-## 2. Disconnect a character
-
-Requested 2026-07-21. Characters can only ever be *added* (ESI login, `?market=1`, `?reactions=1`,
-`?wallet=1`) — there is no in-UI removal. Surface it in the Settings modal under a Characters tab.
-
-- **Open decision (blocks implementation):** unlink the reactions/PI *association* only, or delete
-  the `pp_characters` row plus dependents — `pp_char_planets`, `pp_reaction_assignments`,
-  `pp_char_industry_jobs`, and `pp_market_config.market_character_id` if it pointed at that char.
-- **Constraint:** must be `require_context`-scoped (own characters only) per the privacy rule.
-- **Already handled:** `_market_character` falls back to the first scoped char, so removing the
-  designated market character degrades gracefully.
-
-## 3. Required-skills-to-build (Industry)
+## 2. Required-skills-to-build (Industry)
 
 The manufacturing plan should list the skills the account is **missing** to actually build the
 target — you can't make a Revelation without capital production skills, and today the plan happily
@@ -40,7 +37,7 @@ schedules a job nobody can install.
   the account's best character; show missing skill + level.
 - **Size:** the largest open item — SDE backfill plus a new ESI fetch shape.
 
-## 4. Skill-optimization advisor page (Industry)
+## 3. Skill-optimization advisor page (Industry)
 
 Tell the user what to train to raise overall output: more reaction/manufacturing slots if they're
 constantly full, CC-upgrade / Interplanetary Consolidation for PI, higher Industry / Advanced
@@ -48,9 +45,9 @@ Industry for job time. Extends the existing PI `skill_roi` advisor.
 
 - **Needs scoping first** — this is the vaguest item on the list. Include a "train X for Y SP →
   +Z% output" framing with a threshold so it doesn't nag someone already training toward max.
-- **Depends on** the full-skill-list fetch from item 4; do them in that order.
+- **Depends on** the full-skill-list fetch from item 2 (Required-skills-to-build); do them in that order.
 
-## 5. Hand-built / custom colony layouts
+## 4. Hand-built / custom colony layouts
 
 Hybrid-colony detection shipped. Broader tracking of player-designed layouts (colonies that don't
 match any template we generate) is still unscoped.
@@ -58,7 +55,7 @@ match any template we generate) is still unscoped.
 - **First step:** decide what the feature would actually *do* for the user before building anything —
   detection alone has no action attached to it today.
 
-## 6. Layout engine — known gaps
+## 5. Layout engine — known gaps
 
 Both documented in CLAUDE.md, neither with a demand signal yet:
 
@@ -129,3 +126,5 @@ anything over a few seconds on a warm path as a regression worth tracing rather 
 | Deleting the legacy Find-Buildables analyzer | **Keep it** (2026-07-30). Live, ungated, default PI-planner sub-tab; `highspy`+`numpy` are lazy-imported so they cost image size only. Promoted to `app/analyzer.py` instead. |
 | Browser-level tests for `api()`/`toast()` | **Dismissed** (2026-07-30). Would mean introducing a browser-test harness this repo doesn't have; manual testing already catches the residual breakages at the expected rate. |
 | Alert-engine rename | **Done** (2026-07-30). `app/colony_alerts.py` → `app/alerts.py`, `compute_colony_alerts()` → `compute_alerts()`, `test_colony_alerts.py` → `test_alerts.py`. Pure rename, zero behaviour change; `test_alerts.py` passes in-container incl. the live `/api/dashboard` layer. |
+| Remove the dead `_muted` assignment | **Done** (2026-07-30). Deleted; `pyflakes app/planner_dashboard.py` is clean. `_alert` stays — it still supplies the display thresholds; only the mute set was dead (muting moved inside `compute_alerts()`). |
+| Disconnect a character | **Done** (2026-07-30). Premise was stale: the UI button and `DELETE /api/characters/{id}` already shipped. The real bug was that it cleared 2 of 10 per-character tables. Now deletes all of them, clears the market-reader + saved-plan references, re-points the session instead of logging you out, revokes the ESI grant, and keeps `pp_bugs` + the completions ledgers. Hard delete, not soft unlink — a retained row keeps a live refresh token. `test_disconnect_character.py`, 6 groups. |
