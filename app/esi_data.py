@@ -287,7 +287,7 @@ def list_characters(pp_session: str = Cookie(default=None)):
     con.close()
 
     # Local import (avoids a circular import at module load — planner imports esi, not esi_data).
-    from app.planner import reseat_redeploy_events
+    from app.planner_advisor import reseat_redeploy_events
 
     char_planets: dict[int, list] = {}
     for p in planet_rows:

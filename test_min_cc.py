@@ -211,7 +211,7 @@ def test_required_cc_helpers():
     """The advisor's 'lowest level that runs what you already have' helpers, used per character
     across BOTH their extractor and factory planets."""
     print("required-CC helpers:")
-    from app.planner import _required_cc_extractor, _required_cc_factory
+    from app.planner_advisor import _required_cc_extractor, _required_cc_factory
     pi = load_pi_data()
     p2 = next(tid for tid, t in pi["types"].items() if t.get("pi_tier") == 2)
     for pt in ("Barren", "Lava"):

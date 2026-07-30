@@ -144,7 +144,7 @@ def _packed_rate(type_id: int, planet_type: str, cc_level: int) -> float:
     actually chosen. Local import to avoid a circular import (planner.py doesn't import
     from this module, but keeping this defensive matches the pattern used elsewhere in
     this codebase for cross-module helper reuse)."""
-    from app.planner import _layout_cache_get_or_compute
+    from app.planner_advisor import _layout_cache_get_or_compute
     key = (type_id, planet_type, cc_level)
 
     def compute():

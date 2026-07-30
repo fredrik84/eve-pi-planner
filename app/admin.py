@@ -803,7 +803,7 @@ def debug_memory(_: int = Depends(require_admin)):
     except Exception:
         pass
 
-    from app.planner import _UNITS_PER_PLANET, _FACTORY_FIT, _FACTORY_PACK_MAXDIAM
+    from app.planner_advisor import _UNITS_PER_PLANET, _FACTORY_FIT, _FACTORY_PACK_MAXDIAM
     from app.layout import _FITTED_BASICS_CACHE
     from app.fuelblocks import _PACKED_RATE_CACHE
     from app.sde import load_pi_data
@@ -882,7 +882,7 @@ def debug_user(character_name: str, _: int = Depends(require_admin)):
                 pass
         return d
 
-    from app.planner import derive_setup_plans
+    from app.planner_advisor import derive_setup_plans
     return {
         "character": dict(char),
         "context_characters": {

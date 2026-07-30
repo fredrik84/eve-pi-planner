@@ -143,12 +143,38 @@ only caller of `highspy`+`numpy` (~55 MB of the image), lazily imported inside t
 cost nothing at startup. Retiring the feature = delete `analyzer.py`, `pi.py`, `optimizer.py`,
 `shares.py` and those two requirements.
 
-`app/planner.py` is the core **planning algorithm**. The CRUD half it used to carry — per-character
-plan-config, `pp_shares`, profiles, plan snapshots and colony flags — now lives in
-**`app/planner_store.py`** (its own `APIRouter`, mounted by `main.py` next to the planner's).
-The dependency is one-directional: `planner.py` imports `ensure_plan_tables`,
-`ensure_profile_tables`, `ensure_share_table` and `_flagged_colonies` from `planner_store`,
-never the reverse, so there is no cycle. Add a new saved-plan field in `planner_store`.
+`app/planner.py` is **plan orchestration** — `_run_plan`, `/api/plan`, `/api/debug/plan`,
+`/api/pi-lifetime`, and the shared plan math (P1 requirement tracing, `_effective_fph`,
+`_factory_refill_hours`, `_char_footprint`, `_p0_available_by_char*`). It was ~3,900 lines
+carrying four unrelated jobs; the other three now live in siblings, imported **one way only** so
+the chain is acyclic:
+
+```
+planner_algo  <-  planner  <-  planner_advisor  <-  planner_dashboard
+```
+
+- **`app/planner_algo.py`** — the assignment algorithm: bipartite feasibility
+  (`_max_matching_slots`/`_can_add_p0`), `_compute_slot_budget`, `_compute_factory_shares`,
+  `_build_need_list`, the extractor passes (`_assign_extractors`, `_run_swap_pass`, `_absorb_remaining`,
+  `_waterfill_new_slots`), split extractors, `_assign_factory_planets_to_chars`, and the shared plan
+  helpers `_build_char_list`/`_factory_candidates`/`_run_extractor_pipeline`. **A LEAF — it imports
+  nothing from `planner.py`.** Keep it that way: its helpers take `con`/`req`/char lists as
+  arguments rather than reaching for request state, which is what makes the algorithm testable
+  without a session, and is what keeps the split acyclic.
+- **`app/planner_advisor.py`** — advice about an EXISTING setup: `/api/analyze-placements`,
+  `/api/factory-fit`, `/api/my-setup-plan` (+`derive_setup_plans`), `/api/skill-roi`,
+  `/api/redeploy-candidates` (+ the reseat geometry), `/api/expansion`, and the layout caches
+  (`_layout_cache_get_or_compute`, `_UNITS_PER_PLANET`, `_FACTORY_FIT`, `_FACTORY_PACK_MAXDIAM`).
+- **`app/planner_dashboard.py`** — `/api/dashboard` (a ~400-line read-only aggregation) plus
+  `_pad_fill_meter`. It computes no plan; it reads state and re-groups what `compute_colony_alerts`
+  and the advisor already produce.
+
+Each of the three has its **own `APIRouter`**, mounted by `main.py`. The CRUD half — per-character
+plan-config, `pp_shares`, profiles, plan snapshots and colony flags — is in
+**`app/planner_store.py`** (same pattern, its own router); `planner_models`,
+`planner_serialization` and `planner_recommendations` are unchanged. Add a new saved-plan field in
+`planner_store`. **Importing a planner helper from another module? Check which of these it lives in
+now** — `fuelblock_planner`, `fuelblocks`, `admin` and `esi_data` all had to be repointed.
 
 `_run_plan(req, context_id)` orchestrates; the heavy lifting is in named helpers (refactored out of one giant function):
 - `_compute_slot_budget` → factory count + `_compute_factory_shares`

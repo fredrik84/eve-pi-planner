@@ -16,7 +16,7 @@ Runs in-process (no server) — but must run INSIDE the container so `app` impor
 
 import sys
 
-from app.planner import reseat_redeploy_events, _colony_reach
+from app.planner_advisor import reseat_redeploy_events, _colony_reach
 
 
 def check(cond, msg):

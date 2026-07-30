@@ -339,7 +339,7 @@ def run_factory_budget_invariants() -> bool:
     """
     print(f"\n{'='*60}\n  Factory budget invariants (in-process)\n{'='*60}")
     try:
-        from app.planner import _compute_slot_budget
+        from app.planner_algo import _compute_slot_budget
     except Exception as e:
         print(f"  SKIP: not importable here ({e.__class__.__name__}) — run inside the container")
         return True

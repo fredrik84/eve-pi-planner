@@ -22,10 +22,10 @@ from app import fuelblocks
 from app.sde import load_pi_data, get_connection
 from app.market import fetch_prices
 from app.esi import require_context
-from app.planner import (
+from app.planner import _build_p0_p1_maps
+from app.planner_algo import (
     _PLANET_P0_PER_DAY,
     _build_char_list,
-    _build_p0_p1_maps,
     _build_p1_info,
     _build_p1_info_raw,
     _compute_factory_shares,
@@ -35,15 +35,16 @@ from app.planner import (
     _actual_p0_per_day_by_p0,
     _ext_leg_qualities,
     _factory_candidates,
-    _norm_dist_mode,
     _fetch_planets_and_recs,
     _load_char_planet_config,
-    _norm_split_mode,
     _pick_factory_system,
     _run_extractor_pipeline,
     _set_computed_ext_cap,
-    ensure_plan_tables,
 )
+# These two used to come via planner.py, which merely re-exported them; point at the real homes
+# so the indirection can't outlive the module it was passing through.
+from app.planner_serialization import _norm_dist_mode, _norm_split_mode
+from app.planner_store import ensure_plan_tables
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -276,7 +277,7 @@ def _assign_fuelblock_factories(
         }
         # Reuse the player's existing factory colonies — but NOT ones on a planet a factory can't fit on
         # (Gas): an empty Command Center anchored on a Gas planet must not be turned into a factory.
-        from app.planner import _FACTORY_EXCLUDE_TYPES
+        from app.planner_algo import _FACTORY_EXCLUDE_TYPES
         nonfac = [
             p for p in char_nonfac.get(cid, [])
             if (p.get("system_name"), p.get("planet_num")) not in char_used
@@ -314,7 +315,7 @@ def _assign_fuelblock_factories(
                 # a bigger planet than a CC4 toon. Unknown-diameter planets fall back to the safe B/T rule.
                 # In preview mode, skip the real (generate_layout-backed) lookup entirely and use the
                 # ceiling directly — see is_preview docstring above.
-                from app.planner import _factory_pack_max_diameter, _FACTORY_DIAM_CEILING
+                from app.planner_advisor import _factory_pack_max_diameter, _FACTORY_DIAM_CEILING
                 cap = _FACTORY_DIAM_CEILING if is_preview else min(
                     _FACTORY_DIAM_CEILING, _factory_pack_max_diameter(comp["type_id"], char.get("effective_ccu")))
 
@@ -612,7 +613,7 @@ def _run_fuelblock_plan(req: "FuelBlockPlanRequest", context_id: int) -> dict:
     # factory under any character. Skipped in preview mode (see is_preview above): nothing in the
     # Find Systems UI reads factory_diam_cap_km/factory_planets_oversized, so the real per-product
     # _factory_pack_max_diameter calls (each a generate_layout geometry pass) would be pure waste.
-    from app.planner import _factory_pack_max_diameter, _FACTORY_DIAM_CEILING
+    from app.planner_advisor import _factory_pack_max_diameter, _FACTORY_DIAM_CEILING
     if is_preview:
         diam_cap = _FACTORY_DIAM_CEILING
         factory_planets_oversized = 0
