@@ -1028,10 +1028,15 @@ re-implements detection. This was a deliberate unification (2026-07-10): notific
 have their own bespoke `_extractor_events`/`_factory_events` queries, duplicating (and able to
 drift from) what the Dashboard showed. Returns a flat list of individual alert instances —
 `{kind, severity, character_id, character_name, planet_id, location, hours_left, pct
-(storage_full only)}` — across 8 kinds (`app.alert_settings.ALERT_KINDS`): four threshold-based
-(`expired`, `expiring`, `storage_full`, `factory_refill`) and four correctness-based, stored
+(storage_full only)}` — across 11 kinds (`app.alert_settings.ALERT_KINDS`): four threshold-based
+(`expired`, `expiring`, `storage_full`, `factory_refill`); four correctness-based, stored
 per-scan by `app.esi._detect_colony_issues` (`ext_unrouted`, `fac_unfed`, `fac_output`,
-`p0_mismatch` — always "high" severity, never muted-by-default). `factory_refill` has no
+`p0_mismatch` — always "high" severity, never muted-by-default); `schedule_sync` (an extractor
+running a different program length than the fleet's norm, always "warn", computed fleet-wide via
+`_extractor_program_lengths()`); and two Reactions kinds (`reaction_finishing_soon`,
+`reaction_completed` — see `_reaction_alerts()`), which are not about PI colonies at all but are
+folded into the same flat list so they inherit the mute/severity/dashboard/push plumbing. That
+last pair is why the module is `app/alerts.py` and not `colony_alerts.py`. `factory_refill` has no
 dedicated threshold fields of its own — deliberately reuses `expiring_hours` as "how far ahead to
 flag" and `storage_high_ttf_hours` as the warn→high cutoff (same ideas as extraction expiry and
 storage already use) rather than adding two more number fields for one kind. `dashboard()` passes
@@ -1049,7 +1054,7 @@ urgent yet.
 be hardcoded, so nothing changed behavior until a user edits it): `expiring_hours` (3h),
 `storage_warn_pct` (80), `storage_high_pct` (95) / `storage_high_ttf_hours` (2 — either escalates
 a pad to "high"), `storage_urgent_hours` (3 — counted in the "(N within Xh)" header). `muted_kinds`
-(JSON column, same row) lets ANY of the 8 kinds be turned off entirely, including the
+(JSON column, same row) lets ANY of the 11 kinds be turned off entirely, including the
 correctness-based ones with no numeric threshold to tune. `get_alert_settings(context_id)` is the
 single read path `compute_alerts()` and the settings endpoints all use, so they can't drift.
 `GET/PUT /api/alert-settings` + `POST /api/alert-settings/reset`, all `require_context`-gated (own
@@ -1296,7 +1301,7 @@ fuel blocks stay on Jita).
 
 ## Notifications (`app/notifications.py`, `app/notifiers.py`)
 
-Push alerts for any of the 8 colony-alert kinds (`app.alert_settings.ALERT_KINDS`), checked by an
+Push alerts for any of the 11 alert kinds (`app.alert_settings.ALERT_KINDS`), checked by an
 APScheduler job every 15 minutes (`make_scheduler`, `check_and_send_notifications`) — pure DB
 math, no ESI calls, so it runs freely between rescans. Settings/prefs/log are per-`context_id` in
 `pp_notification_settings`, `pp_notification_prefs`, `pp_notification_log`.
@@ -1317,7 +1322,7 @@ math, no ESI calls, so it runs freely between rescans. Settings/prefs/log are pe
   had already muted e.g. factory refills doesn't suddenly get pinged for it — but does **not**
   auto-enable the new kinds this unification added (`storage_full`, `ext_unrouted`, ...) for
   already-configured accounts, since silently expanding what an already-tuned account gets pinged
-  about is the wrong default. A brand-new context (no prefs row at all) gets all 8 kinds enabled,
+  about is the wrong default. A brand-new context (no prefs row at all) gets all 11 kinds enabled,
   matching the old out-of-the-box default. `GET /api/notifications/prefs` echoes back
   `ALERT_KINDS` as `available_kinds` (same registry `/api/alert-settings` uses) so the frontend
   never hardcodes labels.

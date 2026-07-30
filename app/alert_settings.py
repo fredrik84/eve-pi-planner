@@ -26,7 +26,7 @@ DEFAULTS = {
     "muted_kinds": [],
 }
 
-# Every kind of colony warning the Dashboard AND the notification system can raise, muteable/
+# Every kind of alert the Dashboard AND the notification system can raise, muteable/
 # routable regardless of whether it has a tunable threshold. Keys match the "kind" strings
 # app.alerts.compute_alerts() emits (the single shared engine both consume):
 # ext_unrouted/fac_unfed/fac_output/p0_mismatch come straight from
@@ -34,7 +34,8 @@ DEFAULTS = {
 # engine's own labels for the four threshold-based kinds; schedule_sync (an extractor running a
 # different program length than the fleet's norm) has no numeric threshold, same as the
 # correctness kinds — always "warn" severity (a drifted schedule isn't dangerous, just worth a
-# heads-up), never "high".
+# heads-up), never "high"; reaction_finishing_soon/reaction_completed are the two Reactions kinds,
+# not colony warnings at all, folded in here so they inherit the same mute/severity/push plumbing.
 ALERT_KINDS = [
     {"key": "expired", "label": "Extractions expired"},
     {"key": "expiring", "label": "Extractions expiring soon"},

@@ -5,7 +5,8 @@ consumers: the Dashboard (app/planner_dashboard.py's dashboard()) and the notifi
 engine the Dashboard uses, instead of re-implementing detection independently — this exact
 subsystem has caused a real production bug before (duplicate notifications from a scheduler
 race, see check_and_send_notifications()'s docstring), so it gets deliberately thorough
-coverage: the notify_kinds migration, per-kind severity computation for all 9 alert kinds, and
+coverage: the notify_kinds migration, per-kind severity computation for all 9 colony kinds (the
+two Reactions kinds are exercised in their own section), and
 muting.
 
 Two layers:
@@ -140,7 +141,7 @@ def test_unknown_kind_filtered() -> bool:
 
 
 def test_all_eight_kinds_detected() -> bool:
-    print(f"\n{'='*60}\n  compute_alerts detects all 9 kinds with correct severity\n{'='*60}")
+    print(f"\n{'='*60}\n  compute_alerts detects all 9 colony kinds with correct severity\n{'='*60}")
     ok = True
     _seed_character()
     now = time.time()

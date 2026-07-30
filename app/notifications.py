@@ -3,7 +3,8 @@
 Supported channels: Pushover, ntfy.sh, Discord webhook (see notifiers.py).
 Events: the same 11 alert kinds the Dashboard shows (app.alert_settings.ALERT_KINDS) — expired,
 expiring, storage_full, factory_refill, ext_unrouted, fac_unfed, fac_output, p0_mismatch,
-schedule_sync. Event detection itself lives in app.alerts.compute_alerts(); this
+schedule_sync, reaction_finishing_soon, reaction_completed. Event detection itself lives in
+app.alerts.compute_alerts(); this
 module is purely a consumer (kind/severity filtering, cooldown, batching, sending) — it does not
 implement its own detection, so a push notification and what's shown on the Dashboard can never
 drift apart.
