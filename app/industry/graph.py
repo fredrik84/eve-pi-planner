@@ -677,15 +677,16 @@ def industry_plan(req: IndustryPlanRequest, ctx: int = Depends(require_context))
     # Name who installs each job, for every stage — not just the ones startable right now.
     from app.industry.schedule import assign_characters
     from app.industry.slots import _slot_pool
-    assign_characters(result["schedule"]["waves"], _slot_pool(ctx).get("characters") or [])
-    # Which skills the account is missing to actually INSTALL these jobs. Returns None (and the key
-    # is omitted) whenever the feature is off, so a disabled flag costs this endpoint nothing —
-    # not a query, not a byte of payload. Note this reports only; it deliberately does NOT feed
-    # assign_characters above, which still assigns on free slots alone.
-    from app.industry.skills import plan_skill_gaps
-    gaps = plan_skill_gaps(ctx, result.get("requirements") or [], inp.mfg, inp.rx)
-    if gaps is not None:
-        result["skill_gaps"] = gaps
+    # Which skills the account is missing to actually INSTALL these jobs. Returns None (and the
+    # key is omitted) whenever the feature is off, so a disabled flag costs this endpoint nothing
+    # — not a query, not a byte of payload. One call yields both the report and the eligibility
+    # that keeps the scheduler from handing a job to someone who can't install it.
+    from app.industry.skills import analyze_plan_skills
+    sk = analyze_plan_skills(ctx, result.get("requirements") or [], inp.mfg, inp.rx)
+    assign_characters(result["schedule"]["waves"], _slot_pool(ctx).get("characters") or [],
+                      (sk or {}).get("eligibility"))
+    if sk is not None:
+        result["skill_gaps"] = sk["gaps"]
     return result
 
 

@@ -381,7 +381,14 @@ def _run_queue_plan(ctx: int, req: QueuePlanRequest) -> dict:
     # FREE slots; this answers "and then who does the rest", which every later stage lacked.
     from app.industry.schedule import assign_characters
     from app.industry.slots import _slot_pool
-    assign_characters(res["schedule"]["waves"], _slot_pool(ctx).get("characters") or [])
+    # Same skill-aware assignment as the single-product plan — a queue plan hands out the same
+    # jobs, so it would be the one place still able to name someone who can't install them.
+    from app.industry.skills import analyze_plan_skills
+    sk = analyze_plan_skills(ctx, res.get("requirements") or [], inp.mfg, inp.rx)
+    assign_characters(res["schedule"]["waves"], _slot_pool(ctx).get("characters") or [],
+                      (sk or {}).get("eligibility"))
+    if sk is not None:
+        res["skill_gaps"] = sk["gaps"]
     _blend_margin(res, order_margins, inp.params.margin_pct)
     return res
 

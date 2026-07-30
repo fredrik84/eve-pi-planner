@@ -192,16 +192,30 @@ def _best_character(chars: list[dict], required: list[tuple[int, int]]):
     return best[3], best[4]
 
 
-def plan_skill_gaps(context_id: int, requirements: list[dict], mfg: dict, rx: dict) -> dict | None:
-    """Per-step skill gaps for a plan, or None when the feature is off (the caller then omits the
-    key entirely, so a disabled feature adds nothing to the response)."""
+def analyze_plan_skills(context_id: int, requirements: list[dict], mfg: dict, rx: dict) -> dict | None:
+    """Everything this feature knows about one plan, in ONE database pass: the per-step gap report
+    AND the per-step eligibility the scheduler needs to stop handing jobs to characters who cannot
+    install them. Returns None when the feature is off.
+
+    Both outputs come from the same query set deliberately — computing them separately would double
+    the per-plan cost for two views of one answer.
+
+      {"gaps": <the report the UI renders>,
+       "eligibility": {"capable": {type_id: {character_id, ...}},
+                       "unknown": {character_id, ...}}}
+
+    `capable` lists only characters PROVEN to meet a step's requirements. A character we hold no
+    skill data for lands in `unknown` instead: absence of data is not evidence of incapability, and
+    conflating the two would either hide a real problem or invent one.
+    """
     if not _feature_on():
         return None
     ensure_char_skills_table()
     bp = _blueprint_ids(requirements, mfg, rx)
     if not bp:
-        return {"steps": [], "missing": [], "blocked_steps": 0, "characters_without_data": [],
-                "sde_ready": True}
+        return {"gaps": {"steps": [], "missing": [], "blocked_steps": 0,
+                         "characters_without_data": [], "sde_ready": True},
+                "eligibility": {"capable": {}, "unknown": set()}}
     con = get_connection()
     try:
         reqs = _load_requirements(con, set(bp.values()))
@@ -220,8 +234,15 @@ def plan_skill_gaps(context_id: int, requirements: list[dict], mfg: dict, rx: di
     steps: list[dict] = []
     worst: dict[int, int] = {}          # skill_id -> highest level this plan demands
     step_count: dict[int, int] = {}     # skill_id -> how many steps it blocks
+    capable: dict[int, set[int]] = {}   # type_id -> characters proven able to install it
+    unknown = {c["character_id"] for c in chars if not c["has_data"]}
     for tid, key in bp.items():
         required = reqs.get(key) or []
+        # A step with no listed requirement is installable by anyone — record that explicitly
+        # rather than leaving it absent, so the scheduler can tell "no requirement" apart from
+        # "not analysed" without a second lookup.
+        capable[tid] = {c["character_id"] for c in chars
+                        if c["has_data"] and not _missing_for(c, required)}
         if not required:
             continue
         char, missing = _best_character(chars, required)
@@ -246,13 +267,22 @@ def plan_skill_gaps(context_id: int, requirements: list[dict], mfg: dict, rx: di
         key=lambda m: (-m["steps"], -m["level"], m["name"]),
     )
     return {
-        "steps": steps,
-        "missing": missing_summary,
-        "blocked_steps": len(steps),
-        # Named so the UI can say "rescan this character" instead of implying they can't build.
-        "characters_without_data": [c["character_name"] for c in chars if not c["has_data"]],
-        "sde_ready": bool(reqs),
+        "gaps": {
+            "steps": steps,
+            "missing": missing_summary,
+            "blocked_steps": len(steps),
+            # Named so the UI can say "rescan this character" instead of implying they can't build.
+            "characters_without_data": [c["character_name"] for c in chars if not c["has_data"]],
+            "sde_ready": bool(reqs),
+        },
+        "eligibility": {"capable": capable, "unknown": unknown},
     }
+
+
+def plan_skill_gaps(context_id: int, requirements: list[dict], mfg: dict, rx: dict) -> dict | None:
+    """Just the gap report — the thin wrapper callers use when they don't also need eligibility."""
+    res = analyze_plan_skills(context_id, requirements, mfg, rx)
+    return None if res is None else res["gaps"]
 
 
 @router.get("/api/industry/skill-coverage")

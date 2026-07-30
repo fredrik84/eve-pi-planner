@@ -1270,10 +1270,21 @@ function _indMeTeChip(typeId) {
 }
 
 function _indJobChips(g) {
-  return g.map(x => `<span class="ind-wave-job">${_esc(x.name)} ×${x.runs}${x.activity === 'reaction' ? ' rx' : ''} · ${_fmtHours(x.dur)}`
-    + ((x.who && x.who.length)
-        ? `<span class="ind-wave-who" title="Install this on ${_esc(x.who.join(', '))}">on ${_esc(x.who.join(', '))}</span>` : '')
-    + _indMeTeChip(x.type_id) + `</span>`).join('');
+  return g.map(x => {
+    const blocked = x.blocked || [];
+    // Name the assignee, and say plainly when that assignee can't actually install it — an
+    // instruction you can't follow is worse than no instruction, so it's marked inline rather
+    // than left to the skills panel further up the page.
+    const who = (x.who && x.who.length)
+      ? `<span class="ind-wave-who${blocked.length ? ' ind-wave-who-blocked' : ''}" title="${
+          blocked.length
+            ? 'Missing skills: ' + _esc(blocked.join(', ')) + ' cannot install this job — see the missing-skills panel above'
+            : 'Install this on ' + _esc(x.who.join(', '))
+        }">on ${_esc(x.who.join(', '))}${blocked.length ? ' ⚠' : ''}</span>`
+      : '';
+    return `<span class="ind-wave-job">${_esc(x.name)} ×${x.runs}${x.activity === 'reaction' ? ' rx' : ''} · ${_fmtHours(x.dur)}`
+      + who + _indMeTeChip(x.type_id) + `</span>`;
+  }).join('');
 }
 
 // Edit in place on the chip: two numbers, and the plan re-runs against them. This is the "editing
@@ -1345,6 +1356,12 @@ function _indStepsHtml(d, model) {
       // Who installs it. A type's runs can be split across several toons' slots, so collect them
       // all — "who do I log in as" is the question every stage after the first left unanswered.
       if (t.character_name && !g.who.includes(t.character_name)) g.who.push(t.character_name);
+      // `skill_ok === false` means the scheduler had to fall back to someone who provably can't
+      // install this job (nobody who can had a free slot). Strictly false — undefined means the
+      // check didn't run, and "not checked" must never render as a problem.
+      if (t.character_name && t.skill_ok === false) {
+        (g.blocked || (g.blocked = [])).includes(t.character_name) || g.blocked.push(t.character_name);
+      }
     });
   });
   const stages = Object.values(byStage).sort((a, b) => a.start - b.start);

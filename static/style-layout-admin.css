@@ -940,6 +940,9 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
    from a contract copy" and "your own researched print" are very different confidence levels. */
 .ind-wave-who { font-size: 10px; margin-left: 6px; padding: 0 6px; border-radius: 8px;
   background: #16202c; color: #8fb4d8; border: 1px solid #24344a; }
+/* The assignee provably can't install this job — same amber as the missing-skills panel, so the
+   inline mark and the panel above read as one story. */
+.ind-wave-who-blocked { background: #2a2620; color: #e2c07a; border-color: #4a3f28; }
 .ind-mete { font-size: 10px; margin-left: 6px; padding: 0 6px; border-radius: 8px; cursor: pointer;
   background: #1a2030; color: var(--clr-text-soft); border: 1px solid #262d3d; }
 .ind-mete:hover { border-color: #3a4460; }

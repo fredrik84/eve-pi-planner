@@ -528,7 +528,8 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
 
 
 
-def assign_characters(waves: list[dict], characters: list[dict]) -> list[dict]:
+def assign_characters(waves: list[dict], characters: list[dict],
+                      eligibility: dict | None = None) -> list[dict]:
     """Stamp `character_id` / `character_name` onto every scheduled job, across the WHOLE schedule.
 
     The to-install checklist already named a character for the jobs you can start right now, but
@@ -541,9 +542,33 @@ def assign_characters(waves: list[dict], characters: list[dict]) -> list[dict]:
     that job ends, and gives each job to whoever has the most capacity free at that moment (which
     spreads the work rather than hammering one toon).
 
+    `eligibility` (optional, from app.industry.skills.analyze_plan_skills) makes this SKILL-AWARE.
+    Without it the assignment is capacity-only, which could hand a Revelation to a character with no
+    capital production skills — a schedule nobody can execute. With it, candidates are tiered:
+
+      1. proven capable of that step   2. skills unknown (never scanned)   3. proven incapable
+
+    Capacity still decides WITHIN a tier, so the work spreads exactly as before among equals. A
+    lower tier is used only when no better candidate has a free slot: a job assigned to someone who
+    cannot install it is still more useful than an unassigned one, because the plan stays complete
+    and the job carries `skill_ok: False` saying precisely what is wrong. Tasks are stamped with
+    `skill_ok` True/False/None (None = unknown), and it is left absent entirely when no eligibility
+    was supplied, so "not checked" never renders as "fine".
+
     Pure and I/O-free like everything else here: the caller supplies the characters. Jobs stay
     unassigned when there's no capacity or no character data, rather than inventing an assignee.
     """
+    capable = (eligibility or {}).get("capable") or {}
+    unknown = (eligibility or {}).get("unknown") or set()
+
+    def _tier(cid: int, type_id) -> int:
+        """2 = proven capable, 1 = unknown, 0 = proven incapable. A step absent from `capable`
+        was never analysed (no recipe match), so nobody is penalised for it."""
+        if type_id not in capable:
+            return 1
+        if cid in capable[type_id]:
+            return 2
+        return 1 if cid in unknown else 0
     cap: dict[tuple[int, str], int] = {}
     names: dict[int, str] = {}
     for c in characters or []:
@@ -570,17 +595,25 @@ def assign_characters(waves: list[dict], characters: list[dict]) -> list[dict]:
         releases = still
         for t in w.get("tasks", []):
             act = t.get("activity")
-            best, best_free = None, 0
+            tid = t.get("type_id")
+            best, best_key = None, None
             for (cid, a), n in free.items():
                 if a != act or n <= 0:
                     continue
-                # Most free capacity wins; character_id breaks ties so the result is deterministic.
-                if n > best_free or (n == best_free and best is not None and cid < best):
-                    best, best_free = cid, n
+                # Skill tier first, then most free capacity, then character_id so the result stays
+                # deterministic. Negated because bigger is better and we're taking the minimum.
+                key = (-_tier(cid, tid), -n, cid)
+                if best_key is None or key < best_key:
+                    best, best_key = cid, key
             if best is None:
                 t["character_id"] = None
                 t["character_name"] = None
+                if eligibility is not None:
+                    t["skill_ok"] = None
                 continue
+            if eligibility is not None:
+                tier = _tier(best, tid)
+                t["skill_ok"] = True if tier == 2 else (None if tier == 1 else False)
             free[(best, act)] -= 1
             releases.append((start + (t.get("duration_hours") or 0.0), best, act))
             t["character_id"] = best

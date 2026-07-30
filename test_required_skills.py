@@ -25,11 +25,13 @@ CHAR_B = -9002          # the generalist: has the rig skill, lacks the capital s
 CHAR_C = -9003          # never scanned — no skill rows at all
 BP_MFG = -7001
 BP_RX = -7002
+BP_RX2 = -7003
 SKILL_CAP = -6001       # "Capital Ship Construction"
 SKILL_RIG = -6002       # "Rig Mastery"
 SKILL_FREE = -6003      # a level-0 requirement
 PROD_MFG = -5001
 PROD_RX = -5002
+PROD_RX2 = -5003
 
 failures = []
 
@@ -43,17 +45,21 @@ def check(cond, msg):
 def _cleanup(con):
     con.execute("DELETE FROM pp_char_skills WHERE character_id IN (?,?,?)", (CHAR_A, CHAR_B, CHAR_C))
     con.execute("DELETE FROM pp_characters WHERE context_id=?", (CTX,))
-    con.execute("DELETE FROM blueprint_skills WHERE blueprint_type_id IN (?,?)", (BP_MFG, BP_RX))
+    con.execute("DELETE FROM blueprint_skills WHERE blueprint_type_id IN (?,?,?)",
+                (BP_MFG, BP_RX, BP_RX2))
     con.execute("DELETE FROM types WHERE type_id IN (?,?,?)", (SKILL_CAP, SKILL_RIG, SKILL_FREE))
     con.commit()
 
 
 # The two graph shapes plan_skill_gaps consumes, hand-built so the test doesn't need a real plan.
 MFG = {PROD_MFG: {"blueprint_type_id": BP_MFG}}
-RX = {PROD_RX: {"reaction_id": BP_RX}}
+RX = {PROD_RX: {"reaction_id": BP_RX}, PROD_RX2: {"reaction_id": BP_RX2}}
 REQUIREMENTS = [
     {"type_id": PROD_MFG, "name": "Test Capital", "activity": "manufacturing"},
     {"type_id": PROD_RX, "name": "Test Reaction", "activity": "reaction"},
+    # A second reaction that B CAN install — without it every step is beyond every character and
+    # the "prefers a capable character" assertion below would pass for the wrong reason.
+    {"type_id": PROD_RX2, "name": "Test Easy Reaction", "activity": "reaction"},
 ]
 
 
@@ -85,6 +91,7 @@ def main():
             con.execute("INSERT INTO blueprint_skills VALUES (?,?,?,?)",
                         (BP_MFG, "manufacturing", sid, lvl))
         con.execute("INSERT INTO blueprint_skills VALUES (?,?,?,?)", (BP_RX, "reaction", SKILL_RIG, 5))
+        con.execute("INSERT INTO blueprint_skills VALUES (?,?,?,?)", (BP_RX2, "reaction", SKILL_RIG, 3))
         for cid, nm in ((CHAR_A, "Specialist"), (CHAR_B, "Generalist"), (CHAR_C, "Unscanned")):
             con.execute("INSERT INTO pp_characters (character_id, character_name, context_id) "
                         "VALUES (?,?,?)", (cid, nm, CTX))
@@ -151,6 +158,51 @@ def main():
         if rig:
             check(rig["level"] == 5,
                   f"the summary carries the HIGHEST level any step demands (got {rig['level']})")
+
+        print("the scheduler prefers a character who can actually install the job:")
+        from app.industry.schedule import assign_characters
+        sk._feature_on = lambda: True
+        try:
+            full = sk.analyze_plan_skills(CTX, REQUIREMENTS, MFG, RX)
+        finally:
+            sk._feature_on = real_feature_on
+        elig = full["eligibility"]
+        # PROD_RX2 needs Rig III: B (IV) can install it, A (0) cannot. PROD_RX needs Rig V, which
+        # NEITHER can do — that's the fallback case, tested separately below.
+        check(elig["capable"].get(PROD_RX2) == {CHAR_B},
+              f"eligibility names exactly who can install a step (got {elig['capable'].get(PROD_RX2)})")
+        # A deliberately gets MORE free slots than B, so a capacity-only assignment would pick A.
+        chars = [{"character_id": CHAR_A, "character_name": "Specialist",
+                  "manufacturing_slots": 5, "reaction_slots": 5},
+                 {"character_id": CHAR_B, "character_name": "Generalist",
+                  "manufacturing_slots": 1, "reaction_slots": 1}]
+        rx_only = [{"start_hours": 0.0, "tasks": [
+            {"type_id": PROD_RX2, "activity": "reaction", "runs": 1, "duration_hours": 1.0}]}]
+        assign_characters(rx_only, chars, elig)
+        t = rx_only[0]["tasks"][0]
+        check(t["character_id"] == CHAR_B,
+              "the capable character wins even though the other has 5x the free slots")
+        check(t.get("skill_ok") is True, "an assignment that works is stamped skill_ok=True")
+
+        print("capacity still decides among equally-capable characters:")
+        # Nobody is capable of the manufacturing step, so the tier is flat and the old
+        # most-free-capacity rule must still apply — A has more slots, so A takes it.
+        mfg_only = [{"start_hours": 0.0, "tasks": [
+            {"type_id": PROD_MFG, "activity": "manufacturing", "runs": 1, "duration_hours": 1.0}]}]
+        assign_characters(mfg_only, chars, elig)
+        t = mfg_only[0]["tasks"][0]
+        check(t["character_id"] == CHAR_A, "with no capable candidate, most-free-capacity still wins")
+        check(t.get("skill_ok") is False,
+              "falling back to someone who can't install it is stamped skill_ok=False, not hidden")
+
+        print("without eligibility the behaviour is byte-for-byte the old one:")
+        legacy = [{"start_hours": 0.0, "tasks": [
+            {"type_id": PROD_RX, "activity": "reaction", "runs": 1, "duration_hours": 1.0}]}]
+        assign_characters(legacy, chars)
+        t = legacy[0]["tasks"][0]
+        check(t["character_id"] == CHAR_A, "capacity-only assignment is unchanged when not skill-aware")
+        check("skill_ok" not in t,
+              "skill_ok is absent (not None/False) when no check ran, so 'unchecked' never reads as 'fine'")
 
         print("the feature flag really gates it:")
         sk._feature_on = lambda: False
