@@ -298,21 +298,39 @@ def recent_runs(limit: int = 60) -> list[dict]:
 
 def job_summary() -> list[dict]:
     """Latest state per job, including jobs that have never run — a job that stopped firing is the
-    one you most need to see, and it would be invisible if this only listed what's in the log."""
-    runs = recent_runs(300)
-    seen: dict[str, dict] = {}
-    for r in runs:
-        j = r["job"]
-        if j not in seen:
-            seen[j] = {**r, "runs": 0, "failures": 0}
-        seen[j]["runs"] += 1
-        if r["status"] == "error":
-            seen[j]["failures"] += 1
+    one you most need to see, and it would be invisible if this only listed what's in the log.
+
+    Asks the database for the latest run *per job* rather than slicing the tail of one global log.
+    It used to fold `recent_runs(300)` down by job, which quietly reported healthy daily jobs as
+    "never run": the three 15-minute jobs alone write ~288 rows a day, so a 300-row window spans
+    barely six hours, and anything less frequent than that fell off the end. `runs`/`failures` are
+    lifetime totals for the same reason — counts taken from that window described the window, not
+    the job. Both queries ride the (job, started_at) index.
+    """
+    ensure_job_tables()
     known = {name: (label, cadence) for name, label, cadence in KNOWN_JOBS}
-    for name, (label, cadence) in known.items():
-        seen.setdefault(name, {"job": name, "owner": None, "started_at": None, "ended_at": None,
-                               "status": "never run", "detail": "", "error": "",
-                               "runs": 0, "failures": 0})
+    con = get_connection()
+    try:
+        totals = con.execute(
+            "SELECT job, COUNT(*) AS runs, "
+            "SUM(CASE WHEN status='error' THEN 1 ELSE 0 END) AS failures "
+            "FROM pp_job_runs GROUP BY job").fetchall()
+        tot = {r["job"]: (int(r["runs"] or 0), int(r["failures"] or 0)) for r in totals}
+        seen: dict[str, dict] = {}
+        # Jobs retired from KNOWN_JOBS still have history worth showing, so union the two sets.
+        for name in list(known) + [j for j in tot if j not in known]:
+            last = con.execute(
+                "SELECT id, job, owner, started_at, ended_at, status, detail, error "
+                "FROM pp_job_runs WHERE job=? ORDER BY started_at DESC LIMIT 1", (name,)).fetchone()
+            runs, failures = tot.get(name, (0, 0))
+            if last is None:
+                seen[name] = {"job": name, "owner": None, "started_at": None, "ended_at": None,
+                              "status": "never run", "detail": "", "error": "",
+                              "runs": 0, "failures": 0}
+            else:
+                seen[name] = {**dict(last), "runs": runs, "failures": failures}
+    finally:
+        con.close()
     out = []
     for name, r in seen.items():
         label, cadence = known.get(name, ("", ""))
