@@ -146,6 +146,7 @@ a.plan-action-btn { text-decoration: none; display: inline-block; }
 #dashboardNavTab,
 #adminNavGroup,
 #adminMobileTab,
+#industryNavGroup,
 .tab[data-tab="analyze"],
 .tab[data-tab="planetary"],
 .tab[data-tab="characters"],
@@ -153,13 +154,26 @@ a.plan-action-btn { text-decoration: none; display: inline-block; }
 .tab[data-tab="layout"],
 .tab[data-tab="reactions"],
 .tab[data-tab="industry"],
-.tab[data-pimode="refill"] { display: none; }
+.tab[data-tab="contribute"],
+.tab[data-pimode="refill"],
+.tab[data-pimode="build"] { display: none; }
 
 html.nav-li #dashboardNavTab,
 html.nav-li .tab[data-tab="analyze"],
 html.nav-li .tab[data-tab="planetary"],
 html.nav-li .tab[data-tab="characters"],
-html.nav-li .tab[data-pimode="refill"] { display: flex; }
+html.nav-li .tab[data-tab="contribute"],
+html.nav-li .tab[data-pimode="refill"],
+html.nav-li .tab[data-pimode="build"] { display: flex; }
+
+/* The Industry group header is only worth drawing when something sits under it. Both of its
+   items are feature-gated AND login-gated, so a logged-out visitor used to get a bare "Industry"
+   heading with nothing beneath it. Tie the group's own visibility to the same conditions as its
+   contents. (_hideEmptyNavGroups() in planetary.js covers the cases CSS can't see — a feature
+   switched off at runtime, or a group page-restriction hiding the last item.) */
+html.nav-li.nav-feat-reactions #industryNavGroup,
+html.nav-li.nav-feat-industry #industryNavGroup { display: flex; }
+.nav-group-empty { display: none; }
 
 html.nav-adm #adminNavGroup,
 html.nav-grpmgr #adminNavGroup { display: flex; }

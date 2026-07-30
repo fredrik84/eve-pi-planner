@@ -196,11 +196,42 @@ function _applyTabGates() {
   if (needRedirect && typeof switchTab === 'function') switchTab('dashboard');
 }
 
+// A nav group whose every item is hidden is worse than no group — it reads as a broken menu.
+// CSS handles the static cases (see style-layout-admin.css); this catches the ones only the
+// runtime knows about: a feature flag switched off, or a group page-restriction that hid the
+// last remaining item. Measured from computed style rather than a list of conditions, so it
+// stays correct as items are added.
+function _hideEmptyNavGroups() {
+  document.querySelectorAll('.sidebar .nav-group-tabs').forEach(group => {
+    // Drop the class before measuring, or a group hidden on a previous pass would report all of
+    // its children as hidden (an ancestor with display:none hides them too) and could never
+    // become visible again.
+    group.classList.remove('nav-group-empty');
+    const items = group.querySelectorAll('.tab');
+    const anyVisible = Array.from(items).some(el => getComputedStyle(el).display !== 'none');
+    group.classList.toggle('nav-group-empty', items.length > 0 && !anyVisible);
+  });
+}
+
 function _applyLoginGates() {
   // Display is handled by CSS classes (nav-li set in renderHeaderSession).
   // This function only handles redirects for users who land on a gated tab while logged out.
-  if (_loggedIn) return;
-  const AUTH_TABS = ['analyze', 'planetary', 'characters', 'planetdb'];
+  _hideEmptyNavGroups();
+  if (_loggedIn) {
+    // Documented intent of the boot path in app.js: "a logged-in player with no remembered tab
+    // lands on the Dashboard". Nothing actually did that — boot only calls switchTab() when a tab
+    // IS remembered, so they landed on whichever tab the markup marked active.
+    if (!localStorage.getItem('activeTab') && typeof switchTab === 'function') switchTab('dashboard');
+    return;
+  }
+  // Tabs a logged-out visitor can't use. 'planner' (Find Buildables) and 'contribute' are in here
+  // because both need an account before they do anything — showing them to a stranger just
+  // advertises a dead end. How it works is the one page that helps someone who hasn't logged in.
+  // NOT 'layout': Factory Layout is shown on the feature flag alone (html.nav-feat-layout, with no
+  // html.nav-li in the selector), i.e. it is deliberately usable logged out. Bouncing off it would
+  // break a page a stranger is meant to reach.
+  const AUTH_TABS = ['analyze', 'planetary', 'characters', 'planetdb',
+                     'planner', 'contribute', 'reactions', 'industry'];
   const cur = localStorage.getItem('activeTab');
   if (AUTH_TABS.includes(cur) || cur === 'dashboard' || !cur) {
     if (typeof switchTab === 'function') switchTab('howitworks');

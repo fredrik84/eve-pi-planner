@@ -53,11 +53,11 @@
           <button class="tab tab-sub" data-tab="analyze"><span class="nav-ico">AN</span><span class="nav-lbl">Setup Analysis</span></button>
           <button class="tab tab-sub" data-tab="planetary"><span class="nav-ico">PP</span><span class="nav-lbl">Planetary Planning</span></button>
           <button class="tab tab-sub" data-tab="planner" data-pimode="refill"><span class="nav-ico">RF</span><span class="nav-lbl">Refill a plan</span></button>
-          <button class="tab tab-sub active" data-tab="planner" data-pimode="build"><span class="nav-ico">FB</span><span class="nav-lbl">Find Buildables</span></button>
+          <button class="tab tab-sub" data-tab="planner" data-pimode="build"><span class="nav-ico">FB</span><span class="nav-lbl">Find Buildables</span></button>
           <button class="tab tab-sub" data-tab="layout"><span class="nav-ico">FL</span><span class="nav-lbl">Factory Layout</span></button>
           <button class="tab tab-sub" data-tab="planetdb"><span class="nav-ico">DB</span><span class="nav-lbl">Planet DB</span></button>
           <button class="tab tab-sub" data-tab="contribute"><span class="nav-ico">?</span><span class="nav-lbl">Contribute</span></button>
-          <button class="tab tab-sub" data-tab="howitworks"><span class="nav-ico">i</span><span class="nav-lbl">How it works</span></button>
+          <button class="tab tab-sub active" data-tab="howitworks"><span class="nav-ico">i</span><span class="nav-lbl">How it works</span></button>
         </div>
         <div class="nav-group nav-group-tabs" id="industryNavGroup">
           <div class="nav-group-hd"><span class="nav-ico">IN</span><span class="nav-lbl">Industry</span></div>
@@ -103,7 +103,7 @@
     </div><!-- /tab-dashboard -->
 
     <!-- ── Tab: How it works (static help) ───────────────────────────────────── -->
-    <div id="tab-howitworks" class="tab-panel" style="display:none">
+    <div id="tab-howitworks" class="tab-panel">
       <div class="pp-layout">
         <div class="pp-main" style="grid-column: 1 / -1; max-width: 100%;">
 
@@ -184,7 +184,7 @@
     </div><!-- /tab-howitworks -->
 
     <!-- ── Tab: PI Planner ─────────────────────────────────────────────────── -->
-    <div id="tab-planner" class="tab-panel">
+    <div id="tab-planner" class="tab-panel" style="display:none">
      <div class="pi-stack">
 
       <!-- Inventory paste — shared by both PI Planner tools -->
