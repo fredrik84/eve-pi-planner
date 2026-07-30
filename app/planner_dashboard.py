@@ -17,7 +17,7 @@ from app.sde import load_pi_data, get_connection
 from app.market import fetch_prices
 from app.esi import session_context_id, ensure_char_tables
 from app.alert_settings import get_alert_settings
-from app.colony_alerts import compute_colony_alerts, _extractor_program_lengths
+from app.alerts import compute_alerts, _extractor_program_lengths
 from app.planner import _compute_p1_fracs, _effective_fph
 from app.planner_advisor import _expansion_capacity
 
@@ -206,13 +206,13 @@ def dashboard(pp_session: str = Cookie(default=None)):
 
     # Colony warnings, grouped PER CHARACTER and counted (so a fleet of expiring extractors is one
     # "12 extractions expiring" line, not 12 rows). All actual DETECTION (thresholds, mutes,
-    # severity) now lives in app.colony_alerts.compute_colony_alerts() — the same engine the
+    # severity) now lives in app.alerts.compute_alerts() — the same engine the
     # notification scheduler consumes, so a push and what's shown here can't drift apart. This
     # function only re-groups the flat alert list into display cards.
     _alert = get_alert_settings(context_id)
     _muted = set(_alert.get("muted_kinds") or [])
-    _colony_alerts = compute_colony_alerts(context_id, rows=rows, now=now)
-    for a in _colony_alerts:
+    _all_alerts = compute_alerts(context_id, rows=rows, now=now)
+    for a in _all_alerts:
         if a["character_id"] is not None:
             chars_in_view.add(a["character_id"])
 
@@ -223,7 +223,7 @@ def dashboard(pp_session: str = Cookie(default=None)):
     factory_refill_high = False                   # any instance escalated to "high" (imminent)?
     fulls = []                                    # storage_full instances, for the grouped card below
     _CORRECTNESS_KINDS = {"ext_unrouted", "fac_unfed", "fac_output", "p0_mismatch"}
-    for a in _colony_alerts:
+    for a in _all_alerts:
         ch = a["character_name"]
         if a["kind"] in _CORRECTNESS_KINDS:
             by_char.setdefault(ch, {}).setdefault(a["kind"], []).append(a["location"])
@@ -304,7 +304,7 @@ def dashboard(pp_session: str = Cookie(default=None)):
     issues.sort(key=lambda c: 0 if c["severity"] == "high" else 1)
 
     # The maintenance-routine countdown stats below (restart/empty/refill cadence) are always-on
-    # numbers, not muteable alerts, so they're computed separately from compute_colony_alerts() —
+    # numbers, not muteable alerts, so they're computed separately from compute_alerts() —
     # they still need every extractor's storage/program data regardless of any account's alert
     # thresholds or mutes.
     empty_pads_h = None; empty_pads_loc = None   # tightest empty→full launchpad time (emptying CADENCE)
@@ -339,7 +339,7 @@ def dashboard(pp_session: str = Cookie(default=None)):
     expansion = _expansion_capacity(context_id)
 
     # Fleet program-length norm (most common, 0.5h bins) — shared with the schedule_sync alert
-    # (see compute_colony_alerts()) so the two can't disagree; computed unconditionally here
+    # (see compute_alerts()) so the two can't disagree; computed unconditionally here
     # (unlike the alert) since the restart-due countdown below needs it regardless of mutes.
     ext_progs, norm = _extractor_program_lengths(rows)
 
@@ -355,9 +355,9 @@ def dashboard(pp_session: str = Cookie(default=None)):
         restart_due_h = max(0.0, (median_exp - now) / 3600.0)
         restart_due_loc = None   # fleet-wide batch, not a single colony
 
-    # Out-of-sync extractors: sourced from _colony_alerts (computed above), so muting schedule_sync
+    # Out-of-sync extractors: sourced from _all_alerts (computed above), so muting schedule_sync
     # in Settings > Alerts hides this card too, same as every other alert kind.
-    _sync_items = [a for a in _colony_alerts if a["kind"] == "schedule_sync"]
+    _sync_items = [a for a in _all_alerts if a["kind"] == "schedule_sync"]
     sync_warn = None
     if _sync_items:
         _sync_items.sort(key=lambda a: a["prog_hours"])
@@ -365,14 +365,14 @@ def dashboard(pp_session: str = Cookie(default=None)):
                      "off": [{"cid": a["character_id"], "char": a["character_name"], "loc": a["location"],
                               "hours": a["prog_hours"]} for a in _sync_items]}
 
-    # Reactions alerts (see app.colony_alerts._reaction_alerts) — unrelated to PI colonies, so
+    # Reactions alerts (see app.alerts._reaction_alerts) — unrelated to PI colonies, so
     # they're not folded into `issues`/`by_char` above; a flat pass-through list is enough, the
     # Dashboard only needs to show them exist (the Reactions tab itself is where the detail —
     # which product, which character — already lives via its own pending/todo display).
     reaction_alerts = [
         {"kind": a["kind"], "severity": a["severity"], "location": a["location"],
          "character_name": a["character_name"], "runs": a.get("runs"), "hours_left": a.get("hours_left")}
-        for a in _colony_alerts if a["kind"] in ("reaction_finishing_soon", "reaction_completed")
+        for a in _all_alerts if a["kind"] in ("reaction_finishing_soon", "reaction_completed")
     ]
 
     # Reactions summary for the main Overview/Maintenance cards — naturally empty/None for

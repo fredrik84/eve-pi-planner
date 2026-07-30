@@ -2,7 +2,7 @@
 Correctness tests for the fixed-unit "customer order" mode in Reactions (app/reactions.py) —
 create a target-quantity order, get the runs/materials/cost/time report, commit runs to real
 reaction slots, and the status/delete lifecycle. Hit as live requests against a running
-container via a fabricated pp_sessions cookie (same pattern as test_colony_alerts.py's live
+container via a fabricated pp_sessions cookie (same pattern as test_alerts.py's live
 smoke test) — this feature is mostly wiring on top of existing chain-math helpers
 (_explode_shopping_list, _explode_chain_tiers, _character_capacities), so the useful thing to
 verify is the wiring and the arithmetic, not re-deriving the chain math itself.

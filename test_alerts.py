@@ -1,6 +1,6 @@
 """
-Correctness tests for the shared colony-alert engine (app/colony_alerts.py) and its two
-consumers: the Dashboard (app/planner.py's dashboard()) and the notification scheduler
+Correctness tests for the shared alert engine (app/alerts.py) and its two
+consumers: the Dashboard (app/planner_dashboard.py's dashboard()) and the notification scheduler
 (app/notifications.py). Added when notifications were unified onto the same alert-detection
 engine the Dashboard uses, instead of re-implementing detection independently — this exact
 subsystem has caused a real production bug before (duplicate notifications from a scheduler
@@ -17,7 +17,7 @@ Two layers:
      the expected cards end-to-end.
 
 Usage:
-    python test_colony_alerts.py [--url http://localhost:8000]
+    python test_alerts.py [--url http://localhost:8000]
 """
 import argparse
 import json
@@ -31,7 +31,7 @@ sys.path.insert(0, ".")
 from app.sde import get_connection  # noqa: E402
 from app.notifications import ensure_notification_tables, _get_prefs  # noqa: E402
 from app.alert_settings import ALERT_KINDS, ensure_alert_settings_table  # noqa: E402
-from app.colony_alerts import compute_colony_alerts  # noqa: E402
+from app.alerts import compute_alerts  # noqa: E402
 
 FAKE_CTX = 777001
 FAKE_CID = 990001
@@ -140,7 +140,7 @@ def test_unknown_kind_filtered() -> bool:
 
 
 def test_all_eight_kinds_detected() -> bool:
-    print(f"\n{'='*60}\n  compute_colony_alerts detects all 9 kinds with correct severity\n{'='*60}")
+    print(f"\n{'='*60}\n  compute_alerts detects all 9 kinds with correct severity\n{'='*60}")
     ok = True
     _seed_character()
     now = time.time()
@@ -170,7 +170,7 @@ def test_all_eight_kinds_detected() -> bool:
     _insert_planet(9, 9, True, sim=json.dumps({"program_days": 2.0}))
     _insert_planet(10, 10, True, sim=json.dumps({"program_days": 0.5}))                        # drifted -> schedule_sync
 
-    alerts = compute_colony_alerts(FAKE_CTX)
+    alerts = compute_alerts(FAKE_CTX)
     by_kind = {}
     for a in alerts:
         by_kind.setdefault(a["kind"], []).append(a)
@@ -194,7 +194,7 @@ def test_all_eight_kinds_detected() -> bool:
 
 
 def test_muting_excludes_from_engine_output() -> bool:
-    print(f"\n{'='*60}\n  Muting a kind removes it from compute_colony_alerts (both consumers)\n{'='*60}")
+    print(f"\n{'='*60}\n  Muting a kind removes it from compute_alerts (both consumers)\n{'='*60}")
     ok = True
     ensure_alert_settings_table()
     con = get_connection()
@@ -206,7 +206,7 @@ def test_muting_excludes_from_engine_output() -> bool:
     )
     con.commit()
     con.close()
-    kinds = {a["kind"] for a in compute_colony_alerts(FAKE_CTX)}
+    kinds = {a["kind"] for a in compute_alerts(FAKE_CTX)}
     ok &= check("ext_unrouted" not in kinds, f"muted kind excluded (got kinds: {kinds})")
     ok &= check("schedule_sync" not in kinds, f"muted schedule_sync excluded (got kinds: {kinds})")
     ok &= check("expired" in kinds, "unmuted kinds still present")
@@ -224,7 +224,7 @@ def test_reaction_finishing_soon() -> bool:
     """)
     con.execute("DELETE FROM pp_char_industry_jobs WHERE character_id=?", (FAKE_CID,))
     # reaction_refill_hours default is 24h — a job with 5h left should fire as "warn"
-    # (the kind never escalates to "high" — see app.colony_alerts._reaction_alerts).
+    # (the kind never escalates to "high" — see app.alerts._reaction_alerts).
     end = datetime.fromtimestamp(time.time() + 5 * 3600, tz=timezone.utc).isoformat().replace("+00:00", "Z")
     jobs = [{"status": "active", "end_date": end, "product_type_id": 16665, "runs": 100, "activity_id": 11}]
     con.execute(
@@ -234,7 +234,7 @@ def test_reaction_finishing_soon() -> bool:
     con.commit()
     con.close()
 
-    alerts = [a for a in compute_colony_alerts(FAKE_CTX) if a["kind"] == "reaction_finishing_soon"]
+    alerts = [a for a in compute_alerts(FAKE_CTX) if a["kind"] == "reaction_finishing_soon"]
     ok &= check(len(alerts) == 1, f"exactly one reaction_finishing_soon alert (got {alerts})")
     if alerts:
         ok &= check(alerts[0]["severity"] == "warn", f"is always 'warn', never escalates (got {alerts[0]['severity']})")
@@ -250,7 +250,7 @@ def test_reaction_finishing_soon() -> bool:
     )
     con.commit()
     con.close()
-    alerts_far = [a for a in compute_colony_alerts(FAKE_CTX) if a["kind"] == "reaction_finishing_soon"]
+    alerts_far = [a for a in compute_alerts(FAKE_CTX) if a["kind"] == "reaction_finishing_soon"]
     ok &= check(len(alerts_far) == 0, f"a job with 72h left does not fire (got {alerts_far})")
 
     con = get_connection()
@@ -290,7 +290,7 @@ def test_live_dashboard_renders_expected_cards(base: str) -> bool:
         msgs = " ".join(it["msg"] for it in correctness_card["items"])
         ok &= check("extractor not routed" not in msgs, f"muted ext_unrouted does not appear (got: {msgs})")
     # schedule_sync is also muted from the previous test — sync_warn (sourced from the same
-    # compute_colony_alerts() list, see dashboard()) must disappear too, same as any other kind.
+    # compute_alerts() list, see dashboard()) must disappear too, same as any other kind.
     ok &= check(data.get("sync_warn") is None, f"muted schedule_sync's sync_warn card is absent (got {data.get('sync_warn')})")
     ok &= check("Extractions expired" in headers, f"expired card present (got headers: {headers})")
     ok &= check(any(h.startswith("Storage filling up") for h in headers), "storage_full card present")

@@ -1,9 +1,11 @@
-"""Shared colony-warning engine.
+"""Shared alert engine.
 
 Computes one flat list of individual alert instances (kind, severity, character, planet,
-message) from the same underlying colony data. Both the Dashboard (app/planner.py's
-`dashboard()`, for display) and the notification scheduler (app/notifications.py, for pushes)
-call `compute_colony_alerts()` — a single source of truth so a push notification and what's
+message). Most kinds come from colony data, but not all — see the Reactions kinds below, which
+is why this module is named for alerts rather than colonies. Both the Dashboard
+(app/planner_dashboard.py's `dashboard()`, for display) and the notification scheduler
+(app/notifications.py, for pushes)
+call `compute_alerts()` — a single source of truth so a push notification and what's
 shown on screen can never drift apart, and both automatically respect each account's configured
 thresholds and muted kinds (app/alert_settings.py) without re-implementing that logic.
 
@@ -168,7 +170,7 @@ def _fetch_factory_refill_hours(context_id: int) -> float | None:
 def _extractor_program_lengths(rows) -> tuple[list[dict], float | None]:
     """Per-extractor {character_id, character_name, planet_id, location, prog_hours, expiry} +
     the fleet's most common program length (0.5h bins, i.e. the batch-restart cadence). Shared
-    by compute_colony_alerts() (the schedule_sync alert, mute-aware) and planner.dashboard()'s
+    by compute_alerts() (the schedule_sync alert, mute-aware) and planner_dashboard.dashboard()'s
     restart-due countdown (an always-on maintenance stat, NOT mute-aware — it needs every
     extractor's program data regardless of any account's alert settings) — extracted here so
     the two can't compute a different norm."""
@@ -194,7 +196,7 @@ def _extractor_program_lengths(rows) -> tuple[list[dict], float | None]:
     return ext_progs, norm
 
 
-def compute_colony_alerts(context_id: int, rows=None, now: float | None = None) -> list[dict]:
+def compute_alerts(context_id: int, rows=None, now: float | None = None) -> list[dict]:
     """Flat list of individual alert instances for this account: one dict per affected
     planet/kind — {kind, severity, character_id, character_name, planet_id, location,
     hours_left, pct (storage_full only), prog_hours/norm_hours (schedule_sync only)}. Already

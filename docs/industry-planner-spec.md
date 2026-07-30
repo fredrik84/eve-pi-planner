@@ -40,7 +40,7 @@ decision is *shown, not asked*; configuration is added only where the math genui
 | Freight | Reactions `import/export_isk_per_m3` + collateral | Reuse verbatim |
 | Pricing (local→Jita, group sheet) | `app/markets.py:resolve_market_data`, group-sheet `alt_cost` logic | Reuse verbatim |
 | Reaction economics | `reactions/graph.py:_value_reaction_batch` (single source of truth) | Reuse for reaction-built inputs |
-| Alert engine | `compute_colony_alerts()` + `app/notifications.py` + `app/alert_settings.py:ALERT_KINDS` | Register new kinds; emit from an industry compute step |
+| Alert engine | `compute_alerts()` + `app/notifications.py` + `app/alert_settings.py:ALERT_KINDS` | Register new kinds; emit from an industry compute step |
 | Slot UX / "to install" / wizard / multi-slot job splitting | Entire `app/reactions/` package | Mirror the structure |
 
 ## 4. Architecture — `app/industry/` (mirrors `app/reactions/`)
@@ -192,7 +192,7 @@ deep-links them into the Reactions tab that owns them. No reaction logic is dupl
 
 Pure reuse of the existing engine. Register kinds in `alert_settings.py:ALERT_KINDS`; emit them
 from `compute_industry_alerts(context_id)` folded into the same aggregated list
-`compute_colony_alerts()` / `app/notifications.py` consume — so in-page Dashboard alerts and pushes
+`compute_alerts()` / `app/notifications.py` consume — so in-page Dashboard alerts and pushes
 (Pushover / ntfy / Discord) can never drift, and each kind gets per-account muting + severity +
 cooldown for free. Detection matches **live ESI jobs against the persistent queue** (same diff
 `reactions/jobs.py` does).
@@ -247,7 +247,7 @@ Admin → Features when ready. No public per-user endpoints (rule 8): every endp
   auto-derived** from the account's Reactions settings; **live manufacturing-job tracking**
   (`app/industry/jobs.py`, activity_id 1) → *free* slot counts + the **"to install" checklist**
   (`/api/industry/to-install`) + in-progress job list. Remaining: alerting (5 kinds into
-  `compute_colony_alerts`) and **spawning real reaction orders** into the Reactions service.
+  `compute_alerts`) and **spawning real reaction orders** into the Reactions service.
 - **Phase 4** — blueprint library UI (manual BPC costs, owned-BPO ME/TE) + treat items you already
   produce (PI / Reactions output) or hold in stock as available inputs (`on_hand` is already wired).
 - **Phase 5 (deferred)** — invention-cost BPCs, contract scanning, T3 reverse-engineering.

@@ -7,7 +7,7 @@ run a level-III command centre should be told that, not told to grind a rank-4 s
 throwaway context with colonies that DON'T need the character's trained level and assert the
 endpoint says so (and, just as importantly, stays quiet when the level really is needed).
 
-Seeds real rows + a fabricated pp_sessions cookie, same approach as test_colony_alerts.py.
+Seeds real rows + a fabricated pp_sessions cookie, same approach as test_alerts.py.
 Run inside the container:
     docker exec eve-pi-planner-web-1 python3 test_skill_enough.py --url http://localhost:8000
 """

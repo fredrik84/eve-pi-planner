@@ -174,7 +174,7 @@ function _renderSyncWarn(data) {
     </section>`;
 }
 
-// Reactions alerts (app.colony_alerts._reaction_alerts), one per character per kind:
+// Reactions alerts (app.alerts._reaction_alerts), one per character per kind:
 //  • reaction_finishing_soon — soonest RUNNING job has less than the configured
 //    reaction_refill_hours left (a lead-time warning).
 //  • reaction_completed — one or more jobs have FINISHED and are sitting idle; go collect the

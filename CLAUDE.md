@@ -18,7 +18,7 @@ These are standing rules for ALL changes. Follow them unless the user explicitly
    needs `DEBUG_PI`/`DEBUG_CONTEXT_ID`), `test_features.py` (feature flags + skill-roi public
    surface), `test_optimizer.py` (LP-solver correctness for `/api/optimize` — synthetic
    hand-computable cases + a live smoke test; run the in-process cases inside the container, not
-   the bare host, since `highspy`/`numpy` are only installed there), `test_colony_alerts.py`
+   the bare host, since `highspy`/`numpy` are only installed there), `test_alerts.py`
    (the shared alert engine + notification prefs migration — seeds fake `pp_char_planets` rows
    and a fabricated `pp_sessions` cookie to exercise the real `/api/dashboard` endpoint without
    a live ESI login), `test_min_cc.py` (layout CPU/PG fitting: the FIT_HEADROOM promise, `min_cc`,
@@ -166,7 +166,7 @@ planner_algo  <-  planner  <-  planner_advisor  <-  planner_dashboard
   `/api/redeploy-candidates` (+ the reseat geometry), `/api/expansion`, and the layout caches
   (`_layout_cache_get_or_compute`, `_UNITS_PER_PLANET`, `_FACTORY_FIT`, `_FACTORY_PACK_MAXDIAM`).
 - **`app/planner_dashboard.py`** — `/api/dashboard` (a ~400-line read-only aggregation) plus
-  `_pad_fill_meter`. It computes no plan; it reads state and re-groups what `compute_colony_alerts`
+  `_pad_fill_meter`. It computes no plan; it reads state and re-groups what `compute_alerts`
   and the advisor already produce.
 
 Each of the three has its **own `APIRouter`**, mounted by `main.py`. The CRUD half — per-character
@@ -1019,9 +1019,9 @@ deliberately stayed in `jobs.py` (it's about slots, and the customer-order alloc
 it too), which is what keeps the dependency acyclic. `__init__.py` imports jobs before advisor
 for the same reason.
 
-## Shared colony-alert engine (`app/colony_alerts.py`) + configurable thresholds (`app/alert_settings.py`)
+## Shared alert engine (`app/alerts.py`) + configurable thresholds (`app/alert_settings.py`)
 
-**`compute_colony_alerts(context_id, rows=None, now=None)`** is the single source of truth for
+**`compute_alerts(context_id, rows=None, now=None)`** is the single source of truth for
 every colony warning in the app — both the Dashboard (`planner.py`'s `dashboard()`, for display)
 and the notification scheduler (`app/notifications.py`, for pushes) call it and nothing else
 re-implements detection. This was a deliberate unification (2026-07-10): notifications used to
@@ -1051,7 +1051,7 @@ be hardcoded, so nothing changed behavior until a user edits it): `expiring_hour
 a pad to "high"), `storage_urgent_hours` (3 — counted in the "(N within Xh)" header). `muted_kinds`
 (JSON column, same row) lets ANY of the 8 kinds be turned off entirely, including the
 correctness-based ones with no numeric threshold to tune. `get_alert_settings(context_id)` is the
-single read path `compute_colony_alerts()` and the settings endpoints all use, so they can't drift.
+single read path `compute_alerts()` and the settings endpoints all use, so they can't drift.
 `GET/PUT /api/alert-settings` + `POST /api/alert-settings/reset`, all `require_context`-gated (own
 account only). `ALERT_KINDS` is the key+label registry — `GET /api/alert-settings` echoes it back
 as `available_kinds` so the frontend never hardcodes labels (the same registry is reused by
@@ -1302,11 +1302,11 @@ math, no ESI calls, so it runs freely between rescans. Settings/prefs/log are pe
 `pp_notification_settings`, `pp_notification_prefs`, `pp_notification_log`.
 
 - **Event detection is not this module's job.** `_process_context` calls
-  `app.colony_alerts.compute_colony_alerts(context_id)` — the same function `dashboard()` uses —
+  `app.alerts.compute_alerts(context_id)` — the same function `dashboard()` uses —
   and only filters/batches/sends. There used to be bespoke `_extractor_events`/`_factory_events`
   queries here, duplicating what the Dashboard computed; unified 2026-07-10 so a push and what's
   shown on screen can never drift apart. If you're tempted to add a new kind of push alert, add
-  the kind to `compute_colony_alerts()` first, not here.
+  the kind to `compute_alerts()` first, not here.
 - **Prefs = which kinds + a severity floor.** `pp_notification_prefs.notify_kinds` (JSON array of
   `ALERT_KINDS` keys) + `min_severity` (`"warn"` = everything, `"high"` = high only). Old
   `lead_hours`/`notify_extractors`/`notify_factories` columns are left in place (harmless, unused)

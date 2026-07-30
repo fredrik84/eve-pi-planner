@@ -9,27 +9,14 @@ cold.
 
 ---
 
-## 1. Alert-engine rename — decide: do it, or close it
-
-`app/colony_alerts.py` / `compute_colony_alerts()` are named after PI colonies, but the module also
-detects two Reactions kinds (`reaction_not_running`, `reaction_low_stock`) that have nothing to do
-with colonies. The name misleads.
-
-- **Work:** rename module → `app/alerts.py`, function → `compute_alerts()`, plus
-  `test_colony_alerts.py` → `test_alerts.py`. Import sites: `planner_dashboard.py` (`dashboard()`),
-  `notifications.py` (`_process_context`), the test. Zero behaviour change.
-- **Why still open:** it's been carried as "low value" for months without ever being worth its own
-  deploy. That's a decision, not a backlog item.
-- **First step:** pick one — schedule it alongside the next unrelated push, or move it to Closed.
-
-## 2. Remove the dead `_muted` assignment
+## 1. Remove the dead `_muted` assignment
 
 `app/planner_dashboard.py:213` assigns `_muted` and never reads it. Pyflakes flags it. Left in place
 deliberately during the 2026-07-29 planner split so that change stayed a provable pure move.
 
 - **First step:** delete the line; confirm `python3 -m pyflakes app/planner_dashboard.py` is clean.
 
-## 3. Disconnect a character
+## 2. Disconnect a character
 
 Requested 2026-07-21. Characters can only ever be *added* (ESI login, `?market=1`, `?reactions=1`,
 `?wallet=1`) — there is no in-UI removal. Surface it in the Settings modal under a Characters tab.
@@ -41,7 +28,7 @@ Requested 2026-07-21. Characters can only ever be *added* (ESI login, `?market=1
 - **Already handled:** `_market_character` falls back to the first scoped char, so removing the
   designated market character degrades gracefully.
 
-## 4. Required-skills-to-build (Industry)
+## 3. Required-skills-to-build (Industry)
 
 The manufacturing plan should list the skills the account is **missing** to actually build the
 target — you can't make a Revelation without capital production skills, and today the plan happily
@@ -53,7 +40,7 @@ schedules a job nobody can install.
   the account's best character; show missing skill + level.
 - **Size:** the largest open item — SDE backfill plus a new ESI fetch shape.
 
-## 5. Skill-optimization advisor page (Industry)
+## 4. Skill-optimization advisor page (Industry)
 
 Tell the user what to train to raise overall output: more reaction/manufacturing slots if they're
 constantly full, CC-upgrade / Interplanetary Consolidation for PI, higher Industry / Advanced
@@ -63,7 +50,7 @@ Industry for job time. Extends the existing PI `skill_roi` advisor.
   +Z% output" framing with a threshold so it doesn't nag someone already training toward max.
 - **Depends on** the full-skill-list fetch from item 4; do them in that order.
 
-## 6. Hand-built / custom colony layouts
+## 5. Hand-built / custom colony layouts
 
 Hybrid-colony detection shipped. Broader tracking of player-designed layouts (colonies that don't
 match any template we generate) is still unscoped.
@@ -71,7 +58,7 @@ match any template we generate) is still unscoped.
 - **First step:** decide what the feature would actually *do* for the user before building anything —
   detection alone has no action attached to it today.
 
-## 7. Layout engine — known gaps
+## 6. Layout engine — known gaps
 
 Both documented in CLAUDE.md, neither with a demand signal yet:
 
@@ -141,3 +128,4 @@ anything over a few seconds on a warm path as a regression worth tracing rather 
 | Skyhook storage bar | **Blocked** — ESI does not expose skyhook cargo; no deterministic formula to fall back on. Manual-checkpoint design was proposed and declined. Revisit only if CCP ships an endpoint. |
 | Deleting the legacy Find-Buildables analyzer | **Keep it** (2026-07-30). Live, ungated, default PI-planner sub-tab; `highspy`+`numpy` are lazy-imported so they cost image size only. Promoted to `app/analyzer.py` instead. |
 | Browser-level tests for `api()`/`toast()` | **Dismissed** (2026-07-30). Would mean introducing a browser-test harness this repo doesn't have; manual testing already catches the residual breakages at the expected rate. |
+| Alert-engine rename | **Done** (2026-07-30). `app/colony_alerts.py` → `app/alerts.py`, `compute_colony_alerts()` → `compute_alerts()`, `test_colony_alerts.py` → `test_alerts.py`. Pure rename, zero behaviour change; `test_alerts.py` passes in-container incl. the live `/api/dashboard` layer. |

@@ -3,7 +3,7 @@
 Supported channels: Pushover, ntfy.sh, Discord webhook (see notifiers.py).
 Events: the same 11 alert kinds the Dashboard shows (app.alert_settings.ALERT_KINDS) — expired,
 expiring, storage_full, factory_refill, ext_unrouted, fac_unfed, fac_output, p0_mismatch,
-schedule_sync. Event detection itself lives in app.colony_alerts.compute_colony_alerts(); this
+schedule_sync. Event detection itself lives in app.alerts.compute_alerts(); this
 module is purely a consumer (kind/severity filtering, cooldown, batching, sending) — it does not
 implement its own detection, so a push notification and what's shown on the Dashboard can never
 drift apart.
@@ -24,7 +24,7 @@ from app.sde import get_connection, ensure_once
 from app.esi import require_context, session_context_id
 from app.notifiers import make_notifier, CHANNEL_LABELS
 from app.alert_settings import ALERT_KINDS
-from app.colony_alerts import compute_colony_alerts
+from app.alerts import compute_alerts
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -223,7 +223,7 @@ def _process_context(con, context_id: int):
         return
 
     by_kind: dict[str, list[dict]] = {}
-    for a in compute_colony_alerts(context_id):
+    for a in compute_alerts(context_id):
         if a["kind"] not in notify_kinds:
             continue
         if min_severity == "high" and a["severity"] != "high":

@@ -28,7 +28,7 @@ DEFAULTS = {
 
 # Every kind of colony warning the Dashboard AND the notification system can raise, muteable/
 # routable regardless of whether it has a tunable threshold. Keys match the "kind" strings
-# app.colony_alerts.compute_colony_alerts() emits (the single shared engine both consume):
+# app.alerts.compute_alerts() emits (the single shared engine both consume):
 # ext_unrouted/fac_unfed/fac_output/p0_mismatch come straight from
 # app.esi._detect_colony_issues; expired/expiring/storage_full/factory_refill are the shared
 # engine's own labels for the four threshold-based kinds; schedule_sync (an extractor running a
