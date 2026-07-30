@@ -4,7 +4,7 @@ EVE SSO OAuth 2.0 integration.
 Required env vars:
   EVE_CLIENT_ID      — from https://developers.eveonline.com
   EVE_CLIENT_SECRET  — from https://developers.eveonline.com
-  EVE_CALLBACK_URL   — must match the registered callback (default: https://eve-pi.failed.name/auth/callback)
+  EVE_CALLBACK_URL   — must match the registered callback (default: https://eveindustry.net/auth/callback)
 
 Scopes requested:
   esi-skills.read_skills.v1
@@ -34,7 +34,7 @@ log = logging.getLogger(__name__)
 
 CLIENT_ID     = os.environ.get("EVE_CLIENT_ID", "")
 CLIENT_SECRET = os.environ.get("EVE_CLIENT_SECRET", "")
-CALLBACK_URL  = os.environ.get("EVE_CALLBACK_URL", "https://eve-pi.failed.name/auth/callback")
+CALLBACK_URL  = os.environ.get("EVE_CALLBACK_URL", "https://eveindustry.net/auth/callback")
 
 _NATURAL_SPLIT = re.compile(r"(\d+)")
 

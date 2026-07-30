@@ -135,9 +135,9 @@ jobs:
         run: |
           SHORT_SHA="${COMMIT_SHA:0:7}"
           if [ "$REF_NAME" = "main" ]; then
-            SITE_URL="https://eve-pi.failed.name"
+            SITE_URL="https://eveindustry.net"
           else
-            SITE_URL="https://eve-pi-dev.failed.name"
+            SITE_URL="https://dev.eveindustry.net"
           fi
           DEPLOYED=""
           for i in $(seq 1 40); do        # 40 x 15s = up to 10 minutes

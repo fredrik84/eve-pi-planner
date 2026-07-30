@@ -2,7 +2,7 @@
 Distribution test suite for the PI planner.
 
 Usage:
-    python test_distribution.py [--url https://eve-pi-dev.failed.name]
+    python test_distribution.py [--url https://dev.eveindustry.net]
 
 Requires DEBUG_PI=true and DEBUG_CONTEXT_ID set in the server's .env.
 """

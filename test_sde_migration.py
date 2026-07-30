@@ -17,7 +17,7 @@ Postgres instance during the migration: querying system_jumps for Jita's neighbo
 returned Perimeter, and _system_security('Jita') correctly returned 0.95.
 
 Usage:
-    python test_sde_migration.py [--url https://eve-pi-dev.failed.name]
+    python test_sde_migration.py [--url https://dev.eveindustry.net]
 """
 
 import argparse

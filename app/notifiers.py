@@ -87,7 +87,7 @@ class DiscordNotifier(BaseNotifier):
             embed: dict = {
                 "title": title,
                 "color": color,
-                "footer": {"text": "EVE PI Planner · eve-pi.failed.name"},
+                "footer": {"text": "EVE PI Planner · eveindustry.net"},
             }
             if description:
                 embed["description"] = description
@@ -111,7 +111,7 @@ class DiscordNotifier(BaseNotifier):
             method="POST",
             headers={
                 "Content-Type": "application/json",
-                "User-Agent": "DiscordBot (https://eve-pi.failed.name, 1)",
+                "User-Agent": "DiscordBot (https://eveindustry.net, 1)",
             },
         )
         try:

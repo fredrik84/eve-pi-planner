@@ -6,7 +6,7 @@ and the unauthenticated skill-roi response. Auth-only behaviour (a populated ski
 context) is left to manual checks, since it needs a logged-in session.
 
 Usage:
-    python test_features.py [--url https://eve-pi-dev.failed.name]
+    python test_features.py [--url https://dev.eveindustry.net]
 """
 
 import argparse

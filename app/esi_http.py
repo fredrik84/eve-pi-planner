@@ -39,7 +39,7 @@ ESI_BASE = os.getenv("ESI_BASE", "https://esi.evetech.net/latest")
 # instead of just blocking an anonymous client.
 USER_AGENT = os.getenv(
     "ESI_USER_AGENT",
-    "eve-pi-planner/1.0 (+https://eve-pi.failed.name; industry & PI planner)",
+    "eve-pi-planner/1.0 (+https://eveindustry.net; industry & PI planner)",
 )
 
 _BUDGET_KEY = "esi:error_budget"

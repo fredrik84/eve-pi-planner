@@ -2,7 +2,7 @@
 
 A multi-character Planetary Industry planner for EVE Online. Plan extraction and factory assignments across an entire fleet to hit a production target with the minimum number of planet interactions.
 
-**Live at [eve-pi.failed.name](https://eve-pi.failed.name)**
+**Live at [eveindustry.net](https://eveindustry.net)**
 
 ---
 

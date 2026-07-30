@@ -60,7 +60,7 @@ These are standing rules for ALL changes. Follow them unless the user explicitly
    touching the planning algorithm, schema/migration changes) where you genuinely want to watch it
    run before it hits prod. In that case: commit and push to `origin/dev` — CI builds a
    `:dev`-tagged image (`.github/workflows/build.yml`, `branches: [main, dev]`), ArgoCD Image
-   Updater rolls the live dev pod at `eve-pi-dev.failed.name` the same way prod does. For quick
+   Updater rolls the live dev pod at `dev.eveindustry.net` the same way prod does. For quick
    local iteration (UI tweaks, etc.) there's also a local `docker compose` stack — separate from,
    and not automatically kept in sync with, the live k8s `dev` namespace. Once it looks right:
    `git checkout main && git pull && git merge dev && git push origin main` — **that push is the
@@ -87,6 +87,21 @@ These are standing rules for ALL changes. Follow them unless the user explicitly
    refresh tokens are single-use/rotating regardless of which of our systems asks for one. The
    `eve-pi` namespace still exists but now hosts only `eve-pi-ops` (donation-alert,
    pod-health-check) — an unrelated app that was never part of this migration; don't delete it.
+
+   **Domains (since 2026-07-30):** prod is `eveindustry.net`, dev is `dev.eveindustry.net`. Each
+   environment serves on exactly **one** canonical host; every other name we answer on
+   (`www.eveindustry.net` and the legacy `eve-pi.failed.name` / `eve-pi-dev.failed.name`) is a
+   permanent 301 to it via the `canonical-redirect` Traefik middleware in the matching
+   `evpi-gitops` overlay. Two things force that shape, so don't "helpfully" start serving the app
+   on a second origin: an EVE application registers exactly **one** callback URL (prod and dev are
+   therefore two separate applications with different `EVE_CLIENT_ID`s — they cannot share one),
+   and the session cookie is set on whichever host completed `/auth/callback` with no `Domain`
+   attribute, so a second serving origin would be permanently logged out. Legacy names must stay
+   in the `Certificate` `dnsNames` for as long as we honour old links — a redirect still has to
+   complete a TLS handshake first. Changing a domain is a three-step cutover, in this order: DNS →
+   cert names (wait for `Ready`) → routes/redirect, then flip the callback in the developer portal
+   and the `EVE_CALLBACK_URL` key of the `eve-pi-env` secret together (Reloader only watches the
+   TLS secret, so that one needs a manual `rollout restart`).
 7. **Commit messages ARE the release notes — be extra vigilant.** The release step in
    `.github/workflows/build.yml` builds the changelog **directly from the commit log** since the
    previous tag (`git log <prev>..<tag>`), grouped into Features / Fixes / Performance / Maintenance
