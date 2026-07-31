@@ -66,6 +66,85 @@ def add_columns(con, table: str, *coldefs: str) -> None:
             pass          # already exists — the only failure worth swallowing here
 
 
+# Columns that store a Unix epoch and were declared `REAL`. On SQLite that's an 8-byte double and
+# fine; on Postgres `real` is **float4** — about 7 significant digits, where an epoch needs 10. In
+# the current epoch range float4's spacing is 128 seconds, so every one of these was quantised to
+# within ~64s of the truth. Measured on prod 2026-07-30: wrote 1785409464.304, read back
+# 1785409408.0, and 75% of sub-minute job runs rendered as a 0-second duration.
+#
+# Only EPOCHS are listed. The other float4 columns in this schema (percentages, volumes, ISK
+# amounts, security status, day counts) are perfectly well served by 7 significant digits — it is
+# specifically the 1.79e9 magnitude of a Unix timestamp that overruns them, which is why this is a
+# targeted list and not "every real column".
+_EPOCH_COLUMNS = [
+    ("pp_char_planets", "scanned_at"), ("pp_char_planets", "checkpoint_at"),
+    ("pp_char_planets", "esi_modified"), ("pp_char_planets", "esi_expires"),
+    ("pp_characters", "skills_expires"),
+    ("pp_colony_flags", "created_at"),
+    ("pp_colony_yield", "install_ts"), ("pp_colony_yield", "scanned_ts"),
+    ("pp_industry_completions", "completed_at"),
+    ("pp_industry_orders", "created_at"),
+    ("pp_industry_settings", "updated_at"),
+    ("pp_industry_shares", "created_at"), ("pp_industry_shares", "last_at"),
+    ("pp_job_config", "run_requested"), ("pp_job_config", "updated_at"),
+    ("pp_job_leases", "lease_until"),
+    ("pp_job_runs", "started_at"), ("pp_job_runs", "ended_at"),
+    ("pp_plan_baseline", "saved_at"),
+    ("pp_reaction_assignments", "created_at"),
+    ("pp_reaction_completions", "completed_at"),
+    ("pp_reaction_orders", "created_at"),
+]
+
+
+def widen_epoch_columns() -> list[str]:
+    """Widen every `_EPOCH_COLUMNS` entry still sitting at float4 to `double precision`.
+
+    Postgres-only: SQLite's REAL is already a double, and SQLite has no ALTER COLUMN TYPE anyway.
+
+    Idempotent by construction — it asks information_schema which columns are actually still `real`
+    and touches only those, so a second run is a no-op and a table that doesn't exist yet is simply
+    absent from the answer. Widening is non-lossy, but it does NOT recover precision already thrown
+    away: rows written before this ran keep their rounded values, and only new writes are exact.
+
+    Each ALTER gets its own commit for the reason spelled out in `add_columns`: Postgres aborts the
+    whole transaction on a failed statement, so batching these would let one failure silently undo
+    the ones that had already succeeded. Returns the list of columns it changed, for the log.
+    """
+    if not _IS_POSTGRES:
+        return []
+    con = get_connection()
+    changed: list[str] = []
+    try:
+        try:
+            rows = con.execute(
+                "SELECT table_name, column_name FROM information_schema.columns "
+                "WHERE table_schema='public' AND data_type='real'").fetchall()
+        except Exception:
+            return []
+        real_now = {(r["table_name"], r["column_name"]) for r in rows}
+        try:
+            con.commit()
+        except Exception:
+            pass
+        for table, col in _EPOCH_COLUMNS:
+            if (table, col) not in real_now:
+                continue
+            try:
+                con.execute(f"ALTER TABLE {table} ALTER COLUMN {col} TYPE double precision")
+                con.commit()
+                changed.append(f"{table}.{col}")
+            except Exception:
+                # Missing table, permissions, a lock timeout — none of them worth failing startup
+                # over, and the next boot retries. The column simply stays float4 until then.
+                try:
+                    con.rollback()
+                except Exception:
+                    pass
+    finally:
+        con.close()
+    return changed
+
+
 class _Row(dict):
     """Dict with integer positional indexing for sqlite3.Row compatibility."""
     def __getitem__(self, key):

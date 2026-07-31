@@ -150,6 +150,19 @@ def _ensure_all_tables():
             _logging.getLogger(__name__).warning("table ensure failed for %s: %s",
                                                  getattr(fn, "__name__", fn), e)
 
+    # Runs AFTER the ensures above, so the tables it widens exist. Postgres-only, idempotent, and a
+    # no-op on every boot after the first — see app.db.widen_epoch_columns for why epochs stored as
+    # `REAL` were losing ~64 seconds each on Postgres.
+    try:
+        from app.db import widen_epoch_columns
+        widened = widen_epoch_columns()
+        if widened:
+            _logging.getLogger(__name__).info(
+                "widened %d epoch column(s) from float4 to double precision: %s",
+                len(widened), ", ".join(widened))
+    except Exception as e:
+        _logging.getLogger(__name__).warning("epoch column widening failed: %s", e)
+
 
 @app.on_event("shutdown")
 async def _shutdown():

@@ -73,7 +73,7 @@ Both documented in CLAUDE.md, neither with a demand signal yet:
 
 ---
 
-## 5. Job timestamps are stored at float4 precision (Postgres)
+## 5. Epoch timestamps stored at float4 precision (Postgres) — FIXED 2026-07-31
 
 `pp_job_runs.started_at` / `ended_at` and `pp_job_leases.lease_until` are declared `REAL`. On SQLite
 that's an 8-byte double, but on Postgres `real` is **float4** — about 7 significant digits, and a Unix
@@ -84,14 +84,23 @@ Consequences, all on the admin Jobs page: displayed last-run times can be a minu
 run **duration** (`ended_at - started_at`) is meaningless for anything shorter than that — a 12s job
 shows as 0s or as ±64s. The lease is unaffected in practice (64s of slop against a 900s TTL).
 
-Fix is a widening migration, `ALTER TABLE ... ALTER COLUMN ... TYPE double precision` on the three
-columns — a table rewrite under an ACCESS EXCLUSIVE lock, but the table is a few thousand rows so it
-is effectively instant. Mind the fresh/stale-DB migration trap in CLAUDE.md: the ALTER must not share
-a transaction with the `CREATE TABLE IF NOT EXISTS` in `ensure_job_tables()`, or a failure takes the
-tables with it.
+Found while fixing the "healthy daily jobs reported as never run" bug (`job_summary`, 2026-07-30).
 
-Found while fixing the "healthy daily jobs reported as never run" bug (`job_summary`, 2026-07-30);
-left alone deliberately because that fix needed no schema change.
+**Fixed by `app.db.widen_epoch_columns()`**, called from `_ensure_all_tables()` at startup. Two
+things the original write-up got wrong, both found by inventorying the live schema rather than
+trusting the note:
+
+- It was **22 columns across 15 tables**, not 3. The same `REAL`-for-an-epoch pattern was in
+  `pp_char_planets` (scan/ESI-cache times), `pp_colony_yield`, every completions/orders/shares
+  table, and the BPC scan lease — the Jobs page was just the only place it was visible.
+- **Only epochs needed it.** The schema's other float4 columns (percentages, volumes, ISK amounts,
+  security status, day counts) are fine at 7 significant digits; it's specifically an epoch's 1.79e9
+  magnitude that overruns them. Widening everything would have been a bigger migration for no gain,
+  so `_EPOCH_COLUMNS` is an explicit list and `types.volume` is asserted to be left alone.
+
+Widening is non-lossy but does NOT recover precision already discarded — rows written before the
+migration keep their rounded values, so historical job durations stay wrong. Only new writes are
+exact. `test_epoch_precision.py` covers the round trip, idempotency, and the targeting.
 
 ---
 
