@@ -96,6 +96,19 @@ _EPOCH_COLUMNS = [
 ]
 
 
+# Arbitrary fixed key for the Postgres advisory lock guarding the widening below — only matters
+# that every replica uses the same constant, and that it differs from build_sde's.
+_EPOCH_WIDEN_LOCK_KEY = 918_273_646
+
+
+def _release_advisory(con, key: int) -> None:
+    try:
+        con.execute("SELECT pg_advisory_unlock(?)", (key,))
+        con.commit()
+    except Exception:
+        pass          # the lock is session-scoped; closing the connection frees it regardless
+
+
 def widen_epoch_columns() -> list[str]:
     """Widen every `_EPOCH_COLUMNS` entry still sitting at float4 to `double precision`.
 
@@ -115,11 +128,27 @@ def widen_epoch_columns() -> list[str]:
     con = get_connection()
     changed: list[str] = []
     try:
+        # Every replica boots at once and would otherwise each read information_schema before any
+        # of them had converted anything, then all run the same ALTERs — N sequential table
+        # rewrites under ACCESS EXCLUSIVE locks instead of one. Observed for real on the first
+        # deploy of this (three pods, 22/22/21 columns, same millisecond). Harmless at these table
+        # sizes, but it would block queries on a big one. Same advisory-lock pattern as
+        # scripts/build_sde.py, with the schema RE-READ inside the lock so the losers of the race
+        # find the work already done and skip it.
+        locked = False
+        try:
+            con.execute("SELECT pg_advisory_lock(?)", (_EPOCH_WIDEN_LOCK_KEY,))
+            con.commit()
+            locked = True
+        except Exception:
+            pass          # no lock is still better than no migration; worst case is the old race
         try:
             rows = con.execute(
                 "SELECT table_name, column_name FROM information_schema.columns "
                 "WHERE table_schema='public' AND data_type='real'").fetchall()
         except Exception:
+            if locked:
+                _release_advisory(con, _EPOCH_WIDEN_LOCK_KEY)
             return []
         real_now = {(r["table_name"], r["column_name"]) for r in rows}
         try:
@@ -140,6 +169,8 @@ def widen_epoch_columns() -> list[str]:
                     con.rollback()
                 except Exception:
                     pass
+        if locked:
+            _release_advisory(con, _EPOCH_WIDEN_LOCK_KEY)
     finally:
         con.close()
     return changed
