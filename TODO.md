@@ -21,12 +21,24 @@ needed**. `_fetch_skills` in app/esi.py was already pulling the character's enti
 `/characters/{id}/skills/` and discarding all but the ~10 in `SKILL_IDS`, so this needed no new call,
 no new scope, and no extra rate-limit budget — only somewhere to put the rest.
 
+`assign_characters` was made skill-aware on top of this (2026-07-30): candidates are tiered
+capable → unknown → incapable, capacity still decides within a tier, and a forced fallback is
+stamped `skill_ok: False` rather than hidden. Wired into both `/api/industry/plan` and the queue
+plan.
+
 Follow-ups, neither blocking:
 
-- **`assign_characters` is still skill-blind.** It assigns jobs on free slots alone, so it can name
-  a character who cannot install the job it just gave them. The skills panel reports the gap but does
-  not feed the assignment. Making it skill-aware is the obvious next step and is where this feature
-  stops being advice and starts being correct.
+- **The to-install checklist is still skill-blind.** `install_block()` in `app/industry/orders.py`
+  (behind `POST /api/industry/to-install`, and inlined into the queue plan) derives its OWN
+  assignment for the ready wave: it walks `_slot_pool`'s free slots most-loaded-first and names a
+  character per job, ignoring what `assign_characters` already decided. So the main screen's
+  "start these now" list can still tell you to install a job on a character who lacks the skills,
+  even though the plan below it marks that same job ⚠. Note the data is already in hand — wave 0's
+  tasks carry `skill_ok` and an assignee by the time `install_block` sees them, so this is about
+  reconciling two assignment paths, not fetching anything new. The honest fix is probably for
+  install_block to respect the scheduler's assignment instead of recomputing one; check first
+  whether its most-loaded-first ordering is doing something the scheduler's spread-the-work rule
+  isn't, because that difference is deliberate.
 - **Item 2 (skill-optimization advisor) is now unblocked** — it was waiting on the full-skill-list
   fetch, which `pp_char_skills` now provides.
 
