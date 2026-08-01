@@ -42,16 +42,46 @@ Follow-ups, neither blocking:
 - **Item 2 (skill-optimization advisor) is now unblocked** — it was waiting on the full-skill-list
   fetch, which `pp_char_skills` now provides.
 
-## 2. Skill-optimization advisor page (Industry)
+## 2. Skill-optimization advisor (Industry) — SHIPPED 2026-08-01, behind `industry_skill_advisor`
 
-Tell the user what to train to raise overall output: more reaction/manufacturing slots if they're
-constantly full, CC-upgrade / Interplanetary Consolidation for PI, higher Industry / Advanced
-Industry for job time. Extends the existing PI `skill_roi` advisor.
+`app/industry/advisor.py` + a card on the Industry tab. Slots and job-time are ranked against each
+other by reducing both to the same unit — percent more jobs finished per day — then sorted by gain
+per SP. Slot skills are suppressed unless the pool is ≥70% busy (an unfilled slot produces nothing;
+an idle pool gets an "already trained, go deploy" note instead); job-time skills always pay and are
+always offered. PI advice is REUSED, not reimplemented: `skill_roi` was split into an endpoint plus
+`skill_roi_for(context_id)`, reported under its own key because ISK/day cannot be ranked against a
+throughput percentage. `test_skill_advisor.py`, 24 assertions.
 
-- **Needs scoping first** — this is the vaguest item on the list. Include a "train X for Y SP →
-  +Z% output" framing with a threshold so it doesn't nag someone already training toward max.
-- **No longer blocked** (2026-07-30): the full skill list it was waiting on now lands in
-  `pp_char_skills` whenever `required_skills` is on. Scoping is the only thing left in the way.
+Two things worth remembering:
+
+- **Skill ranks are hardcoded** (6 constants, verified against the live SDE). The only source is
+  `fsd/typeDogma.yaml`, which costs ~1.8 GB peak RSS and ~19s to parse — an OOM risk at pod startup
+  against a 2Gi limit, for integers that never change.
+- **Cheapest next level is not the lowest-rank skill.** With Mass Production at IV, +1 slot costs
+  421,490 SP that way but only 2,000 SP via Advanced Mass Production 0→I, because level V is where
+  the SP curve explodes. The code picks by SP; a test that assumed "low rank = cheap" was the thing
+  that was wrong.
+
+## 2b. Job-time skills: real values, once they can be proven (2026-08-01)
+
+`account_industry_time_mults` used to read `if ind == 0 and adv == 0: ind = adv = 5`, silently
+upgrading an untrained account to V/V and quoting it a build ~47% faster than it can do.
+
+Fixing it turned out to hinge on telling a real 0 from a stale column, and TWO plausible signals
+were tried and rejected against real data before the right one:
+
+- **ESI skills scope** — rejected. It proves the character was scanned at some point, not that a
+  given column was filled. Would have jumped 13 of 26 accounts' job times by +47%.
+- **"any industry-era column is non-zero"** — also rejected, and provably: two accounts show Mass
+  Production V with Industry 0, which the game forbids (the SDE lists Industry III as a prerequisite
+  of Mass Production). `mass_production` was added to the scan before `industry`, so a populated
+  column says nothing about its neighbour.
+
+What shipped: only a `pp_char_skills` row set counts, because the full ESI list records absence as
+well as presence. Everything else keeps the V/V fallback and reports `skill_time_basis: "assumed"`,
+which the plan surfaces as a warning. So this changed nothing on deploy (0 rows in prod) and
+upgrades account-by-account as `required_skills` rolls out and characters rescan.
+`test_skill_time_mults.py`, 15 assertions, including the exact stale-column shape prod showed.
 
 ## 3. Hand-built / custom colony layouts
 

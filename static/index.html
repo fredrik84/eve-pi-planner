@@ -750,6 +750,14 @@
           <button class="ind-primary-btn ind-big-btn" onclick="indOpenPlanner()">Plan a new build</button>
         </div>
       </div>
+      <!-- What to train next. Rendered only when the industry_skill_advisor flag is on AND there is
+           something worth saying — indRenderSkillAdvisor() hides the card otherwise. -->
+      <div class="pp-card" id="indAdvisorCard" style="display:none">
+        <h2 class="pp-card-title">What to train next
+          <span class="pp-card-hint">— ranked by extra output per skill point</span>
+        </h2>
+        <div class="ind-body" id="indAdvisorBody"></div>
+      </div>
       </div><!-- /indContent -->
     </div><!-- /tab-industry -->
 

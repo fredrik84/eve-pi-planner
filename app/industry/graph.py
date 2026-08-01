@@ -53,9 +53,11 @@ class BuildParams:
     te_pct: float = 0.0                       # time efficiency (0–20)
     struct_material_mult: float = 1.0         # structure+rig MATERIAL multiplier (facility ME bonus)
     struct_time_mult: float = 1.0             # structure+rig TIME multiplier (facility TE bonus)
-    # Industry-skill time reduction, assumed maxed (the standard for anyone building seriously):
-    # manufacturing = Industry V (−20%) × Advanced Industry V (−15%) = 0.68; reactions get only
-    # Advanced Industry V (−15%) = 0.85. Without these the planner over-states job time by ~30%.
+    # Industry-skill time reduction. These DEFAULTS are the maxed case (manufacturing = Industry V
+    # −20% × Advanced Industry V −15% = 0.68; reactions get Advanced Industry V only = 0.85), but
+    # nothing in the app relies on them: every plan goes through resolve_build_params(), which
+    # overwrites both from the account's REAL scanned skills via account_industry_time_mults().
+    # They are the value a bare BuildParams() gets in a test or a REPL, not a planning assumption.
     mfg_skill_time_mult: float = 0.68
     rx_skill_time_mult: float = 0.85
     reaction_material_mult: float = 1.0 - REACTION_ME_REDUCTION
@@ -90,6 +92,10 @@ class BuildParams:
     # What to charge over cost when quoting a customer. Priced off NET cost — the leftovers a build
     # over-produces stay with the builder, so billing them to the customer would charge twice.
     margin_pct: float = 0.0
+    # "real" when the job-time skills came from a scanned character, "assumed" when nothing
+    # on the account has been scanned and V/V was used. Surfaced on the plan so a guess is
+    # never presented as a measurement — same principle as me_source per build step.
+    skill_time_basis: str = "assumed"
 
     def me_te_for(self, type_id: int, activity: str) -> tuple[float, float]:
         """(me_pct, te_pct) for a manufacturing product: its owned-blueprint values if known, else
@@ -438,26 +444,75 @@ MARGINAL_BUILD_PCT_OF_TOTAL = 3.0
 MIN_BUILD_SAVING_ISK = 5_000_000
 
 
-def account_industry_time_mults(context_id: int) -> tuple[float, float]:
+def account_industry_time_mults(context_id: int, with_basis: bool = False):
     """(manufacturing, reaction) job-time multipliers from the account's best Industry / Advanced
     Industry levels — Industry −4%/level (manufacturing), Advanced Industry −3%/level (all jobs).
-    Uses the highest across the account's characters (you build on your best-skilled toon). Falls
-    back to V/V (the norm for anyone building) when no skill data is stored yet — a rescan replaces
-    the assumption with the real numbers."""
+    Uses the highest across the account's characters (you build on your best-skilled toon).
+
+    **Real levels win wherever we can prove we have them.** This used to read
+    `if ind == 0 and adv == 0: ind = adv = 5`, which silently upgraded an untrained account to V/V
+    and quoted it a build ~47% faster than it can actually do.
+
+    The hard part is that a 0 in these columns has TWO meanings, and getting it wrong is expensive
+    in both directions. `industry`/`advanced_industry` were added to the character table after
+    `interplanetary_consolidation`/`command_center_upgrades`/`mass_reactions`, so a character last
+    scanned before that migration reads 0 for the newer columns while the older ones are populated —
+    a stale gap, not an untrained pilot. Measured on prod 2026-08-01: 79 characters across 13 of 26
+    accounts show exactly that shape (Mass Reactions V, Industry 0), and believing those zeros would
+    have inflated their job times by 47% overnight. The ESI skills scope does NOT separate the two
+    cases: it proves the character was scanned at some point, not that THESE columns were filled.
+
+    The only sound evidence is a `pp_char_skills` row set for the character — the full ESI skill
+    list written by the required-skills feature. It is authoritative because it records ABSENCE as
+    well as presence: a skill missing from it is genuinely untrained, so a 0 derived from it is a
+    fact. Without it we cannot tell a real 0 from a stale column, so the account keeps the V/V
+    fallback and the basis is reported as "assumed".
+
+    A tempting shortcut was "believe the columns if ANY industry-era column is non-zero, since that
+    proves a post-migration scan". It is WRONG, and prod proved it: two accounts show Mass
+    Production V with Industry 0, which the game does not allow — the SDE lists Industry III as a
+    prerequisite of Mass Production. `mass_production` was evidently added to the scan before
+    `industry`, so one populated column says nothing about its neighbour. Trusting that shortcut
+    would have inflated those accounts' job times by 47% on data that is provably impossible.
+
+    Practical effect: until required-skills is enabled and characters are rescanned, every account
+    reads "assumed" and nothing changes. As `pp_char_skills` fills in, accounts switch to their real
+    numbers automatically, one rescan at a time.
+
+    Pass `with_basis=True` to also get "real" or "assumed", so callers can say which they used
+    instead of presenting a guess as a measurement.
+    """
     ind = adv = 0
+    known = False
     try:
         con = get_connection()
-        r = con.execute(
-            "SELECT COALESCE(MAX(industry),0) AS i, COALESCE(MAX(advanced_industry),0) AS a "
+        rows = con.execute(
+            "SELECT character_id, COALESCE(industry,0) AS i, COALESCE(advanced_industry,0) AS a "
             "FROM pp_characters WHERE context_id=? AND COALESCE(is_dummy,0)=0", (context_id,),
-        ).fetchone()
+        ).fetchall()
+        scanned_ids: set = set()
+        if rows:
+            try:
+                ids = [r["character_id"] for r in rows]
+                placeholders = ",".join("?" for _ in ids)
+                scanned_ids = {r["character_id"] for r in con.execute(
+                    f"SELECT DISTINCT character_id FROM pp_char_skills "
+                    f"WHERE character_id IN ({placeholders})", tuple(ids))}
+            except Exception:
+                scanned_ids = set()      # table absent (feature never enabled) → nothing is proven
         con.close()
-        ind, adv = int(r["i"] or 0), int(r["a"] or 0)
+        for r in rows:
+            if r["character_id"] not in scanned_ids:
+                continue          # no authoritative list → its columns can't be trusted either way
+            known = True
+            ind = max(ind, int(r["i"] or 0))
+            adv = max(adv, int(r["a"] or 0))
     except Exception:
-        pass
-    if ind == 0 and adv == 0:
-        ind = adv = 5   # not fetched (or a fresh account) → assume trained, corrected on rescan
-    return ((1 - 0.04 * ind) * (1 - 0.03 * adv), (1 - 0.03 * adv))
+        known = False
+    if not known:
+        ind = adv = 5   # no provable data → assume trained, corrected once skills are scanned
+    mults = ((1 - 0.04 * ind) * (1 - 0.03 * adv), (1 - 0.03 * adv))
+    return (*mults, "real" if known else "assumed") if with_basis else mults
 
 
 def account_build_defaults(context_id: int) -> tuple[int | None, float]:
@@ -495,10 +550,10 @@ def resolve_build_params(context_id: int, me_pct: float, te_pct: float,
     except Exception:
         owned = {}
     me_by_product = {p: (o["me"], o["te"]) for p, o in owned.items()}
-    mfg_skill, rx_skill = account_industry_time_mults(context_id)
+    mfg_skill, rx_skill, skill_basis = account_industry_time_mults(context_id, with_basis=True)
     return BuildParams(
         me_pct=me_pct, te_pct=te_pct,
-        mfg_skill_time_mult=mfg_skill, rx_skill_time_mult=rx_skill,
+        mfg_skill_time_mult=mfg_skill, rx_skill_time_mult=rx_skill, skill_time_basis=skill_basis,
         mfg_cost_index=fetch_system_cost_index(sid, "manufacturing"),
         rx_cost_index=fetch_system_cost_index(sid, "reaction"),
         facility_tax_pct=tax, me_by_product=me_by_product, owned=owned,
@@ -687,6 +742,9 @@ def industry_plan(req: IndustryPlanRequest, ctx: int = Depends(require_context))
                       (sk or {}).get("eligibility"))
     if sk is not None:
         result["skill_gaps"] = sk["gaps"]
+    # Whether the job times above came from real scanned skills or the V/V fallback. The number is
+    # the same shape either way, so without this the user cannot tell a measurement from a guess.
+    result["skill_time_basis"] = inp.params.skill_time_basis
     return result
 
 

@@ -316,6 +316,12 @@ def _required_cc_extractor(planet_type: str, cc: int, no_storage: bool = False) 
 
 @router.get("/api/skill-roi")
 def skill_roi(pp_session: str = Cookie(default=None)):
+    """Endpoint wrapper — resolves the session to a context and defers to `skill_roi_for`, which
+    the Industry skill advisor also calls so the PI half of "what should I train" exists once."""
+    return skill_roi_for(session_context_id(pp_session))
+
+
+def skill_roi_for(context_id: int | None) -> dict:
     """Forward-looking 'train these skills for more output' advice for the player's CURRENT
     deployed setup (Setup Analysis tab). Two yield skills:
       • Interplanetary Consolidation — next level = +1 planet ≈ +1 colony's average value/day.
@@ -323,7 +329,6 @@ def skill_roi(pp_session: str = Cookie(default=None)):
         each FACTORY planet (layout-engine max_count delta × per-unit value). Extractor-side CCU
         gains (more basics) aren't modelled yet.
     Estimates (flat per-unit factory rate); strictly scoped to the session's context."""
-    context_id = session_context_id(pp_session)
     if not context_id:
         return {"suggestions": [], "enough": [], "note": None}
     pi = load_pi_data()

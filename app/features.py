@@ -152,6 +152,12 @@ FEATURE_REGISTRY = [
                     "SDE blueprint_skills table and per-character full skill lists — both only "
                     "populated while this is on, so turning it off costs nothing.",
      "default": False},
+    {"key": "industry_skill_advisor", "label": "Industry: skill advisor", "group": "Industry",
+     "description": "On the Industry tab: which skill level to train next for the most extra "
+                    "output per SP \u2014 slot skills when the pools are saturated, job-time skills "
+                    "always \u2014 alongside the planetary skill-ROI advice. Suppresses itself "
+                    "rather than nagging when the slots you have are already idle.",
+     "default": False},
     {"key": "industry_share", "label": "Industry: customer build-status links", "group": "Industry",
      "description": "Share a queued build with the person who ordered it: a login-free link showing "
                     "what's being built, which stage it's on, a progress bar and an ETA. Deliberately "

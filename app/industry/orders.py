@@ -389,6 +389,7 @@ def _run_queue_plan(ctx: int, req: QueuePlanRequest) -> dict:
                       (sk or {}).get("eligibility"))
     if sk is not None:
         res["skill_gaps"] = sk["gaps"]
+    res["skill_time_basis"] = inp.params.skill_time_basis
     _blend_margin(res, order_margins, inp.params.margin_pct)
     return res
 

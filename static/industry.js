@@ -34,9 +34,75 @@ async function onIndustryTabOpen() {
 
   indLoadSetupSummary();     // fire-and-forget: independent of the build status below
   indLoadLifetime();
+  indLoadSkillAdvisor();
   // If something is already cooking, that's what you came to look at — show the live build first
   // and fold the planner away. With an empty queue there's nothing to check, so lead with planning.
   await indRefreshStatus();
+}
+
+// ── What to train next ────────────────────────────────────────────────────────────────────────
+// Fire-and-forget like the other summary loaders. The endpoint answers {enabled:false} when the
+// flag is off, and the card stays hidden unless there is something actually worth saying — an
+// advisor that always has an opinion is one you learn to ignore.
+const _INDADV_ROMAN = ['0', 'I', 'II', 'III', 'IV', 'V'];
+const _indAdvLvl = n => _INDADV_ROMAN[n] || String(n);
+const _indAdvSp = n => (n >= 1e6 ? (n / 1e6).toFixed(2) + 'M' : Math.round(n / 1000) + 'k');
+
+async function indLoadSkillAdvisor() {
+  const card = document.getElementById('indAdvisorCard');
+  const body = document.getElementById('indAdvisorBody');
+  if (!card || !body) return;
+  let d = null;
+  try { d = await api('/api/industry/skill-advisor'); } catch (e) { return; }
+  if (!d || !d.enabled) { card.style.display = 'none'; return; }
+  const html = indRenderSkillAdvisor(d);
+  card.style.display = html ? '' : 'none';
+  if (html) body.innerHTML = html;
+}
+
+function indRenderSkillAdvisor(d) {
+  const sug = d.suggestions || [];
+  const enough = d.enough || [];
+  const pi = (d.planetary && d.planetary.suggestions) || [];
+  if (!sug.length && !enough.length && !pi.length) return '';   // nothing useful to say
+
+  const rows = sug.map(s => `<div class="ind-adv-row">
+      <span class="ind-adv-skill">${_esc(s.skill)} <b>${_indAdvLvl(s.from_lvl)} → ${_indAdvLvl(s.to_lvl)}</b></span>
+      <span class="ind-adv-char">${_esc(s.character_name)}</span>
+      <span class="ind-adv-detail">${_esc(s.detail)}</span>
+      <span class="ind-adv-gain" title="${s.gain_per_msp} % per million SP">+${s.gain_pct}%<span class="ind-adv-sp">${_indAdvSp(s.sp)} SP</span></span>
+    </div>`).join('');
+
+  // The "you already have enough" half. It is the more valuable half when it fires: it means the
+  // fix costs a deploy, not weeks of training.
+  const enoughRows = enough.map(e => `<div class="ind-adv-enough">
+      <span class="ind-adv-enough-nm">${_esc(e.skill)}</span>
+      <span class="ind-adv-detail">${_esc(e.detail)}</span>
+    </div>`).join('');
+
+  // Planetary advice is kept in its own block on purpose — its gains are ISK/day, which cannot be
+  // ranked against a throughput percentage without inventing a shared unit.
+  const piRows = pi.slice(0, 6).map(s => `<div class="ind-adv-row">
+      <span class="ind-adv-skill">${_esc(s.skill)} <b>${_indAdvLvl(s.from_lvl)} → ${_indAdvLvl(s.to_lvl)}</b></span>
+      <span class="ind-adv-char">${_esc(s.char)}</span>
+      <span class="ind-adv-detail">${_esc(s.detail || '')}</span>
+      <span class="ind-adv-gain">${s.add_isk_day ? '+' + fmtIsk(s.add_isk_day) + '/day' : ''}</span>
+    </div>`).join('');
+
+  let html = '';
+  if (rows) {
+    html += `<div class="ind-adv-sec">Industry — ranked by output gained per skill point</div>${rows}`;
+  }
+  if (enoughRows) {
+    html += `<div class="ind-adv-sec">Already trained — nothing to gain here yet</div>${enoughRows}`;
+  }
+  if (piRows) {
+    html += `<div class="ind-adv-sec">Planetary — valued in ISK/day, so not ranked against the above</div>${piRows}`;
+  }
+  html += `<div class="ind-adv-note">Slot skills are only suggested while the matching pool is `
+    + `busy — an extra slot you don't fill produces nothing. Job-time skills always pay, so they're `
+    + `offered whenever the character installs jobs at all.</div>`;
+  return html;
 }
 
 let _indOrders = [];
@@ -1558,6 +1624,16 @@ document.addEventListener('mouseout', e => {
   if (grid && !grid.contains(e.relatedTarget)) _indPipeClearHover(grid);
 });
 
+// Job times come from the account's REAL Industry / Advanced Industry levels (see
+// account_industry_time_mults). When no character has been scanned there are no real levels to use
+// and V/V stands in — say so, because an optimistic time that looks identical to a measured one is
+// exactly the number people promise deliveries on. Shared by both plan renderers.
+function _indSkillBasisWarn(d) {
+  if (d.skill_time_basis !== 'assumed') return '';
+  return `<p class="pp-warn">Job times assume Industry V and Advanced Industry V \u2014 no character `
+    + `has been scanned for skills yet. Rescan to plan against your real training.</p>`;
+}
+
 function _indRenderPlan(d, title) {
   _indReqMeTe = {};
   (d.requirements || []).forEach(r => { _indReqMeTe[r.type_id] = { me: r.me, te: r.te, me_source: r.me_source }; });
@@ -1582,6 +1658,7 @@ function _indRenderPlan(d, title) {
     <div class="ind-body">
       ${_indMetricTiles(d.metrics)}
       ${unres}
+      ${_indSkillBasisWarn(d)}
       ${_indBlueprintWarn(d)}
       ${_indSkillWarn(d)}
       ${_indStepsHtml(d, stageModel)}
@@ -1740,7 +1817,7 @@ function _indRenderPlanBody(d) {
   const stageModel = _indStageModel(tiersData);
   const unres = (d.unresolved && d.unresolved.length)
     ? `<p class="pp-warn">${d.unresolved.length} material(s) had no market price — cost is a floor.</p>` : '';
-  return unres + _indBlueprintWarn(d)
+  return unres + _indSkillBasisWarn(d) + _indBlueprintWarn(d)
     + _indPipelineHtml(d, tiersData, stageModel)
     + _indStepsHtml(d, stageModel)
     + `<details class="ind-details"><summary>Shopping list (${(d.shopping_list || []).length})</summary>`

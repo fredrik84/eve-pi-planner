@@ -1247,6 +1247,22 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-bp-px { flex: 0 0 auto; text-align: right; color: #e6d0b8; display: flex; flex-direction: column; align-items: flex-end; }
 .ind-bp-px b { color: #ffe0b0; font-variant-numeric: tabular-nums; }
 .ind-bp-sub2 { font-size: 11px; color: #b39a9a; }
+/* "What to train next" advisor rows. */
+.ind-adv-sec { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--clr-text-dim);
+  margin: 12px 0 6px; }
+.ind-adv-sec:first-child { margin-top: 0; }
+.ind-adv-row { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; font-size: 12.5px;
+  padding: 6px 0; border-bottom: 1px solid #1c2231; }
+.ind-adv-skill { color: #eef2f8; }
+.ind-adv-skill b { color: #8fc3ff; }
+.ind-adv-char { font-size: 11px; color: #8fa0b8; }
+.ind-adv-detail { font-size: 11.5px; color: #8fa0b8; flex: 1 1 auto; min-width: 0; }
+.ind-adv-gain { margin-left: auto; text-align: right; color: #7fdca6; font-variant-numeric: tabular-nums; }
+.ind-adv-sp { display: block; font-size: 10px; color: var(--clr-text-dim); }
+.ind-adv-enough { display: flex; gap: 10px; flex-wrap: wrap; font-size: 12px; padding: 5px 0; }
+.ind-adv-enough-nm { color: #cdd6e6; }
+.ind-adv-note { font-size: 11px; color: var(--clr-text-dim); margin-top: 10px; line-height: 1.5; }
+
 /* Missing skills to install a build's jobs. Same note chrome as the blueprint warning, amber-
    edged rather than blue: a missing blueprint is a purchase, a missing skill is a wait. */
 .ind-sk-note { margin: 12px 0; padding: 10px 13px; border: 1px solid #3a4356; border-left: 3px solid #c39a4a;
