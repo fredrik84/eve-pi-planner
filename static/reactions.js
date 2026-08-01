@@ -1253,7 +1253,12 @@ function _rxAssignSuggestion(i, btn) {
     chain_tiers: s.chain_tiers || [],
   })
     .then(() => {
-      if (!r.ok) throw new Error();
+      // There used to be an `if (!r.ok) throw new Error()` here — a leftover from when this called
+      // fetch() directly. `r` does not exist in this scope, so it threw a ReferenceError on every
+      // SUCCESSFUL assign, the catch below relabelled the row "Retry", and "Assign all" reported
+      // "Some failed". The POST had already committed, so each retry appended another full set of
+      // assignment rows: two suggestions retried a few times became 27 rows on a 10-slot character
+      // (reported 2026-08-01). apiSend() already rejects on a non-2xx, so reaching here IS success.
       btn.textContent = 'Assigned ✓';
     })
     .catch(() => {

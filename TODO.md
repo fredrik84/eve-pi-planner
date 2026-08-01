@@ -104,7 +104,45 @@ exact. `test_epoch_precision.py` covers the round trip, idempotency, and the tar
 
 ---
 
-## Perf regression protocol (fuel-block planner)
+## 6. Adopt `eslint --rule no-undef` in CI
+
+A dead `if (!r.ok)` left behind by the fetch()→api() migration referenced a variable that doesn't
+exist, so **every successful** reaction assign threw a ReferenceError, was caught, and was reported
+to the user as failed. Because `POST /api/reactions/assign` blindly appends, each retry added
+another full set of rows — two suggestions became 27 assignment rows on a 10-slot character
+(reported 2026-08-01, `static/reactions.js:1256`).
+
+`node --check` cannot catch this: it is valid syntax, and only fails when the line runs. `eslint`
+with a single rule does catch it, proven both ways on 2026-08-01 — re-introducing the bug reports
+`'r' is not defined` at that exact line, and the fixed tree reports **zero** `no-undef` findings
+across every file in `static/`. So there is no backlog of similar bugs to clear first; adopting the
+rule is purely preventive and starts from green.
+
+The wrinkle is that this codebase's JS is plain `<script>` files sharing ~813 implicit globals, so
+a naive run reports every cross-file helper as undefined. The working recipe (used for the audit)
+is to scrape top-level `function`/`let`/`const`/`var` names from all of `static/*.js` into the
+config's `globals` map, then lint with only `no-undef` enabled. That is ~20 lines of setup and no
+new runtime dependency for the app itself.
+
+**Related, still open:** `assign_reaction` has no idempotency and no capacity check, which is what
+turned a UI bug into 27 rows. See the note under item 7.
+
+## 7. Reaction assignment has no idempotency or capacity guard
+
+`POST /api/reactions/assign` (`app/reactions/jobs.py`) is a bare INSERT: re-posting the same
+suggestion appends a second full set of rows, and nothing stops the total exceeding the character's
+actual reaction slots. The frontend bug above is fixed, but any transient failure plus a retry can
+still duplicate.
+
+Both plausible fixes change real semantics, so this needs a decision rather than a patch:
+
+- **Idempotent replace** — re-assigning the same (character, type_id, tier_order) replaces that
+  group's rows instead of appending. Kills the duplication class outright, but breaks a user who
+  deliberately assigns the same product twice to one character to get more parallel jobs (today
+  that is what `job_count` is for, so the loss may be theoretical).
+- **Capacity cap** — refuse rows beyond the character's reaction slots. Careful: chain tiers are
+  SEQUENTIAL, not concurrent (tier 0 must finish before tier 1 starts), so a naive "count all rows
+  against slots" cap would wrongly reject legitimate deep chains.
 
 The fuel-block slowness reported 2026-07-06 is **fixed** — verified in code 2026-07-30: the
 Redis-shared `packed_rate` cache (`app/fuelblocks.py`, via `_layout_cache_get_or_compute`) and the
