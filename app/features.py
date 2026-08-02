@@ -164,6 +164,28 @@ FEATURE_REGISTRY = [
                     "carries no character names, systems or ISK — only the build's own progress. "
                     "Revocable at any time.",
      "default": False},
+    {"key": "industry_manual_done", "label": "Industry: mark jobs done by hand", "group": "Industry",
+     "description": "A tick on every build step to say it's already finished, for work the app "
+                    "can't see — a job run on a character that isn't connected, or a component "
+                    "acquired by trade instead of built. Counts as progress; never writes to the "
+                    "earnings ledger, so it can't inflate your turnover.",
+     "default": False},
+    {"key": "industry_blacklist", "label": "Industry: always-buy list", "group": "Industry",
+     "description": "Items you never build, however the make-or-buy math comes out. Kept per "
+                    "account and applied to every plan; an individual order set to build one of "
+                    "them anyway still does.",
+     "default": False},
+    {"key": "industry_corp_assets", "label": "Industry: corp hangars over ESI", "group": "Industry",
+     "description": "Read corp hangars and containers directly instead of pasting them, for "
+                    "characters with the Director role — EVE allows nothing weaker. They become "
+                    "ordinary opt-in stock sources. Everyone else keeps the paste, which needs no "
+                    "role at all.",
+     "default": False},
+    {"key": "industry_sourcing", "label": "Industry: material sourcing per build", "group": "Industry",
+     "description": "Per order: which materials are already gathered and which are still to buy. "
+                    "Point an order at the container you're hauling into and it keeps itself up to "
+                    "date from your assets; anything we can't see can be ticked off by hand.",
+     "default": False},
 ]
 GROUP_ORDER = ["Dashboard", "Setup Analysis", "Planner", "Planet DB", "Characters",
                "Notifications & Alerts", "Reactions", "Industry"]

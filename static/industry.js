@@ -35,6 +35,7 @@ async function onIndustryTabOpen() {
   indLoadSetupSummary();     // fire-and-forget: independent of the build status below
   indLoadLifetime();
   indLoadSkillAdvisor();
+  await indLoadBlacklist();  // awaited: the shopping list renders its chips from this
   // If something is already cooking, that's what you came to look at — show the live build first
   // and fold the planner away. With an empty queue there's nothing to check, so lead with planning.
   await indRefreshStatus();
@@ -196,6 +197,7 @@ async function indRefreshStatus() {
       + `<div id="indRunning" class="ind-install"></div>`;
     indRenderInstall(d.install);   // "do this now" — comes with the plan, no second round trip
     indLoadRunning();          // what's already cooking goes under the pipeline
+    if (_indSourcingOpen !== null) indRenderSourcing();   // the card was just repainted under it
   } catch (e) { body.innerHTML = `<p class="pp-warn">${_esc(e.message || "Could not plan your queue.")}</p>`; }
 }
 
@@ -290,10 +292,13 @@ function _indStatusHeadline(d) {
         + `ME ${ovMt[0]} · TE ${ovMt[1]}</span>` : '';
     const share = _featureActive('industry_share')
       ? `<button class="ind-oc-share" title="Share a status link with the customer" onclick="indShareOrder(${o.id})">↗</button>` : '';
+    const src = _featureActive('industry_sourcing')
+      ? `<button class="ind-oc-src" title="Materials for this build: what's already in the box and what's still to buy"`
+        + ` onclick="indOpenSourcing(${o.id})">\u{1F4E6}</button>` : '';
     return `<span class="ind-order-chip ind-oc-${st}" id="oc-${o.id}">${pos}${tag}<b>${o.quantity}×</b> ${_esc(o.name)}`
       + (lbl ? `<span class="ind-oc-state">${lbl}</span>` : '') + eta + mrg + forced + mete
       + `<button class="ind-oc-edit" title="Rename, change the quantity, margin or blueprint ME/TE" onclick="indEditOrder(${o.id})">✎</button>`
-      + share
+      + src + share
       + `<button class="ind-oc-del" title="Remove from the build" onclick="indRemoveOrder(${o.id})">✕</button></span>`;
   }).join('');
   return sim
@@ -304,7 +309,10 @@ function _indStatusHeadline(d) {
     + `<button class="ind-secondary-btn" onclick="indRefreshJobs()" title="Pull job status from EVE and re-plan">Refresh</button></div>`
     + `<div class="an-stats">` + tiles.map(([l, v, tip]) =>
         `<div class="an-stat" title="${_esc(tip)}"><div class="an-stat-lbl">${l}</div><div class="an-stat-val">${v}</div></div>`).join('')
-    + `</div>`;
+    + `</div>`
+    // Opened from an order chip; empty until then, and re-rendered in place so the panel survives
+    // the status card's own refreshes.
+    + `<div id="indSourcing" class="ind-sourcing"></div>`;
 }
 
 function indApplyGate(hasStructure) {
@@ -424,7 +432,8 @@ async function indLoadAssets() {
         + _indReauthHtml(d.needs_reauth)
         + `<div class="ind-src-actions">`
         + (d.scannable ? `<button class="ind-bp-btn ind-bp-connect" onclick="indRefreshAssets()">Scan assets</button>` : '')
-        + `<button class="ind-bp-btn" onclick="indOpenPaste()">Paste a hangar</button></div>`
+        + `<button class="ind-bp-btn" onclick="indOpenPaste()">Paste a hangar</button>`
+        + _indCorpScanBtn(d) + `<span id="indCorpMsg" class="ind-src-meta"></span></div>`
         + _indPasteFormHtml();
       return;
     }
@@ -434,7 +443,7 @@ async function indLoadAssets() {
     const rows = (d.sources || []).map(sc => {
       const sub = sc.kind === 'container'
         ? `container${sc.parent ? ' in ' + _esc(sc.parent) : ''}`
-        : sc.kind === 'paste' ? 'pasted' : 'hangar';
+        : sc.kind === 'paste' ? 'pasted' : sc.corp ? 'corp hangar' : 'hangar';
       const del = sc.kind === 'paste'
         ? `<button class="ind-src-del" title="Remove this pasted stock" onclick="event.preventDefault();indDeleteSource('${_esc(sc.key)}')">✕</button>` : '';
       return `<label class="ind-src-row"><input type="checkbox" ${sc.enabled ? 'checked' : ''} `
@@ -449,9 +458,43 @@ async function indLoadAssets() {
       + `<p class="ind-src-help">Tick the hangars and containers the planner may take materials from. Nothing is used until you pick it.</p>`
       + `<div class="ind-src-list">${rows || '<span class="ind-bp-hint">No usable hangars found.</span>'}</div>`
       + _indReauthHtml(d.needs_reauth)
-      + `<div class="ind-src-actions"><button class="ind-bp-btn" onclick="indOpenPaste()">Paste a hangar</button></div>`
+      + `<div class="ind-src-actions"><button class="ind-bp-btn" onclick="indOpenPaste()">Paste a hangar</button>`
+      + _indCorpScanBtn(d) + `<span id="indCorpMsg" class="ind-src-meta"></span></div>`
       + _indPasteFormHtml();
   } catch (e) { el.innerHTML = ''; }
+}
+
+// Reading corp hangars over ESI needs the Director role, which most players don't have — so this is
+// offered as an extra button rather than folded into the normal rescan, and its failure mode ("not
+// a director") is a plain answer rather than an error.
+function _indCorpScanBtn(d) {
+  if (!_featureActive('industry_corp_assets')) return '';
+  if (!d.corp_scannable) {
+    return `<button class="ind-bp-btn" onclick="indReauthAssets()" title="Corp hangars need one more `
+      + `permission — reconnect a director character to grant it">Connect a director</button>`;
+  }
+  return `<button class="ind-bp-btn" onclick="indRefreshCorpAssets()" title="Read the corp hangars `
+    + `and containers of any corp you're a director in">Scan corp hangars</button>`;
+}
+
+async function indRefreshCorpAssets() {
+  const msg = document.getElementById('indCorpMsg');
+  if (msg) msg.textContent = 'Reading corp assets…';
+  let d = null;
+  try { d = await apiSend('POST', '/api/industry/assets/refresh-corp'); }
+  catch (e) { if (msg) msg.textContent = String(e.message || e); return; }
+  // Say which of the two "nothing happened" cases it was: no role is permanent and actionable,
+  // an empty corp hangar is not.
+  const note = d.scanned
+    ? `Read ${d.corporations.join(', ')}.`
+    : (d.no_role || []).length
+      ? `${d.no_role.join(', ')} ${d.no_role.length === 1 ? 'is' : 'are'} not a Director — EVE only lets `
+        + `directors read corp assets. Paste the hangar instead.`
+      : 'No corp hangars found.';
+  await indLoadAssets();          // repaints the panel, so the note has to be written after it
+  indLoadQueue();
+  const m2 = document.getElementById('indCorpMsg');
+  if (m2) m2.textContent = note;
 }
 
 // How corp/shared hangars get in: paste them. ESI can't read a corp hangar for ordinary members,
@@ -1205,12 +1248,47 @@ function _indShopRowHtml(s, allowForce) {
       + (allowForce ? ` <button class="ind-shop-force" onclick="indForceBuildType(${s.type_id}, '${_esc(s.name).replace(/'/g, "\\'")}')"`
       + ` title="Build this component in the plan anyway">Build it</button>` : '');
   }
+  // A blacklisted material is on the list because of a standing rule, not because building lost on
+  // cost — without saying so the plan just looks like it got the make-or-buy call wrong.
+  const never = s.blacklisted
+    ? ` <button class="ind-never-badge" onclick="indBlacklist(${s.type_id}, false)"`
+      + ` title="On your always-buy list. Click to let the planner decide again.">always buy</button>` : '';
   return `<tr><td>${_esc(s.name)}`
     + `${s.bought_for_speed ? ' <span class="ind-speed-badge" title="Bought instead of built to save time">for speed</span>' : ''}`
-    + `${marginal}</td>`
+    + `${never}${marginal}</td>`
     + `<td class="ind-num">${Math.round(s.qty).toLocaleString()}</td>`
     + `<td class="ind-src">${s.source ? _esc(s.source) : '<span class="pp-warn">no price</span>'}</td>`
     + `<td class="ind-num">${s.line_cost != null ? fmtIsk(s.line_cost) : '—'}</td></tr>`;
+}
+
+// ── Always-buy blacklist ────────────────────────────────────────────────────────────────────
+// The account's standing "never build this" list. It changes what every plan does, so like the
+// forced-build overrides it is shown next to the shopping list it produces rather than buried in a
+// settings panel — a rule you can't see is one you can't remember setting.
+let _indBlacklist = [];
+
+async function indLoadBlacklist() {
+  if (!_featureActive('industry_blacklist')) return;
+  try { _indBlacklist = ((await api('/api/industry/blacklist')) || {}).items || []; }
+  catch (e) { _indBlacklist = []; }
+}
+
+async function indBlacklist(typeId, add) {
+  try {
+    _indBlacklist = ((await apiSend('POST', '/api/industry/blacklist',
+                                    { type_id: typeId, add: !!add })) || {}).items || [];
+  } catch (e) { toastError(e, 'Could not save'); return; }
+  _indSweep = null; _indSweepFailed = null;      // the make-or-buy mix moved, so cost and time did
+  _indReplanCurrent();
+}
+
+function _indBlacklistChipsHtml() {
+  if (!_featureActive('industry_blacklist') || !_indBlacklist.length) return '';
+  return `<div class="ind-forced-bar ind-never-bar"><span class="ind-forced-lbl">Always bought:</span>`
+    + _indBlacklist.map(b =>
+        `<button class="ind-forced-chip" onclick="indBlacklist(${b.type_id}, false)" title="Let the planner decide again">`
+        + `${_esc(b.name)} <span class="ind-forced-x">✕</span></button>`).join('')
+    + `<span class="ind-src-meta">An order set to build one of these anyway still builds it.</span></div>`;
 }
 
 // The components the user overruled, with a way back — once forced they vanish from the shopping
@@ -1259,7 +1337,7 @@ function _indShoppingSections(d, model, allowForce) {
   const totalCost = list.reduce((a, s) => a + (s.line_cost || 0), 0);
   return `<div class="ind-shop-bar"><button class="ind-copy-btn" onclick="indCopyMultibuy()">Copy everything</button>`
     + `<span class="ind-shop-tot">${list.length} items · ${fmtIsk(totalCost)}</span></div>`
-    + (allowForce ? _indForcedChipsHtml() : '') + sections;
+    + (allowForce ? _indForcedChipsHtml() : '') + _indBlacklistChipsHtml() + sections;
 }
 
 // Copy a shopping list (or one stage of it, if `stage` is given) in EVE's Multibuy paste format
@@ -1267,11 +1345,7 @@ function _indShoppingSections(d, model, allowForce) {
 function indCopyMultibuy(stage) {
   const list = (stage !== undefined && _indShopStageData[stage]) ? _indShopStageData[stage] : ((_indLastPlan && _indLastPlan.shopping_list) || []);
   if (!list.length) return;
-  const text = list.map(s => `${s.name}\t${Math.ceil(s.qty)}`).join('\n');
-  const btn = event && event.target;
-  const done = () => { if (btn) { const t = btn.textContent; btn.textContent = 'Copied ✓'; setTimeout(() => { btn.textContent = t; }, 1500); } };
-  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done).catch(() => {});
-  else { const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select(); try { document.execCommand('copy'); done(); } catch (e) {} document.body.removeChild(ta); }
+  _indCopyText(list.map(s => `${s.name}\t${Math.ceil(s.qty)}`).join('\n'));
 }
 
 // Jump from a pipeline "Buy N materials" card down to that exact stage in the shopping list below.
@@ -1335,6 +1409,28 @@ function _indMeTeChip(typeId) {
     + ` onclick="indEditMeTe(${typeId})">ME ${r.me} · TE ${r.te}</button>`;
 }
 
+// Two per-job controls that both amount to "the plan is wrong about this one, and I'd know":
+// I've already built it, and I never build this — see indMarkDone / indBlacklist below.
+function _indJobActions(x) {
+  let html = '';
+  if (_featureActive('industry_manual_done')) {
+    const t = _indProgTypeMap()[x.type_id];
+    const done = t && t.done_runs >= t.required_runs && t.required_runs > 0;
+    const byHand = t && t.manual_runs > 0;
+    html += done
+      ? `<button class="ind-job-done ind-job-done-on" onclick="indMarkDone(${x.type_id}, false)" title="${
+          byHand ? 'You marked this done — click to undo' : 'Already done. Click if that is wrong.'
+        }">✓ done</button>`
+      : `<button class="ind-job-done" onclick="indMarkDone(${x.type_id}, true)"`
+        + ` title="Mark this step done — for work we can't see, like a job run on a character that isn't connected">✓</button>`;
+  }
+  if (_featureActive('industry_blacklist')) {
+    html += `<button class="ind-job-never" onclick="indBlacklist(${x.type_id}, true)"`
+      + ` title="Always buy ${_esc(x.name)} instead of building it — on every build, until you undo it">⊘</button>`;
+  }
+  return html;
+}
+
 function _indJobChips(g) {
   return g.map(x => {
     const blocked = x.blocked || [];
@@ -1348,9 +1444,23 @@ function _indJobChips(g) {
             : 'Install this on ' + _esc(x.who.join(', '))
         }">on ${_esc(x.who.join(', '))}${blocked.length ? ' ⚠' : ''}</span>`
       : '';
-    return `<span class="ind-wave-job">${_esc(x.name)} ×${x.runs}${x.activity === 'reaction' ? ' rx' : ''} · ${_fmtHours(x.dur)}`
-      + who + _indMeTeChip(x.type_id) + `</span>`;
+    const t = _indProgTypeMap()[x.type_id];
+    const isDone = t && t.required_runs > 0 && t.done_runs >= t.required_runs;
+    return `<span class="ind-wave-job${isDone ? ' ind-wave-job-done' : ''}">`
+      + `${_esc(x.name)} ×${x.runs}${x.activity === 'reaction' ? ' rx' : ''} · ${_fmtHours(x.dur)}`
+      + who + _indMeTeChip(x.type_id) + _indJobActions(x) + `</span>`;
   }).join('');
+}
+
+// Mark a build step done (or take it back) and re-read progress. The whole status card re-renders
+// because a step going green moves the headline counters too — showing one and not the other is how
+// a page ends up disagreeing with itself.
+async function indMarkDone(typeId, done) {
+  try {
+    _indProgress = await apiSend('POST', '/api/industry/progress/done',
+                                 { type_id: typeId, runs: done ? null : 0 });
+  } catch (e) { toastError(e, 'Could not save'); return; }
+  indRefreshStatus();
 }
 
 // Edit in place on the chip: two numbers, and the plan re-runs against them. This is the "editing
@@ -2268,6 +2378,109 @@ function indRenderInstall(d) {
       ? `<h3 class="ind-do-title">Do this now</h3><div class="ind-do-grid">${cards}</div>${wait}${later}`
       : `<h3 class="ind-do-title">Nothing to start yet</h3>${wait}${later}`;
   } catch (e) { el.innerHTML = ''; }
+}
+
+// ── Per-order material sourcing ─────────────────────────────────────────────────────────────
+// "What have I already got for this build, and what's still to buy." The answer comes mostly from
+// the container the build is being gathered into — bind one and the list keeps itself up to date —
+// with a hand-entered quantity for everything ESI can't see.
+let _indSourcingOpen = null;      // order id, so the panel can be re-rendered after an edit
+
+async function indOpenSourcing(orderId) {
+  if (_indSourcingOpen === orderId) { indCloseSourcing(); return; }   // the chip toggles it
+  _indSourcingOpen = orderId;
+  const el = document.getElementById('indSourcing');
+  if (el) el.innerHTML = _indLoadingHtml('Working out what this build needs…');
+  await indRenderSourcing();
+}
+
+function indCloseSourcing() {
+  _indSourcingOpen = null;
+  const el = document.getElementById('indSourcing');
+  if (el) el.innerHTML = '';
+}
+
+let _indSourcingData = null;
+
+async function indRenderSourcing() {
+  const el = document.getElementById('indSourcing');
+  if (!el || _indSourcingOpen === null) return;
+  let d;
+  try { d = await api(`/api/industry/orders/${_indSourcingOpen}/sourcing`); }
+  catch (e) { el.innerHTML = `<p class="pp-warn">${_esc(e.message || 'Could not read this build.')}</p>`; return; }
+  _indSourcingData = d;
+
+  const opts = ['<option value="">— not tracked in a container —</option>']
+    .concat((d.sources || []).map(s =>
+      `<option value="${_esc(s.key)}"${s.key === d.source_key ? ' selected' : ''}>`
+      + `${_esc(s.name)}${s.kind === 'container' ? '' : ' (whole hangar)'}</option>`)).join('');
+
+  const rows = (d.items || []).map(i => {
+    // Where the "have" came from matters: contents of the box are observed and will keep updating,
+    // a typed number is a promise the user made and nothing will ever correct it.
+    const from = i.in_source >= i.required && i.required > 0
+      ? `<span class="ind-src-meta">in the box</span>`
+      : i.noted > 0 ? `<span class="ind-src-meta">noted by you</span>` : '';
+    const act = i.done
+      ? `<button class="ind-srcq-btn" onclick="indSetSourced(${i.type_id}, 0)" title="Clear what you noted for this">undo</button>`
+      : `<button class="ind-srcq-btn" onclick="indSetSourced(${i.type_id}, null)" title="I have all of this">got it</button>`;
+    return `<tr class="${i.done ? 'ind-srcrow-done' : ''}"><td>${_esc(i.name)} ${from}</td>`
+      + `<td class="ind-num">${Math.round(i.required).toLocaleString()}</td>`
+      + `<td class="ind-num">${Math.round(i.sourced).toLocaleString()}</td>`
+      + `<td class="ind-num">${i.remaining > 0 ? Math.round(i.remaining).toLocaleString() : '—'}</td>`
+      + `<td class="ind-num">${i.remaining_cost ? fmtIsk(i.remaining_cost) : '—'}</td>`
+      + `<td>${act}</td></tr>`;
+  }).join('');
+
+  const t = d.totals || {};
+  el.innerHTML = `<div class="ind-srcpanel">
+      <div class="ind-srcpanel-hd">
+        <span class="ind-srcpanel-title">Materials for ${d.quantity}× ${_esc(d.name)}`
+        + (d.label ? ` <span class="ind-oc-for">${_esc(d.label)}</span>` : '') + `</span>
+        <button class="ind-oc-del" onclick="indCloseSourcing()" title="Close">✕</button>
+      </div>
+      <div class="ind-srcpanel-bar">
+        <label class="ind-src-meta">Pulling from
+          <select onchange="indBindSource(this.value)">${opts}</select></label>
+        <span class="ind-shop-tot">${t.sourced} of ${t.materials} sourced`
+        + (t.remaining_cost ? ` · ${fmtIsk(t.remaining_cost)} still to buy` : '') + `</span>
+        <button class="ind-copy-btn ind-copy-sm" onclick="indCopyMissing()">Copy what's missing</button>
+      </div>
+      <p class="ind-src-help">Anything sitting in the container you pick counts automatically — rescan
+        your assets after hauling and this moves on its own. Use <b>got it</b> for stock we can't see.</p>
+      <table class="ind-table"><thead><tr><th>Material</th><th class="ind-num">Needs</th>
+        <th class="ind-num">Have</th><th class="ind-num">Short</th><th class="ind-num">Left to buy</th><th></th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="6">Nothing to buy for this one.</td></tr>'}</tbody></table>
+    </div>`;
+}
+
+async function indBindSource(key) {
+  try { await apiSend('PATCH', `/api/industry/orders/${_indSourcingOpen}`, { source_key: key }); }
+  catch (e) { toastError(e, 'Could not save'); return; }
+  indRenderSourcing();
+}
+
+async function indSetSourced(typeId, qty) {
+  try {
+    await apiSend('POST', `/api/industry/orders/${_indSourcingOpen}/sourcing`,
+                  { type_id: typeId, qty });
+  } catch (e) { toastError(e, 'Could not save'); return; }
+  indRenderSourcing();
+}
+
+// The shortfall in EVE Multibuy format — the actual point of the checklist is walking to the market
+// with what's left, not admiring what you already have.
+function indCopyMissing() {
+  const items = ((_indSourcingData || {}).items || []).filter(i => i.remaining > 0);
+  if (!items.length) return;
+  _indCopyText(items.map(i => `${i.name}\t${Math.ceil(i.remaining)}`).join('\n'));
+}
+
+function _indCopyText(text) {
+  const btn = event && event.target;
+  const done = () => { if (btn) { const t = btn.textContent; btn.textContent = 'Copied ✓'; setTimeout(() => { btn.textContent = t; }, 1500); } };
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done).catch(() => {});
+  else { const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select(); try { document.execCommand('copy'); done(); } catch (e) {} document.body.removeChild(ta); }
 }
 
 async function indLoadRunning() {

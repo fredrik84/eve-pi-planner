@@ -1321,3 +1321,35 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-ord-btn:hover:not(:disabled) { background: #1b2233; color: #fff; }
 .ind-do-runs b { color: var(--clr-accent); font-variant-numeric: tabular-nums; }
 .ind-opt-muted { opacity: .45; }
+
+/* Per-job overrides on a plan step: "I've already done this one" and "I always buy this one".
+   Both are corrections to the plan, so they sit on the job chip itself rather than in a panel
+   elsewhere — muted until hovered, since most jobs never need either. */
+.ind-job-done, .ind-job-never { background: none; border: 0; cursor: pointer; font-size: 11px;
+  padding: 0 3px; margin-left: 3px; color: var(--clr-text-dim); opacity: .55; }
+.ind-job-done:hover { color: var(--clr-green); opacity: 1; }
+.ind-job-never:hover { color: #d8b46a; opacity: 1; }
+.ind-job-done-on { color: var(--clr-green); opacity: 1; }
+.ind-wave-job-done { border-color: #2c4a33; color: var(--clr-text-soft); }
+/* A material on the shopping list because of a standing rule, not because building lost on cost. */
+.ind-never-badge { font-size: 10px; background: #241f16; color: #d8b46a; border: 1px solid #4a3f2c;
+  border-radius: 8px; padding: 1px 6px; cursor: pointer; }
+.ind-never-badge:hover { background: #2f2819; }
+.ind-never-bar .ind-forced-chip { background: #241f16; color: #d8b46a; border-color: #4a3f2c; }
+.ind-never-bar .ind-forced-chip:hover { background: #2f2819; }
+
+/* Sourcing panel: what's already gathered for one order and what's still to buy. */
+.ind-oc-src { background: none; border: 0; cursor: pointer; font-size: 12px; padding: 0 3px; }
+.ind-sourcing:empty { display: none; }
+.ind-srcpanel { background: #12161f; border: 1px solid var(--clr-border); border-radius: 8px;
+  padding: 10px 12px; margin: 10px 0 4px; }
+.ind-srcpanel-hd { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.ind-srcpanel-title { font-size: 13px; color: #eef2f8; font-weight: 600; }
+.ind-srcpanel-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 8px 0 4px; }
+.ind-srcpanel-bar select { background: #0e121b; color: var(--clr-text); border: 1px solid var(--clr-border);
+  border-radius: 4px; padding: 3px 6px; font-size: 12px; max-width: 260px; }
+.ind-srcq-btn { font-size: 10px; background: #161b28; color: #9fb4d8; border: 1px solid var(--clr-border);
+  border-radius: 8px; padding: 1px 7px; cursor: pointer; }
+.ind-srcq-btn:hover { background: #1b2233; color: #fff; }
+.ind-srcrow-done td { color: var(--clr-text-soft); }
+.ind-srcrow-done td:first-child { color: var(--clr-green); }

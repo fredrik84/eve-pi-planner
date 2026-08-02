@@ -30,4 +30,5 @@ from app.industry import (  # noqa: F401 — imported for endpoint registration 
     skills,         # required-skills-to-build: /api/industry/skill-coverage
     advisor,        # what to train next: /api/industry/skill-advisor
     shares,         # customer build-status links: /api/industry/orders/{id}/share, /build-status
+    sourcing,       # per-order material sourcing: /api/industry/orders/{id}/sourcing
 )

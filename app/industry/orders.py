@@ -60,6 +60,11 @@ def ensure_industry_orders_table():
             # The margin this order was quoted at. Snapshotted rather than read live: a customer
             # holding a price shouldn't see it move because the builder changed their default.
             "margin_pct REAL",
+            # The stock source this build pulls from — the corp hangar or container the materials
+            # are being gathered into. One box per build is how players actually keep two
+            # simultaneous builds apart, so the sourcing checklist reads that box rather than
+            # asking them to tick materials off by hand.
+            "source_key TEXT DEFAULT ''",
         )
         con.commit()
     finally:
@@ -85,6 +90,7 @@ class OrderUpdate(BaseModel):
     label: str | None = None
     priority: int | None = None
     status: str | None = None
+    source_key: str | None = None    # '' unbinds the order from its container
 
 
 def _parse_map(value) -> dict:
@@ -235,6 +241,8 @@ def update_order(order_id: int, req: OrderUpdate, ctx: int = Depends(require_con
             params.append(json.dumps(req.me_te_overrides))
         if req.margin_pct is not None:
             sets.append("margin_pct=?"); params.append(max(0.0, min(100.0, float(req.margin_pct))))
+        if req.source_key is not None:
+            sets.append("source_key=?"); params.append(req.source_key.strip()[:80])
         if req.status is not None:
             if req.status not in _VALID_STATUSES:
                 raise HTTPException(status_code=400, detail=f"status must be one of {_VALID_STATUSES}")
@@ -259,6 +267,11 @@ def delete_order(order_id: int, ctx: int = Depends(require_context)):
         _order_row(con, order_id, ctx)
         con.execute("DELETE FROM pp_industry_orders WHERE id=? AND context_id=?", (order_id, ctx))
         con.commit()
+        # The sourcing notes are about THIS order's materials and mean nothing without it; ids are
+        # reused by the sequence eventually, so leaving them would attach one build's notes to
+        # another's.
+        from app.industry.sourcing import clear_order_sourcing
+        clear_order_sourcing(ctx, order_id)
         return {"deleted": order_id}
     finally:
         con.close()
