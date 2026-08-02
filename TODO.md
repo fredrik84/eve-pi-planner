@@ -83,6 +83,33 @@ which the plan surfaces as a warning. So this changed nothing on deploy (0 rows 
 upgrades account-by-account as `required_skills` rolls out and characters rescan.
 `test_skill_time_mults.py`, 15 assertions, including the exact stale-column shape prod showed.
 
+## 2c. Running a build, not just planning one — SHIPPED 2026-08-02
+
+Four requests from builders using the Industry tab, each behind its own flag: `industry_blacklist`
+(always-buy list), `industry_manual_done` (tick a build step done by hand), `industry_corp_assets`
+(read corp hangars/containers over ESI for directors), `industry_sourcing` (per-order material
+checklist bound to the container the build is gathered into). Design notes in CLAUDE.md under
+"Industry: running a build, not just planning one"; 40 new assertions in `test_industry.py`.
+
+Two consequences worth knowing before touching this area:
+
+- **Two new ESI scopes** (`esi-assets.read_corporation_assets.v1`,
+  `esi-corporations.read_divisions.v1`) joined the unified superset, so every existing character
+  holds a token without them until it is re-authorised. Only the corp scan needs them; the UI says
+  who to reconnect rather than failing vaguely.
+- **`pp_asset_sources.scope`** now records which scan owns a source, and a re-scan replaces
+  everything that scan owned. Before this, a container that had been emptied kept its last known
+  contents forever — the personal scan had the same bug, and this fixed it there too.
+
+Open follow-ups, neither blocking:
+
+- The sourcing panel plans the order on its own (one `build_plan` per open). Fine for a handful of
+  orders; if someone queues 30, this becomes the page's most expensive call and wants the same
+  treatment the to-install checklist got (derive it from a plan that already exists).
+- Manual "done" marks are per TYPE, so two orders needing the same component share one tick. That is
+  consistent with how every other progress signal works here, but it means a mark can't say "done
+  for THIS order" — worth revisiting only if someone actually hits it.
+
 ## 3. Hand-built / custom colony layouts
 
 Hybrid-colony detection shipped. Broader tracking of player-designed layouts (colonies that don't

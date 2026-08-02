@@ -909,6 +909,68 @@ and no session: the page must be incapable of showing account data even by accid
 - Public reads are cached 60s (`indshare:<id>`); a public page whose every render costs two plans
   would otherwise be an amplification lever.
 
+## Industry: running a build, not just planning one
+
+Four things builders asked for after living with the tool. Each is behind its own flag
+(`industry_blacklist`, `industry_manual_done`, `industry_corp_assets`, `industry_sourcing`).
+
+**Always-buy blacklist** (`never_build_ids`). The mirror of `force_build_ids`: some things a player
+simply always buys, which is a standing way of operating rather than a judgement the cost math can
+reach. Stored per account in `pp_industry_settings.never_build_ids` (JSON id array) with its **own
+write path** (`GET/POST /api/industry/blacklist`, `set_blacklist`) — deliberately NOT a field on the
+settings PUT, which is a debounced save of the whole plan form and would carry a stale list along
+with every knob move. Applied in `resolve_unit_costs`, not at demand time: deciding to buy a
+component while still costing its parent as if it were built is the mismatch that makes a total stop
+matching its own shopping list. Three precedence rules, all deliberate:
+- **`force_build_ids` wins** — a per-order "build it anyway" is the more specific instruction.
+- **A blacklisted item with no buy price is still built**; refusing to build what can't be bought
+  would leave the plan no way to get one at all.
+- **A TARGET is never blacklisted out of its own build** (`prepare_plan_inputs` filters the order's
+  own products out of the list before it reaches the params) — ordering it IS the newer instruction.
+Both shopping-list builders (`build_plan` and `plan_queue`) stamp `blacklisted` on the row, because
+a material bought under a standing rule otherwise looks like the engine got make-or-buy wrong.
+
+**Marking a job done by hand** (`pp_industry_manual_done`, `POST /api/industry/progress/done`).
+Progress inference is right most of the time and wrong in ways only the user can see: a batch built
+on a character that never granted the jobs scope, work done before the account was connected, a
+component acquired by trade. The mark is the **third done-signal**, combined by `resolve_done(need,
+completed, from_stock, manual)` — the max of the three, capped at the requirement — so it can raise
+a count but never hide observed work. Stored per TYPE (the grain everything else here uses), and
+epoch-gated exactly like the completion ledgers so a tick from a finished build can't read as
+progress on a re-queued one. Runs `-1` (`_ALL`) means "all of it, whatever the plan currently says";
+a concrete number would go stale the moment a quantity changed. It **never writes to the completion
+ledgers** — those feed lifetime turnover and profit, and a tick is not evidence of an ISK-bearing
+job (same rule the simulated-progress preview follows).
+
+**Corp hangars over ESI** (`refresh_corp_assets`, `POST /api/industry/assets/refresh-corp`). The
+module docstring used to say corp assets were deliberately not read, because `/corporations/{id}/
+assets/` needs the **Director** role and ESI offers nothing weaker. That reasoning still holds for
+most players — the paste path is theirs — but directors run their builds out of corp hangars, so
+this reads them into the same opt-in source list. Adds `CORP_ASSETS_SCOPE` +
+`CORP_DIVISIONS_SCOPE` (division names: a director picking a hangar needs the names they gave it) to
+the ONE unified scope superset. **A 403 is not an error** — it is the expected answer for a
+non-director and is reported as "no Director role", never retried. Scanned once per CORPORATION, not
+per character, and only on request (a full corp asset list is heavy).
+Two supporting changes in `assets.py`: sources carry the **`scope`** that owns them (`char:<id>` /
+`corp:<id>`), so a re-scan replaces everything that scan owns instead of only what it found this
+time — an emptied container has to disappear, since counting stock you can't draw from is the
+asymmetric error this module exists to avoid — and `_split_by_source` takes a `cont_key` so corp
+keys (`corp:<cid>:h<n>`, `corp:<cid>:c<item>`) can't collide with personal ones.
+
+**Per-order material sourcing** (`app/industry/sourcing.py`, `pp_industry_sourced`,
+`pp_industry_orders.source_key`). "What have I already gathered for this build, and what's still to
+buy." Players dedicate a container per build and haul into it, so **the box is the record**: an
+order names one stock source and whatever is in it counts as sourced with no ticking at all — rescan
+after hauling and the checklist moves itself. A hand-entered quantity covers what ESI can't see; the
+**higher of the two wins** per material, so a note never erases real contents and a scan never
+erases a note. `source_quantities(ctx, key)` deliberately ignores the source's *enabled* flag: this
+asks what's in a specific box the user pointed at, not what the planner may spend.
+**The requirement is per ORDER, not the queue batch** — the queue aggregates demand across orders
+(right for cost and scheduling, useless here: you can't haul 40% of a shared batch into one
+customer's box), so this plans the order alone with its own quantity and overrides, and the sum
+across orders can legitimately exceed what the queue will build. Deleting an order clears its notes
+(ids get reused).
+
 
 ## Bug reporting (`app/bugs.py`, `pp_bugs` table)
 

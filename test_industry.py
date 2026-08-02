@@ -88,6 +88,39 @@ def approx(a, b, tol=0.01):
     return a is not None and abs(a - b) <= tol
 
 
+class _KeepOpen:
+    """A sqlite connection whose close() does nothing.
+
+    The code under test opens and closes a connection per call, which is right against a pool and
+    fatal against `:memory:` — the database only exists while a connection to it does. Everything
+    else passes straight through.
+    """
+
+    def __init__(self, con):
+        self._con = con
+
+    def __getattr__(self, name):
+        return getattr(self._con, name)
+
+    def close(self):
+        pass
+
+
+def _patch_db(module):
+    """Point one module's `get_connection` at a private in-memory DB. Returns (con, restore)."""
+    con = sqlite3.connect(":memory:")
+    con.row_factory = sqlite3.Row
+    keeper = _KeepOpen(con)
+    real = module.get_connection
+    module.get_connection = lambda: keeper
+
+    def restore():
+        module.get_connection = real
+        con.close()
+
+    return con, restore
+
+
 def test_material_formula():
     print("test_material_formula")
     check("no ME", effective_material_qty(10, 1, 0, 1.0) == 10)
@@ -1619,6 +1652,12 @@ def main():
     test_esi_budget_guard()
     test_job_runner_lease_and_toggle()
     test_run_now_trigger()
+    test_blacklisted_components_are_always_bought()
+    test_a_target_is_never_blacklisted_out_of_its_own_build()
+    test_hand_marked_jobs_count_as_progress()
+    test_sourcing_notes_belong_to_one_order()
+    test_a_scan_retires_stock_that_is_no_longer_there()
+    test_corp_hangars_and_containers_split_like_personal_ones()
     print(f"\nAll {_passed} checks passed.")
 
 
@@ -1640,6 +1679,187 @@ def test_structure_bonus():
     check("no hull no rig", manufacturing_bonus(None, 0, 0, "high") == (0.0, 0.0))
     # Reaction: Tatara + T2 rig low ×1.9 → 2.4×1.9 = 4.56% ME
     check("tatara T2 ME low", reaction_bonus("tatara", 2, 0, "low") == (4.56, 0.0))
+
+
+
+
+# ── Always-buy blacklist, hand-marked progress, sourcing, corp stock ──────────────────────────
+# The four things a builder asked for after living with the tool: never build THAT, I already did
+# this one, here's what I've gathered so far, and read the corp hangar I'm gathering it into.
+
+def test_blacklisted_components_are_always_bought():
+    """A standing "I never build that" beats the cost engine, and it has to beat it at COSTING time
+    too: deciding to buy a component while still pricing its parent as if it were built is how a
+    plan's total stops matching its own shopping list."""
+    print("test_blacklisted_components_are_always_bought")
+    con = _seed_con()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+    P = _prices(SELL)
+
+    base = build_plan(100, 1, mfg, rx, P, ADJ, BuildParams(), NAMES)
+    check("gadget is built when nothing forbids it",
+          any(j["type_id"] == 101 for j in base["jobs"]))
+
+    never = build_plan(100, 1, mfg, rx, P, ADJ, BuildParams(never_build_ids={101}), NAMES)
+    shop = {s["type_id"]: s for s in never["shopping_list"]}
+    check("a blacklisted component is bought instead", 101 in shop)
+    check("and nothing is built for it", not any(j["type_id"] == 101 for j in never["jobs"]))
+    check("its own inputs drop off the shopping list", 201 not in shop)
+    check("the row says why it's there", shop[101]["blacklisted"] is True)
+    # 2 Gadgets at the market price of 1000 each, so the parent is costed against what it will pay.
+    check("materials are priced at the buy price", approx(shop[101]["qty"] * 1000.0, 2000.0))
+    check("and the total reflects the dearer route",
+          never["metrics"]["total_cost"] > base["metrics"]["total_cost"])
+
+    # force_build is per-order and deliberate; the blacklist is a standing default. The specific
+    # choice has to win, or an order could never make an exception.
+    both = build_plan(100, 1, mfg, rx, P, ADJ,
+                      BuildParams(never_build_ids={101}, force_build_ids={101}), NAMES)
+    check("an order set to build it anyway still builds it",
+          any(j["type_id"] == 101 for j in both["jobs"]))
+
+    # Nothing to fall back on: an item with no price cannot be bought, so refusing to build it would
+    # leave the plan with no way to get one at all.
+    unpriced = _prices({k: v for k, v in SELL.items() if k != 101})
+    no_price = build_plan(100, 1, mfg, rx, unpriced, ADJ, BuildParams(never_build_ids={101}), NAMES)
+    check("an unbuyable component is still built", any(j["type_id"] == 101 for j in no_price["jobs"]))
+
+
+def test_a_target_is_never_blacklisted_out_of_its_own_build():
+    """Blacklisting something and then ordering it is not a contradiction to resolve in favour of
+    the list — ordering it IS the more recent, more specific instruction."""
+    print("test_a_target_is_never_blacklisted_out_of_its_own_build")
+    import inspect
+    from app.industry.graph import prepare_plan_inputs
+    src = inspect.getsource(prepare_plan_inputs)
+    check("targets are filtered out of the blacklist before it reaches the params",
+          "not in {tid for tid, _q in targets}" in src)
+
+    con = _seed_con()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+    # The engine-level guarantee behind that filter: a root builds on its own buildability.
+    res = build_plan(101, 1, mfg, rx, _prices(SELL), ADJ,
+                     BuildParams(never_build_ids={101}), NAMES)
+    check("the ordered product is built regardless", res["tree"]["decision"] == "build")
+
+
+def test_hand_marked_jobs_count_as_progress():
+    print("test_hand_marked_jobs_count_as_progress")
+    from app.industry.progress import resolve_done, _ALL
+
+    check("a hand mark fills an untouched step", resolve_done(10, 0, 0, 10) == 10)
+    check("it never lowers what was measured", resolve_done(10, 7, 0, 2) == 7)
+    check("owning the output still counts", resolve_done(10, 0, 4, 0) == 4)
+    check("nothing exceeds what the plan asked for", resolve_done(10, 99, 0, 99) == 10)
+    check("no signal is no progress", resolve_done(10, 0, 0, 0) == 0)
+    check("'all of it' is a sentinel, not a run count", _ALL < 0)
+
+    # Storage round-trip against a real (in-memory) DB, including the two rules that matter: a mark
+    # is epoch-gated like every other done-signal, and clearing it means clearing it.
+    from app.industry import progress as P
+    con, restore = _patch_db(P)
+    try:
+        P.ensure_manual_done_table.__wrapped__()   # @ensure_once may already have fired at import
+        t0 = time.time()
+        P.set_manual_done(1, 100, None)
+        check("marked done for all runs", P._manual_by_type(1, t0 - 5) == {100: _ALL})
+        check("a mark from before this queue is ignored", P._manual_by_type(1, t0 + 60) == {})
+        P.set_manual_done(1, 100, 3)
+        check("a partial mark stores its run count", P._manual_by_type(1, t0 - 5) == {100: 3})
+        P.set_manual_done(1, 100, 0)
+        check("clearing removes it entirely", P._manual_by_type(1, t0 - 5) == {})
+        check("and another account's marks are invisible", P._manual_by_type(2, 0) == {})
+    finally:
+        restore()
+
+
+def test_sourcing_notes_belong_to_one_order():
+    print("test_sourcing_notes_belong_to_one_order")
+    from app.industry import sourcing as S
+    con, restore = _patch_db(S)
+    try:
+        S.ensure_sourcing_table.__wrapped__()
+        S.set_sourced(1, 10, 200, 5000)
+        S.set_sourced(1, 11, 200, 7)
+        check("a note is stored per order", S._manual(1, 10) == {200: 5000.0})
+        check("and another order's note is separate", S._manual(1, 11) == {200: 7.0})
+        S.set_sourced(1, 10, 200, 0)
+        check("zero clears rather than storing a nought", S._manual(1, 10) == {})
+        S.set_sourced(1, 11, 201, 3)
+        S.clear_order_sourcing(1, 11)
+        check("deleting an order takes its notes with it", S._manual(1, 11) == {})
+        check("another account sees none of it", S._manual(2, 10) == {})
+    finally:
+        restore()
+
+
+def test_a_scan_retires_stock_that_is_no_longer_there():
+    """Counting stock you cannot draw from makes the planner build too little and the shopping list
+    miss materials — the asymmetric error this module is built to avoid. So a re-scan replaces
+    everything that scan owns, not merely what it happened to find this time: a container that has
+    since been emptied has to disappear, not keep its last known contents forever."""
+    print("test_a_scan_retires_stock_that_is_no_longer_there")
+    from app.industry import assets as A
+    con, restore = _patch_db(A)
+    try:
+        A.ensure_asset_tables()   # not @ensure_once — safe to call against the patched DB
+        A._store(1, {"char:5": {"kind": "hangar", "name": "Alt", "parent": ""},
+                     "cont:9": {"kind": "container", "name": "Build box", "parent": ""}},
+                 {"char:5": {200: 10.0}, "cont:9": {201: 5.0}},
+                 {"char:5", "cont:9"}, scope="char:5")
+        A.set_sources(1, ["char:5", "cont:9"], True)
+        check("both sources are counted", A.owned_quantities(1) == {200: 10.0, 201: 5.0})
+
+        # Next scan: the container is gone from the answer entirely.
+        A._store(1, {"char:5": {"kind": "hangar", "name": "Alt", "parent": ""}},
+                 {"char:5": {200: 12.0}}, {"char:5"}, scope="char:5")
+        check("the emptied container is retired", A.owned_quantities(1) == {200: 12.0})
+        check("and it is gone from the source list",
+              [s["key"] for s in A.list_sources(1)] == ["char:5"])
+        check("the surviving source keeps being switched on",
+              A.list_sources(1)[0]["enabled"] is True)
+
+        # A different scan's sources are none of its business.
+        A._store(1, {"corp:7:h1": {"kind": "hangar", "name": "Corp — Ore", "parent": ""}},
+                 {"corp:7:h1": {202: 1.0}}, {"corp:7:h1"}, scope="corp:7")
+        check("a corp scan leaves the personal one alone",
+              {s["key"] for s in A.list_sources(1)} == {"char:5", "corp:7:h1"})
+        check("corp sources are flagged as such",
+              [s["corp"] for s in A.list_sources(1) if s["key"].startswith("corp:")] == [True])
+    finally:
+        restore()
+
+
+def test_corp_hangars_and_containers_split_like_personal_ones():
+    """Corp stock goes through the same bucketing as personal stock — one item belongs to exactly
+    one source, the container it sits in if any, otherwise the hangar. Anything that isn't a corp
+    hangar division (deliveries, a ship's hold) is not stock a job can be fed from."""
+    print("test_corp_hangars_and_containers_split_like_personal_ones")
+    from app.industry.assets import _split_by_source, _CORP_FLAGS
+
+    rows = [
+        {"item_id": 1, "type_id": 200, "quantity": 100, "location_id": 60000, "location_flag": "CorpSAG1"},
+        {"item_id": 2, "type_id": 0, "quantity": 1, "location_id": 60000, "location_flag": "CorpSAG2"},
+        {"item_id": 3, "type_id": 201, "quantity": 7, "location_id": 2, "location_flag": "Unlocked"},
+        # Not stock: the corp deliveries hangar, and a module in a ship parked in a corp hangar.
+        {"item_id": 4, "type_id": 202, "quantity": 5, "location_id": 60000, "location_flag": "CorpDeliveries"},
+        {"item_id": 5, "type_id": 0, "quantity": 1, "location_id": 60000, "location_flag": "CorpSAG1"},
+        {"item_id": 6, "type_id": 203, "quantity": 3, "location_id": 5, "location_flag": "Cargo"},
+    ]
+    srcs, stock, conts = _split_by_source(
+        rows, set(_CORP_FLAGS),
+        lambda f: f"corp:7:h{_CORP_FLAGS[f]}",
+        lambda f: f"Corp — hangar {_CORP_FLAGS[f]}",
+        cont_key=lambda loc: f"corp:7:c{loc}")
+
+    check("a hangar division becomes one source", stock.get("corp:7:h1", {}).get(200) == 100.0)
+    check("a container inside it is its own source", stock.get("corp:7:c2", {}).get(201) == 7.0)
+    check("the container is reported for naming", conts == [2])
+    check("its parent hangar is named", srcs["corp:7:c2"]["parent"] == "Corp — hangar 2")
+    check("deliveries are not usable stock", not any(202 in s for s in stock.values()))
+    check("a ship's cargo is not usable stock", not any(203 in s for s in stock.values()))
+    check("corp keys never collide with personal ones",
+          all(k.startswith("corp:7:") for k in srcs))
 
 
 if __name__ == "__main__":
