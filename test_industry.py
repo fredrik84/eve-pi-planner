@@ -1657,6 +1657,7 @@ def main():
     test_hand_marked_jobs_count_as_progress()
     test_sourcing_notes_belong_to_one_order()
     test_pasting_a_hangar_sets_what_is_sourced()
+    test_the_sourcing_list_is_not_a_second_shopping_list()
     test_a_scan_retires_stock_that_is_no_longer_there()
     test_corp_hangars_and_containers_split_like_personal_ones()
     print(f"\nAll {_passed} checks passed.")
@@ -1835,6 +1836,31 @@ def test_pasting_a_hangar_sets_what_is_sourced():
         A.get_connection = real_assets_con
         seeded.close()
         restore()
+
+
+def test_the_sourcing_list_is_not_a_second_shopping_list():
+    """The two lists are the same materials seen two ways, and they legitimately disagree: the queue
+    plan nets off stock and batches shared components once across every order, while sourcing plans
+    one order at its full requirement. That's fine as long as only ONE of them talks about money —
+    two priced lists showing different numbers for the same item is how a page loses the reader's
+    trust. Sourcing carries the shortfall's cost and nothing else."""
+    print("test_the_sourcing_list_is_not_a_second_shopping_list")
+    import inspect
+    from app.industry import sourcing as S
+
+    # Asserted on the row a sourcing item actually is, not on the source text — the function reads a
+    # unit price to work out the shortfall's cost, and must not publish it.
+    row = S._item_row({"type_id": 200, "name": "MineralA", "qty": 100.0, "unit_price": 5.0,
+                       "source": "Jita", "line_cost": 500.0},
+                      {200: 30.0}, {200: 10.0})
+    priced = sorted(k for k in row if k in ("unit_price", "line_cost", "source", "margin", "price"))
+    check("no pricing fields are published on a sourcing row", priced == [])
+    check("except the shortfall's cost, which is what decides a shopping trip",
+          approx(row["remaining_cost"], 350.0))                 # 70 short × 5
+    check("the box beats a smaller hand-written note", row["sourced"] == 30.0)
+    check("and a row isn't done until the whole requirement is", row["done"] is False)
+    check("and the full requirement is what it measures against, not what's left after stock",
+          "use_stock=False" in inspect.getsource(S._order_requirement))
 
 
 def test_a_scan_retires_stock_that_is_no_longer_there():

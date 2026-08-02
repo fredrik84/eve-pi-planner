@@ -162,6 +162,33 @@ def _order_requirement(ctx: int, order) -> list[dict]:
     return res.get("shopping_list") or []
 
 
+def _item_row(s: dict, in_source: dict[int, float], manual: dict[int, float]) -> dict:
+    """One material's sourcing state, from its shopping-list row plus the two "have" signals.
+
+    **This is not a second shopping list.** The two are the same materials seen two ways and they
+    legitimately disagree — the queue plan nets off your stock and batches shared components once
+    across every order, while this plans one order at its full requirement — so only one of them may
+    talk about money. Two priced lists showing different numbers for the same item is how a page
+    stops being believed. Hence no unit price, no market, no line cost here; the single exception is
+    the SHORTFALL's cost, which is the one number that decides whether to go shopping at all.
+    """
+    tid = int(s["type_id"])
+    need = float(s["qty"])
+    held = float(in_source.get(tid, 0.0))
+    noted = float(manual.get(tid, 0.0))
+    # The box and the note are two answers to the same question, so take the better one: a note
+    # never erases what's really in the container, and a rescan never erases a note.
+    have = min(need, max(held, noted))
+    short = max(0.0, need - have)
+    unit = s.get("unit_price")
+    return {
+        "type_id": tid, "name": s["name"], "required": need,
+        "in_source": held, "noted": noted, "sourced": have,
+        "remaining": short, "done": have >= need - 1e-9,
+        "remaining_cost": unit * short if unit is not None else None,
+    }
+
+
 def order_sourcing(ctx: int, order_id: int) -> dict:
     """Per-material sourcing state for one order."""
     from app.industry.assets import list_sources, source_name, source_quantities
@@ -184,23 +211,7 @@ def order_sourcing(ctx: int, order_id: int) -> dict:
     in_source = source_quantities(ctx, key) if key else {}
     manual = _manual(ctx, order_id)
 
-    items = []
-    for s in _order_requirement(ctx, order):
-        tid = int(s["type_id"])
-        need = float(s["qty"])
-        held = float(in_source.get(tid, 0.0))
-        noted = float(manual.get(tid, 0.0))
-        have = min(need, max(held, noted))
-        items.append({
-            "type_id": tid, "name": s["name"], "required": need,
-            "in_source": held, "noted": noted, "sourced": have,
-            "remaining": max(0.0, need - have),
-            "done": have >= need - 1e-9,
-            "unit_price": s.get("unit_price"),
-            # What the shortfall costs to buy — the number that decides whether to go shopping now.
-            "remaining_cost": (s["unit_price"] * max(0.0, need - have)
-                               if s.get("unit_price") is not None else None),
-        })
+    items = [_item_row(s, in_source, manual) for s in _order_requirement(ctx, order)]
     items.sort(key=lambda r: (r["done"], -(r["remaining_cost"] or 0.0), r["name"]))
 
     done = sum(1 for i in items if i["done"])

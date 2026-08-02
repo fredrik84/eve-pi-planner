@@ -2498,9 +2498,12 @@ async function indRenderSourcing() {
         <button class="ind-copy-btn ind-copy-sm" onclick="indCopyMissing()">Copy what's missing</button>
         <button class="ind-bp-btn" onclick="indOpenSourcePaste()">Paste what you've got</button>
       </div>
-      <p class="ind-src-help">Anything sitting in the container you pick counts automatically — rescan
-        your assets after hauling and this moves on its own. For stock we can't see, select it in the
-        EVE client and paste it in.</p>
+      <p class="ind-src-help">What this build needs and how much of it you've already got. Anything in
+        the container you pick counts automatically — rescan your assets after hauling and this moves
+        on its own; for stock we can't see, paste it from the EVE client.
+        <b>Prices and the buy list for everything queued are further down</b> — those quantities
+        differ on purpose, because the queue nets off your stock and builds shared components once
+        for every order.</p>
       <div id="indSrcPaste" class="ind-paste" style="display:none">
         <p class="ind-src-help">Select the materials in your hangar or container (Ctrl+A), copy
           (Ctrl+C) and paste below. This <b>replaces</b> what you've noted so far — it's a snapshot of
