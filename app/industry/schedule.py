@@ -432,6 +432,10 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
                 "bought_marginal": info.get("bought_marginal", False),
                 "marginal_saving": info.get("marginal_saving"),
                 "bought_no_blueprint": info.get("bought_no_blueprint", False),
+                # On the list because the user said always buy this, not because building lost on
+                # cost — a standing rule has to be visible where it takes effect, or the plan looks
+                # like it just got the make-or-buy call wrong.
+                "blacklisted": tid in params.never_build_ids,
             })
     shopping.sort(key=lambda r: r["line_cost"] or 0.0, reverse=True)
 

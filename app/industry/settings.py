@@ -14,6 +14,7 @@ saved value, and only then to the library default.
 """
 from __future__ import annotations
 
+import json
 import time
 
 from fastapi import Depends
@@ -44,7 +45,11 @@ def ensure_industry_settings_table():
             )
         """)
         # Added after the table shipped; additive ALTER is this codebase's migration convention.
-        add_columns(con, "pp_industry_settings", "margin_pct REAL")
+        add_columns(con, "pp_industry_settings", "margin_pct REAL",
+                    # The account's "always buy these" list, a JSON id array. Stored here rather
+                    # than per order because it's a standing way of operating, not a decision about
+                    # one build — an order overrides it with force_build_ids.
+                    "never_build_ids TEXT")
         con.commit()
     finally:
         con.close()
@@ -68,9 +73,42 @@ def get_settings(context_id: int) -> dict:
     try:
         row = con.execute("SELECT * FROM pp_industry_settings WHERE context_id=?",
                           (context_id,)).fetchone()
-        return dict(row) if row else {}
+        d = dict(row) if row else {}
     finally:
         con.close()
+    d["never_build_ids"] = _parse_ids(d.get("never_build_ids"))
+    return d
+
+
+def _parse_ids(value) -> list[int]:
+    """The blacklist column holds a JSON array; '' / NULL / anything unparseable means no list."""
+    try:
+        return [int(v) for v in json.loads(value or "[]")]
+    except Exception:
+        return []
+
+
+def get_blacklist(context_id: int) -> list[int]:
+    return get_settings(context_id).get("never_build_ids") or []
+
+
+def set_blacklist(context_id: int, type_ids: list[int]) -> list[int]:
+    """Replace the account's always-buy list. Written through its own path rather than the settings
+    PUT: that one is a debounced save of the whole plan form, so a knob moving would carry a stale
+    (or absent) blacklist along with it and quietly undo an edit made elsewhere on the page."""
+    ensure_industry_settings_table()
+    ids = sorted({int(t) for t in type_ids})
+    con = get_connection()
+    try:
+        con.execute(
+            "INSERT INTO pp_industry_settings (context_id, never_build_ids, updated_at) "
+            "VALUES (?,?,?) ON CONFLICT(context_id) DO UPDATE SET "
+            "never_build_ids=excluded.never_build_ids, updated_at=excluded.updated_at",
+            (context_id, json.dumps(ids), time.time()))
+        con.commit()
+    finally:
+        con.close()
+    return ids
 
 
 def apply_account_build_options(context_id: int, opts):
@@ -91,6 +129,10 @@ def apply_account_build_options(context_id: int, opts):
     for field in ("prioritize_speed", "force_build"):
         if field not in sent and saved.get(field) is not None:
             update[field] = bool(saved[field])
+    # The blacklist is a standing rule, so it applies to every plan path — the checklist and the
+    # customer's share link included — not only to plans a browser asks for.
+    if "never_build_ids" not in sent and saved.get("never_build_ids"):
+        update["never_build_ids"] = list(saved["never_build_ids"])
     return opts.model_copy(update=update) if update else opts
 
 
@@ -127,3 +169,42 @@ def write_industry_settings(req: IndustrySettings, ctx: int = Depends(require_co
     finally:
         con.close()
     return {"ok": True}
+
+
+# ── Always-buy blacklist ──────────────────────────────────────────────────────────────────────
+
+def _named(context_id: int) -> dict:
+    """The blacklist with names attached — an id list is unreadable, and this is a list the user
+    edits by hand."""
+    ids = get_blacklist(context_id)
+    names = {}
+    if ids:
+        con = get_connection()
+        try:
+            names = {r["type_id"]: r["name"] for r in con.execute(
+                f"SELECT type_id, name FROM types WHERE type_id IN ({','.join('?' * len(ids))})",
+                tuple(ids))}
+        finally:
+            con.close()
+    return {"items": [{"type_id": t, "name": names.get(t, str(t))} for t in ids]}
+
+
+class BlacklistEdit(BaseModel):
+    type_id: int
+    add: bool = True
+
+
+@router.get("/api/industry/blacklist")
+def read_blacklist(ctx: int = Depends(require_context)):
+    """Components the account always buys instead of building."""
+    return _named(ctx)
+
+
+@router.post("/api/industry/blacklist")
+def edit_blacklist(req: BlacklistEdit, ctx: int = Depends(require_context)):
+    """Add or remove one item. One item at a time rather than a whole-list PUT: the list is edited
+    from wherever the item is on screen (a shopping row, a job chip), never as a form."""
+    ids = set(get_blacklist(ctx))
+    ids.add(int(req.type_id)) if req.add else ids.discard(int(req.type_id))
+    set_blacklist(ctx, sorted(ids))
+    return _named(ctx)

@@ -89,6 +89,13 @@ class BuildParams:
     # heuristics about what's WORTH a job, and that's the user's call to make item by item — the
     # cost engine's own verdict (buying is outright cheaper) is untouched by this.
     force_build_ids: set = field(default_factory=set)
+    # The mirror of force_build_ids: NEVER build these, whatever the cost engine works out. Some
+    # things a player simply always buys — a component whose blueprint they don't intend to own, a
+    # material they can get delivered — and that's a standing preference about how they operate, not
+    # a judgement the cost math can reach. Only honoured when the item can actually be bought (no
+    # price = no alternative), and `force_build_ids` wins: a per-order "build it anyway" is a
+    # deliberate exception to the standing rule, so the more specific choice takes precedence.
+    never_build_ids: set = field(default_factory=set)
     # What to charge over cost when quoting a customer. Priced off NET cost — the leftovers a build
     # over-produces stay with the builder, so billing them to the customer would charge twice.
     margin_pct: float = 0.0
@@ -270,7 +277,14 @@ def resolve_unit_costs(mfg: dict, rx: dict, prices: dict, adjusted: dict,
                 job = eiv * (ci + params.facility_tax_pct / 100.0 + SCC_SURCHARGE_PCT)
                 build_uc = (total_in + job) / recipe["output_qty"]
 
-        if build_uc is not None and buy is not None:
+        # Blacklisted: the user always buys this one. Applied HERE rather than at demand time so the
+        # parent's cost is the price of buying it too — deciding to buy but costing the parent as if
+        # it were built is the mismatch that makes a plan's total unbelievable.
+        blacklisted = (type_id in params.never_build_ids
+                       and type_id not in params.force_build_ids and buy is not None)
+        if blacklisted:
+            decision = "buy"
+        elif build_uc is not None and buy is not None:
             decision = "build" if build_uc < buy * (1 - params.build_margin) else "buy"
         elif build_uc is not None:
             decision = "build"
@@ -282,7 +296,7 @@ def resolve_unit_costs(mfg: dict, rx: dict, prices: dict, adjusted: dict,
                      else buy if decision == "buy" else None)
         node = {
             "type_id": type_id, "activity": activity, "buildable": recipe is not None,
-            "decision": decision, "unit_cost": unit_cost,
+            "decision": decision, "unit_cost": unit_cost, "blacklisted": blacklisted,
             "build_unit_cost": build_uc, "buy_unit_cost": buy,
             "source": (prices.get(type_id) or {}).get("source"),
         }
@@ -367,6 +381,10 @@ def build_plan(target: int, quantity: int, mfg: dict, rx: dict, prices: dict, ad
                 "unit_price": (prices.get(tid) or {}).get("sell_price"),
                 "source": (prices.get(tid) or {}).get("source"),
                 "line_cost": ((prices.get(tid) or {}).get("sell_price") or 0.0) * qty,
+                # Bought because of the account's standing always-buy rule rather than because
+                # building lost on cost — the same flag the queue's list carries, since the two
+                # lists render through the same row.
+                "blacklisted": tid in params.never_build_ids,
             }
             for tid, qty in shopping.items()
         ),
@@ -409,6 +427,9 @@ class BuildOptions(BaseModel):
     marginal_pct: float | None = None  # build only if it saves >= this % of the build (None = default)
     force_build: bool = False          # build everything buildable, ignoring small-saving shortcuts
     force_build_ids: list[int] = []    # build THESE components regardless of the shortcuts
+    # Never build these, whatever the cost engine decides — the account's standing "I always buy
+    # that" list. `force_build_ids` on an order overrides it for that build.
+    never_build_ids: list[int] = []
     # Per-product ME/TE the user wants assumed, {"<type_id>": [me, te]} — JSON keys are strings.
     # Wins over everything: it's the user telling us which print they'll actually use.
     me_te_overrides: dict[str, list[int]] = {}
@@ -541,7 +562,8 @@ def resolve_build_params(context_id: int, me_pct: float, te_pct: float,
                          struct_material_pct: float = 0.0, struct_time_pct: float = 0.0,
                          marginal_pct: float | None = None, force_build: bool = False,
                          force_build_ids: list[int] | None = None,
-                         margin_pct: float | None = None) -> BuildParams:
+                         margin_pct: float | None = None,
+                         never_build_ids: list[int] | None = None) -> BuildParams:
     """Build the resolver's params, auto-deriving the build system + tax from the account's
     Reactions settings when the request didn't override them — so the caller needn't supply a
     system id or tax by hand."""
@@ -578,6 +600,7 @@ def resolve_build_params(context_id: int, me_pct: float, te_pct: float,
                                 else max(0.0, min(25.0, float(marginal_pct))))),
         min_saving_isk=(0.0 if force_build else MIN_BUILD_SAVING_ISK),
         force_build_ids=set(force_build_ids or ()),
+        never_build_ids=set(never_build_ids or ()),
         margin_pct=(MARGIN_DEFAULT_PCT if margin_pct is None
                     else max(0.0, min(100.0, float(margin_pct)))),
     )
@@ -644,7 +667,11 @@ def prepare_plan_inputs(ctx: int, targets: list[tuple[int, int]], opts: BuildOpt
     params = resolve_build_params(ctx, opts.me_pct, opts.te_pct, opts.system_id,
                                   opts.facility_tax_pct, mbh, opts.struct_material_pct,
                                   opts.struct_time_pct, opts.marginal_pct, opts.force_build,
-                                  opts.force_build_ids, opts.margin_pct)
+                                  opts.force_build_ids, opts.margin_pct,
+                                  # A target is never blacklisted out of its own build: you asked for
+                                  # it. Only components can be forced onto the shopping list.
+                                  [t for t in opts.never_build_ids
+                                   if t not in {tid for tid, _q in targets}])
     # What an unowned blueprint would cost to acquire, so building can be priced honestly and the
     # margin-saver can see it. Best-effort: an empty index just leaves the old behaviour.
     try:
