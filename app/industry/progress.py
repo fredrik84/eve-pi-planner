@@ -14,18 +14,34 @@ Two things shape the design:
 Nothing here changes how jobs are fetched. Completed work is read from the two existing forward-only
 ledgers (`pp_industry_completions`, `pp_reaction_completions`) and running work from the two existing
 per-character job caches, so this module adds no ESI traffic and no new scope.
+
+**Marking a job done by hand is the third signal.** Inference is right most of the time and wrong in
+ways the user can see and we can't: a batch built on a character that never granted the jobs scope,
+work done before the account was connected, a component acquired by trade or contract instead of
+built, or an ESI job cache that simply hasn't caught up. When the screen says a job is outstanding
+and the player knows it isn't, the only honest fix is to let them say so. A manual mark is stored
+per TYPE (the same grain everything else here is tracked at) and folded in as one more "done"
+signal, never overriding a higher measured one.
 """
 
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime
 
 from fastapi import Depends
+from pydantic import BaseModel
 
 from app.db import get_connection
+from app.sde import ensure_once
 from app.esi import require_context
 from app.industry._router import router
+
+# Stored runs value meaning "all of it, whatever the plan currently asks for". A concrete number
+# would go stale the moment the queue is re-planned (change a quantity and a job marked complete
+# would silently become partly outstanding again), which is the opposite of what ticking it means.
+_ALL = -1
 
 # Statuses that mean "a slot is busy with this right now". `ready` is finished-but-undelivered — the
 # work is done but it hasn't been collected, so it counts as in-progress, not done (the completions
@@ -115,6 +131,76 @@ def _done_by_type(context_id: int, since: float) -> dict[int, int]:
     return out
 
 
+@ensure_once
+def ensure_manual_done_table():
+    con = get_connection()
+    try:
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS pp_industry_manual_done (
+                context_id INTEGER NOT NULL,
+                type_id    INTEGER NOT NULL,
+                runs       INTEGER NOT NULL DEFAULT -1,
+                marked_at  REAL NOT NULL,
+                PRIMARY KEY (context_id, type_id)
+            )
+        """)
+        con.commit()
+    finally:
+        con.close()
+
+
+def _manual_by_type(context_id: int, since: float) -> dict[int, int]:
+    """Runs the user has marked done by hand, per type.
+
+    Epoch-gated like the completion ledgers, and for the same reason: re-queueing restarts the
+    clock, so a tick left over from a build you finished last month can't read as progress on a new
+    one. `_ALL` is resolved against the plan's own requirement by the caller.
+    """
+    ensure_manual_done_table()
+    con = get_connection()
+    try:
+        rows = con.execute(
+            "SELECT type_id, runs FROM pp_industry_manual_done "
+            "WHERE context_id = ? AND marked_at >= ?",
+            (context_id, since),
+        ).fetchall()
+    except Exception:
+        return {}
+    finally:
+        con.close()
+    return {int(r["type_id"]): int(r["runs"]) for r in rows}
+
+
+def set_manual_done(context_id: int, type_id: int, runs: int | None) -> None:
+    """Mark (`runs=None` → all of it, or a run count) or clear (`runs=0`) a type as done by hand."""
+    ensure_manual_done_table()
+    con = get_connection()
+    try:
+        if runs is not None and runs <= 0:
+            con.execute("DELETE FROM pp_industry_manual_done WHERE context_id=? AND type_id=?",
+                        (context_id, type_id))
+        else:
+            con.execute(
+                "INSERT INTO pp_industry_manual_done (context_id, type_id, runs, marked_at) "
+                "VALUES (?,?,?,?) ON CONFLICT(context_id, type_id) DO UPDATE SET "
+                "runs=excluded.runs, marked_at=excluded.marked_at",
+                (context_id, type_id, _ALL if runs is None else int(runs), time.time()))
+        con.commit()
+    finally:
+        con.close()
+
+
+def resolve_done(need: int, completed: int, from_stock: int, manual: int) -> int:
+    """The three "it's done" signals combined into one run count.
+
+    Each of them under-reports on its own — the ledger only knows the current epoch, the hangar goes
+    to zero once the output is consumed by the next stage, and a hand mark is only as complete as
+    the user bothered to be — so the highest wins, capped at what the plan actually asked for. Taking
+    the max is also what keeps a manual tick honest: it can raise the count, never hide observed work.
+    """
+    return min(max(completed, from_stock, manual), need)
+
+
 def _epoch(context_id: int) -> float:
     """Only work started after the queue was set up counts toward it — otherwise an unrelated build
     of the same item from last week would read as queue progress. The oldest still-queued order is
@@ -157,13 +243,18 @@ def _queue_snapshot(context_id: int):
     return orders, res
 
 
-def _type_row(tid: int, req, need: int, done: int, running: int, in_stock: int) -> dict:
-    """One per-type progress row. `req` is the plan requirement (name/activity/output_qty)."""
+def _type_row(tid: int, req, need: int, done: int, running: int, in_stock: int,
+              manual: int = 0) -> dict:
+    """One per-type progress row. `req` is the plan requirement (name/activity/output_qty).
+
+    `manual_runs` is reported separately from `done_runs` so the UI can show that this one was
+    ticked by hand rather than observed — and offer to untick it.
+    """
     return {
         "type_id": tid, "name": req["name"], "activity": req["activity"],
         "required_runs": need, "done_runs": done, "running_runs": running,
         "waiting_runs": max(0, need - done - running),
-        "output_qty": req["output_qty"], "in_stock": in_stock,
+        "output_qty": req["output_qty"], "in_stock": in_stock, "manual_runs": manual,
         "pct": round(100.0 * done / need, 1) if need else 0.0,
     }
 
@@ -229,6 +320,14 @@ def queue_progress(context_id: int) -> dict:
     # Either alone under-reports; the max of the two is right in both directions.
     from app.industry.assets import owned_quantities
     owned = owned_quantities(context_id)
+    # The third signal: what the user told us is done. Same max() treatment — a hand mark can only
+    # ever raise the count, so it can't hide work that the ledgers or the hangar prove is still
+    # outstanding, and it doesn't need to be right about the exact number to be useful.
+    marked = _manual_by_type(context_id, since)
+
+    def _manual_runs(tid: int, need: int) -> int:
+        m = marked.get(tid)
+        return 0 if m is None else (need if m == _ALL else min(m, need))
 
     types = []
     for req in res.get("requirements", []):
@@ -236,12 +335,20 @@ def queue_progress(context_id: int) -> dict:
         need = int(req["runs"])
         oq = int(req["output_qty"]) or 1
         from_stock = int(owned.get(tid, 0) // oq)      # whole runs' worth sitting in the hangar
-        d = min(max(completed.get(tid, 0), from_stock), need)   # cap at what the plan asked for
+        man = _manual_runs(tid, need)
+        d = resolve_done(need, completed.get(tid, 0), from_stock, man)
         r = min(running.get(tid, 0), max(0, need - d))
-        types.append(_type_row(tid, req, need, d, r, in_stock=int(owned.get(tid, 0))))
+        types.append(_type_row(tid, req, need, d, r, in_stock=int(owned.get(tid, 0)), manual=man))
 
-    def units(tid, _t, oq, want):
-        have = max(completed.get(tid, 0) * oq, int(owned.get(tid, 0)))
+    def units(tid, t, oq, want):
+        # A product ticked done is done in UNITS too — otherwise the order chip would still read
+        # "not started" next to a build the user just marked complete. `_ALL` means the whole thing
+        # regardless of what the plan says, which also covers a product that has no requirement row
+        # left (already netted off by stock).
+        if marked.get(tid) == _ALL:
+            return want, 0
+        man_units = _manual_runs(tid, (t or {}).get("required_runs") or 0) * oq
+        have = max(completed.get(tid, 0) * oq, int(owned.get(tid, 0)), man_units)
         done_units = min(have, want)
         return done_units, min(running.get(tid, 0) * oq, max(0, want - done_units))
 
@@ -326,4 +433,21 @@ def industry_progress(simulate: float | None = None, ctx: int = Depends(require_
     """
     if simulate is not None:
         return simulated_progress(ctx, float(simulate))
+    return queue_progress(ctx)
+
+
+class MarkDone(BaseModel):
+    type_id: int
+    runs: int | None = None      # None = all of it; 0 = clear the mark
+
+
+@router.post("/api/industry/progress/done")
+def industry_mark_done(req: MarkDone, ctx: int = Depends(require_context)):
+    """Mark a build step done (or un-mark it) by hand, and return the refreshed progress.
+
+    Deliberately does NOT write to the completion ledgers: those feed lifetime turnover and profit,
+    and a tick is a statement about this queue's progress, not evidence of an ISK-bearing job. Same
+    rule the simulated-progress preview follows.
+    """
+    set_manual_done(ctx, int(req.type_id), req.runs)
     return queue_progress(ctx)
