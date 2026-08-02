@@ -114,14 +114,20 @@ BLUEPRINTS_SCOPE = "esi-characters.read_blueprints.v1"
 # already sitting in your hangar and can report queue progress without guessing a start date.
 # Same rule as every scope above — it joins the ONE superset, never its own set.
 ASSETS_SCOPE = "esi-assets.read_assets.v1"
-# NOT requested: esi-assets.read_corporation_assets.v1. ESI gates corp assets behind the Director
-# role and offers nothing weaker, so for almost every corp member that endpoint can never answer —
-# asking for a permission we could not use for them is worse than not asking. Corp hangars are
-# covered by pasting them instead (app/industry/assets.py add_pasted_source), which works for
-# everyone regardless of role.
+# Corp assets + division names. ESI gates BOTH behind the Director role and offers nothing weaker,
+# so for a character without it they can never answer — which is why this was deliberately left out
+# at first, and why nothing here treats a 403 as an error: for most characters it is simply the
+# expected answer, reported as "not a director" and nothing more. Directors, though, run their
+# builds out of corp hangars and containers, and pasting a hangar every time stock moves is not a
+# substitute for reading it. The division-name scope rides along because a director picking "which
+# hangar do I pull this build from" needs the names they gave those hangars, not "Corp hangar 3".
+# Pasting (app/industry/assets.py add_pasted_source) remains the path for everyone else.
+CORP_ASSETS_SCOPE    = "esi-assets.read_corporation_assets.v1"
+CORP_DIVISIONS_SCOPE = "esi-corporations.read_divisions.v1"
 REACTIONS_SCOPES = (
     f"{SCOPES} {INDUSTRY_JOBS_SCOPE} {CORP_INDUSTRY_JOBS_SCOPE} "
-    f"{MARKET_SCOPE} {SEARCH_STRUCT_SCOPE} {STRUCTURES_SCOPE} {BLUEPRINTS_SCOPE} {ASSETS_SCOPE}"
+    f"{MARKET_SCOPE} {SEARCH_STRUCT_SCOPE} {STRUCTURES_SCOPE} {BLUEPRINTS_SCOPE} {ASSETS_SCOPE} "
+    f"{CORP_ASSETS_SCOPE} {CORP_DIVISIONS_SCOPE}"
 )
 # All opt-in "connect a character" flows request this ONE superset so re-authing a character for
 # any tool never drops the scopes another relies on. Wallet stays deliberately separate.
@@ -1158,6 +1164,7 @@ _CONTEXT_OWNED_TABLES = [
     "pp_alert_settings", "pp_notification_prefs", "pp_notification_settings", "pp_notification_log",
     "pp_market_config", "pp_asset_sources", "pp_asset_stock",
     "pp_industry_settings", "pp_industry_orders", "pp_industry_shares", "pp_industry_completions",
+    "pp_industry_manual_done", "pp_industry_sourced",
     "pp_account_reaction_settings", "pp_reaction_orders", "pp_reaction_completions",
     "pp_planet_submissions", "pp_oauth_pending",
 ]

@@ -18,11 +18,14 @@ Sources are FLAT: an item belongs to exactly one source, the container it sits i
 the hangar itself. There is deliberately no "enabling a division also enables its containers" rule,
 which keeps every toggle unambiguous.
 
-Corp hangars come in by PASTING them, not over ESI. `/corporations/{id}/assets/` is gated behind the
-**Director** role with nothing weaker on offer, so for almost every corp member it can never answer;
-building on it would mean requesting a permission most users can't use, spending an ESI call per
-character to get a 403, and showing a role error nobody can act on. A pasted hangar is a source like
-any other — selectable, counted identically, and it works for everyone.
+Corp hangars come in two ways. `/corporations/{id}/assets/` is gated behind the **Director** role
+with nothing weaker on offer, so for most corp members it can never answer — those users PASTE a
+hangar instead, which is a source like any other: selectable, counted identically, and it works for
+everyone. For a director it does answer, and directors run their builds out of corp hangars and
+containers, so `refresh_corp_assets` reads them into exactly the same source list. A 403 there is
+not an error, it is the normal answer for a non-director, and it's reported as "no Director role"
+rather than a failure. Corp assets are scanned ONLY on request (never as part of the personal
+refresh), and once per corporation no matter how many of the account's characters are in it.
 
 Assets are read on demand and cached, like the blueprint and job caches — never polled, since a full
 asset list is a heavy call.
@@ -36,12 +39,16 @@ from fastapi import Depends
 from pydantic import BaseModel
 
 from app.db import get_connection
+from app.sde import add_columns
 from app import esi_http
-from app.esi import require_context, _get_valid_token, ASSETS_SCOPE
+from app.esi import require_context, _get_valid_token, ASSETS_SCOPE, CORP_ASSETS_SCOPE
 from app.industry._router import router
 
 # Personal hangar flags — assets in a ship fit, delivery hangar or contract are NOT usable stock.
 _USABLE_FLAGS = {"Hangar", "HangarAll"}
+# The seven corp hangar divisions. Same idea as the personal flags: anything else a corp owns
+# (deliveries, impounded, a ship's hold) is not stock a job can be fed from.
+_CORP_FLAGS = {f"CorpSAG{n}": n for n in range(1, 8)}
 # Flags an item carries when it sits INSIDE a plain container (station/secure/audit can). Anything
 # else nested — Cargo, DroneBay, a slot — means it's in a ship and can't be fed to a job without
 # unloading it first, so containment only counts through these.
@@ -74,6 +81,11 @@ def ensure_asset_tables():
             )
         """)
         con.execute("CREATE INDEX IF NOT EXISTS idx_asset_stock_ctx ON pp_asset_stock (context_id)")
+        # Which scan owns a source ("char:<id>", "corp:<id>", "paste"). Without it a re-scan could
+        # only replace the sources it found THIS time, so a container that had been emptied kept its
+        # last known contents forever — stock you can no longer draw from, which is precisely the
+        # error this module treats as the dangerous one.
+        add_columns(con, "pp_asset_sources", "scope TEXT DEFAULT ''")
         con.commit()
     finally:
         con.close()
@@ -139,7 +151,7 @@ def _names_for(client, url: str, token: str, item_ids: list[int]) -> dict[int, s
     return out
 
 
-def _split_by_source(rows, hangar_flags, hangar_key, hangar_name):
+def _split_by_source(rows, hangar_flags, hangar_key, hangar_name, cont_key=None):
     """Bucket every asset into exactly one source: the container it sits in, or else its hangar.
 
     Containment is only honoured when the chain actually roots in a usable hangar, so a can inside a
@@ -172,6 +184,7 @@ def _split_by_source(rows, hangar_flags, hangar_key, hangar_name):
     sources: dict[str, dict] = {}
     stock: dict[str, dict[int, float]] = {}
     containers: set[int] = set()
+    cont_key = cont_key or (lambda loc: f"cont:{loc}")
 
     for a in rows:
         if not usable(a):
@@ -182,10 +195,12 @@ def _split_by_source(rows, hangar_flags, hangar_key, hangar_name):
         parent = _parent(a)
         if parent is not None:                       # sits inside a container
             loc = int(a["location_id"])
-            key = f"cont:{loc}"
+            key = cont_key(loc)
             containers.add(loc)
             pflag = hangar_of(parent)
-            sources.setdefault(key, {"kind": "container", "name": f"Container {loc}",
+            # `item_id` is carried so container names can be applied without parsing it back out of
+            # the key — the key format differs between the personal and corp scans.
+            sources.setdefault(key, {"kind": "container", "name": f"Container {loc}", "item_id": loc,
                                      "parent": hangar_name(pflag) if pflag in hangar_flags else ""})
         else:                                        # loose in the hangar itself
             flag = a.get("location_flag")
@@ -197,31 +212,45 @@ def _split_by_source(rows, hangar_flags, hangar_key, hangar_name):
     return sources, stock, sorted(containers)
 
 
-def _store(context_id: int, sources: dict, stock: dict, scope_keys: set[str]) -> None:
-    """Replace the stored sources/stock for exactly `scope_keys`, preserving each source's enabled
-    flag so a refresh never silently switches a hangar off (or on)."""
+def _apply_container_names(sources: dict, names: dict[int, str]) -> None:
+    for meta in sources.values():
+        nm = names.get(meta.get("item_id"))
+        if nm:
+            meta["name"] = nm
+
+
+def _store(context_id: int, sources: dict, stock: dict, scope_keys: set[str],
+           scope: str = "") -> None:
+    """Replace the stored sources/stock for `scope_keys`, preserving each source's enabled flag so a
+    refresh never silently switches a hangar off (or on).
+
+    When `scope` is given, every source that scan owns is replaced — not just the ones it found this
+    time. That's what retires a container which has since been emptied or unanchored; leaving its
+    last contents behind would have the planner counting stock that isn't there.
+    """
     ensure_asset_tables()
-    if not scope_keys:
+    if not scope_keys and not scope:
         return
     con = get_connection()
     try:
-        marks = ",".join("?" * len(scope_keys))
-        keys = list(scope_keys)
+        keys = list(scope_keys) or ["\x00none"]     # a non-key, so the IN clause stays valid
+        marks = ",".join("?" * len(keys))
+        where = f"context_id = ? AND (key IN ({marks})" + (" OR scope = ?)" if scope else ")")
+        args = (context_id, *keys, *((scope,) if scope else ()))
         prior = {r["key"]: r["enabled"] for r in con.execute(
-            f"SELECT key, enabled FROM pp_asset_sources WHERE context_id = ? AND key IN ({marks})",
-            (context_id, *keys),
-        ).fetchall()}
-        con.execute(f"DELETE FROM pp_asset_sources WHERE context_id = ? AND key IN ({marks})",
-                    (context_id, *keys))
-        con.execute(f"DELETE FROM pp_asset_stock WHERE context_id = ? AND key IN ({marks})",
-                    (context_id, *keys))
+            f"SELECT key, enabled FROM pp_asset_sources WHERE {where}", args).fetchall()}
+        con.execute(f"DELETE FROM pp_asset_sources WHERE {where}", args)
+        if prior:
+            con.execute(
+                f"DELETE FROM pp_asset_stock WHERE context_id = ? AND key IN ({','.join('?' * len(prior))})",
+                (context_id, *prior))
         now = time.time()
         for key, meta in sources.items():
             con.execute(
                 "INSERT INTO pp_asset_sources (context_id, key, kind, name, parent, enabled, "
-                "item_count, updated_at) VALUES (?,?,?,?,?,?,?,?)",
+                "item_count, updated_at, scope) VALUES (?,?,?,?,?,?,?,?,?)",
                 (context_id, key, meta["kind"], meta["name"], meta["parent"],
-                 int(prior.get(key, 0)), len(stock.get(key, {})), now),
+                 int(prior.get(key, 0)), len(stock.get(key, {})), now, scope),
             )
             for tid, qty in stock.get(key, {}).items():
                 con.execute(
@@ -257,11 +286,9 @@ def refresh_assets(context_id: int) -> dict:
                         lambda _f, _n=cname: f"{_n} — personal hangar",
                     )
                     if conts:
-                        nm = _names_for(client, f"characters/{cid}/assets/names/", token, conts)
-                        for k, meta in srcs.items():
-                            if k.startswith("cont:") and int(k.split(":")[1]) in nm:
-                                meta["name"] = nm[int(k.split(":")[1])]
-                    _store(context_id, srcs, stock, set(srcs))
+                        _apply_container_names(
+                            srcs, _names_for(client, f"characters/{cid}/assets/names/", token, conts))
+                    _store(context_id, srcs, stock, set(srcs), scope=f"char:{cid}")
                     ok += 1
 
         except Exception:
@@ -269,6 +296,91 @@ def refresh_assets(context_id: int) -> dict:
 
     return {"characters": len(chars), "refreshed": ok, "failed": failed,
             "needs_reauth": [c["character_name"] for c in needs]}
+
+
+def _corp_scanners(context_id: int) -> list[dict]:
+    """Characters whose token carries the corp-assets scope. Only these are worth trying; anyone
+    else would 403 on the scope before the role even came into it."""
+    con = get_connection()
+    try:
+        rows = con.execute(
+            "SELECT character_id, character_name, scopes FROM pp_characters WHERE context_id = ?",
+            (context_id,),
+        ).fetchall()
+    finally:
+        con.close()
+    return [{"character_id": r["character_id"], "character_name": r["character_name"]}
+            for r in rows if CORP_ASSETS_SCOPE in (r["scopes"] or "").split()]
+
+
+def _division_names(client, corp_id: int, token: str) -> dict[int, str]:
+    """{division number: name} for the corp's seven hangars. Best-effort — an unnamed division is
+    still a perfectly usable source, so this never fails a scan."""
+    try:
+        r = esi_http.get(f"corporations/{corp_id}/divisions/", client=client, token=token)
+        if r.status_code != 200:
+            return {}
+        return {int(h["division"]): h["name"] for h in (r.json() or {}).get("hangar", [])
+                if h.get("name")}
+    except Exception:
+        return {}
+
+
+def refresh_corp_assets(context_id: int) -> dict:
+    """Read corp hangars and containers for every corporation the account can actually read one for.
+
+    Scanned per CORPORATION, not per character: several toons in the same corp see the same hangars,
+    and asking ESI once per toon would be the same heavy call repeated for an identical answer.
+
+    A 403 means the character isn't a Director. That is the expected outcome for most players and
+    is reported as such — not as a failure, and not as something to retry.
+    """
+    ensure_asset_tables()
+    scanners = _corp_scanners(context_id)
+    if not scanners:
+        return {"scanned": 0, "corporations": [], "no_role": [], "needs_scope": True}
+
+    seen: set[int] = set()
+    done: list[str] = []
+    no_role: list[str] = []
+    failed = 0
+    for c in scanners:
+        cid, cname = c["character_id"], c["character_name"]
+        token = _get_valid_token(cid)
+        if not token:
+            failed += 1
+            continue
+        try:
+            with esi_http.client(timeout=25) as client:
+                pub = esi_http.get(f"characters/{cid}/", client=client).json()
+                corp_id = int(pub.get("corporation_id") or 0)
+                if not corp_id or corp_id in seen:
+                    continue
+                rows = _paginate(client, f"corporations/{corp_id}/assets/", token)
+                if isinstance(rows, str):          # "role" — not a Director, nothing to retry
+                    no_role.append(cname)
+                    continue
+                seen.add(corp_id)
+                corp_name = (esi_http.get(f"corporations/{corp_id}/", client=client).json()
+                             or {}).get("name") or f"Corp {corp_id}"
+                divs = _division_names(client, corp_id, token)
+                srcs, stock, conts = _split_by_source(
+                    rows, set(_CORP_FLAGS),
+                    lambda f, _c=corp_id: f"corp:{_c}:h{_CORP_FLAGS[f]}",
+                    lambda f, _n=corp_name, _d=divs: (
+                        f"{_n} — {_d.get(_CORP_FLAGS[f]) or f'hangar {_CORP_FLAGS[f]}'}"),
+                    cont_key=lambda loc, _c=corp_id: f"corp:{_c}:c{loc}",
+                )
+                if conts:
+                    _apply_container_names(
+                        srcs, _names_for(client, f"corporations/{corp_id}/assets/names/", token, conts))
+                _store(context_id, srcs, stock, set(srcs), scope=f"corp:{corp_id}")
+                done.append(corp_name)
+        except Exception:
+            failed += 1
+
+    return {"scanned": len(done), "corporations": done, "no_role": no_role, "failed": failed,
+            "needs_scope": False}
 
 
 def add_pasted_source(context_id: int, name: str, text: str) -> dict:
@@ -345,7 +457,10 @@ def list_sources(context_id: int) -> list[dict]:
     finally:
         con.close()
     return [{"key": r["key"], "kind": r["kind"], "name": r["name"], "parent": r["parent"],
-             "enabled": bool(r["enabled"]), "item_count": r["item_count"]} for r in rows]
+             "enabled": bool(r["enabled"]), "item_count": r["item_count"],
+             # Corp sources are worth distinguishing in the UI: they're shared with the whole corp,
+             # so "is this mine to spend" is a different question than for a personal hangar.
+             "corp": str(r["key"]).startswith("corp:")} for r in rows]
 
 
 def set_sources(context_id: int, keys: list[str], enabled: bool) -> None:
@@ -379,6 +494,39 @@ def owned_quantities(context_id: int) -> dict[int, float]:
     return {int(r["type_id"]): float(r["q"] or 0) for r in rows}
 
 
+def source_quantities(context_id: int, key: str) -> dict[int, float]:
+    """{type_id: qty} in ONE source, enabled or not.
+
+    Deliberately ignores the enabled flag: this answers "what is in that container", which is a
+    question about a specific box the user pointed at, not about the pool the planner may spend.
+    """
+    ensure_asset_tables()
+    con = get_connection()
+    try:
+        rows = con.execute(
+            "SELECT type_id, qty FROM pp_asset_stock WHERE context_id = ? AND key = ?",
+            (context_id, key),
+        ).fetchall()
+    except Exception:
+        return {}
+    finally:
+        con.close()
+    return {int(r["type_id"]): float(r["qty"] or 0) for r in rows}
+
+
+def source_name(context_id: int, key: str) -> str | None:
+    ensure_asset_tables()
+    con = get_connection()
+    try:
+        row = con.execute("SELECT name FROM pp_asset_sources WHERE context_id = ? AND key = ?",
+                          (context_id, key)).fetchone()
+    except Exception:
+        return None
+    finally:
+        con.close()
+    return row["name"] if row else None
+
+
 def assets_status(context_id: int) -> dict:
     _ok, needs = chars_by_scope(context_id)
     srcs = list_sources(context_id)
@@ -400,6 +548,10 @@ def assets_status(context_id: int) -> dict:
         # Characters whose stored token predates the assets scope — they need one re-auth each.
         "needs_reauth": [c["character_name"] for c in needs],
         "scannable": len(_ok),
+        # Whether anything on this account could even try a corp scan. Nobody with the scope means
+        # the button would only ever produce an error, so the UI offers a re-auth instead.
+        "corp_scannable": len(_corp_scanners(context_id)),
+        "corp_sources": sum(1 for s in srcs if s.get("corp")),
     }
 
 
@@ -412,6 +564,16 @@ def industry_assets(ctx: int = Depends(require_context)):
 @router.post("/api/industry/assets/refresh")
 def industry_assets_refresh(ctx: int = Depends(require_context)):
     res = refresh_assets(ctx)
+    res.update(assets_status(ctx))
+    return res
+
+
+@router.post("/api/industry/assets/refresh-corp")
+def industry_assets_refresh_corp(ctx: int = Depends(require_context)):
+    """Read the corp hangars and containers of any corporation a character on this account has the
+    Director role in. Separate from the personal refresh on purpose: it's a heavy call that most
+    accounts can't make at all, so it runs only when asked for."""
+    res = refresh_corp_assets(ctx)
     res.update(assets_status(ctx))
     return res
 
