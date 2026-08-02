@@ -2463,25 +2463,25 @@ async function indRenderSourcing() {
       `<option value="${_esc(s.key)}"${s.key === d.source_key ? ' selected' : ''}>`
       + `${_esc(s.name)}${s.kind === 'container' ? '' : ' (whole hangar)'}</option>`)).join('');
 
-  const rows = (d.items || []).map(i => {
-    // Where the "have" came from matters: contents of the box are observed and will keep updating,
-    // a typed number is a promise the user made and nothing will ever correct it.
-    const from = i.in_source >= i.required && i.required > 0
-      ? `<span class="ind-src-meta">in the box</span>`
-      : i.noted > 0 ? `<span class="ind-src-meta">noted by you</span>` : '';
-    // One button per row was the first cut, and it doesn't survive a real build: an Archon has 50-odd
-    // distinct materials, so confirming them individually is data entry. Pasting the pile is both
-    // faster and more accurate; this stays only for correcting a single line afterwards.
-    const act = i.noted > 0
-      ? `<button class="ind-srcq-btn" onclick="indSetSourced(${i.type_id}, 0)" title="Forget what was noted for this one">clear</button>`
-      : '';
-    return `<tr class="${i.done ? 'ind-srcrow-done' : ''}"><td>${_esc(i.name)} ${from}</td>`
-      + `<td class="ind-num">${Math.round(i.required).toLocaleString()}</td>`
-      + `<td class="ind-num">${Math.round(i.sourced).toLocaleString()}</td>`
-      + `<td class="ind-num">${i.remaining > 0 ? Math.round(i.remaining).toLocaleString() : '—'}</td>`
-      + `<td class="ind-num">${i.remaining_cost ? fmtIsk(i.remaining_cost) : '—'}</td>`
-      + `<td>${act}</td></tr>`;
-  }).join('');
+  // NO material table here. The shopping list below is already that table, and two lists of the same
+  // materials — inevitably showing different quantities, since the queue's list nets off stock and
+  // batches shared components across orders — is worse than one. What this panel knows that the
+  // shopping list cannot is per-BUILD state: which box this one pulls from and how far along the
+  // gathering is. So it shows that, and the shortfall stays one collapsed click away for the moment
+  // you want to read it without scrolling.
+  const short = (d.items || []).filter(i => !i.done);
+  const missing = short.length
+    ? `<details class="ind-src-missing"><summary>${short.length} still short</summary>`
+      + `<table class="ind-table"><thead><tr><th>Material</th><th class="ind-num">Short</th><th></th></tr></thead><tbody>`
+      + short.map(i => `<tr><td>${_esc(i.name)}`
+          + (i.sourced > 0 ? ` <span class="ind-src-meta">${Math.round(i.sourced).toLocaleString()} of `
+              + `${Math.round(i.required).toLocaleString()}${i.noted > 0 ? ', noted by you' : ' in the box'}</span>` : '')
+          + `</td><td class="ind-num">${Math.round(i.remaining).toLocaleString()}</td>`
+          // Kept for correcting a single line after a paste; the paste is how the list gets filled.
+          + `<td>${i.noted > 0 ? `<button class="ind-srcq-btn" onclick="indSetSourced(${i.type_id}, 0)"`
+              + ` title="Forget what was noted for this one">clear</button>` : ''}</td></tr>`).join('')
+      + `</tbody></table></details>`
+    : `<p class="ind-src-help ind-src-allin">Everything this build needs is accounted for.</p>`;
 
   const t = d.totals || {};
   el.innerHTML = `<div class="ind-srcpanel">
@@ -2498,12 +2498,10 @@ async function indRenderSourcing() {
         <button class="ind-copy-btn ind-copy-sm" onclick="indCopyMissing()">Copy what's missing</button>
         <button class="ind-bp-btn" onclick="indOpenSourcePaste()">Paste what you've got</button>
       </div>
-      <p class="ind-src-help">What this build needs and how much of it you've already got. Anything in
-        the container you pick counts automatically — rescan your assets after hauling and this moves
-        on its own; for stock we can't see, paste it from the EVE client.
-        <b>Prices and the buy list for everything queued are further down</b> — those quantities
-        differ on purpose, because the queue nets off your stock and builds shared components once
-        for every order.</p>
+      <p class="ind-src-help">How far along the gathering is for this one build. Anything in the
+        container you pick counts automatically — rescan your assets after hauling and this moves on
+        its own; for stock we can't see, paste it from the EVE client. The full priced list of what
+        to buy is the shopping list below.</p>
       <div id="indSrcPaste" class="ind-paste" style="display:none">
         <p class="ind-src-help">Select the materials in your hangar or container (Ctrl+A), copy
           (Ctrl+C) and paste below. This <b>replaces</b> what you've noted so far — it's a snapshot of
@@ -2515,9 +2513,7 @@ async function indRenderSourcing() {
           <span id="indSrcPasteMsg" class="ind-src-meta">${_esc(_indSrcPasteMsg)}</span>
         </div>
       </div>
-      <table class="ind-table"><thead><tr><th>Material</th><th class="ind-num">Needs</th>
-        <th class="ind-num">Have</th><th class="ind-num">Short</th><th class="ind-num">Left to buy</th><th></th></tr></thead>
-        <tbody>${rows || '<tr><td colspan="6">Nothing to buy for this one.</td></tr>'}</tbody></table>
+      ${missing}
     </div>`;
 }
 

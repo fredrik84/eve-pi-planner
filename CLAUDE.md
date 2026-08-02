@@ -982,14 +982,17 @@ asks what's in a specific box the user pointed at, not what the planner may spen
 (right for cost and scheduling, useless here: you can't haul 40% of a shared batch into one
 customer's box), so this plans the order alone with its own quantity and overrides, and the sum
 across orders can legitimately exceed what the queue will build.
-**It is deliberately NOT a second shopping list** (`_item_row`). The two show the same materials two
-ways and legitimately disagree — the queue's list nets stock off and batches shared components once
-for every order, this one measures against the full requirement (`use_stock=False`, or the bar could
-never fill) — so only one of them may talk about money. A sourcing row therefore carries no unit
-price, market or line cost; the single exception is the SHORTFALL's cost, the one number that
-decides whether to go shopping. Two priced lists disagreeing about the same item is how a page stops
-being believed, and `test_the_sourcing_list_is_not_a_second_shopping_list` asserts it on the row
-itself rather than the source text (the function reads a unit price to compute that shortfall). Deleting an order clears its notes
+**The panel renders NO material table** — that was the first cut and it was wrong. The shopping list
+is already that table, and the two can only ever disagree: the queue's list nets stock off and
+batches shared components once for every order, while sourcing measures one order against its full
+requirement (`use_stock=False`, or the progress bar could never fill). Two tables of the same
+materials showing different quantities is worse than one, however well each is explained. What the
+panel knows that the shopping list cannot is per-BUILD state, so that is all it shows: which box this
+build pulls from, how far the gathering has got, and the shortfall behind one `<details>` click for
+when you don't want to scroll. For the same reason a sourcing row carries no unit price, market or
+line cost (`_item_row`); the one exception is the SHORTFALL's cost, which decides whether to go
+shopping at all. `test_the_sourcing_list_is_not_a_second_shopping_list` asserts that on the row
+itself rather than the source text — the function reads a unit price to compute that shortfall. Deleting an order clears its notes
 (ids get reused).
 
 

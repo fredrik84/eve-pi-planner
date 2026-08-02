@@ -1356,5 +1356,10 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-srcq-btn { font-size: 10px; background: #161b28; color: #9fb4d8; border: 1px solid var(--clr-border);
   border-radius: 8px; padding: 1px 7px; cursor: pointer; }
 .ind-srcq-btn:hover { background: #1b2233; color: #fff; }
-.ind-srcrow-done td { color: var(--clr-text-soft); }
-.ind-srcrow-done td:first-child { color: var(--clr-green); }
+/* The shortfall, collapsed. The shopping list below is the material table; this exists so you can
+   read what's still short without scrolling to it, not so there are two of them. */
+.ind-src-missing { margin-top: 8px; }
+.ind-src-missing > summary { cursor: pointer; font-size: 12px; color: var(--clr-accent); }
+.ind-src-missing > summary:hover { color: #d5e4ff; }
+.ind-src-missing .ind-table { margin-top: 6px; }
+.ind-src-allin { color: var(--clr-green); }
