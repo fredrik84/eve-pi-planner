@@ -1656,6 +1656,7 @@ def main():
     test_a_target_is_never_blacklisted_out_of_its_own_build()
     test_hand_marked_jobs_count_as_progress()
     test_sourcing_notes_belong_to_one_order()
+    test_pasting_a_hangar_sets_what_is_sourced()
     test_a_scan_retires_stock_that_is_no_longer_there()
     test_corp_hangars_and_containers_split_like_personal_ones()
     print(f"\nAll {_passed} checks passed.")
@@ -1790,6 +1791,49 @@ def test_sourcing_notes_belong_to_one_order():
         check("deleting an order takes its notes with it", S._manual(1, 11) == {})
         check("another account sees none of it", S._manual(2, 10) == {})
     finally:
+        restore()
+
+
+def test_pasting_a_hangar_sets_what_is_sourced():
+    """A capital build has 50+ distinct materials, so confirming them one at a time is data entry,
+    not a checklist — the client's own copy is the fast, accurate answer. Two rules make the paste
+    trustworthy: it REPLACES the previous note (it's a snapshot, so a material since consumed has to
+    drop back), and it ignores what this build doesn't need (people select the whole hangar)."""
+    print("test_pasting_a_hangar_sets_what_is_sourced")
+    from app.industry import sourcing as S
+    from app.industry import assets as A
+
+    con, restore = _patch_db(S)
+    # The paste parser resolves names against the SDE, which lives behind assets.get_connection.
+    seeded = sqlite3.connect(":memory:")
+    seeded.row_factory = sqlite3.Row
+    seeded.execute("CREATE TABLE types (type_id INTEGER PRIMARY KEY, name TEXT)")
+    for tid, nm in NAMES.items():
+        seeded.execute("INSERT INTO types VALUES (?, ?)", (tid, nm))
+    seeded.commit()
+    real_assets_con = A.get_connection
+    A.get_connection = lambda _c=_KeepOpen(seeded): _c
+    try:
+        S.ensure_sourcing_table.__wrapped__()
+        wanted = {200, 201, 202}
+
+        res = S.apply_paste(1, 10, "MineralA\t1 000\nMineralB\t40\nWidget\t2\nNotAThing\t5", wanted)
+        check("materials this build needs are matched", res["matched"] == 2)
+        check("and quantities survive EVE's thousands separators",
+              S._manual(1, 10) == {200: 1000.0, 201: 40.0})
+        check("an item the build doesn't need is ignored, not an error", res["ignored"] == 1)
+        check("an unreadable name is reported", res["unknown"] == ["NotAThing"])
+
+        # A second paste is the new truth: MineralB is gone from the pile, so it must go to zero.
+        S.apply_paste(1, 10, "MineralA\t1 500", wanted)
+        check("a later paste replaces rather than merges", S._manual(1, 10) == {200: 1500.0})
+
+        check("nothing readable is reported as such",
+              S.apply_paste(1, 10, "   ", wanted).get("error") == "empty")
+        check("and a failed paste leaves the previous one alone", S._manual(1, 10) == {200: 1500.0})
+    finally:
+        A.get_connection = real_assets_con
+        seeded.close()
         restore()
 
 

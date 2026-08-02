@@ -124,8 +124,42 @@ function indOpenPlanner() {
   indRestoreMargin();
   _indRestoringSettings = false;
   _indSyncOptsVisible();
+  indLoadPlanSources();
   const s = document.getElementById('indSearch');
   if (s) setTimeout(() => s.focus(), 30);
+}
+
+// Which box this build's materials come from, chosen while planning it — because "which container
+// is this build's" is decided at the same moment as what to build, not afterwards. A director picks
+// a corp hangar or container straight off the scanned list; everyone else pastes what they hold,
+// which is recorded against the order rather than added to the planner's global stock (stock you
+// can't actually draw from is the one error that makes the planner build too little).
+async function indLoadPlanSources() {
+  const field = document.getElementById('indPlanSrcField');
+  const sel = document.getElementById('indPlanSrc');
+  if (!field || !sel) return;
+  if (!_featureActive('industry_sourcing')) { field.style.display = 'none'; return; }
+  let srcs = [];
+  try { srcs = ((await api('/api/industry/assets')) || {}).sources || []; } catch (e) {}
+  // Containers first — a build is normally gathered into a box, not a whole hangar.
+  srcs.sort((a, b) => (a.kind !== 'container') - (b.kind !== 'container') || a.name.localeCompare(b.name));
+  sel.innerHTML = '<option value="">— track it later —</option>'
+    + srcs.map(s => `<option value="${_esc(s.key)}">${_esc(s.name)}`
+        + `${s.kind === 'container' ? '' : ' (whole hangar)'}</option>`).join('')
+    + '<option value="__paste">Paste what I already have…</option>';
+  field.style.display = '';
+  indOnPlanSourceChange();
+}
+
+function indOnPlanSourceChange() {
+  const sel = document.getElementById('indPlanSrc');
+  const box = document.getElementById('indPlanPaste');
+  if (!sel || !box) return;
+  box.style.display = sel.value === '__paste' ? '' : 'none';
+  if (sel.value === '__paste') {
+    const t = document.getElementById('indPlanPasteText');
+    if (t) setTimeout(() => t.focus(), 30);
+  }
 }
 
 function indClosePlanner() {
@@ -1962,18 +1996,31 @@ function _indCacheNames(d) {
 async function indAddToQueue() {
   if (!_indPicked) return;
   const qty = Math.max(1, parseInt(document.getElementById('indQty').value) || 1);
+  const srcSel = (document.getElementById('indPlanSrc') || {}).value || '';
+  const pasted = srcSel === '__paste'
+    ? ((document.getElementById('indPlanPasteText') || {}).value || '') : '';
   try {
-    await apiSend('POST', '/api/industry/orders',
+    const order = await apiSend('POST', '/api/industry/orders',
       { product_type_id: _indPicked.type_id, quantity: qty,
         label: (document.getElementById('indLabel') || {}).value || '',
         // The overrides were decided against THIS product — they ride along, or
         // queueing would silently undo every one of them.
         force_build_ids: _indForceIds(), me_te_overrides: _indMeTeMap(),
-        margin_pct: _indMarginPct() });
+        margin_pct: _indMarginPct(),
+        source_key: srcSel === '__paste' ? '' : srcSel });
+    // A paste is per-order sourcing, not planner stock: it says what's already gathered for THIS
+    // build, so it lands on the order's checklist and nowhere else. Best-effort — the order itself
+    // is already queued, and failing the whole action over the checklist would be the wrong trade.
+    if (pasted.trim() && order && order.id) {
+      try { await apiSend('POST', `/api/industry/orders/${order.id}/sourcing/paste`, { text: pasted }); }
+      catch (e) {}
+    }
     document.getElementById('indResult').innerHTML = '';
     _indForcedTypes.clear();       // they live on the order now
     const lb = document.getElementById('indLabel');
     if (lb) lb.value = '';          // don't inherit the last customer on the next order
+    const pt = document.getElementById('indPlanPasteText');
+    if (pt) pt.value = '';          // and don't carry one build's materials onto the next
     indClosePlanner();
     await indLoadQueue();
     await indRefreshStatus();     // adding re-plans the whole queue together — the reason to queue
@@ -2389,6 +2436,7 @@ let _indSourcingOpen = null;      // order id, so the panel can be re-rendered a
 async function indOpenSourcing(orderId) {
   if (_indSourcingOpen === orderId) { indCloseSourcing(); return; }   // the chip toggles it
   _indSourcingOpen = orderId;
+  _indSrcPasteMsg = '';          // last build's paste result is not this one's
   const el = document.getElementById('indSourcing');
   if (el) el.innerHTML = _indLoadingHtml('Working out what this build needs…');
   await indRenderSourcing();
@@ -2421,9 +2469,12 @@ async function indRenderSourcing() {
     const from = i.in_source >= i.required && i.required > 0
       ? `<span class="ind-src-meta">in the box</span>`
       : i.noted > 0 ? `<span class="ind-src-meta">noted by you</span>` : '';
-    const act = i.done
-      ? `<button class="ind-srcq-btn" onclick="indSetSourced(${i.type_id}, 0)" title="Clear what you noted for this">undo</button>`
-      : `<button class="ind-srcq-btn" onclick="indSetSourced(${i.type_id}, null)" title="I have all of this">got it</button>`;
+    // One button per row was the first cut, and it doesn't survive a real build: an Archon has 50-odd
+    // distinct materials, so confirming them individually is data entry. Pasting the pile is both
+    // faster and more accurate; this stays only for correcting a single line afterwards.
+    const act = i.noted > 0
+      ? `<button class="ind-srcq-btn" onclick="indSetSourced(${i.type_id}, 0)" title="Forget what was noted for this one">clear</button>`
+      : '';
     return `<tr class="${i.done ? 'ind-srcrow-done' : ''}"><td>${_esc(i.name)} ${from}</td>`
       + `<td class="ind-num">${Math.round(i.required).toLocaleString()}</td>`
       + `<td class="ind-num">${Math.round(i.sourced).toLocaleString()}</td>`
@@ -2445,13 +2496,65 @@ async function indRenderSourcing() {
         <span class="ind-shop-tot">${t.sourced} of ${t.materials} sourced`
         + (t.remaining_cost ? ` · ${fmtIsk(t.remaining_cost)} still to buy` : '') + `</span>
         <button class="ind-copy-btn ind-copy-sm" onclick="indCopyMissing()">Copy what's missing</button>
+        <button class="ind-bp-btn" onclick="indOpenSourcePaste()">Paste what you've got</button>
       </div>
       <p class="ind-src-help">Anything sitting in the container you pick counts automatically — rescan
-        your assets after hauling and this moves on its own. Use <b>got it</b> for stock we can't see.</p>
+        your assets after hauling and this moves on its own. For stock we can't see, select it in the
+        EVE client and paste it in.</p>
+      <div id="indSrcPaste" class="ind-paste" style="display:none">
+        <p class="ind-src-help">Select the materials in your hangar or container (Ctrl+A), copy
+          (Ctrl+C) and paste below. This <b>replaces</b> what you've noted so far — it's a snapshot of
+          what you have now — and anything this build doesn't need is ignored.</p>
+        <textarea id="indSrcPasteText" rows="6" placeholder="Tritanium&#9;1 000 000&#10;Morphite&#9;2 400"></textarea>
+        <div class="ind-src-actions">
+          <button class="ind-primary-btn" onclick="indApplySourcePaste()">Apply</button>
+          <button class="ind-bp-btn" onclick="indCloseSourcePaste()">Cancel</button>
+          <span id="indSrcPasteMsg" class="ind-src-meta">${_esc(_indSrcPasteMsg)}</span>
+        </div>
+      </div>
       <table class="ind-table"><thead><tr><th>Material</th><th class="ind-num">Needs</th>
         <th class="ind-num">Have</th><th class="ind-num">Short</th><th class="ind-num">Left to buy</th><th></th></tr></thead>
         <tbody>${rows || '<tr><td colspan="6">Nothing to buy for this one.</td></tr>'}</tbody></table>
     </div>`;
+}
+
+// Kept outside the panel's HTML because applying a paste re-renders the whole thing — the result of
+// what you just did must not be wiped by the redraw that shows it.
+let _indSrcPasteMsg = '';
+
+function indOpenSourcePaste() {
+  const f = document.getElementById('indSrcPaste');
+  if (!f) return;
+  f.style.display = '';
+  const t = document.getElementById('indSrcPasteText');
+  if (t) t.focus();
+}
+
+function indCloseSourcePaste() {
+  _indSrcPasteMsg = '';
+  const f = document.getElementById('indSrcPaste');
+  if (f) f.style.display = 'none';
+}
+
+async function indApplySourcePaste() {
+  const text = (document.getElementById('indSrcPasteText') || {}).value || '';
+  const msg = document.getElementById('indSrcPasteMsg');
+  if (!text.trim()) { if (msg) msg.textContent = 'Paste something first.'; return; }
+  if (msg) msg.textContent = 'Reading…';
+  let d;
+  try {
+    d = await apiSend('POST', `/api/industry/orders/${_indSourcingOpen}/sourcing/paste`, { text });
+  } catch (e) { if (msg) msg.textContent = String(e.message || e); return; }
+  const p = d.paste || {};
+  // Say what was ignored as well as what matched: a paste that matched nothing is almost always the
+  // wrong hangar, and silence would leave the user staring at an unchanged list.
+  _indSrcPasteMsg = p.error === 'empty'
+    ? "Couldn't read that paste."
+    : `Matched ${p.matched} of this build's materials`
+      + (p.ignored ? ` · ignored ${p.ignored} item${p.ignored === 1 ? '' : 's'} it doesn't need` : '')
+      + ((p.unknown || []).length ? ` · ${p.unknown.length} name(s) not recognised` : '') + '.';
+  await indRenderSourcing();
+  if (p.matched) indOpenSourcePaste();     // leave it open so the outcome is visible next to the list
 }
 
 async function indBindSource(key) {

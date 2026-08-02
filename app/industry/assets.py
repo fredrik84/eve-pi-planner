@@ -383,20 +383,18 @@ def refresh_corp_assets(context_id: int) -> dict:
             "needs_scope": False}
 
 
-def add_pasted_source(context_id: int, name: str, text: str) -> dict:
-    """Turn an EVE inventory paste into a stock source.
+def parse_stock_paste(text: str) -> tuple[dict[int, float], list[str]]:
+    """An EVE inventory paste → ({type_id: qty}, names we couldn't match).
 
-    The corp assets endpoint needs Director, which most corp members will never have — pasting the
-    hangar is the equivalent that works for everyone. Reuses the same paste parser the PI tools use,
-    then resolves names to type_ids against the SDE. Pasted sources are enabled on creation: you
-    just went to the trouble of pasting it, so meaning to use it is a safe assumption.
+    Shared by every "paste what you've got" path (a stock source here, an order's sourced materials
+    in sourcing.py): same parser the PI tools use, same SDE name resolution, so the two can't
+    disagree about what a pasted hangar contains.
     """
     from app.pi import parse_inventory
 
-    ensure_asset_tables()
     parsed = parse_inventory(text or "")
     if not parsed:
-        return {"added": 0, "unknown": [], "error": "empty"}
+        return {}, []
 
     con = get_connection()
     try:
@@ -421,6 +419,20 @@ def add_pasted_source(context_id: int, name: str, text: str) -> dict:
             unknown.append(nm)
             continue
         stock[int(tid)] = stock.get(int(tid), 0.0) + float(qty)
+    return stock, unknown
+
+
+def add_pasted_source(context_id: int, name: str, text: str) -> dict:
+    """Turn an EVE inventory paste into a stock source.
+
+    The corp assets endpoint needs Director, which most corp members will never have — pasting the
+    hangar is the equivalent that works for everyone. Pasted sources are enabled on creation: you
+    just went to the trouble of pasting it, so meaning to use it is a safe assumption.
+    """
+    ensure_asset_tables()
+    stock, unknown = parse_stock_paste(text)
+    if not stock and not unknown:
+        return {"added": 0, "unknown": [], "error": "empty"}
     if not stock:
         return {"added": 0, "unknown": unknown, "error": "unrecognized"}
 

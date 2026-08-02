@@ -79,6 +79,9 @@ class OrderCreate(BaseModel):
     force_build_ids: list[int] = []   # components to build regardless of the buy-shortcuts
     me_te_overrides: dict[str, list[int]] = {}   # {"<type_id>": [me, te]} to assume when planning
     margin_pct: float | None = None             # quote margin; None = the account's current default
+    # The container/hangar this build pulls from, chosen while planning it. Set here rather than
+    # only afterwards because "which box is this build's" is decided when the build is decided.
+    source_key: str = ""
 
 
 class OrderUpdate(BaseModel):
@@ -160,12 +163,13 @@ def create_order(req: OrderCreate, ctx: int = Depends(require_context)):
         # 404 ("order not found") even though the insert committed.
         oid = con.execute(
             "INSERT INTO pp_industry_orders (context_id, product_type_id, name, quantity, mode, "
-            "priority, status, created_at, label, force_build_ids, me_te_overrides, margin_pct) "
-            "VALUES (?,?,?,?,?,?, 'queued', ?,?,?,?,?) RETURNING id",
+            "priority, status, created_at, label, force_build_ids, me_te_overrides, margin_pct, "
+            "source_key) VALUES (?,?,?,?,?,?, 'queued', ?,?,?,?,?,?) RETURNING id",
             (ctx, req.product_type_id, name or str(req.product_type_id), req.quantity, req.mode,
              int(_time.time()), _time.time(), (req.label or "").strip()[:60],
              json.dumps(sorted({int(t) for t in req.force_build_ids})),
-             json.dumps(req.me_te_overrides or {}), req.margin_pct),
+             json.dumps(req.me_te_overrides or {}), req.margin_pct,
+             (req.source_key or "").strip()[:80]),
         ).fetchone()[0]
         con.commit()
         return _order_row(con, oid, ctx)

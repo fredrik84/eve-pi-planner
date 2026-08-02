@@ -11,9 +11,11 @@ Two signals, combined the same way progress combines its own:
   container this build pulls from. Whatever is in it counts as sourced, no ticking required. Refresh
   the assets and the checklist moves on its own, which is the version of this feature that costs the
   user nothing to keep up to date.
-* **A hand-entered quantity.** For everything the first signal can't see — stock sitting in a
-  station you haven't scanned, a courier contract in flight, a corp-mate's promise — the user can
-  say how much is accounted for. Stored per (order, material).
+* **A pasted inventory.** For everything the first signal can't see — stock in a station you
+  haven't scanned, a hangar belonging to someone else, a courier contract already unloaded — the
+  user selects the pile in the EVE client and pastes it. A capital build has 50+ distinct
+  materials, so anything that asks for one confirmation per material is not a checklist, it's data
+  entry; the client's own copy is the fastest true answer available. Stored per (order, material).
 
 The higher of the two wins per material, so ticking something off never hides real contents and a
 scan never erases a note.
@@ -90,6 +92,41 @@ def set_sourced(context_id: int, order_id: int, type_id: int, qty: float) -> Non
         con.commit()
     finally:
         con.close()
+
+
+def apply_paste(context_id: int, order_id: int, text: str, wanted: set[int]) -> dict:
+    """Replace this order's notes with what an inventory paste says is on hand.
+
+    **Replace, not merge.** A paste is a snapshot of a pile as it stands, so a material that has
+    since been consumed — or that was never really there — has to drop back to zero. Merging would
+    make every past paste a floor the count could never fall below, and the one number nobody can
+    correct is the one that quietly hides a shortfall.
+
+    Items the order doesn't need are ignored rather than reported as a problem: people select the
+    whole hangar, and a hangar holds more than one build's materials.
+    """
+    from app.industry.assets import parse_stock_paste
+
+    stock, unknown = parse_stock_paste(text)
+    if not stock and not unknown:
+        return {"matched": 0, "ignored": 0, "unknown": [], "error": "empty"}
+
+    relevant = {tid: qty for tid, qty in stock.items() if tid in wanted}
+    ensure_sourcing_table()
+    con = get_connection()
+    try:
+        con.execute("DELETE FROM pp_industry_sourced WHERE context_id=? AND order_id=?",
+                    (context_id, order_id))
+        now = time.time()
+        for tid, qty in relevant.items():
+            if qty > 0:
+                con.execute(
+                    "INSERT INTO pp_industry_sourced (context_id, order_id, type_id, qty, updated_at) "
+                    "VALUES (?,?,?,?,?)", (context_id, order_id, int(tid), float(qty), now))
+        con.commit()
+    finally:
+        con.close()
+    return {"matched": len(relevant), "ignored": len(stock) - len(relevant), "unknown": unknown}
 
 
 def clear_order_sourcing(context_id: int, order_id: int) -> None:
@@ -197,7 +234,8 @@ class SourcedEdit(BaseModel):
 def industry_order_sourcing_set(order_id: int, req: SourcedEdit,
                                 ctx: int = Depends(require_context)):
     """Note how much of one material is accounted for (`qty: null` = all of it), and return the
-    refreshed checklist."""
+    refreshed checklist. The bulk answer is the paste endpoint below — this one exists for fixing a
+    single line after the fact."""
     cur = order_sourcing(ctx, order_id)           # also 404s if the order isn't the caller's
     qty = req.qty
     if qty is None:
@@ -207,3 +245,20 @@ def industry_order_sourcing_set(order_id: int, req: SourcedEdit,
         qty = item["required"]
     set_sourced(ctx, order_id, int(req.type_id), float(qty))
     return order_sourcing(ctx, order_id)
+
+
+class SourcedPaste(BaseModel):
+    text: str
+
+
+@router.post("/api/industry/orders/{order_id}/sourcing/paste")
+def industry_order_sourcing_paste(order_id: int, req: SourcedPaste,
+                                  ctx: int = Depends(require_context)):
+    """Set what's been gathered from an EVE inventory paste — select the pile in the client, copy,
+    paste. The whole point of the checklist is a capital build's 50-odd materials, which is far too
+    many to confirm one at a time."""
+    cur = order_sourcing(ctx, order_id)           # 404s if the order isn't the caller's
+    res = apply_paste(ctx, order_id, req.text, {i["type_id"] for i in cur["items"]})
+    out = order_sourcing(ctx, order_id)
+    out["paste"] = res
+    return out

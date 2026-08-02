@@ -961,9 +961,22 @@ keys (`corp:<cid>:h<n>`, `corp:<cid>:c<item>`) can't collide with personal ones.
 `pp_industry_orders.source_key`). "What have I already gathered for this build, and what's still to
 buy." Players dedicate a container per build and haul into it, so **the box is the record**: an
 order names one stock source and whatever is in it counts as sourced with no ticking at all — rescan
-after hauling and the checklist moves itself. A hand-entered quantity covers what ESI can't see; the
-**higher of the two wins** per material, so a note never erases real contents and a scan never
-erases a note. `source_quantities(ctx, key)` deliberately ignores the source's *enabled* flag: this
+after hauling and the checklist moves itself. Anything ESI can't see is **pasted** from the client
+(`POST …/sourcing/paste`, sharing `assets.parse_stock_paste` with the pasted-stock source so the two
+can't disagree about what a hangar contains); the **higher of paste and box wins** per material, so
+a note never erases real contents and a scan never erases a note.
+A per-row "got it" button was the first cut and was wrong: an Archon has 50+ distinct materials, so
+one confirmation per material is data entry, not a checklist. The paste **replaces** the order's
+notes rather than merging — it's a snapshot, so a material since consumed has to drop back to zero,
+and merging would make every past paste a floor the count could never fall below. Items the build
+doesn't need are ignored, not flagged (people select the whole hangar). The per-material control
+that remains is `clear`, for correcting one line.
+**Both are chosen while planning the build**, not only afterwards: the plan modal carries a
+"Materials from" picker (the scanned sources, or *paste what I already have*) and `OrderCreate`
+takes `source_key`, because which box a build belongs to is decided at the same moment as what to
+build. A paste made there lands on the new order's checklist and **nowhere else** — it is not
+registered as planner stock, since stock that can't actually be drawn from is the one error that
+makes the planner build too little. `source_quantities(ctx, key)` deliberately ignores the source's *enabled* flag: this
 asks what's in a specific box the user pointed at, not what the planner may spend.
 **The requirement is per ORDER, not the queue batch** — the queue aggregates demand across orders
 (right for cost and scheduling, useless here: you can't haul 40% of a shared batch into one
