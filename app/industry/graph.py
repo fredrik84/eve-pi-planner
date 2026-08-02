@@ -92,6 +92,11 @@ class BuildParams:
     # What to charge over cost when quoting a customer. Priced off NET cost — the leftovers a build
     # over-produces stay with the builder, so billing them to the customer would charge twice.
     margin_pct: float = 0.0
+    # The system the build is costed in, or None when the account has never configured one. Job
+    # installation fees are EIV x (system cost index + facility tax + 4% SCC); with no system the
+    # index term is simply absent, so the fee is understated by exactly that share (the SCC and tax
+    # still apply — this is NOT a zero job cost). Carried so the plan can say so out loud.
+    build_system_id: int | None = None
     # "real" when the job-time skills came from a scanned character, "assumed" when nothing
     # on the account has been scanned and V/V was used. Surfaced on the plan so a guess is
     # never presented as a measurement — same principle as me_source per build step.
@@ -556,7 +561,7 @@ def resolve_build_params(context_id: int, me_pct: float, te_pct: float,
         mfg_skill_time_mult=mfg_skill, rx_skill_time_mult=rx_skill, skill_time_basis=skill_basis,
         mfg_cost_index=fetch_system_cost_index(sid, "manufacturing"),
         rx_cost_index=fetch_system_cost_index(sid, "reaction"),
-        facility_tax_pct=tax, me_by_product=me_by_product, owned=owned,
+        facility_tax_pct=tax, me_by_product=me_by_product, owned=owned, build_system_id=sid,
         max_build_hours=max_build_hours,
         struct_material_mult=1.0 - struct_material_pct / 100.0,
         struct_time_mult=1.0 - struct_time_pct / 100.0,
@@ -702,6 +707,18 @@ def industry_search(q: str, ctx: int = Depends(require_context)):
         con.close()
 
 
+def _cost_basis(params) -> dict:
+    """What the job-installation fee was actually costed against, so a missing system cost index is
+    visible instead of silently cheap. Job cost is EIV x (index + facility tax + 4% SCC); with no
+    configured build system the index term is 0 and the quote is light by that share."""
+    return {
+        "system_id": params.build_system_id,
+        "mfg_index": params.mfg_cost_index,
+        "rx_index": params.rx_cost_index,
+        "facility_tax_pct": params.facility_tax_pct,
+    }
+
+
 @router.post("/api/industry/plan")
 def industry_plan(req: IndustryPlanRequest, ctx: int = Depends(require_context)):
     """Read-only make-or-buy plan for one product+quantity: build tree, priced shopping list, and
@@ -745,6 +762,7 @@ def industry_plan(req: IndustryPlanRequest, ctx: int = Depends(require_context))
     # Whether the job times above came from real scanned skills or the V/V fallback. The number is
     # the same shape either way, so without this the user cannot tell a measurement from a guess.
     result["skill_time_basis"] = inp.params.skill_time_basis
+    result["cost_basis"] = _cost_basis(inp.params)
     return result
 
 

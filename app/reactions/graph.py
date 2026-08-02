@@ -462,7 +462,26 @@ def _build_opportunities_uncached(context_id: int, allowed_material_ids: set[int
 
 @router.get("/api/reactions/opportunities")
 def reactions_opportunities(context_id: int = Depends(require_context)):
-    return {"opportunities": _build_opportunities(context_id)}
+    """Ranked reaction opportunities, plus what their job cost was actually costed against.
+
+    Unlike the manufacturing planner — which still charges the 4% SCC and facility tax without a
+    system, so only the index share is missing — an unconfigured reaction system zeroes the WHOLE
+    `job_cost_rate` here (see _load_goo_and_reached), and the adjusted-price fetch is skipped with
+    it. So these profits are quoted with NO installation fee at all, which flatters every one of
+    them. That is deliberate ("behave as before until configured") but it must not be invisible.
+    """
+    basis = {"system": None, "cost_index": 0.0, "facility_tax_pct": 0.0}
+    try:
+        s = effective_reaction_settings(context_id)
+        sysname = s.get("reaction_system")
+        basis = {
+            "system": sysname,
+            "cost_index": fetch_system_cost_index(_resolve_system_id(sysname)) if sysname else 0.0,
+            "facility_tax_pct": s.get("facility_tax_pct") or 0.0,
+        }
+    except Exception:
+        pass
+    return {"opportunities": _build_opportunities(context_id), "cost_basis": basis}
 
 
 @router.get("/api/reactions/job-detail")

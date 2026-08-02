@@ -390,6 +390,8 @@ def _run_queue_plan(ctx: int, req: QueuePlanRequest) -> dict:
     if sk is not None:
         res["skill_gaps"] = sk["gaps"]
     res["skill_time_basis"] = inp.params.skill_time_basis
+    from app.industry.graph import _cost_basis
+    res["cost_basis"] = _cost_basis(inp.params)
     _blend_margin(res, order_margins, inp.params.margin_pct)
     return res
 

@@ -1634,6 +1634,19 @@ function _indSkillBasisWarn(d) {
     + `has been scanned for skills yet. Rescan to plan against your real training.</p>`;
 }
 
+// Job installation fee = EIV x (system cost index + facility tax + 4% SCC). With no build system
+// configured the INDEX term is missing, so the fee is light by exactly that share \u2014 the SCC and any
+// tax are still charged, so this is an understatement, not a zero. Worth saying plainly: the index
+// runs from 0.14% to 17.25% across New Eden, so in a busy system it is most of the fee.
+function _indCostBasisWarn(d) {
+  const cb = d.cost_basis;
+  if (!cb || cb.system_id) return '';
+  return `<p class="pp-warn">Job fees exclude the system cost index \u2014 no build system is set, so `
+    + `only the 4% SCC${cb.facility_tax_pct ? ' and facility tax' : ''} are counted. `
+    + `<button class="ind-link-btn" onclick="indOpenSetup()">Set your build system</button> for a `
+    + `true install cost.</p>`;
+}
+
 function _indRenderPlan(d, title) {
   _indReqMeTe = {};
   (d.requirements || []).forEach(r => { _indReqMeTe[r.type_id] = { me: r.me, te: r.te, me_source: r.me_source }; });
@@ -1659,6 +1672,7 @@ function _indRenderPlan(d, title) {
       ${_indMetricTiles(d.metrics)}
       ${unres}
       ${_indSkillBasisWarn(d)}
+      ${_indCostBasisWarn(d)}
       ${_indBlueprintWarn(d)}
       ${_indSkillWarn(d)}
       ${_indStepsHtml(d, stageModel)}
@@ -1817,7 +1831,7 @@ function _indRenderPlanBody(d) {
   const stageModel = _indStageModel(tiersData);
   const unres = (d.unresolved && d.unresolved.length)
     ? `<p class="pp-warn">${d.unresolved.length} material(s) had no market price — cost is a floor.</p>` : '';
-  return unres + _indSkillBasisWarn(d) + _indBlueprintWarn(d)
+  return unres + _indSkillBasisWarn(d) + _indCostBasisWarn(d) + _indBlueprintWarn(d)
     + _indPipelineHtml(d, tiersData, stageModel)
     + _indStepsHtml(d, stageModel)
     + `<details class="ind-details"><summary>Shopping list (${(d.shopping_list || []).length})</summary>`

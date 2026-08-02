@@ -134,6 +134,24 @@ exact. `test_epoch_precision.py` covers the round trip, idempotency, and the tar
 
 ---
 
+## 8. Default the build system (job fees are quoted light without one)
+
+Job installation fee = EIV × (system cost index + facility tax + 4% SCC). The index is fetched and
+correct (ESI `industry/systems/`, 5,485 systems, both activities, 6h cache) — but it only applies
+once a system is CONFIGURED, and in prod **1 of 26 accounts has one**. The two engines then degrade
+differently, which the warnings shipped 2026-08-02 now state explicitly:
+
+- **Manufacturing** still charges the SCC and facility tax, so the fee is understated by the index
+  share only. Not trivial: in Jita the index is **76%** of the whole fee (0.1715 vs a 0.055 rate
+  without it), and it spans 0.14%–17.25% across New Eden.
+- **Reactions** zero the entire rate, so profits are quoted with no install fee at all.
+
+Surfacing it was the safe half (option 1, done). The open question is whether to pick a system on
+the user's behalf when none is set — the account's own structure system, or Jita as a
+worst-case-ish reference. Deliberately NOT done yet: it would silently change every existing
+account's costs, and a wrong default is harder to notice than an absent one. If it is done, it
+should be visibly labelled as a default, the same way `skill_time_basis` and `cost_basis` are.
+
 ## 6. Adopt `eslint --rule no-undef` in CI
 
 A dead `if (!r.ok)` left behind by the fetch()→api() migration referenced a variable that doesn't

@@ -54,6 +54,19 @@ function _rxErr(e, fallback) {
   return new Error(e && e.status === 401 ? 'Log in to use Reactions' : (fallback || e.message));
 }
 
+let _rxCostBasis = null;
+
+// Reaction profits are quoted with NO job installation fee when no reaction system is configured:
+// the rate zeroes out entirely (system cost index + facility tax + 4% SCC), which flatters every
+// opportunity in the list. Say so rather than letting the numbers pass as complete.
+function _rxCostBasisWarn() {
+  if (!_rxCostBasis || _rxCostBasis.system) return '';
+  return `<p class="pp-warn">Profits exclude the job installation fee \u2014 no reaction system is `
+    + `set, so the system cost index, facility tax and the 4% SCC are all uncounted. `
+    + `<button class="ind-link-btn" onclick="openSettingsModal('markets')">Set your reaction system</button> `
+    + `to price jobs properly.</p>`;
+}
+
 function _rxLoadOpportunities(force) {
   if (_rxOppsLoading) return _rxOppsLoading;
   if (_rxOppsLoaded && !force) return Promise.resolve(_rxOpps);
@@ -61,6 +74,10 @@ function _rxLoadOpportunities(force) {
     .catch(e => { throw _rxErr(e, 'Load failed'); })
     .then(data => {
       _rxOpps = data.opportunities || [];
+      // What the job installation fee was costed against. Unlike the manufacturing planner, an
+      // unconfigured reaction system zeroes the WHOLE rate here (index + tax + the 4% SCC), so
+      // these profits are quoted with no install fee at all — see _rxCostBasisWarn.
+      _rxCostBasis = data.cost_basis || null;
       _rxOppsLoaded = true;
       _rxOppsLoading = null;
       return _rxOpps;
@@ -1332,7 +1349,7 @@ function _renderReactions() {
     const detailRow = `<tr class="rx-opp-detail-row"><td colspan="${_RX_CORE_COLUMNS.length}"><div class="rx-opp-detail">${chips}</div></td></tr>`;
     return mainRow + detailRow;
   }).join('');
-  el.innerHTML = `
+  el.innerHTML = _rxCostBasisWarn() + `
     <div style="overflow-x:auto">
       <table class="pp-card-table" style="width:100%">
         <thead><tr>${head}</tr></thead>
