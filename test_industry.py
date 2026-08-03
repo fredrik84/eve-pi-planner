@@ -20,7 +20,7 @@ from app.industry.graph import (
     collect_reachable, build_plan, resolve_unit_costs,
 )
 from app.industry.schedule import (order_ranks, 
-    aggregate_demand, build_tasks, schedule, plan_queue, Task, _built_deps,
+    aggregate_demand, build_tasks, schedule, plan_queue, Task, _built_deps, _depths,
     _critical_priority,
 )
 
@@ -1656,6 +1656,7 @@ def main():
     test_a_target_is_never_blacklisted_out_of_its_own_build()
     test_hand_marked_jobs_count_as_progress()
     test_progress_percent_is_weighted_by_job_time_not_run_count()
+    test_slack_travels_down_a_chain_not_just_one_level()
     test_a_deliverable_is_never_paced_against_the_rest_of_the_queue()
     test_a_job_never_carries_more_runs_than_the_blueprint_copy_has()
     test_an_owned_copy_only_covers_the_runs_it_has()
@@ -2006,6 +2007,44 @@ def test_a_job_never_carries_more_runs_than_the_blueprint_copy_has():
     _t5, by_rx = build_tasks(ragg, {}, rx, buying, pools, depths={9: 0}, deps={9: set()})
     check("a reaction is never capped by a blueprint it doesn't have",
           sum(t.runs for t in by_rx[9]) == 20)
+
+
+def test_slack_travels_down_a_chain_not_just_one_level():
+    """Reported from a real plan: four things in the same wave finishing at 2h 32m, 5h 05m, 2h 47m
+    and 10h 11m — four moments to log in at, from work that could have landed together. They fed
+    DIFFERENT consumers, and the first rule capped each component at its consumer's EARLIEST start,
+    so a component whose consumer was itself off the critical path inherited nothing.
+
+    The deadline has to be when the consumer must START, which is only known once that consumer has
+    itself been stretched — hence the backward pass runs consumers first."""
+    print("test_slack_travels_down_a_chain_not_just_one_level")
+    H = 3600
+    # 40 -> 20 -> root, with 30 the long branch. 20 is off the critical path by nine hours, so 40
+    # can take that room too: one job of four runs instead of four jobs of one.
+    mfg = {1: {"base_time": H, "max_runs": 1, "output_qty": 1,
+               "inputs": [{"type_id": 20, "quantity": 1}, {"type_id": 30, "quantity": 1}]},
+           20: {"base_time": H, "max_runs": 10, "output_qty": 1,
+                "inputs": [{"type_id": 40, "quantity": 1}]},
+           30: {"base_time": 10 * H, "max_runs": 1, "output_qty": 1, "inputs": []},
+           40: {"base_time": H, "max_runs": 10, "output_qty": 1, "inputs": []}}
+    agg = {t: {"build": True, "runs": 1, "activity": "manufacturing"} for t in (1, 20, 30)}
+    agg[40] = {"build": True, "runs": 4, "activity": "manufacturing"}
+    params = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, struct_time_mult=1.0)
+    pools = {"manufacturing": 10, "reaction": 10}
+    deps = _built_deps(agg, mfg, {})
+
+    tasks, by_type = build_tasks(agg, mfg, {}, params, pools, depths=_depths([1], mfg, {}), deps=deps)
+    check("a component two levels below the long branch inherits its slack",
+          len(by_type[40]) == 1 and by_type[40][0].runs == 4)
+    check("the long branch itself is untouched", len(by_type[30]) == 1)
+
+    # And the whole point: it costs nothing. Same finish, fewer slots held.
+    wide, wide_by = build_tasks(agg, mfg, {}, params, pools)
+    prio = {t: (0, 0.0) for t in agg}
+    check("with no time lost anywhere",
+          approx(schedule(wide, wide_by, deps, pools, prio)["makespan_hours"],
+                 schedule(tasks, by_type, deps, pools, prio)["makespan_hours"], 0.02))
+    check("and fewer slots held to do it", len(tasks) < len(wide))
 
 
 def test_a_deliverable_is_never_paced_against_the_rest_of_the_queue():

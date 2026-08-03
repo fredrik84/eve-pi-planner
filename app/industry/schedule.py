@@ -223,6 +223,29 @@ def _balanced(total: int, n: int) -> list[int]:
     return [base + 1 if i < extra else base for i in range(n)]
 
 
+def _packed_jobs(p: dict) -> int:
+    """How many jobs this type needs to land inside its window.
+
+    A type always has at least its OWN slack, before any consumer is considered: an uneven split
+    finishes when the biggest chunk does, so every other job may carry that many runs too and land
+    at the same moment. That was the whole of the first reported case — 8 jobs of 1 run beside 2 of
+    2, all of the same thing, finishing 2h 32m and 5h 05m respectively.
+
+    Work in RUNS PER JOB, never job count: runs are indivisible, so the question is how many of them
+    fit the window, capped by what one blueprint copy may carry.
+    """
+    window = max(p.get("window", 0.0), p["wide_dur"])
+    if window <= 0 or p["per_run"] <= 0:
+        return p["n_wide"]
+    per_job = max(1, min(p["cap"], int(window / p["per_run"] + 1e-9)))
+    return max(1, min(p["n_wide"], math.ceil(p["runs"] / per_job)))
+
+
+def _packed_duration(p: dict) -> float:
+    """How long this type will take once packed — the longest of its jobs, runs being whole."""
+    return math.ceil(p["runs"] / _packed_jobs(p)) * p["per_run"]
+
+
 def build_tasks(agg: dict, mfg: dict, rx: dict, params: BuildParams,
                 pools: dict[str, int] | None = None,
                 depths: dict[int, int] | None = None,
@@ -330,31 +353,28 @@ def build_tasks(agg: dict, mfg: dict, rx: dict, params: BuildParams,
             finish[tid] = st + p["wide_dur"]
         makespan = max(finish.values()) if finish else 0.0
 
-        for tid, p in plan.items():
-            # The latest this type may finish: when the first thing needing it can begin.
-            #
-            # A type with NO consumer is a deliverable, and it answers to itself — never to the
-            # makespan. Pacing a finished product against the slowest thing in the queue trades the
-            # one number a customer actually feels for slots nobody asked to free: a 20-run product
-            # that takes an hour on its own became a ten-hour job the moment a 100-hour order was
-            # queued beside it. Slack is for components, whose only deadline is the job that eats
-            # them; first delivery is not slack.
-            cons = [start[c] for c in (consumers.get(tid) or ()) if c in start]
+        # Backward pass, CONSUMERS FIRST, and it has to be in that order: a component's deadline is
+        # when the job eating it must start, and that job's own start is only known once IT has been
+        # stretched. Deciding roots first and walking down is what lets slack propagate — otherwise
+        # a component whose consumer is itself off the critical path never inherits any, which is
+        # how a 2h 32m job stayed 2h 32m in a plan whose critical path was four times as long, and
+        # why the builder ended up with three separate moments to log in at instead of one.
+        latest_start: dict[int, float] = {}
+        for tid in sorted(plan, key=lambda t: plan[t]["stage"]):     # consumers before their inputs
+            p = plan[tid]
+            # A type with NO consumer is a deliverable and answers to ITSELF, never to the makespan:
+            # pacing a finished product against the slowest thing in the queue trades the one number
+            # a customer feels for slots nobody asked to free.
+            cons = [latest_start[c] for c in (consumers.get(tid) or ()) if c in latest_start]
             deadline = min(cons) if cons else finish[tid]
             p["window"] = max(0.0, deadline - start[tid])
+            # What this type will actually take once packed into that window — decided here so its
+            # own inputs can be given the room it leaves behind.
+            dur = _packed_duration(p)
+            latest_start[tid] = deadline - dur
 
     for tid, p in plan.items():
-        n = p["n_wide"]
-        # A type always has at least its OWN slack, before any consumer is considered: a split into
-        # uneven chunks finishes when the biggest chunk does, so every other job may carry that many
-        # runs too and land at the same moment. That is the whole of the reported case — 8 jobs of 1
-        # run beside 2 jobs of 2, all of the same thing, finishing 2h32m and 5h05m respectively.
-        window = max(p.get("window", 0.0), p["wide_dur"])
-        if window > 0 and p["per_run"] > 0:
-            # Work in RUNS PER JOB, not job count: runs are indivisible, so the question is how many
-            # of them fit the window, capped by what one blueprint copy may carry.
-            per_job = max(1, min(p["cap"], int(window / p["per_run"] + 1e-9)))
-            n = max(1, min(p["n_wide"], math.ceil(p["runs"] / per_job)))
+        n = _packed_jobs(p)
         for i, r in enumerate(_balanced(p["runs"], n)):
             t = Task(f"{tid}-{i}", tid, p["activity"], r, r * p["per_run"])
             tasks.append(t)

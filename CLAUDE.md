@@ -887,6 +887,12 @@ and both were learned from real builds rather than guessed:
   against the other types at its own depth in the same pool, which is a crude proxy: a type alone at
   its stage paces against itself and stays fully split, and two types feeding one job from different
   depths never see each other.
+* **And it travels DOWN a chain.** The backward pass runs **consumers first** (`latest_start`,
+  `_packed_duration`), because a component's deadline is when the job eating it must START, and that
+  is only known once that job has itself been stretched. Capping at the consumer's EARLIEST start —
+  the first version — meant a component whose consumer was off the critical path inherited nothing.
+  Reported from a real plan: four things in one wave finishing at 2h32m, 2h47m, 5h05m and 10h11m,
+  four separate moments to log in at, from work that could have landed together.
 
 **An owned COPY only covers the runs it has.** Ownership used to be binary — `tid in params.owned`
 meant free and ready — which is right for an ORIGINAL and wrong for a copy: holding a 4-run copy
