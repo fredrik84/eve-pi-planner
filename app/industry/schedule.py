@@ -216,6 +216,19 @@ class Task:
     start: float = 0.0
     end: float = 0.0
     slot: int = 0
+    # What the SCHEDULER treats as this job's identity. Normally the type — one shared batch per
+    # component — but when orders are planned separately it is namespaced per order, so an order's
+    # jobs can never satisfy a different order's dependency. `type_id` stays the real type, because
+    # every name, price and progress lookup keys on that.
+    key: object = None
+    order_id: int | None = None
+    # Why this job is the length it is: the window it had, and what set it. Carried to the UI
+    # because "why is this 2h 32m when everything else is 5h" is otherwise unanswerable without
+    # reading the scheduler, and the answer is usually "something needs it sooner".
+    why: dict | None = None
+
+    def sched_key(self):
+        return self.type_id if self.key is None else self.key
 
 
 def _balanced(total: int, n: int) -> list[int]:
@@ -408,8 +421,9 @@ def build_tasks(agg: dict, mfg: dict, rx: dict, params: BuildParams,
             # A type with NO consumer is a deliverable and answers to ITSELF, never to the makespan:
             # pacing a finished product against the slowest thing in the queue trades the one number
             # a customer feels for slots nobody asked to free.
-            cons = [latest_start[c] for c in (consumers.get(tid) or ()) if c in latest_start]
-            deadline = min(cons) if cons else finish[tid]
+            cons = [(latest_start[c], c) for c in (consumers.get(tid) or ()) if c in latest_start]
+            deadline, binder = min(cons) if cons else (finish[tid], None)
+            p["needed_by"] = binder
             # Bounded by the plan's existing longest job, so compaction can close a gap but never
             # open a new one. `hard_window` keeps the dependency deadline on the side: the pace may
             # be overshot by a hair to reach a whole run, a consumer's start may not.
@@ -424,8 +438,22 @@ def build_tasks(agg: dict, mfg: dict, rx: dict, params: BuildParams,
 
     for tid, p in plan.items():
         n = _packed_jobs(p)
+        why = {
+            "runs_per_job": math.ceil(p["runs"] / n),
+            "window_h": round(max(p.get("window", 0.0), p["wide_dur"]) / 3600.0, 2),
+            "pace_h": round(p.get("pace_cap", 0.0) / 3600.0, 2),
+            "own_h": round(p["wide_dur"] / 3600.0, 2),
+            # What stopped it being longer. "consumer" means something needs it sooner than the
+            # plan's pace, which is the answer that surprises people.
+            "bound_by": ("consumer" if p.get("hard_window") is not None
+                         and p.get("hard_window", 0.0) < p.get("pace_cap", 0.0) - 1e-9
+                         else "pace" if p.get("pace_cap") else "own"),
+            "needed_by": p.get("needed_by"),
+            "needed_by_name": None,
+        }
         for i, r in enumerate(_balanced(p["runs"], n)):
             t = Task(f"{tid}-{i}", tid, p["activity"], r, r * p["per_run"])
+            t.why = why
             tasks.append(t)
             by_type.setdefault(tid, []).append(t)
     return tasks, by_type
@@ -518,8 +546,8 @@ def schedule(tasks: list[Task], by_type: dict, deps: dict, pools: dict[str, int]
         # Start every ready task that fits a free slot in its pool, most-critical first.
         ready = sorted(
             (t for t in tasks if t.task_id not in started
-             and all(d in completed for d in deps.get(t.type_id, ()))),
-            key=lambda t: priority.get(t.type_id, (0, 0.0)), reverse=True,
+             and all(d in completed for d in deps.get(t.sched_key(), ()))),
+            key=lambda t: priority.get(t.sched_key(), (0, 0.0)), reverse=True,
         )
         started_any = False
         for t in ready:
@@ -557,7 +585,8 @@ def schedule(tasks: list[Task], by_type: dict, deps: dict, pools: dict[str, int]
     wave_list = [
         {"start_hours": round(s / 3600.0, 2),
          "tasks": [{"type_id": t.type_id, "activity": t.activity, "runs": t.runs,
-                    "duration_hours": round(t.duration / 3600.0, 2), "slot": t.slot}
+                    "duration_hours": round(t.duration / 3600.0, 2), "slot": t.slot,
+                    "why": t.why}
                    for t in sorted(ts, key=lambda t: t.type_id)]}
         for s, ts in sorted(waves.items())
     ]
@@ -599,6 +628,11 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
     for w in sched["waves"]:                       # enrich wave tasks with readable names
         for t in w["tasks"]:
             t["name"] = names.get(t["type_id"], str(t["type_id"]))
+            # Name whatever set this job's length, so the UI can say "held to 2h 32m because X
+            # needs it then" rather than leaving the reader to infer it.
+            if t.get("why") and t["why"].get("needed_by") is not None:
+                t["why"]["needed_by_name"] = names.get(t["why"]["needed_by"],
+                                                       str(t["why"]["needed_by"]))
 
     # Cost roll-up from the aggregated demand (single batch per type — the honest, shared-batch cost).
     materials_cost = 0.0
@@ -861,3 +895,125 @@ def sweep_marginal(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: 
             by_threshold[thr] = point
         out.append({"pct": pct, **point})
     return out
+
+
+# ── Per-order planning (behind `industry_per_order_plans`) ────────────────────────────────────
+
+def plan_queue_per_order(order_specs: list[dict], mfg: dict, rx: dict, prices: dict, adjusted: dict,
+                         params: BuildParams, names: dict, pools: dict[str, int],
+                         on_hand: dict[int, float] | None = None) -> dict:
+    """Plan every order on its OWN, then schedule the lot together against the shared slot pool.
+
+    Why this exists, in one physical fact: **a job outputs to exactly one container.** Builders run
+    a container per build — it is where the materials are sourced and where the output lands, and it
+    is how they know what is finished for which customer with three orders in flight. A batch shared
+    between two orders has nowhere to deliver. The aggregated plan (`plan_queue`) is cheaper and
+    cannot be executed that way.
+
+    What it costs: shared components are built once PER ORDER, blueprint copies are bought per
+    order, and output rounding (a reaction making 2/run) is wasted per order rather than once. That
+    is the price of attribution and it is real — hence the comparison endpoint.
+
+    `order_specs`: [{id, type_id, quantity, force_build_ids, me_te_overrides}] in queue order.
+    Stock is allocated FIRST COME FIRST SERVED down that list: two orders cannot both spend the same
+    hangar contents, and the queue order is the only fair way to decide who gets it.
+    """
+    remaining_stock = dict(on_hand or {})
+    all_tasks: list[Task] = []
+    by_key: dict[object, list[Task]] = {}
+    deps: dict[object, set] = {}
+    priority: dict[object, tuple] = {}
+    per_order: list[dict] = []
+    shopping: dict[int, dict] = {}
+    totals = {"materials_cost": 0.0, "job_cost": 0.0, "blueprint_cost": 0.0,
+              "total_cost": 0.0, "leftover_value": 0.0, "net_cost": 0.0}
+
+    for idx, spec in enumerate(order_specs):
+        tid, qty = int(spec["type_id"]), int(spec["quantity"])
+        # Each order gets its own params: its own forced builds and its own blueprint assumptions.
+        p = copy.copy(params)
+        p.force_build_ids = set(params.force_build_ids) | {int(t) for t in (spec.get("force_build_ids") or [])}
+        p.me_by_product = dict(params.me_by_product)
+        p.me_source = dict(params.me_source)
+        for k, v in (spec.get("me_te_overrides") or {}).items():
+            try:
+                p.me_by_product[int(k)] = (float(v[0]), float(v[1]))
+                p.me_source[int(k)] = "override"
+            except Exception:
+                continue
+
+        memo, unit = resolve_unit_costs(mfg, rx, prices, adjusted, p)
+        unit(tid, frozenset())
+        agg = aggregate_demand([(tid, qty)], memo, mfg, rx, p, remaining_stock, pools)
+        # Spend what this order actually consumed, so the next one can't spend it twice.
+        for t, info in agg.items():
+            if not info["build"] and info["gross"] > 0:
+                remaining_stock[t] = max(0.0, remaining_stock.get(t, 0.0) - info["gross"])
+
+        o_deps = _built_deps(agg, mfg, rx)
+        tasks, o_by_type = build_tasks(agg, mfg, rx, p, pools,
+                                       depths=_depths([tid], mfg, rx), deps=o_deps)
+        crit = _critical_priority(agg, o_deps, mfg, rx, p)
+        for t in tasks:
+            t.key = (idx, t.type_id)
+            t.order_id = spec.get("id")
+            t.task_id = f"{idx}:{t.task_id}"
+            by_key.setdefault(t.key, []).append(t)
+            priority[t.key] = (-idx, crit.get(t.type_id, 0.0))
+        for dtid, ds in o_deps.items():
+            deps[(idx, dtid)] = {(idx, d) for d in ds}
+        all_tasks.extend(tasks)
+
+        # Cost roll-up for this order alone — the thing the aggregated plan cannot give you.
+        cost = _order_cost(agg, mfg, rx, prices, adjusted, p, memo)
+        for k in totals:
+            totals[k] += cost.get(k, 0.0)
+        per_order.append({"order_id": spec.get("id"), "type_id": tid, "name": names.get(tid, str(tid)),
+                          "quantity": qty, "jobs": len(tasks), **cost})
+        for t, info in agg.items():
+            if not info["build"] and info["gross"] > 0:
+                row = shopping.setdefault(t, {"type_id": t, "name": names.get(t, str(t)), "qty": 0.0,
+                                              "unit_price": (prices.get(t) or {}).get("sell_price"),
+                                              "source": (prices.get(t) or {}).get("source")})
+                row["qty"] += info["gross"]
+
+    sched = schedule(all_tasks, by_key, deps, pools, priority)
+    for w in sched["waves"]:
+        for t in w["tasks"]:
+            t["name"] = names.get(t["type_id"], str(t["type_id"]))
+    for row in shopping.values():
+        row["line_cost"] = (row["unit_price"] or 0.0) * row["qty"] if row["unit_price"] else None
+
+    return {
+        "per_order": per_order,
+        "schedule": sched,
+        "shopping_list": sorted(shopping.values(), key=lambda r: r["line_cost"] or 0.0, reverse=True),
+        "metrics": {**{k: round(v, 2) for k, v in totals.items()},
+                    "job_count": len(all_tasks),
+                    "makespan_hours": sched["makespan_hours"]},
+    }
+
+
+def _order_cost(agg, mfg, rx, prices, adjusted, params, memo) -> dict:
+    """Materials + job fees + blueprint copies for ONE order's own demand, less reusable leftovers.
+    Same arithmetic as plan_queue's roll-up; kept here so a per-order plan reports a real cost of
+    its own rather than a share of somebody else's."""
+    materials = job = 0.0
+    for tid, info in agg.items():
+        if info["build"]:
+            recipe = mfg.get(tid) or rx.get(tid)
+            ci = params.mfg_cost_index if info["activity"] == "manufacturing" else params.rx_cost_index
+            eiv = sum(inp["quantity"] * info["runs"] * adjusted.get(inp["type_id"], 0.0)
+                      for inp in recipe["inputs"])
+            job += eiv * (ci + params.facility_tax_pct / 100.0 + SCC_SURCHARGE_PCT)
+        elif info["gross"] > 0:
+            materials += ((prices.get(tid) or {}).get("sell_price") or 0.0) * info["gross"]
+    blueprint = sum(i.get("blueprint_cost", 0.0) for i in agg.values())
+    leftover = 0.0
+    for tid, info in agg.items():
+        if info.get("leftover", 0) > 0:
+            uc = (memo.get(tid) or {}).get("build_unit_cost") or 0.0
+            leftover += uc * info["leftover"]
+    total = materials + job + blueprint
+    return {"materials_cost": materials, "job_cost": job, "blueprint_cost": blueprint,
+            "total_cost": total, "leftover_value": leftover, "net_cost": total - leftover}

@@ -2929,7 +2929,7 @@ function _indGroupJobs(jobs) {
   (jobs || []).forEach(j => {
     const g = by[j.type_id] || (by[j.type_id] = {
       type_id: j.type_id, name: j.name || ('#' + j.type_id), activity: j.activity,
-      count: 0, minRuns: Infinity, maxRuns: 0, totalRuns: 0, dur: 0, runsList: [],
+      count: 0, minRuns: Infinity, maxRuns: 0, totalRuns: 0, dur: 0, runsList: [], why: j.why,
     });
     g.count += 1;
     g.minRuns = Math.min(g.minRuns, j.runs);
@@ -2998,9 +2998,18 @@ function indRenderInstall(d) {
           + g.buckets.map(b => (g.count > 1 ? `<b>${b.n}×</b> ${b.runs}` : `<b>${b.runs}</b>`)
               + ` run${b.runs > 1 ? 's' : ''}`).join(' · ')
           + `</span>`;
+        // Why this job is that long. "Everything else is 5h, why is this one 2h32m" has one
+        // answer — something needs it sooner — and it is unanswerable from the screen otherwise.
+        const w = g.why || {};
+        const why = w.bound_by === 'consumer' && w.needed_by_name
+          ? ` — held to this because ${_esc(w.needed_by_name)} needs it then`
+          : w.bound_by === 'pace' ? ` — matched to the plan's pace (${_fmtHours(w.pace_h)})`
+          : '';
+        const dur = `<span class="ind-do-dur" title="${w.runs_per_job || 1} run(s) per job${_esc(why)}">`
+          + `${_fmtHours(g.dur)}${why ? ' <span class="ind-do-why">?</span>' : ''}</span>`;
         return `<li class="ind-do-job"><span class="ind-do-name">${_esc(g.name)}</span>${each}`
           + `<span class="ind-do-act ind-do-${g.activity}">${g.activity === 'reaction' ? 'reaction' : 'industry'}</span>`
-          + `<span class="ind-do-dur">${_fmtHours(g.dur)}</span></li>`;
+          + dur + `</li>`;
       }).join('');
       const mUsed = c.manufacturing_slots - c.manufacturing_free;
       const rUsed = c.reaction_slots - c.reaction_free;
