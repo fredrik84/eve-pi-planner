@@ -156,6 +156,57 @@ Deliberately kept, with eyes open:
 Still open: no browser tests for any frontend behaviour (see item 6 for the eslint work that would
 be the first step).
 
+## 2f. Stop sharing job runs between orders — DESIGN, not yet built (2026-08-03)
+
+**The physical fact this rests on: a job outputs to exactly ONE container.** Capital builders run a
+container per build — it is both where the materials are sourced and where the output lands, and it
+is how they know what is finished for which customer when three orders are in flight. A batch shared
+between two orders has nowhere to deliver. That is not a preference about tidiness, it is a
+constraint, and the current design contradicts it.
+
+Today `aggregate_demand` deliberately combines every queued order into ONE demand and builds each
+shared component once (`app/industry/orders.py`, `schedule.py`, documented in CLAUDE.md and in
+`progress.py`'s module docstring). It is right for cost and wrong for how the work is actually run.
+
+**What changes**
+
+- Plan each order on its own — its own quantity, overrides, ME/TE, blueprint copies, runs. The
+  machinery already exists: `sourcing._order_requirement` and `shares._order_plan` both do exactly
+  this today, for exactly this reason.
+- The queue's job is then SCHEDULING those per-order jobs against one shared slot pool, plus
+  aligning them (see the pace/compaction rules in CLAUDE.md) so a builder still logs in once.
+- Container becomes input AND output on the order, not just a source.
+
+**What it costs, honestly**
+
+- **Builds get more expensive.** Shared-batch savings disappear: two orders needing the same
+  component build it twice, and buy two sets of blueprint copies. The user has accepted this; it
+  should still be stated in the UI rather than discovered.
+- **Rounding waste multiplies.** A reaction making 2/run rounds up per order now, not once.
+- `_blend_margin` can go — it exists only because a shared batch has no per-order cost. Per-order
+  planning gives each order its own real cost, which is strictly better for quoting.
+- Progress stops needing to be per-TYPE-only (`progress.py`'s central compromise) and can be per
+  (order, type). The manual-done grain follow-up in item 2c resolves itself.
+- The share's "two different plans on purpose" note simplifies to one plan.
+- **Cross-order alignment must become explicit.** It works today only as a side effect of
+  aggregation; with orders separate, the pace has to be computed across all orders' jobs.
+
+**Perf.** N plans per page load instead of 1. Mitigate by sharing ONE `prepare_plan_inputs` across
+them (already the pattern in `_run_queue_plan(want_full=True)` and `force_build_above`) — the DB-heavy
+half doesn't depend on which order is being planned.
+
+**Migration.** No schema change for the split itself; `force_build_ids` / `me_te_overrides` /
+`margin_pct` / `source_key` are already per order. The union logic in `_run_queue_plan` is what goes.
+Queued orders keep working; their numbers move (up), which is worth saying in the release note.
+
+**Containers are not universal.** Corp hangar containers need the Director role; everyone else has
+personal containers or pasted stock. So per-order input/output labelling must degrade to "no
+container bound" without breaking the plan — the sourcing panel already behaves this way.
+
+**First step:** make `plan_queue` produce per-order plans behind a flag, with the shared slot pool
+and the existing alignment, and compare cost + makespan against the aggregated plan on a real queue
+before switching anyone over.
+
 ## 3. Hand-built / custom colony layouts
 
 Hybrid-colony detection shipped. Broader tracking of player-designed layouts (colonies that don't
