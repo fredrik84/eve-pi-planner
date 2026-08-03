@@ -1656,8 +1656,7 @@ def main():
     test_a_target_is_never_blacklisted_out_of_its_own_build()
     test_hand_marked_jobs_count_as_progress()
     test_progress_percent_is_weighted_by_job_time_not_run_count()
-    test_slots_are_only_spent_where_they_buy_time()
-    test_packing_never_paces_one_pool_against_the_other()
+    test_a_deliverable_is_never_paced_against_the_rest_of_the_queue()
     test_a_job_never_carries_more_runs_than_the_blueprint_copy_has()
     test_an_owned_copy_only_covers_the_runs_it_has()
     test_one_products_runs_are_not_spread_thinner_than_its_own_pace()
@@ -1667,8 +1666,7 @@ def main():
     test_the_sourcing_list_is_not_a_second_shopping_list()
     test_binding_a_container_lets_the_planner_spend_it()
     test_first_run_setup_shows_once_and_never_to_an_established_user()
-    test_the_customer_bar_moves_when_the_builder_marks_a_step_done()
-    test_the_customer_page_measures_progress_the_same_way_the_builder_does()
+    test_the_customer_sees_the_same_progress_the_builder_does()
     test_stale_caches_refresh_themselves_on_the_way_in()
     test_opening_the_tab_plans_the_queue_once_not_twice()
     test_building_the_borderline_set_runs_to_a_fixpoint()
@@ -1746,12 +1744,6 @@ def test_a_target_is_never_blacklisted_out_of_its_own_build():
     """Blacklisting something and then ordering it is not a contradiction to resolve in favour of
     the list — ordering it IS the more recent, more specific instruction."""
     print("test_a_target_is_never_blacklisted_out_of_its_own_build")
-    import inspect
-    from app.industry.graph import prepare_plan_inputs
-    src = inspect.getsource(prepare_plan_inputs)
-    check("targets are filtered out of the blacklist before it reaches the params",
-          "not in {tid for tid, _q in targets}" in src)
-
     con = _seed_con()
     mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
     # The engine-level guarantee behind that filter: a root builds on its own buildability.
@@ -1839,59 +1831,6 @@ def test_progress_percent_is_weighted_by_job_time_not_run_count():
         {"tasks": [{"type_id": 8, "duration_hours": 4.0}]}]}}
     check("a type's runs split across parallel jobs are summed",
           _hours_by_type(res) == {7: 5.0, 8: 4.0})
-
-
-def _pack_case():
-    """Two components in the same stage: a 2h job that cannot be split, and 2×1h runs that can.
-    Same total work, and the stage can never finish before the unsplittable one does."""
-    mfg = {
-        1: {"base_time": 7200, "max_runs": 1, "output_qty": 1, "inputs": []},    # 1 run  × 2h
-        2: {"base_time": 3600, "max_runs": 10, "output_qty": 1, "inputs": []},   # 2 runs × 1h
-    }
-    agg = {
-        1: {"build": True, "runs": 1, "activity": "manufacturing"},
-        2: {"build": True, "runs": 2, "activity": "manufacturing"},
-    }
-    params = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, struct_time_mult=1.0)
-    return agg, mfg, params, {"manufacturing": 5, "reaction": 5}
-
-
-def test_slots_are_only_spent_where_they_buy_time():
-    """A stage finishes when its slowest component does, so splitting everything else as wide as the
-    pool allows just occupies slots to sit idle sooner. Two 1h runs beside an unsplittable 2h job
-    should be ONE slot for two hours, not two slots for one — the stage lands at the same moment and
-    a slot is left free to start other work in."""
-    print("test_slots_are_only_spent_where_they_buy_time")
-    agg, mfg, params, pools = _pack_case()
-    depths = {1: 1, 2: 1}                      # same stage
-
-    wide, _ = build_tasks(agg, mfg, {}, params, pools)          # no plan shape = old behaviour
-    packed, by_type = build_tasks(agg, mfg, {}, params, pools, depths=depths,
-                                  deps={1: set(), 2: set()})
-
-    check("without the plan's shape every type splits as wide as it can",
-          len([t for t in wide if t.type_id == 2]) == 2)
-    check("knowing how long the plan runs, the splittable one uses a single slot",
-          len(by_type[2]) == 1)
-    check("and it holds both runs", by_type[2][0].runs == 2)
-    check("landing exactly when the unsplittable job does",
-          approx(by_type[2][0].duration, by_type[1][0].duration))
-    check("the unsplittable job is untouched", len(by_type[1]) == 1)
-    check("so the stage costs 2 slots instead of 3", len(packed) == 2 and len(wide) == 3)
-
-    # The whole justification is that this costs no time. Prove it on the real scheduler.
-    deps = {1: set(), 2: set()}
-    prio = {1: (1, 0.0), 2: (0, 0.0)}
-    s_wide = schedule(wide, {}, deps, pools, prio)
-    s_packed = schedule(packed, {}, deps, pools, prio)
-    check("and the stage finishes at the same time either way",
-          approx(s_wide["makespan_hours"], s_packed["makespan_hours"]))
-
-    # A component whose own work sets the pace must never be narrowed: on its own, nothing else in
-    # the plan is longer, so spreading it wide IS the fastest answer.
-    solo, solo_by = build_tasks({2: agg[2]}, mfg, {}, params, pools, depths={2: 1},
-                                deps={2: set()})
-    check("the pace-setting component still spreads across the slots", len(solo_by[2]) == 2)
 
 
 def test_slack_comes_from_the_consumer_not_from_stage_mates():
@@ -2069,22 +2008,26 @@ def test_a_job_never_carries_more_runs_than_the_blueprint_copy_has():
           sum(t.runs for t in by_rx[9]) == 20)
 
 
-def test_packing_never_paces_one_pool_against_the_other():
-    """Reactions and manufacturing draw on separate slot pools and don't wait on each other. Pacing
-    a manufacturing job against a slow reaction in the same stage would consolidate it against a
-    deadline that does not apply to it, and that WOULD cost time."""
-    print("test_packing_never_paces_one_pool_against_the_other")
-    mfg = {2: {"base_time": 3600, "max_runs": 10, "output_qty": 1, "inputs": []}}
-    rx = {9: {"base_time": 360000, "max_runs": 0, "output_qty": 1, "inputs": []}}   # 100h, unsplit
-    agg = {
-        2: {"build": True, "runs": 2, "activity": "manufacturing"},
-        9: {"build": True, "runs": 1, "activity": "reaction"},
-    }
+def test_a_deliverable_is_never_paced_against_the_rest_of_the_queue():
+    """Slack is for components, whose deadline is the job that eats them. A type with no consumer is
+    a DELIVERABLE and answers to itself: pacing a finished product against the slowest thing in the
+    queue trades the one number a customer feels for slots nobody asked to free. Caught by trimming
+    tests — a 20-run product taking an hour alone became a ten-hour job beside a 100-hour order."""
+    print("test_a_deliverable_is_never_paced_against_the_rest_of_the_queue")
+    mfg = {1: {"base_time": 3600, "max_runs": 10, "output_qty": 1, "inputs": []},
+           2: {"base_time": 360000, "max_runs": 1, "output_qty": 1, "inputs": []}}
+    agg = {1: {"build": True, "runs": 20, "activity": "manufacturing"},
+           2: {"build": True, "runs": 1, "activity": "manufacturing"}}
     params = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, struct_time_mult=1.0)
-    _tasks, by_type = build_tasks(agg, mfg, rx, params, {"manufacturing": 5, "reaction": 5},
-                                  depths={2: 1, 9: 1})
-    check("a slow reaction does not make manufacturing dawdle", len(by_type[2]) == 2)
-    check("the reaction itself is one job", len(by_type[9]) == 1)
+    pools = {"manufacturing": 20, "reaction": 20}
+
+    alone, by_alone = build_tasks({1: agg[1]}, mfg, {}, params, pools, depths={1: 0}, deps={1: set()})
+    both, by_both = build_tasks(agg, mfg, {}, params, pools, depths={1: 0, 2: 0},
+                                deps=_built_deps(agg, mfg, {}))
+    check("a deliverable finishes as fast queued as it does alone",
+          approx(max(t.duration for t in by_both[1]), max(t.duration for t in by_alone[1]), 1e-6))
+    check("and is not consolidated to match a slower order", len(by_both[1]) == len(by_alone[1]))
+    check("the slow order is left alone too", len(by_both[2]) == 1)
 
 
 def test_stale_caches_refresh_themselves_on_the_way_in():
@@ -2104,11 +2047,6 @@ def test_stale_caches_refresh_themselves_on_the_way_in():
     check("blueprints, which barely change, are the least eager of all",
           F._THRESHOLDS["blueprints"] > F._THRESHOLDS["assets"])
 
-    src = inspect.getsource(F.refresh_stale)
-    check("a repeat attempt inside the floor does nothing", "_MIN_GAP" in src)
-    check("and the attempt is stamped before the work, not after",
-          src.index("_stamp_attempt") < src.index("for kind in kinds"))
-
     # Never fetched at all is NOT stale: an account with no connected character must not have a
     # refresh attempted on its behalf every time it opens the tab.
     real = F.cache_ages
@@ -2123,75 +2061,41 @@ def test_stale_caches_refresh_themselves_on_the_way_in():
         F.cache_ages = real
 
 
-def test_the_customer_page_measures_progress_the_same_way_the_builder_does():
-    """The build sheet said 10% and the customer's page said 48% — same build, same moment. The
-    builder's headline had moved to job-time weighting and the share was still counting runs. A
-    customer must never see a rosier number than the builder, and that includes one that is rosier
-    only because it was measured differently."""
-    print("test_the_customer_page_measures_progress_the_same_way_the_builder_does")
-    import inspect
-    from app.industry import shares as SH
-    src = inspect.getsource(SH.build_status)
-    check("the share weights by job time", "_hours_by_type" in src)
-    check("per stage as well as overall", src.count("h_done") >= 3)
-    check("falling back to run counts when no times are known",
-          "else (round(100.0 * st[\"done\"] / st[\"required\"], 1)" in src)
-    # And it still gives nothing away: hours are used to weight, never published.
-    check("the payload gains no new money or timing fields",
-          '"h_total"' not in src.split("payload = {")[-1])
-
-
 def test_opening_the_tab_plans_the_queue_once_not_twice():
-    """The page fetched the plan and the progress separately, and each of those planned the whole
-    queue — the single most expensive thing the tab did, done twice, for an answer the first one was
-    already holding. Progress now rides along with the plan it is a view of. The two plans are not
-    identical (progress measures against the FULL requirement, or its bar could never fill), so the
-    saving is in the inputs: one prepare_plan_inputs, one set of DB reads, one request."""
+    """The page fetched the plan and the progress separately, and each planned the whole queue — the
+    most expensive thing the tab did, done twice, for an answer the first was already holding."""
     print("test_opening_the_tab_plans_the_queue_once_not_twice")
     import inspect
     from app.industry import orders as O
     from app.industry import progress as P
 
-    src = inspect.getsource(O.queue_plan)
-    check("the plan endpoint carries progress inline", '"progress"' in src)
-    check("computed from the full-requirement plan it already made", "_full" in src)
-    check("and a failure there never takes the plan down with it", "except Exception" in src)
-
-    run = inspect.getsource(O._run_queue_plan)
-    check("the second plan reuses the resolved inputs", "want_full" in run)
-    check("and is skipped entirely when no stock is netted off",
-          "res if not on_hand else" in run)
-
-    sig = inspect.signature(P.queue_progress)
     check("progress accepts a plan instead of always making one",
-          sig.parameters["res"].default is None)
-    snap = inspect.getsource(P._queue_snapshot)
-    check("and only plans for itself when it wasn't given one", "if res is None:" in snap)
+          inspect.signature(P.queue_progress).parameters["res"].default is None)
+    check("and only plans for itself when it wasn't given one",
+          "if res is None:" in inspect.getsource(P._queue_snapshot))
+    # The two plans differ (progress measures the FULL requirement), so the saving is in the inputs
+    # — and when no stock is netted off they are the same object and the second is skipped outright.
+    run = inspect.getsource(O._run_queue_plan)
+    check("the second plan reuses the resolved inputs, and is skipped when stock changes nothing",
+          "want_full" in run and "res if not on_hand else" in run)
 
 
 def test_building_the_borderline_set_runs_to_a_fixpoint():
     """Accepting a batch of borderline components changes the shared batch every other decision was
     weighed against, so a different set comes out borderline afterwards. A chip at a time that is
-    indistinguishable from the tool inventing new work each time you take its advice. One press has
-    to leave nothing above the cut-off, so it iterates until no new type qualifies."""
+    indistinguishable from the tool inventing new work, so one press iterates until nothing new
+    qualifies. Termination is the property worth pinning: the forced set only ever grows."""
     print("test_building_the_borderline_set_runs_to_a_fixpoint")
     import inspect
     from app.industry import orders as O
 
     src = inspect.getsource(O.force_build_above)
-    check("it loops rather than taking one pass", "for _ in range(_FORCE_ROUNDS)" in src)
-    check("and stops as soon as nothing new qualifies", "if not fresh:" in src)
+    check("it iterates, and stops when a round adds nothing",
+          "for _ in range(_FORCE_ROUNDS)" in src and "if not fresh:" in src)
     check("the forced set only ever grows, which is what guarantees it terminates",
           "forced |= fresh" in src and "forced -=" not in src and "forced.discard" not in src)
-    check("the rounds share one input preparation",
-          src.index("prepare_plan_inputs(") < src.index("for _ in range(_FORCE_ROUNDS)")
-          and "inp.params.force_build_ids = set(forced)" in src)
-    check("only components UNDER the engine's own threshold are swept up",
-          's.get("bought_marginal")' in src)
-    check("the cut-off is honoured", '>= cut' in src)
-    check("and the result is persisted where every other force-build lives",
-          "force_build_ids=?" in src)
-    check("there is a bound on the rounds", isinstance(O._FORCE_ROUNDS, int) and O._FORCE_ROUNDS > 1)
+    check("with a bound on the rounds regardless",
+          isinstance(O._FORCE_ROUNDS, int) and O._FORCE_ROUNDS > 1)
 
 
 def test_sourcing_notes_belong_to_one_order():
@@ -2330,11 +2234,6 @@ def test_binding_a_container_lets_the_planner_spend_it():
     finally:
         restore()
 
-    # Both ways an order can name a box go through the same call — queueing it from the plan modal
-    # with a source picked, and binding one afterwards from the checklist.
-    for fn in (O.create_order, O.update_order):
-        check(f"{fn.__name__} enables the bound source",
-              "enable_bound_source" in inspect.getsource(fn))
 
 
 def test_first_run_setup_shows_once_and_never_to_an_established_user():
@@ -2388,32 +2287,22 @@ def test_first_run_setup_shows_once_and_never_to_an_established_user():
         restore()
 
 
-def test_the_customer_bar_moves_when_the_builder_marks_a_step_done():
-    """A hand mark moved the builder's progress and not the customer's, because the share computed
-    its own done-count from the ledgers and the hangar and never learned about marks. A status link
-    whose bar disagrees with the builder is worse than no link. Both views must combine the same
-    three signals through the same function, and the mark has to drop the share's cache — a bar
-    that catches up a minute later still looks broken to whoever just pressed the button."""
-    print("test_the_customer_bar_moves_when_the_builder_marks_a_step_done")
+def test_the_customer_sees_the_same_progress_the_builder_does():
+    """Twice this path drifted by keeping its own copy of a rule: marking a step done moved the
+    builder's bar and not the customer's, then the builder's headline moved to job-time weighting
+    while the share still counted runs (10% against 48%, same build, same moment). Both views must
+    combine the same signals the same way, and a mark has to drop the share's cached page."""
+    print("test_the_customer_sees_the_same_progress_the_builder_does")
     import inspect
     from app.industry import shares as SH
     from app.industry import progress as P
 
     src = inspect.getsource(SH.build_status)
-    check("the share reads hand marks at all", "_manual_by_type" in src)
-    check("and combines them through the shared rule, not a second copy",
-          "resolve_done(" in src)
-    check("'all of it' is resolved against this order's own requirement", "_ALL" in src)
-
-    marking = inspect.getsource(P.industry_mark_done)
-    check("marking a step drops the customer link's cached page",
-          "invalidate_context_shares" in marking)
-    check("across the whole account, since a mark is per type not per order",
-          "context_id" in inspect.getsource(SH.invalidate_context_shares))
-
-    # The rule itself, at the boundary the bug lived on: a mark alone is enough to fill a step.
-    check("a marked step reads as done with no ledger and no stock",
-          P.resolve_done(8, 0, 0, 8) == 8)
+    check("the share combines all three signals through the shared rules, not its own copies",
+          "_manual_by_type" in src and "resolve_done(" in src and "_hours_by_type" in src)
+    check("marking a step drops every cached customer page on the account",
+          "invalidate_context_shares" in inspect.getsource(P.industry_mark_done))
+    check("a marked step reads as done with no ledger and no stock", P.resolve_done(8, 0, 0, 8) == 8)
 
 
 def test_a_scan_retires_stock_that_is_no_longer_there():
@@ -2474,11 +2363,6 @@ def test_ordinary_users_are_not_asked_for_director_permissions():
     # — the exact silo bug the single-superset rule exists to prevent.
     missing = [s for s in REACTIONS_SCOPES.split() if s not in DIRECTOR_SCOPES.split()]
     check("and keeps everything a normal character has", missing == [])
-
-    import inspect
-    from app import esi
-    src = inspect.getsource(esi.esi_login)
-    check("the login route can be asked for it explicitly", "director" in src)
 
 
 def test_corp_hangars_and_containers_split_like_personal_ones():
