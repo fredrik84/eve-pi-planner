@@ -4,6 +4,21 @@
 
 Optimize a player's EVE Online Planetary Industry (PI) setup across multiple characters with the least effort for distributing and delivering materials. The planner assigns extractor planets (where P0 raw materials are harvested) and factory planets (where P0→P1→…→P4 processing happens) across all characters to hit a user-specified overproduction target.
 
+### The Industry planner's goal, and the tension inside it
+
+**The least effort for the builder, at the lowest net cost, in the fastest time.** All three at
+once, and they pull against each other — so when a decision here trades one for another, say which
+way and why rather than optimising one in silence.
+
+The tension worth keeping in mind: a builder sells against competitors, and **net cost sets the
+floor under the price they can quote**. Buying a component instead of building it is a perfectly
+good trade for effort and delivery time — that's exactly what the marginal-saving threshold and the
+speed cap are for — but every ISK of that convenience is passed to the customer and makes the quote
+harder to win. That is why those shortcuts are *judgements the user can overrule* (the
+"worth building instead?" strip, `force_build_ids`) and not settled policy, and why the plan reports
+what each shortcut cost (`marginal_saving`) instead of quietly taking it. Neither answer is right
+for every builder; what's wrong is deciding for them without showing the price.
+
 ---
 
 See also [CONTRIBUTING.md](CONTRIBUTING.md) for the condensed, PR-facing version of the design
