@@ -277,7 +277,16 @@ function _indStatusHeadline(d) {
   // headline percentage. Four to a row, so this reads as two tidy lines.
   const tiles = [];
   if (t && t.required) {
-    tiles.push(['Progress', `${p.pct}%`, `${t.done} of ${t.required} jobs delivered`]);
+    // Weighted by JOB TIME, not run count. Bulk components come in hundreds of short runs while the
+    // capital part is a handful of very long ones, so a run-counted percentage told you 71.8% done
+    // when what had finished was 57 minutes of a multi-day build. The tooltip carries both numbers
+    // and names the unit, because a percentage nobody can reconcile is a percentage nobody trusts.
+    const h = p.hours || {};
+    const basis = h.total
+      ? `${_fmtHours(h.done)} of ${_fmtHours(h.total)} of job time finished`
+        + ` · ${t.done} of ${t.required} runs done`
+      : `${t.done} of ${t.required} runs done`;
+    tiles.push(['Progress', `${p.pct}%`, basis]);
   }
   const fd = d.metrics.first_delivery_hours;
   // Two different questions: when can I hand over the first order, vs when am I finished entirely.
@@ -317,8 +326,10 @@ function _indStatusHeadline(d) {
                     + ` over net cost — the figure your customer sees on a shared link`]);
   }
   if (t && t.required) {
-    tiles.push(['Still to start', String(t.waiting), 'Jobs not started yet']);
-    tiles.push(['In the cooker', String(t.running), 'Jobs running right now']);
+    // Runs, not jobs — one job carries many runs, and calling these "jobs" made the counters
+    // disagree with the "N jobs" the step list and the checklist talk about.
+    tiles.push(['Still to start', String(t.waiting), 'Runs not started yet']);
+    tiles.push(['In the cooker', String(t.running), 'Runs installed and running right now']);
   }
   const byOrder = {};
   ((p && p.orders) || []).forEach(o => { byOrder[o.id] = o; });
@@ -1202,13 +1213,13 @@ function _indForceIds() { return [..._indForcedTypes.keys()]; }
 function indForceBuildType(typeId, name) {
   _indForcedTypes.set(typeId, name || String(typeId));
   _indSweep = null; _indSweepFailed = null;
-  indRunPlan();
+  return indRunPlan();      // returned so a caller can await the repaint (see _indKeepScroll)
 }
 
 function indUnforceBuildType(typeId) {
   _indForcedTypes.delete(typeId);
   _indSweep = null; _indSweepFailed = null;
-  indRunPlan();
+  return _indKeepScroll(() => indRunPlan());
 }
 
 let _indSweep = null;          // { key, points: [{pct, makespan_hours, total_cost, ...}] }
@@ -1500,7 +1511,7 @@ async function indBlacklist(typeId, add) {
                                     { type_id: typeId, add: !!add })) || {}).items || [];
   } catch (e) { toastError(e, 'Could not save'); return; }
   _indSweep = null; _indSweepFailed = null;      // the make-or-buy mix moved, so cost and time did
-  _indReplanCurrent();
+  return _indKeepScroll(() => _indReplanCurrent());
 }
 
 function _indBlacklistChipsHtml() {
@@ -1533,7 +1544,9 @@ function _indMarginalBar(d) {
   const show = rows.slice(0, 6);
   const chips = show.map(s =>
     `<button class="ind-marg-chip" onclick="indBuildAnyway(${s.type_id}, '${_esc(s.name).replace(/'/g, "\\'")}')"`
-    + ` title="Build ${_esc(s.name)} instead of buying it — the plan says it only saves ${fmtIsk(s.marginal_saving)}, which is your call, not ours">`
+    // Say what it costs and what it buys, and stop there. An earlier version ended "which is your
+    // call, not ours", which reads as the tool bracing for blame rather than helping you decide.
+    + ` title="Build ${_esc(s.name)} yourself instead of buying it: saves ${fmtIsk(s.marginal_saving)}, costs you one more job">`
     + `${_esc(s.name)} <span class="ind-marg-save">+${fmtIsk(s.marginal_saving)}</span></button>`).join('');
   const more = rows.length > show.length
     ? `<button class="ind-link-btn" onclick="indOpenShoppingList()">+${rows.length - show.length} more in the shopping list</button>` : '';
@@ -1548,12 +1561,25 @@ function _indMarginalBar(d) {
 // across orders, so one order carries it for the whole batch — and the ⚒ tag on that order chip is
 // how you take it back), while the preview keeps it in the session map until the build is queued.
 async function indBuildAnyway(typeId, name) {
-  if (!_indStatusVisible() || !(_indOrders || []).length) { indForceBuildType(typeId, name); return; }
+  if (!_indStatusVisible() || !(_indOrders || []).length) {
+    return _indKeepScroll(() => indForceBuildType(typeId, name));
+  }
   const order = _indOrders[0];
   const ids = [...new Set([...(order.force_build_ids || []), typeId])];
   try { await apiSend('PATCH', `/api/industry/orders/${order.id}`, { force_build_ids: ids }); }
   catch (e) { toastError(e, 'Could not save'); return; }
-  indRefreshStatus();     // building it changes the batch every other decision was weighed against
+  // Building it changes the batch every other decision was weighed against, so the plan really does
+  // have to re-run — but see _indKeepScroll for why you don't get thrown to the top of the page.
+  return _indKeepScroll(() => indRefreshStatus());
+}
+
+// Re-planning replaces the whole card, and while it's being fetched the page is a short spinner —
+// so the browser leaves you at the top of a document that just lost most of its height. Anyone
+// overruling one borderline component usually wants to overrule the next one too, and re-finding
+// the strip each time is what makes that tedious. Hold the scroll position across the repaint.
+async function _indKeepScroll(run) {
+  const y = window.scrollY;
+  try { await run(); } finally { window.scrollTo(0, y); }
 }
 
 // The components the user overruled, with a way back — once forced they vanish from the shopping
@@ -1782,7 +1808,14 @@ function _indApplyDoneLocally(typeId, runs) {
   const sum = k => p.types.reduce((a, x) => a + (x[k] || 0), 0);
   p.totals = { required: sum('required_runs'), done: sum('done_runs'),
                running: sum('running_runs'), waiting: sum('waiting_runs') };
-  p.pct = p.totals.required ? Math.round(1000 * p.totals.done / p.totals.required) / 10 : 0;
+  // Same weighting the server uses (_weighted_pct): by job time, falling back to runs when no
+  // schedule times are known. Recomputing this the old run-counted way would flash a different
+  // number for the second it takes the real response to land.
+  const hTot = p.types.reduce((a, x) => a + (x.job_hours || 0), 0);
+  const hDone = p.types.reduce((a, x) => a + (x.required_runs ? (x.done_runs / x.required_runs) * (x.job_hours || 0) : 0), 0);
+  p.hours = { total: Math.round(hTot * 100) / 100, done: Math.round(hDone * 100) / 100 };
+  p.runs_pct = p.totals.required ? Math.round(1000 * p.totals.done / p.totals.required) / 10 : 0;
+  p.pct = hTot > 0 ? Math.round(1000 * hDone / hTot) / 10 : p.runs_pct;
   // Order chips are units, not runs, and only the order FOR this product can move. Anything subtler
   // (a product already covered by stock, say) is corrected a moment later by the real response.
   (p.orders || []).forEach(o => {
@@ -1857,8 +1890,10 @@ function indClearMeTe(typeId) {
 // showing has to be the one that re-runs.
 function _indReplanCurrent() {
   const out = document.getElementById('indResult');
-  if (_indPicked && out && out.innerHTML.trim()) indRunPlan();
-  if (_indStatusVisible()) indRefreshStatus();
+  const jobs = [];
+  if (_indPicked && out && out.innerHTML.trim()) jobs.push(indRunPlan());
+  if (_indStatusVisible()) jobs.push(indRefreshStatus());
+  return Promise.all(jobs);      // awaitable, so a caller can hold the scroll until it's repainted
 }
 
 function _indStepItems(g, open) {

@@ -209,7 +209,7 @@ function _renderSkillRoiSection() {
   const trainCard = sugs.length ? `
       <div class="pp-card-title">Train skills for more output <span class="tl-preview-tag">estimate</span></div>
       <div class="pp-card-body an-suggest an-suggest-skill">
-        <div class="an-sug-note">What an extra skill level on each character would add at your current setup — your call whether the train (or an injector) is worth it.</div>
+        <div class="an-sug-note">What an extra skill level on each character would add at your current setup, so you can weigh it against the training time (or an injector).</div>
         <ul class="an-skill-list">${li}</ul>${note}
       </div>` : '';
   const enoughCard = enough.length ? `

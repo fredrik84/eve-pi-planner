@@ -244,7 +244,7 @@ def _queue_snapshot(context_id: int):
 
 
 def _type_row(tid: int, req, need: int, done: int, running: int, in_stock: int,
-              manual: int = 0, observed: int | None = None) -> dict:
+              manual: int = 0, observed: int | None = None, job_hours: float = 0.0) -> dict:
     """One per-type progress row. `req` is the plan requirement (name/activity/output_qty).
 
     `manual_runs` is reported separately from `done_runs` so the UI can show that this one was
@@ -262,6 +262,9 @@ def _type_row(tid: int, req, need: int, done: int, running: int, in_stock: int,
         "waiting_runs": max(0, need - done - running),
         "output_qty": req["output_qty"], "in_stock": in_stock, "manual_runs": manual,
         "observed_runs": done if observed is None else observed,
+        # Total job time this type accounts for, summed across however many parallel jobs its runs
+        # were split into. It's what the queue-wide percentage is weighted by — see _weighted_pct.
+        "job_hours": round(float(job_hours), 3),
         "pct": round(100.0 * done / need, 1) if need else 0.0,
     }
 
@@ -299,12 +302,49 @@ def _order_rows(orders, types: list[dict], units) -> list[dict]:
     return rows
 
 
+def _hours_by_type(res: dict) -> dict[int, float]:
+    """Total job time per product type, from the plan's own schedule. A type's runs are often split
+    across several parallel jobs, so this sums them."""
+    out: dict[int, float] = {}
+    for w in (res.get("schedule") or {}).get("waves", []):
+        for t in w.get("tasks", []):
+            tid = int(t["type_id"])
+            out[tid] = out.get(tid, 0.0) + float(t.get("duration_hours") or 0.0)
+    return out
+
+
+def _weighted_pct(types: list[dict]) -> float | None:
+    """How far through the WORK the queue is, weighted by job time. None when no times are known.
+
+    Counting runs instead — which this used to do — makes the headline meaningless on any real
+    build: bulk components come in hundreds of short runs while the capital part is a handful of
+    very long ones, so finishing 57 minutes of reactions read as 71.8% of a multi-day build. Runs
+    are the right unit for *marking* a step (that's what you install) and the wrong one for
+    *summarising* it. Time is the thing the reader is actually asking about — it sits next to
+    "Time left", and the two now move together.
+    """
+    total = sum(t.get("job_hours") or 0.0 for t in types)
+    if total <= 0:
+        return None
+    done = sum((t["done_runs"] / t["required_runs"]) * (t.get("job_hours") or 0.0)
+               for t in types if t["required_runs"])
+    return round(100.0 * done / total, 1)
+
+
 def _progress_payload(types: list[dict], order_rows: list[dict], **extra) -> dict:
     tot = _totals(types)
+    runs_pct = round(100.0 * tot["done"] / tot["required"], 1) if tot["required"] else 0.0
+    weighted = _weighted_pct(types)
     return {
         "empty": False,
         "totals": tot,
-        "pct": round(100.0 * tot["done"] / tot["required"], 1) if tot["required"] else 0.0,
+        "pct": runs_pct if weighted is None else weighted,
+        # Both are reported so the headline can say what it measured, and so a caller with no use
+        # for time weighting (or no schedule) still has the raw count.
+        "runs_pct": runs_pct,
+        "hours": {"total": round(sum(t.get("job_hours") or 0.0 for t in types), 2),
+                  "done": round(sum((t["done_runs"] / t["required_runs"]) * (t.get("job_hours") or 0.0)
+                                    for t in types if t["required_runs"]), 2)},
         "types": types,
         "orders": order_rows,
         **extra,
@@ -331,6 +371,8 @@ def queue_progress(context_id: int) -> dict:
     # ever raise the count, so it can't hide work that the ledgers or the hangar prove is still
     # outstanding, and it doesn't need to be right about the exact number to be useful.
     marked = _manual_by_type(context_id, since)
+    # Per-type job time, so the headline percentage can be weighted by work rather than run count.
+    hours = _hours_by_type(res)
 
     def _manual_runs(tid: int, need: int) -> int:
         m = marked.get(tid)
@@ -346,7 +388,8 @@ def queue_progress(context_id: int) -> dict:
         d = resolve_done(need, completed.get(tid, 0), from_stock, man)
         r = min(running.get(tid, 0), max(0, need - d))
         types.append(_type_row(tid, req, need, d, r, in_stock=int(owned.get(tid, 0)), manual=man,
-                               observed=resolve_done(need, completed.get(tid, 0), from_stock, 0)))
+                               observed=resolve_done(need, completed.get(tid, 0), from_stock, 0),
+                               job_hours=hours.get(tid, 0.0)))
 
     def units(tid, t, oq, want):
         # A product ticked done is done in UNITS too — otherwise the order chip would still read
@@ -395,6 +438,7 @@ def simulated_progress(context_id: int, pct: float) -> dict:
         if tid not in order:
             order.append(tid)
 
+    sim_hours = _hours_by_type(res)
     total_runs = sum(int(r["runs"]) for r in reqs.values())
     budget = total_runs * max(0.0, min(100.0, pct)) / 100.0
 
@@ -421,7 +465,8 @@ def simulated_progress(context_id: int, pct: float) -> dict:
         need = int(r["runs"])
         d = min(done_runs.get(tid, 0), need)
         run = min(running_runs.get(tid, 0), max(0, need - d))
-        types.append(_type_row(tid, r, need, d, run, in_stock=0))
+        types.append(_type_row(tid, r, need, d, run, in_stock=0,
+                               job_hours=sim_hours.get(tid, 0.0)))
 
     def units(_tid, t, oq, want):
         done_units = min((t or {}).get("done_runs", 0) * oq, want)

@@ -1011,6 +1011,15 @@ finished with the rest waiting on a slot is a real state, but it is the rare one
 tax the common "this one's finished". It **never writes to the completion
 ledgers** — those feed lifetime turnover and profit, and a tick is not evidence of an ISK-bearing
 job (same rule the simulated-progress preview follows).
+**The headline percentage is weighted by JOB TIME, not run count** (`_weighted_pct`, falling back to
+runs when a plan carries no schedule times). Runs are the unit you mark in and a terrible unit to
+summarise with: bulk components arrive as hundreds of short runs while the capital part is a handful
+of very long ones, so one finished reaction batch — 57 minutes of a multi-day build — reported
+**71.8% done**. Each type row carries `job_hours` (summed across the parallel jobs its runs were
+split into); the payload reports `pct`, `runs_pct` and `hours` so the tile can name what it measured,
+and `_indApplyDoneLocally` mirrors the same weighting or the optimistic repaint would flash a
+different number. The counters beside it are **runs**, and say so — they used to be labelled "jobs",
+which one job carrying many runs makes plainly wrong.
 **Ticking repaints; it does not re-plan.** Marking a step changes nothing the plan computes — not
 the requirements, not the schedule, not the cost — only the progress read off it, so the browser
 recomputes the affected numbers itself (`_indApplyDoneLocally`, `max(observed, manual)` — the same

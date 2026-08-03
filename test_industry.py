@@ -1655,6 +1655,7 @@ def main():
     test_blacklisted_components_are_always_bought()
     test_a_target_is_never_blacklisted_out_of_its_own_build()
     test_hand_marked_jobs_count_as_progress()
+    test_progress_percent_is_weighted_by_job_time_not_run_count()
     test_sourcing_notes_belong_to_one_order()
     test_pasting_a_hangar_sets_what_is_sourced()
     test_the_sourcing_list_is_not_a_second_shopping_list()
@@ -1792,6 +1793,41 @@ def test_hand_marked_jobs_count_as_progress():
         check("and another account's marks are invisible", P._manual_by_type(2, 0) == {})
     finally:
         restore()
+
+
+def test_progress_percent_is_weighted_by_job_time_not_run_count():
+    """Run count is the right unit for MARKING a step and the wrong one for summarising a build.
+    Bulk components come in hundreds of short runs while the capital part is a handful of very long
+    ones, so counting runs reported 71.8% done when what had actually finished was 57 minutes of a
+    multi-day build. Weighting by job time makes the headline agree with the clock beside it."""
+    print("test_progress_percent_is_weighted_by_job_time_not_run_count")
+    from app.industry.progress import _weighted_pct, _progress_payload, _hours_by_type
+
+    req = {"name": "x", "activity": "manufacturing", "output_qty": 1}
+    from app.industry.progress import _type_row
+    # 300 quick reaction runs (1 hour of work all told) finished; one 99-hour capital job not.
+    bulk = _type_row(1, req, 300, 300, 0, in_stock=0, job_hours=1.0)
+    cap = _type_row(2, req, 1, 0, 0, in_stock=0, job_hours=99.0)
+    payload = _progress_payload([bulk, cap], [])
+    check("by run count the build would look nearly finished", payload["runs_pct"] > 99)
+    check("by job time it is barely started", payload["pct"] == 1.0)
+    check("both numbers are reported, so the tile can say which it used",
+          payload["pct"] != payload["runs_pct"])
+    check("and the hours behind it are exposed for the tooltip",
+          payload["hours"] == {"total": 100.0, "done": 1.0})
+
+    # No schedule times at all (an older plan, or a queue that scheduled nothing) — fall back to
+    # runs rather than reporting zero progress on a build that has some.
+    no_hours = [_type_row(1, req, 10, 5, 0, in_stock=0)]
+    check("with no times known it falls back to counting runs",
+          _weighted_pct(no_hours) is None and _progress_payload(no_hours, [])["pct"] == 50.0)
+
+    # The per-type hours come from the plan's own schedule, summed across parallel splits.
+    res = {"schedule": {"waves": [
+        {"tasks": [{"type_id": 7, "duration_hours": 2.0}, {"type_id": 7, "duration_hours": 3.0}]},
+        {"tasks": [{"type_id": 8, "duration_hours": 4.0}]}]}}
+    check("a type's runs split across parallel jobs are summed",
+          _hours_by_type(res) == {7: 5.0, 8: 4.0})
 
 
 def test_sourcing_notes_belong_to_one_order():
