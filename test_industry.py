@@ -2044,6 +2044,10 @@ def test_jobs_are_aligned_to_the_plans_pace_not_stretched_past_it():
     check("and the 2-run item is compacted onto it", len(by[300]) == 1 and by[300][0].runs == 2)
     check("nothing runs more than a sliver past the pace",
           max(t.duration for t in tasks) <= pace * 1.05 + 1)
+    # Ten or twenty minutes of misalignment is immaterial to someone who logs in once to set
+    # everything going; seconds of it are not worth a slot. So the allowance has a floor.
+    from app.industry.schedule import _ALIGN_FLOOR
+    check("with a floor generous enough to actually buy a slot", _ALIGN_FLOOR >= 15 * 60)
     # The bound that actually matters commercially: a builder quoting 8 days against a competitor's
     # 14 cannot spend hours of delivery to save logins. Overshoot is capped by a slice of the whole
     # build, so it can never be the difference between winning a contract and losing it.

@@ -872,10 +872,14 @@ constraint everything here fits inside, so a job runs as long as it may.
 
 **The question is never "how much longer is this job", it is "does this move the delivery".** Runs
 are indivisible and rarely divide the pace evenly — four 2h 33m runs against a 5h 05m pace is 1.996
-runs a job, and refusing that by 26 seconds leaves four jobs holding four slots — so a sliver of
-overshoot is allowed, bounded twice: `_PACE_OVERSHOOT` (5% of the job's own window, so no single job
-balloons) AND `_DELIVERY_OVERSHOOT` (1% of the whole build's makespan, so it can never cost a
-meaningful slice of the quote). Both matter and for different reasons: the first was added because
+runs a job, and refusing that by 26 seconds leaves four jobs holding four slots — so overshoot is
+allowed, bounded twice and floored once: `_PACE_OVERSHOOT` (5% of the job's own window, so no single
+job balloons) and `_DELIVERY_OVERSHOOT` (2% of the whole build's makespan, so it can never cost a
+meaningful slice of the quote), with `_ALIGN_FLOOR` (20 minutes) under the first — a percentage of a
+short window is seconds, and nobody is served by that. A builder does not log in for fun: they log
+in to set everything going at once, and whether the jobs then land ten or twenty minutes apart is
+immaterial. What matters is that the slots are working while they are away and that the ones they
+don't need are free for the next order. Both matter and for different reasons: the first was added because
 rounding up a half-hour component with half an hour of room doubled it and moved everything
 downstream; the second because a builder quoting 8 days against a competitor's 14 cannot spend hours
 to save logins, while on a 14-day build a few minutes is nothing.

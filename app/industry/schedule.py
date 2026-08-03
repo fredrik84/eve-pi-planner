@@ -234,8 +234,15 @@ def _balanced(total: int, n: int) -> list[int]:
 # that matters commercially: a builder quoting 8 days against a competitor's 14 cannot spend hours
 # to save logins, while on a 14-day build a few minutes is nothing. Small enough that it can never
 # be the difference between winning a contract and losing it, in either direction.
-_PACE_OVERSHOOT = 0.05        # of the job's own window
-_DELIVERY_OVERSHOOT = 0.01    # of the whole build's makespan
+_PACE_OVERSHOOT = 0.05          # of the job's own window
+_DELIVERY_OVERSHOOT = 0.02      # of the whole build's makespan
+# ...and a floor under the first, because a percentage of a short window is seconds and nobody is
+# served by that. A builder does not log in for fun: they log in to set everything going at once,
+# and whether the jobs then land ten or twenty minutes apart is immaterial — what matters is that
+# the slots are working while they are away, and that the ones they don't need are free for the
+# next order. Twenty minutes is worth a slot; it is not worth anything to anyone waiting on a
+# delivery, which is what the makespan bound above is there to guarantee.
+_ALIGN_FLOOR = 20 * 60
 
 
 def _packed_jobs(p: dict) -> int:
@@ -261,7 +268,7 @@ def _packed_jobs(p: dict) -> int:
     # real deadline by the whole of a run is not a sliver: a half-hour component with half an hour of
     # room became an hour-long one that way, and everything downstream of it moved. And whatever that
     # comes to, it may not cost a meaningful slice of the DELIVERY.
-    slack = min(window * _PACE_OVERSHOOT,
+    slack = min(max(_ALIGN_FLOOR, window * _PACE_OVERSHOOT),
                 (p.get("makespan") or window) * _DELIVERY_OVERSHOOT)
     allowed = window + slack
     if per_job < p["cap"] and (per_job + 1) * p["per_run"] <= allowed + 1e-9:
