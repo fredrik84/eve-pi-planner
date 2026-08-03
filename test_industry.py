@@ -1664,6 +1664,8 @@ def main():
     test_binding_a_container_lets_the_planner_spend_it()
     test_first_run_setup_shows_once_and_never_to_an_established_user()
     test_the_customer_bar_moves_when_the_builder_marks_a_step_done()
+    test_the_customer_page_measures_progress_the_same_way_the_builder_does()
+    test_stale_caches_refresh_themselves_on_the_way_in()
     test_a_scan_retires_stock_that_is_no_longer_there()
     test_corp_hangars_and_containers_split_like_personal_ones()
     print(f"\nAll {_passed} checks passed.")
@@ -1898,6 +1900,60 @@ def test_packing_never_paces_one_pool_against_the_other():
                                   depths={2: 1, 9: 1})
     check("a slow reaction does not make manufacturing dawdle", len(by_type[2]) == 2)
     check("the reaction itself is one job", len(by_type[9]) == 1)
+
+
+def test_stale_caches_refresh_themselves_on_the_way_in():
+    """Pressing Refresh was the user's job, and forgetting it is silent: a stale job cache overstates
+    free slots, stale assets tell you to buy what's already in your hangar. Each cache gets its own
+    threshold (a full asset list is heavy; jobs are cheap and move hourly), and an attempt is stamped
+    whether or not it worked — age only advances on SUCCESS, so a permanently-failing character would
+    otherwise be retried on every single tab open forever."""
+    print("test_stale_caches_refresh_themselves_on_the_way_in")
+    import inspect
+    from app.industry import freshness as F
+
+    check("the thresholds are per cache, not one global number",
+          len(set(F._THRESHOLDS.values())) == len(F._THRESHOLDS))
+    check("the heavy asset scan is the least eager",
+          F._THRESHOLDS["assets"] > F._THRESHOLDS["jobs"])
+    check("blueprints, which barely change, are the least eager of all",
+          F._THRESHOLDS["blueprints"] > F._THRESHOLDS["assets"])
+
+    src = inspect.getsource(F.refresh_stale)
+    check("a repeat attempt inside the floor does nothing", "_MIN_GAP" in src)
+    check("and the attempt is stamped before the work, not after",
+          src.index("_stamp_attempt") < src.index("for kind in kinds"))
+
+    # Never fetched at all is NOT stale: an account with no connected character must not have a
+    # refresh attempted on its behalf every time it opens the tab.
+    real = F.cache_ages
+    try:
+        F.cache_ages = lambda ctx: {"jobs": None, "assets": None, "blueprints": None}
+        check("nothing cached yet is left alone", F.stale_kinds(1) == [])
+        F.cache_ages = lambda ctx: {"jobs": F._THRESHOLDS["jobs"] + 1, "assets": 5,
+                                    "blueprints": None}
+        check("only what is actually past its own threshold is refreshed",
+              F.stale_kinds(1) == ["jobs"])
+    finally:
+        F.cache_ages = real
+
+
+def test_the_customer_page_measures_progress_the_same_way_the_builder_does():
+    """The build sheet said 10% and the customer's page said 48% — same build, same moment. The
+    builder's headline had moved to job-time weighting and the share was still counting runs. A
+    customer must never see a rosier number than the builder, and that includes one that is rosier
+    only because it was measured differently."""
+    print("test_the_customer_page_measures_progress_the_same_way_the_builder_does")
+    import inspect
+    from app.industry import shares as SH
+    src = inspect.getsource(SH.build_status)
+    check("the share weights by job time", "_hours_by_type" in src)
+    check("per stage as well as overall", src.count("h_done") >= 3)
+    check("falling back to run counts when no times are known",
+          "else (round(100.0 * st[\"done\"] / st[\"required\"], 1)" in src)
+    # And it still gives nothing away: hours are used to weight, never published.
+    check("the payload gains no new money or timing fields",
+          '"h_total"' not in src.split("payload = {")[-1])
 
 
 def test_sourcing_notes_belong_to_one_order():

@@ -851,6 +851,21 @@ have separate slots and don't wait on each other — pacing one against the othe
 time), or go below the per-BPC `max_runs` floor. Callers without a dependency graph pass no
 `depths` and keep the old maximal split.
 
+**Stale caches refresh themselves** (`app/industry/freshness.py`, `POST /api/industry/refresh-stale`,
+fired after the first paint on tab open). Three caches feed this tab — running jobs, blueprints,
+asset stock — and each used to be a Refresh button, which makes staleness the user's job with a
+silent failure mode: a stale job cache overstates free slots, stale assets tell you to buy what's in
+your hangar, stale blueprints cost you your real ME/TE, and none of it announces itself. The buttons
+stay for "do it now". Three rules hold it together:
+* **A threshold per cache, not one global number** — jobs 15 min (cheap, moves hourly), assets 1 h
+  (a heavy paginated call per character, on the timescale someone actually hauls things), blueprints
+  24 h (they barely change).
+* **Never fetched ≠ stale.** An account with no connected character must not have a refresh
+  attempted on its behalf on every visit.
+* **The attempt is stamped before the work, not after** (`auto_refreshed_at`, floor `_MIN_GAP`).
+  Age only advances on SUCCESS, so a character that will always fail — revoked token, missing scope
+  — would otherwise be retried on every single tab open forever.
+
 **Industry performance.** Two things dominated page and share-link load, both measured before
 changing anything:
 * The **recipe graphs are cached per process** (`graph._cached_graph`, 15-min TTL, `clear_graph_cache()`
@@ -960,8 +975,12 @@ and no session: the page must be incapable of showing account data even by accid
   misstate the customer's build and disclose the builder's other work — while the **ETA** comes from
   the whole-queue schedule, because contention for slots is real and the customer feels it.
 - Progress reads the same signals the builder's own view does — `_done_by_type`/`_running_by_type`,
-  owned quantities **and hand marks**, combined through the shared `resolve_done` — so a customer can
-  never see a rosier number than the builder, nor a staler one. The three used to be two here: a
+  owned quantities **and hand marks**, combined through the shared `resolve_done`, and weighted by
+  **job time** through the shared `_hours_by_type` — so a customer can never see a rosier number
+  than the builder, nor a staler one, nor one that is rosier only because it was measured
+  differently (the build sheet read 10% while the customer's page read 48%, same build, same
+  moment). Twice now this path has drifted by keeping its own copy of a rule; if you change how
+  progress is computed, change it here in the same commit. The three used to be two here: a
   step ticked done moved the builder's bar and not the customer's, because this path had its own
   copy of the combination rule. That's what `resolve_done` is shared for.
 - **Marking a step done invalidates every share on the ACCOUNT** (`invalidate_context_shares`), not

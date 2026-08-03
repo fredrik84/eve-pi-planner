@@ -87,7 +87,7 @@ _EPOCH_COLUMNS = [
     ("pp_industry_manual_done", "marked_at"),
     ("pp_industry_orders", "created_at"),
     ("pp_industry_sourced", "updated_at"),
-    ("pp_industry_settings", "updated_at"),
+    ("pp_industry_settings", "updated_at"), ("pp_industry_settings", "auto_refreshed_at"),
     ("pp_industry_shares", "created_at"), ("pp_industry_shares", "last_at"),
     ("pp_job_config", "run_requested"), ("pp_job_config", "updated_at"),
     ("pp_job_leases", "lease_until"),

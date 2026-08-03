@@ -41,6 +41,23 @@ async function onIndustryTabOpen() {
   // If something is already cooking, that's what you came to look at — show the live build first
   // and fold the planner away. With an empty queue there's nothing to check, so lead with planning.
   await indRefreshStatus();
+  indRefreshStaleCaches();   // after the paint: never make the page wait on ESI
+}
+
+// Bring stale caches up to date on the way in, instead of leaving it to whoever remembers to press
+// Refresh. Staleness is silent and the numbers are wrong while it lasts — a stale job cache
+// overstates free slots, stale assets tell you to buy what's in your hangar — so making it the
+// user's job is making them responsible for a mistake they can't see. Fires AFTER the first paint
+// and repaints only if something actually changed; the server decides what's stale and refuses to
+// try more than once every few minutes (app/industry/freshness.py).
+async function indRefreshStaleCaches() {
+  let d = null;
+  try { d = await apiSend('POST', '/api/industry/refresh-stale'); } catch (e) { return; }
+  if (!d || !(d.refreshed || []).length) return;
+  indLoadSetupSummary();
+  // Jobs and stock both move the plan and the progress on it; blueprints move ME/TE, which moves
+  // every material figure. Any of the three is worth the re-read.
+  indRefreshStatus();
 }
 
 // ── What to train next ────────────────────────────────────────────────────────────────────────

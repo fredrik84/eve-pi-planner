@@ -54,7 +54,10 @@ def ensure_industry_settings_table():
                     # Per ACCOUNT, not per browser: "I've set this up" is a fact about the account,
                     # and a localStorage flag would re-ask on every new device and forget on a
                     # cache clear.
-                    "onboarded INTEGER")
+                    "onboarded INTEGER",
+                    # When the tab last tried to refresh a stale cache on its own. Stamped on the
+                    # ATTEMPT, not the result — see app/industry/freshness.py.
+                    "auto_refreshed_at REAL")
         # Anyone who already has saved build options has plainly used this tab before, so they must
         # not be handed a first-run screen. Safe to re-run on a restart precisely because a user who
         # has NOT been through setup owns no settings row: the frontend only seeds one once the

@@ -31,4 +31,5 @@ from app.industry import (  # noqa: F401 — imported for endpoint registration 
     advisor,        # what to train next: /api/industry/skill-advisor
     shares,         # customer build-status links: /api/industry/orders/{id}/share, /build-status
     sourcing,       # per-order material sourcing: /api/industry/orders/{id}/sourcing
+    freshness,      # auto-refresh of stale caches: /api/industry/refresh-stale
 )
