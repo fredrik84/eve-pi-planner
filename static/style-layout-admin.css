@@ -1050,6 +1050,15 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
   color: var(--clr-green); opacity: 0; transition: opacity .12s; }
 .ind-pipe-markable:hover::after { opacity: .85; }
 .ind-pipe-is-done.ind-pipe-markable:hover::after { content: '✕'; color: #d88a8a; }
+/* Partial marks. Half a step is real but rare, so it costs one extra click and leaves the common
+   "this one's finished" as a single click on the card. The run count is the way in, because that is
+   already the number being corrected. */
+.ind-pipe-runs-edit { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }
+.ind-pipe-runs-edit:hover { color: var(--clr-accent); }
+.ind-pipe-partedit { display: inline-flex; align-items: center; gap: 4px; }
+.ind-pipe-partedit input { width: 46px; background: #0e121b; color: var(--clr-text);
+  border: 1px solid var(--clr-border); border-radius: 4px; padding: 0 3px; font-size: 10px; }
+.ind-pipe-partof { color: var(--clr-text-soft); font-size: 10px; }
 /* Hover trace: dim everything, light up the hovered step + what it feeds / is fed by */
 .ind-pipe-focus .ind-pipe-card { opacity: .28; }
 .ind-pipe-focus .ind-hi-self { opacity: 1; border-color: var(--clr-accent); border-left-color: var(--clr-accent); background: #16233a; box-shadow: inset 0 0 0 1px var(--clr-accent); }

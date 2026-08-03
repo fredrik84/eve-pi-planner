@@ -1653,12 +1653,47 @@ function _indJobChips(g) {
 // Mark a build step done (or take it back) and re-read progress. The whole status card re-renders
 // because a step going green moves the headline counters too — showing one and not the other is how
 // a page ends up disagreeing with itself.
+//
+// `runs`: null = all of it (and it stays "all" if the plan's run count later changes), a number =
+// that many, 0 = forget the mark.
 async function indMarkDone(typeId, done) {
+  return _indPostDone(typeId, done ? null : 0);
+}
+
+async function _indPostDone(typeId, runs) {
   try {
     _indProgress = await apiSend('POST', '/api/industry/progress/done',
-                                 { type_id: typeId, runs: done ? null : 0 });
+                                 { type_id: typeId, runs });
   } catch (e) { toastError(e, 'Could not save'); return; }
   indRefreshStatus();
+}
+
+// Half a step is a real state — you install five of the twelve runs, they finish, the rest are
+// waiting on a slot. But it is the RARE state, so it costs an extra click and the common
+// "this one's finished" stays a single click on the card. The way in is the card's own run count,
+// because "12 runs" is already the number you'd be correcting.
+function indEditDoneRuns(ev, typeId, required, current) {
+  if (ev) { ev.stopPropagation(); ev.preventDefault(); }   // don't also toggle the whole card
+  const el = document.getElementById('pruns-' + typeId);
+  if (!el) return;
+  const wrap = document.createElement('span');
+  wrap.className = 'ind-pipe-partedit';
+  wrap.onclick = e => e.stopPropagation();
+  wrap.innerHTML = `<input type="number" min="0" max="${required}" value="${current || 0}" id="pdone-${typeId}">`
+    + `<span class="ind-pipe-partof">of ${required}</span>`
+    + `<button class="ind-srcq-btn" onclick="indApplyDoneRuns(${typeId}, ${required})">set</button>`;
+  el.replaceWith(wrap);
+  const inp = document.getElementById('pdone-' + typeId);
+  if (inp) { inp.focus(); inp.select();
+    inp.onkeydown = e => { if (e.key === 'Enter') indApplyDoneRuns(typeId, required); }; }
+}
+
+function indApplyDoneRuns(typeId, required) {
+  const inp = document.getElementById('pdone-' + typeId);
+  const n = Math.max(0, Math.min(required, parseInt((inp || {}).value, 10) || 0));
+  // All of them means ALL of them — store the sentinel, not the number, so the mark survives the
+  // plan's run count changing later.
+  _indPostDone(typeId, n >= required ? null : n);
 }
 
 // Edit in place on the chip: two numbers, and the plan re-runs against them. This is the "editing
@@ -1802,7 +1837,7 @@ function _indPipelineHtml(d, tiersData, model) {
   const prog = _indProgTypeMap();
   const buildCard = e => {
     const owned = e.owned ? `<span class="ind-owned" title="You own this ${e.owned.kind.toUpperCase()}">${e.owned.kind.toUpperCase()}</span>` : '';
-    const runs = e.runs ? `<span class="ind-pipe-runs">${e.runs.toLocaleString()}&nbsp;run${e.runs > 1 ? 's' : ''}</span>` : '';
+    const runs = e.runs ? `<span class="ind-pipe-runs" id="pruns-${e.type_id}">${e.runs.toLocaleString()}&nbsp;run${e.runs > 1 ? 's' : ''}</span>` : '';
     const qty = `×${Math.round(e.qty).toLocaleString()}`;
     // Live state from real ESI jobs, when we have it — the pipeline doubles as a progress board.
     // Three states you can read at a glance: done (green border), in the cooker (accent + glow),
@@ -1829,10 +1864,20 @@ function _indPipelineHtml(d, tiersData, model) {
     const onclick = markable ? ` onclick="indMarkDone(${e.type_id}, ${!done})"` : '';
     const tip = `${_esc(e.name)} — ${qty}${e.runs ? ', ' + e.runs + ' runs' : ''}. Hover to trace its chain.`
       + (markable ? (done ? ' Click to un-mark it done.' : ' Click if this one is already done.') : '');
+    // The run count doubles as the way in to a partial mark when there's more than one run to
+    // split. One run can't be half done, so it stays plain text there.
+    const runsCell = (markable && p.required_runs > 1)
+      ? `<span class="ind-pipe-runs ind-pipe-runs-edit" id="pruns-${e.type_id}"`
+        + ` onclick="indEditDoneRuns(event, ${e.type_id}, ${p.required_runs}, ${p.done_runs})"`
+        + ` title="${p.done_runs} of ${p.required_runs} runs done \u2014 click to set how many, rather than the whole step">`
+        // Label stays the run count: how many are DONE is already on this card as its state
+        // badge, and the same number twice on a card this small reads as two different ones.
+        + `${p.required_runs.toLocaleString()}&nbsp;runs</span>`
+      : runs;
     return `<div class="ind-pipe-card ind-pipe-build${cls}${markable ? ' ind-pipe-markable' : ''}"${onclick}`
       + ` data-tid="${e.type_id}" title="${tip}">`
       + `<span class="ind-pipe-name">${_esc(e.name)}</span>`
-      + `<span class="ind-pipe-meta"><span class="ind-pipe-qty">${qty}</span>${runs}${owned}${state}</span></div>`;
+      + `<span class="ind-pipe-meta"><span class="ind-pipe-qty">${qty}</span>${runsCell}${owned}${state}</span></div>`;
   };
   const buyCard = (buys, t) => {
     const names = buys.slice(0, 25).map(b => b.name).join(', ') + (buys.length > 25 ? '…' : '');

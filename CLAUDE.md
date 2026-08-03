@@ -991,7 +991,12 @@ completed, from_stock, manual)` — the max of the three, capped at the requirem
 a count but never hide observed work. Stored per TYPE (the grain everything else here uses), and
 epoch-gated exactly like the completion ledgers so a tick from a finished build can't read as
 progress on a re-queued one. Runs `-1` (`_ALL`) means "all of it, whatever the plan currently says";
-a concrete number would go stale the moment a quantity changed. It **never writes to the completion
+a concrete number would go stale the moment a quantity changed — so the UI stores the sentinel
+whenever the user says "all", including when they type the full count into the partial editor.
+**Partial marks cost one extra click and the whole-step case still costs one** (`indEditDoneRuns`
+off the card's run count, which is already the number being corrected). Five of twelve runs
+finished with the rest waiting on a slot is a real state, but it is the rare one, so it must not
+tax the common "this one's finished". It **never writes to the completion
 ledgers** — those feed lifetime turnover and profit, and a tick is not evidence of an ISK-bearing
 job (same rule the simulated-progress preview follows).
 **The control is the pipeline card** (`ind-pipe-markable`): that card already renders this type's

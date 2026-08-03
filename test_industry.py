@@ -1771,6 +1771,10 @@ def test_hand_marked_jobs_count_as_progress():
         check("a mark from before this queue is ignored", P._manual_by_type(1, t0 + 60) == {})
         P.set_manual_done(1, 100, 3)
         check("a partial mark stores its run count", P._manual_by_type(1, t0 - 5) == {100: 3})
+        # Half a step is a real state: five of twelve runs installed and finished, the rest waiting
+        # on a slot. It counts for exactly what it says and no more.
+        check("a partial mark fills only its share", P.resolve_done(12, 0, 0, 5) == 5)
+        check("and never more than the plan asks for", P.resolve_done(12, 0, 0, 99) == 12)
         P.set_manual_done(1, 100, 0)
         check("clearing removes it entirely", P._manual_by_type(1, t0 - 5) == {})
         check("and another account's marks are invisible", P._manual_by_type(2, 0) == {})
