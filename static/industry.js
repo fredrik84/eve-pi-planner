@@ -712,6 +712,22 @@ function indReauthAssets() {
   indEsiConnect(() => { indLoadAssets(); indLoadSetupSummary(); });
 }
 
+// The director connect is its OWN flow, and deliberately not the one every other button uses: it
+// asks for corporation-wide read access, which EVE gates behind the Director role and which nobody
+// else can use. Only someone who has just clicked "connect a director" should ever be shown those
+// lines on the consent screen.
+function indConnectDirector() {
+  const w = window.open('/auth/login?director=1', 'EVE SSO', 'width=800,height=900');
+  window.addEventListener('message', function handler(e) {
+    if (e.data === 'esi-done') {
+      window.removeEventListener('message', handler);
+      if (w && !w.closed) w.close();
+      indLoadAssets();
+      indLoadSetupSummary();
+    }
+  });
+}
+
 async function indLoadAssets() {
   const el = document.getElementById('indAssets');
   if (!el) return;
@@ -761,8 +777,9 @@ async function indLoadAssets() {
 function _indCorpScanBtn(d) {
   if (!_featureActive('industry_corp_assets')) return '';
   if (!d.corp_scannable) {
-    return `<button class="ind-bp-btn" onclick="indReauthAssets()" title="Corp hangars need one more `
-      + `permission — reconnect a director character to grant it">Connect a director</button>`;
+    return `<button class="ind-bp-btn" onclick="indConnectDirector()" title="Corp hangars need `
+      + `corporation-wide read access, which EVE only grants to a Director. Nobody else is asked `
+      + `for it — connect the director character here.">Connect a director</button>`;
   }
   return `<button class="ind-bp-btn" onclick="indRefreshCorpAssets()" title="Read the corp hangars `
     + `and containers of any corp you're a director in">Scan corp hangars</button>`;

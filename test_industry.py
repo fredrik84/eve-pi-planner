@@ -1669,6 +1669,7 @@ def main():
     test_opening_the_tab_plans_the_queue_once_not_twice()
     test_a_scan_retires_stock_that_is_no_longer_there()
     test_corp_hangars_and_containers_split_like_personal_ones()
+    test_ordinary_users_are_not_asked_for_director_permissions()
     print(f"\nAll {_passed} checks passed.")
 
 
@@ -2242,6 +2243,34 @@ def test_a_scan_retires_stock_that_is_no_longer_there():
               [s["corp"] for s in A.list_sources(1) if s["key"].startswith("corp:")] == [True])
     finally:
         restore()
+
+
+def test_ordinary_users_are_not_asked_for_director_permissions():
+    """Corp assets and division names are gated behind the Director role, so for almost every player
+    they are permissions that can never be used — and each is a line on the consent screen they must
+    agree to before they can plan anything. They were folded into the one unified superset when corp
+    hangars shipped, which meant every single login asked a whole userbase for corporation-wide read
+    access so the occasional director could skip a copy-paste. They now belong to their own flow."""
+    print("test_ordinary_users_are_not_asked_for_director_permissions")
+    from app.esi import (REACTIONS_SCOPES, INDUSTRY_SCOPES, MARKET_SCOPES, SCOPES,
+                         DIRECTOR_SCOPES, CORP_ASSETS_SCOPE, CORP_DIVISIONS_SCOPE)
+
+    for name, scopes in (("the base login", SCOPES), ("reactions", REACTIONS_SCOPES),
+                         ("industry", INDUSTRY_SCOPES), ("markets", MARKET_SCOPES)):
+        check(f"{name} does not ask for corp assets", CORP_ASSETS_SCOPE not in scopes)
+        check(f"{name} does not ask for division names", CORP_DIVISIONS_SCOPE not in scopes)
+
+    check("the director flow asks for both", CORP_ASSETS_SCOPE in DIRECTOR_SCOPES
+          and CORP_DIVISIONS_SCOPE in DIRECTOR_SCOPES)
+    # A strict superset, or connecting a director would strip the scopes every other tool relies on
+    # — the exact silo bug the single-superset rule exists to prevent.
+    missing = [s for s in REACTIONS_SCOPES.split() if s not in DIRECTOR_SCOPES.split()]
+    check("and keeps everything a normal character has", missing == [])
+
+    import inspect
+    from app import esi
+    src = inspect.getsource(esi.esi_login)
+    check("the login route can be asked for it explicitly", "director" in src)
 
 
 def test_corp_hangars_and_containers_split_like_personal_ones():

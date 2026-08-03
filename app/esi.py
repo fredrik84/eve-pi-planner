@@ -126,9 +126,23 @@ CORP_ASSETS_SCOPE    = "esi-assets.read_corporation_assets.v1"
 CORP_DIVISIONS_SCOPE = "esi-corporations.read_divisions.v1"
 REACTIONS_SCOPES = (
     f"{SCOPES} {INDUSTRY_JOBS_SCOPE} {CORP_INDUSTRY_JOBS_SCOPE} "
-    f"{MARKET_SCOPE} {SEARCH_STRUCT_SCOPE} {STRUCTURES_SCOPE} {BLUEPRINTS_SCOPE} {ASSETS_SCOPE} "
-    f"{CORP_ASSETS_SCOPE} {CORP_DIVISIONS_SCOPE}"
+    f"{MARKET_SCOPE} {SEARCH_STRUCT_SCOPE} {STRUCTURES_SCOPE} {BLUEPRINTS_SCOPE} {ASSETS_SCOPE}"
 )
+# The two corp scopes are the ONE exception to the single-superset rule above, and the exception is
+# the point: EVE gates both behind the **Director** role, so for almost everybody they are
+# permissions that can never be used — and every one of them is a line on the consent screen an
+# ordinary member has to agree to before they can plan a build. Asking a whole userbase to hand over
+# corporation-wide read access so that the occasional director can skip a copy-paste is the wrong
+# trade, and it was mine to get wrong: these were folded into the superset when corp hangars shipped.
+#
+# So they are requested ONLY by the explicit "connect a director" flow (`/auth/login?director=1`),
+# which asks for the full superset PLUS these — a strict superset, so a director who connects that
+# way keeps everything a normal character has.
+#
+# The one wrinkle: a director who later re-auths through a normal flow drops the corp scopes again.
+# That is recoverable and visible rather than silent — the corp-scan panel goes back to offering
+# "Connect a director" — and it is a far better failure than the alternative of asking everyone.
+DIRECTOR_SCOPES = f"{REACTIONS_SCOPES} {CORP_ASSETS_SCOPE} {CORP_DIVISIONS_SCOPE}"
 # All opt-in "connect a character" flows request this ONE superset so re-authing a character for
 # any tool never drops the scopes another relies on. Wallet stays deliberately separate.
 MARKET_SCOPES = REACTIONS_SCOPES
@@ -866,7 +880,8 @@ def _fetch_planets(character_id: int, access_token: str, only_planet_id: int | N
 # ── OAuth endpoints ───────────────────────────────────────────────────────────
 
 @router.get("/auth/login")
-def esi_login(wallet: int = 0, reactions: int = 0, market: int = 0, industry: int = 0, pp_session: str = Cookie(default=None)):
+def esi_login(wallet: int = 0, reactions: int = 0, market: int = 0, industry: int = 0,
+              director: int = 0, pp_session: str = Cookie(default=None)):
     if not _is_configured():
         return HTMLResponse(
             "<h2>ESI not configured</h2>"
@@ -897,6 +912,9 @@ def esi_login(wallet: int = 0, reactions: int = 0, market: int = 0, industry: in
     except Exception:
         pass
     scope_enc = (
+        # Director first: it is the superset of the superset, and it is only ever reached by
+        # someone who explicitly asked to connect a character for corp hangars.
+        DIRECTOR_SCOPES if director else
         REACTIONS_SCOPES if (market or reactions) else
         INDUSTRY_SCOPES if industry else
         WALLET_SCOPES if wallet else

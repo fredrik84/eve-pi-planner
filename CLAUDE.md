@@ -1114,9 +1114,20 @@ a chip already carrying a name, runs, a duration and an ME/TE tag were effective
 module docstring used to say corp assets were deliberately not read, because `/corporations/{id}/
 assets/` needs the **Director** role and ESI offers nothing weaker. That reasoning still holds for
 most players — the paste path is theirs — but directors run their builds out of corp hangars, so
-this reads them into the same opt-in source list. Adds `CORP_ASSETS_SCOPE` +
-`CORP_DIVISIONS_SCOPE` (division names: a director picking a hangar needs the names they gave it) to
-the ONE unified scope superset. **A 403 is not an error** — it is the expected answer for a
+this reads them into the same opt-in source list. Needs `CORP_ASSETS_SCOPE` +
+`CORP_DIVISIONS_SCOPE` (division names: a director picking a hangar needs the names they gave it),
+and those are the **one exception to the single-superset rule** — they live in `DIRECTOR_SCOPES` and
+are requested only by `/auth/login?director=1`, behind the explicit "Connect a director" button.
+They were briefly folded into the shared superset, which meant every login asked a whole userbase to
+hand over corporation-wide read access so the occasional director could skip a copy-paste; a tester
+hit that consent screen and it was the right thing to complain about. `DIRECTOR_SCOPES` is a strict
+superset of `REACTIONS_SCOPES`, or connecting a director would strip the scopes every other tool
+needs. Known wrinkle: a director who later re-auths through a normal flow loses the corp scopes —
+recoverable and visible (the panel offers "Connect a director" again), which is a far better failure
+than asking everyone.
+**Both scopes must also be enabled on the EVE application itself** (developer portal) — prod and dev
+are separate applications, so that is two edits, and a scope the app doesn't carry fails at the SSO
+screen rather than in our code. **A 403 is not an error** — it is the expected answer for a
 non-director and is reported as "no Director role", never retried. Scanned once per CORPORATION, not
 per character, and only on request (a full corp asset list is heavy).
 Two supporting changes in `assets.py`: sources carry the **`scope`** that owns them (`char:<id>` /
