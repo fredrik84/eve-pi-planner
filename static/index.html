@@ -1581,6 +1581,15 @@ PVF-N9    3         95                 60             80                  100   
           <span id="indSimPct" class="ind-src-meta">45% complete</span>
         </div>
       </div>
+      <!-- Admins only: replay the first-run setup screen. Anyone who has used this tab is marked
+           set-up, so without this there is no way to see what a new user meets first. -->
+      <div class="ind-modal-section" id="indAdminSection" style="display:none">
+        <h3 class="ind-modal-h">Admin</h3>
+        <div class="ind-src-actions">
+          <button class="ind-bp-btn" onclick="indResetOnboarding()">Replay first-run setup</button>
+          <span id="indResetMsg" class="ind-src-meta">Shows the setup screen again on your own account.</span>
+        </div>
+      </div>
     </div>
   </div>
 

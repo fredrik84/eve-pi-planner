@@ -1935,6 +1935,21 @@ def test_first_run_setup_shows_once_and_never_to_an_established_user():
         check("completing setup sticks", S.get_settings(2)["onboarded"] is True)
         check("and leaves the rest of the account's settings alone",
               S.get_settings(2)["never_build_ids"] == [34])
+
+        # The admin replay. It must write 0, not NULL: the backfill claims NULL rows, so a NULL
+        # would be silently undone on the next restart and the screen would never appear.
+        S.reset_onboarding(2)
+        check("an admin can replay the setup screen", S.get_settings(2)["onboarded"] is False)
+        S.ensure_industry_settings_table.__wrapped__()
+        check("and a restart does not undo the replay", S.get_settings(2)["onboarded"] is False)
+        # Gated on the dependency itself, not on the source reading like it is.
+        import inspect
+        from app.esi import require_admin, require_context
+        dep = inspect.signature(S.reset_onboarding).parameters["ctx"].default
+        check("resetting is admin-gated", getattr(dep, "dependency", None) is require_admin)
+        check("while completing it is open to any logged-in user",
+              getattr(inspect.signature(S.complete_onboarding).parameters["ctx"].default,
+                      "dependency", None) is require_context)
     finally:
         restore()
 

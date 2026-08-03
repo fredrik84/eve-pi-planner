@@ -936,6 +936,12 @@ plainly used the tab), and the frontend does **not** seed settings for an un-onb
 (`if (!_indHasSavedSettings && _indOnboarded)`). Without that guard the backfill would mark someone
 part-way through setup as established on the next pod restart. `_indOnboarded` also defaults to
 **true** so a failed settings fetch shows an established user their tab, never a setup screen.
+That backfill has a side effect worth a control: nobody who has used the tab can ever see the screen
+again, including whoever has to check it. `POST /api/industry/onboarding/reset` (**`require_admin`**,
+and it only ever resets the CALLER's own account — it is a test affordance, not a tool over other
+users) replays it; the button is in Setup & slots, hidden unless `_featuresIsAdmin`. It writes
+`onboarded = 0` and **not NULL**, because the backfill claims NULL rows and would otherwise undo the
+reset at the next pod restart.
 
 What first use still assumes:
 - **Pricing needs nothing** — `resolve_market_data` falls back to Jita.

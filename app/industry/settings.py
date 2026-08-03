@@ -22,7 +22,7 @@ from pydantic import BaseModel
 
 from app.db import get_connection
 from app.sde import ensure_once, add_columns
-from app.esi import require_context
+from app.esi import require_context, require_admin
 
 from app.industry._router import router
 
@@ -202,6 +202,29 @@ def complete_onboarding(ctx: int = Depends(require_context)):
     finally:
         con.close()
     return {"onboarded": True}
+
+
+@router.post("/api/industry/onboarding/reset")
+def reset_onboarding(ctx: int = Depends(require_admin)):
+    """Replay the first-run setup screen on YOUR OWN account. Admin-only, and deliberately not a
+    tool for resetting anyone else's: the flag is backfilled from having saved build options, so
+    nobody who has used the tab can see that screen again, which leaves no way to check the thing
+    every new user meets first.
+
+    Writes 0 rather than NULL on purpose — the backfill in `ensure_industry_settings_table` claims
+    NULL rows, so a NULL here would be silently undone on the next pod restart.
+    """
+    ensure_industry_settings_table()
+    con = get_connection()
+    try:
+        con.execute(
+            "INSERT INTO pp_industry_settings (context_id, onboarded, updated_at) VALUES (?,0,?) "
+            "ON CONFLICT(context_id) DO UPDATE SET onboarded=0, updated_at=excluded.updated_at",
+            (ctx, time.time()))
+        con.commit()
+    finally:
+        con.close()
+    return {"onboarded": False}
 
 
 # ── Always-buy blacklist ──────────────────────────────────────────────────────────────────────

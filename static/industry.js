@@ -548,9 +548,26 @@ async function indLoadSetupSummary() {
 
 function indOpenSetup() {
   document.getElementById('indSetupModal').style.display = '';
+  const adm = document.getElementById('indAdminSection');
+  // Hidden rather than merely refused: the endpoint is admin-gated anyway, so showing the control
+  // to everyone would only offer an action that answers 403.
+  if (adm) adm.style.display = (typeof _featuresIsAdmin !== 'undefined' && _featuresIsAdmin) ? '' : 'none';
   indLoadSlots();
   indLoadBlueprints();
   indLoadAssets();
+}
+
+// Replay the first-run setup screen on your own account. Admin-only, and only useful to an admin:
+// everyone who has ever used the tab is marked set-up by the backfill, so there is otherwise no way
+// to look at the thing every new user sees first.
+async function indResetOnboarding() {
+  const msg = document.getElementById('indResetMsg');
+  if (msg) msg.textContent = 'Resetting…';
+  try { await apiSend('POST', '/api/industry/onboarding/reset'); }
+  catch (e) { if (msg) msg.textContent = String(e.message || e); return; }
+  _indOnboarded = false;
+  indCloseSetup();
+  onIndustryTabOpen();      // re-runs the gate, which now renders the setup screen
 }
 
 // ── Stock on hand (ESI assets) ──────────────────────────────────────────────────────────────
