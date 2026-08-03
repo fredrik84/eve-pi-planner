@@ -263,7 +263,13 @@ def build_status(share_id: str) -> dict:
     # step the builder ticked done by hand is done as far as this order is concerned, and leaving
     # marks out meant pressing "done" moved the builder's bar and not the customer's.
     from app.industry.progress import (_done_by_type, _running_by_type, _epoch,
-                                       _manual_by_type, resolve_done, _ALL)
+                                       _manual_by_type, resolve_done, _ALL, _hours_by_type)
+    # Weighted by job time, exactly like the builder's own headline. Counting runs made the two
+    # disagree flatly — 48% on the customer's page against 10% on the build sheet — because bulk
+    # components arrive as hundreds of short runs while the capital part is a handful of long ones.
+    # The customer must never be shown a rosier number than the builder; that includes a number
+    # that is rosier because it was measured differently.
+    hours = _hours_by_type(res)
     since = _epoch(ctx)
     done_runs = _done_by_type(ctx, since)
     running_runs = _running_by_type(ctx, since)
@@ -287,16 +293,22 @@ def build_status(share_id: str) -> dict:
                          0 if m is None else (need if m == _ALL else m))
         r = min(running_runs.get(rtid, 0), max(0, need - d))
         st = stages.setdefault(stage_of.get(rtid, 1), {"required": 0, "done": 0, "running": 0,
-                                                       "items": []})
+                                                       "h_total": 0.0, "h_done": 0.0, "items": []})
         st["required"] += need
         st["done"] += d
         st["running"] += r
+        th = hours.get(rtid, 0.0)
+        st["h_total"] += th
+        st["h_done"] += (d / need) * th
         st["items"].append({"name": req["name"], "runs": need, "done_runs": d, "running_runs": r})
 
     stage_list = []
     for n in sorted(stages):
         st = stages[n]
-        pct = round(100.0 * st["done"] / st["required"], 1) if st["required"] else 0.0
+        # Job time when the schedule knows it, run count as the fallback — same rule, same order of
+        # preference, as progress._weighted_pct.
+        pct = (round(100.0 * st["h_done"] / st["h_total"], 1) if st["h_total"] > 0
+               else (round(100.0 * st["done"] / st["required"], 1) if st["required"] else 0.0))
         st["items"].sort(key=lambda i: -i["runs"])
         stage_list.append({
             "stage": len(stage_list) + 1,          # renumbered so gaps never show as "Stage 4 of 3"
@@ -309,7 +321,10 @@ def build_status(share_id: str) -> dict:
 
     total_req = sum(s["required_runs"] for s in stage_list)
     total_done = sum(s["done_runs"] for s in stage_list)
-    pct = round(100.0 * total_done / total_req, 1) if total_req else 0.0
+    h_total = sum(st["h_total"] for st in stages.values())
+    h_done = sum(st["h_done"] for st in stages.values())
+    pct = (round(100.0 * h_done / h_total, 1) if h_total > 0
+           else (round(100.0 * total_done / total_req, 1) if total_req else 0.0))
     current = next((s["stage"] for s in stage_list if s["state"] != "complete"), None)
 
     # Units of the finished product actually in hand, so a part-delivered order reads honestly.
