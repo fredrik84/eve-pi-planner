@@ -223,6 +223,21 @@ def _balanced(total: int, n: int) -> list[int]:
     return [base + 1 if i < extra else base for i in range(n)]
 
 
+# How far a job may overshoot its window to reach the next whole run.
+#
+# Runs are indivisible and rarely divide the pace evenly: four 2h 33m runs against a 5h 05m pace is
+# 1.996 runs per job, and refusing that by 26 seconds leaves four jobs holding four slots. But the
+# same rounding on a shorter job doubled it and pushed everything downstream — so the question is
+# never "how much longer is this job", it is **"does this move the delivery"**.
+#
+# Both bounds have to hold. The first keeps any single job from ballooning; the second is the one
+# that matters commercially: a builder quoting 8 days against a competitor's 14 cannot spend hours
+# to save logins, while on a 14-day build a few minutes is nothing. Small enough that it can never
+# be the difference between winning a contract and losing it, in either direction.
+_PACE_OVERSHOOT = 0.05        # of the job's own window
+_DELIVERY_OVERSHOOT = 0.01    # of the whole build's makespan
+
+
 def _packed_jobs(p: dict) -> int:
     """How many jobs this type needs to land inside its window.
 
@@ -238,6 +253,19 @@ def _packed_jobs(p: dict) -> int:
     if window <= 0 or p["per_run"] <= 0:
         return p["n_wide"]
     per_job = max(1, min(p["cap"], int(window / p["per_run"] + 1e-9)))
+    # One more run, when it lands within touching distance of the pace. Four 2h 33m runs against a
+    # 5h 05m pace is 1.996 runs a job — refusing that by 26 seconds keeps four jobs in four slots,
+    # and pushes whatever consumes them back by a minute and a half if we take it. A minute and a
+    # half for two slots is the trade this feature exists to make.
+    # 5% of the BINDING window — never of the pace when something needs this sooner. Reaching past a
+    # real deadline by the whole of a run is not a sliver: a half-hour component with half an hour of
+    # room became an hour-long one that way, and everything downstream of it moved. And whatever that
+    # comes to, it may not cost a meaningful slice of the DELIVERY.
+    slack = min(window * _PACE_OVERSHOOT,
+                (p.get("makespan") or window) * _DELIVERY_OVERSHOOT)
+    allowed = window + slack
+    if per_job < p["cap"] and (per_job + 1) * p["per_run"] <= allowed + 1e-9:
+        per_job += 1
     return max(1, min(p["n_wide"], math.ceil(p["runs"] / per_job)))
 
 
@@ -376,8 +404,12 @@ def build_tasks(agg: dict, mfg: dict, rx: dict, params: BuildParams,
             cons = [latest_start[c] for c in (consumers.get(tid) or ()) if c in latest_start]
             deadline = min(cons) if cons else finish[tid]
             # Bounded by the plan's existing longest job, so compaction can close a gap but never
-            # open a new one.
-            p["window"] = min(max(0.0, deadline - start[tid]), pace_cap)
+            # open a new one. `hard_window` keeps the dependency deadline on the side: the pace may
+            # be overshot by a hair to reach a whole run, a consumer's start may not.
+            p["hard_window"] = max(0.0, deadline - start[tid])
+            p["pace_cap"] = pace_cap
+            p["makespan"] = makespan
+            p["window"] = min(p["hard_window"], pace_cap)
             # What this type will actually take once packed into that window — decided here so its
             # own inputs can be given the room it leaves behind.
             dur = _packed_duration(p)

@@ -870,6 +870,16 @@ the part that actually matters — **it costs the builder a second login**. Jobs
 and 5h05m mean logging in twice to start work that one trip could have covered. Least effort is the
 constraint everything here fits inside, so a job runs as long as it may.
 
+**The question is never "how much longer is this job", it is "does this move the delivery".** Runs
+are indivisible and rarely divide the pace evenly — four 2h 33m runs against a 5h 05m pace is 1.996
+runs a job, and refusing that by 26 seconds leaves four jobs holding four slots — so a sliver of
+overshoot is allowed, bounded twice: `_PACE_OVERSHOOT` (5% of the job's own window, so no single job
+balloons) AND `_DELIVERY_OVERSHOOT` (1% of the whole build's makespan, so it can never cost a
+meaningful slice of the quote). Both matter and for different reasons: the first was added because
+rounding up a half-hour component with half an hour of room doubled it and moved everything
+downstream; the second because a builder quoting 8 days against a competitor's 14 cannot spend hours
+to save logins, while on a 14-day build a few minutes is nothing.
+
 **Compaction fills up to the pace the plan already runs at; it never sets a new one.** No job is
 ever made longer than the longest job the plan already had (`pace_cap`). Slack says a component
 *could* take the whole critical path — taking it is a different question, and the answer is no:

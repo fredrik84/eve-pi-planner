@@ -1656,7 +1656,7 @@ def main():
     test_a_target_is_never_blacklisted_out_of_its_own_build()
     test_hand_marked_jobs_count_as_progress()
     test_progress_percent_is_weighted_by_job_time_not_run_count()
-    test_compaction_never_makes_a_job_longer_than_the_longest_one()
+    test_jobs_are_aligned_to_the_plans_pace_not_stretched_past_it()
     test_slack_travels_down_a_chain_not_just_one_level()
     test_a_deliverable_is_never_paced_against_the_rest_of_the_queue()
     test_a_job_never_carries_more_runs_than_the_blueprint_copy_has()
@@ -2010,16 +2010,19 @@ def test_a_job_never_carries_more_runs_than_the_blueprint_copy_has():
           sum(t.runs for t in by_rx[9]) == 20)
 
 
-def test_compaction_never_makes_a_job_longer_than_the_longest_one():
-    """Slack says a component COULD take the whole critical path. Taking it is a different question:
-    stretching four 2h 33m runs into one 10h 11m job is free only in a model with unlimited slots and
-    no interest in when that item is finished — in the real plan it puts the thing seven and a half
-    hours further away. Compaction fills up to the pace the plan already runs at; it never sets a
-    new one. Reported from a live plan where exactly that happened."""
-    print("test_compaction_never_makes_a_job_longer_than_the_longest_one")
+def test_jobs_are_aligned_to_the_plans_pace_not_stretched_past_it():
+    """The reported wave, and both mistakes it exposed.
+
+    First: slack said a 4-run reaction could become ONE 10h 11m job, which put that item seven and a
+    half hours further away and held a slot for all of it. Compaction fills up to the pace the plan
+    already runs at; it must never set a new one.
+
+    Second: refusing to overshoot that pace AT ALL left the same item as four 1-run jobs, because
+    two runs came to 5h 06m against a 5h 05m pace — four slots held for the sake of sixty seconds.
+    Runs are indivisible and rarely divide the pace evenly, so a sliver of overshoot is allowed. The
+    result is what was asked for: everything lands together, and there is one moment to log in at."""
+    print("test_jobs_are_aligned_to_the_plans_pace_not_stretched_past_it")
     H = 3600
-    # The reported wave: a 4-run reaction of 2h33m/run, a 14-run one of 2h32m/run (which splits into
-    # 2-run jobs and so sets the pace at ~5h05m), and a 2-run one that can be compacted 2:1.
     rx = {100: {"base_time": int(2.546 * H), "max_runs": 0, "output_qty": 1, "inputs": []},
           200: {"base_time": int(2.533 * H), "max_runs": 0, "output_qty": 1, "inputs": []},
           300: {"base_time": int(2.533 * H), "max_runs": 0, "output_qty": 1, "inputs": []}}
@@ -2031,17 +2034,34 @@ def test_compaction_never_makes_a_job_longer_than_the_longest_one():
            300: {"build": True, "runs": 2, "activity": "reaction"}}
     params = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, struct_time_mult=1.0)
     pools = {"manufacturing": 9, "reaction": 10}
-    _t, by = build_tasks(agg, mfg, rx, params, pools,
-                         depths=_depths([1], mfg, rx), deps=_built_deps(agg, mfg, rx))
+    deps = _built_deps(agg, mfg, rx)
+    tasks, by = build_tasks(agg, mfg, rx, params, pools, depths=_depths([1], mfg, rx), deps=deps)
 
-    longest = max(t.duration for t in _t)
-    check("nothing is stretched past the longest job the plan already had",
-          approx(longest, 2 * 2.533 * H, 60))
-    check("the 4-run item stays four short jobs, not one long one",
-          len(by[100]) == 4 and max(t.duration for t in by[100]) < 3 * H)
-    check("the item that sets the pace is left as it is", len(by[200]) == 7)
-    check("and the short one is compacted onto it, 2 runs to a job",
-          len(by[300]) == 1 and by[300][0].runs == 2)
+    pace = 2 * 2.533 * H                      # the 14-run item's own split sets it
+    check("the 4-run item is aligned to the pace, not stretched past it",
+          len(by[100]) == 2 and by[100][0].runs == 2)
+    check("the item that sets the pace is left alone", len(by[200]) == 7)
+    check("and the 2-run item is compacted onto it", len(by[300]) == 1 and by[300][0].runs == 2)
+    check("nothing runs more than a sliver past the pace",
+          max(t.duration for t in tasks) <= pace * 1.05 + 1)
+    # The bound that actually matters commercially: a builder quoting 8 days against a competitor's
+    # 14 cannot spend hours of delivery to save logins. Overshoot is capped by a slice of the whole
+    # build, so it can never be the difference between winning a contract and losing it.
+    prio0 = {t: (0, 0.0) for t in agg}
+    packed_span = schedule(tasks, by, deps, pools, prio0)["makespan_hours"]
+    wide0, wideby0 = build_tasks(agg, mfg, rx, params, pools)
+    wide_span = schedule(wide0, wideby0, deps, pools, prio0)["makespan_hours"]
+    check("and delivery is never meaningfully later for it",
+          packed_span <= wide_span * 1.01 + 0.02)
+    check("so the whole wave lands within minutes of itself",
+          max(t.duration for t in tasks) - min(t.duration for t in by[200]) < 0.1 * H)
+
+    wide, wide_by = build_tasks(agg, mfg, rx, params, pools)
+    check("and it holds fewer slots than spreading everything wide", len(tasks) < len(wide))
+    prio = {t: (0, 0.0) for t in agg}
+    check("without costing time — here it saves it, since the wide split contends for slots",
+          schedule(tasks, by, deps, pools, prio)["makespan_hours"]
+          <= schedule(wide, wide_by, deps, pools, prio)["makespan_hours"] + 0.05)
 
 
 def test_slack_travels_down_a_chain_not_just_one_level():
