@@ -213,15 +213,34 @@ def _balanced(total: int, n: int) -> list[int]:
 
 
 def build_tasks(agg: dict, mfg: dict, rx: dict, params: BuildParams,
-                pools: dict[str, int] | None = None) -> tuple[list[Task], dict]:
+                pools: dict[str, int] | None = None,
+                depths: dict[int, int] | None = None) -> tuple[list[Task], dict]:
     """One or more Task instances per built type. A type's runs are split so they can run in
     PARALLEL across the pool's slots — up to `pool_size` concurrent jobs — while still respecting
     the per-BPC run cap (`max_runs`). This is what lets a big reaction (thousands of runs, no BPC
     cap → otherwise one multi-month job) actually spread across your reaction slots the way you'd
-    run it in-game. Returns (tasks, tasks_by_type)."""
+    run it in-game. Returns (tasks, tasks_by_type).
+
+    **Slots are only spent where they buy time.** Splitting every type as wide as the pool allows
+    is wasteful: a stage finishes when its SLOWEST component does, so anything that would finish
+    earlier can run in fewer slots and land at the same moment. Two runs of an hour each, alongside
+    a two-hour job that can't be split, is one slot for two hours — not two slots for one — and the
+    stage still completes at the two-hour mark. The freed slots are the point: they're what lets a
+    builder start the next order (or a batch of something else entirely) instead of watching jobs
+    idle out.
+
+    `depths` groups types into the stages the plan actually works through. Each stage's pace is set
+    by its own slowest member under full parallelism; every other type in it is then given the
+    FEWEST jobs that still finish by then. The per-BPC cap and "at most one job per run" still bind,
+    and no type is ever given fewer than one job. Without `depths` the old maximal split is used, so
+    callers that don't have the dependency graph to hand are unaffected.
+    """
     pools = pools or {}
     tasks: list[Task] = []
     by_type: dict[int, list[Task]] = {}
+
+    # Pass 1: the shape of each type's work, and the widest split that is legal for it.
+    plan: dict[int, dict] = {}
     for tid, info in agg.items():
         if not info["build"] or info["runs"] <= 0:
             continue
@@ -235,11 +254,31 @@ def build_tasks(agg: dict, mfg: dict, rx: dict, params: BuildParams,
         R = info["runs"]
         P = max(1, pools.get(activity, 1))
         cap = max_runs if max_runs else R
-        # Split into enough jobs to (a) fill up to P slots concurrently and (b) never exceed the
-        # per-job run cap — whichever forces MORE jobs.
-        n = max(min(P, R), math.ceil(R / cap))
-        for i, r in enumerate(_balanced(R, n)):
-            t = Task(f"{tid}-{i}", tid, activity, r, r * per_run)
+        # (a) fill up to P slots concurrently, (b) never exceed the per-job run cap — whichever
+        # forces MORE jobs. This is the widest split; the floor is what the cap alone demands.
+        n_wide = max(min(P, R), math.ceil(R / cap))
+        plan[tid] = {"activity": activity, "per_run": per_run, "runs": R,
+                     "n_wide": n_wide, "n_min": math.ceil(R / cap),
+                     "work": R * per_run, "stage": (depths or {}).get(tid, 0)}
+
+    # Pass 2: per stage AND pool, how fast the stage can go at all — its slowest member at full
+    # width. Reactions and manufacturing draw on separate slots and don't wait for each other, so
+    # pacing one against the other would consolidate against a deadline that doesn't apply.
+    pace: dict[tuple[int, str], float] = {}
+    for tid, p in plan.items():
+        key = (p["stage"], p["activity"])
+        pace[key] = max(pace.get(key, 0.0), p["work"] / p["n_wide"])
+
+    for tid, p in plan.items():
+        n = p["n_wide"]
+        if depths is not None:
+            target = pace.get((p["stage"], p["activity"]), 0.0)
+            if target > 0:
+                # The fewest jobs that still finish by the time the stage's slowest member does.
+                # Never below the BPC cap's floor, never above the widest legal split.
+                n = max(p["n_min"], 1, min(p["n_wide"], math.ceil(p["work"] / target - 1e-9)))
+        for i, r in enumerate(_balanced(p["runs"], n)):
+            t = Task(f"{tid}-{i}", tid, p["activity"], r, r * p["per_run"])
             tasks.append(t)
             by_type.setdefault(tid, []).append(t)
     return tasks, by_type
@@ -400,7 +439,10 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
         unit(tid, frozenset())
 
     agg = aggregate_demand(targets, memo, mfg, rx, params, on_hand, pools)
-    tasks, by_type = build_tasks(agg, mfg, rx, params, pools)
+    # Pass the stage depths so a type is only split as wide as its stage's pace requires — see
+    # build_tasks. The same `_depths` the demand pass already walked.
+    tasks, by_type = build_tasks(agg, mfg, rx, params, pools,
+                                 depths=_depths([t for t, _ in targets], mfg, rx))
     deps = _built_deps(agg, mfg, rx)
     crit = _critical_priority(agg, deps, mfg, rx, params)
     ranks = order_ranks(targets, mfg, rx)

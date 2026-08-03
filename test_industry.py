@@ -1656,6 +1656,8 @@ def main():
     test_a_target_is_never_blacklisted_out_of_its_own_build()
     test_hand_marked_jobs_count_as_progress()
     test_progress_percent_is_weighted_by_job_time_not_run_count()
+    test_slots_are_only_spent_where_they_buy_time()
+    test_packing_never_paces_one_pool_against_the_other()
     test_sourcing_notes_belong_to_one_order()
     test_pasting_a_hangar_sets_what_is_sourced()
     test_the_sourcing_list_is_not_a_second_shopping_list()
@@ -1828,6 +1830,74 @@ def test_progress_percent_is_weighted_by_job_time_not_run_count():
         {"tasks": [{"type_id": 8, "duration_hours": 4.0}]}]}}
     check("a type's runs split across parallel jobs are summed",
           _hours_by_type(res) == {7: 5.0, 8: 4.0})
+
+
+def _pack_case():
+    """Two components in the same stage: a 2h job that cannot be split, and 2×1h runs that can.
+    Same total work, and the stage can never finish before the unsplittable one does."""
+    mfg = {
+        1: {"base_time": 7200, "max_runs": 1, "output_qty": 1, "inputs": []},    # 1 run  × 2h
+        2: {"base_time": 3600, "max_runs": 10, "output_qty": 1, "inputs": []},   # 2 runs × 1h
+    }
+    agg = {
+        1: {"build": True, "runs": 1, "activity": "manufacturing"},
+        2: {"build": True, "runs": 2, "activity": "manufacturing"},
+    }
+    params = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, struct_time_mult=1.0)
+    return agg, mfg, params, {"manufacturing": 5, "reaction": 5}
+
+
+def test_slots_are_only_spent_where_they_buy_time():
+    """A stage finishes when its slowest component does, so splitting everything else as wide as the
+    pool allows just occupies slots to sit idle sooner. Two 1h runs beside an unsplittable 2h job
+    should be ONE slot for two hours, not two slots for one — the stage lands at the same moment and
+    a slot is left free to start other work in."""
+    print("test_slots_are_only_spent_where_they_buy_time")
+    agg, mfg, params, pools = _pack_case()
+    depths = {1: 1, 2: 1}                      # same stage
+
+    wide, _ = build_tasks(agg, mfg, {}, params, pools)                    # no depths = old behaviour
+    packed, by_type = build_tasks(agg, mfg, {}, params, pools, depths=depths)
+
+    check("without stage information every type splits as wide as it can",
+          len([t for t in wide if t.type_id == 2]) == 2)
+    check("knowing the stage, the splittable one runs in a single slot",
+          len(by_type[2]) == 1)
+    check("and it holds both runs", by_type[2][0].runs == 2)
+    check("landing exactly when the unsplittable job does",
+          approx(by_type[2][0].duration, by_type[1][0].duration))
+    check("the unsplittable job is untouched", len(by_type[1]) == 1)
+    check("so the stage costs 2 slots instead of 3", len(packed) == 2 and len(wide) == 3)
+
+    # The whole justification is that this costs no time. Prove it on the real scheduler.
+    deps = {1: set(), 2: set()}
+    prio = {1: (1, 0.0), 2: (0, 0.0)}
+    s_wide = schedule(wide, {}, deps, pools, prio)
+    s_packed = schedule(packed, {}, deps, pools, prio)
+    check("and the stage finishes at the same time either way",
+          approx(s_wide["makespan_hours"], s_packed["makespan_hours"]))
+
+    # A component whose own work sets the pace must never be narrowed.
+    solo, solo_by = build_tasks({2: agg[2]}, mfg, {}, params, pools, depths={2: 1})
+    check("the pace-setting component still spreads across the slots", len(solo_by[2]) == 2)
+
+
+def test_packing_never_paces_one_pool_against_the_other():
+    """Reactions and manufacturing draw on separate slot pools and don't wait on each other. Pacing
+    a manufacturing job against a slow reaction in the same stage would consolidate it against a
+    deadline that does not apply to it, and that WOULD cost time."""
+    print("test_packing_never_paces_one_pool_against_the_other")
+    mfg = {2: {"base_time": 3600, "max_runs": 10, "output_qty": 1, "inputs": []}}
+    rx = {9: {"base_time": 360000, "max_runs": 0, "output_qty": 1, "inputs": []}}   # 100h, unsplit
+    agg = {
+        2: {"build": True, "runs": 2, "activity": "manufacturing"},
+        9: {"build": True, "runs": 1, "activity": "reaction"},
+    }
+    params = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, struct_time_mult=1.0)
+    _tasks, by_type = build_tasks(agg, mfg, rx, params, {"manufacturing": 5, "reaction": 5},
+                                  depths={2: 1, 9: 1})
+    check("a slow reaction does not make manufacturing dawdle", len(by_type[2]) == 2)
+    check("the reaction itself is one job", len(by_type[9]) == 1)
 
 
 def test_sourcing_notes_belong_to_one_order():

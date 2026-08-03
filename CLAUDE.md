@@ -808,6 +808,19 @@ anything the plan can see. Components stay on their job chips. Rules that matter
   forced-build tag: an assumed efficiency drives every material number, so it can't be invisible).
 - Reactions have no blueprint ME/TE — the editor is omitted when `me_source == 'reaction'`.
 
+**Slots are only spent where they buy time** (`build_tasks(..., depths=)`). A stage finishes when
+its SLOWEST component does, so splitting every other type as wide as the pool allows just occupies
+slots that then sit idle. Each (stage, pool) is paced by its own slowest member at full width, and
+every other type in it gets the FEWEST jobs that still land by then: two 1h runs beside an
+unsplittable 2h job become **one slot for two hours, not two slots for one**. The freed slots are
+the whole point — they're what lets a builder start the next order instead of watching jobs idle
+out. Time-neutral by construction, and `test_slots_are_only_spent_where_they_buy_time` proves the
+makespan doesn't move on the real scheduler.
+Two things it must never do: pace a type against a **different pool** (reactions and manufacturing
+have separate slots and don't wait on each other — pacing one against the other would cost real
+time), or go below the per-BPC `max_runs` floor. Callers without a dependency graph pass no
+`depths` and keep the old maximal split.
+
 **Industry performance.** Two things dominated page and share-link load, both measured before
 changing anything:
 * The **recipe graphs are cached per process** (`graph._cached_graph`, 15-min TTL, `clear_graph_cache()`
