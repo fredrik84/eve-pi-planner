@@ -1656,6 +1656,7 @@ def main():
     test_a_target_is_never_blacklisted_out_of_its_own_build()
     test_hand_marked_jobs_count_as_progress()
     test_progress_percent_is_weighted_by_job_time_not_run_count()
+    test_compaction_never_makes_a_job_longer_than_the_longest_one()
     test_slack_travels_down_a_chain_not_just_one_level()
     test_a_deliverable_is_never_paced_against_the_rest_of_the_queue()
     test_a_job_never_carries_more_runs_than_the_blueprint_copy_has()
@@ -2007,6 +2008,40 @@ def test_a_job_never_carries_more_runs_than_the_blueprint_copy_has():
     _t5, by_rx = build_tasks(ragg, {}, rx, buying, pools, depths={9: 0}, deps={9: set()})
     check("a reaction is never capped by a blueprint it doesn't have",
           sum(t.runs for t in by_rx[9]) == 20)
+
+
+def test_compaction_never_makes_a_job_longer_than_the_longest_one():
+    """Slack says a component COULD take the whole critical path. Taking it is a different question:
+    stretching four 2h 33m runs into one 10h 11m job is free only in a model with unlimited slots and
+    no interest in when that item is finished — in the real plan it puts the thing seven and a half
+    hours further away. Compaction fills up to the pace the plan already runs at; it never sets a
+    new one. Reported from a live plan where exactly that happened."""
+    print("test_compaction_never_makes_a_job_longer_than_the_longest_one")
+    H = 3600
+    # The reported wave: a 4-run reaction of 2h33m/run, a 14-run one of 2h32m/run (which splits into
+    # 2-run jobs and so sets the pace at ~5h05m), and a 2-run one that can be compacted 2:1.
+    rx = {100: {"base_time": int(2.546 * H), "max_runs": 0, "output_qty": 1, "inputs": []},
+          200: {"base_time": int(2.533 * H), "max_runs": 0, "output_qty": 1, "inputs": []},
+          300: {"base_time": int(2.533 * H), "max_runs": 0, "output_qty": 1, "inputs": []}}
+    mfg = {1: {"base_time": H, "max_runs": 1, "output_qty": 1,
+               "inputs": [{"type_id": t, "quantity": 1} for t in (100, 200, 300)]}}
+    agg = {1: {"build": True, "runs": 1, "activity": "manufacturing"},
+           100: {"build": True, "runs": 4, "activity": "reaction"},
+           200: {"build": True, "runs": 14, "activity": "reaction"},
+           300: {"build": True, "runs": 2, "activity": "reaction"}}
+    params = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, struct_time_mult=1.0)
+    pools = {"manufacturing": 9, "reaction": 10}
+    _t, by = build_tasks(agg, mfg, rx, params, pools,
+                         depths=_depths([1], mfg, rx), deps=_built_deps(agg, mfg, rx))
+
+    longest = max(t.duration for t in _t)
+    check("nothing is stretched past the longest job the plan already had",
+          approx(longest, 2 * 2.533 * H, 60))
+    check("the 4-run item stays four short jobs, not one long one",
+          len(by[100]) == 4 and max(t.duration for t in by[100]) < 3 * H)
+    check("the item that sets the pace is left as it is", len(by[200]) == 7)
+    check("and the short one is compacted onto it, 2 runs to a job",
+          len(by[300]) == 1 and by[300][0].runs == 2)
 
 
 def test_slack_travels_down_a_chain_not_just_one_level():

@@ -870,8 +870,15 @@ the part that actually matters — **it costs the builder a second login**. Jobs
 and 5h05m mean logging in twice to start work that one trip could have covered. Least effort is the
 constraint everything here fits inside, so a job runs as long as it may.
 
+**Compaction fills up to the pace the plan already runs at; it never sets a new one.** No job is
+ever made longer than the longest job the plan already had (`pace_cap`). Slack says a component
+*could* take the whole critical path — taking it is a different question, and the answer is no:
+stretching four 2h 33m runs into one 10h 11m job is free only in a model with unlimited slots and no
+interest in when that item is finished. In the real plan it put the item seven and a half hours
+further away and held a slot for all of it. Shipped that way for one deploy, reported immediately.
+
 Each type is given the fewest jobs that still land by its deadline, where the deadline is **when the
-job consuming it can start**. A type with NO consumer is a deliverable and answers to **itself, never
+job consuming it can start**, bounded by that cap. A type with NO consumer is a deliverable and answers to **itself, never
 to the makespan** — pacing a finished product against the slowest thing in the queue trades the one
 number a customer feels for slots nobody asked to free (a 20-run product taking an hour alone became
 a ten-hour job the moment a 100-hour order was queued beside it). Slack is for components; first

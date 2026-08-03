@@ -359,6 +359,14 @@ def build_tasks(agg: dict, mfg: dict, rx: dict, params: BuildParams,
         # a component whose consumer is itself off the critical path never inherits any, which is
         # how a 2h 32m job stayed 2h 32m in a plan whose critical path was four times as long, and
         # why the builder ended up with three separate moments to log in at instead of one.
+        # NEVER make a job longer than the longest job the plan already has. Slack says a component
+        # could take the whole critical path; taking it is a different question. Stretching four
+        # 2h 33m runs into one 10h 11m job is "free" only in a model with unlimited slots and no
+        # interest in when that item is finished — in the real plan it puts the thing seven and a
+        # half hours further away and holds one slot for the whole of it. Compaction is for filling
+        # up to the pace the plan already runs at, not for setting a new one.
+        pace_cap = max((p["wide_dur"] for p in plan.values()), default=0.0)
+
         latest_start: dict[int, float] = {}
         for tid in sorted(plan, key=lambda t: plan[t]["stage"]):     # consumers before their inputs
             p = plan[tid]
@@ -367,7 +375,9 @@ def build_tasks(agg: dict, mfg: dict, rx: dict, params: BuildParams,
             # a customer feels for slots nobody asked to free.
             cons = [latest_start[c] for c in (consumers.get(tid) or ()) if c in latest_start]
             deadline = min(cons) if cons else finish[tid]
-            p["window"] = max(0.0, deadline - start[tid])
+            # Bounded by the plan's existing longest job, so compaction can close a gap but never
+            # open a new one.
+            p["window"] = min(max(0.0, deadline - start[tid]), pace_cap)
             # What this type will actually take once packed into that window — decided here so its
             # own inputs can be given the room it leaves behind.
             dur = _packed_duration(p)
