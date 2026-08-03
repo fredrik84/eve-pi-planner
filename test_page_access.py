@@ -152,15 +152,18 @@ def main():
         # ── the public customer link is not behind the gate ────────────────────────────────
         from app.industry import _router as ind_router
         from app.industry import shares as ind_shares
-        import inspect
         gated = [d for d in (ind_router.router.dependencies or [])]
         check(len(gated) >= 1,
               "the account-scoped industry router carries the page dependency")
         check(not (ind_router.public_router.dependencies or []),
               "the public router carries NO page dependency")
-        src = inspect.getsource(ind_shares)
-        check("@public_router.get(\"/api/industry/build-status/{share_id}\")" in src,
-              "the customer build-status link is registered on the ungated public router — a "
+        # Asked of the route table rather than the source text: what matters is where the endpoint
+        # is actually mounted, not that a decorator line reads a particular way.
+        public_paths = {getattr(r, "path", "") for r in ind_router.public_router.routes}
+        gated_paths = {getattr(r, "path", "") for r in ind_router.router.routes}
+        status_path = "/api/industry/build-status/{share_id}"
+        check(status_path in public_paths and status_path not in gated_paths,
+              "the customer build-status link is mounted on the ungated public router — a "
               "customer has no account and therefore no group, so gating it would 403 all of them")
     finally:
         _cleanup()

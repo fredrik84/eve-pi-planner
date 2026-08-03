@@ -131,6 +131,31 @@ account that hasn't finished setup. Those two live in different files and are on
 
 Not done: no browser test covers the wizard (same gap the rest of the frontend has, see item 6).
 
+## 2e. Test suite: what the assertions are actually worth (2026-08-03)
+
+Audited after the industry work pushed `test_industry.py` to ~500 assertions. Cut to 450 by removing
+checks that matched SOURCE TEXT rather than behaviour — they break on harmless refactors and would
+still pass if the logic broke. `test_page_access.py`'s one `inspect.getsource` was converted to ask
+the router's route table instead, which is the same length and actually true.
+
+**The trim earned its keep by finding a live bug**: a deleted test had been passing for the wrong
+reason, and chasing why exposed that a type with no consumer was paced against the whole queue's
+makespan — a 20-run deliverable taking an hour alone became a ten-hour job beside a 100-hour order.
+Fixed in `71ffff8`. Worth remembering the next time a test looks redundant: check WHY it passes
+before deleting it.
+
+Deliberately kept, with eyes open:
+
+- **Source checks that assert ABSENCE** — `test_customer_build_status_leaks_nothing` scans the
+  payload builder for banned cost words. Inspection is the right tool for "this field must never
+  appear"; a behavioural test can only prove the fields that ARE there.
+- **`test_nav_gating.py` (17 assertions)** is entirely string matching against CSS and JS files. It
+  is weak by construction — renaming a class breaks it, an overridden rule passes it — but it is the
+  only guard on nav gating and there is no browser test infrastructure. It is a proxy, not a proof.
+
+Still open: no browser tests for any frontend behaviour (see item 6 for the eslint work that would
+be the first step).
+
 ## 3. Hand-built / custom colony layouts
 
 Hybrid-colony detection shipped. Broader tracking of player-designed layouts (colonies that don't
