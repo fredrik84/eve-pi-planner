@@ -57,7 +57,11 @@ def ensure_industry_settings_table():
                     "onboarded INTEGER",
                     # When the tab last tried to refresh a stale cache on its own. Stamped on the
                     # ATTEMPT, not the result — see app/industry/freshness.py.
-                    "auto_refreshed_at REAL")
+                    "auto_refreshed_at REAL",
+                    # The stock source the last build was pointed at, so the next one can default to
+                    # it instead of asking again. Per ACCOUNT and not derived from the orders table:
+                    # it has to survive that order being finished and cleared.
+                    "last_source_key TEXT")
         # Anyone who already has saved build options has plainly used this tab before, so they must
         # not be handed a first-run screen. Safe to re-run on a restart precisely because a user who
         # has NOT been through setup owns no settings row: the frontend only seeds one once the

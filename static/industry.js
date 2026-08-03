@@ -162,8 +162,12 @@ async function indLoadPlanSources() {
   try { srcs = ((await api('/api/industry/assets')) || {}).sources || []; } catch (e) {}
   // Containers first — a build is normally gathered into a box, not a whole hangar.
   srcs.sort((a, b) => (a.kind !== 'container') - (b.kind !== 'container') || a.name.localeCompare(b.name));
-  sel.innerHTML = '<option value="">— track it later —</option>'
-    + srcs.map(s => `<option value="${_esc(s.key)}">${_esc(s.name)}`
+  // Pre-filled with the one the last build used, when it still exists. A builder running a can per
+  // build answers this on every order and the answer is nearly always the same — so the question is
+  // already answered, visibly, and one click to change. Left blank when that container is gone.
+  const last = srcs.some(x => x.key === _indLastSourceKey) ? _indLastSourceKey : '';
+  sel.innerHTML = `<option value=""${last ? '' : ' selected'}>— track it later —</option>`
+    + srcs.map(s => `<option value="${_esc(s.key)}"${s.key === last ? ' selected' : ''}>${_esc(s.name)}`
         + `${s.kind === 'container' ? '' : ' (whole hangar)'}</option>`).join('')
     + '<option value="__paste">Paste what I already have…</option>';
   field.style.display = '';
@@ -459,6 +463,7 @@ function indDismissFacilityNudge() {
 // Save & continue is never disabled. Nothing here can strand anyone.
 let _indOnboarded = true;      // assume yes until the settings load says otherwise — a failed
                                // fetch must not throw a setup screen at an established user
+let _indLastSourceKey = '';    // the stock source the previous build was bound to
 
 function _indRenderWizard(hasStructure) {
   const gate = document.getElementById('indGate');
@@ -1067,6 +1072,8 @@ async function _indApplySavedSettings() {
   // one that hasn't been through setup, so bailing first would hide the wizard from the only
   // people who need it.
   _indOnboarded = !!(d && d.onboarded);
+  // The container the last build was pointed at, used to pre-fill the picker on the next one.
+  _indLastSourceKey = (d && d.last_source_key) || '';
   _indHasSavedSettings = !!(d && d.updated_at);
   if (!d || !d.updated_at) return;
   const set = (id, val) => { const el = document.getElementById(id); if (el && val != null) el.value = val; };

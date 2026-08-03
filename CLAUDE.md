@@ -1137,6 +1137,12 @@ Binding enables; **unbinding never disables**, because auto-disabling could swit
 user turned on themselves or that another order still draws from, and the two failure directions
 (ignoring stock you have → build too much; counting stock you don't → build too little, shopping
 list short) are both too costly to guess at. One tick in Setup undoes it.
+**The picker arrives already answered.** Binding records the source as the account's default
+(`pp_industry_settings.last_source_key`, written by `enable_bound_source`) and the next build's
+picker pre-selects it — a builder running a can per build was otherwise answering the same question
+on every order. Stored per account rather than read back off the orders table so it survives that
+order being finished and cleared; the option is skipped when the remembered container no longer
+exists in the scan.
 **Both are chosen while planning the build**, not only afterwards: the plan modal carries a
 "Materials from" picker (the scanned sources, or *paste what I already have*) and `OrderCreate`
 takes `source_key`, because which box a build belongs to is decided at the same moment as what to

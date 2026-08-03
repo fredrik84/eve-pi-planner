@@ -77,6 +77,20 @@ def enable_bound_source(context_id: int, key: str) -> None:
         return
     from app.industry.assets import set_sources
     set_sources(context_id, [key], True)
+    # Remember it as the account's default. A builder running a can per build answers this question
+    # on every single order, and the answer is nearly always the one they gave last time — so the
+    # next order arrives with it already filled in, visible in the picker and one click to change.
+    con = get_connection()
+    try:
+        con.execute(
+            "INSERT INTO pp_industry_settings (context_id, last_source_key) VALUES (?,?) "
+            "ON CONFLICT(context_id) DO UPDATE SET last_source_key=excluded.last_source_key",
+            (context_id, key))
+        con.commit()
+    except Exception:
+        pass                  # a missing default is a lesser problem than a failed binding
+    finally:
+        con.close()
 
 
 def _manual(context_id: int, order_id: int) -> dict[int, float]:

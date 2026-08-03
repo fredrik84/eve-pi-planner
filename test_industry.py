@@ -2055,6 +2055,7 @@ def test_binding_a_container_lets_the_planner_spend_it():
     from app.industry import sourcing as S
     from app.industry import assets as A
     from app.industry import orders as O
+    from app.industry import settings as SET
 
     con, restore = _patch_db(A)
     try:
@@ -2064,9 +2065,25 @@ def test_binding_a_container_lets_the_planner_spend_it():
         check("a freshly scanned container is off until it's chosen",
               A.owned_quantities(1) == {})
 
-        S.enable_bound_source(1, "cont:9")
-        check("binding a build to it lets the planner spend it",
-              A.owned_quantities(1) == {200: 400.0})
+        # Both modules must share one database here: binding writes stock state through assets and
+        # the remembered default through settings.
+        real_s, real_set = S.get_connection, SET.get_connection
+        S.get_connection = A.get_connection
+        SET.get_connection = A.get_connection
+        try:
+            SET.ensure_industry_settings_table.__wrapped__()
+            S.enable_bound_source(1, "cont:9")
+            check("binding a build to it lets the planner spend it",
+                  A.owned_quantities(1) == {200: 400.0})
+            # ...and the next build starts with the same answer already filled in, because a builder
+            # running a can per build otherwise answers this question on every single order.
+            check("the container is remembered as the account's default",
+                  SET.get_settings(1)["last_source_key"] == "cont:9")
+            S.enable_bound_source(1, "cont:11")
+            check("and the default follows the most recent choice",
+                  SET.get_settings(1)["last_source_key"] == "cont:11")
+        finally:
+            S.get_connection, SET.get_connection = real_s, real_set
 
         # Unbinding is the caller passing an empty key. It must be a no-op, not a switch-off.
         S.enable_bound_source(1, "")
