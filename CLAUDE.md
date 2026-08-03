@@ -790,7 +790,15 @@ unowned blueprint copy makes building dearer).
 *and* was rendered without `allowForce`, so once a build was queued the user could neither see what
 building would save nor act on it — the override existed only in the preview modal, before the
 build was real. The strip lists only the borderline components (positive saving, biggest first, six
-then "+N more"), states the total at stake, and each chip is the action. The shopping list keeps the
+then "+N more"), states the total at stake, and each chip is the action.
+It also carries a **"build everything worth more than X" slider**, which is deliberately NOT a
+second make-or-buy threshold: the saving-% slider decides what gets *suggested* here, and this one
+decides how many of those suggestions you accept in one go, over the list that threshold already
+produced. They cannot fight, because they act at different stages. (An absolute-ISK make-or-buy
+threshold WOULD fight: the engine's rule is `max(pct × total, MIN_BUILD_SAVING_ISK)`, so on a 2.4b
+hull the 3% term is ~72M and an ISK floor set below that would change no decision at all — a control
+you can drag while nothing happens.) One or many, `_indForceBuildMany` sends **one** request and
+triggers **one** re-plan; seven chips must not mean seven plans of a batch each one changes. The shopping list keeps the
 `low saving` badge and the "saves X if built" note as an *explanation* of why a row is there — one
 place to decide, one place to look things up, no second list.
 Where the override is stored depends on context (`indBuildAnyway`): with a queue it PATCHes the

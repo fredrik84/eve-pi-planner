@@ -327,6 +327,7 @@ function _indPaintStatus(d, opts) {
     + _indRenderPlanBody(d)
     + `<div id="indRunning" class="ind-install"></div>`;
   indRenderInstall(d.install);   // "do this now" — comes with the plan, no second round trip
+  indMargCutLabel();             // the bulk control's live readout starts filled in, not blank
   if (keep) {
     const run = document.getElementById('indRunning');
     if (run) run.innerHTML = keep.running;
@@ -1052,6 +1053,7 @@ async function indRunPlan() {
     }
     _indLastPlan = d;
     out.innerHTML = _indRenderPlan(d, `Build ${qty}× ${_esc(d.target.name)}`);
+    indMargCutLabel();
     // The plan renders below a tall form inside a scrolling modal, so on a laptop it can land
     // entirely below the fold — which reads as "the button did nothing". Bring it into view.
     out.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -1641,10 +1643,58 @@ function _indMarginalBar(d) {
     + `${_esc(s.name)} <span class="ind-marg-save">+${fmtIsk(s.marginal_saving)}</span></button>`).join('');
   const more = rows.length > show.length
     ? `<button class="ind-link-btn" onclick="indOpenShoppingList()">+${rows.length - show.length} more in the shopping list</button>` : '';
+
+  // Take them in bulk instead of one at a time. This is NOT a second make-or-buy threshold — the
+  // saving-% slider decides what gets suggested here; this decides how many of those suggestions
+  // you accept in one go, over the list that slider already produced. A builder who would take any
+  // job worth 10m shouldn't have to click seven chips to say so.
+  _indMargRows = rows.map(s => ({ type_id: s.type_id, name: s.name, saving: s.marginal_saving }));
+  const max = Math.ceil(rows[0].marginal_saving);
+  const bulk = (rows.length > 1 && max > 0)
+    ? `<div class="ind-marg-bulk">`
+      + `<label class="ind-src-meta">Build everything worth more than`
+      + ` <input type="range" id="indMargCut" min="0" max="${max}" step="${Math.max(1, Math.round(max / 200))}"`
+      + ` value="${max}" oninput="indMargCutLabel()"></label>`
+      + `<span id="indMargCutInfo" class="ind-marg-cutinfo"></span>`
+      + `<button class="ind-marg-apply" onclick="indBuildAllAbove()">Build these</button></div>` : '';
+
   return `<div class="ind-marg-bar"><span class="ind-marg-lbl">Worth building instead?</span>`
     + `<span class="ind-src-meta">${rows.length} component${rows.length > 1 ? 's are' : ' is'} bought`
     + ` because each saves little on its own — ${fmtIsk(total)} in total. Click one to build it.</span>`
-    + `<div class="ind-marg-chips">${chips}${more}</div></div>`;
+    + `<div class="ind-marg-chips">${chips}${more}</div>${bulk}</div>`;
+}
+
+// The borderline components currently on screen, so the bulk control can act on them without
+// re-deriving the list from a plan that may already have been replaced.
+let _indMargRows = [];
+
+function _indMargCut() {
+  const el = document.getElementById('indMargCut');
+  return el ? parseFloat(el.value) : Infinity;
+}
+
+function _indMargAbove() {
+  const cut = _indMargCut();
+  return _indMargRows.filter(r => r.saving >= cut);
+}
+
+// Live feedback while dragging: what the cut-off means in components and ISK, before committing.
+function indMargCutLabel() {
+  const info = document.getElementById('indMargCutInfo');
+  if (!info) return;
+  const picked = _indMargAbove();
+  const gain = picked.reduce((a, r) => a + r.saving, 0);
+  info.textContent = picked.length
+    ? `${fmtIsk(_indMargCut())} — builds ${picked.length} of ${_indMargRows.length}, saving ${fmtIsk(gain)}`
+    : `${fmtIsk(_indMargCut())} — nothing that high`;
+  const btn = document.querySelector('.ind-marg-apply');
+  if (btn) btn.disabled = !picked.length;
+}
+
+async function indBuildAllAbove() {
+  const picked = _indMargAbove();
+  if (!picked.length) return;
+  return _indKeepScroll(() => _indForceBuildMany(picked));
 }
 
 // Overrule the buy-it shortcut for one component. Where that override is STORED depends on whether
@@ -1652,16 +1702,25 @@ function _indMarginalBar(d) {
 // across orders, so one order carries it for the whole batch — and the ⚒ tag on that order chip is
 // how you take it back), while the preview keeps it in the session map until the build is queued.
 async function indBuildAnyway(typeId, name) {
+  return _indKeepScroll(() => _indForceBuildMany([{ type_id: typeId, name }]));
+}
+
+// One or many, one round trip and ONE re-plan either way. Overruling seven components must not mean
+// seven requests each re-planning the whole queue against a batch the next one is about to change.
+async function _indForceBuildMany(items) {
+  if (!items.length) return;
   if (!_indStatusVisible() || !(_indOrders || []).length) {
-    return _indKeepScroll(() => indForceBuildType(typeId, name));
+    items.forEach(i => _indForcedTypes.set(i.type_id, i.name || String(i.type_id)));
+    _indSweep = null; _indSweepFailed = null;
+    return indRunPlan();
   }
   const order = _indOrders[0];
-  const ids = [...new Set([...(order.force_build_ids || []), typeId])];
+  const ids = [...new Set([...(order.force_build_ids || []), ...items.map(i => i.type_id)])];
   try { await apiSend('PATCH', `/api/industry/orders/${order.id}`, { force_build_ids: ids }); }
   catch (e) { toastError(e, 'Could not save'); return; }
-  // Building it changes the batch every other decision was weighed against, so the plan really does
-  // have to re-run — but see _indKeepScroll for why you don't get thrown to the top of the page.
-  return _indKeepScroll(() => indRefreshStatus());
+  // Building them changes the batch every other decision was weighed against, so the plan really
+  // does have to re-run — but see _indKeepScroll for why you don't get thrown to the top.
+  return indRefreshStatus();
 }
 
 // Re-planning replaces the whole card, and while it's being fetched the page is a short spinner —
