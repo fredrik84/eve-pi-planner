@@ -657,7 +657,7 @@ def queue_plan_packing(req: QueuePlanRequest | None = None, ctx: int = Depends(r
                 "runs_per_job": why.get("runs_per_job"), "per_run_h": why.get("per_run_h"),
                 "job_h": t["duration_hours"],
                 "own_h": why.get("own_h"), "pace_h": why.get("pace_h"),
-                "consumer_deadline_h": why.get("hard_h"),
+                "window_h": why.get("hard_h"),
                 "bound_by": why.get("bound_by"), "needed_by": why.get("needed_by_name"),
             })
             r["job_h"] = max(r["job_h"], t["duration_hours"])

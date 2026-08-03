@@ -415,8 +415,26 @@ def build_tasks(agg: dict, mfg: dict, rx: dict, params: BuildParams,
         # up to the pace the plan already runs at, not for setting a new one.
         pace_cap = max((p["wide_dur"] for p in plan.values()), default=0.0)
 
+        # Consumers strictly before their inputs — a REAL topological order, not depth order.
+        # `_depths` records the deepest level a type is reached at, so a type used both as a direct
+        # input to the product and again further down gets the deeper number, and its own consumer
+        # can end up sorted AFTER it. When that happened the consumer had no `latest_start` yet, the
+        # input fell through to "no slack at all", and a 0.7h job sat next to its 4.7h siblings for
+        # no reason anyone could see from the outside. Kahn's algorithm on the consumer graph, with
+        # any cycle remnant appended so nothing is silently dropped.
+        pending = {t: {c for c in (consumers.get(t) or ()) if c in plan} for t in plan}
+        order2, done_set = [], set()
+        while True:
+            ready = [t for t, cs in pending.items() if t not in done_set and cs <= done_set]
+            if not ready:
+                break
+            ready.sort(key=lambda t: plan[t]["stage"])      # stable, and nice for readability
+            order2.extend(ready)
+            done_set.update(ready)
+        order2.extend(t for t in plan if t not in done_set)
+
         latest_start: dict[int, float] = {}
-        for tid in sorted(plan, key=lambda t: plan[t]["stage"]):     # consumers before their inputs
+        for tid in order2:
             p = plan[tid]
             # A type with NO consumer is a deliverable and answers to ITSELF, never to the makespan:
             # pacing a finished product against the slowest thing in the queue trades the one number
