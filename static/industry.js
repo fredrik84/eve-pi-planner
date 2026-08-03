@@ -1606,22 +1606,25 @@ function _indMeTeChip(typeId) {
 
 // Two per-job controls that both amount to "the plan is wrong about this one, and I'd know":
 // I've already built it, and I never build this — see indMarkDone / indBlacklist below.
+// Two corrections you can make to a job from the step list. Both are real buttons with words on
+// them: the first cut used bare dimmed glyphs, which on a chip that already carries a name, a run
+// count, a duration and an ME/TE tag were effectively invisible.
 function _indJobActions(x) {
   let html = '';
   if (_featureActive('industry_manual_done')) {
     const t = _indProgTypeMap()[x.type_id];
-    const done = t && t.done_runs >= t.required_runs && t.required_runs > 0;
+    const done = t && t.required_runs > 0 && t.done_runs >= t.required_runs;
     const byHand = t && t.manual_runs > 0;
     html += done
-      ? `<button class="ind-job-done ind-job-done-on" onclick="indMarkDone(${x.type_id}, false)" title="${
+      ? `<button class="ind-job-act ind-job-done-on" onclick="indMarkDone(${x.type_id}, false)" title="${
           byHand ? 'You marked this done — click to undo' : 'Already done. Click if that is wrong.'
         }">✓ done</button>`
-      : `<button class="ind-job-done" onclick="indMarkDone(${x.type_id}, true)"`
-        + ` title="Mark this step done — for work we can't see, like a job run on a character that isn't connected">✓</button>`;
+      : `<button class="ind-job-act" onclick="indMarkDone(${x.type_id}, true)"`
+        + ` title="Mark this step done — for work we can't see, like a job run on a character that isn't connected">mark done</button>`;
   }
   if (_featureActive('industry_blacklist')) {
-    html += `<button class="ind-job-never" onclick="indBlacklist(${x.type_id}, true)"`
-      + ` title="Always buy ${_esc(x.name)} instead of building it — on every build, until you undo it">⊘</button>`;
+    html += `<button class="ind-job-act ind-job-never" onclick="indBlacklist(${x.type_id}, true)"`
+      + ` title="Always buy ${_esc(x.name)} instead of building it — on every build, until you undo it">always buy</button>`;
   }
   return html;
 }
@@ -1805,10 +1808,11 @@ function _indPipelineHtml(d, tiersData, model) {
     // Three states you can read at a glance: done (green border), in the cooker (accent + glow),
     // waiting (greyed back). Anything with no progress data at all keeps the neutral card.
     const p = prog[e.type_id];
-    let state = '', cls = '';
+    let state = '', cls = '', done = false;
     if (p && p.required_runs) {
       if (p.done_runs >= p.required_runs) {
         state = '<span class="ind-pipe-state ind-st-done">✓ done</span>'; cls = ' ind-pipe-is-done';
+        done = true;
       } else if (p.running_runs > 0) {
         state = `<span class="ind-pipe-state ind-st-run">${p.running_runs} cooking</span>`; cls = ' ind-pipe-is-run';
         if (p.done_runs > 0) state += `<span class="ind-pipe-state ind-st-part">${p.done_runs}/${p.required_runs}</span>`;
@@ -1818,7 +1822,16 @@ function _indPipelineHtml(d, tiersData, model) {
         state = '<span class="ind-pipe-state ind-st-wait">waiting</span>'; cls = ' ind-pipe-is-wait';
       }
     }
-    return `<div class="ind-pipe-card ind-pipe-build${cls}" data-tid="${e.type_id}" title="${_esc(e.name)} — ${qty}${e.runs ? ', ' + e.runs + ' runs' : ''}. Hover to trace its chain."><span class="ind-pipe-name">${_esc(e.name)}</span>`
+    // The card already IS the progress readout for this step, so it's also where you correct it:
+    // click to say it's done, click again to take that back. A tick tucked into the step-by-step
+    // chips was the first cut and too small to read, never mind aim at.
+    const markable = _featureActive('industry_manual_done') && p && p.required_runs;
+    const onclick = markable ? ` onclick="indMarkDone(${e.type_id}, ${!done})"` : '';
+    const tip = `${_esc(e.name)} — ${qty}${e.runs ? ', ' + e.runs + ' runs' : ''}. Hover to trace its chain.`
+      + (markable ? (done ? ' Click to un-mark it done.' : ' Click if this one is already done.') : '');
+    return `<div class="ind-pipe-card ind-pipe-build${cls}${markable ? ' ind-pipe-markable' : ''}"${onclick}`
+      + ` data-tid="${e.type_id}" title="${tip}">`
+      + `<span class="ind-pipe-name">${_esc(e.name)}</span>`
       + `<span class="ind-pipe-meta"><span class="ind-pipe-qty">${qty}</span>${runs}${owned}${state}</span></div>`;
   };
   const buyCard = (buys, t) => {
@@ -1863,7 +1876,8 @@ function _indPipelineHtml(d, tiersData, model) {
   });
 
   return `<details class="ind-details" open><summary>Build pipeline</summary>`
-    + `<p class="ind-pipe-hint">Each row is a building, each column a stage. Hover a step to trace its whole chain.</p>`
+    + `<p class="ind-pipe-hint">Each row is a building, each column a stage. Hover a step to trace its`
+    + ` whole chain${_featureActive('industry_manual_done') ? ', or click one to mark it done' : ''}.</p>`
     + `<div class="ind-pipe-scroll"><div class="ind-pipe" style="--ind-cols:${cols.length}">${html}</div></div></details>`;
 }
 

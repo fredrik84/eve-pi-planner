@@ -987,6 +987,11 @@ progress on a re-queued one. Runs `-1` (`_ALL`) means "all of it, whatever the p
 a concrete number would go stale the moment a quantity changed. It **never writes to the completion
 ledgers** — those feed lifetime turnover and profit, and a tick is not evidence of an ISK-bearing
 job (same rule the simulated-progress preview follows).
+**The control is the pipeline card** (`ind-pipe-markable`): that card already renders this type's
+done/cooking/waiting state, so the place showing the state is the place that corrects it, and a whole
+card is an easy target. The step-by-step chips keep a labelled `mark done` / `always buy` button as
+the fallback for plans too shallow to draw a pipeline — both were bare dimmed glyphs first, which on
+a chip already carrying a name, runs, a duration and an ME/TE tag were effectively invisible.
 
 **Corp hangars over ESI** (`refresh_corp_assets`, `POST /api/industry/assets/refresh-corp`). The
 module docstring used to say corp assets were deliberately not read, because `/corporations/{id}/

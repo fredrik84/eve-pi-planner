@@ -1025,7 +1025,7 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-pipe-cell { display: flex; flex-direction: column; gap: 4px; padding: 8px 0;
   border-bottom: 1px solid #1a2030; min-width: 0; }
 .ind-pipe-card { border: 1px solid var(--clr-border); border-left: 3px solid var(--clr-border); border-radius: 5px;
-  padding: 4px 6px; background: #12161f; min-width: 0; overflow: hidden;
+  padding: 4px 6px; background: #12161f; min-width: 0; overflow: hidden; position: relative;
   transition: opacity .12s, border-color .12s, background .12s; }
 .ind-pipe-build { border-left-color: #3a9668; }
 .ind-pipe-name { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
@@ -1041,6 +1041,15 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-pipe-buys { border-style: dashed; border-left-style: solid; border-left-color: #7a6a8a; background: #15121b; cursor: pointer; }
 .ind-pipe-buys:hover { border-color: var(--clr-accent); background: #191527; }
 .ind-pipe-buys .ind-pipe-name { color: #cbb8d6; }
+/* A build card you can correct: clicking says "this one is already done". The affordance has to be
+   visible without hovering every card, so it gets the pointer plus a check that appears on hover —
+   the version this replaced was a dimmed glyph on a crowded chip and nobody could find it. */
+.ind-pipe-markable { cursor: pointer; }
+.ind-pipe-markable:hover { border-color: var(--clr-accent); background: #16233a; }
+.ind-pipe-markable::after { content: '✓'; position: absolute; top: 3px; right: 5px; font-size: 11px;
+  color: var(--clr-green); opacity: 0; transition: opacity .12s; }
+.ind-pipe-markable:hover::after { opacity: .85; }
+.ind-pipe-is-done.ind-pipe-markable:hover::after { content: '✕'; color: #d88a8a; }
 /* Hover trace: dim everything, light up the hovered step + what it feeds / is fed by */
 .ind-pipe-focus .ind-pipe-card { opacity: .28; }
 .ind-pipe-focus .ind-hi-self { opacity: 1; border-color: var(--clr-accent); border-left-color: var(--clr-accent); background: #16233a; box-shadow: inset 0 0 0 1px var(--clr-accent); }
@@ -1337,11 +1346,14 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 /* Per-job overrides on a plan step: "I've already done this one" and "I always buy this one".
    Both are corrections to the plan, so they sit on the job chip itself rather than in a panel
    elsewhere — muted until hovered, since most jobs never need either. */
-.ind-job-done, .ind-job-never { background: none; border: 0; cursor: pointer; font-size: 11px;
-  padding: 0 3px; margin-left: 3px; color: var(--clr-text-dim); opacity: .55; }
-.ind-job-done:hover { color: var(--clr-green); opacity: 1; }
-.ind-job-never:hover { color: #d8b46a; opacity: 1; }
-.ind-job-done-on { color: var(--clr-green); opacity: 1; }
+.ind-job-act { background: #1b2233; border: 1px solid var(--clr-border); border-radius: 8px;
+  cursor: pointer; font-size: 11px; line-height: 1.5; padding: 1px 7px; margin-left: 4px;
+  color: #9fb4d8; white-space: nowrap; }
+.ind-job-act:hover { background: #24304a; color: #fff; border-color: #3a4a6b; }
+.ind-job-never { color: #d8b46a; }
+.ind-job-never:hover { background: #2f2819; color: #f0d9a6; }
+.ind-job-done-on { color: var(--clr-green); border-color: #2c4a33; background: #16211a; }
+.ind-job-done-on:hover { background: #1b2a1e; color: var(--clr-green); }
 .ind-wave-job-done { border-color: #2c4a33; color: var(--clr-text-soft); }
 /* A material on the shopping list because of a standing rule, not because building lost on cost. */
 .ind-never-badge { font-size: 10px; background: #241f16; color: #d8b46a; border: 1px solid #4a3f2c;
