@@ -142,6 +142,32 @@ def invalidate_order_shares(order_id: int):
             pass                  # a stale page for up to a minute is not worth failing the edit
 
 
+def invalidate_context_shares(context_id: int):
+    """Drop the cached payload for every live link this ACCOUNT owns.
+
+    Some things that move a share's progress bar aren't attached to one order: marking a build step
+    done is recorded per TYPE, and one type can feed several customers' orders at once. Invalidating
+    only the order you happened to be looking at would leave the others quoting a minute-old bar.
+    """
+    ensure_industry_shares_table()
+    con = get_connection()
+    try:
+        rows = con.execute(
+            "SELECT s.share_id FROM pp_industry_shares s "
+            "JOIN pp_industry_orders o ON o.id = s.order_id "
+            "WHERE o.context_id=? AND s.revoked=0", (context_id,)).fetchall()
+    except Exception:
+        return
+    finally:
+        con.close()
+    for r in rows:
+        try:
+            from app.cache import cache_invalidate
+            cache_invalidate(f"indshare:{r['share_id']}")
+        except Exception:
+            pass
+
+
 def _stage_of_types(target_id: int, mfg: dict, rx: dict) -> dict[int, int]:
     """type_id → stage number, 1 = the deepest components, N = the final assembly.
 
@@ -232,12 +258,16 @@ def build_status(share_id: str) -> dict:
     res, inp = _order_plan(ctx, tid, qty, force_ids, me_te, order["margin_pct"])
     stage_of = _stage_of_types(tid, inp.mfg, inp.rx)
 
-    # Progress comes from the same ledgers the builder's own view reads, so the customer can never
-    # be shown a rosier number than the builder sees.
-    from app.industry.progress import _done_by_type, _running_by_type, _epoch
+    # Progress comes from the same signals the builder's own view reads, so the customer can never
+    # be shown a rosier number than the builder sees — nor a staler one. All THREE belong here: a
+    # step the builder ticked done by hand is done as far as this order is concerned, and leaving
+    # marks out meant pressing "done" moved the builder's bar and not the customer's.
+    from app.industry.progress import (_done_by_type, _running_by_type, _epoch,
+                                       _manual_by_type, resolve_done, _ALL)
     since = _epoch(ctx)
     done_runs = _done_by_type(ctx, since)
     running_runs = _running_by_type(ctx, since)
+    marked = _manual_by_type(ctx, since)
     from app.industry.assets import owned_quantities
     owned = owned_quantities(ctx)
 
@@ -248,9 +278,13 @@ def build_status(share_id: str) -> dict:
         if need <= 0:
             continue
         oq = int(req["output_qty"]) or 1
-        # Same two-signal rule as the builder's progress view: owning the output proves it's built,
-        # the ledger remembers it after it's consumed — take whichever is higher, capped at need.
-        d = min(max(done_runs.get(rtid, 0), int(owned.get(rtid, 0) // oq)), need)
+        # The SAME combination the builder's progress view uses, through the same function — owning
+        # the output proves it's built, the ledger remembers it after it's consumed, a hand mark
+        # covers what neither can see; highest wins, capped at need. Sharing `resolve_done` is what
+        # stops the two views drifting apart again.
+        m = marked.get(rtid)
+        d = resolve_done(need, done_runs.get(rtid, 0), int(owned.get(rtid, 0) // oq),
+                         0 if m is None else (need if m == _ALL else m))
         r = min(running_runs.get(rtid, 0), max(0, need - d))
         st = stages.setdefault(stage_of.get(rtid, 1), {"required": 0, "done": 0, "running": 0,
                                                        "items": []})

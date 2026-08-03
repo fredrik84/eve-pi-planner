@@ -450,4 +450,13 @@ def industry_mark_done(req: MarkDone, ctx: int = Depends(require_context)):
     rule the simulated-progress preview follows.
     """
     set_manual_done(ctx, int(req.type_id), req.runs)
+    # Customer links cache their payload for a minute. A mark moves their progress bar too, so
+    # without this the builder ticks a step done, looks at the link they handed over, and sees it
+    # unchanged — which is precisely the doubt a status link exists to remove. Per ACCOUNT, not per
+    # order: a mark is per type, and one type can feed several customers' orders.
+    try:
+        from app.industry.shares import invalidate_context_shares
+        invalidate_context_shares(ctx)
+    except Exception:
+        pass                      # a stale customer page for a minute must not fail the mark
     return queue_progress(ctx)

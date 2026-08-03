@@ -1660,6 +1660,7 @@ def main():
     test_the_sourcing_list_is_not_a_second_shopping_list()
     test_binding_a_container_lets_the_planner_spend_it()
     test_first_run_setup_shows_once_and_never_to_an_established_user()
+    test_the_customer_bar_moves_when_the_builder_marks_a_step_done()
     test_a_scan_retires_stock_that_is_no_longer_there()
     test_corp_hangars_and_containers_split_like_personal_ones()
     print(f"\nAll {_passed} checks passed.")
@@ -1952,6 +1953,34 @@ def test_first_run_setup_shows_once_and_never_to_an_established_user():
                       "dependency", None) is require_context)
     finally:
         restore()
+
+
+def test_the_customer_bar_moves_when_the_builder_marks_a_step_done():
+    """A hand mark moved the builder's progress and not the customer's, because the share computed
+    its own done-count from the ledgers and the hangar and never learned about marks. A status link
+    whose bar disagrees with the builder is worse than no link. Both views must combine the same
+    three signals through the same function, and the mark has to drop the share's cache — a bar
+    that catches up a minute later still looks broken to whoever just pressed the button."""
+    print("test_the_customer_bar_moves_when_the_builder_marks_a_step_done")
+    import inspect
+    from app.industry import shares as SH
+    from app.industry import progress as P
+
+    src = inspect.getsource(SH.build_status)
+    check("the share reads hand marks at all", "_manual_by_type" in src)
+    check("and combines them through the shared rule, not a second copy",
+          "resolve_done(" in src)
+    check("'all of it' is resolved against this order's own requirement", "_ALL" in src)
+
+    marking = inspect.getsource(P.industry_mark_done)
+    check("marking a step drops the customer link's cached page",
+          "invalidate_context_shares" in marking)
+    check("across the whole account, since a mark is per type not per order",
+          "context_id" in inspect.getsource(SH.invalidate_context_shares))
+
+    # The rule itself, at the boundary the bug lived on: a mark alone is enough to fill a step.
+    check("a marked step reads as done with no ledger and no stock",
+          P.resolve_done(8, 0, 0, 8) == 8)
 
 
 def test_a_scan_retires_stock_that_is_no_longer_there():

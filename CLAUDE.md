@@ -904,8 +904,15 @@ and no session: the page must be incapable of showing account data even by accid
   (`_order_plan`, `use_stock=False`) — the queue plan aggregates every order, which would both
   misstate the customer's build and disclose the builder's other work — while the **ETA** comes from
   the whole-queue schedule, because contention for slots is real and the customer feels it.
-- Progress reads the same ledgers the builder's own view does (`_done_by_type`/`_running_by_type` +
-  owned quantities, capped at need), so a customer can never see a rosier number than the builder.
+- Progress reads the same signals the builder's own view does — `_done_by_type`/`_running_by_type`,
+  owned quantities **and hand marks**, combined through the shared `resolve_done` — so a customer can
+  never see a rosier number than the builder, nor a staler one. The three used to be two here: a
+  step ticked done moved the builder's bar and not the customer's, because this path had its own
+  copy of the combination rule. That's what `resolve_done` is shared for.
+- **Marking a step done invalidates every share on the ACCOUNT** (`invalidate_context_shares`), not
+  just one order's: a mark is per type, and one type feeds several customers' orders. Without it the
+  fix above is still a minute late, which looks identical to broken to whoever just pressed the
+  button.
 - Public reads are cached 60s (`indshare:<id>`); a public page whose every render costs two plans
   would otherwise be an amplification lever.
 
