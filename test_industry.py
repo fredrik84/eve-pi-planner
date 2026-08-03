@@ -1658,6 +1658,7 @@ def main():
     test_progress_percent_is_weighted_by_job_time_not_run_count()
     test_slots_are_only_spent_where_they_buy_time()
     test_packing_never_paces_one_pool_against_the_other()
+    test_a_job_never_carries_more_runs_than_the_blueprint_copy_has()
     test_one_products_runs_are_not_spread_thinner_than_its_own_pace()
     test_slack_comes_from_the_consumer_not_from_stage_mates()
     test_sourcing_notes_belong_to_one_order()
@@ -1974,6 +1975,58 @@ def test_one_products_runs_are_not_spread_thinner_than_its_own_pace():
     _t, capped_by = build_tasks(agg, capped, {}, params, pools, depths={1: 0}, deps={1: set()})
     check("but a 1-run blueprint cap is never exceeded",
           max(t.runs for t in capped_by[1]) == 1)
+
+
+def test_a_job_never_carries_more_runs_than_the_blueprint_copy_has():
+    """Packing deliberately makes manufacturing jobs longer, which runs straight into the thing the
+    SDE cap does not describe: a COPY carries a fixed number of runs. A 20-run batch is happy as two
+    10-run jobs when the plan has the slack, and impossible off 5-run copies. Reactions have no
+    blueprint and are untouched by any of this."""
+    print("test_a_job_never_carries_more_runs_than_the_blueprint_copy_has")
+    # A 10h unsplittable job beside 20 one-hour runs feeding the same assembly: the 20 runs have
+    # ten hours of room, so without a copy limit they would pack into 2 jobs of 10.
+    mfg = {
+        1: {"base_time": 36000, "max_runs": 1, "output_qty": 1, "inputs": []},
+        2: {"base_time": 3600, "max_runs": 100, "output_qty": 1, "inputs": []},
+        3: {"base_time": 3600, "max_runs": 1, "output_qty": 1,
+            "inputs": [{"type_id": 1, "quantity": 1}, {"type_id": 2, "quantity": 1}]},
+    }
+    agg = {1: {"build": True, "runs": 1, "activity": "manufacturing"},
+           2: {"build": True, "runs": 20, "activity": "manufacturing"},
+           3: {"build": True, "runs": 1, "activity": "manufacturing"}}
+    pools = {"manufacturing": 29, "reaction": 29}
+    deps = _built_deps(agg, mfg, {})
+    depths = {1: 1, 2: 1, 3: 0}
+
+    free = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, struct_time_mult=1.0)
+    _t, by_free = build_tasks(agg, mfg, {}, free, pools, depths=depths, deps=deps)
+    check("with no copy limit the slack is taken in full", max(t.runs for t in by_free[2]) == 10)
+
+    # Copies the plan would BUY carry 5 runs each — one contract is one copy.
+    buying = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, struct_time_mult=1.0,
+                         bp_acquire={2: {"kind": "bpc", "price": 1.0, "runs_per_copy": 5}})
+    _t2, by_buy = build_tasks(agg, mfg, {}, buying, pools, depths=depths, deps=deps)
+    check("a bought copy's run count caps the job", max(t.runs for t in by_buy[2]) == 5)
+    check("and the batch is still built in full", sum(t.runs for t in by_buy[2]) == 20)
+
+    # A copy the account already HOLDS, with runs left on it.
+    held = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, struct_time_mult=1.0,
+                       owned={2: {"me": 0, "te": 0, "kind": "bpc", "runs": 4}})
+    _t3, by_held = build_tasks(agg, mfg, {}, held, pools, depths=depths, deps=deps)
+    check("so does a copy you already own", max(t.runs for t in by_held[2]) == 4)
+
+    # An original has no run limit of its own — only the blueprint type's per-job cap applies.
+    bpo = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, struct_time_mult=1.0,
+                      owned={2: {"me": 0, "te": 0, "kind": "bpo", "runs": -1}})
+    _t4, by_bpo = build_tasks(agg, mfg, {}, bpo, pools, depths=depths, deps=deps)
+    check("an original is not limited that way", max(t.runs for t in by_bpo[2]) == 10)
+
+    # Reactions have no blueprint at all, so nothing here may touch them.
+    rx = {9: {"base_time": 3600, "max_runs": 0, "output_qty": 1, "inputs": []}}
+    ragg = {9: {"build": True, "runs": 20, "activity": "reaction"}}
+    _t5, by_rx = build_tasks(ragg, {}, rx, buying, pools, depths={9: 0}, deps={9: set()})
+    check("a reaction is never capped by a blueprint it doesn't have",
+          sum(t.runs for t in by_rx[9]) == 20)
 
 
 def test_packing_never_paces_one_pool_against_the_other():

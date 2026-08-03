@@ -255,6 +255,22 @@ def build_tasks(agg: dict, mfg: dict, rx: dict, params: BuildParams,
         R = info["runs"]
         P = max(1, pools.get(activity, 1))
         cap = max_runs if max_runs else R
+        # A manufacturing job also cannot carry more runs than the BLUEPRINT COPY it runs off. The
+        # SDE cap above is the blueprint type's per-job limit; this is the copy's own remaining
+        # runs, which is usually far smaller and is what actually binds in practice. It matters
+        # specifically because the packing below makes jobs LONGER: a 35-run batch is happy as one
+        # job when the plan has the slack for it, and impossible if your copies carry 10 runs each.
+        # Reactions have no blueprint and are untouched.
+        if activity == "manufacturing":
+            own = (params.owned or {}).get(tid) or {}
+            if own.get("kind") == "bpc" and (own.get("runs") or 0) > 0:
+                cap = min(cap, int(own["runs"]))
+            elif not own:
+                # Not owned: the plan buys copies, and one contract is one copy of fixed runs.
+                acq = (params.bp_acquire or {}).get(tid) or {}
+                if acq.get("kind") == "bpc" and (acq.get("runs_per_copy") or 0) > 0:
+                    cap = min(cap, int(acq["runs_per_copy"]))
+        cap = max(1, cap)
         # (a) fill up to P slots concurrently, (b) never exceed the per-job run cap — whichever
         # forces MORE jobs. This is the widest split; the floor is what the cap alone demands.
         n_wide = max(min(P, R), math.ceil(R / cap))

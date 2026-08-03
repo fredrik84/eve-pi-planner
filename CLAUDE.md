@@ -884,6 +884,13 @@ and both were learned from real builds rather than guessed:
   its stage paces against itself and stays fully split, and two types feeding one job from different
   depths never see each other.
 
+**A manufacturing job also cannot exceed the blueprint COPY's runs.** The SDE `max_runs` is the
+blueprint type's per-job limit; what actually binds is the copy — `owned[tid].runs` for one the
+account holds, `bp_acquire[tid].runs_per_copy` for one the plan would buy (one contract is one
+copy). This only became load-bearing WITH the packing above: making jobs longer is exactly what
+pushes a job past a copy's runs, and a 20-run job off 5-run copies is not a plan, it's a plan that
+cannot be installed. An owned BPO has no such limit. Reactions have no blueprint and are untouched.
+
 Work in **runs per job**, never in job count: runs are indivisible, so the question is how many fit
 the window (`int(window / per_run)`), capped by what one blueprint copy may carry. Computing it as
 `work / window` uses the AVERAGE job length and is exactly what hid the uneven-split case.
