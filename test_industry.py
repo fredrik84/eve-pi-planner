@@ -445,7 +445,7 @@ def test_progress_rollup():
     orig = (PR._queue_snapshot, PR._epoch, PR._done_by_type, PR._running_by_type,
             ASSETS.owned_quantities)
     try:
-        PR._queue_snapshot = lambda ctx: (orders, plan)
+        PR._queue_snapshot = lambda ctx, res=None: (orders, plan)   # res: a caller-supplied plan
         PR._epoch = lambda ctx: 1234.0
         PR._done_by_type = lambda ctx, since: {110: 6}      # 6 of the 10 Part runs done
         PR._running_by_type = lambda ctx, since: {110: 2}   # 2 more in flight
@@ -493,7 +493,7 @@ def test_progress_rollup():
         check("sim: 100% completes everything", full["totals"]["done"] == full["totals"]["required"])
         check("sim: 100% leaves nothing waiting", full["totals"]["waiting"] == 0)
 
-        PR._queue_snapshot = lambda ctx: (None, None)
+        PR._queue_snapshot = lambda ctx, res=None: (None, None)
         check("empty queue reports empty", PR.queue_progress(1) == {"empty": True}
               and PR.simulated_progress(1, 50.0) == {"empty": True})
     finally:
@@ -1666,6 +1666,7 @@ def main():
     test_the_customer_bar_moves_when_the_builder_marks_a_step_done()
     test_the_customer_page_measures_progress_the_same_way_the_builder_does()
     test_stale_caches_refresh_themselves_on_the_way_in()
+    test_opening_the_tab_plans_the_queue_once_not_twice()
     test_a_scan_retires_stock_that_is_no_longer_there()
     test_corp_hangars_and_containers_split_like_personal_ones()
     print(f"\nAll {_passed} checks passed.")
@@ -1954,6 +1955,34 @@ def test_the_customer_page_measures_progress_the_same_way_the_builder_does():
     # And it still gives nothing away: hours are used to weight, never published.
     check("the payload gains no new money or timing fields",
           '"h_total"' not in src.split("payload = {")[-1])
+
+
+def test_opening_the_tab_plans_the_queue_once_not_twice():
+    """The page fetched the plan and the progress separately, and each of those planned the whole
+    queue — the single most expensive thing the tab did, done twice, for an answer the first one was
+    already holding. Progress now rides along with the plan it is a view of. The two plans are not
+    identical (progress measures against the FULL requirement, or its bar could never fill), so the
+    saving is in the inputs: one prepare_plan_inputs, one set of DB reads, one request."""
+    print("test_opening_the_tab_plans_the_queue_once_not_twice")
+    import inspect
+    from app.industry import orders as O
+    from app.industry import progress as P
+
+    src = inspect.getsource(O.queue_plan)
+    check("the plan endpoint carries progress inline", '"progress"' in src)
+    check("computed from the full-requirement plan it already made", "_full" in src)
+    check("and a failure there never takes the plan down with it", "except Exception" in src)
+
+    run = inspect.getsource(O._run_queue_plan)
+    check("the second plan reuses the resolved inputs", "want_full" in run)
+    check("and is skipped entirely when no stock is netted off",
+          "res if not on_hand else" in run)
+
+    sig = inspect.signature(P.queue_progress)
+    check("progress accepts a plan instead of always making one",
+          sig.parameters["res"].default is None)
+    snap = inspect.getsource(P._queue_snapshot)
+    check("and only plans for itself when it wasn't given one", "if res is None:" in snap)
 
 
 def test_sourcing_notes_belong_to_one_order():

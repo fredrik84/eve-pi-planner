@@ -216,28 +216,37 @@ def _epoch(context_id: int) -> float:
     return float((row and row["t"]) or 0.0)
 
 
-def _queue_snapshot(context_id: int):
-    """(orders, plan) for the account's queue, or (None, None) if there's nothing to report.
-
-    Shared by the live and simulated progress paths: both need the same order rows in the same
-    queue order, and the same full-requirement plan to measure against.
-    """
-    from app.industry.orders import QueuePlanRequest, _run_queue_plan
-
+def _queue_orders(context_id: int):
+    """The account's queued orders, in queue order. One cheap read, shared by every progress path."""
     con = get_connection()
     try:
-        orders = con.execute(
+        return con.execute(
             "SELECT id, product_type_id, name, quantity, COALESCE(label, '') AS label FROM pp_industry_orders "
             "WHERE context_id = ? ORDER BY priority DESC, id",
             (context_id,),
         ).fetchall()
     finally:
         con.close()
+
+
+def _queue_snapshot(context_id: int, res: dict | None = None):
+    """(orders, plan) for the account's queue, or (None, None) if there's nothing to report.
+
+    `res` lets a caller that has ALREADY planned the queue hand its plan in rather than making this
+    run another one. That is the whole point: the page used to fetch the plan and the progress
+    separately, so opening the tab planned a capital build twice over — the single most expensive
+    thing it did, for an answer it already had. Same rule the start-now checklist follows.
+
+    The plan handed in must be the FULL-requirement one (`use_stock=False`): with stock netted off,
+    the denominator would shrink as you acquire materials and the bar could never fill.
+    """
+    from app.industry.orders import QueuePlanRequest, _run_queue_plan
+
+    orders = _queue_orders(context_id)
     if not orders:
         return None, None
-    # use_stock=False: progress must measure against the FULL requirement. With stock netted off,
-    # the denominator would shrink as you acquire materials and the bar could never fill.
-    res = _run_queue_plan(context_id, QueuePlanRequest(use_stock=False))
+    if res is None:
+        res = _run_queue_plan(context_id, QueuePlanRequest(use_stock=False))
     if res.get("empty"):
         return None, None
     return orders, res
@@ -351,9 +360,11 @@ def _progress_payload(types: list[dict], order_rows: list[dict], **extra) -> dic
     }
 
 
-def queue_progress(context_id: int) -> dict:
-    """Per-type and per-order progress for the account's current build queue."""
-    orders, res = _queue_snapshot(context_id)
+def queue_progress(context_id: int, res: dict | None = None) -> dict:
+    """Per-type and per-order progress for the account's current build queue.
+
+    `res` is an already-computed full-requirement plan; pass it whenever you have one."""
+    orders, res = _queue_snapshot(context_id, res)
     if orders is None:
         return {"empty": True}
 

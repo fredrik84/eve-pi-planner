@@ -874,11 +874,21 @@ changing anything:
   read-only (no caller mutates a recipe), so one copy serves them all. The TTL is a backstop for an
   SDE rebuild under a long-lived process; a deploy restarts the pod anyway. **Tests that seed their
   own synthetic SDE must call `clear_graph_cache()`** — `test_industry._seed_con` does.
-* The page ran **three full queue plans** per load (queue-plan, to-install, progress). The checklist
-  is a view of the plan, not a separate question, so `/api/industry/queue-plan` returns it inline as
-  `install` (built by the shared `orders.install_block(ctx, res)`, which `/api/industry/to-install`
-  also uses); the frontend renders from that instead of a second POST. Progress and the plan are
-  independent, so they now run concurrently (`Promise.all`).
+* The page ran **three full queue plans** per load (queue-plan, to-install, progress). Both of the
+  others are views OF the plan, not separate questions, so `/api/industry/queue-plan` now returns
+  both inline: `install` (via the shared `orders.install_block(ctx, res)`) and `progress` (via
+  `queue_progress(ctx, res=...)`). **One plan per page load.** Progress needs the queue planned with
+  no stock netted off (`use_stock=False`, or its bar could never fill), so `_run_queue_plan(...,
+  want_full=True)` produces that second variant from the inputs it has ALREADY resolved rather than
+  from a second request that would repeat every DB read in `prepare_plan_inputs` — graph, names,
+  blueprints, contract index, slot pool. With no stock enabled the two are identical and the second
+  `plan_queue` is skipped outright.
+* The status card **paints the last plan first and checks it after** (`_indReadPlanCache` /
+  `_indWritePlanCache`, sessionStorage). The cache is keyed on the queue itself — order ids,
+  quantities, force-build and ME/TE overrides — and the orders list is fetched before it is read, so
+  a plan is only ever shown for the queue that is actually there (which also makes flashing another
+  account's build impossible). Capped at 15 minutes, past which the ETAs are visibly wrong and it
+  waits instead.
 Measured on a Revelation: share link 706ms cold-process → **47ms** warm; page ≈73ms serial → ≈25ms.
 Keep it that way: anything that needs a whole-queue plan should take one that already exists rather
 than calling `_run_queue_plan` again.

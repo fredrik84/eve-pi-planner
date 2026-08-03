@@ -243,18 +243,68 @@ async function indRefreshStatus() {
   }
   card.style.display = '';
   if (empty) empty.style.display = 'none';
-  body.innerHTML = _indLoadingHtml('Checking your build…', 'Pulling job status and re-planning what is left.');
-  // Progress and the plan are independent server-side, and each is a second or more against a
-  // capital build — running them one after the other doubled the wait for no reason.
-  const planReq = apiSend('POST', '/api/industry/queue-plan', _indQueueBody());
+
+  // Paint the last plan for this exact queue straight away, then go and check it. Re-planning a
+  // capital build is real work, and staring at a spinner for it on every visit is the difference
+  // between a tool you keep open and one you avoid. The orders list is fetched first precisely so
+  // the cache can be matched against it — a plan is only shown if it was built for the queue that
+  // is actually there now, which also makes it impossible to flash another account's build.
+  const cached = _indReadPlanCache(_indQueueSig(orders));
+  if (cached) {
+    _indLastPlan = cached.plan;
+    _indProgress = cached.progress || null;
+    _indCacheNames(cached.plan);
+    _indPaintStatus(cached.plan, { local: true });
+  } else {
+    body.innerHTML = _indLoadingHtml('Checking your build…', 'Pulling job status and re-planning what is left.');
+  }
+
+  // Progress now rides along with the plan (it is a view OF that plan), so this is ONE request
+  // where it used to be two — each of which planned the whole queue independently.
   let d;
   try {
-    [, d] = await Promise.all([indLoadProgress(), planReq]);
+    d = await apiSend('POST', '/api/industry/queue-plan', _indQueueBody());
     if (d.empty) { card.style.display = 'none'; if (empty) empty.style.display = ''; return; }
     _indLastPlan = d;
+    // Preview mode's fabricated progress must win over the real thing while it's on.
+    if (_indSim === null) _indProgress = (d.progress && !d.progress.empty) ? d.progress : null;
+    else await indLoadProgress();
     _indCacheNames(d);
     _indPaintStatus(d);
-  } catch (e) { body.innerHTML = `<p class="pp-warn">${_esc(e.message || "Could not plan your queue.")}</p>`; }
+    _indWritePlanCache(_indQueueSig(orders), d);
+  } catch (e) {
+    if (!cached) body.innerHTML = `<p class="pp-warn">${_esc(e.message || "Could not plan your queue.")}</p>`;
+  }
+}
+
+// ── Last-plan cache (paint now, check after) ─────────────────────────────────────────────────
+// Keyed on the queue itself: order ids, quantities and the overrides that change what gets built.
+// If any of that differs, the cached plan is not a plan of THIS queue and is never shown.
+const _IND_CACHE_KEY = 'indPlanCache';
+const _IND_CACHE_MAX_AGE = 15 * 60 * 1000;   // beyond this the ETAs are visibly wrong; wait instead
+
+function _indQueueSig(orders) {
+  return JSON.stringify((orders || []).map(o => [o.id, o.quantity, o.product_type_id,
+                                                 (o.force_build_ids || []).join(','),
+                                                 JSON.stringify(o.me_te_overrides || {})]));
+}
+
+function _indReadPlanCache(sig) {
+  try {
+    const raw = sessionStorage.getItem(_IND_CACHE_KEY);
+    if (!raw) return null;
+    const c = JSON.parse(raw);
+    if (c.sig !== sig || !c.plan) return null;
+    if (Date.now() - (c.at || 0) > _IND_CACHE_MAX_AGE) return null;
+    return c;
+  } catch (e) { return null; }
+}
+
+function _indWritePlanCache(sig, plan) {
+  try {
+    sessionStorage.setItem(_IND_CACHE_KEY, JSON.stringify(
+      { sig, at: Date.now(), plan, progress: _indProgress }));
+  } catch (e) {}     // a full or disabled sessionStorage just means no head start, never an error
 }
 
 // Draw the status card from a plan we already have. Split out from the fetch above because marking

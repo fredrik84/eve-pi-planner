@@ -346,7 +346,7 @@ def _blend_margin(res: dict, order_margins: list, default_pct: float) -> None:
         round((price / net - 1) * 100.0, 2) if net else 0.0)
 
 
-def _run_queue_plan(ctx: int, req: QueuePlanRequest) -> dict:
+def _run_queue_plan(ctx: int, req: QueuePlanRequest, want_full: bool = False) -> dict:
     """Shared core of the whole-queue plan: aggregate every queued order's demand and schedule it.
     Returns the plan_queue result, or {"empty": True} when the queue is empty. Used by both the
     queue-plan endpoint and the to-install checklist."""
@@ -394,6 +394,15 @@ def _run_queue_plan(ctx: int, req: QueuePlanRequest) -> dict:
     on_hand = _stock_for(ctx, targets) if req.use_stock else None
     res = plan_queue(targets, inp.mfg, inp.rx, inp.prices, inp.adjusted, inp.params, inp.names,
                      inp.pools, on_hand=on_hand)
+    # Progress measures against the FULL requirement, so it needs the same queue planned with no
+    # stock netted off. Computed HERE, off inputs already resolved, rather than in a second request
+    # that would repeat every DB read in prepare_plan_inputs — the graph, the names, the blueprints,
+    # the contract index, the slot pool — to answer a question this plan is already holding.
+    # With no stock enabled the two plans are identical, so that case costs nothing at all.
+    if want_full:
+        res["_full"] = (res if not on_hand else
+                        plan_queue(targets, inp.mfg, inp.rx, inp.prices, inp.adjusted, inp.params,
+                                   inp.names, inp.pools, on_hand=None))
     # The recipe tree per ordered product. plan_queue returns aggregated demand — correct for cost
     # and scheduling, but it has no structure, and the UI derives its build STAGES from the tree.
     # Without this the status view (the main screen) had no pipeline at all and lumped every job
@@ -429,9 +438,17 @@ def queue_plan(req: QueuePlanRequest, ctx: int = Depends(require_context)):
     was fetching it separately, which planned the entire queue a second time to answer a question the
     plan it already had could answer.
     """
-    res = _run_queue_plan(ctx, req)
+    res = _run_queue_plan(ctx, req, want_full=True)
+    full = res.pop("_full", None)
     if not res.get("empty"):
         res["install"] = install_block(ctx, res)
+        # Progress rides along for the same reason the checklist does: it is a view OF THIS PLAN.
+        # The page fetching it separately meant planning the whole queue a second time.
+        try:
+            from app.industry.progress import queue_progress
+            res["progress"] = queue_progress(ctx, res=full)
+        except Exception:
+            res["progress"] = None       # never let the progress overlay take the plan down with it
     return res
 
 
