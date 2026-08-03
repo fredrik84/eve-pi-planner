@@ -1517,7 +1517,7 @@ function _rxAccountSettingsFormHtml() {
       <label class="pp-label" for="rxAcctCollateral">Your export collateral %</label>
       <input type="number" id="rxAcctCollateral" class="pp-num-input" style="width:100px" step="0.1">
 
-      <label class="pp-label" for="rxAcctSystem">Your reaction system</label>
+      <label class="pp-label" for="rxAcctSystem" title="Drives job-installation fees for reactions AND manufacturing — the Industry planner reads this same value">Your reaction / build system</label>
       <input type="text" id="rxAcctSystem" class="pp-num-input" style="width:120px" placeholder="e.g. Jita">
 
       <label class="pp-label" for="rxAcctTax">Your facility tax %</label>
@@ -1525,7 +1525,7 @@ function _rxAccountSettingsFormHtml() {
 
       ${_rxTimeEffFieldHtml('rxAcct', 'Your time efficiency %')}
     </div>
-    <div class="pp-card-hint" style="margin-top:2px">Reaction system + facility tax estimate real job-installation fees. Leave the system blank to skip this — nothing changes until it's set. Time efficiency % shortens every duration/runtime estimate — check your real in-game job duration against the formula's raw time and enter the % difference (we can't auto-detect this, ESI only reports a job's facility once it's already installed).</div>
+    <div class="pp-card-hint" style="margin-top:2px">System + facility tax estimate real job-installation fees, for <b>manufacturing as well as reactions</b> — the Industry planner reads this same setting, and quotes fees light without it. Leave the system blank to skip this — nothing changes until it's set. Time efficiency % shortens every duration/runtime estimate — check your real in-game job duration against the formula's raw time and enter the % difference (we can't auto-detect this, ESI only reports a job's facility once it's already installed).</div>
     <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:8px">
       <button onclick="_saveRxAccountSettings()">Save my rate</button>
       <button class="pp-cancel-btn" onclick="_resetRxAccountSettings()">Use default instead</button>
@@ -2231,7 +2231,9 @@ function _rxMarketManagerHtml(d) {
   const unreadable = structs.length && !d.connected;
   const warn = unreadable
     ? `<div class="pp-warn" style="margin:0 0 8px">⚠ Your structure market${structs.length > 1 ? 's' : ''} can't be read — no connected character has market access, so pricing falls back to Jita (in Reactions <b>and</b> Manufacturing). Connect a market character to fix it.</div>`
-    : (d.connected ? '' : `<div class="pp-card-hint" style="margin:0 0 8px">Structure search needs a connected market character (public regions work without one).</div>`);
+    : (d.connected ? '' : `<div class="pp-card-hint" style="margin:0 0 8px">Structure search needs a `
+        + `connected market character (public regions work without one).`
+        + ` <button class="ind-link-btn" onclick="connectReactionsMarket()">Connect one</button></div>`);
   return inheritNote + warn
     + `<div class="rx-mkt-sec"><div class="rx-mkt-sec-h">Price against — in priority order</div>`
     + `<div class="rx-mkt-list">${_rxPricingRowsHtml(pricing, editable)}</div>`
@@ -2298,9 +2300,16 @@ async function _rxMarketSearch() {
   catch (e) { box.innerHTML = '<div class="pp-card-hint">Search failed.</div>'; return; }
   const results = [...(d.structures || []), ...(d.regions || [])];
   if (!results.length) {
-    box.innerHTML = `<div class="pp-card-hint">${!d.connected
-      ? 'No matches. Structure search needs a connected market character — connect one in step 1.'
-      : 'No matches.'}</div>`;
+    // "connect one in step 1" was written for the Reactions onboarding gate and is nonsense
+    // anywhere else — this same panel is mounted in Settings, and the Manufacturing gate sends
+    // people straight here to add a build structure. Someone who has only ever used PI holds no
+    // market-scope character, so this empty result IS their dead end unless the way out is on it.
+    box.innerHTML = !d.connected
+      ? `<div class="pp-card-hint">No matches. Searching for a <b>structure</b> needs a character with
+           market access — public regions work without one.</div>`
+        + `<div class="settings-connect-row"><button class="pp-connect-btn" onclick="connectReactionsMarket()">`
+        + `Connect a market character</button></div>`
+      : '<div class="pp-card-hint">No matches.</div>';
     return;
   }
   box.innerHTML = results.map(m => {

@@ -909,6 +909,28 @@ and no session: the page must be incapable of showing account data even by accid
 - Public reads are cached 60s (`indshare:<id>`); a public page whose every render costs two plans
   would otherwise be an amplification lever.
 
+## Industry: first use (there is no wizard — deliberately, for now)
+
+Reactions blocks its tab behind a real onboarding gate (`_rxApplyGate`, three numbered steps, a
+persisted `onboarded` flag). **Industry has no equivalent**, and the stand-in it used to have was
+worse than nothing: `indApplyGate` blocked the whole tab until a build structure was configured,
+which is more than the planner needs — the Facility dropdown ships generic presets (`IND_FACILITIES`:
+NPC station, T1/T2 ME/TE rig structures) that cost a build perfectly well — and the way out could
+**dead-end**, because adding a real structure needs structure search, which needs a character with
+the market scope, which a player who has only ever used PI does not have. So it is now a dismissible
+notice over a working tab (`localStorage.indFacilityNudge`).
+What first use still assumes, in case a wizard gets built later:
+- **Pricing needs nothing** — `resolve_market_data` falls back to Jita.
+- **Blueprints are optional** (ME 0/TE 0 + a "connect a character" reminder), assets are opt-in.
+- **The build system comes from REACTIONS settings** (`account_build_defaults` → `reaction_system`),
+  so a Reactions-less account quotes job fees light by the system cost index — warned by
+  `_indCostBasisWarn`, which must link to **Markets & Logistics** (where that field lives); it used
+  to open Setup & slots, which cannot set it.
+- **Slots need the skills scope AND Mass Production / Mass Reactions trained** (`_eligibility`).
+  With neither trained the pools are 0, `schedule` starts nothing and the plan renders a 0h
+  makespan with an empty checklist — not a crash, but it looks like one. The excluded characters
+  and the reason are listed in Setup → Job slots.
+
 ## Industry: running a build, not just planning one
 
 Four things builders asked for after living with the tool. Each is behind its own flag

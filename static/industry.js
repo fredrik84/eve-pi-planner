@@ -28,9 +28,9 @@ async function onIndustryTabOpen() {
   // defaults until they happen to touch a knob, which is not a step anyone knows to take: the share
   // quietly quoted 14d 4h off an un-bonused, buy-everything plan against an 8d 8h build.
   if (!_indHasSavedSettings) _indSaveSettings();
-  const hasStructure = Object.keys(_indFacilityMap).some(k => k.startsWith('s:'));
-  indApplyGate(hasStructure);
-  if (!hasStructure) return;
+  // No structure of your own is a nudge now, not a stop — the generic facility presets are enough
+  // to plan with, so the tab loads either way.
+  indApplyGate(Object.keys(_indFacilityMap).some(k => k.startsWith('s:')));
 
   indLoadSetupSummary();     // fire-and-forget: independent of the build status below
   indLoadLifetime();
@@ -349,26 +349,40 @@ function _indStatusHeadline(d) {
     + `<div id="indSourcing" class="ind-sourcing"></div>`;
 }
 
+// A NUDGE, not a wall. This used to block the whole tab until a real build structure was
+// configured, which demanded more than the planner actually needs — the Facility dropdown ships
+// generic presets (NPC station, T1/T2 rig structures) that cost a build perfectly well — and the
+// way out could dead-end: adding a real structure needs structure search, which needs a connected
+// market character, which someone who has only ever used PI does not have. Locking a working tool
+// behind a prerequisite the user may be unable to satisfy is the worst of both.
 function indApplyGate(hasStructure) {
   const gate = document.getElementById('indGate');
   const content = document.getElementById('indContent');
   if (!gate || !content) return;
-  if (hasStructure) { gate.style.display = 'none'; content.style.display = ''; return; }
-  content.style.display = 'none';
+  content.style.display = '';
+  if (hasStructure || localStorage.getItem('indFacilityNudge') === 'off') {
+    gate.style.display = 'none';
+    return;
+  }
   gate.style.display = '';
-  gate.innerHTML = `<div class="pp-card"><div class="pp-card-title">Set up manufacturing</div><div class="ind-body">
-    <p class="pp-sub">To plan builds, add at least one <b>structure you manufacture in</b> — its rigs set your material &amp; time efficiency, which every cost and time figure depends on.</p>
-    <ol class="ind-gate-steps">
-      <li>Open <b>Settings → Markets &amp; Logistics</b>.</li>
-      <li>Search and add your structure, then hit <b>🔨</b> and turn on <b>Manufacture here</b> with its rig tiers.</li>
-      <li>Come back and continue — that's it.</li>
-    </ol>
+  gate.innerHTML = `<div class="pp-card ind-fac-nudge"><div class="ind-body">
+    <p class="pp-sub"><b>Costing against a generic facility.</b> Rigs change the materials and time of
+      every job, so pick the closest match in the plan form's <b>Facility</b> list — or add the
+      structure you really build in and get its exact ME &amp; TE.</p>
     <div class="ind-gate-actions">
-      <button class="ind-primary-btn" onclick="openSettingsModal('markets')">Open Markets &amp; Logistics</button>
-      <button class="ind-secondary-btn" onclick="onIndustryTabOpen()">I've added it — continue</button>
+      <button class="ind-primary-btn" onclick="openSettingsModal('markets')">Add my structure</button>
+      <button class="ind-secondary-btn" onclick="indDismissFacilityNudge()">Not now</button>
     </div>
-    <p class="pp-sub ind-gate-note">Only reactions? You don't need this — Manufacturing just stays gated until you build something.</p>
+    <p class="pp-sub ind-gate-note">In <b>Markets &amp; Logistics</b>: search it, hit <b>🔨</b>, turn on
+      <b>Manufacture here</b> with its rig tiers. Needs a character with market access — there's a
+      button for that on the same panel.</p>
   </div></div>`;
+}
+
+function indDismissFacilityNudge() {
+  localStorage.setItem('indFacilityNudge', 'off');
+  const gate = document.getElementById('indGate');
+  if (gate) gate.style.display = 'none';
 }
 
 // Lifetime manufacturing ledger tiles — shown ONLY once the account has actually completed a
@@ -1785,10 +1799,14 @@ function _indSkillBasisWarn(d) {
 function _indCostBasisWarn(d) {
   const cb = d.cost_basis;
   if (!cb || cb.system_id) return '';
+  // Points at Markets & Logistics, which is where the system actually lives (the planner reads the
+  // account's reaction system + facility tax \u2014 account_build_defaults). It used to open Setup &
+  // slots, which holds blueprints, stock and job slots and no way whatsoever to set a system: an
+  // instruction that leads somewhere it can't be carried out is worse than no instruction.
   return `<p class="pp-warn">Job fees exclude the system cost index \u2014 no build system is set, so `
     + `only the 4% SCC${cb.facility_tax_pct ? ' and facility tax' : ''} are counted. `
-    + `<button class="ind-link-btn" onclick="indOpenSetup()">Set your build system</button> for a `
-    + `true install cost.</p>`;
+    + `<button class="ind-link-btn" onclick="openSettingsModal('markets')">Set your build system</button>`
+    + ` (Markets &amp; Logistics \u2192 <i>your reaction/build system</i>) for a true install cost.</p>`;
 }
 
 function _indRenderPlan(d, title) {

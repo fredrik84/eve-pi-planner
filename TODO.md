@@ -110,6 +110,22 @@ Open follow-ups, neither blocking:
   consistent with how every other progress signal works here, but it means a mark can't say "done
   for THIS order" — worth revisiting only if someone actually hits it.
 
+## 2d. Industry first-use onboarding — PARTIAL, 2026-08-03
+
+Prompted by the first two external testers, who may never have set up Reactions. Reactions has a
+proper onboarding gate; Industry does not. Three sharp edges were fixed (see CLAUDE.md "Industry:
+first use"): the tab no longer blocks on a configured build structure, the structure-search empty
+state carries the Connect-a-market-character button instead of pointing at a "step 1" that only
+exists in the Reactions gate, and the missing-build-system warning links to the panel that can
+actually set it.
+
+**Still open — the wizard itself.** Mirror `_rxApplyGate` with three steps: (1) where you build —
+the Facility dropdown inline, presets included, structure as the optional upgrade; (2) characters &
+slots — detected slots plus the excluded-character reasons `_slot_pool` already returns; (3) build
+system, optional and folded. Persist an `industry_onboarded` flag the way `pp_markets.onboarded`
+works. Deliberately deferred: the three fixes remove the ways a tester can get *stuck*, and a wizard
+built before watching real first-runs would be guessing at which steps they actually need.
+
 ## 3. Hand-built / custom colony layouts
 
 Hybrid-colony detection shipped. Broader tracking of player-designed layouts (colonies that don't
