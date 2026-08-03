@@ -627,6 +627,14 @@ def force_build_above(req: ForceAboveRequest, ctx: int = Depends(require_context
             "rounds": rounds, "cut": cut}
 
 
+@router.get("/api/industry/queue-plan/packing")
+def queue_plan_packing_get(ctx: int = Depends(require_context)):
+    """Same diagnostic, openable in a browser tab. A GET plans with the ACCOUNT's saved build
+    options (`apply_account_build_options` fills them in), which is what the page uses anyway — and
+    it means reading this needs no console, which is where the first attempt at it fell over."""
+    return queue_plan_packing(None, ctx)
+
+
 @router.post("/api/industry/queue-plan/packing")
 def queue_plan_packing(req: QueuePlanRequest | None = None, ctx: int = Depends(require_context)):
     """Why every job in the queue is the length it is — one row per type.
