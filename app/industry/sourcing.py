@@ -59,6 +59,26 @@ def ensure_sourcing_table():
         con.close()
 
 
+def enable_bound_source(context_id: int, key: str) -> None:
+    """Pointing a build at a container also lets the PLANNER spend that container.
+
+    Without this the page contradicted itself: the checklist said you had the materials while the
+    shopping list below it still told you to buy them, because "this build pulls from that box" and
+    "the planner may count that box" were two separate switches and only one of them had been
+    thrown. Naming the box you're hauling into is a clear enough statement of intent for both.
+
+    **Binding enables; unbinding never disables.** Enabling is additive and one tick to undo in
+    Setup, whereas auto-disabling could switch off a source the user turned on themselves, or that
+    another order still draws from — and quietly ignoring stock you do have is the direction that
+    makes the planner build too much, then quietly *counting* stock you don't is the direction that
+    makes it build too little. Neither is worth guessing at on the user's behalf.
+    """
+    if not key:
+        return
+    from app.industry.assets import set_sources
+    set_sources(context_id, [key], True)
+
+
 def _manual(context_id: int, order_id: int) -> dict[int, float]:
     ensure_sourcing_table()
     con = get_connection()

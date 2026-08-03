@@ -2500,8 +2500,9 @@ async function indRenderSourcing() {
       </div>
       <p class="ind-src-help">How far along the gathering is for this one build. Anything in the
         container you pick counts automatically — rescan your assets after hauling and this moves on
-        its own; for stock we can't see, paste it from the EVE client. The full priced list of what
-        to buy is the shopping list below.</p>
+        its own; for stock we can't see, paste it from the EVE client. Picking a container also lets
+        the planner spend it, so the shopping list below stops asking you to buy what's already in
+        there (untick it under Setup → stock if you'd rather it didn't).</p>
       <div id="indSrcPaste" class="ind-paste" style="display:none">
         <p class="ind-src-help">Select the materials in your hangar or container (Ctrl+A), copy
           (Ctrl+C) and paste below. This <b>replaces</b> what you've noted so far — it's a snapshot of
@@ -2559,7 +2560,10 @@ async function indApplySourcePaste() {
 async function indBindSource(key) {
   try { await apiSend('PATCH', `/api/industry/orders/${_indSourcingOpen}`, { source_key: key }); }
   catch (e) { toastError(e, 'Could not save'); return; }
-  indRenderSourcing();
+  await indRenderSourcing();
+  // Binding switches the container on as planner stock, so the queue plan and the shopping list
+  // below are now out of date by exactly the contents of that box.
+  if (key) indRefreshStatus();
 }
 
 async function indSetSourced(typeId, qty) {

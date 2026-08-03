@@ -172,6 +172,10 @@ def create_order(req: OrderCreate, ctx: int = Depends(require_context)):
              (req.source_key or "").strip()[:80]),
         ).fetchone()[0]
         con.commit()
+        # Naming the box this build pulls from also lets the planner count it — see
+        # sourcing.enable_bound_source for why those aren't two separate decisions.
+        from app.industry.sourcing import enable_bound_source
+        enable_bound_source(ctx, (req.source_key or "").strip())
         return _order_row(con, oid, ctx)
     finally:
         con.close()
@@ -258,6 +262,9 @@ def update_order(order_id: int, req: OrderUpdate, ctx: int = Depends(require_con
             # The customer's link is cached; an edit to the quote has to reach it now, not in a minute.
             from app.industry.shares import invalidate_order_shares
             invalidate_order_shares(order_id)
+        if req.source_key:
+            from app.industry.sourcing import enable_bound_source
+            enable_bound_source(ctx, req.source_key.strip())
         return _order_row(con, order_id, ctx)
     finally:
         con.close()

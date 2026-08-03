@@ -971,6 +971,14 @@ notes rather than merging — it's a snapshot, so a material since consumed has 
 and merging would make every past paste a floor the count could never fall below. Items the build
 doesn't need are ignored, not flagged (people select the whole hangar). The per-material control
 that remains is `clear`, for correcting one line.
+**Binding a source also ENABLES it** (`enable_bound_source`, called from both `create_order` and
+`update_order`). "This build pulls from that box" and "the planner may count that box" used to be
+two switches with only one thrown, so the checklist said you had the materials while the shopping
+list beside it still told you to buy them — naming the box you're hauling into settles both.
+Binding enables; **unbinding never disables**, because auto-disabling could switch off a source the
+user turned on themselves or that another order still draws from, and the two failure directions
+(ignoring stock you have → build too much; counting stock you don't → build too little, shopping
+list short) are both too costly to guess at. One tick in Setup undoes it.
 **Both are chosen while planning the build**, not only afterwards: the plan modal carries a
 "Materials from" picker (the scanned sources, or *paste what I already have*) and `OrderCreate`
 takes `source_key`, because which box a build belongs to is decided at the same moment as what to

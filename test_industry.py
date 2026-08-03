@@ -1658,6 +1658,7 @@ def main():
     test_sourcing_notes_belong_to_one_order()
     test_pasting_a_hangar_sets_what_is_sourced()
     test_the_sourcing_list_is_not_a_second_shopping_list()
+    test_binding_a_container_lets_the_planner_spend_it()
     test_a_scan_retires_stock_that_is_no_longer_there()
     test_corp_hangars_and_containers_split_like_personal_ones()
     print(f"\nAll {_passed} checks passed.")
@@ -1861,6 +1862,44 @@ def test_the_sourcing_list_is_not_a_second_shopping_list():
     check("and a row isn't done until the whole requirement is", row["done"] is False)
     check("and the full requirement is what it measures against, not what's left after stock",
           "use_stock=False" in inspect.getsource(S._order_requirement))
+
+
+def test_binding_a_container_lets_the_planner_spend_it():
+    """"This build pulls from that box" and "the planner may count that box" were two switches, and
+    only one got thrown — so the checklist said you had the materials while the shopping list beside
+    it still told you to buy them. Binding throws both. Unbinding throws neither back: enabling is
+    additive and one tick to undo, while auto-disabling could switch off a source the user turned on
+    themselves or that another order still draws from."""
+    print("test_binding_a_container_lets_the_planner_spend_it")
+    import inspect
+    from app.industry import sourcing as S
+    from app.industry import assets as A
+    from app.industry import orders as O
+
+    con, restore = _patch_db(A)
+    try:
+        A.ensure_asset_tables()
+        A._store(1, {"cont:9": {"kind": "container", "name": "Archon build can", "parent": ""}},
+                 {"cont:9": {200: 400.0}}, {"cont:9"}, scope="char:5")
+        check("a freshly scanned container is off until it's chosen",
+              A.owned_quantities(1) == {})
+
+        S.enable_bound_source(1, "cont:9")
+        check("binding a build to it lets the planner spend it",
+              A.owned_quantities(1) == {200: 400.0})
+
+        # Unbinding is the caller passing an empty key. It must be a no-op, not a switch-off.
+        S.enable_bound_source(1, "")
+        check("unbinding leaves the source alone", A.owned_quantities(1) == {200: 400.0})
+        check("a key that doesn't exist is harmless", S.enable_bound_source(1, "cont:404") is None)
+    finally:
+        restore()
+
+    # Both ways an order can name a box go through the same call — queueing it from the plan modal
+    # with a source picked, and binding one afterwards from the checklist.
+    for fn in (O.create_order, O.update_order):
+        check(f"{fn.__name__} enables the bound source",
+              "enable_bound_source" in inspect.getsource(fn))
 
 
 def test_a_scan_retires_stock_that_is_no_longer_there():
