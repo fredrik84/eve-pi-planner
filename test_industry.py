@@ -2048,6 +2048,11 @@ def test_jobs_are_aligned_to_the_plans_pace_not_stretched_past_it():
     # everything going; seconds of it are not worth a slot. So the allowance has a floor.
     from app.industry.schedule import _ALIGN_FLOOR
     check("with a floor generous enough to actually buy a slot", _ALIGN_FLOOR >= 15 * 60)
+    # A job holding ONE run can only grow by taking a second, which is a 100% increase by
+    # definition. An allowance below that is arithmetically incapable of merging such a job, however
+    # much slack it has — measured on a real Archon, 5% left 232 jobs where 100% leaves 159.
+    from app.industry.schedule import _PACE_OVERSHOOT
+    check("and an allowance that can actually reach the next whole run", _PACE_OVERSHOOT >= 1.0)
     # The bound that actually matters commercially: a builder quoting 8 days against a competitor's
     # 14 cannot spend hours of delivery to save logins. Overshoot is capped by a slice of the whole
     # build, so it can never be the difference between winning a contract and losing it.

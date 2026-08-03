@@ -873,9 +873,18 @@ constraint everything here fits inside, so a job runs as long as it may.
 **The question is never "how much longer is this job", it is "does this move the delivery".** Runs
 are indivisible and rarely divide the pace evenly — four 2h 33m runs against a 5h 05m pace is 1.996
 runs a job, and refusing that by 26 seconds leaves four jobs holding four slots — so overshoot is
-allowed, bounded twice and floored once: `_PACE_OVERSHOOT` (5% of the job's own window, so no single
-job balloons) and `_DELIVERY_OVERSHOOT` (2% of the whole build's makespan, so it can never cost a
-meaningful slice of the quote), with `_ALIGN_FLOOR` (20 minutes) under the first — a percentage of a
+allowed. **`_PACE_OVERSHOOT` is 100%, and it has to be**: a job holding ONE run can only grow by
+taking a second, which is a doubling by definition, so every smaller allowance tried here (5%, a
+flat 20 minutes, 2% of the makespan) was arithmetically incapable of merging a 1-run job however
+much slack it had — an 18-slot component stayed at 18 slots through four attempts at tuning it. It
+is not the safety bound. `_DELIVERY_OVERSHOOT` (2% of the whole build's makespan) is, and it is what
+protects the quote; `_ALIGN_FLOOR` (20 minutes) sits under the first for short windows.
+**Measured on a real 206-hour Archon: 232 jobs → 159, a third of the slots back, for 32 minutes
+(+0.26%).** It plateaus at 100% — past that nothing more merges, because what remains is bounded by
+runs available, blueprint copy caps and genuine dependencies.
+A **deliverable is exempt from the overshoot entirely** (`no_consumer`): it may still be packed to
+its own natural length, but the allowance buys slots by finishing components later and a finished
+product has no later to give — a percentage of a
 short window is seconds, and nobody is served by that. A builder does not log in for fun: they log
 in to set everything going at once, and whether the jobs then land ten or twenty minutes apart is
 immaterial. What matters is that the slots are working while they are away and that the ones they

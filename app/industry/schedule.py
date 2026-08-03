@@ -247,7 +247,17 @@ def _balanced(total: int, n: int) -> list[int]:
 # that matters commercially: a builder quoting 8 days against a competitor's 14 cannot spend hours
 # to save logins, while on a 14-day build a few minutes is nothing. Small enough that it can never
 # be the difference between winning a contract and losing it, in either direction.
-_PACE_OVERSHOOT = 0.05          # of the job's own window
+# A job holding ONE run can only grow by taking a second, and that is a 100% increase by
+# definition. Every smaller allowance tried here — 5%, then a flat 20 minutes, then 2% of the
+# makespan — was arithmetically incapable of merging a 1-run job however much slack it had, which
+# is why an 18-slot component stayed at 18 slots through four attempts. So the per-job allowance is
+# "you may double, if that is what reaching the next whole run costs". It is not the safety bound;
+# _DELIVERY_OVERSHOOT below is, and it is the one that protects the quote.
+#
+# Measured on a real 206-hour Archon: 232 jobs -> 159 (a third of the slots back) for 32 minutes,
+# +0.26%. It plateaus there — past 100% nothing more merges, because what is left is bounded by
+# runs available, blueprint copy caps and genuine dependencies.
+_PACE_OVERSHOOT = 1.0           # of the job's own window
 _DELIVERY_OVERSHOOT = 0.02      # of the whole build's makespan
 # ...and a floor under the first, because a percentage of a short window is seconds and nobody is
 # served by that. A builder does not log in for fun: they log in to set everything going at once,
@@ -283,7 +293,7 @@ def _packed_jobs(p: dict) -> int:
     # comes to, it may not cost a meaningful slice of the DELIVERY.
     slack = min(max(_ALIGN_FLOOR, window * _PACE_OVERSHOOT),
                 (p.get("makespan") or window) * _DELIVERY_OVERSHOOT)
-    allowed = window + slack
+    allowed = window if p.get("no_consumer") else window + slack
     if per_job < p["cap"] and (per_job + 1) * p["per_run"] <= allowed + 1e-9:
         per_job += 1
     return max(1, min(p["n_wide"], math.ceil(p["runs"] / per_job)))
@@ -442,6 +452,11 @@ def build_tasks(agg: dict, mfg: dict, rx: dict, params: BuildParams,
             cons = [(latest_start[c], c) for c in (consumers.get(tid) or ()) if c in latest_start]
             deadline, binder = min(cons) if cons else (finish[tid], None)
             p["needed_by"] = binder
+            # Nothing is waiting on this, so it IS the delivery. It may still be packed to its own
+            # natural length (an uneven split), but it may not be stretched a minute past that: the
+            # overshoot allowance buys slots by finishing components later, and a finished product
+            # has no later to give.
+            p["no_consumer"] = not cons
             # Bounded by the plan's existing longest job, so compaction can close a gap but never
             # open a new one. `hard_window` keeps the dependency deadline on the side: the pace may
             # be overshot by a hair to reach a whole run, a consumer's start may not.
