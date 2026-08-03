@@ -1659,6 +1659,7 @@ def main():
     test_pasting_a_hangar_sets_what_is_sourced()
     test_the_sourcing_list_is_not_a_second_shopping_list()
     test_binding_a_container_lets_the_planner_spend_it()
+    test_first_run_setup_shows_once_and_never_to_an_established_user()
     test_a_scan_retires_stock_that_is_no_longer_there()
     test_corp_hangars_and_containers_split_like_personal_ones()
     print(f"\nAll {_passed} checks passed.")
@@ -1900,6 +1901,42 @@ def test_binding_a_container_lets_the_planner_spend_it():
     for fn in (O.create_order, O.update_order):
         check(f"{fn.__name__} enables the bound source",
               "enable_bound_source" in inspect.getsource(fn))
+
+
+def test_first_run_setup_shows_once_and_never_to_an_established_user():
+    """The setup screen is remembered per ACCOUNT (a browser flag would re-ask on every device and
+    forget on a cache clear), and the migration that adds it must not hand a first-run screen to
+    someone who has been using the tab for months — anyone with saved build options has obviously
+    been here before. That backfill has to survive a pod restart, which it does only because an
+    un-onboarded account owns no settings row at all."""
+    print("test_first_run_setup_shows_once_and_never_to_an_established_user")
+    from app.industry import settings as S
+    con, restore = _patch_db(S)
+    try:
+        S.ensure_industry_settings_table.__wrapped__()
+
+        # An established user: settings saved, flag never set (i.e. rows predating this feature).
+        con.execute("INSERT INTO pp_industry_settings (context_id, margin_pct, updated_at) "
+                    "VALUES (1, 10.0, 123.0)")
+        # A user part-way through setup owns no row at all — that's what makes the backfill safe.
+        con.commit()
+        S.ensure_industry_settings_table.__wrapped__()      # re-run, as a restart would
+        check("an established account is treated as already set up",
+              S.get_settings(1)["onboarded"] is True)
+        check("an account that has never saved anything is not",
+              S.get_settings(2)["onboarded"] is False)
+
+        # Completing setup is its own write, so a debounced save of the plan form can't set it...
+        S.set_blacklist(2, [34])
+        check("another write doesn't quietly complete setup for you",
+              S.get_settings(2)["onboarded"] is False)
+        # ...and completing it doesn't disturb what else is stored.
+        S.complete_onboarding(2)
+        check("completing setup sticks", S.get_settings(2)["onboarded"] is True)
+        check("and leaves the rest of the account's settings alone",
+              S.get_settings(2)["never_build_ids"] == [34])
+    finally:
+        restore()
 
 
 def test_a_scan_retires_stock_that_is_no_longer_there():

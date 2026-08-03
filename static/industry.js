@@ -27,7 +27,9 @@ async function onIndustryTabOpen() {
   // it, a plan run on the user's behalf (a customer's share link, the checklist) keeps using library
   // defaults until they happen to touch a knob, which is not a step anyone knows to take: the share
   // quietly quoted 14d 4h off an un-bonused, buy-everything plan against an 8d 8h build.
-  if (!_indHasSavedSettings) _indSaveSettings();
+  // ...but NOT before the first-run wizard has been through: its Save writes these, and a row
+  // written earlier would make the account look established to the onboarded-backfill migration.
+  if (!_indHasSavedSettings && _indOnboarded) _indSaveSettings();
   // No structure of your own is a nudge now, not a stop — the generic facility presets are enough
   // to plan with, so the tab loads either way.
   indApplyGate(Object.keys(_indFacilityMap).some(k => k.startsWith('s:')));
@@ -179,16 +181,21 @@ let _indSaveSettingsTimer = null;
 // writes the browser's own state back over the account's — including when the read that should have
 // corrected it failed.
 let _indRestoringSettings = false;
+// The account's build options as the settings endpoint wants them. Shared with the wizard's save,
+// which needs the same body but awaited rather than debounced.
+function _indSettingsBody() {
+  const sel = document.getElementById('indFacility');
+  return { ..._indFacilityBonus(), prioritize_speed: _indPrioSpeed(),
+           marginal_pct: _indMarginalPct(), force_build: _indForceBuild(),
+           margin_pct: _indMarginPct(), facility_id: sel ? sel.value : '' };
+}
+
 function _indSaveSettings() {
   if (_indRestoringSettings) return;
   clearTimeout(_indSaveSettingsTimer);
+  // best-effort: the plan on screen already has these values
   _indSaveSettingsTimer = setTimeout(() => {
-    const sel = document.getElementById('indFacility');
-    const f = _indFacilityBonus();
-    apiSend('PUT', '/api/industry/settings',
-            { ...f, prioritize_speed: _indPrioSpeed(), marginal_pct: _indMarginalPct(),
-              force_build: _indForceBuild(), margin_pct: _indMarginPct(),
-              facility_id: sel ? sel.value : '' }).catch(() => {});          // best-effort: the plan on screen already has these values
+    apiSend('PUT', '/api/industry/settings', _indSettingsBody()).catch(() => {});
   }, 600);
 }
 
@@ -359,6 +366,9 @@ function indApplyGate(hasStructure) {
   const gate = document.getElementById('indGate');
   const content = document.getElementById('indContent');
   if (!gate || !content) return;
+  // First run gets the setup screen instead. Unlike the old gate this one can always be completed
+  // without leaving the page, which is the property that makes blocking acceptable at all.
+  if (!_indOnboarded) { _indRenderWizard(hasStructure); return; }
   content.style.display = '';
   if (hasStructure || localStorage.getItem('indFacilityNudge') === 'off') {
     gate.style.display = 'none';
@@ -383,6 +393,114 @@ function indDismissFacilityNudge() {
   localStorage.setItem('indFacilityNudge', 'off');
   const gate = document.getElementById('indGate');
   if (gate) gate.style.display = 'none';
+}
+
+// ── First-run setup ─────────────────────────────────────────────────────────────────────────
+// Mirrors the Reactions onboarding gate (_rxApplyGate): a blocking screen with numbered steps and
+// a Save & continue, remembered per ACCOUNT so it shows once rather than once per browser.
+//
+// One rule shapes the whole thing: **every step must be completable right here.** The old gate
+// demanded a build structure, which needs structure search, which needs a market character — a
+// chain a PI-only player can't finish, on a screen they couldn't get past. So the required step
+// (where you build) is a dropdown that already has a valid answer, the rest are optional, and
+// Save & continue is never disabled. Nothing here can strand anyone.
+let _indOnboarded = true;      // assume yes until the settings load says otherwise — a failed
+                               // fetch must not throw a setup screen at an established user
+
+function _indRenderWizard(hasStructure) {
+  const gate = document.getElementById('indGate');
+  const content = document.getElementById('indContent');
+  if (!gate || !content) return;
+  content.style.display = 'none';
+  gate.style.display = '';
+
+  // The same facility options the plan form uses — built by indPopulateFacility, which has already
+  // run. Presets are real answers, not placeholders: an NPC station or a T1-rigged structure costs
+  // a build correctly, so nobody needs a structure configured to get a true plan.
+  const cur = (document.getElementById('indFacility') || {}).value || '';
+  const opts = Object.keys(_indFacilityMap).map(k =>
+    `<option value="${_esc(k)}"${k === cur ? ' selected' : ''}>`
+    + `${_esc(_indFacilityLabel[k] || k)}${k.startsWith('s:') ? ' — your structure' : ''}</option>`).join('');
+
+  gate.innerHTML =
+    `<section class="pp-card ind-wizard">`
+    + `<div class="pp-card-title">Set up manufacturing`
+    + `<span class="pp-card-hint">— one required step, two worth doing. All of it changeable later.</span></div>`
+    + `<div class="ind-body">`
+
+    // Step 1 — where you build (required, and already answered)
+    + `<div class="rx-onboard-step"><div class="rx-onboard-step-h"><span class="rx-onboard-num">1</span>Where you build</div>`
+    + `<div class="rx-onboard-step-b">`
+    + `<select id="indWizFacility" class="ind-wiz-sel">${opts}</select>`
+    + `<div class="pp-card-hint" style="margin-top:6px">A structure's rigs change the materials and`
+    + ` time of every job, so this drives every cost and duration. Pick the closest match — or add`
+    + ` the structure you really build in for its exact ME &amp; TE.`
+    + (hasStructure ? '' : ` <button class="ind-link-btn" onclick="openSettingsModal('markets')">Add my structure</button>`)
+    + `</div></div></div>`
+
+    // Step 2 — characters and the slots they contribute (informational, never blocking)
+    + `<div class="rx-onboard-step"><div class="rx-onboard-step-h"><span class="rx-onboard-num">2</span>`
+    + `Characters &amp; slots<span class="rx-onboard-opt">optional</span></div>`
+    + `<div class="rx-onboard-step-b"><div id="indWizSlots"><div class="pp-loading"><span class="pp-spinner"></span> Reading your slots…</div></div>`
+    + `<div id="indWizSlotWarn"></div>`
+    + `<div class="settings-connect-row" style="margin-top:8px">`
+    + `<button class="pp-connect-btn" onclick="indWizConnect()">Connect a character</button>`
+    + `<span class="pp-card-hint">Brings its real slots, skills and blueprints. Without one we plan`
+    + ` against un-researched blueprints and default skills.</span></div></div></div>`
+
+    // Step 3 — the build system, folded (this is the one people skip, and skipping it is fine)
+    + `<div class="rx-onboard-step"><details><summary class="rx-onboard-step-h" style="cursor:pointer">`
+    + `<span class="rx-onboard-num">3</span>Build system &amp; fees<span class="rx-onboard-opt">optional</span></summary>`
+    + `<div class="rx-onboard-step-b">`
+    + `<div class="pp-card-hint" style="margin-bottom:8px">Job installation fees are the system's cost`
+    + ` index × the job's value, plus tax. Leave this blank and we count only the 4% SCC surcharge, so`
+    + ` fees come out light — everything else in the plan is unaffected.</div>`
+    + ((typeof _rxAccountSettingsFormHtml === 'function') ? _rxAccountSettingsFormHtml()
+        : `<button class="ind-bp-btn" onclick="openSettingsModal('markets')">Open Markets &amp; Logistics</button>`)
+    + `</div></details></div>`
+
+    + `<div class="rx-onboard-foot">`
+    + `<button class="rx-onboard-connect" onclick="indWizSave()">Save &amp; continue</button>`
+    + `<span id="indWizMsg" class="pp-card-hint"></span></div>`
+    + `</div></section>`;
+
+  if (typeof _loadRxAccountSettings === 'function') _loadRxAccountSettings();
+  _indWizLoadSlots();
+}
+
+async function _indWizLoadSlots() {
+  const d = await indLoadSlots('indWizSlots');
+  const warn = document.getElementById('indWizSlotWarn');
+  if (!warn) return;
+  // Zero capacity isn't an error and mustn't block — but it does make the plan render a 0h build
+  // with an empty "do this now", which looks broken unless it's called out here.
+  warn.innerHTML = (d && (d.manufacturing_slots || d.reaction_slots)) ? ''
+    : `<p class="pp-warn" style="margin:8px 0 0">No usable job slots yet, so plans will show nothing`
+      + ` to start. A character needs Mass Production (or Mass Reactions) trained and its skills`
+      + ` connected here. You can carry on and set this up later.</p>`;
+}
+
+function indWizConnect() {
+  indEsiConnect(() => { _indWizLoadSlots(); indPopulateFacility(); });
+}
+
+async function indWizSave() {
+  const msg = document.getElementById('indWizMsg');
+  const wiz = document.getElementById('indWizFacility');
+  const sel = document.getElementById('indFacility');
+  // The wizard's dropdown is a second view of the plan form's, so hand the choice over to the
+  // control that already owns saving and restoring it rather than inventing a parallel path.
+  if (wiz && sel && wiz.value) {
+    sel.value = wiz.value;
+    try { localStorage.setItem('indFacility', wiz.value); } catch (e) {}
+  }
+  if (msg) msg.textContent = 'Saving…';
+  try {
+    await apiSend('PUT', '/api/industry/settings', _indSettingsBody());
+    await apiSend('POST', '/api/industry/onboarding/complete');
+  } catch (e) { if (msg) msg.textContent = String(e.message || e); return; }
+  _indOnboarded = true;
+  onIndustryTabOpen();     // re-run: set up now, so the gate lifts and the tab loads for real
 }
 
 // Lifetime manufacturing ledger tiles — shown ONLY once the account has actually completed a
@@ -649,11 +767,20 @@ async function indRefreshBlueprints() {
 }
 
 // ── Slot pool ───────────────────────────────────────────────────────────────────────────────
-async function indLoadSlots() {
-  const el = document.getElementById('indSlots');
-  if (!el) return;
+// Mounted in two places — Setup & slots, and step 2 of the first-run wizard — so the markup lives
+// in one function. Returns the loaded pool so a caller can react to it (the wizard warns when the
+// account has no usable slots at all).
+async function indLoadSlots(target) {
+  const el = document.getElementById(target || 'indSlots');
+  if (!el) return null;
   try {
     const d = await api('/api/industry/slots');
+    el.innerHTML = _indSlotsHtml(d);
+    return d;
+  } catch (e) { el.innerHTML = ''; return null; }
+}
+
+function _indSlotsHtml(d) {
     const chips = (d.characters || []).map(c =>
       `<span class="ind-slot-chip" title="${_esc(c.character_name)}">${_esc(c.character_name)}: `
       + (c.manufacturing_slots ? `${c.manufacturing_free}/${c.manufacturing_slots}<span class="ind-slot-sub">mfg</span>` : '<span class="ind-slot-sub">no mfg</span>')
@@ -661,7 +788,7 @@ async function indLoadSlots() {
       + (c.reaction_slots ? `${c.reaction_free}/${c.reaction_slots}<span class="ind-slot-sub">rx</span>` : '<span class="ind-slot-sub">no rx</span>')
       + `</span>`
     ).join('');
-    el.innerHTML = `<div class="ind-slot-tot"><b>${d.manufacturing_free}/${d.manufacturing_slots}</b> manufacturing · `
+    return `<div class="ind-slot-tot"><b>${d.manufacturing_free}/${d.manufacturing_slots}</b> manufacturing · `
       + `<b>${d.reaction_free}/${d.reaction_slots}</b> reaction slots free `
       + `<button class="ind-bp-btn" onclick="indRefreshJobs()" title="Re-read running jobs from ESI">Refresh jobs</button></div>`
       + `<div class="ind-slot-chips">${chips || '<span class="pp-sub">No characters — add one to get real slot counts.</span>'}</div>`
@@ -672,7 +799,6 @@ async function indLoadSlots() {
           + `<div class="ind-slot-excl-why">Characters with no slot skills trained (or no skill data) are left out — `
           + `their single free slot would inflate every estimate and send you jobs they can't run.</div></div>`
         : '');
-  } catch (e) { el.innerHTML = ''; }
 }
 
 // ── Product search / picker ─────────────────────────────────────────────────────────────────
@@ -867,6 +993,10 @@ async function _indApplySavedSettings() {
   try {
     d = (await api('/api/industry/settings')).settings || null;
   } catch (e) { return; }
+  // Read BEFORE the early return below: an account that has never saved a setting is exactly the
+  // one that hasn't been through setup, so bailing first would hide the wizard from the only
+  // people who need it.
+  _indOnboarded = !!(d && d.onboarded);
   _indHasSavedSettings = !!(d && d.updated_at);
   if (!d || !d.updated_at) return;
   const set = (id, val) => { const el = document.getElementById(id); if (el && val != null) el.value = val; };

@@ -909,17 +909,35 @@ and no session: the page must be incapable of showing account data even by accid
 - Public reads are cached 60s (`indshare:<id>`); a public page whose every render costs two plans
   would otherwise be an amplification lever.
 
-## Industry: first use (there is no wizard — deliberately, for now)
+## Industry: first use
 
-Reactions blocks its tab behind a real onboarding gate (`_rxApplyGate`, three numbered steps, a
-persisted `onboarded` flag). **Industry has no equivalent**, and the stand-in it used to have was
-worse than nothing: `indApplyGate` blocked the whole tab until a build structure was configured,
-which is more than the planner needs — the Facility dropdown ships generic presets (`IND_FACILITIES`:
-NPC station, T1/T2 ME/TE rig structures) that cost a build perfectly well — and the way out could
-**dead-end**, because adding a real structure needs structure search, which needs a character with
-the market scope, which a player who has only ever used PI does not have. So it is now a dismissible
-notice over a working tab (`localStorage.indFacilityNudge`).
-What first use still assumes, in case a wizard gets built later:
+A first-run setup screen (`_indRenderWizard`), mirroring the Reactions gate (`_rxApplyGate`) down to
+its step chrome — two onboarding screens that look unrelated read as two different products. Three
+steps: **where you build** (required, the Facility dropdown inline), **characters & slots**
+(optional, the real `/api/industry/slots` readout plus its excluded-character reasons), **build
+system & fees** (optional, folded, reusing `_rxAccountSettingsFormHtml`).
+
+**Every step is completable without leaving the page, and Save & continue is never disabled** —
+that property is the entire reason a blocking screen is acceptable here. The version this replaced
+blocked the tab until a build *structure* was configured, which is more than the planner needs (the
+presets in `IND_FACILITIES` — NPC station, T1/T2 ME/TE rigs — cost a build correctly) and could
+**dead-end**: adding a real structure needs structure search → a market-scope character → which a
+player who has only ever used PI does not have. Zero job slots is likewise a warning, not a barrier.
+Once past it, an account with no structure of its own gets a dismissible notice instead
+(`localStorage.indFacilityNudge`).
+
+**The flag is per ACCOUNT** (`pp_industry_settings.onboarded`), written by its own endpoint
+(`POST /api/industry/onboarding/complete`) — not a field on the settings PUT, which is a debounced
+save of the plan form and must not be able to set or reset it. A browser flag would re-ask on every
+new device and forget on a cache clear.
+Two halves of one rule keep the migration honest: `ensure_industry_settings_table` backfills
+`onboarded = 1` for any row that already has `updated_at` (saved build options ⇒ this account has
+plainly used the tab), and the frontend does **not** seed settings for an un-onboarded account
+(`if (!_indHasSavedSettings && _indOnboarded)`). Without that guard the backfill would mark someone
+part-way through setup as established on the next pod restart. `_indOnboarded` also defaults to
+**true** so a failed settings fetch shows an established user their tab, never a setup screen.
+
+What first use still assumes:
 - **Pricing needs nothing** — `resolve_market_data` falls back to Jita.
 - **Blueprints are optional** (ME 0/TE 0 + a "connect a character" reminder), assets are opt-in.
 - **The build system comes from REACTIONS settings** (`account_build_defaults` → `reaction_system`),

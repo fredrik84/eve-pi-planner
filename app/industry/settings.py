@@ -49,7 +49,18 @@ def ensure_industry_settings_table():
                     # The account's "always buy these" list, a JSON id array. Stored here rather
                     # than per order because it's a standing way of operating, not a decision about
                     # one build — an order overrides it with force_build_ids.
-                    "never_build_ids TEXT")
+                    "never_build_ids TEXT",
+                    # Has the first-run setup screen been completed? Mirrors pp_markets.onboarded.
+                    # Per ACCOUNT, not per browser: "I've set this up" is a fact about the account,
+                    # and a localStorage flag would re-ask on every new device and forget on a
+                    # cache clear.
+                    "onboarded INTEGER")
+        # Anyone who already has saved build options has plainly used this tab before, so they must
+        # not be handed a first-run screen. Safe to re-run on a restart precisely because a user who
+        # has NOT been through setup owns no settings row: the frontend only seeds one once the
+        # wizard is done (see the guard on _indSaveSettings in onIndustryTabOpen).
+        con.execute("UPDATE pp_industry_settings SET onboarded = 1 "
+                    "WHERE onboarded IS NULL AND updated_at IS NOT NULL")
         con.commit()
     finally:
         con.close()
@@ -77,6 +88,7 @@ def get_settings(context_id: int) -> dict:
     finally:
         con.close()
     d["never_build_ids"] = _parse_ids(d.get("never_build_ids"))
+    d["onboarded"] = bool(d.get("onboarded"))
     return d
 
 
@@ -169,6 +181,27 @@ def write_industry_settings(req: IndustrySettings, ctx: int = Depends(require_co
     finally:
         con.close()
     return {"ok": True}
+
+
+@router.post("/api/industry/onboarding/complete")
+def complete_onboarding(ctx: int = Depends(require_context)):
+    """Mark the first-run setup screen done, so it never blocks the tab again.
+
+    Written on its own rather than as a field on the settings PUT for the same reason the blacklist
+    is: that PUT is a debounced save of the plan form, and a knob moving must not be able to reset
+    (or set) whether the account has been through setup.
+    """
+    ensure_industry_settings_table()
+    con = get_connection()
+    try:
+        con.execute(
+            "INSERT INTO pp_industry_settings (context_id, onboarded, updated_at) VALUES (?,1,?) "
+            "ON CONFLICT(context_id) DO UPDATE SET onboarded=1, updated_at=excluded.updated_at",
+            (ctx, time.time()))
+        con.commit()
+    finally:
+        con.close()
+    return {"onboarded": True}
 
 
 # ── Always-buy blacklist ──────────────────────────────────────────────────────────────────────

@@ -110,21 +110,26 @@ Open follow-ups, neither blocking:
   consistent with how every other progress signal works here, but it means a mark can't say "done
   for THIS order" — worth revisiting only if someone actually hits it.
 
-## 2d. Industry first-use onboarding — PARTIAL, 2026-08-03
+## 2d. Industry first-use onboarding — SHIPPED 2026-08-03
 
-Prompted by the first two external testers, who may never have set up Reactions. Reactions has a
-proper onboarding gate; Industry does not. Three sharp edges were fixed (see CLAUDE.md "Industry:
-first use"): the tab no longer blocks on a configured build structure, the structure-search empty
+Prompted by the first two external testers, who may never have set up Reactions. Three sharp edges
+fixed first: the tab no longer blocks on a configured build structure, the structure-search empty
 state carries the Connect-a-market-character button instead of pointing at a "step 1" that only
 exists in the Reactions gate, and the missing-build-system warning links to the panel that can
 actually set it.
 
-**Still open — the wizard itself.** Mirror `_rxApplyGate` with three steps: (1) where you build —
-the Facility dropdown inline, presets included, structure as the optional upgrade; (2) characters &
-slots — detected slots plus the excluded-character reasons `_slot_pool` already returns; (3) build
-system, optional and folded. Persist an `industry_onboarded` flag the way `pp_markets.onboarded`
-works. Deliberately deferred: the three fixes remove the ways a tester can get *stuck*, and a wizard
-built before watching real first-runs would be guessing at which steps they actually need.
+Then the setup screen itself (`_indRenderWizard`), mirroring `_rxApplyGate`: where you build /
+characters & slots / build system, with `pp_industry_settings.onboarded` per account. Design notes
+in CLAUDE.md under "Industry: first use". The rule to preserve if this is touched again: **every
+step must be completable without leaving the page and Save & continue is never disabled** — the
+screen it replaced could strand a PI-only player behind a prerequisite chain they had no way to
+finish.
+
+Worth knowing: existing accounts are backfilled to `onboarded = 1` from having saved build options,
+which stays correct across restarts ONLY because the frontend refuses to seed a settings row for an
+account that hasn't finished setup. Those two live in different files and are one rule.
+
+Not done: no browser test covers the wizard (same gap the rest of the frontend has, see item 6).
 
 ## 3. Hand-built / custom colony layouts
 
