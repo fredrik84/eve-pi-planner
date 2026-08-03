@@ -893,6 +893,25 @@ rounding up a half-hour component with half an hour of room doubled it and moved
 downstream; the second because a builder quoting 8 days against a competitor's 14 cannot spend hours
 to save logins, while on a 14-day build a few minutes is nothing.
 
+**An allowance grows a job; only a target lands it** (`_align_cohorts`). The rules above decide how
+long a job MAY take before it holds something up. That is not the same question as when it should
+LAND, and a builder logs in at landings — which is why the allowance above, correct as it is, left
+the same builder with Hypnagogic Neurolink Enhancer at 10h11m beside Sulfuric Acid at 7h39m and
+Oxy-Organic Solvents at 5h05m. The `+1 run` step can only add ONE run past a window and Oxy-Organic
+needed three; sweeping `_DELIVERY_OVERSHOOT` from 2% to 100% on the real Archon moved **not one
+job**, and widening it far enough to reach grew a *different* job to 15h18m, past the pace the wave
+was landing at. So: every type starting at the same moment is a cohort, and each is packed up to the
+longest job that cohort already has. Measured on the real Archon: **159 jobs → 143**, with Sulfuric
+Acid, Oxy-Organic and Hypnagogic all landing together at 10h12m, for +1.7% makespan — and that
++1.7% is measured against the assumption that the builder is present the instant every job lands. At
+a 12h login cadence the aligned plan delivers in 220.1h against the old plan's 232.1h.
+**The bound is enforced in `plan_queue`, on the SCHEDULED makespan**, which drops the alignment
+wholesale if it cost more than `_DELIVERY_OVERSHOOT`. Don't move that check back into the packer:
+per type it rejects the merge it exists for (Oxy-Organic's window is 2h33m against a 4h08m
+allowance), and per plan the packer's own model has no slot contention — it read 211h where the
+schedule delivered 210.46h and gave back that merge for nothing. A deliverable is exempt, for the
+same reason it is exempt from the overshoot.
+
 **Compaction fills up to the pace the plan already runs at; it never sets a new one.** No job is
 ever made longer than the longest job the plan already had (`pace_cap`). Slack says a component
 *could* take the whole critical path — taking it is a different question, and the answer is no:

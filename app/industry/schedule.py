@@ -279,6 +279,10 @@ def _packed_jobs(p: dict) -> int:
     Work in RUNS PER JOB, never job count: runs are indivisible, so the question is how many of them
     fit the window, capped by what one blueprint copy may carry.
     """
+    # `_align_cohorts` has already decided this one, having seen what it runs BESIDE — which is the
+    # one thing this function cannot see from a single type's window.
+    if p.get("aligned_jobs"):
+        return p["aligned_jobs"]
     window = max(p.get("window", 0.0), p["wide_dur"])
     if window <= 0 or p["per_run"] <= 0:
         return p["n_wide"]
@@ -304,10 +308,64 @@ def _packed_duration(p: dict) -> float:
     return math.ceil(p["runs"] / _packed_jobs(p)) * p["per_run"]
 
 
+def _align_cohorts(plan: dict, start: dict) -> None:
+    """Lift every job to the longest one already running BESIDE it, so a wave lands in one go.
+
+    A window tells a type how long it may take before it holds something up. It cannot tell it when
+    to LAND, and those are different questions — which is the whole of why tuning the allowance
+    never worked. Measured on the real Archon: sweeping `_DELIVERY_OVERSHOOT` from 2% to 100% moved
+    nothing whatsoever, because a job could only ever take ONE run past its window and Oxy-Organic
+    Solvents needed three. Widening it enough to close that gap grew a *different* job to 15h 18m,
+    past the 10h 12m the wave was landing at — more slack, worse alignment. An allowance grows a
+    job; only a target lands it.
+
+    So the target is the longest job the cohort already has, and the cohort is everything that
+    starts at the same moment. No new pace is set — same principle as `pace_cap`, scoped to what a
+    builder is actually looking at when they log in rather than to the whole plan. A type that
+    already finishes at the cohort's pace is untouched; one finishing early is given the runs to
+    land with it, in fewer slots.
+
+    A **deliverable is exempt** for the same reason it is exempt from the overshoot: the alignment
+    buys slots by finishing components later, and a finished product has no later to give.
+
+    This can genuinely overrun a consumer's start, so it is NOT free — but the bound that decides
+    whether it was worth it lives in `plan_queue`, measured on the scheduled makespan, because that
+    is the number quoted. Enforcing it here instead was tried twice and was wrong both times:
+
+    - **Per type it cannot work at all.** Oxy-Organic's own window is 2h 33m against a 4h 08m
+      allowance, so any per-type bound rejects the 10h 12m job — which is the merge this exists for,
+      and which costs the delivered plan nothing.
+    - **Per plan, on THIS model, it is too pessimistic.** Re-timing here ignores slot contention (by
+      design — see the note above the backward pass, it is the safe direction for slack). On the
+      real Archon the model read 211h where the schedule delivered 210.46h, and the give-back
+      spent that phantom difference on exactly the Oxy-Organic merge, for four fewer slots and not
+      one minute of delivery.
+
+    So: align, then let the caller check the real number and drop the whole thing if it did not pay.
+    """
+    cohorts: dict[float, list[int]] = defaultdict(list)
+    for tid, p in plan.items():
+        if not p.get("no_consumer") and p["per_run"] > 0:
+            cohorts[round(start.get(tid, 0.0), 3)].append(tid)
+
+    want: dict[int, int] = {}
+    for members in cohorts.values():
+        target = max(_packed_duration(plan[t]) for t in members)
+        for tid in members:
+            p = plan[tid]
+            per_job = max(1, min(p["cap"], int(target / p["per_run"] + 1e-9)))
+            n = max(1, min(p["n_wide"], math.ceil(p["runs"] / per_job)))
+            if n < _packed_jobs(p):
+                want[tid] = n
+    for tid, n in want.items():
+        plan[tid]["aligned_jobs"] = n
+
+
 def build_tasks(agg: dict, mfg: dict, rx: dict, params: BuildParams,
                 pools: dict[str, int] | None = None,
                 depths: dict[int, int] | None = None,
-                deps: dict[int, set[int]] | None = None) -> tuple[list[Task], dict]:
+                deps: dict[int, set[int]] | None = None,
+                align: bool = True) -> tuple[list[Task], dict]:
     """One or more Task instances per built type. A type's runs are split so they can run in
     PARALLEL across the pool's slots — up to `pool_size` concurrent jobs — while still respecting
     the per-BPC run cap (`max_runs`). This is what lets a big reaction (thousands of runs, no BPC
@@ -469,6 +527,12 @@ def build_tasks(agg: dict, mfg: dict, rx: dict, params: BuildParams,
             dur = _packed_duration(p)
             latest_start[tid] = deadline - dur
 
+        # Last, because it needs every type's natural length decided first: what each one runs
+        # beside is only knowable once they have all been packed. `align=False` is how the caller
+        # asks for the same plan without it, to price what it cost.
+        if align:
+            _align_cohorts(plan, start)
+
     for tid, p in plan.items():
         n = _packed_jobs(p)
         why = {
@@ -481,7 +545,8 @@ def build_tasks(agg: dict, mfg: dict, rx: dict, params: BuildParams,
             "own_h": round(p["wide_dur"] / 3600.0, 2),
             # What stopped it being longer. "consumer" means something needs it sooner than the
             # plan's pace, which is the answer that surprises people.
-            "bound_by": ("consumer" if p.get("hard_window") is not None
+            "bound_by": ("aligned" if p.get("aligned_jobs")
+                         else "consumer" if p.get("hard_window") is not None
                          and p.get("hard_window", 0.0) < p.get("pace_cap", 0.0) - 1e-9
                          else "pace" if p.get("pace_cap") else "own"),
             "needed_by": p.get("needed_by"),
@@ -660,7 +725,22 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
                                  depths=_depths([t for t, _ in targets], mfg, rx), deps=deps)
     crit = _critical_priority(agg, deps, mfg, rx, params)
     ranks = order_ranks(targets, mfg, rx)
-    sched = schedule(tasks, by_type, deps, pools, _fifo_priority(crit, ranks))
+    prio = _fifo_priority(crit, ranks)
+    sched = schedule(tasks, by_type, deps, pools, prio)
+
+    # Did aligning the wave cost the delivery more than it is allowed to? This is the ONLY place
+    # that can answer it, because it is the only place holding the scheduled makespan — the number
+    # actually quoted. `_align_cohorts` deliberately does not try: its own model has no slot
+    # contention, reads the plan as longer than it is, and gave back the merges it exists to make.
+    # Two extra passes over prepared data, and only when the alignment changed something.
+    if any(t.why and t.why.get("bound_by") == "aligned" for t in tasks):
+        plain_tasks, plain_by = build_tasks(agg, mfg, rx, params, pools,
+                                            depths=_depths([t for t, _ in targets], mfg, rx),
+                                            deps=deps, align=False)
+        plain = schedule(plain_tasks, plain_by, deps, pools, prio)
+        if sched["makespan_hours"] > plain["makespan_hours"] * (1 + _DELIVERY_OVERSHOOT):
+            tasks, by_type, sched = plain_tasks, plain_by, plain
+
     for w in sched["waves"]:                       # enrich wave tasks with readable names
         for t in w["tasks"]:
             t["name"] = names.get(t["type_id"], str(t["type_id"]))

@@ -1658,6 +1658,7 @@ def main():
     test_progress_percent_is_weighted_by_job_time_not_run_count()
     test_jobs_are_aligned_to_the_plans_pace_not_stretched_past_it()
     test_slack_travels_down_a_chain_not_just_one_level()
+    test_a_job_is_lifted_to_land_with_what_runs_beside_it()
     test_a_deliverable_is_never_paced_against_the_rest_of_the_queue()
     test_a_job_never_carries_more_runs_than_the_blueprint_copy_has()
     test_an_owned_copy_only_covers_the_runs_it_has()
@@ -2109,6 +2110,51 @@ def test_slack_travels_down_a_chain_not_just_one_level():
           approx(schedule(wide, wide_by, deps, pools, prio)["makespan_hours"],
                  schedule(tasks, by_type, deps, pools, prio)["makespan_hours"], 0.02))
     check("and fewer slots held to do it", len(tasks) < len(wide))
+
+
+def test_a_job_is_lifted_to_land_with_what_runs_beside_it():
+    """A window says how long a job MAY take; it cannot say when to LAND, and a builder logs in at
+    landings. Reported off a real Archon: Hypnagogic Neurolink Enhancer at 10h 11m beside Sulfuric
+    Acid at 7h 39m and Oxy-Organic Solvents at 5h 05m — three trips to start work one could cover.
+
+    The shape that defeats the per-job allowance: `quick` is on the critical path, so its consumer
+    needs it almost immediately and its window stays at its own length. The allowance can only add
+    ONE run to that, which is why widening it (2% to 100%) moved nothing — `quick` needed two. Only
+    a target reaches the pace its cohort is already running at."""
+    print("test_a_job_is_lifted_to_land_with_what_runs_beside_it")
+    H = 3600.0
+    rx = {10: {"base_time": H, "output_qty": 1, "inputs": []}}
+    mfg = {1: {"base_time": H, "max_runs": 1, "output_qty": 1,
+               "inputs": [{"type_id": 20, "quantity": 1}, {"type_id": 21, "quantity": 1}]},
+           # Long, and fed by `quick` — this is what squeezes 10's deadline to nothing.
+           20: {"base_time": 20 * H, "max_runs": 1, "output_qty": 1,
+                "inputs": [{"type_id": 10, "quantity": 1}]},
+           21: {"base_time": H, "max_runs": 1, "output_qty": 1,
+                "inputs": [{"type_id": 11, "quantity": 1}]},
+           # Sets the cohort's pace at 3h and is pinned there by its copy's run cap, so it cannot
+           # drift while the thing beside it is being lifted onto it.
+           11: {"base_time": H, "max_runs": 3, "output_qty": 1, "inputs": []}}
+    agg = {1: {"build": True, "runs": 1, "activity": "manufacturing"},
+           20: {"build": True, "runs": 1, "activity": "manufacturing"},
+           21: {"build": True, "runs": 1, "activity": "manufacturing"},
+           10: {"build": True, "runs": 8, "activity": "reaction"},          # quick, 1h a run
+           11: {"build": True, "runs": 30, "activity": "manufacturing"}}
+    params = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, struct_time_mult=1.0)
+    pools = {"manufacturing": 10, "reaction": 10}
+    depths, deps = _depths([1], mfg, rx), _built_deps(agg, mfg, rx)
+
+    _t, plain = build_tasks(agg, mfg, rx, params, pools, depths=depths, deps=deps, align=False)
+    _t2, by = build_tasks(agg, mfg, rx, params, pools, depths=depths, deps=deps)
+
+    pace = max(t.duration for t in by[11])
+    check("the pace-setter is left alone", len(by[11]) == len(plain[11]))
+    check("the allowance alone could not reach it",
+          max(t.duration for t in plain[10]) < pace - 1e-6)
+    check("and the quick one is lifted to land with it",
+          approx(max(t.duration for t in by[10]), pace, 1e-6))
+    check("in fewer slots than it held before", len(by[10]) < len(plain[10]))
+    check("with none of its runs dropped", sum(t.runs for t in by[10]) == 8)
+    check("a deliverable is never lifted", len(by[1]) == len(plain[1]) == 1)
 
 
 def test_a_deliverable_is_never_paced_against_the_rest_of_the_queue():

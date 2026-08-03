@@ -217,23 +217,60 @@ nothing until wired.
 4. Cross-order alignment has to become explicit — today it works only because aggregation puts every
    order in one pace calculation.
 
-## 2g. Slot alignment — RESOLVED 2026-08-03, and how
+## 2g. Slot alignment — RESOLVED 2026-08-03 in two rounds
 
 Long thread with a capital builder. Jobs in one wave finished at 2h32m / 5h05m / 10h11m, so the
 builder had three separate moments to log in at, and a third of their slots sat idle in between.
 
-**The fix that worked: `_PACE_OVERSHOOT = 1.0`.** A job holding ONE run can only grow by taking a
+**Round 1 — `_PACE_OVERSHOOT = 1.0`.** A job holding ONE run can only grow by taking a
 second, which is a 100% increase *by definition* — so every smaller allowance tried first (5%, a flat
 20 minutes, 2% of the makespan) was arithmetically incapable of merging a 1-run job however much
 slack it had. Four rounds of tuning moved nothing and each null result got explained away as a
 dependency constraint instead of checked against the arithmetic. Measured on the real 206-hour
-Archon: **232 jobs → 159, +32 minutes (+0.26%)**. Plateaus at 100%; past that what remains is bounded
-by runs available, blueprint copy caps and real dependencies.
+Archon: **232 jobs → 159, +32 minutes (+0.26%)**.
 
-Guards that must stay: `_DELIVERY_OVERSHOOT` (2% of makespan) is the real bound and protects the
-quote; a **deliverable is exempt from overshoot entirely** (`no_consumer`) — the allowance buys slots
-by finishing components later and a finished product has no later to give. Flipping the constant
-without that exemption slowed a finished product, and the suite caught it.
+**It was called resolved here and was not.** The builder came back with the same complaint against
+the new plan — Hypnagogic Neurolink Enhancer 10h11m, Sulfuric Acid 7h39m, Oxy-Organic Solvents
+5h05m, still three logins. Sweeping `_DELIVERY_OVERSHOOT` from 2% to 100% on the real Archon moved
+**not one job**, which is what showed round 1 had found a real bug but not the mechanism: the +1-run
+step can only ever add ONE run past a type's window, and Oxy-Organic needed three. Widening the
+allowance until it could reach grew a *different* job to 15h18m, past the 10h12m the wave was
+landing at — more slack, worse alignment.
+
+**Round 2 — `_align_cohorts`, the missing idea being a TARGET.** A window says how long a job may
+take before it holds something up; it cannot say when to LAND, and a builder logs in at landings. So
+every type that starts at the same moment forms a cohort, and each one is packed up to the longest
+job the cohort already has — no new pace, same principle as `pace_cap`, scoped to what the builder
+is looking at when they log in. Measured on the real Archon: **159 jobs → 143, and Sulfuric Acid,
+Oxy-Organic Solvents and Hypnagogic all land together at 10h12m.** The 5h05m and 7h39m trips are
+gone.
+
+**The bound moved to where the quoted number is.** `_DELIVERY_OVERSHOOT` (2%) still governs, but
+`plan_queue` now enforces it on the SCHEDULED makespan and drops the alignment wholesale if it did
+not pay. Enforcing it inside the packer failed twice, both instructive:
+- *Per type* it cannot work — Oxy-Organic's own window is 2h33m against a 4h08m allowance, so any
+  per-type bound rejects the merge the feature exists for.
+- *Per plan on the packer's own model* it is too pessimistic: that model ignores slot contention (on
+  purpose), read 211h where the schedule delivered 210.46h, and spent the phantom difference giving
+  back exactly the Oxy-Organic merge — four fewer slots for zero minutes of delivery.
+
+Guards that must stay: a **deliverable is exempt** (`no_consumer`) — alignment buys slots by
+finishing components later and a finished product has no later to give; flipping `_PACE_OVERSHOOT`
+without that exemption slowed a finished product and the suite caught it. `pace_cap` is what stops
+alignment setting a new pace: packing to the plan's pace with no deadline at all gives 34 jobs and a
+**544h** makespan.
+
+**The makespan cost is 206.89h → 210.46h (+1.7%) and that number is measured against a fiction** —
+that the builder is at the keyboard the instant every job lands. Re-priced against a login cadence,
+the aligned plan wins outright, and by more the less often they log in:
+
+| | jobs | present instantly | every 6h | every 12h | every 24h |
+|---|---|---|---|---|---|
+| before | 159 | 206.1h / 5 logins | 220.1h | 232.1h | 280.1h |
+| aligned | 143 | 207.7h / 4 logins | **214.1h** | **220.1h** | **256.1h** |
+
+Worth keeping in view if the 2% bound is ever revisited: it is enforced against the instant-presence
+number, which is the one yardstick we know the builder does not live by.
 
 **How to measure this again** — the thing that finally ended the guessing. There is a diagnostic
 endpoint (`GET /api/industry/queue-plan/packing`, also POST) printing per type: runs, jobs, runs per
