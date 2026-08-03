@@ -925,6 +925,11 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
   border-radius: 8px; padding: 3px 12px; cursor: pointer; }
 .ind-marg-apply:hover:not(:disabled) { background: #3d3320; color: #fff; }
 .ind-marg-apply:disabled { opacity: .4; cursor: default; }
+/* Dragging the cut-off marks the chips it would take. The list IS the feedback — a counter over an
+   unchanged row of chips reads as a control wired to nothing. */
+.ind-marg-chip.ind-marg-in { border-color: var(--clr-green); background: #1b2a1e; color: #d7f0e0; }
+.ind-marg-chip.ind-marg-out { opacity: .4; }
+.ind-marg-chip.ind-marg-out:hover { opacity: 1; }
 .ind-forced-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
 .ind-forced-lbl { font-size: 11px; color: var(--clr-text-soft); }
 .ind-forced-chip { font-size: 11px; background: #1b2a1e; color: var(--clr-green); border: 1px solid #2c4a33;

@@ -1632,11 +1632,12 @@ function _indMarginalBar(d) {
     .sort((a, b) => b.marginal_saving - a.marginal_saving);
   if (!rows.length) return '';
   const total = rows.reduce((a, s) => a + s.marginal_saving, 0);
-  // Six is enough to decide from; beyond that the tail is small by construction (they're sorted by
-  // saving) and the shopping list is where you'd go to read the rest.
-  const show = rows.slice(0, 6);
+  // Every borderline component is listed, not a top-six: the slider selects across the whole list,
+  // and a control that says "builds 9 of 14" above six visible chips is asking to be misread.
+  const show = rows.slice(0, 24);
   const chips = show.map(s =>
-    `<button class="ind-marg-chip" onclick="indBuildAnyway(${s.type_id}, '${_esc(s.name).replace(/'/g, "\\'")}')"`
+    `<button class="ind-marg-chip" id="margchip-${s.type_id}" data-sav="${s.marginal_saving}"`
+    + ` onclick="indBuildAnyway(${s.type_id}, '${_esc(s.name).replace(/'/g, "\\'")}')"`
     // Say what it costs and what it buys, and stop there. An earlier version ended "which is your
     // call, not ours", which reads as the tool bracing for blame rather than helping you decide.
     + ` title="Build ${_esc(s.name)} yourself instead of buying it: saves ${fmtIsk(s.marginal_saving)}, costs you one more job">`
@@ -1650,17 +1651,24 @@ function _indMarginalBar(d) {
   // job worth 10m shouldn't have to click seven chips to say so.
   _indMargRows = rows.map(s => ({ type_id: s.type_id, name: s.name, saving: s.marginal_saving }));
   const max = Math.ceil(rows[0].marginal_saving);
+  // Where the slider was left last time, so a refresh doesn't silently move it back and change what
+  // the strip appears to be offering. Clamped, because the next build's savings are different
+  // numbers entirely. Restoring the POSITION applies nothing on its own — you still press the button.
+  let start = parseFloat(localStorage.getItem('indMargCut'));
+  if (!(start >= 0) || start > max) start = max;
   const bulk = (rows.length > 1 && max > 0)
     ? `<div class="ind-marg-bulk">`
       + `<label class="ind-src-meta">Build everything worth more than`
       + ` <input type="range" id="indMargCut" min="0" max="${max}" step="${Math.max(1, Math.round(max / 200))}"`
-      + ` value="${max}" oninput="indMargCutLabel()"></label>`
+      + ` value="${start}" oninput="indMargCutLabel()"></label>`
       + `<span id="indMargCutInfo" class="ind-marg-cutinfo"></span>`
       + `<button class="ind-marg-apply" onclick="indBuildAllAbove()">Build these</button></div>` : '';
 
   return `<div class="ind-marg-bar"><span class="ind-marg-lbl">Worth building instead?</span>`
     + `<span class="ind-src-meta">${rows.length} component${rows.length > 1 ? 's are' : ' is'} bought`
-    + ` because each saves little on its own — ${fmtIsk(total)} in total. Click one to build it.</span>`
+    + ` because each saves little on its own — ${fmtIsk(total)} in total. Click one to build it,`
+    + ` or take several at once below. Building some changes the shared batch, so a different set`
+    + ` can be borderline afterwards — that is the plan re-costing itself, not new work appearing.</span>`
     + `<div class="ind-marg-chips">${chips}${more}</div>${bulk}</div>`;
 }
 
@@ -1678,17 +1686,27 @@ function _indMargAbove() {
   return _indMargRows.filter(r => r.saving >= cut);
 }
 
-// Live feedback while dragging: what the cut-off means in components and ISK, before committing.
+// Live feedback while dragging — and the LIST is the feedback, not just a counter. Dragging marks
+// exactly which chips the button would take, so what you're about to accept is the thing you're
+// looking at. A number saying "builds 3 of 7" over an unchanged row of chips reads as a control
+// that isn't connected to anything.
 function indMargCutLabel() {
   const info = document.getElementById('indMargCutInfo');
   if (!info) return;
+  const cut = _indMargCut();
   const picked = _indMargAbove();
   const gain = picked.reduce((a, r) => a + r.saving, 0);
   info.textContent = picked.length
-    ? `${fmtIsk(_indMargCut())} — builds ${picked.length} of ${_indMargRows.length}, saving ${fmtIsk(gain)}`
-    : `${fmtIsk(_indMargCut())} — nothing that high`;
+    ? `${fmtIsk(cut)} — builds ${picked.length} of ${_indMargRows.length}, saving ${fmtIsk(gain)}`
+    : `${fmtIsk(cut)} — nothing that high`;
   const btn = document.querySelector('.ind-marg-apply');
   if (btn) btn.disabled = !picked.length;
+  document.querySelectorAll('.ind-marg-chip').forEach(el => {
+    const sav = parseFloat(el.getAttribute('data-sav'));
+    el.classList.toggle('ind-marg-in', isFinite(sav) && sav >= cut);
+    el.classList.toggle('ind-marg-out', isFinite(sav) && sav < cut);
+  });
+  try { localStorage.setItem('indMargCut', String(cut)); } catch (e) {}
 }
 
 async function indBuildAllAbove() {

@@ -798,7 +798,16 @@ produced. They cannot fight, because they act at different stages. (An absolute-
 threshold WOULD fight: the engine's rule is `max(pct × total, MIN_BUILD_SAVING_ISK)`, so on a 2.4b
 hull the 3% term is ~72M and an ISK floor set below that would change no decision at all — a control
 you can drag while nothing happens.) One or many, `_indForceBuildMany` sends **one** request and
-triggers **one** re-plan; seven chips must not mean seven plans of a batch each one changes. The shopping list keeps the
+triggers **one** re-plan; seven chips must not mean seven plans of a batch each one changes.
+Three things make the slider legible rather than mystifying: **the chips themselves mark up as you
+drag** (the list is the feedback — a "builds 3 of 7" counter over an unchanged row of chips reads as
+a control wired to nothing), **every borderline component is listed** rather than a top-six the
+selection would then exceed, and **the position is remembered** (`localStorage.indMargCut`, clamped
+to the current build's range) so a refresh doesn't silently change what the strip appears to offer.
+Restoring the position applies nothing by itself — the button is still a deliberate press.
+The strip also says out loud that **taking some changes which components are borderline afterwards**.
+That is the plan re-costing a batch the user just changed, but without saying so it looks like the
+tool inventing new work each time you accept its advice. The shopping list keeps the
 `low saving` badge and the "saves X if built" note as an *explanation* of why a row is there — one
 place to decide, one place to look things up, no second list.
 Where the override is stored depends on context (`indBuildAnyway`): with a queue it PATCHes the
