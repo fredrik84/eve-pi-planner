@@ -754,7 +754,19 @@ using each factory planet's stored `planet_type` + the character's `ccu`.
 cost engine would build: the marginal-saving threshold (the slider) and the speed cap. Both are
 judgements about what's *worth a job*, which is the user's call — so every "low saving" shopping-list
 row reports `marginal_saving` (the ISK building that batch would have saved, negative when an
-unowned blueprint copy makes building dearer) and offers a **Build it** button.
+unowned blueprint copy makes building dearer).
+**The decision lives in `_indMarginalBar`, above the plan, and nowhere else.** It used to be a
+*Build it* button on the shopping-list row, which meant: in the QUEUED view the list is collapsed
+*and* was rendered without `allowForce`, so once a build was queued the user could neither see what
+building would save nor act on it — the override existed only in the preview modal, before the
+build was real. The strip lists only the borderline components (positive saving, biggest first, six
+then "+N more"), states the total at stake, and each chip is the action. The shopping list keeps the
+`low saving` badge and the "saves X if built" note as an *explanation* of why a row is there — one
+place to decide, one place to look things up, no second list.
+Where the override is stored depends on context (`indBuildAnyway`): with a queue it PATCHes the
+**first** order's `force_build_ids` — the queue unions them across orders, so one order carries it
+for the whole batch, and that order chip's `⚒` tag is how you take it back — while the preview keeps
+it in the session map until the build is queued.
 `BuildParams.force_build_ids` / `BuildOptions.force_build_ids` defeat **only those two shortcuts** —
 a component the cost engine says is outright cheaper to buy is still bought, whatever the user
 clicks. Overrides persist on the order (`pp_industry_orders.force_build_ids`, a JSON id list) and

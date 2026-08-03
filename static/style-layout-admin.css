@@ -904,6 +904,17 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-shop-force { font-size: 10px; background: #1e3a5f; color: var(--clr-accent); border: 1px solid #2d5a8a;
   border-radius: 8px; padding: 1px 7px; cursor: pointer; }
 .ind-shop-force:hover { background: #254a78; }
+/* The borderline components: bought only because each saves too little to be worth a job. That is a
+   judgement about the user's time, so it gets a visible strip above the plan rather than a button
+   buried in a collapsed, stage-grouped shopping list. */
+.ind-marg-bar { border: 1px solid #4a3f2c; border-left: 3px solid #d8b46a; border-radius: 8px;
+  background: #1a1710; padding: 9px 12px; margin: 0 0 12px; }
+.ind-marg-lbl { color: #d8b46a; font-weight: 600; font-size: 13px; margin-right: 8px; }
+.ind-marg-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; align-items: center; }
+.ind-marg-chip { font-size: 12px; background: #241f16; color: #eadfc4; border: 1px solid #4a3f2c;
+  border-radius: 10px; padding: 3px 10px; cursor: pointer; }
+.ind-marg-chip:hover { background: #33291a; color: #fff; border-color: #6b5a3c; }
+.ind-marg-save { color: var(--clr-green); font-variant-numeric: tabular-nums; }
 .ind-forced-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
 .ind-forced-lbl { font-size: 11px; color: var(--clr-text-soft); }
 .ind-forced-chip { font-size: 11px; background: #1b2a1e; color: var(--clr-green); border: 1px solid #2c4a33;

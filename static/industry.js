@@ -1453,9 +1453,12 @@ function _indStageModel(tiersData) {
   return { cols, stageOf };
 }
 
-function _indShopRowHtml(s, allowForce) {
+function _indShopRowHtml(s) {
   // "Low saving" is a verdict; on its own it asks the user to trust it. Say what building this one
   // would actually have saved (or cost) and let them overrule it per material.
+  // Explains why this row is on the list. The ACTION lives in the decision strip above the plan
+  // (_indMarginalBar) and only there — this list is collapsed by default and stage-grouped, which
+  // is a fine place to look something up and a terrible place to hide a decision.
   let marginal = '';
   if (s.bought_marginal) {
     const sv = s.marginal_saving;
@@ -1464,9 +1467,7 @@ function _indShopRowHtml(s, allowForce) {
       : `Building this batch yourself would cost ${fmtIsk(-sv)} MORE than buying it`;
     marginal = ` <span class="ind-marginal-badge" title="${_esc(why)}">low saving</span>`
       + (sv != null ? ` <span class="ind-shop-note">${sv > 0 ? `saves ${fmtIsk(sv)} if built`
-                                                             : `${fmtIsk(-sv)} dearer to build`}</span>` : '')
-      + (allowForce ? ` <button class="ind-shop-force" onclick="indForceBuildType(${s.type_id}, '${_esc(s.name).replace(/'/g, "\\'")}')"`
-      + ` title="Build this component in the plan anyway">Build it</button>` : '');
+                                                             : `${fmtIsk(-sv)} dearer to build`}</span>` : '');
   }
   // A blacklisted material is on the list because of a standing rule, not because building lost on
   // cost — without saying so the plan just looks like it got the make-or-buy call wrong.
@@ -1511,6 +1512,50 @@ function _indBlacklistChipsHtml() {
     + `<span class="ind-src-meta">An order set to build one of these anyway still builds it.</span></div>`;
 }
 
+// ── The borderline components, and the decision about them ──────────────────────────────────
+// The engine buys anything whose saving is too small to be worth a job. That's a judgement about
+// the user's time, so it's theirs to overrule — but the evidence for overruling it (what building
+// each one would actually save) sat inside the shopping list, which is collapsed by default and
+// grouped by stage, and in the queued view carried no button at all. A decision nobody can see is
+// not a decision they get to make.
+//
+// So it lives here instead: one strip, above the plan, listing ONLY the borderline items. Not a
+// second copy of the shopping list — that list keeps the "low saving" badge as an explanation of
+// why a row is there, and nothing else. One place to decide, one place to look things up.
+function _indMarginalBar(d) {
+  const rows = (d.shopping_list || [])
+    .filter(s => s.bought_marginal && (s.marginal_saving || 0) > 0)
+    .sort((a, b) => b.marginal_saving - a.marginal_saving);
+  if (!rows.length) return '';
+  const total = rows.reduce((a, s) => a + s.marginal_saving, 0);
+  // Six is enough to decide from; beyond that the tail is small by construction (they're sorted by
+  // saving) and the shopping list is where you'd go to read the rest.
+  const show = rows.slice(0, 6);
+  const chips = show.map(s =>
+    `<button class="ind-marg-chip" onclick="indBuildAnyway(${s.type_id}, '${_esc(s.name).replace(/'/g, "\\'")}')"`
+    + ` title="Build ${_esc(s.name)} instead of buying it — the plan says it only saves ${fmtIsk(s.marginal_saving)}, which is your call, not ours">`
+    + `${_esc(s.name)} <span class="ind-marg-save">+${fmtIsk(s.marginal_saving)}</span></button>`).join('');
+  const more = rows.length > show.length
+    ? `<button class="ind-link-btn" onclick="indOpenShoppingList()">+${rows.length - show.length} more in the shopping list</button>` : '';
+  return `<div class="ind-marg-bar"><span class="ind-marg-lbl">Worth building instead?</span>`
+    + `<span class="ind-src-meta">${rows.length} component${rows.length > 1 ? 's are' : ' is'} bought`
+    + ` because each saves little on its own — ${fmtIsk(total)} in total. Click one to build it.</span>`
+    + `<div class="ind-marg-chips">${chips}${more}</div></div>`;
+}
+
+// Overrule the buy-it shortcut for one component. Where that override is STORED depends on whether
+// there's a queue yet: a queued build keeps it on the order (the queue unions force_build_ids
+// across orders, so one order carries it for the whole batch — and the ⚒ tag on that order chip is
+// how you take it back), while the preview keeps it in the session map until the build is queued.
+async function indBuildAnyway(typeId, name) {
+  if (!_indStatusVisible() || !(_indOrders || []).length) { indForceBuildType(typeId, name); return; }
+  const order = _indOrders[0];
+  const ids = [...new Set([...(order.force_build_ids || []), typeId])];
+  try { await apiSend('PATCH', `/api/industry/orders/${order.id}`, { force_build_ids: ids }); }
+  catch (e) { toastError(e, 'Could not save'); return; }
+  indRefreshStatus();     // building it changes the batch every other decision was weighed against
+}
+
 // The components the user overruled, with a way back — once forced they vanish from the shopping
 // list (they're built now), so without this the override would be invisible and unrepeatable.
 function _indForcedChipsHtml() {
@@ -1542,7 +1587,7 @@ function _indShoppingSections(d, model, allowForce) {
     sections += `<div class="ind-shop-stage" id="ind-shop-stage-${col.t}">`
       + `<div class="ind-shop-stage-hd"><span>For ${_esc(col.shopLabel || col.label)} — ${rows.length} item${rows.length > 1 ? 's' : ''} · ${fmtIsk(stageCost)}</span>`
       + `<button class="ind-copy-btn ind-copy-sm" onclick="indCopyMultibuy(${col.t})">Copy this stage</button></div>`
-      + `<table class="ind-table"><thead><tr><th>Material</th><th class="ind-num">Qty</th><th>Source</th><th class="ind-num">Cost</th></tr></thead><tbody>${rows.map(r => _indShopRowHtml(r, allowForce)).join('')}</tbody></table></div>`;
+      + `<table class="ind-table"><thead><tr><th>Material</th><th class="ind-num">Qty</th><th>Source</th><th class="ind-num">Cost</th></tr></thead><tbody>${rows.map(_indShopRowHtml).join('')}</tbody></table></div>`;
   });
   // Anything the stage model didn't place (defensive — keeps the list complete no matter what).
   const placed = new Set(model.cols.flatMap(c => c.buys.map(e => e.type_id)));
@@ -1552,7 +1597,7 @@ function _indShoppingSections(d, model, allowForce) {
     sections += `<div class="ind-shop-stage" id="ind-shop-stage-other">`
       + `<div class="ind-shop-stage-hd"><span title="Not linked to a build stage — please report this">Not tied to a stage — ${rest.length} item${rest.length > 1 ? 's' : ''}</span>`
       + `<button class="ind-copy-btn ind-copy-sm" onclick="indCopyMultibuy('other')">Copy this stage</button></div>`
-      + `<table class="ind-table"><thead><tr><th>Material</th><th class="ind-num">Qty</th><th>Source</th><th class="ind-num">Cost</th></tr></thead><tbody>${rest.map(r => _indShopRowHtml(r, allowForce)).join('')}</tbody></table></div>`;
+      + `<table class="ind-table"><thead><tr><th>Material</th><th class="ind-num">Qty</th><th>Source</th><th class="ind-num">Cost</th></tr></thead><tbody>${rest.map(_indShopRowHtml).join('')}</tbody></table></div>`;
   }
   const totalCost = list.reduce((a, s) => a + (s.line_cost || 0), 0);
   return `<div class="ind-shop-bar"><button class="ind-copy-btn" onclick="indCopyMultibuy()">Copy everything</button>`
@@ -1569,6 +1614,15 @@ function indCopyMultibuy(stage) {
 }
 
 // Jump from a pipeline "Buy N materials" card down to that exact stage in the shopping list below.
+// Open the (collapsed) shopping list and scroll to it — the place to read the rest of the
+// borderline rows, since the strip above only carries as many as you can decide from at a glance.
+function indOpenShoppingList() {
+  const bar = document.querySelector('.ind-shop-bar');
+  const details = bar && bar.closest('details');
+  if (details) details.open = true;
+  (details || bar || {}).scrollIntoView && (details || bar).scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
 function _indJumpToStage(t) {
   const el = document.getElementById('ind-shop-stage-' + t);
   if (!el) return;
@@ -2116,6 +2170,7 @@ function _indRenderPlan(d, title) {
       ${_indCostBasisWarn(d)}
       ${_indBlueprintWarn(d)}
       ${_indSkillWarn(d)}
+      ${_indMarginalBar(d)}
       ${_indStepsHtml(d, stageModel)}
       ${_indPipelineHtml(d, tiersData, stageModel)}
       <details class="ind-details" open><summary>Shopping list (${(d.shopping_list || []).length})</summary>${_indShoppingSections(d, stageModel, true)}</details>
@@ -2273,6 +2328,7 @@ function _indRenderPlanBody(d) {
   const unres = (d.unresolved && d.unresolved.length)
     ? `<p class="pp-warn">${d.unresolved.length} material(s) had no market price — cost is a floor.</p>` : '';
   return unres + _indSkillBasisWarn(d) + _indCostBasisWarn(d) + _indBlueprintWarn(d)
+    + _indMarginalBar(d)
     + _indPipelineHtml(d, tiersData, stageModel)
     + _indStepsHtml(d, stageModel)
     + `<details class="ind-details"><summary>Shopping list (${(d.shopping_list || []).length})</summary>`
