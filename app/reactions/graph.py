@@ -650,18 +650,27 @@ def _materials_report(totals: dict[int, float], reached: dict, types: dict) -> l
 
 
 @router.get("/api/reactions/shopping-list")
-def reactions_shopping_list(context_id: int = Depends(require_context)):
+def reactions_shopping_list(include_orders: bool = False,
+                            context_id: int = Depends(require_context)):
     """Total raw materials needed across every one of the caller's pending SPECULATIVE-PROFIT
     assignments (see assign_reaction) — moon goo AND any purchased materials (fuel blocks etc.),
     summed and broken down to the same leaf level the profitability table prices from. Meant to
     be copied straight into a Jita multibuy tool (Janice) or the alliance's goo buy channel.
 
-    Deliberately EXCLUDES order-linked assignments (order_id IS NOT NULL) — a customer order
+    By default EXCLUDES order-linked assignments (order_id IS NOT NULL) — a customer order
     already has its own materials report scoped to that specific order (GET
     /api/reactions/orders/{id}, sized off the order's own target_qty, not whatever a partial
     batch has been assigned so far), so folding it into this general list would both double-count
     against the order's own report and mix a client's specific requirement into an unrelated
-    general shopping run."""
+    general shopping run.
+
+    `include_orders=true` folds them in anyway, for the one job that reasoning does not cover:
+    actually going shopping. A player whose work is ALL customer orders got an empty list and the
+    words "nothing currently assigned" while four assignments sat in the table — technically the
+    truth about speculative work, and useless. The counts below are always reported so the caller
+    can say which case it is instead of showing an empty list as if there were nothing to buy.
+    Note the double-count warning still stands: this list and the per-order reports overlap by
+    construction, so use one or the other for a given buy, never both."""
     # Deferred import: this reads the jobs-layer plan table, but jobs imports graph, so graph can
     # only reach jobs at call time (not module load) without a circular import.
     from app.reactions.jobs import ensure_reaction_assignments_table
@@ -673,22 +682,30 @@ def reactions_shopping_list(context_id: int = Depends(require_context)):
             (context_id,),
         )]
         if not char_ids:
-            return {"materials": []}
+            return {"materials": [], "speculative_count": 0, "order_count": 0}
         placeholders = ",".join("?" * len(char_ids))
-        assignments = con.execute(
-            f"SELECT type_id, runs FROM pp_reaction_assignments "
-            f"WHERE character_id IN ({placeholders}) AND order_id IS NULL",
+        rows = con.execute(
+            f"SELECT type_id, runs, order_id FROM pp_reaction_assignments "
+            f"WHERE character_id IN ({placeholders})",
             char_ids,
         ).fetchall()
     finally:
         con.close()
 
+    speculative = [r for r in rows if r["order_id"] is None]
+    order_linked = [r for r in rows if r["order_id"] is not None]
+    # Always reported, even when the list is empty: "you have nothing assigned" and "everything you
+    # have is on a customer order" need different answers from the caller, and they are
+    # indistinguishable from an empty materials list alone.
+    counts = {"speculative_count": len(speculative), "order_count": len(order_linked)}
+    assignments = rows if include_orders else speculative
+
     if not assignments:
-        return {"materials": []}
+        return {"materials": [], **counts}
 
     loaded = _load_goo_and_reached(context_id)
     if loaded is None:
-        return {"materials": []}
+        return {"materials": [], **counts}
     goo, reached, _, _, types = loaded
 
     totals: dict[int, float] = {}
@@ -699,4 +716,4 @@ def reactions_shopping_list(context_id: int = Depends(require_context)):
         top_units = a["runs"] * node["via"]["output_qty"]
         _explode_shopping_list(a["type_id"], top_units, reached, totals)
 
-    return {"materials": _materials_report(totals, reached, types)}
+    return {"materials": _materials_report(totals, reached, types), **counts}

@@ -905,48 +905,118 @@ def _character_capacities(context_id: int) -> list[dict]:
 
 # ── Customer orders: committing a fixed order to real reaction slots ───────────────────────────
 
+def _fit_chain_slots(works: list[float], caps: list[int], budget: int) -> list[int]:
+    """How many slots each tier of ONE chain gets, out of a character's free slots.
+
+    A chain is installed tier by tier — the intermediate has to finish before the job eating it can
+    start — so the chain takes `sum(work_i / slots_i)` and the tiers do NOT want equal shares. On
+    the order this was written for, Carbon Fiber carries 1956 runs beside Oxy-Organic Solvents'
+    196; a slot given to the second saves a tenth of what the same slot saves on the first.
+
+    So each spare slot goes to whichever tier gains most from it — the saving from one more being
+    `work_i/s_i - work_i/(s_i+1)`. That is exactly optimal for this objective (it is separable and
+    convex in the slot counts) and reads more honestly than the closed form, which is slots
+    proportional to the square root of work.
+
+    Every tier starts at one slot because a chain with a tier at zero cannot be installed at all.
+    `caps` stops a tier being given more slots than it has runs, which would just create empty jobs.
+    """
+    n = len(works)
+    if n == 0 or budget <= 0:
+        return []
+    slots = [1] * n
+    spare = budget - n
+    while spare > 0:
+        best, best_gain = -1, 0.0
+        for i in range(n):
+            if slots[i] >= caps[i]:
+                continue
+            gain = works[i] / slots[i] - works[i] / (slots[i] + 1)
+            if gain > best_gain:
+                best, best_gain = i, gain
+        if best < 0:
+            break            # every tier already has a slot per run; more would be empty jobs
+        slots[best] += 1
+        spare -= 1
+    return slots
+
+
 def _allocate_and_insert(context_id: int, type_id: int, name: str, node: dict, reached: dict,
                           types: dict, runs_needed: int, order_id: int) -> dict:
-    """Commits `runs_needed` top-level runs (plus any intermediate chain-tier reactions the
-    formula needs) onto ONE character with enough free reaction slots right now — deliberately
-    single-character, not spread across several like _suggest_reactions' stage 2: there's no
-    per-job runs cap in this app's model (assign_reaction already lets one job carry an
-    arbitrary run count), so a whole batch always fits in one job once a character has a free
-    slot for it, and an intermediate reaction's output has to be physically on the same
-    character as the job that consumes it anyway (same rule the manual-assign modal already
-    enforces). Repeated "assign next batch" calls naturally land on different characters over
-    time as each one's slots fill up, since this always re-reads free slots fresh."""
+    """Commits `runs_needed` top-level runs (plus the intermediate chain tiers the formula needs)
+    to as many real reaction slots as will actually make the order finish sooner.
+
+    **A slot is a rate, not a container.** The first version of this put each tier in exactly one
+    job, reasoning that because this app models no per-job run cap, a whole batch always "fits" in
+    one slot once a character has one free. It does fit — and it then takes as long as running
+    every run end to end. A real 400,000-unit Reinforced Carbon Fiber order became four jobs of
+    ~2000 runs each while fifty-five reaction slots sat idle.
+
+    **A customer order runs flat out, not to a cadence.** The Suggest wizard sizes speculative work
+    against a check-in cadence, because there the question is what to leave running until you next
+    log in. An order is a commitment someone is waiting on, so the only sensible target is as soon
+    as possible: take every free slot that still reduces the finish time, and stop at the point
+    where another slot would only add an empty job. Assign a smaller batch (`req.runs`) when you
+    want to keep slots back for other work — that is the knob, rather than pacing every order as if
+    nobody were waiting for it.
+
+    **Each character gets a COMPLETE chain.** An intermediate's output has to be physically on the
+    character running the job that consumes it, so the split across characters is by whole chains
+    and never by tier: a character either hosts the product and all of its intermediates, or takes
+    no part in the order. Runs are shared out in proportion to free slots, because slots are what a
+    character can actually turn into throughput.
+    """
     chars = [c for c in _character_capacities(context_id) if c["free_slots"] > 0]
     if not chars or runs_needed <= 0:
         return {"runs_assigned": 0, "characters": []}
-    chars.sort(key=lambda c: -c["free_slots"])
 
     formula = node.get("via")
-    ordered_tiers = _ordered_chain_tiers(formula["inputs"], runs_needed, reached) if formula else []
-    chain_job_slots = len(ordered_tiers)
+    tier_count = len(_ordered_chain_tiers(formula["inputs"], runs_needed, reached)) if formula else 0
+    per_chain = tier_count + 1          # one slot per intermediate, plus the product itself
 
-    pick = next((c for c in chars if c["free_slots"] >= chain_job_slots + 1), None)
-    if pick is None:
-        if chain_job_slots > 0:
-            return {"runs_assigned": 0, "characters": [], "error":
-                     f"Needs {chain_job_slots} intermediate reaction job slot(s) plus 1 for the product "
-                     f"itself, all on one character — none of your tracked characters has that much free "
-                     f"right now. Free up slots, or assign a smaller batch."}
-        pick = chars[0]
+    hosts = sorted((c for c in chars if c["free_slots"] >= per_chain),
+                    key=lambda c: -c["free_slots"])
+    if not hosts:
+        return {"runs_assigned": 0, "characters": [], "error":
+                 f"Needs {tier_count} intermediate reaction job slot(s) plus 1 for the product "
+                 f"itself, all on one character — none of your tracked characters has that much free "
+                 f"right now. Free up slots, or assign a smaller batch."}
+    # A character can only take a share if there is at least one run in it for them, so a two-run
+    # order never fragments across fourteen characters just because the slots exist.
+    hosts = hosts[:max(1, min(len(hosts), runs_needed))]
+
+    capacity = sum(h["free_slots"] for h in hosts)
+    shares = [int(runs_needed * h["free_slots"] / capacity) for h in hosts]
+    for i in range(runs_needed - sum(shares)):      # rounding remainder, roomiest first
+        shares[i % len(hosts)] += 1
 
     now = _time.time()
+    unit_cost = node.get("unit_cost", 0.0) + node.get("job_cost", 0.0)
+    top_cycle_h = (node.get("cycle_time") or 0) / 3600.0
+    placed: list[dict] = []
     con = get_connection()
     try:
-        for tier_order, (tid, info) in enumerate(ordered_tiers):
-            tname = types.get(tid, {}).get("name", str(tid))
-            _insert_assignment_rows(con, pick["character_id"], tid, tname, info["runs"], 1,
-                                     0.0, 0.0, tier_order, now, order_id)
-        unit_cost = node.get("unit_cost", 0.0) + node.get("job_cost", 0.0)
-        _insert_assignment_rows(con, pick["character_id"], type_id, name, runs_needed, 1,
-                                 unit_cost * runs_needed, 0.0, len(ordered_tiers), now, order_id)
+        for host, share in zip(hosts, shares):
+            if share <= 0:
+                continue
+            tiers = _ordered_chain_tiers(formula["inputs"], share, reached) if formula else []
+            works = [t["runs"] * ((t["cycle_time"] or 0) / 3600.0) for _, t in tiers]
+            caps = [max(1, int(t["runs"])) for _, t in tiers]
+            works.append(share * top_cycle_h)
+            caps.append(share)
+            slots = _fit_chain_slots(works, caps, host["free_slots"])
+
+            for tier_order, (tid, info) in enumerate(tiers):
+                _insert_assignment_rows(con, host["character_id"], tid,
+                                         types.get(tid, {}).get("name", str(tid)),
+                                         info["runs"], slots[tier_order], 0.0, 0.0,
+                                         tier_order, now, order_id)
+            _insert_assignment_rows(con, host["character_id"], type_id, name, share, slots[-1],
+                                     unit_cost * share, 0.0, len(tiers), now, order_id)
+            placed.append({"character_id": host["character_id"],
+                            "character_name": host["character_name"],
+                            "runs": share, "jobs": sum(slots)})
         con.commit()
     finally:
         con.close()
-    return {"runs_assigned": runs_needed,
-            "characters": [{"character_id": pick["character_id"], "character_name": pick["character_name"],
-                             "runs": runs_needed}]}
+    return {"runs_assigned": sum(p["runs"] for p in placed), "characters": placed}

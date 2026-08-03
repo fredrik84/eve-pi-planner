@@ -143,17 +143,33 @@ function _onRxShoppingToggle(el) {
 }
 
 let _rxLastShoppingList = [];
+// Whether the list folds in customer-order assignments. Off by default, matching the endpoint:
+// each order has its own correctly-sized materials report, and the two overlap by construction.
+let _rxShoppingIncludeOrders = false;
+
+function _toggleRxShoppingOrders() {
+  _rxShoppingIncludeOrders = !_rxShoppingIncludeOrders;
+  _loadRxShoppingList();
+}
 
 function _loadRxShoppingList() {
   const el = document.getElementById('rxShoppingListContent');
   if (!el) return;
   el.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Loading shopping list…</div>';
-  api('/api/reactions/shopping-list')
+  api('/api/reactions/shopping-list?include_orders=' + (_rxShoppingIncludeOrders ? 'true' : 'false'))
     .catch(() => ({ materials: [] }))
     .then(d => {
       _rxLastShoppingList = d.materials || [];
       if (!_rxLastShoppingList.length) {
-        el.innerHTML = '<div class="pp-empty">Nothing needed right now — nothing currently assigned.</div>';
+        // "Nothing assigned" and "everything you have is on a customer order" are different
+        // situations and used to render identically — the second one told a player with four
+        // live assignments that they had none.
+        const orders = d.order_count || 0;
+        el.innerHTML = orders > 0
+          ? `<div class="pp-empty">No speculative assignments — but ${orders} assignment${orders === 1 ? ' is' : 's are'}
+             committed to customer orders, each with its own materials report on the order itself.
+             <button class="pp-btn-link" onclick="_toggleRxShoppingOrders()">Include customer orders</button></div>`
+          : '<div class="pp-empty">Nothing needed right now — nothing currently assigned.</div>';
         _renderRxReceivedDiff();
         return;
       }
@@ -188,7 +204,15 @@ function _loadRxShoppingList() {
             <tbody>${items.map(m => `<tr><td>${_esc(m.name)}${srcBadge(m)}</td><td>${_rxCopyQtyCell(m.quantity)}</td><td>${_fmtIsk(m.unit_cost)}${priceDiff(m)}</td><td>${_fmtIsk(m.unit_cost * m.quantity)}</td><td>${Math.round(m.volume_m3 || 0).toLocaleString()} m³</td></tr>`).join('')}</tbody>
           </table>
         </div>`;
-      el.innerHTML = section('Fetch from your alliance', group)
+      // Say plainly when order-linked work is folded in — this list and each order's own report
+      // cover the same materials, so buying from both would double up.
+      const scope = (d.order_count || 0) === 0 ? '' : (_rxShoppingIncludeOrders
+        ? `<div class="pp-card-hint" style="margin-bottom:8px">Including ${d.order_count} customer-order assignment${d.order_count === 1 ? '' : 's'} — don't also buy from those orders' own reports.
+           <button class="pp-btn-link" onclick="_toggleRxShoppingOrders()">Speculative only</button></div>`
+        : `<div class="pp-card-hint" style="margin-bottom:8px">Speculative assignments only — ${d.order_count} more ${d.order_count === 1 ? 'is' : 'are'} committed to customer orders.
+           <button class="pp-btn-link" onclick="_toggleRxShoppingOrders()">Include customer orders</button></div>`);
+      el.innerHTML = scope
+        + section('Fetch from your alliance', group)
         + section('Buy on the market (fuel blocks, or cheaper right now than your sheet)', market);
       _renderRxReceivedDiff();
     })

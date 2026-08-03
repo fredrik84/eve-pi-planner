@@ -308,6 +308,37 @@ def test_explode_shopping_list() -> bool:
     return ok
 
 
+def test_a_chain_spreads_over_the_slots_it_has() -> bool:
+    """A slot is a RATE, not a container. The customer-order path used to put each tier in exactly
+    one job — a real 2000-run Reinforced Carbon Fiber order became four jobs of ~2000 runs while
+    fifty-five reaction slots sat idle. The chain runs tier by tier, so its time is
+    sum(work/slots), and the tiers must NOT get equal shares when one carries ten times the runs."""
+    from app.reactions.jobs import _fit_chain_slots
+
+    # Order #36's real shape: Carbon Fiber 1956, Oxy-Organic 196, Thermosetting 1956, RCF 2000,
+    # all on a 2.55h cycle.
+    works = [1956 * 2.55, 196 * 2.55, 1956 * 2.55, 2000 * 2.55]
+    caps = [1956, 196, 1956, 2000]
+
+    ok = check(_fit_chain_slots(works, caps, 4) == [1, 1, 1, 1],
+               "a four-slot budget still installs every tier of a four-tier chain")
+
+    slots = _fit_chain_slots(works, caps, 40)
+    ok &= check(sum(slots) == 40, "the whole budget is spent when every tier can still use it")
+    ok &= check(min(slots) >= 1, "no tier is ever left with zero slots — the chain must install")
+    ok &= check(slots[1] < slots[0], "the 196-run tier gets fewer slots than the 1956-run tier")
+    ok &= check(sum(works[i] / slots[i] for i in range(4))
+                < sum(works[i] / 10 for i in range(4)),
+                "and it beats splitting the budget evenly across the tiers")
+
+    # A slot per run is the end of it — past that a slot only adds an empty job.
+    tiny = _fit_chain_slots([2 * 2.55, 1 * 2.55], [2, 1], 50)
+    ok &= check(tiny == [2, 1], "no tier is given more slots than it has runs")
+    ok &= check(_fit_chain_slots([], [], 10) == [] and _fit_chain_slots([1.0], [1], 0) == [],
+                "an empty chain and a zero budget are both handled")
+    return ok
+
+
 def test_explode_chain_tiers() -> bool:
     from app.reactions import _resolve_reachable, _explode_chain_tiers
     reached = _resolve_reachable(_SYN_GOO, _SYN_MARKET, _SYN_REACTIONS)
@@ -396,6 +427,7 @@ def run_unit_tests() -> bool:
     results = [
         test_resolve_reachable(),
         test_explode_shopping_list(),
+        test_a_chain_spreads_over_the_slots_it_has(),
         test_explode_chain_tiers(),
         test_value_reaction_batch(),
         test_local_sell_hint(),
