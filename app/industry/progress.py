@@ -244,17 +244,24 @@ def _queue_snapshot(context_id: int):
 
 
 def _type_row(tid: int, req, need: int, done: int, running: int, in_stock: int,
-              manual: int = 0) -> dict:
+              manual: int = 0, observed: int | None = None) -> dict:
     """One per-type progress row. `req` is the plan requirement (name/activity/output_qty).
 
     `manual_runs` is reported separately from `done_runs` so the UI can show that this one was
     ticked by hand rather than observed — and offer to untick it.
+
+    `observed_runs` is what the count would be with the hand marks taken away. It exists so the
+    browser can work out the new `done_runs` for itself the instant you tick something — `max(
+    observed, manual)`, the same rule as `resolve_done` — instead of waiting on a round trip. From
+    `done_runs` alone that is impossible: it already has the old mark folded in, with no way to
+    separate the two again.
     """
     return {
         "type_id": tid, "name": req["name"], "activity": req["activity"],
         "required_runs": need, "done_runs": done, "running_runs": running,
         "waiting_runs": max(0, need - done - running),
         "output_qty": req["output_qty"], "in_stock": in_stock, "manual_runs": manual,
+        "observed_runs": done if observed is None else observed,
         "pct": round(100.0 * done / need, 1) if need else 0.0,
     }
 
@@ -338,7 +345,8 @@ def queue_progress(context_id: int) -> dict:
         man = _manual_runs(tid, need)
         d = resolve_done(need, completed.get(tid, 0), from_stock, man)
         r = min(running.get(tid, 0), max(0, need - d))
-        types.append(_type_row(tid, req, need, d, r, in_stock=int(owned.get(tid, 0)), manual=man))
+        types.append(_type_row(tid, req, need, d, r, in_stock=int(owned.get(tid, 0)), manual=man,
+                               observed=resolve_done(need, completed.get(tid, 0), from_stock, 0)))
 
     def units(tid, t, oq, want):
         # A product ticked done is done in UNITS too — otherwise the order chip would still read

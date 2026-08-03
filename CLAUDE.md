@@ -999,6 +999,18 @@ finished with the rest waiting on a slot is a real state, but it is the rare one
 tax the common "this one's finished". It **never writes to the completion
 ledgers** — those feed lifetime turnover and profit, and a tick is not evidence of an ISK-bearing
 job (same rule the simulated-progress preview follows).
+**Ticking repaints; it does not re-plan.** Marking a step changes nothing the plan computes — not
+the requirements, not the schedule, not the cost — only the progress read off it, so the browser
+recomputes the affected numbers itself (`_indApplyDoneLocally`, `max(observed, manual)` — the same
+rule as `resolve_done`) and redraws from the plan already on screen via `_indPaintStatus(d,
+{local:true})`. The write still goes out and its answer replaces the local one when it lands. This
+used to cost **two** whole-queue plans per click (the endpoint runs one, and the old
+`indRefreshStatus()` afterwards ran another), which on a capital build is seconds of waiting to
+watch a card turn green. Two things make it computable client-side: `observed_runs` on each type row
+(the count with the marks removed — `done_runs` alone can't be un-mixed once a mark is folded in),
+and a local repaint carrying the running-jobs list and sourcing panel across untouched instead of
+re-fetching them. Preview mode opts out: its numbers are fabricated, so editing them is editing
+fiction.
 **The control is the pipeline card** (`ind-pipe-markable`): that card already renders this type's
 done/cooking/waiting state, so the place showing the state is the place that corrects it, and a whole
 card is an easy target. The step-by-step chips keep a labelled `mark done` / `always buy` button as

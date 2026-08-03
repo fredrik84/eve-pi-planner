@@ -232,14 +232,39 @@ async function indRefreshStatus() {
     if (d.empty) { card.style.display = 'none'; if (empty) empty.style.display = ''; return; }
     _indLastPlan = d;
     _indCacheNames(d);
-    body.innerHTML = _indStatusHeadline(d)
-      + `<div id="indInstall" class="ind-install"></div>`
-      + _indRenderPlanBody(d)
-      + `<div id="indRunning" class="ind-install"></div>`;
-    indRenderInstall(d.install);   // "do this now" — comes with the plan, no second round trip
-    indLoadRunning();          // what's already cooking goes under the pipeline
-    if (_indSourcingOpen !== null) indRenderSourcing();   // the card was just repainted under it
+    _indPaintStatus(d);
   } catch (e) { body.innerHTML = `<p class="pp-warn">${_esc(e.message || "Could not plan your queue.")}</p>`; }
+}
+
+// Draw the status card from a plan we already have. Split out from the fetch above because marking
+// a step done changes NO part of the plan — not the requirements, not the schedule, not the cost —
+// only the progress read off it. Re-planning the whole queue to repaint a tick was seconds of wait
+// for an answer already in hand.
+function _indPaintStatus(d, opts) {
+  const body = document.getElementById('indStatusBody');
+  if (!body || !d) return;
+  const local = !!(opts && opts.local);
+  // The running-jobs list and the sourcing panel are separate fetches, and a hand mark can't change
+  // either of them — so a local repaint carries their current markup across instead of paying for
+  // two more round trips (the sourcing one plans an order from scratch) to redraw the same thing.
+  const keep = local ? {
+    running: (document.getElementById('indRunning') || {}).innerHTML || '',
+    sourcing: (document.getElementById('indSourcing') || {}).innerHTML || '',
+  } : null;
+  body.innerHTML = _indStatusHeadline(d)
+    + `<div id="indInstall" class="ind-install"></div>`
+    + _indRenderPlanBody(d)
+    + `<div id="indRunning" class="ind-install"></div>`;
+  indRenderInstall(d.install);   // "do this now" — comes with the plan, no second round trip
+  if (keep) {
+    const run = document.getElementById('indRunning');
+    if (run) run.innerHTML = keep.running;
+    const src = document.getElementById('indSourcing');
+    if (src) src.innerHTML = keep.sourcing;
+    return;
+  }
+  indLoadRunning();          // what's already cooking goes under the pipeline
+  if (_indSourcingOpen !== null) indRenderSourcing();   // the card was just repainted under it
 }
 
 // One-line answer to "where am I": overall progress, what's in the cooker, what to do next.
@@ -1660,12 +1685,60 @@ async function indMarkDone(typeId, done) {
   return _indPostDone(typeId, done ? null : 0);
 }
 
+// Repaint FIRST, save second. Ticking a step changes nothing the plan computes, so the browser can
+// work out the new numbers itself — `max(observed, manual)`, the same rule the server applies — and
+// redraw from the plan already on screen. The write still goes out, and its authoritative answer
+// replaces the local guess when it lands, but nobody waits for a capital build to be re-planned
+// twice over just to watch a card turn green.
 async function _indPostDone(typeId, runs) {
+  const painted = _indApplyDoneLocally(typeId, runs);
+  if (painted) _indPaintStatus(_indLastPlan, { local: true });
   try {
-    _indProgress = await apiSend('POST', '/api/industry/progress/done',
-                                 { type_id: typeId, runs });
-  } catch (e) { toastError(e, 'Could not save'); return; }
-  indRefreshStatus();
+    const fresh = await apiSend('POST', '/api/industry/progress/done', { type_id: typeId, runs });
+    _indProgress = (fresh && !fresh.empty) ? fresh : _indProgress;
+    // Nothing was painted locally (no plan in hand, or preview mode) — fall back to the full path,
+    // which is what used to happen every time.
+    if (painted) _indPaintStatus(_indLastPlan, { local: true }); else indRefreshStatus();
+  } catch (e) {
+    toastError(e, 'Could not save');
+    indRefreshStatus();      // the local guess is now a lie — go and get the truth
+  }
+}
+
+// Apply a mark to the progress we already hold, exactly as the server would. Returns false when
+// there's nothing to apply to, in which case the caller falls back to a full refresh.
+function _indApplyDoneLocally(typeId, runs) {
+  const p = _indProgress;
+  if (!p || !p.types || !_indLastPlan) return false;
+  // Preview mode's numbers are fabricated, so editing them would be editing fiction — leave that
+  // path exactly as it was and let the full refresh re-fetch the simulation.
+  if (_indSim !== null) return false;
+  const t = p.types.find(x => x.type_id === typeId);
+  if (!t || !t.required_runs) return false;
+  const need = t.required_runs;
+  // `runs === null` is "all of it"; a number is that many; 0 clears the mark. `observed_runs` is
+  // the count without any mark, which is what makes this computable without asking the server.
+  t.manual_runs = runs === null ? need : Math.max(0, Math.min(need, runs));
+  const observed = t.observed_runs != null ? t.observed_runs : 0;
+  t.done_runs = Math.min(need, Math.max(observed, t.manual_runs));
+  t.running_runs = Math.min(t.running_runs, Math.max(0, need - t.done_runs));
+  t.waiting_runs = Math.max(0, need - t.done_runs - t.running_runs);
+  t.pct = need ? Math.round(1000 * t.done_runs / need) / 10 : 0;
+  // Headline counters are sums over the types, so they follow from the same edit.
+  const sum = k => p.types.reduce((a, x) => a + (x[k] || 0), 0);
+  p.totals = { required: sum('required_runs'), done: sum('done_runs'),
+               running: sum('running_runs'), waiting: sum('waiting_runs') };
+  p.pct = p.totals.required ? Math.round(1000 * p.totals.done / p.totals.required) / 10 : 0;
+  // Order chips are units, not runs, and only the order FOR this product can move. Anything subtler
+  // (a product already covered by stock, say) is corrected a moment later by the real response.
+  (p.orders || []).forEach(o => {
+    if (o.product_type_id !== typeId) return;
+    o.done_units = Math.min(o.quantity, t.done_runs * (t.output_qty || 1));
+    o.pct = o.quantity ? Math.round(1000 * o.done_units / o.quantity) / 10 : 0;
+    o.status = o.done_units >= o.quantity ? 'complete'
+      : (o.running_units > 0 || o.done_units > 0) ? 'building' : 'waiting';
+  });
+  return true;
 }
 
 // Half a step is a real state — you install five of the twelve runs, they finish, the rest are

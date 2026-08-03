@@ -1775,6 +1775,18 @@ def test_hand_marked_jobs_count_as_progress():
         # on a slot. It counts for exactly what it says and no more.
         check("a partial mark fills only its share", P.resolve_done(12, 0, 0, 5) == 5)
         check("and never more than the plan asks for", P.resolve_done(12, 0, 0, 99) == 12)
+
+        # `observed_runs` is what the count would be with the marks taken away. The browser needs it
+        # to recompute done_runs itself the instant you tick something, instead of waiting on a
+        # re-plan of the whole queue; done_runs alone can't be un-mixed once a mark is folded in.
+        req = {"name": "Widget", "activity": "manufacturing", "output_qty": 1}
+        row = P._type_row(100, req, 12, 12, 0, in_stock=0, manual=12, observed=4)
+        check("a row says what was observed without the mark", row["observed_runs"] == 4)
+        check("alongside what the mark made of it", row["done_runs"] == 12)
+        check("recomputing from those two matches the server's own rule",
+              max(row["observed_runs"], row["manual_runs"]) == row["done_runs"])
+        plain = P._type_row(100, req, 12, 4, 0, in_stock=0)
+        check("with no mark, observed is simply the count", plain["observed_runs"] == 4)
         P.set_manual_done(1, 100, 0)
         check("clearing removes it entirely", P._manual_by_type(1, t0 - 5) == {})
         check("and another account's marks are invisible", P._manual_by_type(2, 0) == {})
