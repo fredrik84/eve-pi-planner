@@ -203,9 +203,50 @@ Queued orders keep working; their numbers move (up), which is worth saying in th
 personal containers or pasted stock. So per-order input/output labelling must degrade to "no
 container bound" without breaking the plan — the sourcing panel already behaves this way.
 
-**First step:** make `plan_queue` produce per-order plans behind a flag, with the shared slot pool
-and the existing alignment, and compare cost + makespan against the aggregated plan on a real queue
-before switching anyone over.
+**STATE (2026-08-03): half-built and deliberately unwired.** `schedule.plan_queue_per_order` exists
+and is committed — per-order params, first-come-first-served stock allocation down the queue, its own
+`_order_cost`, and namespaced scheduling keys (`Task.key` / `Task.order_id`) so one order's jobs can
+never satisfy another's dependency. **Nothing calls it.** No endpoint, no flag, no UI. It changes
+nothing until wired.
+
+**What is left**
+1. A `industry_per_order_plans` flag + request/account option, and a branch in `_run_queue_plan`.
+2. A compare endpoint returning both plans' cost, makespan and job count — the numbers were promised
+   and never delivered. Measure on the real Archon queue (context 1) before switching anyone.
+3. Container as job OUTPUT as well as input (item 5), which is the point of the whole exercise.
+4. Cross-order alignment has to become explicit — today it works only because aggregation puts every
+   order in one pace calculation.
+
+## 2g. Slot alignment — RESOLVED 2026-08-03, and how
+
+Long thread with a capital builder. Jobs in one wave finished at 2h32m / 5h05m / 10h11m, so the
+builder had three separate moments to log in at, and a third of their slots sat idle in between.
+
+**The fix that worked: `_PACE_OVERSHOOT = 1.0`.** A job holding ONE run can only grow by taking a
+second, which is a 100% increase *by definition* — so every smaller allowance tried first (5%, a flat
+20 minutes, 2% of the makespan) was arithmetically incapable of merging a 1-run job however much
+slack it had. Four rounds of tuning moved nothing and each null result got explained away as a
+dependency constraint instead of checked against the arithmetic. Measured on the real 206-hour
+Archon: **232 jobs → 159, +32 minutes (+0.26%)**. Plateaus at 100%; past that what remains is bounded
+by runs available, blueprint copy caps and real dependencies.
+
+Guards that must stay: `_DELIVERY_OVERSHOOT` (2% of makespan) is the real bound and protects the
+quote; a **deliverable is exempt from overshoot entirely** (`no_consumer`) — the allowance buys slots
+by finishing components later and a finished product has no later to give. Flipping the constant
+without that exemption slowed a finished product, and the suite caught it.
+
+**How to measure this again** — the thing that finally ended the guessing. There is a diagnostic
+endpoint (`GET /api/industry/queue-plan/packing`, also POST) printing per type: runs, jobs, runs per
+job, own/pace/consumer windows, which bound bit, and the consumer that set it. Better still, run the
+planner in-process inside the prod pod:
+```
+ssh -o BatchMode=yes node02.failed.name \
+  "sudo k3s kubectl -n production exec -i <pod> -- python3 -" < script.py
+```
+with `from app.industry.orders import queue_plan_packing; queue_plan_packing(None, <context_id>)`.
+Monkeypatching `app.industry.schedule._PACE_OVERSHOOT` in that script gives a real what-if curve on
+real data in seconds. Five rounds of reconstructing the user's build from descriptions were all
+wrong; one probe settled it.
 
 ## 3. Hand-built / custom colony layouts
 
