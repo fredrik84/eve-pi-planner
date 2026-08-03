@@ -214,7 +214,8 @@ def _balanced(total: int, n: int) -> list[int]:
 
 def build_tasks(agg: dict, mfg: dict, rx: dict, params: BuildParams,
                 pools: dict[str, int] | None = None,
-                depths: dict[int, int] | None = None) -> tuple[list[Task], dict]:
+                depths: dict[int, int] | None = None,
+                deps: dict[int, set[int]] | None = None) -> tuple[list[Task], dict]:
     """One or more Task instances per built type. A type's runs are split so they can run in
     PARALLEL across the pool's slots — up to `pool_size` concurrent jobs — while still respecting
     the per-BPC run cap (`max_runs`). This is what lets a big reaction (thousands of runs, no BPC
@@ -257,26 +258,70 @@ def build_tasks(agg: dict, mfg: dict, rx: dict, params: BuildParams,
         # (a) fill up to P slots concurrently, (b) never exceed the per-job run cap — whichever
         # forces MORE jobs. This is the widest split; the floor is what the cap alone demands.
         n_wide = max(min(P, R), math.ceil(R / cap))
-        plan[tid] = {"activity": activity, "per_run": per_run, "runs": R,
+        plan[tid] = {"activity": activity, "per_run": per_run, "runs": R, "cap": cap,
                      "n_wide": n_wide, "n_min": math.ceil(R / cap),
+                     # A split of R runs into n jobs finishes when the LONGEST job does, and runs
+                     # are whole: ceil(R/n) of them land in the biggest chunk. Using the average
+                     # (work/n) here is what hid the case this was reported for — 29 runs over 29
+                     # slots is not 29 equal jobs, it is a few 2-run jobs setting the pace while
+                     # the 1-run ones finish in half the time and their slots sit idle.
+                     "wide_dur": math.ceil(R / n_wide) * per_run,
                      "work": R * per_run, "stage": (depths or {}).get(tid, 0)}
 
-    # Pass 2: per stage AND pool, how fast the stage can go at all — its slowest member at full
-    # width. Reactions and manufacturing draw on separate slots and don't wait for each other, so
-    # pacing one against the other would consolidate against a deadline that doesn't apply.
-    pace: dict[tuple[int, str], float] = {}
-    for tid, p in plan.items():
-        key = (p["stage"], p["activity"])
-        pace[key] = max(pace.get(key, 0.0), p["work"] / p["n_wide"])
+    # Pass 2: how long each type may take without holding anything up — its SLACK.
+    #
+    # The deadline for a component is when the job that consumes it can actually start, and nothing
+    # else. An earlier version paced each type against its stage-mates in the same pool, which is a
+    # crude proxy for the same idea and misses the cases that matter: a type alone at its stage
+    # paces against itself and stays fully split, and two types that feed the same job but sit at
+    # different depths never see each other at all. Real example that exposed it — one component
+    # taking 5h 05m across 8 jobs beside another taking 2h 32m across 9, both feeding the same work:
+    # the second could run 2 runs per job (5h 04m) and free 4 slots without moving anything.
+    #
+    # So: a forward pass for the earliest each type can start, then each type's deadline is the
+    # earliest start of whatever consumes it (the final products get the makespan). Anything with
+    # room to spare runs in fewer, longer jobs and lands at the same moment it would have anyway.
+    # The freed slots are the point — they're what lets a builder start other work.
+    #
+    # Makespan-preserving by construction: no earliest-start ever moves, because every type still
+    # finishes by the time its consumer needed it. Slot contention is ignored here, which is the
+    # safe direction — consolidating only ever REDUCES the number of jobs competing for slots, and
+    # a contended schedule's real start times are later than this model's, so the slack is real.
+    if depths is not None and deps is not None:
+        order = sorted(plan, key=lambda t: -plan[t]["stage"])      # inputs first
+        consumers: dict[int, set[int]] = {}
+        for tid, ds in (deps or {}).items():
+            for d in ds:
+                consumers.setdefault(d, set()).add(tid)
+
+        start: dict[int, float] = {}
+        finish: dict[int, float] = {}
+        for tid in order:
+            p = plan[tid]
+            st = max([finish.get(d, 0.0) for d in (deps.get(tid) or ()) if d in plan] or [0.0])
+            start[tid] = st
+            finish[tid] = st + p["wide_dur"]
+        makespan = max(finish.values()) if finish else 0.0
+
+        for tid, p in plan.items():
+            # The latest this type may finish: when the first thing needing it can begin. A final
+            # product answers to the makespan instead — it has no consumer to hold up.
+            cons = [start[c] for c in (consumers.get(tid) or ()) if c in start]
+            deadline = min(cons) if cons else makespan
+            p["window"] = max(0.0, deadline - start[tid])
 
     for tid, p in plan.items():
         n = p["n_wide"]
-        if depths is not None:
-            target = pace.get((p["stage"], p["activity"]), 0.0)
-            if target > 0:
-                # The fewest jobs that still finish by the time the stage's slowest member does.
-                # Never below the BPC cap's floor, never above the widest legal split.
-                n = max(p["n_min"], 1, min(p["n_wide"], math.ceil(p["work"] / target - 1e-9)))
+        # A type always has at least its OWN slack, before any consumer is considered: a split into
+        # uneven chunks finishes when the biggest chunk does, so every other job may carry that many
+        # runs too and land at the same moment. That is the whole of the reported case — 8 jobs of 1
+        # run beside 2 jobs of 2, all of the same thing, finishing 2h32m and 5h05m respectively.
+        window = max(p.get("window", 0.0), p["wide_dur"])
+        if window > 0 and p["per_run"] > 0:
+            # Work in RUNS PER JOB, not job count: runs are indivisible, so the question is how many
+            # of them fit the window, capped by what one blueprint copy may carry.
+            per_job = max(1, min(p["cap"], int(window / p["per_run"] + 1e-9)))
+            n = max(1, min(p["n_wide"], math.ceil(p["runs"] / per_job)))
         for i, r in enumerate(_balanced(p["runs"], n)):
             t = Task(f"{tid}-{i}", tid, p["activity"], r, r * p["per_run"])
             tasks.append(t)
@@ -441,9 +486,11 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
     agg = aggregate_demand(targets, memo, mfg, rx, params, on_hand, pools)
     # Pass the stage depths so a type is only split as wide as its stage's pace requires — see
     # build_tasks. The same `_depths` the demand pass already walked.
-    tasks, by_type = build_tasks(agg, mfg, rx, params, pools,
-                                 depths=_depths([t for t, _ in targets], mfg, rx))
     deps = _built_deps(agg, mfg, rx)
+    # Deps as well as depths: a type's real deadline is when the job consuming it can start, which
+    # is what decides how many slots it needs — see build_tasks.
+    tasks, by_type = build_tasks(agg, mfg, rx, params, pools,
+                                 depths=_depths([t for t, _ in targets], mfg, rx), deps=deps)
     crit = _critical_priority(agg, deps, mfg, rx, params)
     ranks = order_ranks(targets, mfg, rx)
     sched = schedule(tasks, by_type, deps, pools, _fifo_priority(crit, ranks))

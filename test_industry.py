@@ -1658,6 +1658,8 @@ def main():
     test_progress_percent_is_weighted_by_job_time_not_run_count()
     test_slots_are_only_spent_where_they_buy_time()
     test_packing_never_paces_one_pool_against_the_other()
+    test_one_products_runs_are_not_spread_thinner_than_its_own_pace()
+    test_slack_comes_from_the_consumer_not_from_stage_mates()
     test_sourcing_notes_belong_to_one_order()
     test_pasting_a_hangar_sets_what_is_sourced()
     test_the_sourcing_list_is_not_a_second_shopping_list()
@@ -1861,12 +1863,13 @@ def test_slots_are_only_spent_where_they_buy_time():
     agg, mfg, params, pools = _pack_case()
     depths = {1: 1, 2: 1}                      # same stage
 
-    wide, _ = build_tasks(agg, mfg, {}, params, pools)                    # no depths = old behaviour
-    packed, by_type = build_tasks(agg, mfg, {}, params, pools, depths=depths)
+    wide, _ = build_tasks(agg, mfg, {}, params, pools)          # no plan shape = old behaviour
+    packed, by_type = build_tasks(agg, mfg, {}, params, pools, depths=depths,
+                                  deps={1: set(), 2: set()})
 
-    check("without stage information every type splits as wide as it can",
+    check("without the plan's shape every type splits as wide as it can",
           len([t for t in wide if t.type_id == 2]) == 2)
-    check("knowing the stage, the splittable one runs in a single slot",
+    check("knowing how long the plan runs, the splittable one uses a single slot",
           len(by_type[2]) == 1)
     check("and it holds both runs", by_type[2][0].runs == 2)
     check("landing exactly when the unsplittable job does",
@@ -1882,9 +1885,95 @@ def test_slots_are_only_spent_where_they_buy_time():
     check("and the stage finishes at the same time either way",
           approx(s_wide["makespan_hours"], s_packed["makespan_hours"]))
 
-    # A component whose own work sets the pace must never be narrowed.
-    solo, solo_by = build_tasks({2: agg[2]}, mfg, {}, params, pools, depths={2: 1})
+    # A component whose own work sets the pace must never be narrowed: on its own, nothing else in
+    # the plan is longer, so spreading it wide IS the fastest answer.
+    solo, solo_by = build_tasks({2: agg[2]}, mfg, {}, params, pools, depths={2: 1},
+                                deps={2: set()})
     check("the pace-setting component still spreads across the slots", len(solo_by[2]) == 2)
+
+
+def test_slack_comes_from_the_consumer_not_from_stage_mates():
+    """Reported from a real build: one component running 8 jobs of 1 run (5h 05m) beside another
+    running 9 jobs of 1 run (2h 32m), both feeding the same work, across 5 characters and 29 slots.
+    Two runs of the 2h 32m one is 5h 04m — it could take half the slots and land at the same moment.
+
+    The first version paced each type against its stage-mates in the same POOL, which misses this:
+    a type alone at its stage paces against itself, and two types feeding one job from different
+    depths never see each other. A component's deadline is when the job consuming it can start."""
+    print("test_slack_comes_from_the_consumer_not_from_stage_mates")
+    # 1: the pace-setter, 8 runs of ~38m that cannot be narrowed (its own work sets the deadline).
+    # 2: 9 runs of ~17m, which alone would split 9 ways. 3: the assembly that eats both.
+    mfg = {
+        1: {"base_time": 2287, "max_runs": 1, "output_qty": 1, "inputs": [{"type_id": 0, "quantity": 1}]},
+        2: {"base_time": 1013, "max_runs": 10, "output_qty": 1, "inputs": [{"type_id": 0, "quantity": 1}]},
+        3: {"base_time": 3600, "max_runs": 1, "output_qty": 1,
+            "inputs": [{"type_id": 1, "quantity": 1}, {"type_id": 2, "quantity": 1}]},
+    }
+    agg = {
+        1: {"build": True, "runs": 8, "activity": "manufacturing"},
+        2: {"build": True, "runs": 9, "activity": "manufacturing"},
+        3: {"build": True, "runs": 1, "activity": "manufacturing"},
+    }
+    params = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, struct_time_mult=1.0)
+    pools = {"manufacturing": 29, "reaction": 29}
+    deps = _built_deps(agg, mfg, {})
+    depths = {1: 1, 2: 1, 3: 0}
+
+    wide, wide_by = build_tasks(agg, mfg, {}, params, pools, depths=depths)
+    check("left alone, the quick component takes a slot per run", len(wide_by[2]) == 9)
+
+    _tasks, by_type = build_tasks(agg, mfg, {}, params, pools, depths=depths, deps=deps)
+    check("with the consumer's deadline known, it uses fewer", len(by_type[2]) < 9)
+    check("and it still finishes by the time the assembly can start",
+          max(t.duration for t in by_type[2]) <= max(t.duration for t in by_type[1]) + 1e-6)
+    check("the pace-setter is untouched", len(by_type[1]) == 8)
+    check("slots saved", len(_tasks) < len(wide))
+
+    # The promise that makes it safe: the build does not take a minute longer.
+    prio = {1: (2, 0.0), 2: (1, 0.0), 3: (0, 0.0)}
+    s_wide = schedule(wide, wide_by, deps, pools, prio)
+    s_packed = schedule(_tasks, by_type, deps, pools, prio)
+    check("and the whole build still finishes at the same time",
+          approx(s_wide["makespan_hours"], s_packed["makespan_hours"], 0.02))
+
+
+def test_one_products_runs_are_not_spread_thinner_than_its_own_pace():
+    """Reported from a real build: Sulfuric Acid spread over 29 slots as a mix of 2-run jobs (5h 05m)
+    and 1-run jobs (2h 32m). The 2-run jobs set the pace, so every 1-run job finishes in half the
+    time and then its slot sits idle — the build is no faster for occupying them, and meanwhile
+    there are no slots left to start a second plan in. Two runs each, half the jobs, same finish.
+
+    This is a type's OWN slack and needs no dependency information at all: an uneven split finishes
+    when the biggest chunk does, so every other job may carry that many runs too."""
+    print("test_one_products_runs_are_not_spread_thinner_than_its_own_pace")
+    per_run = 9120                      # 2h 32m
+    mfg = {1: {"base_time": per_run, "max_runs": 10, "output_qty": 1, "inputs": []}}
+    agg = {1: {"build": True, "runs": 35, "activity": "manufacturing"}}
+    params = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, struct_time_mult=1.0)
+    pools = {"manufacturing": 29, "reaction": 29}
+
+    # The old behaviour, stated directly rather than obtained from build_tasks: one job per slot,
+    # 35 runs over 29 slots, so six jobs carry 2 runs and 23 carry 1. The 2-run jobs set the pace.
+    naive_jobs, naive_dur = 29, 2 * per_run
+
+    packed, by_type = build_tasks(agg, mfg, {}, params, pools, depths={1: 0}, deps={1: set()})
+    check("no job is left carrying less than the pace allows",
+          max(t.runs for t in by_type[1]) == 2)
+    check("which is 18 slots instead of 29", len(by_type[1]) == 18 < naive_jobs)
+    check("and not one minute slower",
+          approx(max(t.duration for t in by_type[1]), naive_dur, 1e-6))
+    check("the runs themselves are all still there", sum(t.runs for t in by_type[1]) == 35)
+    check("so 11 slots are free for other work", naive_jobs - len(by_type[1]) == 11)
+
+    # Own slack needs no dependency graph — it is a fact about one type's own uneven split — so it
+    # must hold on every path into build_tasks, including callers that pass neither depths nor deps.
+    _b, bare = build_tasks(agg, mfg, {}, params, pools)
+    check("and it holds even with no plan shape given", len(bare[1]) == 18)
+    # A blueprint copy that can only carry so many runs still binds.
+    capped = {1: {"base_time": per_run, "max_runs": 1, "output_qty": 1, "inputs": []}}
+    _t, capped_by = build_tasks(agg, capped, {}, params, pools, depths={1: 0}, deps={1: set()})
+    check("but a 1-run blueprint cap is never exceeded",
+          max(t.runs for t in capped_by[1]) == 1)
 
 
 def test_packing_never_paces_one_pool_against_the_other():

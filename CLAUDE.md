@@ -864,33 +864,34 @@ anything the plan can see. Components stay on their job chips. Rules that matter
   forced-build tag: an assumed efficiency drives every material number, so it can't be invisible).
 - Reactions have no blueprint ME/TE — the editor is omitted when `me_source == 'reaction'`.
 
-**Slots are only spent where they buy time** (`build_tasks(..., depths=)`). A stage finishes when
-its SLOWEST component does, so splitting every other type as wide as the pool allows just occupies
-slots that then sit idle. Each (stage, pool) is paced by its own slowest member at full width, and
-every other type in it gets the FEWEST jobs that still land by then: two 1h runs beside an
-unsplittable 2h job become **one slot for two hours, not two slots for one**. The freed slots are
-the whole point — they're what lets a builder start the next order instead of watching jobs idle
-out. Time-neutral by construction, and `test_slots_are_only_spent_where_they_buy_time` proves the
-makespan doesn't move on the real scheduler.
-Two things it must never do: pace a type against a **different pool** (reactions and manufacturing
-have separate slots and don't wait on each other — pacing one against the other would cost real
-time), or go below the per-BPC `max_runs` floor. Callers without a dependency graph pass no
-`depths` and keep the old maximal split.
+**Slots are only spent where they buy time** (`build_tasks(..., depths=, deps=)`). A stage finishes
+when its SLOWEST job does, so a job that lands early buys the plan nothing: its slot idles, and —
+the part that actually matters — **it costs the builder a second login**. Jobs finishing at 2h32m
+and 5h05m mean logging in twice to start work that one trip could have covered. Least effort is the
+constraint everything here fits inside, so a job runs as long as it may.
 
-**Stale caches refresh themselves** (`app/industry/freshness.py`, `POST /api/industry/refresh-stale`,
-fired after the first paint on tab open). Three caches feed this tab — running jobs, blueprints,
-asset stock — and each used to be a Refresh button, which makes staleness the user's job with a
-silent failure mode: a stale job cache overstates free slots, stale assets tell you to buy what's in
-your hangar, stale blueprints cost you your real ME/TE, and none of it announces itself. The buttons
-stay for "do it now". Three rules hold it together:
-* **A threshold per cache, not one global number** — jobs 15 min (cheap, moves hourly), assets 1 h
-  (a heavy paginated call per character, on the timescale someone actually hauls things), blueprints
-  24 h (they barely change).
-* **Never fetched ≠ stale.** An account with no connected character must not have a refresh
-  attempted on its behalf on every visit.
-* **The attempt is stamped before the work, not after** (`auto_refreshed_at`, floor `_MIN_GAP`).
-  Age only advances on SUCCESS, so a character that will always fail — revoked token, missing scope
-  — would otherwise be retried on every single tab open forever.
+Each type is given the fewest jobs that still land by its deadline, where the deadline is **when the
+job consuming it can start** (the final products answer to the makespan instead). Two rules follow,
+and both were learned from real builds rather than guessed:
+
+* **A type has its own slack before any dependency is considered.** `_balanced` splits R runs over n
+  slots unevenly — 35 runs over 29 slots is 6 jobs of 2 and 23 of 1 — and the batch finishes when
+  the biggest chunk does, so every other job may carry that many runs too. That is 18 slots instead
+  of 29, not a minute slower. Reported from a real Sulfuric Acid batch. This needs no dependency
+  graph and applies on every path into `build_tasks`.
+* **Slack comes from the consumer, not from stage-mates.** An earlier version paced each type
+  against the other types at its own depth in the same pool, which is a crude proxy: a type alone at
+  its stage paces against itself and stays fully split, and two types feeding one job from different
+  depths never see each other.
+
+Work in **runs per job**, never in job count: runs are indivisible, so the question is how many fit
+the window (`int(window / per_run)`), capped by what one blueprint copy may carry. Computing it as
+`work / window` uses the AVERAGE job length and is exactly what hid the uneven-split case.
+Makespan-preserving by construction — no earliest-start ever moves — and
+`test_one_products_runs_are_not_spread_thinner_than_its_own_pace` plus
+`test_slack_comes_from_the_consumer_not_from_stage_mates` both run the real scheduler to prove it.
+Slot contention is ignored in the slack model, which is the safe direction: consolidating only ever
+reduces the number of jobs competing for slots.
 
 **Industry performance.** Two things dominated page and share-link load, both measured before
 changing anything:
