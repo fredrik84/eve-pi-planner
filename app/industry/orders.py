@@ -625,3 +625,38 @@ def force_build_above(req: ForceAboveRequest, ctx: int = Depends(require_context
 
     return {"added": [{"type_id": t, "name": inp.names.get(t, str(t))} for t in added],
             "rounds": rounds, "cut": cut}
+
+
+@router.post("/api/industry/queue-plan/packing")
+def queue_plan_packing(req: QueuePlanRequest | None = None, ctx: int = Depends(require_context)):
+    """Why every job in the queue is the length it is — one row per type.
+
+    A diagnostic, not a feature. Slot compaction is decided from each type's window, and when the
+    result looks wrong from the outside there is no way to tell WHICH of the three bounds bit: the
+    type's own uneven split, the plan's pace, or something downstream needing it sooner. This prints
+    all of them so the answer is read rather than inferred.
+    """
+    res = _run_queue_plan(ctx, req or QueuePlanRequest())
+    if res.get("empty"):
+        return {"empty": True}
+    rows: dict[int, dict] = {}
+    for w in res["schedule"]["waves"]:
+        for t in w["tasks"]:
+            why = t.get("why") or {}
+            r = rows.setdefault(t["type_id"], {
+                "name": t.get("name"), "activity": t["activity"],
+                "runs_total": why.get("runs"), "jobs": why.get("jobs"),
+                "runs_per_job": why.get("runs_per_job"), "per_run_h": why.get("per_run_h"),
+                "job_h": t["duration_hours"],
+                "own_h": why.get("own_h"), "pace_h": why.get("pace_h"),
+                "consumer_deadline_h": why.get("hard_h"),
+                "bound_by": why.get("bound_by"), "needed_by": why.get("needed_by_name"),
+            })
+            r["job_h"] = max(r["job_h"], t["duration_hours"])
+    # What it COULD be if only the pace bound it — the number that says whether a dependency is
+    # genuinely in the way or the pace itself is being computed too low.
+    for r in rows.values():
+        pr = r.get("per_run_h") or 0
+        r["could_be_runs_per_job_at_pace"] = (int((r.get("pace_h") or 0) / pr) if pr else None)
+    return {"pace_h": max((r.get("pace_h") or 0) for r in rows.values()) if rows else 0,
+            "types": sorted(rows.values(), key=lambda r: -(r.get("job_h") or 0))}

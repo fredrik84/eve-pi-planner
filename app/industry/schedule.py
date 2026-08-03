@@ -440,6 +440,9 @@ def build_tasks(agg: dict, mfg: dict, rx: dict, params: BuildParams,
         n = _packed_jobs(p)
         why = {
             "runs_per_job": math.ceil(p["runs"] / n),
+            "runs": p["runs"], "jobs": n,
+            "per_run_h": round(p["per_run"] / 3600.0, 3),
+            "hard_h": (round(p["hard_window"] / 3600.0, 2) if p.get("hard_window") is not None else None),
             "window_h": round(max(p.get("window", 0.0), p["wide_dur"]) / 3600.0, 2),
             "pace_h": round(p.get("pace_cap", 0.0) / 3600.0, 2),
             "own_h": round(p["wide_dur"] / 3600.0, 2),
