@@ -331,10 +331,16 @@ def build_tasks(agg: dict, mfg: dict, rx: dict, params: BuildParams,
         makespan = max(finish.values()) if finish else 0.0
 
         for tid, p in plan.items():
-            # The latest this type may finish: when the first thing needing it can begin. A final
-            # product answers to the makespan instead — it has no consumer to hold up.
+            # The latest this type may finish: when the first thing needing it can begin.
+            #
+            # A type with NO consumer is a deliverable, and it answers to itself — never to the
+            # makespan. Pacing a finished product against the slowest thing in the queue trades the
+            # one number a customer actually feels for slots nobody asked to free: a 20-run product
+            # that takes an hour on its own became a ten-hour job the moment a 100-hour order was
+            # queued beside it. Slack is for components, whose only deadline is the job that eats
+            # them; first delivery is not slack.
             cons = [start[c] for c in (consumers.get(tid) or ()) if c in start]
-            deadline = min(cons) if cons else makespan
+            deadline = min(cons) if cons else finish[tid]
             p["window"] = max(0.0, deadline - start[tid])
 
     for tid, p in plan.items():

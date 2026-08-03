@@ -871,7 +871,11 @@ and 5h05m mean logging in twice to start work that one trip could have covered. 
 constraint everything here fits inside, so a job runs as long as it may.
 
 Each type is given the fewest jobs that still land by its deadline, where the deadline is **when the
-job consuming it can start** (the final products answer to the makespan instead). Two rules follow,
+job consuming it can start**. A type with NO consumer is a deliverable and answers to **itself, never
+to the makespan** — pacing a finished product against the slowest thing in the queue trades the one
+number a customer feels for slots nobody asked to free (a 20-run product taking an hour alone became
+a ten-hour job the moment a 100-hour order was queued beside it). Slack is for components; first
+delivery is not slack. Two rules follow,
 and both were learned from real builds rather than guessed:
 
 * **A type has its own slack before any dependency is considered.** `_balanced` splits R runs over n
