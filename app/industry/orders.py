@@ -535,3 +535,90 @@ def install_block(ctx: int, res: dict) -> dict:
         "makespan_hours": res["metrics"]["makespan_hours"],
         "later_waves": max(0, len(waves) - 1),
     }
+
+
+class ForceAboveRequest(QueuePlanRequest):
+    """Build every borderline component worth at least `min_saving`, to a fixpoint."""
+    min_saving: float = 0.0
+
+
+# Building a component makes its own inputs a bulk demand, which can make THOSE worth building, and
+# so on down the tree. Bounded because forcing only ever grows the set and every round must add at
+# least one type; the cap is a safety net against a pathological graph, not an expected exit.
+_FORCE_ROUNDS = 8
+
+
+@router.post("/api/industry/orders/force-above")
+def force_build_above(req: ForceAboveRequest, ctx: int = Depends(require_context)):
+    """Overrule the buy-it-anyway shortcut for everything saving at least `min_saving`, then keep
+    going until nothing new qualifies.
+
+    One press instead of chasing the list. Accepting a batch of these changes the shared batch every
+    other decision was weighed against, so a different set comes out borderline afterwards — which,
+    a chip at a time, is indistinguishable from the tool inventing new work each time you take its
+    advice. Iterating to a fixpoint here means the answer the user gets is stable: after this, there
+    is nothing left above their cut-off.
+
+    The rounds share ONE `prepare_plan_inputs`. Only `force_build_ids` changes between them, and the
+    expensive half — graphs, prices, names, blueprints, the contract index, the slot pool — does not
+    depend on it, so this costs one set of DB reads however many rounds it takes.
+    """
+    ensure_industry_orders_table()
+    cut = max(0.0, float(req.min_saving))
+    con = get_connection()
+    try:
+        orders = con.execute(
+            "SELECT id, product_type_id, quantity, force_build_ids, me_te_overrides "
+            "FROM pp_industry_orders WHERE context_id=? AND status='queued' "
+            "ORDER BY priority DESC, id", (ctx,),
+        ).fetchall()
+    finally:
+        con.close()
+    if not orders:
+        return {"added": [], "rounds": 0, "empty": True}
+
+    forced = {t for o in orders for t in _parse_ids(o["force_build_ids"])}
+    me_te: dict = {}
+    for o in orders:
+        me_te.update(_parse_map(o["me_te_overrides"]))
+    combined: dict[int, int] = {}
+    for o in orders:
+        combined[o["product_type_id"]] = combined.get(o["product_type_id"], 0) + o["quantity"]
+    targets = list(combined.items())
+
+    req = req.model_copy(update={"force_build_ids": sorted(forced),
+                                 "me_te_overrides": {**me_te, **(req.me_te_overrides or {})}})
+    inp = prepare_plan_inputs(ctx, targets, req, mfg_slots=req.mfg_slots, rx_slots=req.rx_slots,
+                              missing_recipe_detail=lambda tid: f"queued order {tid} has no recipe")
+    on_hand = _stock_for(ctx, targets) if req.use_stock else None
+
+    added: list[int] = []
+    rounds = 0
+    for _ in range(_FORCE_ROUNDS):
+        rounds += 1
+        inp.params.force_build_ids = set(forced)
+        res = plan_queue(targets, inp.mfg, inp.rx, inp.prices, inp.adjusted, inp.params, inp.names,
+                         inp.pools, on_hand=on_hand)
+        fresh = {int(s["type_id"]) for s in res.get("shopping_list", [])
+                 if s.get("bought_marginal") and (s.get("marginal_saving") or 0) >= cut
+                 and int(s["type_id"]) not in forced}
+        if not fresh:
+            break
+        forced |= fresh
+        added.extend(sorted(fresh))
+
+    if added:
+        # Stored on the first order, like every other force-build: the queue unions them, so one
+        # order carries the decision for the whole batch and its ⚒ tag is how it's taken back.
+        con = get_connection()
+        try:
+            con.execute("UPDATE pp_industry_orders SET force_build_ids=? WHERE id=? AND context_id=?",
+                        (json.dumps(sorted(forced)), orders[0]["id"], ctx))
+            con.commit()
+        finally:
+            con.close()
+        from app.industry.shares import invalidate_order_shares
+        invalidate_order_shares(orders[0]["id"])
+
+    return {"added": [{"type_id": t, "name": inp.names.get(t, str(t))} for t in added],
+            "rounds": rounds, "cut": cut}

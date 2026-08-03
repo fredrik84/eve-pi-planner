@@ -1667,6 +1667,7 @@ def main():
     test_the_customer_page_measures_progress_the_same_way_the_builder_does()
     test_stale_caches_refresh_themselves_on_the_way_in()
     test_opening_the_tab_plans_the_queue_once_not_twice()
+    test_building_the_borderline_set_runs_to_a_fixpoint()
     test_a_scan_retires_stock_that_is_no_longer_there()
     test_corp_hangars_and_containers_split_like_personal_ones()
     test_ordinary_users_are_not_asked_for_director_permissions()
@@ -1984,6 +1985,31 @@ def test_opening_the_tab_plans_the_queue_once_not_twice():
           sig.parameters["res"].default is None)
     snap = inspect.getsource(P._queue_snapshot)
     check("and only plans for itself when it wasn't given one", "if res is None:" in snap)
+
+
+def test_building_the_borderline_set_runs_to_a_fixpoint():
+    """Accepting a batch of borderline components changes the shared batch every other decision was
+    weighed against, so a different set comes out borderline afterwards. A chip at a time that is
+    indistinguishable from the tool inventing new work each time you take its advice. One press has
+    to leave nothing above the cut-off, so it iterates until no new type qualifies."""
+    print("test_building_the_borderline_set_runs_to_a_fixpoint")
+    import inspect
+    from app.industry import orders as O
+
+    src = inspect.getsource(O.force_build_above)
+    check("it loops rather than taking one pass", "for _ in range(_FORCE_ROUNDS)" in src)
+    check("and stops as soon as nothing new qualifies", "if not fresh:" in src)
+    check("the forced set only ever grows, which is what guarantees it terminates",
+          "forced |= fresh" in src and "forced -=" not in src and "forced.discard" not in src)
+    check("the rounds share one input preparation",
+          src.index("prepare_plan_inputs(") < src.index("for _ in range(_FORCE_ROUNDS)")
+          and "inp.params.force_build_ids = set(forced)" in src)
+    check("only components UNDER the engine's own threshold are swept up",
+          's.get("bought_marginal")' in src)
+    check("the cut-off is honoured", '>= cut' in src)
+    check("and the result is persisted where every other force-build lives",
+          "force_build_ids=?" in src)
+    check("there is a bound on the rounds", isinstance(O._FORCE_ROUNDS, int) and O._FORCE_ROUNDS > 1)
 
 
 def test_sourcing_notes_belong_to_one_order():

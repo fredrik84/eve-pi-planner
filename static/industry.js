@@ -1709,10 +1709,30 @@ function indMargCutLabel() {
   try { localStorage.setItem('indMargCut', String(cut)); } catch (e) {}
 }
 
+// One press, then keep going: building these makes their own inputs a bulk demand, which can make
+// THOSE worth building too. The server iterates to a fixpoint so the answer is stable — after this
+// there is nothing left above the cut-off — rather than leaving the user to chase a list that
+// regrows each time they accept its advice.
 async function indBuildAllAbove() {
   const picked = _indMargAbove();
   if (!picked.length) return;
-  return _indKeepScroll(() => _indForceBuildMany(picked));
+  // No queue yet (the preview): nothing to iterate against, so take the single pass.
+  if (!_indStatusVisible() || !(_indOrders || []).length) {
+    return _indKeepScroll(() => _indForceBuildMany(picked));
+  }
+  const btn = document.querySelector('.ind-marg-apply');
+  if (btn) { btn.disabled = true; btn.textContent = 'Working…'; }
+  let d;
+  try {
+    d = await apiSend('POST', '/api/industry/orders/force-above',
+                      { ..._indQueueBody(), min_saving: _indMargCut() });
+  } catch (e) { toastError(e, 'Could not save'); if (btn) btn.textContent = 'Build these'; return; }
+  const n = (d.added || []).length;
+  if (n) {
+    toast(`Building ${n} more component${n === 1 ? '' : 's'}`
+          + (d.rounds > 1 ? ` — ${d.rounds} passes, since building some made others worth building` : ''));
+  }
+  return _indKeepScroll(() => indRefreshStatus());
 }
 
 // Overrule the buy-it shortcut for one component. Where that override is STORED depends on whether

@@ -807,7 +807,16 @@ to the current build's range) so a refresh doesn't silently change what the stri
 Restoring the position applies nothing by itself — the button is still a deliberate press.
 The strip also says out loud that **taking some changes which components are borderline afterwards**.
 That is the plan re-costing a batch the user just changed, but without saying so it looks like the
-tool inventing new work each time you accept its advice. The shopping list keeps the
+tool inventing new work each time you accept its advice — so the bulk button doesn't stop at one
+pass. `POST /api/industry/orders/force-above` **iterates to a fixpoint**: plan, take everything at
+or above the cut-off, re-plan (building a component makes its own inputs a bulk demand, which can
+make THOSE worth building), repeat until a round adds nothing. One press, and afterwards there is
+nothing left above the cut-off. It terminates because the forced set only grows and every round must
+add at least one type; `_FORCE_ROUNDS` is a safety net against a pathological graph, not the
+expected exit. All rounds share ONE `prepare_plan_inputs` — only `force_build_ids` changes between
+them, and the expensive half doesn't depend on it — so the whole thing costs one set of DB reads
+however many passes it takes. The single chips stay a single pass: clicking one component is a
+choice about that component, not a policy. The shopping list keeps the
 `low saving` badge and the "saves X if built" note as an *explanation* of why a row is there — one
 place to decide, one place to look things up, no second list.
 Where the override is stored depends on context (`indBuildAnyway`): with a queue it PATCHes the
