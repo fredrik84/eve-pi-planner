@@ -141,11 +141,19 @@ def aggregate_demand(targets: list[tuple[int, int]], memo: dict, mfg: dict, rx: 
         bp = params.bp_acquire.get(tid)
         bp_cost = 0.0
         bp_buy = None
-        if bp and runs > 0 and tid not in params.owned and bp["kind"] != "bpo_only":
+        # What the account's OWN copy covers. An original covers everything; a copy covers its
+        # remaining runs and no more. Owning a 4-run copy for a 20-run batch is not "you have the
+        # blueprint" — it is sixteen runs you still have to find, and treating it as covered priced
+        # those copies at nothing and told the builder they were ready to start when they weren't.
+        own = (params.owned or {}).get(tid) or {}
+        covered = (runs if own.get("kind") == "bpo" else
+                   max(0, int(own.get("runs") or 0)) if own else 0)
+        short = max(0, runs - covered)
+        if bp and short > 0 and bp["kind"] != "bpo_only":
             # Priced from the real listings: a copy carries a fixed number of runs and one contract
             # is one item, so a 40-run batch off 10-run copies means buying four of them.
             from app.industry.bpc import cost_for_runs
-            bp_buy = cost_for_runs(bp, runs)
+            bp_buy = cost_for_runs(bp, short)
             bp_cost = bp_buy["cost"]
             blueprint_cost_total += bp_cost
 
@@ -176,6 +184,9 @@ def aggregate_demand(targets: list[tuple[int, int]], memo: dict, mfg: dict, rx: 
             "gross": gross[tid], "net": net, "runs": runs, "produced": produced,
             "leftover": produced - net, "output_qty": output_qty, "bought_for_speed": False,
             "blueprint_cost": bp_cost, "blueprint_buy": bp_buy,
+            # Runs this batch needs that the account's own blueprint cannot cover, so the plan can
+            # say "you hold a 4-run copy and this is 20 runs" instead of implying you're ready.
+            "runs_short": short if own else 0,
         }
         for inp in recipe["inputs"]:
             gross[inp["type_id"]] += effective_material_qty(inp["quantity"], runs, me, mult)
@@ -588,7 +599,10 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
              # isn't a plan — it's a shopping trip you haven't been told about. Reactions use a
              # formula, not a blueprint, so they're never flagged.
              "blueprint": params.owned.get(tid),
-             "needs_blueprint": info["activity"] == "manufacturing" and tid not in params.owned}
+             "needs_blueprint": info["activity"] == "manufacturing" and tid not in params.owned,
+             # Owned, but not for this many runs. A 4-run copy against a 20-run batch is sixteen
+             # runs still to find, which "you own the blueprint" hides completely.
+             "runs_short": info.get("runs_short") or 0}
             for tid, info in agg.items() if info["build"] and info["runs"] > 0
         ],
         "schedule": sched,

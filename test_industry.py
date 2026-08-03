@@ -1659,6 +1659,7 @@ def main():
     test_slots_are_only_spent_where_they_buy_time()
     test_packing_never_paces_one_pool_against_the_other()
     test_a_job_never_carries_more_runs_than_the_blueprint_copy_has()
+    test_an_owned_copy_only_covers_the_runs_it_has()
     test_one_products_runs_are_not_spread_thinner_than_its_own_pace()
     test_slack_comes_from_the_consumer_not_from_stage_mates()
     test_sourcing_notes_belong_to_one_order()
@@ -1975,6 +1976,45 @@ def test_one_products_runs_are_not_spread_thinner_than_its_own_pace():
     _t, capped_by = build_tasks(agg, capped, {}, params, pools, depths={1: 0}, deps={1: set()})
     check("but a 1-run blueprint cap is never exceeded",
           max(t.runs for t in capped_by[1]) == 1)
+
+
+def test_an_owned_copy_only_covers_the_runs_it_has():
+    """Owning a blueprint was treated as owning it for any batch size. It isn't: a COPY carries a
+    fixed number of runs, so holding a 4-run copy against a 20-run batch is sixteen runs you still
+    have to find — priced at nothing, and reported as "you have the blueprint", which tells a
+    builder they are ready to start when they are not. An ORIGINAL genuinely does cover any batch."""
+    print("test_an_owned_copy_only_covers_the_runs_it_has")
+    mfg = {1: {"base_time": 3600, "max_runs": 100, "output_qty": 1, "inputs": []}}
+    agg_of = lambda: {1: {"build": True, "runs": 20, "activity": "manufacturing"}}
+    prices, adj, names = _prices({1: 5_000_000.0}), {1: 1.0}, {1: "Widget"}
+    pools = {"manufacturing": 5, "reaction": 5}
+    acquire = {1: {"kind": "bpc", "price": 10_000_000.0, "runs_per_copy": 5, "live": True,
+                   "listings": [{"runs": 5, "price": 10_000_000.0}] * 8}}
+
+    def bp_cost(owned):
+        p = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, struct_time_mult=1.0,
+                        owned=owned, bp_acquire=acquire)
+        memo, _u = resolve_unit_costs(mfg, {}, prices, adj, p)
+        agg = aggregate_demand([(1, 20)], memo, mfg, {}, p, None, pools)
+        return agg[1].get("blueprint_cost", 0.0), agg[1].get("runs_short", 0)
+
+    none_cost, none_short = bp_cost({})
+    check("owning nothing charges for the whole batch's copies", none_cost > 0)
+    check("and nothing is 'short', because nothing was assumed", none_short == 0)
+
+    bpo_cost, bpo_short = bp_cost({1: {"me": 0, "te": 0, "kind": "bpo", "runs": -1}})
+    check("an original covers any batch, for free", bpo_cost == 0.0 and bpo_short == 0)
+
+    part_cost, part_short = bp_cost({1: {"me": 0, "te": 0, "kind": "bpc", "runs": 8}})
+    check("an 8-run copy leaves 12 runs to find", part_short == 12)
+    check("which are charged for", part_cost > 0)
+    # 12 runs is three 5-run copies where 20 runs is four, so holding one really is cheaper. (Note
+    # it isn't always: a shortfall of 16 still needs four copies, because copies come whole.)
+    check("but less than owning nothing at all", part_cost < none_cost)
+    check("and the shortfall is charged in whole copies", part_cost == none_cost * 3 / 4)
+
+    full_cost, full_short = bp_cost({1: {"me": 0, "te": 0, "kind": "bpc", "runs": 25}})
+    check("a copy with runs to spare covers the batch", full_short == 0 and full_cost == 0.0)
 
 
 def test_a_job_never_carries_more_runs_than_the_blueprint_copy_has():

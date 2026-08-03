@@ -459,9 +459,15 @@ def acquisition_costs(type_ids: list[int], owned: dict, region_id: int = THE_FOR
                        hides that you can't start at all. The caller treats these as "buy the
                        component instead", which is what a person would actually do.
 
-    Types already owned are omitted — you have the blueprint, so there is nothing to acquire.
+    Types whose owned blueprint is an ORIGINAL are omitted — you have it, and it never runs out.
+    An owned COPY is still priced: it carries a fixed number of runs, so a batch longer than that
+    needs more copies, and the caller nets its own copy off before charging for the rest.
     """
-    wanted = [t for t in type_ids if t not in owned]
+    # Owned BPOs are done — an original never runs out. An owned COPY is not: it carries a fixed
+    # number of runs, and a batch bigger than that needs more copies from somewhere. So those stay
+    # in the list, and the caller decides how much of the batch its own copy already covers.
+    wanted = [t for t in type_ids
+              if t not in owned or (owned[t] or {}).get("kind") == "bpc"]
     prices = bpc_prices(wanted, region_id)
     out: dict[int, dict] = {}
     for tid, info in prices.items():

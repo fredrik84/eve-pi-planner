@@ -284,9 +284,14 @@ const _IND_CACHE_KEY = 'indPlanCache';
 const _IND_CACHE_MAX_AGE = 15 * 60 * 1000;   // beyond this the ETAs are visibly wrong; wait instead
 
 function _indQueueSig(orders) {
-  return JSON.stringify((orders || []).map(o => [o.id, o.quantity, o.product_type_id,
-                                                 (o.force_build_ids || []).join(','),
-                                                 JSON.stringify(o.me_te_overrides || {})]));
+  // The running BUILD is part of the key. Without it a deploy that changes how plans are computed
+  // — how jobs are split across slots, say — would still be served the pre-deploy plan from this
+  // cache for up to fifteen minutes, and the user would reasonably conclude the change didn't ship.
+  const src = (document.querySelector('script[src*="industry.js"]') || {}).src || '';
+  const build = (src.match(/[?&]v=([a-z0-9]+)/) || [])[1] || '';
+  return JSON.stringify([build, (orders || []).map(o => [o.id, o.quantity, o.product_type_id,
+                                                         (o.force_build_ids || []).join(','),
+                                                         JSON.stringify(o.me_te_overrides || {})])]);
 }
 
 function _indReadPlanCache(sig) {
@@ -2416,6 +2421,29 @@ let _indBpcSeq = 0;
 
 function _indBlueprintWarn(d) {
   const miss = (d.metrics && d.metrics.missing_blueprints) || [];
+  return _indCopyShortWarn(d) + (miss.length ? _indMissingBpWarn(d, miss) : '');
+}
+
+// Owning a COPY is not owning the blueprint for any batch size: it carries a fixed number of runs.
+// This says so, because "you have the blueprint" while sixteen of twenty runs have nowhere to come
+// from is the kind of quiet wrong that gets found at the industry terminal.
+function _indCopyShortWarn(d) {
+  const short = (d.requirements || []).filter(r => (r.runs_short || 0) > 0);
+  if (!short.length) return '';
+  const rows = short.map(r => {
+    const have = (r.blueprint && r.blueprint.runs) || 0;
+    return `<div class="ind-bp-row2"><span class="ind-bp-nm">${_esc(r.name)}`
+      + `<span class="ind-bp-need">${r.runs} run${r.runs > 1 ? 's' : ''} needed, your copy has ${have}</span></span>`
+      + `<span class="ind-bp-px">${r.runs_short} run${r.runs_short > 1 ? 's' : ''} short</span></div>`;
+  }).join('');
+  return `<div class="ind-bp-note"><b>Your blueprint ${short.length === 1 ? 'copy runs' : 'copies run'} out</b>`
+    + `<div class="ind-bp-rows">${rows}</div>`
+    + `<div class="ind-bp-warn-sub">A copy carries a fixed number of runs, so the rest of the batch `
+    + `needs more copies — those are priced into the total above, at contract prices. Nothing is `
+    + `blocked; you just can't start the whole batch off the one you hold.</div></div>`;
+}
+
+function _indMissingBpWarn(d, miss) {
   if (!miss.length) return '';
   const inst = ++_indBpcSeq;
   const rows = miss.map(m => {

@@ -884,6 +884,15 @@ and both were learned from real builds rather than guessed:
   its stage paces against itself and stays fully split, and two types feeding one job from different
   depths never see each other.
 
+**An owned COPY only covers the runs it has.** Ownership used to be binary — `tid in params.owned`
+meant free and ready — which is right for an ORIGINAL and wrong for a copy: holding a 4-run copy
+against a 20-run batch is sixteen runs with nowhere to come from, priced at nothing and reported as
+"you have the blueprint". `acquisition_costs` therefore keeps owned-BPC types in its list, and
+`aggregate_demand` charges `cost_for_runs(bp, runs - covered)` where `covered` is the whole batch for
+a BPO and the copy's remaining runs for a BPC. The shortfall is reported per requirement as
+`runs_short` and surfaced by `_indCopyShortWarn`. Note copies come whole, so a shortfall of 16 and a
+batch of 20 both cost four 5-run copies — owning one is not always cheaper.
+
 **A manufacturing job also cannot exceed the blueprint COPY's runs.** The SDE `max_runs` is the
 blueprint type's per-job limit; what actually binds is the copy — `owned[tid].runs` for one the
 account holds, `bp_acquire[tid].runs_per_copy` for one the plan would buy (one contract is one
@@ -921,8 +930,10 @@ changing anything:
   `_indWritePlanCache`, sessionStorage). The cache is keyed on the queue itself — order ids,
   quantities, force-build and ME/TE overrides — and the orders list is fetched before it is read, so
   a plan is only ever shown for the queue that is actually there (which also makes flashing another
-  account's build impossible). Capped at 15 minutes, past which the ETAs are visibly wrong and it
-  waits instead.
+  account's build impossible). **The running build id is part of that key** — otherwise a deploy
+  that changes how plans are computed would keep serving the pre-deploy plan for fifteen minutes and
+  the change would look like it hadn't shipped. Capped at 15 minutes, past which the ETAs are
+  visibly wrong and it waits instead.
 Measured on a Revelation: share link 706ms cold-process → **47ms** warm; page ≈73ms serial → ≈25ms.
 Keep it that way: anything that needs a whole-queue plan should take one that already exists rather
 than calling `_run_queue_plan` again.
