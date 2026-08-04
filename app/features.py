@@ -186,6 +186,14 @@ FEATURE_REGISTRY = [
                     "Point an order at the container you're hauling into and it keeps itself up to "
                     "date from your assets; anything we can't see can be ticked off by hand.",
      "default": False},
+    {"key": "industry_plan_sources", "label": "Industry: each build owns its containers",
+     "group": "Industry",
+     "description": "Per order: bind SEVERAL containers to a build (grouped by station and system), "
+                    "save a reusable named set, and count only those boxes as that build's stock — "
+                    "sharing a container between builds becomes a deliberate pick rather than a "
+                    "side effect of binding it. Orders queued before this keep using the "
+                    "account-wide tick list until you edit them.",
+     "default": False},
 ]
 GROUP_ORDER = ["Dashboard", "Setup Analysis", "Planner", "Planet DB", "Characters",
                "Notifications & Alerts", "Reactions", "Industry"]

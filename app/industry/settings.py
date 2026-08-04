@@ -61,7 +61,12 @@ def ensure_industry_settings_table():
                     # The stock source the last build was pointed at, so the next one can default to
                     # it instead of asking again. Per ACCOUNT and not derived from the orders table:
                     # it has to survive that order being finished and cleared.
-                    "last_source_key TEXT")
+                    "last_source_key TEXT",
+                    # …and the whole remembered SET, a JSON array. A build gathered from a reaction
+                    # can and a manufacturing can answers the same question with the same two boxes
+                    # every time; `last_source_key` keeps the first of them so nothing that only
+                    # knows the single field changes.
+                    "last_source_keys TEXT")
         # Anyone who already has saved build options has plainly used this tab before, so they must
         # not be handed a first-run screen. Safe to re-run on a restart precisely because a user who
         # has NOT been through setup owns no settings row: the frontend only seeds one once the
@@ -96,6 +101,15 @@ def get_settings(context_id: int) -> dict:
         con.close()
     d["never_build_ids"] = _parse_ids(d.get("never_build_ids"))
     d["onboarded"] = bool(d.get("onboarded"))
+    # The remembered source set, with the single-key column as its fallback so an account that last
+    # bound a build before sets existed still arrives with its picker answered.
+    try:
+        keys = [str(k) for k in json.loads(d.get("last_source_keys") or "[]") if str(k).strip()]
+    except Exception:
+        keys = []
+    if not keys and (d.get("last_source_key") or "").strip():
+        keys = [d["last_source_key"].strip()]
+    d["last_source_keys"] = keys
     return d
 
 

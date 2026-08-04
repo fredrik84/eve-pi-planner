@@ -1279,7 +1279,73 @@ list beside it still told you to buy them — naming the box you're hauling into
 Binding enables; **unbinding never disables**, because auto-disabling could switch off a source the
 user turned on themselves or that another order still draws from, and the two failure directions
 (ignoring stock you have → build too much; counting stock you don't → build too little, shopping
-list short) are both too costly to guess at. One tick in Setup undoes it.
+list short) are both too costly to guess at. One tick in Setup undoes it. **This is now the LEGACY
+path** — see per-plan sources below, where the account-wide side effect is exactly what changes.
+
+### Where a container IS, and which build owns it (`industry_plan_sources`)
+
+Two things reported from use, one code path. Both live in `app/industry/assets.py`.
+
+**A container is identified by where it is.** A source row used to carry its own name and its parent
+hangar division and nothing else, which is ambiguous exactly when it matters: picking which box a
+build sources from with cans in several stations. `_split_by_source`'s `root_of` walk (the one that
+already finds the hangar flag) now also yields the root asset's `location_id` — the station or
+structure the whole chain sits in — resolved to `{name, system}` by `_resolve_location` and stored on
+the row (`location_id` / `location_name` / `system_name`). Rules worth keeping:
+- **Only CONTAINERS carry a location.** A hangar source key is `char:<id>` for every station that
+  character has a hangar in, so it has no single location and must not claim one.
+- **Station → `/universe/stations/{id}`** (public). **Structure → `/universe/structures/{id}`**
+  through `markets.structure_info`, which is now the ONE place that call is made (the market
+  hull/security detector was the other; it calls this too). Structures are **ACL-gated**: a 403 is
+  the normal answer for somebody else's citadel and degrades to "no system name", never to a failed
+  asset scan — the same rule container naming already followed.
+- **Resolutions are cached in `pp_locations`** (global — an id→name mapping is a property of New
+  Eden, and a row is only ever read back for an account that already holds assets there). The
+  **unresolvable answer is cached too**, or every scan would re-burn the ESI error budget on the
+  same 403.
+- `_place_label` is the one string every list groups by, built server-side (`place` on each source)
+  so the four pickers can't word it differently. It appends the system only when the location name
+  doesn't already lead with it — every NPC station name opens with its system, and "Jita IV - Moon 4
+  - CNAP · Jita" reads as a bug.
+- **Every list that shows containers groups by it**: the Setup stock list (section headers), the plan
+  modal's "Materials from" picker and the sourcing panel's (both `<optgroup>` per station/structure,
+  via the shared `_indGroupSources` / `_indSourceOptionsHtml`). Reactions and PI surface no container
+  lists of their own — `pp_asset_sources` is read only by Industry — so there was no fourth place.
+
+**A build owns its containers.** `pp_industry_orders.source_keys` (JSON array) replaces the single
+`source_key`, because reaction stock and manufacturing stock genuinely sit in different stations and
+one build draws on both. `source_key` is still written as the set's first element, so nothing that
+only knows about one box changed. `source_quantities_multi` sums the set (no double counting is
+possible — an item belongs to exactly one source by construction, and the key set is de-duplicated),
+and `_item_row`'s **higher of paste and box** rule is untouched: the sum is what the note is weighed
+against.
+The bigger change is what the set MEANS. Binding used to switch a box on account-wide, which made
+one build's can every other build's stock. Now `plan_source_keys(ctx, orders)` resolves what a plan
+may spend: an order whose set the user curated (`sources_owned`) counts that set **and nothing
+else**, so sharing a container between two builds is a deliberate pick in both, not a side effect.
+Three rules keep that from being retroactive or surprising, and all three are load-bearing:
+- **An uncurated order still draws on the account-wide tick list.** Every order queued before this
+  is uncurated, so an in-flight build cannot silently lose sight of a can it was already counting.
+  `sources_owned` is set only when a caller sends `source_keys` — the old single field never claims
+  ownership.
+- **A mixed queue is the UNION of both.** The queue is planned as one aggregated batch, so denying
+  it the pool an uncurated order is entitled to would have the planner buy materials the user has in
+  hand — the expensive direction to be wrong in.
+- **An empty set is not ownership.** Picking no box says nothing about where materials come from, so
+  it falls back to the pool rather than to no stock at all; clearing every box hands ownership back
+  (`sources_owned = 0`). Same rule in `graph._plan_on_hand` for the single-product preview, which
+  takes `source_keys` so the preview is costed against the stock the resulting ORDER would count.
+`enable_bound_sources` (legacy, single-key callers) and `remember_source_default` (the per-plan path)
+are the two halves of what `enable_bound_source` used to do; only the first touches the account-wide
+tick list. The remembered default is a SET now (`pp_industry_settings.last_source_keys`, first
+element still in `last_source_key`), so a builder who gathers from two cans on every order gets both
+pre-filled.
+**Effort constraint:** the common case is still one box and still costs one dropdown, pre-answered.
+Extra boxes are behind a `+ another box` button, and `pp_source_sets` (a named group — "reaction
+stock" = three cans across two stations, `GET/POST/DELETE /api/industry/source-sets`) collapses a
+repeat multi-box answer back to a single pick. A saved set is a **shortcut for choosing boxes**, never
+a second thing a plan can be bound to: picking one expands to its keys on the order, so there stays
+exactly one shape of binding for every reader.
 **The picker arrives already answered.** Binding records the source as the account's default
 (`pp_industry_settings.last_source_key`, written by `enable_bound_source`) and the next build's
 picker pre-selects it — a builder running a can per build was otherwise answering the same question

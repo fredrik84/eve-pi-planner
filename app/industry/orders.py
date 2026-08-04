@@ -65,6 +65,18 @@ def ensure_industry_orders_table():
             # simultaneous builds apart, so the sourcing checklist reads that box rather than
             # asking them to tick materials off by hand.
             "source_key TEXT DEFAULT ''",
+            # The FULL bound set, a JSON array of source keys. Reaction stock and manufacturing
+            # stock routinely sit in different stations, so one build's materials legitimately live
+            # in several boxes. Additive by design: `source_key` keeps the first of them, so an
+            # order written before this column existed — and any reader that only knows about the
+            # single key — still works untouched.
+            "source_keys TEXT DEFAULT ''",
+            # Has the user curated THIS order's sources? 1 = the set above is the whole answer for
+            # this plan: it is what the checklist measures and the only stock this plan may count.
+            # 0 = the order predates per-plan sources and keeps drawing on the account-wide tick
+            # list, exactly as it did before. The column is what makes the change non-retroactive:
+            # an in-flight build cannot silently lose sight of a can it was already counting.
+            "sources_owned INTEGER DEFAULT 0",
         )
         con.commit()
     finally:
@@ -82,6 +94,10 @@ class OrderCreate(BaseModel):
     # The container/hangar this build pulls from, chosen while planning it. Set here rather than
     # only afterwards because "which box is this build's" is decided when the build is decided.
     source_key: str = ""
+    # …and the rest of them, when a build's materials are spread over more than one box. Both fields
+    # are accepted so an older client (or a caller that only ever binds one) needs no change at all;
+    # `source_keys` wins when both are sent, since it is the more complete statement.
+    source_keys: list[str] = []
 
 
 class OrderUpdate(BaseModel):
@@ -94,6 +110,7 @@ class OrderUpdate(BaseModel):
     priority: int | None = None
     status: str | None = None
     source_key: str | None = None    # '' unbinds the order from its container
+    source_keys: list[str] | None = None   # the whole bound set; [] unbinds every box
 
 
 def _parse_map(value) -> dict:
@@ -113,10 +130,34 @@ def _parse_ids(value) -> list[int]:
         return []
 
 
+def order_source_keys(row) -> list[str]:
+    """The boxes an order pulls from, in bind order.
+
+    `source_keys` is the truth once it has been written; an order queued before it existed has only
+    `source_key`, and reads as the one-element set it always meant. Both are kept in step on write
+    (see `_normalise_source_keys`) so neither column can be the stale one.
+    """
+    d = dict(row) if not isinstance(row, dict) else row
+    try:
+        keys = [str(k) for k in json.loads(d.get("source_keys") or "[]") if str(k).strip()]
+    except Exception:
+        keys = []
+    if not keys and (d.get("source_key") or "").strip():
+        keys = [d["source_key"].strip()]
+    return list(dict.fromkeys(keys))
+
+
+def _normalise_source_keys(keys) -> list[str]:
+    """De-duplicated, order-preserving, length-capped — the same cap the single column has always
+    applied, since each element still has to fit it."""
+    return list(dict.fromkeys((str(k) or "").strip()[:80] for k in (keys or []) if str(k).strip()))
+
+
 def _order_dict(con, row) -> dict:
     """Row → API shape: the overrides come back as {type_id, name} so the UI can show WHICH
     components were overridden without a second lookup per order."""
     d = dict(row)
+    d["source_keys"] = order_source_keys(d)
     ids = _parse_ids(d.get("force_build_ids"))
     d["force_build_ids"] = ids
     d["me_te_overrides"] = _parse_map(d.get("me_te_overrides"))
@@ -161,21 +202,34 @@ def create_order(req: OrderCreate, ctx: int = Depends(require_context)):
             raise HTTPException(status_code=400, detail="that type has no manufacturing or reaction recipe")
         # RETURNING id — cur.lastrowid is None on Postgres (prod), which made the follow-up lookup
         # 404 ("order not found") even though the insert committed.
+        # Sending `source_keys` at all is the statement "this plan's sources are mine to decide" —
+        # a client that only knows the old single field keeps the old account-wide behaviour. An
+        # EMPTY set is not that statement: picking no box says nothing about where this build's
+        # materials come from, so it falls back to the account pool rather than to no stock at all.
+        sent = "source_keys" in req.model_fields_set
+        keys = _normalise_source_keys(req.source_keys if sent
+                                      else ([req.source_key] if req.source_key else []))
+        owned = sent and bool(keys)
         oid = con.execute(
             "INSERT INTO pp_industry_orders (context_id, product_type_id, name, quantity, mode, "
             "priority, status, created_at, label, force_build_ids, me_te_overrides, margin_pct, "
-            "source_key) VALUES (?,?,?,?,?,?, 'queued', ?,?,?,?,?,?) RETURNING id",
+            "source_key, source_keys, sources_owned) "
+            "VALUES (?,?,?,?,?,?, 'queued', ?,?,?,?,?,?,?,?) RETURNING id",
             (ctx, req.product_type_id, name or str(req.product_type_id), req.quantity, req.mode,
              int(_time.time()), _time.time(), (req.label or "").strip()[:60],
              json.dumps(sorted({int(t) for t in req.force_build_ids})),
              json.dumps(req.me_te_overrides or {}), req.margin_pct,
-             (req.source_key or "").strip()[:80]),
+             keys[0] if keys else "", json.dumps(keys), 1 if owned else 0),
         ).fetchone()[0]
         con.commit()
-        # Naming the box this build pulls from also lets the planner count it — see
-        # sourcing.enable_bound_source for why those aren't two separate decisions.
-        from app.industry.sourcing import enable_bound_source
-        enable_bound_source(ctx, (req.source_key or "").strip())
+        from app.industry.sourcing import remember_source_default, enable_bound_sources
+        if owned:
+            # The plan owns its sources: they count for THIS build and no other. Nothing global is
+            # switched on, so hauling into this order's can does not quietly hand its contents to
+            # every other build — sharing a box is putting it in both sets, deliberately.
+            remember_source_default(ctx, keys)
+        else:
+            enable_bound_sources(ctx, keys)
         return _order_row(con, oid, ctx)
     finally:
         con.close()
@@ -249,8 +303,24 @@ def update_order(order_id: int, req: OrderUpdate, ctx: int = Depends(require_con
             params.append(json.dumps(req.me_te_overrides))
         if req.margin_pct is not None:
             sets.append("margin_pct=?"); params.append(max(0.0, min(100.0, float(req.margin_pct))))
-        if req.source_key is not None:
-            sets.append("source_key=?"); params.append(req.source_key.strip()[:80])
+        # One binding, two columns kept in lockstep: whichever field the caller sent decides the
+        # whole set, and `source_key` always ends up as its first element. Letting them be written
+        # independently is how the two would come to disagree about which box a build pulls from.
+        bound, sent = None, False
+        if req.source_keys is not None:
+            bound, sent = _normalise_source_keys(req.source_keys), True
+        elif req.source_key is not None:
+            bound = _normalise_source_keys([req.source_key] if req.source_key.strip() else [])
+        owned = sent and bool(bound)
+        if bound is not None:
+            sets.append("source_key=?"); params.append(bound[0] if bound else "")
+            sets.append("source_keys=?"); params.append(json.dumps(bound))
+            if sent:
+                # Editing the set through the per-plan picker is the user taking ownership of this
+                # order's stock — the point at which it stops drawing on the account-wide pool.
+                # Clearing every box hands it back, rather than leaving a plan that owns nothing and
+                # can therefore count nothing.
+                sets.append("sources_owned=?"); params.append(1 if bound else 0)
         if req.status is not None:
             if req.status not in _VALID_STATUSES:
                 raise HTTPException(status_code=400, detail=f"status must be one of {_VALID_STATUSES}")
@@ -262,9 +332,9 @@ def update_order(order_id: int, req: OrderUpdate, ctx: int = Depends(require_con
             # The customer's link is cached; an edit to the quote has to reach it now, not in a minute.
             from app.industry.shares import invalidate_order_shares
             invalidate_order_shares(order_id)
-        if req.source_key:
-            from app.industry.sourcing import enable_bound_source
-            enable_bound_source(ctx, req.source_key.strip())
+        if bound:
+            from app.industry.sourcing import enable_bound_sources, remember_source_default
+            (remember_source_default if owned else enable_bound_sources)(ctx, bound)
         return _order_row(con, order_id, ctx)
     finally:
         con.close()
@@ -299,12 +369,43 @@ class QueuePlanRequest(BuildOptions):
     rx_slots: int | None = None
 
 
-def _stock_for(ctx: int, targets) -> dict[int, float]:
+def plan_source_keys(ctx: int, orders) -> list[str] | None:
+    """Which boxes THIS plan may spend, or None for "the account-wide tick list" (the old pool).
+
+    A plan owns its own sources: an order whose set the user has curated (`sources_owned`) counts
+    that set and nothing else, so hauling a can into build A does not quietly hand its contents to
+    build B. Sharing a container between two builds is then something the user does on purpose, by
+    putting it in both sets.
+
+    Two rules keep that from being retroactive, which matters more here than usual:
+    * **An uncurated order still draws on the account pool.** Every order queued before this
+      existed is uncurated, so nothing about an in-flight build changes until its owner edits it.
+    * **A mixed queue is the UNION of both.** The queue is planned as one aggregated batch, so the
+      pool an uncurated order is entitled to is available to that batch — narrowing it because a
+      *different* order was curated would make the planner buy materials the user has in hand,
+      which is the expensive direction to be wrong in.
+    Counting is by key set, so a container in two orders' sets is still only spendable once.
+    """
+    rows = [dict(o) for o in (orders or [])]
+    # An order that claims ownership but names no box owns nothing to spend — treat it as having no
+    # opinion, or it would silently deny the whole queue the account pool.
+    curated = [o for o in rows if int(o.get("sources_owned") or 0) and order_source_keys(o)]
+    if not curated:
+        return None
+    keys = [k for o in curated for k in order_source_keys(o)]
+    if len(curated) != len(rows):
+        from app.industry.assets import enabled_source_keys
+        keys += enabled_source_keys(ctx)
+    return list(dict.fromkeys(keys))
+
+
+def _stock_for(ctx: int, targets, orders=None) -> dict[int, float]:
     """Owned quantities to net off the demand, EXCLUDING the products being ordered. Owning a
     Revelation must not make an order to build one plan zero jobs — you asked to build it. Only
     intermediates and materials count as stock. Empty when assets were never fetched."""
-    from app.industry.assets import owned_quantities
-    stock = owned_quantities(ctx)
+    from app.industry.assets import owned_quantities, source_quantities_multi
+    keys = plan_source_keys(ctx, orders)
+    stock = owned_quantities(ctx) if keys is None else source_quantities_multi(ctx, keys)
     for tid, _ in targets:
         stock.pop(tid, None)
     return stock
@@ -357,8 +458,9 @@ def _run_queue_plan(ctx: int, req: QueuePlanRequest, want_full: bool = False) ->
         # Without an explicit ORDER BY the row order is whatever the DB returns, which would make
         # "first in line" arbitrary.
         orders = con.execute(
-            "SELECT product_type_id, quantity, force_build_ids, me_te_overrides, margin_pct "
-            "FROM pp_industry_orders "
+            "SELECT product_type_id, quantity, force_build_ids, me_te_overrides, margin_pct, "
+            "COALESCE(source_key,'') AS source_key, COALESCE(source_keys,'') AS source_keys, "
+            "COALESCE(sources_owned,0) AS sources_owned FROM pp_industry_orders "
             "WHERE context_id=? AND status='queued' ORDER BY priority DESC, id", (ctx,),
         ).fetchall()
         if not orders:
@@ -381,6 +483,10 @@ def _run_queue_plan(ctx: int, req: QueuePlanRequest, want_full: bool = False) ->
         # Margin is snapshotted PER ORDER (a quote a customer holds must not move), so the queue's
         # price can't be one blanket markup — see _blend_margin below.
         order_margins = [(o["product_type_id"], o["quantity"], o["margin_pct"]) for o in orders]
+        # Materialised before the connection closes — the stock resolution below needs each order's
+        # own source set, and a plan is no longer entitled to whatever the account happens to have
+        # ticked (see plan_source_keys).
+        order_rows = [dict(o) for o in orders]
     finally:
         con.close()
 
@@ -391,7 +497,7 @@ def _run_queue_plan(ctx: int, req: QueuePlanRequest, want_full: bool = False) ->
     inp = prepare_plan_inputs(
         ctx, targets, req, mfg_slots=req.mfg_slots, rx_slots=req.rx_slots,
         missing_recipe_detail=lambda tid: f"queued order {tid} has no recipe")
-    on_hand = _stock_for(ctx, targets) if req.use_stock else None
+    on_hand = _stock_for(ctx, targets, order_rows) if req.use_stock else None
     res = plan_queue(targets, inp.mfg, inp.rx, inp.prices, inp.adjusted, inp.params, inp.names,
                      inp.pools, on_hand=on_hand)
     # Progress measures against the FULL requirement, so it needs the same queue planned with no
@@ -571,7 +677,9 @@ def force_build_above(req: ForceAboveRequest, ctx: int = Depends(require_context
     con = get_connection()
     try:
         orders = con.execute(
-            "SELECT id, product_type_id, quantity, force_build_ids, me_te_overrides "
+            "SELECT id, product_type_id, quantity, force_build_ids, me_te_overrides, "
+            "COALESCE(source_key,'') AS source_key, COALESCE(source_keys,'') AS source_keys, "
+            "COALESCE(sources_owned,0) AS sources_owned "
             "FROM pp_industry_orders WHERE context_id=? AND status='queued' "
             "ORDER BY priority DESC, id", (ctx,),
         ).fetchall()
@@ -593,7 +701,7 @@ def force_build_above(req: ForceAboveRequest, ctx: int = Depends(require_context
                                  "me_te_overrides": {**me_te, **(req.me_te_overrides or {})}})
     inp = prepare_plan_inputs(ctx, targets, req, mfg_slots=req.mfg_slots, rx_slots=req.rx_slots,
                               missing_recipe_detail=lambda tid: f"queued order {tid} has no recipe")
-    on_hand = _stock_for(ctx, targets) if req.use_stock else None
+    on_hand = _stock_for(ctx, targets, [dict(o) for o in orders]) if req.use_stock else None
 
     added: list[int] = []
     rounds = 0

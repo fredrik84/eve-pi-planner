@@ -29,6 +29,7 @@ legitimately exceed what the queue will actually build.
 
 from __future__ import annotations
 
+import json
 import time
 
 from fastapi import Depends, HTTPException
@@ -59,38 +60,58 @@ def ensure_sourcing_table():
         con.close()
 
 
-def enable_bound_source(context_id: int, key: str) -> None:
-    """Pointing a build at a container also lets the PLANNER spend that container.
+def remember_source_default(context_id: int, keys: list[str]) -> None:
+    """Remember this bind as the account's default set, and change nothing else.
 
-    Without this the page contradicted itself: the checklist said you had the materials while the
-    shopping list below it still told you to buy them, because "this build pulls from that box" and
-    "the planner may count that box" were two separate switches and only one of them had been
-    thrown. Naming the box you're hauling into is a clear enough statement of intent for both.
+    A builder running a can per build answers "which box?" on every single order, and the answer is
+    nearly always the one they gave last time — so the next order arrives with it already filled in,
+    visible in the picker and one click to change. Remembered as a SET for the same reason it is
+    bound as one: someone gathering from a reaction can and a manufacturing can does that on every
+    order, not just the one.
 
-    **Binding enables; unbinding never disables.** Enabling is additive and one tick to undo in
-    Setup, whereas auto-disabling could switch off a source the user turned on themselves, or that
-    another order still draws from — and quietly ignoring stock you do have is the direction that
-    makes the planner build too much, then quietly *counting* stock you don't is the direction that
-    makes it build too little. Neither is worth guessing at on the user's behalf.
+    **It deliberately does NOT enable anything.** Under per-plan sources a bound box is stock for
+    THAT plan; making it visible to every other plan is a separate decision, and one the user makes
+    by putting the box in the other plan's set (or ticking it in Setup).
     """
-    if not key:
+    keys = [k for k in (keys or []) if k]
+    if not keys:
         return
-    from app.industry.assets import set_sources
-    set_sources(context_id, [key], True)
-    # Remember it as the account's default. A builder running a can per build answers this question
-    # on every single order, and the answer is nearly always the one they gave last time — so the
-    # next order arrives with it already filled in, visible in the picker and one click to change.
     con = get_connection()
     try:
         con.execute(
-            "INSERT INTO pp_industry_settings (context_id, last_source_key) VALUES (?,?) "
-            "ON CONFLICT(context_id) DO UPDATE SET last_source_key=excluded.last_source_key",
-            (context_id, key))
+            "INSERT INTO pp_industry_settings (context_id, last_source_key, last_source_keys) "
+            "VALUES (?,?,?) ON CONFLICT(context_id) DO UPDATE SET "
+            "last_source_key=excluded.last_source_key, last_source_keys=excluded.last_source_keys",
+            (context_id, keys[0], json.dumps(keys)))
         con.commit()
     except Exception:
         pass                  # a missing default is a lesser problem than a failed binding
     finally:
         con.close()
+
+
+def enable_bound_sources(context_id: int, keys: list[str]) -> None:
+    """The LEGACY bind: remember the default AND switch the boxes on account-wide.
+
+    This is what "binding enables" used to mean everywhere — it made the checklist and the shopping
+    list agree, at the cost of making that box stock for every other plan on the account too. That
+    side effect is what per-plan sources replaces (`remember_source_default` + the order's own set),
+    so this path now only serves a caller that sends the old single `source_key` and has therefore
+    made no statement about owning its plan's sources. Unbinding still never disables: the tick is
+    the user's now, and taking it back is one click in Setup.
+    """
+    keys = [k for k in (keys or []) if k]
+    if not keys:
+        return
+    from app.industry.assets import set_sources
+    set_sources(context_id, keys, True)
+    remember_source_default(context_id, keys)
+
+
+def enable_bound_source(context_id: int, key: str) -> None:
+    """Single-box form of `enable_bound_sources`, kept because every existing caller says it that
+    way."""
+    enable_bound_sources(context_id, [key] if key else [])
 
 
 def _manual(context_id: int, order_id: int) -> dict[int, float]:
@@ -225,15 +246,18 @@ def _item_row(s: dict, in_source: dict[int, float], manual: dict[int, float]) ->
 
 def order_sourcing(ctx: int, order_id: int) -> dict:
     """Per-material sourcing state for one order."""
-    from app.industry.assets import list_sources, source_name, source_quantities
-    from app.industry.orders import ensure_industry_orders_table
+    from app.industry.assets import (list_source_sets, list_sources, source_labels, source_name,
+                                     source_quantities_multi)
+    from app.industry.orders import ensure_industry_orders_table, order_source_keys
 
     ensure_industry_orders_table()
     con = get_connection()
     try:
         order = con.execute(
             "SELECT id, product_type_id, name, quantity, label, force_build_ids, me_te_overrides, "
-            "COALESCE(source_key,'') AS source_key FROM pp_industry_orders WHERE id=? AND context_id=?",
+            "COALESCE(source_key,'') AS source_key, COALESCE(source_keys,'') AS source_keys, "
+            "COALESCE(sources_owned,0) AS sources_owned "
+            "FROM pp_industry_orders WHERE id=? AND context_id=?",
             (order_id, ctx),
         ).fetchone()
     finally:
@@ -241,8 +265,12 @@ def order_sourcing(ctx: int, order_id: int) -> dict:
     if not order:
         raise HTTPException(status_code=404, detail="order not found")
 
-    key = order["source_key"] or ""
-    in_source = source_quantities(ctx, key) if key else {}
+    keys = order_source_keys(order)
+    key = keys[0] if keys else ""
+    # Summed across every bound box — an item belongs to exactly one source, so the boxes add up
+    # with nothing counted twice — and still capped per material by `_item_row`, which is what keeps
+    # the "higher of paste and box wins" rule intact however many boxes there are.
+    in_source = source_quantities_multi(ctx, keys)
     manual = _manual(ctx, order_id)
 
     items = [_item_row(s, in_source, manual) for s in _order_requirement(ctx, order)]
@@ -253,9 +281,18 @@ def order_sourcing(ctx: int, order_id: int) -> dict:
         "order_id": order_id, "name": order["name"], "quantity": order["quantity"],
         "label": order["label"] or "",
         "source_key": key, "source_name": source_name(ctx, key) if key else None,
+        # The full bound set — `source_key`/`source_name` stay as its first element so nothing that
+        # only knows about one box has to change.
+        "source_keys": keys, "bound": source_labels(ctx, keys),
+        # Whether this plan owns its sources yet. An order queued before per-plan sources existed
+        # still draws on the account-wide tick list, and the panel says so rather than implying a
+        # set it doesn't have.
+        "sources_owned": bool(order["sources_owned"]),
         # Offered so the picker can be built without a second call. Containers first: a build is
-        # normally pulled from a box, not from a whole hangar.
-        "sources": sorted(list_sources(ctx), key=lambda s: (s["kind"] != "container", s["name"])),
+        # normally pulled from a box, not from a whole hangar. Grouped in the UI by where they are.
+        "sources": sorted(list_sources(ctx), key=lambda s: (s["kind"] != "container",
+                                                            s.get("place") or "", s["name"])),
+        "sets": list_source_sets(ctx),
         "items": items,
         "totals": {
             "materials": len(items), "sourced": done, "missing": len(items) - done,

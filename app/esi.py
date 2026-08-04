@@ -1180,7 +1180,7 @@ _CHAR_OWNED_TABLES = [
 _CONTEXT_OWNED_TABLES = [
     "pp_plan_snapshots", "pp_plan_baseline", "pp_profiles",
     "pp_alert_settings", "pp_notification_prefs", "pp_notification_settings", "pp_notification_log",
-    "pp_market_config", "pp_asset_sources", "pp_asset_stock",
+    "pp_market_config", "pp_asset_sources", "pp_asset_stock", "pp_source_sets",
     "pp_industry_settings", "pp_industry_orders", "pp_industry_shares", "pp_industry_completions",
     "pp_industry_manual_done", "pp_industry_sourced",
     "pp_account_reaction_settings", "pp_reaction_orders", "pp_reaction_completions",
@@ -1188,6 +1188,9 @@ _CONTEXT_OWNED_TABLES = [
 ]
 
 # Context-scoped data NOT covered by the list above:
+#   pp_locations               — global id→name cache for stations/structures, keyed by nothing but
+#                                the location id. It holds no account's data (a station name is a
+#                                property of New Eden), so there is nothing here to delete.
 #   pp_baskets/pp_basket_items — handled separately (needs the basket ids to cascade).
 #   pp_markets                 — keyed (owner_kind, owner_id); only the 'account' rows are ours.
 #   pp_bugs                    — anonymised rather than deleted (see delete_account).
