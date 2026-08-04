@@ -1662,6 +1662,7 @@ def main():
     test_a_deliverable_is_never_paced_against_the_rest_of_the_queue()
     test_a_job_never_carries_more_runs_than_the_blueprint_copy_has()
     test_an_owned_copy_only_covers_the_runs_it_has()
+    test_runs_needed_is_never_reported_as_runs_on_the_copy()
     test_one_products_runs_are_not_spread_thinner_than_its_own_pace()
     test_slack_comes_from_the_consumer_not_from_stage_mates()
     test_sourcing_notes_belong_to_one_order()
@@ -1679,6 +1680,85 @@ def main():
     print(f"\nAll {_passed} checks passed.")
 
 
+
+
+def test_runs_needed_is_never_reported_as_runs_on_the_copy():
+    """Reported by a builder ordering TWO Phoenixes: the plan looked like it was offering a "BPC
+    with 2 runs", and capital blueprint copies only ever carry 1.
+
+    Nothing was misread. The SDE caps the Phoenix blueprint at max_runs 1, every copy indexed off
+    Jita contracts carries runs 1, and the scheduler had correctly produced two 1-run jobs. The
+    order was for two hulls. What the plan did wrong was report the BATCH's run count and the
+    blueprint noun as one fact, leaving the reader to join them.
+
+    Runs needed, runs per copy and copies to buy are THREE numbers. This pins that each is reported
+    on its own, that no job is ever planned longer than one copy carries, and — the part that was
+    genuinely broken — that `acquisition_costs` actually emits the `runs_per_copy` that
+    `build_tasks` caps on. That key was documented and only ever set for `bpo_only`, so the cap for
+    a print the plan BUYS was dead code, verified only by tests that hand-built the dict."""
+    print("test_runs_needed_is_never_reported_as_runs_on_the_copy")
+    con = _seed_con()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+    # Widget stands in for the hull: one run per job, like every capital blueprint.
+    mfg = dict(mfg)
+    mfg[100] = {**mfg[100], "max_runs": 1}
+    pools = {"manufacturing": 8, "reaction": 8}
+
+    # A 1-run copy in the hangar, against an order for two.
+    P = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, struct_time_mult=1.0,
+                    owned={100: {"me": 10, "te": 18, "kind": "bpc", "runs": 1}})
+    res = plan_queue([(100, 2)], mfg, rx, _prices(SELL), ADJ, P, NAMES, pools)
+    req = {r["type_id"]: r for r in res["requirements"]}[100]
+
+    check("the build needs two runs", req["runs"] == 2)
+    check("the copy still carries one", req["blueprint"]["runs"] == 1)
+    check("and the shortfall is the difference", req["runs_short"] == 1)
+    check("copies to buy is its own number", "copies_to_buy" in req)
+    # The three must never be the same field: a UI reading `runs` off a row tagged BPC is exactly
+    # how "2 runs needed" became "a 2-run BPC".
+    check("runs needed is not the copy's run count", req["runs"] != req["blueprint"]["runs"])
+
+    jobs = [t for w in res["schedule"]["waves"] for t in w["tasks"] if t["type_id"] == 100]
+    check("a 1-run blueprint yields 1-run jobs", jobs and all(t["runs"] == 1 for t in jobs))
+    check("and the full order is still built", sum(t["runs"] for t in jobs) == 2)
+
+    # An ORIGINAL covers any batch — it must not acquire a phantom shortfall from this.
+    Pbpo = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, struct_time_mult=1.0,
+                       owned={100: {"me": 10, "te": 18, "kind": "bpo", "runs": -1}})
+    rbpo = {r["type_id"]: r for r in plan_queue([(100, 2)], mfg, rx, _prices(SELL), ADJ, Pbpo,
+                                                NAMES, pools)["requirements"]}[100]
+    check("an original is never short", rbpo["runs_short"] == 0 and rbpo["copies_to_buy"] == 0)
+
+    # The cap `build_tasks` reads has to be a key the real producer sets, not one only tests write.
+    import app.industry.bpc as B
+    dbcon, restore = _patch_db(B)
+    try:
+        dbcon.execute("CREATE TABLE blueprints (blueprint_type_id INTEGER PRIMARY KEY, "
+                      "product_type_id INTEGER, output_qty INTEGER, base_time INTEGER, "
+                      "max_runs INTEGER)")
+        dbcon.execute("INSERT INTO blueprints VALUES (1000, 100, 1, 3600, 1)")
+        B.ensure_bpc_tables()
+        now = time.time()
+        for cid, runs, price in ((1, 1, 20e6), (2, 1, 26e6), (3, 1, 22e6)):
+            dbcon.execute("INSERT INTO pp_bpc_observations (contract_id, region_id, type_id, "
+                          "is_bpc, runs, me, te, price, first_seen, last_seen) "
+                          "VALUES (?,?,?,1,?,10,18,?,?,?)",
+                          (cid, B.THE_FORGE, 1000, runs, price, now, now))
+        dbcon.commit()
+        acq = B.acquisition_costs([100], {})[100]
+        check("a listed copy reports its run count", acq.get("runs_per_copy") == 1)
+        check("and it is not silently zero", (acq.get("runs_per_copy") or 0) > 0)
+
+        # A market where bigger copies exist reports the biggest — the loosest cap that is still
+        # true whatever combination cost_for_runs buys.
+        dbcon.execute("INSERT INTO pp_bpc_observations (contract_id, region_id, type_id, is_bpc, "
+                      "runs, me, te, price, first_seen, last_seen) VALUES (9, ?, 1000, 1, 40, 10, "
+                      "18, 7100000, ?, ?)", (B.THE_FORGE, now, now))
+        dbcon.commit()
+        check("the biggest copy on offer sets the cap",
+              B.acquisition_costs([100], {})[100].get("runs_per_copy") == 40)
+    finally:
+        restore()
 
 
 def test_structure_bonus():

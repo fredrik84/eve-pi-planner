@@ -1852,6 +1852,35 @@ function _indJumpToStage(t) {
   setTimeout(() => el.classList.remove('ind-shop-flash'), 1200);
 }
 
+// The blueprint chip for a step, and the one place that decides what a blueprint noun may sit next
+// to. Three different numbers meet here and none of them is interchangeable:
+//   * RUNS NEEDED — how many units this build wants. It belongs to the build, never to the print.
+//   * RUNS PER COPY — what the copy you hold actually carries. A capital BPC is 1 run, always.
+//   * COPIES TO BUY — how many contracts cover the shortfall.
+// Rendering the first of those beside the word "BPC" is how a Phoenix builder was told the plan had
+// found him a 2-run capital copy. It had not: he had ordered two hulls, off a 1-run copy, and the
+// scheduler had correctly split it into two 1-run jobs. So the chip states the copy's OWN runs,
+// and when the batch needs more than the copy carries it says so on the chip rather than leaving
+// the run count next door to be misread as the copy's.
+function _indOwnedBpChip(owned, runsNeeded) {
+  if (!owned) return '';
+  const kind = String(owned.kind || '').toUpperCase();
+  const me = owned.me != null ? ` ME${owned.me}` : '';
+  if (kind !== 'BPC') {
+    return ` <span class="ind-owned" title="You own this ${kind} — an original, so it never runs out">${kind}${me}</span>`;
+  }
+  const have = Math.max(0, Math.round(owned.runs || 0));
+  const need = Math.max(0, Math.round(runsNeeded || 0));
+  const short = need > have ? need - have : 0;
+  const runTxt = `${have} run${have === 1 ? '' : 's'}`;
+  const tip = `You own this BPC and it carries ${runTxt}`
+    + (need ? `. This build needs ${need} run${need === 1 ? '' : 's'}` : '')
+    + (short ? `, so ${short} more must come from further copies` : '')
+    + '.';
+  return ` <span class="ind-owned${short ? ' ind-owned-short' : ''}" title="${tip}">`
+    + `BPC${me} · ${runTxt}${short ? ` · ${short} short` : ''}</span>`;
+}
+
 // Compact tree row label (shared by leaves and collapsible nodes).
 function _indTreeLabel(n) {
   const badge = n.decision === 'build'
@@ -1859,8 +1888,7 @@ function _indTreeLabel(n) {
     : n.decision === 'buy' ? '<span class="ind-badge ind-buy">buy</span>'
     : '<span class="ind-badge ind-unres">no price</span>';
   const cost = n.unit_cost != null ? `<span class="ind-tree-cost">${fmtIsk((n.unit_cost || 0) * (n.qty || 0))}</span>` : '';
-  const owned = n.owned
-    ? ` <span class="ind-owned" title="You own this ${n.owned.kind.toUpperCase()} (ME${n.owned.me}/TE${n.owned.te})">${n.owned.kind.toUpperCase()} ME${n.owned.me}</span>` : '';
+  const owned = _indOwnedBpChip(n.owned, n.runs);
   return `<span class="ind-tree-name">${_esc(n.name)}</span> <span class="ind-tree-qty">×${Math.round(n.qty).toLocaleString()}</span> ${badge}${owned}${cost}`;
 }
 
@@ -2191,7 +2219,9 @@ function _indPipelineHtml(d, tiersData, model) {
   // repeating it just costs width. Qty and runs are what actually differ per card.
   const prog = _indProgTypeMap();
   const buildCard = e => {
-    const owned = e.owned ? `<span class="ind-owned" title="You own this ${e.owned.kind.toUpperCase()}">${e.owned.kind.toUpperCase()}</span>` : '';
+    // The pipeline card is the most-read surface in the tab and the one where this went wrong:
+    // "2 runs" (the batch) sat directly beside a bare "BPC", which reads as a 2-run copy.
+    const owned = _indOwnedBpChip(e.owned, e.runs);
     const runs = e.runs ? `<span class="ind-pipe-runs" id="pruns-${e.type_id}">${e.runs.toLocaleString()}&nbsp;run${e.runs > 1 ? 's' : ''}</span>` : '';
     const qty = `×${Math.round(e.qty).toLocaleString()}`;
     // Live state from real ESI jobs, when we have it — the pipeline doubles as a progress board.
@@ -2432,9 +2462,17 @@ function _indCopyShortWarn(d) {
   if (!short.length) return '';
   const rows = short.map(r => {
     const have = (r.blueprint && r.blueprint.runs) || 0;
+    // All three numbers, each named, on one line: what the BUILD needs, what the COPY carries, and
+    // how many COPIES that leaves to buy. Two of the three used to be shown as bare counts either
+    // side of the word "copy", which is exactly ambiguous enough to read as a run count on the
+    // print itself.
+    const buy = r.copies_to_buy
+      ? `<span class="ind-bp-px">buy ${r.copies_to_buy} more cop${r.copies_to_buy === 1 ? 'y' : 'ies'}</span>`
+      : `<span class="ind-bp-px">${r.runs_short} run${r.runs_short > 1 ? 's' : ''} short</span>`;
     return `<div class="ind-bp-row2"><span class="ind-bp-nm">${_esc(r.name)}`
-      + `<span class="ind-bp-need">${r.runs} run${r.runs > 1 ? 's' : ''} needed, your copy has ${have}</span></span>`
-      + `<span class="ind-bp-px">${r.runs_short} run${r.runs_short > 1 ? 's' : ''} short</span></div>`;
+      + `<span class="ind-bp-need">build needs ${r.runs} run${r.runs > 1 ? 's' : ''} · `
+      + `your copy carries ${have} · ${r.runs_short} run${r.runs_short > 1 ? 's' : ''} short</span></span>`
+      + buy + `</div>`;
   }).join('');
   return `<div class="ind-bp-note"><b>Your blueprint ${short.length === 1 ? 'copy runs' : 'copies run'} out</b>`
     + `<div class="ind-bp-rows">${rows}</div>`

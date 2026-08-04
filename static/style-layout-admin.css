@@ -854,6 +854,10 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-bp-connect { background: #163524; border-color: #2c6a44; color: #7fdca6; }
 .ind-bp-connect:hover { background: #1c4a30; }
 .ind-owned { font-size: 10px; background: #163a3a; color: #7fe0d0; padding: 1px 6px; border-radius: 8px; }
+/* The copy you hold does not cover the batch — amber, same language the ME/TE override tag uses
+   for "an assumption you should look at", because "you own the blueprint" in green is the exact
+   reassurance that is wrong here. */
+.ind-owned-short { background: #3a2f16; color: #e6c77f; }
 .ind-install { margin-top: 14px; }
 .ind-install-title { font-size: 13px; color: #9fb4d8; margin: 8px 0 6px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .ind-install-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-bottom: 1px solid #1a2030; font-size: 13px; flex-wrap: wrap; }
