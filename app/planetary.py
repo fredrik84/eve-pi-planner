@@ -189,7 +189,7 @@ class LayoutRequest(BaseModel):
     cc_level: Optional[int] = None      # command-centre level 1–5; None → CMD_CTR_LEVEL (5)
     no_storage: bool = False            # extractor: buffer in launchpad, no storage hub (frees PG)
     diameter: Optional[float] = None    # REAL planet diameter (km); None → planet-type default. On an
-    # extractor, a smaller planet fits more basics (head-spoke PG ∝ radius), so pass the actual size.
+    # extractor, a smaller planet fits more basics (link PG ∝ radius), so pass the actual size.
 
 
 @router.post("/api/layout")
@@ -257,7 +257,7 @@ def download_bundle(type_ids: str = "", expand: int = 0, splits: str = "", no_st
         cc = int(parts[3]) if len(parts) > 3 and parts[3] else None
         ptype = parts[4] if len(parts) > 4 and parts[4] else "Barren"
         # Optional 6th field: the REAL per-planet diameter (km, from pp_planets.diameter). Extractor
-        # templates fit fewer basics on a bigger planet (head-spoke PG ∝ radius), so using the actual
+        # templates fit fewer basics on a bigger planet (link PG ∝ radius), so using the actual
         # planet size instead of the planet-type default sizes each colony's basic count correctly.
         diam = float(parts[5]) if len(parts) > 5 and parts[5] else None
         tokens.append((tid, lp, cnt, cc, ptype, diam))

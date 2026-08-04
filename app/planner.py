@@ -343,7 +343,7 @@ def _run_plan(req: PlanRequest, context_id: int) -> dict:
         rec["factory_capacity"] = {s: sys_fac_capacity.get(s, 0) for s in rec["systems_needed"]}
 
     # Real per-planet diameter (pp_planets.diameter) keyed by (system, planet_num). Used to size each
-    # extractor colony's exported template to its ACTUAL planet — the head-spoke power grid scales with
+    # extractor colony's exported template to its ACTUAL planet — the link power grid scales with
     # radius, so the planet-type default (Gas Ø40000) dropped a basic on the many smaller real planets.
     # Guarded: a pre-populate install without the column just yields an empty map → type-default fallback.
     diam_by_planet: dict[tuple, float] = {}

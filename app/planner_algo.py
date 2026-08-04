@@ -815,7 +815,7 @@ def _ext_leg_qualities(extractors: list[dict]) -> list[int]:
 def _basics_factor(planet_type: str | None, cc: int, no_storage: bool = False) -> float:
     """Fraction of full on-planet P1 refining the planet can actually do: 8 Basic Industry
     Facilities fully convert a 100%-quality planet's extraction; fewer fit on a low-CC or big
-    planet (head spokes eat the grid), so it refines proportionally less P1 on-site. 1.0 if
+    planet (links eat the grid), so it refines proportionally less P1 on-site. 1.0 if
     unknown. `no_storage` (buffer in the launchpad, drop the storage hub) frees ~700 PG so more
     basics fit. A planet's effective P1 output is then min(quality, basics-factor) — whichever of
     extraction richness or on-site refining is the bottleneck."""

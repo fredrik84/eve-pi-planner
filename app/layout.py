@@ -59,16 +59,17 @@ STRUCT_COST = {
     "launchpad": (3600, 700), "basic_if": (200, 800), "adv_if": (500, 700),
     "hitech_if": (1100, 400), "storage": (500, 700), "ecu": (400, 2600),
 }
-HEAD_COST = (110, 550)               # per extractor head (the ECU pin's "H") — flat part
+# Per extractor head (the ECU pin's "H"). FLAT — it depends on the number of heads and nothing
+# else. It was briefly modelled as a "spoke" whose PG scaled with the planet radius, calibrated to
+# one measured Gas CC5 build; that was wrong twice over. EVE charges heads a fixed 110 CPU / 550 PG
+# each, and the residual PG that calibration was chasing is LINK cost we were under-counting by
+# assuming a Gas planet is Ø40000 (see PLANET_DIAM). Because the invented term grew without bound
+# with the radius, feeding a real gas giant's diameter in collapsed the template from 8 basics to 1.
+# Planet size belongs in the link model below, where EVE actually puts it.
+HEAD_COST = (110, 550)
 # A link of length l km costs (cpu, pg) = (15 + 0.2*l, 10 + 0.15*l).
 LINK_CPU_BASE, LINK_CPU_PER_KM = 15.0, 0.2
 LINK_PG_BASE, LINK_PG_PER_KM = 10.0, 0.15
-# Extractor heads connect to resource hotspots by spokes whose CPU/PG scales with distance, like
-# links. Hotspots spread across the planet, so on a big planet (Gas Ø40000, Storm Ø30000) heads
-# cost much more than the flat part — which is why 10 heads + a full basic line won't fit a large
-# planet at CC5 even though the flat model says it does. Model the average spoke as this planar
-# length × the planet radius (calibrated to a measured Gas CC5 build: ~835 PG with 9 heads).
-HEAD_SPOKE_PLANAR = 0.095
 
 
 def compute_resources(template: dict, struct: dict) -> dict:
@@ -79,10 +80,7 @@ def compute_resources(template: dict, struct: dict) -> dict:
     the raw lat/lon plane (EVE treats the surface as flat for placement)."""
     role_of = {tid: role for role, tid in struct.items() if role in STRUCT_COST}
     radius = template.get("Diam", 8000.0) / 2.0
-    # Per-head cost = flat facility part + a distance-scaled spoke (bigger planet → costlier heads).
-    spoke_km = HEAD_SPOKE_PLANAR * radius
-    head_cpu = HEAD_COST[0] + LINK_CPU_PER_KM * spoke_km
-    head_pg = HEAD_COST[1] + LINK_PG_PER_KM * spoke_km
+    head_cpu, head_pg = HEAD_COST                     # flat per head — planet size affects links only
     cpu = pg = 0.0
     for p in template["P"]:
         role = role_of.get(p["T"])
@@ -595,7 +593,7 @@ def build_extractor_template(p1_id: int, planet_type: str, struct: dict, pi_data
     cmt = f"{types[p0_id]['name']} → {types[p1_id]['name']}"   # planet type omitted — templates are portable
     return {
         "template": {"CmdCtrLv": CMD_CTR_LEVEL, "Cmt": cmt,
-                     # Real per-planet diameter when known (from pp_planets.diameter) — the head-spoke
+                     # Real per-planet diameter when known (from pp_planets.diameter) — the link
                      # PG cost scales with radius, so using the planet TYPE default (Gas Ø40000) instead
                      # of the actual planet (often smaller) needlessly dropped a basic. Falls back to the
                      # type default when the caller has no real size.
@@ -662,7 +660,7 @@ def build_split_extractor_template(p1a_id: int, p1b_id: int, planet_type: str, s
     cmt = f"Split: {types[p0a]['name']} + {types[p0b]['name']}"   # planet type omitted — templates are portable
     return {
         "template": {"CmdCtrLv": CMD_CTR_LEVEL, "Cmt": cmt,
-                     # Real per-planet diameter when known (head-spoke PG ∝ radius) — else type default.
+                     # Real per-planet diameter when known (link PG ∝ radius) — else type default.
                      "Diam": float(diam) if diam else PLANET_DIAM.get(planet_type, 8000.0),
                      "Pln": struct["planet_type_id"], "P": pins, "L": links, "R": routes},
         "name": cmt, "n_basic_a": n_basic_a, "n_basic_b": n_basic_b,
@@ -819,7 +817,7 @@ def generate_extractor_layout(p1_id: int, planet_type: str = "Barren", launchpad
         (full P0 extraction) and scales ONLY the basic (P1) factories down — a lower-CC planet
         extracts the same P0 but converts fewer P1 on-site, so the planner places more of them.
         Heads are the last resort: at the 1-basic floor the ECU and its heads alone can still
-        blow a small budget (CC1/CC2, or a big planet with expensive head spokes), and dropping
+        blow a small budget (CC1/CC2, or a big planet with expensive links), and dropping
         one costs real extraction, so we do it only to avoid exporting a template the game will
         refuse to build."""
         h, nb = max(1, want_heads), max(1, want_basics)
@@ -876,7 +874,7 @@ _FITTED_BASICS_CACHE: dict[tuple, int] = {}
 def fitted_extractor_basics(planet_type: str, cc: int, no_storage: bool = False) -> int:
     """How many Basic Industry Facilities fit alongside the 10 extractor heads on this planet
     type at this command-centre level (power-grid limited). 8 basics = full conversion of a
-    100%-quality planet's extraction; fewer (low CC, or a big planet whose head spokes eat the
+    100%-quality planet's extraction; fewer (low CC, or a big planet whose links eat the
     grid) means the planet refines less P1 on-site. `no_storage` drops the storage hub (buffer in
     the launchpad), freeing ~700 PG so another basic often fits. Cached (≤ 8 types × 5 CC × 2).
     Builds the template directly (no planet-type coercion) — the basic-facility cost is

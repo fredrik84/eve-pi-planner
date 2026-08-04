@@ -240,7 +240,7 @@ def derive_setup_plans(context_id: int) -> list[dict]:
 # whole fleet's lifetime, not per-pod-per-cold-start; the in-process dict stays as a zero-latency
 # L1 hit for the (common) case of the same combo recurring within one request/process.
 # Bump _LAYOUT_CALC_VER if the layout engine's math ever changes, to invalidate stale values.
-_LAYOUT_CALC_VER = "v2"   # v2: layouts build to FIT_HEADROOM, so packed counts differ from v1
+_LAYOUT_CALC_VER = "v3"   # v3: extractor heads cost a flat 110/550 again (planet size is links only)
 _LAYOUT_CALC_TTL = 30 * 86400  # 30 days
 
 

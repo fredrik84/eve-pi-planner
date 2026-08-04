@@ -288,7 +288,7 @@ P1→P0 planet type comes from the slot's `best_planet_type`.
 all 10 extractor heads (full P0 extraction, matching the planner's flat 48k P0/cycle model) and
 scales **only** the basic (P1) factory count down to fit a lower CC (8→6→4→1 at CC5→4→3→2 on a
 small planet). Heads are a **last-resort** lever, pulled only when even 1 basic doesn't fit (CC1/CC2,
-or a big planet with expensive head spokes) — before that we exported templates the client would
+or a big planet with expensive links) — before that we exported templates the client would
 reject. The summary reports `heads_requested` alongside `heads` so the UI can say what the low
 command centre cost. `generate_layout` passes `cc_level` into the tier-1 path (don't drop it —
 extractor templates must scale with the toon's real CC, not default to CC5). **Factory** planets
@@ -347,15 +347,33 @@ yet place *more* extractor planets to compensate. Split legs aren't capped (edge
 mitigation that lifts the cap: drop the separate storage facility and buffer P0 in the launchpad
 (frees ~700 PG → often restores a basic on big planets) — not built.
 
-**Heads cost PG by distance (planet size).** `HEAD_COST` is only the flat part; extractor heads
-attach to hotspots spread across the planet via spokes whose CPU/PG scale with distance like
-links. `compute_resources` adds `HEAD_SPOKE_PLANAR (0.095) × radius` km of spoke per head, so a
-big planet (Gas Ø40000, Storm Ø30000) makes each head far costlier — calibrated to a real Gas CC5
-build (~835 PG with 9 heads). Effect: on a Gas planet the template **drops a basic (8→7)** so all
-10 heads fit (18.5k/19k PG) instead of the old flat model claiming 10 heads + 8 basics fit (it
-didn't — you'd run out of PG on the 10th head in-game). Small planets (Ø6000–8000) are barely
-affected. This only changes the **exported template** (basic count), not the planner's flat 48k
-production model.
+**Heads cost a FLAT 110 CPU / 550 PG — planet size moves LINKS, nothing else.** `HEAD_COST` is the
+whole per-head cost; EVE charges by head count and by nothing else (EVE University: "each
+additional head consumes an amount of CPU (110) and Powergrid (550)"). Between 2026-06-13 and
+2026-08-04 heads were modelled as "spokes" costing `HEAD_SPOKE_PLANAR (0.095) × radius` km of extra
+link, calibrated to one measured Gas CC5 build (~835 PG/head). **Don't reintroduce that** — it was
+wrong in two ways at once:
+- The residual PG that calibration was chasing is **link** cost we under-count on a big planet,
+  because `PLANET_DIAM["Gas"] = 40000` is far below a real gas giant. Attributing it to heads put
+  the size term in the wrong place.
+- The invented term grew **without bound** with the radius, so the later real-per-planet-diameter
+  feature fed it real sizes and collapsed the template: a Gas extractor went 8 basics → 5 at the
+  Ø40000 default and → **1 basic** at a real Ø110000, while an 8-basic Gas extractor places fine
+  in the client. That's the bug the user reported ("lowering the diameter gives me MORE
+  factories").
+Now: heads flat, size only in the link formula, so a bigger planet sheds basics gently (Gas 8 at
+Ø40k, 7 at Ø110k, 6 at Ø221k). Changing this changes plan sizing (`fitted_extractor_basics` →
+`_basics_factor`) — `_LAYOUT_CALC_VER` is at **v3**. Covered by
+`test_head_cost_is_flat_and_size_only_moves_links` in `test_min_cc.py`.
+
+**OPEN: `PLANET_DIAM` is not calibrated and prod has no real diameters.** The type defaults (Gas
+40000, Ice 6000, Storm 30000) don't match the SDE's celestial radii under either reading of
+`mapDenormalize.radius`, and every `pp_planets.diameter` in production is **0** — so
+`scripts/populate_planet_radius.py` has never landed and every layout runs on the type default.
+That script's `diameter_km = radius_m / 500` is also unverified: for F18-AY VIII it yields 221,320
+while the client reads ~110,000, so one of the two is off by 2×. Settle it against a real in-game
+exported template's `Diam` field before populating, because link PG (and therefore how much fits)
+scales directly with it.
 
 **Per-character CCU** defaults to each toon's real ESI Command Center Upgrades skill
 (`command_center_upgrades`, skill id 2505, fetched in `esi.py`); `_build_char_list` uses the

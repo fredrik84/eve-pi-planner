@@ -336,7 +336,7 @@ function renderLayoutCard(entry) {
           onwheel="_layoutWheelLp(event, this, '${entry.key}')"></label>
         ${planetSel}
         ${ccSel}
-        <label title="Your planet's REAL diameter (km). A smaller planet fits more basics (head power-grid scales with size); leave blank for the planet-type default. Find it in-game or on the Planet DB.">Ø km <input type="number" min="1000" max="120000" step="100" value="${entry.diameter || ''}" placeholder="${Math.round((p.template && p.template.Diam) || 0) || 'default'}"
+        <label title="Your planet's REAL diameter (km). A smaller planet fits more basics (link power-grid scales with size); leave blank for the planet-type default. Find it in-game or on the Planet DB.">Ø km <input type="number" min="1000" max="120000" step="100" value="${entry.diameter || ''}" placeholder="${Math.round((p.template && p.template.Diam) || 0) || 'default'}"
           onchange="changeLayoutDiameter('${entry.key}', this.value)"></label>
         <a class="layout-btn" href="${url}" download>Download .json</a>
         <button class="layout-btn" onclick="copyLayoutEntry('${entry.key}', this)">Copy JSON</button>

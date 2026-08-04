@@ -16,8 +16,9 @@ import sys
 
 sys.path.insert(0, ".")
 
-from app.layout import (CC_BUDGET, CMD_CTR_LEVEL, EXTRACTOR_HEADS, FIT_HEADROOM,
-                        compute_resources, generate_extractor_layout, generate_layout, min_cc_for)
+from app.layout import (CC_BUDGET, CMD_CTR_LEVEL, EXTRACTOR_HEADS, FIT_HEADROOM, HEAD_COST,
+                        _structure_ids, compute_resources, generate_extractor_layout,
+                        generate_layout, min_cc_for)
 from app.sde import load_pi_data
 
 FAILS = []
@@ -180,6 +181,39 @@ def test_full_cc_keeps_all_heads():
             check(s["heads"] == EXTRACTOR_HEADS, f"{s['planet_type']} CC{cc}: all {EXTRACTOR_HEADS} heads kept")
 
 
+def test_head_cost_is_flat_and_size_only_moves_links():
+    """An extractor head costs a fixed 110 CPU / 550 PG in EVE — the planet's size touches LINKS
+    and nothing else. This was briefly modelled as a per-head 'spoke' scaling with the radius,
+    which made a real gas giant's diameter collapse the template from 8 basics to 1 (reported
+    from the client, where an 8-basic Gas extractor places fine). Two invariants pin it down:
+    heads alone must not move with the diameter, and a bigger planet must lose basics slowly."""
+    print("head cost vs planet size:")
+    pi = load_pi_data()
+    p1 = _a_p1(pi)
+    struct = _structure_ids(pi, "Gas")
+    base = {"CmdCtrLv": 5, "Diam": 8000.0, "P": [{"La": 1.2, "Lo": 1.55, "H": 0,
+                                                  "S": None, "T": struct["ecu"]}], "L": []}
+    for heads in (0, 5, 10):
+        base["P"][0]["H"] = heads
+        draws = []
+        for diam in (6000.0, 40000.0, 110000.0):
+            base["Diam"] = diam
+            r = compute_resources(base, struct)
+            draws.append((r["cpu"], r["pg"]))
+        check(len(set(draws)) == 1, f"{heads} heads: same CPU/PG on a Ø6k and a Ø110k planet")
+        exp = (400 + heads * HEAD_COST[0], 2600 + heads * HEAD_COST[1])
+        check(draws[0] == exp, f"{heads} heads: ECU draw is {exp}, got {draws[0]}")
+
+    # Bigger planet → longer links → fewer basics, but gently: the whole line must not vanish.
+    prev = 99
+    for diam in (8000.0, 40000.0, 110000.0, 221000.0):
+        s = generate_extractor_layout(p1, planet_type="Gas", cc_level=5, diam=diam)["summary"]
+        n = s["facilities_by_tier"].get("P1", 0)
+        check(n <= prev, f"Gas Ø{diam / 1000:.0f}k: {n} basics (≤ the next size down)")
+        check(n >= 4, f"Gas Ø{diam / 1000:.0f}k: {n} basics — a giant still runs a real line")
+        prev = n
+
+
 def test_factory_min_cc_matches_packing():
     """max_count is 'the most units that fit', so one more must NOT fit — that's the invariant
     min_cc has to agree with. Where the packing is budget-limited (P2/P3) that means min_cc is
@@ -235,6 +269,7 @@ if __name__ == "__main__":
     test_min_cc_agrees_with_over()
     test_low_cc_never_exports_over_budget()
     test_full_cc_keeps_all_heads()
+    test_head_cost_is_flat_and_size_only_moves_links()
     test_factory_min_cc_matches_packing()
     test_required_cc_helpers()
     print()
