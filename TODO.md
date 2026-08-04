@@ -523,6 +523,75 @@ more expressive and would follow `force_build_ids`' storage pattern. Ask before 
 
 ---
 
+## 11. A reaction formula is an item too — reaction batches split wider than the formulas you own (2026-08-04)
+
+Found while fixing the manufacturing version of this (`build_tasks` splitting a batch across more
+jobs than the account has blueprint copies to install). CLAUDE.md says "Reactions have no blueprint
+and are untouched" and the code models them that way — but in EVE a reaction formula is a physical
+item that is locked into the reactor for the job's duration, so **one formula cannot run two jobs at
+once**, exactly like a BPO. **This is a real problem, and it is worse in reactions than in
+manufacturing**, because reactions are where the planner deliberately splits widest.
+
+**What the code knows: nothing.** Formula ownership is not tracked anywhere.
+`owned_blueprints()` (`app/industry/blueprints.py:122`) builds its `blueprint_type_id →
+product_type_id` map from the SDE `blueprints` table alone — and measured against prod, **0 of the
+112 `reaction_id`s appear in `blueprints`** (`build_sde` fills that table from
+`activities.manufacturing` and the reaction tables from `activities.reaction`). Every reaction
+formula ESI returns is therefore dropped on the floor at that join. Downstream everything is
+manufacturing-gated on purpose: `BuildParams.copies_for` returns `[]` for a non-manufacturing
+activity, `_copy_limits` (`schedule.py:258`) returns no cap, `max_runs` is read from `mfg` only, so
+`cap = R` and `n_wide = max(min(P, R), ceil(R/cap))` collapses to `min(P, R)` — **a reaction batch
+splits as wide as the reaction slot pool, full stop**. `graph.py`'s reaction path carries no
+ownership concept at all: `_load_reaction_graph` yields `{reaction_id, output_qty, base_time,
+inputs}` and nothing else. The plan also never tells you to buy a formula — `needs_blueprint` /
+`copies_to_buy` are manufacturing-only, and `schedule.py:943` says so in as many words.
+
+**What the SDE has:** `reactions(reaction_id, output_type_id, output_qty, cycle_time)` — a recipe,
+no `max_runs`. Two things make the missing half cheap, though. `maxProductionLimit` is a
+**top-level** `blueprints.yaml` key, so it exists on reaction entries too and `parse_reactions`
+(`scripts/build_sde.py:293`) simply doesn't read it. And `reaction_id` **is the formula's type_id** —
+the same id space as `blueprint_type_id`, which `build_sde` already relies on for the shared
+`blueprint_skills` table. So mapping an ESI blueprint row to a reaction product needs no new data,
+no new fetch and no new scope.
+
+**What prod holds (read-only probe, 2026-08-04):** 5 characters have a cached blueprint list, 1,180
+rows between them. One account (3 characters) holds **50 distinct reaction formulas**, and every row
+is `runs = -1` with `quantity` −1 or a positive stack — i.e. all originals, which is correct:
+formulas cannot be copied or researched. They are **stacked**: 17× Titanium Carbide, 5× Titanium
+Chromide, 5× Silicon Diborite, 4× each of Carbon Fiber / Thermosetting Polymer / Reinforced Carbon
+Fiber / Hexite, down to 1 for most of the tail. The data is already in `pp_char_blueprints` and
+entirely unused.
+
+**How wide it splits, measured on the two real queued builds:**
+- 2× Phoenix (330.3h, 52 jobs): **Axosomatic Neurolink Enhancer → 17 jobs, all 17 concurrent in one
+  wave, off the ONE formula that account owns.** 16 of those jobs cannot be installed.
+- 1× Archon (206.1h, 257 jobs): Reinforced Carbon Fiber 37 jobs / **27 concurrent**, Carbon Fiber
+  27/27, Thermosetting Polymer 27/27, Pressurized Oxidizers 22/22, Sulfuric Acid 16/16, Hypnagogic
+  Neurolink Enhancer 12/12. That account has blueprint caches for only 2 of its 14 characters and no
+  reaction formulas among them, so what it really owns is unknown — which is itself part of the
+  problem below.
+
+**Why the manufacturing fix does not transplant.** There are no reaction BPCs, so runs-per-copy never
+binds; the only thing that binds is **how many of that formula you hold, and it binds on
+CONCURRENCY, not on runs per job**. The cap belongs beside `n_wide`, not inside `cap`. And it must
+come from ownership data: **assuming one formula per type would wrongly serialise every reaction
+chain** — the account above holds 17 of one formula and 4 of several others, so a blanket cap of 1
+turns a 27-wide stage into a multi-day serial one and lengthens every quote it touches. A blanket
+cap is not the conservative choice here; it is a different wrong answer.
+
+**First step, and it is the half that isn't in `schedule.py`:** teach `owned_blueprints()` about
+formulas — union the `blueprints` map with `SELECT reaction_id, output_type_id FROM reactions` so
+`params.owned` carries them (`kind: "bpo"`, `runs: -1`; a positive `quantity` is a stack of N, so
+count the stack, not the row). That alone is measurable and testable with no scheduler change: the
+plan can then report "you own 1 formula for X and this stage wants 17", the same way `runs_short`
+reports a copy shortfall. Only then cap `n_wide` by the count, and settle two decisions with the
+user first: an account with **no** formula data must default to today's unbounded split, never to 1
+(missing evidence is not evidence of scarcity), and whether an unowned formula should join the
+shopping list — formulas are bought off the market as items, not from contracts, so
+`acquisition_costs`/`bpc.py` is the wrong pricing path for them.
+
+---
+
 ## Closed — do not reopen without new evidence
 
 | Item | Verdict |
