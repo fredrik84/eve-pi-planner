@@ -475,12 +475,22 @@ def acquisition_costs(type_ids: list[int], owned: dict, region_id: int = THE_FOR
         live, hist = bpc.get("live"), bpc.get("history")
         pick = live or hist
         if pick:
+            ls = (info.get("bpc_listings") if live else info.get("bpc_listings_hist")) or []
+            runs = [int(l.get("runs") or 0) for l in ls if (l.get("runs") or 0) > 0]
             out[tid] = {"kind": "bpc",
                         "price": pick["cheapest"] if live else pick["median"],
                         "median_per_run": pick.get("median_per_run"),
                         # The real contracts, each with its own run count — what actually decides
                         # how many you have to buy.
-                        "listings": (info.get("bpc_listings") if live else info.get("bpc_listings_hist")) or [],
+                        "listings": ls,
+                        # The most runs ANY single copy on offer carries. `build_tasks` caps a job
+                        # at this: a job needs one copy, so a 20-run job off a market where the
+                        # biggest copy is 5 runs cannot be installed at all. It is the *loosest*
+                        # honest cap — the plan may buy a smaller copy — but it is the one that is
+                        # true whatever combination `cost_for_runs` picks, and until this key was
+                        # populated the cap in build_tasks was dead code (only `bpo_only` set it),
+                        # which is how a capital job could be planned longer than any copy sold.
+                        "runs_per_copy": max(runs) if runs else 0,
                         "live": bool(live)}
             continue
         bpo = info.get("bpo") or {}

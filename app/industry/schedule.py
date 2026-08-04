@@ -827,7 +827,13 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
              "needs_blueprint": info["activity"] == "manufacturing" and tid not in params.owned,
              # Owned, but not for this many runs. A 4-run copy against a 20-run batch is sixteen
              # runs still to find, which "you own the blueprint" hides completely.
-             "runs_short": info.get("runs_short") or 0}
+             "runs_short": info.get("runs_short") or 0,
+             # Runs needed (`runs`), runs the copy you hold carries (`blueprint.runs`) and copies
+             # you must buy are THREE different numbers. The UI was only ever given the first two,
+             # so it had to render the batch's run count beside the word BPC — which a capital
+             # builder reads as "the plan found me a 2-run Phoenix copy". Capital copies are 1 run;
+             # what the plan meant was "this order is 2 hulls". Say all three or say none.
+             "copies_to_buy": (info.get("blueprint_buy") or {}).get("copies") or 0}
             for tid, info in agg.items() if info["build"] and info["runs"] > 0
         ],
         "schedule": sched,
