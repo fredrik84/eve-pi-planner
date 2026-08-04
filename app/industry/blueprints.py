@@ -71,21 +71,46 @@ def fetch_character_blueprints(character_id: int, access_token: str) -> list[dic
     return out
 
 
-def _better(a: dict, b: dict) -> bool:
-    """Which owned blueprint to prefer for one product: a BPO beats a BPC (unlimited runs, no
-    re-buy); among the same kind, higher ME wins, then higher TE."""
-    rank = {"bpo": 1, "bpc": 0}
-    if rank[a["kind"]] != rank[b["kind"]]:
-        return rank[a["kind"]] > rank[b["kind"]]
-    if a["me"] != b["me"]:
-        return a["me"] > b["me"]
-    return a["te"] > b["te"]
+def _copy_rank(c: dict) -> tuple:
+    """Consumption order for one product's copies: BEST RESEARCHED FIRST, an original winning ties.
+
+    Not "BPO before everything", which is what this used to be. A job runs off one copy and takes
+    that copy's ME/TE, so a ME10 copy beside an un-researched original should run first and the
+    original should carry whatever is left — which is also why the original sorts last among equals
+    only: it is the one that never runs out, so it is the right thing to fall back to.
+    """
+    return (-(c["me"] or 0), -(c["te"] or 0), 0 if c["kind"] == "bpo" else 1)
+
+
+def classify_blueprint(quantity, runs) -> str:
+    """'bpo' | 'bpc' for one ESI blueprint row.
+
+    **`runs == -1` is the unambiguous marker** — a real copy always carries a positive run count.
+    Quantity alone is not: ESI uses -1 for a singleton and -2 for a copy, but a POSITIVE quantity
+    is a stack of ORIGINALS fresh from the market, and reading `quantity == -1` as the only original
+    filed all of those as copies carrying -1 runs, i.e. as covering nothing at all. There were 26
+    such blueprints in production, each one telling its owner to go and buy a print they hold.
+    """
+    try:
+        r = int(runs)
+    except (TypeError, ValueError):
+        return "bpo"
+    if r < 0:
+        return "bpo"
+    return "bpc" if quantity == -2 else "bpo"
 
 
 def owned_blueprints(context_id: int) -> dict[int, dict]:
-    """product_type_id -> {me, te, kind ('bpo'|'bpc'), runs} for the best blueprint the account owns
-    for that product, across all its characters. Maps each blueprint's type_id to its product via
-    the SDE `blueprints` table. Empty if nothing's connected/cached."""
+    """product_type_id -> what the account owns for that product, across all its characters:
+    `{me, te, kind, runs, copies, copy_count}`.
+
+    **Every copy counts.** This used to collapse a product's blueprints down to the single best one
+    and throw the rest away, so an account holding 21 Nitrogen Fuel Block copies worth 3,975 runs
+    was credited with 175 and told to buy the rest. `copies` is the whole holding, ordered the way
+    the plan will consume it (`_copy_rank`); `runs` is the TOTAL coverage (-1 = an original, which
+    covers any batch); `me`/`te` describe the copy the first job will run off, and the per-job
+    values come off `copies` (see BuildParams.me_te_for). Empty if nothing's connected/cached.
+    """
     ensure_char_blueprints_table()
     con = get_connection()
     try:
@@ -99,7 +124,7 @@ def owned_blueprints(context_id: int) -> dict[int, dict]:
     finally:
         con.close()
 
-    owned: dict[int, dict] = {}
+    by_product: dict[int, list[dict]] = {}
     for row in rows:
         try:
             items = _json.loads(row["blueprints_json"])
@@ -109,12 +134,26 @@ def owned_blueprints(context_id: int) -> dict[int, dict]:
             prod = bp2prod.get(b.get("type_id"))
             if not prod:
                 continue
-            cand = {"me": b.get("me", 0) or 0, "te": b.get("te", 0) or 0,
-                    "kind": "bpo" if b.get("quantity") == -1 else "bpc",
-                    "runs": b.get("runs", -1)}
-            cur = owned.get(prod)
-            if cur is None or _better(cand, cur):
-                owned[prod] = cand
+            runs = b.get("runs", -1)
+            kind = classify_blueprint(b.get("quantity"), runs)
+            by_product.setdefault(prod, []).append({
+                "me": b.get("me", 0) or 0, "te": b.get("te", 0) or 0, "kind": kind,
+                "runs": -1 if kind == "bpo" else max(0, int(runs or 0)),
+            })
+
+    owned: dict[int, dict] = {}
+    for prod, copies in by_product.items():
+        copies.sort(key=_copy_rank)
+        has_bpo = any(c["kind"] == "bpo" for c in copies)
+        best = copies[0]
+        owned[prod] = {
+            "me": best["me"], "te": best["te"],
+            # Coverage semantics, deliberately not the top copy's kind: an original anywhere in the
+            # holding means every run is covered, whatever the best-researched copy happens to be.
+            "kind": "bpo" if has_bpo else "bpc",
+            "runs": -1 if has_bpo else sum(c["runs"] for c in copies),
+            "copies": copies, "copy_count": len(copies),
+        }
     return owned
 
 

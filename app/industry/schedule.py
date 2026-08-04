@@ -24,7 +24,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 from app.industry.graph import (
-    BuildParams, collect_reachable, effective_material_qty, resolve_unit_costs,
+    BuildParams, blueprint_summary, collect_reachable, effective_material_qty, resolve_unit_costs,
     SCC_SURCHARGE_PCT,
 )
 from app.industry.routing import plan_moves
@@ -112,12 +112,17 @@ def aggregate_demand(targets: list[tuple[int, int]], memo: dict, mfg: dict, rx: 
     for tid in built:
         recipe = mfg.get(tid) or rx.get(tid)
         activity = "manufacturing" if tid in mfg else "reaction"
-        me, te = params.me_te_for(tid, activity)
         mult, _tm = params.struct_mults_for(tid, activity)
         output_qty = recipe["output_qty"]
         net = max(0.0, gross[tid] - on_hand.get(tid, 0.0))
         runs = max(0, math.ceil(net / output_qty)) if net > 0 else 0
         produced = runs * output_qty
+        # Demand is aggregated BEFORE jobs are split, so a per-job ME/TE has no meaning here: what
+        # this batch's materials cost is what the copies it consumes come to, runs-weighted. Passing
+        # the run count is what lets `me_te_for` weigh exactly those copies (and price the runs no
+        # owned copy covers off the one the plan would buy) instead of crediting the whole batch to
+        # the best copy in the drawer.
+        me, te = params.me_te_for(tid, activity, runs)
 
         # Time-aware flip: buy this batch instead of building if it's slow AND purchasable (never
         # flip a target — the user asked to build that).
@@ -141,13 +146,13 @@ def aggregate_demand(targets: list[tuple[int, int]], memo: dict, mfg: dict, rx: 
         bp = params.bp_acquire.get(tid)
         bp_cost = 0.0
         bp_buy = None
-        # What the account's OWN copy covers. An original covers everything; a copy covers its
-        # remaining runs and no more. Owning a 4-run copy for a 20-run batch is not "you have the
-        # blueprint" — it is sixteen runs you still have to find, and treating it as covered priced
-        # those copies at nothing and told the builder they were ready to start when they weren't.
+        # What the account's OWN blueprints cover. An original covers everything; copies cover the
+        # runs they carry — ALL of them, summed. Owning a 4-run copy for a 20-run batch is not "you
+        # have the blueprint", it is sixteen runs you still have to find; and owning fourteen copies
+        # worth 212 runs is not five runs, which is what counting only the best copy reported.
         own = (params.owned or {}).get(tid) or {}
         covered = (runs if own.get("kind") == "bpo" else
-                   max(0, int(own.get("runs") or 0)) if own else 0)
+                   min(runs, max(0, int(own.get("runs") or 0))) if own else 0)
         short = max(0, runs - covered)
         if bp and short > 0 and bp["kind"] != "bpo_only":
             # Priced from the real listings: a copy carries a fixed number of runs and one contract
@@ -222,6 +227,11 @@ class Task:
     # every name, price and progress lookup keys on that.
     key: object = None
     order_id: int | None = None
+    # The research of the blueprint COPY this job runs on. Jobs of the same type in one batch can
+    # legitimately differ — that is the point of consuming the best copies first — so the number is
+    # per job, not per type. None for a reaction (no blueprint).
+    me: float | None = None
+    te: float | None = None
     # Why this job is the length it is: the window it had, and what set it. Carried to the UI
     # because "why is this 2h 32m when everything else is 5h" is otherwise unanswerable without
     # reading the scheduler, and the answer is usually "something needs it sooner".
@@ -234,6 +244,73 @@ class Task:
 def _balanced(total: int, n: int) -> list[int]:
     base, extra = divmod(total, n)
     return [base + 1 if i < extra else base for i in range(n)]
+
+
+def _copy_limits(params, tid: int, activity: str,
+                 runs: int) -> tuple[list[dict], int | None, int | None]:
+    """(owned copies best first, the most runs any ONE copy may carry, runs per BOUGHT copy).
+
+    The copies are the account's owned ones best-researched first; anything the batch needs past
+    them comes off copies the plan buys, which is one entry of `runs_per_copy` repeated as needed.
+    The limit is None when nothing binds (an owned ORIGINAL, or an unowned print with no listing to
+    tell us how big a copy is — in which case the old, uncapped behaviour is what we keep).
+    """
+    if activity != "manufacturing":
+        return [], None, None
+    copies = list(params.copies_for(tid, activity))
+    acq = (params.bp_acquire or {}).get(tid) or {}
+    buy_runs = (int(acq["runs_per_copy"])
+                if acq.get("kind") == "bpc" and (acq.get("runs_per_copy") or 0) > 0 else None)
+    limits: list[int] = []
+    for c in copies:
+        if (c.get("runs") if c.get("runs") is not None else -1) < 0:
+            return copies, None, None            # an original: no per-job run limit at all
+        limits.append(int(c.get("runs") or 0))
+    if runs > sum(limits) and buy_runs:          # the rest is bought, one contract = one copy
+        limits.append(buy_runs)
+    limits = [n for n in limits if n > 0]
+    # Nothing owned and nothing listed = nothing known, which is where the cap came in: leave the
+    # job uncapped, exactly as it was before copies were modelled at all. With copies in hand but no
+    # listing to size a bought one, the copies you hold are the only evidence there is — assume a
+    # bought copy is no larger, since an over-split batch is merely inefficient and a job bigger
+    # than its copy cannot be installed at all.
+    return copies, (max(limits) if limits else None), buy_runs
+
+
+def _jobs_on_copies(chunks: list[int], copies: list[dict], fallback: tuple[float, float],
+                    buy_runs: int | None) -> list[tuple[int, float, float]]:
+    """[(runs, me, te)] — one entry per JOB, each running off ONE blueprint copy, best first.
+
+    A job cannot span two copies, so a chunk longer than the copy it lands on is split rather than
+    quietly installed as an impossible job. Runs past everything owned are built off the copy the
+    plan would buy, at that copy's research: a 20-run batch against a 10-run ME10 copy is ten runs
+    at ME10 and ten at whatever the market is selling, not twenty at ME10.
+    """
+    out: list[tuple[int, float, float]] = []
+    idx, left_in_copy = 0, None
+    for chunk in chunks:
+        need = int(chunk)
+        while need > 0:
+            if idx < len(copies):
+                c = copies[idx]
+                cr = c.get("runs")
+                unlimited = cr is None or int(cr) < 0
+                if left_in_copy is None:
+                    left_in_copy = None if unlimited else max(0, int(cr or 0))
+                if left_in_copy == 0:            # spent copy (or a 0-run one) — move on
+                    idx += 1
+                    left_in_copy = None
+                    continue
+                take = need if left_in_copy is None else min(need, left_in_copy)
+                out.append((take, c["me"], c["te"]))
+                if left_in_copy is not None:
+                    left_in_copy -= take
+                need -= take
+            else:
+                take = need if not buy_runs else min(need, buy_runs)
+                out.append((take, fallback[0], fallback[1]))
+                need -= take
+    return out
 
 
 # How far a job may overshoot its window to reach the next whole run.
@@ -398,33 +475,40 @@ def build_tasks(agg: dict, mfg: dict, rx: dict, params: BuildParams,
         recipe = mfg.get(tid) or rx.get(tid)
         activity = info["activity"]
         max_runs = mfg[tid]["max_runs"] if tid in mfg else 0
-        _me, te = params.me_te_for(tid, activity)
+        R = info["runs"]
+        # The batch-level ME/TE — what the WINDOWS are measured with. The jobs themselves each take
+        # the research of the copy they run on (see `_jobs_on_copies` below), which legitimately
+        # differ inside one batch; the packing has to work off one figure, and the runs-weighted one
+        # is the batch's own average rather than its best moment.
+        _me, te = params.me_te_for(tid, activity, R)
         _mm, st = params.struct_mults_for(tid, activity)
         skill = params.mfg_skill_time_mult if activity == "manufacturing" else params.rx_skill_time_mult
-        per_run = recipe["base_time"] * (1 - te / 100.0) * st * skill
-        R = info["runs"]
+        base_run = recipe["base_time"] * st * skill
+        per_run = base_run * (1 - te / 100.0)
         P = max(1, pools.get(activity, 1))
         cap = max_runs if max_runs else R
         # A manufacturing job also cannot carry more runs than the BLUEPRINT COPY it runs off. The
-        # SDE cap above is the blueprint type's per-job limit; this is the copy's own remaining
-        # runs, which is usually far smaller and is what actually binds in practice. It matters
-        # specifically because the packing below makes jobs LONGER: a 35-run batch is happy as one
-        # job when the plan has the slack for it, and impossible if your copies carry 10 runs each.
-        # Reactions have no blueprint and are untouched.
-        if activity == "manufacturing":
-            own = (params.owned or {}).get(tid) or {}
-            if own.get("kind") == "bpc" and (own.get("runs") or 0) > 0:
-                cap = min(cap, int(own["runs"]))
-            elif not own:
-                # Not owned: the plan buys copies, and one contract is one copy of fixed runs.
-                acq = (params.bp_acquire or {}).get(tid) or {}
-                if acq.get("kind") == "bpc" and (acq.get("runs_per_copy") or 0) > 0:
-                    cap = min(cap, int(acq["runs_per_copy"]))
+        # SDE cap above is the blueprint type's per-job limit; this is one copy's runs, which is
+        # usually far smaller and is what actually binds in practice. It matters specifically because
+        # the packing below makes jobs LONGER: a 35-run batch is happy as one job when the plan has
+        # the slack for it, and impossible if your copies carry 10 runs each. Reactions have no
+        # blueprint and are untouched.
+        copies, copy_cap, buy_runs = _copy_limits(params, tid, activity, R)
+        if copy_cap is not None:
+            cap = min(cap, copy_cap)
         cap = max(1, cap)
         # (a) fill up to P slots concurrently, (b) never exceed the per-job run cap — whichever
         # forces MORE jobs. This is the widest split; the floor is what the cap alone demands.
         n_wide = max(min(P, R), math.ceil(R / cap))
-        plan[tid] = {"activity": activity, "per_run": per_run, "runs": R, "cap": cap,
+        plan[tid] = {"activity": activity, "per_run": per_run, "base_run": base_run,
+                     "copies": copies,
+                     # What runs past the owned copies are built at. With no owned copies at all
+                     # this is simply the batch figure — so a plan with nothing owned, or with a
+                     # user override, comes out exactly as it did before any of this.
+                     "buy_me_te": (params.buy_me_te_for(tid)
+                                   if activity == "manufacturing" and copies else (_me, te)),
+                     "buy_runs": buy_runs,
+                     "runs": R, "cap": cap,
                      "n_wide": n_wide, "n_min": math.ceil(R / cap),
                      # A split of R runs into n jobs finishes when the LONGEST job does, and runs
                      # are whole: ceil(R/n) of them land in the biggest chunk. Using the average
@@ -552,9 +636,17 @@ def build_tasks(agg: dict, mfg: dict, rx: dict, params: BuildParams,
             "needed_by": p.get("needed_by"),
             "needed_by_name": None,
         }
-        for i, r in enumerate(_balanced(p["runs"], n)):
-            t = Task(f"{tid}-{i}", tid, p["activity"], r, r * p["per_run"])
+        # Each job runs off ONE copy and carries that copy's research — best copies first, so the
+        # first jobs installed are the well-researched ones. This can add jobs the packing didn't
+        # ask for (a chunk longer than the copy it lands on has to be split), which is the honest
+        # answer: the alternative is a job that cannot be installed.
+        jobs = _jobs_on_copies(_balanced(p["runs"], n), p["copies"], p["buy_me_te"], p["buy_runs"])
+        for i, (r, me_i, te_i) in enumerate(jobs):
+            t = Task(f"{tid}-{i}", tid, p["activity"], r,
+                     r * p["base_run"] * (1 - te_i / 100.0))
             t.why = why
+            if p["activity"] == "manufacturing":
+                t.me, t.te = me_i, te_i
             tasks.append(t)
             by_type.setdefault(tid, []).append(t)
     return tasks, by_type
@@ -584,7 +676,7 @@ def _critical_priority(agg: dict, deps: dict, mfg: dict, rx: dict, params: Build
     def type_dur(tid: int) -> float:
         info = agg[tid]
         recipe = mfg.get(tid) or rx.get(tid)
-        _me, te = params.me_te_for(tid, info["activity"])
+        _me, te = params.me_te_for(tid, info["activity"], info["runs"])
         _mm, st = params.struct_mults_for(tid, info["activity"])
         skill = params.mfg_skill_time_mult if info["activity"] == "manufacturing" else params.rx_skill_time_mult
         return info["runs"] * recipe["base_time"] * (1 - te / 100.0) * st * skill
@@ -687,7 +779,10 @@ def schedule(tasks: list[Task], by_type: dict, deps: dict, pools: dict[str, int]
         {"start_hours": round(s / 3600.0, 2),
          "tasks": [{"type_id": t.type_id, "activity": t.activity, "runs": t.runs,
                     "duration_hours": round(t.duration / 3600.0, 2), "slot": t.slot,
-                    "why": t.why}
+                    "why": t.why,
+                    # The copy THIS job runs on. Two jobs of one type can differ, so the type-level
+                    # figure on the requirement can't answer "why is that one longer".
+                    **({"me": t.me, "te": t.te} if t.me is not None else {})}
                    for t in sorted(ts, key=lambda t: t.type_id)]}
         for s, ts in sorted(waves.items())
     ]
@@ -837,14 +932,16 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
              "units": info["runs"] * info["output_qty"],
              # What this step was costed and timed at, and where that came from — so an assumed
              # ME/TE is visible and correctable rather than an invisible input to every number.
-             "me": params.me_te_for(tid, info["activity"])[0],
-             "te": params.me_te_for(tid, info["activity"])[1],
+             # The batch's runs-weighted ME/TE across the copies it consumes. Per-JOB values are
+             # on the scheduled jobs; a batch spanning copies of mixed research has no single one.
+             "me": round(params.me_te_for(tid, info["activity"], info["runs"])[0], 3),
+             "te": round(params.me_te_for(tid, info["activity"], info["runs"])[1], 3),
              "me_source": (params.me_source.get(tid, "default")
                            if info["activity"] == "manufacturing" else "reaction"),
              # You cannot install a job without the blueprint, so a build step you own nothing for
              # isn't a plan — it's a shopping trip you haven't been told about. Reactions use a
              # formula, not a blueprint, so they're never flagged.
-             "blueprint": params.owned.get(tid),
+             "blueprint": blueprint_summary(params.owned.get(tid)),
              "needs_blueprint": info["activity"] == "manufacturing" and tid not in params.owned,
              # Owned, but not for this many runs. A 4-run copy against a 20-run batch is sixteen
              # runs still to find, which "you own the blueprint" hides completely.

@@ -17,8 +17,8 @@ import sys
 sys.path.insert(0, ".")
 
 from app.industry.graph import (
-    BuildParams, effective_material_qty, load_manufacturing_graph, load_reaction_graph,
-    collect_reachable, build_plan, resolve_unit_costs,
+    BuildParams, blend_me_te, effective_material_qty, load_manufacturing_graph,
+    load_reaction_graph, collect_reachable, build_plan, resolve_unit_costs,
 )
 from app.industry.schedule import (order_ranks, 
     aggregate_demand, build_tasks, schedule, plan_queue, Task, _built_deps, _depths,
@@ -674,8 +674,10 @@ def test_missing_blueprints_are_reported():
     check("needs_blueprint false for the reaction", byid[102]["needs_blueprint"] is False)
 
     # Owning the Widget BPO clears only that one.
+    # An UN-RESEARCHED original, deliberately: research legitimately moves materials (that is what
+    # ME is), so the only way to ask whether *ownership* moves them is to hold ME/TE at 0.
     P2 = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0,
-                     owned={100: {"me": 10, "te": 20, "kind": "bpo", "runs": -1}})
+                     owned={100: {"me": 0, "te": 0, "kind": "bpo", "runs": -1}})
     res2 = plan_queue([(100, 1)], mfg, rx, _prices(SELL), ADJ, P2, NAMES,
                       {"manufacturing": 5, "reaction": 5})
     miss2 = [m["name"] for m in res2["metrics"]["missing_blueprints"]]
@@ -2353,6 +2355,11 @@ def main():
     test_binding_a_set_remembers_it_without_switching_it_on_for_everyone()
     test_a_named_set_of_containers_is_one_pick()
     test_an_existing_single_key_order_keeps_planning_identically()
+    test_every_copy_the_account_holds_counts()
+    test_a_stack_of_originals_is_not_a_copy_that_covers_nothing()
+    test_each_job_runs_off_the_copy_it_is_installed_on()
+    test_an_override_still_beats_every_copy_you_own()
+    test_a_single_copy_account_plans_exactly_as_before()
     print(f"\nAll {_passed} checks passed.")
 
 
@@ -3368,6 +3375,206 @@ def test_the_step_by_step_parts_account_for_the_whole():
     check("the total says it is wall clock, not a sum of the steps",
           "not lengths to add up" in done)
     check("and names the step that drives it", "driver" in done)
+
+
+
+def _seed_blueprint_cache(dbcon, items, context_id=1, character_id=7):
+    """One character's ESI blueprint cache, as `owned_blueprints` reads it.
+    `items`: [(blueprint_type_id, quantity, runs, me, te)] — raw ESI shape, quirks included."""
+    dbcon.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS blueprints (blueprint_type_id INTEGER PRIMARY KEY,
+            product_type_id INTEGER, output_qty INTEGER, base_time INTEGER, max_runs INTEGER);
+        CREATE TABLE IF NOT EXISTS pp_characters (character_id INTEGER PRIMARY KEY,
+            context_id INTEGER);
+        CREATE TABLE IF NOT EXISTS pp_char_blueprints (character_id INTEGER PRIMARY KEY,
+            blueprints_json TEXT NOT NULL DEFAULT '[]', fetched_at REAL);
+        """)
+    dbcon.execute("INSERT OR REPLACE INTO blueprints VALUES (1000, 100, 1, 3600, 100)")
+    dbcon.execute("INSERT OR REPLACE INTO pp_characters VALUES (?, ?)", (character_id, context_id))
+    rows = [{"type_id": bt, "quantity": q, "runs": r, "me": me, "te": te}
+            for bt, q, r, me, te in items]
+    dbcon.execute("INSERT OR REPLACE INTO pp_char_blueprints VALUES (?, ?, 0)",
+                  (character_id, json.dumps(rows)))
+    dbcon.commit()
+
+
+def test_every_copy_the_account_holds_counts():
+    """Reported: the planner ignores blueprint copies whose ME/TE doesn't match. It did — worse, it
+    ignored every copy but ONE. `owned_blueprints` collapsed a product's whole holding down to the
+    single best print and threw the rest away, so an account holding 14 Capital Armor Plates copies
+    worth 212 runs was credited with 5 and told to go and buy the other 207 it already had."""
+    print("test_every_copy_the_account_holds_counts")
+    import app.industry.blueprints as B
+    dbcon, restore = _patch_db(B)
+    try:
+        _seed_blueprint_cache(dbcon, [
+            (1000, -2, 5, 10, 20),      # the best-researched copy — all the old code ever saw
+            (1000, -2, 30, 8, 16),
+            (1000, -2, 25, 0, 0),
+        ])
+        own = B.owned_blueprints(1)[100]
+        check("every copy is kept", own["copy_count"] == 3)
+        check("coverage is the SUM of their runs, not the best one's", own["runs"] == 60)
+        check("and they are ordered best-researched first",
+              [c["me"] for c in own["copies"]] == [10, 8, 0])
+    finally:
+        restore()
+
+    # ...and that coverage is what the batch is measured against.
+    mfg = {1: {"base_time": 3600, "max_runs": 100, "output_qty": 1, "inputs": []}}
+    prices, adj = _prices({1: 5_000_000.0}), {1: 1.0}
+    pools = {"manufacturing": 5, "reaction": 5}
+    copies = [{"me": 10, "te": 20, "kind": "bpc", "runs": 5},
+              {"me": 0, "te": 0, "kind": "bpc", "runs": 30}]
+    held = {1: {"me": 10, "te": 20, "kind": "bpc", "runs": 35, "copies": copies, "copy_count": 2}}
+    p = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, struct_time_mult=1.0,
+                    owned=held, bp_acquire={1: {"kind": "bpc", "price": 10e6, "runs_per_copy": 5,
+                                                "live": True,
+                                                "listings": [{"runs": 5, "price": 10e6}] * 8}})
+    memo, _u = resolve_unit_costs(mfg, {}, prices, adj, p)
+    agg = aggregate_demand([(1, 30)], memo, mfg, {}, p, None, pools)
+    check("a 30-run batch is covered by 35 runs of copies", agg[1]["runs_short"] == 0)
+    check("so no copies are bought for it", agg[1].get("blueprint_cost", 0.0) == 0.0)
+    agg2 = aggregate_demand([(1, 50)], memo, mfg, {}, p, None, pools)
+    check("and a bigger batch is short by what the WHOLE holding leaves", agg2[1]["runs_short"] == 15)
+    check("which is what gets charged for", agg2[1]["blueprint_cost"] > 0)
+
+
+def test_a_stack_of_originals_is_not_a_copy_that_covers_nothing():
+    """ESI's `quantity` is -1 for a singleton, -2 for a copy — and a POSITIVE number for a stack of
+    ORIGINALS fresh from the market. Reading `quantity == -1` as the only original filed all of
+    those as copies carrying -1 runs, i.e. as covering nothing: 26 blueprints in production, each
+    telling its owner to buy a print they are holding. `runs == -1` is the unambiguous marker — a
+    real copy always carries a positive run count."""
+    print("test_a_stack_of_originals_is_not_a_copy_that_covers_nothing")
+    import app.industry.blueprints as B
+    check("a singleton original is an original", B.classify_blueprint(-1, -1) == "bpo")
+    check("a STACK of originals is too", B.classify_blueprint(5, -1) == "bpo")
+    check("a copy is a copy", B.classify_blueprint(-2, 10) == "bpc")
+    check("and -1 runs is never a copy, whatever the quantity says",
+          B.classify_blueprint(-2, -1) == "bpo")
+
+    dbcon, restore = _patch_db(B)
+    try:
+        _seed_blueprint_cache(dbcon, [(1000, 5, -1, 9, 18)])
+        own = B.owned_blueprints(1)[100]
+        check("the stack is reported as an original", own["kind"] == "bpo")
+        check("and an original covers any batch", own["runs"] == -1)
+        mfg = {100: {"base_time": 3600, "max_runs": 100, "output_qty": 1, "inputs": []}}
+        p = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, struct_time_mult=1.0,
+                        owned={100: own})
+        memo, _u = resolve_unit_costs(mfg, {}, _prices({100: 5e6}), {100: 1.0}, p)
+        agg = aggregate_demand([(100, 40)], memo, mfg, {}, p, None,
+                               {"manufacturing": 5, "reaction": 5})
+        check("so nothing is short and nothing is bought",
+              agg[100]["runs_short"] == 0 and agg[100].get("blueprint_cost", 0.0) == 0.0)
+        check("and its research is used, not ME 0",
+              p.me_te_for(100, "manufacturing", 40) == (9, 18))
+    finally:
+        restore()
+
+
+def test_each_job_runs_off_the_copy_it_is_installed_on():
+    """ME/TE is a property of the COPY a job runs on, so jobs of one type in one batch legitimately
+    differ — the best copies are consumed first. The aggregate the demand pass uses is then a
+    runs-weighted figure over exactly those copies (crediting the whole batch to the best copy in
+    the drawer over-states what it saves), and runs no copy covers are built at whatever the plan
+    would buy."""
+    print("test_each_job_runs_off_the_copy_it_is_installed_on")
+    mfg = {2: {"base_time": 3600, "max_runs": 100, "output_qty": 1, "inputs": []}}
+    agg = {2: {"build": True, "runs": 6, "activity": "manufacturing"}}
+    pools = {"manufacturing": 6, "reaction": 6}
+    copies = [{"me": 10, "te": 20, "kind": "bpc", "runs": 2},
+              {"me": 0, "te": 0, "kind": "bpc", "runs": 4}]
+    p = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, struct_time_mult=1.0,
+                    owned={2: {"me": 10, "te": 20, "kind": "bpc", "runs": 6, "copies": copies}})
+    _t, by = build_tasks(agg, mfg, {}, p, pools)
+    jobs = by[2]
+    check("every run is still built", sum(t.runs for t in jobs) == 6)
+    check("the best copies are installed first",
+          [t.te for t in jobs][:2] == [20, 20] and [t.te for t in jobs][2:] == [0, 0, 0, 0])
+    check("and a job's LENGTH follows its own copy",
+          approx(jobs[0].duration, 2880.0) and approx(jobs[-1].duration, 3600.0))
+
+    check("the batch figure is runs-weighted over the copies it spends",
+          approx(p.me_te_for(2, "manufacturing", 6)[0], (10 * 2 + 0 * 4) / 6))
+    check("not the best copy's, which would over-credit the materials",
+          p.me_te_for(2, "manufacturing", 6)[0] < 10)
+    check("a batch the first copy covers alone IS the first copy",
+          p.me_te_for(2, "manufacturing", 2) == (10, 20))
+
+    # Runs past everything owned are built off the copy the plan would BUY.
+    p2 = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, struct_time_mult=1.0,
+                     owned={2: {"me": 10, "te": 20, "kind": "bpc", "runs": 2,
+                                "copies": copies[:1]}},
+                     buy_me_te={2: (4, 8)},
+                     bp_acquire={2: {"kind": "bpc", "price": 1.0, "runs_per_copy": 2}})
+    # Three slots, so the six runs land as three 2-run jobs — one per copy, which is the point.
+    _t2, by2 = build_tasks(agg, mfg, {}, p2, {"manufacturing": 3, "reaction": 3})
+    check("the owned copy runs first, the bought ones after",
+          [t.te for t in by2[2]] == [20, 8, 8])
+    check("no job carries more runs than one copy", max(t.runs for t in by2[2]) == 2)
+    check("and the shortfall is weighed at what it will really be built at",
+          approx(p2.me_te_for(2, "manufacturing", 6)[0], (10 * 2 + 4 * 4) / 6))
+
+    # The blend itself, stated directly.
+    check("an original answers for the whole batch",
+          blend_me_te([{"me": 3, "te": 6, "runs": -1}], 100, (0, 0)) == (3, 6))
+    check("and for a batch of unknown size too",
+          blend_me_te([{"me": 3, "te": 6, "runs": -1}], None, (0, 0)) == (3, 6))
+
+
+def test_an_override_still_beats_every_copy_you_own():
+    """Precedence is user override > owned blueprint > contract copy > ME 0/TE 0, and per-copy
+    assignment must not quietly outrank the one thing the user said explicitly."""
+    print("test_an_override_still_beats_every_copy_you_own")
+    mfg = {2: {"base_time": 3600, "max_runs": 100, "output_qty": 1, "inputs": []}}
+    agg = {2: {"build": True, "runs": 4, "activity": "manufacturing"}}
+    copies = [{"me": 10, "te": 20, "kind": "bpc", "runs": 2},
+              {"me": 0, "te": 0, "kind": "bpc", "runs": 2}]
+    p = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, struct_time_mult=1.0,
+                    owned={2: {"me": 10, "te": 20, "kind": "bpc", "runs": 4, "copies": copies}},
+                    me_by_product={2: (7.0, 14.0)}, me_source={2: "override"})
+    check("the override is what the batch is costed at",
+          p.me_te_for(2, "manufacturing", 4) == (7.0, 14.0))
+    check("and the copies are not consulted at all", p.copies_for(2, "manufacturing") == [])
+    _t, by = build_tasks(agg, mfg, {}, p, {"manufacturing": 4, "reaction": 4})
+    check("every job runs at the overridden efficiency",
+          all(t.te == 14.0 for t in by[2]) and len(by[2]) == 4)
+
+
+def test_a_single_copy_account_plans_exactly_as_before():
+    """The deploy guarantee: an account holding ONE print for a product plans identically however
+    the holding is described — the multi-copy path has to reduce to the old one, byte for byte."""
+    print("test_a_single_copy_account_plans_exactly_as_before")
+    con = _seed_con()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+    pools = {"manufacturing": 5, "reaction": 5}
+    one = {"me": 10, "te": 20, "kind": "bpc", "runs": 4}
+
+    def plan(owned):
+        p = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, struct_time_mult=1.0,
+                        owned=owned)
+        return plan_queue([(100, 3)], mfg, rx, _prices(SELL), ADJ, p, NAMES, pools)
+
+    summary_only = plan({100: dict(one)})
+    with_copies = plan({100: dict(one, copies=[dict(one)], copy_count=1)})
+
+    def _blind(res):
+        """Same plan, minus the one thing that is genuinely new: how many copies were counted."""
+        r = json.loads(json.dumps(res))
+        for req in r["requirements"]:
+            (req.get("blueprint") or {}).pop("copy_count", None)
+        return json.dumps(r, sort_keys=True)
+
+    check("the whole plan is identical", _blind(summary_only) == _blind(with_copies))
+    check("the count of copies counted is reported",
+          {r["type_id"]: r for r in with_copies["requirements"]}[100]["blueprint"]["copy_count"] == 1)
+    check("and it still uses the copy's research",
+          {r["type_id"]: r for r in with_copies["requirements"]}[100]["me"] == 10)
+    check("the per-copy list never reaches the payload",
+          "copies" not in ({r["type_id"]: r for r in with_copies["requirements"]}[100]["blueprint"]))
 
 
 if __name__ == "__main__":

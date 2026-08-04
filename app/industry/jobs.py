@@ -192,7 +192,7 @@ def log_manufacturing_completions(context_id: int) -> int:
         if recipe and runs > 0:
             produced = runs * (recipe["output_qty"] or 1)
             output_value = ((prices.get(tid) or {}).get("sell_price") or 0.0) * produced
-            me, _te = params.me_te_for(tid, "manufacturing")
+            me, _te = params.me_te_for(tid, "manufacturing", runs)
             eiv = 0.0
             for inp in recipe["inputs"]:
                 qty = effective_material_qty(inp["quantity"], runs, me, 1.0)

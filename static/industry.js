@@ -2005,16 +2005,23 @@ function _indOwnedBpChip(owned, runsNeeded) {
   if (kind !== 'BPC') {
     return ` <span class="ind-owned" title="You own this ${kind} — an original, so it never runs out">${kind}${me}</span>`;
   }
+  // `runs` is the coverage of EVERY copy you hold for this product, summed — so with more than one
+  // the chip has to say so, or "BPC ME10 · 60 runs" reads as one enormous ME10 copy when it is
+  // really three copies of mixed research, best first.
   const have = Math.max(0, Math.round(owned.runs || 0));
+  const n = Math.max(1, Math.round(owned.copy_count || 1));
   const need = Math.max(0, Math.round(runsNeeded || 0));
   const short = need > have ? need - have : 0;
   const runTxt = `${have} run${have === 1 ? '' : 's'}`;
-  const tip = `You own this BPC and it carries ${runTxt}`
+  const copyTxt = n > 1 ? ` across ${n} copies` : '';
+  const tip = `You own ${n > 1 ? `${n} copies of this BPC carrying ${runTxt} in total`
+    : `this BPC and it carries ${runTxt}`}`
+    + (n > 1 ? `; the best-researched are used first (ME${owned.me} is the best of them)` : '')
     + (need ? `. This build needs ${need} run${need === 1 ? '' : 's'}` : '')
     + (short ? `, so ${short} more must come from further copies` : '')
     + '.';
   return ` <span class="ind-owned${short ? ' ind-owned-short' : ''}" title="${tip}">`
-    + `BPC${me} · ${runTxt}${short ? ` · ${short} short` : ''}</span>`;
+    + `BPC${me} · ${runTxt}${copyTxt}${short ? ` · ${short} short` : ''}</span>`;
 }
 
 // Compact tree row label (shared by leaves and collapsible nodes).
