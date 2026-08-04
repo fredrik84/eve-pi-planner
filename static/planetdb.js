@@ -245,7 +245,7 @@ function _ppRenderChunk() {
 }
 
 async function clearPlanets() {
-  if (!confirm('Clear all planet data?')) return;
+  if (!await ppConfirm('Clear all planet data?')) return;
   try {
     await apiSend('DELETE', '/api/planets');
   } catch (e) { toastError(e, 'Could not clear the planet data'); return; }

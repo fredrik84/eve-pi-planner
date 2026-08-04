@@ -2720,7 +2720,7 @@ function indCopyShare() {
 }
 
 async function indRevokeShare(orderId) {
-  if (!confirm('Revoke this link? The customer\'s page will stop working immediately.')) return;
+  if (!await ppConfirm('Revoke this link? The customer\'s page will stop working immediately.')) return;
   try {
     await apiSend('DELETE', `/api/industry/orders/${orderId}/share`);
   } catch (e) { /* revoking is best-effort from the UI's point of view */ }

@@ -253,7 +253,7 @@ async function addTester() {
 }
 
 async function removeTester(name) {
-  if (!confirm(`Remove tester "${name}"?`)) return;
+  if (!await ppConfirm(`Remove tester "${name}"?`)) return;
   try {
     await apiSend('DELETE', `/api/testers/${encodeURIComponent(name)}`);
     loadTesters();
@@ -303,7 +303,7 @@ function renderPlanetSubmissions(subs) {
 }
 
 async function reviewPlanetSubmission(id, action) {
-  if (action === 'reject' && !confirm('Reject and discard this submission?')) return;
+  if (action === 'reject' && !await ppConfirm('Reject and discard this submission?')) return;
   try {
     const data = await apiSend('POST', `/api/planet-submissions/${id}/${action}`);
     if (action === 'approve') {
@@ -346,7 +346,7 @@ async function addAdmin() {
 }
 
 async function removeAdmin(name) {
-  if (!confirm(`Remove admin "${name}"?`)) return;
+  if (!await ppConfirm(`Remove admin "${name}"?`)) return;
   try {
     await apiSend('DELETE', `/api/admins/${encodeURIComponent(name)}`);
     loadAdmins();
@@ -494,7 +494,7 @@ async function saveBasket() {
 }
 
 async function deleteBasket(id, name) {
-  if (!confirm(`Delete basket "${name}"? It will no longer be selectable in the planner.`)) return;
+  if (!await ppConfirm(`Delete basket "${name}"? It will no longer be selectable in the planner.`)) return;
   try {
     await apiSend('DELETE', `/api/baskets/${id}`);
     if (_basketEditId === id) resetBasketEditor();
@@ -777,7 +777,7 @@ async function runCleanup() {
     const meta = _CLEANUP_LABELS[key];
     return `• ${meta.label}: ${data.count} ${meta.unit}${data.count !== 1 ? 's' : ''}`;
   });
-  if (!confirm(`Permanently delete:\n\n${lines.join('\n')}\n\nThis cannot be undone.`)) return;
+  if (!await ppConfirm(`Permanently delete:\n\n${lines.join('\n')}\n\nThis cannot be undone.`)) return;
 
   const statusEl = document.getElementById('cleanupStatus');
   if (statusEl) statusEl.textContent = 'Running…';
@@ -912,7 +912,7 @@ async function saveMoonGooRow(typeId, btn) {
 }
 
 async function deleteMoonGooRow(typeId, btn) {
-  if (!confirm('Remove this material from the price list?')) return;
+  if (!await ppConfirm('Remove this material from the price list?')) return;
   btn.disabled = true;
   try {
     await apiSend('DELETE', `/api/moon-goo/${_moonGooGroupId}/${typeId}`);
@@ -1024,7 +1024,7 @@ async function createGroup() {
 }
 
 async function deleteGroup(groupId, name, btn) {
-  if (!confirm(`Delete group "${name}"? Its price sheet and reaction settings are left in place but become unreachable.`)) return;
+  if (!await ppConfirm(`Delete group "${name}"? Its price sheet and reaction settings are left in place but become unreachable.`)) return;
   btn.disabled = true;
   try {
     await apiSend('DELETE', `/api/admin/groups/${groupId}`);

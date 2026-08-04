@@ -864,7 +864,7 @@ function _rxManualAssignPreview() {
     </div>`;
 }
 
-function _rxSubmitManualAssign() {
+async function _rxSubmitManualAssign() {
   const status = document.getElementById('rxManualAssignStatus');
   const o = _rxManualAssignMatch();
   if (!o) { status.textContent = 'Pick a product from the list.'; return; }
@@ -928,7 +928,7 @@ function _rxSubmitManualAssign() {
   if (!allocations.length) { status.textContent = 'No free reaction slots on any tracked character.'; return; }
   if (remaining > 0) {
     const chainNote = chainJobs > 0 ? ` (after reserving ${chainJobs} for the intermediate chain)` : '';
-    if (!confirm(`Only ${jobsWanted - remaining} of ${jobsWanted} jobs fit across your free slots right now${chainNote}. Assign what fits?`)) return;
+    if (!await ppConfirm(`Only ${jobsWanted - remaining} of ${jobsWanted} jobs fit across your free slots right now${chainNote}. Assign what fits?`)) return;
   }
 
   status.textContent = _rxEditingAssignmentId ? 'Saving…' : 'Assigning…';
@@ -1817,6 +1817,11 @@ function _rxOrderReportBody(data) {
       </table>
     </div>`;
   const chainNote = !(data.chain_tiers || []).length ? '' : `<div class="rx-manual-preview-chain" style="margin-top:6px">Also needs ${data.chain_tiers.length} intermediate reaction${data.chain_tiers.length === 1 ? '' : 's'} first: ${data.chain_tiers.map(t => `<b>${_esc(t.name)}</b> ×${t.runs.toLocaleString()}`).join(', ')}.</div>`;
+  // Folded away by default: the materials table is the longest thing in the modal and pushed the
+  // order's own actions off the bottom. The summary carries enough (line count + total ISK) to
+  // decide whether opening it is worth it.
+  const matCount = (data.materials || []).length;
+  const matIsk = (data.materials || []).reduce((s, m) => s + (m.unit_cost || 0) * (m.quantity || 0), 0);
 
   return `
     <div class="pp-card-title" style="margin-top:14px;font-size:14px">Cost to produce</div>
@@ -1836,10 +1841,14 @@ function _rxOrderReportBody(data) {
     <div class="pp-card-hint">${_esc(data.time.caveat || '')}</div>
     ${chainNote}
 
-    <div class="pp-card-title" style="margin-top:14px;font-size:14px">Materials to import (full chain, ${Math.round(o.target_qty).toLocaleString()} units)
-      ${(data.materials || []).length ? `<button class="pp-add-btn" onclick="_rxCopyOrderMaterials(this)">Copy for Janice</button>` : ''}
-    </div>
-    ${materialsHtml}`;
+    <details class="rx-order-materials" style="margin-top:14px">
+      <summary class="pp-card-title rx-fold-summary" style="font-size:14px">
+        <span class="rx-fold-caret">▸</span>
+        <span>Materials to import <span class="pp-card-hint">— full chain, ${Math.round(o.target_qty).toLocaleString()} units${matCount ? ` · ${matCount} line${matCount === 1 ? '' : 's'} · ${_fmtIsk(matIsk)}` : ''}</span></span>
+        ${matCount ? `<button class="pp-add-btn" onclick="event.preventDefault();event.stopPropagation();_rxCopyOrderMaterials(this)">Copy for Janice</button>` : ''}
+      </summary>
+      ${materialsHtml}
+    </details>`;
 }
 
 function _renderRxOrderDetail(data) {
@@ -1852,8 +1861,8 @@ function _renderRxOrderDetail(data) {
   const actionButtons = o.status === 'open' ? `
       ${remaining > 0 ? `<button id="rxOrderAssignBtn" onclick="_rxAssignOrderBatch(${o.id})">Assign next batch (${remaining.toLocaleString()} run${remaining === 1 ? '' : 's'} left)</button>` : '<span class="pp-card-hint">Every run has been assigned.</span>'}
       <button class="pp-add-btn" onclick="_rxCompleteOrder(${o.id})">Mark completed</button>
-      <button class="pp-cancel-btn" onclick="_rxCancelOrder(${o.id})">Cancel order</button>
-      ${o.assigned_runs === 0 ? `<button class="pp-cancel-btn" onclick="_rxDeleteOrder(${o.id})">Delete</button>` : ''}
+      <button class="pp-danger-btn" onclick="_rxCancelOrder(${o.id})">Cancel order</button>
+      ${o.assigned_runs === 0 ? `<button class="pp-danger-btn" onclick="_rxDeleteOrder(${o.id})">Delete</button>` : ''}
     ` : `<span class="pp-card-hint">Order ${_esc(o.status)}.</span>`;
 
   el.innerHTML = `
@@ -1995,18 +2004,18 @@ function _rxSetOrderStatus(orderId, newStatus) {
     });
 }
 
-function _rxCompleteOrder(orderId) {
-  if (!confirm('Mark this order completed? Any reaction slots reserved for it will be freed.')) return;
+async function _rxCompleteOrder(orderId) {
+  if (!await ppConfirm('Mark this order completed? Any reaction slots reserved for it will be freed.')) return;
   _rxSetOrderStatus(orderId, 'completed');
 }
 
-function _rxCancelOrder(orderId) {
-  if (!confirm('Cancel this order? Any reaction slots reserved for it will be freed.')) return;
+async function _rxCancelOrder(orderId) {
+  if (!await ppConfirm('Cancel this order? Any reaction slots reserved for it will be freed.')) return;
   _rxSetOrderStatus(orderId, 'cancelled');
 }
 
-function _rxDeleteOrder(orderId) {
-  if (!confirm('Delete this order? This cannot be undone.')) return;
+async function _rxDeleteOrder(orderId) {
+  if (!await ppConfirm('Delete this order? This cannot be undone.')) return;
   apiSend('DELETE', `/api/reactions/orders/${orderId}`)
     .then(() => { _rxCloseOrderDetail(); _rxLoadOrders(); })
     .catch(err => {

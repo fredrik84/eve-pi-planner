@@ -729,7 +729,7 @@ function renderCharacters(chars, loggedIn) {
       // That asymmetry is the one thing worth spelling out before someone clicks ✕ on an alt.
       if (del) del.addEventListener('click', async (e) => {
         e.preventDefault(); e.stopPropagation();
-        if (!confirm(
+        if (!await ppConfirm(
           `Disconnect ${c.name}?\n\n` +
           `This deletes its colonies, plan roles and saved settings, and revokes this app's ESI access.\n` +
           `You can re-add the character any time by logging in again — but its measured yield history ` +
@@ -1531,7 +1531,7 @@ function settingsLoadProfile(id) {
 async function settingsDeleteProfile(id) {
   const profile = _ppProfiles.find(p => p.id === id);
   if (!profile) return;
-  if (!confirm(`Delete profile "${profile.name}"?`)) return;
+  if (!await ppConfirm(`Delete profile "${profile.name}"?`)) return;
   try { await apiSend('DELETE', `/api/profiles/${id}`); }
   catch (e) { toastError(e, 'Could not delete that profile'); }
   loadProfiles();   // refresh either way, so the list always reflects the server
@@ -1652,7 +1652,7 @@ function _persistLastPlan() {
 
 async function wizardShare(includeDetails = false) {
   if (!_wiz.typeId) return;
-  if (includeDetails && !confirm(
+  if (includeDetails && !await ppConfirm(
       'This full link embeds your character names, systems and planets. Anyone it is '
       + 'forwarded to could use in-game locator agents to find and camp you.\n\n'
       + 'Only send it to people you trust. Continue?')) return;
@@ -3116,7 +3116,7 @@ async function notifToggle(id) {
 }
 
 async function notifDelete(id) {
-  if (!confirm('Remove this notification channel?')) return;
+  if (!await ppConfirm('Remove this notification channel?')) return;
   try { await apiSend('DELETE', `/api/notifications/settings/${id}`); }
   catch (e) { toastError(e, 'Could not remove that channel'); }
   await loadNotifications();

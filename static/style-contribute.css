@@ -366,6 +366,42 @@
 }
 .pp-cancel-btn:hover { background: #222838; color: #a8b4cc; }
 
+/* A destructive action should not look identical to "Close". `.pp-cancel-btn` is the neutral
+   dismiss treatment and Cancel-order/Delete were borrowing it, so the row read as three
+   interchangeable grey buttons with the irreversible one indistinguishable from the way out. */
+.pp-danger-btn {
+  background: #2a1a1e;
+  color: #e08a92;
+  border: 1px solid #5c2b33;
+  border-radius: 5px;
+  padding: 8px 18px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.pp-danger-btn:hover { background: #3a2228; color: #ffb3ba; border-color: #7a3a44; }
+
+/* ── In-app confirm (ppConfirm, utils.js) ─────────────────────────────────────────────── */
+.pp-confirm-back {
+  position: fixed; inset: 0; z-index: 1000;
+  background: rgba(6, 9, 16, 0.72);
+  display: flex; align-items: center; justify-content: center;
+  padding: 20px;
+}
+.pp-confirm {
+  background: var(--clr-panel, #131722);
+  border: 1px solid var(--clr-border);
+  border-radius: 8px;
+  padding: 20px 22px;
+  max-width: 420px; width: 100%;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+}
+.pp-confirm-msg { font-size: 13px; line-height: 1.55; color: var(--clr-text, #c8d2e0); }
+.pp-confirm-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 18px; }
+@media (max-width: 480px) {
+  .pp-confirm-actions { flex-direction: column-reverse; }
+  .pp-confirm-actions button { width: 100%; }
+}
+
 .pp-text-input { border-radius: 4px; font-size: 13px; padding: 5px 8px; width: 100%; }
 
 /* ── Bug reporting ─────────────────────────────────────────────────────────── */

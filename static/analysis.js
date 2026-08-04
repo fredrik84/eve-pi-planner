@@ -1597,7 +1597,7 @@ async function savePlanForRefills() {
 }
 
 async function deletePlanSnapshot(srvId) {
-  if (!confirm('Delete this saved plan?')) return;
+  if (!await ppConfirm('Delete this saved plan?')) return;
   try { await apiSend('DELETE', `/api/plan-snapshots/${srvId}`); } catch (e) {}
   const el = document.getElementById('planDistSection');
   if (el) el.dataset.sel = '';

@@ -67,6 +67,54 @@ function toastError(e, prefix) {
   toast(prefix ? `${prefix}: ${m}` : m, 'error');
 }
 
+// ── Confirm ───────────────────────────────────────────────────────────────────────────
+// Native confirm() has one failure mode that matters here: once a page has thrown a few dialogs,
+// browsers offer "prevent this page from creating additional dialogs", and every later confirm()
+// then returns FALSE with no prompt and no error. Every destructive action in this app was gated
+// on one, so the symptom is a button that silently does nothing — reported against "Cancel order",
+// whose backend was provably fine and whose order was still `open` in the database because the
+// request was never sent.
+//
+// Same reasoning that replaced 55 alert() calls with toasts, finished off: the app owns its own
+// dialogs, so nothing outside it can switch them off. Returns a Promise<boolean>, so callers read
+// as `ppConfirm(...).then(ok => { if (!ok) return; ... })`.
+function ppConfirm(message, { okLabel = 'Confirm', danger = true } = {}) {
+  return new Promise(resolve => {
+    const back = document.createElement('div');
+    back.className = 'pp-confirm-back';
+    back.innerHTML = `
+      <div class="pp-confirm" role="alertdialog" aria-modal="true">
+        <div class="pp-confirm-msg"></div>
+        <div class="pp-confirm-actions">
+          <button class="pp-cancel-btn" data-no>Keep it</button>
+          <button class="${danger ? 'pp-danger-btn' : 'pp-add-btn'}" data-yes></button>
+        </div>
+      </div>`;
+    back.querySelector('.pp-confirm-msg').textContent = message;
+    back.querySelector('[data-yes]').textContent = okLabel;
+
+    let done = false;
+    const close = ok => {
+      if (done) return;
+      done = true;
+      document.removeEventListener('keydown', onKey);
+      back.remove();
+      resolve(ok);
+    };
+    const onKey = e => {
+      if (e.key === 'Escape') close(false);
+      if (e.key === 'Enter') close(true);
+    };
+    back.querySelector('[data-no]').addEventListener('click', () => close(false));
+    back.querySelector('[data-yes]').addEventListener('click', () => close(true));
+    // Clicking the backdrop cancels — but only the backdrop, never a stray click inside the card.
+    back.addEventListener('click', e => { if (e.target === back) close(false); });
+    document.addEventListener('keydown', onKey);
+    document.body.appendChild(back);
+    back.querySelector('[data-yes]').focus();
+  });
+}
+
 function fmtIsk(n) {
   if (n >= 1e9) return (n / 1e9).toFixed(2) + ' B';
   if (n >= 1e6) return (n / 1e6).toFixed(2) + ' M';

@@ -100,7 +100,7 @@ function openSavedPlanRefill(id) {
 }
 
 async function deleteSavedPlan(id, srvId) {
-  if (!confirm('Delete this saved plan?')) return;
+  if (!await ppConfirm('Delete this saved plan?')) return;
   if (srvId) {
     try { await apiSend('DELETE', `/api/plan-snapshots/${srvId}`); } catch (e) {}
   } else {
