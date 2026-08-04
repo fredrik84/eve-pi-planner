@@ -461,6 +461,68 @@ anything over a few seconds on a warm path as a regression worth tracing rather 
 
 ---
 
+## 10. Choose whether — and which — reactions the plan builds (DESIGN, 2026-08-04)
+
+Reported from use: "a button to toggle if we build reactions or not, or decide to build certain
+categories of reactions." Today reactions go through make-or-buy like anything else, so a builder
+who simply doesn't run reactions has to blacklist each output by hand.
+
+**Where it applies: `resolve_unit_costs` (`app/industry/graph.py:317`), the same layer as
+`never_build_ids` — not at demand time.** That placement is already load-bearing and the reasoning
+is in the code: deciding to buy a component while still costing its parent as if it were built is
+what makes a total stop matching its own shopping list. Setting `decision = "buy"` there makes the
+whole subtree below it disappear on its own; there is nothing to prune by hand.
+
+**Categories: reuse the reaction group ids, do not invent a second taxonomy.** `RIG_FAMILIES` in
+`app/industry/structures.py` already carries curated, tested group sets for exactly the three
+reaction families — `composite` (groups 429, 428 — Composite + Intermediate moon materials),
+`hybrid_polymer` (974), `biochemical` (712, 20). **But extract them into a shared
+`REACTION_CATEGORIES` map first and have both read it.** That registry is currently keyed to
+*rigs*; the two meanings coincide today and there is no reason a rig family and a build-policy
+category must stay identical forever. One registry echoed to the frontend, same rule as
+`ALERT_KINDS` — the UI never hardcodes the labels.
+
+**Precedence, which must not fight the two controls already there.** Three layers, most specific
+wins, and the first two already behave this way:
+1. `force_build_ids` (per order, "build it anyway") — beats everything, unchanged.
+2. `never_build_ids` (per account, per type) — unchanged.
+3. **the new category policy** (per account, per family) — the bulk rule underneath both.
+Category and blacklist both resolve to "buy", so they cannot contradict each other; only `force`
+overrides, exactly as it does for the blacklist today. **A reaction with no buy price is still
+built** — the same carve-out the blacklist has, for the same reason: refusing to build what can't
+be bought leaves the plan no way to get one at all.
+
+**Say what the convenience costs.** Buying reaction outputs instead of running them is the same
+shape of trade as the marginal-saving threshold, and CLAUDE.md's rule for that is explicit: report
+what the shortcut cost rather than quietly taking it. So the policy must surface the ISK delta
+(the `marginal_saving` machinery already computes this per row) — a builder quoting against a
+competitor needs to see that not reacting moved their floor.
+
+**Storage + write path.** Additive column on `pp_industry_settings` (a JSON family-key array, plus
+the plain on/off which is just "all families off"). It needs **its own endpoint**, like
+`set_blacklist` — deliberately NOT a field on the debounced settings PUT, which is a save of the
+whole plan form and would carry a stale policy along with every knob move. That mistake is already
+documented for the blacklist; don't repeat it.
+
+**Ship behind a flag** (`industry_reaction_policy`), default all-families-on = today's behaviour
+exactly.
+
+**Two things to check before building, both cheap:**
+- **Reaction slots go idle.** With reactions off, the reaction pool contributes nothing and
+  `schedule` must still produce a sane plan from a pool of zero — the same path that already
+  renders a 0h makespan for an account with no Mass Reactions trained. Confirm it degrades rather
+  than divides by zero.
+- **Don't imply anything about the Reactions tab.** That is a separate feature with its own slot
+  planning; a builder may well turn reactions off *here* and still run them there. The wording has
+  to be about this build, not about their reaction business.
+
+**Open question for the user, not to be guessed:** is this per ACCOUNT (a standing way of
+operating, like the blacklist) or per ORDER (this customer's build is bought-in, the next one
+isn't)? Account-level is the smaller change and matches how the blacklist is framed; per-order is
+more expressive and would follow `force_build_ids`' storage pattern. Ask before building.
+
+---
+
 ## Closed — do not reopen without new evidence
 
 | Item | Verdict |
