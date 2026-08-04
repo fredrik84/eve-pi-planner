@@ -336,8 +336,18 @@ profiles (no DB column) and NOT yet a checkbox in the Factory Layout tab. Extrac
 
 **On-planet refining cap (basics/8).** An extractor planet's P1 output isn't just extraction — its
 Basic Industry Facilities convert P0→P1, and 8 basics = full conversion of a 100%-quality planet
-(the 48k baseline). Fewer basics fit on a low-CC or big planet (`fitted_extractor_basics(type, cc)`
-in layout.py, cached), so it refines proportionally less. The supply-limited throughput now uses
+(the 48k baseline). Fewer basics fit on a low-CC or big planet
+(`fitted_extractor_basics(type, cc, no_storage, diam)` in layout.py, cached), so it refines
+proportionally less. **That function is a thin cache over `fit_extractor` — the SAME loop that
+sizes the exported template**, so what the planner assumes a colony refines and what the .zip
+tells you to build cannot disagree. They were two copies of the loop until 2026-08-04, and the
+planner's copy had drifted: no head-drop stage, and no `diam` parameter at all, so the plan was
+stuck on the planet-TYPE default while the export could already size to a real planet. Put a new
+fitting lever in `fit_extractor`, never in a caller;
+`test_the_plan_and_the_exported_template_fit_the_same` (test_min_cc.py) asserts the two agree
+across every type × CC × diameter. Pinned extractor slots carry `diameter`, which
+`_ext_actual_p0_per_day` / `_actual_p0_per_day_by_p0` pass through to `_basics_factor`.
+The supply-limited throughput uses
 **min(quality, basics-factor)** per slot (`_basics_factor` in planner.py; `_ext_actual_p0_per_day` /
 `_actual_p0_per_day_by_p0` take a `cc` arg) — whichever of extraction richness or on-site refining
 binds. Single-product `_build_char_list` switched to `with_ccu=True` and the assignment carries

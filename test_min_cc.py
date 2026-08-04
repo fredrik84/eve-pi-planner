@@ -17,8 +17,8 @@ import sys
 sys.path.insert(0, ".")
 
 from app.layout import (CC_BUDGET, CMD_CTR_LEVEL, EXTRACTOR_HEADS, FIT_HEADROOM, HEAD_COST,
-                        _structure_ids, compute_resources, generate_extractor_layout,
-                        generate_layout, min_cc_for)
+                        _structure_ids, compute_resources, fitted_extractor_basics,
+                        generate_extractor_layout, generate_layout, min_cc_for)
 from app.sde import load_pi_data
 
 FAILS = []
@@ -32,6 +32,18 @@ def check(cond, msg):
 
 def _a_p1(pi):
     return next(tid for tid, t in pi["types"].items() if t.get("pi_tier") == 1)
+
+
+def _a_p1_of(pi, planet_type):
+    """A P1 whose P0 is extractable on this planet type, so the generator doesn't coerce away."""
+    from app.layout import _p0_planets
+    for tid, t in pi["types"].items():
+        if t.get("pi_tier") != 1:
+            continue
+        p0 = pi["schematics"][tid]["inputs"][0]["type_id"]
+        if planet_type in _p0_planets(pi["types"][p0]["name"]):
+            return tid
+    raise AssertionError(planet_type)
 
 
 def test_min_cc_for_monotonic():
@@ -214,6 +226,30 @@ def test_head_cost_is_flat_and_size_only_moves_links():
         prev = n
 
 
+def test_the_plan_and_the_exported_template_fit_the_same():
+    """`fitted_extractor_basics` (what the planner assumes a colony refines on-site) and
+    `generate_extractor_layout` (what the .zip tells you to build) must be the same number, on
+    every planet type, level, storage mode AND real diameter. They were two separate copies of the
+    fitting loop; the planner's copy took no diameter at all, so the moment a real planet size
+    reached the export the two would have disagreed silently — the plan promising P1 a template
+    can't refine. Both now go through `fit_extractor`; this is what keeps it that way."""
+    print("plan cap == exported template:")
+    pi = load_pi_data()
+    for pt in ("Barren", "Lava", "Storm", "Gas"):
+        p1 = _a_p1_of(pi, pt)                 # a P1 this planet type actually yields, or it coerces
+        for cc in (2, 3, 4, 5):
+            for diam in (None, 25000.0, 110000.0):
+                r = generate_extractor_layout(p1, planet_type=pt, cc_level=cc, diam=diam,
+                                              launchpads=1)
+                if cc == 2 and diam is None:
+                    check(r["summary"]["planet_type"] == pt, f"{pt}: a {pt} P1 stays on {pt}")
+                built = r["summary"]["facilities_by_tier"]["P1"]
+                assumed = fitted_extractor_basics(pt, cc, False, diam)
+                check(built == assumed,
+                      f"{pt} CC{cc} Ø{'default' if diam is None else round(diam)}: "
+                      f"template builds {built}, planner assumes {assumed}")
+
+
 def test_factory_min_cc_matches_packing():
     """max_count is 'the most units that fit', so one more must NOT fit — that's the invariant
     min_cc has to agree with. Where the packing is budget-limited (P2/P3) that means min_cc is
@@ -270,6 +306,7 @@ if __name__ == "__main__":
     test_low_cc_never_exports_over_budget()
     test_full_cc_keeps_all_heads()
     test_head_cost_is_flat_and_size_only_moves_links()
+    test_the_plan_and_the_exported_template_fit_the_same()
     test_factory_min_cc_matches_packing()
     test_required_cc_helpers()
     print()

@@ -812,18 +812,21 @@ def _ext_leg_qualities(extractors: list[dict]) -> list[int]:
     return out
 
 
-def _basics_factor(planet_type: str | None, cc: int, no_storage: bool = False) -> float:
+def _basics_factor(planet_type: str | None, cc: int, no_storage: bool = False,
+                   diam: float | None = None) -> float:
     """Fraction of full on-planet P1 refining the planet can actually do: 8 Basic Industry
     Facilities fully convert a 100%-quality planet's extraction; fewer fit on a low-CC or big
     planet (links eat the grid), so it refines proportionally less P1 on-site. 1.0 if
     unknown. `no_storage` (buffer in the launchpad, drop the storage hub) frees ~700 PG so more
-    basics fit. A planet's effective P1 output is then min(quality, basics-factor) — whichever of
-    extraction richness or on-site refining is the bottleneck."""
+    basics fit. `diam` is the slot's REAL planet diameter in km when we know it (pinned slots
+    carry it) — the same size the exported template is built at, so the plan's refining cap and
+    the .zip agree per planet, not just per planet type. A planet's effective P1 output is then
+    min(quality, basics-factor) — whichever of extraction richness or on-site refining binds."""
     if not planet_type:
         return 1.0
     try:
         from app.layout import fitted_extractor_basics
-        return max(0.125, min(1.0, fitted_extractor_basics(planet_type, cc, no_storage) / 8.0))
+        return max(0.125, min(1.0, fitted_extractor_basics(planet_type, cc, no_storage, diam) / 8.0))
     except Exception:
         return 1.0
 
@@ -837,7 +840,8 @@ def _ext_actual_p0_per_day(extractors: list[dict], cc: int = 5, no_storage: bool
             for leg in e.get("legs", []):
                 total += leg.get("heads", 0) * leg.get("quality_pct", 100) / 100.0 * _PU_PER_PLANET_DAY
         else:
-            eff = min(e.get("quality_pct", 100) / 100.0, _basics_factor(_slot_planet_type(e), cc, no_storage))
+            eff = min(e.get("quality_pct", 100) / 100.0,
+                      _basics_factor(_slot_planet_type(e), cc, no_storage, e.get("diameter")))
             total += eff * 48_000 * 24
     return total
 
@@ -855,7 +859,8 @@ def _actual_p0_per_day_by_p0(extractors: list[dict], cc: int = 5, no_storage: bo
         else:
             n = e.get("p0_name")
             if n:
-                eff = min(e.get("quality_pct", 100) / 100.0, _basics_factor(_slot_planet_type(e), cc, no_storage))
+                eff = min(e.get("quality_pct", 100) / 100.0,
+                          _basics_factor(_slot_planet_type(e), cc, no_storage, e.get("diameter")))
                 out[n] = out.get(n, 0.0) + eff * 48_000 * 24
     return out
 

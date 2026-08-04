@@ -784,6 +784,42 @@ def _p0_planets(p0_name: str) -> list[str]:
     return [pt for pt, p0s in PLANET_P0_MAP.items() if p0_name in p0s]
 
 
+def fit_extractor(p1_id: int, planet_type: str, struct: dict, pi_data: dict, cc: int,
+                  want_heads: int = EXTRACTOR_HEADS, want_basics: int = EXTRACTOR_BASICS,
+                  n_launchpads: int = 1, no_storage: bool = False,
+                  diam: Optional[float] = None) -> tuple[int, int, dict]:
+    """**THE** extractor fitting rule — the largest layout that fits `cc` with headroom, as
+    `(heads, basics, built_template)`.
+
+    Keeps all the extractor heads (full P0 extraction) and scales ONLY the basic (P1) factories
+    down: a lower-CC planet extracts the same P0 but converts fewer P1 on-site, so the planner
+    places more of them. Heads are the last resort — at the 1-basic floor the ECU and its heads
+    alone can still blow a small budget (CC1/CC2, or a big planet with expensive links), and
+    dropping one costs real extraction, so we do it only to avoid exporting a template the game
+    will refuse to build.
+
+    One implementation on purpose. The exported template and the planner's on-planet refining cap
+    (`fitted_extractor_basics` → `_basics_factor`) are the same question asked by two callers, and
+    they were two copies of this loop until 2026-08-04 — the planner's copy had no head-drop stage
+    and no `diam` argument, so it could not see a real planet's size at all. Add a fitting lever
+    HERE, never in a caller."""
+    def _build(h, nb):
+        b = build_extractor_template(p1_id, planet_type, struct, pi_data, h, nb,
+                                     n_launchpads=n_launchpads, no_storage=no_storage, diam=diam)
+        b["template"]["CmdCtrLv"] = cc
+        return b
+
+    h, nb = max(1, want_heads), max(1, want_basics)
+    b = _build(h, nb)
+    while nb > 1 and compute_resources(b["template"], struct)["over_fit"]:
+        nb -= 1
+        b = _build(h, nb)
+    while h > 1 and compute_resources(b["template"], struct)["over_fit"]:
+        h -= 1
+        b = _build(h, nb)
+    return h, nb, b
+
+
 def generate_extractor_layout(p1_id: int, planet_type: str = "Barren", launchpads: int = 1,
                               heads: int = EXTRACTOR_HEADS, n_basic: int = EXTRACTOR_BASICS,
                               cc_level: Optional[int] = None, no_storage: bool = False,
@@ -806,29 +842,9 @@ def generate_extractor_layout(p1_id: int, planet_type: str = "Barren", launchpad
     cc = CMD_CTR_LEVEL if cc_level is None else max(1, min(5, int(cc_level)))
     lp = max(1, min(MAX_LAUNCHPADS, launchpads))
 
-    def _build(h, nb, at_cc):
-        b = build_extractor_template(p1_id, planet_type, struct, pi_data, h, nb, n_launchpads=lp,
-                                     no_storage=no_storage, diam=diam)
-        b["template"]["CmdCtrLv"] = at_cc
-        return b
-
     def _fit(at_cc: int, want_heads: int, want_basics: int):
-        """Largest layout that fits level `at_cc` with headroom. Keeps all the extractor heads
-        (full P0 extraction) and scales ONLY the basic (P1) factories down — a lower-CC planet
-        extracts the same P0 but converts fewer P1 on-site, so the planner places more of them.
-        Heads are the last resort: at the 1-basic floor the ECU and its heads alone can still
-        blow a small budget (CC1/CC2, or a big planet with expensive links), and dropping
-        one costs real extraction, so we do it only to avoid exporting a template the game will
-        refuse to build."""
-        h, nb = max(1, want_heads), max(1, want_basics)
-        b = _build(h, nb, at_cc)
-        while nb > 1 and compute_resources(b["template"], struct)["over_fit"]:
-            nb -= 1
-            b = _build(h, nb, at_cc)
-        while h > 1 and compute_resources(b["template"], struct)["over_fit"]:
-            h -= 1
-            b = _build(h, nb, at_cc)
-        return h, nb, b
+        return fit_extractor(p1_id, planet_type, struct, pi_data, at_cc, want_heads, want_basics,
+                             n_launchpads=lp, no_storage=no_storage, diam=diam)
 
     req_heads = max(1, heads)
     heads, n_basic, built = _fit(cc, heads, n_basic)
@@ -871,16 +887,21 @@ def generate_extractor_layout(p1_id: int, planet_type: str = "Barren", launchpad
 _FITTED_BASICS_CACHE: dict[tuple, int] = {}
 
 
-def fitted_extractor_basics(planet_type: str, cc: int, no_storage: bool = False) -> int:
-    """How many Basic Industry Facilities fit alongside the 10 extractor heads on this planet
-    type at this command-centre level (power-grid limited). 8 basics = full conversion of a
-    100%-quality planet's extraction; fewer (low CC, or a big planet whose links eat the
-    grid) means the planet refines less P1 on-site. `no_storage` drops the storage hub (buffer in
-    the launchpad), freeing ~700 PG so another basic often fits. Cached (≤ 8 types × 5 CC × 2).
-    Builds the template directly (no planet-type coercion) — the basic-facility cost is
-    recipe-independent, so any P1 schematic gives the right count for the planet type."""
+def fitted_extractor_basics(planet_type: str, cc: int, no_storage: bool = False,
+                            diam: Optional[float] = None) -> int:
+    """How many Basic Industry Facilities fit alongside the extractor heads on this planet at this
+    command-centre level (power-grid limited). 8 basics = full conversion of a 100%-quality
+    planet's extraction; fewer (low CC, or a big planet whose links eat the grid) means the planet
+    refines less P1 on-site. `no_storage` drops the storage hub (buffer in the launchpad), freeing
+    ~700 PG so another basic often fits; `diam` is the planet's REAL diameter in km (None → the
+    planet-type default).
+
+    A thin cache over `fit_extractor` — the SAME loop that sizes the exported template, so what the
+    planner assumes a colony refines and what the .zip tells you to build cannot disagree. Builds
+    the template directly (no planet-type coercion): the basic-facility cost is recipe-independent,
+    so any P1 schematic gives the right count for the planet type."""
     cc = max(1, min(5, int(cc)))
-    key = (planet_type, cc, no_storage)
+    key = (planet_type, cc, no_storage, round(diam) if diam else 0)
     if key in _FITTED_BASICS_CACHE:
         return _FITTED_BASICS_CACHE[key]
     n = EXTRACTOR_BASICS
@@ -889,17 +910,8 @@ def fitted_extractor_basics(planet_type: str, cc: int, no_storage: bool = False)
         p1_id = next(tid for tid, t in pi_data["types"].items() if t.get("pi_tier") == 1)
         struct = _structure_ids(pi_data, planet_type)
         struct["planet_type_id"] = pi_data["name_to_id"].get(f"planet ({planet_type})".lower())
-
-        def _build(nb):
-            b = build_extractor_template(p1_id, planet_type, struct, pi_data, EXTRACTOR_HEADS, nb,
-                                         n_launchpads=1, no_storage=no_storage)
-            b["template"]["CmdCtrLv"] = cc
-            return b
-
-        built = _build(n)
-        while n > 1 and compute_resources(built["template"], struct)["over_fit"]:
-            n -= 1
-            built = _build(n)
+        _, n, _ = fit_extractor(p1_id, planet_type, struct, pi_data, cc, EXTRACTOR_HEADS,
+                                EXTRACTOR_BASICS, n_launchpads=1, no_storage=no_storage, diam=diam)
     except Exception:
         n = EXTRACTOR_BASICS
     _FITTED_BASICS_CACHE[key] = n
