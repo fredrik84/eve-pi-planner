@@ -2338,6 +2338,7 @@ def main():
     test_a_scan_retires_stock_that_is_no_longer_there()
     test_corp_hangars_and_containers_split_like_personal_ones()
     test_ordinary_users_are_not_asked_for_director_permissions()
+    test_a_skill_blocker_is_shown_while_building_not_only_while_planning()
     test_the_step_by_step_parts_account_for_the_whole()
     test_a_rig_only_applies_to_what_it_is_for()
     test_a_structure_with_no_families_still_covers_everything()
@@ -3312,6 +3313,39 @@ def test_corp_hangars_and_containers_split_like_personal_ones():
     check("a ship's cargo is not usable stock", not any(203 in s for s in stock.values()))
     check("corp keys never collide with personal ones",
           all(k.startswith("corp:7:") for k in srcs))
+
+
+def test_a_skill_blocker_is_shown_while_building_not_only_while_planning():
+    """A step nobody can install has to be visible on the BUILD page.
+
+    `_indSkillWarn` was wired into the preview modal only, so the plan you look at before queueing
+    warned you and the screen you actually work from did not — the one place the warning could
+    change what you do. The data was never the problem: `_run_queue_plan` has always attached
+    `skill_gaps`. Only the render was missing.
+
+    This also pins the trim that made it affordable: the warning stays silent unless a step is
+    genuinely BLOCKED, so putting it on the busiest screen costs nothing on a healthy plan.
+    """
+    print("test_a_skill_blocker_is_shown_while_building_not_only_while_planning")
+    import inspect
+    js = open("static/industry.js").read()
+
+    body = js[js.index("function _indRenderPlanBody"):]
+    body = body[:body.index("\n}\n")]
+    check("the build page asks for skill notices", "_indNotices(d, true)" in body)
+
+    warn = js[js.index("function _indSkillWarn"):]
+    warn = warn[:warn.index("\n}\n")]
+    check("and the warning is silent unless a step is blocked",
+          "if (!g.blocked_steps) return '';" in warn)
+    check("the two info-only states it used to render are gone",
+          "sde_ready" not in warn)
+
+    # The server half: the queue plan (the build page's source) must actually carry the key.
+    from app.industry import orders as _orders
+    src = inspect.getsource(_orders._run_queue_plan)
+    check("the queue plan attaches skill_gaps", 'res["skill_gaps"] = sk["gaps"]' in src)
+    check("computed from the same analyzer the preview uses", "analyze_plan_skills" in src)
 
 
 def test_the_step_by_step_parts_account_for_the_whole():

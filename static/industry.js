@@ -2778,7 +2778,12 @@ function _indRenderPlanBody(d) {
   const tiersData = roots ? _indComputeTiers(roots, new Set((d.shopping_list || []).map(x => x.type_id)))
     : { byType: {}, tiers: {}, maxT: 0, inputsOf: {}, consumersOf: {} };
   const stageModel = _indStageModel(tiersData);
-  return _indNotices(d, false)
+  // Skill blockers belong HERE, not only in the preview modal. `_indSkillWarn` now says nothing
+  // unless a step is genuinely blocked, so this adds a line to the build page exactly when nobody
+  // on the account can install one of the jobs it is telling you to start — which is the one moment
+  // it is worth the space. The queue plan has always carried `skill_gaps` (_run_queue_plan); it was
+  // simply never rendered, so the blocker was visible while planning and invisible while building.
+  return _indNotices(d, true)
     + _indMarginalBar(d)
     + _indPipelineHtml(d, tiersData, stageModel)
     + _indStepsHtml(d, stageModel)
