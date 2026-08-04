@@ -1035,6 +1035,39 @@ over-split batch is merely inefficient, a job bigger than its copy cannot be ins
 pushes a job past a copy's runs, and a 20-run job off 5-run copies is not a plan, it's a plan that
 cannot be installed. An owned BPO has no such limit. Reactions have no blueprint and are untouched.
 
+**And ONE PRINT RUNS ONE JOB AT A TIME.** A blueprint is a physical item: while it is installed it
+is locked, so parallelism is bounded by how many prints you hold, not by free slots. `build_tasks`
+capped runs and slots and never this — measured in the container, one owned 4-run BPC planned FOUR
+simultaneous jobs off it, and one owned BPO planned TEN (unlimited *runs* read as unlimited
+*parallelism*, quoting a 1.6h makespan for 20 sequential runs). `_print_limits(params, tid,
+activity, runs)` returns `(prints, can_buy)`: prints = one per entry in `owned[tid].copies` (an
+ORIGINAL is one item too) plus the copies the plan already buys to cover the runs those don't.
+- **Where copies are listed, the plan BUYS the prints that fill the idle slots** — decided after
+  packing, off the final job count, so every print it asks for is one that buys time (the same
+  "slots are only spent where they buy time" rule).
+- **Reported separately, always.** A copy bought to fill a SLOT is not a copy bought because the
+  RUNS are short; on a capital that difference is billions the builder did not ask to spend. It has
+  its own list (`blueprint_parallel`), its own metrics (`blueprint_parallel_cost` /
+  `_copies`), its own per-requirement count (`copies_for_slots`, a FOURTH number beside `runs`,
+  `blueprint.runs` and `copies_to_buy`) and its own note in the UI. Never folded into
+  `blueprint_cost` — same rule as `marginal_saving` and the `blacklisted` badge.
+- **Never buy what cannot be bought.** `bpo_only` and a type with nothing listed cap instead,
+  running fewer, longer jobs; a type with neither an owned copy nor a listing is UNKNOWN and stays
+  uncapped, because blueprint scope is opt-in and an unconnected character looks exactly like an
+  empty drawer.
+- The per-job run cap still binds underneath (`ceil(R/cap)` is a floor on job count the print cap
+  may not push below — that batch is short of RUNS, which is a different report).
+- `_jobs_on_copies` deals the runs out one print at a time, each taking an even share or its
+  proportional share of the capacity left, whichever is larger. Purely even stranded runs on a
+  5-run/1-run pair and needed a second job back on the first copy — a job the plan counted as
+  concurrent and physically was not.
+- Measured on a real Archon (10 mfg slots, one 10-run copy per component): the cap alone costs
+  507.6h → 525.1h and 10 fewer jobs; with copies purchasable the makespan is held at 507.6h for 18
+  copies. Covered by `test_one_print_cannot_run_two_jobs_at_once`,
+  `test_a_print_that_cannot_be_bought_caps_instead_of_being_invented`,
+  `test_copies_bought_to_fill_slots_are_reported_apart_from_the_runs_they_cover` and
+  `test_the_print_cap_is_paid_for_in_time_not_in_lost_runs`.
+
 Work in **runs per job**, never in job count: runs are indivisible, so the question is how many fit
 the window (`int(window / per_run)`), capped by what one blueprint copy may carry. Computing it as
 `work / window` uses the AVERAGE job length and is exactly what hid the uneven-split case.

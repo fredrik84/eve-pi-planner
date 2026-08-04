@@ -2614,7 +2614,32 @@ let _indBpcSeq = 0;
 
 function _indBlueprintWarn(d) {
   const miss = (d.metrics && d.metrics.missing_blueprints) || [];
-  return _indCopyShortWarn(d) + (miss.length ? _indMissingBpWarn(d, miss) : '');
+  return _indCopyShortWarn(d) + _indParallelCopyNote(d)
+    + (miss.length ? _indMissingBpWarn(d, miss) : '');
+}
+
+// A print is LOCKED while a job runs on it, so two jobs of one type at the same moment need two
+// prints. Where the plan buys them to keep your slots busy, that is a purchase nobody asked for —
+// so it gets its own line, with its own total, and never disappears into the blueprint cost beside
+// it. Buying copies to cover RUNS you're short of and buying them to fill SLOTS are two different
+// decisions, and only one of them is about being able to build the thing at all.
+function _indParallelCopyNote(d) {
+  const rows = (d.blueprint_parallel || []).filter(r => (r.copies || 0) > 0);
+  if (!rows.length) return '';
+  const total = rows.reduce((s, r) => s + (r.cost || 0), 0);
+  const copies = rows.reduce((s, r) => s + r.copies, 0);
+  const body = rows.map(r =>
+    `<div class="ind-bp-row2"><span class="ind-bp-nm">${_esc(r.name)}`
+    + `<span class="ind-bp-need">${r.jobs} job${r.jobs === 1 ? '' : 's'} at once · `
+    + `${r.copies} extra cop${r.copies === 1 ? 'y' : 'ies'}${r.covered ? '' : ' (estimated)'}</span></span>`
+    + `<span class="ind-bp-px">${fmtIsk(r.cost)}</span></div>`).join('');
+  return `<div class="ind-bp-note"><b>${copies} blueprint cop${copies === 1 ? 'y' : 'ies'} bought to `
+    + `run these in parallel — ${fmtIsk(total)}</b>`
+    + `<div class="ind-bp-rows">${body}</div>`
+    + `<div class="ind-bp-warn-sub">A blueprint is locked while a job runs on it, so several jobs of `
+    + `one thing at the same time need several prints. These copies buy speed, not the ability to `
+    + `build — they are counted in the total above, separately from the copies your run count needs.`
+    + `</div></div>`;
 }
 
 // Owning a COPY is not owning the blueprint for any batch size: it carries a fixed number of runs.

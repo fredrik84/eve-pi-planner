@@ -2328,6 +2328,10 @@ def main():
     test_sourcing_notes_belong_to_one_order()
     test_pasting_a_hangar_sets_what_is_sourced()
     test_the_sourcing_list_is_not_a_second_shopping_list()
+    test_one_print_cannot_run_two_jobs_at_once()
+    test_a_print_that_cannot_be_bought_caps_instead_of_being_invented()
+    test_copies_bought_to_fill_slots_are_reported_apart_from_the_runs_they_cover()
+    test_the_print_cap_is_paid_for_in_time_not_in_lost_runs()
     test_binding_a_container_lets_the_planner_spend_it()
     test_first_run_setup_shows_once_and_never_to_an_established_user()
     test_the_customer_sees_the_same_progress_the_builder_does()
@@ -2760,11 +2764,15 @@ def test_a_job_never_carries_more_runs_than_the_blueprint_copy_has():
     _t3, by_held = build_tasks(agg, mfg, {}, held, pools, depths=depths, deps=deps)
     check("so does a copy you already own", max(t.runs for t in by_held[2]) == 4)
 
-    # An original has no run limit of its own — only the blueprint type's per-job cap applies.
+    # An original has no run limit of its own — only the blueprint type's per-job cap applies. It is
+    # still ONE ITEM, though, so it runs one job at a time: the whole batch goes on that single job
+    # rather than being spread over slots there is no print to fill. (This check used to read 10,
+    # from a plan that split 20 runs across two simultaneous jobs off one original.)
     bpo = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, struct_time_mult=1.0,
                       owned={2: {"me": 0, "te": 0, "kind": "bpo", "runs": -1}})
     _t4, by_bpo = build_tasks(agg, mfg, {}, bpo, pools, depths=depths, deps=deps)
-    check("an original is not limited that way", max(t.runs for t in by_bpo[2]) == 10)
+    check("an original is not limited that way", max(t.runs for t in by_bpo[2]) == 20)
+    check("but one print is still one job at a time", len(by_bpo[2]) == 1)
 
     # Reactions have no blueprint at all, so nothing here may touch them.
     rx = {9: {"base_time": 3600, "max_runs": 0, "output_qty": 1, "inputs": []}}
@@ -3480,7 +3488,12 @@ def test_each_job_runs_off_the_copy_it_is_installed_on():
     differ — the best copies are consumed first. The aggregate the demand pass uses is then a
     runs-weighted figure over exactly those copies (crediting the whole batch to the best copy in
     the drawer over-states what it saves), and runs no copy covers are built at whatever the plan
-    would buy."""
+    would buy.
+
+    **Corrected 2026-08-04:** this used to assert SIX concurrent jobs drawn from TWO physical
+    copies, and the first two of them running off the same 2-run copy at once. A blueprint is an
+    item and it is locked while a job runs on it, so two copies are two jobs — the ME/TE-per-copy
+    intent below is unchanged, but the concurrency it was written against was never possible."""
     print("test_each_job_runs_off_the_copy_it_is_installed_on")
     mfg = {2: {"base_time": 3600, "max_runs": 100, "output_qty": 1, "inputs": []}}
     agg = {2: {"build": True, "runs": 6, "activity": "manufacturing"}}
@@ -3492,10 +3505,12 @@ def test_each_job_runs_off_the_copy_it_is_installed_on():
     _t, by = build_tasks(agg, mfg, {}, p, pools)
     jobs = by[2]
     check("every run is still built", sum(t.runs for t in jobs) == 6)
-    check("the best copies are installed first",
-          [t.te for t in jobs][:2] == [20, 20] and [t.te for t in jobs][2:] == [0, 0, 0, 0])
+    check("two copies run two jobs, not six", len(jobs) == 2)
+    check("the best copy is installed first", [t.te for t in jobs] == [20, 0])
+    check("and each job carries exactly what its own copy has",
+          [t.runs for t in jobs] == [2, 4])
     check("and a job's LENGTH follows its own copy",
-          approx(jobs[0].duration, 2880.0) and approx(jobs[-1].duration, 3600.0))
+          approx(jobs[0].duration, 2 * 3600 * 0.8) and approx(jobs[-1].duration, 4 * 3600.0))
 
     check("the batch figure is runs-weighted over the copies it spends",
           approx(p.me_te_for(2, "manufacturing", 6)[0], (10 * 2 + 0 * 4) / 6))
@@ -3575,6 +3590,143 @@ def test_a_single_copy_account_plans_exactly_as_before():
           {r["type_id"]: r for r in with_copies["requirements"]}[100]["me"] == 10)
     check("the per-copy list never reaches the payload",
           "copies" not in ({r["type_id"]: r for r in with_copies["requirements"]}[100]["blueprint"]))
+
+
+def test_one_print_cannot_run_two_jobs_at_once():
+    """A blueprint is a physical item and it is LOCKED while a job is installed on it.
+
+    The scheduler modelled runs and slots and never the print itself, so an account holding ONE
+    4-run copy planned four simultaneous jobs off it, and one owned ORIGINAL planned ten — unlimited
+    *runs* read as unlimited *parallelism*, and the quoted makespan was a sixth of the truth. What
+    binds is the count of prints: one print is one job at a time however many slots are free."""
+    print("test_one_print_cannot_run_two_jobs_at_once")
+    mfg = {2: {"base_time": 3600, "max_runs": 100, "output_qty": 1, "inputs": []}}
+    pools = {"manufacturing": 10, "reaction": 10}
+
+    def jobs(owned, runs, **kw):
+        agg = {2: {"build": True, "runs": runs, "activity": "manufacturing"}}
+        p = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, struct_time_mult=1.0,
+                        owned=owned, **kw)
+        _t, by = build_tasks(agg, mfg, {}, p, pools)
+        return by[2]
+
+    one_copy = jobs({2: {"me": 0, "te": 0, "kind": "bpc", "runs": 4,
+                         "copies": [{"me": 0, "te": 0, "kind": "bpc", "runs": 4}]}}, 4)
+    check("one 4-run copy is ONE job, not four", len(one_copy) == 1)
+    check("carrying the whole batch", one_copy[0].runs == 4)
+
+    bpo = jobs({2: {"me": 0, "te": 0, "kind": "bpo", "runs": -1,
+                    "copies": [{"me": 0, "te": 0, "kind": "bpo", "runs": -1}]}}, 20)
+    check("an owned ORIGINAL is one job too — unlimited runs is not unlimited parallelism",
+          len(bpo) == 1 and bpo[0].runs == 20)
+    check("and the plan says so in its duration", approx(bpo[0].duration, 20 * 3600.0))
+
+    three = [{"me": 0, "te": 0, "kind": "bpc", "runs": 4} for _ in range(3)]
+    n3 = jobs({2: {"me": 0, "te": 0, "kind": "bpc", "runs": 12, "copies": three}}, 12)
+    check("N copies run at most N jobs at once", len(n3) <= 3)
+    check("with every run still built", sum(t.runs for t in n3) == 12)
+
+
+def test_a_print_that_cannot_be_bought_caps_instead_of_being_invented():
+    """`bpo_only` (originals listed, no copies) and a type with nothing listed at all must fall back
+    to the cap ALONE — fewer jobs, honestly slower — never to a purchase that doesn't exist."""
+    print("test_a_print_that_cannot_be_bought_caps_instead_of_being_invented")
+    mfg = {2: {"base_time": 3600, "max_runs": 100, "output_qty": 1, "inputs": []}}
+    agg = {2: {"build": True, "runs": 12, "activity": "manufacturing"}}
+    pools = {"manufacturing": 6, "reaction": 6}
+
+    def run(**kw):
+        p = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, struct_time_mult=1.0, **kw)
+        bought: dict = {}
+        _t, by = build_tasks(agg, mfg, {}, p, pools, parallel_copies=bought)
+        return by[2], bought
+
+    owned_one = {2: {"me": 0, "te": 0, "kind": "bpc", "runs": 12,
+                     "copies": [{"me": 0, "te": 0, "kind": "bpc", "runs": 12}]}}
+    j, bought = run(owned=owned_one,
+                    bp_acquire={2: {"kind": "bpo_only", "price": 9e9, "runs_per_copy": 0}})
+    check("only originals on offer: run fewer jobs rather than buy one", len(j) == 1)
+    check("and buy nothing", bought == {})
+
+    j2, bought2 = run(owned=owned_one)      # nothing listed at all
+    check("nothing listed is the same answer", len(j2) == 1 and bought2 == {})
+
+    # Nothing owned and nothing known about the print: the old, uncapped behaviour is kept — an
+    # invented cap would be worse than the missing one, since blueprint scope is opt-in and an
+    # unconnected character looks exactly like an empty drawer.
+    j3, bought3 = run()
+    check("an unknown print is not capped on a guess", len(j3) == 6 and bought3 == {})
+
+
+def test_copies_bought_to_fill_slots_are_reported_apart_from_the_runs_they_cover():
+    """Two different purchases: a copy bought because the RUNS are short, and a copy bought because
+    a SLOT would otherwise idle. On a capital hull that difference is billions, and a purchase the
+    builder did not ask for has to be visible and attributable — the same rule `marginal_saving` and
+    the `blacklisted` badge already follow."""
+    print("test_copies_bought_to_fill_slots_are_reported_apart_from_the_runs_they_cover")
+    con = _seed_con()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+    pools = {"manufacturing": 6, "reaction": 6}
+    listings = [{"price": 1_000_000.0, "runs": 10, "me": 0, "te": 0} for _ in range(8)]
+    acq = {101: {"kind": "bpc", "price": 1_000_000.0, "runs_per_copy": 10,
+                 "median_per_run": 100_000.0, "listings": listings}}
+    p = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, struct_time_mult=1.0,
+                    force_build_ids={101}, bp_acquire=acq)
+    res = plan_queue([(100, 6)], mfg, rx, _prices(SELL), ADJ, p, NAMES, pools)
+
+    par = {r["type_id"]: r for r in res["blueprint_parallel"]}
+    m = res["metrics"]
+    check("the slot-driven copies are itemised", 101 in par and par[101]["copies"] > 0)
+    check("and priced", par[101]["cost"] > 0)
+    check("the metric is its own line", m["blueprint_parallel_cost"] == par[101]["cost"])
+    check("never folded into the blueprint cost the runs needed",
+          m["blueprint_cost"] > 0 and m["blueprint_cost"] != m["blueprint_parallel_cost"])
+    check("but still part of what the build costs",
+          approx(m["total_cost"], m["materials_cost"] + m["job_cost"] + m["blueprint_cost"]
+                 + m["blueprint_parallel_cost"], 1.0))
+    req = {r["type_id"]: r for r in res["requirements"]}
+    check("and attributable to the component that spent it",
+          req[101]["copies_for_slots"] == par[101]["copies"])
+    check("which is not the same number as the copies its runs needed",
+          req[101]["copies_to_buy"] != req[101]["copies_for_slots"])
+    check("one print per job, no more bought than jobs run",
+          par[101]["copies"] + req[101]["copies_to_buy"] == par[101]["jobs"])
+
+    # Nothing to buy → nothing bought, and no empty section to render.
+    p2 = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, struct_time_mult=1.0,
+                     force_build_ids={101})
+    plain = plan_queue([(100, 6)], mfg, rx, _prices(SELL), ADJ, p2, NAMES, pools)
+    check("a plan with nothing listed buys no parallelism", plain["blueprint_parallel"] == []
+          and plain["metrics"]["blueprint_parallel_cost"] == 0)
+
+
+def test_the_print_cap_is_paid_for_in_time_not_in_lost_runs():
+    """The consequence of the cap, stated: a batch with one print takes longer than the same batch
+    with several. That is the honest number rather than a regression — the fast one was a schedule
+    nobody could install. Nothing is ever lost from the batch to pay for it."""
+    print("test_the_print_cap_is_paid_for_in_time_not_in_lost_runs")
+    con = _seed_con()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+    pools = {"manufacturing": 6, "reaction": 6}
+
+    def plan(copies):
+        owned = {101: {"me": 0, "te": 0, "kind": "bpc", "runs": sum(c["runs"] for c in copies),
+                       "copies": copies, "copy_count": len(copies)}}
+        p = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, struct_time_mult=1.0,
+                        owned=owned, force_build_ids={101})
+        return plan_queue([(100, 6)], mfg, rx, _prices(SELL), ADJ, p, NAMES, pools)
+
+    one = plan([{"me": 0, "te": 0, "kind": "bpc", "runs": 12}])
+    many = plan([{"me": 0, "te": 0, "kind": "bpc", "runs": 3} for _ in range(4)])
+    gadget_one = [r for r in one["requirements"] if r["type_id"] == 101][0]
+    gadget_many = [r for r in many["requirements"] if r["type_id"] == 101][0]
+    check("the same runs are built either way", gadget_one["runs"] == gadget_many["runs"] == 12)
+    check("one print takes longer than four",
+          one["metrics"]["makespan_hours"] > many["metrics"]["makespan_hours"])
+    check("and neither plan buys a copy it was never offered",
+          one["blueprint_parallel"] == [] and many["blueprint_parallel"] == [])
+    check("nor reports a run it cannot cover",
+          gadget_one["runs_short"] == 0 and gadget_many["runs_short"] == 0)
 
 
 if __name__ == "__main__":

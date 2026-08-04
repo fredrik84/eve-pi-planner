@@ -424,6 +424,32 @@ def cost_for_runs(info: dict, runs_needed: int) -> dict:
     return {"cost": round(cost, 2), "copies": copies, "covered": False, "short_runs": short}
 
 
+def cost_for_copies(info: dict, n_copies: int, skip: int = 0) -> dict:
+    """What `n_copies` MORE prints of a blueprint cost, whatever runs they happen to carry.
+
+    A different question from `cost_for_runs`, and it has to be asked separately: that one covers a
+    run count, this one puts N prints in the builder's hands AT ONCE. A blueprint is locked while a
+    job runs on it, so parallelism is bought in copies and never in runs — a single 20-run copy is
+    one job at a time, not twenty.
+
+    Cheapest listings first, `skip`ping the ones the run-shortfall purchase has already spent so the
+    same contract is never sold to this build twice. If the market doesn't list enough, the rest are
+    priced at the median of what IS listed — never at zero, which would read as "parallelism is
+    free" and is the most damaging way to be wrong about a purchase the builder didn't ask for.
+    """
+    n = max(0, int(n_copies))
+    if n == 0:
+        return {"cost": 0.0, "copies": 0, "covered": True}
+    prices = sorted(float(l["price"]) for l in (info.get("listings") or []) if l.get("price"))
+    take = prices[max(0, int(skip)):][:n]
+    missing = n - len(take)
+    cost = sum(take)
+    if missing:
+        each = statistics.median(prices) if prices else float(info.get("price") or 0.0)
+        cost += missing * each
+    return {"cost": round(cost, 2), "copies": n, "covered": missing == 0}
+
+
 def representative_me_te(info: dict) -> tuple[int, int] | None:
     """(me, te) the build should assume for a print it doesn't own — the research on the copy it
     would actually buy.
