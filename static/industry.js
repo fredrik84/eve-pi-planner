@@ -2109,10 +2109,17 @@ function _indStepsHtml(d, model) {
   waves.forEach(w => {
     (w.tasks || []).forEach(t => {
       const key = stageOfType[t.type_id] === undefined ? 'x' : stageOfType[t.type_id];
-      const s = byStage[key] || (byStage[key] = { key, jobs: 0, runs: 0, start: Infinity, batches: new Set(), by: {} });
+      const s = byStage[key] || (byStage[key] = { key, jobs: 0, runs: 0, start: Infinity, end: 0, longest: 0, batches: new Set(), by: {} });
       s.jobs += 1;
       s.runs += t.runs;
       s.start = Math.min(s.start, w.start_hours);
+      // A step is an OFFSET into one wall clock, not a length — and the header used to show the
+      // offset alone. On a real 2× Phoenix queue that read "Finished — 2 jobs ≈ +14h 34m" above
+      // "Done — built in ≈ 13d 12h": the 12d 21h the Phoenix job itself runs for appeared nowhere
+      // except inside the collapsed "show items" fold. Carry the longest job and the moment the
+      // stage has fully landed, so the steps account for the total instead of contradicting it.
+      s.end = Math.max(s.end, w.start_hours + t.duration_hours);
+      s.longest = Math.max(s.longest, t.duration_hours);
       s.batches.add(w.start_hours);
       const g = s.by[t.type_id] || (s.by[t.type_id] = { name: t.name || _indName(t.type_id), runs: 0, activity: t.activity, dur: 0, who: [], type_id: t.type_id });
       g.runs += t.runs;
@@ -2147,15 +2154,28 @@ function _indStepsHtml(d, model) {
     const first = i === 0 && s.start <= 0.01;
     const when = first
       ? '<span class="ind-step-tag">do this now</span>'
-      : `<span class="ind-step-when">≈ +${_fmtHours(s.start)}</span>`;
+      : `<span class="ind-step-when">starts +${_fmtHours(s.start)}</span>`;
+    // The two numbers that make the step add up: how long its longest job runs for, and when the
+    // whole step has landed. Without them a reader can only add the start offsets, which on any
+    // build with one dominant job lands nowhere near the total.
+    const runs = `<span class="ind-step-when" title="The longest job in this step runs ${_fmtHours(s.longest)}. Everything in this step has landed ${_fmtHours(s.end)} after you start the build.">runs ${_fmtHours(s.longest)} · all landed by +${_fmtHours(s.end)}</span>`;
     // Several batches = the same stage restarted as slots freed, not extra decisions to make.
     const batches = s.batches.size > 1
       ? `<span class="ind-step-note">in ${s.batches.size} batches as slots free</span>` : '';
     html += `<div class="ind-step${first ? ' ind-step-now' : ' ind-step-later'}">`
-      + `<div class="ind-step-hd"><span class="ind-step-num">${n}</span>${_esc(title)} — ${jobs} ${when}${batches}</div>`
+      + `<div class="ind-step-hd"><span class="ind-step-num">${n}</span>${_esc(title)} — ${jobs} ${when}${runs}${batches}</div>`
       + _indStepItems(items, first) + `</div>`;
   });
-  html += `<div class="ind-step ind-step-done"><div class="ind-step-hd"><span class="ind-step-num">✓</span>Done — ${_esc(d.target ? d.target.name : 'product')} built in ≈ ${_fmtHours(d.metrics.makespan_hours)}</div></div>`;
+  // Say what the total MEASURES, and name the step that drives it. Two numbers on one screen that
+  // disagree with no explanation is the defect this line exists to close: the steps are start
+  // times on one wall clock, so they were never meant to be added, and the build's length is
+  // whichever step lands last — usually the final assembly job, running for days on its own.
+  const driver = stages.reduce((a, b) => (b.end > a.end ? b : a), stages[0]);
+  const driverCol = model.cols[driver.key];
+  const driverName = driverCol ? driverCol.label : 'the last step';
+  html += `<div class="ind-step ind-step-done"><div class="ind-step-hd"><span class="ind-step-num">✓</span>Done — ${_esc(d.target ? d.target.name : 'product')} built in ≈ ${_fmtHours(d.metrics.makespan_hours)}</div>`
+    + `<div class="ind-step-body">Wall-clock from installing the first job, with everything running in parallel — the times above are points on that same clock, not lengths to add up.`
+    + ` ${_esc(driverName)} is what sets it: it starts at +${_fmtHours(driver.start)} and its longest job runs ${_fmtHours(driver.longest)}.</div></div>`;
   return html + '</div>';
 }
 

@@ -971,6 +971,18 @@ and both were learned from real builds rather than guessed:
   Reported from a real plan: four things in one wave finishing at 2h32m, 2h47m, 5h05m and 10h11m,
   four separate moments to log in at, from work that could have landed together.
 
+**The Step-by-step view's parts must account for its total** (`_indStepsHtml`). Each step is an
+OFFSET into one wall clock, not a length, and the steps used to show only that offset — so a real
+2× Phoenix queue read "Finished — 2 jobs ≈ +14h" directly above "Done — built in ≈ 13d 12h", with
+the 12d 21h the hull job actually runs for visible only inside the collapsed "show items" fold.
+Both numbers were right and the screen was lying about what they meant. Every step therefore
+carries its longest job AND when the step has fully landed (`s.longest` / `s.end`, max over the
+waves it was collapsed from), the last stage to land equals the makespan by construction, and the
+Done line states that it is wall clock — naming the step that drives it — rather than sitting there
+looking like a sum. **Do not "fix" this by making the offsets add up**: they overlap on purpose, and
+`test_the_step_by_step_parts_account_for_the_whole` asserts that they don't sum, alongside the
+renderer actually rendering the reconciliation.
+
 **An owned COPY only covers the runs it has.** Ownership used to be binary — `tid in params.owned`
 meant free and ready — which is right for an ORIGINAL and wrong for a copy: holding a 4-run copy
 against a 20-run batch is sixteen runs with nowhere to come from, priced at nothing and reported as

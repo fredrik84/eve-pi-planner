@@ -1676,6 +1676,7 @@ def main():
     test_a_scan_retires_stock_that_is_no_longer_there()
     test_corp_hangars_and_containers_split_like_personal_ones()
     test_ordinary_users_are_not_asked_for_director_permissions()
+    test_the_step_by_step_parts_account_for_the_whole()
     print(f"\nAll {_passed} checks passed.")
 
 
@@ -2544,6 +2545,74 @@ def test_corp_hangars_and_containers_split_like_personal_ones():
     check("a ship's cargo is not usable stock", not any(203 in s for s in stock.values()))
     check("corp keys never collide with personal ones",
           all(k.startswith("corp:7:") for k in srcs))
+
+
+def test_the_step_by_step_parts_account_for_the_whole():
+    """Reported on a real 2× Phoenix queue: the summary said the build takes ~13d 12h while the
+    steps above it topped out at "+14h", and nothing on the screen explained the gap.
+
+    Both numbers were right. The steps render each stage's START offset into one wall clock, and
+    the finished-hull job — 12d 21h of the 13d 12h — appeared only inside a collapsed "show items"
+    fold. Two numbers disagreeing on one screen with no reconciliation is the defect, so the
+    invariant is that the collapsed-stage view the renderer builds accounts for the makespan.
+
+    Pinned in two halves: the schedule must CARRY what the reconciliation needs (a stage's last
+    landing is the makespan), and `_indStepsHtml` must actually render it. The trap is asserted
+    too — summing the start offsets is nowhere near the total, and always will be, so the fix can
+    never be "make the steps add up".
+    """
+    print("test_the_step_by_step_parts_account_for_the_whole")
+    import os
+    import re
+    H = 3600
+    # One short component stage feeding one very long final job — the Phoenix shape.
+    rx = {}
+    mfg = {1: {"base_time": 300 * H, "max_runs": 10, "output_qty": 1,
+               "inputs": [{"type_id": 2, "quantity": 1}]},
+           2: {"base_time": 2 * H, "max_runs": 10, "output_qty": 1, "inputs": []}}
+    agg = {1: {"build": True, "runs": 2, "activity": "manufacturing"},
+           2: {"build": True, "runs": 2, "activity": "manufacturing"}}
+    params = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, struct_time_mult=1.0)
+    pools = {"manufacturing": 4, "reaction": 0}
+    deps = _built_deps(agg, mfg, rx)
+    tasks, by = build_tasks(agg, mfg, rx, params, pools, depths=_depths([1], mfg, rx), deps=deps)
+    sched = schedule(tasks, by, deps, pools, {t: (0, 0.0) for t in agg})
+    waves = sched["waves"]
+    makespan = sched["makespan_hours"]
+
+    # The renderer's own collapse: one row per stage, min start / max landing / longest job.
+    stage_of = {2: 0, 1: 1}
+    stages = {}
+    for w in waves:
+        for t in w["tasks"]:
+            s = stages.setdefault(stage_of[t["type_id"]], {"start": float("inf"), "end": 0.0, "longest": 0.0})
+            s["start"] = min(s["start"], w["start_hours"])
+            s["end"] = max(s["end"], w["start_hours"] + t["duration_hours"])
+            s["longest"] = max(s["longest"], t["duration_hours"])
+
+    check("every scheduled job reports the length the steps render",
+          all(t.get("duration_hours") is not None for w in waves for t in w["tasks"]))
+    check("the last stage to land IS the build's length",
+          abs(max(s["end"] for s in stages.values()) - makespan) < 0.02)
+    check("and each stage lands after it starts, so start+longest explains it",
+          all(s["end"] <= s["start"] + s["longest"] + 0.02 for s in stages.values()))
+    # The trap, stated as an invariant so nobody "fixes" it by making the offsets sum.
+    check("summing the start offsets is NOT the build's length",
+          sum(s["start"] for s in stages.values()) < makespan * 0.2)
+
+    src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "static", "industry.js"), encoding="utf-8").read()
+    body = src[src.index("function _indStepsHtml("):]
+    body = body[:body.index("\nfunction ", 1)]
+    check("the step collapse tracks when a stage has landed", re.search(r"\bs\.end\s*=", body))
+    check("and the longest job inside it", re.search(r"\bs\.longest\s*=", body))
+    check("a step header renders that job length, not only its start offset",
+          "s.longest" in body.split("html +=", 1)[1] and "s.end" in body.split("html +=", 1)[1])
+    # The total has to say what it measures. Left bare, it reads as the sum of the steps above it.
+    done = body[body.index("ind-step-done"):]
+    check("the total says it is wall clock, not a sum of the steps",
+          "not lengths to add up" in done)
+    check("and names the step that drives it", "driver" in done)
 
 
 if __name__ == "__main__":
