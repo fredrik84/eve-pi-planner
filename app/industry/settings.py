@@ -148,6 +148,11 @@ def apply_account_build_options(context_id: int, opts):
     for field in ("prioritize_speed", "force_build"):
         if field not in sent and saved.get(field) is not None:
             update[field] = bool(saved[field])
+    # WHICH facility, not just its percentages: per-job routing needs to know whether the selected
+    # facility is one of the account's own structures. A plan run without a browser (share link,
+    # checklist) must route the same way the user's screen did.
+    if "facility_id" not in sent and saved.get("facility_id"):
+        update["facility_id"] = str(saved["facility_id"])
     # The blacklist is a standing rule, so it applies to every plan path — the checklist and the
     # customer's share link included — not only to plans a browser asks for.
     if "never_build_ids" not in sent and saved.get("never_build_ids"):

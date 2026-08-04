@@ -27,6 +27,7 @@ from app.industry.graph import (
     BuildParams, collect_reachable, effective_material_qty, resolve_unit_costs,
     SCC_SURCHARGE_PCT,
 )
+from app.industry.routing import plan_moves
 
 
 # ── Demand aggregation (MRP explosion) ────────────────────────────────────────────────────────
@@ -112,8 +113,7 @@ def aggregate_demand(targets: list[tuple[int, int]], memo: dict, mfg: dict, rx: 
         recipe = mfg.get(tid) or rx.get(tid)
         activity = "manufacturing" if tid in mfg else "reaction"
         me, te = params.me_te_for(tid, activity)
-        mult = (params.struct_material_mult if activity == "manufacturing"
-                else params.reaction_material_mult)
+        mult, _tm = params.struct_mults_for(tid, activity)
         output_qty = recipe["output_qty"]
         net = max(0.0, gross[tid] - on_hand.get(tid, 0.0))
         runs = max(0, math.ceil(net / output_qty)) if net > 0 else 0
@@ -399,7 +399,7 @@ def build_tasks(agg: dict, mfg: dict, rx: dict, params: BuildParams,
         activity = info["activity"]
         max_runs = mfg[tid]["max_runs"] if tid in mfg else 0
         _me, te = params.me_te_for(tid, activity)
-        st = params.struct_time_mult if activity == "manufacturing" else 1.0
+        _mm, st = params.struct_mults_for(tid, activity)
         skill = params.mfg_skill_time_mult if activity == "manufacturing" else params.rx_skill_time_mult
         per_run = recipe["base_time"] * (1 - te / 100.0) * st * skill
         R = info["runs"]
@@ -585,7 +585,7 @@ def _critical_priority(agg: dict, deps: dict, mfg: dict, rx: dict, params: Build
         info = agg[tid]
         recipe = mfg.get(tid) or rx.get(tid)
         _me, te = params.me_te_for(tid, info["activity"])
-        st = params.struct_time_mult if info["activity"] == "manufacturing" else 1.0
+        _mm, st = params.struct_mults_for(tid, info["activity"])
         skill = params.mfg_skill_time_mult if info["activity"] == "manufacturing" else params.rx_skill_time_mult
         return info["runs"] * recipe["base_time"] * (1 - te / 100.0) * st * skill
 
@@ -706,6 +706,22 @@ def _finish_of(tasks: list, type_id: int) -> float:
     return round(max(ends) / 3600.0, 2) if ends else 0.0
 
 
+def _sites_used(agg: dict, params: BuildParams) -> list[dict]:
+    """The distinct structures this plan installs jobs in, with how many build steps each takes —
+    the one-line answer to "where is this build actually happening"."""
+    used: dict[str, dict] = {}
+    for tid, info in agg.items():
+        if not info.get("build") or info.get("runs", 0) <= 0:
+            continue
+        site = params.site_for(tid, info["activity"])
+        if not site:
+            continue
+        row = used.setdefault(site["key"], {"key": site["key"], "name": site["name"],
+                                            "system_id": site.get("system_id"), "steps": 0})
+        row["steps"] += 1
+    return sorted(used.values(), key=lambda r: -r["steps"])
+
+
 def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict, adjusted: dict,
                params: BuildParams, names: dict[int, str], pools: dict[str, int],
                on_hand: dict[int, float] | None = None) -> dict:
@@ -744,6 +760,12 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
     for w in sched["waves"]:                       # enrich wave tasks with readable names
         for t in w["tasks"]:
             t["name"] = names.get(t["type_id"], str(t["type_id"]))
+            # WHERE this job is installed. The checklist is an instruction, and "install 40 runs of
+            # Capital Armor Plates" is not one when you run three structures with different rigs.
+            site = params.site_for(t["type_id"], t["activity"])
+            if site:
+                t["site"] = site["name"]
+                t["site_key"] = site["key"]
             # Name whatever set this job's length, so the UI can say "held to 2h 32m because X
             # needs it then" rather than leaving the reader to infer it.
             if t.get("why") and t["why"].get("needed_by") is not None:
@@ -757,10 +779,9 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
     for tid, info in agg.items():
         if info["build"]:
             recipe = mfg.get(tid) or rx.get(tid)
-            ci = params.mfg_cost_index if info["activity"] == "manufacturing" else params.rx_cost_index
             eiv = sum(inp["quantity"] * info["runs"] * adjusted.get(inp["type_id"], 0.0)
                       for inp in recipe["inputs"])
-            job_cost += eiv * (ci + params.facility_tax_pct / 100.0 + SCC_SURCHARGE_PCT)
+            job_cost += eiv * params.job_fee_rate(tid, info["activity"])
         elif info["gross"] > 0:
             price = (prices.get(tid) or {}).get("sell_price")
             line = (price or 0.0) * info["gross"]
@@ -833,10 +854,16 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
              # so it had to render the batch's run count beside the word BPC — which a capital
              # builder reads as "the plan found me a 2-run Phoenix copy". Capital copies are 1 run;
              # what the plan meant was "this order is 2 hulls". Say all three or say none.
-             "copies_to_buy": (info.get("blueprint_buy") or {}).get("copies") or 0}
+             "copies_to_buy": (info.get("blueprint_buy") or {}).get("copies") or 0,
+             # The structure this step's ME/TE, fee and duration were all resolved against.
+             "site": (params.site_for(tid, info["activity"]) or {}).get("name")}
             for tid, info in agg.items() if info["build"] and info["runs"] > 0
         ],
         "schedule": sched,
+        # Where the plan spread itself, and what that spread costs in hauling. Both are empty on an
+        # unrouted plan (one facility), so nothing new appears for an account with one structure.
+        "build_sites": _sites_used(agg, params),
+        "moves": plan_moves(agg, mfg, rx, params, names),
         "shopping_list": shopping,
         "leftovers": leftovers,
         "unresolved": [s["type_id"] for s in shopping if s["unit_price"] is None],

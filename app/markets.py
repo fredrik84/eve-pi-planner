@@ -64,7 +64,17 @@ def ensure_markets_table():
                 "rx_me_rig INTEGER NOT NULL DEFAULT 0", "rx_te_rig INTEGER NOT NULL DEFAULT 0",
                 # price_from: is this a PRICING source (in the priority chain)? 1 by default so
                 # existing market rows keep pricing; a build-only structure sets it 0.
-                "price_from INTEGER NOT NULL DEFAULT 1")
+                "price_from INTEGER NOT NULL DEFAULT 1",
+                # Which Standup M-Set / L-Set rig FAMILIES each fitted rig covers (JSON array of
+                # app.industry.structures.RIG_FAMILIES keys). NULL/empty means "all groups" — the
+                # behaviour every existing row already has, so nobody's quoted efficiency drops on
+                # deploy; narrowing is an explicit choice. Additive ALTER, never DROP.
+                "me_rig_groups TEXT", "te_rig_groups TEXT",
+                "rx_me_rig_groups TEXT", "rx_te_rig_groups TEXT",
+                # The structure's solar system + its own facility tax, so a job routed here is
+                # charged THIS system's cost index and THIS structure's tax rather than the
+                # account's single build system. NULL system → fall back to the account default.
+                "system_id BIGINT", "facility_tax_pct REAL")
     con.commit()
     con.close()
 
@@ -120,6 +130,17 @@ STRUCTURE_HULLS = {35825: "raitaru", 35826: "azbel", 35827: "sotiyo",
                    35835: "athanor", 35836: "tatara"}
 
 
+def _parse_families(value) -> list[str]:
+    """A rig's families column holds a JSON array of RIG_FAMILIES keys; NULL/''/garbage = [] =
+    'covers everything', which is what every pre-existing row means."""
+    import json as _json
+    from app.industry.structures import RIG_FAMILIES
+    try:
+        return [k for k in _json.loads(value or "[]") if k in RIG_FAMILIES]
+    except Exception:
+        return []
+
+
 def _list_markets(owner_kind: str, owner_id: int) -> list[dict]:
     ensure_markets_table()
     from app.industry.structures import manufacturing_bonus, reaction_bonus
@@ -129,7 +150,9 @@ def _list_markets(owner_kind: str, owner_id: int) -> list[dict]:
             "SELECT id, kind, location_id, name, priority, active, COALESCE(price_from,1) AS price_from, "
             "COALESCE(build_mfg,0) AS build_mfg, COALESCE(build_rx,0) AS build_rx, hull, security, "
             "COALESCE(me_rig,0) AS me_rig, COALESCE(te_rig,0) AS te_rig, "
-            "COALESCE(rx_me_rig,0) AS rx_me_rig, COALESCE(rx_te_rig,0) AS rx_te_rig FROM pp_markets "
+            "COALESCE(rx_me_rig,0) AS rx_me_rig, COALESCE(rx_te_rig,0) AS rx_te_rig, "
+            "me_rig_groups, te_rig_groups, rx_me_rig_groups, rx_te_rig_groups, "
+            "system_id, facility_tax_pct FROM pp_markets "
             "WHERE owner_kind=? AND owner_id=? AND active=1 ORDER BY priority, id",
             (owner_kind, owner_id),
         ).fetchall()
@@ -139,6 +162,11 @@ def _list_markets(owner_kind: str, owner_id: int) -> list[dict]:
     for r in rows:
         d = dict(r)
         if d["kind"] == "structure":
+            for col in ("me_rig_groups", "te_rig_groups", "rx_me_rig_groups", "rx_te_rig_groups"):
+                d[col] = _parse_families(d.get(col))
+            # The bonus reported here is the structure's BEST case — what it gives a job its rigs
+            # actually cover. What any one job gets is resolved per job against the produced type's
+            # group (app.industry.structures.route_job); this is the headline for the UI.
             mme, mte = manufacturing_bonus(d["hull"], d["me_rig"], d["te_rig"], d["security"])
             rme, rte = reaction_bonus(d["hull"], d["rx_me_rig"], d["rx_te_rig"], d["security"])
             d["mfg_bonus"] = {"me": mme, "te": mte}
@@ -147,22 +175,31 @@ def _list_markets(owner_kind: str, owner_id: int) -> list[dict]:
     return out
 
 
-def _detect_structure_meta(context_id: int, structure_id: int) -> tuple[str | None, str | None]:
-    """ESI-detect a structure's (hull, security_band) from /universe/structures + its system's
-    security. Rigs are NOT exposed by ESI (no fitting endpoint), so those stay a manual pick.
-    Best-effort: (None, None) if it can't be read."""
+def build_structures(context_id: int) -> list[dict]:
+    """The account's structures that are configured as BUILD facilities (manufacturing and/or
+    reactions), for the Industry planner's per-job routing. Personal list only — a group's shared
+    market list is a pricing default, not somewhere this account may install jobs."""
+    return [m for m in _list_markets("account", context_id)
+            if m["kind"] == "structure" and (m["build_mfg"] or m["build_rx"])]
+
+
+def _detect_structure_meta(context_id: int, structure_id: int) -> tuple:
+    """ESI-detect a structure's (hull, security_band, system_id) from /universe/structures + its
+    system's security. Rigs are NOT exposed by ESI (no fitting endpoint), so those stay a manual
+    pick. The system id matters as much as the hull now: a job routed to this structure is charged
+    THIS system's cost index. Best-effort: (None, None, None) if it can't be read."""
     ch = _market_character(context_id)
     if not ch:
-        return (None, None)
+        return (None, None, None)
     token = _get_valid_token(ch["character_id"])
     if not token:
-        return (None, None)
+        return (None, None, None)
     try:
         with esi_http.client(timeout=12) as client:
             s = esi_http.get(f"universe/structures/{structure_id}/?datasource=tranquility",
                              client=client, token=token)
             if s.status_code != 200:
-                return (None, None)
+                return (None, None, None)
             sj = s.json() or {}
             hull = STRUCTURE_HULLS.get(sj.get("type_id"))
             sys_id = sj.get("solar_system_id")
@@ -172,9 +209,9 @@ def _detect_structure_meta(context_id: int, structure_id: int) -> tuple[str | No
                 if sy.status_code == 200:
                     v = (sy.json() or {}).get("security_status")
                     sec = "high" if (v or 0) >= 0.45 else "low" if (v or 0) > 0 else "null"
-            return (hull, sec)
+            return (hull, sec, sys_id)
     except Exception:
-        return (None, None)
+        return (None, None, None)
 
 
 def effective_markets(context_id: int) -> list[dict]:
@@ -585,18 +622,21 @@ def add_market(req: MarketAdd, context_id: int = Depends(require_context)):
             (owner_kind, owner_id),
         ).fetchone()
         nxt = (row["m"] if row else -1) + 1
-        # ESI-detect hull + security for a structure so the build-bonus is ready to configure.
-        hull = sec = None
+        # ESI-detect hull + security + SYSTEM for a structure so the build-bonus is ready to
+        # configure and a job routed here can be charged its own system's cost index.
+        hull = sec = sys_id = None
         if req.kind == "structure":
-            hull, sec = _detect_structure_meta(context_id, req.location_id)
+            hull, sec, sys_id = _detect_structure_meta(context_id, req.location_id)
         clamp = lambda v: max(0, min(2, int(v)))
         con.execute(
             "INSERT INTO pp_markets (owner_kind, owner_id, kind, location_id, name, priority, active, "
-            "hull, security, price_from, build_mfg, build_rx, me_rig, te_rig, rx_me_rig, rx_te_rig) "
-            "VALUES (?,?,?,?,?,?,1,?,?,?,?,?,?,?,?,?)",
+            "hull, security, price_from, build_mfg, build_rx, me_rig, te_rig, rx_me_rig, rx_te_rig, "
+            "system_id) "
+            "VALUES (?,?,?,?,?,?,1,?,?,?,?,?,?,?,?,?,?)",
             (owner_kind, owner_id, req.kind, req.location_id, req.name.strip()[:120], nxt, hull, sec,
              1 if req.price_from else 0, 1 if req.build_mfg else 0, 1 if req.build_rx else 0,
-             clamp(req.me_rig), clamp(req.te_rig), clamp(req.rx_me_rig), clamp(req.rx_te_rig)),
+             clamp(req.me_rig), clamp(req.te_rig), clamp(req.rx_me_rig), clamp(req.rx_te_rig),
+             sys_id),
         )
         con.commit()
     finally:
@@ -611,30 +651,66 @@ class MarketBuildConfig(BaseModel):
     te_rig: int = 0
     rx_me_rig: int = 0
     rx_te_rig: int = 0
+    # What each rig is FOR — a list of app.industry.structures.RIG_FAMILIES keys. Omitted (None)
+    # leaves the stored value alone; an empty list means "covers everything", which is what a
+    # structure configured before this existed already means.
+    me_rig_groups: list[str] | None = None
+    te_rig_groups: list[str] | None = None
+    rx_me_rig_groups: list[str] | None = None
+    rx_te_rig_groups: list[str] | None = None
+    facility_tax_pct: float | None = None   # this structure's own tax; None → account default
     hull: str | None = None       # optional manual override if ESI couldn't detect it
     security: str | None = None
     price_from: bool | None = None   # also toggle whether this structure is priced from
     scope: str = "account"
 
 
+@router.get("/api/markets/rig-families")
+def list_rig_families(context_id: int = Depends(require_context)):
+    """The pickable rig families (Standup M-Set / L-Set), so the UI never hardcodes the list."""
+    from app.industry.structures import family_registry
+    return {"families": family_registry()}
+
+
 @router.post("/api/markets/{market_id}/build")
 def set_market_build(market_id: int, req: MarketBuildConfig, context_id: int = Depends(require_context)):
-    """Configure a structure as a BUILD facility: whether you manufacture / react there and the
-    fitted rig tiers (0=none, 1=T1, 2=T2). Hull + security stay as ESI-detected unless overridden."""
+    """Configure a structure as a BUILD facility: whether you manufacture / react there, the fitted
+    rig tiers (0=none, 1=T1, 2=T2) and which rig FAMILIES those rigs are. Hull + security stay as
+    ESI-detected unless overridden; the system is (re-)detected here since a job routed to this
+    structure is charged that system's cost index."""
+    import json as _json
+    from app.industry.structures import RIG_FAMILIES
     owner_kind, owner_id = _owner_for_scope(context_id, req.scope)
     ensure_markets_table()
     clamp = lambda v: max(0, min(2, int(v)))
+    fams = lambda ks: _json.dumps([k for k in (ks or []) if k in RIG_FAMILIES])
     con = get_connection()
     try:
         sets = ["build_mfg=?", "build_rx=?", "me_rig=?", "te_rig=?", "rx_me_rig=?", "rx_te_rig=?"]
         vals = [1 if req.build_mfg else 0, 1 if req.build_rx else 0,
                 clamp(req.me_rig), clamp(req.te_rig), clamp(req.rx_me_rig), clamp(req.rx_te_rig)]
+        for col, val in (("me_rig_groups", req.me_rig_groups), ("te_rig_groups", req.te_rig_groups),
+                         ("rx_me_rig_groups", req.rx_me_rig_groups),
+                         ("rx_te_rig_groups", req.rx_te_rig_groups)):
+            if val is not None:
+                sets.append(f"{col}=?"); vals.append(fams(val))
+        if req.facility_tax_pct is not None:
+            sets.append("facility_tax_pct=?"); vals.append(max(0.0, float(req.facility_tax_pct)))
         if req.hull is not None:
             sets.append("hull=?"); vals.append(req.hull or None)
         if req.security is not None:
             sets.append("security=?"); vals.append(req.security or None)
         if req.price_from is not None:
             sets.append("price_from=?"); vals.append(1 if req.price_from else 0)
+        # Backfill the system for a row added before we stored it — best-effort, and only when the
+        # user is already editing this structure, never inside a plan.
+        row = con.execute("SELECT location_id, kind, system_id FROM pp_markets "
+                          "WHERE id=? AND owner_kind=? AND owner_id=?",
+                          (market_id, owner_kind, owner_id)).fetchone()
+        if row and row["kind"] == "structure" and not row["system_id"]:
+            _hull, _sec, sys_id = _detect_structure_meta(context_id, row["location_id"])
+            if sys_id:
+                sets.append("system_id=?"); vals.append(sys_id)
         vals += [market_id, owner_kind, owner_id]
         con.execute(f"UPDATE pp_markets SET {', '.join(sets)} WHERE id=? AND owner_kind=? AND owner_id=?", vals)
         con.commit()

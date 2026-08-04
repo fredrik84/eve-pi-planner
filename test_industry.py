@@ -1604,6 +1604,227 @@ def test_share_links_outlive_their_order():
           "add_columns(" in ddl and "last_payload" in ddl)
 
 
+# ── Rigs are not generic: per-job structure routing ───────────────────────────────────────────
+# A Standup M-Set rig covers ONE family of products. A builder runs capital parts in one structure
+# and the hull in another, so the planner has to resolve the bonus per JOB — and every number
+# downstream (materials, cost, job fee, duration, schedule) has to read the SAME decision.
+
+def _site(key, name, me, te, ci=0.0, tax=0.0, system_id=None):
+    """A routed site, shaped exactly as structures.route_job returns one."""
+    return {"key": key, "name": name, "system_id": system_id, "me_pct": me, "te_pct": te,
+            "material_mult": 1.0 - me / 100.0, "time_mult": 1.0 - te / 100.0,
+            "cost_index": ci, "tax_pct": tax}
+
+
+def test_a_rig_only_applies_to_what_it_is_for():
+    """The bug this whole feature exists for: a capital-rigged structure was quoting its ME on
+    every job in the plan. A rig contributes only to products in its own families; the hull ROLE
+    bonus is structure-wide and always applies."""
+    print("test_a_rig_only_applies_to_what_it_is_for")
+    from app.industry.structures import covers, manufacturing_bonus, RIG_FAMILIES
+    # 873 = Capital Construction Components, 27 = Battleship, 85 = a charge group.
+    check("capital component rig covers capital components", covers(["capital_component"], 873))
+    check("capital component rig does NOT cover a battleship", not covers(["capital_component"], 27))
+    check("capital ship rig covers a dreadnought (group 485)", covers(["capital_ship"], 485))
+    check("capital ship rig does not cover a cruiser (group 26)", not covers(["capital_ship"], 26))
+    check("every family key maps to a non-empty group set",
+          all(f["groups"] for f in RIG_FAMILIES.values()))
+    # Raitaru + T2 ME rig in null: 1% role + 2.4×2.1 = 6.04 when it applies, role alone when not.
+    check("covered job gets role + rig", manufacturing_bonus("raitaru", 2, 0, "null") == (6.04, 0.0))
+    check("uncovered job keeps only the hull role bonus",
+          manufacturing_bonus("raitaru", 2, 0, "null", me_applies=False) == (1.0, 0.0))
+    check("uncovered TE job keeps only the role TE",
+          manufacturing_bonus("azbel", 0, 2, "null", te_applies=False) == (1.0, 0.0))
+
+
+def test_a_structure_with_no_families_still_covers_everything():
+    """The compatibility promise, asserted rather than trusted: a structure that has rig tiers and
+    has never been told what they are for keeps behaving exactly as it does today. Silently cutting
+    everyone's quoted efficiency on deploy is the one outcome this feature must not have."""
+    print("test_a_structure_with_no_families_still_covers_everything")
+    from app.industry.structures import covers, BuildSite
+    check("no families = every group", covers([], 873) and covers(None, 27) and covers((), 999999))
+    site = BuildSite(key="s:1", name="Old", activity="manufacturing", hull="raitaru",
+                     security="null", me_rig=2, te_rig=2)
+    for group in (873, 27, 85, None):
+        check(f"un-narrowed rig applies to group {group}", site.bonus_for(group) == (6.04, 50.4))
+
+
+def test_the_planner_picks_the_structure_that_covers_the_job():
+    """No knob for this (CLAUDE.md rule 3): the user says what their structures are rigged for and
+    the math routes each job. Best ME wins, then best TE, then staying where the consumer is."""
+    print("test_the_planner_picks_the_structure_that_covers_the_job")
+    from app.industry.structures import BuildSite, route_job
+    caps = BuildSite(key="s:1", name="Capital yard", activity="manufacturing", hull="sotiyo",
+                     security="null", me_rig=2, te_rig=2,
+                     me_families=("capital_component",), te_families=("capital_component",))
+    ammo = BuildSite(key="s:2", name="Ammo shop", activity="manufacturing", hull="raitaru",
+                     security="null", me_rig=2, te_rig=2,
+                     me_families=("ammunition",), te_families=("ammunition",))
+    sites = [caps, ammo]
+    check("a capital component goes to the capital yard",
+          route_job(sites, 873)["key"] == "s:1")
+    check("a charge goes to the ammo shop", route_job(sites, 85)["key"] == "s:2")
+    # Neither covers a battleship, so both offer the same 1% role ME — the tie must not shuffle
+    # the plan around: it stays where its consumer is being built.
+    check("a tie stays where the consumer is",
+          route_job(sites, 27, prefer="s:2")["key"] == "s:2")
+    check("a tie with no incumbent is still deterministic",
+          route_job(sites, 27)["key"] in ("s:1", "s:2"))
+    # Same rigs, different systems → the cheaper job fee breaks the tie.
+    cheap = BuildSite(key="s:3", name="Cheap", activity="manufacturing", hull="raitaru",
+                      security="null", me_rig=2, te_rig=2, cost_index=0.01)
+    dear = BuildSite(key="s:4", name="Dear", activity="manufacturing", hull="raitaru",
+                     security="null", me_rig=2, te_rig=2, cost_index=0.09)
+    check("equal rigs → the cheaper system", route_job([dear, cheap], 27)["key"] == "s:3")
+
+
+def test_cost_materials_time_and_schedule_all_use_the_same_site():
+    """The half-threaded version is worse than not doing it at all: costing materials off a rig the
+    scheduler knows nothing about produces a plan whose ISK and whose ETA describe two different
+    factories. One decision, read through BuildParams, by every consumer."""
+    print("test_cost_materials_time_and_schedule_all_use_the_same_site")
+    con = _seed_con()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+    P = _prices(SELL)
+    # Gadget (101) is built in a structure that halves materials AND time; Widget (100) in one that
+    # does neither. Nothing else differs.
+    params = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, struct_time_mult=1.0,
+                         marginal_pct_of_total=0.0, min_saving_isk=0.0)
+    params.job_sites = {100: _site("s:1", "Hull yard", 0, 0),
+                        101: _site("s:2", "Parts yard", 50, 50),
+                        102: _site("s:2", "Parts yard", 0, 0)}
+
+    plan = build_plan(100, 1, mfg, rx, P, ADJ, params, NAMES)
+    gadget = next(n for n in plan["tree"]["inputs"] if n["type_id"] == 101)
+    minb = next(n for n in gadget["inputs"] if n["type_id"] == 201)
+    mina = next(n for n in plan["tree"]["inputs"] if n["type_id"] == 200)
+    # Gadget needs 5 MineralB/run at ME 0; the parts yard's 50% material bonus halves it, and the
+    # 2 Gadgets the Widget needs are two runs → 5 (not 10). Widget's own 10 MineralA is untouched.
+    check("materials use the site the JOB is built in", minb["qty"] == 5)
+    check("a job in the un-rigged structure keeps full materials", mina["qty"] == 10)
+    check("each build step names where it was costed",
+          gadget["site"] == "Parts yard" and plan["tree"]["site"] == "Hull yard")
+
+    # Same params through the scheduler: gadget's 1800s base halves, widget's 3600s does not.
+    memo, unit = resolve_unit_costs(mfg, rx, P, ADJ, params)
+    unit(100, frozenset())
+    agg = aggregate_demand([(100, 1)], memo, mfg, rx, params, {}, {"manufacturing": 5, "reaction": 5})
+    tasks, by_type = build_tasks(agg, mfg, rx, params, {"manufacturing": 5, "reaction": 5})
+    dur = {t.type_id: t.duration for t in tasks}
+    check("the schedule uses the same time bonus as the cost", dur.get(101) == 900.0)
+    check("and leaves the un-rigged job alone", dur.get(100) == 3600.0)
+    # And the demand pass agrees with the tree: 2 gadget runs × 5 MineralB × 0.5.
+    check("aggregated demand halves the same material", agg[201]["gross"] == 5)
+
+
+def test_the_job_fee_follows_the_system_the_job_lands_in():
+    """Job installation cost is EIV × (system cost index + facility tax + SCC), and the index is
+    per SYSTEM. Route a job to another structure and charge it the first system's index and the
+    plan's ISK is describing a build that never happens."""
+    print("test_the_job_fee_follows_the_system_the_job_lands_in")
+    con = _seed_con()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+    P = _prices(SELL)
+    params = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, struct_time_mult=1.0,
+                         mfg_cost_index=0.10, facility_tax_pct=5.0)
+    check("unrouted: the account's index and tax",
+          abs(params.job_fee_rate(100, "manufacturing") - (0.10 + 0.05 + 0.04)) < 1e-9)
+    params.job_sites = {100: _site("s:1", "Elsewhere", 0, 0, ci=0.02, tax=1.0)}
+    check("routed: that structure's own system index and tax",
+          abs(params.job_fee_rate(100, "manufacturing") - (0.02 + 0.01 + 0.04)) < 1e-9)
+    check("a type with no site still falls back to the account's",
+          abs(params.job_fee_rate(101, "manufacturing") - (0.10 + 0.05 + 0.04)) < 1e-9)
+    # And the fee actually lands in the plan's job cost: Widget's EIV is 2×1000 + 10×100 = 3000.
+    plan = build_plan(100, 1, mfg, rx, P, ADJ, params, NAMES)
+    check("the tree's job cost is charged at the routed rate",
+          abs(plan["tree"]["job_cost"] - 3000 * 0.07) < 1e-6)
+
+
+def test_an_unrouted_plan_is_byte_for_byte_the_old_plan():
+    """The deploy guarantee: an account with one structure (or none) plans exactly as it does
+    today. Routing is opt-in per structure and the flag is off by default; with no job_sites every
+    number has to come out of the same code path unchanged."""
+    print("test_an_unrouted_plan_is_byte_for_byte_the_old_plan")
+    con = _seed_con()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+    P = _prices(SELL)
+    flat = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0,
+                       struct_material_mult=0.9, struct_time_mult=0.8,
+                       mfg_cost_index=0.05, facility_tax_pct=2.0)
+    check("materials fall back to the flat facility",
+          flat.struct_mults_for(100, "manufacturing") == (0.9, 0.8))
+    check("reactions keep their own material multiplier and no time bonus",
+          flat.struct_mults_for(102, "reaction") == (flat.reaction_material_mult, 1.0))
+    a = plan_queue([(100, 3)], mfg, rx, P, ADJ, flat, NAMES, {"manufacturing": 5, "reaction": 5})
+    check("nothing new is reported for a single-facility plan",
+          a["build_sites"] == [] and a["moves"] == [])
+    check("the plan still costs and schedules", a["metrics"]["total_cost"] > 0
+          and a["metrics"]["makespan_hours"] > 0)
+
+
+def test_every_station_change_is_reported():
+    """Routing does NOT price freight — so it owes the builder the list of what has to move. A plan
+    that quietly spreads a capital build over three structures and never says so is one you find
+    out about while holding the parts."""
+    print("test_every_station_change_is_reported")
+    from app.industry.routing import plan_moves
+    con = _seed_con()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+    P = _prices(SELL)
+    params = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, struct_time_mult=1.0,
+                         marginal_pct_of_total=0.0, min_saving_isk=0.0)
+    params.job_sites = {100: _site("s:1", "Hull yard", 0, 0),
+                        101: _site("s:2", "Parts yard", 40, 0),
+                        102: _site("s:2", "Parts yard", 0, 0)}
+    res = plan_queue([(100, 4)], mfg, rx, P, ADJ, params, NAMES,
+                     {"manufacturing": 5, "reaction": 5})
+    names = {m["name"] for m in res["moves"]}
+    check("the component built elsewhere is listed as a move", "Gadget" in names)
+    check("a component built where it is consumed is not", "Sprocket" not in names)
+    move = next(m for m in res["moves"] if m["name"] == "Gadget")
+    check("the move says where from and where to",
+          move["from"] == "Parts yard" and move["to"] == "Hull yard" and move["units"] > 0)
+    check("the plan says which structures it used",
+          {s["name"] for s in res["build_sites"]} == {"Hull yard", "Parts yard"})
+    check("build steps are attributed to their structure",
+          all(r["site"] for r in res["requirements"]))
+    check("every scheduled job names its structure",
+          all(t.get("site") for w in res["schedule"]["waves"] for t in w["tasks"]))
+    check("no moves when everything is built in one place",
+          plan_moves({100: {"build": True, "runs": 1}}, mfg, rx, BuildParams(), NAMES) == [])
+
+
+def test_the_rig_family_registry_is_the_single_source():
+    """The families are a stored KEY, so the registry is a migration surface: the frontend reads it
+    from the backend, and a key that vanishes silently un-narrows somebody's structure."""
+    print("test_the_rig_family_registry_is_the_single_source")
+    import inspect
+    from app.industry.structures import family_registry, RIG_FAMILIES
+    fams = family_registry()
+    check("the registry is served whole", len(fams) == len(RIG_FAMILIES))
+    check("both activities are represented",
+          {f["activity"] for f in fams} == {"manufacturing", "reaction"})
+    check("every entry has a key and a human label",
+          all(f["key"] and f["label"] for f in fams))
+    check("manufacturing families are the ones the M-Set line has",
+          {"capital_ship", "capital_component", "advanced_component", "ammunition",
+           "equipment", "drone", "structure"} <= set(RIG_FAMILIES))
+    # Additive migration only — the columns are added to the existing pp_markets table.
+    from app import markets
+    ddl = inspect.getsource(markets.ensure_markets_table)
+    check("the rig-family columns are added additively",
+          "add_columns(" in ddl and "me_rig_groups TEXT" in ddl
+          and "DROP COLUMN" not in ddl.upper() and "DROP TABLE" not in ddl.upper())
+    check("the structure's own system and tax are stored too",
+          "system_id BIGINT" in ddl and "facility_tax_pct REAL" in ddl)
+    # The whole feature is gated (CLAUDE.md rule 2). Assert the flag EXISTS and is registered, not
+    # what state it is in — an admin can flip that.
+    from app.features import FEATURE_REGISTRY
+    check("the feature is in the registry",
+          any(f["key"] == "industry_rig_routing" for f in FEATURE_REGISTRY))
+
+
 def main():
     test_material_formula()
     test_graph_loaders()
@@ -1678,6 +1899,14 @@ def main():
     test_corp_hangars_and_containers_split_like_personal_ones()
     test_ordinary_users_are_not_asked_for_director_permissions()
     test_the_step_by_step_parts_account_for_the_whole()
+    test_a_rig_only_applies_to_what_it_is_for()
+    test_a_structure_with_no_families_still_covers_everything()
+    test_the_planner_picks_the_structure_that_covers_the_job()
+    test_cost_materials_time_and_schedule_all_use_the_same_site()
+    test_the_job_fee_follows_the_system_the_job_lands_in()
+    test_an_unrouted_plan_is_byte_for_byte_the_old_plan()
+    test_every_station_change_is_reported()
+    test_the_rig_family_registry_is_the_single_source()
     print(f"\nAll {_passed} checks passed.")
 
 

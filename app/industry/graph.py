@@ -109,6 +109,41 @@ class BuildParams:
     # never presented as a measurement — same principle as me_source per build step.
     skill_time_basis: str = "assumed"
 
+    # Per-JOB build site, when the account runs more than one build structure and its rigs are
+    # group-specific: type_id -> {key, name, system_id, me_pct, te_pct, material_mult, time_mult,
+    # cost_index, tax_pct}. Empty = the single flat facility above, which is exactly how every
+    # plan behaved before routing existed. See app.industry.structures.route_job.
+    job_sites: dict = field(default_factory=dict)
+
+    def site_for(self, type_id: int, activity: str) -> dict | None:
+        """Where this job is installed, or None when the plan isn't routed (one flat facility)."""
+        return self.job_sites.get(type_id) if activity else None
+
+    def struct_mults_for(self, type_id: int, activity: str) -> tuple[float, float]:
+        """(material_mult, time_mult) for ONE job — the single place cost, materials, job time and
+        the scheduler all read, so they cannot disagree about which structure a job ran in.
+
+        A half-threaded version of this is worse than none: quoting materials off a capital rig the
+        schedule doesn't know about produces a plan whose ISK and whose ETA describe two different
+        factories. Every consumer goes through here.
+        """
+        site = self.job_sites.get(type_id)
+        if site is not None:
+            return site["material_mult"], site["time_mult"]
+        if activity == "manufacturing":
+            return self.struct_material_mult, self.struct_time_mult
+        return self.reaction_material_mult, 1.0
+
+    def job_fee_rate(self, type_id: int, activity: str) -> float:
+        """The multiplier on EIV that gives the job installation fee: system cost index + facility
+        tax + the flat SCC surcharge. Routed jobs use THEIR OWN system's index and structure's tax
+        — the fee is per-system, so it has to follow the routing or the cost is fiction."""
+        site = self.job_sites.get(type_id)
+        if site is not None:
+            return site["cost_index"] + site["tax_pct"] / 100.0 + SCC_SURCHARGE_PCT
+        ci = self.mfg_cost_index if activity == "manufacturing" else self.rx_cost_index
+        return ci + self.facility_tax_pct / 100.0 + SCC_SURCHARGE_PCT
+
     def me_te_for(self, type_id: int, activity: str) -> tuple[float, float]:
         """(me_pct, te_pct) for a manufacturing product: its owned-blueprint values if known, else
         the global fallback. Reactions have no blueprint ME/TE (rig-based, via the material mult),
@@ -258,9 +293,8 @@ def resolve_unit_costs(mfg: dict, rx: dict, prices: dict, adjusted: dict,
         build_uc = None
         if recipe and type_id not in stack:
             me, _te = params.me_te_for(type_id, activity)
-            mult = (params.struct_material_mult if activity == "manufacturing"
-                    else params.reaction_material_mult)
-            ci = params.mfg_cost_index if activity == "manufacturing" else params.rx_cost_index
+            mult, _tm = params.struct_mults_for(type_id, activity)
+            fee_rate = params.job_fee_rate(type_id, activity)
             inner = stack | {type_id}
             total_in = 0.0
             eiv = 0.0
@@ -274,7 +308,7 @@ def resolve_unit_costs(mfg: dict, rx: dict, prices: dict, adjusted: dict,
                 total_in += child["unit_cost"] * qty
                 eiv += inp["quantity"] * adjusted.get(inp["type_id"], 0.0)
             if ok:
-                job = eiv * (ci + params.facility_tax_pct / 100.0 + SCC_SURCHARGE_PCT)
+                job = eiv * fee_rate
                 build_uc = (total_in + job) / recipe["output_qty"]
 
         # Blacklisted: the user always buys this one. Applied HERE rather than at demand time so the
@@ -337,9 +371,7 @@ def build_plan(target: int, quantity: int, mfg: dict, rx: dict, prices: dict, ad
             }
 
         me, te = params.me_te_for(type_id, activity)
-        mult = (params.struct_material_mult if activity == "manufacturing"
-                else params.reaction_material_mult)
-        ci = params.mfg_cost_index if activity == "manufacturing" else params.rx_cost_index
+        mult, st = params.struct_mults_for(type_id, activity)
         output_qty = recipe["output_qty"]
         runs = max(1, math.ceil(qty / output_qty))
         produced = runs * output_qty
@@ -353,8 +385,7 @@ def build_plan(target: int, quantity: int, mfg: dict, rx: dict, prices: dict, ad
             # EIV (the job-cost basis) uses BASE quantities × runs — ME never reduces it.
             eiv += inp["quantity"] * runs * adjusted.get(inp["type_id"], 0.0)
             children.append(explode(inp["type_id"], need))
-        job_cost = eiv * (ci + params.facility_tax_pct / 100.0 + SCC_SURCHARGE_PCT)
-        st = params.struct_time_mult if activity == "manufacturing" else 1.0
+        job_cost = eiv * params.job_fee_rate(type_id, activity)
         skill = params.mfg_skill_time_mult if activity == "manufacturing" else params.rx_skill_time_mult
         job_seconds = recipe["base_time"] * runs * (1 - te / 100.0) * st * skill
         totals["job_cost"] += job_cost
@@ -370,6 +401,9 @@ def build_plan(target: int, quantity: int, mfg: dict, rx: dict, prices: dict, ad
             "produced": produced, "excess": produced - qty,
             "unit_cost": node["build_unit_cost"], "buy_unit_cost": node["buy_unit_cost"],
             "job_cost": job_cost, "owned": params.owned.get(type_id), "inputs": children,
+            # Which of your structures this step was costed in — the rigs there are what the ME/TE
+            # above came from, so the number is unreadable without it.
+            "site": (params.site_for(type_id, activity) or {}).get("name"),
         }
 
     tree = explode(target, quantity, is_root=True)
@@ -423,6 +457,10 @@ class BuildOptions(BaseModel):
     prioritize_speed: bool = True      # buy slow-to-build bulk components to minimize makespan
     struct_material_pct: float = 0.0   # facility ME bonus (material reduction %)
     struct_time_pct: float = 0.0       # facility TE bonus (time reduction %)
+    # Which facility the two percentages above came from ("s:<market id>" = one of the account's
+    # own structures, "p:<preset>" = a generic preset). The engine needs the identity, not just the
+    # numbers, to know whether that structure is already a routing candidate — see routing.py.
+    facility_id: str | None = None
     use_stock: bool = True             # net owned materials off the demand (needs an asset scan)
     marginal_pct: float | None = None  # build only if it saves >= this % of the build (None = default)
     force_build: bool = False          # build everything buildable, ignoring small-saving shortcuts
@@ -651,10 +689,16 @@ def prepare_plan_inputs(ctx: int, targets: list[tuple[int, int]], opts: BuildOpt
                           else f"No manufacturing or reaction recipe for type {tid}")
                 raise HTTPException(status_code=400, detail=detail)
             ids |= collect_reachable(tid, mfg, rx)
-        names = {r["type_id"]: r["name"]
-                 for r in con.execute(
-                     f"SELECT type_id, name FROM types WHERE type_id IN ({','.join('?' * len(ids))})",
-                     tuple(ids))}
+        names = {}
+        groups = {}
+        # group_id comes along for the ride: it's what decides whether a structure's rigs cover a
+        # given job (app.industry.structures), and it is the ONLY taxonomy the SDE build imports —
+        # there is no groups table, so no category and no tech level.
+        for r in con.execute(
+                f"SELECT type_id, name, group_id FROM types WHERE type_id IN ({','.join('?' * len(ids))})",
+                tuple(ids)):
+            names[r["type_id"]] = r["name"]
+            groups[r["type_id"]] = r["group_id"]
     finally:
         con.close()
 
@@ -701,6 +745,12 @@ def prepare_plan_inputs(ctx: int, targets: list[tuple[int, int]], opts: BuildOpt
             continue
         params.me_by_product[tid] = (max(0.0, min(10.0, me)), max(0.0, min(20.0, te)))
         params.me_source[tid] = "override"
+
+    # Per-job build site. Resolved LAST: it reads the resolved params (build system, tax, the flat
+    # facility bonus) and hands back the routing every downstream number is then computed from.
+    # `{}` when the flag is off or the account described no build structure — i.e. today's plan.
+    from app.industry.routing import resolve_job_sites
+    params.job_sites = resolve_job_sites(ctx, targets, mfg, rx, groups, params, opts.facility_id)
 
     pool = _slot_pool(ctx)
     pools = {

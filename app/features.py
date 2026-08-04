@@ -186,6 +186,14 @@ FEATURE_REGISTRY = [
                     "Point an order at the container you're hauling into and it keeps itself up to "
                     "date from your assets; anything we can't see can be ticked off by hand.",
      "default": False},
+    {"key": "industry_rig_routing", "label": "Industry: rigs per structure, jobs per rig",
+     "group": "Industry",
+     "description": "Say what each structure's rigs are FOR (capital ships, advanced components, "
+                    "ammunition, …) and the planner picks the right structure per job: only jobs a "
+                    "rig actually covers get its ME/TE, and each job's fee follows the system it "
+                    "lands in. The plan names the structure per step and lists the parts that have "
+                    "to move. A structure with no families set still covers everything.",
+     "default": False},
 ]
 GROUP_ORDER = ["Dashboard", "Setup Analysis", "Planner", "Planet DB", "Characters",
                "Notifications & Alerts", "Reactions", "Industry"]
