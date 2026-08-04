@@ -17,3 +17,4 @@ venv/
 request.json
 *.tar.gz
 .DS_Store
+.claude/worktrees/
