@@ -25,11 +25,13 @@ from app.industry.structures import BuildSite, route_job
 FEATURE_KEY = "industry_rig_routing"
 
 
-def _feature_on() -> bool:
+def _feature_on(context_id: int | None = None) -> bool:
     # Local import: app.features imports from app.esi, and this module is reached from the industry
     # router, so a module-level import risks a cycle (same reason skills.py does it this way).
-    from app.features import feature_enabled
-    return feature_enabled(FEATURE_KEY)
+    # Role-aware: a feature parked on `testers` has to actually work for a tester, or the rung is
+    # decoration — see feature_enabled_for.
+    from app.features import feature_enabled_for
+    return feature_enabled_for(FEATURE_KEY, context_id)
 
 
 def _sites_for(structures: list[dict], params, activity: str) -> list[BuildSite]:
@@ -93,7 +95,7 @@ def resolve_job_sites(context_id: int, targets: list[tuple[int, int]], mfg: dict
     CONSUMER was routed to: on a tie — or a difference inside `ROUTE_NOISE_PCT` — the parts stay
     where they're going to be used instead of earning a haul for a rounding error.
     """
-    if not _feature_on():
+    if not _feature_on(context_id):
         return {}
     try:
         from app.markets import build_structures

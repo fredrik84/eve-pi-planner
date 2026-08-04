@@ -81,9 +81,11 @@ SLOT_SKILLS = {
 }
 
 
-def _feature_on() -> bool:
-    from app.features import feature_enabled
-    return feature_enabled(FEATURE_KEY)
+def _feature_on(context_id: int | None = None) -> bool:
+    # Role-aware: a feature on the `testers` rung must work for a tester, not just show up in the
+    # Admin tab. See app.features.feature_enabled_for.
+    from app.features import feature_enabled_for
+    return feature_enabled_for(FEATURE_KEY, context_id)
 
 
 def sp_for_level(rank: int, level: int) -> int:
@@ -154,7 +156,7 @@ def _suggest(char: dict, skill_id: int, have: int, gain_pct: float, pool: str, d
 
 def industry_skill_advice(context_id: int) -> dict | None:
     """Ranked "train this next" advice for the account, or None when the feature is off."""
-    if not _feature_on():
+    if not _feature_on(context_id):
         return None
     pool = _slot_pool(context_id)
     by_id = {c["character_id"]: c for c in pool.get("characters") or []}
@@ -241,7 +243,7 @@ def industry_skill_advisor(ctx: int = Depends(require_context)):
     throughput percentage; merging them into one ranked list would invent a common currency that
     doesn't exist.
     """
-    if not _feature_on():
+    if not _feature_on(ctx):
         return {"enabled": False}
     out = industry_skill_advice(ctx) or {}
     try:

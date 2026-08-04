@@ -72,7 +72,7 @@ def main():
 
         real_feature_on = ad._feature_on
         real_pool = ad._slot_pool
-        ad._feature_on = lambda: True
+        ad._feature_on = lambda *_a, **_k: True
 
         def _pool(_ctx, free_mfg):
             """A slot pool with everything trained but a controllable amount of it busy."""
@@ -137,7 +137,7 @@ def main():
                   f"nothing is suggested to a fully trained character (got {res['suggestions']})")
 
             print("the feature flag gates it:")
-            ad._feature_on = lambda: False
+            ad._feature_on = lambda *_a, **_k: False
             check(ad.industry_skill_advice(CTX) is None,
                   "industry_skill_advice returns None with the feature off")
         finally:

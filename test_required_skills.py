@@ -109,7 +109,7 @@ def main():
         con.commit()
 
         real_feature_on = sk._feature_on
-        sk._feature_on = lambda: True
+        sk._feature_on = lambda *_a, **_k: True
         try:
             g = sk.plan_skill_gaps(CTX, REQUIREMENTS, MFG, RX)
         finally:
@@ -161,7 +161,7 @@ def main():
 
         print("the scheduler prefers a character who can actually install the job:")
         from app.industry.schedule import assign_characters
-        sk._feature_on = lambda: True
+        sk._feature_on = lambda *_a, **_k: True
         try:
             full = sk.analyze_plan_skills(CTX, REQUIREMENTS, MFG, RX)
         finally:
@@ -205,7 +205,7 @@ def main():
               "skill_ok is absent (not None/False) when no check ran, so 'unchecked' never reads as 'fine'")
 
         print("the feature flag really gates it:")
-        sk._feature_on = lambda: False
+        sk._feature_on = lambda *_a, **_k: False
         try:
             off = sk.plan_skill_gaps(CTX, REQUIREMENTS, MFG, RX)
         finally:
@@ -213,7 +213,7 @@ def main():
         check(off is None, "plan_skill_gaps returns None with the feature off, so the key is omitted")
 
         print("the write path is gated too:")
-        sk._feature_on = lambda: False
+        sk._feature_on = lambda *_a, **_k: False
         try:
             sk.store_character_skills(CHAR_C, {SKILL_CAP: 5})
         finally:
@@ -222,7 +222,7 @@ def main():
                         (CHAR_C,)).fetchone()["n"]
         check(n == 0, "store_character_skills writes nothing while the feature is off")
 
-        sk._feature_on = lambda: True
+        sk._feature_on = lambda *_a, **_k: True
         try:
             sk.store_character_skills(CHAR_C, {SKILL_CAP: 5, SKILL_RIG: 2})
             n = con.execute("SELECT COUNT(*) AS n FROM pp_char_skills WHERE character_id=?",

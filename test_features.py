@@ -90,6 +90,57 @@ def test_skill_roi_anon(base: str) -> bool:
     return ok
 
 
+def test_backend_gates_respect_the_whole_ladder(base: str) -> bool:
+    """A feature rolled out to TESTERS must actually run for a tester.
+
+    `feature_enabled()` answers only "is it public", so every server-side gate built on it read
+    "off" for admins and testers alike — the Admin tab showed a feature on the testers rung while
+    the code behind it did nothing. Three Industry features were gated that way and three were
+    sitting on `testers` in production. This pins the ladder itself, and that the backend gates
+    take a caller so they CAN place someone on it.
+    """
+    print(f"\n{'='*60}\n  backend feature gates respect admin/tester rungs\n{'='*60}")
+    import inspect
+    from app import features as F
+
+    ok = True
+    # The ladder, with the role lookup stubbed so this tests the rungs and not the DB.
+    import app.esi as E
+    orig = E.admin_and_tester_status_for_context
+    orig_state = F._state_of
+    try:
+        E.admin_and_tester_status_for_context = lambda c: {1: (True, True), 2: (False, True),
+                                                           3: (False, False)}[c]
+        expected = {
+            "hidden":  {1: False, 2: False, 3: False, None: False},
+            "admin":   {1: True,  2: False, 3: False, None: False},
+            "testers": {1: True,  2: True,  3: False, None: False},
+            "public":  {1: True,  2: True,  3: True,  None: True},
+        }
+        for state, per_caller in expected.items():
+            F._state_of = lambda _k, _s=state: _s
+            for ctx, want in per_caller.items():
+                got = F.feature_enabled_for("anything", ctx)
+                ok &= check(got is want,
+                            f"{state}: caller {ctx} sees {got} (expected {want})")
+    finally:
+        E.admin_and_tester_status_for_context = orig
+        F._state_of = orig_state
+
+    # And the gates that sit in front of real features must accept a caller at all — a zero-arg
+    # gate cannot consult a rung, which is exactly how this regressed.
+    for mod, name in (("app.industry.routing", "routing"),
+                      ("app.industry.skills", "skills"),
+                      ("app.industry.advisor", "advisor")):
+        m = __import__(mod, fromlist=["_feature_on"])
+        params = inspect.signature(m._feature_on).parameters
+        ok &= check(len(params) >= 1, f"{name}._feature_on takes a caller")
+        src = inspect.getsource(m._feature_on)
+        ok &= check("feature_enabled_for" in src,
+                    f"{name}._feature_on asks the role-aware gate, not the public-only one")
+    return ok
+
+
 def test_corp_wallet_gated(base: str) -> bool:
     print(f"\n{'='*60}\n  GET /api/corp-wallet is admin-gated\n{'='*60}")
     code = get_status(f"{base}/api/corp-wallet")
@@ -315,6 +366,7 @@ def main():
         test_features(base),
         test_feature_toggle_gated(base),
         test_skill_roi_anon(base),
+        test_backend_gates_respect_the_whole_ladder(base),
         test_corp_wallet_gated(base),
         test_reactions_gated(base),
         test_markets_gated(base),

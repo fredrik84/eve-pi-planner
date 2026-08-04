@@ -242,15 +242,45 @@ def ensure_features_table():
     con.close()
 
 
-def feature_enabled(key: str) -> bool:
-    """Is this feature public-visible? (For backend gating — ignores admin/tester roles.)"""
+def _state_of(key: str) -> str:
+    """The feature's current rung on the rollout ladder."""
     ensure_features_table()
     con = get_connection()
     row = con.execute("SELECT state FROM pp_features WHERE key=?", (key,)).fetchone()
     con.close()
     if row is not None:
-        return row["state"] == "public"
-    return bool(_DEFAULTS.get(key, {}).get("default", False))
+        return row["state"] or "admin"
+    return _default_state(_DEFAULTS.get(key, {"default": False}))
+
+
+def feature_enabled(key: str) -> bool:
+    """Is this feature public-visible? (For backend gating — ignores admin/tester roles.)
+
+    Use `feature_enabled_for(key, context_id)` instead wherever the caller knows whose request it
+    is: this one answers only "is it public", so a feature parked on `admin` or `testers` reads as
+    OFF for everybody, including the admins and testers the rung exists to serve.
+    """
+    return _state_of(key) == "public"
+
+
+def feature_enabled_for(key: str, context_id: int | None) -> bool:
+    """Backend gate that respects the whole rollout ladder for a KNOWN caller.
+
+    `feature_enabled()` alone made the ladder frontend-only: the Admin tab would show a feature
+    rolled out to testers while every server-side gate behind it still answered "off", so the
+    feature appeared enabled and did nothing. Anything gated in the backend must ask this instead,
+    or its rung on the ladder is decoration.
+
+    hidden → nobody. admin → admins. testers → admins and testers. public → everyone.
+    """
+    state = _state_of(key)
+    if state == "public":
+        return True
+    if state == "hidden" or not context_id:
+        return False
+    from app.esi import admin_and_tester_status_for_context
+    is_admin, is_tester = admin_and_tester_status_for_context(context_id)
+    return is_admin if state == "admin" else (is_admin or is_tester)
 
 
 @router.get("/api/features")

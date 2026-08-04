@@ -41,11 +41,25 @@ FEATURE_KEY = "required_skills"
 MAX_SKILL_LEVEL = 5
 
 
-def _feature_on() -> bool:
+def _feature_on(context_id: int | None = None) -> bool:
     # Local import: app.features imports from app.esi, and this module is imported by the industry
     # router, so a module-level import risks a cycle.
-    from app.features import feature_enabled
-    return feature_enabled(FEATURE_KEY)
+    # Role-aware: this feature has lived on the `testers` rung, where a public-only gate answers
+    # "off" for the very testers it was rolled out to. See app.features.feature_enabled_for.
+    from app.features import feature_enabled_for
+    return feature_enabled_for(FEATURE_KEY, context_id)
+
+
+def _context_of(character_id: int) -> int | None:
+    """The account a character belongs to — needed because the skill WRITE path is reached from an
+    ESI scan that knows the character but not who asked."""
+    con = get_connection()
+    try:
+        row = con.execute("SELECT context_id FROM pp_characters WHERE character_id=?",
+                          (character_id,)).fetchone()
+    finally:
+        con.close()
+    return row["context_id"] if row else None
 
 
 @ensure_once
@@ -75,7 +89,7 @@ def store_character_skills(character_id: int, levels: dict[int, int]) -> None:
     re-scanned after the SDE moved on, and a stale row that survived a refresh would be indis-
     tinguishable from a real one. An empty `levels` is treated as a failed fetch and left alone
     rather than wiping a good list (same reasoning as the PI skill columns in app/esi.py)."""
-    if not levels or not _feature_on():
+    if not levels or not _feature_on(_context_of(character_id)):
         return
     ensure_char_skills_table()
     con = get_connection()
@@ -208,7 +222,7 @@ def analyze_plan_skills(context_id: int, requirements: list[dict], mfg: dict, rx
     skill data for lands in `unknown` instead: absence of data is not evidence of incapability, and
     conflating the two would either hide a real problem or invent one.
     """
-    if not _feature_on():
+    if not _feature_on(context_id):
         return None
     ensure_char_skills_table()
     bp = _blueprint_ids(requirements, mfg, rx)
@@ -290,7 +304,7 @@ def industry_skill_coverage(ctx: int = Depends(require_context)):
     """Diagnostic: whether the two data sources this feature needs are actually populated, per
     account. Cheap to call and the first thing to check when the panel says nothing — it separates
     "SDE not backfilled" from "characters never rescanned since the flag went on"."""
-    if not _feature_on():
+    if not _feature_on(ctx):
         return {"enabled": False}
     ensure_char_skills_table()
     con = get_connection()
