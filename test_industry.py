@@ -7,6 +7,7 @@ aggregation, and the cost/time totals.
 
 Run: python3 test_industry.py
 """
+import json
 import math
 import sqlite3
 import time
@@ -1823,6 +1824,442 @@ def test_the_rig_family_registry_is_the_single_source():
     from app.features import FEATURE_REGISTRY
     check("the feature is in the registry",
           any(f["key"] == "industry_rig_routing" for f in FEATURE_REGISTRY))
+def _patch_db_all(*modules):
+    """One in-memory DB shared by several modules. Each imports `get_connection` into its own
+    namespace, so patching one leaves the others talking to the real database — which is how a
+    multi-module flow (assets + orders + sourcing + settings) silently half-tests itself."""
+    con = sqlite3.connect(":memory:")
+    con.row_factory = sqlite3.Row
+    keeper = _KeepOpen(con)
+    saved = [(m, m.get_connection) for m in modules]
+    for m in modules:
+        m.get_connection = lambda _k=keeper: _k
+
+    def restore():
+        for m, real in saved:
+            m.get_connection = real
+        con.close()
+
+    return con, restore
+
+
+def test_a_container_carries_where_it_is():
+    """A container source used to say what it was called and which hangar it hung off, and nothing
+    about WHERE — ambiguous exactly when it matters, with cans in several stations. The walk that
+    already finds the hangar also finds the root asset, whose `location_id` IS the station or
+    structure."""
+    print("test_a_container_carries_where_it_is")
+    from app.industry.assets import _split_by_source, _USABLE_FLAGS, _CORP_FLAGS, _place_label
+
+    # item 5 (a can) sits in a station; item 6 is a can INSIDE that can, two links from the root.
+    rows = [
+        {"item_id": 5, "type_id": 0, "quantity": 1, "location_id": 60003760, "location_flag": "Hangar"},
+        {"item_id": 6, "type_id": 0, "quantity": 1, "location_id": 5, "location_flag": "Unlocked"},
+        {"item_id": 7, "type_id": 200, "quantity": 100, "location_id": 5, "location_flag": "Unlocked"},
+        {"item_id": 8, "type_id": 201, "quantity": 50, "location_id": 6, "location_flag": "Unlocked"},
+        # A second can in a DIFFERENT structure — the whole point of the feature.
+        {"item_id": 9, "type_id": 0, "quantity": 1, "location_id": 1035466617946, "location_flag": "Hangar"},
+        {"item_id": 10, "type_id": 202, "quantity": 7, "location_id": 9, "location_flag": "Unlocked"},
+    ]
+    srcs, stock, conts = _split_by_source(
+        rows, _USABLE_FLAGS, lambda _f: "char:1", lambda _f: "Toon — personal hangar")
+
+    check("a container knows the station it is in", srcs["cont:5"]["location_id"] == 60003760)
+    check("a nested container reports the ROOT location, not its parent can",
+          srcs["cont:6"]["location_id"] == 60003760)
+    check("a container in a structure carries the structure id",
+          srcs["cont:9"]["location_id"] == 1035466617946)
+    check("two cans in different places stay two sources",
+          stock["cont:5"][200] == 100.0 and stock["cont:9"][202] == 7.0)
+    # A hangar source spans every station that character has one in, so it has no single location —
+    # claiming one would be worse than claiming none.
+    check("a hangar source claims no location", srcs["char:1"].get("location_id") is None)
+
+    # Corp scans go through the same walk, so they get the same answer.
+    corp_rows = [
+        {"item_id": 1, "type_id": 0, "quantity": 1, "location_id": 60003760, "location_flag": "CorpSAG1"},
+        {"item_id": 2, "type_id": 200, "quantity": 9, "location_id": 1, "location_flag": "Unlocked"},
+    ]
+    csrcs, _cstock, _cc = _split_by_source(
+        corp_rows, set(_CORP_FLAGS), lambda f: f"corp:7:h{_CORP_FLAGS[f]}",
+        lambda f: f"Corp — hangar {_CORP_FLAGS[f]}", cont_key=lambda loc: f"corp:7:c{loc}")
+    check("a corp container knows where it is too",
+          csrcs["corp:7:c1"]["location_id"] == 60003760)
+
+    # The label every list groups by.
+    check("a structure gets its system named beside it",
+          _place_label("Test Citadel", "1DQ1-A") == "Test Citadel · 1DQ1-A")
+    # An NPC station name already opens with its system, and so do plenty of player structures.
+    check("a station name that already leads with its system isn't made to repeat it",
+          _place_label("Jita IV - Moon 4 - Caldari Navy Assembly Plant", "Jita")
+          == "Jita IV - Moon 4 - Caldari Navy Assembly Plant")
+    check("the same rule for a structure named that way",
+          _place_label("1DQ1-A - Test Citadel", "1DQ1-A") == "1DQ1-A - Test Citadel")
+    check("no location resolves to no label", _place_label("", "") == "")
+    check("a system with no station name is still better than nothing",
+          _place_label("", "Jita") == "Jita")
+
+
+def test_an_unreadable_structure_never_fails_the_scan():
+    """Structure visibility is ACL-gated: somebody else's citadel 403s. That is a normal answer
+    about a normal structure and must degrade to "no system name" — exactly like container naming —
+    rather than taking the asset scan down. The unresolvable answer is cached too, or every scan
+    would re-ask and re-burn the ESI error budget."""
+    print("test_an_unreadable_structure_never_fails_the_scan")
+    from app.industry import assets as A
+    import app.markets as M
+
+    con, restore = _patch_db_all(A)
+    try:
+        A.ensure_asset_tables()
+        con.execute("CREATE TABLE solar_systems (system_id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+        con.execute("INSERT INTO solar_systems VALUES (30000142, 'Jita')")
+        con.commit()
+
+        calls = []
+        real_struct = M.structure_info
+        real_get = A.esi_http.get
+
+        class _R:
+            def __init__(self, code, body):
+                self.status_code, self._b = code, body
+
+            def json(self):
+                return self._b
+
+        def fake_struct(sid, token, client=None):
+            calls.append(("structure", sid))
+            return None                     # a 403 comes back from structure_info as None
+
+        def fake_get(url, **kw):
+            calls.append(("http", url))
+            if url.startswith("universe/stations/"):
+                return _R(200, {"name": "Jita IV - Moon 4 - CNAP", "system_id": 30000142})
+            return _R(404, {})
+
+        M.structure_info, A.esi_http.get = fake_struct, fake_get
+        try:
+            srcs = {"cont:1": {"kind": "container", "name": "Can A", "parent": "",
+                               "location_id": 60003760},
+                    "cont:2": {"kind": "container", "name": "Can B", "parent": "",
+                               "location_id": 1035466617946}}
+            A._apply_locations(srcs, "tok")
+            check("a station resolves to its name and system",
+                  srcs["cont:1"]["location_name"] == "Jita IV - Moon 4 - CNAP"
+                  and srcs["cont:1"]["system_name"] == "Jita")
+            check("an unreadable structure degrades to no location, not an exception",
+                  srcs["cont:2"]["location_name"] == "" and srcs["cont:2"]["system_name"] == "")
+
+            n = len(calls)
+            A._apply_locations(srcs, "tok")
+            check("both answers are cached — a rescan asks ESI nothing", len(calls) == n)
+            check("including the unresolvable one, so a 403 isn't retried every scan",
+                  sum(1 for c in calls if c[0] == "structure") == 1)
+        finally:
+            M.structure_info, A.esi_http.get = real_struct, real_get
+
+        # And the whole thing is best-effort: a resolver that throws must not stop a scan.
+        def boom(*_a, **_k):
+            raise RuntimeError("ESI is having a day")
+
+        A.esi_http.get = boom
+        M.structure_info = boom
+        try:
+            srcs2 = {"cont:3": {"kind": "container", "name": "Can C", "parent": "",
+                                "location_id": 60009999}}
+            A._apply_locations(srcs2, "tok")
+            check("a throwing lookup leaves the source usable and unlocated",
+                  srcs2.get("location_name") is None and "cont:3" in srcs2)
+        finally:
+            M.structure_info, A.esi_http.get = real_struct, real_get
+    finally:
+        restore()
+
+
+def test_where_a_container_is_survives_the_round_trip():
+    """The location has to reach every list that shows containers, which means through the store and
+    back out of `list_sources` — the one call all four pickers are built from."""
+    print("test_where_a_container_is_survives_the_round_trip")
+    from app.industry import assets as A
+
+    _con, restore = _patch_db_all(A)
+    try:
+        A.ensure_asset_tables()
+        A._store(1, {"cont:5": {"kind": "container", "name": "Reaction can", "parent": "",
+                                "location_id": 60003760, "location_name": "Rx Depot",
+                                "system_name": "Jita"},
+                     "char:1": {"kind": "hangar", "name": "Toon — personal hangar", "parent": ""}},
+                 {"cont:5": {200: 10.0}, "char:1": {201: 5.0}}, {"cont:5", "char:1"}, scope="char:1")
+        by_key = {s["key"]: s for s in A.list_sources(1)}
+        check("the station reaches the picker", by_key["cont:5"]["location"] == "Rx Depot")
+        check("so does the system", by_key["cont:5"]["system"] == "Jita")
+        check("and the grouping label is built once, server-side",
+              by_key["cont:5"]["place"] == "Rx Depot · Jita")
+        check("a hangar has no place and is not forced into one",
+              by_key["char:1"]["place"] == "")
+        # A rescan must not lose it: _store rewrites the row from the fresh scan every time.
+        A._store(1, {"cont:5": {"kind": "container", "name": "Reaction can", "parent": "",
+                                "location_id": 60003760, "location_name": "Rx Depot",
+                                "system_name": "Jita"}},
+                 {"cont:5": {200: 20.0}}, {"cont:5"}, scope="char:1")
+        check("and a rescan keeps it",
+              [s for s in A.list_sources(1) if s["key"] == "cont:5"][0]["place"]
+              == "Rx Depot · Jita")
+    finally:
+        restore()
+
+
+def test_a_build_can_be_gathered_from_several_boxes():
+    """Reaction stock and manufacturing stock sit in different stations, so one build's materials
+    legitimately live in several boxes. The bound set sums across them without double counting, and
+    an order written before the set existed still reads as the one box it named."""
+    print("test_a_build_can_be_gathered_from_several_boxes")
+    from app.industry import assets as A
+    from app.industry.orders import order_source_keys, _normalise_source_keys
+
+    _con, restore = _patch_db_all(A)
+    try:
+        A.ensure_asset_tables()
+        A._store(1, {"cont:1": {"kind": "container", "name": "Reaction can", "parent": ""},
+                     "cont:2": {"kind": "container", "name": "Mfg can", "parent": ""},
+                     "cont:3": {"kind": "container", "name": "Someone else's", "parent": ""}},
+                 {"cont:1": {200: 100.0, 201: 5.0}, "cont:2": {200: 40.0}, "cont:3": {200: 999.0}},
+                 {"cont:1", "cont:2", "cont:3"}, scope="char:1")
+
+        check("one box still sums to one box", A.source_quantities_multi(1, ["cont:1"]) == {200: 100.0, 201: 5.0})
+        check("two boxes add up", A.source_quantities_multi(1, ["cont:1", "cont:2"])[200] == 140.0)
+        check("a box named twice is still counted once",
+              A.source_quantities_multi(1, ["cont:1", "cont:2", "cont:1"])[200] == 140.0)
+        check("a box nobody bound is not counted",
+              A.source_quantities_multi(1, ["cont:1", "cont:2"]).get(200) == 140.0)
+        check("no boxes means no stock", A.source_quantities_multi(1, []) == {})
+        check("the single-box helper still answers as it always did",
+              A.source_quantities(1, "cont:2") == {200: 40.0})
+        # Labels for the panel: name AND where, in bind order, with a vanished box still listed.
+        labels = A.source_labels(1, ["cont:2", "cont:1", "cont:404"])
+        check("bound boxes come back in the order they were bound",
+              [b["key"] for b in labels] == ["cont:2", "cont:1", "cont:404"])
+        check("a box that has left your assets is still shown, flagged",
+              labels[2]["missing"] is True and labels[0]["missing"] is False)
+
+        # Back-compat of the binding itself.
+        check("an order with only the old single key reads as a one-box set",
+              order_source_keys({"source_key": "cont:9", "source_keys": ""}) == ["cont:9"])
+        check("an order with a set reads as that set",
+              order_source_keys({"source_key": "cont:1", "source_keys": '["cont:1","cont:2"]'})
+              == ["cont:1", "cont:2"])
+        check("an unbound order binds nothing",
+              order_source_keys({"source_key": "", "source_keys": ""}) == [])
+        check("garbage in the column is not a crash",
+              order_source_keys({"source_key": "", "source_keys": "{nope"}) == [])
+        check("duplicates and blanks are normalised away",
+              _normalise_source_keys(["cont:1", " ", "cont:1", "cont:2"]) == ["cont:1", "cont:2"])
+    finally:
+        restore()
+
+
+def test_the_box_and_the_note_still_take_the_higher_of_the_two():
+    """The rule that makes the checklist trustworthy: a hand-noted quantity never erases what is
+    really in the containers, and a rescan never erases a note. Adding more boxes must not weaken
+    it — the SUM across boxes is what the note is weighed against, still capped at what's needed."""
+    print("test_the_box_and_the_note_still_take_the_higher_of_the_two")
+    from app.industry.sourcing import _item_row
+
+    s = {"type_id": 200, "name": "MineralA", "qty": 100.0, "unit_price": 10.0}
+    r = _item_row(s, {200: 60.0}, {200: 25.0})
+    check("the boxes win when they hold more", r["sourced"] == 60.0 and r["remaining"] == 40.0)
+    r = _item_row(s, {200: 20.0}, {200: 70.0})
+    check("the note wins when it says more", r["sourced"] == 70.0 and r["remaining"] == 30.0)
+    # Two boxes holding 60 + 50 is 110 of a 100 requirement: capped, done, never negative.
+    r = _item_row(s, {200: 110.0}, {})
+    check("more than you need is not more than done", r["sourced"] == 100.0 and r["remaining"] == 0.0)
+    check("and it is reported done", r["done"] is True)
+    r = _item_row(s, {}, {})
+    check("nothing gathered costs the whole line", r["remaining_cost"] == 1000.0)
+
+
+def test_a_plan_owns_its_containers():
+    """A container bound to one build is that build's stock. Sharing it with another build is then
+    something the user does on purpose, by picking it there too — not a side effect of binding it.
+
+    The rule that keeps this from being retroactive matters more than the rule itself: an order
+    queued before per-plan sources existed still draws on the account-wide tick list, so nothing
+    about an in-flight build changes until its owner edits it."""
+    print("test_a_plan_owns_its_containers")
+    from app.industry import assets as A
+    from app.industry import orders as O
+
+    _con, restore = _patch_db_all(A, O)
+    try:
+        A.ensure_asset_tables()
+        A._store(1, {"cont:1": {"kind": "container", "name": "Build A can", "parent": ""},
+                     "cont:2": {"kind": "container", "name": "Build B can", "parent": ""},
+                     "char:1": {"kind": "hangar", "name": "Toon hangar", "parent": ""}},
+                 {"cont:1": {200: 10.0}, "cont:2": {200: 20.0}, "char:1": {200: 5.0}},
+                 {"cont:1", "cont:2", "char:1"}, scope="char:1")
+        A.set_sources(1, ["char:1"], True)          # the account-wide tick list
+
+        legacy = {"source_key": "cont:1", "source_keys": "", "sources_owned": 0}
+        curated_a = {"source_key": "cont:1", "source_keys": '["cont:1"]', "sources_owned": 1}
+        curated_b = {"source_key": "cont:2", "source_keys": '["cont:2"]', "sources_owned": 1}
+
+        check("a queue of pre-existing orders keeps using the account pool",
+              O.plan_source_keys(1, [legacy]) is None)
+        check("a curated order counts its own boxes and nothing else",
+              O.plan_source_keys(1, [curated_a]) == ["cont:1"])
+        check("two curated orders count the union of theirs",
+              sorted(O.plan_source_keys(1, [curated_a, curated_b])) == ["cont:1", "cont:2"])
+        mixed = O.plan_source_keys(1, [legacy, curated_b])
+        check("a mixed queue never narrows what the uncurated order was already entitled to",
+              set(mixed) == {"char:1", "cont:2"})
+
+        # And the stock actually resolved from it. The account pool is 5; build A's can is 10.
+        check("the old behaviour is bit-for-bit unchanged for an uncurated queue",
+              O._stock_for(1, [], [legacy]) == {200: 5.0})
+        check("a curated build spends its own box, not the account's hangar",
+              O._stock_for(1, [], [curated_a]) == {200: 10.0})
+        check("a box in two curated orders is still only spendable once",
+              O._stock_for(1, [], [curated_a, curated_a]) == {200: 10.0})
+        check("the ordered product itself is never counted as stock",
+              O._stock_for(1, [(200, 1)], [curated_a]) == {})
+        check("no orders at all is the account pool, as every caller before this assumed",
+              O._stock_for(1, [], None) == {200: 5.0})
+        # Owning nothing is not the same as owning an empty set: a build with no box picked has said
+        # nothing about where its materials come from, so it falls back rather than counting zero.
+        empty = {"source_key": "", "source_keys": "[]", "sources_owned": 1}
+        check("a plan that names no box falls back to the account pool",
+              O.plan_source_keys(1, [empty]) is None)
+    finally:
+        restore()
+
+
+def test_binding_a_set_remembers_it_without_switching_it_on_for_everyone():
+    """Two halves of the old single-key bind, separated: remembering the answer (so the next order
+    arrives pre-filled) and switching the box on account-wide (so every other plan can spend it).
+    Under per-plan sources only the first is wanted — the second is what made one build's can
+    everybody's stock."""
+    print("test_binding_a_set_remembers_it_without_switching_it_on_for_everyone")
+    from app.industry import assets as A
+    from app.industry import sourcing as S
+    from app.industry import settings as SET
+
+    _con, restore = _patch_db_all(A, S, SET)
+    try:
+        A.ensure_asset_tables()
+        SET.ensure_industry_settings_table.__wrapped__()
+        A._store(1, {"cont:1": {"kind": "container", "name": "Rx can", "parent": ""},
+                     "cont:2": {"kind": "container", "name": "Mfg can", "parent": ""}},
+                 {"cont:1": {200: 10.0}, "cont:2": {200: 20.0}}, {"cont:1", "cont:2"}, scope="char:1")
+
+        S.remember_source_default(1, ["cont:1", "cont:2"])
+        check("the whole set is remembered for the next build",
+              SET.get_settings(1)["last_source_keys"] == ["cont:1", "cont:2"])
+        check("and its first box still fills the old single field",
+              SET.get_settings(1)["last_source_key"] == "cont:1")
+        check("remembering does NOT make the boxes everybody's stock",
+              A.owned_quantities(1) == {})
+
+        # The legacy path — a caller that only sends `source_key` has made no claim to owning its
+        # plan's sources, so it keeps the behaviour it has always had.
+        S.enable_bound_source(1, "cont:2")
+        check("the old single-key bind still enables the box account-wide",
+              A.owned_quantities(1) == {200: 20.0})
+        check("an empty bind remains a no-op", S.enable_bound_sources(1, []) is None)
+        check("and leaves the tick list alone", A.owned_quantities(1) == {200: 20.0})
+
+        # A remembered set whose boxes have since gone must not resurrect them.
+        check("nothing is remembered from an empty set",
+              S.remember_source_default(1, []) is None)
+        check("the last real answer stands", SET.get_settings(1)["last_source_keys"] == ["cont:2"])
+    finally:
+        restore()
+
+
+def test_a_named_set_of_containers_is_one_pick():
+    """"Reaction stock" is three cans across two stations. Naming that set is what keeps binding it
+    to a build at one click rather than three — the effort constraint, not a filing system."""
+    print("test_a_named_set_of_containers_is_one_pick")
+    from app.industry import assets as A
+
+    _con, restore = _patch_db_all(A)
+    try:
+        A.ensure_asset_tables()
+        saved = A.save_source_set(1, "Reaction stock", ["cont:1", "cont:2", "cont:1"])
+        check("a set is saved under its name", saved["name"] == "Reaction stock")
+        check("with its boxes de-duplicated", saved["keys"] == ["cont:1", "cont:2"])
+        A.save_source_set(1, "Reaction stock", ["cont:9"])
+        sets = A.list_source_sets(1)
+        check("saving the same name again replaces it rather than growing a twin", len(sets) == 1)
+        check("and the replacement is what's stored", sets[0]["keys"] == ["cont:9"])
+        A.save_source_set(1, "Capital mats", ["cont:3"])
+        check("a different name is a different set", len(A.list_source_sets(1)) == 2)
+        check("sets are per account", A.list_source_sets(2) == [])
+        check("an unnamed set is not saved", A.save_source_set(1, "   ", ["cont:1"]) == {})
+        A.delete_source_set(1, sets[0]["id"])
+        check("deleting one leaves the other",
+              [s["name"] for s in A.list_source_sets(1)] == ["Capital mats"])
+    finally:
+        restore()
+
+
+def test_an_existing_single_key_order_keeps_planning_identically():
+    """The migration promise, end to end: an order queued the old way must plan exactly as it did
+    until its owner edits it — and editing it through the new picker is the moment it takes
+    ownership. Additive columns only; the old one is still written and still read."""
+    print("test_an_existing_single_key_order_keeps_planning_identically")
+    from app.industry import assets as A
+    from app.industry import orders as O
+    from app.industry import sourcing as S
+    from app.industry import settings as SET
+
+    con, restore = _patch_db_all(A, O, S, SET)
+    try:
+        A.ensure_asset_tables()
+        SET.ensure_industry_settings_table.__wrapped__()
+        O.ensure_industry_orders_table.__wrapped__()
+        A._store(1, {"cont:1": {"kind": "container", "name": "Old can", "parent": ""},
+                     "cont:2": {"kind": "container", "name": "New can", "parent": ""}},
+                 {"cont:1": {200: 10.0}, "cont:2": {200: 20.0}}, {"cont:1", "cont:2"}, scope="char:1")
+
+        # An order exactly as the old code wrote one: source_key only, no set, no ownership.
+        con.execute("INSERT INTO pp_industry_orders (id, context_id, product_type_id, name, "
+                    "quantity, mode, priority, status, created_at, source_key) "
+                    "VALUES (1, 1, 100, 'Widget', 1, 'parallel', 0, 'queued', 1.0, 'cont:1')")
+        con.commit()
+        row = con.execute("SELECT * FROM pp_industry_orders WHERE id=1").fetchone()
+        check("it still names its box", O.order_source_keys(row) == ["cont:1"])
+        check("and it has not silently claimed to own its sources",
+              O.plan_source_keys(1, [dict(row)]) is None)
+
+        # Now the user edits it through the new picker — `source_keys` is the statement of ownership.
+        req = O.OrderUpdate(source_keys=["cont:1", "cont:2"])
+        check("the request carries the set", req.source_keys == ["cont:1", "cont:2"])
+        keys = O._normalise_source_keys(req.source_keys)
+        con.execute("UPDATE pp_industry_orders SET source_key=?, source_keys=?, sources_owned=1 "
+                    "WHERE id=1", (keys[0], json.dumps(keys)))
+        con.commit()
+        row = con.execute("SELECT * FROM pp_industry_orders WHERE id=1").fetchone()
+        check("both boxes are bound", O.order_source_keys(row) == ["cont:1", "cont:2"])
+        check("the old column still holds the first, for anything that only knows about one",
+              row["source_key"] == "cont:1")
+        check("and the plan now owns exactly those boxes",
+              sorted(O.plan_source_keys(1, [dict(row)])) == ["cont:1", "cont:2"])
+        check("which is 30 units of stock, not the account's idea of it",
+              O._stock_for(1, [], [dict(row)]) == {200: 30.0})
+
+        # The columns are added the only way this codebase migrates.
+        import inspect
+        ddl = inspect.getsource(O.ensure_industry_orders_table)
+        check("the new columns are additive", "add_columns(" in ddl and "source_keys" in ddl
+              and "sources_owned" in ddl)
+        # Additive means additive: no column or table is ever removed to make room for the new ones.
+        # (Matched on the statements, not the prose — the comments in there discuss decisions being
+        # "silently dropped", which is not a DDL statement.)
+        up = ddl.upper()
+        check("and nothing is dropped",
+              "DROP COLUMN" not in up and "DROP TABLE" not in up)
+    finally:
+        restore()
 
 
 def main():
@@ -1907,6 +2344,15 @@ def main():
     test_an_unrouted_plan_is_byte_for_byte_the_old_plan()
     test_every_station_change_is_reported()
     test_the_rig_family_registry_is_the_single_source()
+    test_a_container_carries_where_it_is()
+    test_an_unreadable_structure_never_fails_the_scan()
+    test_where_a_container_is_survives_the_round_trip()
+    test_a_build_can_be_gathered_from_several_boxes()
+    test_the_box_and_the_note_still_take_the_higher_of_the_two()
+    test_a_plan_owns_its_containers()
+    test_binding_a_set_remembers_it_without_switching_it_on_for_everyone()
+    test_a_named_set_of_containers_is_one_pick()
+    test_an_existing_single_key_order_keeps_planning_identically()
     print(f"\nAll {_passed} checks passed.")
 
 

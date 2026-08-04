@@ -148,30 +148,146 @@ function indOpenPlanner() {
   if (s) setTimeout(() => s.focus(), 30);
 }
 
+// ── Where a container IS ─────────────────────────────────────────────────────────────────────
+// A container used to be identified by its own name and its parent hangar and nothing else. With
+// cans in several stations that is ambiguous exactly when it matters — picking which box a build
+// sources from — so every list that shows containers GROUPS them by the station or structure they
+// sit in, with the system named. One helper, because four lists showing the same boxes must not
+// each invent their own wording.
+const _IND_NO_PLACE = 'Hangars & pasted stock';
+
+// [{label, items}] — containers bucketed by where they are, then everything with no location
+// (hangars, pasted stock, a structure we can't see) in one trailing group.
+function _indGroupSources(srcs) {
+  const groups = new Map();
+  (srcs || []).forEach(s => {
+    const label = (s.kind === 'container' && s.place) ? s.place : _IND_NO_PLACE;
+    if (!groups.has(label)) groups.set(label, []);
+    groups.get(label).push(s);
+  });
+  const placed = [...groups.keys()].filter(k => k !== _IND_NO_PLACE).sort((a, b) => a.localeCompare(b));
+  if (groups.has(_IND_NO_PLACE)) placed.push(_IND_NO_PLACE);   // never first: the point is the places
+  return placed.map(label => ({
+    label,
+    items: groups.get(label).sort((a, b) => a.name.localeCompare(b.name)),
+  }));
+}
+
+function _indSourceLabel(s) {
+  return _esc(s.name) + (s.kind === 'container' ? '' : ' (whole hangar)');
+}
+
+// The <option> list for one source picker: saved sets first (one pick instead of three), then the
+// boxes under an <optgroup> per station/structure.
+function _indSourceOptionsHtml(srcs, selected, opts) {
+  const o = opts || {};
+  let html = `<option value=""${selected ? '' : ' selected'}>${_esc(o.blank || '— track it later —')}</option>`;
+  if (o.sets && _indSourceSets.length) {
+    html += `<optgroup label="Saved sets">` + _indSourceSets.map(st =>
+      `<option value="set:${st.id}">${_esc(st.name)} (${st.keys.length} source${st.keys.length === 1 ? '' : 's'})</option>`).join('') + `</optgroup>`;
+  }
+  _indGroupSources(srcs).forEach(g => {
+    html += `<optgroup label="${_esc(g.label)}">` + g.items.map(s =>
+      `<option value="${_esc(s.key)}"${s.key === selected ? ' selected' : ''}>${_indSourceLabel(s)}</option>`).join('')
+      + `</optgroup>`;
+  });
+  if (o.paste) html += '<option value="__paste">Paste what I already have…</option>';
+  return html;
+}
+
+// One row of the picker. The COMMON case is one box and it costs exactly what it always did: a
+// single dropdown, pre-answered. Extra boxes are an explicit "+ another box" away, and only when
+// per-plan sources are on.
+function _indSourceRowHtml(srcs, selected, onchange, opts) {
+  const o = opts || {};
+  return `<span class="ind-srcrow"><select ${o.id ? `id="${o.id}" ` : ''}class="ind-srcsel" `
+    + `onchange="${onchange}">${_indSourceOptionsHtml(srcs, selected, o)}</select>`
+    + (o.removable ? `<button type="button" class="ind-src-del" title="Stop pulling from this box" `
+        + `onclick="${o.onremove}">✕</button>` : '') + `</span>`;
+}
+
+// Every value currently picked in a rows container, minus the blanks and the pseudo-options.
+function _indPickedSources(containerId) {
+  const el = document.getElementById(containerId);
+  if (!el) return [];
+  return Array.from(el.querySelectorAll('select'))
+    .map(s => s.value)
+    .filter(v => v && v !== '__paste' && v.slice(0, 4) !== 'set:');
+}
+
+// A saved set picked in any row expands to its keys — the set is a shortcut for choosing boxes,
+// never a second thing a plan can be bound to. One shape of binding keeps every reader honest.
+function _indExpandSets(keys, picked) {
+  const out = [];
+  (keys || []).forEach(k => out.push(k));
+  (picked || []).forEach(v => {
+    if (v.slice(0, 4) !== 'set:') return;
+    const st = _indSourceSets.find(x => String(x.id) === v.slice(4));
+    (st ? st.keys : []).forEach(k => out.push(k));
+  });
+  return out.filter((k, i) => k && out.indexOf(k) === i);
+}
+
 // Which box this build's materials come from, chosen while planning it — because "which container
 // is this build's" is decided at the same moment as what to build, not afterwards. A director picks
 // a corp hangar or container straight off the scanned list; everyone else pastes what they hold,
 // which is recorded against the order rather than added to the planner's global stock (stock you
 // can't actually draw from is the one error that makes the planner build too little).
+let _indPlanSources = [];      // the scanned source list, as the plan modal last saw it
+
 async function indLoadPlanSources() {
   const field = document.getElementById('indPlanSrcField');
-  const sel = document.getElementById('indPlanSrc');
-  if (!field || !sel) return;
+  const rows = document.getElementById('indPlanSrcRows');
+  if (!field || !rows) return;
   if (!_featureActive('industry_sourcing')) { field.style.display = 'none'; return; }
-  let srcs = [];
-  try { srcs = ((await api('/api/industry/assets')) || {}).sources || []; } catch (e) {}
-  // Containers first — a build is normally gathered into a box, not a whole hangar.
-  srcs.sort((a, b) => (a.kind !== 'container') - (b.kind !== 'container') || a.name.localeCompare(b.name));
-  // Pre-filled with the one the last build used, when it still exists. A builder running a can per
-  // build answers this on every order and the answer is nearly always the same — so the question is
-  // already answered, visibly, and one click to change. Left blank when that container is gone.
-  const last = srcs.some(x => x.key === _indLastSourceKey) ? _indLastSourceKey : '';
-  sel.innerHTML = `<option value=""${last ? '' : ' selected'}>— track it later —</option>`
-    + srcs.map(s => `<option value="${_esc(s.key)}"${s.key === last ? ' selected' : ''}>${_esc(s.name)}`
-        + `${s.kind === 'container' ? '' : ' (whole hangar)'}</option>`).join('')
-    + '<option value="__paste">Paste what I already have…</option>';
+  let d = {};
+  try { d = (await api('/api/industry/assets')) || {}; } catch (e) {}
+  _indPlanSources = d.sources || [];
+  _indSourceSets = d.sets || [];
+  const multi = _featureActive('industry_plan_sources');
+  // Pre-filled with what the last build used, minus anything that has since gone. A builder running
+  // a can per build answers this on every order and the answer is nearly always the same — so the
+  // question is already answered, visibly, and one click to change. With per-plan sources the
+  // remembered answer is the whole SET, because a build gathered from a reaction can and a
+  // manufacturing can answers it the same way every time too.
+  const remembered = (multi && _indLastSourceKeys.length ? _indLastSourceKeys
+                                                         : [_indLastSourceKey])
+    .filter(k => k && _indPlanSources.some(x => x.key === k));
+  const picked = (multi ? remembered : remembered.slice(0, 1));
+  rows.innerHTML = (picked.length ? picked : ['']).map((k, i) => _indSourceRowHtml(
+    _indPlanSources, k, 'indOnPlanSourceChange()',
+    {id: i === 0 ? 'indPlanSrc' : '', paste: i === 0, sets: multi,
+     removable: multi && i > 0, onremove: 'indRemovePlanSource(this)'})).join('')
+    + (multi ? `<button type="button" class="ind-src-add" onclick="indAddPlanSource()" `
+        + `title="This build's materials are gathered from more than one box">+ another box</button>` : '');
   field.style.display = '';
   indOnPlanSourceChange();
+}
+
+function indAddPlanSource() {
+  const rows = document.getElementById('indPlanSrcRows');
+  const btn = rows && rows.querySelector('.ind-src-add');
+  if (!btn) return;
+  btn.insertAdjacentHTML('beforebegin', _indSourceRowHtml(
+    _indPlanSources, '', 'indOnPlanSourceChange()',
+    {sets: true, removable: true, onremove: 'indRemovePlanSource(this)', blank: '— pick a box —'}));
+}
+
+function indRemovePlanSource(btn) {
+  const row = btn && btn.closest('.ind-srcrow');
+  if (row) row.remove();
+}
+
+// The boxes the plan modal currently has picked, saved sets expanded. Used for BOTH the preview and
+// the queued order, so the two cannot be costed against different stock — a preview that promises a
+// shopping list the queued build then contradicts is the bug this shares one function to avoid.
+function _indPlanSourceKeys() {
+  return _indExpandSets(_indPickedSources('indPlanSrcRows'), _indSourceValues('indPlanSrcRows'));
+}
+
+function _indSourceValues(containerId) {
+  const el = document.getElementById(containerId);
+  return el ? Array.from(el.querySelectorAll('select')).map(s => s.value) : [];
 }
 
 function indOnPlanSourceChange() {
@@ -520,6 +636,8 @@ function indDismissFacilityNudge() {
 let _indOnboarded = true;      // assume yes until the settings load says otherwise — a failed
                                // fetch must not throw a setup screen at an established user
 let _indLastSourceKey = '';    // the stock source the previous build was bound to
+let _indLastSourceKeys = [];   // …and the whole remembered set, for a build gathered from several
+let _indSourceSets = [];       // named, reusable groups of sources ("reaction stock")
 
 function _indRenderWizard(hasStructure) {
   const gate = document.getElementById('indGate');
@@ -753,22 +871,30 @@ async function indLoadAssets() {
     const when = d.fetched_at ? new Date(d.fetched_at * 1000).toLocaleString() : '';
     // Every source is opt-in: counting a hangar you can't actually draw from would make the
     // planner build too little, which is worse than ignoring stock altogether.
-    const rows = (d.sources || []).map(sc => {
-      const sub = sc.kind === 'container'
-        ? `container${sc.parent ? ' in ' + _esc(sc.parent) : ''}`
-        : sc.kind === 'paste' ? 'pasted' : sc.corp ? 'corp hangar' : 'hangar';
-      const del = sc.kind === 'paste'
-        ? `<button class="ind-src-del" title="Remove this pasted stock" onclick="event.preventDefault();indDeleteSource('${_esc(sc.key)}')">✕</button>` : '';
-      return `<label class="ind-src-row"><input type="checkbox" ${sc.enabled ? 'checked' : ''} `
-        + `onchange="indToggleSource('${_esc(sc.key)}', this.checked)">`
-        + `<span class="ind-src-name">${_esc(sc.name)}</span>`
-        + `<span class="ind-src-meta">${sub} · ${sc.item_count} item type${sc.item_count === 1 ? '' : 's'}</span>${del}</label>`;
-    }).join('');
+    // Grouped by station/structure, so two identically-named cans in different stations are told
+    // apart here as well as in the pickers.
+    _indSourceSets = d.sets || [];
+    const rows = _indGroupSources(d.sources || []).map(g =>
+      `<div class="ind-src-group"><div class="ind-src-place">${_esc(g.label)}</div>`
+      + g.items.map(sc => {
+        const sub = sc.kind === 'container'
+          ? `container${sc.parent ? ' in ' + _esc(sc.parent) : ''}`
+          : sc.kind === 'paste' ? 'pasted' : sc.corp ? 'corp hangar' : 'hangar';
+        const del = sc.kind === 'paste'
+          ? `<button class="ind-src-del" title="Remove this pasted stock" onclick="event.preventDefault();indDeleteSource('${_esc(sc.key)}')">✕</button>` : '';
+        return `<label class="ind-src-row"><input type="checkbox" ${sc.enabled ? 'checked' : ''} `
+          + `onchange="indToggleSource('${_esc(sc.key)}', this.checked)">`
+          + `<span class="ind-src-name">${_esc(sc.name)}</span>`
+          + `<span class="ind-src-meta">${sub} · ${sc.item_count} item type${sc.item_count === 1 ? '' : 's'}</span>${del}</label>`;
+      }).join('') + `</div>`).join('');
     el.innerHTML = `<div class="ind-src-hd"><span class="ind-bp-ok">✓ ${d.enabled_sources} of ${(d.sources || []).length} `
       + `source${(d.sources || []).length === 1 ? '' : 's'} in use · ${d.distinct_types} item type${d.distinct_types === 1 ? '' : 's'} counted`
       + `${when ? ' · scanned ' + _esc(when) : ''}</span>`
       + `<button class="ind-bp-btn" onclick="indRefreshAssets()">Rescan</button></div>`
-      + `<p class="ind-src-help">Tick the hangars and containers the planner may take materials from. Nothing is used until you pick it.</p>`
+      + `<p class="ind-src-help">Tick the hangars and containers the planner may take materials from. Nothing is used until you pick it.`
+      + (_featureActive('industry_plan_sources')
+          ? ` A build with its own containers picked counts <b>those</b> and ignores this list — this is what everything else falls back on.` : '')
+      + `</p>`
       + `<div class="ind-src-list">${rows || '<span class="ind-bp-hint">No usable hangars found.</span>'}</div>`
       + _indReauthHtml(d.needs_reauth)
       + `<div class="ind-src-actions"><button class="ind-bp-btn" onclick="indOpenPaste()">Paste a hangar</button>`
@@ -1052,6 +1178,10 @@ async function indRunPlan() {
              { type_id: _indPicked.type_id, quantity: qty, prioritize_speed: _indPrioSpeed(),
                marginal_pct: _indMarginalPct(), force_build: _indForceBuild(),
                force_build_ids: _indForceIds(), me_te_overrides: _indMeTeMap(),
+               // Cost the preview against the stock the resulting ORDER would count, not the
+               // account's whole tick list — those are different plans otherwise.
+               ...(_featureActive('industry_plan_sources')
+                     ? { source_keys: _indPlanSourceKeys() } : {}),
                ..._indFacilityBonus() });
     } catch (e) {
       out.innerHTML = `<div class="pp-card"><p class="pp-warn">${_esc(e.message || 'Plan failed')}</p></div>`; return;
@@ -1146,8 +1276,9 @@ async function _indApplySavedSettings() {
   // one that hasn't been through setup, so bailing first would hide the wizard from the only
   // people who need it.
   _indOnboarded = !!(d && d.onboarded);
-  // The container the last build was pointed at, used to pre-fill the picker on the next one.
+  // The containers the last build was pointed at, used to pre-fill the picker on the next one.
   _indLastSourceKey = (d && d.last_source_key) || '';
+  _indLastSourceKeys = (d && d.last_source_keys) || (_indLastSourceKey ? [_indLastSourceKey] : []);
   _indHasSavedSettings = !!(d && d.updated_at);
   if (!d || !d.updated_at) return;
   const set = (id, val) => { const el = document.getElementById(id); if (el && val != null) el.value = val; };
@@ -2666,6 +2797,7 @@ async function indAddToQueue() {
   const srcSel = (document.getElementById('indPlanSrc') || {}).value || '';
   const pasted = srcSel === '__paste'
     ? ((document.getElementById('indPlanPasteText') || {}).value || '') : '';
+  const keys = _indPlanSourceKeys();
   try {
     const order = await apiSend('POST', '/api/industry/orders',
       { product_type_id: _indPicked.type_id, quantity: qty,
@@ -2674,7 +2806,12 @@ async function indAddToQueue() {
         // queueing would silently undo every one of them.
         force_build_ids: _indForceIds(), me_te_overrides: _indMeTeMap(),
         margin_pct: _indMarginPct(),
-        source_key: srcSel === '__paste' ? '' : srcSel });
+        // `source_keys` is only sent when per-plan sources are on, and sending it is what tells the
+        // server this plan owns its stock. Without the flag the old single field goes up alone and
+        // the account-wide behaviour is untouched.
+        ...(_featureActive('industry_plan_sources')
+              ? { source_keys: keys }
+              : { source_key: srcSel === '__paste' ? '' : srcSel }) });
     // A paste is per-order sourcing, not planner stock: it says what's already gathered for THIS
     // build, so it lands on the order's checklist and nowhere else. Best-effort — the order itself
     // is already queued, and failing the whole action over the checklist would be the wrong trade.
@@ -3163,10 +3300,21 @@ async function indRenderSourcing() {
   catch (e) { el.innerHTML = `<p class="pp-warn">${_esc(e.message || 'Could not read this build.')}</p>`; return; }
   _indSourcingData = d;
 
-  const opts = ['<option value="">— not tracked in a container —</option>']
-    .concat((d.sources || []).map(s =>
-      `<option value="${_esc(s.key)}"${s.key === d.source_key ? ' selected' : ''}>`
-      + `${_esc(s.name)}${s.kind === 'container' ? '' : ' (whole hangar)'}</option>`)).join('');
+  _indSourceSets = d.sets || [];
+  const multi = _featureActive('industry_plan_sources');
+  // One row per bound box, plus a blank row to add the next — grouped by station/structure so two
+  // cans with the same name in different stations are distinguishable. Without the flag this is the
+  // single dropdown it has always been.
+  const bound = multi ? (d.source_keys || []) : [d.source_key || ''];
+  const picker = (bound.length ? bound : ['']).map((k, i) => _indSourceRowHtml(
+      d.sources || [], k, 'indBindSources()',
+      {sets: multi, blank: i === 0 ? '— not tracked in a container —' : '— pick a box —',
+       removable: multi && i > 0, onremove: 'indRemoveBoundSource(this)'})).join('')
+    + (multi ? `<button type="button" class="ind-src-add" onclick="indAddBoundSource()" `
+        + `title="This build is gathered from more than one box — a reaction can and a manufacturing can, say">+ another box</button>`
+        + (bound.length > 1 ? ` <button type="button" class="ind-bp-btn ind-copy-sm" onclick="indSaveSourceSet()" `
+            + `title="Save these boxes as a named set you can pick in one go next time">Save as set…</button>` : '')
+      : '');
 
   // NO material table here. The shopping list below is already that table, and two lists of the same
   // materials — inevitably showing different quantities, since the queue's list nets off stock and
@@ -3188,6 +3336,15 @@ async function indRenderSourcing() {
       + `</tbody></table></details>`
     : `<p class="ind-src-help ind-src-allin">Everything this build needs is accounted for.</p>`;
 
+  // Where each bound box actually is, spelled out under the picker — a closed dropdown shows only
+  // the container's name, and the whole point is that its name is not enough to place it.
+  const where = (multi && (d.bound || []).length)
+    ? `<div class="ind-src-where ind-src-meta">Gathered into ` + d.bound.map(b =>
+        `<span class="ind-src-box">${_esc(b.name)}${b.place ? ` <span class="ind-src-place-in">${_esc(b.place)}</span>` : ''}`
+        + `${b.missing ? ' <span class="pp-warn">(no longer in your assets)</span>' : ''}</span>`).join(', ')
+      + `</div>`
+    : '';
+
   const t = d.totals || {};
   el.innerHTML = `<div class="ind-srcpanel">
       <div class="ind-srcpanel-hd">
@@ -3197,17 +3354,21 @@ async function indRenderSourcing() {
       </div>
       <div class="ind-srcpanel-bar">
         <label class="ind-src-meta">Pulling from
-          <select onchange="indBindSource(this.value)">${opts}</select></label>
+          <span id="indBoundSrcRows" class="ind-srcrows">${picker}</span></label>
         <span class="ind-shop-tot">${t.sourced} of ${t.materials} sourced`
         + (t.remaining_cost ? ` · ${fmtIsk(t.remaining_cost)} still to buy` : '') + `</span>
         <button class="ind-copy-btn ind-copy-sm" onclick="indCopyMissing()">Copy what's missing</button>
         <button class="ind-bp-btn" onclick="indOpenSourcePaste()">Paste what you've got</button>
       </div>
+      ${where}
       <p class="ind-src-help">How far along the gathering is for this one build. Anything in the
-        container you pick counts automatically — rescan your assets after hauling and this moves on
-        its own; for stock we can't see, paste it from the EVE client. Picking a container also lets
-        the planner spend it, so the shopping list below stops asking you to buy what's already in
-        there (untick it under Setup → stock if you'd rather it didn't).</p>
+        containers you pick counts automatically — rescan your assets after hauling and this moves on
+        its own; for stock we can't see, paste it from the EVE client. ${multi
+          ? `Those boxes are <b>this build's</b> stock: the plan below counts them and no others, so
+             another build can only spend them if you pick them for it too.`
+          : `Picking a container also lets the planner spend it, so the shopping list below stops
+             asking you to buy what's already in there (untick it under Setup → stock if you'd
+             rather it didn't).`}</p>
       <div id="indSrcPaste" class="ind-paste" style="display:none">
         <p class="ind-src-help">Select the materials in your hangar or container (Ctrl+A), copy
           (Ctrl+C) and paste below. This <b>replaces</b> what you've noted so far — it's a snapshot of
@@ -3262,13 +3423,46 @@ async function indApplySourcePaste() {
   if (p.matched) indOpenSourcePaste();     // leave it open so the outcome is visible next to the list
 }
 
-async function indBindSource(key) {
-  try { await apiSend('PATCH', `/api/industry/orders/${_indSourcingOpen}`, { source_key: key }); }
+function indAddBoundSource() {
+  const rows = document.getElementById('indBoundSrcRows');
+  const btn = rows && rows.querySelector('.ind-src-add');
+  if (!btn) return;
+  btn.insertAdjacentHTML('beforebegin', _indSourceRowHtml(
+    ((_indSourcingData || {}).sources) || [], '', 'indBindSources()',
+    {sets: true, removable: true, onremove: 'indRemoveBoundSource(this)', blank: '— pick a box —'}));
+}
+
+async function indRemoveBoundSource(btn) {
+  const row = btn && btn.closest('.ind-srcrow');
+  if (row) row.remove();
+  await indBindSources();
+}
+
+// Save the whole picked set, not one box. Sent as `source_keys`, which is also what tells the
+// server this plan owns its stock from now on — so what the checklist measures and what the plan is
+// allowed to count can never drift apart.
+async function indBindSources() {
+  const keys = _indExpandSets(_indPickedSources('indBoundSrcRows'),
+                              _indSourceValues('indBoundSrcRows'));
+  const body = _featureActive('industry_plan_sources')
+    ? { source_keys: keys } : { source_key: keys[0] || '' };
+  try { await apiSend('PATCH', `/api/industry/orders/${_indSourcingOpen}`, body); }
   catch (e) { toastError(e, 'Could not save'); return; }
   await indRenderSourcing();
-  // Binding switches the container on as planner stock, so the queue plan and the shopping list
-  // below are now out of date by exactly the contents of that box.
-  if (key) indRefreshStatus();
+  // The bound set is this build's stock, so the queue plan and the shopping list below are now out
+  // of date by exactly the contents of those boxes.
+  if (keys.length) indRefreshStatus();
+}
+
+async function indSaveSourceSet() {
+  const keys = _indExpandSets(_indPickedSources('indBoundSrcRows'),
+                              _indSourceValues('indBoundSrcRows'));
+  if (!keys.length) return;
+  const name = window.prompt('Name this set of containers — e.g. "Reaction stock"');
+  if (!name || !name.trim()) return;
+  try { await apiSend('POST', '/api/industry/source-sets', { name: name.trim(), keys }); }
+  catch (e) { toastError(e, 'Could not save the set'); return; }
+  await indRenderSourcing();
 }
 
 async function indSetSourced(typeId, qty) {

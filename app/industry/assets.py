@@ -33,6 +33,7 @@ asset list is a heavy call.
 
 from __future__ import annotations
 
+import json
 import time
 
 from fastapi import Depends
@@ -53,6 +54,10 @@ _CORP_FLAGS = {f"CorpSAG{n}": n for n in range(1, 8)}
 # else nested — Cargo, DroneBay, a slot — means it's in a ship and can't be fed to a job without
 # unloading it first, so containment only counts through these.
 _CONTENT_FLAGS = {"AutoFit", "Unlocked", "Locked"}
+# Player-owned structure ids are allocated well above this; NPC station ids are 6-8 digits. Which
+# side of it an id falls on decides whether the lookup is the public station endpoint or the
+# ACL-gated structure one.
+_STRUCTURE_ID_FLOOR = 100_000_000
 
 
 def ensure_asset_tables():
@@ -85,10 +90,209 @@ def ensure_asset_tables():
         # only replace the sources it found THIS time, so a container that had been emptied kept its
         # last known contents forever — stock you can no longer draw from, which is precisely the
         # error this module treats as the dangerous one.
-        add_columns(con, "pp_asset_sources", "scope TEXT DEFAULT ''")
+        add_columns(con, "pp_asset_sources", "scope TEXT DEFAULT ''",
+                    # WHERE the source is. A container was identified by its own name and its parent
+                    # hangar and nothing else, which is ambiguous exactly when it matters — picking
+                    # which box a build sources from with cans in several stations. BIGINT because a
+                    # structure id is well past 2^31 (a Postgres INTEGER would overflow).
+                    "location_id BIGINT",
+                    "location_name TEXT DEFAULT ''",
+                    "system_name TEXT DEFAULT ''")
+        # Station and structure ids are static; assets are re-scanned often. Resolving them on every
+        # scan would be a per-container ESI call for an answer that cannot change. Global, not
+        # per-account: the id→name mapping is a property of New Eden, and a row is only ever read
+        # back for an account that already holds assets there.
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS pp_locations (
+                location_id BIGINT PRIMARY KEY,
+                name        TEXT NOT NULL DEFAULT '',
+                system_name TEXT NOT NULL DEFAULT '',
+                updated_at  REAL
+            )
+        """)
+        # A named, reusable set of sources — "reaction stock" = three cans across two stations —
+        # so binding a build to a familiar group of boxes is one pick rather than three. It is a
+        # convenience OVER the per-plan set, not a second system: choosing one simply expands to
+        # its keys on the order, which is the only thing any plan ever reads.
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS pp_source_sets (
+                context_id INTEGER NOT NULL,
+                id         INTEGER NOT NULL,
+                name       TEXT    NOT NULL,
+                keys       TEXT    NOT NULL DEFAULT '[]',
+                updated_at REAL,
+                PRIMARY KEY (context_id, id)
+            )
+        """)
         con.commit()
     finally:
         con.close()
+
+
+def list_source_sets(context_id: int) -> list[dict]:
+    ensure_asset_tables()
+    con = get_connection()
+    try:
+        rows = con.execute(
+            "SELECT id, name, keys FROM pp_source_sets WHERE context_id = ? ORDER BY name",
+            (context_id,)).fetchall()
+    except Exception:
+        return []
+    finally:
+        con.close()
+    out = []
+    for r in rows:
+        try:
+            keys = [str(k) for k in json.loads(r["keys"] or "[]") if str(k).strip()]
+        except Exception:
+            keys = []
+        out.append({"id": r["id"], "name": r["name"], "keys": keys})
+    return out
+
+
+def save_source_set(context_id: int, name: str, keys: list[str], set_id: int | None = None) -> dict:
+    """Create or rename/replace one named set. Keyed by name when no id is given, so saving the same
+    name twice updates it rather than growing a second set the user has to tell apart."""
+    ensure_asset_tables()
+    label = (name or "").strip()[:60]
+    uniq = list(dict.fromkeys(k for k in (keys or []) if k))
+    if not label:
+        return {}
+    con = get_connection()
+    try:
+        row = None
+        if set_id is not None:
+            row = con.execute("SELECT id FROM pp_source_sets WHERE context_id=? AND id=?",
+                              (context_id, int(set_id))).fetchone()
+        if row is None:
+            row = con.execute("SELECT id FROM pp_source_sets WHERE context_id=? AND LOWER(name)=?",
+                              (context_id, label.lower())).fetchone()
+        if row is not None:
+            con.execute("UPDATE pp_source_sets SET name=?, keys=?, updated_at=? "
+                        "WHERE context_id=? AND id=?",
+                        (label, json.dumps(uniq), time.time(), context_id, row["id"]))
+            new_id = row["id"]
+        else:
+            nxt = con.execute("SELECT COALESCE(MAX(id),0)+1 AS n FROM pp_source_sets WHERE context_id=?",
+                              (context_id,)).fetchone()["n"]
+            con.execute("INSERT INTO pp_source_sets (context_id, id, name, keys, updated_at) "
+                        "VALUES (?,?,?,?,?)", (context_id, nxt, label, json.dumps(uniq), time.time()))
+            new_id = nxt
+        con.commit()
+    finally:
+        con.close()
+    return {"id": new_id, "name": label, "keys": uniq}
+
+
+def delete_source_set(context_id: int, set_id: int) -> None:
+    ensure_asset_tables()
+    con = get_connection()
+    try:
+        con.execute("DELETE FROM pp_source_sets WHERE context_id=? AND id=?", (context_id, int(set_id)))
+        con.commit()
+    finally:
+        con.close()
+
+
+def _system_name(system_id: int, client=None) -> str:
+    """System id → name, from the local `solar_systems` table, else ESI (and cached there).
+
+    `solar_systems` is populated as a side effect of PI colony scans, so an account with no colonies
+    in the system a container sits in simply has no row — hence the fallback.
+    """
+    if not system_id:
+        return ""
+    con = get_connection()
+    try:
+        row = con.execute("SELECT name FROM solar_systems WHERE system_id = ?",
+                          (int(system_id),)).fetchone()
+        if row and row["name"]:
+            return row["name"]
+    except Exception:
+        return ""
+    finally:
+        con.close()
+    try:
+        r = esi_http.get(f"universe/systems/{int(system_id)}/?datasource=tranquility", client=client)
+        if r.status_code != 200:
+            return ""
+        name = (r.json() or {}).get("name") or ""
+    except Exception:
+        return ""
+    if name:
+        con = get_connection()
+        try:
+            con.execute("INSERT OR IGNORE INTO solar_systems VALUES (?,?)", (int(system_id), name))
+            con.commit()
+        except Exception:
+            pass
+        finally:
+            con.close()
+    return name
+
+
+def _resolve_location(location_id: int, token: str | None, client=None) -> dict:
+    """{name, system_name} for a station or structure id — cached, and never fatal.
+
+    A station is public. A **structure is ACL-gated**: a character with no access gets a 403, which
+    is the normal answer for somebody else's citadel and must degrade to "no system name" rather
+    than failing the asset scan — exactly what container naming already does. The unresolvable
+    answer is cached too, or every scan would retry the same 403.
+    """
+    lid = int(location_id)
+    con = get_connection()
+    try:
+        row = con.execute("SELECT name, system_name FROM pp_locations WHERE location_id = ?",
+                          (lid,)).fetchone()
+        if row:
+            return {"name": row["name"] or "", "system_name": row["system_name"] or ""}
+    except Exception:
+        return {"name": "", "system_name": ""}
+    finally:
+        con.close()
+
+    name, sys_id = "", 0
+    try:
+        if lid >= _STRUCTURE_ID_FLOOR:
+            from app.markets import structure_info
+            sj = structure_info(lid, token or "", client=client) or {}
+            name = sj.get("name") or ""
+            sys_id = int(sj.get("solar_system_id") or 0)
+        else:
+            r = esi_http.get(f"universe/stations/{lid}/?datasource=tranquility", client=client)
+            if r.status_code == 200:
+                sj = r.json() or {}
+                name = sj.get("name") or ""
+                sys_id = int(sj.get("system_id") or 0)
+    except Exception:
+        name, sys_id = "", 0
+
+    out = {"name": name, "system_name": _system_name(sys_id, client=client) if sys_id else ""}
+    con = get_connection()
+    try:
+        con.execute("INSERT OR IGNORE INTO pp_locations (location_id, name, system_name, updated_at) "
+                    "VALUES (?,?,?,?)", (lid, out["name"], out["system_name"], time.time()))
+        con.commit()
+    except Exception:
+        pass
+    finally:
+        con.close()
+    return out
+
+
+def _apply_locations(sources: dict, token: str | None, client=None) -> None:
+    """Fill each source's station/structure + system name. Best-effort, like container naming — a
+    source with no resolvable location is still perfectly usable, it just isn't grouped."""
+    for meta in sources.values():
+        lid = meta.get("location_id")
+        if not lid:
+            continue
+        try:
+            loc = _resolve_location(int(lid), token, client=client)
+        except Exception:
+            continue
+        meta["location_name"] = loc.get("name") or ""
+        meta["system_name"] = loc.get("system_name") or ""
 
 
 def chars_by_scope(context_id: int) -> tuple[list[dict], list[dict]]:
@@ -174,12 +378,19 @@ def _split_by_source(rows, hangar_flags, hangar_key, hangar_name, cont_key=None)
             return a.get("location_flag") in hangar_flags
         return a.get("location_flag") in _CONTENT_FLAGS and usable(p, depth + 1)
 
+    def root_of(a, depth=0):
+        """The outermost asset of this item's chain — the one whose `location_id` is the station or
+        structure itself, and whose `location_flag` is the hangar."""
+        if depth > 12:
+            return a
+        p = _parent(a)
+        return a if p is None else root_of(p, depth + 1)
+
     def hangar_of(a, depth=0):
         """The hangar flag at the top of this item's chain (for naming a container's parent)."""
         if depth > 12:
             return None
-        p = _parent(a)
-        return a.get("location_flag") if p is None else hangar_of(p, depth + 1)
+        return root_of(a, depth).get("location_flag")
 
     sources: dict[str, dict] = {}
     stock: dict[str, dict[int, float]] = {}
@@ -197,11 +408,16 @@ def _split_by_source(rows, hangar_flags, hangar_key, hangar_name, cont_key=None)
             loc = int(a["location_id"])
             key = cont_key(loc)
             containers.add(loc)
-            pflag = hangar_of(parent)
+            root = root_of(parent)
+            pflag = root.get("location_flag")
             # `item_id` is carried so container names can be applied without parsing it back out of
-            # the key — the key format differs between the personal and corp scans.
+            # the key — the key format differs between the personal and corp scans. `location_id` is
+            # the station or structure the whole chain roots in, which is what says WHERE this box
+            # is; only containers carry one, because a hangar source key (`char:<id>`) spans every
+            # station that character has a hangar in and so has no single location.
             sources.setdefault(key, {"kind": "container", "name": f"Container {loc}", "item_id": loc,
-                                     "parent": hangar_name(pflag) if pflag in hangar_flags else ""})
+                                     "parent": hangar_name(pflag) if pflag in hangar_flags else "",
+                                     "location_id": int(root.get("location_id") or 0) or None})
         else:                                        # loose in the hangar itself
             flag = a.get("location_flag")
             key = hangar_key(flag)
@@ -248,9 +464,12 @@ def _store(context_id: int, sources: dict, stock: dict, scope_keys: set[str],
         for key, meta in sources.items():
             con.execute(
                 "INSERT INTO pp_asset_sources (context_id, key, kind, name, parent, enabled, "
-                "item_count, updated_at, scope) VALUES (?,?,?,?,?,?,?,?,?)",
+                "item_count, updated_at, scope, location_id, location_name, system_name) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 (context_id, key, meta["kind"], meta["name"], meta["parent"],
-                 int(prior.get(key, 0)), len(stock.get(key, {})), now, scope),
+                 int(prior.get(key, 0)), len(stock.get(key, {})), now, scope,
+                 meta.get("location_id"), meta.get("location_name") or "",
+                 meta.get("system_name") or ""),
             )
             for tid, qty in stock.get(key, {}).items():
                 con.execute(
@@ -288,6 +507,7 @@ def refresh_assets(context_id: int) -> dict:
                     if conts:
                         _apply_container_names(
                             srcs, _names_for(client, f"characters/{cid}/assets/names/", token, conts))
+                    _apply_locations(srcs, token, client=client)
                     _store(context_id, srcs, stock, set(srcs), scope=f"char:{cid}")
                     ok += 1
 
@@ -374,6 +594,7 @@ def refresh_corp_assets(context_id: int) -> dict:
                 if conts:
                     _apply_container_names(
                         srcs, _names_for(client, f"corporations/{corp_id}/assets/names/", token, conts))
+                _apply_locations(srcs, token, client=client)
                 _store(context_id, srcs, stock, set(srcs), scope=f"corp:{corp_id}")
                 done.append(corp_name)
         except Exception:
@@ -457,19 +678,38 @@ def delete_source(context_id: int, key: str) -> None:
         con.close()
 
 
+def _place_label(location_name: str, system_name: str) -> str:
+    """"Where is this box" as one line: the station or structure, with its system named.
+
+    Every NPC station name already begins with its system (`Jita IV - Moon 4 - …`), and players name
+    structures the same way often enough to matter, so the system is appended only when the name
+    doesn't already lead with it — otherwise the label reads "Jita IV - Moon 4 - CNAP · Jita".
+    """
+    loc = (location_name or "").strip()
+    sysn = (system_name or "").strip()
+    if loc and sysn:
+        return loc if loc.lower().startswith(sysn.lower()) else f"{loc} · {sysn}"
+    return loc or sysn
+
+
 def list_sources(context_id: int) -> list[dict]:
     ensure_asset_tables()
     con = get_connection()
     try:
         rows = con.execute(
-            "SELECT key, kind, name, parent, enabled, item_count FROM pp_asset_sources "
-            "WHERE context_id = ? ORDER BY kind, name",
+            "SELECT key, kind, name, parent, enabled, item_count, location_id, "
+            "COALESCE(location_name,'') AS location_name, COALESCE(system_name,'') AS system_name "
+            "FROM pp_asset_sources WHERE context_id = ? ORDER BY kind, name",
             (context_id,),
         ).fetchall()
     finally:
         con.close()
     return [{"key": r["key"], "kind": r["kind"], "name": r["name"], "parent": r["parent"],
              "enabled": bool(r["enabled"]), "item_count": r["item_count"],
+             # Where the box is. `place` is the one string every list groups by, built here so the
+             # four places that show containers can't each invent their own wording.
+             "location_id": r["location_id"], "location": r["location_name"],
+             "system": r["system_name"], "place": _place_label(r["location_name"], r["system_name"]),
              # Corp sources are worth distinguishing in the UI: they're shared with the whole corp,
              # so "is this mine to spend" is a different question than for a personal hangar.
              "corp": str(r["key"]).startswith("corp:")} for r in rows]
@@ -485,6 +725,25 @@ def set_sources(context_id: int, keys: list[str], enabled: bool) -> None:
         con.commit()
     finally:
         con.close()
+
+
+def enabled_source_keys(context_id: int) -> list[str]:
+    """The account-wide "the planner may spend these" tick list.
+
+    Still the pool for any plan that has not been given a set of its own — which is every plan that
+    predates per-plan sources, and is why turning that model on narrows nothing.
+    """
+    ensure_asset_tables()
+    con = get_connection()
+    try:
+        rows = con.execute(
+            "SELECT key FROM pp_asset_sources WHERE context_id = ? AND enabled = 1",
+            (context_id,)).fetchall()
+    except Exception:
+        return []
+    finally:
+        con.close()
+    return [r["key"] for r in rows]
 
 
 def owned_quantities(context_id: int) -> dict[int, float]:
@@ -526,6 +785,34 @@ def source_quantities(context_id: int, key: str) -> dict[int, float]:
     return {int(r["type_id"]): float(r["qty"] or 0) for r in rows}
 
 
+def source_quantities_multi(context_id: int, keys: list[str]) -> dict[int, float]:
+    """{type_id: qty} pooled across SEVERAL named sources — a build's reaction stock and its
+    manufacturing stock legitimately sit in different stations.
+
+    No double counting is possible on the sum itself (an item belongs to exactly one source by
+    construction, and the key set is de-duplicated first), so the boxes simply add up.
+    Like `source_quantities`, this deliberately ignores the enabled flag: it asks what is in the
+    boxes the user pointed at, not what the planner may spend.
+    """
+    ensure_asset_tables()
+    uniq = list(dict.fromkeys(k for k in (keys or []) if k))
+    if not uniq:
+        return {}
+    con = get_connection()
+    try:
+        marks = ",".join("?" * len(uniq))
+        rows = con.execute(
+            f"SELECT type_id, SUM(qty) AS q FROM pp_asset_stock WHERE context_id = ? "
+            f"AND key IN ({marks}) GROUP BY type_id",
+            (context_id, *uniq),
+        ).fetchall()
+    except Exception:
+        return {}
+    finally:
+        con.close()
+    return {int(r["type_id"]): float(r["q"] or 0) for r in rows}
+
+
 def source_name(context_id: int, key: str) -> str | None:
     ensure_asset_tables()
     con = get_connection()
@@ -537,6 +824,23 @@ def source_name(context_id: int, key: str) -> str | None:
     finally:
         con.close()
     return row["name"] if row else None
+
+
+def source_labels(context_id: int, keys: list[str]) -> list[dict]:
+    """`[{key, name, place}]` for the bound set, in the order given — so a panel can say which boxes
+    a build pulls from AND where each one is, without a lookup per key."""
+    uniq = list(dict.fromkeys(k for k in (keys or []) if k))
+    if not uniq:
+        return []
+    by_key = {s["key"]: s for s in list_sources(context_id)}
+    out = []
+    for k in uniq:
+        s = by_key.get(k)
+        # A source that has since vanished from the scan still gets a row: the order is bound to it,
+        # and silently dropping it would leave the panel claiming a binding the user never made.
+        out.append({"key": k, "name": (s or {}).get("name") or k,
+                    "place": (s or {}).get("place") or "", "missing": s is None})
+    return out
 
 
 def assets_status(context_id: int) -> dict:
@@ -564,6 +868,7 @@ def assets_status(context_id: int) -> dict:
         # the button would only ever produce an error, so the UI offers a re-auth instead.
         "corp_scannable": len(_corp_scanners(context_id)),
         "corp_sources": sum(1 for s in srcs if s.get("corp")),
+        "sets": list_source_sets(context_id),
     }
 
 
@@ -620,3 +925,27 @@ def industry_assets_paste(req: PasteStock, ctx: int = Depends(require_context)):
 def industry_assets_source_delete(key: str, ctx: int = Depends(require_context)):
     delete_source(ctx, key)
     return assets_status(ctx)
+
+
+class SourceSetSave(BaseModel):
+    name: str
+    keys: list[str] = []
+    id: int | None = None
+
+
+@router.get("/api/industry/source-sets")
+def industry_source_sets(ctx: int = Depends(require_context)):
+    """Named groups of stock sources, so "reaction stock" can be bound to a build in one pick."""
+    return {"sets": list_source_sets(ctx)}
+
+
+@router.post("/api/industry/source-sets")
+def industry_source_set_save(req: SourceSetSave, ctx: int = Depends(require_context)):
+    save_source_set(ctx, req.name, req.keys, req.id)
+    return {"sets": list_source_sets(ctx)}
+
+
+@router.delete("/api/industry/source-sets/{set_id}")
+def industry_source_set_delete(set_id: int, ctx: int = Depends(require_context)):
+    delete_source_set(ctx, set_id)
+    return {"sets": list_source_sets(ctx)}

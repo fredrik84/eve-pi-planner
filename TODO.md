@@ -377,38 +377,27 @@ new runtime dependency for the app itself.
 **Related, still open:** `assign_reaction` has no idempotency and no capacity check, which is what
 turned a UI bug into 27 rows. See the note under item 7.
 
-## 9. Name the SYSTEM a container is in, wherever containers are listed (2026-08-04)
+## 9. Name the SYSTEM a container is in + let a build source from several — SHIPPED 2026-08-04
 
-Reported from use: a container in a source/output list is identified by its own name and its parent
-hangar, and nothing says **where it is**. With containers in several stations that is ambiguous
-exactly when it matters — picking where a build sources from, and where its output lands.
+Both halves built together (one code path), behind `industry_plan_sources`; design notes in
+CLAUDE.md under "Where a container IS, and which build owns it".
 
-What a container source carries today (`_split_by_source`, `app/industry/assets.py:203`):
+The researched plan held up: `root_of` (the walk that already found the hangar flag) returns the
+root asset's `location_id`, resolved station → `/universe/stations/{id}` / structure →
+`markets.structure_info` — now the single call site for that lookup — and cached in `pp_locations`,
+including the **unresolvable** answer so an ACL 403 isn't re-asked every scan. Grouping is real
+`<optgroup>`/section headers off one server-built `place` label, in all three lists that show
+containers. There was no fourth: **Reactions and PI surface no container lists at all** —
+`pp_asset_sources` is read only by Industry — so that premise in the write-up was wrong.
 
-```python
-sources.setdefault(key, {"kind": "container", "name": f"Container {loc}", "item_id": loc,
-                         "parent": hangar_name(pflag) if pflag in hangar_flags else ""})
-```
+The second half turned out to be more than a set: binding used to switch a box on ACCOUNT-WIDE, so
+one build's can was every other build's stock. `source_keys` + `sources_owned` make a plan own what
+it may spend, with three rules keeping it non-retroactive (an uncurated order still uses the account
+pool; a mixed queue is the union; an empty set is not ownership). `pp_source_sets` keeps a repeat
+multi-box answer at one pick.
 
-`name` is the ESI-resolved container name (`_apply_container_names`, cosmetic — an unnamed
-container is still usable), `parent` is the hangar division. No location at all.
-
-**The data is already in hand.** `hangar_of()` walks an asset to the root of its container chain,
-and that root asset's `location_id` IS the station or structure. So the walk that already exists
-just needs to also return the root's location, which then resolves to a system:
-
-- station id → `/universe/stations/{id}` → `system_id`
-- structure id → `/universe/structures/{id}` → `solar_system_id` (already done for a different
-  purpose in `app/markets.py:162` — reuse that path and its auth/error handling rather than adding
-  a second one)
-- system id → name from the local `solar_systems` table (`app/planner_algo.py:1261` joins it)
-
-**Watch for:** structure lookups are ACL-gated — a structure the character can't see 403s, so this
-has to degrade to no system name rather than failing the asset scan, the same way container naming
-already does. Cache the id→system resolution; assets refresh often and these ids are static.
-
-Applies to every list that shows containers, not just the industry sourcing panel — the reactions
-and PI sides surface the same source rows.
+Left undone: the **output** half of the original note ("and where its output lands") is still not
+modelled — a job's output container is item 2f's territory, not this one's.
 
 ## 7. Reaction assignment has no idempotency or capacity guard
 

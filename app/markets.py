@@ -183,6 +183,32 @@ def build_structures(context_id: int) -> list[dict]:
             if m["kind"] == "structure" and (m["build_mfg"] or m["build_rx"])]
 
 
+def structure_info(structure_id: int, token: str, client=None) -> dict | None:
+    """`/universe/structures/{id}` — `{name, solar_system_id, type_id}` — or None.
+
+    **The one place this call is made.** Structure visibility is ACL-gated: a character who has no
+    docking access gets a 403, which is a normal answer about a normal structure and never an error
+    to report. Every caller wants the same degradation (no name rather than a failed operation), so
+    they share this rather than each writing their own auth-and-403 dance.
+    """
+    if not token or not structure_id:
+        return None
+    try:
+        own = client is None
+        c = client or esi_http.client(timeout=12)
+        try:
+            s = esi_http.get(f"universe/structures/{structure_id}/?datasource=tranquility",
+                             client=c, token=token)
+            if s.status_code != 200:      # 403 = no access; 404 = gone. Both mean "no name".
+                return None
+            return s.json() or None
+        finally:
+            if own:
+                c.close()
+    except Exception:
+        return None
+
+
 def _detect_structure_meta(context_id: int, structure_id: int) -> tuple:
     """ESI-detect a structure's (hull, security_band, system_id) from /universe/structures + its
     system's security. Rigs are NOT exposed by ESI (no fitting endpoint), so those stay a manual
@@ -196,11 +222,10 @@ def _detect_structure_meta(context_id: int, structure_id: int) -> tuple:
         return (None, None, None)
     try:
         with esi_http.client(timeout=12) as client:
-            s = esi_http.get(f"universe/structures/{structure_id}/?datasource=tranquility",
-                             client=client, token=token)
-            if s.status_code != 200:
+            # Through the shared single call site, so the ACL-403 degradation is written once.
+            sj = structure_info(structure_id, token, client=client)
+            if not sj:
                 return (None, None, None)
-            sj = s.json() or {}
             hull = STRUCTURE_HULLS.get(sj.get("type_id"))
             sys_id = sj.get("solar_system_id")
             sec = None

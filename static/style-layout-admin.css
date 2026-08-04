@@ -1163,6 +1163,20 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-src-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 .ind-src-del { margin-left: 8px; background: none; border: none; color: #e69aa0; cursor: pointer; font-size: 13px; padding: 0 4px; }
 .ind-src-del:hover { color: #ff6b74; }
+/* Where a container is: station/structure heading over its boxes, in every list that shows them */
+.ind-src-group + .ind-src-group { margin-top: 6px; }
+.ind-src-place { font-size: 11px; font-weight: 600; letter-spacing: .02em; color: var(--clr-text-soft);
+  padding: 4px 6px 2px; border-bottom: 1px solid var(--clr-border); }
+/* Multi-box picker: one row per bound container, plus the "+ another box" affordance */
+.ind-srcrows { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.ind-srcrow { display: inline-flex; align-items: center; gap: 2px; }
+.ind-srcrow select { max-width: 260px; }
+.ind-src-add { background: none; border: 1px dashed var(--clr-border); border-radius: 5px;
+  color: var(--clr-text-soft); cursor: pointer; font-size: 11px; padding: 3px 8px; }
+.ind-src-add:hover { color: var(--clr-accent); border-color: var(--clr-accent); }
+.ind-src-where { margin: 6px 0 0; }
+.ind-src-box + .ind-src-box { margin-left: 2px; }
+.ind-src-place-in { color: var(--clr-text-soft); opacity: .85; }
 .ind-paste { margin-top: 10px; padding: 10px 12px; border: 1px solid var(--clr-border); border-radius: 6px; background: #12161f; }
 .ind-paste input, .ind-paste textarea { width: 100%; background: #141720; color: var(--clr-text); border: 1px solid var(--clr-border); border-radius: 5px; padding: 7px 9px; font-size: 13px; margin-bottom: 7px; }
 .ind-paste textarea { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; resize: vertical; }

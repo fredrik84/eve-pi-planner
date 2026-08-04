@@ -477,6 +477,11 @@ class BuildOptions(BaseModel):
 class IndustryPlanRequest(BuildOptions):
     type_id: int
     quantity: int = 1
+    # The boxes this PLAN may spend, when the user has already picked them in the modal. A plan owns
+    # its own sources, so the preview has to be costed against exactly the stock the resulting order
+    # would count — otherwise the preview promises a shopping list the queued build then contradicts.
+    # Omitted (None) = the account-wide tick list, which is what every existing caller sends.
+    source_keys: list[str] | None = None
 
 
 # Wall-clock cap (hours) a single component's batch may take to build before the time-priority
@@ -796,6 +801,20 @@ def _cost_basis(params) -> dict:
     }
 
 
+def _plan_on_hand(ctx: int, req) -> dict[int, float]:
+    """Stock a single-product plan may net off.
+
+    `source_keys` given = this plan owns its sources and counts those boxes only; absent OR EMPTY =
+    the account-wide enabled pool, which is what every plan did before plans owned anything. Empty
+    counts as absent for the same reason it does on an order: picking no box says nothing about
+    where the materials come from, and answering "then you have nothing" would quietly turn the
+    picker into a switch that disables stock netting.
+    """
+    from app.industry.assets import owned_quantities, source_quantities_multi
+    keys = getattr(req, "source_keys", None)
+    return source_quantities_multi(ctx, keys) if keys else owned_quantities(ctx)
+
+
 @router.post("/api/industry/plan")
 def industry_plan(req: IndustryPlanRequest, ctx: int = Depends(require_context)):
     """Read-only make-or-buy plan for one product+quantity: build tree, priced shopping list, and
@@ -813,9 +832,9 @@ def industry_plan(req: IndustryPlanRequest, ctx: int = Depends(require_context))
     # parallel). plan_queue gives schedule + batched cost + net-cost; build_plan supplies the tree.
     # Local imports avoid a graph↔schedule/assets import cycle.
     from app.industry.schedule import plan_queue
-    from app.industry.assets import owned_quantities
-    # Net off what you already own (never the product itself — you asked to build that).
-    on_hand = owned_quantities(ctx) if req.use_stock else {}
+    # Net off what you already own (never the product itself — you asked to build that), from the
+    # sources this plan is entitled to: the ones picked for it if any, else the account's tick list.
+    on_hand = _plan_on_hand(ctx, req) if req.use_stock else {}
     on_hand.pop(req.type_id, None)
     result = plan_queue(targets, inp.mfg, inp.rx, inp.prices, inp.adjusted, inp.params, inp.names,
                         inp.pools, on_hand=on_hand)
@@ -862,8 +881,7 @@ def industry_plan_sweep(req: IndustryPlanRequest, ctx: int = Depends(require_con
         ctx, targets, req,
         missing_recipe_detail=lambda _tid: "No manufacturing or reaction recipe for that type")
     from app.industry.schedule import sweep_marginal
-    from app.industry.assets import owned_quantities
-    on_hand = owned_quantities(ctx) if req.use_stock else {}
+    on_hand = _plan_on_hand(ctx, req) if req.use_stock else {}
     on_hand.pop(req.type_id, None)
     points = sweep_marginal(targets, inp.mfg, inp.rx, inp.prices, inp.adjusted, inp.params,
                             inp.names, inp.pools, on_hand=on_hand)
