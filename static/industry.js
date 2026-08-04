@@ -2622,6 +2622,23 @@ function _indBlueprintWarn(d) {
 // reused by every build after this one — so the plan says what another one is worth in time and
 // leaves the spend to the builder. Nothing here is in any cost on the page.
 function _indPrintLimitNote(d) {
+  const cov = d.print_coverage;
+  // The sibling state, and it has to be said out loud: with the blueprint picture incomplete the
+  // schedule assumes you hold as many prints as you have slots, which is the old behaviour and may
+  // be optimistic. Naming what is missing makes it a choice the user can close rather than an
+  // absence they'd have to notice.
+  if (cov && cov.prints_counted === false) {
+    const miss = cov.missing || 0;
+    return `<div class="ind-bp-note"><b>This schedule assumes unlimited blueprint copies</b>`
+      + `<div class="ind-bp-warn-sub">A blueprint is locked while a job runs on it, so how many you `
+      + `hold decides how many jobs of one thing can run at once. `
+      + (miss ? `${miss} of your ${cov.characters} character${cov.characters === 1 ? '' : 's'} `
+              + `${miss === 1 ? 'has' : 'have'} no blueprints connected, so what you hold is only `
+              + `partly visible — counting it would guess low and spread the build out for no reason. `
+              + `Connect the rest for a schedule that matches your drawer.`
+              : `No blueprints are connected yet, so the plan can't count them.`)
+      + `</div></div>`;
+  }
   const rows = (d.print_limits || []).filter(r => (r.extra || 0) > 0);
   if (!rows.length) return '';
   const body = rows.slice(0, 8).map(r =>

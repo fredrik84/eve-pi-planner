@@ -2334,6 +2334,7 @@ def main():
     test_the_print_cap_is_paid_for_in_time_not_in_lost_runs()
     test_a_reaction_formula_is_an_item_too_and_unknown_ownership_never_serialises()
     test_reaction_formulas_are_read_off_the_blueprints_cache_at_all()
+    test_a_half_connected_account_is_never_capped_on_what_it_half_shows()
     test_binding_a_container_lets_the_planner_spend_it()
     test_first_run_setup_shows_once_and_never_to_an_established_user()
     test_the_customer_sees_the_same_progress_the_builder_does()
@@ -3795,6 +3796,78 @@ def test_reaction_formulas_are_read_off_the_blueprints_cache_at_all():
         check("and the stack is counted as separate items", own[102]["copy_count"] == 3)
     finally:
         restore()
+
+
+def test_a_half_connected_account_is_never_capped_on_what_it_half_shows():
+    """Unknown ownership bites at TWO levels and the per-type check only catches one.
+
+    `owned_blueprints` unions the characters that HAVE a cached blueprint list, so on a partly
+    connected account every count in it is a FLOOR — the characters we can't see may hold more of
+    the same types. Measured in production: account 1 has 2 of 14 characters cached and still shows
+    prints for 159 types, while account 9022 has 3 of 3 and 31 of its 50 formula types really are
+    held singly. The same numbers, opposite meanings; only the coverage tells them apart, and
+    capping on the first one serialises work the builder can genuinely run side by side.
+
+    So the cap waits for a COMPLETE picture. This is the guard against that check being
+    'simplified' away later — half a picture must plan byte for byte as it does today."""
+    print("test_a_half_connected_account_is_never_capped_on_what_it_half_shows")
+    import app.industry.blueprints as B
+    dbcon, restore = _patch_db(B)
+    try:
+        _seed_blueprint_cache(dbcon, [(1000, -2, 5, 10, 20)])      # character 7 is cached
+        dbcon.execute("INSERT OR REPLACE INTO pp_characters VALUES (8, 1)")   # ...character 8 isn't
+        dbcon.commit()
+        half = B.blueprint_coverage(1)
+        check("a character with no cache is counted as missing",
+              half == {"characters": 2, "cached": 1, "missing": 1, "complete": False})
+        dbcon.execute("INSERT OR REPLACE INTO pp_char_blueprints VALUES (8, '[]', 0)")
+        dbcon.commit()
+        full = B.blueprint_coverage(1)
+        check("and the picture is complete only when every character has one",
+              full["complete"] and full["missing"] == 0)
+        owned = B.owned_blueprints(1)
+    finally:
+        restore()
+
+    con = _seed_con()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+    pools = {"manufacturing": 6, "reaction": 6}
+    held = {101: {"me": 10, "te": 20, "kind": "bpc", "runs": 12, "copy_count": 1,
+                  "copies": [{"me": 10, "te": 20, "kind": "bpc", "runs": 12}]}}
+
+    def plan(coverage, owned=held):
+        p = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, struct_time_mult=1.0,
+                        owned=owned, force_build_ids={101}, blueprint_coverage=coverage)
+        return plan_queue([(100, 6)], mfg, rx, _prices(SELL), ADJ, p, NAMES, pools)
+
+    def jobs_of(res, tid):
+        return len([t for w in res["schedule"]["waves"] for t in w["tasks"] if t["type_id"] == tid])
+
+    partial = plan({"characters": 2, "cached": 1, "missing": 1, "complete": False})
+    complete = plan({"characters": 2, "cached": 2, "missing": 0, "complete": True})
+    today = plan(None, owned={})            # what the planner did before any of this existed
+
+    check("half a picture plans exactly as it does today",
+          jobs_of(partial, 101) == jobs_of(today, 101)
+          and partial["metrics"]["makespan_hours"] == today["metrics"]["makespan_hours"])
+    check("and claims nothing about the prints it half-saw", partial["print_limits"] == [])
+    check("a complete picture caps to the one copy that account holds",
+          jobs_of(complete, 101) == 1 and jobs_of(complete, 101) < jobs_of(partial, 101))
+    check("which costs time, and says what another copy would save",
+          complete["metrics"]["makespan_hours"] > partial["metrics"]["makespan_hours"]
+          and any(r["type_id"] == 101 for r in complete["print_limits"]))
+
+    check("the plan says which state it is in", partial["print_coverage"]["prints_counted"] is False
+          and complete["print_coverage"]["prints_counted"] is True)
+    check("and names how many characters are still to connect",
+          partial["print_coverage"]["missing"] == 1)
+    check("a hand-built params with no coverage stated still trusts what it was given",
+          plan(None)["print_coverage"]["prints_counted"] is True)
+    check("an account with no blueprints connected at all is not capped either",
+          plan({"characters": 3, "cached": 0, "missing": 3,
+                "complete": False})["print_coverage"]["prints_counted"] is False)
+    check("and owned_blueprints still reads the cached character's holding",
+          owned[100]["copy_count"] == 1)
 
 
 if __name__ == "__main__":

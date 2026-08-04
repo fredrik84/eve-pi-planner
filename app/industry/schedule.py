@@ -306,6 +306,13 @@ def _print_limits(params, tid: int, activity: str, runs: int) -> tuple[int | Non
     one production account has caches for 2 of its 14 characters — so a formula we cannot see means
     *we don't know*, never *they hold none*. No observation ⇒ no cap, exactly as today.
     """
+    # Unknown ownership bites at TWO levels, and the per-type check below only catches one. `owned`
+    # is a union over the characters that have a cached blueprint list, so on a partly-connected
+    # account every count in it is a floor: prod account 1 has 2 of 14 characters cached and still
+    # shows prints for 159 types, which the cap would take for the whole truth and serialise work the
+    # builder can really run in parallel. Nothing is capped until the account's picture is complete.
+    if not params.prints_known():
+        return None, False
     if activity != "manufacturing":
         own = (params.owned or {}).get(tid) or {}
         if not own:
@@ -1131,6 +1138,13 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
         # Prints the plan is short of and deliberately does NOT buy — a reaction formula above all.
         # Advice with a number on it, not a line item: nothing here is in any cost.
         "print_limits": print_limits,
+        # ...and the sibling state: whether the schedule was allowed to count prints at all. On an
+        # account whose blueprint picture is incomplete it assumes UNLIMITED prints, exactly as it
+        # did before any of this — and says so, with the number of characters still to connect.
+        # Not saying it would be its own kind of lie once the user knows the cap exists.
+        "print_coverage": {**(params.blueprint_coverage
+                              or {"characters": 0, "cached": 0, "missing": 0, "complete": True}),
+                           "prints_counted": params.prints_known()},
         "leftovers": leftovers,
         "unresolved": [s["type_id"] for s in shopping if s["unit_price"] is None],
         "metrics": {
