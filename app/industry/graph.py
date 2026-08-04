@@ -79,6 +79,13 @@ class BuildParams:
     # te_pct fallback. `owned` carries the same map's ownership detail for display.
     me_by_product: dict = field(default_factory=dict)
     owned: dict = field(default_factory=dict)
+    # How much of the account's blueprint picture we can actually SEE: {characters, cached}.
+    # `owned` unions only the characters that have a cached blueprint list, so on a partly-connected
+    # account every count in it is a FLOOR, not a total — the other characters may hold more copies
+    # and more formulas of the same types. Anything that reasons about how many prints exist has to
+    # know that (see `prints_known`). None = not stated, which is a hand-built params (a test, a
+    # REPL) where `owned` IS the holding by construction.
+    blueprint_coverage: dict | None = None
     # ME/TE of the copy the plan would BUY (from the contract index) — what runs past the owned
     # copies are built at. Falls back to the global me_pct/te_pct when nothing is listed.
     buy_me_te: dict = field(default_factory=dict)
@@ -146,6 +153,27 @@ class BuildParams:
             return site["cost_index"] + site["tax_pct"] / 100.0 + SCC_SURCHARGE_PCT
         ci = self.mfg_cost_index if activity == "manufacturing" else self.rx_cost_index
         return ci + self.facility_tax_pct / 100.0 + SCC_SURCHARGE_PCT
+
+    def prints_known(self) -> bool:
+        """Whether the account's blueprint holding may be read as a TOTAL rather than a floor.
+
+        Only when EVERY character has a cached blueprint list. `owned` is a union over the cached
+        ones, so a partly-connected account's counts are a floor — and a cap built on a floor
+        serialises jobs the builder can really run side by side, which is a plan made materially
+        worse on incomplete evidence. Measured in prod: one account has 2 of 14 characters cached and
+        still shows prints for 159 types; another has 3 of 3 and 31 of its 50 formula types are
+        genuinely held singly. Same numbers, opposite meanings — only the coverage tells them apart.
+
+        A character without the blueprints scope can never have a cache, so such an account is
+        permanently "unknown" until it connects one. That is the honest answer, and it is deliberately
+        NOT a partial-credit scheme: crediting the characters we can see is the same guess in
+        smaller print.
+        """
+        cov = self.blueprint_coverage
+        if cov is None:
+            return True                    # not stated — `owned` is the holding, by construction
+        chars = int(cov.get("characters") or 0)
+        return chars > 0 and int(cov.get("cached") or 0) >= chars
 
     def copies_for(self, type_id: int, activity: str) -> list[dict]:
         """The owned copies a job for this product may run off, best-researched first.
@@ -696,10 +724,14 @@ def resolve_build_params(context_id: int, me_pct: float, te_pct: float,
     tax = facility_tax_pct if facility_tax_pct is not None else d_tax
     # Auto per-product ME/TE from the account's real owned blueprints (empty if not connected).
     try:
-        from app.industry.blueprints import owned_blueprints
+        from app.industry.blueprints import owned_blueprints, blueprint_coverage
         owned = owned_blueprints(context_id)
+        # ...and how much of the account that holding actually covers. Everything that counts PRINTS
+        # (how many jobs of a type can run at once) is only allowed to trust it when every character
+        # is cached — see BuildParams.prints_known.
+        coverage = blueprint_coverage(context_id)
     except Exception:
-        owned = {}
+        owned, coverage = {}, {"characters": 0, "cached": 0, "missing": 0, "complete": False}
     # The per-product aggregate is a runs-weighted figure over the WHOLE holding, not the best copy:
     # crediting a 20-run batch with the ME of a 5-run copy under-states its materials. The per-JOB
     # value comes off the copies themselves (BuildParams.me_te_for / build_tasks). This map is only
@@ -712,7 +744,8 @@ def resolve_build_params(context_id: int, me_pct: float, te_pct: float,
         mfg_skill_time_mult=mfg_skill, rx_skill_time_mult=rx_skill, skill_time_basis=skill_basis,
         mfg_cost_index=fetch_system_cost_index(sid, "manufacturing"),
         rx_cost_index=fetch_system_cost_index(sid, "reaction"),
-        facility_tax_pct=tax, me_by_product=me_by_product, owned=owned, build_system_id=sid,
+        facility_tax_pct=tax, me_by_product=me_by_product, owned=owned,
+        blueprint_coverage=coverage, build_system_id=sid,
         max_build_hours=max_build_hours,
         struct_material_mult=1.0 - struct_material_pct / 100.0,
         struct_time_mult=1.0 - struct_time_pct / 100.0,

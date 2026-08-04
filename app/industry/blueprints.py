@@ -178,6 +178,32 @@ def owned_blueprints(context_id: int) -> dict[int, dict]:
     return owned
 
 
+def blueprint_coverage(context_id: int) -> dict:
+    """{characters, cached, missing, complete} — how much of this account's blueprint holding we
+    can see.
+
+    `owned_blueprints` unions the characters that HAVE a cached list, and that is routinely a
+    subset: blueprint scope is opt-in per character, and a character without it can never have a
+    cache at all. So the union is a floor on what the account holds, and only `complete` licenses
+    anything to read it as a total (see BuildParams.prints_known). Reported to the user as well as
+    consumed by the planner — silently not capping is its own kind of lie once you know the feature
+    is there.
+    """
+    ensure_char_blueprints_table()
+    con = get_connection()
+    try:
+        chars = con.execute("SELECT COUNT(*) AS n FROM pp_characters WHERE context_id=?",
+                            (context_id,)).fetchone()["n"] or 0
+        cached = con.execute(
+            "SELECT COUNT(*) AS n FROM pp_char_blueprints b "
+            "JOIN pp_characters c ON b.character_id = c.character_id WHERE c.context_id=?",
+            (context_id,)).fetchone()["n"] or 0
+    finally:
+        con.close()
+    return {"characters": chars, "cached": cached, "missing": max(0, chars - cached),
+            "complete": chars > 0 and cached >= chars}
+
+
 @router.post("/api/industry/blueprints/refresh")
 def refresh_blueprints(context_id: int = Depends(require_context)):
     """Re-read owned blueprints from ESI for the caller's characters that granted the blueprint

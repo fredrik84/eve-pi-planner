@@ -1073,11 +1073,24 @@ ORIGINAL is one item too) plus the copies the plan already buys to cover the run
   returned was dropped at that join (50 sat unused in prod). A `reaction_id` IS the formula item's
   own type_id, so the fix is `SELECT reaction_id, output_type_id FROM reactions` unioned into the
   map — no new fetch, table or scope.
-- **UNKNOWN ownership never caps.** The blueprints scope is opt-in per character (one prod account
-  has caches for 2 of its 14), so no rows means *we don't know*, never *they hold none*. `_print_limits`
-  returns `(None, False)` for any type with no observation and the plan runs exactly as it does
-  today. Pinned by `test_a_reaction_formula_is_an_item_too_and_unknown_ownership_never_serialises` —
-  capping on absent evidence is the single most damaging way this could go wrong.
+- **UNKNOWN ownership never caps, at BOTH levels.** Capping on absent evidence is the single most
+  damaging way this could go wrong, and "absent" happens twice over:
+  - **Per TYPE** — `_print_limits` returns `(None, False)` for a type with no observation at all.
+  - **Per ACCOUNT** — `owned_blueprints` unions only the characters that HAVE a cached blueprint
+    list, so on a partly-connected account every count in it is a **floor**: prod account 1 has
+    **2 of 14** characters cached and still shows prints for **159 types**, while account 9022 has
+    3 of 3 and 31 of its 50 formula types genuinely are held singly. Same numbers, opposite
+    meanings. `blueprint_coverage(ctx)` → `BuildParams.blueprint_coverage` → `prints_known()`
+    gates the whole cap on `cached >= characters`; anything less plans **exactly as it does
+    today**. A character without the blueprints scope can never have a cache, so such an account
+    stays "unknown" until it connects one — deliberately NOT a partial-credit scheme, and never a
+    cap over just the subset we can see.
+  Silently not capping is its own kind of lie once the user knows the feature exists, so the plan
+  says which state it is in: `print_coverage` (`{characters, cached, missing, complete,
+  prints_counted}`) and a UI note naming how many characters are still to connect. Pinned by
+  `test_a_reaction_formula_is_an_item_too_and_unknown_ownership_never_serialises` and
+  `test_a_half_connected_account_is_never_capped_on_what_it_half_shows` — the second exists
+  specifically so the coverage check can't be "simplified" away later.
 - **What can't be bought is REPORTED, not spent on** — `print_limits` (`{name, noun, held, jobs,
   extra, hours, hours_if_held}`, `metrics.print_limited_steps`) says what holding more prints would
   save on that step, and no ISK anywhere moves for it. Measured with one formula of each held: a
