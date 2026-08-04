@@ -27,7 +27,6 @@ from app.industry.graph import (
     BuildParams, blueprint_summary, collect_reachable, effective_material_qty, resolve_unit_costs,
     SCC_SURCHARGE_PCT,
 )
-from app.industry.routing import plan_moves
 
 
 # ── Demand aggregation (MRP explosion) ────────────────────────────────────────────────────────
@@ -1125,10 +1124,10 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
             for tid, info in agg.items() if info["build"] and info["runs"] > 0
         ],
         "schedule": sched,
-        # Where the plan spread itself, and what that spread costs in hauling. Both are empty on an
-        # unrouted plan (one facility), so nothing new appears for an account with one structure.
+        # Where the plan spread itself. Empty on an unrouted plan (one facility), so nothing new
+        # appears for an account with one structure. The per-move haul list this used to carry
+        # beside it was dropped: the builder knows parts routed to two structures have to travel.
         "build_sites": _sites_used(agg, params),
-        "moves": plan_moves(agg, mfg, rx, params, names),
         "shopping_list": shopping,
         # Blueprint copies bought for PARALLELISM, itemised. Kept out of `shopping_list` (which is
         # materials, priced off the market) and out of `missing_blueprints` (which is "you can't

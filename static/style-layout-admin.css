@@ -1117,12 +1117,6 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 /* Where a job is installed, on the checklist line. Muted — it only appears when a plan actually
    spans more than one structure, and then it's a location, not the headline. */
 .ind-do-site { flex: 0 0 auto; font-size: 11px; color: var(--clr-text-soft); white-space: nowrap; }
-.ind-moves { margin-top: 12px; }
-.ind-moves h4 { margin: 0 0 2px; font-size: 13px; }
-.ind-move-list { list-style: none; margin: 6px 0 0; padding: 0; }
-.ind-move { display: flex; gap: 8px; align-items: baseline; font-size: 12px; padding: 2px 0; }
-.ind-move-qty { color: var(--clr-text-soft); font-variant-numeric: tabular-nums; }
-.ind-move-path { margin-left: auto; color: var(--clr-text-soft); white-space: nowrap; }
 /* First-run facility notice. A bar over a working tab, not a card that replaces it — the planner
    runs fine on the generic presets, so this informs rather than blocks. */
 .ind-fac-nudge { border-left: 3px solid var(--clr-accent); }
@@ -1322,11 +1316,18 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-slot-excl b { color: #9fb4d8; }
 .ind-slot-excl span { border-bottom: 1px dotted #4a5468; cursor: help; }
 .ind-slot-excl-why { font-size: 11px; margin-top: 3px; opacity: .85; }
-/* Informational, not an error: a missing blueprint is usually just one we can't see (corp hangar),
-   and it never blocks or changes a build decision — so it must not look like a failure. */
-.ind-bp-note { margin: 12px 0; padding: 10px 13px; border: 1px solid #3a4356; border-left: 3px solid #5a7ba6;
+/* ONE notice block above the plan, not a column of coloured banners (_indNotices). Everything in
+   it either corrects a number or names money spent; each entry is a plain line, or a small titled
+   block where it genuinely has rows (blueprint copies, missing prints, skill gaps). Informational,
+   not an error — a missing blueprint is usually just one we can't see (corp hangar) and blocks
+   nothing, so none of this may look like a failure. */
+.ind-notes { margin: 12px 0; padding: 10px 13px; border: 1px solid #3a4356; border-left: 3px solid #5a7ba6;
   border-radius: 6px; background: #161b26; font-size: 13px; color: #cdd6e6; }
-.ind-bp-note b { color: #eef2f8; }
+.ind-notes b { color: #eef2f8; }
+.ind-note-line { line-height: 1.5; padding: 3px 0; }
+.ind-note-line + .ind-note-line, .ind-notes > .ind-note-block { border-top: 1px solid #232a38; margin-top: 6px; padding-top: 6px; }
+.ind-note-spend b { color: #ffe0b0; font-variant-numeric: tabular-nums; }
+.ind-note-block-skill { border-left: 2px solid #c39a4a; padding-left: 9px; }
 .ind-bp-warn-sub { font-size: 11.5px; color: #8fa0b8; margin-top: 5px; line-height: 1.5; }
 .ind-bp-nm { color: #eef2f8; flex: 1 1 auto; min-width: 0; }
 .ind-bp-rows { display: flex; flex-direction: column; gap: 5px; margin: 8px 0 4px; }
@@ -1334,28 +1335,8 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-bp-px { flex: 0 0 auto; text-align: right; color: #e6d0b8; display: flex; flex-direction: column; align-items: flex-end; }
 .ind-bp-px b { color: #ffe0b0; font-variant-numeric: tabular-nums; }
 .ind-bp-sub2 { font-size: 11px; color: #b39a9a; }
-/* "What to train next" advisor rows. */
-.ind-adv-sec { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--clr-text-dim);
-  margin: 12px 0 6px; }
-.ind-adv-sec:first-child { margin-top: 0; }
-.ind-adv-row { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; font-size: 12.5px;
-  padding: 6px 0; border-bottom: 1px solid #1c2231; }
-.ind-adv-skill { color: #eef2f8; }
-.ind-adv-skill b { color: #8fc3ff; }
-.ind-adv-char { font-size: 11px; color: #8fa0b8; }
-.ind-adv-detail { font-size: 11.5px; color: #8fa0b8; flex: 1 1 auto; min-width: 0; }
-.ind-adv-gain { margin-left: auto; text-align: right; color: #7fdca6; font-variant-numeric: tabular-nums; }
-.ind-adv-sp { display: block; font-size: 10px; color: var(--clr-text-dim); }
-.ind-adv-enough { display: flex; gap: 10px; flex-wrap: wrap; font-size: 12px; padding: 5px 0; }
-.ind-adv-enough-nm { color: #cdd6e6; }
-.ind-adv-note { font-size: 11px; color: var(--clr-text-dim); margin-top: 10px; line-height: 1.5; }
-
-/* Missing skills to install a build's jobs. Same note chrome as the blueprint warning, amber-
-   edged rather than blue: a missing blueprint is a purchase, a missing skill is a wait. */
-.ind-sk-note { margin: 12px 0; padding: 10px 13px; border: 1px solid #3a4356; border-left: 3px solid #c39a4a;
-  border-radius: 6px; background: #161b26; font-size: 13px; color: #cdd6e6; }
-.ind-sk-note b { color: #eef2f8; }
-.ind-sk-info { border-left-color: #5a7ba6; }
+/* Missing skills to install a build's jobs — a block inside the notice card, amber-edged (see
+   .ind-note-block-skill): a missing blueprint is a purchase, a missing skill is a wait. */
 .ind-sk-sub { font-size: 11.5px; color: #8fa0b8; margin-top: 6px; line-height: 1.5; }
 .ind-sk-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 4px; }
 .ind-sk-chip { font-size: 11.5px; padding: 2px 9px; border-radius: 10px; background: #2a2620; color: #e2c07a; }

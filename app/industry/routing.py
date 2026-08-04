@@ -19,6 +19,12 @@ Three properties it has to keep:
   * **Fees follow the routing.** Job installation cost is EIV × (system cost index + facility tax +
     SCC), and the index is per SYSTEM — a job routed to another structure is charged that
     structure's system, or the plan's ISK is describing a build that never happens.
+
+There was a fourth thing here — `plan_moves`, which listed every station change the routing
+implied — and it is gone on purpose. A builder installing jobs in two structures already knows the
+parts have to travel; the list told them nothing they would act on, and the build page is short of
+room for things that do. `build_sites` still names the structures used, which is what the checklist
+needs to say WHERE to install each job.
 """
 from app.industry.structures import BuildSite, route_job
 
@@ -137,39 +143,3 @@ def resolve_job_sites(context_id: int, targets: list[tuple[int, int]], mfg: dict
     for tid, _qty in targets:
         walk(tid, None, frozenset())
     return chosen
-
-
-def plan_moves(agg: dict, mfg: dict, rx: dict, params, names: dict[int, str]) -> list[dict]:
-    """Every station change the routing implies: a built component whose consumer is built
-    somewhere else has to be hauled there.
-
-    Freight is not priced into the routing decision (see `route_job`) — which makes reporting the
-    moves the other half of that promise, not a nicety. A plan that quietly spreads a capital build
-    over three structures and never says so is one the builder finds out about while holding the
-    parts.
-    """
-    if not params.job_sites:
-        return []
-    moves: dict[tuple, dict] = {}
-    for tid, info in agg.items():
-        if not info.get("build") or info.get("runs", 0) <= 0:
-            continue
-        recipe = mfg.get(tid) or rx.get(tid)
-        here = params.job_sites.get(tid)
-        if here is None or recipe is None:
-            continue
-        for inp in recipe["inputs"]:
-            src = params.job_sites.get(inp["type_id"])
-            child = agg.get(inp["type_id"]) or {}
-            if not src or not child.get("build") or src["key"] == here["key"]:
-                continue
-            key = (inp["type_id"], src["key"], here["key"])
-            row = moves.get(key)
-            if row is None:
-                moves[key] = {
-                    "type_id": inp["type_id"], "name": names.get(inp["type_id"], str(inp["type_id"])),
-                    "units": child.get("produced") or 0,
-                    "from": src["name"], "to": here["name"],
-                    "from_key": src["key"], "to_key": here["key"],
-                }
-    return sorted(moves.values(), key=lambda m: m["name"])

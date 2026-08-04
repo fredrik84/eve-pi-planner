@@ -36,7 +36,6 @@ async function onIndustryTabOpen() {
 
   indLoadSetupSummary();     // fire-and-forget: independent of the build status below
   indLoadLifetime();
-  indLoadSkillAdvisor();
   await indLoadBlacklist();  // awaited: the shopping list renders its chips from this
   // If something is already cooking, that's what you came to look at — show the live build first
   // and fold the planner away. With an empty queue there's nothing to check, so lead with planning.
@@ -60,70 +59,10 @@ async function indRefreshStaleCaches() {
   indRefreshStatus();
 }
 
-// ── What to train next ────────────────────────────────────────────────────────────────────────
-// Fire-and-forget like the other summary loaders. The endpoint answers {enabled:false} when the
-// flag is off, and the card stays hidden unless there is something actually worth saying — an
-// advisor that always has an opinion is one you learn to ignore.
-const _INDADV_ROMAN = ['0', 'I', 'II', 'III', 'IV', 'V'];
-const _indAdvLvl = n => _INDADV_ROMAN[n] || String(n);
-const _indAdvSp = n => (n >= 1e6 ? (n / 1e6).toFixed(2) + 'M' : Math.round(n / 1000) + 'k');
-
-async function indLoadSkillAdvisor() {
-  const card = document.getElementById('indAdvisorCard');
-  const body = document.getElementById('indAdvisorBody');
-  if (!card || !body) return;
-  let d = null;
-  try { d = await api('/api/industry/skill-advisor'); } catch (e) { return; }
-  if (!d || !d.enabled) { card.style.display = 'none'; return; }
-  const html = indRenderSkillAdvisor(d);
-  card.style.display = html ? '' : 'none';
-  if (html) body.innerHTML = html;
-}
-
-function indRenderSkillAdvisor(d) {
-  const sug = d.suggestions || [];
-  const enough = d.enough || [];
-  const pi = (d.planetary && d.planetary.suggestions) || [];
-  if (!sug.length && !enough.length && !pi.length) return '';   // nothing useful to say
-
-  const rows = sug.map(s => `<div class="ind-adv-row">
-      <span class="ind-adv-skill">${_esc(s.skill)} <b>${_indAdvLvl(s.from_lvl)} → ${_indAdvLvl(s.to_lvl)}</b></span>
-      <span class="ind-adv-char">${_esc(s.character_name)}</span>
-      <span class="ind-adv-detail">${_esc(s.detail)}</span>
-      <span class="ind-adv-gain" title="${s.gain_per_msp} % per million SP">+${s.gain_pct}%<span class="ind-adv-sp">${_indAdvSp(s.sp)} SP</span></span>
-    </div>`).join('');
-
-  // The "you already have enough" half. It is the more valuable half when it fires: it means the
-  // fix costs a deploy, not weeks of training.
-  const enoughRows = enough.map(e => `<div class="ind-adv-enough">
-      <span class="ind-adv-enough-nm">${_esc(e.skill)}</span>
-      <span class="ind-adv-detail">${_esc(e.detail)}</span>
-    </div>`).join('');
-
-  // Planetary advice is kept in its own block on purpose — its gains are ISK/day, which cannot be
-  // ranked against a throughput percentage without inventing a shared unit.
-  const piRows = pi.slice(0, 6).map(s => `<div class="ind-adv-row">
-      <span class="ind-adv-skill">${_esc(s.skill)} <b>${_indAdvLvl(s.from_lvl)} → ${_indAdvLvl(s.to_lvl)}</b></span>
-      <span class="ind-adv-char">${_esc(s.char)}</span>
-      <span class="ind-adv-detail">${_esc(s.detail || '')}</span>
-      <span class="ind-adv-gain">${s.add_isk_day ? '+' + fmtIsk(s.add_isk_day) + '/day' : ''}</span>
-    </div>`).join('');
-
-  let html = '';
-  if (rows) {
-    html += `<div class="ind-adv-sec">Industry — ranked by output gained per skill point</div>${rows}`;
-  }
-  if (enoughRows) {
-    html += `<div class="ind-adv-sec">Already trained — nothing to gain here yet</div>${enoughRows}`;
-  }
-  if (piRows) {
-    html += `<div class="ind-adv-sec">Planetary — valued in ISK/day, so not ranked against the above</div>${piRows}`;
-  }
-  html += `<div class="ind-adv-note">Slot skills are only suggested while the matching pool is `
-    + `busy — an extra slot you don't fill produces nothing. Job-time skills always pay, so they're `
-    + `offered whenever the character installs jobs at all.</div>`;
-  return html;
-}
+// The "what to train next" advisor no longer renders here. The engine, its endpoint
+// (/api/industry/skill-advisor) and its flag are all still in place — this is a page-density
+// decision, not a teardown: training advice is not about THIS build, and a card suggesting a
+// character start Industry I is not what somebody checking on a running build came for.
 
 let _indOrders = [];
 // The status card is the live view; when it's on screen, a setting change must re-plan it.
@@ -484,11 +423,21 @@ function _indStatusHeadline(d) {
   const fd = d.metrics.first_delivery_hours;
   // Two different questions: when can I hand over the first order, vs when am I finished entirely.
   // Only worth splitting when they actually differ.
+  // A half-connected account is never capped on the prints it half-shows (see `prints_known()`), so
+  // the schedule assumes as many copies as there are slots and may be optimistic. That fact used to
+  // be a banner of its own; it is not something anyone acts on mid-build, so it rides here on the
+  // number it actually qualifies and costs no space at all.
+  const cov = d.print_coverage;
+  const covNote = (cov && cov.prints_counted === false)
+    ? ` · Blueprint copies aren't counted${cov.missing ? ` (${cov.missing} character`
+        + `${cov.missing === 1 ? '' : 's'} not connected)` : ''}, so jobs of one type are assumed to`
+      + ` run in parallel — this may be optimistic.` : '';
   if (fd != null && d.metrics.makespan_hours - fd > 0.05) {
-    tiles.push(['First delivery', _fmtHours(fd), 'When the first order in line is finished and deliverable']);
-    tiles.push(['Whole queue', _fmtHours(d.metrics.makespan_hours), 'When everything queued is finished']);
+    tiles.push(['First delivery', _fmtHours(fd), 'When the first order in line is finished and deliverable' + covNote]);
+    tiles.push(['Whole queue', _fmtHours(d.metrics.makespan_hours), 'When everything queued is finished' + covNote]);
   } else {
-    tiles.push(['Time left', _fmtHours(d.metrics.makespan_hours), 'Wall-clock for what remains, jobs in parallel']);
+    tiles.push(['Time left', _fmtHours(d.metrics.makespan_hours),
+                'Wall-clock for what remains, jobs in parallel' + covNote]);
   }
   const m = d.metrics || {};
   if (m.total_cost != null) {
@@ -2536,14 +2485,21 @@ document.addEventListener('mouseout', e => {
   if (grid && !grid.contains(e.relatedTarget)) _indPipeClearHover(grid);
 });
 
+// ── The notice stack, and the bar it has to clear ────────────────────────────────────────────
+// ONE block above the plan, never a column of coloured banners. Everything in here either corrects
+// a number the builder would otherwise believe (times, fees, an unpriced material) or names money
+// they are spending (copies bought). A notice a reader will not act on is not worth its space,
+// however true it is — which is what removed the "this schedule assumes unlimited blueprint
+// copies" paragraph and the standalone "no skill data yet" box.
+
 // Job times come from the account's REAL Industry / Advanced Industry levels (see
 // account_industry_time_mults). When no character has been scanned there are no real levels to use
 // and V/V stands in — say so, because an optimistic time that looks identical to a measured one is
-// exactly the number people promise deliveries on. Shared by both plan renderers.
+// exactly the number people promise deliveries on.
 function _indSkillBasisWarn(d) {
   if (d.skill_time_basis !== 'assumed') return '';
-  return `<p class="pp-warn">Job times assume Industry V and Advanced Industry V \u2014 no character `
-    + `has been scanned for skills yet. Rescan to plan against your real training.</p>`;
+  return `<div class="ind-note-line">Job times assume Industry V and Advanced Industry V \u2014 no `
+    + `character has been scanned for skills yet. Rescan to plan against your real training.</div>`;
 }
 
 // Job installation fee = EIV x (system cost index + facility tax + 4% SCC). With no build system
@@ -2557,17 +2513,28 @@ function _indCostBasisWarn(d) {
   // account's reaction system + facility tax \u2014 account_build_defaults). It used to open Setup &
   // slots, which holds blueprints, stock and job slots and no way whatsoever to set a system: an
   // instruction that leads somewhere it can't be carried out is worse than no instruction.
-  return `<p class="pp-warn">Job fees exclude the system cost index \u2014 no build system is set, so `
-    + `only the 4% SCC${cb.facility_tax_pct ? ' and facility tax' : ''} are counted. `
+  return `<div class="ind-note-line">Job fees exclude the system cost index \u2014 no build system is `
+    + `set, so only the 4% SCC${cb.facility_tax_pct ? ' and facility tax' : ''} are counted. `
     + `<button class="ind-link-btn" onclick="openSettingsModal('markets')">Set your build system</button>`
-    + ` (Markets &amp; Logistics \u2192 <i>your reaction/build system</i>) for a true install cost.</p>`;
+    + ` (Markets &amp; Logistics \u2192 <i>your reaction/build system</i>) for a true install cost.</div>`;
+}
+
+// The one block. `withSkills` is the only thing that differs between the two renderers: the modal
+// checks whether your characters can install the jobs this plan schedules, the live build page
+// does not (and never has — don't "fix" that by quietly adding a panel to the busiest screen).
+function _indNotices(d, withSkills) {
+  const unres = (d.unresolved && d.unresolved.length)
+    ? `<div class="ind-note-line">${d.unresolved.length} material(s) had no market price — cost is `
+      + `a floor.</div>` : '';
+  const body = unres + _indSkillBasisWarn(d) + _indCostBasisWarn(d)
+    + _indCopyShortWarn(d) + _indParallelCopyNote(d) + _indPrintLimitNote(d)
+    + _indMissingBpWarn(d) + (withSkills ? _indSkillWarn(d) : '');
+  return body ? `<div class="ind-notes">${body}</div>` : '';
 }
 
 function _indRenderPlan(d, title) {
   _indReqMeTe = {};
   (d.requirements || []).forEach(r => { _indReqMeTe[r.type_id] = { me: r.me, te: r.te, me_source: r.me_source }; });
-  const unres = (d.unresolved && d.unresolved.length)
-    ? `<p class="pp-warn">${d.unresolved.length} material(s) had no market price — cost is a floor.</p>` : '';
   const leftovers = (d.leftovers && d.leftovers.length)
     ? `<details class="ind-details"><summary>Reusable leftovers (${d.leftovers.length}) — ${fmtIsk(d.metrics.leftover_value || 0)} credited</summary>`
       + d.leftovers.map(l => `<div class="ind-tree-row"><span class="ind-tree-name">${_esc(l.name)}</span> `
@@ -2586,11 +2553,7 @@ function _indRenderPlan(d, title) {
     <h2 class="pp-card-title">${title}</h2>
     <div class="ind-body">
       ${_indMetricTiles(d.metrics)}
-      ${unres}
-      ${_indSkillBasisWarn(d)}
-      ${_indCostBasisWarn(d)}
-      ${_indBlueprintWarn(d)}
-      ${_indSkillWarn(d)}
+      ${_indNotices(d, true)}
       ${_indMarginalBar(d)}
       ${_indStepsHtml(d, stageModel)}
       ${_indPipelineHtml(d, tiersData, stageModel)}
@@ -2612,70 +2575,53 @@ function _indRenderPlan(d, title) {
 // contracts…" forever. That was a real bug, not a hypothetical.
 let _indBpcSeq = 0;
 
-function _indBlueprintWarn(d) {
-  const miss = (d.metrics && d.metrics.missing_blueprints) || [];
-  return _indCopyShortWarn(d) + _indParallelCopyNote(d) + _indPrintLimitNote(d)
-    + (miss.length ? _indMissingBpWarn(d, miss) : '');
-}
-
 // The prints the plan is SHORT of and will not buy for you. A reaction formula is durable — it is
-// reused by every build after this one — so the plan says what another one is worth in time and
+// reused by every build after this one — so the plan says what another one is worth in TIME and
 // leaves the spend to the builder. Nothing here is in any cost on the page.
+//
+// ONE line. It used to be a headed block with a row per step plus a paragraph of explanation, and
+// above it a second block ("this schedule assumes unlimited blueprint copies") for the state where
+// the account's blueprint picture is incomplete. That second one is GONE: it was prose saying a
+// number might be optimistic, with nothing to do about it on a page already too dense. The
+// coverage gate itself (`print_coverage` / `prints_known()`) is untouched — a half-connected
+// account is still never capped — and the fact now rides in the build-time tile's tooltip
+// (`_indStatusHeadline`) rather than a banner.
 function _indPrintLimitNote(d) {
-  const cov = d.print_coverage;
-  // The sibling state, and it has to be said out loud: with the blueprint picture incomplete the
-  // schedule assumes you hold as many prints as you have slots, which is the old behaviour and may
-  // be optimistic. Naming what is missing makes it a choice the user can close rather than an
-  // absence they'd have to notice.
-  if (cov && cov.prints_counted === false) {
-    const miss = cov.missing || 0;
-    return `<div class="ind-bp-note"><b>This schedule assumes unlimited blueprint copies</b>`
-      + `<div class="ind-bp-warn-sub">A blueprint is locked while a job runs on it, so how many you `
-      + `hold decides how many jobs of one thing can run at once. `
-      + (miss ? `${miss} of your ${cov.characters} character${cov.characters === 1 ? '' : 's'} `
-              + `${miss === 1 ? 'has' : 'have'} no blueprints connected, so what you hold is only `
-              + `partly visible — counting it would guess low and spread the build out for no reason. `
-              + `Connect the rest for a schedule that matches your drawer.`
-              : `No blueprints are connected yet, so the plan can't count them.`)
-      + `</div></div>`;
-  }
   const rows = (d.print_limits || []).filter(r => (r.extra || 0) > 0);
   if (!rows.length) return '';
-  const body = rows.slice(0, 8).map(r =>
-    `<div class="ind-bp-row2"><span class="ind-bp-nm">${_esc(r.name)}`
-    + `<span class="ind-bp-need">${r.held} ${_esc(r.noun)}${r.held === 1 ? '' : 's'} held · `
-    + `${r.jobs} job${r.jobs === 1 ? '' : 's'} at ${_fmtHours(r.hours)}</span></span>`
-    + `<span class="ind-bp-px">+${r.extra} → ${_fmtHours(r.hours_if_held)}</span></div>`).join('');
-  return `<div class="ind-bp-note"><b>Running in fewer jobs than your slots allow</b>`
-    + `<div class="ind-bp-rows">${body}</div>`
-    + `<div class="ind-bp-warn-sub">A print is locked while a job runs on it, so these steps are `
-    + `limited by how many you hold rather than by free slots. Nothing has been bought for them: a `
-    + `reaction formula is a permanent asset you reuse on every build, not a cost of this one — the `
-    + `figure on the right is what holding that many more would save on this step.</div></div>`;
+  // The best trade in the list leads, because it is the one worth acting on; the rest are in the
+  // tooltip, where looking something up costs nothing and reading it costs no space.
+  const best = rows.slice().sort((a, b) => (b.hours - b.hours_if_held) - (a.hours - a.hours_if_held))[0];
+  const detail = rows.map(r => `${r.name}: ${r.held} ${r.noun}${r.held === 1 ? '' : 's'} held, `
+    + `${r.jobs} job${r.jobs === 1 ? '' : 's'} at ${_fmtHours(r.hours)} — +${r.extra} → `
+    + `${_fmtHours(r.hours_if_held)}`).join('\n');
+  return `<div class="ind-note-line" title="${_esc(detail)}">`
+    + `${rows.length} step${rows.length === 1 ? '' : 's'} run in fewer jobs than your slots allow — `
+    + `a print is locked while a job runs on it. Best: <b>+${best.extra} ${_esc(best.noun)}`
+    + `${best.extra === 1 ? '' : 's'}</b> of ${_esc(best.name)} would take it from `
+    + `${_fmtHours(best.hours)} to ${_fmtHours(best.hours_if_held)}. Nothing was bought for these.`
+    + `</div>`;
 }
 
 // A print is LOCKED while a job runs on it, so two jobs of one type at the same moment need two
 // prints. Where the plan buys them to keep your slots busy, that is a purchase nobody asked for —
-// so it gets its own line, with its own total, and never disappears into the blueprint cost beside
-// it. Buying copies to cover RUNS you're short of and buying them to fill SLOTS are two different
-// decisions, and only one of them is about being able to build the thing at all.
+// so the SPEND stays on the page, on its own line, and never disappears into the blueprint cost
+// beside it. Buying copies to cover RUNS you're short of and buying them to fill SLOTS are two
+// different decisions, and only one of them is about being able to build the thing at all.
+// One line, not a headed block with a row per type: the number that matters is the total ISK, and
+// which types it was spent on is a lookup (the tooltip), not a decision.
 function _indParallelCopyNote(d) {
   const rows = (d.blueprint_parallel || []).filter(r => (r.copies || 0) > 0);
   if (!rows.length) return '';
   const total = rows.reduce((s, r) => s + (r.cost || 0), 0);
   const copies = rows.reduce((s, r) => s + r.copies, 0);
-  const body = rows.map(r =>
-    `<div class="ind-bp-row2"><span class="ind-bp-nm">${_esc(r.name)}`
-    + `<span class="ind-bp-need">${r.jobs} job${r.jobs === 1 ? '' : 's'} at once · `
-    + `${r.copies} extra cop${r.copies === 1 ? 'y' : 'ies'}${r.covered ? '' : ' (estimated)'}</span></span>`
-    + `<span class="ind-bp-px">${fmtIsk(r.cost)}</span></div>`).join('');
-  return `<div class="ind-bp-note"><b>${copies} blueprint cop${copies === 1 ? 'y' : 'ies'} bought to `
-    + `run these in parallel — ${fmtIsk(total)}</b>`
-    + `<div class="ind-bp-rows">${body}</div>`
-    + `<div class="ind-bp-warn-sub">A blueprint is locked while a job runs on it, so several jobs of `
-    + `one thing at the same time need several prints. These copies buy speed, not the ability to `
-    + `build — they are counted in the total above, separately from the copies your run count needs.`
-    + `</div></div>`;
+  const detail = rows.map(r => `${r.name}: ${r.jobs} job${r.jobs === 1 ? '' : 's'} at once, `
+    + `${r.copies} extra cop${r.copies === 1 ? 'y' : 'ies'}${r.covered ? '' : ' (estimated)'} `
+    + `— ${fmtIsk(r.cost)}`).join('\n');
+  return `<div class="ind-note-line ind-note-spend" title="${_esc(detail)}">`
+    + `<b>${fmtIsk(total)}</b> of the total is ${copies} blueprint cop${copies === 1 ? 'y' : 'ies'} `
+    + `bought so ${rows.length === 1 ? 'this step runs' : 'these steps run'} in parallel — they buy `
+    + `speed, not the ability to build.</div>`;
 }
 
 // Owning a COPY is not owning the blueprint for any batch size: it carries a fixed number of runs.
@@ -2698,14 +2644,14 @@ function _indCopyShortWarn(d) {
       + `your copy carries ${have} · ${r.runs_short} run${r.runs_short > 1 ? 's' : ''} short</span></span>`
       + buy + `</div>`;
   }).join('');
-  return `<div class="ind-bp-note"><b>Your blueprint ${short.length === 1 ? 'copy runs' : 'copies run'} out</b>`
+  return `<div class="ind-note-block"><b>Your blueprint ${short.length === 1 ? 'copy runs' : 'copies run'} out</b>`
     + `<div class="ind-bp-rows">${rows}</div>`
     + `<div class="ind-bp-warn-sub">A copy carries a fixed number of runs, so the rest of the batch `
-    + `needs more copies — those are priced into the total above, at contract prices. Nothing is `
-    + `blocked; you just can't start the whole batch off the one you hold.</div></div>`;
+    + `needs more copies — those are priced into the total above, at contract prices.</div></div>`;
 }
 
-function _indMissingBpWarn(d, miss) {
+function _indMissingBpWarn(d) {
+  const miss = (d.metrics && d.metrics.missing_blueprints) || [];
   if (!miss.length) return '';
   const inst = ++_indBpcSeq;
   const rows = miss.map(m => {
@@ -2720,12 +2666,11 @@ function _indMissingBpWarn(d, miss) {
   setTimeout(() => indLoadBpcPrices(inst, miss.map(m => m.type_id), miss), 0);
   // No nagging about roles or connecting more characters — the user can't act on that and doesn't
   // need to be told. Just say the list may be incomplete and give them the price.
-  return `<div class="ind-bp-note"><b>No blueprint found for ${miss.length === 1 ? 'this' : 'these'}</b>`
+  return `<div class="ind-note-block"><b>No blueprint found for ${miss.length === 1 ? 'this' : 'these'}</b>`
     + `<div class="ind-bp-rows">${rows}</div>`
     + `<div class="ind-bp-warn-sub">Blueprints in corp hangars aren't visible here, so prints you `
-    + `already have can still show up in this list. Nothing is blocked and no build decision was `
-    + `changed — it's a price so you can compare against a local seller. Copy prices, where copies `
-    + `are listed, are included in the total above.</div></div>`;
+    + `already have can still show up in this list — it's a price so you can compare against a `
+    + `local seller. Copy prices, where copies are listed, are included in the total above.</div></div>`;
 }
 
 // Skills you don't have to install the jobs this plan schedules. The server sends `skill_gaps` only
@@ -2740,24 +2685,20 @@ const _indSkLvl = n => _INDSK_ROMAN[n] || String(n);
 function _indSkillWarn(d) {
   const g = d.skill_gaps;
   if (!g) return '';                       // feature off — server omitted the key
-  // The SDE predates the feature: say so rather than implying the account is fully skilled, which
-  // is the one wrong answer here (it reads as "you're good to go" when nothing was checked).
-  if (g.sde_ready === false) {
-    return `<div class="ind-sk-note ind-sk-info">Skill requirements aren't loaded yet — the SDE `
-      + `needs its <code>blueprint_skills</code> backfill. Nothing was checked against your characters.</div>`;
-  }
+  // NOTHING is said unless a step is actually blocked. The two info states this used to render —
+  // "the SDE hasn't backfilled blueprint_skills yet" and a bare "no skill data yet for X" box on a
+  // plan with no gaps at all — were both banners about our own state of knowledge, on a page where
+  // the space belongs to what the builder has to do. The unknown-characters line survives INSIDE a
+  // real gap report, where it qualifies a finding they are already reading.
+  if (!g.blocked_steps) return '';
   const unknown = g.characters_without_data || [];
   // A character we've never read skills for is a DIFFERENT answer from one who lacks the skills,
-  // and it's the one the user can fix, so it gets said even when there are no gaps.
+  // and it's the one the user can fix.
   const unknownNote = unknown.length
     ? `<div class="ind-sk-sub">No skill data yet for ${unknown.map(_esc).join(', ')} — `
       + `rescan ${unknown.length === 1 ? 'that character' : 'those characters'} to include `
-      + `${unknown.length === 1 ? 'them' : 'them'} in this check.</div>`
+      + `them in this check.</div>`
     : '';
-  if (!g.blocked_steps) {
-    return unknown.length
-      ? `<div class="ind-sk-note ind-sk-info"><b>Skills check</b>${unknownNote}</div>` : '';
-  }
   const summary = (g.missing || []).map(m =>
     `<span class="ind-sk-chip" title="Needed for ${m.steps} build step${m.steps === 1 ? '' : 's'}">`
     + `${_esc(m.name)} ${_indSkLvl(m.level)}</span>`).join('');
@@ -2772,13 +2713,12 @@ function _indSkillWarn(d) {
       + `<span class="ind-sk-misses">${miss}</span></div>`;
   }).join('');
   const n = g.blocked_steps;
-  return `<div class="ind-sk-note"><b>Missing skills for ${n} build step${n === 1 ? '' : 's'}</b>`
+  return `<div class="ind-note-block ind-note-block-skill"><b>Missing skills for ${n} build step${n === 1 ? '' : 's'}</b>`
     + `<div class="ind-sk-chips">${summary}</div>`
     + `<details class="ind-details"><summary>Which steps, and who comes closest</summary>`
     + `<div class="ind-sk-rows">${rows}</div></details>`
     + `<div class="ind-sk-sub">Skills don't pool across characters — one character installs one `
-    + `job, so each step is checked against whichever of your characters comes closest. Costs and `
-    + `timings above are unchanged; this only tells you what you can't start yet.</div>`
+    + `job, so each step is checked against whichever of your characters comes closest.</div>`
     + unknownNote + `</div>`;
 }
 
@@ -2838,9 +2778,7 @@ function _indRenderPlanBody(d) {
   const tiersData = roots ? _indComputeTiers(roots, new Set((d.shopping_list || []).map(x => x.type_id)))
     : { byType: {}, tiers: {}, maxT: 0, inputsOf: {}, consumersOf: {} };
   const stageModel = _indStageModel(tiersData);
-  const unres = (d.unresolved && d.unresolved.length)
-    ? `<p class="pp-warn">${d.unresolved.length} material(s) had no market price — cost is a floor.</p>` : '';
-  return unres + _indSkillBasisWarn(d) + _indCostBasisWarn(d) + _indBlueprintWarn(d)
+  return _indNotices(d, false)
     + _indMarginalBar(d)
     + _indPipelineHtml(d, tiersData, stageModel)
     + _indStepsHtml(d, stageModel)
@@ -3198,20 +3136,9 @@ function _indIsMultiSite() {
   return ((_indLastPlan && _indLastPlan.build_sites) || []).length > 1;
 }
 
-// The station changes the routing implies: a component built in one structure that has to be
-// hauled to where its consumer is built. Routing deliberately doesn't price freight, so saying
-// what has to move is the other half of that promise — not a footnote.
-function _indMovesHtml() {
-  const moves = (_indLastPlan && _indLastPlan.moves) || [];
-  if (!moves.length) return '';
-  const rows = moves.map(m =>
-    `<li class="ind-move"><span class="ind-move-name">${_esc(m.name)}</span>`
-    + `<span class="ind-move-qty">${(m.units || 0).toLocaleString()}</span>`
-    + `<span class="ind-move-path">${_esc(m.from)} → ${_esc(m.to)}</span></li>`).join('');
-  return `<div class="ind-moves"><h4>Parts to move</h4>`
-    + `<div class="pp-sub">Different rigs, different structures — these are built in one and used in another.</div>`
-    + `<ul class="ind-move-list">${rows}</ul></div>`;
-}
+// The routing's station changes ("Parts to move") are NOT rendered, and the plan no longer
+// computes them. A builder whose jobs are routed to two structures already knows the parts have
+// to travel; a list restating it was a panel that changed nothing anyone does.
 
 function _indGroupJobs(jobs) {
   const by = {};
@@ -3330,10 +3257,9 @@ function indRenderInstall(d) {
     const later = d.later_waves
       ? `<div class="pp-sub ind-later">Then ${d.later_waves} more round${d.later_waves > 1 ? 's' : ''} unlock as these finish · about ${_fmtHours(d.makespan_hours)} to the end.</div>` : '';
 
-    const moves = _indMovesHtml();
     el.innerHTML = doers.length
-      ? `<h3 class="ind-do-title">Do this now</h3><div class="ind-do-grid">${cards}</div>${wait}${later}${moves}`
-      : `<h3 class="ind-do-title">Nothing to start yet</h3>${wait}${later}${moves}`;
+      ? `<h3 class="ind-do-title">Do this now</h3><div class="ind-do-grid">${cards}</div>${wait}${later}`
+      : `<h3 class="ind-do-title">Nothing to start yet</h3>${wait}${later}`;
   } catch (e) { el.innerHTML = ''; }
 }
 

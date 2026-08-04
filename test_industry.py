@@ -1760,18 +1760,17 @@ def test_an_unrouted_plan_is_byte_for_byte_the_old_plan():
     check("reactions keep their own material multiplier and no time bonus",
           flat.struct_mults_for(102, "reaction") == (flat.reaction_material_mult, 1.0))
     a = plan_queue([(100, 3)], mfg, rx, P, ADJ, flat, NAMES, {"manufacturing": 5, "reaction": 5})
-    check("nothing new is reported for a single-facility plan",
-          a["build_sites"] == [] and a["moves"] == [])
+    check("nothing new is reported for a single-facility plan", a["build_sites"] == [])
     check("the plan still costs and schedules", a["metrics"]["total_cost"] > 0
           and a["metrics"]["makespan_hours"] > 0)
 
 
-def test_every_station_change_is_reported():
-    """Routing does NOT price freight — so it owes the builder the list of what has to move. A plan
-    that quietly spreads a capital build over three structures and never says so is one you find
-    out about while holding the parts."""
-    print("test_every_station_change_is_reported")
-    from app.industry.routing import plan_moves
+def test_a_routed_plan_names_the_structures_it_used():
+    """Routing spreads a build over several structures, so every job has to say WHERE to install
+    it. (The per-part haul list this test used to assert — `moves` / `plan_moves` — was removed on
+    2026-08-04: a builder routing jobs to two structures already knows the parts travel, and the
+    build page has no room for a panel nobody acts on.)"""
+    print("test_a_routed_plan_names_the_structures_it_used")
     con = _seed_con()
     mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
     P = _prices(SELL)
@@ -1782,20 +1781,15 @@ def test_every_station_change_is_reported():
                         102: _site("s:2", "Parts yard", 0, 0)}
     res = plan_queue([(100, 4)], mfg, rx, P, ADJ, params, NAMES,
                      {"manufacturing": 5, "reaction": 5})
-    names = {m["name"] for m in res["moves"]}
-    check("the component built elsewhere is listed as a move", "Gadget" in names)
-    check("a component built where it is consumed is not", "Sprocket" not in names)
-    move = next(m for m in res["moves"] if m["name"] == "Gadget")
-    check("the move says where from and where to",
-          move["from"] == "Parts yard" and move["to"] == "Hull yard" and move["units"] > 0)
     check("the plan says which structures it used",
           {s["name"] for s in res["build_sites"]} == {"Hull yard", "Parts yard"})
     check("build steps are attributed to their structure",
           all(r["site"] for r in res["requirements"]))
     check("every scheduled job names its structure",
           all(t.get("site") for w in res["schedule"]["waves"] for t in w["tasks"]))
-    check("no moves when everything is built in one place",
-          plan_moves({100: {"build": True, "runs": 1}}, mfg, rx, BuildParams(), NAMES) == [])
+    check("nothing computes a haul list any more",
+          not hasattr(__import__("app.industry.routing", fromlist=["x"]), "plan_moves")
+          and "moves" not in res)
 
 
 def test_the_rig_family_registry_is_the_single_source():
@@ -2351,7 +2345,7 @@ def main():
     test_cost_materials_time_and_schedule_all_use_the_same_site()
     test_the_job_fee_follows_the_system_the_job_lands_in()
     test_an_unrouted_plan_is_byte_for_byte_the_old_plan()
-    test_every_station_change_is_reported()
+    test_a_routed_plan_names_the_structures_it_used()
     test_the_rig_family_registry_is_the_single_source()
     test_a_container_carries_where_it_is()
     test_an_unreadable_structure_never_fails_the_scan()

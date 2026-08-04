@@ -280,10 +280,9 @@ def route_job(sites: list[BuildSite], group_id: int | None, fee_extra: float = 0
     This is the math deciding, not a knob (CLAUDE.md rule 3) — there is no user-facing choice of
     where a component is built, only the structures they told us they have.
 
-    Freight is deliberately NOT priced in. The plan reports every station change it introduced
-    (see `plan_queue`'s `moves`) and leaves the "is 2% ME worth the trip" call to the builder — a
-    rejection rule built on volumes we have never verified would refuse sensible moves and be
-    impossible to debug.
+    Freight is deliberately NOT priced in: a rejection rule built on volumes we have never
+    verified would refuse sensible moves and be impossible to debug. The "is 2% ME worth the trip"
+    call stays the builder's, and `build_sites` names the structures the plan used.
     """
     q = lambda v: round(v / ROUTE_NOISE_PCT)     # differences inside the band tie
     best = None

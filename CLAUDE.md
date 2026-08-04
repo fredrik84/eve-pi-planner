@@ -1049,7 +1049,8 @@ ORIGINAL is one item too) plus the copies the plan already buys to cover the run
   RUNS are short; on a capital that difference is billions the builder did not ask to spend. It has
   its own list (`blueprint_parallel`), its own metrics (`blueprint_parallel_cost` /
   `_copies`), its own per-requirement count (`copies_for_slots`, a FOURTH number beside `runs`,
-  `blueprint.runs` and `copies_to_buy`) and its own note in the UI. Never folded into
+  `blueprint.runs` and `copies_to_buy`) and its own line in the UI — the SPEND is real money and
+  stays visible whatever else gets trimmed off that page. Never folded into
   `blueprint_cost` — same rule as `marginal_saving` and the `blacklisted` badge.
 - **Never buy what cannot be bought.** `bpo_only` and a type with nothing listed cap instead,
   running fewer, longer jobs; a type with neither an owned copy nor a listing is UNKNOWN and stays
@@ -1087,7 +1088,9 @@ ORIGINAL is one item too) plus the copies the plan already buys to cover the run
     cap over just the subset we can see.
   Silently not capping is its own kind of lie once the user knows the feature exists, so the plan
   says which state it is in: `print_coverage` (`{characters, cached, missing, complete,
-  prints_counted}`) and a UI note naming how many characters are still to connect. Pinned by
+  prints_counted}`). That state used to get its own banner ("this schedule assumes unlimited
+  blueprint copies"); it was cut on 2026-08-04 as prose nobody acts on, and now rides in the
+  build-time tile's tooltip instead. **The gate itself is untouched and must stay that way.** Pinned by
   `test_a_reaction_formula_is_an_item_too_and_unknown_ownership_never_serialises` and
   `test_a_half_connected_account_is_never_capped_on_what_it_half_shows` — the second exists
   specifically so the coverage check can't be "simplified" away later.
@@ -1247,6 +1250,27 @@ and no session: the page must be incapable of showing account data even by accid
   button.
 - Public reads are cached 60s (`indshare:<id>`); a public page whose every render costs two plans
   would otherwise be an amplification lever.
+
+### The build page's notice stack (trimmed 2026-08-04)
+
+The page had accumulated a column of coloured banners above the plan. They are now ONE block
+(`_indNotices` in `static/industry.js`, `.ind-notes`), and the bar for being in it is: **does this
+change what the builder DOES or what they SPEND, or correct a number they would otherwise
+believe?** A notice a reader will not act on is not worth its space, however true it is.
+
+Kept: unpriced materials (cost is a floor), skill-time basis (delivery times are assumed V/V),
+cost basis (job fees exclude the system index — with the button that fixes it), copies short of
+runs, copies bought for parallelism (real money, one line, per-type detail in the tooltip), prints
+the plan is short of (one line, best trade named), missing blueprints (contract prices), and the
+skill-gap blocker list — which renders in the **preview modal only**, as it always has.
+
+Cut, deliberately: **"Parts to move"** (`plan_moves`, gone server-side too — a builder routing jobs
+to two structures knows the parts travel); the **skill/training advisor card** (`advisor.py` and
+its endpoint, tests and flag all still live — it just isn't about THIS build, so it isn't on this
+page); the **"unlimited blueprint copies" coverage banner** (now a tooltip, see above); the SDE
+`blueprint_skills`-backfill notice and the standalone "no skill data yet for X" box (both were
+banners about our own state of knowledge; the unknown-characters line survives inside a real gap
+report). Don't re-add any of these without a reason that clears the bar above.
 
 ## Industry: first use
 
