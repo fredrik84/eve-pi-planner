@@ -377,6 +377,39 @@ new runtime dependency for the app itself.
 **Related, still open:** `assign_reaction` has no idempotency and no capacity check, which is what
 turned a UI bug into 27 rows. See the note under item 7.
 
+## 9. Name the SYSTEM a container is in, wherever containers are listed (2026-08-04)
+
+Reported from use: a container in a source/output list is identified by its own name and its parent
+hangar, and nothing says **where it is**. With containers in several stations that is ambiguous
+exactly when it matters — picking where a build sources from, and where its output lands.
+
+What a container source carries today (`_split_by_source`, `app/industry/assets.py:203`):
+
+```python
+sources.setdefault(key, {"kind": "container", "name": f"Container {loc}", "item_id": loc,
+                         "parent": hangar_name(pflag) if pflag in hangar_flags else ""})
+```
+
+`name` is the ESI-resolved container name (`_apply_container_names`, cosmetic — an unnamed
+container is still usable), `parent` is the hangar division. No location at all.
+
+**The data is already in hand.** `hangar_of()` walks an asset to the root of its container chain,
+and that root asset's `location_id` IS the station or structure. So the walk that already exists
+just needs to also return the root's location, which then resolves to a system:
+
+- station id → `/universe/stations/{id}` → `system_id`
+- structure id → `/universe/structures/{id}` → `solar_system_id` (already done for a different
+  purpose in `app/markets.py:162` — reuse that path and its auth/error handling rather than adding
+  a second one)
+- system id → name from the local `solar_systems` table (`app/planner_algo.py:1261` joins it)
+
+**Watch for:** structure lookups are ACL-gated — a structure the character can't see 403s, so this
+has to degrade to no system name rather than failing the asset scan, the same way container naming
+already does. Cache the id→system resolution; assets refresh often and these ids are static.
+
+Applies to every list that shows containers, not just the industry sourcing panel — the reactions
+and PI sides surface the same source rows.
+
 ## 7. Reaction assignment has no idempotency or capacity guard
 
 `POST /api/reactions/assign` (`app/reactions/jobs.py`) is a bare INSERT: re-posting the same
