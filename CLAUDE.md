@@ -992,10 +992,46 @@ a BPO and the copy's remaining runs for a BPC. The shortfall is reported per req
 `runs_short` and surfaced by `_indCopyShortWarn`. Note copies come whole, so a shortfall of 16 and a
 batch of 20 both cost four 5-run copies — owning one is not always cheaper.
 
+**EVERY copy counts, and ME/TE is per JOB off the copy it runs on.** `owned_blueprints()` used to
+collapse a product's whole holding down to ONE print (BPO > BPC, then ME, then TE) and discard the
+rest, so `covered` above saw one copy's runs: measured on prod, Capital Armor Plates 212 owned runs
+across 14 copies counted as **5**, Nitrogen Fuel Block 3,975 across 21 counted as **175** — the plan
+then reported a huge `runs_short` and charged for copies the builder already had. It now returns
+`{me, te, kind, runs, copies, copy_count}`: `copies` is the whole holding ordered the way it will be
+consumed (`_copy_rank` — best RESEARCHED first, an original winning ties because it never runs out),
+`runs` is total coverage (-1 = an original owned anywhere in the set), `me`/`te` describe the first
+copy a job will run off.
+- **Classification uses `runs == -1`, not `quantity`** (`classify_blueprint`). ESI's quantity is -1
+  for a singleton and -2 for a copy, but a POSITIVE quantity is a stack of ORIGINALS fresh from the
+  market — reading `quantity == -1` as the only original filed those as copies carrying -1 runs,
+  i.e. covering nothing. 26 blueprints in prod, each telling its owner to buy a print they hold.
+- **Per job:** `build_tasks` assigns copies to jobs best-first (`_jobs_on_copies`), so each job
+  carries its own copy's ME/TE — materials and duration legitimately differ between jobs of one type
+  in one batch — and a chunk longer than the copy it lands on is SPLIT rather than emitted as a job
+  nobody can install. Runs past everything owned are built at `buy_me_te` (the contract copy the
+  plan would buy), not at the best copy's research. The scheduled job carries `me`/`te`.
+- **The aggregate is runs-weighted, deliberately.** Demand is aggregated BEFORE jobs are split, so a
+  per-job figure has no meaning there: `me_te_for(tid, activity, runs)` takes the batch size and
+  returns a runs-weighted blend over exactly the copies best-first consumption will spend on it
+  (`blend_me_te`), with the remainder at `buy_me_te`. Using the best copy for the whole batch would
+  over-credit every run after that copy runs out. `runs=None` (a bare call) weights the whole
+  holding, which is the conservative reading. The `requirements` row reports that blend.
+- **Precedence is unchanged: user override > owned blueprint > contract copy > ME 0/TE 0.** An
+  override sets `me_source[tid] = "override"`, and `copies_for` returns nothing for such a type, so
+  the per-copy path can never outrank what the user said explicitly.
+- Covered by `test_every_copy_the_account_holds_counts`,
+  `test_a_stack_of_originals_is_not_a_copy_that_covers_nothing`,
+  `test_each_job_runs_off_the_copy_it_is_installed_on`,
+  `test_an_override_still_beats_every_copy_you_own` and
+  `test_a_single_copy_account_plans_exactly_as_before` (a one-print account plans byte for byte as
+  it did).
+
 **A manufacturing job also cannot exceed the blueprint COPY's runs.** The SDE `max_runs` is the
-blueprint type's per-job limit; what actually binds is the copy — `owned[tid].runs` for one the
-account holds, `bp_acquire[tid].runs_per_copy` for one the plan would buy (one contract is one
-copy). This only became load-bearing WITH the packing above: making jobs longer is exactly what
+blueprint type's per-job limit; what actually binds is the copy — the largest single copy in
+`owned[tid].copies` for ones the account holds, `bp_acquire[tid].runs_per_copy` for ones the plan
+would buy (one contract is one copy). With copies in hand but nothing listed to size a bought one,
+the copies you hold are the only evidence there is and a bought copy is assumed no larger: an
+over-split batch is merely inefficient, a job bigger than its copy cannot be installed at all. This only became load-bearing WITH the packing above: making jobs longer is exactly what
 pushes a job past a copy's runs, and a 20-run job off 5-run copies is not a plan, it's a plan that
 cannot be installed. An owned BPO has no such limit. Reactions have no blueprint and are untouched.
 

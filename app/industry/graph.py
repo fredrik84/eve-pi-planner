@@ -79,6 +79,9 @@ class BuildParams:
     # te_pct fallback. `owned` carries the same map's ownership detail for display.
     me_by_product: dict = field(default_factory=dict)
     owned: dict = field(default_factory=dict)
+    # ME/TE of the copy the plan would BUY (from the contract index) — what runs past the owned
+    # copies are built at. Falls back to the global me_pct/te_pct when nothing is listed.
+    buy_me_te: dict = field(default_factory=dict)
     # product_type_id -> "owned" | "contract" | "override". Purely for reporting: a plan that
     # silently assumed ME 10 off a contract is one the user can't sanity-check.
     me_source: dict = field(default_factory=dict)
@@ -144,15 +147,91 @@ class BuildParams:
         ci = self.mfg_cost_index if activity == "manufacturing" else self.rx_cost_index
         return ci + self.facility_tax_pct / 100.0 + SCC_SURCHARGE_PCT
 
-    def me_te_for(self, type_id: int, activity: str) -> tuple[float, float]:
-        """(me_pct, te_pct) for a manufacturing product: its owned-blueprint values if known, else
-        the global fallback. Reactions have no blueprint ME/TE (rig-based, via the material mult),
-        so they return (0, 0)."""
+    def copies_for(self, type_id: int, activity: str) -> list[dict]:
+        """The owned copies a job for this product may run off, best-researched first.
+
+        Empty for a reaction (no blueprint), for a product the account owns nothing for, and for one
+        the user has explicitly overridden — an override is the user telling us which print they
+        will actually use, so it wins over every copy we can see.
+        """
+        if activity != "manufacturing" or self.me_source.get(type_id) == "override":
+            return []
+        own = self.owned.get(type_id)
+        if not own:
+            return []
+        # `owned` carries every copy (see app.industry.blueprints.owned_blueprints). A hand-built
+        # params — a test, a REPL — may carry only the summary; that is one copy, described.
+        return own.get("copies") or [{"me": own.get("me") or 0, "te": own.get("te") or 0,
+                                      "kind": own.get("kind") or "bpc",
+                                      "runs": own.get("runs", -1)}]
+
+    def buy_me_te_for(self, type_id: int) -> tuple[float, float]:
+        """ME/TE of the copy the plan would buy — what runs past the owned copies are built at."""
+        return self.buy_me_te.get(type_id) or (self.me_pct, self.te_pct)
+
+    def me_te_for(self, type_id: int, activity: str, runs: int | None = None) -> tuple[float, float]:
+        """(me_pct, te_pct) for a manufacturing product. Reactions have no blueprint ME/TE
+        (rig-based, via the material mult), so they return (0, 0).
+
+        **ME/TE is per JOB, off the copy that job runs on** — so with several owned copies of mixed
+        research this is an AGGREGATE, and the caller says how big the batch is so the aggregate can
+        be honest. `runs` given: a runs-weighted figure over exactly the copies best-first
+        consumption will spend on that many runs, plus whatever the plan buys for the remainder.
+        Using the best copy for the whole batch instead would over-credit every run after the first
+        copy runs out; the per-job values themselves come from `copies_for` in build_tasks.
+        """
         if activity != "manufacturing":
             return (0.0, 0.0)
-        if type_id in self.me_by_product:
-            return self.me_by_product[type_id]
-        return (self.me_pct, self.te_pct)
+        copies = self.copies_for(type_id, activity)
+        if not copies:
+            if type_id in self.me_by_product:
+                return self.me_by_product[type_id]
+            return (self.me_pct, self.te_pct)
+        return blend_me_te(copies, runs, self.buy_me_te_for(type_id))
+
+
+def blueprint_summary(own: dict | None) -> dict | None:
+    """What a payload says about the blueprint(s) you hold for a product — everything except the
+    per-copy list, which is a planning input rather than something a page needs to render."""
+    if not own:
+        return own
+    return {k: v for k, v in own.items() if k != "copies"}
+
+
+def blend_me_te(copies: list[dict], runs: int | None,
+                fallback: tuple[float, float]) -> tuple[float, float]:
+    """Runs-weighted (me, te) over the copies a batch of `runs` will actually be built off.
+
+    Copies arrive best-researched first and are consumed in that order; anything past what they
+    cover is built off `fallback` — the copy the plan would buy. An ORIGINAL (`runs < 0`) has no
+    limit, so it answers for everything left.
+
+    `runs=None` means the batch size isn't known at this point (a bare call, or the representative
+    single-run costing). The whole holding is then weighted, which is the conservative reading: it
+    never credits the best copy with runs it cannot carry.
+    """
+    if not copies:
+        return fallback
+    left = runs
+    if left is None:
+        left = sum(c.get("runs") or 0 for c in copies if (c.get("runs") or -1) >= 0)
+    used: list[tuple[float, float, float]] = []      # (n, me, te)
+    for c in copies:
+        if left <= 0:
+            break
+        cr = c.get("runs")
+        n = left if cr is None or cr < 0 else min(left, int(cr))
+        if n <= 0:
+            continue
+        used.append((n, c["me"], c["te"]))
+        left -= n
+    if left > 0:
+        used.append((left, fallback[0], fallback[1]))
+    total = sum(n for n, _m, _t in used)
+    if total <= 0:                       # nothing to weigh (e.g. an original only) — it is the copy
+        return (copies[0]["me"], copies[0]["te"])
+    return (sum(n * m for n, m, _t in used) / total,
+            sum(n * t for n, _m, t in used) / total)
 
 
 # ── SDE recipe graph loaders ──────────────────────────────────────────────────────────────────
@@ -370,10 +449,11 @@ def build_plan(target: int, quantity: int, mfg: dict, rx: dict, prices: dict, ad
                 "source": node.get("source"),
             }
 
-        me, te = params.me_te_for(type_id, activity)
         mult, st = params.struct_mults_for(type_id, activity)
         output_qty = recipe["output_qty"]
         runs = max(1, math.ceil(qty / output_qty))
+        # Runs first: ME/TE depends on how many copies this batch consumes.
+        me, te = params.me_te_for(type_id, activity, runs)
         produced = runs * output_qty
         if produced > qty:   # batch-rounding overproduction is reusable inventory, credit it back
             totals["leftover_value"] += (produced - qty) * (node["build_unit_cost"] or 0.0)
@@ -400,7 +480,8 @@ def build_plan(target: int, quantity: int, mfg: dict, rx: dict, prices: dict, ad
             "decision": "build", "activity": activity, "qty": qty, "runs": runs,
             "produced": produced, "excess": produced - qty,
             "unit_cost": node["build_unit_cost"], "buy_unit_cost": node["buy_unit_cost"],
-            "job_cost": job_cost, "owned": params.owned.get(type_id), "inputs": children,
+            "job_cost": job_cost, "owned": blueprint_summary(params.owned.get(type_id)),
+            "inputs": children,
             # Which of your structures this step was costed in — the rigs there are what the ME/TE
             # above came from, so the number is unreadable without it.
             "site": (params.site_for(type_id, activity) or {}).get("name"),
@@ -619,7 +700,12 @@ def resolve_build_params(context_id: int, me_pct: float, te_pct: float,
         owned = owned_blueprints(context_id)
     except Exception:
         owned = {}
-    me_by_product = {p: (o["me"], o["te"]) for p, o in owned.items()}
+    # The per-product aggregate is a runs-weighted figure over the WHOLE holding, not the best copy:
+    # crediting a 20-run batch with the ME of a 5-run copy under-states its materials. The per-JOB
+    # value comes off the copies themselves (BuildParams.me_te_for / build_tasks). This map is only
+    # the fallback for a product with no copies to read.
+    me_by_product = {p: blend_me_te(o.get("copies") or [o], None, (me_pct, te_pct))
+                     for p, o in owned.items()}
     mfg_skill, rx_skill, skill_basis = account_industry_time_mults(context_id, with_basis=True)
     return BuildParams(
         me_pct=me_pct, te_pct=te_pct,
@@ -733,10 +819,15 @@ def prepare_plan_inputs(ctx: int, targets: list[tuple[int, int]], opts: BuildOpt
     # index we just priced against. That inflated both materials and job time on every component
     # bought as a BPC. Owned blueprints still win: your own print is what you'd actually use.
     for tid, info in (params.bp_acquire or {}).items():
-        if tid in params.me_by_product or info.get("kind") != "bpc":
+        if info.get("kind") != "bpc":
             continue
         me_te = representative_me_te(info)
-        if me_te:
+        if not me_te:
+            continue
+        # Recorded for EVERY type, owned or not: it is what a batch bigger than the copies you hold
+        # is built off, so it has to be known even when the owned copies win the first runs.
+        params.buy_me_te[tid] = me_te
+        if tid not in params.me_by_product:
             params.me_by_product[tid] = me_te
             params.me_source[tid] = "contract"
     for tid in params.owned:
