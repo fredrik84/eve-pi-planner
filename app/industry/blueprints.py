@@ -71,6 +71,9 @@ def fetch_character_blueprints(character_id: int, access_token: str) -> list[dic
     return out
 
 
+_STACK_CAP = 200          # how far a stack of identical prints is expanded into separate items
+
+
 def _copy_rank(c: dict) -> tuple:
     """Consumption order for one product's copies: BEST RESEARCHED FIRST, an original winning ties.
 
@@ -121,6 +124,16 @@ def owned_blueprints(context_id: int) -> dict[int, dict]:
         ).fetchall()
         bp2prod = {r["blueprint_type_id"]: r["product_type_id"]
                    for r in con.execute("SELECT blueprint_type_id, product_type_id FROM blueprints")}
+        # ...and REACTION FORMULAS, which this map used to drop on the floor. `blueprints` is filled
+        # from the SDE's manufacturing activity only, so not one of the 112 `reaction_id`s appears in
+        # it and every formula ESI returned was discarded at this join — 50 distinct formulas sitting
+        # in the cache in production, unused. A `reaction_id` IS the formula item's own type_id (they
+        # are the "… Reaction Formula" types), so the mapping needs no new data, fetch or scope.
+        try:
+            for r in con.execute("SELECT reaction_id, output_type_id FROM reactions"):
+                bp2prod.setdefault(r["reaction_id"], r["output_type_id"])
+        except Exception:
+            pass          # an SDE without the reactions table is a manufacturing-only answer
     finally:
         con.close()
 
@@ -136,10 +149,18 @@ def owned_blueprints(context_id: int) -> dict[int, dict]:
                 continue
             runs = b.get("runs", -1)
             kind = classify_blueprint(b.get("quantity"), runs)
-            by_product.setdefault(prod, []).append({
-                "me": b.get("me", 0) or 0, "te": b.get("te", 0) or 0, "kind": kind,
-                "runs": -1 if kind == "bpo" else max(0, int(runs or 0)),
-            })
+            entry = {"me": b.get("me", 0) or 0, "te": b.get("te", 0) or 0, "kind": kind,
+                     "runs": -1 if kind == "bpo" else max(0, int(runs or 0))}
+            # A positive quantity is a STACK, and every print in it is a separate item that can hold
+            # a separate job — twenty Synth Mindflood formulas are twenty reactors' worth, not one.
+            # Copies never stack (quantity -2), so this only ever expands originals. Bounded, because
+            # the count only decides how many jobs may run at once and nobody runs 200 at a time.
+            try:
+                n = int(b.get("quantity") or 1)
+            except (TypeError, ValueError):
+                n = 1
+            for _ in range(max(1, min(n, _STACK_CAP))):
+                by_product.setdefault(prod, []).append(dict(entry))
 
     owned: dict[int, dict] = {}
     for prod, copies in by_product.items():

@@ -277,39 +277,110 @@ def _copy_limits(params, tid: int, activity: str,
     return copies, (max(limits) if limits else None), buy_runs
 
 
-def _jobs_on_copies(chunks: list[int], copies: list[dict], fallback: tuple[float, float],
-                    buy_runs: int | None) -> list[tuple[int, float, float]]:
-    """[(runs, me, te)] — one entry per JOB, each running off ONE blueprint copy, best first.
+def _print_limits(params, tid: int, activity: str, runs: int) -> tuple[int | None, bool]:
+    """(how many physical PRINTS this type can run jobs off, whether more can be bought).
 
-    A job cannot span two copies, so a chunk longer than the copy it lands on is split rather than
-    quietly installed as an impossible job. Runs past everything owned are built off the copy the
-    plan would buy, at that copy's research: a 20-run batch against a 10-run ME10 copy is ten runs
-    at ME10 and ten at whatever the market is selling, not twenty at ME10.
+    A blueprint is an item, and it is LOCKED while a job is installed on it: one print runs one job
+    at a time, however many slots are free and however many runs the batch needs. The scheduler
+    modelled runs and slots and never this, so one owned 4-run copy planned four simultaneous jobs
+    and one owned BPO planned ten — unlimited *runs* read as unlimited *parallelism*.
+
+    The count is what the account holds (`copies` is one entry per item, an ORIGINAL included — it
+    never runs out, but it is still one item) plus the copies the plan already buys to cover the runs
+    those don't. `can_buy` says whether more prints are purchasable at all: `bpo_only` and a type
+    with nothing listed cap instead, running fewer jobs rather than inventing a purchase.
+
+    None = nothing is known about the print (a type with neither an owned copy nor a listing), which
+    leaves the old uncapped behaviour exactly as it was.
+
+    **Reactions have a formula, and a formula is an item too** — it locks into the reactor for the
+    job, so one formula is one concurrent reaction however many reactor slots are free (a real
+    2× Phoenix queue planned Axosomatic Neurolink Enhancer as 17 simultaneous jobs off the ONE
+    formula that account holds). It differs from a blueprint copy in three ways that all matter:
+    formulas cannot be copied, so runs-per-job never binds and this is purely a CONCURRENCY bound;
+    they STACK, so the cap is how many items are held (20× Synth Mindflood is 20 jobs, not one); and
+    they are DURABLE, so the plan never buys one — `acquisition_costs` already refuses to charge an
+    original to a single build, and a formula is reused by every build after this one.
+
+    **Unknown ownership must not serialise anything.** Blueprint scope is opt-in and per character —
+    one production account has caches for 2 of its 14 characters — so a formula we cannot see means
+    *we don't know*, never *they hold none*. No observation ⇒ no cap, exactly as today.
     """
+    if activity != "manufacturing":
+        own = (params.owned or {}).get(tid) or {}
+        if not own:
+            return None, False               # ownership unobserved — never cap on absent evidence
+        held = own.get("copies")
+        return max(1, len(held) if held else 1), False
+    copies = params.copies_for(tid, activity)
+    acq = (params.bp_acquire or {}).get(tid) or {}
+    buy_runs = int(acq.get("runs_per_copy") or 0)
+    can_buy = acq.get("kind") == "bpc" and buy_runs > 0
+    if not copies and not acq:
+        return None, False                   # nothing to go on — don't invent a cap
+    unlimited = any((c.get("runs") if c.get("runs") is not None else -1) < 0 for c in copies)
+    owned_runs = 0 if unlimited else sum(max(0, int(c.get("runs") or 0)) for c in copies)
+    short = 0 if unlimited else max(0, int(runs) - owned_runs)
+    bought = math.ceil(short / buy_runs) if (short > 0 and can_buy) else 0
+    # Owning nothing and buying nothing for runs still means ONE print: the original a `bpo_only`
+    # type forces you to buy, or the single copy behind an unpriced listing.
+    return max(1, len(copies) + bought), can_buy
+
+
+def _jobs_on_copies(runs: int, n: int, copies: list[dict], fallback: tuple[float, float],
+                    buy_runs: int | None) -> list[tuple[int, float, float]]:
+    """[(runs, me, te)] — one entry per JOB, each running off ONE PRINT, best-researched first.
+
+    `n` jobs are wanted, and the prints to run them on are the account's own copies (best first)
+    followed by however many the plan buys. A job cannot span two prints, so the runs are dealt out
+    one print at a time: each takes an even share (`_balanced`) or its proportional share of the
+    capacity left, whichever is larger, and never more than it carries.
+
+    That "or proportional" is what stops runs stranding. Dealing purely evenly gives a 5-run copy
+    three runs beside a 1-run copy's one, leaves two runs with nowhere to go, and needs a SECOND job
+    back on the first copy — which is a job the plan counted as concurrent and physically is not.
+    Sizing by capacity lands the same work in two jobs on the two prints there actually are.
+
+    Runs past everything owned are built off the copy the plan would buy, at that copy's research: a
+    20-run batch against a 10-run ME10 copy is ten runs at ME10 and ten at whatever the market is
+    selling, not twenty at ME10.
+    """
+    left = int(runs)
+    if left <= 0:
+        return []
+    n = max(1, int(n))
+
+    def bought() -> tuple[int | None, float, float]:
+        return (int(buy_runs) if buy_runs else None, fallback[0], fallback[1])
+
+    prints: list[tuple[int | None, float, float]] = []
+    for c in copies:
+        cr = c.get("runs")
+        cap = None if (cr is None or int(cr) < 0) else max(0, int(cr))
+        if cap == 0:                       # a spent copy is not a print you can install on
+            continue
+        prints.append((cap, c["me"], c["te"]))
+    while len(prints) < n:                 # the rest of the wanted jobs run off bought copies
+        prints.append(bought())
+
     out: list[tuple[int, float, float]] = []
-    idx, left_in_copy = 0, None
-    for chunk in chunks:
-        need = int(chunk)
-        while need > 0:
-            if idx < len(copies):
-                c = copies[idx]
-                cr = c.get("runs")
-                unlimited = cr is None or int(cr) < 0
-                if left_in_copy is None:
-                    left_in_copy = None if unlimited else max(0, int(cr or 0))
-                if left_in_copy == 0:            # spent copy (or a 0-run one) — move on
-                    idx += 1
-                    left_in_copy = None
-                    continue
-                take = need if left_in_copy is None else min(need, left_in_copy)
-                out.append((take, c["me"], c["te"]))
-                if left_in_copy is not None:
-                    left_in_copy -= take
-                need -= take
-            else:
-                take = need if not buy_runs else min(need, buy_runs)
-                out.append((take, fallback[0], fallback[1]))
-                need -= take
+    i = 0
+    while left > 0:
+        if i >= len(prints):
+            # The prints ran out of runs before the batch did. That batch is already reported
+            # `runs_short`; it needs more copies, and each of those is another print.
+            prints.append(bought())
+        cap, me, te = prints[i]
+        rest = prints[i:]
+        even = _balanced(left, len(rest))[0]
+        finite = [c for c, _m, _t in rest if c is not None]
+        prop = (math.ceil(left * cap / sum(finite))
+                if cap is not None and len(finite) == len(rest) and sum(finite) > 0 else even)
+        want = max(even, prop)
+        take = max(1, min(left, want if cap is None else min(cap, want)))
+        out.append((take, me, te))
+        left -= take
+        i += 1
     return out
 
 
@@ -442,7 +513,9 @@ def build_tasks(agg: dict, mfg: dict, rx: dict, params: BuildParams,
                 pools: dict[str, int] | None = None,
                 depths: dict[int, int] | None = None,
                 deps: dict[int, set[int]] | None = None,
-                align: bool = True) -> tuple[list[Task], dict]:
+                align: bool = True,
+                parallel_copies: dict[int, int] | None = None,
+                print_gaps: dict[int, dict] | None = None) -> tuple[list[Task], dict]:
     """One or more Task instances per built type. A type's runs are split so they can run in
     PARALLEL across the pool's slots — up to `pool_size` concurrent jobs — while still respecting
     the per-BPC run cap (`max_runs`). This is what lets a big reaction (thousands of runs, no BPC
@@ -462,6 +535,18 @@ def build_tasks(agg: dict, mfg: dict, rx: dict, params: BuildParams,
     FEWEST jobs that still finish by then. The per-BPC cap and "at most one job per run" still bind,
     and no type is ever given fewer than one job. Without `depths` the old maximal split is used, so
     callers that don't have the dependency graph to hand are unaffected.
+
+    **A type never runs more jobs at once than it has PRINTS** (`_print_limits`). Slots and runs are
+    not the only thing a job needs: it needs a blueprint, and that blueprint is LOCKED for the
+    duration of the job. Where filling the free slots would take more prints than the account holds
+    and copies ARE listed, the plan buys them — and reports them separately through `parallel_copies`
+    ({type_id: copies}), because a copy bought to fill a SLOT is a different purchase from one bought
+    because the RUNS are short, and on a capital hull that difference is billions the builder did not
+    ask to spend. Where copies cannot be bought (`bpo_only`, nothing listed) the cap simply stands
+    and the type runs fewer, longer jobs — and what holding more prints would be worth is reported
+    through `print_gaps` ({type_id: {held, jobs, could_run, extra, hours, hours_if_held}}) instead.
+    That is the whole answer for a REACTION: a formula is durable and reused by every later build,
+    so the plan says what another one would save and never spends the builder's ISK on it.
     """
     pools = pools or {}
     tasks: list[Task] = []
@@ -499,9 +584,22 @@ def build_tasks(agg: dict, mfg: dict, rx: dict, params: BuildParams,
         cap = max(1, cap)
         # (a) fill up to P slots concurrently, (b) never exceed the per-job run cap — whichever
         # forces MORE jobs. This is the widest split; the floor is what the cap alone demands.
-        n_wide = max(min(P, R), math.ceil(R / cap))
+        n_floor = math.ceil(R / cap)
+        n_wide = max(min(P, R), n_floor)
+        # ...and (c) a job needs a PRINT, which is locked while it runs. One copy is one job at a
+        # time whatever the pool has free. When more prints can't be bought the cap simply binds; the
+        # run floor still wins, because splitting below it would emit a job no copy can carry (that
+        # batch is already reported `runs_short` — it is short of runs, not of parallelism).
+        prints, can_buy_prints = _print_limits(params, tid, activity, R)
+        n_free = n_wide
+        if prints is not None and not can_buy_prints:
+            n_wide = max(n_floor, min(n_wide, prints))
         plan[tid] = {"activity": activity, "per_run": per_run, "base_run": base_run,
-                     "copies": copies,
+                     "copies": copies, "prints": prints, "can_buy_prints": can_buy_prints,
+                     # What the split would have been with prints to spare — the difference is what
+                     # holding more of them would buy, which is worth SAYING even where it isn't
+                     # worth spending (a formula is durable; the plan reports, never buys).
+                     "n_free": n_free,
                      # What runs past the owned copies are built at. With no owned copies at all
                      # this is simply the batch figure — so a plan with nothing owned, or with a
                      # user override, comes out exactly as it did before any of this.
@@ -619,6 +717,26 @@ def build_tasks(agg: dict, mfg: dict, rx: dict, params: BuildParams,
 
     for tid, p in plan.items():
         n = _packed_jobs(p)
+        # Prints bought purely to run these jobs side by side. Decided HERE, after packing, and not
+        # off the widest split: the packed count is already the fewest jobs that land inside the
+        # window, so every print this asks for is one that genuinely buys time — the same rule the
+        # rest of this module works to. Nothing is bought where nothing is listed (`can_buy_prints`).
+        if parallel_copies is not None and p.get("can_buy_prints") and p.get("prints") is not None:
+            extra = max(0, n - p["prints"])
+            if extra:
+                parallel_copies[tid] = extra
+        # ...and where prints are what's short and buying them is NOT the plan's call — a reaction
+        # formula (durable, reused by every future build) or a blueprint with no copies on offer —
+        # say what holding more would be worth instead of quietly running slower.
+        if (print_gaps is not None and p.get("prints") is not None and not p.get("can_buy_prints")
+                and p.get("n_free", 0) > p["prints"]):
+            free_jobs = max(1, p["n_free"])
+            print_gaps[tid] = {
+                "activity": p["activity"], "held": p["prints"], "jobs": n,
+                "could_run": free_jobs, "extra": free_jobs - p["prints"],
+                "hours": round(math.ceil(p["runs"] / n) * p["per_run"] / 3600.0, 2),
+                "hours_if_held": round(math.ceil(p["runs"] / free_jobs) * p["per_run"] / 3600.0, 2),
+            }
         why = {
             "runs_per_job": math.ceil(p["runs"] / n),
             "runs": p["runs"], "jobs": n,
@@ -640,7 +758,7 @@ def build_tasks(agg: dict, mfg: dict, rx: dict, params: BuildParams,
         # first jobs installed are the well-researched ones. This can add jobs the packing didn't
         # ask for (a chunk longer than the copy it lands on has to be split), which is the honest
         # answer: the alternative is a job that cannot be installed.
-        jobs = _jobs_on_copies(_balanced(p["runs"], n), p["copies"], p["buy_me_te"], p["buy_runs"])
+        jobs = _jobs_on_copies(p["runs"], n, p["copies"], p["buy_me_te"], p["buy_runs"])
         for i, (r, me_i, te_i) in enumerate(jobs):
             t = Task(f"{tid}-{i}", tid, p["activity"], r,
                      r * p["base_run"] * (1 - te_i / 100.0))
@@ -832,8 +950,11 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
     deps = _built_deps(agg, mfg, rx)
     # Deps as well as depths: a type's real deadline is when the job consuming it can start, which
     # is what decides how many slots it needs — see build_tasks.
+    parallel: dict[int, int] = {}
+    gaps: dict[int, dict] = {}
     tasks, by_type = build_tasks(agg, mfg, rx, params, pools,
-                                 depths=_depths([t for t, _ in targets], mfg, rx), deps=deps)
+                                 depths=_depths([t for t, _ in targets], mfg, rx), deps=deps,
+                                 parallel_copies=parallel, print_gaps=gaps)
     crit = _critical_priority(agg, deps, mfg, rx, params)
     ranks = order_ranks(targets, mfg, rx)
     prio = _fifo_priority(crit, ranks)
@@ -845,12 +966,16 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
     # contention, reads the plan as longer than it is, and gave back the merges it exists to make.
     # Two extra passes over prepared data, and only when the alignment changed something.
     if any(t.why and t.why.get("bound_by") == "aligned" for t in tasks):
+        plain_parallel: dict[int, int] = {}
+        plain_gaps: dict[int, dict] = {}
         plain_tasks, plain_by = build_tasks(agg, mfg, rx, params, pools,
                                             depths=_depths([t for t, _ in targets], mfg, rx),
-                                            deps=deps, align=False)
+                                            deps=deps, align=False, parallel_copies=plain_parallel,
+                                            print_gaps=plain_gaps)
         plain = schedule(plain_tasks, plain_by, deps, pools, prio)
         if sched["makespan_hours"] > plain["makespan_hours"] * (1 + _DELIVERY_OVERSHOOT):
             tasks, by_type, sched = plain_tasks, plain_by, plain
+            parallel, gaps = plain_parallel, plain_gaps
 
     for w in sched["waves"]:                       # enrich wave tasks with readable names
         for t in w["tasks"]:
@@ -901,6 +1026,38 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
     # building saves was bought instead of appearing here.
     blueprint_cost = sum(info.get("blueprint_cost", 0.0) for info in agg.values())
 
+    # Copies bought to fill a SLOT rather than to cover a RUN — reported on their own line, never
+    # folded into the figure above. One print is one job at a time, so a batch that wants six
+    # concurrent jobs off one copy has to buy five more prints; that is real money, spent on speed
+    # rather than on the ability to build at all, and a purchase the builder did not ask for has to
+    # be visible and attributable. Same rule as `marginal_saving` and the `blacklisted` badge: report
+    # what the convenience cost.
+    from app.industry.bpc import cost_for_copies
+    blueprint_parallel = []
+    parallel_cost = 0.0
+    for tid, n in parallel.items():
+        acq = (params.bp_acquire or {}).get(tid) or {}
+        if n <= 0 or acq.get("kind") != "bpc":
+            continue
+        # Skip the contracts the run-shortfall purchase already spent — one listing is one item.
+        spent = ((agg.get(tid) or {}).get("blueprint_buy") or {}).get("copies") or 0
+        c = cost_for_copies(acq, n, skip=spent)
+        parallel_cost += c["cost"]
+        blueprint_parallel.append({"type_id": tid, "name": names.get(tid, str(tid)),
+                                   "copies": n, "cost": c["cost"], "covered": c["covered"],
+                                   "jobs": len(by_type.get(tid) or ())})
+    blueprint_parallel.sort(key=lambda r: -r["cost"])
+
+    # The other half of the same constraint: prints the plan is SHORT of and will not buy. A
+    # reaction formula is durable — it is reused by every build after this one — so charging one to
+    # this build would be the same nonsense `acquisition_costs` already refuses for an original.
+    # Report what another one would be worth in time and let the builder decide.
+    print_limits = sorted(
+        ({"type_id": tid, "name": names.get(tid, str(tid)),
+          "noun": "formula" if g["activity"] == "reaction" else "blueprint", **g}
+         for tid, g in gaps.items()),
+        key=lambda r: -(r["hours"] - r["hours_if_held"]))
+
     # Leftover intermediates (batch-rounding overproduction) are reusable/sellable inventory, not a
     # cost of the finished product — value them at their build unit cost and credit that back so the
     # net product cost excludes what we can recycle.
@@ -915,7 +1072,7 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
         leftovers.append({"type_id": tid, "name": names.get(tid, str(tid)),
                           "qty": info["leftover"], "value": round(val, 2)})
     leftovers.sort(key=lambda r: r["value"], reverse=True)
-    total_cost = materials_cost + job_cost + blueprint_cost
+    total_cost = materials_cost + job_cost + blueprint_cost + parallel_cost
     return {
         # `unit_cost` is the standalone resolved cost of one unit (already memoised above). The
         # aggregate cost below is a shared-batch figure with no per-order split, so this is what
@@ -952,6 +1109,10 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
              # builder reads as "the plan found me a 2-run Phoenix copy". Capital copies are 1 run;
              # what the plan meant was "this order is 2 hulls". Say all three or say none.
              "copies_to_buy": (info.get("blueprint_buy") or {}).get("copies") or 0,
+             # ...and a FOURTH, which is not any of those three: copies bought so this batch can run
+             # in several slots at once. A print is locked while a job runs on it, so parallelism has
+             # to be bought in prints — attributed per type here, priced in `blueprint_parallel`.
+             "copies_for_slots": parallel.get(tid, 0),
              # The structure this step's ME/TE, fee and duration were all resolved against.
              "site": (params.site_for(tid, info["activity"]) or {}).get("name")}
             for tid, info in agg.items() if info["build"] and info["runs"] > 0
@@ -962,12 +1123,26 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
         "build_sites": _sites_used(agg, params),
         "moves": plan_moves(agg, mfg, rx, params, names),
         "shopping_list": shopping,
+        # Blueprint copies bought for PARALLELISM, itemised. Kept out of `shopping_list` (which is
+        # materials, priced off the market) and out of `missing_blueprints` (which is "you can't
+        # build this without one") because it is neither: it is what running the batch side by side
+        # cost, and the builder has to be able to see it and argue with it.
+        "blueprint_parallel": blueprint_parallel,
+        # Prints the plan is short of and deliberately does NOT buy — a reaction formula above all.
+        # Advice with a number on it, not a line item: nothing here is in any cost.
+        "print_limits": print_limits,
         "leftovers": leftovers,
         "unresolved": [s["type_id"] for s in shopping if s["unit_price"] is None],
         "metrics": {
             "materials_cost": round(materials_cost, 2),
             "job_cost": round(job_cost, 2),
             "blueprint_cost": round(blueprint_cost, 2),
+            # Separate from the line above on purpose — see `blueprint_parallel`.
+            "blueprint_parallel_cost": round(parallel_cost, 2),
+            "blueprint_parallel_copies": sum(r["copies"] for r in blueprint_parallel),
+            # How many steps are running in fewer jobs than the slots would allow because there
+            # aren't the prints to install them on. Nothing is bought for these — see `print_limits`.
+            "print_limited_steps": len(print_limits),
             "total_cost": round(total_cost, 2),
             "leftover_value": round(leftover_value, 2),
             "net_cost": round(total_cost - leftover_value, 2),
@@ -1172,6 +1347,7 @@ def plan_queue_per_order(order_specs: list[dict], mfg: dict, rx: dict, prices: d
     per_order: list[dict] = []
     shopping: dict[int, dict] = {}
     totals = {"materials_cost": 0.0, "job_cost": 0.0, "blueprint_cost": 0.0,
+              "blueprint_parallel_cost": 0.0,
               "total_cost": 0.0, "leftover_value": 0.0, "net_cost": 0.0}
 
     for idx, spec in enumerate(order_specs):
@@ -1197,8 +1373,20 @@ def plan_queue_per_order(order_specs: list[dict], mfg: dict, rx: dict, prices: d
                 remaining_stock[t] = max(0.0, remaining_stock.get(t, 0.0) - info["gross"])
 
         o_deps = _built_deps(agg, mfg, rx)
+        o_parallel: dict[int, int] = {}
         tasks, o_by_type = build_tasks(agg, mfg, rx, p, pools,
-                                       depths=_depths([tid], mfg, rx), deps=o_deps)
+                                       depths=_depths([tid], mfg, rx), deps=o_deps,
+                                       parallel_copies=o_parallel)
+        # Copies bought so this order's batches can run side by side. Per-order plans buy blueprints
+        # per order by design (that is the price of attribution), and this is no different — but it
+        # stays its own line, exactly as in `plan_queue`.
+        from app.industry.bpc import cost_for_copies
+        o_par_cost = 0.0
+        for ptid, n in o_parallel.items():
+            acq = (p.bp_acquire or {}).get(ptid) or {}
+            if n > 0 and acq.get("kind") == "bpc":
+                spent = ((agg.get(ptid) or {}).get("blueprint_buy") or {}).get("copies") or 0
+                o_par_cost += cost_for_copies(acq, n, skip=spent)["cost"]
         crit = _critical_priority(agg, o_deps, mfg, rx, p)
         for t in tasks:
             t.key = (idx, t.type_id)
@@ -1212,6 +1400,9 @@ def plan_queue_per_order(order_specs: list[dict], mfg: dict, rx: dict, prices: d
 
         # Cost roll-up for this order alone — the thing the aggregated plan cannot give you.
         cost = _order_cost(agg, mfg, rx, prices, adjusted, p, memo)
+        cost["blueprint_parallel_cost"] = round(o_par_cost, 2)
+        cost["total_cost"] += o_par_cost
+        cost["net_cost"] += o_par_cost
         for k in totals:
             totals[k] += cost.get(k, 0.0)
         per_order.append({"order_id": spec.get("id"), "type_id": tid, "name": names.get(tid, str(tid)),
