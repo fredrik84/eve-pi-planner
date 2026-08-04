@@ -522,6 +522,9 @@ def install_block(ctx: int, res: dict) -> dict:
             "assigned": assigned_by_char.get(cid, 0),
             "jobs": [{"name": t.get("name"), "type_id": t["type_id"], "runs": t["runs"],
                       "activity": t["activity"], "duration_hours": t["duration_hours"],
+                      # Which structure to install it in — carried from the routing, since with
+                      # group-specific rigs "install this job" is only half an instruction.
+                      "site": t.get("site"),
                       # Why this job is that long — see build_tasks. Carried through so the
                       # checklist can answer "everything else is 5h, why is this 2h32m".
                       "why": t.get("why")}

@@ -2176,6 +2176,40 @@ function _rxPricingRowsHtml(pricing, editable) {
   return rows;
 }
 
+// ── Rig families: what each fitted rig is FOR ────────────────────────────────────────
+// A Standup M-Set rig covers one family of products, so a structure rigged for capital parts does
+// nothing for a battleship hull. The list comes from the backend registry (never hardcoded here —
+// the labels would drift). Selecting nothing keeps the old meaning: this rig covers everything.
+let _rxRigFamilies = null;
+async function _rxLoadRigFamilies() {
+  if (_rxRigFamilies) return _rxRigFamilies;
+  try {
+    const d = await api('/api/markets/rig-families');
+    _rxRigFamilies = d.families || [];
+  } catch (e) { _rxRigFamilies = []; }
+  return _rxRigFamilies;
+}
+function _rxRigRoutingOn() {
+  return typeof _featureActive === 'function' && _featureActive('industry_rig_routing');
+}
+function _rigFamSelect(id, activity, selected) {
+  const fams = (_rxRigFamilies || []).filter(f => f.activity === activity);
+  if (!fams.length) return '';
+  const sel = new Set(selected || []);
+  return `<select id="${id}" multiple size="4" class="rx-rig-fams">`
+    + fams.map(f => `<option value="${f.key}" ${sel.has(f.key) ? 'selected' : ''}>${_esc(f.label)}</option>`).join('')
+    + `</select>`;
+}
+function _rigFamRow(m, kind, activity) {
+  if (!_rxRigRoutingOn()) return '';
+  const col = { bmmeg: 'me_rig_groups', bmteg: 'te_rig_groups',
+                brmeg: 'rx_me_rig_groups', brteg: 'rx_te_rig_groups' }[kind];
+  const which = kind.indexOf('me') > 0 ? 'ME' : 'TE';
+  return `<div class="rx-rig-row rx-rig-fam-row"><span>${which} rig covers</span>`
+    + _rigFamSelect(kind + '-' + m.id, activity, m[col])
+    + `<span class="pp-card-hint">nothing selected = every group</span></div>`;
+}
+
 // A build structure, configured inline (no ordering — building isn't a priority chain).
 function _rxBuildRowHtml(m) {
   const hullNote = m.hull ? `<b>${_esc(m.hull)}</b> · ${_esc(m.security || '?')}-sec` : 'type not detected';
@@ -2194,8 +2228,10 @@ function _rxBuildRowHtml(m) {
     ${manual}
     <label class="rx-build-chk"><input type="checkbox" id="bm-${m.id}" ${m.build_mfg ? 'checked' : ''}> Manufacture here</label>
     <div class="rx-rig-row">ME rig <select id="bmme-${m.id}">${_rigOpts(m.me_rig)}</select> · TE rig <select id="bmte-${m.id}">${_rigOpts(m.te_rig)}</select></div>
+    ${_rigFamRow(m, 'bmmeg', 'manufacturing')}${_rigFamRow(m, 'bmteg', 'manufacturing')}
     <label class="rx-build-chk"><input type="checkbox" id="br-${m.id}" ${m.build_rx ? 'checked' : ''}> React here</label>
     <div class="rx-rig-row">ME rig <select id="brme-${m.id}">${_rigOpts(m.rx_me_rig)}</select> · TE rig <select id="brte-${m.id}">${_rigOpts(m.rx_te_rig)}</select></div>
+    ${_rigFamRow(m, 'brmeg', 'reaction')}${_rigFamRow(m, 'brteg', 'reaction')}
     <label class="rx-build-chk"><input type="checkbox" id="bp-${m.id}" ${m.price_from ? 'checked' : ''}> Also price from here</label>
     <div class="rx-build-foot"><button class="pp-add-btn" onclick="_rxSaveBuild(${m.id})">Save</button>${bonus.length ? `<span class="rx-mkt-build-badge">${bonus.join(' · ')}</span>` : ''}</div>
   </div>`;
@@ -2231,6 +2267,14 @@ async function _rxSaveBuild(id) {
     rx_me_rig: +v('brme').value, rx_te_rig: +v('brte').value,
     scope: (typeof _rxMarketMount !== 'undefined' && _rxMarketMount === 'rxSettingsMarketsGroup') ? 'group' : 'account',
   };
+  // What each rig is for. Only sent when the picker is on screen — an omitted field leaves the
+  // stored value alone, so a save from a build without this UI can't silently blank it.
+  const fams = sel => sel ? Array.from(sel.selectedOptions).map(o => o.value) : null;
+  [['bmmeg', 'me_rig_groups'], ['bmteg', 'te_rig_groups'],
+   ['brmeg', 'rx_me_rig_groups'], ['brteg', 'rx_te_rig_groups']].forEach(([id, key]) => {
+    const got = fams(v(id));
+    if (got) body[key] = got;
+  });
   if (v('bhull')) body.hull = v('bhull').value || null;
   if (v('bsec')) body.security = v('bsec').value || null;
   if (v('bp')) body.price_from = v('bp').checked;
@@ -2314,7 +2358,10 @@ function _rxRenderMarketManager() {
 
 async function _rxRefreshMarkets() {
   try {
-    _rxMarketData = await api('/api/markets');
+    // Both together: the rig-family registry has to be in hand before the build cards render, or
+    // the "what is this rig for" pickers come up empty on the first paint.
+    const [d] = await Promise.all([api('/api/markets'), _rxLoadRigFamilies()]);
+    _rxMarketData = d;
   } catch (e) {}
   _rxRenderMarketManager();
 }

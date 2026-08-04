@@ -1333,7 +1333,8 @@ function _indMeTeMap() {
 function _indSweepKey(qty) {
   const f = _indFacilityBonus();
   return [_indPicked ? _indPicked.type_id : 0, qty, _indPrioSpeed() ? 1 : 0,
-          f.struct_material_pct, f.struct_time_pct, _indForceIds().sort().join(','),
+          f.struct_material_pct, f.struct_time_pct, f.facility_id || '',
+          _indForceIds().sort().join(','),
           JSON.stringify(_indMeTeMap())].join('|');
 }
 
@@ -1458,7 +1459,11 @@ async function indPopulateFacility() {
 function _indFacilityBonus() {
   const sel = document.getElementById('indFacility');
   const b = _indFacilityMap[sel ? sel.value : ''] || { me: 0, te: 0 };
-  return { struct_material_pct: b.me, struct_time_pct: b.te };
+  // The ID travels with the percentages: when the selection is one of your own structures the
+  // planner routes each job to whichever structure's rigs actually cover it, and it can only know
+  // that this selection IS that structure (rather than a flat preset) from the id.
+  return { struct_material_pct: b.me, struct_time_pct: b.te,
+           facility_id: (sel && sel.value) || null };
 }
 // Which building a job actually happens in — the selected facility for manufacturing, or the
 // account's configured reaction structure for reactions (a separate, independently-set structure).
@@ -2924,12 +2929,35 @@ async function indRefreshJobs() {
 // per free slot, so a character can be handed a dozen identical installs — listing each separately
 // turns one action ("start 12 of these") into twelve lines. Grouped, the checklist stays readable
 // whether the plan has 18 jobs or 300. Longest job first, since that's what gates the stage.
+// Does this plan install jobs in more than one structure? Only then is naming the building on
+// every job worth the space — one structure means the answer is the same every line.
+function _indIsMultiSite() {
+  return ((_indLastPlan && _indLastPlan.build_sites) || []).length > 1;
+}
+
+// The station changes the routing implies: a component built in one structure that has to be
+// hauled to where its consumer is built. Routing deliberately doesn't price freight, so saying
+// what has to move is the other half of that promise — not a footnote.
+function _indMovesHtml() {
+  const moves = (_indLastPlan && _indLastPlan.moves) || [];
+  if (!moves.length) return '';
+  const rows = moves.map(m =>
+    `<li class="ind-move"><span class="ind-move-name">${_esc(m.name)}</span>`
+    + `<span class="ind-move-qty">${(m.units || 0).toLocaleString()}</span>`
+    + `<span class="ind-move-path">${_esc(m.from)} → ${_esc(m.to)}</span></li>`).join('');
+  return `<div class="ind-moves"><h4>Parts to move</h4>`
+    + `<div class="pp-sub">Different rigs, different structures — these are built in one and used in another.</div>`
+    + `<ul class="ind-move-list">${rows}</ul></div>`;
+}
+
 function _indGroupJobs(jobs) {
   const by = {};
   (jobs || []).forEach(j => {
     const g = by[j.type_id] || (by[j.type_id] = {
       type_id: j.type_id, name: j.name || ('#' + j.type_id), activity: j.activity,
       count: 0, minRuns: Infinity, maxRuns: 0, totalRuns: 0, dur: 0, runsList: [], why: j.why,
+      // Which structure to install it in. Only present when the plan is routed across several.
+      site: j.site,
     });
     g.count += 1;
     g.minRuns = Math.min(g.minRuns, j.runs);
@@ -3007,7 +3035,12 @@ function indRenderInstall(d) {
           : '';
         const dur = `<span class="ind-do-dur" title="${w.runs_per_job || 1} run(s) per job${_esc(why)}">`
           + `${_fmtHours(g.dur)}${why ? ' <span class="ind-do-why">?</span>' : ''}</span>`;
+        // Where to install it. With group-specific rigs the plan may spread a build over several
+        // structures, and "install 40 runs" without naming the building is half an instruction.
+        const where = g.site && _indIsMultiSite()
+          ? `<span class="ind-do-site" title="Install in ${_esc(g.site)}">@ ${_esc(g.site)}</span>` : '';
         return `<li class="ind-do-job"><span class="ind-do-name">${_esc(g.name)}</span>${each}`
+          + where
           + `<span class="ind-do-act ind-do-${g.activity}">${g.activity === 'reaction' ? 'reaction' : 'industry'}</span>`
           + dur + `</li>`;
       }).join('');
@@ -3034,9 +3067,10 @@ function indRenderInstall(d) {
     const later = d.later_waves
       ? `<div class="pp-sub ind-later">Then ${d.later_waves} more round${d.later_waves > 1 ? 's' : ''} unlock as these finish · about ${_fmtHours(d.makespan_hours)} to the end.</div>` : '';
 
+    const moves = _indMovesHtml();
     el.innerHTML = doers.length
-      ? `<h3 class="ind-do-title">Do this now</h3><div class="ind-do-grid">${cards}</div>${wait}${later}`
-      : `<h3 class="ind-do-title">Nothing to start yet</h3>${wait}${later}`;
+      ? `<h3 class="ind-do-title">Do this now</h3><div class="ind-do-grid">${cards}</div>${wait}${later}${moves}`
+      : `<h3 class="ind-do-title">Nothing to start yet</h3>${wait}${later}${moves}`;
   } catch (e) { el.innerHTML = ''; }
 }
 
