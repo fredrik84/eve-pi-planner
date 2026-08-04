@@ -193,7 +193,9 @@ FEATURE_REGISTRY = [
                     "rig actually covers get its ME/TE, and each job's fee follows the system it "
                     "lands in. The plan names the structure per step and lists the parts that have "
                     "to move. A structure with no families set still covers everything.",
-     "default": False},
+     # Starts with the testers, alongside every other Industry feature — this was asked for by the
+     # builders using the tab, so admin-only would be a rung nobody needed.
+     "default": False, "state": "testers"},
     {"key": "industry_plan_sources", "label": "Industry: each build owns its containers",
      "group": "Industry",
      "description": "Per order: bind SEVERAL containers to a build (grouped by station and system), "
@@ -201,7 +203,7 @@ FEATURE_REGISTRY = [
                     "sharing a container between builds becomes a deliberate pick rather than a "
                     "side effect of binding it. Orders queued before this keep using the "
                     "account-wide tick list until you edit them.",
-     "default": False},
+     "default": False, "state": "testers"},
 ]
 GROUP_ORDER = ["Dashboard", "Setup Analysis", "Planner", "Planet DB", "Characters",
                "Notifications & Alerts", "Reactions", "Industry"]
@@ -210,7 +212,17 @@ VALID_STATES = {"hidden", "admin", "testers", "public"}
 
 
 def _default_state(f: dict) -> str:
-    return "public" if f["default"] else "admin"
+    """The rung a feature starts on when its row is first created.
+
+    `default: True/False` is the old two-state shorthand (public / admin-only). A feature may
+    instead name its starting rung explicitly with `"state"` — which is how something ships
+    straight to the testers who asked for it, rather than landing on `admin` and needing a manual
+    flip that only takes effect on whichever environment someone remembered to click.
+    """
+    state = f.get("state")
+    if state in VALID_STATES:
+        return state
+    return "public" if f.get("default") else "admin"
 
 
 @ensure_once
