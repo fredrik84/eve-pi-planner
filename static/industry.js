@@ -2614,8 +2614,27 @@ let _indBpcSeq = 0;
 
 function _indBlueprintWarn(d) {
   const miss = (d.metrics && d.metrics.missing_blueprints) || [];
-  return _indCopyShortWarn(d) + _indParallelCopyNote(d)
+  return _indCopyShortWarn(d) + _indParallelCopyNote(d) + _indPrintLimitNote(d)
     + (miss.length ? _indMissingBpWarn(d, miss) : '');
+}
+
+// The prints the plan is SHORT of and will not buy for you. A reaction formula is durable — it is
+// reused by every build after this one — so the plan says what another one is worth in time and
+// leaves the spend to the builder. Nothing here is in any cost on the page.
+function _indPrintLimitNote(d) {
+  const rows = (d.print_limits || []).filter(r => (r.extra || 0) > 0);
+  if (!rows.length) return '';
+  const body = rows.slice(0, 8).map(r =>
+    `<div class="ind-bp-row2"><span class="ind-bp-nm">${_esc(r.name)}`
+    + `<span class="ind-bp-need">${r.held} ${_esc(r.noun)}${r.held === 1 ? '' : 's'} held · `
+    + `${r.jobs} job${r.jobs === 1 ? '' : 's'} at ${_fmtHours(r.hours)}</span></span>`
+    + `<span class="ind-bp-px">+${r.extra} → ${_fmtHours(r.hours_if_held)}</span></div>`).join('');
+  return `<div class="ind-bp-note"><b>Running in fewer jobs than your slots allow</b>`
+    + `<div class="ind-bp-rows">${body}</div>`
+    + `<div class="ind-bp-warn-sub">A print is locked while a job runs on it, so these steps are `
+    + `limited by how many you hold rather than by free slots. Nothing has been bought for them: a `
+    + `reaction formula is a permanent asset you reuse on every build, not a cost of this one — the `
+    + `figure on the right is what holding that many more would save on this step.</div></div>`;
 }
 
 // A print is LOCKED while a job runs on it, so two jobs of one type at the same moment need two

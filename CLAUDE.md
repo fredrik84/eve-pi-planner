@@ -1061,6 +1061,28 @@ ORIGINAL is one item too) plus the copies the plan already buys to cover the run
   proportional share of the capacity left, whichever is larger. Purely even stranded runs on a
   5-run/1-run pair and needed a second job back on the first copy — a job the plan counted as
   concurrent and physically was not.
+- **A REACTION FORMULA is an item too** — it locks into the reactor for the job, so one formula is
+  one concurrent reaction. Three differences from a copy, all load-bearing: it binds on CONCURRENCY
+  only (formulas can't be copied, so runs-per-job never binds); formulas **STACK**, so the cap is
+  how many ITEMS are held (`owned_blueprints` expands a positive `quantity` into that many entries,
+  `_STACK_CAP` 200 — 20× Synth Mindflood is 20 reactors, and a blanket one-per-type cap would be as
+  wrong as no cap); and the plan **never buys one**, because a formula is durable and reused by
+  every later build (the rule `acquisition_costs` already applies to originals). Formulas were
+  invisible until 2026-08-04: `owned_blueprints` built its blueprint→product map from the SDE
+  `blueprints` table alone and **not one of the 112 `reaction_id`s is in it**, so every formula ESI
+  returned was dropped at that join (50 sat unused in prod). A `reaction_id` IS the formula item's
+  own type_id, so the fix is `SELECT reaction_id, output_type_id FROM reactions` unioned into the
+  map — no new fetch, table or scope.
+- **UNKNOWN ownership never caps.** The blueprints scope is opt-in per character (one prod account
+  has caches for 2 of its 14), so no rows means *we don't know*, never *they hold none*. `_print_limits`
+  returns `(None, False)` for any type with no observation and the plan runs exactly as it does
+  today. Pinned by `test_a_reaction_formula_is_an_item_too_and_unknown_ownership_never_serialises` —
+  capping on absent evidence is the single most damaging way this could go wrong.
+- **What can't be bought is REPORTED, not spent on** — `print_limits` (`{name, noun, held, jobs,
+  extra, hours, hours_if_held}`, `metrics.print_limited_steps`) says what holding more prints would
+  save on that step, and no ISK anywhere moves for it. Measured with one formula of each held: a
+  2× Phoenix goes 761.6h → 1611.3h and an Archon 525.1h → 1008.0h — the honest cost of a single
+  reactor formula, against a plan that had been running 10 jobs a type off it.
 - Measured on a real Archon (10 mfg slots, one 10-run copy per component): the cap alone costs
   507.6h → 525.1h and 10 fewer jobs; with copies purchasable the makespan is held at 507.6h for 18
   copies. Covered by `test_one_print_cannot_run_two_jobs_at_once`,

@@ -2332,6 +2332,8 @@ def main():
     test_a_print_that_cannot_be_bought_caps_instead_of_being_invented()
     test_copies_bought_to_fill_slots_are_reported_apart_from_the_runs_they_cover()
     test_the_print_cap_is_paid_for_in_time_not_in_lost_runs()
+    test_a_reaction_formula_is_an_item_too_and_unknown_ownership_never_serialises()
+    test_reaction_formulas_are_read_off_the_blueprints_cache_at_all()
     test_binding_a_container_lets_the_planner_spend_it()
     test_first_run_setup_shows_once_and_never_to_an_established_user()
     test_the_customer_sees_the_same_progress_the_builder_does()
@@ -3397,8 +3399,12 @@ def _seed_blueprint_cache(dbcon, items, context_id=1, character_id=7):
             context_id INTEGER);
         CREATE TABLE IF NOT EXISTS pp_char_blueprints (character_id INTEGER PRIMARY KEY,
             blueprints_json TEXT NOT NULL DEFAULT '[]', fetched_at REAL);
+        CREATE TABLE IF NOT EXISTS reactions (reaction_id INTEGER PRIMARY KEY,
+            output_type_id INTEGER, output_qty INTEGER, cycle_time INTEGER);
         """)
     dbcon.execute("INSERT OR REPLACE INTO blueprints VALUES (1000, 100, 1, 3600, 100)")
+    # A reaction formula's item type IS its reaction_id — the mapping owned_blueprints unions in.
+    dbcon.execute("INSERT OR REPLACE INTO reactions VALUES (2000, 102, 2, 3600)")
     dbcon.execute("INSERT OR REPLACE INTO pp_characters VALUES (?, ?)", (character_id, context_id))
     rows = [{"type_id": bt, "quantity": q, "runs": r, "me": me, "te": te}
             for bt, q, r, me, te in items]
@@ -3727,6 +3733,68 @@ def test_the_print_cap_is_paid_for_in_time_not_in_lost_runs():
           one["blueprint_parallel"] == [] and many["blueprint_parallel"] == [])
     check("nor reports a run it cannot cover",
           gadget_one["runs_short"] == 0 and gadget_many["runs_short"] == 0)
+
+
+def test_a_reaction_formula_is_an_item_too_and_unknown_ownership_never_serialises():
+    """A formula locks into the reactor for the job, so one formula is one reaction at a time — a
+    real 2x Phoenix queue planned Axosomatic Neurolink Enhancer as SEVENTEEN simultaneous jobs off
+    the one formula that account holds. Three things make it unlike a blueprint copy, and all three
+    are asserted here: formulas STACK (20 held is 20 jobs, not one), they are never bought by the
+    plan (durable, reused by every later build), and **unobserved ownership must not cap anything** —
+    the blueprints scope is opt-in per character, so "no formula rows" means we don't know."""
+    print("test_a_reaction_formula_is_an_item_too_and_unknown_ownership_never_serialises")
+    rx = {9: {"base_time": 3600, "max_runs": 0, "output_qty": 1, "inputs": []}}
+    agg = {9: {"build": True, "runs": 12, "activity": "reaction"}}
+    pools = {"manufacturing": 12, "reaction": 12}
+
+    def jobs(owned):
+        p = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, struct_time_mult=1.0,
+                        owned=owned)
+        gaps: dict = {}
+        bought: dict = {}
+        _t, by = build_tasks(agg, {}, rx, p, pools, parallel_copies=bought, print_gaps=gaps)
+        return by[9], gaps, bought
+
+    def formulas(n):
+        return {9: {"me": 0, "te": 0, "kind": "bpo", "runs": -1, "copy_count": n,
+                    "copies": [{"me": 0, "te": 0, "kind": "bpo", "runs": -1} for _ in range(n)]}}
+
+    unknown, gaps_u, _b = jobs({})
+    check("an account we have never seen a formula for is NOT serialised",
+          len(unknown) == 12 and sum(t.runs for t in unknown) == 12)
+    check("and nothing is claimed about what it holds", gaps_u == {})
+
+    one, gaps_1, bought_1 = jobs(formulas(1))
+    check("one formula runs one reaction at a time", len(one) == 1 and one[0].runs == 12)
+    check("the plan never buys a formula", bought_1 == {})
+    check("it reports what another would be worth instead",
+          gaps_1[9]["held"] == 1 and gaps_1[9]["extra"] == 11
+          and gaps_1[9]["hours_if_held"] < gaps_1[9]["hours"])
+    check("named as a formula, not a blueprint", gaps_1[9]["activity"] == "reaction")
+
+    stacked, gaps_s, _b2 = jobs(formulas(4))
+    check("a STACK of formulas is a stack of reactors", len(stacked) == 4)
+    check("every run is still run", sum(t.runs for t in stacked) == 12)
+    check("and a holding that fills the slots is not flagged at all", jobs(formulas(12))[1] == {})
+
+
+def test_reaction_formulas_are_read_off_the_blueprints_cache_at_all():
+    """`owned_blueprints` built its blueprint→product map from the SDE `blueprints` table only, and
+    not one of the 112 reaction_ids is in it — so every formula ESI returned was dropped at the
+    join and 50 of them sat unused in production. A reaction_id IS the formula item's own type_id,
+    so the fix is a union, with no new data, fetch or scope."""
+    print("test_reaction_formulas_are_read_off_the_blueprints_cache_at_all")
+    import app.industry.blueprints as B
+    dbcon, restore = _patch_db(B)
+    try:
+        # 2000 is the synthetic graph's reaction formula for Sprocket (102) — see _seed_con.
+        _seed_blueprint_cache(dbcon, [(2000, 3, -1, 0, 0)])
+        own = B.owned_blueprints(1)
+        check("a formula is no longer dropped at the join", 102 in own)
+        check("it is an original, as every formula is", own[102]["kind"] == "bpo")
+        check("and the stack is counted as separate items", own[102]["copy_count"] == 3)
+    finally:
+        restore()
 
 
 if __name__ == "__main__":
