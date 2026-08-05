@@ -1891,11 +1891,11 @@ def test_a_rig_only_applies_to_what_it_is_for():
     check("every family key maps to a non-empty group set",
           all(f["groups"] for f in RIG_FAMILIES.values()))
     # Raitaru + T2 ME rig in null: 1% role + 2.4×2.1 = 6.04 when it applies, role alone when not.
-    check("covered job gets role + rig", manufacturing_bonus("raitaru", 2, 0, "null") == (6.04, 0.0))
+    check("covered job gets role + rig", manufacturing_bonus("raitaru", 2, 0, "null") == (6.04, 15.0))
     check("uncovered job keeps only the hull role bonus",
-          manufacturing_bonus("raitaru", 2, 0, "null", me_applies=False) == (1.0, 0.0))
+          manufacturing_bonus("raitaru", 2, 0, "null", me_applies=False) == (1.0, 15.0))
     check("uncovered TE job keeps only the role TE",
-          manufacturing_bonus("azbel", 0, 2, "null", te_applies=False) == (1.0, 0.0))
+          manufacturing_bonus("azbel", 0, 2, "null", te_applies=False) == (1.0, 20.0))
 
 
 def test_a_structure_with_no_families_still_covers_everything():
@@ -1908,7 +1908,7 @@ def test_a_structure_with_no_families_still_covers_everything():
     site = BuildSite(key="s:1", name="Old", activity="manufacturing", hull="raitaru",
                      security="null", me_rig=2, te_rig=2)
     for group in (873, 27, 85, None):
-        check(f"un-narrowed rig applies to group {group}", site.bonus_for(group) == (6.04, 50.4))
+        check(f"un-narrowed rig applies to group {group}", site.bonus_for(group) == (6.04, 65.4))
 
 
 def test_the_planner_picks_the_structure_that_covers_the_job():
@@ -1919,7 +1919,10 @@ def test_the_planner_picks_the_structure_that_covers_the_job():
     caps = BuildSite(key="s:1", name="Capital yard", activity="manufacturing", hull="sotiyo",
                      security="null", me_rig=2, te_rig=2,
                      me_families=("capital_component",), te_families=("capital_component",))
-    ammo = BuildSite(key="s:2", name="Ammo shop", activity="manufacturing", hull="raitaru",
+    # Same HULL on purpose: the role bonus differs per hull (Sotiyo 30% TE, Raitaru 15%), so two
+    # different hulls are never tied on an uncovered job — the bigger one simply wins, correctly.
+    # The tie this test is about is the rig one, and it needs the hulls held equal to exist.
+    ammo = BuildSite(key="s:2", name="Ammo shop", activity="manufacturing", hull="sotiyo",
                      security="null", me_rig=2, te_rig=2,
                      me_families=("ammunition",), te_families=("ammunition",))
     sites = [caps, ammo]
@@ -2532,6 +2535,7 @@ def main():
     test_time_aware_make_or_buy()
     test_marginal_buy()
     test_structure_bonus()
+    test_hull_role_bonuses()
     test_manufacturing_slots()
     test_per_product_me_from_blueprints()
     test_plan_queue_end_to_end()
@@ -2722,16 +2726,42 @@ def test_structure_bonus():
     check("sec band high", _sec_band(0.9) == "high")
     check("sec band low", _sec_band(0.3) == "low")
     check("sec band null", _sec_band(0.0) == "null")
-    # Raitaru (1% role ME) + T2 ME rig (2.4%) in hi-sec ×1.0 → 1 + 2.4 = 3.4% ME; no TE rig → 0
-    check("raitaru T2 ME hi", manufacturing_bonus("raitaru", 2, 0, "high") == (3.4, 0.0))
-    # Sotiyo + T2 ME rig in null ×2.1 → 1 + 2.4×2.1 = 6.04% ME
-    check("sotiyo T2 ME null", manufacturing_bonus("sotiyo", 2, 0, "null") == (6.04, 0.0))
-    # T2 TE rig in null → 24×2.1 = 50.4% TE
-    check("azbel T2 TE null", manufacturing_bonus("azbel", 0, 2, "null") == (1.0, 50.4))
+    # Raitaru (1% role ME, 15% role TE) + T2 ME rig (2.4%) in hi-sec ×1.0 → 3.4% ME, role TE only
+    check("raitaru T2 ME hi", manufacturing_bonus("raitaru", 2, 0, "high") == (3.4, 15.0))
+    # Sotiyo + T2 ME rig in null ×2.1 → 1 + 2.4×2.1 = 6.04% ME, and the hull's own 30% TE
+    check("sotiyo T2 ME null", manufacturing_bonus("sotiyo", 2, 0, "null") == (6.04, 30.0))
+    # T2 TE rig in null → 24×2.1 = 50.4% TE on top of the Azbel's 20% role
+    check("azbel T2 TE null", manufacturing_bonus("azbel", 0, 2, "null") == (1.0, 70.4))
     # No structure → nothing
     check("no hull no rig", manufacturing_bonus(None, 0, 0, "high") == (0.0, 0.0))
-    # Reaction: Tatara + T2 rig low ×1.9 → 2.4×1.9 = 4.56% ME
-    check("tatara T2 ME low", reaction_bonus("tatara", 2, 0, "low") == (4.56, 0.0))
+    # Reaction: Tatara + T2 rig low ×1.9 → 2.4×1.9 = 4.56% ME, plus its 25% reaction time role
+    check("tatara T2 ME low", reaction_bonus("tatara", 2, 0, "low") == (4.56, 25.0))
+
+
+def test_hull_role_bonuses():
+    """The hull's own bonus, before any rig — it applies to every job the structure runs, so an
+    error here is an error in every quoted cost and every ETA. These were all modelled as zero TE,
+    which costed every structure build at un-bonused job times.
+
+    The Athanor's zero is asserted deliberately: it is the reprocessing refinery and has NO
+    reaction role bonus, so it must not drift towards the Tatara's 25% the next time someone reads
+    the two hulls as a pair.
+    """
+    print("test_hull_role_bonuses")
+    from app.industry.structures import manufacturing_bonus, reaction_bonus
+    # No rigs, hi-sec (×1.0) → whatever comes out is the hull role bonus alone.
+    role_mfg = lambda h: manufacturing_bonus(h, 0, 0, "high")
+    role_rx = lambda h: reaction_bonus(h, 0, 0, "high")
+    check("raitaru role ME 1 / TE 15", role_mfg("raitaru") == (1.0, 15.0))
+    check("azbel role ME 1 / TE 20", role_mfg("azbel") == (1.0, 20.0))
+    check("sotiyo role ME 1 / TE 30", role_mfg("sotiyo") == (1.0, 30.0))
+    check("tatara reaction role TE 25, no ME", role_rx("tatara") == (0.0, 25.0))
+    check("athanor has NO reaction role bonus", role_rx("athanor") == (0.0, 0.0))
+    # The refinery hulls are read case-insensitively, and an unknown hull claims nothing.
+    check("hull name is case-insensitive", role_rx("Tatara") == (0.0, 25.0))
+    check("an unknown hull gets no role bonus", role_mfg("keepstar") == (0.0, 0.0))
+    # A rig the Athanor carries still applies — only the hull role is absent.
+    check("athanor rigs still work", reaction_bonus("athanor", 2, 2, "high") == (2.4, 24.0))
 
 
 

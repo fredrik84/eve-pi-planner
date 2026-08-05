@@ -17,8 +17,9 @@ hull in another. So a rig carries the **families it covers** and the bonus is re
 against the produced type's SDE group.
 
 Standard EVE figures (approximate, T2 rig set):
-  Engineering Complex (Raitaru/Azbel/Sotiyo) role bonus: +1% material efficiency.
-  Refinery (Athanor/Tatara) reaction role bonus: rig-driven here.
+  Engineering Complex role bonus: +1% material efficiency on all three hulls, and a time bonus
+    that grows with the hull — Raitaru 15%, Azbel 20%, Sotiyo 30%.
+  Refinery reaction role bonus: Tatara 25% time, no material. The Athanor has none at all.
   Manufacturing rigs (Standup M-Set): ME T1 2.0% / T2 2.4%; TE T1 20% / T2 24%.
   Reaction rigs (Standup L-Set Reactor Efficiency): ME T1 2.0% / T2 2.4%; TE T1 20% / T2 24%.
   Rig security multiplier: hi-sec ×1.0, low-sec ×1.9, null-sec / WH ×2.1.
@@ -48,9 +49,14 @@ SECURITY_RIG_MULT = {"high": 1.0, "low": 1.9, "null": 2.1, "wh": 2.1}
 _ME_RIG = {0: 0.0, 1: 2.0, 2: 2.4}
 _TE_RIG = {0: 0.0, 1: 20.0, 2: 24.0}
 
-# hull → (role material %, role time %). Engineering complexes give a flat 1% ME; TE is rig-driven.
-_MFG_HULL_ROLE = {"raitaru": (1.0, 0.0), "azbel": (1.0, 0.0), "sotiyo": (1.0, 0.0)}
-_RX_HULL_ROLE = {"athanor": (0.0, 0.0), "tatara": (0.0, 0.0)}
+# hull → (role material %, role time %). The role bonus is the hull's own, before any rig: every
+# engineering complex gives a flat 1% ME, and the bigger the hull the more time it takes off.
+# These were zero for TE, which quietly costed every structure build at un-bonused job times.
+_MFG_HULL_ROLE = {"raitaru": (1.0, 15.0), "azbel": (1.0, 20.0), "sotiyo": (1.0, 30.0)}
+# The two refineries are NOT a pair here. Reaction time is the TATARA's role bonus alone — the
+# Athanor is the reprocessing hull and has no reaction role bonus of any kind, so its zero is the
+# right answer, not a gap left to fill. Rigs still apply to both; only the hull role differs.
+_RX_HULL_ROLE = {"athanor": (0.0, 0.0), "tatara": (0.0, 25.0)}
 
 # The manufacturing engineering complexes, by hull name (for the UI + auto-detect classification).
 MFG_HULLS = ("raitaru", "azbel", "sotiyo")
