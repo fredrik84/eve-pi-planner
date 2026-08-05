@@ -77,7 +77,16 @@ def ensure_industry_settings_table():
                     # per build or does not), so it lives here rather than on an order — see
                     # `plan_queue_per_order`. NULL/0 = the aggregated plan, which is the default and
                     # what every account planned with before this existed.
-                    "per_order_plans INTEGER")
+                    "per_order_plans INTEGER",
+                    # The longest a single REACTION job may run, in DAYS. Days because that is the
+                    # unit the ceiling is thought in — "never spend more than 2-3 days on a reaction
+                    # job" — and a reaction batch is a multi-day object; hours would put a builder
+                    # in front of a box wanting 72. Stored as REAL so half a day is sayable.
+                    # NULL/0 = no ceiling, which is what every account planned with before this
+                    # existed. Manufacturing has no equivalent on purpose: splitting a manufacturing
+                    # batch spends blueprint COPIES, which cost ISK, while a reaction formula is
+                    # durable and reused by every later build — so this half can stand alone.
+                    "max_reaction_job_days REAL")
         # Anyone who already has saved build options has plainly used this tab before, so they must
         # not be handed a first-run screen. Safe to re-run on a restart precisely because a user who
         # has NOT been through setup owns no settings row: the frontend only seeds one once the
@@ -119,6 +128,13 @@ def get_settings(context_id: int) -> dict:
     d["reaction_policy"] = _parse_reaction_policy(d.get("reaction_policy"))
     d["onboarded"] = bool(d.get("onboarded"))
     d["per_order_plans"] = bool(d.get("per_order_plans"))
+    # None means "no ceiling", and it has to stay None rather than becoming 0.0: `apply_account_
+    # build_options` only fills a field the account has an opinion about, and a 0 would read as one.
+    try:
+        _mj = float(d.get("max_reaction_job_days") or 0.0)
+    except (TypeError, ValueError):
+        _mj = 0.0
+    d["max_reaction_job_days"] = _mj if _mj > 0 else None
     # The remembered source set, with the single-key column as its fallback so an account that last
     # bound a build before sets existed still arrives with its picker answered.
     try:
@@ -223,6 +239,42 @@ def set_per_order_plans(context_id: int, on: bool) -> bool:
     return bool(on)
 
 
+def get_max_reaction_job_days(context_id: int) -> float | None:
+    """The longest one reaction job may run, in days — or None when the account has set no ceiling.
+
+    Default None, and deliberately so: a ceiling is a statement about how this builder wants to
+    operate ("never park a reactor for a fortnight"), and guessing one for somebody would split
+    their batches into jobs they never asked to install.
+    """
+    return get_settings(context_id).get("max_reaction_job_days")
+
+
+def set_max_reaction_job_days(context_id: int, days: float | None) -> float | None:
+    """Its own write path, for the same reason `set_per_order_plans` has one: the settings PUT is a
+    debounced save of the plan form, and a slider moving must not carry a stale ceiling along and
+    silently re-split every reaction in the queue. 0 / None clears it."""
+    ensure_industry_settings_table()
+    try:
+        val = float(days) if days is not None else 0.0
+    except (TypeError, ValueError):
+        val = 0.0
+    # A ceiling below one job's own length is unreachable anyway, and a negative one is nonsense; a
+    # month is past the point where any plan is bound by it. Clamped rather than rejected — this is
+    # a preference, not a command, and the plan already reports what it could not honour.
+    val = 0.0 if val <= 0 else min(val, 30.0)
+    con = get_connection()
+    try:
+        con.execute(
+            "INSERT INTO pp_industry_settings (context_id, max_reaction_job_days, updated_at) "
+            "VALUES (?,?,?) ON CONFLICT(context_id) DO UPDATE SET "
+            "max_reaction_job_days=excluded.max_reaction_job_days, updated_at=excluded.updated_at",
+            (context_id, val or None, time.time()))
+        con.commit()
+    finally:
+        con.close()
+    return val or None
+
+
 def get_blacklist(context_id: int) -> list[int]:
     return get_settings(context_id).get("never_build_ids") or []
 
@@ -280,6 +332,12 @@ def apply_account_build_options(context_id: int, opts):
         update["buy_all_reactions"] = True
     if "buy_reaction_categories" not in sent and policy.get("buy_categories"):
         update["buy_reaction_categories"] = list(policy["buy_categories"])
+    # …and so is the reaction job-length ceiling. It changes how many jobs a plan HAS, so a share
+    # link or the start-now checklist that missed it would hand the builder a different list of jobs
+    # from the one on their screen — exactly the class of bug this module exists to end. Whether it
+    # is honoured at all is the feature flag's call, made once in `prepare_plan_inputs`.
+    if "max_reaction_job_days" not in sent and saved.get("max_reaction_job_days"):
+        update["max_reaction_job_days"] = float(saved["max_reaction_job_days"])
     return opts.model_copy(update=update) if update else opts
 
 
@@ -427,6 +485,35 @@ def edit_per_order_plans(req: PerOrderPlansEdit, ctx: int = Depends(require_cont
     if not feature_enabled_for("industry_per_order_plans", ctx):
         raise HTTPException(status_code=403, detail="feature not enabled")
     return {"enabled": set_per_order_plans(ctx, req.enabled), "available": True}
+
+
+class JobLengthPolicyEdit(BaseModel):
+    """Days. `None` (or 0) clears the ceiling."""
+    max_reaction_job_days: float | None = None
+
+
+@router.get("/api/industry/job-length-policy")
+def read_job_length_policy(ctx: int = Depends(require_context)):
+    """How long one reaction job may run, in days. 5,000 runs of a reaction fit in a single slot and
+    sit there for weeks; this is how a builder says "never more than two or three days" and has the
+    work spread across the reactor slots they actually have."""
+    from app.features import feature_enabled_for
+    return {"max_reaction_job_days": get_max_reaction_job_days(ctx),
+            # Nothing is hidden server-side by the flag beyond whether the plan HONOURS the ceiling
+            # (`prepare_plan_inputs`) — the UI needs to know whether to offer the control.
+            "available": feature_enabled_for("industry_job_length_policy", ctx)}
+
+
+@router.post("/api/industry/job-length-policy")
+def edit_job_length_policy(req: JobLengthPolicyEdit, ctx: int = Depends(require_context)):
+    """Gated on the rollout ladder rather than settable by anyone who can guess the endpoint: this
+    changes how many jobs a plan has, and a stored value nobody could see the effect of would be
+    worse than no setting at all."""
+    from app.features import feature_enabled_for
+    if not feature_enabled_for("industry_job_length_policy", ctx):
+        raise HTTPException(status_code=403, detail="feature not enabled")
+    return {"max_reaction_job_days": set_max_reaction_job_days(ctx, req.max_reaction_job_days),
+            "available": True}
 
 
 class ReactionPolicyEdit(BaseModel):

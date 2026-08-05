@@ -126,6 +126,15 @@ class BuildParams:
     buy_all_reactions: bool = False           # the account doesn't run reactions at all
     buy_reaction_categories: set = field(default_factory=set)   # …or not THESE families
     build_reactions_anyway: bool = False      # per order: this build makes them regardless
+    # ── How long ONE reaction job may run (hours). 0 = no ceiling, which is every plan before this.
+    # A reaction has no per-job run cap, so 5,000 runs fit in one slot and sit there for weeks; this
+    # lets a builder say "never more than two days" and have the batch spread over the reactor slots
+    # they have. It is a CEILING, never a target: it can only ever make jobs shorter (see
+    # `_packed_jobs`), a consumer's deadline still wins, and it can never conjure a slot or a formula
+    # — the split stays bounded by `n_wide`, which already holds the pool size and the formula cap.
+    # REACTIONS ONLY, deliberately: splitting a manufacturing batch spends blueprint COPIES, which
+    # cost real ISK, while a formula is durable and reused by every later build.
+    max_reaction_job_hours: float = 0.0
     # product_type_id -> SDE group_id, which is how a produced type is matched to a category. Empty
     # (a hand-built params, a REPL) means no type can be categorised — so a category rule matches
     # nothing and the plan is exactly today's. `buy_all_reactions` needs no groups at all.
@@ -708,6 +717,10 @@ class BuildOptions(BaseModel):
     # Wins over everything: it's the user telling us which print they'll actually use.
     me_te_overrides: dict[str, list[int]] = {}
     margin_pct: float | None = None    # markup over net cost for the customer price (None = default)
+    # The longest a single REACTION job may run, in DAYS (None/0 = no ceiling, today's plan). Filled
+    # from the account's saved setting in apply_account_build_options, so a share link and the
+    # start-now checklist split a batch into the same jobs the user's screen showed.
+    max_reaction_job_days: float | None = None
 
 
 class IndustryPlanRequest(BuildOptions):
@@ -1052,6 +1065,15 @@ def prepare_plan_inputs(ctx: int, targets: list[tuple[int, int]], opts: BuildOpt
     params.buy_reaction_categories = {str(k) for k in (opts.buy_reaction_categories or ())}
     params.build_reactions_anyway = bool(opts.build_reactions_anyway)
     params.type_groups = groups
+    # The reaction job-length ceiling, in hours. THE one flag gate for the feature, placed here
+    # because every plan path resolves its params through this function: with the flag off the field
+    # stays 0.0 and the scheduler is byte-for-byte the one that shipped before it existed. Days in,
+    # hours out — days is the unit a builder says it in, hours is what the scheduler already thinks
+    # in everywhere else.
+    if opts.max_reaction_job_days:
+        from app.features import feature_enabled_for
+        if feature_enabled_for("industry_job_length_policy", ctx):
+            params.max_reaction_job_hours = max(0.0, float(opts.max_reaction_job_days) * 24.0)
     # Ordering a reaction is the newer, more specific instruction — you asked for it, so the policy
     # does not get to buy it out of its own build. Same carve-out the blacklist gets above.
     params.reaction_policy_exempt_ids = {tid for tid, _q in targets}

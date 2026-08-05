@@ -11,7 +11,7 @@ Find a section: `grep -n '^## ' docs/industry-planning.md` and read from that li
 - **Make-or-buy overrides and the marginal-saving strip** — the two shortcuts that buy instead of build, `force_build_ids`, and where the user overrules them
 - **Blueprint ME/TE: where the numbers come from, and the two override paths** — precedence (override > owned > contract > 0/0), the job chip vs the order edit row
 - **Blueprint copies: coverage, per-job research, and one print per job** — runs coverage, `_print_limits`, reaction formulas, and why unknown ownership never caps
-- **Scheduling: slots, pace, cohort alignment and compaction** — `_PACE_OVERSHOOT`, `_align_cohorts`, `pace_cap` — why a job may run long but never past its consumer
+- **Scheduling: slots, pace, cohort alignment and compaction** — `_PACE_OVERSHOOT`, `_align_cohorts`, `pace_cap`, the reaction job-length ceiling — why a job may run long but never past its consumer
 - **The Step-by-step view must account for its own total** — step offsets overlap on purpose; do not make them sum
 - **Planning each order on its own (`industry_per_order_plans`)** — the compare endpoint, first-come-first-served consumption, cross-order alignment
 - **Build options, and who installs each job** — `pp_industry_settings`, one option set per queue, `assign_characters`
@@ -327,6 +327,41 @@ and both were learned from real builds rather than guessed:
   the first version — meant a component whose consumer was off the critical path inherited nothing.
   Reported from a real plan: four things in one wave finishing at 2h32m, 2h47m, 5h05m and 10h11m,
   four separate moments to log in at, from work that could have landed together.
+
+**A ceiling on how long ONE REACTION job may run (`industry_job_length_policy`).** Compaction is
+right and still leaves a builder with 5,000 runs of a reaction parked in a single reactor for weeks
+— reactions have no per-job run cap, so nothing else in the packer stops it. `max_reaction_job_days`
+(per account, `pp_industry_settings`, applied through `apply_account_build_options` /
+`prepare_plan_inputs` like every other build option, converted once to
+`BuildParams.max_reaction_job_hours`) is the builder saying "never more than two or three days".
+- **It is the same KIND of bound as `pace_cap`** — a "never longer than", not a target — so it rides
+  in the same `min()` (`window = min(hard_window, pace_cap, job_ceiling)`) and the existing
+  `window`/`_packed_jobs`/`_packed_duration` machinery does the splitting. There is deliberately no
+  second splitting path. `_tightest(p)` is the pair, and it is exactly `pace_cap` when no ceiling is
+  set. `hard_window` stays out of it for the reason it always has: the pace may be overshot by a
+  hair to reach a whole run, a consumer's start may not. The ceiling also clips the `+1 run`
+  allowance and the `_align_cohorts` target — alignment LENGTHENS a job, which is what a ceiling
+  forbids, so a type with one keeps its own landing.
+- **It can only ever shorten.** A smaller window means more, shorter jobs; a deadline that was met
+  stays met, and a ceiling looser than the pace changes nothing at all.
+- **It cannot manufacture slots or formulas**, and gets no say on concurrency: `_packed_jobs` never
+  exceeds `n_wide`, which already carries the reactor pool and the formula cap (one formula is one
+  concurrent reaction, never bought). An unreachable ceiling is honoured as far as the concurrency
+  goes and the shortfall is stated — `why.ceiling_h` / `why.ceiling_met` per job, `bound_by:
+  "job_length"` when it is what bit, and `job_length_limits` /
+  `metrics.job_length_limited_steps` per plan. Silently missing a target the user set is worse than
+  never offering one.
+- **Reactions only, on purpose.** Splitting a MANUFACTURING batch spends blueprint COPIES, which
+  cost ISK; a reaction formula is durable and reused by every later build, so splitting a reaction
+  is very nearly free. That asymmetry is the whole reason this half ships alone (the manufacturing
+  half is T11 in `TODO.md`).
+- Covered by `test_a_reaction_job_can_be_held_to_a_maximum_length`,
+  `test_the_job_length_ceiling_can_only_ever_shorten`,
+  `test_a_consumer_deadline_still_beats_the_job_length_ceiling`,
+  `test_the_job_length_ceiling_never_touches_manufacturing`,
+  `test_a_job_length_ceiling_cannot_manufacture_slots_or_formulas` and
+  `test_a_plan_with_no_job_length_ceiling_is_byte_for_byte_the_old_plan` — the last one runs the
+  packer against params the field does not exist on, so anything reading it unguarded fails there.
 
 ## The Step-by-step view must account for its own total
 

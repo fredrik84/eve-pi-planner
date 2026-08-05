@@ -2636,6 +2636,13 @@ def main():
     test_a_reaction_family_this_account_does_not_run_is_bought()
     test_the_reaction_category_registry_is_the_single_source()
     test_a_reaction_pool_of_zero_still_plans()
+    test_a_reaction_job_can_be_held_to_a_maximum_length()
+    test_the_job_length_ceiling_can_only_ever_shorten()
+    test_a_consumer_deadline_still_beats_the_job_length_ceiling()
+    test_the_job_length_ceiling_never_touches_manufacturing()
+    test_a_job_length_ceiling_cannot_manufacture_slots_or_formulas()
+    test_a_plan_with_no_job_length_ceiling_is_byte_for_byte_the_old_plan()
+    test_the_reaction_job_ceiling_reaches_plans_run_without_a_browser()
     print(f"\nAll {_passed} checks passed.")
 
 
@@ -4429,6 +4436,263 @@ def test_a_reaction_pool_of_zero_still_plans():
           any(s["type_id"] == 102 and s["reaction_policy"] for s in res["shopping_list"]))
     check("the queue plan reports the ISK too", res["reaction_policy"]["isk"] > 0)
 
+
+
+# ── A ceiling on how long one REACTION job may run ────────────────────────────────────────────
+# Reactions have no per-job run cap, so 5,000 runs fit in a single slot and sit there for weeks.
+# The scheduler already owns the concept: `pace_cap` is a "never longer than" bound and
+# `window`/`_packed_duration` already decide how a type's runs become jobs — the account's ceiling
+# rides in the same min(), which is why it can only ever produce MORE, SHORTER jobs.
+
+def _ceiling_fixture():
+    """A reaction with real SLACK: it feeds a product whose OTHER input is far slower, so the
+    reaction's deadline is a long way past its own earliest finish and the packer legitimately
+    compacts 200 runs into a handful of multi-day jobs. That compaction is the behaviour the
+    ceiling exists to argue with — a straight chain has no slack and nothing to argue about.
+
+    Returns (agg, mfg, rx, deps, depths, pools).
+    """
+    con = _seed_con()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+
+    def row(tid, activity, runs):
+        return {"type_id": tid, "activity": activity, "build": True, "gross": runs, "net": runs,
+                "runs": runs, "produced": runs, "leftover": 0, "output_qty": 1}
+
+    agg = {100: row(100, "manufacturing", 10),      # the product
+           101: row(101, "manufacturing", 400),     # the slow sibling input — sets the plan's pace
+           102: row(102, "reaction", 200)}          # the reaction, with hours of room to spare
+    return (agg, mfg, rx, {100: {101, 102}, 101: set(), 102: set()},
+            {100: 0, 101: 1, 102: 1}, {"manufacturing": 2, "reaction": 10})
+
+
+def _ceiling_jobs(ceiling_h, pools=None, owned=None, agg=None):
+    agg0, mfg, rx, deps, depths, pools0 = _ceiling_fixture()
+    p = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, struct_time_mult=1.0,
+                    max_reaction_job_hours=ceiling_h, owned=owned or {})
+    tasks, _by = build_tasks(agg if agg is not None else agg0, mfg, rx, p, pools or pools0,
+                             depths=depths, deps=deps)
+    return tasks
+
+
+def _longest(tasks, activity):
+    sel = [t for t in tasks if t.activity == activity]
+    return len(sel), max(t.duration for t in sel) / 3600.0, sel[0].why
+
+
+def test_a_reaction_job_can_be_held_to_a_maximum_length():
+    """A tester's words: "never spend more than 2-3 days on a reaction job". Reactions have
+    effectively unlimited runs, so the packer's own compaction — correct on its own terms — parks a
+    5,000-run batch in ONE reactor for weeks. The ceiling is the same KIND of bound as `pace_cap`
+    (a "never longer than", not a target), so it goes in the same window and the existing splitting
+    machinery does the rest."""
+    print("test_a_reaction_job_can_be_held_to_a_maximum_length")
+
+    n0, h0, why0 = _longest(_ceiling_jobs(0.0), "reaction")
+    check("without a ceiling the batch compacts into a few very long jobs", n0 == 4 and h0 == 50.0)
+    check("and nothing claims a ceiling was involved",
+          why0["ceiling_h"] is None and why0["ceiling_met"] is None)
+
+    n1, h1, why1 = _longest(_ceiling_jobs(24.0), "reaction")
+    check("a 24h ceiling splits the same runs across more slots", n1 > n0)
+    check("and no job runs longer than the ceiling", h1 <= 24.0)
+    check("the ceiling is honoured, and says so", why1["ceiling_met"] is True)
+    check("every run still gets run",
+          sum(t.runs for t in _ceiling_jobs(24.0) if t.activity == "reaction") == 200)
+
+
+def test_the_job_length_ceiling_can_only_ever_shorten():
+    """A ceiling, not a target. It may never lengthen a job, never move a delivery later and never
+    talk a type into holding a slot longer than the plan already asked it to — which is exactly why
+    it belongs in the same min() as `pace_cap` rather than in a splitting path of its own."""
+    print("test_the_job_length_ceiling_can_only_ever_shorten")
+    base_n, base_h, _w = _longest(_ceiling_jobs(0.0), "reaction")
+    # Sweep across, below and far above the plan's own pace. Not one of them may go the wrong way.
+    for ceiling in (1.0, 6.0, 12.0, 24.0, 49.0, 50.0, 51.0, 200.0):
+        n, h, _why = _longest(_ceiling_jobs(ceiling), "reaction")
+        check(f"a {ceiling:g}h ceiling never lengthens a job", h <= base_h + 1e-9)
+        check(f"a {ceiling:g}h ceiling never runs fewer jobs", n >= base_n)
+    # A ceiling that is already looser than the pace is simply not a bound, and must leave the plan
+    # exactly where it found it.
+    loose = _ceiling_jobs(200.0)
+    check("a ceiling above the plan's own pace changes nothing",
+          [(t.runs, round(t.duration, 6)) for t in loose if t.activity == "reaction"]
+          == [(t.runs, round(t.duration, 6)) for t in _ceiling_jobs(0.0) if t.activity == "reaction"])
+    check("and is not reported as what bound the job",
+          _longest(loose, "reaction")[2]["bound_by"] == "pace")
+
+
+def test_a_consumer_deadline_still_beats_the_job_length_ceiling():
+    """`hard_window` is kept apart from `pace_cap` on purpose: the pace may be overshot by a hair to
+    reach a whole run, a consumer's start may not. The ceiling joins the PACE side of that line — it
+    can shorten a job, so a deadline that was already met stays met, and it can never stretch one to
+    reach the ceiling when something needs the output sooner."""
+    print("test_a_consumer_deadline_still_beats_the_job_length_ceiling")
+    # A straight chain: the reaction's consumer starts the moment it lands, so its deadline IS its
+    # own length and there is no slack anywhere.
+    agg, mfg, rx = _agg_for([(100, 60)])
+    deps, depths = _built_deps(agg, mfg, rx), _depths([100], mfg, rx)
+    pools = {"manufacturing": 2, "reaction": 10}
+
+    def rx_jobs(ceiling):
+        p = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, struct_time_mult=1.0,
+                        max_reaction_job_hours=ceiling)
+        tasks, _by = build_tasks(agg, mfg, rx, p, pools, depths=depths, deps=deps)
+        return [t for t in tasks if t.activity == "reaction"]
+
+    tight = rx_jobs(0.0)
+    generous = rx_jobs(500.0)
+    check("a ceiling far above the deadline does not stretch the job to reach it",
+          [(t.runs, round(t.duration, 6)) for t in generous]
+          == [(t.runs, round(t.duration, 6)) for t in tight])
+    check("and the deadline is still named as what bound it",
+          generous[0].why["bound_by"] == "consumer")
+    check("the deadline is the tighter of the two, so it is what the window took",
+          generous[0].why["hard_h"] < generous[0].why["ceiling_h"])
+
+
+def test_the_job_length_ceiling_never_touches_manufacturing():
+    """Deliberately reactions only. Splitting a manufacturing batch into more jobs spends blueprint
+    COPIES, and those cost ISK — a ceiling that quietly bought prints would be a spending decision
+    wearing a scheduling knob's clothes. A reaction formula is durable and reused by every later
+    build, so splitting a reaction is very nearly free. That asymmetry is the whole reason this half
+    can ship on its own."""
+    print("test_the_job_length_ceiling_never_touches_manufacturing")
+    plain = [(t.type_id, t.runs, round(t.duration, 6))
+             for t in _ceiling_jobs(0.0) if t.activity == "manufacturing"]
+    for ceiling in (1.0, 6.0, 24.0, 200.0):
+        capped = [(t.type_id, t.runs, round(t.duration, 6))
+                  for t in _ceiling_jobs(ceiling) if t.activity == "manufacturing"]
+        check(f"a {ceiling:g}h ceiling leaves every manufacturing job untouched", capped == plain)
+    check("and no manufacturing job carries a ceiling at all",
+          all(t.why["ceiling_h"] is None
+              for t in _ceiling_jobs(24.0) if t.activity == "manufacturing"))
+
+
+def test_a_job_length_ceiling_cannot_manufacture_slots_or_formulas():
+    """Splitting only helps if there is somewhere to run the pieces. The ceiling never gets its own
+    say on concurrency: `_packed_jobs` can never exceed `n_wide`, which already carries the reactor
+    POOL and the FORMULA cap (one formula is one concurrent reaction, and the plan never buys one).
+    So an unreachable ceiling is honoured as far as it goes and the shortfall is REPORTED — a target
+    silently missed is worse than one never offered."""
+    print("test_a_job_length_ceiling_cannot_manufacture_slots_or_formulas")
+
+    # (a) Not enough reactor slots. Ten slots over 200 one-hour runs is 20h a job at the very widest.
+    n, h, why = _longest(_ceiling_jobs(6.0), "reaction")
+    check("the plan splits as far as the slots allow", n == 10)
+    check("but cannot reach a 6h ceiling", h > 6.0)
+    check("and says the ceiling was not met", why["ceiling_met"] is False)
+    check("naming the ceiling as what it was trying to hit", why["ceiling_h"] == 6.0)
+
+    # (b) Not enough formulas. One formula is one concurrent reaction, whatever the slots hold.
+    one_formula = {102: {"me": 0, "te": 0, "kind": "bpo", "runs": -1, "copy_count": 1,
+                         "copies": [{"me": 0, "te": 0, "kind": "bpo", "runs": -1}]}}
+    n1, h1, why1 = _longest(_ceiling_jobs(24.0, owned=one_formula), "reaction")
+    check("one formula still means one job at a time", n1 == 1)
+    check("so the ceiling cannot be met", h1 > 24.0 and why1["ceiling_met"] is False)
+    check("and the ceiling never argues with the formula cap — it does not invent a second reactor",
+          n1 == len([t for t in _ceiling_jobs(0.0, owned=one_formula) if t.activity == "reaction"]))
+
+    # (c) …and the plan-level report says which steps fell short, once per type.
+    from app.industry.schedule import _job_length_limits
+    rows = _job_length_limits(_ceiling_jobs(6.0), NAMES)
+    check("the plan lists the step it could not hold to the ceiling",
+          len(rows) == 1 and rows[0]["type_id"] == 102 and rows[0]["name"] == "Sprocket")
+    check("with the ceiling asked for and the length actually reached",
+          rows[0]["ceiling_h"] == 6.0 and rows[0]["hours"] > 6.0)
+    check("and a met ceiling is reported as nothing at all",
+          _job_length_limits(_ceiling_jobs(24.0), NAMES) == []
+          and _job_length_limits(_ceiling_jobs(0.0), NAMES) == [])
+
+
+def test_a_plan_with_no_job_length_ceiling_is_byte_for_byte_the_old_plan():
+    """This touches the PLANNING ALGORITHM, so the no-op case is the load-bearing test: with the flag
+    off — or simply with no ceiling set — every number the scheduler produces must be identical to
+    the one it produced before the feature existed. Proved by comparing a plan run with the ceiling
+    ABSENT from the params entirely against one run with the field PRESENT and unset."""
+    print("test_a_plan_with_no_job_length_ceiling_is_byte_for_byte_the_old_plan")
+    import dataclasses
+    con = _seed_con()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+    pools = {"manufacturing": 3, "reaction": 5}
+
+    check("an unset ceiling is the dataclass default",
+          BuildParams().max_reaction_job_hours == 0.0)
+
+    class _NoCeiling:
+        """Params as they were BEFORE the field existed: asking for it raises, exactly as it would
+        have on the old class. If anything in the packer reads it unguarded, this test explodes."""
+
+        def __init__(self, inner):
+            object.__setattr__(self, "_inner", inner)
+
+        def __getattr__(self, name):
+            if name == "max_reaction_job_hours":
+                raise AttributeError(name)
+            return getattr(object.__getattribute__(self, "_inner"), name)
+
+    base = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, struct_time_mult=1.0)
+    absent = plan_queue([(100, 40)], mfg, rx, _prices(SELL), ADJ, _NoCeiling(base), NAMES, pools)
+    present = plan_queue([(100, 40)], mfg, rx, _prices(SELL), ADJ,
+                         dataclasses.replace(base), NAMES, pools)
+
+    # Strip only the two keys that did not exist before, then demand exact equality of everything
+    # else — costs, makespan, every wave, every job, every `why`.
+    def _scrub(d):
+        s = json.loads(json.dumps(d, default=str))
+        s.pop("job_length_limits", None)
+        s["metrics"].pop("job_length_limited_steps", None)
+        for w in s["schedule"]["waves"]:
+            for t in w["tasks"]:
+                (t.get("why") or {}).pop("ceiling_h", None)
+                (t.get("why") or {}).pop("ceiling_met", None)
+        return s
+
+    check("the plan is identical with the feature absent and present-but-unset",
+          _scrub(absent) == _scrub(present))
+    check("and the ceiling reports itself as absent on every job",
+          all((t.get("why") or {}).get("ceiling_h") is None
+              for w in present["schedule"]["waves"] for t in w["tasks"]))
+    check("with nothing to report at the plan level",
+          present["job_length_limits"] == []
+          and present["metrics"]["job_length_limited_steps"] == 0)
+
+
+def test_the_reaction_job_ceiling_reaches_plans_run_without_a_browser():
+    """Stored per account in `pp_industry_settings` and applied in `prepare_plan_inputs`, like every
+    other build option — a share link or the start-now checklist that missed it would hand the
+    builder a different set of jobs from the one on their screen. In DAYS, because that is the unit
+    the ceiling is thought in; the scheduler works in hours and converts once."""
+    print("test_the_reaction_job_ceiling_reaches_plans_run_without_a_browser")
+    import inspect
+    from app.industry.graph import BuildOptions, prepare_plan_inputs
+    from app.industry import settings as ind_settings
+    from app.features import FEATURE_REGISTRY
+
+    real_get = ind_settings.get_settings
+    ind_settings.get_settings = lambda ctx: {"max_reaction_job_days": 2.5}
+    try:
+        merged = ind_settings.apply_account_build_options(1, BuildOptions())
+        check("a bare request inherits the account's ceiling", merged.max_reaction_job_days == 2.5)
+        explicit = ind_settings.apply_account_build_options(
+            1, BuildOptions(max_reaction_job_days=1.0))
+        check("an explicitly sent ceiling still wins", explicit.max_reaction_job_days == 1.0)
+        ind_settings.get_settings = lambda ctx: {}
+        check("and an account that never set one sends nothing",
+              ind_settings.apply_account_build_options(1, BuildOptions()).max_reaction_job_days is None)
+    finally:
+        ind_settings.get_settings = real_get
+
+    src = inspect.getsource(prepare_plan_inputs)
+    check("the ceiling is resolved where every plan resolves its inputs",
+          "max_reaction_job_hours" in src and "max_reaction_job_days" in src)
+    check("behind the feature flag, in exactly one place",
+          'feature_enabled_for("industry_job_length_policy"' in src)
+    check("days in, hours out", "* 24.0" in src)
+
+    f = [x for x in FEATURE_REGISTRY if x["key"] == "industry_job_length_policy"]
+    check("the feature is registered", len(f) == 1)
+    check("and defaults to off", f[0]["default"] is False)
 
 if __name__ == "__main__":
     main()

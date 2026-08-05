@@ -461,7 +461,14 @@ straight-to-`main` one.
 decision is a separate knob from the ceiling. Worth understanding what their threshold means before
 designing ours.
 
-### T12 — A ceiling on reaction job length
+### T12 — A ceiling on reaction job length — **SHIPPED 2026-08-05**
+
+Shipped as `max_reaction_job_days` (per account, `pp_industry_settings`) behind
+`industry_job_length_policy`, built exactly as sketched below: `BuildParams.max_reaction_job_hours`
+joins `pace_cap` in the packer's `window`, so no second splitting path exists. Days, not hours,
+because that is the unit the ask was phrased in. See
+[docs/industry-planning.md](industry-planning.md) § Scheduling for the bound, what happens when the
+slots or formulas cannot supply the concurrency, and why manufacturing (T11) is untouched.
 
 **Ask.** Configure a maximum time reactions should take. Reactions have unlimited runs, so 5,000
 runs fit in one slot and take weeks; a 2–3 day ceiling should split the work across more slots.

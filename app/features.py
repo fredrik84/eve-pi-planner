@@ -259,6 +259,17 @@ FEATURE_REGISTRY = [
                     "per order and blueprint copies bought per order. Compare both plans on the "
                     "real queue before switching.",
      "default": False, "state": "testers"},
+    {"key": "industry_job_length_policy", "label": "Industry: cap how long one reaction job runs",
+     "group": "Industry",
+     "description": "Say the longest a single REACTION job may run (in days) and the planner splits a "
+                    "big batch across more of your reaction slots instead of parking 5,000 runs in "
+                    "one slot for weeks. A ceiling only ever makes jobs shorter — a consumer's "
+                    "deadline still wins, and it can never invent slots or formulas, so where the "
+                    "concurrency isn't there the plan honours what it can and says so. Manufacturing "
+                    "is untouched: splitting a manufacturing batch spends blueprint COPIES, which "
+                    "cost ISK, while a reaction formula is durable and reused.",
+     # Testers, like every other Industry feature — the ceiling came from a builder using the tab.
+     "default": False, "state": "testers"},
     {"key": "industry_reaction_policy", "label": "Industry: which reactions a build runs",
      "group": "Industry",
      "description": "Say once that this account's builds don't run reactions — or don't run certain "

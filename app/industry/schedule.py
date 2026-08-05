@@ -459,6 +459,11 @@ def _packed_jobs(p: dict) -> int:
     slack = min(max(_ALIGN_FLOOR, window * _PACE_OVERSHOOT),
                 (p.get("makespan") or window) * _DELIVERY_OVERSHOOT)
     allowed = window if p.get("no_consumer") else window + slack
+    # A ceiling is a ceiling, so the "+1 run" allowance may not reach past it. It cannot make the job
+    # shorter than the window already forced (the max below), which matters where the ceiling is
+    # unreachable: there the window has already fallen back to `wide_dur` and this must not fight it.
+    if p.get("job_ceiling"):
+        allowed = min(allowed, max(p["job_ceiling"], window))
     if per_job < p["cap"] and (per_job + 1) * p["per_run"] <= allowed + 1e-9:
         per_job += 1
     return max(1, min(p["n_wide"], math.ceil(p["runs"] / per_job)))
@@ -467,6 +472,17 @@ def _packed_jobs(p: dict) -> int:
 def _packed_duration(p: dict) -> float:
     """How long this type will take once packed — the longest of its jobs, runs being whole."""
     return math.ceil(p["runs"] / _packed_jobs(p)) * p["per_run"]
+
+
+def _tightest(p: dict) -> float:
+    """The tighter of the two "never longer than" bounds — the plan's pace, and the account's own
+    ceiling on one reaction job. They are the same kind of bound, which is why the ceiling rides in
+    the same min() as `pace_cap` rather than in a splitting path of its own. `hard_window` is
+    deliberately NOT in here: a deadline is a different promise, and it is compared against this.
+    With no ceiling set this is exactly `pace_cap`, so every plan reads as it always did."""
+    pace = p.get("pace_cap", 0.0)
+    ceiling = p.get("job_ceiling")
+    return min(pace, ceiling) if ceiling else pace
 
 
 def _align_cohorts(plan: dict, start: dict) -> None:
@@ -514,7 +530,13 @@ def _align_cohorts(plan: dict, start: dict) -> None:
         target = max(_packed_duration(plan[t]) for t in members)
         for tid in members:
             p = plan[tid]
-            per_job = max(1, min(p["cap"], int(target / p["per_run"] + 1e-9)))
+            # Alignment LENGTHENS a job to land with its cohort, which is precisely what a job-length
+            # ceiling forbids. So the target is clipped to the ceiling for a type that has one: it
+            # then asks for at least as many jobs as the type already has, the `n <` guard below
+            # declines, and the type simply keeps its own landing. Without a ceiling this is the
+            # cohort target unchanged.
+            tgt = min(target, p["job_ceiling"]) if p.get("job_ceiling") else target
+            per_job = max(1, min(p["cap"], int(tgt / p["per_run"] + 1e-9)))
             n = max(1, min(p["n_wide"], math.ceil(p["runs"] / per_job)))
             if n < _packed_jobs(p):
                 want[tid] = n
@@ -563,6 +585,17 @@ def build_tasks(agg: dict, mfg: dict, rx: dict, params: BuildParams,
     through `print_gaps` ({type_id: {held, jobs, could_run, extra, hours, hours_if_held}}) instead.
     That is the whole answer for a REACTION: a formula is durable and reused by every later build,
     so the plan says what another one would save and never spends the builder's ISK on it.
+
+    **A REACTION job may also be held to a MAXIMUM LENGTH** (`params.max_reaction_job_hours`, 0 =
+    off). Reactions have no per-job run cap, so the compaction above will happily park 5,000 runs in
+    one reactor for weeks. The account's ceiling is the same KIND of bound as `pace_cap` — a "never
+    longer than", not a target — so it rides in the same window and this machinery does the
+    splitting; there is deliberately no second path. It can only ever make jobs SHORTER, a consumer's
+    deadline still outranks it, and it gets no say on concurrency: the split stays bounded by
+    `n_wide`, which already holds the slot pool and the formula cap. Where that is not enough the
+    ceiling is honoured as far as it goes and the miss is reported (`why.ceiling_met`). Manufacturing
+    is untouched on purpose — splitting a manufacturing batch spends blueprint COPIES, which cost
+    ISK, while a formula is durable and reused by every later build.
 
     **Aligning ACROSS several calls** (`plan_out` / `start_out` / `align_hint`). Cohort alignment
     only ever sees the types in ONE call, which is right for the aggregated queue — it is one plan —
@@ -619,8 +652,17 @@ def build_tasks(agg: dict, mfg: dict, rx: dict, params: BuildParams,
         n_free = n_wide
         if prints is not None and not can_buy_prints:
             n_wide = max(n_floor, min(n_wide, prints))
+        # The longest ONE job of this type may run, when the account has asked for a ceiling.
+        # REACTIONS ONLY: splitting a manufacturing batch spends blueprint copies, which cost ISK,
+        # whereas a formula is durable and reused — that asymmetry is why only this half exists.
+        # None everywhere when the setting is unset or the flag is off, and every expression below
+        # that reads it is a no-op on None, so the plan is byte-for-byte the one that shipped.
+        job_ceiling = (params.max_reaction_job_hours * 3600.0
+                       if activity == "reaction" and getattr(params, "max_reaction_job_hours", 0.0) > 0
+                       else None)
         plan[tid] = {"activity": activity, "per_run": per_run, "base_run": base_run,
                      "copies": copies, "prints": prints, "can_buy_prints": can_buy_prints,
+                     "job_ceiling": job_ceiling,
                      # What the split would have been with prints to spare — the difference is what
                      # holding more of them would buy, which is worth SAYING even where it isn't
                      # worth spending (a formula is durable; the plan reports, never buys).
@@ -729,6 +771,17 @@ def build_tasks(agg: dict, mfg: dict, rx: dict, params: BuildParams,
             p["pace_cap"] = pace_cap
             p["makespan"] = makespan
             p["window"] = min(p["hard_window"], pace_cap)
+            # …and the account's own ceiling on one reaction job, which is the same KIND of bound as
+            # `pace_cap` — a "never longer than", not a target — so it belongs in the same min().
+            # It can only ever shrink the window, so it can only ever make MORE, SHORTER jobs; it
+            # never moves a delivery later and it cannot beat `hard_window`, because a smaller window
+            # still lands inside a deadline that was already met. What it CANNOT do is buy
+            # concurrency: `_packed_jobs` never returns more than `n_wide`, which already carries the
+            # slot pool and the formula cap, so an unreachable ceiling is honoured as far as the
+            # slots and formulas allow and then reported (`ceiling_met` below) rather than missed in
+            # silence.
+            if p.get("job_ceiling"):
+                p["window"] = min(p["window"], p["job_ceiling"])
             # What this type will actually take once packed into that window — decided here so its
             # own inputs can be given the room it leaves behind.
             dur = _packed_duration(p)
@@ -772,6 +825,13 @@ def build_tasks(agg: dict, mfg: dict, rx: dict, params: BuildParams,
                 "hours": round(math.ceil(p["runs"] / n) * p["per_run"] / 3600.0, 2),
                 "hours_if_held": round(math.ceil(p["runs"] / free_jobs) * p["per_run"] / 3600.0, 2),
             }
+        # The account's ceiling on one reaction job, and whether the plan could actually keep to it.
+        # A ceiling cannot buy slots or formulas, so where it needs more concurrency than the pool
+        # or the formula cap can supply it is honoured as far as it goes and the shortfall SAID —
+        # a target quietly missed is worse than one never offered. `ceiling` is absent entirely for
+        # everything else, which is every job in a plan without the setting.
+        ceiling = p.get("job_ceiling")
+        packed_h = math.ceil(p["runs"] / n) * p["per_run"] / 3600.0
         why = {
             "runs_per_job": math.ceil(p["runs"] / n),
             "runs": p["runs"], "jobs": n,
@@ -780,11 +840,17 @@ def build_tasks(agg: dict, mfg: dict, rx: dict, params: BuildParams,
             "window_h": round(max(p.get("window", 0.0), p["wide_dur"]) / 3600.0, 2),
             "pace_h": round(p.get("pace_cap", 0.0) / 3600.0, 2),
             "own_h": round(p["wide_dur"] / 3600.0, 2),
+            "ceiling_h": (round(ceiling / 3600.0, 2) if ceiling else None),
+            "ceiling_met": (packed_h <= ceiling / 3600.0 + 1e-9) if ceiling else None,
             # What stopped it being longer. "consumer" means something needs it sooner than the
-            # plan's pace, which is the answer that surprises people.
+            # plan's pace, which is the answer that surprises people; "job_length" means the account
+            # said no reaction job may run longer than this, and it bit before the pace did. The
+            # deadline still outranks both — a ceiling makes a job shorter, it never excuses one
+            # landing late.
             "bound_by": ("aligned" if p.get("aligned_jobs")
                          else "consumer" if p.get("hard_window") is not None
-                         and p.get("hard_window", 0.0) < p.get("pace_cap", 0.0) - 1e-9
+                         and p.get("hard_window", 0.0) < _tightest(p) - 1e-9
+                         else "job_length" if ceiling and ceiling < p.get("pace_cap", 0.0) - 1e-9
                          else "pace" if p.get("pace_cap") else "own"),
             "needed_by": p.get("needed_by"),
             "needed_by_name": None,
@@ -973,6 +1039,34 @@ def _sites_used(agg: dict, params: BuildParams) -> list[dict]:
                                             "system_id": site.get("system_id"), "steps": 0})
         row["steps"] += 1
     return sorted(used.values(), key=lambda r: -r["steps"])
+
+
+def _job_length_limits(tasks: list, names: dict[int, str]) -> list[dict]:
+    """Reaction steps the account's job-length ceiling could NOT be honoured on, one row per type.
+
+    Derived from the `why` the packer already wrote rather than through a fourth out-parameter: the
+    ceiling has no separate splitting path — it rides in the window with `pace_cap` — so there is no
+    separate state to collect, only the answer to read back. Empty whenever no ceiling is set, and
+    empty when every reaction kept to it, which is the case a plan should say nothing about.
+
+    A ceiling cannot make slots and cannot make formulas: `_packed_jobs` never returns more jobs
+    than `n_wide`, which already carries the reactor pool and the formula cap. So it is honoured as
+    far as the concurrency goes and the remainder is reported here — the plan states that it fell
+    short rather than presenting the longer job as if it were what was asked for.
+    """
+    rows: dict[int, dict] = {}
+    for t in tasks:
+        why = t.why if hasattr(t, "why") else (t or {}).get("why")
+        if not why or not why.get("ceiling_h") or why.get("ceiling_met"):
+            continue
+        tid = t.type_id if hasattr(t, "type_id") else t["type_id"]
+        rows[tid] = {"type_id": tid, "name": names.get(tid, str(tid)),
+                     "ceiling_h": why["ceiling_h"],
+                     # The longest job as PACKED — runs are whole, so this is the honest figure and
+                     # not the window it was measured against.
+                     "hours": round(why["runs_per_job"] * why["per_run_h"], 2),
+                     "jobs": why["jobs"], "runs_per_job": why["runs_per_job"]}
+    return sorted(rows.values(), key=lambda r: -(r["hours"] - r["ceiling_h"]))
 
 
 def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict, adjusted: dict,
@@ -1179,6 +1273,10 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
         # Prints the plan is short of and deliberately does NOT buy — a reaction formula above all.
         # Advice with a number on it, not a line item: nothing here is in any cost.
         "print_limits": print_limits,
+        # Reaction steps whose job-length ceiling could not be met, because meeting it needs more
+        # concurrent jobs than the reactor pool or the formulas held can supply. Empty when no
+        # ceiling is set and empty when every reaction kept to it.
+        "job_length_limits": _job_length_limits(tasks, names),
         # ...and the sibling state: whether the schedule was allowed to count prints at all. On an
         # account whose blueprint picture is incomplete it assumes UNLIMITED prints, exactly as it
         # did before any of this — and says so, with the number of characters still to connect.
@@ -1198,6 +1296,9 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
             # How many steps are running in fewer jobs than the slots would allow because there
             # aren't the prints to install them on. Nothing is bought for these — see `print_limits`.
             "print_limited_steps": len(print_limits),
+            # ...and how many reaction steps could not be held to the account's job-length ceiling
+            # because the slots or the formulas to run them side by side are not there.
+            "job_length_limited_steps": len(_job_length_limits(tasks, names)),
             "total_cost": round(total_cost, 2),
             "leftover_value": round(leftover_value, 2),
             "net_cost": round(total_cost - leftover_value, 2),
@@ -1790,6 +1891,9 @@ def plan_queue_per_order(order_specs: list[dict], mfg: dict, rx: dict, prices: d
         "blueprint_parallel": sorted(({**r, "cost": round(r["cost"], 2)}
                                       for r in parallel_rows.values()), key=lambda r: -r["cost"]),
         "print_limits": sorted(gaps.values(), key=lambda r: -(r["hours"] - r["hours_if_held"])),
+        # Same report on the per-order path — a ceiling is an account-wide rule, so it has to be
+        # answered for however the queue was planned.
+        "job_length_limits": _job_length_limits(built["tasks"], names),
         "print_coverage": {**(params.blueprint_coverage
                               or {"characters": 0, "cached": 0, "missing": 0, "complete": True}),
                            "prints_counted": params.prints_known()},
@@ -1805,6 +1909,7 @@ def plan_queue_per_order(order_specs: list[dict], mfg: dict, rx: dict, prices: d
             "blueprint_parallel_cost": round(totals["blueprint_parallel_cost"], 2),
             "blueprint_parallel_copies": sum(r["copies"] for r in parallel_rows.values()),
             "print_limited_steps": len(gaps),
+            "job_length_limited_steps": len(_job_length_limits(built["tasks"], names)),
             "total_cost": round(total_cost, 2),
             "leftover_value": round(leftover_value, 2),
             "net_cost": round(total_cost - leftover_value, 2),
