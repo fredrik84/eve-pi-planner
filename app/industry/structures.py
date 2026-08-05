@@ -40,6 +40,8 @@ level anywhere. Consequences, stated rather than papered over:
 """
 from dataclasses import dataclass, field
 
+from app.industry.categories import REACTION_CATEGORIES
+
 SECURITY_RIG_MULT = {"high": 1.0, "low": 1.9, "null": 2.1, "wh": 2.1}
 
 # rig tier → base % reduction (before the security multiplier)
@@ -125,10 +127,13 @@ _G_CAPITAL_COMPONENT = frozenset({873})
 _G_ADVANCED_COMPONENT = frozenset({913, 334, 964})
 _G_STRUCTURE_COMPONENT = frozenset({536})
 
-# Reaction outputs (category 4 Material), one family per Standup L-Set reactor rig.
-_G_COMPOSITE = frozenset({429, 428})        # Composite + Intermediate Materials
-_G_HYBRID_POLYMER = frozenset({974})
-_G_BIOCHEMICAL = frozenset({712, 20})       # Biochemical Material + Drug (boosters)
+# Reaction outputs, one family per Standup L-Set reactor rig. The GROUP SETS are shared with the
+# build-policy categories (app.industry.categories) — one curated map, two readers — but the labels
+# below stay rig labels: a rig family and "does this account run this kind of reaction" are two
+# different questions that agree today and needn't forever.
+_G_COMPOSITE = REACTION_CATEGORIES["composite"]["groups"]
+_G_HYBRID_POLYMER = REACTION_CATEGORIES["hybrid_polymer"]["groups"]
+_G_BIOCHEMICAL = REACTION_CATEGORIES["biochemical"]["groups"]
 
 
 # key → what the UI calls it, which activity it belongs to, and the groups it covers. The key is

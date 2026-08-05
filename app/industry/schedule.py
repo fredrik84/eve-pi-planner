@@ -24,8 +24,8 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 from app.industry.graph import (
-    BuildParams, blueprint_summary, collect_reachable, effective_material_qty, resolve_unit_costs,
-    SCC_SURCHARGE_PCT,
+    BuildParams, blueprint_summary, collect_reachable, effective_material_qty,
+    reaction_policy_report, resolve_unit_costs, SCC_SURCHARGE_PCT,
 )
 
 
@@ -1024,6 +1024,9 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
                 # cost — a standing rule has to be visible where it takes effect, or the plan looks
                 # like it just got the make-or-buy call wrong.
                 "blacklisted": tid in params.never_build_ids,
+                # Same reasoning one rung up: bought because this account doesn't run that kind of
+                # reaction, not because building lost on cost.
+                "reaction_policy": bool((memo.get(tid) or {}).get("reaction_policy")),
             })
     shopping.sort(key=lambda r: r["line_cost"] or 0.0, reverse=True)
 
@@ -1129,6 +1132,11 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
         # beside it was dropped: the builder knows parts routed to two structures have to travel.
         "build_sites": _sites_used(agg, params),
         "shopping_list": shopping,
+        # What the account's reaction policy cost this build — or, when an order overrides it, what
+        # reacting saved. Reported rather than quietly taken, same rule as `marginal_saving`.
+        "reaction_policy": reaction_policy_report(
+            memo, params, names,
+            [(tid, info["gross"], bool(info["build"])) for tid, info in agg.items()]),
         # Blueprint copies bought for PARALLELISM, itemised. Kept out of `shopping_list` (which is
         # materials, priced off the market) and out of `missing_blueprints` (which is "you can't
         # build this without one") because it is neither: it is what running the batch side by side
@@ -1368,6 +1376,9 @@ def plan_queue_per_order(order_specs: list[dict], mfg: dict, rx: dict, prices: d
         # Each order gets its own params: its own forced builds and its own blueprint assumptions.
         p = copy.copy(params)
         p.force_build_ids = set(params.force_build_ids) | {int(t) for t in (spec.get("force_build_ids") or [])}
+        # …and its own "this build makes its own reactions". Here — unlike the aggregated plan — the
+        # batches are already per order, so the override needn't be unioned across the queue.
+        p.build_reactions_anyway = bool(params.build_reactions_anyway or spec.get("build_reactions"))
         p.me_by_product = dict(params.me_by_product)
         p.me_source = dict(params.me_source)
         for k, v in (spec.get("me_te_overrides") or {}).items():

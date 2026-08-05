@@ -57,6 +57,11 @@ def ensure_industry_orders_table():
             # Per-product ME/TE the user set while planning. Same reasoning: a decision made in the
             # preview that the queue silently dropped is worse than no decision.
             "me_te_overrides TEXT DEFAULT ''",
+            # "This build makes its own reactions" — the per-ORDER exception to the account's
+            # standing reaction policy, stored beside force_build_ids because it is the same kind of
+            # instruction one rung coarser. 0 = follow the account policy, which is what every order
+            # written before this column existed keeps doing.
+            "build_reactions INTEGER DEFAULT 0",
             # The margin this order was quoted at. Snapshotted rather than read live: a customer
             # holding a price shouldn't see it move because the builder changed their default.
             "margin_pct REAL",
@@ -90,6 +95,7 @@ class OrderCreate(BaseModel):
     label: str = ""          # free text: customer, contract, whatever makes it identifiable
     force_build_ids: list[int] = []   # components to build regardless of the buy-shortcuts
     me_te_overrides: dict[str, list[int]] = {}   # {"<type_id>": [me, te]} to assume when planning
+    build_reactions: bool = False     # build this order's reactions whatever the account policy says
     margin_pct: float | None = None             # quote margin; None = the account's current default
     # The container/hangar this build pulls from, chosen while planning it. Set here rather than
     # only afterwards because "which box is this build's" is decided when the build is decided.
@@ -104,6 +110,7 @@ class OrderUpdate(BaseModel):
     quantity: int | None = None
     force_build_ids: list[int] | None = None
     me_te_overrides: dict[str, list[int]] | None = None
+    build_reactions: bool | None = None
     margin_pct: float | None = None
     mode: str | None = None
     label: str | None = None
@@ -161,6 +168,7 @@ def _order_dict(con, row) -> dict:
     ids = _parse_ids(d.get("force_build_ids"))
     d["force_build_ids"] = ids
     d["me_te_overrides"] = _parse_map(d.get("me_te_overrides"))
+    d["build_reactions"] = bool(d.get("build_reactions"))
     d["force_build"] = []
     if ids:
         names = {r["type_id"]: r["name"] for r in con.execute(
@@ -213,12 +221,13 @@ def create_order(req: OrderCreate, ctx: int = Depends(require_context)):
         oid = con.execute(
             "INSERT INTO pp_industry_orders (context_id, product_type_id, name, quantity, mode, "
             "priority, status, created_at, label, force_build_ids, me_te_overrides, margin_pct, "
-            "source_key, source_keys, sources_owned) "
-            "VALUES (?,?,?,?,?,?, 'queued', ?,?,?,?,?,?,?,?) RETURNING id",
+            "build_reactions, source_key, source_keys, sources_owned) "
+            "VALUES (?,?,?,?,?,?, 'queued', ?,?,?,?,?,?,?,?,?) RETURNING id",
             (ctx, req.product_type_id, name or str(req.product_type_id), req.quantity, req.mode,
              int(_time.time()), _time.time(), (req.label or "").strip()[:60],
              json.dumps(sorted({int(t) for t in req.force_build_ids})),
              json.dumps(req.me_te_overrides or {}), req.margin_pct,
+             1 if req.build_reactions else 0,
              keys[0] if keys else "", json.dumps(keys), 1 if owned else 0),
         ).fetchone()[0]
         con.commit()
@@ -301,6 +310,9 @@ def update_order(order_id: int, req: OrderUpdate, ctx: int = Depends(require_con
         if req.me_te_overrides is not None:
             sets.append("me_te_overrides=?")
             params.append(json.dumps(req.me_te_overrides))
+        if req.build_reactions is not None:
+            sets.append("build_reactions=?")
+            params.append(1 if req.build_reactions else 0)
         if req.margin_pct is not None:
             sets.append("margin_pct=?"); params.append(max(0.0, min(100.0, float(req.margin_pct))))
         # One binding, two columns kept in lockstep: whichever field the caller sent decides the
@@ -459,6 +471,7 @@ def _run_queue_plan(ctx: int, req: QueuePlanRequest, want_full: bool = False) ->
         # "first in line" arbitrary.
         orders = con.execute(
             "SELECT product_type_id, quantity, force_build_ids, me_te_overrides, margin_pct, "
+            "COALESCE(build_reactions,0) AS build_reactions, "
             "COALESCE(source_key,'') AS source_key, COALESCE(source_keys,'') AS source_keys, "
             "COALESCE(sources_owned,0) AS sources_owned FROM pp_industry_orders "
             "WHERE context_id=? AND status='queued' ORDER BY priority DESC, id", (ctx,),
@@ -469,6 +482,9 @@ def _run_queue_plan(ctx: int, req: QueuePlanRequest, want_full: bool = False) ->
         # a component is built once for everybody — so they can only be applied as a union. In
         # practice that's what the user meant: they asked for that component to be built.
         forced = {t for o in orders for t in _parse_ids(o["force_build_ids"])}
+        # Unioned for exactly the same reason: the queue builds ONE shared batch per component, so
+        # if any order in it makes its own reactions, that batch is reacted.
+        reacts = any(o["build_reactions"] for o in orders)
         # Same union logic, and for the same reason: one shared batch per component means one ME/TE
         # per component. A later order's explicit choice wins over an earlier one's.
         me_te: dict = {}
@@ -494,6 +510,8 @@ def _run_queue_plan(ctx: int, req: QueuePlanRequest, want_full: bool = False) ->
         req = req.model_copy(update={"force_build_ids": sorted(set(req.force_build_ids) | forced)})
     if me_te:
         req = req.model_copy(update={"me_te_overrides": {**me_te, **(req.me_te_overrides or {})}})
+    if reacts:
+        req = req.model_copy(update={"build_reactions_anyway": True})
     inp = prepare_plan_inputs(
         ctx, targets, req, mfg_slots=req.mfg_slots, rx_slots=req.rx_slots,
         missing_recipe_detail=lambda tid: f"queued order {tid} has no recipe")
@@ -681,6 +699,7 @@ def force_build_above(req: ForceAboveRequest, ctx: int = Depends(require_context
     try:
         orders = con.execute(
             "SELECT id, product_type_id, quantity, force_build_ids, me_te_overrides, "
+            "COALESCE(build_reactions,0) AS build_reactions, "
             "COALESCE(source_key,'') AS source_key, COALESCE(source_keys,'') AS source_keys, "
             "COALESCE(sources_owned,0) AS sources_owned "
             "FROM pp_industry_orders WHERE context_id=? AND status='queued' "
@@ -701,7 +720,8 @@ def force_build_above(req: ForceAboveRequest, ctx: int = Depends(require_context
     targets = list(combined.items())
 
     req = req.model_copy(update={"force_build_ids": sorted(forced),
-                                 "me_te_overrides": {**me_te, **(req.me_te_overrides or {})}})
+                                 "me_te_overrides": {**me_te, **(req.me_te_overrides or {})},
+                                 "build_reactions_anyway": any(o["build_reactions"] for o in orders)})
     inp = prepare_plan_inputs(ctx, targets, req, mfg_slots=req.mfg_slots, rx_slots=req.rx_slots,
                               missing_recipe_detail=lambda tid: f"queued order {tid} has no recipe")
     on_hand = _stock_for(ctx, targets, [dict(o) for o in orders]) if req.use_stock else None

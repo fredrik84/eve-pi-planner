@@ -106,6 +106,46 @@ class BuildParams:
     # price = no alternative), and `force_build_ids` wins: a per-order "build it anyway" is a
     # deliberate exception to the standing rule, so the more specific choice takes precedence.
     never_build_ids: set = field(default_factory=set)
+    # ── Reaction build policy (per ACCOUNT) ───────────────────────────────────────────────────
+    # A builder who simply doesn't run reactions had to blacklist every output by hand. This is the
+    # same standing-way-of-operating idea as `never_build_ids`, one rung coarser: it speaks for a
+    # whole ACTIVITY or a whole FAMILY instead of a type. Both resolve to "buy", so they cannot
+    # contradict each other — only an override can beat either.
+    #
+    # Two overrides, at the two grains the choice is actually made at, and it is worth being explicit
+    # about why there are two: `force_build_ids` is "build THIS component anyway" (per order, per
+    # type, the finest escape) and `build_reactions_anyway` is the same sentence at the level this
+    # policy operates on — "this order makes its own reactions". Neither is a second policy; both
+    # simply exempt something from the standing rule.
+    buy_all_reactions: bool = False           # the account doesn't run reactions at all
+    buy_reaction_categories: set = field(default_factory=set)   # …or not THESE families
+    build_reactions_anyway: bool = False      # per order: this build makes them regardless
+    # product_type_id -> SDE group_id, which is how a produced type is matched to a category. Empty
+    # (a hand-built params, a REPL) means no type can be categorised — so a category rule matches
+    # nothing and the plan is exactly today's. `buy_all_reactions` needs no groups at all.
+    type_groups: dict = field(default_factory=dict)
+    # Ordering a reaction is the newer, more specific instruction — the same carve-out the blacklist
+    # gets from `prepare_plan_inputs`. Filled with the plan's targets there.
+    reaction_policy_exempt_ids: set = field(default_factory=set)
+
+    def reaction_policy_buys(self, type_id: int, activity: str | None,
+                             ignore_override: bool = False) -> bool:
+        """Does the account's standing reaction policy say to buy this one?
+
+        `ignore_override=True` answers the counterfactual — what the policy WOULD have said — which
+        is what an order that overrides it reports its ISK delta against.
+        """
+        if activity != "reaction" or type_id in self.reaction_policy_exempt_ids:
+            return False
+        if self.build_reactions_anyway and not ignore_override:
+            return False
+        if self.buy_all_reactions:
+            return True
+        if not self.buy_reaction_categories:
+            return False
+        from app.industry.categories import category_for
+        key = category_for(self.type_groups.get(type_id))
+        return key is not None and key in self.buy_reaction_categories
     # What to charge over cost when quoting a customer. Priced off NET cost — the leftovers a build
     # over-produces stay with the builder, so billing them to the customer would charge twice.
     margin_pct: float = 0.0
@@ -423,7 +463,14 @@ def resolve_unit_costs(mfg: dict, rx: dict, prices: dict, adjusted: dict,
         # it were built is the mismatch that makes a plan's total unbelievable.
         blacklisted = (type_id in params.never_build_ids
                        and type_id not in params.force_build_ids and buy is not None)
-        if blacklisted:
+        # The account's reaction policy, applied at the SAME layer and for the same reason: it makes
+        # the whole subtree under a bought reaction disappear on its own, with nothing pruned by
+        # hand. `force_build_ids` still wins (a per-type "build it anyway" is the more specific
+        # instruction) and a reaction with no buy price is still BUILT — refusing to build what
+        # can't be bought would leave the plan no way to get one at all.
+        by_policy = (params.reaction_policy_buys(type_id, activity)
+                     and type_id not in params.force_build_ids and buy is not None)
+        if blacklisted or by_policy:
             decision = "buy"
         elif build_uc is not None and buy is not None:
             decision = "build" if build_uc < buy * (1 - params.build_margin) else "buy"
@@ -438,6 +485,7 @@ def resolve_unit_costs(mfg: dict, rx: dict, prices: dict, adjusted: dict,
         node = {
             "type_id": type_id, "activity": activity, "buildable": recipe is not None,
             "decision": decision, "unit_cost": unit_cost, "blacklisted": blacklisted,
+            "reaction_policy": by_policy,
             "build_unit_cost": build_uc, "buy_unit_cost": buy,
             "source": (prices.get(type_id) or {}).get("source"),
         }
@@ -445,6 +493,53 @@ def resolve_unit_costs(mfg: dict, rx: dict, prices: dict, adjusted: dict,
         return node
 
     return memo, unit
+
+
+def reaction_policy_report(memo: dict, params: BuildParams, names: dict[int, str],
+                           rows: list[tuple[int, float, bool]]) -> dict | None:
+    """What the reaction policy did to this plan, in ISK.
+
+    Buying reaction outputs instead of running them is the same shape of trade as the
+    marginal-saving threshold, so it follows the same rule: report what the shortcut cost rather
+    than quietly taking it. A builder quoting against a competitor has to see that not reacting
+    moved their floor.
+
+    `isk` is signed the same way `marginal_saving` is — **what BUILDING these would save over
+    buying them** — which is what makes it read correctly in both directions:
+      * policy in force  → the reactions were bought, so a positive figure is what the convenience
+        cost this build;
+      * order overriding it → the reactions were built, so the same positive figure is what
+        building them saved against the standing rule.
+    `None` when the policy touched nothing, so the UI has nothing to draw.
+
+    `rows` is (type_id, quantity, was_built) — the caller knows which of its own rows are which.
+    """
+    items = []
+    total = 0.0
+    for tid, qty, built in rows:
+        if qty <= 0 or not params.reaction_policy_buys(tid, "reaction", ignore_override=True):
+            continue
+        if tid in params.force_build_ids:
+            continue          # exempted per type; not the policy's doing either way
+        node = memo.get(tid) or {}
+        buc, byc = node.get("build_unit_cost"), node.get("buy_unit_cost")
+        if built and not params.build_reactions_anyway:
+            continue          # built despite the policy (no buy price) — nothing was traded away
+        saving = None if buc is None or byc is None else round((byc - buc) * qty, 2)
+        if saving is not None:
+            total += saving
+        items.append({"type_id": tid, "name": names.get(tid, str(tid)), "qty": qty,
+                      "built": built, "saving": saving})
+    if not items:
+        return None
+    items.sort(key=lambda r: -(r["saving"] or 0.0))
+    return {
+        "overridden": bool(params.build_reactions_anyway),
+        "all": bool(params.buy_all_reactions),
+        "categories": sorted(params.buy_reaction_categories),
+        "items": items,
+        "isk": round(total, 2),
+    }
 
 
 def build_plan(target: int, quantity: int, mfg: dict, rx: dict, prices: dict, adjusted: dict,
@@ -528,6 +623,9 @@ def build_plan(target: int, quantity: int, mfg: dict, rx: dict, prices: dict, ad
                 # building lost on cost — the same flag the queue's list carries, since the two
                 # lists render through the same row.
                 "blacklisted": tid in params.never_build_ids,
+                # …and the same for the account's reaction policy: a standing rule has to be
+                # visible where it takes effect, or the plan looks like it got make-or-buy wrong.
+                "reaction_policy": bool((memo.get(tid) or {}).get("reaction_policy")),
             }
             for tid, qty in shopping.items()
         ),
@@ -550,6 +648,11 @@ def build_plan(target: int, quantity: int, mfg: dict, rx: dict, prices: dict, ad
             "total_job_hours": round(totals["job_seconds"] / 3600.0, 2),
         },
         "unresolved": unresolved,
+        # What the account's reaction policy cost (or, when this build overrides it, saved).
+        "reaction_policy": reaction_policy_report(
+            memo, params, names,
+            [(s["type_id"], s["qty"], False) for s in shopping_list]
+            + [(j["type_id"], j["produced"], True) for j in jobs]),
     }
 
 
@@ -577,6 +680,16 @@ class BuildOptions(BaseModel):
     # Never build these, whatever the cost engine decides — the account's standing "I always buy
     # that" list. `force_build_ids` on an order overrides it for that build.
     never_build_ids: list[int] = []
+    # The account's standing reaction policy (app.industry.categories). `buy_all_reactions` is "this
+    # account doesn't run reactions"; `buy_reaction_categories` narrows that to families. Filled from
+    # the saved policy in apply_account_build_options, so every plan path — share link, checklist —
+    # follows the same standing rule the user's screen does.
+    buy_all_reactions: bool = False
+    buy_reaction_categories: list[str] = []
+    # …and the per-ORDER escape hatch: this build makes its own reactions regardless. Unioned across
+    # the queue exactly like force_build_ids, because the queue builds ONE shared batch per
+    # component — if any order in it reacts, the shared batch is reacted.
+    build_reactions_anyway: bool = False
     # Per-product ME/TE the user wants assumed, {"<type_id>": [me, te]} — JSON keys are strings.
     # Wins over everything: it's the user telling us which print they'll actually use.
     me_te_overrides: dict[str, list[int]] = {}
@@ -840,6 +953,17 @@ def prepare_plan_inputs(ctx: int, targets: list[tuple[int, int]], opts: BuildOpt
                                   # it. Only components can be forced onto the shopping list.
                                   [t for t in opts.never_build_ids
                                    if t not in {tid for tid, _q in targets}])
+    # The account's standing reaction policy. Set on the resolved params rather than threaded
+    # through resolve_build_params' positional list, same as job_sites and bp_acquire. `type_groups`
+    # is what a produced type is matched to a category by, and it is the map already fetched above —
+    # the SDE's only taxonomy, shared with rig routing.
+    params.buy_all_reactions = bool(opts.buy_all_reactions)
+    params.buy_reaction_categories = {str(k) for k in (opts.buy_reaction_categories or ())}
+    params.build_reactions_anyway = bool(opts.build_reactions_anyway)
+    params.type_groups = groups
+    # Ordering a reaction is the newer, more specific instruction — you asked for it, so the policy
+    # does not get to buy it out of its own build. Same carve-out the blacklist gets above.
+    params.reaction_policy_exempt_ids = {tid for tid, _q in targets}
     # What an unowned blueprint would cost to acquire, so building can be priced honestly and the
     # margin-saver can see it. Best-effort: an empty index just leaves the old behaviour.
     try:

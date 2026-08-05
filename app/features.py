@@ -204,6 +204,15 @@ FEATURE_REGISTRY = [
                     "side effect of binding it. Orders queued before this keep using the "
                     "account-wide tick list until you edit them.",
      "default": False, "state": "testers"},
+    {"key": "industry_reaction_policy", "label": "Industry: which reactions a build runs",
+     "group": "Industry",
+     "description": "Say once that this account's builds don't run reactions — or don't run certain "
+                    "families of them (composites & intermediates, hybrid polymers, biochemicals) — "
+                    "instead of blacklisting every output by hand. Those outputs are bought, their "
+                    "sub-steps disappear, and the plan says what buying them instead added to the "
+                    "cost. A single order can still be set to make its own.",
+     # Testers, like every other Industry feature — this came from the builders using the tab.
+     "default": False, "state": "testers"},
 ]
 GROUP_ORDER = ["Dashboard", "Setup Analysis", "Planner", "Planet DB", "Characters",
                "Notifications & Alerts", "Reactions", "Industry"]

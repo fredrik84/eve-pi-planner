@@ -62,6 +62,11 @@ def ensure_industry_settings_table():
                     # it instead of asking again. Per ACCOUNT and not derived from the orders table:
                     # it has to survive that order being finished and cleared.
                     "last_source_key TEXT",
+                    # Does this account run reactions, and which kinds — a JSON object
+                    # {"build_reactions": bool, "buy_categories": [category key, …]}. Per ACCOUNT
+                    # for the same reason the blacklist is: it's a standing way of operating, not a
+                    # decision about one build. An order overrides it with build_reactions.
+                    "reaction_policy TEXT",
                     # …and the whole remembered SET, a JSON array. A build gathered from a reaction
                     # can and a manufacturing can answers the same question with the same two boxes
                     # every time; `last_source_key` keeps the first of them so nothing that only
@@ -100,6 +105,7 @@ def get_settings(context_id: int) -> dict:
     finally:
         con.close()
     d["never_build_ids"] = _parse_ids(d.get("never_build_ids"))
+    d["reaction_policy"] = _parse_reaction_policy(d.get("reaction_policy"))
     d["onboarded"] = bool(d.get("onboarded"))
     # The remembered source set, with the single-key column as its fallback so an account that last
     # bound a build before sets existed still arrives with its picker answered.
@@ -119,6 +125,52 @@ def _parse_ids(value) -> list[int]:
         return [int(v) for v in json.loads(value or "[]")]
     except Exception:
         return []
+
+
+def _parse_reaction_policy(value) -> dict:
+    """The stored policy, normalised. Anything missing or unparseable is TODAY'S BEHAVIOUR — every
+    reaction built — so an account that has never touched this plans exactly as it always did, and
+    a corrupt value degrades to the safe default rather than silently buying a builder's whole
+    reaction line. Unknown category keys are dropped against the registry: a key that vanished in a
+    rename must not keep half-applying."""
+    from app.industry.categories import REACTION_CATEGORIES
+    d = {}
+    try:
+        raw = json.loads(value or "{}")
+        if isinstance(raw, dict):
+            d = raw
+    except Exception:
+        d = {}
+    cats = [str(k) for k in (d.get("buy_categories") or []) if str(k) in REACTION_CATEGORIES]
+    return {"build_reactions": bool(d.get("build_reactions", True)),
+            "buy_categories": sorted(set(cats))}
+
+
+def get_reaction_policy(context_id: int) -> dict:
+    return get_settings(context_id).get("reaction_policy") or {"build_reactions": True,
+                                                               "buy_categories": []}
+
+
+def set_reaction_policy(context_id: int, build_reactions: bool, buy_categories: list[str]) -> dict:
+    """Replace the account's reaction build policy. Its OWN write path, like `set_blacklist` and for
+    the same reason: the settings PUT is a debounced save of the whole plan form, so every knob move
+    would carry a stale policy along with it and quietly undo a change made elsewhere on the page."""
+    from app.industry.categories import REACTION_CATEGORIES
+    ensure_industry_settings_table()
+    policy = {"build_reactions": bool(build_reactions),
+              "buy_categories": sorted({str(k) for k in (buy_categories or [])
+                                        if str(k) in REACTION_CATEGORIES})}
+    con = get_connection()
+    try:
+        con.execute(
+            "INSERT INTO pp_industry_settings (context_id, reaction_policy, updated_at) "
+            "VALUES (?,?,?) ON CONFLICT(context_id) DO UPDATE SET "
+            "reaction_policy=excluded.reaction_policy, updated_at=excluded.updated_at",
+            (context_id, json.dumps(policy), time.time()))
+        con.commit()
+    finally:
+        con.close()
+    return policy
 
 
 def get_blacklist(context_id: int) -> list[int]:
@@ -171,6 +223,13 @@ def apply_account_build_options(context_id: int, opts):
     # customer's share link included — not only to plans a browser asks for.
     if "never_build_ids" not in sent and saved.get("never_build_ids"):
         update["never_build_ids"] = list(saved["never_build_ids"])
+    # …and so is the reaction policy: it is the same kind of standing rule, so the checklist and the
+    # customer's share link have to follow it too, or they quote a build the user isn't making.
+    policy = saved.get("reaction_policy") or {}
+    if "buy_all_reactions" not in sent and policy.get("build_reactions") is False:
+        update["buy_all_reactions"] = True
+    if "buy_reaction_categories" not in sent and policy.get("buy_categories"):
+        update["buy_reaction_categories"] = list(policy["buy_categories"])
     return opts.model_copy(update=update) if update else opts
 
 
@@ -290,3 +349,37 @@ def edit_blacklist(req: BlacklistEdit, ctx: int = Depends(require_context)):
     ids.add(int(req.type_id)) if req.add else ids.discard(int(req.type_id))
     set_blacklist(ctx, sorted(ids))
     return _named(ctx)
+
+
+# ── Reaction build policy ─────────────────────────────────────────────────────────────────────
+
+class ReactionPolicyEdit(BaseModel):
+    """Either half can be sent on its own: flipping the master switch must not clear a category
+    selection the user spent time on, and vice versa."""
+    build_reactions: bool | None = None
+    buy_categories: list[str] | None = None
+
+
+def _policy_payload(context_id: int) -> dict:
+    """The policy plus the CATEGORY REGISTRY it is expressed in. The frontend never hardcodes these
+    labels — same rule as ALERT_KINDS — so they travel with every read and every write."""
+    from app.industry.categories import category_registry
+    return {"policy": get_reaction_policy(context_id), "categories": category_registry()}
+
+
+@router.get("/api/industry/reaction-policy")
+def read_reaction_policy(ctx: int = Depends(require_context)):
+    """Whether this account's builds run reactions, and which families of them."""
+    return _policy_payload(ctx)
+
+
+@router.post("/api/industry/reaction-policy")
+def edit_reaction_policy(req: ReactionPolicyEdit, ctx: int = Depends(require_context)):
+    """Its own write path, deliberately not a field on the settings PUT — see `set_reaction_policy`.
+    Either half may be sent alone; whatever is omitted keeps its stored value."""
+    cur = get_reaction_policy(ctx)
+    set_reaction_policy(
+        ctx,
+        cur["build_reactions"] if req.build_reactions is None else req.build_reactions,
+        cur["buy_categories"] if req.buy_categories is None else req.buy_categories)
+    return _policy_payload(ctx)

@@ -210,6 +210,10 @@ def _order_requirement(ctx: int, order) -> list[dict]:
         use_stock=False,                       # the FULL requirement — stock is what we measure
         force_build_ids=_parse_ids(order["force_build_ids"]),
         me_te_overrides=_parse_map(order["me_te_overrides"]),
+        # An order that makes its own reactions is gathering reaction INPUTS, not reaction outputs —
+        # planning it without this would hand the builder a shopping list for a build they aren't
+        # running.
+        build_reactions_anyway=bool(order["build_reactions"]),
     )
     inp = prepare_plan_inputs(ctx, [(tid, qty)], req,
                              missing_recipe_detail=lambda t: f"order {t} has no recipe")
@@ -255,6 +259,7 @@ def order_sourcing(ctx: int, order_id: int) -> dict:
     try:
         order = con.execute(
             "SELECT id, product_type_id, name, quantity, label, force_build_ids, me_te_overrides, "
+            "COALESCE(build_reactions,0) AS build_reactions, "
             "COALESCE(source_key,'') AS source_key, COALESCE(source_keys,'') AS source_keys, "
             "COALESCE(sources_owned,0) AS sources_owned "
             "FROM pp_industry_orders WHERE id=? AND context_id=?",

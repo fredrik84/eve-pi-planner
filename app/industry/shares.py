@@ -184,7 +184,8 @@ def _stage_of_types(target_id: int, mfg: dict, rx: dict) -> dict[int, int]:
 
 
 def _order_plan(ctx: int, product_type_id: int, quantity: int, force_ids: list[int],
-                me_te: dict | None = None, margin_pct: float | None = None):
+                me_te: dict | None = None, margin_pct: float | None = None,
+                build_reactions: bool = False):
     """This order's OWN plan — requirements and stages for just what the customer ordered.
 
     Not the queue plan: that aggregates every order's demand into shared batches, so its run counts
@@ -193,7 +194,10 @@ def _order_plan(ctx: int, product_type_id: int, quantity: int, force_ids: list[i
     queue is real and the customer feels it."""
     from app.industry.graph import BuildOptions, prepare_plan_inputs
     from app.industry.schedule import plan_queue
-    opts = BuildOptions(use_stock=False, force_build_ids=force_ids, me_te_overrides=me_te or {})
+    # The order's own reaction exception rides along for the same reason its ME/TE does: the
+    # customer's stages have to be the builder's stages.
+    opts = BuildOptions(use_stock=False, force_build_ids=force_ids, me_te_overrides=me_te or {},
+                        build_reactions_anyway=bool(build_reactions))
     if margin_pct is not None:
         opts = opts.model_copy(update={"margin_pct": float(margin_pct)})
     inp = prepare_plan_inputs(
@@ -226,7 +230,8 @@ def build_status(share_id: str) -> dict:
         order = con.execute(
             "SELECT id, product_type_id, name, quantity, COALESCE(label,'') AS label, status, "
             "COALESCE(force_build_ids,'') AS force_build_ids, "
-            "COALESCE(me_te_overrides,'') AS me_te_overrides, margin_pct "
+            "COALESCE(me_te_overrides,'') AS me_te_overrides, margin_pct, "
+            "COALESCE(build_reactions,0) AS build_reactions "
             "FROM pp_industry_orders WHERE id=? AND context_id=?", (order_id, ctx)).fetchone()
         if not order:
             # The order is gone — finished and cleared, or deleted. The link still answers, with the
@@ -255,7 +260,8 @@ def build_status(share_id: str) -> dict:
 
     # The order's own quoted margin when it has one, so the price the customer was given doesn't move
     # if the builder changes their default later.
-    res, inp = _order_plan(ctx, tid, qty, force_ids, me_te, order["margin_pct"])
+    res, inp = _order_plan(ctx, tid, qty, force_ids, me_te, order["margin_pct"],
+                           bool(order["build_reactions"]))
     stage_of = _stage_of_types(tid, inp.mfg, inp.rx)
 
     # Progress comes from the same signals the builder's own view reads, so the customer can never
