@@ -204,6 +204,15 @@ FEATURE_REGISTRY = [
                     "side effect of binding it. Orders queued before this keep using the "
                     "account-wide tick list until you edit them.",
      "default": False, "state": "testers"},
+    {"key": "industry_per_order_plans", "label": "Industry: plan each order on its own",
+     "group": "Industry",
+     "description": "Plan every queued order separately instead of aggregating the queue into one "
+                    "shared batch. A job outputs to exactly ONE container, so a batch shared "
+                    "between two builds has nowhere to deliver — this is what lets a builder run a "
+                    "container per customer. It costs real ISK: shared components are built once "
+                    "per order and blueprint copies bought per order. Compare both plans on the "
+                    "real queue before switching.",
+     "default": False, "state": "testers"},
     {"key": "industry_reaction_policy", "label": "Industry: which reactions a build runs",
      "group": "Industry",
      "description": "Say once that this account's builds don't run reactions — or don't run certain "

@@ -1272,6 +1272,65 @@ page); the **"unlimited blueprint copies" coverage banner** (now a tooltip, see 
 banners about our own state of knowledge; the unknown-characters line survives inside a real gap
 report). Don't re-add any of these without a reason that clears the bar above.
 
+### Planning each order on its own (`industry_per_order_plans`)
+
+`plan_queue` aggregates every queued order into ONE demand and builds each shared component once.
+That is right for cost and wrong for how the work is run: **a job outputs to exactly one
+container**, builders run a container per build, and a batch shared between two orders has nowhere
+to deliver. `plan_queue_per_order` plans each order alone and schedules the lot against one slot
+pool. Off by default; the setting is per ACCOUNT (`pp_industry_settings.per_order_plans`, its own
+write path `GET/POST /api/industry/per-order-plans`, gated on the rollout ladder) because it is a
+standing way of operating, and `_run_queue_plan` branches on it.
+
+**It costs money, so the number comes before the switch.** `POST /api/industry/queue-plan/compare`
+runs both plans off the same inputs and reports cost, makespan, job count and the per-order split.
+Measured as a what-if on the two real queued builds (2026-08-05, two customers instead of one):
+
+| | 2× Archon | 2 orders × 2 Phoenix |
+|---|---|---|
+| net cost | +2.45% (+138.8M) | +0.96% (+88.2M) |
+| blueprints | +39.8% | +4.6% |
+| makespan | −1.27% | −6.08% |
+| jobs / build steps | 60→92 / 6→12 | 49→74 / 4→8 |
+
+Splitting is **not always slower** — more, smaller batches fill idle slots — but it always buys
+more prints and more materials, and it lands the work at more separate moments (the Phoenix queue
+goes from 4 wave starts to 9), which is the effort cost to watch.
+
+**Four things are consumed first come first served down the queue, and each was a real error when
+it wasn't.** Two orders cannot both spend the same thing, and queue order is the only fair rule:
+
+- **Stock.** A curated order (`sources_owned`) is capped by its OWN boxes; the queue-wide remainder
+  caps that in turn. Only what a batch is actually netted against is deducted — `aggregate_demand`
+  nets stock off BUILT types.
+- **Contracts.** `cost_for_runs` / `cost_for_copies` now report the listings they spent (`used`),
+  and each order plans against a pool with the earlier ones removed. Without it both orders took
+  the cheapest copy and the split read **76.7% CHEAPER on blueprints** than the batch it is.
+- **Owned copies.** A BPC's runs are spent when they are run, so crediting one copy to two orders
+  reports a shortfall of zero twice. Originals are exempt — they run forever.
+- **Job fees.** `_order_cost` reached for `mfg_cost_index`/`rx_cost_index` directly instead of
+  `params.job_fee_rate`, ignoring per-job ROUTING; on a real build that alone made planning apart
+  look 6.84% dearer (220.5M of fees against 511.4M) when the two plans were identical.
+
+**Cross-order alignment has to be explicit.** `_align_cohorts` only sees the types in one
+`build_tasks` call, so orders planned apart would never be aligned against each other and the
+builder would log in once per order. Each order is packed once with `align=False` (`plan_out` /
+`start_out`), the union is aligned keyed per order, and each order is replayed with `align_hint` —
+which lands exactly where the local answer would have gone, so a hinted single order is identical
+to an un-hinted one. The `_DELIVERY_OVERSHOOT` give-back is applied on the SCHEDULED makespan, same
+rule as `plan_queue`.
+
+**It returns the same shape as `plan_queue`, deliberately** — the checklist, progress, the customer
+share and the whole build page read that contract. Per-type rows are merged across orders (runs
+summed, `orders: [id…]` naming who they are for; ownership fields come from the first order that
+built the type), `per_order` carries what the aggregated plan cannot, and every scheduled job
+carries `order_id`. `_blend_margin` does NOT run on this path: it exists only because a shared
+batch has no per-order cost, and here each order has a real one, so `metrics.price` is their sum.
+
+**Still not modelled:** a job's output CONTAINER (the point of the whole exercise — item 2f.3 in
+TODO.md), and print locking ACROSS orders — two orders each see the one BPO they share and may each
+schedule a concurrent job off it. Per-order copy *runs* are consumed correctly; concurrency is not.
+
 ## Industry: first use
 
 A first-run setup screen (`_indRenderWizard`), mirroring the Reactions gate (`_rxApplyGate`) down to

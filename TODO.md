@@ -156,66 +156,60 @@ Deliberately kept, with eyes open:
 Still open: no browser tests for any frontend behaviour (see item 6 for the eslint work that would
 be the first step).
 
-## 2f. Stop sharing job runs between orders — DESIGN, not yet built (2026-08-03)
+## 2f. Stop sharing job runs between orders — WIRED 2026-08-05, behind `industry_per_order_plans`
 
 **The physical fact this rests on: a job outputs to exactly ONE container.** Capital builders run a
 container per build — it is both where the materials are sourced and where the output lands, and it
 is how they know what is finished for which customer when three orders are in flight. A batch shared
-between two orders has nowhere to deliver. That is not a preference about tidiness, it is a
-constraint, and the current design contradicts it.
+between two orders has nowhere to deliver.
 
-Today `aggregate_demand` deliberately combines every queued order into ONE demand and builds each
-shared component once (`app/industry/orders.py`, `schedule.py`, documented in CLAUDE.md and in
-`progress.py`'s module docstring). It is right for cost and wrong for how the work is actually run.
+Shipped: `plan_queue_per_order` returns the full `plan_queue` contract and is reachable —
+`pp_industry_settings.per_order_plans` (own write path, `GET/POST /api/industry/per-order-plans`),
+a `per_order_plans` field on `QueuePlanRequest`, and the branch in `_run_queue_plan`. Design notes
+in CLAUDE.md under "Planning each order on its own". Default OFF and gated on the ladder, because
+switching re-costs every quote.
 
-**What changes**
+**The comparison that was promised and never delivered** is `POST /api/industry/queue-plan/compare`
+(both plans, same inputs). Measured as a what-if on the two real queued builds — two customers
+instead of one — on 2026-08-05:
 
-- Plan each order on its own — its own quantity, overrides, ME/TE, blueprint copies, runs. The
-  machinery already exists: `sourcing._order_requirement` and `shares._order_plan` both do exactly
-  this today, for exactly this reason.
-- The queue's job is then SCHEDULING those per-order jobs against one shared slot pool, plus
-  aligning them (see the pace/compaction rules in CLAUDE.md) so a builder still logs in once.
-- Container becomes input AND output on the order, not just a source.
+| | 2× Archon (ctx 1) | 2 orders × 2 Phoenix (ctx 9022) |
+|---|---|---|
+| net cost | +2.45% (+138.8M) | +0.96% (+88.2M) |
+| blueprints | +39.8% | +4.6% |
+| makespan | −1.27% | −6.08% |
+| jobs / build steps | 60→92 / 6→12 | 49→74 / 4→8 |
+| wave starts (logins) | 3 → 3 | 4 → 9 |
 
-**What it costs, honestly**
+So it is not always slower — smaller batches fill idle slots — but it always buys more prints and
+materials, and it scatters the landings. On a single-order queue (which is what both prod accounts
+actually have) the two plans are **byte-identical**, verified in prod.
 
-- **Builds get more expensive.** Shared-batch savings disappear: two orders needing the same
-  component build it twice, and buy two sets of blueprint copies. The user has accepted this; it
-  should still be stated in the UI rather than discovered.
-- **Rounding waste multiplies.** A reaction making 2/run rounds up per order now, not once.
-- `_blend_margin` can go — it exists only because a shared batch has no per-order cost. Per-order
-  planning gives each order its own real cost, which is strictly better for quoting.
-- Progress stops needing to be per-TYPE-only (`progress.py`'s central compromise) and can be per
-  (order, type). The manual-done grain follow-up in item 2c resolves itself.
-- The share's "two different plans on purpose" note simplifies to one plan.
-- **Cross-order alignment must become explicit.** It works today only as a side effect of
-  aggregation; with orders separate, the pace has to be computed across all orders' jobs.
+**Four things had to become first-come-first-served, and three were live errors in the unwired
+code** — two orders cannot both spend the same thing: stock (curated boxes cap the order, the
+queue-wide remainder caps that), contracts (`cost_for_runs`/`cost_for_copies` now report the
+listings they spent; without it the split read 76.7% *cheaper* on blueprints), owned copies (a
+BPC's runs are spent when run; originals exempt), and job fees (`_order_cost` ignored per-job
+routing — 220.5M against 511.4M on a real build). Covered by six new test groups in
+`test_industry.py`, including "a single order plans the same either way".
 
-**Perf.** N plans per page load instead of 1. Mitigate by sharing ONE `prepare_plan_inputs` across
-them (already the pattern in `_run_queue_plan(want_full=True)` and `force_build_above`) — the DB-heavy
-half doesn't depend on which order is being planned.
-
-**Migration.** No schema change for the split itself; `force_build_ids` / `me_te_overrides` /
-`margin_pct` / `source_key` are already per order. The union logic in `_run_queue_plan` is what goes.
-Queued orders keep working; their numbers move (up), which is worth saying in the release note.
-
-**Containers are not universal.** Corp hangar containers need the Director role; everyone else has
-personal containers or pasted stock. So per-order input/output labelling must degrade to "no
-container bound" without breaking the plan — the sourcing panel already behaves this way.
-
-**STATE (2026-08-03): half-built and deliberately unwired.** `schedule.plan_queue_per_order` exists
-and is committed — per-order params, first-come-first-served stock allocation down the queue, its own
-`_order_cost`, and namespaced scheduling keys (`Task.key` / `Task.order_id`) so one order's jobs can
-never satisfy another's dependency. **Nothing calls it.** No endpoint, no flag, no UI. It changes
-nothing until wired.
+**Cross-order alignment is now explicit** (the old item 4): `build_tasks` gained `plan_out` /
+`start_out` / `align_hint`, each order is packed once unaligned, the union is aligned keyed per
+order, and each order is replayed with the answer. The `_DELIVERY_OVERSHOOT` give-back is measured
+on the scheduled makespan exactly as in `plan_queue`.
 
 **What is left**
-1. A `industry_per_order_plans` flag + request/account option, and a branch in `_run_queue_plan`.
-2. A compare endpoint returning both plans' cost, makespan and job count — the numbers were promised
-   and never delivered. Measure on the real Archon queue (context 1) before switching anyone.
-3. Container as job OUTPUT as well as input (item 5), which is the point of the whole exercise.
-4. Cross-order alignment has to become explicit — today it works only because aggregation puts every
-   order in one pace calculation.
+
+1. **Container as job OUTPUT** (item 5's other half) — still not modelled, and it is the point of
+   the whole exercise. Every scheduled job now carries `order_id`, which is the hook: the order
+   already names the box its materials come from, and the output belongs in the same one. Needs a
+   UI answer for "no container bound" (corp hangars need Director; not everyone has one).
+2. **Print locking ACROSS orders.** Per-order copy RUNS are consumed correctly now, but two orders
+   sharing one BPO each see it and may each schedule a concurrent job off it. Fixing it properly
+   means making the print a scheduling resource rather than a per-plan cap — bigger than it looks,
+   and it only bites an account planning apart with a single original per type.
+3. **No UI.** The setting and the comparison are endpoints only; nothing on the build page offers
+   either yet. Deliberate — the numbers above were the gate on going further.
 
 ## 2g. Slot alignment — RESOLVED 2026-08-03 in two rounds
 
@@ -329,6 +323,14 @@ trusting the note:
   security status, day counts) are fine at 7 significant digits; it's specifically an epoch's 1.79e9
   magnitude that overruns them. Widening everything would have been a bigger migration for no gain,
   so `_EPOCH_COLUMNS` is an explicit list and `types.volume` is asserted to be left alone.
+
+**Reopened and re-fixed 2026-08-05:** the inventory above claimed the BPC scan lease was covered and
+it was not — prod still had `pp_bpc_scan.lease_until` / `started_at` / `ended_at` at float4. The
+symptom was a test that failed about half the time (`an expired lease is reclaimable`), because a
+lease set to `now - 1` rounds back into the future inside a ~128-second bucket. Now in
+`_EPOCH_COLUMNS`. Lesson worth keeping: the list is hand-maintained, so a new epoch column added
+anywhere needs an entry — and "the write-up says it's covered" is not the same as asking the live
+schema, which is what found this.
 
 Widening is non-lossy but does NOT recover precision already discarded — rows written before the
 migration keep their rounded values, so historical job durations stay wrong. Only new writes are
@@ -533,6 +535,55 @@ Design notes in CLAUDE.md under "one print runs one job at a time". Pinned by
 `test_a_half_connected_account_is_never_capped_on_what_it_half_shows` (the second exists
 specifically so the coverage gate can't be "simplified" away later). `test_industry.py` 763 checks,
 green in-container; live in prod on `55e1de4`.
+
+---
+
+## 12. Describe the Industry workflow end to end (2026-08-05)
+
+Industry has been extended a lot in a short time — make-or-buy overrides, an always-buy blacklist,
+a reaction policy, per-order sourcing and source sets, corp hangars, manual done-marks, print and
+formula caps, customer share links, onboarding — and each landed with its own design note in
+CLAUDE.md. What does NOT exist anywhere is the **whole flow in one place**: what the feature set
+supports, and how a builder is actually meant to work with it from "a customer asks for a Phoenix"
+through to "it is built and delivered".
+
+Wanted: a short summary plus a step-by-step description of the intended workflow — the path a
+builder walks every time, which controls belong to which step, and which are the occasional ones
+behind it. Two audiences and they are different documents: the **user-facing** one (what the tab
+does and the order to use it in — candidate for the How-it-works page or the onboarding screen)
+and the **developer-facing** one (a map of the modules and endpoints each step goes through, which
+CLAUDE.md's per-feature notes hang off).
+
+First step is a read of what is actually there rather than a write-up from memory: `app/industry/`
+is 22 modules now, and parts of the intended path exist only as UI ordering in `static/industry.js`.
+Worth doing before the next feature, because "does this add a step to the path a builder walks every
+time" is the design test everything here is supposed to meet, and right now that path isn't written
+down.
+
+---
+
+## 13. A manifesto per service — what PI, Reactions and Industry are FOR (2026-08-05)
+
+Companion to item 12, and it comes first when the audit runs: item 12 describes what the Industry
+flow *is*, this one states what each service is *for*, so the audit has something to measure
+against. Without it "is this up to code" has no code to be up to.
+
+The repo already carries the house style — minimize planet interactions, automate the math or drop
+the feature, the best UI is read-only, effort is the constraint the other goals fit inside, does
+this add a step to the path a builder walks every time — but those are cross-cutting *rules*. What
+is missing is, per service: **its purpose, the end state it is aiming at, and the path from where
+it is now to there.**
+
+- **PI planner** — one target, one plan, least interaction per ISK.
+- **Reactions** — a slot business; what the tool is supposed to decide for the user and what it
+  deliberately leaves to them.
+- **Industry** — lowest net cost and fastest delivery, inside the effort constraint (this one is at
+  least half written already, at the top of CLAUDE.md).
+
+Wanted: a short manifesto for each — purpose, target state, and the honest gap — written so the
+audit in item 12 can score against it feature by feature: does this serve the stated goal, does it
+cost more effort than it removes, and if not, does it come out. It is also the thing to hold a new
+feature against BEFORE building it, which is the cheaper end of the same test.
 
 ---
 

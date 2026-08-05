@@ -397,7 +397,11 @@ def cost_for_runs(info: dict, runs_needed: int) -> dict:
     INF = float("inf")
     dp = [(INF, 0)] * (cap + 1)
     dp[0] = (0.0, 0)
-    for l in listings:
+    # Which contracts each cell bought, so the caller can be told. A plan that buys copies for
+    # several orders has to know WHICH listings went, or the next order prices the same contract a
+    # second time — see `used` below.
+    took: list[tuple | None] = [None] * (cap + 1)
+    for i, l in enumerate(listings):
         gain = min(int(l["runs"]), cap)
         price = float(l["price"])
         for r in range(cap, -1, -1):       # 0/1: each contract can only be bought once
@@ -407,10 +411,17 @@ def cost_for_runs(info: dict, runs_needed: int) -> dict:
             nxt = min(cap, r + gain)
             if cost_r + price < dp[nxt][0]:
                 dp[nxt] = (cost_r + price, n_r + 1)
+                took[nxt] = (r, i)
 
     cost, copies = dp[cap]
     if cost < INF:
-        return {"cost": round(cost, 2), "copies": copies, "covered": True, "short_runs": 0}
+        used, at = [], cap
+        while at > 0 and took[at] is not None:
+            prev, i = took[at]
+            used.append(listings[i])
+            at = prev
+        return {"cost": round(cost, 2), "copies": copies, "covered": True, "short_runs": 0,
+                "used": used}
 
     # Can't cover it from what's listed: take everything, then extrapolate the rest.
     total_runs = sum(int(l["runs"]) for l in listings)
@@ -421,7 +432,8 @@ def cost_for_runs(info: dict, runs_needed: int) -> dict:
     biggest = max(int(l["runs"]) for l in listings)
     cost += short * per_run
     copies += math.ceil(short / biggest) if biggest else 0
-    return {"cost": round(cost, 2), "copies": copies, "covered": False, "short_runs": short}
+    return {"cost": round(cost, 2), "copies": copies, "covered": False, "short_runs": short,
+            "used": list(listings)}
 
 
 def cost_for_copies(info: dict, n_copies: int, skip: int = 0) -> dict:
@@ -439,15 +451,18 @@ def cost_for_copies(info: dict, n_copies: int, skip: int = 0) -> dict:
     """
     n = max(0, int(n_copies))
     if n == 0:
-        return {"cost": 0.0, "copies": 0, "covered": True}
-    prices = sorted(float(l["price"]) for l in (info.get("listings") or []) if l.get("price"))
-    take = prices[max(0, int(skip)):][:n]
+        return {"cost": 0.0, "copies": 0, "covered": True, "used": []}
+    avail = sorted((l for l in (info.get("listings") or []) if l.get("price")),
+                   key=lambda l: float(l["price"]))
+    take = avail[max(0, int(skip)):][:n]
     missing = n - len(take)
-    cost = sum(take)
+    cost = sum(float(l["price"]) for l in take)
     if missing:
+        prices = [float(l["price"]) for l in avail]
         each = statistics.median(prices) if prices else float(info.get("price") or 0.0)
         cost += missing * each
-    return {"cost": round(cost, 2), "copies": n, "covered": missing == 0}
+    # The contracts this actually spends, for the same reason `cost_for_runs` reports them.
+    return {"cost": round(cost, 2), "copies": n, "covered": missing == 0, "used": take}
 
 
 def representative_me_te(info: dict) -> tuple[int, int] | None:

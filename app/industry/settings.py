@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import time
 
-from fastapi import Depends
+from fastapi import Depends, HTTPException
 from pydantic import BaseModel
 
 from app.db import get_connection
@@ -71,7 +71,13 @@ def ensure_industry_settings_table():
                     # can and a manufacturing can answers the same question with the same two boxes
                     # every time; `last_source_key` keeps the first of them so nothing that only
                     # knows the single field changes.
-                    "last_source_keys TEXT")
+                    "last_source_keys TEXT",
+                    # Plan each queued order on its OWN instead of aggregating the queue into one
+                    # shared batch. A standing way of operating (a builder either runs a container
+                    # per build or does not), so it lives here rather than on an order — see
+                    # `plan_queue_per_order`. NULL/0 = the aggregated plan, which is the default and
+                    # what every account planned with before this existed.
+                    "per_order_plans INTEGER")
         # Anyone who already has saved build options has plainly used this tab before, so they must
         # not be handed a first-run screen. Safe to re-run on a restart precisely because a user who
         # has NOT been through setup owns no settings row: the frontend only seeds one once the
@@ -107,6 +113,7 @@ def get_settings(context_id: int) -> dict:
     d["never_build_ids"] = _parse_ids(d.get("never_build_ids"))
     d["reaction_policy"] = _parse_reaction_policy(d.get("reaction_policy"))
     d["onboarded"] = bool(d.get("onboarded"))
+    d["per_order_plans"] = bool(d.get("per_order_plans"))
     # The remembered source set, with the single-key column as its fallback so an account that last
     # bound a build before sets existed still arrives with its picker answered.
     try:
@@ -171,6 +178,30 @@ def set_reaction_policy(context_id: int, build_reactions: bool, buy_categories: 
     finally:
         con.close()
     return policy
+
+
+def get_per_order_plans(context_id: int) -> bool:
+    """Does this account plan each order separately? Default False — the aggregated queue plan is
+    cheaper, and switching costs real ISK, so it is never turned on for somebody."""
+    return bool(get_settings(context_id).get("per_order_plans"))
+
+
+def set_per_order_plans(context_id: int, on: bool) -> bool:
+    """Its own write path, for the same reason the blacklist has one: the settings PUT is a
+    debounced save of the plan form, and this is not a knob on that form — it changes what a plan
+    IS, and a stale value riding along with a slider move would silently re-quote every build."""
+    ensure_industry_settings_table()
+    con = get_connection()
+    try:
+        con.execute(
+            "INSERT INTO pp_industry_settings (context_id, per_order_plans, updated_at) "
+            "VALUES (?,?,?) ON CONFLICT(context_id) DO UPDATE SET "
+            "per_order_plans=excluded.per_order_plans, updated_at=excluded.updated_at",
+            (context_id, 1 if on else 0, time.time()))
+        con.commit()
+    finally:
+        con.close()
+    return bool(on)
 
 
 def get_blacklist(context_id: int) -> list[int]:
@@ -352,6 +383,32 @@ def edit_blacklist(req: BlacklistEdit, ctx: int = Depends(require_context)):
 
 
 # ── Reaction build policy ─────────────────────────────────────────────────────────────────────
+
+class PerOrderPlansEdit(BaseModel):
+    enabled: bool
+
+
+@router.get("/api/industry/per-order-plans")
+def read_per_order_plans(ctx: int = Depends(require_context)):
+    """Whether this account's queue is planned order by order rather than as one shared batch."""
+    from app.features import feature_enabled_for
+    return {"enabled": get_per_order_plans(ctx),
+            # Nothing is hidden server-side by the flag — a setting already switched on keeps
+            # working — but the UI needs to know whether to offer it.
+            "available": feature_enabled_for("industry_per_order_plans", ctx)}
+
+
+@router.post("/api/industry/per-order-plans")
+def edit_per_order_plans(req: PerOrderPlansEdit, ctx: int = Depends(require_context)):
+    """Turning this on makes every build more expensive (shared components are built once per
+    order, blueprint copies bought per order), so it is gated on the rollout ladder rather than
+    settable by anyone who can guess the endpoint — and `/api/industry/queue-plan/compare` exists
+    to put the number on it first."""
+    from app.features import feature_enabled_for
+    if not feature_enabled_for("industry_per_order_plans", ctx):
+        raise HTTPException(status_code=403, detail="feature not enabled")
+    return {"enabled": set_per_order_plans(ctx, req.enabled), "available": True}
+
 
 class ReactionPolicyEdit(BaseModel):
     """Either half can be sent on its own: flipping the master switch must not clear a category

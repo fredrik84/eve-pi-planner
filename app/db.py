@@ -91,6 +91,14 @@ _EPOCH_COLUMNS = [
     ("pp_industry_shares", "created_at"), ("pp_industry_shares", "last_at"),
     ("pp_job_config", "run_requested"), ("pp_job_config", "updated_at"),
     ("pp_job_leases", "lease_until"),
+    # The BPC scan lease and its run stamps. The 2026-07-31 inventory said these were covered and
+    # they were not — prod still had all three at float4 on 2026-08-05, which quantises the lease to
+    # ~128s and makes "an expired lease is reclaimable" pass or fail depending on where in that
+    # bucket the clock happens to sit (it is what `test_scan_lease_is_single_writer_across_replicas`
+    # was intermittently failing on). Same slop-against-a-900s-TTL argument as `pp_job_leases`, so
+    # the scanner was never really at risk; the flapping test was the tell.
+    ("pp_bpc_scan", "lease_until"),
+    ("pp_bpc_scan", "started_at"), ("pp_bpc_scan", "ended_at"),
     ("pp_job_runs", "started_at"), ("pp_job_runs", "ended_at"),
     ("pp_plan_baseline", "saved_at"),
     ("pp_reaction_assignments", "created_at"),

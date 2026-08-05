@@ -21,8 +21,8 @@ from app.industry.graph import (
     load_reaction_graph, collect_reachable, build_plan, resolve_unit_costs,
 )
 from app.industry.schedule import (order_ranks, 
-    aggregate_demand, build_tasks, schedule, plan_queue, Task, _built_deps, _depths,
-    _critical_priority,
+    aggregate_demand, build_tasks, schedule, plan_queue, plan_queue_per_order, Task, _built_deps,
+    _depths, _critical_priority,
 )
 
 # ── Synthetic graph ───────────────────────────────────────────────────────────────────────────
@@ -1520,6 +1520,207 @@ def test_price_is_net_cost_plus_margin():
           resolve_build_params(0, 0, 0, None, None, 0.0, 0, 0, margin_pct=0).margin_pct == 0.0)
 
 
+def test_per_order_plans_build_a_shared_component_once_per_order():
+    """A job outputs to exactly ONE container, so a batch shared between two orders has nowhere to
+    deliver. Planned apart, each order gets its own runs of every shared component — which costs
+    real ISK, and the point of the feature is that the cost is attributable, not that it is lower.
+
+    Sprocket is the case that shows it: the reaction makes TWO per run, so one Gadget's single
+    Sprocket rounds up to a whole run and wastes the other. Aggregated, two Gadgets share that run;
+    apart, each order pays for its own — the rounding waste multiplies, exactly as designed."""
+    print("test_per_order_plans_build_a_shared_component_once_per_order")
+    con = _seed_con()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+    P = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0)
+    pools = {"manufacturing": 10, "reaction": 5}
+    specs = [{"id": 1, "type_id": 101, "quantity": 1}, {"id": 2, "type_id": 101, "quantity": 1}]
+
+    agg = plan_queue([(101, 2)], mfg, rx, _prices(SELL), ADJ, P, NAMES, pools)
+    sep = plan_queue_per_order(specs, mfg, rx, _prices(SELL), ADJ, P, NAMES, pools)
+
+    check("every order is costed on its own", len(sep["per_order"]) == 2)
+    check("and they are the same build, so they cost the same",
+          approx(sep["per_order"][0]["net_cost"], sep["per_order"][1]["net_cost"]))
+    check("the totals are the sum of the orders",
+          approx(sep["metrics"]["net_cost"], sum(o["net_cost"] for o in sep["per_order"]), 0.02))
+    spr = [r for r in sep["requirements"] if r["type_id"] == 102][0]
+    spr_agg = [r for r in agg["requirements"] if r["type_id"] == 102][0]
+    check("batch rounding is paid per order, not once", spr["runs"] == 2 and spr_agg["runs"] == 1)
+    check("so planning apart is never cheaper",
+          sep["metrics"]["total_cost"] > agg["metrics"]["total_cost"])
+    check("a shared component names the orders it is for", sorted(spr["orders"]) == [1, 2])
+    # Aggregated, the two Sprockets that one run makes are both consumed and nothing is wasted.
+    # Apart, each order makes a run for one Sprocket and is left holding the other.
+    check("aggregated, the shared run is fully consumed", agg["metrics"]["leftover_value"] == 0)
+    check("apart, each order is left holding its own half-run",
+          [(r["type_id"], r["qty"]) for r in sep["leftovers"]] == [(102, 2.0)])
+
+
+def test_one_orders_jobs_can_never_satisfy_anothers():
+    """The whole physical claim: an order's batch is ITS batch. Scheduling keys are namespaced per
+    order, so a dependency is only ever met by the same order's own job."""
+    print("test_one_orders_jobs_can_never_satisfy_anothers")
+    con = _seed_con()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+    P = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0)
+    sep = plan_queue_per_order([{"id": 7, "type_id": 100, "quantity": 1},
+                                {"id": 9, "type_id": 100, "quantity": 1}],
+                               mfg, rx, _prices(SELL), ADJ, P, NAMES,
+                               {"manufacturing": 10, "reaction": 5})
+    jobs = [t for w in sep["schedule"]["waves"] for t in w["tasks"]]
+    check("every scheduled job says whose it is", all(t.get("order_id") in (7, 9) for t in jobs))
+    check("both orders have their own Sprocket job",
+          {t["order_id"] for t in jobs if t["type_id"] == 102} == {7, 9})
+    check("build steps count per order, not per type", sep["metrics"]["build_steps"] == 6)
+
+
+def test_per_order_stock_is_first_come_first_served():
+    """Two orders cannot both spend the same hangar contents. The queue order decides, because it
+    is the only fair rule available — and nothing is spent twice however the boxes are bound."""
+    print("test_per_order_stock_is_first_come_first_served")
+    con = _seed_con()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+    P = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0)
+    pools = {"manufacturing": 10, "reaction": 5}
+    specs = [{"id": 1, "type_id": 100, "quantity": 1}, {"id": 2, "type_id": 100, "quantity": 1}]
+    # Exactly enough Gadgets for ONE of the two orders.
+    sep = plan_queue_per_order(specs, mfg, rx, _prices(SELL), ADJ, P, NAMES, pools,
+                               on_hand={101: 2})
+    gad = [r for r in sep["requirements"] if r["type_id"] == 101]
+    check("the stock covers the first order outright", gad and gad[0]["runs"] == 2)
+    check("and only the second order still builds them", gad[0]["orders"] == [2])
+    check("the first order is cheaper for having had it",
+          sep["per_order"][0]["net_cost"] < sep["per_order"][1]["net_cost"])
+
+
+def test_two_orders_cannot_buy_the_same_contract_twice():
+    """A blueprint copy on contract is ONE item. Planned apart, each order prices the market from
+    scratch — so both would take the cheapest listing and the split would look CHEAPER on
+    blueprints than the single batch it is. Measured on a real 2x Phoenix queue split in two, that
+    error read as 76.7% off. Whatever an order buys is gone for the orders behind it."""
+    print("test_two_orders_cannot_buy_the_same_contract_twice")
+    con = _seed_con()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+    acq = {100: {"kind": "bpc", "price": 100.0, "runs_per_copy": 1, "median_per_run": 100.0,
+                 "listings": [{"price": 100.0, "runs": 1, "me": 0, "te": 0},
+                              {"price": 1000.0, "runs": 1, "me": 0, "te": 0}]}}
+    P = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, bp_acquire=acq)
+    pools = {"manufacturing": 10, "reaction": 5}
+    agg = plan_queue([(100, 2)], mfg, rx, _prices(SELL), ADJ, P, NAMES, pools)
+    sep = plan_queue_per_order([{"id": 1, "type_id": 100, "quantity": 1},
+                                {"id": 2, "type_id": 100, "quantity": 1}],
+                               mfg, rx, _prices(SELL), ADJ, P, NAMES, pools)
+    check("aggregated buys both listings", approx(agg["metrics"]["blueprint_cost"], 1100.0))
+    check("apart, the second order cannot re-buy the cheap one",
+          approx(sep["metrics"]["blueprint_cost"], 1100.0))
+    check("and each order paid a different price",
+          sep["per_order"][0]["blueprint_cost"] != sep["per_order"][1]["blueprint_cost"])
+
+
+def test_two_orders_cannot_spend_the_same_owned_copy():
+    """The same rule for copies already in the drawer: a BPC's runs are spent when they are run, so
+    crediting one 1-run copy to both orders reports a shortfall of zero twice and buys nothing.
+    An ORIGINAL is not consumed — it runs forever — and must keep covering every order."""
+    print("test_two_orders_cannot_spend_the_same_owned_copy")
+    con = _seed_con()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+    acq = {100: {"kind": "bpc", "price": 500.0, "runs_per_copy": 1, "median_per_run": 500.0,
+                 "listings": [{"price": 500.0, "runs": 1, "me": 0, "te": 0}]}}
+    copy1 = {"me": 0, "te": 0, "kind": "bpc", "runs": 1}
+    owned = {100: {"me": 0, "te": 0, "kind": "bpc", "runs": 1,
+                   "copies": [copy1], "copy_count": 1}}
+    P = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, bp_acquire=acq, owned=owned)
+    specs = [{"id": 1, "type_id": 100, "quantity": 1}, {"id": 2, "type_id": 100, "quantity": 1}]
+    sep = plan_queue_per_order(specs, mfg, rx, _prices(SELL), ADJ, P, NAMES,
+                               {"manufacturing": 10, "reaction": 5})
+    check("the copy covers the first order and no more",
+          sep["per_order"][0]["blueprint_cost"] == 0
+          and sep["per_order"][1]["blueprint_cost"] > 0)
+    # Once the copy is spent the second order owns nothing for that type at all, so it is not
+    # "short a run" — it is buying a print, which is what the plan says and charges for.
+    check("the second order has to buy a print",
+          [r["copies_to_buy"] for r in sep["requirements"] if r["type_id"] == 100] == [1])
+
+    # An original covers both, and is still there afterwards.
+    owned_bpo = {100: {"me": 0, "te": 0, "kind": "bpo", "runs": -1,
+                       "copies": [{"me": 0, "te": 0, "kind": "bpo", "runs": -1}], "copy_count": 1}}
+    P2 = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, bp_acquire=acq, owned=owned_bpo)
+    sep2 = plan_queue_per_order(specs, mfg, rx, _prices(SELL), ADJ, P2, NAMES,
+                                {"manufacturing": 10, "reaction": 5})
+    check("an original is never used up", sep2["metrics"]["blueprint_cost"] == 0)
+    check("and nothing is reported short",
+          all(r["runs_short"] == 0 for r in sep2["requirements"]))
+
+
+def test_per_order_plans_price_off_each_orders_real_cost():
+    """`_blend_margin` exists only because a shared batch has no per-order cost. Here every order
+    has one, so its price is arithmetic on that — no apportionment standing in for it."""
+    print("test_per_order_plans_price_off_each_orders_real_cost")
+    con = _seed_con()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+    P = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, margin_pct=10.0)
+    sep = plan_queue_per_order([{"id": 1, "type_id": 100, "quantity": 1, "margin_pct": 50.0},
+                                {"id": 2, "type_id": 100, "quantity": 1, "margin_pct": 0.0}],
+                               mfg, rx, _prices(SELL), ADJ, P, NAMES,
+                               {"manufacturing": 10, "reaction": 5})
+    a, b = sep["per_order"]
+    check("each order is priced at its own margin",
+          approx(a["price"], a["net_cost"] * 1.5) and approx(b["price"], b["net_cost"]))
+    check("the queue price is their sum", approx(sep["metrics"]["price"], a["price"] + b["price"]))
+    check("mixed margins are flagged", sep["metrics"]["margin_mixed"] is True)
+    check("and the reported rate explains the price",
+          approx(sep["metrics"]["price"],
+                 sep["metrics"]["net_cost"] * (1 + sep["metrics"]["margin_pct"] / 100.0), 1.0))
+
+
+def test_per_order_jobs_still_land_together():
+    """Cross-order alignment has to become EXPLICIT. In the aggregated plan a builder logs in once
+    because every order's jobs were packed in one call; planned apart they never meet, so the
+    alignment is done over the union and replayed. Without it the same queue lands its work at as
+    many separate moments as it has orders — the effort cost this whole feature sits inside."""
+    print("test_per_order_jobs_still_land_together")
+    con = _seed_con()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+    P = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0)
+    specs = [{"id": 1, "type_id": 100, "quantity": 3}, {"id": 2, "type_id": 101, "quantity": 6}]
+    sep = plan_queue_per_order(specs, mfg, rx, _prices(SELL), ADJ, P, NAMES,
+                               {"manufacturing": 10, "reaction": 5})
+    # Same inputs, but each order aligned only against itself — what the unwired version did.
+    from app.industry.schedule import _order_params, _built_deps as _bd
+    solo_jobs = 0
+    for sp in specs:
+        p = _order_params(P, sp)
+        memo, unit = resolve_unit_costs(mfg, rx, _prices(SELL), ADJ, p)
+        unit(sp["type_id"], frozenset())
+        a = aggregate_demand([(sp["type_id"], sp["quantity"])], memo, mfg, rx, p, None,
+                             {"manufacturing": 10, "reaction": 5})
+        t, _by = build_tasks(a, mfg, rx, p, {"manufacturing": 10, "reaction": 5},
+                             depths=_depths([sp["type_id"]], mfg, rx), deps=_bd(a, mfg, rx))
+        solo_jobs += len(t)
+    check("aligning across the queue never costs jobs", sep["metrics"]["job_count"] <= solo_jobs)
+    check("the plan still delivers", sep["metrics"]["makespan_hours"] > 0)
+
+
+def test_a_single_order_queue_plans_the_same_either_way():
+    """One order is one batch whichever way it is planned, so nothing may move for the accounts
+    that have exactly one build in flight — which is most of them."""
+    print("test_a_single_order_queue_plans_the_same_either_way")
+    con = _seed_con()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+    P = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0)
+    pools = {"manufacturing": 10, "reaction": 5}
+    agg = plan_queue([(100, 2)], mfg, rx, _prices(SELL), ADJ, P, NAMES, pools)
+    sep = plan_queue_per_order([{"id": 1, "type_id": 100, "quantity": 2}], mfg, rx, _prices(SELL),
+                               ADJ, P, NAMES, pools)
+    for k in ("net_cost", "total_cost", "materials_cost", "job_cost", "makespan_hours",
+              "job_count", "build_steps"):
+        check(f"{k} is unchanged", approx(sep["metrics"][k], agg["metrics"][k], 0.01)
+              if isinstance(agg["metrics"][k], float) else sep["metrics"][k] == agg["metrics"][k])
+    check("and it reports the same build steps",
+          sorted(r["type_id"] for r in sep["requirements"])
+          == sorted(r["type_id"] for r in agg["requirements"]))
+
+
 def test_queue_price_uses_each_orders_own_margin():
     """The builder's own sheet must quote what the customers are quoted. Margin is snapshotted per
     order, but the queue was marked up at ONE blanket rate — so editing a customer's margin moved
@@ -2293,6 +2494,14 @@ def main():
     test_the_checklist_and_the_plan_agree_on_what_is_ready()
     test_saved_build_options_reach_plans_run_without_a_browser()
     test_price_is_net_cost_plus_margin()
+    test_per_order_plans_build_a_shared_component_once_per_order()
+    test_one_orders_jobs_can_never_satisfy_anothers()
+    test_per_order_stock_is_first_come_first_served()
+    test_two_orders_cannot_buy_the_same_contract_twice()
+    test_two_orders_cannot_spend_the_same_owned_copy()
+    test_per_order_plans_price_off_each_orders_real_cost()
+    test_per_order_jobs_still_land_together()
+    test_a_single_order_queue_plans_the_same_either_way()
     test_queue_price_uses_each_orders_own_margin()
     test_share_links_outlive_their_order()
     test_install_assignment_spreads_and_respects_free_slots()
@@ -2997,8 +3206,10 @@ def test_opening_the_tab_plans_the_queue_once_not_twice():
     # The two plans differ (progress measures the FULL requirement), so the saving is in the inputs
     # — and when no stock is netted off they are the same object and the second is skipped outright.
     run = inspect.getsource(O._run_queue_plan)
+    # Source text, and weak by construction (see the audit note in TODO 2e) — but the property is
+    # "no second set of DB reads", which has no behavioural stand-in without a seeded live account.
     check("the second plan reuses the resolved inputs, and is skipped when stock changes nothing",
-          "want_full" in run and "res if not on_hand else" in run)
+          "want_full" in run and 'res["_full"] = res' in run and "inp." in run)
 
 
 def test_building_the_borderline_set_runs_to_a_fixpoint():

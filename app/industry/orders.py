@@ -22,7 +22,7 @@ from app.esi import require_context
 
 from app.industry._router import router
 from app.industry.graph import BuildOptions, build_plan, prepare_plan_inputs
-from app.industry.schedule import plan_queue
+from app.industry.schedule import plan_queue, plan_queue_per_order
 
 _VALID_MODES = ("parallel", "serial")
 _VALID_STATUSES = ("queued", "done", "cancelled")
@@ -379,6 +379,10 @@ class QueuePlanRequest(BuildOptions):
     shrink as you acquire stock and the bar could never fill."""
     mfg_slots: int | None = None
     rx_slots: int | None = None
+    # Plan each order on its own rather than aggregating the queue. None = whatever the account has
+    # saved (the normal path); True/False is how the compare endpoint asks for one specific answer
+    # off the same inputs, and how a caller that must not be re-costed pins the old behaviour.
+    per_order_plans: bool | None = None
 
 
 def plan_source_keys(ctx: int, orders) -> list[str] | None:
@@ -421,6 +425,32 @@ def _stock_for(ctx: int, targets, orders=None) -> dict[int, float]:
     for tid, _ in targets:
         stock.pop(tid, None)
     return stock
+
+
+def _order_stock(ctx: int, targets, order_rows) -> dict[int, list]:
+    """{order_id: {type_id: qty}} — what each order may spend, planned apart.
+
+    The aggregated plan can only ask one question ("what may this QUEUE spend"), which is why
+    `plan_source_keys` unions a curated order's boxes with the account pool. Planned apart the
+    honest answer is per order: a curated order spends ITS boxes and nothing else — that is what
+    curating them meant — and an uncurated one still draws on the account-wide tick list. The
+    queue-wide remainder in `plan_queue_per_order` then stops two orders spending the same item.
+    """
+    from app.industry.assets import owned_quantities, source_quantities_multi
+    pool = None
+    out: dict[int, dict] = {}
+    for o in order_rows:
+        keys = order_source_keys(o) if int(o.get("sources_owned") or 0) else []
+        if keys:
+            stock = source_quantities_multi(ctx, keys)
+        else:
+            if pool is None:
+                pool = owned_quantities(ctx)
+            stock = dict(pool)
+        for tid, _ in targets:
+            stock.pop(tid, None)
+        out[o["id"]] = stock
+    return out
 
 
 def _blend_margin(res: dict, order_margins: list, default_pct: float) -> None:
@@ -470,7 +500,7 @@ def _run_queue_plan(ctx: int, req: QueuePlanRequest, want_full: bool = False) ->
         # Without an explicit ORDER BY the row order is whatever the DB returns, which would make
         # "first in line" arbitrary.
         orders = con.execute(
-            "SELECT product_type_id, quantity, force_build_ids, me_te_overrides, margin_pct, "
+            "SELECT id, product_type_id, quantity, force_build_ids, me_te_overrides, margin_pct, "
             "COALESCE(build_reactions,0) AS build_reactions, "
             "COALESCE(source_key,'') AS source_key, COALESCE(source_keys,'') AS source_keys, "
             "COALESCE(sources_owned,0) AS sources_owned FROM pp_industry_orders "
@@ -506,34 +536,77 @@ def _run_queue_plan(ctx: int, req: QueuePlanRequest, want_full: bool = False) ->
     finally:
         con.close()
 
-    if forced:
-        req = req.model_copy(update={"force_build_ids": sorted(set(req.force_build_ids) | forced)})
-    if me_te:
-        req = req.model_copy(update={"me_te_overrides": {**me_te, **(req.me_te_overrides or {})}})
-    if reacts:
-        req = req.model_copy(update={"build_reactions_anyway": True})
+    # Does this queue get planned order by order, or as one shared batch? The request wins when it
+    # says (that is how the compare endpoint gets both answers off one set of inputs); otherwise the
+    # account's saved choice, and only where the feature is actually rolled out to this caller.
+    from app.features import feature_enabled_for
+    from app.industry.settings import get_per_order_plans
+    per_order = (get_per_order_plans(ctx) and feature_enabled_for("industry_per_order_plans", ctx)
+                 if req.per_order_plans is None else bool(req.per_order_plans))
+
+    # The unions below exist ONLY because the aggregated plan builds one shared batch per component:
+    # a component built once for everybody can only be built one way. Planned apart, every order
+    # carries its own — so unioning them here would hand one customer's "build it anyway" to
+    # everyone else's build, which is the exact conflation this path removes.
+    if not per_order:
+        if forced:
+            req = req.model_copy(update={"force_build_ids": sorted(set(req.force_build_ids) | forced)})
+        if me_te:
+            req = req.model_copy(update={"me_te_overrides": {**me_te, **(req.me_te_overrides or {})}})
+        if reacts:
+            req = req.model_copy(update={"build_reactions_anyway": True})
     inp = prepare_plan_inputs(
         ctx, targets, req, mfg_slots=req.mfg_slots, rx_slots=req.rx_slots,
         missing_recipe_detail=lambda tid: f"queued order {tid} has no recipe")
-    on_hand = _stock_for(ctx, targets, order_rows) if req.use_stock else None
-    res = plan_queue(targets, inp.mfg, inp.rx, inp.prices, inp.adjusted, inp.params, inp.names,
-                     inp.pools, on_hand=on_hand)
+    if per_order:
+        stock = _order_stock(ctx, targets, order_rows) if req.use_stock else {}
+        specs = [{"id": o["id"], "type_id": o["product_type_id"], "quantity": o["quantity"],
+                  "force_build_ids": _parse_ids(o["force_build_ids"]),
+                  "me_te_overrides": _parse_map(o["me_te_overrides"]),
+                  "build_reactions": bool(o["build_reactions"]),
+                  "margin_pct": o["margin_pct"],
+                  "stock": stock.get(o["id"]) if req.use_stock else None}
+                 for o in order_rows]
+        # The queue-wide ceiling on stock, so first-come-first-served can subtract from something
+        # even where every order curated its own boxes.
+        on_hand = _stock_for(ctx, targets, order_rows) if req.use_stock else None
+        res = plan_queue_per_order(specs, inp.mfg, inp.rx, inp.prices, inp.adjusted, inp.params,
+                                   inp.names, inp.pools, on_hand=on_hand)
+    else:
+        on_hand = _stock_for(ctx, targets, order_rows) if req.use_stock else None
+        res = plan_queue(targets, inp.mfg, inp.rx, inp.prices, inp.adjusted, inp.params, inp.names,
+                         inp.pools, on_hand=on_hand)
     # Progress measures against the FULL requirement, so it needs the same queue planned with no
     # stock netted off. Computed HERE, off inputs already resolved, rather than in a second request
     # that would repeat every DB read in prepare_plan_inputs — the graph, the names, the blueprints,
     # the contract index, the slot pool — to answer a question this plan is already holding.
     # With no stock enabled the two plans are identical, so that case costs nothing at all.
     if want_full:
-        res["_full"] = (res if not on_hand else
-                        plan_queue(targets, inp.mfg, inp.rx, inp.prices, inp.adjusted, inp.params,
-                                   inp.names, inp.pools, on_hand=None))
+        if not on_hand:
+            res["_full"] = res
+        elif per_order:
+            res["_full"] = plan_queue_per_order(
+                [{**sp, "stock": None} for sp in specs], inp.mfg, inp.rx, inp.prices, inp.adjusted,
+                inp.params, inp.names, inp.pools, on_hand=None)
+        else:
+            res["_full"] = plan_queue(targets, inp.mfg, inp.rx, inp.prices, inp.adjusted,
+                                      inp.params, inp.names, inp.pools, on_hand=None)
     # The recipe tree per ordered product. plan_queue returns aggregated demand — correct for cost
     # and scheduling, but it has no structure, and the UI derives its build STAGES from the tree.
     # Without this the status view (the main screen) had no pipeline at all and lumped every job
     # into one unlabelled bucket, while the preview modal showed the real stages.
-    res["trees"] = [build_plan(t, q, inp.mfg, inp.rx, inp.prices, inp.adjusted, inp.params,
-                               inp.names)["tree"]
-                    for t, q in targets]
+    # Per-order plans build the tree with THAT order's own params, because its forced builds and
+    # ME/TE are its own — the tree is what the page draws its stages from, and a tree built off a
+    # unioned set would show stages the order isn't running.
+    if per_order:
+        from app.industry.schedule import _order_params
+        res["trees"] = [build_plan(sp["type_id"], sp["quantity"], inp.mfg, inp.rx, inp.prices,
+                                   inp.adjusted, _order_params(inp.params, sp), inp.names)["tree"]
+                        for sp in specs]
+    else:
+        res["trees"] = [build_plan(t, q, inp.mfg, inp.rx, inp.prices, inp.adjusted, inp.params,
+                                   inp.names)["tree"]
+                        for t, q in targets]
     # Who installs what, across the whole schedule. to-install still answers "right now" off the
     # FREE slots; this answers "and then who does the rest", which every later stage lacked.
     from app.industry.schedule import assign_characters
@@ -549,7 +622,11 @@ def _run_queue_plan(ctx: int, req: QueuePlanRequest, want_full: bool = False) ->
     res["skill_time_basis"] = inp.params.skill_time_basis
     from app.industry.graph import _cost_basis
     res["cost_basis"] = _cost_basis(inp.params)
-    _blend_margin(res, order_margins, inp.params.margin_pct)
+    # `_blend_margin` exists only because a shared batch has no per-order cost to price off — the
+    # per-order plan has one, and has already used it. Running it here would replace a real sum with
+    # an apportionment of itself.
+    if not per_order:
+        _blend_margin(res, order_margins, inp.params.margin_pct)
     return res
 
 
@@ -574,6 +651,51 @@ def queue_plan(req: QueuePlanRequest, ctx: int = Depends(require_context)):
         except Exception:
             res["progress"] = None       # never let the progress overlay take the plan down with it
     return res
+
+
+@router.post("/api/industry/queue-plan/compare")
+def queue_plan_compare(req: QueuePlanRequest | None = None, ctx: int = Depends(require_context)):
+    """Both plans of the SAME queue, side by side: aggregated versus per order.
+
+    Switching a builder from one to the other changes what every quote costs, so the number has to
+    come before the switch rather than after it. Same inputs, same options, same stock — only the
+    question differs — and the delta is stated as what planning APART costs, because that is the
+    direction the decision runs in (the aggregated plan is the cheap default).
+
+    Deliberately not cached and not folded into the plan endpoint: it is twice the work of a page
+    load and is read once, when deciding.
+    """
+    from app.industry.settings import get_per_order_plans
+    base = req or QueuePlanRequest()
+    agg = _run_queue_plan(ctx, base.model_copy(update={"per_order_plans": False}))
+    if agg.get("empty"):
+        return {"empty": True}
+    sep = _run_queue_plan(ctx, base.model_copy(update={"per_order_plans": True}))
+
+    def _row(res: dict) -> dict:
+        m = res.get("metrics") or {}
+        return {"net_cost": m.get("net_cost"), "total_cost": m.get("total_cost"),
+                "materials_cost": m.get("materials_cost"), "job_cost": m.get("job_cost"),
+                "blueprint_cost": m.get("blueprint_cost"),
+                "blueprint_parallel_cost": m.get("blueprint_parallel_cost"),
+                "leftover_value": m.get("leftover_value"), "price": m.get("price"),
+                "job_count": m.get("job_count"), "build_steps": m.get("build_steps"),
+                "makespan_hours": m.get("makespan_hours"),
+                "first_delivery_hours": m.get("first_delivery_hours")}
+
+    a, b = _row(agg), _row(sep)
+    return {
+        "aggregated": a,
+        "per_order": b,
+        # Per-order costs the aggregated plan cannot produce at all — the thing being bought.
+        "orders": sep.get("per_order") or [],
+        "delta": {k: (None if a.get(k) is None or b.get(k) is None else round(b[k] - a[k], 2))
+                  for k in a},
+        "delta_pct": {k: (None if not a.get(k) or b.get(k) is None
+                          else round((b[k] / a[k] - 1) * 100.0, 2)) for k in a},
+        # Which of the two the account is actually planning with today.
+        "enabled": get_per_order_plans(ctx),
+    }
 
 
 @router.post("/api/industry/to-install")
