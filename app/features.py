@@ -278,6 +278,14 @@ FEATURE_REGISTRY = [
                     "A pasted hangar wins for the formulas it names. Concurrency only — neither an "
                     "asset row nor a job states ME, TE or runs.",
      "default": False},
+    {"key": "reactions_formula_cap", "label": "Reactions: a formula is one reaction at a time",
+     "group": "Reactions",
+     "description": "On Reactions: cap how many jobs of a product the wizard and customer orders "
+                    "plan side by side at the number of formulas you actually hold — a formula is "
+                    "locked into the reactor while a job runs on it, so ten free slots and one "
+                    "Ferrofluid formula is one job, not ten. Chain tiers are unaffected (they run "
+                    "in sequence), and a formula we have no evidence about is never capped.",
+     "default": False},
 ]
 GROUP_ORDER = ["Dashboard", "Setup Analysis", "Planner", "Planet DB", "Characters",
                "Notifications & Alerts", "Reactions", "Industry"]

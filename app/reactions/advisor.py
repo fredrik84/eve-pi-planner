@@ -35,6 +35,7 @@ from app.reactions.settings import effective_reaction_settings
 from app.reactions.jobs import (
     ensure_industry_jobs_table, ensure_reaction_assignments_table,
     get_industry_jobs, reaction_capable, reaction_slots, _character_capacities,
+    formula_concurrency_caps, _cap_jobs,
 )
 
 log = logging.getLogger(__name__)
@@ -118,7 +119,7 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
     empty = {"suggestions": [], "totals": {
         "isk_committed": 0.0, "isk_budget": isk_budget, "net_profit": 0.0, "net_profit_per_day": None,
         "output_value": 0.0, "output_m3": 0.0, "characters_used": 0, "completion_hours": None,
-        "binding": "neither", "absorb_fill_pct": round(frac * 100)}}
+        "binding": "neither", "absorb_fill_pct": round(frac * 100), "formula_capped": []}}
     if not candidates:
         return empty
 
@@ -138,6 +139,10 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
     # scale down linearly with runs (unit cost and unit price don't change with batch size).
     chars_for_cap = _character_capacities(context_id)
     max_slots_available = max((c["free_slots"] for c in chars_for_cap), default=0) or 1
+    # How many jobs of a product may run at once, given the formulas the account actually holds — a
+    # formula is locked into the reactor while a job runs on it. Sparse: a product with no key is a
+    # product we have no evidence about, and is never capped (see formula_concurrency_caps).
+    formula_caps = formula_concurrency_caps(context_id)
     committed_units = _committed_production_units()
     # Real daily traded volume (Jita/The Forge) per candidate — the market-absorption base. How much
     # you can realistically sell over the run period is trade VELOCITY × the period, not a single
@@ -150,7 +155,11 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
         cycle_hours = o["cycle_time"] / 3600.0 if o["cycle_time"] else 0
         if cycle_hours <= 0:
             continue
-        max_runs_in_cadence = int(max_slots_available * cadence_hours / cycle_hours)
+        # Sizing the batch against the best character's free slots is only honest if that many jobs
+        # of this product could be installed at once; with one formula it is one job's worth of
+        # cadence however many reactors are idle, so the LP never funds runs stage 2 cannot place.
+        f_cap = formula_caps.get(o["type_id"])
+        max_runs_in_cadence = int(_cap_jobs(f_cap, max_slots_available) * cadence_hours / cycle_hours)
         if max_runs_in_cadence <= 0:
             continue
         # Market-absorption cap: (this batch + what our userbase already committed) must stay under
@@ -194,6 +203,11 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
         c2["_absorb_extra_runs"] = absorb_extra_runs
         c2["_absorb_extra_reward"] = absorb_extra_runs * per_run_profit
         c2["_absorb_unlock_frac"] = c_absorb_unlock_frac
+        # Whether the formula count — not the free slots — is what held this batch down. Recorded
+        # HERE because it is here that it binds: by the time stage 2 sizes the allocation, the runs
+        # have already been cut to what the capped job count can finish, so the same comparison
+        # there would find nothing to report and the user would be told nothing at all.
+        c2["_formula_cap"] = f_cap if (f_cap and f_cap < max_slots_available) else None
         capped.append(c2)
     candidates = capped
     if not candidates:
@@ -267,6 +281,7 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
     touched_chars: set[int] = set()
 
     suggestions = []
+    formula_capped: list[str] = []      # products running in fewer jobs than the slots would allow
     isk_committed = net_profit = total_output_value = total_output_m3 = 0.0
     max_completion_hours = 0.0
     for c, xi in alloc_order:
@@ -283,7 +298,17 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
         pick_id = max(touched_with_room, key=lambda cid: remaining_slots[cid]) if touched_with_room \
             else max(available, key=lambda cid: remaining_slots[cid])
 
-        slots_used = min(ideal_slots, remaining_slots[pick_id])
+        # A formula is an item and it is locked while a job runs on it, so however many slots are
+        # free, this product runs in as many jobs as there are formulas of it. Deliberately applied
+        # to `want_slots` and NOT to `ideal_slots`: the downscale just below keys off ideal_slots,
+        # so a capped suggestion has its run count cut to what those jobs can really finish within
+        # the cadence instead of keeping the runs and quietly blowing past it.
+        f_cap = formula_caps.get(c["type_id"])
+        want_slots = _cap_jobs(f_cap, ideal_slots)
+        slots_used = min(want_slots, remaining_slots[pick_id])
+        # Capped at either end: stage 1 shrank the batch to fit the formulas, or the batch survived
+        # that and the job count is being held down here.
+        capped_by_formula = c.get("_formula_cap") or (f_cap if (f_cap and f_cap < ideal_slots) else None)
         remaining_slots[pick_id] -= slots_used
         touched_chars.add(pick_id)
 
@@ -318,13 +343,19 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
             for tid, info in ordered:
                 t_cycle_hours = info["cycle_time"] / 3600.0 if info["cycle_time"] else 1.0
                 t_ideal_slots = max(1, math.ceil(info["runs"] * t_cycle_hours / cadence_hours)) if cadence_hours > 0 else info["runs"]
-                t_slots_used = max(1, min(t_ideal_slots, remaining_slots.get(pick_id, 0)))
+                # Each tier against its OWN formula count. Never across tiers: tier 0 has finished
+                # before tier 1 starts, so one formula can legitimately serve both.
+                t_cap = formula_caps.get(tid)
+                t_slots_used = max(1, min(_cap_jobs(t_cap, t_ideal_slots), remaining_slots.get(pick_id, 0)))
                 remaining_slots[pick_id] = remaining_slots.get(pick_id, 0) - t_slots_used
+                if t_cap and t_cap < t_ideal_slots:
+                    formula_capped.append(types.get(tid, {}).get("name", str(tid)))
                 chain_tiers.append({
                     "type_id": tid, "name": types.get(tid, {}).get("name", str(tid)),
                     "runs": info["runs"],
                     "job_count": t_slots_used,
                     "runs_per_job": math.ceil(info["runs"] / t_slots_used),
+                    "formula_cap": t_cap,
                 })
 
         cost = c["input_cost"] * xi
@@ -393,7 +424,13 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
             "assigned_character": char_names.get(pick_id, "?"),
             "assigned_character_id": pick_id,
             "chain_tiers": chain_tiers,
+            # How many formulas of this product the account has evidence of, when that is what held
+            # the job count down — so the UI can say WHY ten free slots are being used as one,
+            # rather than leaving it looking broken. None = not capped / nothing known.
+            "formula_cap": capped_by_formula,
         })
+        if capped_by_formula:
+            formula_capped.append(c["name"])
 
     # Built in allocation order (smallest slot-need first, see alloc_order above) — restore
     # profit-descending order for display, matching what the LP itself ranked as most valuable.
@@ -417,6 +454,9 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
             "completion_hours": round(max_completion_hours, 1) if suggestions else None,
             "binding": binding,
             "absorb_fill_pct": round(frac * 100),
+            # Names of the products (and chain tiers) whose job count was held down by how many
+            # formulas the account holds rather than by free slots — one UI line's worth of "why".
+            "formula_capped": formula_capped,
         },
     }
 
@@ -512,7 +552,7 @@ def suggest_reactions(req: SuggestRequest, context_id: int = Depends(require_con
     if req.isk_budget <= 0 or req.max_chain_depth <= 0 or req.cadence_hours <= 0:
         return {"suggestions": [], "totals": {
             "isk_committed": 0.0, "isk_budget": req.isk_budget, "net_profit": 0.0, "net_profit_per_day": None,
-            "output_value": 0.0, "output_m3": 0.0, "characters_used": 0, "completion_hours": None, "binding": "neither"},
+            "output_value": 0.0, "output_m3": 0.0, "characters_used": 0, "completion_hours": None, "binding": "neither", "formula_capped": []},
             "advisor": {"budget_hint": None, "align_hints": [], "fuel_block_hints": []}}
     material_ids = set(req.material_ids) if req.material_ids else None
     result = _suggest_reactions(context_id, req.isk_budget, req.max_chain_depth, req.cadence_hours,

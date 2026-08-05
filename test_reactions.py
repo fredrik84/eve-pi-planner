@@ -41,6 +41,11 @@ def _cleanup():
     con.execute("DELETE FROM pp_reaction_assignments WHERE character_id=?", (FAKE_CID,))
     con.execute("DELETE FROM pp_reaction_orders WHERE context_id=?", (FAKE_CTX,))
     con.execute("DELETE FROM pp_sessions WHERE context_id=?", (FAKE_CTX,))
+    for t in ("pp_char_blueprints", "pp_char_formula_jobs", "pp_char_industry_jobs"):
+        try:
+            con.execute(f"DELETE FROM {t} WHERE character_id=?", (FAKE_CID,))
+        except Exception:
+            pass
     con.execute("DELETE FROM pp_characters WHERE character_id=?", (FAKE_CID,))
     con.commit()
     con.close()
@@ -548,6 +553,234 @@ def test_stock_zero_falls_back_to_market() -> bool:
     return ok
 
 
+def _set_feature_state(key: str, state: str) -> str:
+    """Force a feature onto a rung and return the rung it was on. There is no caching in
+    app.features._state_of, so this takes effect immediately for in-process callers."""
+    from app.features import ensure_features_table
+    ensure_features_table()
+    con = get_connection()
+    row = con.execute("SELECT state FROM pp_features WHERE key=?", (key,)).fetchone()
+    con.execute("UPDATE pp_features SET state=? WHERE key=?", (state, key))
+    con.commit()
+    con.close()
+    return (row["state"] if row else None) or "admin"
+
+
+def _clear_formula_evidence():
+    con = get_connection()
+    for t in ("pp_char_blueprints", "pp_char_formula_jobs", "pp_char_industry_jobs"):
+        try:
+            con.execute(f"DELETE FROM {t} WHERE character_id=?", (FAKE_CID,))
+        except Exception:
+            pass
+    con.commit()
+    con.close()
+
+
+def test_a_formula_is_one_reaction_at_a_time() -> bool:
+    """A formula is an ITEM and it is LOCKED into the reactor while a job runs on it, so one
+    Ferrofluid formula is one concurrent reaction however many reactor slots are free. Reactions
+    allocated against slots only, so it happily told a player to install ten parallel jobs they
+    physically cannot. The invariants:
+
+      * N formulas cap concurrency at N — and the evidence is the Industry side's, reused rather
+        than reimplemented (personal blueprint cache ∪ enabled stock ∪ observed blueprint_ids);
+      * chain tiers are SEQUENTIAL, so the cap is per tier and a deep chain is never blocked by it;
+      * **no evidence means NO cap** — an unseen formula is "we don't know", never "you hold none",
+        and an incomplete blueprint picture is unknown at the account level;
+      * flag off ⇒ no caps at all ⇒ the existing slot math is untouched.
+    """
+    print(f"\n{'='*60}\n  A formula is one reaction at a time\n{'='*60}")
+    from app.industry.blueprints import (ensure_char_blueprints_table,
+                                          ensure_formula_job_prints_table)
+    from app.reactions.jobs import _cap_jobs, _fit_chain_slots, formula_concurrency_caps
+
+    ensure_char_blueprints_table()
+    ensure_formula_job_prints_table()
+    ok = True
+
+    # `_cap_jobs` is the whole "unknown never refuses" rule in one line, so pin it directly.
+    ok &= check(_cap_jobs(None, 7) == 7, "no cap leaves the job count alone (unknown never refuses)")
+    ok &= check(_cap_jobs(0, 7) == 7, "and a zero cap is 'unknown' too, not 'you may run nothing'")
+    ok &= check(_cap_jobs(2, 7) == 2 and _cap_jobs(9, 7) == 7, "a cap binds only when it is tighter")
+    ok &= check(_cap_jobs(1, 0) == 1, "a capped tier still gets one job — a tier at zero can't install")
+
+    # Tiers are sequential: one formula each, four tiers, still four jobs. Nothing is capped ACROSS
+    # tiers, because tier 0 has finished before tier 1 starts.
+    deep = _fit_chain_slots([100.0, 100.0, 100.0, 100.0], [1, 1, 1, 1], 40)
+    ok &= check(deep == [1, 1, 1, 1],
+                "a four-tier chain with one formula per tier still installs every tier")
+    mixed = _fit_chain_slots([100.0, 100.0], [1, 20], 20)
+    ok &= check(mixed[0] == 1 and mixed[1] > 1,
+                "and capping one tier does not cap the tier beside it")
+
+    con = get_connection()
+    rx = con.execute("SELECT reaction_id, output_type_id FROM reactions "
+                     "ORDER BY reaction_id LIMIT 2").fetchall()
+    con.close()
+    if not check(len(rx) >= 2, "the SDE knows some reactions to test with"):
+        return ok
+    formula, product = rx[0]["reaction_id"], rx[0]["output_type_id"]
+    unseen = rx[1]["output_type_id"]
+
+    prev_state = _set_feature_state("reactions_formula_cap", "public")
+    try:
+        _clear_formula_evidence()
+        con = get_connection()
+        # Three of the formula in the personal blueprint list — a positive quantity is a STACK, and
+        # each print in it can hold its own job.
+        con.execute("INSERT INTO pp_char_blueprints (character_id, blueprints_json, fetched_at) "
+                    "VALUES (?,?,?) ON CONFLICT (character_id) DO UPDATE SET "
+                    "blueprints_json=excluded.blueprints_json",
+                    (FAKE_CID, json.dumps([{"type_id": formula, "me": 0, "te": 0,
+                                            "quantity": 3, "runs": -1}]), 1.0))
+        con.commit()
+        con.close()
+
+        caps = formula_concurrency_caps(FAKE_CTX)
+        ok &= check(caps.get(product) == 3, "three formulas held cap that product at three jobs at once")
+        ok &= check(unseen not in caps, "a formula we have never seen is not capped at all")
+
+        # The Industry evidence layer's third source, reused as-is: N distinct physical prints
+        # observed running jobs is N formulas, wherever they are actually kept.
+        con = get_connection()
+        con.execute("UPDATE pp_char_blueprints SET blueprints_json=? WHERE character_id=?",
+                    (json.dumps([{"type_id": formula, "me": 0, "te": 0, "quantity": -1, "runs": -1}]),
+                     FAKE_CID))
+        con.execute("INSERT INTO pp_char_formula_jobs (character_id, prints_json, fetched_at) "
+                    "VALUES (?,?,?) ON CONFLICT (character_id) DO UPDATE SET "
+                    "prints_json=excluded.prints_json",
+                    (FAKE_CID, json.dumps([{"blueprint_id": 5001, "blueprint_type_id": formula},
+                                           {"blueprint_id": 5002, "blueprint_type_id": formula},
+                                           {"blueprint_id": 5002, "blueprint_type_id": formula}]), 1.0))
+        con.commit()
+        con.close()
+        caps = formula_concurrency_caps(FAKE_CTX)
+        ok &= check(caps.get(product) == 2,
+                    "two DISTINCT prints seen in job history is two formulas (the repeat id is one)")
+
+        # Unknown at the ACCOUNT level: the blueprint scope is opt-in per character, so a picture
+        # that isn't complete is a floor, and a floor read as a total serialises real work.
+        _clear_formula_evidence()
+        ok &= check(formula_concurrency_caps(FAKE_CTX) == {},
+                    "an incomplete blueprint picture caps nothing at all")
+    finally:
+        _clear_formula_evidence()
+        _set_feature_state("reactions_formula_cap", prev_state)
+
+    # Flag off: no caps, whatever the evidence says — the slot math is bit-for-bit what it was.
+    con = get_connection()
+    con.execute("INSERT INTO pp_char_blueprints (character_id, blueprints_json, fetched_at) "
+                "VALUES (?,?,?) ON CONFLICT (character_id) DO UPDATE SET "
+                "blueprints_json=excluded.blueprints_json",
+                (FAKE_CID, json.dumps([{"type_id": formula, "me": 0, "te": 0,
+                                        "quantity": 1, "runs": -1}]), 1.0))
+    con.commit()
+    con.close()
+    try:
+        ok &= check(formula_concurrency_caps(FAKE_CTX) == {},
+                    "with the flag off nothing is capped, however much evidence there is")
+    finally:
+        _clear_formula_evidence()
+    return ok
+
+
+def test_order_estimate_reflects_the_formula_cap(api: Api) -> bool:
+    """The quoted time on a customer order assumes a tier's runs spread across every free slot —
+    and that is the number a customer is given. It has to answer to the same formula cap the
+    assign path commits under, or the tool quotes an installation it would then refuse to make."""
+    print(f"\n{'='*60}\n  Order estimate answers to the formula cap\n{'='*60}")
+    from app.reactions import orders as rx_orders
+
+    product = _find_test_product(api)
+    if product is None:
+        print("  SKIP: no reachable priced product in this environment")
+        return True
+    order = {"id": None, "type_id": product["type_id"], "name": product["name"],
+             "target_qty": product["output_qty"] * 40 / max(1, product["top_level_runs"]),
+             "top_level_runs": 40, "assigned_runs": 0, "status": "preview"}
+
+    real = rx_orders.formula_concurrency_caps
+    try:
+        rx_orders.formula_concurrency_caps = lambda ctx: {}
+        base = rx_orders._order_report(FAKE_CTX, order)
+        rx_orders.formula_concurrency_caps = lambda ctx: {product["type_id"]: 1}
+        capped = rx_orders._order_report(FAKE_CTX, order)
+    finally:
+        rx_orders.formula_concurrency_caps = real
+
+    ok = check(base["time"]["free_slots_now"] > 1,
+               f"the seeded character really has free slots ({base['time']['free_slots_now']})")
+    ok &= check(base["time"]["formula_capped"] == [],
+                "no evidence about the formula leaves the quote exactly as it was")
+    ok &= check(capped["time"]["estimated_hours"] > base["time"]["estimated_hours"],
+                f"one formula quotes longer than {base['time']['free_slots_now']} free slots would "
+                f"({capped['time']['estimated_hours']}h vs {base['time']['estimated_hours']}h)")
+    ok &= check(capped["time"]["formula_capped"] == [product["name"]],
+                "and the report names the step the formula held back, so the UI can say why")
+    return ok
+
+
+def test_suggest_and_assign_respect_the_formula_cap(api: Api) -> bool:
+    """The other two paths the cap has to reach: the Suggest wizard's bin-pack must not propose
+    five parallel jobs off one formula, and the customer-order assign must not commit them. Seeds
+    ONE formula of every reaction into the blueprint cache (so every candidate is capped at one)
+    and compares a run with the flag off against a run with it on."""
+    print(f"\n{'='*60}\n  Suggest + order assign respect the formula cap\n{'='*60}")
+    from app.reactions.advisor import _suggest_reactions
+
+    prev = _set_feature_state("reactions_formula_cap", "hidden")
+    ok = True
+    try:
+        _clear_formula_evidence()
+        off = _suggest_reactions(FAKE_CTX, 5_000_000_000, 2, 168.0)
+        wide = [s for s in off["suggestions"] if s["job_count"] > 1]
+        if not wide:
+            print("  SKIP: nothing in this environment gets suggested across several slots")
+            return True
+        ok &= check(off["totals"]["formula_capped"] == [],
+                    "with the flag off no product is formula-capped and job counts are untouched")
+
+        con = get_connection()
+        rx = [r["reaction_id"] for r in con.execute("SELECT reaction_id FROM reactions")]
+        con.execute("INSERT INTO pp_char_blueprints (character_id, blueprints_json, fetched_at) "
+                    "VALUES (?,?,?) ON CONFLICT (character_id) DO UPDATE SET "
+                    "blueprints_json=excluded.blueprints_json",
+                    (FAKE_CID, json.dumps([{"type_id": t, "me": 0, "te": 0, "quantity": 1, "runs": -1}
+                                           for t in rx]), 1.0))
+        con.commit()
+        con.close()
+        _set_feature_state("reactions_formula_cap", "public")
+        on = _suggest_reactions(FAKE_CTX, 5_000_000_000, 2, 168.0)
+        ok &= check(all(s["job_count"] == 1 for s in on["suggestions"]),
+                    "one formula of everything means one job per suggestion, not one per free slot")
+        ok &= check(all(t["job_count"] == 1 for s in on["suggestions"] for t in s["chain_tiers"]),
+                    "each chain tier is held to its own formula too")
+        ok &= check(len(on["totals"]["formula_capped"]) > 0
+                    and all(s["formula_cap"] == 1 for s in on["suggestions"]
+                            if s["name"] in on["totals"]["formula_capped"]),
+                    "and the run says which products the formula count held down, so the UI can say why")
+
+        # The customer-order assign path, on the same evidence: one formula, one job installed.
+        product = _find_test_product(api)
+        if product is not None:
+            status, created = api.post("/api/reactions/orders", {
+                "type_id": product["type_id"], "target_qty": product["output_qty"] * 20,
+                "client_name": "Formula Cap"})
+            if check(status == 200, f"an order for 20x the batch creates (got {status})"):
+                oid = created["order"]["id"]
+                status, res = api.post(f"/api/reactions/orders/{oid}/assign", {})
+                ok &= check(status == 200, f"assigning it succeeds (got {status})")
+                jobs = [c["jobs"] for c in res.get("characters", [])]
+                ok &= check(jobs and all(j == 1 for j in jobs),
+                            f"the order commits ONE job per character, not one per free slot (got {jobs})")
+                api.post(f"/api/reactions/orders/{oid}/status", {"status": "cancelled"})
+    finally:
+        _clear_formula_evidence()
+        _set_feature_state("reactions_formula_cap", prev)
+    return ok
+
+
 def test_suggest_absorb_contract(api: Api) -> bool:
     """The suggestion engine caps each batch at a fraction (the "Market fill" slider, absorb_fraction)
     of the product's real traded volume over the run period. Assert the durable CONTRACT — the
@@ -589,6 +822,9 @@ def main() -> int:
             results.append(test_pricing_endpoints_live(api))
             results.append(test_suggest_absorb_contract(api))
             results.append(test_stock_zero_falls_back_to_market())
+            results.append(test_a_formula_is_one_reaction_at_a_time())
+            results.append(test_order_estimate_reflects_the_formula_cap(api))
+            results.append(test_suggest_and_assign_respect_the_formula_cap(api))
             _cleanup()
         except Exception as e:
             print(f"  SKIP live order-lifecycle test (no reachable app/DB/server: {e})")

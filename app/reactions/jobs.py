@@ -992,6 +992,91 @@ def _character_capacities(context_id: int) -> list[dict]:
     return result
 
 
+# ── Formula concurrency: a formula is an item, and it is LOCKED while a job runs on it ─────────
+# Slots were the only thing this package ever allocated against, so one Ferrofluid formula and ten
+# free reactors produced a plan telling the user to install ten parallel jobs they physically
+# cannot. The Industry scheduler has modelled exactly this for a while (schedule.py::_print_limits,
+# "one formula is one concurrent reaction however many reactor slots are free"); this is the same
+# cap, reading the same evidence, on the Reactions side.
+#
+# **Dependency direction: app/reactions -> app/industry, and only from inside a function.**
+# app/industry/slots.py deliberately does not import app.reactions to keep the packages acyclic;
+# the same discipline in this direction means the evidence layer is REUSED rather than
+# reimplemented (formula_print_floor already unions the personal blueprint cache, enabled asset
+# stock incl. corp scans and pastes, and distinct observed blueprint_ids, with a settled
+# precedence) without either package's module-import graph gaining an edge — the import happens at
+# call time, and a failure to import degrades to "no cap", which is the safe direction.
+
+def _formula_caps_on(context_id: int) -> bool:
+    """Gated: capping changes what gets suggested and what an assign commits, so it rolls out
+    rather than lands. Off ⇒ `formula_concurrency_caps` returns {} ⇒ the slot math is exactly what
+    it was."""
+    try:
+        from app.features import feature_enabled_for
+        return feature_enabled_for("reactions_formula_cap", context_id)
+    except Exception:
+        return False
+
+
+def formula_concurrency_caps(context_id: int) -> dict[int, int]:
+    """reaction product_type_id -> how many jobs of that product may run AT ONCE, for the products
+    we have evidence about. **A MISSING KEY MEANS UNKNOWN, and unknown never refuses** — the same
+    rule `_assigned_slot_capacity` follows, and the reason this returns a sparse map rather than a
+    number per product: a cap built on absent evidence blocks work the player can really do.
+
+    Three things make a key absent:
+
+      * the flag is off — {} outright, so nothing anywhere behaves differently;
+      * the account's blueprint picture is incomplete (`blueprint_coverage().complete` is false —
+        the scope is opt-in per character, so a partly-connected account's counts are a FLOOR, and
+        a floor read as a total serialises real work). Mirrors `BuildParams.prints_known`;
+      * that particular formula was never seen by any of the three evidence sources.
+
+    Concurrency only, per the evidence layer's own contract: an asset row and a job state no ME, no
+    TE and no remaining runs, and a formula has no ME/TE anyway (rig-based) and cannot be copied.
+
+    Nothing here is per-TIER: a chain's tiers run in sequence, so one formula legitimately serves
+    tier 0 and then tier 1. Callers apply the cap within a tier, never across tiers.
+    """
+    if not _formula_caps_on(context_id):
+        return {}
+    try:
+        from app.industry.blueprints import (
+            blueprint_coverage, formula_print_floor, owned_blueprints)
+        if not blueprint_coverage(context_id).get("complete"):
+            return {}
+        owned = owned_blueprints(context_id)
+        floor = formula_print_floor(context_id, owned)
+    except Exception:
+        return {}                       # evidence unavailable is evidence absent — never cap
+
+    con = get_connection()
+    try:
+        outputs = {r["output_type_id"] for r in con.execute(
+            "SELECT output_type_id FROM reactions")}
+    except Exception:
+        return {}
+    finally:
+        con.close()
+
+    caps: dict[int, int] = {}
+    for prod in (set(owned) | set(floor)) & outputs:
+        own = owned.get(prod) or {}
+        held = own.get("copies")
+        n_owned = (len(held) if held else 1) if own else 0
+        n_extra = int(floor.get(prod) or 0)       # already de-duplicated against `owned`
+        if not n_owned and not n_extra:
+            continue                              # unobserved — no key, no cap
+        caps[prod] = max(1, n_owned + n_extra)
+    return caps
+
+
+def _cap_jobs(cap: int | None, want: int) -> int:
+    """`want` jobs of one product at one moment, held to the formulas there are. No cap = no
+    change; a cap never takes the count below 1, since a tier at zero jobs cannot be installed."""
+    return max(1, min(want, cap)) if cap else want
+
+
 # ── Customer orders: committing a fixed order to real reaction slots ───────────────────────────
 
 def _fit_chain_slots(works: list[float], caps: list[int], budget: int) -> list[int]:
@@ -1054,14 +1139,25 @@ def _allocate_and_insert(context_id: int, type_id: int, name: str, node: dict, r
     and never by tier: a character either hosts the product and all of its intermediates, or takes
     no part in the order. Runs are shared out in proportion to free slots, because slots are what a
     character can actually turn into throughput.
+
+    **And a formula is one job at a time.** Slots are not the only limit: the print is a physical
+    item locked into the reactor for the job's duration, so a tier never gets more parallel jobs
+    than there are formulas of it (`formula_concurrency_caps` — flag-gated, and silent about
+    anything it has no evidence for). The cap is per PRODUCT and account-wide, not per character,
+    because that is what the item is, so it also bounds how many characters can host the order at
+    all: every host needs at least one job of every tier.
     """
     chars = [c for c in _character_capacities(context_id) if c["free_slots"] > 0]
     if not chars or runs_needed <= 0:
         return {"runs_assigned": 0, "characters": []}
 
     formula = node.get("via")
-    tier_count = len(_ordered_chain_tiers(formula["inputs"], runs_needed, reached)) if formula else 0
+    ordered_all = _ordered_chain_tiers(formula["inputs"], runs_needed, reached) if formula else []
+    tier_count = len(ordered_all)
     per_chain = tier_count + 1          # one slot per intermediate, plus the product itself
+    caps_by_type = formula_concurrency_caps(context_id)
+    chain_caps = {t: caps_by_type[t] for t in [tid for tid, _ in ordered_all] + [type_id]
+                  if caps_by_type.get(t)}
 
     hosts = sorted((c for c in chars if c["free_slots"] >= per_chain),
                     key=lambda c: -c["free_slots"])
@@ -1073,6 +1169,10 @@ def _allocate_and_insert(context_id: int, type_id: int, name: str, node: dict, r
     # A character can only take a share if there is at least one run in it for them, so a two-run
     # order never fragments across fourteen characters just because the slots exist.
     hosts = hosts[:max(1, min(len(hosts), runs_needed))]
+    # ...and each host runs the WHOLE chain, so it needs one formula of every tier for itself. The
+    # scarcest formula in the chain is therefore also the most characters this order can use.
+    if chain_caps:
+        hosts = hosts[:max(1, min(chain_caps.values()))]
 
     capacity = sum(h["free_slots"] for h in hosts)
     shares = [int(runs_needed * h["free_slots"] / capacity) for h in hosts]
@@ -1083,9 +1183,10 @@ def _allocate_and_insert(context_id: int, type_id: int, name: str, node: dict, r
     unit_cost = node.get("unit_cost", 0.0) + node.get("job_cost", 0.0)
     top_cycle_h = (node.get("cycle_time") or 0) / 3600.0
     placed: list[dict] = []
+    left = dict(chain_caps)             # formulas of each type still unspoken for, account-wide
     con = get_connection()
     try:
-        for host, share in zip(hosts, shares):
+        for idx, (host, share) in enumerate(zip(hosts, shares)):
             if share <= 0:
                 continue
             tiers = _ordered_chain_tiers(formula["inputs"], share, reached) if formula else []
@@ -1093,7 +1194,16 @@ def _allocate_and_insert(context_id: int, type_id: int, name: str, node: dict, r
             caps = [max(1, int(t["runs"])) for _, t in tiers]
             works.append(share * top_cycle_h)
             caps.append(share)
+            # Formulas left for this host, holding one of each back for every host still to come —
+            # a host that cannot install a tier at all cannot run its share of the chain.
+            after = len(hosts) - idx - 1
+            for i, tid in enumerate([t for t, _ in tiers] + [type_id]):
+                if tid in left:
+                    caps[i] = _cap_jobs(max(1, left[tid] - after), caps[i])
             slots = _fit_chain_slots(works, caps, host["free_slots"])
+            for i, tid in enumerate([t for t, _ in tiers] + [type_id]):
+                if tid in left:
+                    left[tid] = max(0, left[tid] - slots[i])
 
             for tier_order, (tid, info) in enumerate(tiers):
                 _insert_assignment_rows(con, host["character_id"], tid,

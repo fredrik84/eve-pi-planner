@@ -18,7 +18,7 @@ from app.reactions.graph import (
 )
 from app.reactions.jobs import (
     _character_capacities, ensure_reaction_orders_table, ensure_reaction_assignments_table,
-    _allocate_and_insert,
+    _allocate_and_insert, formula_concurrency_caps, _cap_jobs,
 )
 
 
@@ -34,7 +34,8 @@ def _order_report(context_id: int, order: dict) -> dict:
         return {
             "materials": [], "chain_tiers": [],
             "cost": {"material_cost": None, "job_cost": None, "total_cost": None, "cost_per_unit": None},
-            "time": {"tiers": [], "free_slots_now": 0, "estimated_hours": None, "caveat": None},
+            "time": {"tiers": [], "free_slots_now": 0, "estimated_hours": None, "caveat": None,
+                      "formula_capped": []},
             "stale": True,
         }
     goo, reached, reactions_by_output, inputs_by_reaction, types = loaded
@@ -70,17 +71,32 @@ def _order_report(context_id: int, order: dict) -> dict:
     # its own runs across however many free slots you have right now. An honest approximation,
     # not a guarantee (see the caveat text) — matches this tool's "advice, not a tool" convention
     # rather than presenting false precision.
+    # ...and a tier's runs only spread across as many jobs as it has FORMULAS: the print is locked
+    # into the reactor for the job, so free slots are not on their own what a tier can use. This is
+    # the number a customer gets quoted, so it has to be the same cap the assign path commits under
+    # (`_allocate_and_insert`) or the quote is for an installation the tool would refuse to make.
+    # Nothing known about a formula ⇒ no key ⇒ the estimate is exactly what it was.
     free_slots_now = sum(c["free_slots"] for c in _character_capacities(context_id))
+    caps = formula_concurrency_caps(context_id)
     sequence = chain_tiers + [{"type_id": order["type_id"], "name": order["name"], "runs": top_level_runs,
                                 "cycle_time": node.get("cycle_time")}]
     estimated_hours = 0.0
+    formula_capped: list[str] = []
     for tier in sequence:
         cycle_hours = (tier["cycle_time"] or 3600) / 3600.0
-        jobs_used = min(free_slots_now, tier["runs"]) or 1
+        cap = caps.get(tier["type_id"])
+        by_slots = min(free_slots_now, tier["runs"]) or 1
+        jobs_used = _cap_jobs(cap, by_slots)
+        if cap and cap < by_slots:
+            formula_capped.append(tier["name"])
+        tier["formula_cap"] = cap
         estimated_hours += math.ceil(tier["runs"] / jobs_used) * cycle_hours
 
     time_report = {
         "tiers": sequence, "free_slots_now": free_slots_now, "estimated_hours": round(estimated_hours, 1),
+        # Which steps are held below your free-slot count by how many formulas you hold — one line
+        # of "why", so an order quoted at ten times the obvious time doesn't read as a broken tool.
+        "formula_capped": formula_capped,
         "caveat": "Assumes your current free reaction slots stay free until each tier finishes, run in "
                   "sequence (each intermediate tier must finish before the next starts) — a rough "
                   "estimate, not a guarantee.",

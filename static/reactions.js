@@ -1120,7 +1120,14 @@ function _renderReactionsSuggestions(data) {
   const absorbNote = (t.absorb_fill_pct != null && t.absorb_fill_pct !== 50)
     ? `<div style="margin-bottom:10px;color:var(--clr-text-soft);font-size:0.9em">Market fill set to <b style="color:var(--clr-text-bright)">${t.absorb_fill_pct}%</b> of each product's weekly trade volume — <button type="button" onclick="_rxResetAbsorbFraction()" style="background:none;border:none;padding:0;font:inherit;color:var(--clr-accent);text-decoration:underline;cursor:pointer">back to default</button></div>`
     : '';
-  const budgetSummary = `<div class="pp-card-hint" style="margin-bottom:10px">${bindingNote}</div>${absorbNote}`;
+  // A formula is locked into the reactor while a job runs on it, so a product runs in as many jobs
+  // as you hold formulas — not as many as you have free slots. Say so, or 10 slots used as 1 reads
+  // as a broken tool.
+  const capped = t.formula_capped || [];
+  const formulaNote = capped.length
+    ? `<div class="pp-card-hint" style="margin-bottom:10px">${capped.length} step${capped.length === 1 ? '' : 's'} run in fewer jobs than your free slots allow — a formula is locked while a job runs on it, so ${_esc(capped.join(', '))} run${capped.length === 1 ? 's' : ''} on the formulas you hold.</div>`
+    : '';
+  const budgetSummary = `<div class="pp-card-hint" style="margin-bottom:10px">${bindingNote}</div>${absorbNote}${formulaNote}`;
 
   // Grouped by assigned character (each is "this character's job list"), not one flat table —
   // the engine already picks a character per suggestion based on free reaction slots; this
@@ -1902,6 +1909,7 @@ function _rxOrderReportBody(data) {
       <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Free slots now</span><b>${data.time.free_slots_now}</b></div>
     </div>
     <div class="pp-card-hint">${_esc(data.time.caveat || '')}</div>
+    ${(data.time.formula_capped || []).length ? `<div class="pp-card-hint">${_esc((data.time.formula_capped || []).join(', '))} can't use every free slot — a formula is locked while a job runs on it, so that step runs on the formulas you hold.</div>` : ''}
     ${chainNote}
 
     <details class="rx-order-materials" style="margin-top:14px">
