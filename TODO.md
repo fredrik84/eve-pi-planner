@@ -461,65 +461,46 @@ anything over a few seconds on a warm path as a regression worth tracing rather 
 
 ---
 
-## 10. Choose whether — and which — reactions the plan builds (DESIGN, 2026-08-04)
+## 10. Choose whether — and which — reactions the plan builds — SHIPPED 2026-08-05, behind `industry_reaction_policy`
 
-Reported from use: "a button to toggle if we build reactions or not, or decide to build certain
-categories of reactions." Today reactions go through make-or-buy like anything else, so a builder
-who simply doesn't run reactions has to blacklist each output by hand.
+Built as specified, per ACCOUNT (the open question, answered by the owner: a standing way of
+operating, like the blacklist — not per order). Two halves.
 
-**Where it applies: `resolve_unit_costs` (`app/industry/graph.py:317`), the same layer as
-`never_build_ids` — not at demand time.** That placement is already load-bearing and the reasoning
-is in the code: deciding to buy a component while still costing its parent as if it were built is
-what makes a total stop matching its own shopping list. Setting `decision = "buy"` there makes the
-whole subtree below it disappear on its own; there is nothing to prune by hand.
+**The rule.** `pp_industry_settings.reaction_policy`, a JSON `{build_reactions, buy_categories}`
+written by its own endpoint (`GET/POST /api/industry/reaction-policy`, `set_reaction_policy`) —
+deliberately not a field on the debounced settings PUT. Applied in `resolve_unit_costs` beside
+`never_build_ids`, so setting the DECISION is what makes the subtree below it vanish and what keeps
+the parent costed against what it will actually pay; nothing is pruned by hand. Categories live in
+the new shared `REACTION_CATEGORIES` (`app/industry/categories.py`) which the rig families in
+`structures.py` now read for their GROUP SETS while keeping their own rig labels — one curated map,
+two readers, not one idea welded to the other. The registry (labels + descriptions) is echoed to the
+frontend on every read and write; the UI hardcodes none of it. An uncategorisable reaction is BUILT,
+which is why "we don't run reactions at all" is its own switch rather than three ticks.
 
-**Categories: reuse the reaction group ids, do not invent a second taxonomy.** `RIG_FAMILIES` in
-`app/industry/structures.py` already carries curated, tested group sets for exactly the three
-reaction families — `composite` (groups 429, 428 — Composite + Intermediate moon materials),
-`hybrid_polymer` (974), `biochemical` (712, 20). **But extract them into a shared
-`REACTION_CATEGORIES` map first and have both read it.** That registry is currently keyed to
-*rigs*; the two meanings coincide today and there is no reason a rig family and a build-policy
-category must stay identical forever. One registry echoed to the frontend, same rule as
-`ALERT_KINDS` — the UI never hardcodes the labels.
+Precedence, most specific first: `build_reactions_anyway` (per order, `pp_industry_orders.
+build_reactions`, unioned across the queue exactly like `force_build_ids` since the queue builds one
+shared batch) → `force_build_ids` → this policy → `never_build_ids`. A reaction with no buy price is
+still built; a reaction you ORDERED is exempt from the policy in its own build. The rule reaches
+every plan path — checklist, sourcing list, customer share link — through
+`apply_account_build_options`.
 
-**Precedence, which must not fight the two controls already there.** Three layers, most specific
-wins, and the first two already behave this way:
-1. `force_build_ids` (per order, "build it anyway") — beats everything, unchanged.
-2. `never_build_ids` (per account, per type) — unchanged.
-3. **the new category policy** (per account, per family) — the bulk rule underneath both.
-Category and blacklist both resolve to "buy", so they cannot contradict each other; only `force`
-overrides, exactly as it does for the blacklist today. **A reaction with no buy price is still
-built** — the same carve-out the blacklist has, for the same reason: refusing to build what can't
-be bought leaves the plan no way to get one at all.
+**The price of the convenience.** `reaction_policy_report` on both plan builders, signed as *what
+BUILDING these would save*, which is the single figure that reads correctly in both directions:
+policy on → what buying them in added to this build; order overriding it → what reacting them saved.
+Rendered as one quiet row beside `_indMarginalBar` — a decision surface, not a notice, so nothing
+was added to the block trimmed on 2026-08-04 — with the per-family checkboxes folded behind the
+switch, a `not reacted` badge on the shopping row, and a `reacts` tag + checkbox on the order chip.
+Nothing in the wording touches the Reactions tab: an account can buy reaction outputs for its builds
+and still run a reaction business there.
 
-**Say what the convenience costs.** Buying reaction outputs instead of running them is the same
-shape of trade as the marginal-saving threshold, and CLAUDE.md's rule for that is explicit: report
-what the shortcut cost rather than quietly taking it. So the policy must surface the ISK delta
-(the `marginal_saving` machinery already computes this per row) — a builder quoting against a
-competitor needs to see that not reacting moved their floor.
+Both cheap checks came out clean: a reaction pool of zero plans fine (no reaction jobs, sane
+makespan — `test_a_reaction_pool_of_zero_still_plans`), and the default is byte-identical to the old
+plan (asserted by dict equality, not by eye). `test_industry.py` 711 → 763 checks, all green,
+plus `test_features.py` 17/17.
 
-**Storage + write path.** Additive column on `pp_industry_settings` (a JSON family-key array, plus
-the plain on/off which is just "all families off"). It needs **its own endpoint**, like
-`set_blacklist` — deliberately NOT a field on the debounced settings PUT, which is a save of the
-whole plan form and would carry a stale policy along with every knob move. That mistake is already
-documented for the blacklist; don't repeat it.
-
-**Ship behind a flag** (`industry_reaction_policy`), default all-families-on = today's behaviour
-exactly.
-
-**Two things to check before building, both cheap:**
-- **Reaction slots go idle.** With reactions off, the reaction pool contributes nothing and
-  `schedule` must still produce a sane plan from a pool of zero — the same path that already
-  renders a 0h makespan for an account with no Mass Reactions trained. Confirm it degrades rather
-  than divides by zero.
-- **Don't imply anything about the Reactions tab.** That is a separate feature with its own slot
-  planning; a builder may well turn reactions off *here* and still run them there. The wording has
-  to be about this build, not about their reaction business.
-
-**Open question for the user, not to be guessed:** is this per ACCOUNT (a standing way of
-operating, like the blacklist) or per ORDER (this customer's build is bought-in, the next one
-isn't)? Account-level is the smaller change and matches how the blacklist is framed; per-order is
-more expressive and would follow `force_build_ids`' storage pattern. Ask before building.
+Deliberately left out: no per-category ISK breakdown beyond the per-item list (the items carry it);
+no way to express "buy this family but only above N units", which would be a threshold and this is a
+standing rule.
 
 ---
 

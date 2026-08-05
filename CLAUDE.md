@@ -1339,6 +1339,36 @@ matching its own shopping list. Three precedence rules, all deliberate:
 Both shopping-list builders (`build_plan` and `plan_queue`) stamp `blacklisted` on the row, because
 a material bought under a standing rule otherwise looks like the engine got make-or-buy wrong.
 
+**Which reactions a build runs** (`industry_reaction_policy`). The blacklist one rung coarser: a
+builder who simply doesn't run reactions had to blacklist every output by hand. Stored per account
+in `pp_industry_settings.reaction_policy` (JSON `{build_reactions, buy_categories}`) with its **own
+write path** (`GET/POST /api/industry/reaction-policy`, `set_reaction_policy`) — not a field on the
+settings PUT, for the reason already written above. Applied in `resolve_unit_costs` beside
+`never_build_ids`, so the decision is what removes the subtree; nothing is pruned by hand.
+- **Categories are a registry, `REACTION_CATEGORIES` in `app/industry/categories.py`** — composite,
+  hybrid_polymer, biochemical, matched to a produced type by its SDE `group_id`. The rig families in
+  `structures.py` read the SAME group sets and keep their OWN labels: a rig family answers "does
+  this structure's rig apply to this job" and a category answers "does this account run this kind of
+  reaction". They agree today and needn't forever. Labels are served, never hardcoded in the UI
+  (same rule as `ALERT_KINDS`).
+- **A category may only speak for what it can identify.** An uncategorisable reaction (no group, or
+  a group in no category) is BUILT. That is why "we don't run reactions at all"
+  (`build_reactions: false`) is its own switch and not three ticks.
+- Precedence, most specific first: `build_reactions_anyway` (per order, `pp_industry_orders.
+  build_reactions`, unioned across the queue like `force_build_ids` because the queue builds one
+  shared batch) → `force_build_ids` → this policy → `never_build_ids`. All the bulk rules resolve to
+  "buy", so they cannot contradict each other. **A reaction with no buy price is still built**, and
+  **a reaction you ORDERED is never bought out of its own build** (`reaction_policy_exempt_ids`).
+- **It reports what it cost** (`reaction_policy_report`, on both plan builders). Signed as *what
+  BUILDING these would save*, which is the one figure that reads correctly in both directions:
+  policy in force → that is what buying them in added to this build; order overriding it → that is
+  what reacting them saved. Same rule as `marginal_saving`: report the shortcut, don't take it
+  quietly — a builder quoting against a competitor has to see that not reacting moved their floor.
+- **The control is a decision surface, not a notice**: one quiet row beside `_indMarginalBar`, never
+  in the trimmed `_indNotices` block, with the per-family detail folded behind the switch. It says
+  nothing about the **Reactions tab**, which is a separate feature with its own slot planning — an
+  account may buy reaction inputs for its builds here and still run a reaction business there.
+
 **Marking a job done by hand** (`pp_industry_manual_done`, `POST /api/industry/progress/done`).
 Progress inference is right most of the time and wrong in ways only the user can see: a batch built
 on a character that never granted the jobs scope, work done before the account was connected, a
