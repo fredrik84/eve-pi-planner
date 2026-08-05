@@ -268,6 +268,14 @@ FEATURE_REGISTRY = [
                     "cost. A single order can still be set to make its own.",
      # Testers, like every other Industry feature — this came from the builders using the tab.
      "default": False, "state": "testers"},
+    {"key": "industry_formulas_from_stock", "label": "Industry: count formulas in your hangars",
+     "group": "Industry",
+     "description": "Count reaction formulas found in your enabled stock sources (corp hangars, "
+                    "containers, pasted hangars) toward how many reactions of a product can run at "
+                    "once. ESI only reports PERSONAL blueprints, so formulas kept in a corp "
+                    "container were invisible and the plan scheduled parallel jobs off a formula "
+                    "you own one of. Concurrency only — an asset row states no ME, TE or runs.",
+     "default": False},
 ]
 GROUP_ORDER = ["Dashboard", "Setup Analysis", "Planner", "Planet DB", "Characters",
                "Notifications & Alerts", "Reactions", "Industry"]

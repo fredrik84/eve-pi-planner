@@ -178,6 +178,91 @@ def owned_blueprints(context_id: int) -> dict[int, dict]:
     return owned
 
 
+def stock_formula_prints(context_id: int, owned: dict[int, dict] | None = None) -> dict[int, int]:
+    """product_type_id -> how many EXTRA concurrent reactions the account's enabled stock proves,
+    on top of whatever `owned_blueprints()` already counted.
+
+    Why this exists: `pp_char_blueprints` is filled from `GET /characters/{id}/blueprints/`, which
+    returns PERSONAL blueprints only. A builder who keeps their formulas in a corp hangar container
+    has none of them there, so the print cap never fires and the plan schedules N parallel reactions
+    off one formula they own a single copy of. The formulas ARE visible in `pp_asset_stock` — from a
+    corp asset scan, or from a pasted hangar (the path every non-Director has).
+
+    **Concurrency only, and only for FORMULAS.** An asset row carries a type_id and a quantity and
+    nothing else — no ME, no TE, no remaining runs. For a reaction that is the whole truth anyway: a
+    formula has no ME/TE (rig-based) and cannot be copied, so the only thing owning one more of them
+    changes is how many jobs may run at once. A manufacturing BLUEPRINT in stock is deliberately NOT
+    counted here: its cap is entangled with run coverage and its ME/TE decides what the build costs,
+    so an asset row would have to invent both — and a plan that quietly credits an unknown-ME print
+    is worse than one that admits it can't see the print at all. Personal blueprints are already read
+    properly by ESI; the corp-hangar hole is a formula problem in practice.
+
+    **No double counting.** The two sources genuinely overlap: a personal asset scan and the
+    blueprint endpoint see the SAME items, so a formula in a character's own container is in both.
+    So the counts are bucketed by where the evidence came from and only then summed:
+
+      * personal (`char:*`-scoped sources) — the same population `pp_char_blueprints` describes, so
+        the two are reconciled with `max`, never added.
+      * corp scans and pastes — invisible to the personal scans, so they add to the personal figure.
+        Between themselves they are also reconciled with `max`: a paste exists because the corp
+        endpoint needs Director, so a paste and a corp scan are most likely the same hangar seen
+        twice, and adding them would double a box the builder owns one of.
+
+    Enabled sources only, like every other read of stock (see the module docstring in assets.py) —
+    a formula in a container the user hasn't ticked is not one they've said they will spend.
+    """
+    from app.industry.assets import ensure_asset_tables
+
+    ensure_asset_tables()
+    con = get_connection()
+    try:
+        try:
+            rx = {r["reaction_id"]: r["output_type_id"]
+                  for r in con.execute("SELECT reaction_id, output_type_id FROM reactions")}
+        except Exception:
+            return {}                       # a manufacturing-only SDE knows no formulas at all
+        if not rx:
+            return {}
+        rows = con.execute(
+            "SELECT COALESCE(src.scope,'') AS scope, src.key AS key, s.type_id AS type_id, "
+            "SUM(s.qty) AS q FROM pp_asset_stock s "
+            "JOIN pp_asset_sources src ON src.context_id = s.context_id AND src.key = s.key "
+            "WHERE s.context_id = ? AND src.enabled = 1 "
+            "GROUP BY COALESCE(src.scope,''), src.key, s.type_id",
+            (context_id,),
+        ).fetchall()
+    except Exception:
+        return {}
+    finally:
+        con.close()
+
+    buckets: dict[int, dict[str, int]] = {}
+    for r in rows:
+        prod = rx.get(int(r["type_id"]))
+        if not prod:
+            continue                        # not a reaction formula — see the docstring
+        scope, key = str(r["scope"] or ""), str(r["key"] or "")
+        if scope.startswith("char:") or key.startswith("char:") or key.startswith("cont:"):
+            bucket = "personal"
+        elif scope.startswith("corp:") or key.startswith("corp:"):
+            bucket = "corp"
+        else:
+            bucket = "paste"
+        b = buckets.setdefault(prod, {"personal": 0, "corp": 0, "paste": 0})
+        b[bucket] += max(0, int(float(r["q"] or 0)))
+
+    owned = owned or {}
+    out: dict[int, int] = {}
+    for prod, b in buckets.items():
+        own = owned.get(prod) or {}
+        held = own.get("copies")
+        seen_personally = len(held) if held else (1 if own else 0)
+        extra = max(0, b["personal"] - seen_personally) + max(b["corp"], b["paste"])
+        if extra > 0:
+            out[prod] = extra
+    return out
+
+
 def blueprint_coverage(context_id: int) -> dict:
     """{characters, cached, missing, complete} — how much of this account's blueprint holding we
     can see.

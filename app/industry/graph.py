@@ -86,6 +86,12 @@ class BuildParams:
     # know that (see `prints_known`). None = not stated, which is a hand-built params (a test, a
     # REPL) where `owned` IS the holding by construction.
     blueprint_coverage: dict | None = None
+    # product_type_id -> EXTRA concurrent reactions the account's ENABLED stock proves, over and
+    # above the copies in `owned` (app.industry.blueprints.stock_formula_prints, which does the
+    # de-duplication against the blueprint cache). A formula found in a hangar raises the print CAP
+    # and nothing else: an asset row has no ME, no TE and no runs, so it never reaches `owned`,
+    # `copies_for` or `me_te_for`. Empty = exactly the behaviour before stock was read at all.
+    stock_prints: dict = field(default_factory=dict)
     # ME/TE of the copy the plan would BUY (from the contract index) — what runs past the owned
     # copies are built at. Falls back to the global me_pct/te_pct when nothing is listed.
     buy_me_te: dict = field(default_factory=dict)
@@ -917,6 +923,16 @@ def resolve_build_params(context_id: int, me_pct: float, te_pct: float,
         coverage = blueprint_coverage(context_id)
     except Exception:
         owned, coverage = {}, {"characters": 0, "cached": 0, "missing": 0, "complete": False}
+    # Reaction formulas the account keeps in a hangar or container instead of a personal blueprint
+    # list. Same cap, different evidence — see stock_formula_prints for the de-duplication.
+    stock_prints: dict = {}
+    try:
+        from app.features import feature_enabled_for
+        if feature_enabled_for("industry_formulas_from_stock", context_id):
+            from app.industry.blueprints import stock_formula_prints
+            stock_prints = stock_formula_prints(context_id, owned)
+    except Exception:
+        stock_prints = {}
     # The per-product aggregate is a runs-weighted figure over the WHOLE holding, not the best copy:
     # crediting a 20-run batch with the ME of a 5-run copy under-states its materials. The per-JOB
     # value comes off the copies themselves (BuildParams.me_te_for / build_tasks). This map is only
@@ -930,7 +946,8 @@ def resolve_build_params(context_id: int, me_pct: float, te_pct: float,
         mfg_cost_index=fetch_system_cost_index(sid, "manufacturing"),
         rx_cost_index=fetch_system_cost_index(sid, "reaction"),
         facility_tax_pct=tax, me_by_product=me_by_product, owned=owned,
-        blueprint_coverage=coverage, build_system_id=sid, build_system_basis=basis,
+        blueprint_coverage=coverage, stock_prints=stock_prints,
+        build_system_id=sid, build_system_basis=basis,
         max_build_hours=max_build_hours,
         struct_material_mult=1.0 - struct_material_pct / 100.0,
         struct_time_mult=1.0 - struct_time_pct / 100.0,

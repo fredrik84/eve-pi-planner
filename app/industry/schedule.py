@@ -314,10 +314,17 @@ def _print_limits(params, tid: int, activity: str, runs: int) -> tuple[int | Non
         return None, False
     if activity != "manufacturing":
         own = (params.owned or {}).get(tid) or {}
-        if not own:
-            return None, False               # ownership unobserved — never cap on absent evidence
         held = own.get("copies")
-        return max(1, len(held) if held else 1), False
+        n_owned = (len(held) if held else 1) if own else 0
+        # Formulas the account keeps in a hangar rather than a personal blueprint list — a corp
+        # container is invisible to /characters/{id}/blueprints/ entirely. Already de-duplicated
+        # against `owned` (blueprints.stock_formula_prints), so this simply adds. It raises the
+        # CONCURRENCY cap and nothing else: no ME/TE, no run coverage, because an asset row states
+        # none of them.
+        n_stock = int((params.stock_prints or {}).get(tid) or 0)
+        if not n_owned and not n_stock:
+            return None, False               # ownership unobserved — never cap on absent evidence
+        return max(1, n_owned + n_stock), False
     copies = params.copies_for(tid, activity)
     acq = (params.bp_acquire or {}).get(tid) or {}
     buy_runs = int(acq.get("runs_per_copy") or 0)
