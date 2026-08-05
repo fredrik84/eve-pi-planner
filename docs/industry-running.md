@@ -2,6 +2,7 @@
 
 Executing a queued build and reporting it: what is done, where the materials are, and what the customer sees.
 Planning one: [industry-planning.md](industry-planning.md). Back to [CLAUDE.md](../CLAUDE.md).
+The whole flow in one place: [industry-workflow.md](industry-workflow.md).
 
 Find a section: `grep -n '^## ' docs/industry-running.md` and read from that line — this file is meant to be read in parts.
 

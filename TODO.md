@@ -11,50 +11,76 @@ Reviewed 2026-08-05.
 
 ---
 
-## 12. Describe the Industry workflow end to end (2026-08-05)
+## 14. Roll Industry out, or write down why not (2026-08-05)
 
-Industry has been extended a lot in a short time — make-or-buy overrides, an always-buy blacklist, a
-reaction policy, per-order sourcing and source sets, corp hangars, manual done-marks, print and
-formula caps, alliance-shared buildings, customer share links, onboarding — and each landed with its
-own design note in CLAUDE.md. What does NOT exist anywhere is the **whole flow in one place**: what
-the feature set supports, and how a builder is meant to work with it from "a customer asks for a
-Phoenix" through to "it is built and delivered".
+The audit's headline finding, and the one that reframes the rest. **All 15 Industry flags sit at
+`testers` on prod; none is public — including `industry` itself.** Against that, the PI side is 14
+of 17 public and Reactions is mixed. So the audience the manifesto names — any EVE player, casual to
+serious — has never used this service, and every casual-user property it was built to have (the
+facility presets that cost a build correctly, the wizard that can always be completed, the nudge
+instead of a gate) has only ever been verified against the builders who asked for the features.
 
-Wanted: a short summary plus a step-by-step of the intended workflow — the path a builder walks
-every time, which controls belong to which step, and which are the occasional ones behind it. Two
-audiences and they are different documents: the **user-facing** one (what the tab does and the order
-to use it in — candidate for the How-it-works page or onboarding) and the **developer-facing** one
-(a map of the modules and endpoints each step goes through, which CLAUDE.md's per-feature notes hang
-off).
+This is not a request to flip the flags. It is a request to decide which it is: a **known gap**
+holding the gate — and then name it, because it is the next thing to build — or **inertia**, in
+which case the ladder exists to be climbed and `industry` goes to `public` while the rest follow on
+their own merits.
 
-First step is a read of what is actually there rather than a write-up from memory: `app/industry/`
-is 22 modules, and parts of the intended path exist only as UI ordering in `static/industry.js`.
-Worth doing before the next feature, because "does this add a step to the path a builder walks every
-time" is the design test everything here is supposed to meet, and right now that path isn't written
-down.
+First step: pick one. Everything else in the Industry backlog is second-order to it.
 
-## 13. A manifesto per service — what PI, Reactions and Industry are FOR (2026-08-05)
+## 15. `industry_per_order_plans` should not sit at `testers` half-landed (2026-08-05)
 
-Companion to item 12, and it comes first when the audit runs: item 12 describes what the Industry
-flow *is*, this one states what each service is *for*, so the audit has something to measure
-against. Without it "is this up to code" has no code to be up to.
+The flag's own description states its purpose: *a job outputs to exactly ONE container, so a batch
+shared between two builds has nowhere to deliver — this is what lets a builder run a container per
+customer.* Container-as-output is not modelled (2f-residual #1), and the setting has no UI
+(2f-residual #3, with `available` already sitting in the read response for a frontend nobody wrote).
 
-The repo already carries the house style — minimize planet interactions, automate the math or drop
-the feature, the best UI is read-only, effort is the constraint the other goals fit inside, does
-this add a step to the path a builder walks every time — but those are cross-cutting *rules*. What
-is missing is, per service: **its purpose, the end state it is aiming at, and the path from where it
-is now to there.**
+So what is rolled out to testers today is the half that **costs money** — planning apart is +2.45%
+net on a 2× Archon, +0.96% on a Phoenix queue, measured — without the capability that spends it.
+The compare endpoint is the manifesto's rule followed exactly (put the number on it before the
+switch); the problem is the rung, not the design.
 
-- **PI planner** — one target, one plan, least interaction per ISK.
-- **Reactions** — a slot business; what the tool decides for the user and what it deliberately
-  leaves to them.
-- **Industry** — lowest net cost and fastest delivery, inside the effort constraint (half written
-  already, at the top of CLAUDE.md).
+Two acceptable outcomes, no third: land 2f-residual #1 and #3 together and keep it at `testers`, or
+drop the flag to `hidden` until they land.
 
-Wanted: a short manifesto for each — purpose, target state, honest gap — written so the item-12
-audit can score against it feature by feature: does this serve the stated goal, does it cost more
-effort than it removes, and if not, does it come out. It is also what to hold a NEW feature against
-before building it, which is the cheaper end of the same test.
+## 16. Remove the dead Industry surface (2026-08-05)
+
+Three things are maintained with no caller. One commit, no behaviour change:
+
+- **`app/industry/advisor.py` + `industry_skill_advisor` + `/api/industry/skill-advisor`.** The
+  rendering was removed on purpose (`industry.js:63` — training advice is not about THIS build, and
+  a card telling a character to start Industry I is not what somebody checking on a running build
+  came for). That reasoning is right; the conclusion left 255 lines, an endpoint and a flag behind
+  it. Delete it, or give it a home where training advice belongs — which is not the build page. The
+  PI half (`skill_roi_for`) is already shared and unaffected either way.
+- **`/api/industry/to-install`.** Superseded by the inline `install` block that rides along with
+  `queue-plan`.
+- **`/api/industry/skill-coverage`.** No caller; `analyze_plan_skills` is called directly by both
+  plan paths.
+
+Per [docs/manifesto.md](docs/manifesto.md), residue is removable rather than backlog — the point of
+this item is to actually remove it.
+
+## 17. Stock sources have four surfaces (2026-08-05, low)
+
+One concept — *which boxes may this build spend* — is expressed in the plan modal's "Materials
+from", the sourcing panel's "Pulling from", Setup → Stock on hand's tick list, and saved source
+sets, under **two** ownership models that coexist behind `industry_plan_sources` (account-wide tick
+list vs. a build owning its boxes). `plan_source_keys` exists solely to reconcile them per request.
+
+Altitude, not correctness — every surface is individually justified and the feature is right. Worth
+scoping only once `industry_plan_sources` settles which ownership model wins, since that decision
+removes one of the two on its own.
+
+## 12-residual. The user-facing workflow has no home in the product (2026-08-05)
+
+Item 12 shipped as two documents (see Shipped). The user-facing one was written as "a candidate for
+the How-it-works page or onboarding" and is still only a doc — which is one of the audit's own
+findings: **nothing in the product states the path.** The How-it-works page is Planetary Industry
+only (one mention of "Planetary Industry", none of manufacturing or reactions), and the Industry
+onboarding covers setup and stops. Steps 1-9 exist nowhere a user can read them.
+
+Blocked behind item 14 rather than open: writing the tab's workflow into a page for an audience that
+cannot open the tab is work in the wrong order. Pick the rung first.
 
 ## 2f-residual. A job's output container, and prints across orders (2026-08-05)
 
@@ -71,6 +97,12 @@ Per-order planning shipped (see Shipped below) and these three are what it delib
 3. **No UI.** The account setting and `/api/industry/queue-plan/compare` are endpoints only; nothing
    on the build page offers either. Deliberate — the measured cost of splitting was the gate on
    going further, and it is now known (+2.45% net on a 2× Archon, +0.96% on a Phoenix queue).
+
+**#1 and #3 are one piece of work, not two.** The 2026-08-05 audit made the link explicit: #3's
+flag (`industry_per_order_plans`) exists *because* of #1 — a job outputs to exactly one container,
+so a shared batch has nowhere to deliver — which means the flag currently ships the half that costs
+ISK without the half that justifies it. Do them together, or neither; see item 15 for the rung
+decision in the meantime.
 
 ## 2e-residual. No browser tests for any frontend behaviour (2026-08-03)
 
@@ -112,6 +144,9 @@ match any template we generate) is still unscoped.
 | 9 | A container names the SYSTEM it is in, and a build may source from several (`industry_plan_sources`) | 08-04 |
 | 10 | Choose whether — and which — reactions a plan builds (`industry_reaction_policy`) | 08-05 |
 | 11 | A reaction formula is an item too: concurrency capped by formulas held; unknown ownership never serialises | 08-04 |
+| 12 | The Industry flow end to end, twice: `docs/industry-workflow.md` (nine steps + the module/endpoint/table map) and `docs/industry-workflow-user.md` (the same path for the user). Written from a read of the 22 modules and `static/industry.js`, not from memory; the judgement-bearing half is fenced under Observations. UI home still open — see 12-residual | 08-05 |
+| 13 | `docs/manifesto.md` — purpose, target state and honest gap for PI (an end state), Reactions (a business in its own right) and Industry (a direction), plus the five questions a feature is scored against and what a failing score means | 08-05 |
+| — | `docs/industry-audit-2026-08.md` — item 12 re-run against the manifesto: the every-time path cleared, `industry_per_order_plans` and `industry_skill_advisor` failed, two dead routes found, and the live flag read that corrected two of the pass-1 claims | 08-05 |
 | — | Alliance-shared build structures as suggestions (`industry_group_structures`) | 08-05 |
 
 ---

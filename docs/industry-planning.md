@@ -2,6 +2,7 @@
 
 Deciding what to build vs buy, what it costs, when it lands and what to quote. Everything behind the `industry` flag up to the moment a build starts.
 Running one: [industry-running.md](industry-running.md). Back to [CLAUDE.md](../CLAUDE.md).
+The whole flow in one place: [industry-workflow.md](industry-workflow.md).
 
 Find a section: `grep -n '^## ' docs/industry-planning.md` and read from that line — this file is meant to be read in parts.
 

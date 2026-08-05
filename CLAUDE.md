@@ -8,11 +8,15 @@ feature. Everything else lives in `docs/`, split by service. Open only the one y
 
 | File | Read it when |
 | --- | --- |
+| [docs/manifesto.md](docs/manifesto.md) | **what each service is FOR** — purpose, target state, honest gap, and the questions a feature is scored against. Read before proposing or removing one |
 | [docs/code-layout.md](docs/code-layout.md) | adding a route or module, or finding where something lives |
 | [docs/pi.md](docs/pi.md) | the PI planner: planning algorithm, colony simulation, Setup Analysis advice, alerts, fuel blocks |
 | [docs/reactions.md](docs/reactions.md) | the Reactions tool: the advisor, and how reaction goods must be priced |
 | [docs/industry-planning.md](docs/industry-planning.md) | Industry up to the moment a build starts: make-or-buy, blueprints, scheduling, quoting |
 | [docs/industry-running.md](docs/industry-running.md) | Industry after it starts: progress, sourcing, corp hangars, customer status links |
+| [docs/industry-workflow.md](docs/industry-workflow.md) | the whole Industry flow end to end: the nine steps a builder walks, and the module/endpoint/table map behind each |
+| [docs/industry-workflow-user.md](docs/industry-workflow-user.md) | the same flow written for the user — what the tab does and the order to use it in |
+| [docs/industry-audit-2026-08.md](docs/industry-audit-2026-08.md) | the Industry feature set scored against the manifesto — verdicts, removal candidates, live flag states |
 | [docs/industry-planner-spec.md](docs/industry-planner-spec.md) | the Industry planner's original spec |
 | [docs/platform.md](docs/platform.md) | admin, accounts, notifications, market pricing, mobile |
 | [TODO.md](TODO.md) | **source of truth for open work** and closed-with-reasoning verdicts — read before proposing anything |
