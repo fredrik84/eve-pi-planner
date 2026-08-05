@@ -11,6 +11,65 @@ Reviewed 2026-08-05.
 
 ---
 
+## 18. Is all of this too complicated? — storage shape and precomputation (2026-08-05, LARGE)
+
+A step back from feature work: **have we ended up doing this the hard way?** Two halves, and they
+are related only in that both are about paying repeatedly for something that could be paid for once.
+
+**Half A — storage shape.** The account's configuration is spread across a lot of typed columns in a
+lot of tables. There are ~62 `pp_*` tables, of which the settings-shaped ones alone include
+`pp_industry_settings`, `pp_reaction_settings`, `pp_account_reaction_settings`, `pp_alert_settings`,
+`pp_notification_prefs`, `pp_notification_settings`, `pp_market_config`, `pp_job_config`,
+`pp_plan_config` and `pp_source_sets`. The proposition to test: **the default configuration should be
+a simple keyed blob** — one readable, serialisable object per account — rather than a column per
+setting spread over a table per feature.
+
+**This partly reopens a Closed item, deliberately and with new evidence.** "Per-account settings
+consolidation (`settings_store.py`)" was closed **Won't do** on 2026-07-30, and its reasoning still
+has to be answered rather than ignored: the duplication is the cheap part (~60-80 lines of upsert),
+*validation* dominates the handlers and survives any scheme, 2 of 7 tables weren't settings rows at
+all, and a JSON blob trades typed columns against this repo's additive-migration convention. What has
+changed since:
+
+1. **A worked example exists.** A tester supplied a real ravworks config export — one flat keyed JSON
+   object carrying structures, rigs, declared slots and skills, per-category build allocation,
+   job-length settings, blacklists and tax, with a `cookie_version` for versioning. It is shared
+   alliance-wide and it works. See [docs/tester-feedback-2026-08.md](docs/tester-feedback-2026-08.md).
+2. **Export/import is now wanted** (T13). The July verdict never considered serialisation; a config
+   that must leave the account and come back changes the blob from a tidiness question into a
+   load-bearing one.
+3. **The settings surface is about to grow a lot.** Manual structures, manual blueprints, declared
+   slots, a job-length policy and per-category build sites are all planned. "Prod holds only 10 rows
+   total" was the July calculus and it is about to stop being true.
+
+**Half B — precomputation.** How much of what a page load costs is recomputed every time for an
+answer that did not change? There is prior art in both directions and the audit must read it before
+proposing anything: `docs/industry-planning.md` ("Industry performance: one plan per page load" — the
+graph cache, the inline install/progress blocks, the sessionStorage plan cache) shows real wins
+already taken, and the Closed entry "Frontend CPU offload, phase 3" records an investigation that
+found the hotspot was *cacheable server-side*, not a JS-offload candidate. The open question is what
+is left: which reads rebuild a graph, re-resolve prices, or re-plan a queue to answer something that
+could have been precomputed, and where the invalidation boundary honestly sits.
+
+**First step is measurement, not restructuring.** The one thing that would make this item go wrong is
+adopting the blob because it sounds simpler. Before any schema is touched:
+
+1. Instrument a real page load on prod, per service, and record where the time and the queries
+   actually go. Use the in-process prod debugging path in CLAUDE.md rather than reasoning from the
+   code.
+2. Count the true settings surface — which tables are genuinely per-account configuration, which are
+   ledgers, caches or shared data that must NOT move into a blob (the July verdict's "2 of 7" point,
+   re-counted against today's schema).
+3. Answer the July objections explicitly: where does validation live under a blob, and what replaces
+   an additive `ALTER` when a field's meaning changes.
+4. Only then propose a shape — and it may legitimately come back "the storage is fine, the
+   precomputation isn't", or the reverse.
+
+Worth noting as evidence for the audit rather than as separate items: the schema carries visible
+accretion — `pp_baskets_old`, `pp_profiles_new`, `pp_session` alongside `pp_sessions`,
+`pp_characters_context`, and two pairs of near-identically-named settings tables. Whatever the
+verdict on the blob, that is worth a pass on its own.
+
 ## 14. Roll Industry out, or write down why not (2026-08-05)
 
 The audit's headline finding, and the one that reframes the rest. **All 15 Industry flags sit at
@@ -156,7 +215,7 @@ match any template we generate) is still unscoped.
 | Item | Verdict |
 |---|---|
 | Layout engine: intermediate storage facilities + simulated CPU/PG fit | **Won't build** (2026-08-05). Both were documented gaps for months with no demand signal: the generator routes intermediates tier-to-tier instead of buffering them through storage, and `compute_resources` estimates the fit from idealised pin coordinates. `FIT_HEADROOM = 0.10` exists precisely so the estimate need not be exact — it leaves ~10% of both budgets free so a template that fits on paper fits in the client. Reopen if an exported template is actually rejected in-game, which is the evidence neither gap has ever produced. |
-| Per-account settings consolidation (`settings_store.py`) | **Won't do** (2026-07-30). The duplication is the cheap part (~60-80 lines of upsert); validation, which dominates the handlers, survives any scheme. 2 of 7 tables aren't settings rows at all. Trades typed columns for a JSON blob against this repo's additive-migration convention. Prod holds only 10 rows total, so the old "too risky" framing was wrong — it's low *value*, not high risk. |
+| Per-account settings consolidation (`settings_store.py`) | **Won't do** (2026-07-30). The duplication is the cheap part (~60-80 lines of upsert); validation, which dominates the handlers, survives any scheme. 2 of 7 tables aren't settings rows at all. Trades typed columns for a JSON blob against this repo's additive-migration convention. Prod holds only 10 rows total, so the old "too risky" framing was wrong — it's low *value*, not high risk. **Partly reopened 2026-08-05 as item 18** on new evidence (a working keyed-blob config from ravworks, export/import now wanted, and a settings surface about to grow) — the objections above are what that audit has to answer, not skip. |
 | Distribution "lever 1 — cross-character rich-planet reuse" | **Wrong lever, not unfinished work.** Per-character planet-pick shipped (`db56e2e`, `_waterfill_new_slots` regret heuristic). The residual "thin planets" symptom is lever 2 over-allocating, governed by the **min-density cap**, plus genuine data constraints (a P0 with one planet in-system). |
 | P1 extractor→factory routing | **Won't build** (2026-07-08). Workflow is pooled and P1 is fungible once extracted; routing would impose a fake point-to-point constraint. Revisit only if actual point-to-point hauling automation is described. |
 | Frontend CPU offload, phase 3 | **Rejected for now**, not deferred — the investigation found the real hotspot was cacheable server-side (already done), not a JS-offload candidate. Reasoning trail is in the project notes; don't redo it. |
