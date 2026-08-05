@@ -1166,6 +1166,7 @@ _CHAR_OWNED_TABLES = [
     "pp_char_blueprints",
     "pp_char_industry_jobs",
     "pp_char_manufacturing_jobs",
+    "pp_char_formula_jobs",
     "pp_colony_flags",
     "pp_colony_yield",
     "pp_plan_config",

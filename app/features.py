@@ -271,10 +271,12 @@ FEATURE_REGISTRY = [
     {"key": "industry_formulas_from_stock", "label": "Industry: count formulas in your hangars",
      "group": "Industry",
      "description": "Count reaction formulas found in your enabled stock sources (corp hangars, "
-                    "containers, pasted hangars) toward how many reactions of a product can run at "
-                    "once. ESI only reports PERSONAL blueprints, so formulas kept in a corp "
-                    "container were invisible and the plan scheduled parallel jobs off a formula "
-                    "you own one of. Concurrency only — an asset row states no ME, TE or runs.",
+                    "containers, pasted hangars) — and the formulas your own industry jobs were "
+                    "installed on — toward how many reactions of a product can run at once. ESI "
+                    "only reports PERSONAL blueprints, so formulas kept in a corp container were "
+                    "invisible and the plan scheduled parallel jobs off a formula you own one of. "
+                    "A pasted hangar wins for the formulas it names. Concurrency only — neither an "
+                    "asset row nor a job states ME, TE or runs.",
      "default": False},
 ]
 GROUP_ORDER = ["Dashboard", "Setup Analysis", "Planner", "Planet DB", "Characters",

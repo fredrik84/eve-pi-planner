@@ -46,7 +46,7 @@ REQUIRED = [
     "pp_planets", "pp_planet_submissions", "pp_bugs", "pp_features", "pp_groups",
     "pp_baskets", "pp_basket_items", "pp_char_planets",
     "pp_industry_settings", "pp_industry_orders", "pp_industry_shares",
-    "pp_industry_completions", "pp_char_manufacturing_jobs",
+    "pp_industry_completions", "pp_char_manufacturing_jobs", "pp_char_formula_jobs",
     "pp_reaction_orders", "pp_reaction_assignments", "pp_reaction_completions",
     "pp_char_industry_jobs", "pp_markets", "pp_market_config",
     "pp_notification_settings", "pp_alert_settings", "pp_moon_goo_prices",

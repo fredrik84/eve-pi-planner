@@ -62,6 +62,14 @@ def fetch_manufacturing_jobs(character_id: int, access_token: str) -> list[dict]
             "blueprint_type_id": j.get("blueprint_type_id"), "runs": j.get("runs"),
             "status": j.get("status"), "start_date": j.get("start_date"),
             "end_date": j.get("end_date"),
+            # `blueprint_id` is the id of the SPECIFIC PHYSICAL print the job is installed on, and
+            # `blueprint_location_id` is where that item lives — including a corp hangar no asset or
+            # blueprint endpoint will ever show a non-Director. Distinct blueprint_ids for one
+            # blueprint_type_id are measured evidence of how many prints are really held; see
+            # blueprints.observed_formula_prints. Inert for the slot math here (nothing reads them),
+            # kept because dropping them threw the only view of a corp-held print on the floor.
+            "blueprint_id": j.get("blueprint_id"),
+            "blueprint_location_id": j.get("blueprint_location_id"),
         }
         for j in jobs if j.get("activity_id") == MANUFACTURING_ACTIVITY_ID
     ]
@@ -70,11 +78,40 @@ def fetch_manufacturing_jobs(character_id: int, access_token: str) -> list[dict]
 @router.post("/api/industry/jobs/refresh")
 def refresh_manufacturing_jobs(context_id: int = Depends(require_context)):
     """Re-read manufacturing jobs from ESI for the caller's characters that granted the industry
-    jobs scope. Best-effort per character."""
+    jobs scope. Best-effort per character.
+
+    The same pass also refreshes the reaction-formula job HISTORY (`pp_char_formula_jobs`), which
+    rides the identical scope and is the only way a formula kept in a corp hangar is ever seen by a
+    non-Director — see blueprints.fetch_formula_job_prints for why it is a separate fetch and table
+    rather than `include_completed` on a cache the slot math counts rows in. Its failure is not this
+    endpoint's failure: the manufacturing result is reported unchanged.
+    """
     ensure_manufacturing_jobs_table()
-    return refresh_character_cache(
+    out = refresh_character_cache(
         context_id, scope=INDUSTRY_JOBS_SCOPE, table="pp_char_manufacturing_jobs",
         column="jobs_json", fetch=fetch_manufacturing_jobs)
+    try:
+        from app.industry.blueprints import (ensure_formula_job_prints_table,
+                                             fetch_formula_job_prints)
+        ensure_formula_job_prints_table()
+        con = get_connection()
+        try:
+            # Read the scopes up front and CLOSE — refresh_character_cache holds its connection open
+            # across the ESI calls, so the fetcher must never open a second one (the 2026-07-13
+            # pool-exhaustion pattern). The corp-jobs scope decides whether the corp endpoint is
+            # worth asking at all.
+            scopes = {r["character_id"]: (r["scopes"] or "") for r in con.execute(
+                "SELECT character_id, scopes FROM pp_characters WHERE context_id=?", (context_id,))}
+        finally:
+            con.close()
+        formulas = refresh_character_cache(
+            context_id, scope=INDUSTRY_JOBS_SCOPE, table="pp_char_formula_jobs",
+            column="prints_json",
+            fetch=lambda cid, tok: fetch_formula_job_prints(cid, tok, scopes.get(cid, "")))
+        out = {**out, "formula_history_refreshed": formulas["refreshed"]}
+    except Exception:
+        pass
+    return out
 
 
 def _occupying(jobs: list[dict]) -> int:

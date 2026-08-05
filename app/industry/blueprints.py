@@ -15,7 +15,7 @@ from fastapi import Depends
 
 from app.sde import get_connection, ensure_once
 from app import esi_http
-from app.esi import require_context, BLUEPRINTS_SCOPE
+from app.esi import require_context, BLUEPRINTS_SCOPE, CORP_INDUSTRY_JOBS_SCOPE
 
 from app.industry._router import router
 from app.industry.char_cache import refresh_character_cache
@@ -178,6 +178,62 @@ def owned_blueprints(context_id: int) -> dict[int, dict]:
     return owned
 
 
+def _formula_stock_buckets(context_id: int) -> dict[int, dict[str, int]]:
+    """product_type_id -> {personal, corp, paste}: formula counts in ENABLED stock, bucketed by
+    where the evidence came from. Split out of `stock_formula_prints` so the job-observation floor
+    (`formula_print_floor`) can apply its own precedence to the same buckets rather than re-deriving
+    them — the paste bucket in particular has to be recognisable, since a paste overrides.
+    """
+    from app.industry.assets import ensure_asset_tables
+
+    ensure_asset_tables()
+    con = get_connection()
+    try:
+        try:
+            rx = {r["reaction_id"]: r["output_type_id"]
+                  for r in con.execute("SELECT reaction_id, output_type_id FROM reactions")}
+        except Exception:
+            return {}                       # a manufacturing-only SDE knows no formulas at all
+        if not rx:
+            return {}
+        rows = con.execute(
+            "SELECT COALESCE(src.scope,'') AS scope, src.key AS key, s.type_id AS type_id, "
+            "SUM(s.qty) AS q FROM pp_asset_stock s "
+            "JOIN pp_asset_sources src ON src.context_id = s.context_id AND src.key = s.key "
+            "WHERE s.context_id = ? AND src.enabled = 1 "
+            "GROUP BY COALESCE(src.scope,''), src.key, s.type_id",
+            (context_id,),
+        ).fetchall()
+    except Exception:
+        return {}
+    finally:
+        con.close()
+
+    buckets: dict[int, dict[str, int]] = {}
+    for r in rows:
+        prod = rx.get(int(r["type_id"]))
+        if not prod:
+            continue                        # not a reaction formula — see stock_formula_prints
+        scope, key = str(r["scope"] or ""), str(r["key"] or "")
+        if scope.startswith("char:") or key.startswith("char:") or key.startswith("cont:"):
+            bucket = "personal"
+        elif scope.startswith("corp:") or key.startswith("corp:"):
+            bucket = "corp"
+        else:
+            bucket = "paste"
+        b = buckets.setdefault(prod, {"personal": 0, "corp": 0, "paste": 0})
+        b[bucket] += max(0, int(float(r["q"] or 0)))
+    return buckets
+
+
+def _seen_personally(owned: dict[int, dict] | None, prod: int) -> int:
+    """How many prints of `prod` the personal blueprint endpoint already reported — the figure
+    `_print_limits` starts from, so every "extra" in this module means extra *over this*."""
+    own = (owned or {}).get(prod) or {}
+    held = own.get("copies")
+    return len(held) if held else (1 if own else 0)
+
+
 def stock_formula_prints(context_id: int, owned: dict[int, dict] | None = None) -> dict[int, int]:
     """product_type_id -> how many EXTRA concurrent reactions the account's enabled stock proves,
     on top of whatever `owned_blueprints()` already counted.
@@ -211,53 +267,194 @@ def stock_formula_prints(context_id: int, owned: dict[int, dict] | None = None) 
     Enabled sources only, like every other read of stock (see the module docstring in assets.py) —
     a formula in a container the user hasn't ticked is not one they've said they will spend.
     """
-    from app.industry.assets import ensure_asset_tables
+    out: dict[int, int] = {}
+    for prod, b in _formula_stock_buckets(context_id).items():
+        extra = _stock_extra(b, _seen_personally(owned, prod))
+        if extra > 0:
+            out[prod] = extra
+    return out
 
-    ensure_asset_tables()
+
+def _stock_extra(b: dict[str, int], seen_personally: int) -> int:
+    """The EXTRA prints one product's stock buckets prove over the personal blueprint list."""
+    return max(0, b["personal"] - seen_personally) + max(b["corp"], b["paste"])
+
+
+# ── Formulas observed in real industry jobs ────────────────────────────────────────────────────
+# The third evidence source, and the only one that works for the case both others miss: a builder
+# who keeps their formulas in a CORP HANGAR and is not a Director can never be answered by
+# `/corporations/{id}/assets/` or `/corporations/{id}/blueprints/`. But every industry job names the
+# print it runs on — `blueprint_id` is the id of that SPECIFIC PHYSICAL item — and the two job
+# endpoints they already grant are readable without Director:
+#
+#   GET /characters/{id}/industry/jobs/    esi-industry.read_character_jobs.v1, no corp role
+#   GET /corporations/{id}/industry/jobs/  esi-industry.read_corporation_jobs.v1, Factory_Manager
+#
+# So N distinct blueprint_ids sharing one blueprint_type_id is MEASURED evidence of N physical
+# formulas — wherever they live.
+#
+# **A FLOOR, never a cap.** A formula that has simply not been used is invisible here, so an
+# observation may only ever RAISE the concurrency number. Reading it as a ceiling would serialise
+# work the builder can really do, which is the exact failure "unknown never serialises" guards
+# against. Concurrency only: a job says nothing about the print's ME, TE or remaining runs.
+
+_REACTION_ACTIVITY_ID = 9      # same value as app.reactions.jobs.REACTION_ACTIVITY_ID; app/industry
+                               # deliberately does not import app/reactions (see jobs.py's header)
+
+
+@ensure_once
+def ensure_formula_job_prints_table():
+    con = get_connection()
+    try:
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS pp_char_formula_jobs (
+                character_id INTEGER PRIMARY KEY,
+                prints_json  TEXT NOT NULL DEFAULT '[]',
+                fetched_at   REAL
+            )
+        """)
+        con.commit()
+    finally:
+        con.close()
+
+
+def fetch_formula_job_prints(character_id: int, access_token: str,
+                             scopes: str = "") -> list[dict] | None:
+    """Every reaction job this character has installed, INCLUDING FINISHED ONES, reduced to the
+    print that ran it: `{blueprint_id, blueprint_type_id, blueprint_location_id}`.
+
+    **Why this is a separate fetch and a separate table, and why `app/reactions/jobs.py` was left
+    alone.** `fetch_industry_jobs` there feeds the SLOT CAPACITY math — `_character_capacities`,
+    `running_counts`, every free-slot count on the Reactions tab and the Industry checklist — all of
+    which COUNT ROWS in that cache. Adding `include_completed=true` to it would silently fold a
+    year of finished jobs into "running" and destroy free-slot math everywhere at once. History is
+    therefore fetched by its own path into its own table, and the rows here carry no `status`,
+    `runs` or dates at all, so nothing that counts occupancy could consume them even by accident.
+
+    Corp jobs are included when the character granted the corp-jobs scope: a job installed FOR
+    CORPORATION never appears on the personal endpoint, and that is precisely the shape the
+    corp-hangar builder's work has. Best-effort — a missing role, no corp or a network failure
+    contributes nothing rather than failing the whole fetch. Returns None only if the PERSONAL call
+    failed, so a bad fetch never wipes a good cache.
+    """
+    out: dict[int, dict] = {}
+
+    def _absorb(jobs):
+        for j in jobs:
+            if j.get("activity_id") != _REACTION_ACTIVITY_ID:
+                continue
+            bid = j.get("blueprint_id")
+            if not bid:
+                continue                    # no physical print named — no evidence to record
+            out[int(bid)] = {"blueprint_id": int(bid),
+                             "blueprint_type_id": j.get("blueprint_type_id"),
+                             "blueprint_location_id": j.get("blueprint_location_id")}
+
+    try:
+        with esi_http.client(timeout=15) as client:
+            r = esi_http.get(f"characters/{character_id}/industry/jobs/", client=client,
+                             token=access_token, params={"include_completed": "true"})
+            r.raise_for_status()
+            _absorb(r.json())
+            if CORP_INDUSTRY_JOBS_SCOPE in (scopes or ""):
+                try:
+                    pub = esi_http.get(f"characters/{character_id}/", client=client).json()
+                    corp_id = pub.get("corporation_id")
+                    if corp_id:
+                        cr = esi_http.get(f"corporations/{corp_id}/industry/jobs/", client=client,
+                                          token=access_token,
+                                          params={"include_completed": "true"})
+                        cr.raise_for_status()
+                        # Only THIS character's own installs: the response is the whole corp's queue,
+                        # and a corpmate's formula is not one this account can run a job on.
+                        _absorb([j for j in cr.json() if j.get("installer_id") == character_id])
+                except Exception:
+                    pass
+    except Exception:
+        return None
+    return list(out.values())
+
+
+def observed_formula_prints(context_id: int) -> dict[int, int]:
+    """product_type_id -> how many DISTINCT physical formulas this account has been observed
+    running jobs on. A total, not an extra — the same print can be seen by several sources, so the
+    ids are unioned before they are counted.
+
+    Two caches feed it: the job-history table above, and the Reactions tab's live job cache
+    (`pp_char_industry_jobs`), which stores raw ESI objects and so has carried `blueprint_id` all
+    along. Reading both means the floor works the moment Reactions has been refreshed, without
+    waiting for a history fetch — and the union makes double counting impossible by construction.
+    """
+    ensure_formula_job_prints_table()
     con = get_connection()
     try:
         try:
             rx = {r["reaction_id"]: r["output_type_id"]
                   for r in con.execute("SELECT reaction_id, output_type_id FROM reactions")}
         except Exception:
-            return {}                       # a manufacturing-only SDE knows no formulas at all
+            return {}
         if not rx:
             return {}
-        rows = con.execute(
-            "SELECT COALESCE(src.scope,'') AS scope, src.key AS key, s.type_id AS type_id, "
-            "SUM(s.qty) AS q FROM pp_asset_stock s "
-            "JOIN pp_asset_sources src ON src.context_id = s.context_id AND src.key = s.key "
-            "WHERE s.context_id = ? AND src.enabled = 1 "
-            "GROUP BY COALESCE(src.scope,''), src.key, s.type_id",
-            (context_id,),
-        ).fetchall()
+        chars = [r["character_id"] for r in con.execute(
+            "SELECT character_id FROM pp_characters WHERE context_id=?", (context_id,))]
+        if not chars:
+            return {}
+        holes = ",".join("?" * len(chars))
+        blobs: list[str] = [r["prints_json"] for r in con.execute(
+            f"SELECT prints_json FROM pp_char_formula_jobs WHERE character_id IN ({holes})", chars)]
+        try:
+            blobs += [r["jobs_json"] for r in con.execute(
+                f"SELECT jobs_json FROM pp_char_industry_jobs WHERE character_id IN ({holes})",
+                chars)]
+        except Exception:
+            pass            # the reactions cache table may not exist if Reactions was never used
     except Exception:
         return {}
     finally:
         con.close()
 
-    buckets: dict[int, dict[str, int]] = {}
-    for r in rows:
-        prod = rx.get(int(r["type_id"]))
-        if not prod:
-            continue                        # not a reaction formula — see the docstring
-        scope, key = str(r["scope"] or ""), str(r["key"] or "")
-        if scope.startswith("char:") or key.startswith("char:") or key.startswith("cont:"):
-            bucket = "personal"
-        elif scope.startswith("corp:") or key.startswith("corp:"):
-            bucket = "corp"
-        else:
-            bucket = "paste"
-        b = buckets.setdefault(prod, {"personal": 0, "corp": 0, "paste": 0})
-        b[bucket] += max(0, int(float(r["q"] or 0)))
+    ids_by_product: dict[int, set[int]] = {}
+    for blob in blobs:
+        try:
+            items = _json.loads(blob or "[]")
+        except Exception:
+            continue
+        for j in items:
+            prod = rx.get(j.get("blueprint_type_id"))
+            bid = j.get("blueprint_id")
+            if not prod or not bid:
+                continue
+            ids_by_product.setdefault(prod, set()).add(int(bid))
+    return {p: len(ids) for p, ids in ids_by_product.items() if ids}
 
-    owned = owned or {}
+
+def formula_print_floor(context_id: int, owned: dict[int, dict] | None = None) -> dict[int, int]:
+    """product_type_id -> EXTRA concurrent reactions, over what `owned_blueprints()` counted, that
+    the account's stock AND its observed jobs together prove. Drop-in for `stock_formula_prints`
+    (identical contract: an extra, concurrency only, never ME/TE/runs) with observation folded in.
+
+    Precedence per type, highest first:
+
+      a. **a PASTE naming that formula wins outright.** A pasted inventory is the user stating what
+         they have right now, so the observed floor is NOT added on top of it. This is a product
+         decision, and it has a known edge: a paste covering only ONE container suppresses job
+         evidence about formulas held elsewhere. It is the user's statement either way.
+      b. otherwise the MAXIMUM of the asset-stock figure and the distinct observed blueprint_ids —
+         a max, because both describe the same physical items from different angles, so adding them
+         would count one formula twice.
+      c. never below what the blueprint endpoint already reported (the return is an extra, so a
+         negative is clamped to 0 and the caller's own count stands).
+      d. no evidence at all → nothing here, and `_print_limits` leaves the type uncapped.
+    """
+    buckets = _formula_stock_buckets(context_id)
+    observed = observed_formula_prints(context_id)
     out: dict[int, int] = {}
-    for prod, b in buckets.items():
-        own = owned.get(prod) or {}
-        held = own.get("copies")
-        seen_personally = len(held) if held else (1 if own else 0)
-        extra = max(0, b["personal"] - seen_personally) + max(b["corp"], b["paste"])
+    for prod in set(buckets) | set(observed):
+        b = buckets.get(prod) or {"personal": 0, "corp": 0, "paste": 0}
+        seen = _seen_personally(owned, prod)
+        extra = _stock_extra(b, seen)
+        if not b["paste"]:
+            extra = max(extra, observed.get(prod, 0) - seen)
         if extra > 0:
             out[prod] = extra
     return out

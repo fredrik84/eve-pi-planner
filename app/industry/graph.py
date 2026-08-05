@@ -924,13 +924,15 @@ def resolve_build_params(context_id: int, me_pct: float, te_pct: float,
     except Exception:
         owned, coverage = {}, {"characters": 0, "cached": 0, "missing": 0, "complete": False}
     # Reaction formulas the account keeps in a hangar or container instead of a personal blueprint
-    # list. Same cap, different evidence — see stock_formula_prints for the de-duplication.
+    # list — counted from ENABLED stock and from the prints their real industry jobs were installed
+    # on. Same cap, different evidence; see formula_print_floor for the precedence and the
+    # de-duplication.
     stock_prints: dict = {}
     try:
         from app.features import feature_enabled_for
         if feature_enabled_for("industry_formulas_from_stock", context_id):
-            from app.industry.blueprints import stock_formula_prints
-            stock_prints = stock_formula_prints(context_id, owned)
+            from app.industry.blueprints import formula_print_floor
+            stock_prints = formula_print_floor(context_id, owned)
     except Exception:
         stock_prints = {}
     # The per-product aggregate is a runs-weighted figure over the WHOLE holding, not the best copy:
