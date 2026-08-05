@@ -204,6 +204,28 @@ FEATURE_REGISTRY = [
                     "side effect of binding it. Orders queued before this keep using the "
                     "account-wide tick list until you edit them.",
      "default": False, "state": "testers"},
+    {"key": "industry_install_skill_aware", "label": "Industry: don't tell you to start a job you can't",
+     "group": "Industry",
+     "description": "The start-now checklist names a character with a free slot — now ranked by "
+                    "who can actually install that job, the same way the schedule below it is. "
+                    "Before this the two could disagree: the checklist would say 'start it on X' "
+                    "above a plan already marking that job blocked for X.",
+     "default": False, "state": "testers"},
+    {"key": "industry_default_build_system", "label": "Industry: assume a build system when none is set",
+     "group": "Industry",
+     "description": "Job installation fees include the system cost index, which is 76% of the fee "
+                    "in Jita — but it only counts once a build system is configured, and almost "
+                    "nobody has. This falls back to the system of a structure you build in, or to "
+                    "Jita as a labelled reference when we know nothing, so quotes stop being light "
+                    "by that share. The plan always says which it used.",
+     "default": False, "state": "testers"},
+    {"key": "industry_group_structures", "label": "Industry: build in your group's structures",
+     "group": "Industry",
+     "description": "Structures shared to your alliance group are available to every member as "
+                    "build facilities, so one person describes a building — its hull, rigs, system "
+                    "and tax — and nobody else has to add it again. Your own row always wins for a "
+                    "structure you have described yourself.",
+     "default": False, "state": "testers"},
     {"key": "industry_per_order_plans", "label": "Industry: plan each order on its own",
      "group": "Industry",
      "description": "Plan every queued order separately instead of aggregating the queue into one "

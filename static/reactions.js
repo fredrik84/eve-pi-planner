@@ -2211,7 +2211,7 @@ function _rigFamRow(m, kind, activity) {
 }
 
 // A build structure, configured inline (no ordering — building isn't a priority chain).
-function _rxBuildRowHtml(m) {
+function _rxBuildRowHtml(m, d) {
   const hullNote = m.hull ? `<b>${_esc(m.hull)}</b> · ${_esc(m.security || '?')}-sec` : 'type not detected';
   const manual = m.hull ? '' :
     `<div class="rx-rig-row">Structure <select id="bhull-${m.id}"><option value="">—</option>`
@@ -2219,6 +2219,10 @@ function _rxBuildRowHtml(m) {
     + `</select> in <select id="bsec-${m.id}">`
     + ['high', 'low', 'null'].map(s => `<option value="${s}" ${m.security === s ? 'selected' : ''}>${s}</option>`).join('')
     + `</select></div>`;
+  // Only a group manager may put a building in front of the whole alliance — one wrong rig answer
+  // would otherwise be adopted by everybody and quoted as an efficiency nobody can see is wrong.
+  const share = (d && d.can_manage_group && d.group)
+    ? `<button class="pp-add-btn" onclick="_rxShareStructure(${m.id})" title="Offer this building to everyone in ${_esc(d.group.name)}">Share with alliance</button>` : '';
   const bonus = [];
   if (m.build_mfg && m.mfg_bonus) bonus.push(`mfg ME ${m.mfg_bonus.me}% / TE ${m.mfg_bonus.te}%`);
   if (m.build_rx && m.rx_bonus) bonus.push(`rx ME ${m.rx_bonus.me}% / TE ${m.rx_bonus.te}%`);
@@ -2233,8 +2237,50 @@ function _rxBuildRowHtml(m) {
     <div class="rx-rig-row">ME rig <select id="brme-${m.id}">${_rigOpts(m.rx_me_rig)}</select> · TE rig <select id="brte-${m.id}">${_rigOpts(m.rx_te_rig)}</select></div>
     ${_rigFamRow(m, 'brmeg', 'reaction')}${_rigFamRow(m, 'brteg', 'reaction')}
     <label class="rx-build-chk"><input type="checkbox" id="bp-${m.id}" ${m.price_from ? 'checked' : ''}> Also price from here</label>
-    <div class="rx-build-foot"><button class="pp-add-btn" onclick="_rxSaveBuild(${m.id})">Save</button>${bonus.length ? `<span class="rx-mkt-build-badge">${bonus.join(' · ')}</span>` : ''}</div>
+    <div class="rx-build-foot"><button class="pp-add-btn" onclick="_rxSaveBuild(${m.id})">Save</button>${share}${bonus.length ? `<span class="rx-mkt-build-badge">${bonus.join(' · ')}</span>` : ''}</div>
   </div>`;
+}
+
+// ── Alliance-suggested buildings ─────────────────────────────────────────────────────
+// An alliance builds in the same few structures, and describing one — hull, rig tiers, families,
+// system, tax — is real work. A manager shares theirs; every other member is OFFERED it and adds
+// it with one click. Deliberately a suggestion and not a switch: adopting changes where jobs route
+// and what they cost, so it stays the member's decision, and their own row always wins.
+function _rxSuggestedHtml(d) {
+  const sugg = (d.suggested_structures || []).filter(m => m.kind === 'structure');
+  if (!sugg.length) return '';
+  const rows = sugg.map(m => {
+    const what = [m.build_mfg ? 'manufacturing' : '', m.build_rx ? 'reactions' : '']
+      .filter(Boolean).join(' + ') || 'not set up for building';
+    const rigs = [];
+    if (m.build_mfg && m.mfg_bonus) rigs.push(`mfg ME ${m.mfg_bonus.me}% / TE ${m.mfg_bonus.te}%`);
+    if (m.build_rx && m.rx_bonus) rigs.push(`rx ME ${m.rx_bonus.me}% / TE ${m.rx_bonus.te}%`);
+    return `<div class="rx-mkt-row"><span class="rx-mkt-kind">${_esc(what)}</span>`
+      + `<span class="rx-mkt-name">${_esc(m.name)}</span>`
+      + (rigs.length ? `<span class="rx-mkt-build-badge">${_esc(rigs.join(' · '))}</span>` : '')
+      + `<span class="rx-mkt-ctrl"><button class="pp-add-btn" onclick="_rxAdoptStructure(${m.id})">Add</button></span></div>`;
+  }).join('');
+  const who = (sugg[0] && sugg[0].group_name) ? _esc(sugg[0].group_name) : 'your alliance';
+  return `<div class="rx-mkt-sec"><div class="rx-mkt-sec-h">Buildings ${who} uses `
+    + `<span class="pp-card-hint">added to your own list when you take one — nothing changes until you do</span></div>`
+    + `<div class="rx-mkt-list">${rows}</div></div>`;
+}
+
+async function _rxAdoptStructure(id) {
+  try {
+    _rxMarketData = await apiSend('POST', '/api/markets/adopt', { market_id: id });
+  } catch (e) { toastError(e, 'Could not add that structure'); return; }
+  toast('Added — check its rigs are right for you');
+  _rxRenderMarketManager();
+  if (typeof indPopulateFacility === 'function') indPopulateFacility();
+}
+
+async function _rxShareStructure(id) {
+  try {
+    _rxMarketData = await apiSend('POST', '/api/markets/share', { market_id: id });
+  } catch (e) { toastError(e, 'Could not share that structure'); return; }
+  toast('Shared with your alliance');
+  _rxRenderMarketManager();
 }
 
 // Non-blocking nudge: recommend (never require) setting up a reaction structure so reaction ME/TE
@@ -2319,8 +2365,9 @@ function _rxMarketManagerHtml(d) {
     + `<button class="pp-add-btn" onclick="_rxMarketSearch()">Search</button>`
     + `<div id="rxMarketSearchResults"></div></div></div>`
     + `<div class="rx-mkt-sec"><div class="rx-mkt-sec-h">Structures you build in <span class="pp-card-hint">their rigs set your ME &amp; TE — no ordering needed</span></div>`
-    + (build.length ? build.map(_rxBuildRowHtml).join('') : `<div class="pp-card-hint">None yet — search above and choose <b>+ Build</b> on a structure.</div>`)
-    + `</div>`;
+    + (build.length ? build.map(m => _rxBuildRowHtml(m, d)).join('') : `<div class="pp-card-hint">None yet — search above and choose <b>+ Build</b> on a structure.</div>`)
+    + `</div>`
+    + _rxSuggestedHtml(d);
 }
 
 async function _rxMountMarkets(containerId) {

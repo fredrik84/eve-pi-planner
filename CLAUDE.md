@@ -1331,6 +1331,61 @@ batch has no per-order cost, and here each order has a real one, so `metrics.pri
 TODO.md), and print locking ACROSS orders — two orders each see the one BPO they share and may each
 schedule a concurrent job off it. Per-order copy *runs* are consumed correctly; concurrency is not.
 
+### Alliance-shared buildings (`industry_group_structures`)
+
+An alliance builds in the same few structures, and describing one — hull, rig tiers, rig families,
+system, tax — is real work. Measured in prod (2026-08-05) two accounts had independently configured
+the SAME four structures, maintained twice. A group manager shares theirs (`POST
+/api/markets/share`, a COPY to `owner_kind='group'`, re-sharing a location updates rather than
+duplicates); every other member sees them as **suggestions** and takes one with `POST
+/api/markets/adopt`.
+
+Three rules, all load-bearing:
+
+- **A suggestion is inert until adopted.** `build_structures` — what the planner routes jobs into —
+  stays the account's own list. Adopting changes where jobs go and what they cost, so it is a
+  decision, not a side effect of an alliance-mate describing a building.
+- **Scoped to the ALLIANCE by construction**, not by a filter that can be forgotten: `member_group`
+  joins a real character's `alliance_id` to `pp_groups.alliance_id`. Another alliance on the same
+  install is a different group id and is invisible — they don't dock in our structures.
+- **Your own row always wins.** A location the account has already described is never suggested
+  back, and adopting one it already has is a no-op: one building with two rig answers is two
+  answers that can disagree.
+
+Only a **manager** may share, because a wrong rig answer adopted by everyone is an efficiency the
+plan quotes and nobody can see is wrong. `_SHAREABLE_COLS` is what travels — everything describing
+the building, rig families and its own system and tax included; a shared structure whose rigs each
+member must re-answer has shared nothing. Covered by `test_group_structures.py`.
+
+### Defaulting the build system (`industry_default_build_system`)
+
+Job fee = EIV × (system cost index + facility tax + 4% SCC), and the index only counts once a build
+system is configured — in prod **1 of 26 accounts** had one, so manufacturing was quoted light by
+the index share (76% of the fee in Jita) and reactions charged no install fee at all.
+`account_build_defaults(ctx, with_basis=True)` now answers in three tiers, most specific first, and
+**says which it used** (`cost_basis.basis`, same rule as `skill_time_basis`):
+
+`configured` (the system the user set for Reactions — unchanged, and still first) → `structure` (the
+system of a structure they told us they BUILD in, with that structure's own tax — not a guess, they
+described the building) → `reference` (Jita, when we know nothing). Jita is the honest REFERENCE
+because its index tops the range, so a quote built on it is conservative — but it will be wrong for
+a null-sec builder, and the notice says so and offers the fix. The last two tiers are behind the
+flag: they change the cost of every existing account's build.
+
+### The start-now checklist and the schedule agree on who CAN install (`industry_install_skill_aware`)
+
+`install_block` derived its own assignment and ignored the skill-aware one `assign_characters` had
+already made, so the main screen could say "start this on X" directly above a plan marking that job
+blocked for X. The two paths legitimately differ on capacity — the schedule spans days and counts
+TOTAL slots, the checklist is about what fits now and counts FREE ones — so the fix is not to reuse
+the assignment but to share the RANKING: `schedule.skill_tier(eligibility)` (2 capable / 1 unknown /
+0 incapable), capacity deciding within a tier exactly as before. A job with no capable character
+free is still assigned, carrying `skill_ok: False`, because an instruction that says what is wrong
+beats no instruction. `skill_ok` is recomputed for the character actually named — a stale ✓ carried
+over from the scheduler's pick is worse than no mark. The eligibility map rides on the plan as
+`_eligibility` and is popped before the response: it is sets of character ids, which neither
+serialise nor belong in a browser.
+
 ## Industry: first use
 
 A first-run setup screen (`_indRenderWizard`), mirroring the Reactions gate (`_rxApplyGate`) down to

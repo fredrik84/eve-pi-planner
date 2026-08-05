@@ -2606,6 +2606,18 @@ function _indSkillBasisWarn(d) {
 // runs from 0.14% to 17.25% across New Eden, so in a busy system it is most of the fee.
 function _indCostBasisWarn(d) {
   const cb = d.cost_basis;
+  // A DEFAULTED system is not the same as a configured one, and saying nothing about it would make
+  // an assumption look like a fact. A structure you build in is a good answer; Jita is a reference
+  // and will be wrong for a null-sec builder, so it says so and offers the fix either way.
+  if (cb && cb.system_id && (cb.basis === 'structure' || cb.basis === 'reference')) {
+    const what = cb.basis === 'structure'
+      ? 'the system of a structure you build in'
+      : 'Jita as a reference \u2014 your real index is probably lower';
+    return `<div class="ind-note-line">Job fees are costed against ${what}, because no build system `
+      + `is set. `
+      + `<button class="ind-link-btn" onclick="openSettingsModal('markets')">Set your build system</button>`
+      + ` to quote the real one.</div>`;
+  }
   if (!cb || cb.system_id) return '';
   // Points at Markets & Logistics, which is where the system actually lives (the planner reads the
   // account's reaction system + facility tax \u2014 account_build_defaults). It used to open Setup &

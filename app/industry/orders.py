@@ -619,6 +619,9 @@ def _run_queue_plan(ctx: int, req: QueuePlanRequest, want_full: bool = False) ->
                       (sk or {}).get("eligibility"))
     if sk is not None:
         res["skill_gaps"] = sk["gaps"]
+        # Kept for `install_block`, which has to rank the same way this did. Private: it is a set
+        # of character ids per step, not something to ship to a browser — the endpoints pop it.
+        res["_eligibility"] = sk.get("eligibility")
     res["skill_time_basis"] = inp.params.skill_time_basis
     from app.industry.graph import _cost_basis
     res["cost_basis"] = _cost_basis(inp.params)
@@ -650,6 +653,9 @@ def queue_plan(req: QueuePlanRequest, ctx: int = Depends(require_context)):
             res["progress"] = queue_progress(ctx, res=full)
         except Exception:
             res["progress"] = None       # never let the progress overlay take the plan down with it
+    # Internal only, and it must not reach a browser: sets of character ids, which don't serialise
+    # and are nobody's business but the planner's. Popped after `install_block`, its one consumer.
+    res.pop("_eligibility", None)
     return res
 
 
@@ -716,6 +722,16 @@ def to_install(req: QueuePlanRequest | None = None, ctx: int = Depends(require_c
     return install_block(ctx, res)
 
 
+def _install_skills_on(ctx: int) -> bool:
+    """Gated: it changes who the checklist names, and on an account with partial skill data that
+    is a visible change to the instruction people follow every day."""
+    try:
+        from app.features import feature_enabled_for
+        return feature_enabled_for("industry_install_skill_aware", ctx)
+    except Exception:
+        return False
+
+
 def install_block(ctx: int, res: dict) -> dict:
     """The checklist, derived from an ALREADY-PLANNED queue.
 
@@ -738,15 +754,34 @@ def install_block(ctx: int, res: dict) -> dict:
                                  "manufacturing": c["manufacturing_free"],
                                  "reaction": c["reaction_free"]}
              for c in pool.get("characters", [])}
+    # ...and it must not name somebody who cannot install the job. This list derived its OWN
+    # assignment and ignored the skill-aware one the scheduler had already made, so the main screen
+    # could say "start this on X" directly above a plan marking that same job blocked for X.
+    # Capacity is still decided here — free slots now, not total slots over the whole schedule,
+    # which is the deliberate difference — but the RANKING is the shared one, so the two can only
+    # disagree about when a job runs, never about who can run it.
+    from app.industry.schedule import skill_tier
+    elig = res.get("_eligibility") if _install_skills_on(ctx) else None
+    tier = skill_tier(elig)
     for t in ready:
         act = t["activity"]
-        pick = max(avail.items(), key=lambda kv: kv[1].get(act, 0), default=(None, None))
-        cid, info = pick
-        if cid is not None and info and info.get(act, 0) > 0:
+        cands = [(cid, info) for cid, info in avail.items() if info.get(act, 0) > 0]
+        # Best skill tier first, most free slots within it (which spreads the work exactly as
+        # before among equals). A lower tier is used only when nothing better has a free slot: an
+        # assigned job carrying `skill_ok: False` is more useful than an unassigned one, because it
+        # says precisely what is wrong. Same rule as `assign_characters`.
+        cands.sort(key=lambda kv: (tier(kv[0], t["type_id"]), kv[1].get(act, 0)), reverse=True)
+        if cands:
+            cid, info = cands[0]
             info[act] -= 1
             t["fits_now"] = True
             t["character_id"] = cid
             t["character_name"] = info["name"]
+            if elig is not None:
+                # Recomputed for the character actually named, never carried over from whoever the
+                # scheduler picked — a stale ✓ is worse than no mark at all.
+                tr = tier(cid, t["type_id"])
+                t["skill_ok"] = True if tr == 2 else (None if tr == 1 else False)
         else:
             t["fits_now"] = False
             t["character_id"] = None

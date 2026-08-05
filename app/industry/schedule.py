@@ -1229,6 +1229,29 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
 
 
 
+def skill_tier(eligibility: dict | None):
+    """(character_id, type_id) -> 2 proven capable / 1 unknown / 0 proven incapable.
+
+    Shared so the schedule-wide assignment and the start-now checklist rank candidates the SAME
+    way. They legitimately differ on capacity — the schedule spans days and counts total slots, the
+    checklist is about what fits right now and counts free ones — but there is no version of this
+    where one of them is allowed to name somebody who cannot install the job while the other marks
+    it blocked. That disagreement is what made the main screen tell you to start a job the plan
+    beside it had already flagged.
+    """
+    capable = (eligibility or {}).get("capable") or {}
+    unknown = (eligibility or {}).get("unknown") or set()
+
+    def tier(cid, type_id) -> int:
+        # A step absent from `capable` was never analysed (no recipe match), so nobody is penalised.
+        if type_id not in capable:
+            return 1
+        if cid in capable[type_id]:
+            return 2
+        return 1 if cid in unknown else 0
+    return tier
+
+
 def assign_characters(waves: list[dict], characters: list[dict],
                       eligibility: dict | None = None) -> list[dict]:
     """Stamp `character_id` / `character_name` onto every scheduled job, across the WHOLE schedule.
@@ -1259,17 +1282,7 @@ def assign_characters(waves: list[dict], characters: list[dict],
     Pure and I/O-free like everything else here: the caller supplies the characters. Jobs stay
     unassigned when there's no capacity or no character data, rather than inventing an assignee.
     """
-    capable = (eligibility or {}).get("capable") or {}
-    unknown = (eligibility or {}).get("unknown") or set()
-
-    def _tier(cid: int, type_id) -> int:
-        """2 = proven capable, 1 = unknown, 0 = proven incapable. A step absent from `capable`
-        was never analysed (no recipe match), so nobody is penalised for it."""
-        if type_id not in capable:
-            return 1
-        if cid in capable[type_id]:
-            return 2
-        return 1 if cid in unknown else 0
+    _tier = skill_tier(eligibility)
     cap: dict[tuple[int, str], int] = {}
     names: dict[int, str] = {}
     for c in characters or []:

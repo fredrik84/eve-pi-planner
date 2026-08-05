@@ -154,6 +154,10 @@ class BuildParams:
     # index term is simply absent, so the fee is understated by exactly that share (the SCC and tax
     # still apply — this is NOT a zero job cost). Carried so the plan can say so out loud.
     build_system_id: int | None = None
+    # Where that system came from: "configured" (the user set it), "structure" (a building they
+    # described), "reference" (Jita, we know nothing), "request" (this call named one), "none" (no
+    # system at all — the fee is quoted without an index). Reported, never assumed silently.
+    build_system_basis: str = "none"
     # "real" when the job-time skills came from a scanned character, "assumed" when nothing
     # on the account has been scanned and V/V was used. Surfaced on the plan so a guess is
     # never presented as a measurement — same principle as me_source per build step.
@@ -810,19 +814,81 @@ def account_industry_time_mults(context_id: int, with_basis: bool = False):
     return (*mults, "real" if known else "assumed") if with_basis else mults
 
 
-def account_build_defaults(context_id: int) -> tuple[int | None, float]:
-    """Zero-config build context: reuse the system + facility tax the account already configured
-    for Reactions as the default build location, so the Industry planner gets real cost indices
-    and tax with no separate setup. Least-effort by design — the player configured this once; a
-    dedicated industry build-system override can come later. Returns (system_id, facility_tax_pct);
-    (None, 0.0) if Reactions was never configured (safe no-cost-effect default)."""
+# The reference system used only when an account has told us nothing about where it builds. Jita is
+# the honest choice for a REFERENCE rather than a guess: its index is at the top of the range
+# (0.1715 measured against a 0.055 no-index rate — 76% of the whole fee), so a quote built on it is
+# conservative, and being conservative about a floor price is the safe direction to be wrong in.
+_REFERENCE_SYSTEM_ID = 30000142            # Jita
+
+
+def account_build_defaults(context_id: int, with_basis: bool = False):
+    """Where this account builds — (system_id, facility_tax_pct[, basis]).
+
+    Job installation fee is EIV x (system cost index + facility tax + 4% SCC), so with NO system the
+    index term is simply missing: manufacturing is understated by the index share and reactions are
+    quoted with no install fee at all. Measured in prod, **1 of 26 accounts had a system set**, so
+    that was very nearly everybody.
+
+    Three sources, most specific first, and the basis is reported so the number is never a silent
+    assumption (same rule as `skill_time_basis`):
+
+    * `"configured"` — the system the account set for Reactions. Unchanged behaviour, and it stays
+      first: it is the only one the user actually chose.
+    * `"structure"` — the system of a structure the account has told us it BUILDS in, with that
+      structure's own facility tax. Not a guess at all: they described the building, and it is a
+      better answer than nothing for the 25 accounts that never filled in the Reactions field.
+    * `"reference"` — Jita, when we know nothing whatsoever. Explicitly labelled, because a wrong
+      default is harder to notice than an absent one, and this one WILL be wrong for a null-sec
+      builder — it is a floor to quote against, not a claim about where they live.
+
+    The last two are behind `industry_default_build_system`: they change the cost of every existing
+    account's build, which is not something to do to a live quote without the switch being visible.
+    """
+    basis = "none"
+    sid, tax = None, 0.0
     try:
         from app.reactions.settings import effective_reaction_settings, _resolve_system_id
         s = effective_reaction_settings(context_id)
         sid = _resolve_system_id(s.get("reaction_system"))
-        return sid, (s.get("facility_tax_pct") or 0.0)
+        tax = s.get("facility_tax_pct") or 0.0
+        if sid:
+            basis = "configured"
     except Exception:
-        return None, 0.0
+        sid, tax = None, 0.0
+    if sid is None and _default_system_on(context_id):
+        sid, tax, basis = _fallback_build_system(context_id, tax)
+    return (sid, tax, basis) if with_basis else (sid, tax)
+
+
+def _default_system_on(context_id: int) -> bool:
+    try:
+        from app.features import feature_enabled_for
+        return feature_enabled_for("industry_default_build_system", context_id)
+    except Exception:
+        return False
+
+
+def _fallback_build_system(context_id: int, tax: float) -> tuple[int, float, str]:
+    """A system the account has actually told us about, else the reference one.
+
+    Prefers a structure it BUILDS in over one it only prices from — "where do you install jobs" is
+    the question being answered — and takes that structure's own facility tax with it, since the two
+    belong to the same building. Imported inside the function: `app.markets` reaches back into
+    `app.industry.structures` for the rig bonuses, and this module is on that path.
+    """
+    try:
+        from app.markets import build_structures, _list_markets
+        sites = [m for m in build_structures(context_id) if m.get("system_id")]
+        if sites:
+            site = sites[0]
+            return int(site["system_id"]), float(site.get("facility_tax_pct") or tax), "structure"
+        priced = [m for m in _list_markets("account", context_id)
+                  if m.get("kind") == "structure" and m.get("system_id")]
+        if priced:
+            return int(priced[0]["system_id"]), tax, "structure"
+    except Exception:
+        pass
+    return _REFERENCE_SYSTEM_ID, tax, "reference"
 
 
 def resolve_build_params(context_id: int, me_pct: float, te_pct: float,
@@ -836,9 +902,11 @@ def resolve_build_params(context_id: int, me_pct: float, te_pct: float,
     """Build the resolver's params, auto-deriving the build system + tax from the account's
     Reactions settings when the request didn't override them — so the caller needn't supply a
     system id or tax by hand."""
-    d_sid, d_tax = account_build_defaults(context_id)
+    d_sid, d_tax, basis = account_build_defaults(context_id, with_basis=True)
     sid = system_id if system_id is not None else d_sid
     tax = facility_tax_pct if facility_tax_pct is not None else d_tax
+    if system_id is not None:
+        basis = "request"          # the caller named a system; nothing was defaulted
     # Auto per-product ME/TE from the account's real owned blueprints (empty if not connected).
     try:
         from app.industry.blueprints import owned_blueprints, blueprint_coverage
@@ -862,7 +930,7 @@ def resolve_build_params(context_id: int, me_pct: float, te_pct: float,
         mfg_cost_index=fetch_system_cost_index(sid, "manufacturing"),
         rx_cost_index=fetch_system_cost_index(sid, "reaction"),
         facility_tax_pct=tax, me_by_product=me_by_product, owned=owned,
-        blueprint_coverage=coverage, build_system_id=sid,
+        blueprint_coverage=coverage, build_system_id=sid, build_system_basis=basis,
         max_build_hours=max_build_hours,
         struct_material_mult=1.0 - struct_material_pct / 100.0,
         struct_time_mult=1.0 - struct_time_pct / 100.0,
@@ -1050,6 +1118,8 @@ def _cost_basis(params) -> dict:
         "mfg_index": params.mfg_cost_index,
         "rx_index": params.rx_cost_index,
         "facility_tax_pct": params.facility_tax_pct,
+        # A default has to say it is one — a wrong default is harder to notice than an absent one.
+        "basis": params.build_system_basis,
     }
 
 

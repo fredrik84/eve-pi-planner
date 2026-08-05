@@ -1721,6 +1721,63 @@ def test_a_single_order_queue_plans_the_same_either_way():
           == sorted(r["type_id"] for r in agg["requirements"]))
 
 
+def test_the_start_now_checklist_never_names_someone_who_cannot_install_it():
+    """The main screen said "start this on X" directly above a plan marking that same job blocked
+    for X. Two assignment paths: the scheduler's is skill-aware and counts TOTAL slots over days,
+    the checklist's counts FREE slots right now. The capacity difference is deliberate; disagreeing
+    about who is CAPABLE was not."""
+    print("test_the_start_now_checklist_never_names_someone_who_cannot_install_it")
+    from app.industry import orders as O
+    from app.industry import slots as S
+
+    # B has more free slots, A is the only one who can build type 100.
+    pool = {"manufacturing_free": 3, "reaction_free": 0,
+            "characters": [
+                {"character_id": 1, "character_name": "Able", "manufacturing_slots": 2,
+                 "manufacturing_free": 1, "reaction_slots": 0, "reaction_free": 0},
+                {"character_id": 2, "character_name": "Baker", "manufacturing_slots": 4,
+                 "manufacturing_free": 2, "reaction_slots": 0, "reaction_free": 0}]}
+    res = {"schedule": {"waves": [{"start_hours": 0.0, "tasks": [
+               {"type_id": 100, "activity": "manufacturing", "runs": 1, "duration_hours": 1.0,
+                "name": "Widget"}]}]},
+           "metrics": {"makespan_hours": 1.0},
+           "_eligibility": {"capable": {100: {1}}, "unknown": set()}}
+
+    real_pool, real_flag = S._slot_pool, O._install_skills_on
+    try:
+        S._slot_pool = lambda ctx: pool
+        # Flag OFF: the old capacity-only pick, unchanged.
+        O._install_skills_on = lambda ctx: False
+        import copy as _c
+        off = O.install_block(1, _c.deepcopy(res))
+        check("without the gate it still picks the most idle character",
+              off["ready"][0]["character_name"] == "Baker")
+        check("and says nothing about skills, rather than implying they were checked",
+              "skill_ok" not in off["ready"][0])
+
+        O._install_skills_on = lambda ctx: True
+        on = O.install_block(1, _c.deepcopy(res))
+        check("with it, the job goes to the character who can actually install it",
+              on["ready"][0]["character_name"] == "Able")
+        check("and is marked as installable", on["ready"][0]["skill_ok"] is True)
+
+        # Nobody capable has a free slot: assign anyway, flagged — an assigned job saying what is
+        # wrong beats an unassigned one saying nothing.
+        pool["characters"][0]["manufacturing_free"] = 0
+        low = O.install_block(1, _c.deepcopy(res))
+        check("with no capable character free it still names someone",
+              low["ready"][0]["character_name"] == "Baker")
+        check("but says the job is blocked for them", low["ready"][0]["skill_ok"] is False)
+
+        # An unscanned character is unknown, not incapable.
+        res2 = {**res, "_eligibility": {"capable": {100: {1}}, "unknown": {2}}}
+        unk = O.install_block(1, _c.deepcopy(res2))
+        check("an unscanned character is unknown, never proven incapable",
+              unk["ready"][0]["skill_ok"] is None)
+    finally:
+        S._slot_pool, O._install_skills_on = real_pool, real_flag
+
+
 def test_queue_price_uses_each_orders_own_margin():
     """The builder's own sheet must quote what the customers are quoted. Margin is snapshotted per
     order, but the queue was marked up at ONE blanket rate — so editing a customer's margin moved
@@ -2502,6 +2559,7 @@ def main():
     test_per_order_plans_price_off_each_orders_real_cost()
     test_per_order_jobs_still_land_together()
     test_a_single_order_queue_plans_the_same_either_way()
+    test_the_start_now_checklist_never_names_someone_who_cannot_install_it()
     test_queue_price_uses_each_orders_own_margin()
     test_share_links_outlive_their_order()
     test_install_assignment_spreads_and_respects_free_slots()

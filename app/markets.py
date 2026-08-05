@@ -176,11 +176,57 @@ def _list_markets(owner_kind: str, owner_id: int) -> list[dict]:
 
 
 def build_structures(context_id: int) -> list[dict]:
-    """The account's structures that are configured as BUILD facilities (manufacturing and/or
-    reactions), for the Industry planner's per-job routing. Personal list only — a group's shared
-    market list is a pricing default, not somewhere this account may install jobs."""
+    """The account's structures configured as BUILD facilities (manufacturing and/or reactions),
+    for the Industry planner's per-job routing.
+
+    **Deliberately the account's own list only.** A group's shared structures are SUGGESTIONS (see
+    `_suggested_structures`), not sites this account silently starts installing jobs in: adopting
+    one changes where jobs route and therefore what they cost, and that has to be somebody's
+    decision rather than a side effect of an alliance-mate describing a building.
+    """
     return [m for m in _list_markets("account", context_id)
             if m["kind"] == "structure" and (m["build_mfg"] or m["build_rx"])]
+
+
+def _suggested_structures(context_id: int, own: list[dict]) -> list[dict]:
+    """Structures the account's GROUP has shared that this account has not added itself.
+
+    The problem this solves, measured in prod (2026-08-05): two accounts had independently
+    configured the SAME four alliance structures — the hull, the rig tiers, the families, the
+    system, all answered twice and maintained twice. An alliance builds in the same few buildings,
+    so describing one should be worth doing once.
+
+    A suggestion is inert until adopted: it appears in the member's structure list as something
+    their alliance uses, and `POST /api/markets/adopt` copies it into their own list, where it is
+    then theirs to tune. Nothing about their plans moves until they take it — the same reason
+    `build_structures` stays personal.
+
+    **Scoped to the ALLIANCE, never global**, and by construction rather than by a filter that could
+    be forgotten: `member_group` resolves the group by joining a real character's `alliance_id` to
+    `pp_groups.alliance_id`, so a suggestion can only come from the group this account is actually
+    in. Another alliance running on the same install is a different group id and is invisible here —
+    they don't dock in our structures and must never be told to build in them. An account whose
+    alliance has no group gets nothing at all.
+    """
+    if not _group_structures_on(context_id):
+        return []
+    group = member_group(context_id)
+    if not group:
+        return []
+    mine = {m.get("location_id") for m in own}
+    return [{**m, "suggested": True, "group_name": group["name"]}
+            for m in _list_markets("group", group["id"])
+            if m["kind"] == "structure" and m.get("location_id") not in mine]
+
+
+def _group_structures_on(context_id: int) -> bool:
+    """Gated while it rolls out: it puts another account's answer in front of a member, and a wrong
+    rig answer adopted from a suggestion is an efficiency the plan quotes and cannot see is wrong."""
+    try:
+        from app.features import feature_enabled_for
+        return feature_enabled_for("industry_group_structures", context_id)
+    except Exception:
+        return False
 
 
 def structure_info(structure_id: int, token: str, client=None) -> dict | None:
@@ -606,6 +652,8 @@ def _markets_payload(context_id: int) -> dict:
     return {
         "markets": own,
         "group_markets": group_markets,
+        # Structures the alliance uses that this account hasn't added — inert until adopted.
+        "suggested_structures": _suggested_structures(context_id, own),
         "effective": effective_markets(context_id),
         "effective_level": level,
         "connected": reader is not None,
@@ -619,6 +667,102 @@ def _markets_payload(context_id: int) -> dict:
 
 @router.get("/api/markets")
 def list_markets(context_id: int = Depends(require_context)):
+    return _markets_payload(context_id)
+
+
+# Everything that describes the BUILDING, including the rig families and its own system and tax —
+# a structure shared with the alliance that members then have to re-answer the rigs for has shared
+# nothing at all. `price_from` rides along as set: sharing a station shares it as it stands.
+_SHAREABLE_COLS = ("kind", "location_id", "name", "hull", "security", "price_from", "build_mfg",
+                   "build_rx", "me_rig", "te_rig", "rx_me_rig", "rx_te_rig",
+                   "me_rig_groups", "te_rig_groups", "rx_me_rig_groups", "rx_te_rig_groups",
+                   "system_id", "facility_tax_pct")
+
+
+class MarketShare(BaseModel):
+    market_id: int
+
+
+@router.post("/api/markets/share")
+def share_market(req: MarketShare, context_id: int = Depends(require_context)):
+    """Copy one of this account's structures to the GROUP, so every member has it without adding it
+    by hand. The answer to "I set this up for one user and everybody else had to repeat it".
+
+    A COPY, not a move: the account keeps its own row, so nothing it had stops working and the
+    member who shared it can still tune their own rig answer afterwards. Re-sharing the same
+    location updates the group's row rather than adding a second one — sharing twice is the same
+    statement made twice, not two buildings.
+    """
+    group = member_group(context_id)
+    if not group or not is_group_manager(context_id, group["id"]):
+        raise HTTPException(status_code=403, detail="Not a manager of your group")
+    con = get_connection()
+    try:
+        row = con.execute(
+            "SELECT * FROM pp_markets WHERE id=? AND owner_kind='account' AND owner_id=?",
+            (req.market_id, context_id)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="No such market")
+        if row["kind"] != "structure":
+            raise HTTPException(status_code=400, detail="Only structures can be shared")
+        d = dict(row)
+        existing = con.execute(
+            "SELECT id FROM pp_markets WHERE owner_kind='group' AND owner_id=? AND location_id=?",
+            (group["id"], d["location_id"])).fetchone()
+        cols = _SHAREABLE_COLS
+        vals = [d.get(c) for c in cols]
+        if existing:
+            con.execute(f"UPDATE pp_markets SET {', '.join(c + '=?' for c in cols)} WHERE id=?",
+                        (*vals, existing["id"]))
+        else:
+            nxt = con.execute("SELECT COALESCE(MAX(priority), -1) AS m FROM pp_markets "
+                              "WHERE owner_kind='group' AND owner_id=?",
+                              (group["id"],)).fetchone()["m"] + 1
+            con.execute(
+                f"INSERT INTO pp_markets (owner_kind, owner_id, priority, active, "
+                f"{', '.join(cols)}) VALUES (?,?,?,1,{','.join('?' * len(cols))})",
+                ("group", group["id"], nxt, *vals))
+        con.commit()
+    finally:
+        con.close()
+    return _markets_payload(context_id)
+
+
+@router.post("/api/markets/adopt")
+def adopt_market(req: MarketShare, context_id: int = Depends(require_context)):
+    """Take one of the group's suggested structures into this account's own list.
+
+    A COPY, so the member owns it from then on: they can change the rigs, turn off building in it,
+    or remove it, and none of that touches what the group shared. Adopting a structure the account
+    already has at that location is a no-op rather than a duplicate — the same building twice is
+    two sets of rig answers that can disagree.
+    """
+    group = member_group(context_id)
+    if not group:
+        raise HTTPException(status_code=404, detail="You are not in a group")
+    con = get_connection()
+    try:
+        row = con.execute(
+            "SELECT * FROM pp_markets WHERE id=? AND owner_kind='group' AND owner_id=?",
+            (req.market_id, group["id"])).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="No such shared structure")
+        d = dict(row)
+        dup = con.execute(
+            "SELECT id FROM pp_markets WHERE owner_kind='account' AND owner_id=? AND location_id=?",
+            (context_id, d["location_id"])).fetchone()
+        if not dup:
+            nxt = con.execute("SELECT COALESCE(MAX(priority), -1) AS m FROM pp_markets "
+                              "WHERE owner_kind='account' AND owner_id=?",
+                              (context_id,)).fetchone()["m"] + 1
+            vals = [d.get(c) for c in _SHAREABLE_COLS]
+            con.execute(
+                f"INSERT INTO pp_markets (owner_kind, owner_id, priority, active, "
+                f"{', '.join(_SHAREABLE_COLS)}) VALUES (?,?,?,1,{','.join('?' * len(_SHAREABLE_COLS))})",
+                ("account", context_id, nxt, *vals))
+            con.commit()
+    finally:
+        con.close()
     return _markets_payload(context_id)
 
 

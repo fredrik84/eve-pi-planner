@@ -28,17 +28,13 @@ plan.
 
 Follow-ups, neither blocking:
 
-- **The to-install checklist is still skill-blind.** `install_block()` in `app/industry/orders.py`
-  (behind `POST /api/industry/to-install`, and inlined into the queue plan) derives its OWN
-  assignment for the ready wave: it walks `_slot_pool`'s free slots most-loaded-first and names a
-  character per job, ignoring what `assign_characters` already decided. So the main screen's
-  "start these now" list can still tell you to install a job on a character who lacks the skills,
-  even though the plan below it marks that same job ⚠. Note the data is already in hand — wave 0's
-  tasks carry `skill_ok` and an assignee by the time `install_block` sees them, so this is about
-  reconciling two assignment paths, not fetching anything new. The honest fix is probably for
-  install_block to respect the scheduler's assignment instead of recomputing one; check first
-  whether its most-loaded-first ordering is doing something the scheduler's spread-the-work rule
-  isn't, because that difference is deliberate.
+- **The to-install checklist is no longer skill-blind** — SHIPPED 2026-08-05, behind
+  `industry_install_skill_aware`. The answer to the question this entry left open ("check first
+  whether its most-loaded-first ordering is doing something the scheduler's rule isn't") is yes, and
+  deliberately: the checklist counts FREE slots now, the scheduler counts TOTAL slots over days. So
+  the assignment is not reused — the RANKING is (`schedule.skill_tier`), with capacity still
+  deciding within a tier. A job no capable character has a slot for is still assigned and carries
+  `skill_ok: False`; `skill_ok` is recomputed for whoever is actually named. See CLAUDE.md.
 - **Item 2 (skill-optimization advisor) is now unblocked** — it was waiting on the full-skill-list
   fetch, which `pp_char_skills` now provides.
 
@@ -338,23 +334,23 @@ exact. `test_epoch_precision.py` covers the round trip, idempotency, and the tar
 
 ---
 
-## 8. Default the build system (job fees are quoted light without one)
+## 8. Default the build system — SHIPPED 2026-08-05, behind `industry_default_build_system`
 
-Job installation fee = EIV × (system cost index + facility tax + 4% SCC). The index is fetched and
-correct (ESI `industry/systems/`, 5,485 systems, both activities, 6h cache) — but it only applies
-once a system is CONFIGURED, and in prod **1 of 26 accounts has one**. The two engines then degrade
-differently, which the warnings shipped 2026-08-02 now state explicitly:
+Job installation fee = EIV × (system cost index + facility tax + 4% SCC), and the index only applied
+once a system was CONFIGURED — 1 of 26 prod accounts had one, so manufacturing was understated by
+the index share (76% of the fee in Jita, spanning 0.14%–17.25% across New Eden) and reactions quoted
+no install fee at all.
 
-- **Manufacturing** still charges the SCC and facility tax, so the fee is understated by the index
-  share only. Not trivial: in Jita the index is **76%** of the whole fee (0.1715 vs a 0.055 rate
-  without it), and it spans 0.14%–17.25% across New Eden.
-- **Reactions** zero the entire rate, so profits are quoted with no install fee at all.
-
-Surfacing it was the safe half (option 1, done). The open question is whether to pick a system on
-the user's behalf when none is set — the account's own structure system, or Jita as a
-worst-case-ish reference. Deliberately NOT done yet: it would silently change every existing
-account's costs, and a wrong default is harder to notice than an absent one. If it is done, it
-should be visibly labelled as a default, the same way `skill_time_basis` and `cost_basis` are.
+Answered in three tiers, most specific first, each labelled in `cost_basis.basis`: `configured` (the
+user's own Reactions system — unchanged and still first) → `structure` (the system of a structure
+they told us they build in, with that structure's own facility tax — not a guess at all) →
+`reference` (Jita). The open question in the old write-up was whether to pick a system on the user's
+behalf; the answer is that a building they described is not "on their behalf", and only the last
+tier is. Jita is the right REFERENCE because its index tops the range, so the quote errs
+conservative — and it is stated as an assumption, with the fix one click away, because a wrong
+default is harder to notice than an absent one. Both defaulted tiers are behind the flag: they move
+every existing account's costs. Design notes in CLAUDE.md; `test_cost_basis.py` covers the
+precedence and the label.
 
 ## 6. Adopt `eslint --rule no-undef` in CI
 
