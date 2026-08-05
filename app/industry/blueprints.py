@@ -439,6 +439,13 @@ def formula_print_floor(context_id: int, owned: dict[int, dict] | None = None) -
          they have right now, so the observed floor is NOT added on top of it. This is a product
          decision, and it has a known edge: a paste covering only ONE container suppresses job
          evidence about formulas held elsewhere. It is the user's statement either way.
+         **Confirmed and kept, 2026-08-05**, with that edge understood and accepted — a paste is
+         treated as truth. Two softer rules were considered and declined: "paste wins but never
+         below observed" (which would stop a paste ever saying "I sold three of these"), and a
+         "this is everything I hold" checkbox on the paste form (a knob, and rule 3 says add one
+         only where the math genuinely cannot decide). Do not re-litigate without new evidence —
+         the failing case is pasting a DIFFERENT box than the one the formulas are in, so if that
+         starts biting in practice, the checkbox is the first thing to reach for.
       b. otherwise the MAXIMUM of the asset-stock figure and the distinct observed blueprint_ids —
          a max, because both describe the same physical items from different angles, so adding them
          would count one formula twice.
