@@ -18,6 +18,26 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  # Frontend guard, and it earns its place from one specific bug: a dead `if (!r.ok)` left behind by
+  # the fetch()->api() migration referenced a variable that no longer existed, so every SUCCESSFUL
+  # reaction assign threw, was caught, and was reported to the user as failed — and each retry
+  # appended another set of rows (two suggestions became 27). Valid syntax, so `node --check` passes
+  # it; only a run of that line fails. `no-undef` catches it and the tree is green today, so this is
+  # purely preventive. See scripts/lint_js.mjs for why it is exactly one rule.
+  lint-js:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Syntax-check every frontend file
+        run: for f in static/*.js; do node --check "$f"; done
+      - name: no-undef
+        run: node scripts/lint_js.mjs
+
   build:
     runs-on: ubuntu-latest
     permissions:

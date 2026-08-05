@@ -339,6 +339,32 @@ def test_a_chain_spreads_over_the_slots_it_has() -> bool:
     return ok
 
 
+def test_assigning_twice_does_not_book_it_twice() -> bool:
+    """`POST /api/reactions/assign` was a bare INSERT, so a retry appended a second full set of
+    rows — and a frontend bug that reported every SUCCESSFUL assign as failed turned two
+    suggestions into 27 rows on a 10-slot character. The capacity half has to count what actually
+    runs AT ONCE: chain tiers are sequential, so summing every row would reject a legitimate deep
+    chain that never occupies more than a couple of slots at a time."""
+    from app.reactions.jobs import _concurrent_load
+
+    # A four-tier chain, two jobs per tier: eight rows, but never more than two at once.
+    chain = [{"tier_order": t} for t in range(4) for _ in range(2)]
+    ok = check(_concurrent_load(chain, {}) == 2,
+               "a deep chain counts its widest TIER, not its eight rows")
+    ok &= check(len(chain) == 8, "(which is the whole point — eight rows, two slots)")
+
+    # Two different products sharing a tier DO compete: they install at the same moment.
+    both = [{"tier_order": 0}, {"tier_order": 0}, {"tier_order": 1}]
+    ok &= check(_concurrent_load(both, {}) == 2,
+                "products sharing a tier compete for slots")
+    ok &= check(_concurrent_load(both, {0: 3}) == 5,
+                "and what is being added counts against the tier it lands on")
+    ok &= check(_concurrent_load([], {}) == 0, "an empty plan occupies nothing")
+    ok &= check(_concurrent_load([], {2: 4}) == 4,
+                "a first assignment is measured on its own")
+    return ok
+
+
 def test_explode_chain_tiers() -> bool:
     from app.reactions import _resolve_reachable, _explode_chain_tiers
     reached = _resolve_reachable(_SYN_GOO, _SYN_MARKET, _SYN_REACTIONS)
@@ -428,6 +454,7 @@ def run_unit_tests() -> bool:
         test_resolve_reachable(),
         test_explode_shopping_list(),
         test_a_chain_spreads_over_the_slots_it_has(),
+        test_assigning_twice_does_not_book_it_twice(),
         test_explode_chain_tiers(),
         test_value_reaction_batch(),
         test_local_sell_hint(),

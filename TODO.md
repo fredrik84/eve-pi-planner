@@ -352,28 +352,20 @@ default is harder to notice than an absent one. Both defaulted tiers are behind 
 every existing account's costs. Design notes in CLAUDE.md; `test_cost_basis.py` covers the
 precedence and the label.
 
-## 6. Adopt `eslint --rule no-undef` in CI
+## 6. `eslint --rule no-undef` in CI — SHIPPED 2026-08-05
 
-A dead `if (!r.ok)` left behind by the fetch()→api() migration referenced a variable that doesn't
-exist, so **every successful** reaction assign threw a ReferenceError, was caught, and was reported
-to the user as failed. Because `POST /api/reactions/assign` blindly appends, each retry added
-another full set of rows — two suggestions became 27 assignment rows on a 10-slot character
-(reported 2026-08-01, `static/reactions.js:1256`).
+`scripts/lint_js.mjs` + a `lint-js` job in `.github/workflows/build.yml`. The recipe from the
+investigation held: scrape every top-level `function`/`let`/`const`/`var` name out of `static/*.js`
+into the config's globals (908 of them), add the browser globals, enable ONLY `no-undef`. No runtime
+dependency for the app — `npx eslint@9` in CI, runnable locally with `node scripts/lint_js.mjs`.
 
-`node --check` cannot catch this: it is valid syntax, and only fails when the line runs. `eslint`
-with a single rule does catch it, proven both ways on 2026-08-01 — re-introducing the bug reports
-`'r' is not defined` at that exact line, and the fixed tree reports **zero** `no-undef` findings
-across every file in `static/`. So there is no backlog of similar bugs to clear first; adopting the
-rule is purely preventive and starts from green.
+It found exactly one thing on the way in, and it was real: `_indCopyText` read the deprecated
+implicit `window.event` as a free variable. Now explicit, and the tree is green.
 
-The wrinkle is that this codebase's JS is plain `<script>` files sharing ~813 implicit globals, so
-a naive run reports every cross-file helper as undefined. The working recipe (used for the audit)
-is to scrape top-level `function`/`let`/`const`/`var` names from all of `static/*.js` into the
-config's `globals` map, then lint with only `no-undef` enabled. That is ~20 lines of setup and no
-new runtime dependency for the app itself.
-
-**Related, still open:** `assign_reaction` has no idempotency and no capacity check, which is what
-turned a UI bug into 27 rows. See the note under item 7.
+**Deliberately NOT gating the deploy.** The job reports independently rather than being a `needs:`
+of `build`, because this repo pushes straight to main and a lint step that can fail on an npx
+download would block a hotfix. It exists to make the failure visible, which is all the original bug
+needed — nobody was reading a stack trace, the symptom was 27 rows in a table.
 
 ## 9. Name the SYSTEM a container is in + let a build source from several — SHIPPED 2026-08-04
 
@@ -397,22 +389,24 @@ multi-box answer at one pick.
 Left undone: the **output** half of the original note ("and where its output lands") is still not
 modelled — a job's output container is item 2f's territory, not this one's.
 
-## 7. Reaction assignment has no idempotency or capacity guard
+## 7. Reaction assignment idempotency + capacity — SHIPPED 2026-08-05, behind `reactions_assign_guard`
 
-`POST /api/reactions/assign` (`app/reactions/jobs.py`) is a bare INSERT: re-posting the same
-suggestion appends a second full set of rows, and nothing stops the total exceeding the character's
-actual reaction slots. The frontend bug above is fixed, but any transient failure plus a retry can
-still duplicate.
+`POST /api/reactions/assign` was a bare INSERT: re-posting the same suggestion appended a second
+full set of rows, and nothing stopped the total exceeding the character's real reaction slots. Both
+halves are now built, and the decision the old entry was waiting on went this way:
 
-Both plausible fixes change real semantics, so this needs a decision rather than a patch:
-
-- **Idempotent replace** — re-assigning the same (character, type_id, tier_order) replaces that
-  group's rows instead of appending. Kills the duplication class outright, but breaks a user who
-  deliberately assigns the same product twice to one character to get more parallel jobs (today
-  that is what `job_count` is for, so the loss may be theoretical).
-- **Capacity cap** — refuse rows beyond the character's reaction slots. Careful: chain tiers are
-  SEQUENTIAL, not concurrent (tier 0 must finish before tier 1 starts), so a naive "count all rows
-  against slots" cap would wrongly reject legitimate deep chains.
+- **Idempotent replace.** Re-assigning the same (character, product, tier) replaces that group's
+  rows. The objection was a user who deliberately assigns one product twice to get more parallel
+  jobs — but that is what `job_count` is for, and it sets the row count WITHIN the group, so the
+  capability is expressed and not lost. Customer-order rows (`order_id IS NOT NULL`) are never
+  touched: they were committed against real capacity by a different flow.
+- **Capacity counted per TIER, not per row.** Chain tiers are sequential, so a four-tier chain at
+  two jobs a tier is eight rows and never more than two slots at once; summing rows would refuse it.
+  `_concurrent_load` takes the worst tier. Over capacity is a 409 with the numbers in it, and the
+  frontend now shows the server's message instead of a generic "Assign failed" — a refusal that
+  says "needs 12 at once, this character has 10" is actionable.
+- **Unknown capacity never refuses** — a character we cannot read slots for returns 0 and is not
+  capped, the same rule the blueprint print caps follow.
 
 The fuel-block slowness reported 2026-07-06 is **fixed** — verified in code 2026-07-30: the
 Redis-shared `packed_rate` cache (`app/fuelblocks.py`, via `_layout_cache_get_or_compute`) and the

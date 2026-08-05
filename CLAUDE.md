@@ -1671,6 +1671,20 @@ itself rather than the source text — the function reads a unit price to comput
 (ids get reused).
 
 
+## Frontend lint (`scripts/lint_js.mjs`, CI job `lint-js`)
+
+**One rule: `no-undef`.** A dead `if (!r.ok)` left by the fetch()→api() migration referenced a
+variable that no longer existed, so every SUCCESSFUL reaction assign threw a ReferenceError, was
+caught, and was reported to the user as failed — and the assign endpoint appended, so each retry
+added another full set of rows (two suggestions → 27 rows on a 10-slot character). `node --check`
+passes it: valid syntax, fails only when the line runs.
+
+The frontend is plain `<script>` files sharing ~900 implicit globals, so a naive run reports every
+cross-file helper as undefined. The script scrapes top-level `function`/`let`/`const`/`var` names
+out of all of `static/*.js`, feeds them in as globals, adds the browser set, and enables nothing
+else — style rules over this much JS would be noise, and the point is a guard that starts green.
+Run it locally with `node scripts/lint_js.mjs`. It does **not** gate the deploy (see TODO item 6).
+
 ## Bug reporting (`app/bugs.py`, `pp_bugs` table)
 
 Any logged-in pilot can file a report; only admins read/triage them. **Admin = account owns

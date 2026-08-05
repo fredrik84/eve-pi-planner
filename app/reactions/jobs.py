@@ -411,6 +411,63 @@ class AssignRequest(BaseModel):
     chain_tiers: list[ChainTier] = []
 
 
+def _assign_guards_on(context_id: int) -> bool:
+    """Gated: both halves change what a repeated press DOES. Replacing rather than appending is
+    almost always what was meant, but "almost" is why it rolls out rather than lands."""
+    try:
+        from app.features import feature_enabled_for
+        return feature_enabled_for("reactions_assign_guard", context_id)
+    except Exception:
+        return False
+
+
+def _clear_assignment_group(con, character_id: int, type_id: int, tier_order: int) -> int:
+    """Drop this character's existing plan rows for one (product, tier) — the rows a re-assign is
+    about to rewrite. Returns how many went.
+
+    **`order_id IS NULL` only.** Rows raised by the customer-order flow belong to an order that was
+    committed against real capacity; a suggestion re-assign must not silently eat them.
+    """
+    cur = con.execute(
+        "DELETE FROM pp_reaction_assignments WHERE character_id=? AND type_id=? AND tier_order=? "
+        "AND order_id IS NULL", (character_id, type_id, tier_order))
+    return cur.rowcount or 0
+
+
+def _assigned_slot_capacity(con, character_id: int) -> int:
+    """This character's total reaction slots, or 0 when we cannot tell (never scanned).
+
+    0 means "unknown", and unknown never refuses: the same rule the print caps follow — a cap built
+    on absent evidence blocks work the player can really do.
+    """
+    row = con.execute(
+        "SELECT character_id, mass_reactions, advanced_mass_reactions, scopes FROM pp_characters "
+        "WHERE character_id=?", (character_id,)).fetchone()
+    if not row:
+        return 0
+    try:
+        return int(reaction_slots(row)) if reaction_capable(row)[0] else 0
+    except Exception:
+        return 0
+
+
+def _concurrent_load(rows: list[dict], adding: dict[int, int]) -> int:
+    """Peak slots a character's plan actually occupies at once.
+
+    **Chain tiers are SEQUENTIAL** — tier 0 must finish before tier 1 can start — so counting every
+    row against the slot pool would reject legitimate deep chains that never run simultaneously.
+    What competes for slots is everything sharing a tier_order, so the load is the WORST tier, not
+    the sum. `adding` is {tier_order: rows} for the assignment being considered.
+    """
+    per_tier: dict[int, int] = {}
+    for r in rows:
+        t = int(r.get("tier_order") or 0)
+        per_tier[t] = per_tier.get(t, 0) + 1
+    for t, n in (adding or {}).items():
+        per_tier[t] = per_tier.get(t, 0) + n
+    return max(per_tier.values(), default=0)
+
+
 @router.post("/api/reactions/assign")
 def assign_reaction(req: AssignRequest, context_id: int = Depends(require_context)):
     """Commit a suggested (character, product) pairing as standing "go do this" instructions —
@@ -440,17 +497,49 @@ def assign_reaction(req: AssignRequest, context_id: int = Depends(require_contex
             raise HTTPException(status_code=403, detail="Not your character")
 
         now = _time.time()
+        top_tier_order = len(req.chain_tiers)
+        guarded = _assign_guards_on(context_id)
+        replaced = 0
+        if guarded:
+            # **Idempotent.** This endpoint was a bare INSERT, so re-posting the same suggestion
+            # appended a second full set of rows — and a frontend bug that reported every SUCCESSFUL
+            # assign as failed turned two suggestions into 27 rows on a 10-slot character (reported
+            # 2026-08-01). The bug is fixed; any transient failure plus a retry could still do it.
+            # Replacing the (character, product, tier) group makes a retry a no-op. Deliberate
+            # parallelism is unaffected: how many jobs a product runs side by side is `job_count`,
+            # which sets the row count WITHIN the group, so it is expressed here and not by pressing
+            # the button twice.
+            for tier_order, tier in enumerate(req.chain_tiers):
+                replaced += _clear_assignment_group(con, req.character_id, tier.type_id, tier_order)
+            replaced += _clear_assignment_group(con, req.character_id, req.type_id, top_tier_order)
+
+            # **Capacity.** Nothing stopped the total exceeding the character's real reaction slots,
+            # which is how a 10-slot character ended up holding 27 rows. What competes for a slot is
+            # everything at the same TIER — tiers are sequential — so a deep chain is not penalised.
+            existing = [dict(r) for r in con.execute(
+                "SELECT tier_order FROM pp_reaction_assignments WHERE character_id=?",
+                (req.character_id,))]
+            adding = {i: max(1, t.job_count) for i, t in enumerate(req.chain_tiers)}
+            adding[top_tier_order] = max(1, req.job_count)
+            peak = _concurrent_load(existing, adding)
+            slots = _assigned_slot_capacity(con, req.character_id)
+            if slots and peak > slots:
+                con.rollback()
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"That needs {peak} reaction slots at once and this character has "
+                           f"{slots}. Assign fewer jobs, or spread them across characters.")
+
         for tier_order, tier in enumerate(req.chain_tiers):
             _insert_assignment_rows(con, req.character_id, tier.type_id, tier.name, tier.runs,
                                      tier.job_count, 0.0, 0.0, tier_order, now)
 
-        top_tier_order = len(req.chain_tiers)
         _insert_assignment_rows(con, req.character_id, req.type_id, req.name, req.runs,
                                  req.job_count, req.input_cost, req.reward, top_tier_order, now)
         con.commit()
     finally:
         con.close()
-    return {"ok": True}
+    return {"ok": True, "replaced": replaced}
 
 
 class AdoptOrphanRequest(BaseModel):

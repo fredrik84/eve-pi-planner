@@ -3601,7 +3601,10 @@ function indCopyMissing() {
 }
 
 function _indCopyText(text) {
-  const btn = event && event.target;
+  // `window.event` explicitly, not the bare implicit global: it is deprecated, and reading it as a
+  // free variable is exactly the shape of reference `no-undef` exists to catch (see
+  // scripts/lint_js.mjs). Behaviour is identical — the callers are inline onclick handlers.
+  const btn = (window.event && window.event.target) || null;
   const done = () => { if (btn) { const t = btn.textContent; btn.textContent = 'Copied ✓'; setTimeout(() => { btn.textContent = t; }, 1500); } };
   if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done).catch(() => {});
   else { const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select(); try { document.execCommand('copy'); done(); } catch (e) {} document.body.removeChild(ta); }

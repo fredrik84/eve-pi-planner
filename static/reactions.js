@@ -947,7 +947,10 @@ async function _rxSubmitManualAssign() {
       runs: a.jobs * runsPerJob, job_count: a.jobs,
       input_cost: costPerRun * a.jobs * runsPerJob, reward: rewardPerRun * a.jobs * runsPerJob,
       chain_tiers: a.chain_tiers,
-    }).catch(() => { throw new Error('Assign failed'); }))))
+      // Keep what the server said. A refusal now carries a reason worth reading — "that needs 12
+      // reaction slots at once and this character has 10" tells you what to change; "Assign
+      // failed" tells you nothing and reads as a bug in the tool.
+    }).catch(e => { throw new Error((e && e.message) || 'Assign failed'); }))))
     .then(() => { _rxCloseManualAssign(); onReactionsTabOpen(); })
     .catch(err => { status.textContent = err.message; });
 }

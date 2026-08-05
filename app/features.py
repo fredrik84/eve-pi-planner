@@ -204,6 +204,14 @@ FEATURE_REGISTRY = [
                     "side effect of binding it. Orders queued before this keep using the "
                     "account-wide tick list until you edit them.",
      "default": False, "state": "testers"},
+    {"key": "reactions_assign_guard", "label": "Reactions: assigning twice doesn't book it twice",
+     "group": "Reactions",
+     "description": "Re-assigning the same product to the same character REPLACES that plan entry "
+                    "instead of adding a second copy of it, and an assignment that would need more "
+                    "reaction slots than the character has is refused rather than silently booked. "
+                    "Chain tiers run one after another, so a deep chain is still allowed — only "
+                    "jobs that would run at the same moment count against the slots.",
+     "default": False, "state": "testers"},
     {"key": "industry_install_skill_aware", "label": "Industry: don't tell you to start a job you can't",
      "group": "Industry",
      "description": "The start-now checklist names a character with a free slot — now ranked by "
