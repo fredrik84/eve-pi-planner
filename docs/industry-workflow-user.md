@@ -46,7 +46,7 @@ the page.
    fees come out light and nothing else in the plan is affected.
 
 **Save & continue** is never disabled. If you want your own structure's exact ME and TE, add it in
-**Markets & Logistics** (search it, hit the hammer, turn on *Manufacture here* with its rig tiers) —
+**Structures & Markets** (search it, hit the hammer, turn on *Manufacture here* with its rig tiers) —
 that panel is shared with Reactions and needs a character with market access.
 
 After setup, a **Setup & slots** button sits at the top of the tab: job slots, connected blueprints,

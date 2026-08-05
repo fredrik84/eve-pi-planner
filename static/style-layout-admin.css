@@ -1143,7 +1143,7 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-fac-nudge .ind-body { padding-top: 12px; padding-bottom: 12px; }
 .ind-gate-actions { display: flex; gap: 10px; flex-wrap: wrap; }
 .ind-gate-note { margin-top: 14px; font-size: 12px; opacity: 0.85; }
-/* Markets & Logistics: separated pricing vs build sections */
+/* Structures & Markets: separated pricing vs build sections */
 .rx-mkt-sec { margin-bottom: 18px; }
 .rx-mkt-sec-h { font-size: 12px; font-weight: 600; color: #9fb4d8; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 8px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .rx-build-card { border: 1px solid var(--clr-border); border-radius: 7px; background: #12161f; padding: 10px 12px; margin-bottom: 10px; }

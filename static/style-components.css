@@ -271,7 +271,7 @@ tr:hover td { background: #181d2a; }
   #toastHost { right: 10px; left: 10px; bottom: 74px; max-width: none; }
 }
 
-/* Connect-a-character row in Settings → Markets & Logistics. The action used to be an inline
+/* Connect-a-character row in Settings → Structures & Markets. The action used to be an inline
    text link inside a hint sentence, so the one required setup step read as prose. */
 .settings-connect-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 12px; }
 .pp-connect-btn {

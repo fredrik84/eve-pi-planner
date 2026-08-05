@@ -2840,8 +2840,8 @@ function openSettingsModal(section) {
   if (alertsNav) alertsNav.style.display = (_loggedIn && _featureActive('alert_settings')) ? '' : 'none';
   const acctNav = document.getElementById('settingsNavAccount');
   if (acctNav) acctNav.style.display = _loggedIn ? '' : 'none';
-  // Markets & Logistics (shared by Reactions + Manufacturing) — freight rates + followed markets
-  // are account-wide, so show it to any logged-in user.
+  // Structures & Markets (shared by Reactions + Manufacturing) — build structures, freight rates
+  // and followed markets are account-wide, so show it to any logged-in user.
   const mktNav = document.getElementById('settingsNavMarkets');
   if (mktNav) mktNav.style.display = _loggedIn ? '' : 'none';
   if (section === 'markets' && !_loggedIn) section = 'characters';
@@ -2882,7 +2882,8 @@ function settingsSection(name, doLoad) {
   if (name === 'general') _loadGeneralSettings();
 }
 
-// Markets & Logistics settings — the shared market-follow list + jump-freight costs, relocated
+// Structures & Markets settings — the shared build-structure list, market-follow list and
+// jump-freight costs, relocated
 // here from the Reactions tab so both Reactions and Manufacturing read one source. Reuses the
 // reactions component builders (loaded from reactions.js; global functions, resolved at call time).
 function _loadMarketsSettings() {
@@ -2897,8 +2898,9 @@ function _loadMarketsSettings() {
   const marketMgr = `<div class="settings-subsec-title">Markets to price against <span class="pp-card-hint">— priced top-first; Jita is always the last fallback</span></div>`
     + `<div class="pp-card-hint" style="margin:6px 0 8px">Follow a public region market and/or a player structure market.</div>`
     + `<div class="settings-connect-row">`
-    +   `<button class="pp-connect-btn" onclick="connectReactionsMarket()">Connect a market character</button>`
-    +   `<span class="pp-card-hint">Required for structure markets — region markets work without one.</span>`
+    +   `<button class="pp-connect-btn" onclick="connectReactionsMarket()">Connect a character</button>`
+    +   `<span class="pp-card-hint">Required to search structures and read their markets — public`
+    +   ` regions work without one. ${_connectScopeNote()}</span>`
     + `</div>`
     + `<div id="settingsMarketsMgr" class="pp-target-form" style="margin:8px 0 16px;display:block"><div class="pp-empty">Loading…</div></div>`
     + `<div style="border-top:1px solid var(--clr-border);margin-bottom:12px"></div>`;

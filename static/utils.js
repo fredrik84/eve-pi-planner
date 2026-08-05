@@ -227,3 +227,17 @@ function _parseInventoryLine(line) {
   const qty = parseInt(qtyStr.replace(/[^\d]/g, ''), 10) || 0;
   return (qty > 0 && name) ? [name, qty] : null;
 }
+
+// ── ESI connect consent copy ──────────────────────────────────────────────────────────
+// Every "connect a character" affordance (PI market card, Reactions gate, Manufacturing wizard)
+// triggers the SAME unified scope superset — see the long comment in app/esi.py. Testers were
+// reasonably surprised that a button labelled "market character" asked for blueprints and assets,
+// so the consent text is stated once here and reused verbatim everywhere, instead of each panel
+// naming only the part it happens to care about. Do NOT narrow the scopes to match a narrower
+// label: EVE refresh tokens carry only the LAST auth's scopes, so a smaller login silently strips
+// what the character already had, with no way back.
+function _connectScopeNote() {
+  return 'One login grants markets, blueprints, industry jobs, assets, skills and planets — EVE only'
+    + ' remembers the last permissions you granted, so anything narrower would strip what your'
+    + ' character already had.';
+}

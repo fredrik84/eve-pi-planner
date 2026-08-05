@@ -14,7 +14,7 @@ async function onIndustryTabOpen() {
   }
   // Manufacturing requires at least one structure you build in (it sets your ME/TE). Gate the tool
   // until one exists — but don't re-ask for markets/freight if Reactions already set those up
-  // (they live in the shared Markets & Logistics settings). indPopulateFacility fills the facility
+  // (they live in the shared Structures & Markets settings). indPopulateFacility fills the facility
   // map with your structures, so we can tell from it whether a build structure exists yet.
   await indPopulateFacility();
   _indRestoringSettings = true;
@@ -566,9 +566,10 @@ function indApplyGate(hasStructure) {
       <button class="ind-primary-btn" onclick="openSettingsModal('markets')">Add my structure</button>
       <button class="ind-secondary-btn" onclick="indDismissFacilityNudge()">Not now</button>
     </div>
-    <p class="pp-sub ind-gate-note">In <b>Markets &amp; Logistics</b>: search it, hit <b>🔨</b>, turn on
-      <b>Manufacture here</b> with its rig tiers. Needs a character with market access — there's a
-      button for that on the same panel.</p>
+    <p class="pp-sub ind-gate-note">In <b>Settings → Structures &amp; Markets</b>: search it, hit <b>🔨</b>,
+      turn on <b>Manufacture here</b> with its rig tiers. Searching structures needs a connected
+      character — there's a button for that on the same panel. It's also under <b>Setup &amp; slots</b>
+      if you dismiss this.</p>
   </div></div>`;
 }
 
@@ -632,7 +633,7 @@ function _indRenderWizard(hasStructure) {
     + `<div class="settings-connect-row" style="margin-top:8px">`
     + `<button class="pp-connect-btn" onclick="indWizConnect()">Connect a character</button>`
     + `<span class="pp-card-hint">Brings its real slots, skills and blueprints. Without one we plan`
-    + ` against un-researched blueprints and default skills.</span></div></div></div>`
+    + ` against un-researched blueprints and default skills. ${_connectScopeNote()}</span></div></div></div>`
 
     // Step 3 — the build system, folded (this is the one people skip, and skipping it is fine)
     + `<div class="rx-onboard-step"><details><summary class="rx-onboard-step-h" style="cursor:pointer">`
@@ -642,7 +643,7 @@ function _indRenderWizard(hasStructure) {
     + ` index × the job's value, plus tax. Leave this blank and we count only the 4% SCC surcharge, so`
     + ` fees come out light — everything else in the plan is unaffected.</div>`
     + ((typeof _rxAccountSettingsFormHtml === 'function') ? _rxAccountSettingsFormHtml()
-        : `<button class="ind-bp-btn" onclick="openSettingsModal('markets')">Open Markets &amp; Logistics</button>`)
+        : `<button class="ind-bp-btn" onclick="openSettingsModal('markets')">Open Structures &amp; Markets</button>`)
     + `</div></details></div>`
 
     + `<div class="rx-onboard-foot">`
@@ -2619,14 +2620,14 @@ function _indCostBasisWarn(d) {
       + ` to quote the real one.</div>`;
   }
   if (!cb || cb.system_id) return '';
-  // Points at Markets & Logistics, which is where the system actually lives (the planner reads the
+  // Points at Structures & Markets, which is where the system actually lives (the planner reads the
   // account's reaction system + facility tax \u2014 account_build_defaults). It used to open Setup &
   // slots, which holds blueprints, stock and job slots and no way whatsoever to set a system: an
   // instruction that leads somewhere it can't be carried out is worse than no instruction.
   return `<div class="ind-note-line">Job fees exclude the system cost index \u2014 no build system is `
     + `set, so only the 4% SCC${cb.facility_tax_pct ? ' and facility tax' : ''} are counted. `
     + `<button class="ind-link-btn" onclick="openSettingsModal('markets')">Set your build system</button>`
-    + ` (Markets &amp; Logistics \u2192 <i>your reaction/build system</i>) for a true install cost.</div>`;
+    + ` (Structures &amp; Markets \u2192 <i>your reaction/build system</i>) for a true install cost.</div>`;
 }
 
 // The default reaction policy changed on 2026-08-05 (build hybrid polymers and biochemicals, buy

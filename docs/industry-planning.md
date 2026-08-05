@@ -626,7 +626,7 @@ What first use still assumes:
 - **Blueprints are optional** (ME 0/TE 0 + a "connect a character" reminder), assets are opt-in.
 - **The build system comes from REACTIONS settings** (`account_build_defaults` → `reaction_system`),
   so a Reactions-less account quotes job fees light by the system cost index — warned by
-  `_indCostBasisWarn`, which must link to **Markets & Logistics** (where that field lives); it used
+  `_indCostBasisWarn`, which must link to **Structures & Markets** (where that field lives); it used
   to open Setup & slots, which cannot set it.
 - **Slots need the skills scope AND Mass Production / Mass Reactions trained** (`_eligibility`).
   With neither trained the pools are 0, `schedule` starts nothing and the plan renders a 0h

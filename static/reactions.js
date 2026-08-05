@@ -1396,11 +1396,11 @@ function _renderReactions() {
 // all.") once time-efficiency became something people actually need to configure up front.
 function _rxOpenSettingsModal() {
   const el = document.getElementById('rxSettingsModalContent');
-  // Markets + your personal freight/system rates moved to the global Settings → Markets & Logistics
+  // Markets + your personal freight/system rates moved to the global Settings → Structures & Markets
   // section (shared with Manufacturing). Leave a redirect here; keep the group-manager DEFAULTS
   // (an alliance-wide setting) in Reactions where group management lives.
-  const redirect = `<div class="pp-card-hint" style="margin-bottom:12px">Your markets &amp; freight/system rates moved to `
-    + `<button class="ind-link-btn" onclick="_rxCloseSettingsModal();openSettingsModal('markets')">Settings → Markets &amp; Logistics</button>`
+  const redirect = `<div class="pp-card-hint" style="margin-bottom:12px">Your reaction structures, markets &amp; freight/system rates moved to `
+    + `<button class="ind-link-btn" onclick="_rxCloseSettingsModal();openSettingsModal('markets')">Settings → Structures &amp; Markets</button>`
     + ` — now shared with the Manufacturing planner.</div>`;
   el.innerHTML = redirect + (_rxCanEditSettings() ? _rxSettingsFormHtml() : '');
   document.getElementById('rxSettingsModal').style.display = '';
@@ -2170,7 +2170,7 @@ function _rxCharListHtml(d) {
   return `<div class="rx-gate-charlist">${rows}</div>`
     + `<button class="rx-onboard-connect" style="margin-top:4px" onclick="connectReactionsMarket()">`
     + `${chars.length ? 'Connect another character' : 'Connect a character'}</button>`
-    + `<div class="pp-card-hint" style="margin-top:6px">Characters connected here get reaction slots AND market access. The <b>market character</b> reads your structure market — pick one that can dock at it. You can also add characters from the Dashboard (those contribute slots but not market access).</div>`;
+    + `<div class="pp-card-hint" style="margin-top:6px">Characters connected here get reaction slots AND market access. The <b>market character</b> reads your structure market — pick one that can dock at it. You can also add characters from the Dashboard (those contribute slots but not market access). ${_connectScopeNote()}</div>`;
 }
 
 function _rxUpdateSaveBtn() {
@@ -2358,7 +2358,7 @@ async function _rxStructureRecommend() {
     if (hasRx) { el.style.display = 'none'; return; }
     el.style.display = '';
     el.innerHTML = `For accurate reaction ME/TE, set up your reaction structure — `
-      + `<button class="ind-link-btn" onclick="openSettingsModal('markets')">Markets &amp; Logistics</button> → 🔨 → React here. `
+      + `<button class="ind-link-btn" onclick="openSettingsModal('markets')">Structures &amp; Markets</button> → 🔨 → React here. `
       + `<button class="ind-link-btn" onclick="_rxDismissStructReco()">Dismiss</button>`;
   } catch (e) { el.style.display = 'none'; }
 }
@@ -2416,9 +2416,9 @@ function _rxMarketManagerHtml(d) {
   const structs = pricing.filter(m => m.kind === 'structure');
   const unreadable = structs.length && !d.connected;
   const warn = unreadable
-    ? `<div class="pp-warn" style="margin:0 0 8px">⚠ Your structure market${structs.length > 1 ? 's' : ''} can't be read — no connected character has market access, so pricing falls back to Jita (in Reactions <b>and</b> Manufacturing). Connect a market character to fix it.</div>`
-    : (d.connected ? '' : `<div class="pp-card-hint" style="margin:0 0 8px">Structure search needs a `
-        + `connected market character (public regions work without one).`
+    ? `<div class="pp-warn" style="margin:0 0 8px">⚠ Your structure market${structs.length > 1 ? 's' : ''} can't be read — no connected character has market access, so pricing falls back to Jita (in Reactions <b>and</b> Manufacturing). Connect a character that can dock there to fix it. ${_connectScopeNote()}</div>`
+    : (d.connected ? '' : `<div class="pp-card-hint" style="margin:0 0 8px">Searching structures needs a `
+        + `connected character (public regions work without one). ${_connectScopeNote()}`
         + ` <button class="ind-link-btn" onclick="connectReactionsMarket()">Connect one</button></div>`);
   return inheritNote + warn
     + `<div class="rx-mkt-sec"><div class="rx-mkt-sec-h">Price against — in priority order</div>`
@@ -2437,7 +2437,7 @@ async function _rxMountMarkets(containerId) {
   _rxMarketMount = containerId;
   // Fetch on demand if nothing has loaded the market list yet. Previously this just called
   // _rxRenderMarketManager(), which returns silently when _rxMarketData is null — so opening
-  // Settings -> Markets & Logistics WITHOUT first visiting the Reactions tab (the only thing
+  // Settings -> Structures & Markets WITHOUT first visiting the Reactions tab (the only thing
   // that populated it) rendered an empty panel, and structure search appeared broken until you
   // reloaded the page.
   if (!_rxMarketData) {
@@ -2495,10 +2495,10 @@ async function _rxMarketSearch() {
     // people straight here to add a build structure. Someone who has only ever used PI holds no
     // market-scope character, so this empty result IS their dead end unless the way out is on it.
     box.innerHTML = !d.connected
-      ? `<div class="pp-card-hint">No matches. Searching for a <b>structure</b> needs a character with
-           market access — public regions work without one.</div>`
+      ? `<div class="pp-card-hint">No matches. Searching for a <b>structure</b> needs a connected
+           character — public regions work without one. ${_connectScopeNote()}</div>`
         + `<div class="settings-connect-row"><button class="pp-connect-btn" onclick="connectReactionsMarket()">`
-        + `Connect a market character</button></div>`
+        + `Connect a character</button></div>`
       : '<div class="pp-card-hint">No matches.</div>';
     return;
   }

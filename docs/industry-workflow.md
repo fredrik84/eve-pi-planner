@@ -82,7 +82,7 @@ completes onboarding, then re-runs `onIndustryTabOpen`.
 `POST /api/industry/onboarding/reset` (admin, for replaying the screen). Stored in
 `pp_industry_settings` (incl. `onboarded`).
 
-**Cross-tab dependency.** Describing a real build structure happens in **Markets & Logistics**
+**Cross-tab dependency.** Describing a real build structure happens in **Structures & Markets**
 (`pp_markets` build columns, `structures.py`), shared with Reactions. The wizard links out to it;
 `indPopulateFacility` reads the resulting facility map, and `s:`-prefixed keys are the account's own
 structures.
@@ -344,7 +344,7 @@ gates one step of the path above.
    different ownership models that coexist behind `industry_plan_sources` (account-wide tick list
    vs. a build owning its boxes). `plan_source_keys` exists to reconcile them per request.
 4. **Setup for the single most cost-relevant input is in another tab.** The facility drives every
-   material and time figure, but describing a real structure happens in Markets & Logistics, shared
+   material and time figure, but describing a real structure happens in Structures & Markets, shared
    with Reactions. The wizard links out; the tab then nudges about it indefinitely.
 5. **Fifteen flags, and on prod all fifteen sit at `testers` — none is public, including `industry`
    itself.** So the path is *not* fragmented in practice: a tester sees the whole tab, everyone else

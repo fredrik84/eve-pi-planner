@@ -1168,8 +1168,8 @@ PVF-N9    3         95                 60             80                  100   
             <span class="settings-nav-lbl">Alerts</span>
           </button>
           <button class="settings-nav-item" id="settingsNavMarkets" onclick="settingsSection('markets')" style="display:none">
-            <span class="settings-nav-ico">MK</span>
-            <span class="settings-nav-lbl">Markets &amp; Logistics</span>
+            <span class="settings-nav-ico">SM</span>
+            <span class="settings-nav-lbl">Structures &amp; Markets</span>
           </button>
           <button class="settings-nav-item" id="settingsNavAccount" onclick="settingsSection('account')" style="display:none">
             <span class="settings-nav-ico">AC</span>
@@ -1180,10 +1180,13 @@ PVF-N9    3         95                 60             80                  100   
         <!-- Section content -->
         <div class="settings-modal-content">
 
-          <!-- Markets & Logistics section (shared by Reactions + Manufacturing) -->
+          <!-- Structures & Markets section (shared by Reactions + Manufacturing). One row here is
+               simultaneously "price from here" and/or "build here" — that is deliberate, and the
+               old "Markets & Logistics" title hid the second half, so nobody found where build
+               structures are added. -->
           <div id="settingsSecMarkets" class="settings-section" style="display:none">
-            <div class="settings-sec-hdr"><h3 class="settings-sec-title">Markets &amp; Logistics</h3></div>
-            <div class="settings-subsec-hint">Which markets to price against (your local / alliance markets first, Jita as fallback) and your jump-freight costs. Shared by the Reactions and Manufacturing planners.</div>
+            <div class="settings-sec-hdr"><h3 class="settings-sec-title">Structures &amp; Markets</h3></div>
+            <div class="settings-subsec-hint">The structures you manufacture and react in (their rigs set your ME &amp; TE), which markets to price against (your local / alliance markets first, Jita as fallback), and your jump-freight costs. Shared by the Reactions and Manufacturing planners.</div>
             <div id="settingsSecMarketsBody"><div class="pp-empty">Loading…</div></div>
           </div>
 
@@ -1550,6 +1553,20 @@ PVF-N9    3         95                 60             80                  100   
         <button class="pp-modal-close" onclick="indCloseSetup()">✕</button>
       </div>
       <div class="pp-modal-hint">Your manufacturing &amp; reaction job slots (from each character's skills), and connecting a character so the planner can read your real blueprints (ME/TE) and running jobs. Nothing here is required to plan — it just makes the numbers your own.</div>
+      <!-- Signpost, not a second form. Build structures live in Settings → Structures & Markets
+           (one pp_markets row is both "price from here" and "build here"); until this existed the
+           only pointer to them was the dismissible facility nudge, so anyone who dismissed it had
+           to guess which settings panel owned structures. -->
+      <div class="ind-modal-section">
+        <h3 class="ind-modal-h">Where you build</h3>
+        <p class="ind-src-help">A structure's rigs change the materials and time of every job. Pick
+          the closest preset in the plan form's <b>Facility</b> list, or describe the structure you
+          really build in — that lives in <b>Settings → Structures &amp; Markets</b>: search it, hit
+          <b>🔨</b>, turn on <b>Manufacture here</b> with its rig tiers.</p>
+        <div class="ind-src-actions">
+          <button class="ind-bp-btn" onclick="indCloseSetup();openSettingsModal('markets')">Add a build structure</button>
+        </div>
+      </div>
       <div class="ind-modal-section">
         <h3 class="ind-modal-h">Job slots</h3>
         <div id="indSlots" class="ind-slots"></div>
