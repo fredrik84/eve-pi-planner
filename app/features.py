@@ -219,6 +219,14 @@ FEATURE_REGISTRY = [
                     "Before this the two could disagree: the checklist would say 'start it on X' "
                     "above a plan already marking that job blocked for X.",
      "default": False, "state": "testers"},
+    {"key": "industry_placeholder_slots", "label": "Industry: placeholder characters carry job slots",
+     "group": "Industry",
+     "description": "Placeholder characters can declare how many manufacturing and reaction job "
+                    "slots they have, and those slots count toward the Industry planner's pool — "
+                    "so an alt army can be planned for without connecting every alt over ESI. "
+                    "Own flag because it ADDS capacity to accounts that already use placeholders "
+                    "for PI, which changes every plan they run.",
+     "default": False},
     {"key": "industry_default_build_system", "label": "Industry: assume a build system when none is set",
      "group": "Industry",
      "description": "Job installation fees include the system cost index, which is 76% of the fee "

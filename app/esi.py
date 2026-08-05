@@ -342,6 +342,14 @@ def ensure_char_tables():
     # log every alt in. is_dummy=1; their character_id is negative to avoid colliding with real
     # EVE ids. They contribute planet slots + CCU only.
     _add_col("pp_characters", "is_dummy INTEGER DEFAULT 0")
+    # A placeholder's DECLARED Industry job slots (0-11 each, 0 = doesn't do that activity).
+    # Deliberately their own columns rather than writing implied levels into mass_production /
+    # mass_reactions: the user is asked for slots, and slots do not round-trip through the skill
+    # columns — the formula is 1 base + levels, so 0 slots is not expressible at all, and a fake
+    # level would make a placeholder look like a scanned character to every other reader of those
+    # columns (skill advisor, required-skills, the job-time basis).
+    _add_col("pp_characters", "dummy_mfg_slots INTEGER DEFAULT 0")
+    _add_col("pp_characters", "dummy_rx_slots INTEGER DEFAULT 0")
     # Which corp a character is in — needed to attribute a corp hangar (pp_corp_assets) to the
     # right account without counting an unrelated context's corp stock.
     _add_col("pp_characters", "corporation_id BIGINT")

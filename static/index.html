@@ -1214,6 +1214,14 @@ PVF-N9    3         95                 60             80                  100   
                 <label>CCU<select id="dummyCcu" class="bug-input dummy-num">
                   <option>1</option><option>2</option><option>3</option><option>4</option><option selected>5</option>
                 </select></label>
+                <span id="dummyJobSlotFields" style="display:none">
+                  <label title="Manufacturing job slots this alt has (0 = it doesn't manufacture)">Mfg slots<select id="dummyMfgSlots" class="bug-input dummy-num">
+                    <option selected>0</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option><option>7</option><option>8</option><option>9</option><option>10</option><option>11</option>
+                  </select></label>
+                  <label title="Reaction job slots this alt has (0 = it doesn't run reactions)">Rx slots<select id="dummyRxSlots" class="bug-input dummy-num">
+                    <option selected>0</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option><option>7</option><option>8</option><option>9</option><option>10</option><option>11</option>
+                  </select></label>
+                </span>
                 <label>Name prefix<input id="dummyPrefix" class="bug-input" maxlength="40" value="Alt" autocomplete="off"></label>
                 <button onclick="addDummyCharacters(this)">Add</button>
                 <span id="dummyStatus" class="bug-status-msg"></span>

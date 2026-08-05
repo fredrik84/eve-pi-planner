@@ -176,6 +176,21 @@ def _account_characters(con, context_id: int) -> list[dict]:
             for c in chars]
 
 
+def _placeholder_ids(context_id: int) -> set[int]:
+    """The account's placeholder characters. Its own query rather than a column on
+    `_account_characters` so the gap report — which is about REAL toons and what to train on them —
+    keeps seeing exactly the rows it saw before."""
+    con = get_connection()
+    try:
+        return {r["character_id"] for r in con.execute(
+            "SELECT character_id FROM pp_characters "
+            "WHERE context_id=? AND COALESCE(is_dummy,0)=1", (context_id,))}
+    except Exception:
+        return set()
+    finally:
+        con.close()
+
+
 def _missing_for(char: dict, required: list[tuple[int, int]]) -> list[dict]:
     """Which of `required` this character falls short on. A level-0 requirement is satisfied by
     definition (see MAX_SKILL_LEVEL note) — flagging it would produce a gap nobody can close."""
@@ -249,7 +264,14 @@ def analyze_plan_skills(context_id: int, requirements: list[dict], mfg: dict, rx
     worst: dict[int, int] = {}          # skill_id -> highest level this plan demands
     step_count: dict[int, int] = {}     # skill_id -> how many steps it blocks
     capable: dict[int, set[int]] = {}   # type_id -> characters proven able to install it
-    unknown = {c["character_id"] for c in chars if not c["has_data"]}
+    # Placeholders carry no skills BY DEFINITION, so they are neither "capable" nor scannable. They
+    # belong in `unknown` (tier 1: skill_ok None), not left out of both sets — a character absent
+    # from both scores as PROVEN INCAPABLE in skill_tier(), which is a claim we have no basis for
+    # and would make a placeholder with declared slots the last resort for every job. Unknown is the
+    # honest answer, and the one this module already gives an unscanned real character. They are
+    # deliberately kept out of `characters_without_data`, which tells the user to rescan — there is
+    # nothing to rescan on a placeholder.
+    unknown = {c["character_id"] for c in chars if not c["has_data"]} | _placeholder_ids(context_id)
     for tid, key in bp.items():
         required = reqs.get(key) or []
         # A step with no listed requirement is installable by anyone — record that explicitly

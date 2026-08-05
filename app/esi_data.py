@@ -178,6 +178,8 @@ def list_characters(pp_session: str = Cookie(default=None)):
                    COALESCE(advanced_mass_reactions, 0) AS advanced_mass_reactions,
                    COALESCE(mass_production, 0) AS mass_production,
                    COALESCE(advanced_mass_production, 0) AS advanced_mass_production,
+                   COALESCE(dummy_mfg_slots, 0) AS dummy_mfg_slots,
+                   COALESCE(dummy_rx_slots, 0) AS dummy_rx_slots,
                    COALESCE(scopes, '') AS scopes
             FROM pp_characters WHERE context_id=?
         """, (context_id,)).fetchall()
@@ -453,12 +455,16 @@ def list_characters(pp_session: str = Cookie(default=None)):
             # the game's real max of 11 (same formula as reactions.reaction_slots).
             "mass_reactions":     r["mass_reactions"],
             "adv_mass_reactions": r["advanced_mass_reactions"],
-            "reaction_slots":     min(11, 1 + r["mass_reactions"] + r["advanced_mass_reactions"]),
+            # A placeholder has no skills at all: its slot counts are the ones the user DECLARED,
+            # not a formula over skill columns (which can never read below 1 — see dummy_mfg_slots).
+            "reaction_slots":     (r["dummy_rx_slots"] if is_dummy else
+                                   min(11, 1 + r["mass_reactions"] + r["advanced_mass_reactions"])),
             # Manufacturing skills + capacity (Industry planner). manufacturing_slots =
             # 1 base + 1/level of Mass Production + 1/level of Advanced Mass Production, capped 11.
             "mass_production":       r["mass_production"],
             "adv_mass_production":   r["advanced_mass_production"],
-            "manufacturing_slots":   min(11, 1 + r["mass_production"] + r["advanced_mass_production"]),
+            "manufacturing_slots":   (r["dummy_mfg_slots"] if is_dummy else
+                                      min(11, 1 + r["mass_production"] + r["advanced_mass_production"])),
             "reactions_opted_in": "read_character_jobs" in sc,
             # Opted into job tracking but the token predates (or never got) the corrected
             # structure-read scope — so facility names can't resolve and show as "Structure #<id>".
@@ -590,12 +596,19 @@ class DummyCreate(BaseModel):
     max_planets: int = 6        # 1–6 (→ interplanetary_consolidation = max_planets − 1)
     ccu: int = 5               # 1–5 command-centre level
     name_prefix: str = "Alt"
+    # Industry job slots the placeholder declares — asked for as SLOTS (what a builder knows about
+    # their alt), stored verbatim in dummy_mfg_slots/dummy_rx_slots. 0 = doesn't do that activity,
+    # which is the normal case for one of the two pools; 11 is EVE's real max (1 + 5 + 5).
+    mfg_slots: int = 0
+    rx_slots: int = 0
 
 
 class DummyEdit(BaseModel):
     name: str | None = None
     max_planets: int | None = None
     ccu: int | None = None
+    mfg_slots: int | None = None
+    rx_slots: int | None = None
 
 
 def _clamp(v, lo, hi, default):
@@ -611,6 +624,8 @@ def add_dummy_characters(req: DummyCreate, context_id: int = Depends(require_con
     count = _clamp(req.count, 1, 100, 1)
     mp = _clamp(req.max_planets, 1, 6, 6)
     ccu = _clamp(req.ccu, 1, 5, 5)
+    mfg = _clamp(req.mfg_slots, 0, 11, 0)
+    rx = _clamp(req.rx_slots, 0, 11, 0)
     prefix = (req.name_prefix or "Alt").strip()[:40] or "Alt"
     con = get_connection()
     # Globally unique negative ids (below any existing id) so synthetic chars never collide
@@ -627,8 +642,9 @@ def add_dummy_characters(req: DummyCreate, context_id: int = Depends(require_con
         name = f"{prefix} {have + i + 1}"
         con.execute(
             "INSERT INTO pp_characters (character_id, character_name, interplanetary_consolidation, "
-            "command_center_upgrades, context_id, is_dummy) VALUES (?,?,?,?,?,1)",
-            (next_id, name, mp - 1, ccu, context_id),
+            "command_center_upgrades, context_id, dummy_mfg_slots, dummy_rx_slots, is_dummy) "
+            "VALUES (?,?,?,?,?,?,?,1)",
+            (next_id, name, mp - 1, ccu, context_id, mfg, rx),
         )
         created.append(next_id)
         next_id -= 1
@@ -657,6 +673,10 @@ def edit_dummy_character(character_id: int, req: DummyEdit,
         sets.append("interplanetary_consolidation=?"); params.append(_clamp(req.max_planets, 1, 6, 6) - 1)
     if req.ccu is not None:
         sets.append("command_center_upgrades=?"); params.append(_clamp(req.ccu, 1, 5, 5))
+    if req.mfg_slots is not None:
+        sets.append("dummy_mfg_slots=?"); params.append(_clamp(req.mfg_slots, 0, 11, 0))
+    if req.rx_slots is not None:
+        sets.append("dummy_rx_slots=?"); params.append(_clamp(req.rx_slots, 0, 11, 0))
     if sets:
         params += [character_id, context_id]
         con.execute(f"UPDATE pp_characters SET {', '.join(sets)} WHERE character_id=? AND context_id=?", params)

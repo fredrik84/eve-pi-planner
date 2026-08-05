@@ -485,6 +485,9 @@ function renderCharacters(chars, loggedIn) {
   chars = [...(chars || [])].sort((a, b) => (a.wallet_only ? 1 : 0) - (b.wallet_only ? 1 : 0));
   const dummyCard = document.getElementById('dummyCharCard');
   if (dummyCard) dummyCard.style.display = (loggedIn && _featureActive('dummy_characters')) ? '' : 'none';
+  // Industry job slots are a second, separately-flagged thing a placeholder can declare.
+  const dummyJobSlots = document.getElementById('dummyJobSlotFields');
+  if (dummyJobSlots) dummyJobSlots.style.display = _featureActive('industry_placeholder_slots') ? '' : 'none';
 
   const addBtn     = document.getElementById('esiLoginBtn');
   const refreshBtn = document.getElementById('ppRefreshBtn');
@@ -528,14 +531,21 @@ function renderCharacters(chars, loggedIn) {
     if (c.is_dummy) {
       const mpOpts = [1, 2, 3, 4, 5, 6].map(n => `<option${n === c.max_planets ? ' selected' : ''}>${n}</option>`).join('');
       const ccuOpts = [1, 2, 3, 4, 5].map(n => `<option${n === c.ccu ? ' selected' : ''}>${n}</option>`).join('');
+      // Job slots are asked for as SLOTS (0-11), not skill levels — a builder knows they have 10
+      // manufacturing slots, not which Mass Production / Advanced Mass Production split made it.
+      // 0 = doesn't do that activity, which is the normal case for one of the two.
+      const slotOpts = have => _ppSlotRange.map(n => `<option${n === have ? ' selected' : ''}>${n}</option>`).join('');
+      const jobSlots = _featureActive('industry_placeholder_slots') ? `
+          <label class="pp-dummy-field" title="Manufacturing job slots this alt has (0 = it doesn't manufacture)">mfg slots <select data-f="mfg_slots">${slotOpts(c.manufacturing_slots)}</select></label>
+          <label class="pp-dummy-field" title="Reaction job slots this alt has (0 = it doesn't run reactions)">rx slots <select data-f="rx_slots">${slotOpts(c.reaction_slots)}</select></label>` : '';
       row.innerHTML = `
         <div class="pp-char-header">
-          <span class="pp-char-name"><span class="pp-char-dummy-badge" title="Placeholder character — no ESI, contributes planet slots + CCU only">placeholder</span> ${_esc(c.name)}</span>
+          <span class="pp-char-name"><span class="pp-char-dummy-badge" title="Placeholder character — no ESI, contributes only what you declare here">placeholder</span> ${_esc(c.name)}</span>
           <button class="pp-char-del" title="Remove placeholder" data-id="${c.character_id}">✕</button>
         </div>
         <div class="pp-char-meta">
           <label class="pp-dummy-field">planets <select data-f="max_planets">${mpOpts}</select></label>
-          <label class="pp-dummy-field">CCU <select data-f="ccu">${ccuOpts}</select></label>
+          <label class="pp-dummy-field">CCU <select data-f="ccu">${ccuOpts}</select></label>${jobSlots}
         </div>`;
       row.querySelectorAll('select[data-f]').forEach(sel =>
         sel.addEventListener('change', () => editDummyField(c.character_id, sel.dataset.f, parseInt(sel.value))));
@@ -973,16 +983,22 @@ function sendMaterialsToPlanner() {
   if (typeof syncRefillFromInventory === 'function') syncRefillFromInventory();
 }
 
+// EVE's real job-slot range per pool: 0 (doesn't do it) up to 11 = 1 base + 5 + 5.
+const _ppSlotRange = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+
 async function addDummyCharacters(btn) {
   const count = parseInt(document.getElementById('dummyCount').value) || 1;
   const max_planets = parseInt(document.getElementById('dummyMaxPlanets').value) || 6;
   const ccu = parseInt(document.getElementById('dummyCcu').value) || 5;
+  const mfg_slots = parseInt(document.getElementById('dummyMfgSlots').value) || 0;
+  const rx_slots = parseInt(document.getElementById('dummyRxSlots').value) || 0;
   const name_prefix = (document.getElementById('dummyPrefix').value || 'Alt').trim() || 'Alt';
   const status = document.getElementById('dummyStatus');
   status.textContent = 'Adding…';
   btn.disabled = true;
   try {
-    const d = await apiSend('POST', '/api/characters/dummy', { count, max_planets, ccu, name_prefix });
+    const d = await apiSend('POST', '/api/characters/dummy',
+                            { count, max_planets, ccu, mfg_slots, rx_slots, name_prefix });
     status.textContent = `Added ${d.count}`;
     await loadCharacters();
   } catch (e) {

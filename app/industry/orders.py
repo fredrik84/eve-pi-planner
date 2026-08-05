@@ -800,6 +800,7 @@ def install_block(ctx: int, res: dict) -> dict:
             "character_id": cid, "character_name": c["character_name"],
             "manufacturing_slots": c["manufacturing_slots"], "manufacturing_free": c["manufacturing_free"],
             "reaction_slots": c["reaction_slots"], "reaction_free": c["reaction_free"],
+            "is_placeholder": bool(c.get("is_placeholder")),
             "assigned": assigned_by_char.get(cid, 0),
             "jobs": [{"name": t.get("name"), "type_id": t["type_id"], "runs": t["runs"],
                       "activity": t["activity"], "duration_hours": t["duration_hours"],

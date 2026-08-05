@@ -1010,8 +1010,11 @@ async function indLoadSlots(target) {
 }
 
 function _indSlotsHtml(d) {
+    // A placeholder's slots are DECLARED, not read from ESI — say so wherever they're counted, so
+    // a pool total is never mistaken for measured capacity.
+    const ph = c => c.is_placeholder ? '<span class="pp-char-dummy-badge">placeholder</span> ' : '';
     const chips = (d.characters || []).map(c =>
-      `<span class="ind-slot-chip" title="${_esc(c.character_name)}">${_esc(c.character_name)}: `
+      `<span class="ind-slot-chip" title="${_esc(c.character_name)}${c.is_placeholder ? ' — placeholder character; these slots are the ones you declared, not read from ESI' : ''}">${ph(c)}${_esc(c.character_name)}: `
       + (c.manufacturing_slots ? `${c.manufacturing_free}/${c.manufacturing_slots}<span class="ind-slot-sub">mfg</span>` : '<span class="ind-slot-sub">no mfg</span>')
       + ` · `
       + (c.reaction_slots ? `${c.reaction_free}/${c.reaction_slots}<span class="ind-slot-sub">rx</span>` : '<span class="ind-slot-sub">no rx</span>')
@@ -1025,7 +1028,8 @@ function _indSlotsHtml(d) {
       + ((d.excluded || []).length
         ? `<div class="ind-slot-excl"><b>Not used:</b> ` + d.excluded.map(c =>
             `<span title="${_esc(c.reason)}">${_esc(c.character_name)}</span>`).join(', ')
-          + `<div class="ind-slot-excl-why">Characters with no slot skills trained (or no skill data) are left out — `
+          + `<div class="ind-slot-excl-why">Characters with no slot skills trained (or no skill data), and `
+          + `placeholders with no slots declared, are left out — `
           + `their single free slot would inflate every estimate and send you jobs they can't run.</div></div>`
         : '');
 }
@@ -3393,7 +3397,7 @@ function indRenderInstall(d) {
       const mAss = c.jobs.filter(j => j.activity !== 'reaction').length;
       const rAss = c.jobs.filter(j => j.activity === 'reaction').length;
       return `<div class="ind-do-char">
-        <div class="ind-do-hd"><span class="ind-do-who">${_esc(c.character_name)}</span>
+        <div class="ind-do-hd"><span class="ind-do-who">${c.is_placeholder ? '<span class="pp-char-dummy-badge" title="Placeholder character — not connected to ESI; its slots are the ones you declared">placeholder</span> ' : ''}${_esc(c.character_name)}</span>
           <span class="ind-do-count">start ${c.assigned} job${c.assigned > 1 ? 's' : ''}`
           + (groups.length < c.assigned ? ` · ${groups.length} product${groups.length > 1 ? 's' : ''}` : '')
           + `</span></div>
