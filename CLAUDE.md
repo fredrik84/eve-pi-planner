@@ -1328,7 +1328,7 @@ carries `order_id`. `_blend_margin` does NOT run on this path: it exists only be
 batch has no per-order cost, and here each order has a real one, so `metrics.price` is their sum.
 
 **Still not modelled:** a job's output CONTAINER (the point of the whole exercise — item 2f.3 in
-TODO.md), and print locking ACROSS orders — two orders each see the one BPO they share and may each
+TODO.md, item "2f-residual"), and print locking ACROSS orders — two orders each see the one BPO they share and may each
 schedule a concurrent job off it. Per-order copy *runs* are consumed correctly; concurrency is not.
 
 ### Alliance-shared buildings (`industry_group_structures`)
@@ -1671,6 +1671,69 @@ itself rather than the source text — the function reads a unit price to comput
 (ids get reused).
 
 
+## Epoch timestamps must be `double precision`, never `REAL`
+
+On SQLite `REAL` is an 8-byte double; on **Postgres `real` is float4** — about 7 significant digits,
+and a Unix epoch needs 10. So an epoch stored in a `REAL` column is quantised to ~64-128 seconds
+(measured on prod: wrote `1785409464.304`, read back `1785409400.0`).
+
+`app.db.widen_epoch_columns()` runs at startup from `_ensure_all_tables()` and widens every column
+in `_EPOCH_COLUMNS` still sitting at float4. Three things to know:
+
+- **The list is hand-maintained.** A new epoch column added anywhere needs an entry, or it silently
+  rounds. It is explicit rather than a reflective sweep because only EPOCHS need it — percentages,
+  volumes, ISK and security status are all fine at 7 digits, and `types.volume` is asserted to be
+  left alone.
+- **Asking the live schema is the only proof.** The 2026-07-31 pass claimed the BPC scan lease was
+  covered; on 2026-08-05 prod still had all three `pp_bpc_scan` columns at float4. The tell was
+  `test_scan_lease_is_single_writer_across_replicas` failing about half the time — a lease set to
+  `now - 1` rounds back into the future inside its bucket.
+- **Widening is non-lossy but recovers nothing.** Rows written before the migration keep their
+  rounded values; only new writes are exact.
+
+`test_epoch_precision.py` covers the round trip, idempotency and the targeting.
+
+## Fuel-block performance: the regression procedure
+
+The 2026-07-06 "pressed find, stuck >30s" report is fixed (Redis-shared `packed_rate` cache in
+`app/fuelblocks.py` via `_layout_cache_get_or_compute`, plus the cheap preview path `is_preview` in
+`app/fuelblock_planner.py`). **Run this after touching `fuelblock_planner.py`, `fuelblocks.py`,
+`layout.py`, or the layout caches** — all three checks, because they fail independently.
+
+**A. Preview must do no factory geometry** — the fix that matters most, and the one a refactor is
+most likely to silently undo. In the container:
+
+```python
+import app.planner_advisor as pa, app.fuelblock_planner as fp
+calls = []
+orig = pa._factory_pack_max_diameter
+pa._factory_pack_max_diameter = lambda *a, **k: (calls.append(a), orig(*a, **k))[1]
+# preview  = no chosen_systems  -> expect 0 calls
+# full plan = chosen_systems set -> expect >0 calls (was 21 when first measured)
+```
+
+Expected **0 calls in preview, non-zero with `chosen_systems`**. A non-zero preview count means
+`is_preview` stopped being threaded through and every recommendation pays full placement geometry.
+
+**B. Cold-process cost must not return.** Restart the pod, then time the first fuel-block plan and a
+second identical one:
+
+```
+ssh node01.failed.name "sudo k3s kubectl -n production rollout restart deploy/eve-pi-planner"
+ssh node01.failed.name "sudo k3s kubectl -n production logs -l app=eve-pi-planner --tail=200 \
+  | grep -E 'fuelblock\.(fetch_planets_and_recs|extractor_pipeline)'"
+```
+
+The first call after a restart should be close to the warm one — that is the whole point of the L2
+Redis cache. A large cold/warm gap means it degraded to in-process only.
+
+**C. Cross-replica sharing.** With 2 replicas, a plan computed on one pod should leave the other
+warm: issue the same request repeatedly and confirm the timings don't alternate fast/slow.
+Alternation means the Redis layer isn't being hit and each pod is caching alone.
+
+**Regression threshold:** the original user-visible symptom was 30s. Treat anything over a few
+seconds on a warm path as a regression worth tracing rather than tuning.
+
 ## Frontend lint (`scripts/lint_js.mjs`, CI job `lint-js`)
 
 **One rule: `no-undef`.** A dead `if (!r.ok)` left by the fetch()→api() migration referenced a
@@ -1683,7 +1746,9 @@ The frontend is plain `<script>` files sharing ~900 implicit globals, so a naive
 cross-file helper as undefined. The script scrapes top-level `function`/`let`/`const`/`var` names
 out of all of `static/*.js`, feeds them in as globals, adds the browser set, and enables nothing
 else — style rules over this much JS would be noise, and the point is a guard that starts green.
-Run it locally with `node scripts/lint_js.mjs`. It does **not** gate the deploy (see TODO item 6).
+Run it locally with `node scripts/lint_js.mjs`. It does **not** gate the deploy:
+this repo pushes straight to main, and a lint step that can fail on an npx download must not block a
+hotfix. It exists to make the failure visible, which is all the original bug needed.
 
 ## Bug reporting (`app/bugs.py`, `pp_bugs` table)
 
