@@ -3,6 +3,13 @@
 Module-by-module map of `app/` and `static/`. Read this before adding a route, a module, or a
 large frontend block. Back to [CLAUDE.md](../CLAUDE.md).
 
+Find a module: `grep -n '`app/' docs/code-layout.md` and read from that line — the file is ordered
+backend first (`app/main.py` outward, then the layout generator at `### Factory Layout generator`),
+then the frontend `static/*.js` and the CSS bundles at the end. What a subsystem *does* lives in
+the service file ([pi.md](pi.md), [reactions.md](reactions.md),
+[industry-planning.md](industry-planning.md), [industry-running.md](industry-running.md),
+[platform.md](platform.md)); this file only says where it is.
+
 ## Code layout
 
 `app/main.py` is **composition only** — routers, startup/shutdown, the page routes (`/`, `/s/{id}`,
