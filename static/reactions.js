@@ -1468,6 +1468,66 @@ function _rxSetTimeEffValue(prefix, pct) {
   document.getElementById(`${prefix}TimeEff`).style.display = match ? 'none' : '';
 }
 
+// ── Solar-system typeahead (shared by the group and account system fields) ─────────────────
+// The system name is resolved by exact match server-side and REJECTED if unknown, so a typo is a
+// silent no-op that leaves every job-fee estimate light. This is a suggestion list only — the
+// input stays free text and still validates on save, so a failed/empty search costs nothing.
+const _RX_SYS_TIMERS = {};
+
+function _rxSystemInputHtml(id) {
+  return `<div class="ind-search-wrap" style="max-width:260px">
+      <input type="text" id="${id}" class="pp-num-input" style="width:100%;box-sizing:border-box"
+             placeholder="e.g. Jita" autocomplete="off"
+             oninput="_rxSysOnInput('${id}')" onkeydown="_rxSysOnKey('${id}', event)"
+             onblur="setTimeout(() => _rxSysHide('${id}'), 150)">
+      <div id="${id}Results" class="ind-search-results" style="display:none"></div>
+    </div>`;
+}
+
+function _rxSysOnInput(id) {
+  clearTimeout(_RX_SYS_TIMERS[id]);
+  const q = document.getElementById(id).value.trim();
+  if (q.length < 2) { _rxSysHide(id); return; }
+  _RX_SYS_TIMERS[id] = setTimeout(() => _rxSysSearch(id, q), 200);
+}
+
+// Enter takes the first suggestion, same as the Industry product picker.
+function _rxSysOnKey(id, ev) {
+  if (ev.key === 'Escape') { _rxSysHide(id); return; }
+  if (ev.key !== 'Enter') return;
+  const box = document.getElementById(`${id}Results`);
+  const first = box && box.style.display !== 'none' && box.querySelector('.ind-search-row');
+  if (first) { ev.preventDefault(); first.click(); }
+}
+
+async function _rxSysSearch(id, q) {
+  let d;
+  try {
+    d = await api('/api/systems/search?q=' + encodeURIComponent(q));
+  } catch (e) { _rxSysHide(id); return; }        // endpoint down → plain free-text field
+  const box = document.getElementById(`${id}Results`);
+  if (!box) return;
+  const results = (d && d.results) || [];
+  if (!results.length) { _rxSysHide(id); return; }
+  box.innerHTML = results.map(x => {
+    const where = [x.constellation, x.region].filter(Boolean).join(' · ');
+    const sec = x.security == null ? '' : x.security.toFixed(1);
+    return `<div class="ind-search-row" onclick="_rxSysPick('${id}', '${_esc(x.system).replace(/'/g, "\\'")}')">`
+      + `${_esc(x.system)} <span class="pp-card-hint">${sec ? _esc(sec) + (where ? ' — ' : '') : ''}${_esc(where)}</span></div>`;
+  }).join('');
+  box.style.display = '';
+}
+
+function _rxSysHide(id) {
+  const box = document.getElementById(`${id}Results`);
+  if (box) box.style.display = 'none';
+}
+
+function _rxSysPick(id, name) {
+  document.getElementById(id).value = name;
+  _rxSysHide(id);
+}
+
 function _rxSettingsFormHtml() {
   return `
     <div class="pp-card-title" style="font-size:13px;margin-top:4px">Group defaults
@@ -1484,7 +1544,7 @@ function _rxSettingsFormHtml() {
       <input type="number" id="rxSetCollateral" class="pp-num-input" style="width:100px" step="0.1">
 
       <label class="pp-label" for="rxSetSystem">Reaction system</label>
-      <input type="text" id="rxSetSystem" class="pp-num-input" style="width:120px" placeholder="e.g. Jita">
+      ${_rxSystemInputHtml('rxSetSystem')}
 
       <label class="pp-label" for="rxSetTax">Facility tax %</label>
       <input type="number" id="rxSetTax" class="pp-num-input" style="width:100px" step="0.1">
@@ -1545,7 +1605,7 @@ function _rxAccountSettingsFormHtml() {
       <input type="number" id="rxAcctCollateral" class="pp-num-input" style="width:100px" step="0.1">
 
       <label class="pp-label" for="rxAcctSystem" title="Drives job-installation fees for reactions AND manufacturing — the Industry planner reads this same value">Your reaction / build system</label>
-      <input type="text" id="rxAcctSystem" class="pp-num-input" style="width:120px" placeholder="e.g. Jita">
+      ${_rxSystemInputHtml('rxAcctSystem')}
 
       <label class="pp-label" for="rxAcctTax">Your facility tax %</label>
       <input type="number" id="rxAcctTax" class="pp-num-input" style="width:100px" step="0.1">

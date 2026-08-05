@@ -655,3 +655,51 @@ def list_constellations():
     result = {"constellations": names, "regions": {n: region_of.get(n, "") for n in names}}
     cache_set_json(_CONSTELLATIONS_CACHE_KEY, result, ttl=3600)
     return result
+
+
+@router.get("/api/systems/search")
+def search_systems(q: str = ""):
+    """Solar systems matching `q`, for the reaction/build-system typeahead.
+
+    That setting is resolved by exact name (`app.reactions.settings._resolve_system_id`) and
+    rejected if unknown, so a typo silently leaves every job-fee estimate light — this makes the
+    right spelling one click away. Static SDE geography only (no per-user data), so it is open
+    like `/api/constellations`; min length and the 25-row cap match `/api/industry/search`.
+    Constellation + region + security come back with each hit because a bare system name doesn't
+    disambiguate for a player who knows their space by region, and security drives rig bonuses.
+    """
+    q = (q or "").strip()
+    if len(q) < 2:
+        return {"results": []}
+    con = get_connection()
+    try:
+        # LOWER() both sides — Postgres LIKE is case-sensitive (see /api/industry/search).
+        # Prefix hits first, then shortest, so typing a full name puts the exact system on top.
+        rows = con.execute(
+            "SELECT system, constellation, security, system_id FROM system_geo "
+            "WHERE LOWER(system) LIKE ? "
+            "ORDER BY CASE WHEN LOWER(system) LIKE ? THEN 0 ELSE 1 END, LENGTH(system), system "
+            "LIMIT 25",
+            (f"%{q.lower()}%", f"{q.lower()}%"),
+        ).fetchall()
+        region_of: dict[str, str] = {}
+        try:
+            for r in con.execute("SELECT name, region FROM constellations"):
+                region_of[r["name"]] = r["region"]
+        except Exception:
+            # Optional table (scripts/populate_geo.py) — degrade to no region, don't fail search.
+            log.exception("constellations lookup failed (region label degraded to none)")
+    except Exception:
+        # system_geo is absent in a fresh checkout that never ran populate_geo.py. The field it
+        # feeds is free text and validates on save, so an empty list is a working fallback.
+        log.exception("system search failed")
+        return {"results": []}
+    finally:
+        con.close()
+    return {"results": [{
+        "system": r["system"],
+        "constellation": r["constellation"] or "",
+        "region": region_of.get(r["constellation"] or "", ""),
+        "security": round(r["security"], 1) if r["security"] is not None else None,
+        "system_id": r["system_id"],
+    } for r in rows]}
