@@ -2299,9 +2299,66 @@ function _rxBuildRowHtml(m, d) {
     <label class="rx-build-chk"><input type="checkbox" id="br-${m.id}" ${m.build_rx ? 'checked' : ''}> React here</label>
     <div class="rx-rig-row">ME rig <select id="brme-${m.id}">${_rigOpts(m.rx_me_rig)}</select> · TE rig <select id="brte-${m.id}">${_rigOpts(m.rx_te_rig)}</select></div>
     ${_rigFamRow(m, 'brmeg', 'reaction')}${_rigFamRow(m, 'brteg', 'reaction')}
-    <label class="rx-build-chk"><input type="checkbox" id="bp-${m.id}" ${m.price_from ? 'checked' : ''}> Also price from here</label>
+    ${m.location_id < 0
+      ? `<div class="pp-card-hint">Added by hand — can't be priced from: reading a structure's market needs ESI and its real in-game id.</div>`
+      : `<label class="rx-build-chk"><input type="checkbox" id="bp-${m.id}" ${m.price_from ? 'checked' : ''}> Also price from here</label>`}
     <div class="rx-build-foot"><button class="pp-add-btn" onclick="_rxSaveBuild(${m.id})">Save</button>${share}${bonus.length ? `<span class="rx-mkt-build-badge">${bonus.join(' · ')}</span>` : ''}</div>
   </div>`;
+}
+
+// ── Describe a structure by hand ─────────────────────────────────────────────────────
+// Searching for a structure needs a connected character holding structure-search scopes. Somebody
+// who already knows which buildings they run shouldn't have to grant those just to describe one —
+// everything after the id (hull, rigs, families, tax) was always typed anyway. Hulls come from the
+// backend registry, the system from the shared typeahead, and its SECURITY is derived from that
+// system rather than asked for.
+let _rxHulls = null;
+async function _rxLoadHulls() {
+  if (_rxHulls) return _rxHulls;
+  try {
+    const d = await api('/api/markets/hulls');
+    _rxHulls = d.hulls || [];
+  } catch (e) { _rxHulls = []; }
+  return _rxHulls;
+}
+
+function _rxManualOn() {
+  return typeof _featureActive === 'function' && _featureActive('industry_manual_structures');
+}
+
+function _rxManualFormHtml() {
+  if (!_rxManualOn()) return '';
+  const hulls = (_rxHulls || []).map(h =>
+    `<option value="${_esc(h.key)}">${_esc(h.key)}${h.activity === 'reaction' ? ' (reactions)' : ''}</option>`).join('');
+  if (!hulls) return '';
+  return `<div class="rx-mkt-search" style="flex-wrap:wrap;align-items:flex-start">
+      <input id="rxManualName" placeholder="Structure name, e.g. 1DQ1-A - Home Azbel" style="flex:1 1 220px">
+      <select id="rxManualHull">${hulls}</select>
+      ${_rxSystemInputHtml('rxManualSystem')}
+      <button class="pp-add-btn" onclick="_rxManualAdd()">Add by hand</button>
+      <div class="pp-card-hint" style="flex:1 1 100%">You can BUILD in a hand-added structure, but not
+        price from it — reading a structure's market needs ESI and the structure's real in-game id.
+        Its security (and so its rig bonuses) comes from the system you pick.</div>
+      <span id="rxManualMsg" class="pp-card-hint"></span>
+    </div>`;
+}
+
+async function _rxManualAdd() {
+  const msg = document.getElementById('rxManualMsg');
+  const name = (document.getElementById('rxManualName') || {}).value || '';
+  const hull = (document.getElementById('rxManualHull') || {}).value || '';
+  const system = (document.getElementById('rxManualSystem') || {}).value || '';
+  if (!name.trim() || !system.trim()) {
+    if (msg) msg.textContent = 'Name and system are both needed.';
+    return;
+  }
+  try {
+    _rxMarketData = await apiSend('POST', '/api/markets/manual',
+                                  { name: name.trim(), hull: hull, system: system.trim() });
+  } catch (e) { toastError(e, 'Could not add that structure'); return; }
+  toast('Added — now set its rigs');
+  _rxRenderMarketManager();
+  if (typeof indPopulateFacility === 'function') indPopulateFacility();
 }
 
 // ── Alliance-suggested buildings ─────────────────────────────────────────────────────
@@ -2429,6 +2486,7 @@ function _rxMarketManagerHtml(d) {
     + `<div id="rxMarketSearchResults"></div></div></div>`
     + `<div class="rx-mkt-sec"><div class="rx-mkt-sec-h">Structures you build in <span class="pp-card-hint">their rigs set your ME &amp; TE — no ordering needed</span></div>`
     + (build.length ? build.map(m => _rxBuildRowHtml(m, d)).join('') : `<div class="pp-card-hint">None yet — search above and choose <b>+ Build</b> on a structure.</div>`)
+    + _rxManualFormHtml()
     + `</div>`
     + _rxSuggestedHtml(d);
 }
@@ -2470,7 +2528,9 @@ async function _rxRefreshMarkets() {
   try {
     // Both together: the rig-family registry has to be in hand before the build cards render, or
     // the "what is this rig for" pickers come up empty on the first paint.
-    const [d] = await Promise.all([api('/api/markets'), _rxLoadRigFamilies()]);
+    // Hulls ride along for the same reason: the hand-added-structure form can't paint its hull
+    // picker before the registry is in hand, and the registry is the only place hulls are named.
+    const [d] = await Promise.all([api('/api/markets'), _rxLoadRigFamilies(), _rxLoadHulls()]);
     _rxMarketData = d;
   } catch (e) {}
   _rxRenderMarketManager();

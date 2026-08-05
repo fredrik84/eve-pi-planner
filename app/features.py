@@ -242,6 +242,14 @@ FEATURE_REGISTRY = [
                     "and tax — and nobody else has to add it again. Your own row always wins for a "
                     "structure you have described yourself.",
      "default": False, "state": "testers"},
+    {"key": "industry_manual_structures", "label": "Industry: describe a build structure by hand",
+     "group": "Industry",
+     "description": "Add a structure you build in by typing its name and picking its hull and "
+                    "system — no connected character and no structure-search scopes needed. Its "
+                    "security (and so its rig bonuses) comes from the system you pick. It can be "
+                    "built in like any other structure, but never priced from: reading a "
+                    "structure's market needs ESI and a real structure id.",
+     "default": False, "state": "testers"},
     {"key": "industry_per_order_plans", "label": "Industry: plan each order on its own",
      "group": "Industry",
      "description": "Plan every queued order separately instead of aggregating the queue into one "

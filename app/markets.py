@@ -285,11 +285,69 @@ def _detect_structure_meta(context_id: int, structure_id: int) -> tuple:
         return (None, None, None)
 
 
+# ── Manual (hand-described) structures ─────────────────────────────────────────────────
+# A tester who already knows which buildings they run should not have to grant structure-search
+# scopes just to describe one. Everything AFTER the location id is manual already (hull, rigs,
+# families, tax), so the only ESI-shaped part is where the id comes from — and a hand-described
+# structure can simply be given one we mint ourselves.
+
+def is_manual_location(location_id) -> bool:
+    """Manual rows are the NEGATIVE-id ones. Every real EVE structure id is positive, so the sign
+    alone tells the two apart forever, with no extra column to keep in sync."""
+    try:
+        return int(location_id) < 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _manual_structures_on(context_id: int) -> bool:
+    """Gated while it rolls out: a hand-described structure is an unverified claim about a
+    building, and its rigs are quoted into every job routed there."""
+    try:
+        from app.features import feature_enabled_for
+        return feature_enabled_for("industry_manual_structures", context_id)
+    except Exception:
+        return False
+
+
+def _next_manual_location_id(con) -> int:
+    """One below the globally-minimum location id — the same allocation `add_dummy_characters`
+    uses for placeholder characters, and global for the same reason: the id is compared and stored
+    without its owner in enough places (the group-share dedup keys on location_id alone, and the
+    per-structure market cache key is `mkt:struct:<id>`) that two accounts must never mint the same
+    one. Ids are cheap; a collision between two different buildings is not."""
+    row = con.execute("SELECT MIN(location_id) AS m FROM pp_markets").fetchone()
+    return min(0, (row["m"] if row else 0) or 0) - 1
+
+
+def _manual_system(name: str) -> dict | None:
+    """Resolve a typed system name to `{system, system_id, security}` from `system_geo` — the same
+    table `/api/systems/search` (the typeahead the user picked from) reads, so anything the
+    typeahead offered resolves here. Case-insensitive exact match; unknown name → None."""
+    con = get_connection()
+    try:
+        row = con.execute(
+            "SELECT system, system_id, security FROM system_geo WHERE LOWER(system)=?",
+            ((name or "").strip().lower(),),
+        ).fetchone()
+    except Exception:
+        return None
+    finally:
+        con.close()
+    return dict(row) if row and row["system_id"] else None
+
+
 def effective_markets(context_id: int) -> list[dict]:
     """Ordered market list actually used to price this account: personal list if any, else the
     account's alliance-group default list if any, else [] (Jita-only). Same personal->group->
     fallback shape as effective_reaction_settings()."""
-    pricing = lambda ms: [m for m in ms if m.get("price_from", 1)]
+    # A manual structure can never be a PRICING source: its location id is one we minted, so
+    # `/markets/structures/{id}/` resolves to nothing and the book comes back empty — silently, and
+    # an empty book reads as "this market quotes nothing" rather than as an error. The writes force
+    # `price_from=0` on those rows; this is the second lock, so a row that got one some other way
+    # (an old share, a hand-edited DB) still can't poison the chain.
+    pricing = lambda ms: [m for m in ms
+                          if m.get("price_from", 1) and not is_manual_location(m.get("location_id"))]
     own = pricing(_list_markets("account", context_id))
     if own:
         return own
@@ -782,6 +840,11 @@ def search_markets(q: str = "", context_id: int = Depends(require_context)):
 def add_market(req: MarketAdd, context_id: int = Depends(require_context)):
     if req.kind not in _ALLOWED_KINDS:
         raise HTTPException(status_code=400, detail="Bad market kind")
+    # Real EVE ids are positive. Negative ones are OURS (see `_next_manual_location_id`) and are
+    # minted only by `add_manual_structure`, which forces `price_from` off — accepting one here
+    # would be a way around that, and around the id allocation.
+    if req.location_id <= 0:
+        raise HTTPException(status_code=400, detail="Bad location id")
     owner_kind, owner_id = _owner_for_scope(context_id, req.scope)
     ensure_markets_table()
     con = get_connection()
@@ -806,6 +869,70 @@ def add_market(req: MarketAdd, context_id: int = Depends(require_context)):
              1 if req.price_from else 0, 1 if req.build_mfg else 0, 1 if req.build_rx else 0,
              clamp(req.me_rig), clamp(req.te_rig), clamp(req.rx_me_rig), clamp(req.rx_te_rig),
              sys_id),
+        )
+        con.commit()
+    finally:
+        con.close()
+    return _markets_payload(context_id)
+
+
+class ManualStructureAdd(BaseModel):
+    name: str
+    hull: str
+    system: str
+    scope: str = "account"
+
+
+@router.post("/api/markets/manual")
+def add_manual_structure(req: ManualStructureAdd, context_id: int = Depends(require_context)):
+    """Add a BUILD structure the user describes by hand — a name, a hull and a system — with no ESI
+    character, no structure search and no scopes.
+
+    Everything that makes a structure worth describing is already a manual answer (rig tiers, rig
+    families, facility tax), and this closes the last ESI-shaped gap: the location id. It is minted
+    NEGATIVE (`_next_manual_location_id`) so it can never collide with a real EVE structure id.
+
+    Security is DERIVED from the picked system, never asked: `system_geo` carries the system's
+    security status and `_sec_band` bands it, so asking would be asking for something we already
+    know (CLAUDE.md rule 3) and would let the two disagree.
+
+    **`price_from` is forced off, and there is no parameter to turn it on.** Reading a structure's
+    market is `GET /markets/structures/{id}/` against a REAL id with a real token; a minted id
+    resolves to nothing and returns an empty book, which reads as "quotes nothing" rather than as a
+    failure. Building here is honest; pricing from here would be silently wrong.
+
+    Rigs, families and tax are then set through the normal `POST /api/markets/{id}/build` — this
+    creates the row, it does not duplicate the configuration form.
+    """
+    from app.industry.structures import MFG_HULLS, RX_HULLS, _sec_band
+    if not _manual_structures_on(context_id):
+        raise HTTPException(status_code=403, detail="Manual structures are not enabled for you yet")
+    name = (req.name or "").strip()[:120]
+    if not name:
+        raise HTTPException(status_code=400, detail="Give the structure a name")
+    hull = (req.hull or "").strip().lower()
+    if hull not in MFG_HULLS + RX_HULLS:
+        raise HTTPException(status_code=400, detail="Pick a structure hull")
+    sysrow = _manual_system(req.system)
+    if not sysrow:
+        raise HTTPException(status_code=400, detail=f'Unrecognized solar system "{req.system}"')
+    owner_kind, owner_id = _owner_for_scope(context_id, req.scope)
+    ensure_markets_table()
+    con = get_connection()
+    try:
+        nxt = con.execute(
+            "SELECT COALESCE(MAX(priority), -1) AS m FROM pp_markets WHERE owner_kind=? AND owner_id=?",
+            (owner_kind, owner_id),
+        ).fetchone()["m"] + 1
+        loc = _next_manual_location_id(con)
+        con.execute(
+            "INSERT INTO pp_markets (owner_kind, owner_id, kind, location_id, name, priority, active, "
+            "hull, security, price_from, build_mfg, build_rx, system_id) "
+            "VALUES (?,?,?,?,?,?,1,?,?,0,?,?,?)",
+            (owner_kind, owner_id, "structure", loc, name, nxt, hull,
+             _sec_band(sysrow["security"]),
+             1 if hull in MFG_HULLS else 0, 1 if hull in RX_HULLS else 0,
+             sysrow["system_id"]),
         )
         con.commit()
     finally:
@@ -841,6 +968,16 @@ def list_rig_families(context_id: int = Depends(require_context)):
     return {"families": family_registry()}
 
 
+@router.get("/api/markets/hulls")
+def list_structure_hulls(context_id: int = Depends(require_context)):
+    """The pickable structure hulls, so the UI never hardcodes them — same rule (and the same
+    reason) as `/api/markets/rig-families`: the hull keys drive the role bonus, and a list copied
+    into JS drifts from `app.industry.structures` the first time a hull is added."""
+    from app.industry.structures import MFG_HULLS, RX_HULLS
+    return {"hulls": [{"key": h, "activity": "manufacturing"} for h in MFG_HULLS]
+                     + [{"key": h, "activity": "reaction"} for h in RX_HULLS]}
+
+
 @router.post("/api/markets/{market_id}/build")
 def set_market_build(market_id: int, req: MarketBuildConfig, context_id: int = Depends(require_context)):
     """Configure a structure as a BUILD facility: whether you manufacture / react there, the fitted
@@ -869,14 +1006,19 @@ def set_market_build(market_id: int, req: MarketBuildConfig, context_id: int = D
             sets.append("hull=?"); vals.append(req.hull or None)
         if req.security is not None:
             sets.append("security=?"); vals.append(req.security or None)
-        if req.price_from is not None:
-            sets.append("price_from=?"); vals.append(1 if req.price_from else 0)
-        # Backfill the system for a row added before we stored it — best-effort, and only when the
-        # user is already editing this structure, never inside a plan.
         row = con.execute("SELECT location_id, kind, system_id FROM pp_markets "
                           "WHERE id=? AND owner_kind=? AND owner_id=?",
                           (market_id, owner_kind, owner_id)).fetchone()
-        if row and row["kind"] == "structure" and not row["system_id"]:
+        manual = bool(row) and is_manual_location(row["location_id"])
+        if req.price_from is not None:
+            # A hand-described structure has no readable market at all (see add_manual_structure),
+            # so "price from here" is refused rather than accepted and quietly answered with an
+            # empty book. Turning it OFF is always allowed.
+            sets.append("price_from=?"); vals.append(1 if (req.price_from and not manual) else 0)
+        # Backfill the system for a row added before we stored it — best-effort, and only when the
+        # user is already editing this structure, never inside a plan. Skipped for a manual row:
+        # there is nothing at that id to detect, and its system was answered when it was created.
+        if row and row["kind"] == "structure" and not manual and not row["system_id"]:
             _hull, _sec, sys_id = _detect_structure_meta(context_id, row["location_id"])
             if sys_id:
                 sets.append("system_id=?"); vals.append(sys_id)
