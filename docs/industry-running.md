@@ -47,6 +47,15 @@ settings PUT, for the reason already written above. Applied in `resolve_unit_cos
   this structure's rig apply to this job" and a category answers "does this account run this kind of
   reaction". They agree today and needn't forever. Labels are served, never hardcoded in the UI
   (same rule as `ALERT_KINDS`).
+- **The default (2026-08-05, tester request): build hybrid polymers and biochemicals, buy composites
+  & intermediates** (`DEFAULT_BUY_CATEGORIES` in `categories.py`, applied by `_parse_reaction_policy`
+  / `default_reaction_policy`). Those two feed later steps of a build directly, so reacting them
+  removes a purchase without adding a stage; composites sit under intermediates and are the family
+  where buying is usually the better trade. It is a **code default only**: it reaches every account
+  whose `reaction_policy` column is NULL — a row created by onboarding, source memory or the
+  freshness stamp does NOT count as a choice, which is what `reaction_policy_stored` distinguishes —
+  and it never overwrites a stored policy. An empty stored `buy_categories` means "build all three"
+  and is obeyed as such, so the default keys off the key being ABSENT, not falsy.
 - **A category may only speak for what it can identify.** An uncategorisable reaction (no group, or
   a group in no category) is BUILT. That is why "we don't run reactions at all"
   (`build_reactions: false`) is its own switch and not three ticks.

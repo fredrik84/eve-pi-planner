@@ -41,6 +41,22 @@ REACTION_CATEGORIES: dict[str, dict] = {
 }
 
 
+# What an account buys in when it has NEVER touched the policy control (2026-08-05, tester request).
+#
+# Hybrid polymers and biochemicals feed later steps of a build DIRECTLY, so reacting them removes a
+# purchase without adding a stage to what the builder actually does — the reaction output goes
+# straight into the next job that was already scheduled. Composites and intermediates are the family
+# where buying is usually the better trade: they are the deepest sub-tree (intermediates feed
+# composites feed the build), so building them is where the extra stages, slots and moon-goo sourcing
+# pile up, and they are the most liquid to buy.
+#
+# This is only a DEFAULT. It applies to accounts with no stored policy and to nothing else — an
+# account that has used the control keeps exactly what it chose (see `_parse_reaction_policy`). It is
+# a families-only split by design: whether a first-stage/second-stage axis is also wanted is an open
+# question with the tester, not something this default decides.
+DEFAULT_BUY_CATEGORIES: tuple[str, ...] = ("composite",)
+
+
 def category_registry() -> list[dict]:
     """The pickable categories, for the UI. Never hardcode this list in the frontend."""
     return [{"key": k, "label": v["label"], "description": v["description"]}

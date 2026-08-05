@@ -301,6 +301,10 @@ policy are untouched.
 
 **Size: XS.** **No flag** — it's a default inside an existing flagged feature.
 
+**Shipped 2026-08-05** as `DEFAULT_BUY_CATEGORIES = ("composite",)` (`app/industry/categories.py`),
+plus a dismissible line on the build page for accounts still on the default. The stage axis below
+was NOT shipped and is still open.
+
 **Ravworks reference — this may reopen the decision.** Its blacklist has both a *family* axis and a
 **stage** axis: `No_1st_reacts` and `No_2nd_reacts` alongside `No_bio_reacts`, `No_hyb_reacts`,
 `No_gas_phase_reacts`. The tester's phrase was "for **stage 1** builds", which is ravworks

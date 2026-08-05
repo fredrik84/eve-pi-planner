@@ -111,6 +111,11 @@ def get_settings(context_id: int) -> dict:
     finally:
         con.close()
     d["never_build_ids"] = _parse_ids(d.get("never_build_ids"))
+    # Keep the RAW column beside the parsed policy: a NULL/blank one is an account that has never
+    # used the control, which is who the code default speaks for and who the build page tells that
+    # the default moved. Other writers (onboarding, source memory, freshness) create the ROW, so
+    # "row exists" proves nothing here — only this column does.
+    d["reaction_policy_stored"] = bool(str(d.get("reaction_policy") or "").strip())
     d["reaction_policy"] = _parse_reaction_policy(d.get("reaction_policy"))
     d["onboarded"] = bool(d.get("onboarded"))
     d["per_order_plans"] = bool(d.get("per_order_plans"))
@@ -134,13 +139,25 @@ def _parse_ids(value) -> list[int]:
         return []
 
 
+def default_reaction_policy() -> dict:
+    """What an account gets before it has ever set a policy. The categories, and WHY those, are in
+    `app/industry/categories.py` — this only says that reactions run at all, which is not a default
+    anyone would want flipped: buying every reaction in is a whole line of business turned off."""
+    from app.industry.categories import DEFAULT_BUY_CATEGORIES
+    return {"build_reactions": True, "buy_categories": sorted(DEFAULT_BUY_CATEGORIES)}
+
+
 def _parse_reaction_policy(value) -> dict:
-    """The stored policy, normalised. Anything missing or unparseable is TODAY'S BEHAVIOUR — every
-    reaction built — so an account that has never touched this plans exactly as it always did, and
-    a corrupt value degrades to the safe default rather than silently buying a builder's whole
-    reaction line. Unknown category keys are dropped against the registry: a key that vanished in a
-    rename must not keep half-applying."""
+    """The stored policy, normalised. A MISSING key takes the code default, a PRESENT one is obeyed
+    exactly — that distinction is the whole point: an empty stored `buy_categories` is an account
+    saying "build all three", and must not be re-defaulted into buying composites on the next read.
+    Since `set_reaction_policy` always writes both keys, "absent" means only one thing: this account
+    has never used the control. An unparseable value lands in the same place a never-set one does,
+    which is still the conservative end — reactions keep running, only the default family is bought.
+    Unknown category keys are dropped against the registry: a key that vanished in a rename must not
+    keep half-applying."""
     from app.industry.categories import REACTION_CATEGORIES
+    dflt = default_reaction_policy()
     d = {}
     try:
         raw = json.loads(value or "{}")
@@ -148,14 +165,16 @@ def _parse_reaction_policy(value) -> dict:
             d = raw
     except Exception:
         d = {}
-    cats = [str(k) for k in (d.get("buy_categories") or []) if str(k) in REACTION_CATEGORIES]
-    return {"build_reactions": bool(d.get("build_reactions", True)),
+    if "buy_categories" in d:
+        cats = [str(k) for k in (d.get("buy_categories") or []) if str(k) in REACTION_CATEGORIES]
+    else:
+        cats = dflt["buy_categories"]
+    return {"build_reactions": bool(d.get("build_reactions", dflt["build_reactions"])),
             "buy_categories": sorted(set(cats))}
 
 
 def get_reaction_policy(context_id: int) -> dict:
-    return get_settings(context_id).get("reaction_policy") or {"build_reactions": True,
-                                                               "buy_categories": []}
+    return get_settings(context_id).get("reaction_policy") or default_reaction_policy()
 
 
 def set_reaction_policy(context_id: int, build_reactions: bool, buy_categories: list[str]) -> dict:
@@ -421,7 +440,13 @@ def _policy_payload(context_id: int) -> dict:
     """The policy plus the CATEGORY REGISTRY it is expressed in. The frontend never hardcodes these
     labels — same rule as ALERT_KINDS — so they travel with every read and every write."""
     from app.industry.categories import category_registry
-    return {"policy": get_reaction_policy(context_id), "categories": category_registry()}
+    s = get_settings(context_id)
+    return {"policy": s.get("reaction_policy") or default_reaction_policy(),
+            # Is this the code default rather than a choice? The build page uses it to tell exactly
+            # the affected accounts that the default moved — and to stay silent for everyone who
+            # already picked, whose plans did not change.
+            "defaulted": not s.get("reaction_policy_stored"),
+            "categories": category_registry()}
 
 
 @router.get("/api/industry/reaction-policy")

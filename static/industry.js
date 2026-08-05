@@ -2629,6 +2629,34 @@ function _indCostBasisWarn(d) {
     + ` (Markets &amp; Logistics \u2192 <i>your reaction/build system</i>) for a true install cost.</div>`;
 }
 
+// The default reaction policy changed on 2026-08-05 (build hybrid polymers and biochemicals, buy
+// composites & intermediates). It clears the notice bar because it moved what a build COSTS for an
+// account that changed nothing — the net cost, and so the floor under every quote off it, is not the
+// number they were looking at last week — and because the fix is one click away. It is deliberately
+// not a second policy control: it says what moved and points at the row right below it.
+//
+// Shown ONLY to accounts still on the default (`defaulted` from the server — a stored policy was
+// never touched by this change), and only until dismissed. Dismissal is localStorage, like
+// `indFacilityNudge`: an acknowledgement of a one-off announcement is not worth a settings column,
+// and the worst case of a new browser is one more line to close.
+function _indRxDefaultNote() {
+  if (!_indRxPolicy || !_indRxPolicy.defaulted) return '';
+  try { if (localStorage.getItem('indRxDefaultNote') === 'off') return ''; } catch (e) {}
+  return `<div class="ind-note-line">Reaction default changed: hybrid polymers and biochemicals are `
+    + `now built (they feed later steps directly), composites &amp; intermediates bought. Set your `
+    + `own under <i>Reactions for this build</i> below. `
+    + `<button class="ind-link-btn" onclick="indDismissRxDefaultNote(this)">Dismiss</button></div>`;
+}
+
+function indDismissRxDefaultNote(btn) {
+  try { localStorage.setItem('indRxDefaultNote', 'off'); } catch (e) {}
+  const line = btn && btn.closest('.ind-note-line');
+  const box = line && line.closest('.ind-notes');
+  if (line) line.remove();
+  // The block is one container; an empty one would leave its padding behind as a stray bar.
+  if (box && !box.querySelector('.ind-note-line')) box.remove();
+}
+
 // The one block. `withSkills` is the only thing that differs between the two renderers: the modal
 // checks whether your characters can install the jobs this plan schedules, the live build page
 // does not (and never has — don't "fix" that by quietly adding a panel to the busiest screen).
@@ -2636,7 +2664,7 @@ function _indNotices(d, withSkills) {
   const unres = (d.unresolved && d.unresolved.length)
     ? `<div class="ind-note-line">${d.unresolved.length} material(s) had no market price — cost is `
       + `a floor.</div>` : '';
-  const body = unres + _indSkillBasisWarn(d) + _indCostBasisWarn(d)
+  const body = unres + _indRxDefaultNote() + _indSkillBasisWarn(d) + _indCostBasisWarn(d)
     + _indCopyShortWarn(d) + _indParallelCopyNote(d) + _indPrintLimitNote(d)
     + _indMissingBpWarn(d) + (withSkills ? _indSkillWarn(d) : '');
   return body ? `<div class="ind-notes">${body}</div>` : '';

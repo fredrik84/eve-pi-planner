@@ -4346,16 +4346,38 @@ def test_the_reaction_category_registry_is_the_single_source():
     con, restore = _patch_db(S)
     try:
         S.ensure_industry_settings_table.__wrapped__()
-        check("an account that never set one builds every reaction",
-              S.get_reaction_policy(7) == {"build_reactions": True, "buy_categories": []})
+        # The default (2026-08-05): react what feeds later steps directly, buy the deep family.
+        check("an account that never set one reacts, and buys only composites",
+              S.get_reaction_policy(7) == {"build_reactions": True,
+                                           "buy_categories": ["composite"]})
+        check("the default names its families in one place",
+              S.default_reaction_policy()["buy_categories"] == ["composite"])
+        # A row can exist for reasons that have nothing to do with this control (onboarding, the
+        # remembered stock source, the freshness stamp). Only the COLUMN says the user has chosen.
+        con.execute("INSERT INTO pp_industry_settings (context_id, onboarded) VALUES (8, 1)")
+        check("a settings row written by something else is still 'never set'",
+              S.get_reaction_policy(8)["buy_categories"] == ["composite"]
+              and S.get_settings(8)["reaction_policy_stored"] is False)
+
+        # …and an account that HAS set one is untouched by the default, in both directions.
+        S.set_reaction_policy(9, True, [])
+        check("an account that chose to build all three keeps building all three",
+              S.get_reaction_policy(9) == {"build_reactions": True, "buy_categories": []})
+        check("and it is marked as a choice, not a default",
+              S.get_settings(9)["reaction_policy_stored"] is True)
+        S.set_reaction_policy(10, True, ["hybrid_polymer"])
+        check("a stored family list is obeyed exactly, not merged with the default",
+              S.get_reaction_policy(10)["buy_categories"] == ["hybrid_polymer"])
+
         S.set_reaction_policy(7, False, ["biochemical", "nonsense"])
         got = S.get_reaction_policy(7)
         check("the policy round-trips", got["build_reactions"] is False)
         check("and a key that isn't in the registry is dropped, not half-applied",
               got["buy_categories"] == ["biochemical"])
         con.execute("UPDATE pp_industry_settings SET reaction_policy='not json' WHERE context_id=7")
-        check("an unreadable value degrades to today's behaviour, never to 'buy everything'",
-              S.get_reaction_policy(7) == {"build_reactions": True, "buy_categories": []})
+        check("an unreadable value degrades to the default, never to 'buy everything'",
+              S.get_reaction_policy(7) == S.default_reaction_policy()
+              and S.get_reaction_policy(7)["build_reactions"] is True)
 
         # …and it reaches plans run without a browser: a share link or a checklist quoting a build
         # the user isn't making is the bug this whole settings module exists to end.

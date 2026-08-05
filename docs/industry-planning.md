@@ -542,8 +542,11 @@ Corollaries:
 Kept: unpriced materials (cost is a floor), skill-time basis (delivery times are assumed V/V),
 cost basis (job fees exclude the system index — with the button that fixes it), copies short of
 runs, copies bought for parallelism (real money, one line, per-type detail in the tooltip), prints
-the plan is short of (one line, best trade named), missing blueprints (contract prices), and the
-skill-gap blocker list — which renders in the **preview modal only**, as it always has.
+the plan is short of (one line, best trade named), missing blueprints (contract prices), the
+**reaction-default line** (2026-08-05 — one dismissible line, shown only to accounts still on the
+default, saying the default moved and where to set their own; it clears the bar because it moved
+what a build COSTS for someone who changed nothing, and the fix is one click below it — it is an
+announcement, not a second control), and the skill-gap blocker list — which renders in the **preview modal only**, as it always has.
 
 Cut, deliberately: **"Parts to move"** (`plan_moves`, gone server-side too — a builder routing jobs
 to two structures knows the parts travel); the **skill/training advisor card** (`advisor.py` and
