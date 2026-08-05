@@ -16,6 +16,7 @@ model or a code path that is called out on the item, and nothing else is coupled
 - **What the feedback is about** — the shape of it, and who is asking
 - **Themes** — the seven groups the thirteen items fall into
 - **The ravworks reference** — a real shared config, and what it tells us
+- **T14** — importing one, deferred but shaping what to build now
 - **Item by item** — ask, what exists today, the actual work, size
 - **Priority** — the ranked list, and the reasoning
 - **Relationship to the audit items** — what this does and does not say about TODO 14
@@ -527,6 +528,46 @@ rather than defaulting to the file because the tester said "JSON".
 **Size: M** for export (most of it the privacy pass), **S/M** if extending group sharing instead.
 **Flag:** `industry_config_export`.
 
+### T14 — Import a ravworks configuration (deferred)
+
+**Ask.** A future feature: import a ravworks config directly. Explicitly deferred (2026-08-05) — noted
+here so it is not lost, and because it changes how some of the items above should be built.
+
+**We already have a sample** — the alliance-shared export a tester supplied, analysed under *The
+ravworks reference* above. Mapping its fields onto ours:
+
+| Ravworks | Ours |
+|---|---|
+| `hidden_my_structures` (hull, security, Rig1–3, name) | manual structures — **T3** |
+| `manu_slots`, `react_slots` | declared slots — **T2** |
+| `skill_<type_id>: level` | declared skills — **T2**'s neighbour; nothing today |
+| `hidden_allocation_dict` (per-category build site) | per-category build allocation — **T7** |
+| `max_job_time`, `split_threshold` | job-length policy — **T11/T12** |
+| `No_*` family/stage flags, `No_list` | blacklist + reaction policy — **T5** |
+| `manu_system`, `react_system`, `inv_system` | the system field — **T8** |
+| `brokers_fee`, `sales_tax` | existing account settings |
+
+**The point that matters: almost every field maps to something we have not built yet.** Ravworks
+import is a **capstone, not a starting point** — it cannot land before T2, T3, T7 and T11/T12 exist,
+because there would be nowhere to put most of the file. Two consequences worth carrying into those
+items now, while they are still being designed:
+
+1. **It is a free correctness test for them.** If a real ravworks config round-trips into our model
+   without losing anything, the manual-configuration items are demonstrably complete. If a field has
+   nowhere to go, that gap is a design finding rather than a bug found later.
+2. **It argues for [TODO 18](../TODO.md)'s keyed blob.** Importing a flat keyed config into a flat
+   keyed config is a field mapping; importing one into columns spread over ten tables is a migration
+   every time either side changes.
+
+**Risks to note before building it.** Their format is undocumented and versioned by a field called
+`cookie_version` (`0.08` in our sample) — so it can change without notice, and one sample is not a
+spec. An importer should map what it recognises, report what it ignored, and never silently drop a
+field. Also decide whether import is additive or replaces the account's config; replacing is the
+obvious reading and the destructive one.
+
+**Size: M** once its dependencies exist, and near-zero value before then. **Flag:**
+`industry_config_import`.
+
 ---
 
 ## Priority
@@ -550,6 +591,7 @@ one coupling noted (T6 into T9).
 | 12 | **T13** export or group-share config | S/M–M | Decide the design first; group sharing may cover the real case cheaply |
 | 13 | **T11** job-length trade-off | L | Changes the scheduler's objective; `dev` soak. After T12 proves the bound |
 | 14 | **T4c** derive rigs from SDE dogma attributes | L | The right long-term answer to T4/T7; replaces three hand-maintained tables |
+| — | **T14** import a ravworks config | M | **Deferred.** Blocked on T2/T3/T7/T11/T12 — most of the file has nowhere to land until those exist |
 
 **If you want a first pass that is one sitting:** ranks 1–4 (T4a, T8, T5, T1) are all small, touch no
 data model between them, and one of them fixes numbers people are quoting customers from today.
