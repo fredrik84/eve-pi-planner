@@ -517,11 +517,15 @@ def reaction_policy_report(memo: dict, params: BuildParams, names: dict[int, str
     items = []
     total = 0.0
     for tid, qty, built in rows:
-        if qty <= 0 or not params.reaction_policy_buys(tid, "reaction", ignore_override=True):
+        # The ACTIVITY comes off the resolved node, never assumed from the row: a raw material has
+        # no producer at all, and asking the policy about it as if it were a reaction reports every
+        # mineral in the build as something the policy bought.
+        node = memo.get(tid) or {}
+        if qty <= 0 or not params.reaction_policy_buys(tid, node.get("activity"),
+                                                       ignore_override=True):
             continue
         if tid in params.force_build_ids:
             continue          # exempted per type; not the policy's doing either way
-        node = memo.get(tid) or {}
         buc, byc = node.get("build_unit_cost"), node.get("buy_unit_cost")
         if built and not params.build_reactions_anyway:
             continue          # built despite the policy (no buy price) — nothing was traded away

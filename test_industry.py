@@ -2362,6 +2362,9 @@ def main():
     test_each_job_runs_off_the_copy_it_is_installed_on()
     test_an_override_still_beats_every_copy_you_own()
     test_a_single_copy_account_plans_exactly_as_before()
+    test_a_reaction_family_this_account_does_not_run_is_bought()
+    test_the_reaction_category_registry_is_the_single_source()
+    test_a_reaction_pool_of_zero_still_plans()
     print(f"\nAll {_passed} checks passed.")
 
 
@@ -3896,6 +3899,214 @@ def test_a_half_connected_account_is_never_capped_on_what_it_half_shows():
                 "complete": False})["print_coverage"]["prints_counted"] is False)
     check("and owned_blueprints still reads the cached character's holding",
           owned[100]["copy_count"] == 1)
+
+
+def test_a_reaction_family_this_account_does_not_run_is_bought():
+    """A builder who simply doesn't run reactions had to blacklist every output by hand.
+
+    The policy is applied in `resolve_unit_costs`, beside `never_build_ids`, for the reason already
+    written there: setting the DECISION is what makes the whole subtree below it disappear and what
+    keeps the parent costed against what it will actually pay. Nothing is pruned by hand.
+    """
+    print("test_a_reaction_family_this_account_does_not_run_is_bought")
+    con = _seed_con()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+    P = _prices(SELL)
+    # 102 Sprocket is the graph's only reaction. Group 429 = Composite/Intermediate moon materials,
+    # which is what the `composite` category covers.
+    GROUPS = {102: 429}
+
+    def plan(**kw):
+        return build_plan(100, 1, mfg, rx, P, ADJ, BuildParams(**kw), NAMES)
+
+    base = plan()
+    check("the reaction is built when nothing forbids it",
+          any(j["type_id"] == 102 for j in base["jobs"]))
+
+    off = plan(buy_reaction_categories={"composite"}, type_groups=GROUPS)
+    shop = {s["type_id"]: s for s in off["shopping_list"]}
+    check("a family the account doesn't run is bought instead", 102 in shop)
+    check("and nothing is reacted for it", not any(j["type_id"] == 102 for j in off["jobs"]))
+    check("its inputs go with it, unpruned", 202 not in shop)
+    check("the row says why it's there", shop[102]["reaction_policy"] is True)
+    check("the parent is costed against what it will pay",
+          off["metrics"]["total_cost"] > base["metrics"]["total_cost"])
+
+    # What the convenience cost, reported rather than quietly taken — same rule as marginal_saving.
+    # Sprocket: 10 Goo @20 = 200 + 4% SCC on an EIV of 200 = 208 for 2 units, so 104 each against a
+    # 500 buy price. The build needs 2.
+    rp = off["reaction_policy"]
+    check("the plan says what not reacting added", approx(rp["isk"], (500.0 - 104.0) * 2))
+    check("itemised, so it can be argued with",
+          [i["type_id"] for i in rp["items"]] == [102] and rp["items"][0]["name"] == "Sprocket")
+    check("and which rule did it", rp["categories"] == ["composite"] and rp["all"] is False
+          and rp["overridden"] is False)
+
+    other = plan(buy_reaction_categories={"biochemical"}, type_groups=GROUPS)
+    check("a family the account DOES run is untouched",
+          any(j["type_id"] == 102 for j in other["jobs"]))
+
+    # A category may only speak for what it can identify — see categories.category_for.
+    unknown = plan(buy_reaction_categories={"composite"}, type_groups={})
+    check("an uncategorisable reaction is built, not guessed at",
+          any(j["type_id"] == 102 for j in unknown["jobs"]))
+
+    # …which is exactly why "we don't run reactions at all" is its own switch and not three ticks.
+    none_at_all = plan(buy_all_reactions=True)
+    check("the whole-activity switch needs no group at all",
+          not any(j["type_id"] == 102 for j in none_at_all["jobs"]))
+    check("and says it was the blanket rule",
+          none_at_all["reaction_policy"]["all"] is True)
+
+    # Precedence. force_build_ids is the finer instruction and beats the policy, exactly as it beats
+    # the blacklist; the per-order switch does the same at the grain the policy operates on.
+    forced = plan(buy_all_reactions=True, force_build_ids={102})
+    check("a component set to build anyway still builds",
+          any(j["type_id"] == 102 for j in forced["jobs"]))
+    check("and the policy claims no credit for it", forced["reaction_policy"] is None)
+
+    anyway = plan(buy_all_reactions=True, build_reactions_anyway=True)
+    check("an order that makes its own reactions makes them",
+          any(j["type_id"] == 102 for j in anyway["jobs"]))
+    check("and the same figure reads the other way round: reacting SAVED this",
+          anyway["reaction_policy"]["overridden"] is True
+          and approx(anyway["reaction_policy"]["isk"], (500.0 - 104.0) * 2))
+
+    # The blacklist's carve-out, for the blacklist's reason: refusing to build what cannot be bought
+    # leaves the plan no way to get one at all.
+    unpriced = _prices({k: v for k, v in SELL.items() if k != 102})
+    no_price = build_plan(100, 1, mfg, rx, unpriced, ADJ,
+                          BuildParams(buy_all_reactions=True), NAMES)
+    check("a reaction with no buy price is still built",
+          any(j["type_id"] == 102 for j in no_price["jobs"]))
+    check("and nothing is reported as traded away", no_price["reaction_policy"] is None)
+
+    # Two standing rules at two grains. Both resolve to "buy", so they cannot contradict each other.
+    both = build_plan(100, 1, mfg, rx, P, ADJ,
+                      BuildParams(never_build_ids={101}, buy_all_reactions=True), NAMES)
+    shop2 = {s["type_id"]: s for s in both["shopping_list"]}
+    check("the blacklist still works alongside the policy",
+          shop2[101]["blacklisted"] is True and not any(j["type_id"] == 101 for j in both["jobs"]))
+    check("and the bought component takes the reaction under it with it", 102 not in shop2)
+
+    # The default is today's plan, to the byte.
+    check("an account that has never touched this plans exactly as it did",
+          plan() == base and base["reaction_policy"] is None)
+
+    # Ordering a reaction is the newer, more specific instruction — the same carve-out
+    # prepare_plan_inputs gives the blacklist, and the reason the exempt set exists.
+    ordered = build_plan(102, 2, mfg, rx, P, ADJ,
+                         BuildParams(buy_all_reactions=True,
+                                     reaction_policy_exempt_ids={102}), NAMES)
+    check("a reaction you ORDERED is built regardless", ordered["tree"]["decision"] == "build")
+
+
+def test_the_reaction_category_registry_is_the_single_source():
+    """The category keys are STORED per account, so the registry is a migration surface — and the
+    labels are served, never hardcoded in the frontend (same rule as ALERT_KINDS)."""
+    print("test_the_reaction_category_registry_is_the_single_source")
+    import inspect
+    from app.industry.categories import REACTION_CATEGORIES, category_registry, category_for
+    from app.industry.structures import RIG_FAMILIES
+
+    reg = category_registry()
+    check("the registry is served whole", len(reg) == len(REACTION_CATEGORIES))
+    check("every entry has a key and a human label", all(r["key"] and r["label"] for r in reg))
+    check("the three reaction families are the ones the L-Set line has",
+          set(REACTION_CATEGORIES) == {"composite", "hybrid_polymer", "biochemical"})
+    # ONE curated group map, two readers. The rig registry keeps its own rig labels — a rig family
+    # and a build-policy category are different questions that agree today.
+    for key in REACTION_CATEGORIES:
+        check(f"the rig family and the policy category share {key}'s groups",
+              RIG_FAMILIES[key]["groups"] is REACTION_CATEGORIES[key]["groups"])
+    check("but not their labels", RIG_FAMILIES["composite"]["label"]
+          != REACTION_CATEGORIES["composite"]["label"])
+    check("a produced type is matched by its SDE group", category_for(429) == "composite"
+          and category_for(974) == "hybrid_polymer" and category_for(20) == "biochemical")
+    check("and an unknown group belongs to no category", category_for(None) is None
+          and category_for(999999) is None)
+
+    # Additive migration only, on both tables.
+    from app.industry import settings as S
+    ddl = inspect.getsource(S.ensure_industry_settings_table)
+    check("the policy column is added additively",
+          "add_columns(" in ddl and "reaction_policy TEXT" in ddl
+          and "DROP COLUMN" not in ddl.upper() and "DROP TABLE" not in ddl.upper())
+    from app.industry import orders as O
+    oddl = inspect.getsource(O.ensure_industry_orders_table)
+    check("so is the per-order override",
+          "build_reactions INTEGER DEFAULT 0" in oddl and "DROP COLUMN" not in oddl.upper())
+
+    # Storage round-trip. Its OWN write path, deliberately not a field on the debounced settings PUT
+    # — that one saves the whole plan form and would carry a stale policy with every knob move.
+    check("the policy has its own endpoint, like the blacklist",
+          "/api/industry/reaction-policy" in inspect.getsource(S))
+    check("and the settings PUT cannot write it",
+          "reaction_policy" not in inspect.getsource(S.write_industry_settings))
+
+    con, restore = _patch_db(S)
+    try:
+        S.ensure_industry_settings_table.__wrapped__()
+        check("an account that never set one builds every reaction",
+              S.get_reaction_policy(7) == {"build_reactions": True, "buy_categories": []})
+        S.set_reaction_policy(7, False, ["biochemical", "nonsense"])
+        got = S.get_reaction_policy(7)
+        check("the policy round-trips", got["build_reactions"] is False)
+        check("and a key that isn't in the registry is dropped, not half-applied",
+              got["buy_categories"] == ["biochemical"])
+        con.execute("UPDATE pp_industry_settings SET reaction_policy='not json' WHERE context_id=7")
+        check("an unreadable value degrades to today's behaviour, never to 'buy everything'",
+              S.get_reaction_policy(7) == {"build_reactions": True, "buy_categories": []})
+
+        # …and it reaches plans run without a browser: a share link or a checklist quoting a build
+        # the user isn't making is the bug this whole settings module exists to end.
+        from app.industry.graph import BuildOptions
+        S.set_reaction_policy(7, False, [])
+        opts = S.apply_account_build_options(7, BuildOptions())
+        check("a plan run without a browser follows the standing rule",
+              opts.buy_all_reactions is True)
+        check("but an explicit request still wins",
+              S.apply_account_build_options(
+                  7, BuildOptions(buy_all_reactions=False)).buy_all_reactions is False)
+    finally:
+        restore()
+
+    # The whole feature is gated (CLAUDE.md rule 2). Assert the flag exists and starts with the
+    # testers, alongside every other Industry feature — not what state it is in later.
+    from app.features import FEATURE_REGISTRY, _default_state
+    f = [x for x in FEATURE_REGISTRY if x["key"] == "industry_reaction_policy"]
+    check("the feature is in the registry", len(f) == 1)
+    check("and starts on the testers rung", _default_state(f[0]) == "testers")
+
+    # The UI reads the labels rather than carrying its own copy.
+    js = open("static/industry.js").read()
+    check("the frontend fetches the registry", "/api/industry/reaction-policy" in js)
+    for label in (c["label"] for c in reg):
+        check(f"and does not hardcode “{label}”", label not in js)
+
+
+def test_a_reaction_pool_of_zero_still_plans():
+    """With reactions off, the reaction pool contributes nothing. That has to degrade the way an
+    account with no Mass Reactions trained already degrades — a plan with no reaction steps — not
+    divide by zero.
+
+    Note this says nothing about the REACTIONS TAB, which is a separate feature with its own slot
+    planning: a builder may well turn reactions off for THIS build and still run their reaction
+    business there.
+    """
+    print("test_a_reaction_pool_of_zero_still_plans")
+    con = _seed_con()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+    pools = {"manufacturing": 2, "reaction": 0}
+    p = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, struct_time_mult=1.0,
+                    buy_all_reactions=True)
+    res = plan_queue([(100, 4)], mfg, rx, _prices(SELL), ADJ, p, NAMES, pools)
+    check("the plan still comes out", res["metrics"]["makespan_hours"] > 0)
+    check("with no reaction jobs in it",
+          not any(t["activity"] == "reaction" for w in res["schedule"]["waves"] for t in w["tasks"]))
+    check("and the reaction is on the shopping list instead",
+          any(s["type_id"] == 102 and s["reaction_policy"] for s in res["shopping_list"]))
+    check("the queue plan reports the ISK too", res["reaction_policy"]["isk"] > 0)
 
 
 if __name__ == "__main__":

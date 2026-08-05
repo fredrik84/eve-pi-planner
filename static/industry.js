@@ -37,6 +37,7 @@ async function onIndustryTabOpen() {
   indLoadSetupSummary();     // fire-and-forget: independent of the build status below
   indLoadLifetime();
   await indLoadBlacklist();  // awaited: the shopping list renders its chips from this
+  await indLoadReactionPolicy();   // same: the decision strip renders from it
   // If something is already cooking, that's what you came to look at — show the live build first
   // and fold the planner away. With an empty queue there's nothing to check, so lead with planning.
   await indRefreshStatus();
@@ -509,13 +510,17 @@ function _indStatusHeadline(d) {
     const mete = ovMt
       ? `<span class="ind-oc-metetag" title="Planned against your own blueprint: ME ${ovMt[0]}, TE ${ovMt[1]}">`
         + `ME ${ovMt[0]} · TE ${ovMt[1]}</span>` : '';
+    // This order makes its own reactions, against the account's standing rule. Same reasoning as
+    // the ⚒ tag beside it: an exception you can't see is one you forget you set.
+    const rxo = (o.build_reactions && _featureActive('industry_reaction_policy'))
+      ? `<span class="ind-oc-rxtag" title="This build makes its own reactions, whatever your account rule says">reacts</span>` : '';
     const share = _featureActive('industry_share')
       ? `<button class="ind-oc-share" title="Share a status link with the customer" onclick="indShareOrder(${o.id})">↗</button>` : '';
     const src = _featureActive('industry_sourcing')
       ? `<button class="ind-oc-src" title="Materials for this build: what's already in the box and what's still to buy"`
         + ` onclick="indOpenSourcing(${o.id})">\u{1F4E6}</button>` : '';
     return `<span class="ind-order-chip ind-oc-${st}" id="oc-${o.id}">${pos}${tag}<b>${o.quantity}×</b> ${_esc(o.name)}`
-      + (lbl ? `<span class="ind-oc-state">${lbl}</span>` : '') + eta + mrg + forced + mete
+      + (lbl ? `<span class="ind-oc-state">${lbl}</span>` : '') + eta + mrg + forced + mete + rxo
       + `<button class="ind-oc-edit" title="Rename, change the quantity, margin or blueprint ME/TE" onclick="indEditOrder(${o.id})">✎</button>`
       + src + share
       + `<button class="ind-oc-del" title="Remove from the build" onclick="indRemoveOrder(${o.id})">✕</button></span>`;
@@ -1668,9 +1673,14 @@ function _indShopRowHtml(s) {
   const never = s.blacklisted
     ? ` <button class="ind-never-badge" onclick="indBlacklist(${s.type_id}, false)"`
       + ` title="On your always-buy list. Click to let the planner decide again.">always buy</button>` : '';
+  // …and the same for the reaction policy, one rung coarser: bought because this account doesn't
+  // run that kind of reaction, not because the make-or-buy math came out that way.
+  const rxp = s.reaction_policy
+    ? ` <span class="ind-never-badge ind-rxp-badge" title="Bought because your builds don't run this`
+      + ` kind of reaction. Change that in the strip above the plan.">not reacted</span>` : '';
   return `<tr><td>${_esc(s.name)}`
     + `${s.bought_for_speed ? ' <span class="ind-speed-badge" title="Bought instead of built to save time">for speed</span>' : ''}`
-    + `${never}${marginal}</td>`
+    + `${never}${rxp}${marginal}</td>`
     + `<td class="ind-num">${Math.round(s.qty).toLocaleString()}</td>`
     + `<td class="ind-src">${s.source ? _esc(s.source) : '<span class="pp-warn">no price</span>'}</td>`
     + `<td class="ind-num">${s.line_cost != null ? fmtIsk(s.line_cost) : '—'}</td></tr>`;
@@ -1704,6 +1714,94 @@ function _indBlacklistChipsHtml() {
         `<button class="ind-forced-chip" onclick="indBlacklist(${b.type_id}, false)" title="Let the planner decide again">`
         + `${_esc(b.name)} <span class="ind-forced-x">✕</span></button>`).join('')
     + `<span class="ind-src-meta">An order set to build one of these anyway still builds it.</span></div>`;
+}
+
+// ── Which reactions this account's builds run ───────────────────────────────────────────────
+// A standing way of operating, like the always-buy list, one rung coarser: a builder who doesn't
+// run reactions shouldn't have to blacklist every output by hand.
+//
+// It belongs with the make-or-buy CONTROLS (beside the "worth building instead?" strip), never in
+// the notice stack — that block was trimmed to what a builder acts on, and a decision surface is
+// not a notice. Hence one row: the switch, and the per-family detail folded BEHIND it, because
+// "we don't react" is the common case and "…except biochemicals" is the rare one.
+//
+// The labels come from the server registry (`categories`), never from here.
+let _indRxPolicy = null;
+let _indRxCatsOpen = false;
+
+async function indLoadReactionPolicy() {
+  if (!_featureActive('industry_reaction_policy')) { _indRxPolicy = null; return; }
+  try { _indRxPolicy = await api('/api/industry/reaction-policy'); }
+  catch (e) { _indRxPolicy = null; }
+}
+
+async function indSetReactionPolicy(body) {
+  try { _indRxPolicy = await apiSend('POST', '/api/industry/reaction-policy', body); }
+  catch (e) { toastError(e, 'Could not save'); return; }
+  _indSweep = null; _indSweepFailed = null;      // the make-or-buy mix moved, so cost and time did
+  return _indKeepScroll(() => _indReplanCurrent());
+}
+
+function indToggleReactionCats() {
+  _indRxCatsOpen = !_indRxCatsOpen;
+  return _indKeepScroll(() => _indReplanCurrent());
+}
+
+function indSetReactionCat(key, buy) {
+  const cur = new Set(((_indRxPolicy || {}).policy || {}).buy_categories || []);
+  if (buy) cur.add(key); else cur.delete(key);
+  return indSetReactionPolicy({ buy_categories: [...cur] });
+}
+
+function _indReactionPolicyBar(d) {
+  if (!_featureActive('industry_reaction_policy') || !_indRxPolicy) return '';
+  const pol = _indRxPolicy.policy || {};
+  const cats = _indRxPolicy.categories || [];
+  const runs = pol.build_reactions !== false;
+  const bought = new Set(pol.buy_categories || []);
+
+  // What the convenience cost — the same rule the low-saving strip follows: report it, don't take
+  // it quietly. Signed as "what BUILDING these saves", so one figure reads correctly both ways.
+  const rp = (d && d.reaction_policy) || null;
+  let delta = '';
+  if (rp && rp.isk) {
+    const n = (rp.items || []).length;
+    const what = `${n} reaction output${n === 1 ? '' : 's'}`;
+    delta = rp.overridden
+      ? `<span class="ind-rxp-delta ind-rxp-good" title="This build makes its own reactions, against your standing rule.">`
+        + `reacting ${what} here saves ${fmtIsk(rp.isk)} on this build</span>`
+      : rp.isk > 0
+        ? `<span class="ind-rxp-delta" title="What buying these instead of reacting them adds to THIS build's cost — the floor under any price you quote off it.">`
+          + `buying ${what} in adds ${fmtIsk(rp.isk)} to this build</span>`
+        : `<span class="ind-rxp-delta ind-rxp-good" title="Buying these is cheaper than reacting them for this build.">`
+          + `buying ${what} in saves ${fmtIsk(-rp.isk)} on this build</span>`;
+  }
+
+  // The state in one phrase. Only ever about THIS build — the Reactions tab is a separate feature
+  // with its own slot planning, and turning reactions off here says nothing about it.
+  const some = cats.filter(c => bought.has(c.key));
+  const state = !runs ? 'bought in, not made here'
+    : some.length ? `${some.map(c => c.label.toLowerCase()).join(', ')} bought in`
+    : 'made here';
+
+  const detail = (runs && _indRxCatsOpen)
+    ? `<div class="ind-rxp-cats">` + cats.map(c =>
+        `<label class="ind-rxp-cat" title="${_esc(c.description || '')}">`
+        + `<input type="checkbox" ${bought.has(c.key) ? 'checked' : ''}`
+        + ` onchange="indSetReactionCat('${_esc(c.key)}', this.checked)">`
+        + ` buy ${_esc(c.label)}</label>`).join('')
+      + `<span class="ind-src-meta">An order can still be set to make its own.</span></div>` : '';
+
+  return `<div class="ind-forced-bar ind-rxp-bar">`
+    + `<span class="ind-forced-lbl">Reactions for this build:</span>`
+    + `<button class="ind-forced-chip${runs ? '' : ' ind-rxp-off'}"`
+    + ` onclick="indSetReactionPolicy({ build_reactions: ${!runs} })"`
+    + ` title="${runs ? 'This account runs its own reactions. Click if you buy the outputs instead.'
+                     : 'Reaction outputs are bought and their sub-steps drop off the plan. Click to react them yourself again.'}">`
+    + `${_esc(state)}</button>`
+    + (runs ? `<button class="ind-link-btn" onclick="indToggleReactionCats()">`
+              + `${_indRxCatsOpen ? 'hide families' : 'by family…'}</button>` : '')
+    + delta + `</div>` + detail;
 }
 
 // ── The borderline components, and the decision about them ──────────────────────────────────
@@ -2555,6 +2653,7 @@ function _indRenderPlan(d, title) {
       ${_indMetricTiles(d.metrics)}
       ${_indNotices(d, true)}
       ${_indMarginalBar(d)}
+      ${_indReactionPolicyBar(d)}
       ${_indStepsHtml(d, stageModel)}
       ${_indPipelineHtml(d, tiersData, stageModel)}
       <details class="ind-details" open><summary>Shopping list (${(d.shopping_list || []).length})</summary>${_indShoppingSections(d, stageModel, true)}</details>
@@ -2785,6 +2884,7 @@ function _indRenderPlanBody(d) {
   // simply never rendered, so the blocker was visible while planning and invisible while building.
   return _indNotices(d, true)
     + _indMarginalBar(d)
+    + _indReactionPolicyBar(d)
     + _indPipelineHtml(d, tiersData, stageModel)
     + _indStepsHtml(d, stageModel)
     + `<details class="ind-details"><summary>Shopping list (${(d.shopping_list || []).length})</summary>`
@@ -3053,6 +3153,12 @@ function indEditOrder(id) {
     + `onwheel="indWheelStep(event, this)" `
     + `title="Margin over net cost for this customer's quote — scroll to adjust">%</span>`
     + meTe
+    // The per-order exception to the account's reaction rule. It lives here rather than on a panel
+    // of its own: it is the same kind of per-order override the ME/TE and margin beside it are, and
+    // it is only ever worth showing while you are editing that order.
+    + (_featureActive('industry_reaction_policy')
+        ? `<label class="ind-oc-rx" title="Make this order's reaction steps yourself, whatever your account rule says">`
+          + `<input type="checkbox" id="oce-rx-${id}" ${o.build_reactions ? 'checked' : ''}> reacts</label>` : '')
     + `<button class="ind-oc-ok" onclick="indSaveOrder(${id})">Save</button>`
     + `<button class="ind-oc-cancel" onclick="indRefreshStatus()">Cancel</button>`;
   const q = document.getElementById('oce-lbl-' + id);
@@ -3095,6 +3201,8 @@ async function indSaveOrder(id) {
   if (!isNaN(qty) && qty >= 1) body.quantity = qty;
   const mrg = parseFloat((document.getElementById('oce-mrg-' + id) || {}).value);
   if (!isNaN(mrg)) body.margin_pct = Math.max(0, Math.min(100, mrg));
+  const rx = document.getElementById('oce-rx-' + id);
+  if (rx) body.build_reactions = rx.checked;
   // ME/TE goes only when it actually MOVED. The inputs are seeded with whatever the plan resolved,
   // so sending them unconditionally would turn every rename into a permanent override pinning
   // today's guess — and the plan could then never improve on it (e.g. once you own the print).

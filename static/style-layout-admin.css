@@ -940,6 +940,22 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
   border-radius: 10px; padding: 2px 8px; cursor: pointer; }
 .ind-forced-chip:hover { background: #233a28; }
 .ind-forced-x { color: var(--clr-text-soft); margin-left: 2px; }
+/* Which reactions this account's builds run. A control, not a notice — so it borrows the quiet
+   chip row the forced-build overrides use rather than a coloured banner of its own; the build page
+   carries one notice block and this is not part of it. */
+.ind-rxp-bar { margin-bottom: 6px; }
+.ind-rxp-bar .ind-forced-chip.ind-rxp-off { background: #241f16; color: #d8b46a; border-color: #4a3f2c; }
+.ind-rxp-delta { font-size: 11px; color: #d8b46a; font-variant-numeric: tabular-nums; }
+.ind-rxp-delta.ind-rxp-good { color: var(--clr-green); }
+.ind-rxp-badge { background: #241f16; color: #d8b46a; border-color: #4a3f2c; }
+/* The per-family detail, folded behind the switch: "we don't react" is the common case and
+   "…except biochemicals" is the rare one, so the rare one costs the extra click. */
+.ind-rxp-cats { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin: 0 0 10px 4px;
+  font-size: 11px; color: var(--clr-text-soft); }
+.ind-rxp-cat { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+.ind-oc-rx { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; color: var(--clr-text-soft); }
+.ind-oc-rxtag { font-size: 10px; background: #1b2a1e; color: var(--clr-green); border: 1px solid #2c4a33;
+  border-radius: 8px; padding: 1px 6px; margin-left: 4px; }
 /* Overrides carried by a queued order, and the customer status link. */
 .ind-oc-margin { display: inline-flex; align-items: center; gap: 2px; font-size: 11px; color: var(--clr-text-soft); }
 .ind-oc-mrg { width: 52px; background: #0e121b; color: var(--clr-text); border: 1px solid var(--clr-border);
