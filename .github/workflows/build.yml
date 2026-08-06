@@ -26,6 +26,14 @@ jobs:
   # purely preventive. See scripts/lint_js.mjs for why it is exactly one rule.
   lint-js:
     runs-on: ubuntu-latest
+    # Reports, never blocks. The job already doesn't gate the deploy (`build` has no `needs:` on
+    # it), but without this a transient npx / action-download hiccup still turns the whole RUN red
+    # — and a red run that didn't fail the build is worse than no signal, because it trains you to
+    # ignore the one that did. Seen for real on 2026-08-06, where this job's "Service Unavailable"
+    # sat next to a `build` that had failed for an unrelated reason (no runner acquired), and the
+    # lint noise was what got looked at first. The result still shows on the run, which is all the
+    # `no-undef` guard was ever for.
+    continue-on-error: true
     steps:
       - name: Checkout
         uses: actions/checkout@v7
