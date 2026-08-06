@@ -74,12 +74,22 @@ settings PUT, for the reason already written above. Applied in `resolve_unit_cos
   nothing about the **Reactions tab**, which is a separate feature with its own slot planning — an
   account may buy reaction inputs for its builds here and still run a reaction business there.
 
-**Marking a job done by hand** (`pp_industry_manual_done`, `POST /api/industry/progress/done`).
+**Marking a job running or done by hand** (`pp_industry_manual_done`, `POST
+/api/industry/progress/done`).
 Progress inference is right most of the time and wrong in ways only the user can see: a batch built
 on a character that never granted the jobs scope, work done before the account was connected, a
 component acquired by trade. The mark is the **third done-signal**, combined by `resolve_done(need,
 completed, from_stock, manual)` — the max of the three, capped at the requirement — so it can raise
-a count but never hide observed work. Stored per TYPE (the grain everything else here uses), and
+a count but never hide observed work.
+**A mark also has a middle state, `running`** (`state` column, additive migration 2026-08-06,
+`DEFAULT 'done'` so every pre-existing tick still means done). The same blind spot hides a *started*
+job: "running" is inferred only from the ESI job caches, so a job on an unscoped character reads as
+not started until it completes. `resolve_running(need, done, observed, manual)` states the
+precedence in one rule — **a hand mark may only ever move a type forward**: whatever `resolve_done`
+settled is taken off the top first (`need - done`), so a hand "running" on a batch the ledgers
+already prove delivered resolves to zero and the type stays done; between the two running signals
+the higher wins, same argument as `resolve_done`. One row per type, so the two states are
+alternatives and the click cycle is one write each time. Stored per TYPE (the grain everything else here uses), and
 epoch-gated exactly like the completion ledgers so a tick from a finished build can't read as
 progress on a re-queued one. Runs `-1` (`_ALL`) means "all of it, whatever the plan currently says";
 a concrete number would go stale the moment a quantity changed — so the UI stores the sentinel
@@ -106,16 +116,24 @@ rule as `resolve_done`) and redraws from the plan already on screen via `_indPai
 {local:true})`. The write still goes out and its answer replaces the local one when it lands. This
 used to cost **two** whole-queue plans per click (the endpoint runs one, and the old
 `indRefreshStatus()` afterwards ran another), which on a capital build is seconds of waiting to
-watch a card turn green. Two things make it computable client-side: `observed_runs` on each type row
-(the count with the marks removed — `done_runs` alone can't be un-mixed once a mark is folded in),
+watch a card turn green. Two things make it computable client-side: `observed_runs` /
+`observed_running_runs` on each type row (the counts with the marks removed — the resolved ones
+alone can't be un-mixed once a mark is folded in),
 and a local repaint carrying the running-jobs list and sourcing panel across untouched instead of
 re-fetching them. Preview mode opts out: its numbers are fabricated, so editing them is editing
 fiction.
 **The control is the pipeline card** (`ind-pipe-markable`): that card already renders this type's
 done/cooking/waiting state, so the place showing the state is the place that corrects it, and a whole
-card is an easy target. The step-by-step chips keep a labelled `mark done` / `always buy` button as
-the fallback for plans too shallow to draw a pipeline — both were bare dimmed glyphs first, which on
-a chip already carrying a name, runs, a duration and an ME/TE tag were effectively invisible.
+card is an easy target. **One click advances it** (`indCycleDone` over `_indDoneState`): not started
+→ running → done → not started, wrapping so a misclick costs clicks and never data. The step-by-step
+chips keep a labelled button (`_indDoneBtn`, shared so every surface cycles identically) alongside
+`always buy`, as the fallback for plans too shallow to draw a pipeline — both were bare dimmed
+glyphs first, which on a chip already carrying a name, runs, a duration and an ME/TE tag were
+effectively invisible. **The button's label is the NEXT state, not the current one** — it reads
+`run` on a step that hasn't started and `done` once it is running, so it says what pressing it does;
+only the finished state names itself, because there the press is an undo. The partial editor is
+unchanged and still a `done` mark: `indEditDoneRuns` stops propagation, so opening it never also
+cycles the card underneath.
 
 **Corp hangars over ESI** (`refresh_corp_assets`, `POST /api/industry/assets/refresh-corp`). The
 module docstring used to say corp assets were deliberately not read, because `/corporations/{id}/

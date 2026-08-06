@@ -2955,10 +2955,10 @@ def test_hand_marked_jobs_count_as_progress():
         P.ensure_manual_done_table.__wrapped__()   # @ensure_once may already have fired at import
         t0 = time.time()
         P.set_manual_done(1, 100, None)
-        check("marked done for all runs", P._manual_by_type(1, t0 - 5) == {100: _ALL})
+        check("marked done for all runs", P._manual_by_type(1, t0 - 5) == {100: (_ALL, "done")})
         check("a mark from before this queue is ignored", P._manual_by_type(1, t0 + 60) == {})
         P.set_manual_done(1, 100, 3)
-        check("a partial mark stores its run count", P._manual_by_type(1, t0 - 5) == {100: 3})
+        check("a partial mark stores its run count", P._manual_by_type(1, t0 - 5) == {100: (3, "done")})
         # Half a step is a real state: five of twelve runs installed and finished, the rest waiting
         # on a slot. It counts for exactly what it says and no more.
         check("a partial mark fills only its share", P.resolve_done(12, 0, 0, 5) == 5)

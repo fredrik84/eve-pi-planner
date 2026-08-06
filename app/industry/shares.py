@@ -269,7 +269,8 @@ def build_status(share_id: str) -> dict:
     # step the builder ticked done by hand is done as far as this order is concerned, and leaving
     # marks out meant pressing "done" moved the builder's bar and not the customer's.
     from app.industry.progress import (_done_by_type, _running_by_type, _epoch,
-                                       _manual_by_type, resolve_done, _ALL, _hours_by_type)
+                                       _manual_by_type, resolve_done, resolve_running, manual_runs,
+                                       _STATE_DONE, _STATE_RUNNING, _hours_by_type)
     # Weighted by job time, exactly like the builder's own headline. Counting runs made the two
     # disagree flatly — 48% on the customer's page against 10% on the build sheet — because bulk
     # components arrive as hundreds of short runs while the capital part is a handful of long ones.
@@ -294,10 +295,12 @@ def build_status(share_id: str) -> dict:
         # the output proves it's built, the ledger remembers it after it's consumed, a hand mark
         # covers what neither can see; highest wins, capped at need. Sharing `resolve_done` is what
         # stops the two views drifting apart again.
-        m = marked.get(rtid)
         d = resolve_done(need, done_runs.get(rtid, 0), int(owned.get(rtid, 0) // oq),
-                         0 if m is None else (need if m == _ALL else m))
-        r = min(running_runs.get(rtid, 0), max(0, need - d))
+                         manual_runs(marked, rtid, need, _STATE_DONE))
+        # And a hand "running" mark reaches the customer the same way, through the same precedence
+        # rule: it can start a stage that ESI cannot see, never un-finish one it can.
+        r = resolve_running(need, d, running_runs.get(rtid, 0),
+                            manual_runs(marked, rtid, need, _STATE_RUNNING))
         st = stages.setdefault(stage_of.get(rtid, 1), {"required": 0, "done": 0, "running": 0,
                                                        "h_total": 0.0, "h_done": 0.0, "items": []})
         st["required"] += need

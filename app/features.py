@@ -164,11 +164,13 @@ FEATURE_REGISTRY = [
                     "carries no character names, systems or ISK — only the build's own progress. "
                     "Revocable at any time.",
      "default": False},
-    {"key": "industry_manual_done", "label": "Industry: mark jobs done by hand", "group": "Industry",
-     "description": "A tick on every build step to say it's already finished, for work the app "
-                    "can't see — a job run on a character that isn't connected, or a component "
-                    "acquired by trade instead of built. Counts as progress; never writes to the "
-                    "earnings ledger, so it can't inflate your turnover.",
+    {"key": "industry_manual_done", "label": "Industry: mark jobs running or done by hand",
+     "group": "Industry",
+     "description": "Click a build step to move it on: not started → running → done → back again, "
+                    "for work the app can't see — a job run on a character that isn't connected, "
+                    "or a component acquired by trade instead of built. Counts as progress and "
+                    "never overrides what we can measure; never writes to the earnings ledger, so "
+                    "it can't inflate your turnover.",
      "default": False},
     {"key": "industry_blacklist", "label": "Industry: always-buy list", "group": "Industry",
      "description": "Items you never build, however the make-or-buy math comes out. Kept per "

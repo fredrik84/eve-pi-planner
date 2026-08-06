@@ -258,7 +258,7 @@ Completed jobs feed `GET /api/industry/lifetime`.
 | `GET /api/industry/assets`, `POST /assets/refresh`, `/assets/refresh-corp`, `/assets/paste`, `/assets/sources`, `DELETE /assets/sources/{key}` | assets | Setup → Stock on hand |
 | `GET/POST /api/industry/source-sets`, `DELETE /{set_id}` | assets | sourcing panel |
 | `GET /api/industry/bpc`, `POST /bpc/scan` | bpc | `indLoadBpcPrices` |
-| `GET /api/industry/progress`, `POST /progress/done` | progress | `indLoadProgress`, `indMarkDone` |
+| `GET /api/industry/progress`, `POST /progress/done` | progress | `indLoadProgress`, `indCycleDone` |
 | `GET/PUT /api/industry/settings` | settings | `_indApplySavedSettings`, `_indSaveSettings` |
 | `POST /api/industry/onboarding/complete`, `/reset` | settings | `indWizSave`, `indResetOnboarding` |
 | `GET/POST /api/industry/blacklist` | settings | `indLoadBlacklist`, `indBlacklist` |

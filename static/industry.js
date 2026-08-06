@@ -2126,22 +2126,14 @@ function _indMeTeChip(typeId) {
 }
 
 // Two per-job controls that both amount to "the plan is wrong about this one, and I'd know":
-// I've already built it, and I never build this — see indMarkDone / indBlacklist below.
+// I'm further along than you think, and I never build this — see indCycleDone / indBlacklist below.
 // Two corrections you can make to a job from the step list. Both are real buttons with words on
 // them: the first cut used bare dimmed glyphs, which on a chip that already carries a name, a run
 // count, a duration and an ME/TE tag were effectively invisible.
 function _indJobActions(x) {
   let html = '';
   if (_featureActive('industry_manual_done')) {
-    const t = _indProgTypeMap()[x.type_id];
-    const done = t && t.required_runs > 0 && t.done_runs >= t.required_runs;
-    const byHand = t && t.manual_runs > 0;
-    html += done
-      ? `<button class="ind-job-act ind-job-done-on" onclick="indMarkDone(${x.type_id}, false)" title="${
-          byHand ? 'You marked this done — click to undo' : 'Already done. Click if that is wrong.'
-        }">✓ done</button>`
-      : `<button class="ind-job-act" onclick="indMarkDone(${x.type_id}, true)"`
-        + ` title="Mark this step done — for work we can't see, like a job run on a character that isn't connected">mark done</button>`;
+    html += _indDoneBtn(_indProgTypeMap()[x.type_id], x.type_id, 'ind-job-act');
   }
   if (_featureActive('industry_blacklist')) {
     html += `<button class="ind-job-act ind-job-never" onclick="indBlacklist(${x.type_id}, true)"`
@@ -2171,14 +2163,44 @@ function _indJobChips(g) {
   }).join('');
 }
 
-// Mark a build step done (or take it back) and re-read progress. The whole status card re-renders
-// because a step going green moves the headline counters too — showing one and not the other is how
-// a page ends up disagreeing with itself.
-//
-// `runs`: null = all of it (and it stays "all" if the plan's run count later changes), a number =
-// that many, 0 = forget the mark.
-async function indMarkDone(typeId, done) {
-  return _indPostDone(typeId, done ? null : 0);
+// Progress is three-valued, so the control is too. Where a step stands right now, as far as the
+// user is concerned: what ESI measured and what they said by hand, already combined by the server.
+// A part-done step counts as running — some of it has happened, none of it is finished.
+function _indDoneState(t) {
+  if (!t || !t.required_runs) return 'none';
+  if (t.done_runs >= t.required_runs) return 'done';
+  if (t.running_runs > 0 || t.done_runs > 0 || t.manual_state === 'running') return 'running';
+  return 'none';
+}
+
+// One click advances the step: not started → running → done → not started. The wrap-around is the
+// point — a misclick has to be undoable with more clicks, never a dead end, and "done" was already
+// the state you could take back.
+function indCycleDone(typeId) {
+  const st = _indDoneState(_indProgTypeMap()[typeId]);
+  if (st === 'none') return _indPostDone(typeId, null, 'running');
+  if (st === 'running') return _indPostDone(typeId, null, 'done');
+  return _indPostDone(typeId, 0);                 // done → back to not started
+}
+
+// The step's button, wherever it appears — the pipeline card has its own click target, everything
+// else uses this. **The label is the NEXT state, not the current one**: it reads "run" on a step
+// that hasn't started and "done" once it is running, so the button says what pressing it does. Only
+// the finished state names itself, because there the press is an undo.
+function _indDoneBtn(t, typeId, cls) {
+  const st = _indDoneState(t);
+  const byHand = t && t.manual_state;
+  if (st === 'done') {
+    return `<button class="${cls} ind-job-done-on" onclick="indCycleDone(${typeId})" title="${
+      byHand === 'done' ? 'You marked this done — click to start over'
+                        : 'Already done. Click if that is wrong.'}">✓ done</button>`;
+  }
+  if (st === 'running') {
+    return `<button class="${cls} ind-job-run-on" onclick="indCycleDone(${typeId})"`
+      + ` title="This one is running${byHand === 'running' ? ' (you said so)' : ''} — click when it has finished">done</button>`;
+  }
+  return `<button class="${cls}" onclick="indCycleDone(${typeId})"`
+    + ` title="Say this step is running — for work we can't see, like a job installed on a character that isn't connected">run</button>`;
 }
 
 // Repaint FIRST, save second. Ticking a step changes nothing the plan computes, so the browser can
@@ -2186,11 +2208,12 @@ async function indMarkDone(typeId, done) {
 // redraw from the plan already on screen. The write still goes out, and its authoritative answer
 // replaces the local guess when it lands, but nobody waits for a capital build to be re-planned
 // twice over just to watch a card turn green.
-async function _indPostDone(typeId, runs) {
-  const painted = _indApplyDoneLocally(typeId, runs);
+async function _indPostDone(typeId, runs, state) {
+  state = state || 'done';
+  const painted = _indApplyDoneLocally(typeId, runs, state);
   if (painted) _indPaintStatus(_indLastPlan, { local: true });
   try {
-    const fresh = await apiSend('POST', '/api/industry/progress/done', { type_id: typeId, runs });
+    const fresh = await apiSend('POST', '/api/industry/progress/done', { type_id: typeId, runs, state });
     _indProgress = (fresh && !fresh.empty) ? fresh : _indProgress;
     // Nothing was painted locally (no plan in hand, or preview mode) — fall back to the full path,
     // which is what used to happen every time.
@@ -2203,7 +2226,7 @@ async function _indPostDone(typeId, runs) {
 
 // Apply a mark to the progress we already hold, exactly as the server would. Returns false when
 // there's nothing to apply to, in which case the caller falls back to a full refresh.
-function _indApplyDoneLocally(typeId, runs) {
+function _indApplyDoneLocally(typeId, runs, state) {
   const p = _indProgress;
   if (!p || !p.types || !_indLastPlan) return false;
   // Preview mode's numbers are fabricated, so editing them would be editing fiction — leave that
@@ -2212,12 +2235,20 @@ function _indApplyDoneLocally(typeId, runs) {
   const t = p.types.find(x => x.type_id === typeId);
   if (!t || !t.required_runs) return false;
   const need = t.required_runs;
-  // `runs === null` is "all of it"; a number is that many; 0 clears the mark. `observed_runs` is
-  // the count without any mark, which is what makes this computable without asking the server.
-  t.manual_runs = runs === null ? need : Math.max(0, Math.min(need, runs));
+  // `runs === null` is "all of it"; a number is that many; 0 clears the mark. The `observed_*`
+  // counts are what the server measured with no mark at all, which is what makes this computable
+  // without asking it — and what enforces the same precedence here: a mark is folded in with
+  // max(), so it can move the step forward and never back over a measured signal.
+  const cleared = runs === 0;
+  const manDone = (!cleared && state !== 'running')
+    ? (runs === null ? need : Math.max(0, Math.min(need, runs))) : 0;
+  const manRun = (!cleared && state === 'running') ? need : 0;
   const observed = t.observed_runs != null ? t.observed_runs : 0;
-  t.done_runs = Math.min(need, Math.max(observed, t.manual_runs));
-  t.running_runs = Math.min(t.running_runs, Math.max(0, need - t.done_runs));
+  const obsRun = t.observed_running_runs != null ? t.observed_running_runs : (t.running_runs || 0);
+  t.manual_runs = manDone;
+  t.manual_state = cleared ? '' : state;
+  t.done_runs = Math.min(need, Math.max(observed, manDone));
+  t.running_runs = Math.min(Math.max(obsRun, manRun), Math.max(0, need - t.done_runs));
   t.waiting_runs = Math.max(0, need - t.done_runs - t.running_runs);
   t.pct = need ? Math.round(1000 * t.done_runs / need) / 10 : 0;
   // Headline counters are sums over the types, so they follow from the same edit.
@@ -2237,6 +2268,8 @@ function _indApplyDoneLocally(typeId, runs) {
   (p.orders || []).forEach(o => {
     if (o.product_type_id !== typeId) return;
     o.done_units = Math.min(o.quantity, t.done_runs * (t.output_qty || 1));
+    o.running_units = Math.min(t.running_runs * (t.output_qty || 1),
+                               Math.max(0, o.quantity - o.done_units));
     o.pct = o.quantity ? Math.round(1000 * o.done_units / o.quantity) / 10 : 0;
     o.status = o.done_units >= o.quantity ? 'complete'
       : (o.running_units > 0 || o.done_units > 0) ? 'building' : 'waiting';
@@ -2443,11 +2476,10 @@ function _indPipelineHtml(d, tiersData, model) {
     // Three states you can read at a glance: done (green border), in the cooker (accent + glow),
     // waiting (greyed back). Anything with no progress data at all keeps the neutral card.
     const p = prog[e.type_id];
-    let state = '', cls = '', done = false;
+    let state = '', cls = '';
     if (p && p.required_runs) {
       if (p.done_runs >= p.required_runs) {
         state = '<span class="ind-pipe-state ind-st-done">✓ done</span>'; cls = ' ind-pipe-is-done';
-        done = true;
       } else if (p.running_runs > 0) {
         state = `<span class="ind-pipe-state ind-st-run">${p.running_runs} cooking</span>`; cls = ' ind-pipe-is-run';
         if (p.done_runs > 0) state += `<span class="ind-pipe-state ind-st-part">${p.done_runs}/${p.required_runs}</span>`;
@@ -2458,12 +2490,17 @@ function _indPipelineHtml(d, tiersData, model) {
       }
     }
     // The card already IS the progress readout for this step, so it's also where you correct it:
-    // click to say it's done, click again to take that back. A tick tucked into the step-by-step
-    // chips was the first cut and too small to read, never mind aim at.
+    // each click advances it one state, wrapping back round so a misclick costs clicks and not
+    // data. A tick tucked into the step-by-step chips was the first cut and too small to read,
+    // never mind aim at.
     const markable = _featureActive('industry_manual_done') && p && p.required_runs;
-    const onclick = markable ? ` onclick="indMarkDone(${e.type_id}, ${!done})"` : '';
+    const st = markable ? _indDoneState(p) : 'none';
+    const onclick = markable ? ` onclick="indCycleDone(${e.type_id})"` : '';
+    const nextTip = st === 'done' ? ' Click to set it back to not started.'
+      : st === 'running' ? ' Click when it has finished.'
+      : ' Click to say it is running.';
     const tip = `${_esc(e.name)} — ${qty}${e.runs ? ', ' + e.runs + ' runs' : ''}. Hover to trace its chain.`
-      + (markable ? (done ? ' Click to un-mark it done.' : ' Click if this one is already done.') : '');
+      + (markable ? nextTip : '');
     // The run count doubles as the way in to a partial mark when there's more than one run to
     // split. One run can't be half done, so it stays plain text there.
     const runsCell = (markable && p.required_runs > 1)
@@ -2522,7 +2559,7 @@ function _indPipelineHtml(d, tiersData, model) {
 
   return `<details class="ind-details" open><summary>Build pipeline</summary>`
     + `<p class="ind-pipe-hint">Each row is a building, each column a stage. Hover a step to trace its`
-    + ` whole chain${_featureActive('industry_manual_done') ? ', or click one to mark it done' : ''}.</p>`
+    + ` whole chain${_featureActive('industry_manual_done') ? ', or click one to step it on: not started → running → done' : ''}.</p>`
     + `<div class="ind-pipe-scroll"><div class="ind-pipe" style="--ind-cols:${cols.length}">${html}</div></div></details>`;
 }
 

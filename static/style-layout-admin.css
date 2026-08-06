@@ -1422,6 +1422,10 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-job-never:hover { background: #2f2819; color: #f0d9a6; }
 .ind-job-done-on { color: var(--clr-green); border-color: #2c4a33; background: #16211a; }
 .ind-job-done-on:hover { background: #1b2a1e; color: var(--clr-green); }
+/* The middle state reads as "in the cooker", the same accent the pipeline card uses for a running
+   step, so the button and the card it sits under never look like they disagree. */
+.ind-job-run-on { color: var(--clr-accent); border-color: #3a4152; background: #1a1f2a; }
+.ind-job-run-on:hover { background: #222838; color: var(--clr-accent); }
 .ind-wave-job-done { border-color: #2c4a33; color: var(--clr-text-soft); }
 /* A material on the shopping list because of a standing rule, not because building lost on cost. */
 .ind-never-badge { font-size: 10px; background: #241f16; color: #d8b46a; border: 1px solid #4a3f2c;

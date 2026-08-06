@@ -22,6 +22,15 @@ built, or an ESI job cache that simply hasn't caught up. When the screen says a 
 and the player knows it isn't, the only honest fix is to let them say so. A manual mark is stored
 per TYPE (the same grain everything else here is tracked at) and folded in as one more "done"
 signal, never overriding a higher measured one.
+
+**A hand mark also has a middle state: running.** The same blind spot that hides a finished job
+hides a started one — "running" is inferred ONLY from the ESI job caches, so a job installed on a
+character that never granted the jobs scope reads as *not started* right up until it completes.
+Progress is therefore three-valued end to end (not started → running → done) and a mark can say
+either. The precedence between a hand mark and a measured one is the same in both directions and is
+written out at `resolve_done` / `resolve_running`: a mark may only ever move a type FORWARD, so a
+hand "running" cannot walk back a batch the ledgers already prove is delivered. Neither state ever
+touches the completion ledgers — see `industry_mark_done`.
 """
 
 from __future__ import annotations
@@ -33,7 +42,7 @@ from datetime import datetime
 from fastapi import Depends
 from pydantic import BaseModel
 
-from app.db import get_connection
+from app.db import add_columns, get_connection
 from app.sde import ensure_once
 from app.esi import require_context
 from app.industry._router import router
@@ -47,6 +56,12 @@ _ALL = -1
 # work is done but it hasn't been collected, so it counts as in-progress, not done (the completions
 # ledgers only record a job once it's actually delivered).
 _RUNNING = ("active", "paused", "ready")
+
+# The two things a hand mark can say. Stored as text rather than a number so a row reads for itself
+# in the database, and so a third state later needs no re-numbering.
+_STATE_DONE = "done"
+_STATE_RUNNING = "running"
+_STATES = (_STATE_RUNNING, _STATE_DONE)
 
 MANUFACTURING_ACTIVITY_ID = 1
 REACTION_ACTIVITY_ID = 9
@@ -144,23 +159,29 @@ def ensure_manual_done_table():
                 PRIMARY KEY (context_id, type_id)
             )
         """)
+        # Additive migration (2026-08-06), the only kind this codebase does. The DEFAULT is what
+        # makes it safe for existing users: every row written before the middle state existed was a
+        # done-mark, and ADD COLUMN backfills them all with exactly that, so nothing a user already
+        # ticked changes meaning. `state` is never read without this having run.
+        add_columns(con, "pp_industry_manual_done",
+                    f"state TEXT NOT NULL DEFAULT '{_STATE_DONE}'")
         con.commit()
     finally:
         con.close()
 
 
-def _manual_by_type(context_id: int, since: float) -> dict[int, int]:
-    """Runs the user has marked done by hand, per type.
+def _manual_by_type(context_id: int, since: float) -> dict[int, tuple[int, str]]:
+    """What the user has marked by hand, per type, as `(runs, state)`.
 
     Epoch-gated like the completion ledgers, and for the same reason: re-queueing restarts the
     clock, so a tick left over from a build you finished last month can't read as progress on a new
-    one. `_ALL` is resolved against the plan's own requirement by the caller.
+    one. `_ALL` is resolved against the plan's own requirement by `manual_runs`.
     """
     ensure_manual_done_table()
     con = get_connection()
     try:
         rows = con.execute(
-            "SELECT type_id, runs FROM pp_industry_manual_done "
+            "SELECT type_id, runs, state FROM pp_industry_manual_done "
             "WHERE context_id = ? AND marked_at >= ?",
             (context_id, since),
         ).fetchall()
@@ -168,12 +189,35 @@ def _manual_by_type(context_id: int, since: float) -> dict[int, int]:
         return {}
     finally:
         con.close()
-    return {int(r["type_id"]): int(r["runs"]) for r in rows}
+    # A row predating the migration has no state at all; it was a done-mark, so read it as one.
+    return {int(r["type_id"]): (int(r["runs"]), str(r["state"] or _STATE_DONE)) for r in rows}
 
 
-def set_manual_done(context_id: int, type_id: int, runs: int | None) -> None:
-    """Mark (`runs=None` → all of it, or a run count) or clear (`runs=0`) a type as done by hand."""
+def manual_runs(marked: dict[int, tuple[int, str]], type_id: int, need: int,
+                state: str = _STATE_DONE) -> int:
+    """How many runs of `type_id` the user has hand-marked into `state`, resolved against the plan.
+
+    A type carries at most ONE mark, so asking for `done` on a type marked `running` (or the other
+    way round) is 0 — the states are alternatives, not a ladder you accumulate. Shared with the
+    customer-share builder so the two views can't drift on what a mark means.
+    """
+    m = marked.get(type_id)
+    if m is None or m[1] != state:
+        return 0
+    return need if m[0] == _ALL else min(m[0], need)
+
+
+def set_manual_done(context_id: int, type_id: int, runs: int | None,
+                    state: str = _STATE_DONE) -> None:
+    """Mark (`runs=None` → all of it, or a run count) or clear (`runs=0`) a type by hand.
+
+    `state` is `done` or `running`; one row per type, so setting either replaces the other — which
+    is what makes the not-started → running → done → not-started click cycle a single write each
+    time rather than a pair of half-states that can disagree.
+    """
     ensure_manual_done_table()
+    if state not in _STATES:
+        state = _STATE_DONE
     con = get_connection()
     try:
         if runs is not None and runs <= 0:
@@ -181,10 +225,10 @@ def set_manual_done(context_id: int, type_id: int, runs: int | None) -> None:
                         (context_id, type_id))
         else:
             con.execute(
-                "INSERT INTO pp_industry_manual_done (context_id, type_id, runs, marked_at) "
-                "VALUES (?,?,?,?) ON CONFLICT(context_id, type_id) DO UPDATE SET "
-                "runs=excluded.runs, marked_at=excluded.marked_at",
-                (context_id, type_id, _ALL if runs is None else int(runs), time.time()))
+                "INSERT INTO pp_industry_manual_done (context_id, type_id, runs, marked_at, state) "
+                "VALUES (?,?,?,?,?) ON CONFLICT(context_id, type_id) DO UPDATE SET "
+                "runs=excluded.runs, marked_at=excluded.marked_at, state=excluded.state",
+                (context_id, type_id, _ALL if runs is None else int(runs), time.time(), state))
         con.commit()
     finally:
         con.close()
@@ -199,6 +243,25 @@ def resolve_done(need: int, completed: int, from_stock: int, manual: int) -> int
     the max is also what keeps a manual tick honest: it can raise the count, never hide observed work.
     """
     return min(max(completed, from_stock, manual), need)
+
+
+def resolve_running(need: int, done: int, observed: int, manual: int) -> int:
+    """The "a slot is busy with this right now" signals combined — and the precedence between them.
+
+    **The rule, in one line: a hand mark may only ever move a type FORWARD.** Concretely, in this
+    order:
+
+    1. **`done` outranks `running`, whoever said it.** Whatever `resolve_done` settled on is taken
+       off the top first (`need - done`), so a hand "running" on a batch the ledgers or the hangar
+       already prove is delivered resolves to zero runs in flight and the type stays done. There is
+       no way to spend a click walking a measured signal backwards, which is the whole point: the
+       user is filling in what we cannot see, not overruling what we can.
+    2. **Between the two running signals, the higher wins** — same argument as `resolve_done`. Both
+       under-report on their own (a job cache that hasn't caught up; a user who marked one batch and
+       not the sibling ESI is already reporting), so the max is right in both directions and neither
+       can hide the other.
+    """
+    return min(max(observed, manual), max(0, need - done))
 
 
 def _epoch(context_id: int) -> float:
@@ -253,24 +316,28 @@ def _queue_snapshot(context_id: int, res: dict | None = None):
 
 
 def _type_row(tid: int, req, need: int, done: int, running: int, in_stock: int,
-              manual: int = 0, observed: int | None = None, job_hours: float = 0.0) -> dict:
+              manual: int = 0, observed: int | None = None, job_hours: float = 0.0,
+              manual_state: str = "", observed_running: int | None = None) -> dict:
     """One per-type progress row. `req` is the plan requirement (name/activity/output_qty).
 
     `manual_runs` is reported separately from `done_runs` so the UI can show that this one was
-    ticked by hand rather than observed — and offer to untick it.
+    ticked by hand rather than observed — and offer to untick it. `manual_state` says which of the
+    two things the hand mark claimed, so the click cycle knows where it currently stands.
 
-    `observed_runs` is what the count would be with the hand marks taken away. It exists so the
-    browser can work out the new `done_runs` for itself the instant you tick something — `max(
-    observed, manual)`, the same rule as `resolve_done` — instead of waiting on a round trip. From
-    `done_runs` alone that is impossible: it already has the old mark folded in, with no way to
-    separate the two again.
+    `observed_runs` / `observed_running_runs` are what the counts would be with the hand mark taken
+    away. They exist so the browser can work out the new state for itself the instant you click —
+    `max(observed, manual)`, the same rule as `resolve_done`/`resolve_running` — instead of waiting
+    on a round trip. From the resolved numbers alone that is impossible: they already have the old
+    mark folded in, with no way to separate the two again.
     """
     return {
         "type_id": tid, "name": req["name"], "activity": req["activity"],
         "required_runs": need, "done_runs": done, "running_runs": running,
         "waiting_runs": max(0, need - done - running),
         "output_qty": req["output_qty"], "in_stock": in_stock, "manual_runs": manual,
+        "manual_state": manual_state,
         "observed_runs": done if observed is None else observed,
+        "observed_running_runs": running if observed_running is None else observed_running,
         # Total job time this type accounts for, summed across however many parallel jobs its runs
         # were split into. It's what the queue-wide percentage is weighted by — see _weighted_pct.
         "job_hours": round(float(job_hours), 3),
@@ -378,41 +445,52 @@ def queue_progress(context_id: int, res: dict | None = None) -> dict:
     # Either alone under-reports; the max of the two is right in both directions.
     from app.industry.assets import owned_quantities
     owned = owned_quantities(context_id)
-    # The third signal: what the user told us is done. Same max() treatment — a hand mark can only
-    # ever raise the count, so it can't hide work that the ledgers or the hangar prove is still
-    # outstanding, and it doesn't need to be right about the exact number to be useful.
+    # The third signal: what the user told us, either "this is done" or "this is running". Same
+    # max() treatment in both cases — a hand mark can only ever move a type forward, so it can't
+    # hide work the ledgers or the hangar prove is further along, and it doesn't need to be right
+    # about the exact number to be useful. See resolve_done / resolve_running for the precedence.
     marked = _manual_by_type(context_id, since)
     # Per-type job time, so the headline percentage can be weighted by work rather than run count.
     hours = _hours_by_type(res)
 
-    def _manual_runs(tid: int, need: int) -> int:
-        m = marked.get(tid)
-        return 0 if m is None else (need if m == _ALL else min(m, need))
-
     types = []
+    resolved_running: dict[int, int] = {}
     for req in res.get("requirements", []):
         tid = int(req["type_id"])
         need = int(req["runs"])
         oq = int(req["output_qty"]) or 1
         from_stock = int(owned.get(tid, 0) // oq)      # whole runs' worth sitting in the hangar
-        man = _manual_runs(tid, need)
+        man = manual_runs(marked, tid, need, _STATE_DONE)
+        man_run = manual_runs(marked, tid, need, _STATE_RUNNING)
         d = resolve_done(need, completed.get(tid, 0), from_stock, man)
-        r = min(running.get(tid, 0), max(0, need - d))
+        obs_d = resolve_done(need, completed.get(tid, 0), from_stock, 0)
+        r = resolve_running(need, d, running.get(tid, 0), man_run)
+        resolved_running[tid] = r
         types.append(_type_row(tid, req, need, d, r, in_stock=int(owned.get(tid, 0)), manual=man,
-                               observed=resolve_done(need, completed.get(tid, 0), from_stock, 0),
-                               job_hours=hours.get(tid, 0.0)))
+                               observed=obs_d, job_hours=hours.get(tid, 0.0),
+                               manual_state=(marked.get(tid) or (0, ""))[1] if tid in marked else "",
+                               observed_running=resolve_running(need, obs_d, running.get(tid, 0), 0)))
 
     def units(tid, t, oq, want):
+        # Runs resolved above, so a hand mark moves the order chip by exactly the rule that moved
+        # the type row — including a "running" one, which has to turn the chip from "waiting" to
+        # "building" or the two halves of the same screen disagree.
+        run_runs = resolved_running.get(tid, running.get(tid, 0))
         # A product ticked done is done in UNITS too — otherwise the order chip would still read
         # "not started" next to a build the user just marked complete. `_ALL` means the whole thing
         # regardless of what the plan says, which also covers a product that has no requirement row
         # left (already netted off by stock).
-        if marked.get(tid) == _ALL:
+        need = (t or {}).get("required_runs") or 0
+        if marked.get(tid) == (_ALL, _STATE_DONE):
             return want, 0
-        man_units = _manual_runs(tid, (t or {}).get("required_runs") or 0) * oq
+        man_units = manual_runs(marked, tid, need, _STATE_DONE) * oq
         have = max(completed.get(tid, 0) * oq, int(owned.get(tid, 0)), man_units)
         done_units = min(have, want)
-        return done_units, min(running.get(tid, 0) * oq, max(0, want - done_units))
+        # No requirement row means no `need` to resolve a whole-step running mark against; the
+        # order's own quantity is the honest stand-in for "all of it".
+        if not need and marked.get(tid) == (_ALL, _STATE_RUNNING):
+            return done_units, max(0, want - done_units)
+        return done_units, min(run_runs * oq, max(0, want - done_units))
 
     return _progress_payload(types, _order_rows(orders, types, units), since=since)
 
@@ -503,18 +581,21 @@ def industry_progress(simulate: float | None = None, ctx: int = Depends(require_
 class MarkDone(BaseModel):
     type_id: int
     runs: int | None = None      # None = all of it; 0 = clear the mark
+    state: str = _STATE_DONE     # "done" or "running" — which of the two the mark claims
 
 
 @router.post("/api/industry/progress/done")
 def industry_mark_done(req: MarkDone, ctx: int = Depends(require_context)):
-    """Mark a build step done (or un-mark it) by hand, and return the refreshed progress.
+    """Mark a build step running or done (or un-mark it) by hand, and return the refreshed progress.
 
     Deliberately does NOT write to the completion ledgers: those feed lifetime turnover and profit,
-    and a tick is a statement about this queue's progress, not evidence of an ISK-bearing job. Same
-    rule the simulated-progress preview follows.
+    and a tick is a statement about this queue's progress, not evidence of an ISK-bearing job. That
+    holds for `running` for exactly the same reason — arguably more plainly, since a job that has
+    merely started has earned nothing at all. Same rule the simulated-progress preview follows.
     """
-    set_manual_done(ctx, int(req.type_id), req.runs)
-    # Customer links cache their payload for a minute. A mark moves their progress bar too, so
+    set_manual_done(ctx, int(req.type_id), req.runs, req.state)
+    # Customer links cache their payload for a minute. Either mark moves their progress bar — a
+    # "running" one flips a stage from waiting to building on the customer's page — so
     # without this the builder ticks a step done, looks at the link they handed over, and sees it
     # unchanged — which is precisely the doubt a status link exists to remove. Per ACCOUNT, not per
     # order: a mark is per type, and one type can feed several customers' orders.
