@@ -38,6 +38,24 @@ level anywhere. Consequences, stated rather than papered over:
     are their own family and are matched exactly.
   * A group that is in no family is simply not covered by a narrowed rig, which understates rather
     than overstates — the safe direction, and visible (the job reports the site it was costed in).
+
+**Rig SIZE is a fitting constraint, not a strength ladder.** Every Standup rig gives the same
+bonus at every size (M/L/XL are all -2% ME / -20% TE at T1); what grows with size is how BROADLY
+one rig applies, and which sizes a family exists in at all. A hull's `rigSize` dogma attribute
+fixes what it can fit — Raitaru and Athanor medium, Azbel and Tatara large, Sotiyo x-large — so
+the size a hull accepts decides which families it can honestly claim (`HULL_RIG_SIZE`,
+`RIG_SIZE_FAMILIES`). Verified against the SDE rig catalogue plus EVE Ref's rendered dogma:
+  * There is no `Standup M-Set Capital Ship Manufacturing …` rig in the game at all — capital hull
+    rigs start at L-Set. A Raitaru claiming capital-ship coverage is therefore quoting a rig it
+    cannot fit, which is the one combination this map rules out today.
+  * Everything else our families cover exists at every size a hull with that activity can fit:
+    M-Set has the per-size ship rigs, Equipment, Ammunition, Drone and Fighter, Structure (which
+    covers structure COMPONENTS too), Basic Capital Component and Advanced Component; L-Set has
+    all of those plus Capital Ship; XL-Set folds them into three wholesale rigs (Ship, Equipment
+    and Consumable, Structure and Component). Reactions: M-Set is per-family, L-Set's single
+    Reactor Efficiency rig covers all three — so both refinery hulls can claim any of them.
+The map is deliberately no stricter than that. Blocking a legal configuration is worse than the
+permissiveness it replaces, so anything not positively established as impossible stays allowed.
 """
 from dataclasses import dataclass, field
 
@@ -172,23 +190,74 @@ RIG_FAMILIES: dict[str, dict] = {
 }
 
 
-def family_registry(activity: str | None = None) -> list[dict]:
+# ── Rig size: what a hull can physically fit ──────────────────────────────────────────────────
+# The `rigSize` dogma attribute on each hull. A rig only fits a structure whose size matches, so
+# this is what turns "which families did the user tick" into "which families could they really".
+HULL_RIG_SIZE = {
+    "raitaru": "medium", "azbel": "large", "sotiyo": "xlarge",
+    "athanor": "medium", "tatara": "large",
+}
+RIG_SIZE_LABEL = {"medium": "M-Set", "large": "L-Set", "xlarge": "XL-Set"}
+
+_ALL_FAMILIES = frozenset(RIG_FAMILIES)
+# Which families a rig of each size exists for. Only ONE exclusion is established (see docstring):
+# capital-ship rigs start at L-Set, so a medium hull cannot fit one.
+RIG_SIZE_FAMILIES: dict[str, frozenset] = {
+    "medium": _ALL_FAMILIES - {"capital_ship"},
+    "large": _ALL_FAMILIES,
+    "xlarge": _ALL_FAMILIES,
+}
+
+
+def hull_rig_size(hull: str | None) -> str | None:
+    """The rig size this hull accepts, or None if we don't know the hull."""
+    return HULL_RIG_SIZE.get((hull or "").lower())
+
+
+def fittable_families(hull: str | None) -> frozenset:
+    """The rig families this hull could really carry. An unknown hull is not constrained — we
+    don't know what it is, so we do not get to tell the user their fit is impossible."""
+    size = hull_rig_size(hull)
+    return RIG_SIZE_FAMILIES.get(size, _ALL_FAMILIES) if size else _ALL_FAMILIES
+
+
+def unfittable_families(hull: str | None, families) -> list[str]:
+    """The claimed families this hull cannot fit a rig for, in the order given."""
+    ok = fittable_families(hull)
+    return [k for k in (families or []) if k in RIG_FAMILIES and k not in ok]
+
+
+def family_registry(activity: str | None = None, hull: str | None = None) -> list[dict]:
     """The pickable rig families, for the UI. Never hardcode this list in the frontend — same rule
-    as ALERT_KINDS: one registry, echoed back, so labels can't drift."""
+    as ALERT_KINDS: one registry, echoed back, so labels can't drift. `hull` narrows it to what
+    that hull can actually fit, so the picker can't offer an impossible claim in the first place."""
+    ok = fittable_families(hull) if hull else None
     return [{"key": k, "label": v["label"], "activity": v["activity"]}
-            for k, v in RIG_FAMILIES.items() if activity is None or v["activity"] == activity]
+            for k, v in RIG_FAMILIES.items()
+            if (activity is None or v["activity"] == activity) and (ok is None or k in ok)]
 
 
-def covers(families, group_id: int | None) -> bool:
+def covers(families, group_id: int | None, hull: str | None = None) -> bool:
     """Does a rig covering `families` apply to a product in SDE group `group_id`?
 
     **An empty / missing selection means EVERY group.** That is the whole compatibility promise:
     a structure that already has rig tiers set and has never been told what they are for keeps
     quoting exactly what it quotes today. Narrowing is an explicit choice — silently cutting
     everyone's efficiency on deploy would be the worst possible way to ship this.
+
+    `hull` (optional) additionally drops claims that hull cannot fit a rig for. An impossible
+    claim covers NOTHING — it is not removed from the list, because a list narrowed to empty
+    would flip back to meaning "everything" and hand out a bonus twice as wrong as the one being
+    corrected. The saved configuration is left exactly as the user wrote it; only the bonus it
+    earns is honest, and the structure list reports the claim so they can fix it.
     """
     if not families:
         return True
+    if hull:
+        ok = fittable_families(hull)
+        families = [k for k in families if k in ok]
+        if not families:
+            return False
     if group_id is None:
         return False        # narrowed rig + unknown group → don't claim a bonus we can't justify
     for key in families:
@@ -196,6 +265,36 @@ def covers(families, group_id: int | None) -> bool:
         if fam and group_id in fam["groups"]:
             return True
     return False
+
+
+def rig_fit_warnings(hull: str | None, activity: str, me_rig: int, te_rig: int,
+                     me_families, te_families, security) -> list[dict]:
+    """Rig-family claims this structure cannot physically fit, with what each one was inflating.
+
+    Surfaced rather than repaired: a saved configuration is the user's, and rewriting it for them
+    would hide the very mistake that made the plan optimistic. Silent when no rig is fitted (a
+    tier-0 rig inflates nothing) and when the hull is unknown (we can't judge a fit we can't see).
+    """
+    if not hull_rig_size(hull):
+        return []
+    size = hull_rig_size(hull)
+    smult = SECURITY_RIG_MULT.get(_sec_band(security), 1.0)
+    out = []
+    for which, tier, fams, table in (("me", me_rig, me_families, _ME_RIG),
+                                     ("te", te_rig, te_families, _TE_RIG)):
+        bad = [k for k in unfittable_families(hull, fams)
+               if RIG_FAMILIES[k]["activity"] == activity]
+        if not bad or not table.get(tier, 0.0):
+            continue
+        labels = ", ".join(RIG_FAMILIES[k]["label"] for k in bad)
+        out.append({
+            "rig": which, "activity": activity, "families": bad,
+            "text": (f"A {hull} fits {RIG_SIZE_LABEL.get(size, size)} rigs, and no "
+                     f"{RIG_SIZE_LABEL.get(size, size)} rig exists for {labels}. That claim is "
+                     f"inflating {which.upper()} by {round(table[tier] * smult, 2)}% on those "
+                     f"jobs; it now earns nothing until you correct it."),
+        })
+    return out
 
 
 def _sec_band(security: str | float | None) -> str:
@@ -269,7 +368,8 @@ class BuildSite:
             return self.flat
         fn = manufacturing_bonus if self.activity == "manufacturing" else reaction_bonus
         return fn(self.hull, self.me_rig, self.te_rig, self.security,
-                  covers(self.me_families, group_id), covers(self.te_families, group_id))
+                  covers(self.me_families, group_id, self.hull),
+                  covers(self.te_families, group_id, self.hull))
 
 
 # Below this many percentage points of ME (or TE) two sites are the same site as far as a builder

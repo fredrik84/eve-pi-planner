@@ -1128,6 +1128,8 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .rx-rig-row select { background: #141720; color: var(--clr-text); border: 1px solid var(--clr-border); border-radius: 4px; padding: 3px 6px; font-size: 12px; }
 /* What a fitted rig is FOR. A multi-select rather than a row of checkboxes: a structure carries a
    handful of families at most, and the list has to stay readable next to its rig-tier dropdown. */
+.rx-rig-warn { font-size: 11px; color: #ffb347; border-left: 2px solid #ffb347;
+  background: rgba(255, 179, 71, 0.08); padding: 4px 8px; margin: 4px 0; border-radius: 3px; }
 .rx-rig-fam-row { align-items: flex-start; }
 .rx-rig-fam-row select.rx-rig-fams { min-width: 240px; padding: 2px 4px; }
 /* Where a job is installed, on the checklist line. Muted — it only appears when a plan actually

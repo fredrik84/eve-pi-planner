@@ -143,7 +143,7 @@ def _parse_families(value) -> list[str]:
 
 def _list_markets(owner_kind: str, owner_id: int) -> list[dict]:
     ensure_markets_table()
-    from app.industry.structures import manufacturing_bonus, reaction_bonus
+    from app.industry.structures import manufacturing_bonus, reaction_bonus, rig_fit_warnings
     con = get_connection()
     try:
         rows = con.execute(
@@ -171,6 +171,13 @@ def _list_markets(owner_kind: str, owner_id: int) -> list[dict]:
             rme, rte = reaction_bonus(d["hull"], d["rx_me_rig"], d["rx_te_rig"], d["security"])
             d["mfg_bonus"] = {"me": mme, "te": mte}
             d["rx_bonus"] = {"me": rme, "te": rte}
+            # Rig families this hull cannot fit a rig for. Reported, never repaired — the saved
+            # config stays the user's; see structures.rig_fit_warnings.
+            d["rig_warnings"] = (
+                rig_fit_warnings(d["hull"], "manufacturing", d["me_rig"], d["te_rig"],
+                                 d["me_rig_groups"], d["te_rig_groups"], d["security"])
+                + rig_fit_warnings(d["hull"], "reaction", d["rx_me_rig"], d["rx_te_rig"],
+                                   d["rx_me_rig_groups"], d["rx_te_rig_groups"], d["security"]))
         out.append(d)
     return out
 
@@ -963,9 +970,16 @@ class MarketBuildConfig(BaseModel):
 
 @router.get("/api/markets/rig-families")
 def list_rig_families(context_id: int = Depends(require_context)):
-    """The pickable rig families (Standup M-Set / L-Set), so the UI never hardcodes the list."""
-    from app.industry.structures import family_registry
-    return {"families": family_registry()}
+    """The pickable rig families (Standup M-Set / L-Set / XL-Set), so the UI never hardcodes the
+    list — including which of them each HULL can actually fit a rig for. Rig size is a fitting
+    constraint (a Raitaru takes M-Set, and no M-Set capital-ship rig exists), so a picker that
+    offers every family to every hull lets a user claim a bonus the game will never give them and
+    the planner then quotes costs and durations that are wrong in the optimistic direction.
+    Served here rather than derived in JS for the same reason as the list itself: one registry."""
+    from app.industry.structures import HULL_RIG_SIZE, family_registry, fittable_families
+    return {"families": family_registry(),
+            "by_hull": {h: sorted(fittable_families(h)) for h in HULL_RIG_SIZE},
+            "hull_rig_size": dict(HULL_RIG_SIZE)}
 
 
 @router.get("/api/markets/hulls")

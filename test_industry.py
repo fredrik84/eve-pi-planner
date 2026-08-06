@@ -2081,6 +2081,105 @@ def test_the_rig_family_registry_is_the_single_source():
     from app.features import FEATURE_REGISTRY
     check("the feature is in the registry",
           any(f["key"] == "industry_rig_routing" for f in FEATURE_REGISTRY))
+def test_a_hull_can_only_claim_rigs_it_could_fit():
+    """Rig SIZE is a fitting constraint. A Raitaru takes M-Set rigs and the game has no M-Set
+    capital-ship rig, so a Raitaru configured for capital-ship coverage was quoting ME/TE it can
+    never earn — and every cost and duration derived from it was optimistic. The map stays as
+    narrow as the sources support: blocking a LEGAL fit would be worse than the permissiveness."""
+    print("test_a_hull_can_only_claim_rigs_it_could_fit")
+    from app.industry.structures import (
+        HULL_RIG_SIZE, RIG_FAMILIES, covers, family_registry, fittable_families,
+        hull_rig_size, rig_fit_warnings, unfittable_families, BuildSite,
+    )
+    # (a) the size each hull accepts — its rigSize dogma attribute.
+    check("raitaru fits medium rigs", hull_rig_size("raitaru") == "medium")
+    check("azbel fits large rigs", hull_rig_size("azbel") == "large")
+    check("sotiyo fits x-large rigs", hull_rig_size("sotiyo") == "xlarge")
+    check("athanor fits medium rigs", hull_rig_size("athanor") == "medium")
+    check("tatara fits large rigs", hull_rig_size("tatara") == "large")
+    check("every configurable hull has a size", set(HULL_RIG_SIZE) ==
+          {"raitaru", "azbel", "sotiyo", "athanor", "tatara"})
+    check("an unknown hull is not constrained",
+          hull_rig_size(None) is None and fittable_families("station") == frozenset(RIG_FAMILIES))
+
+    # (b) which families exist at each size. Only capital ships start above M-Set.
+    check("a medium hull cannot fit a capital-ship rig",
+          "capital_ship" not in fittable_families("raitaru"))
+    check("a large hull can", "capital_ship" in fittable_families("azbel"))
+    check("an x-large hull can", "capital_ship" in fittable_families("sotiyo"))
+    for fam in set(RIG_FAMILIES) - {"capital_ship"}:
+        check(f"{fam} exists at M-Set, so a raitaru may claim it",
+              fam in fittable_families("raitaru"))
+    check("both refineries can claim every reaction family",
+          all(f in fittable_families("athanor") and f in fittable_families("tatara")
+              for f, v in RIG_FAMILIES.items() if v["activity"] == "reaction"))
+
+    # The picker is served narrowed, so an impossible claim can't be made in the first place.
+    check("the raitaru picker omits capital ships",
+          "capital_ship" not in {f["key"] for f in family_registry(hull="raitaru")})
+    check("the azbel picker offers it",
+          "capital_ship" in {f["key"] for f in family_registry(hull="azbel")})
+    check("un-hulled, the registry is still served whole",
+          len(family_registry()) == len(RIG_FAMILIES))
+
+    # An impossible claim earns nothing — but it must NOT collapse to "covers everything".
+    check("an impossible claim is reported", unfittable_families("raitaru", ["capital_ship"])
+          == ["capital_ship"] and unfittable_families("azbel", ["capital_ship"]) == [])
+    check("a raitaru's capital-ship claim covers no dreadnought",
+          not covers(["capital_ship"], 485, "raitaru"))
+    check("and does not fall back to covering everything",
+          not covers(["capital_ship"], 27, "raitaru") and not covers(["capital_ship"], 873, "raitaru"))
+    check("an azbel's identical claim is untouched", covers(["capital_ship"], 485, "azbel"))
+    check("a legal claim on a raitaru is unaffected",
+          covers(["ammunition"], 85, "raitaru") and not covers(["ammunition"], 27, "raitaru"))
+    check("a mixed claim keeps its legal half",
+          covers(["capital_ship", "ammunition"], 85, "raitaru"))
+
+    # The contract every pre-families structure relies on, with a hull in play.
+    check("no families still covers everything, hull or not",
+          covers([], 485, "raitaru") and covers(None, 485, "raitaru") and covers((), 27, "raitaru"))
+
+    # ME/TE for a valid configuration is byte-for-byte what it was.
+    legal = BuildSite(key="s:1", name="Ammo", activity="manufacturing", hull="raitaru",
+                      security="null", me_rig=2, te_rig=2,
+                      me_families=("ammunition",), te_families=("ammunition",))
+    check("a legal narrowed structure still earns role + rig", legal.bonus_for(85) == (6.04, 65.4))
+    check("and still earns role alone off-family", legal.bonus_for(27) == (1.0, 15.0))
+    bare = BuildSite(key="s:2", name="Old", activity="manufacturing", hull="raitaru",
+                     security="null", me_rig=2, te_rig=2)
+    check("an un-narrowed structure is completely unchanged", bare.bonus_for(485) == (6.04, 65.4))
+    impossible = BuildSite(key="s:3", name="Fantasy", activity="manufacturing", hull="raitaru",
+                           security="null", me_rig=2, te_rig=2,
+                           me_families=("capital_ship",), te_families=("capital_ship",))
+    check("the impossible one drops to the hull role bonus only",
+          impossible.bonus_for(485) == (1.0, 15.0))
+
+    # Warned, never rewritten: the saved config is the user's to fix.
+    w = rig_fit_warnings("raitaru", "manufacturing", 2, 2, ["capital_ship"], ["capital_ship"], "null")
+    check("both rigs are warned about", [x["rig"] for x in w] == ["me", "te"])
+    check("the warning names the family and what it inflated",
+          "Capital Ship Manufacturing" in w[0]["text"] and "5.04%" in w[0]["text"]
+          and "M-Set" in w[0]["text"])
+    check("a legal fit warns about nothing",
+          rig_fit_warnings("azbel", "manufacturing", 2, 2, ["capital_ship"], [], "null") == []
+          and rig_fit_warnings("raitaru", "manufacturing", 2, 2, ["ammunition"], [], "null") == [])
+    check("no rig fitted inflates nothing, so says nothing",
+          rig_fit_warnings("raitaru", "manufacturing", 0, 0, ["capital_ship"], ["capital_ship"], "null") == [])
+    check("an undetected hull is never accused",
+          rig_fit_warnings(None, "manufacturing", 2, 2, ["capital_ship"], [], "null") == [])
+    check("a reaction rig is judged against reaction families only",
+          rig_fit_warnings("athanor", "reaction", 2, 2, ["composite"], ["biochemical"], "null") == [])
+
+    # The picker's data comes from the backend, not from JS rules (same reason as the list itself).
+    import inspect
+    from app import markets
+    src = inspect.getsource(markets.list_rig_families)
+    check("the endpoint serves the per-hull sets", "by_hull" in src and "fittable_families" in src)
+    js = open("static/reactions.js").read()
+    check("the frontend reads them rather than deriving them",
+          "_rxRigByHull" in js and "by_hull" in js and "HULL_RIG_SIZE" not in js)
+
+
 def _patch_db_all(*modules):
     """One in-memory DB shared by several modules. Each imports `get_connection` into its own
     namespace, so patching one leaves the others talking to the real database — which is how a
@@ -2619,6 +2718,7 @@ def main():
     test_an_unrouted_plan_is_byte_for_byte_the_old_plan()
     test_a_routed_plan_names_the_structures_it_used()
     test_the_rig_family_registry_is_the_single_source()
+    test_a_hull_can_only_claim_rigs_it_could_fit()
     test_a_container_carries_where_it_is()
     test_an_unreadable_structure_never_fails_the_scan()
     test_where_a_container_is_survives_the_round_trip()

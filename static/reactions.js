@@ -2251,22 +2251,35 @@ function _rxPricingRowsHtml(pricing, editable) {
 // A Standup M-Set rig covers one family of products, so a structure rigged for capital parts does
 // nothing for a battleship hull. The list comes from the backend registry (never hardcoded here —
 // the labels would drift). Selecting nothing keeps the old meaning: this rig covers everything.
+// Rig SIZE is a fitting constraint, not a strength ladder: a Raitaru takes M-Set rigs and no
+// M-Set capital-ship rig exists, so the picker only offers what the hull can really carry. Which
+// families that is comes from the backend too (`by_hull`) — the rule is game data, not JS logic.
 let _rxRigFamilies = null;
+let _rxRigByHull = {};
 async function _rxLoadRigFamilies() {
   if (_rxRigFamilies) return _rxRigFamilies;
   try {
     const d = await api('/api/markets/rig-families');
     _rxRigFamilies = d.families || [];
-  } catch (e) { _rxRigFamilies = []; }
+    _rxRigByHull = d.by_hull || {};
+  } catch (e) { _rxRigFamilies = []; _rxRigByHull = {}; }
   return _rxRigFamilies;
 }
 function _rxRigRoutingOn() {
   return typeof _featureActive === 'function' && _featureActive('industry_rig_routing');
 }
-function _rigFamSelect(id, activity, selected) {
-  const fams = (_rxRigFamilies || []).filter(f => f.activity === activity);
-  if (!fams.length) return '';
+function _rigFamSelect(id, activity, selected, hull) {
+  let fams = (_rxRigFamilies || []).filter(f => f.activity === activity);
   const sel = new Set(selected || []);
+  const fits = hull ? _rxRigByHull[hull] : null;
+  if (fits) {
+    // Anything already saved that this hull can't fit stays in the list, still selected, so a
+    // save can never silently drop it behind the user's back — it's labelled instead.
+    const ok = new Set(fits);
+    fams = fams.filter(f => ok.has(f.key) || sel.has(f.key))
+               .map(f => ok.has(f.key) ? f : { key: f.key, label: f.label + ' — not fittable here' });
+  }
+  if (!fams.length) return '';
   return `<select id="${id}" multiple size="4" class="rx-rig-fams">`
     + fams.map(f => `<option value="${f.key}" ${sel.has(f.key) ? 'selected' : ''}>${_esc(f.label)}</option>`).join('')
     + `</select>`;
@@ -2277,8 +2290,16 @@ function _rigFamRow(m, kind, activity) {
                 brmeg: 'rx_me_rig_groups', brteg: 'rx_te_rig_groups' }[kind];
   const which = kind.indexOf('me') > 0 ? 'ME' : 'TE';
   return `<div class="rx-rig-row rx-rig-fam-row"><span>${which} rig covers</span>`
-    + _rigFamSelect(kind + '-' + m.id, activity, m[col])
+    + _rigFamSelect(kind + '-' + m.id, activity, m[col], m.hull)
     + `<span class="pp-card-hint">nothing selected = every group</span></div>`;
+}
+// An impossible claim on an already-saved structure: say which one and what it was inflating,
+// and leave the fix to the user rather than rewriting what they configured.
+function _rigFitWarnings(m) {
+  if (!_rxRigRoutingOn()) return '';
+  const w = m.rig_warnings || [];
+  if (!w.length) return '';
+  return w.map(x => `<div class="rx-rig-warn">${_esc(x.text)}</div>`).join('');
 }
 
 // A build structure, configured inline (no ordering — building isn't a priority chain).
@@ -2300,6 +2321,7 @@ function _rxBuildRowHtml(m, d) {
   return `<div class="rx-build-card">
     <div class="rx-build-hd"><span class="rx-mkt-name">${_esc(m.name)}</span><span class="pp-card-hint">${hullNote}</span>
       <button class="pp-add-btn rx-build-rm" onclick="_rxMarketRemove(${m.id})" title="Remove">✕</button></div>
+    ${_rigFitWarnings(m)}
     ${manual}
     <label class="rx-build-chk"><input type="checkbox" id="bm-${m.id}" ${m.build_mfg ? 'checked' : ''}> Manufacture here</label>
     <div class="rx-rig-row">ME rig <select id="bmme-${m.id}">${_rigOpts(m.me_rig)}</select> · TE rig <select id="bmte-${m.id}">${_rigOpts(m.te_rig)}</select></div>
