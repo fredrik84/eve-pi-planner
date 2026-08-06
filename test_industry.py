@@ -2743,6 +2743,15 @@ def main():
     test_a_job_length_ceiling_cannot_manufacture_slots_or_formulas()
     test_a_plan_with_no_job_length_ceiling_is_byte_for_byte_the_old_plan()
     test_the_reaction_job_ceiling_reaches_plans_run_without_a_browser()
+    test_a_pinned_family_is_built_where_you_said_not_where_it_scores()
+    test_a_pinned_job_is_charged_the_system_it_was_pinned_to()
+    test_a_pin_that_cannot_be_honoured_falls_back_and_says_so()
+    test_a_pin_does_not_disturb_what_is_not_pinned()
+    test_a_pin_says_where_and_the_rig_fit_rule_still_says_what_bonus()
+    test_no_pins_routes_byte_for_byte_as_before()
+    test_a_pin_is_expressed_in_the_rig_family_registry_not_a_second_list()
+    test_pins_reach_a_plan_run_without_a_browser()
+    test_a_pinned_step_reads_as_a_choice_not_an_inference()
     print(f"\nAll {_passed} checks passed.")
 
 
@@ -4793,6 +4802,373 @@ def test_the_reaction_job_ceiling_reaches_plans_run_without_a_browser():
     f = [x for x in FEATURE_REGISTRY if x["key"] == "industry_job_length_policy"]
     check("the feature is registered", len(f) == 1)
     check("and defaults to off", f[0]["default"] is False)
+
+
+
+# ── Pinning: WHERE a category of product is built, stated rather than inferred ─────────────────
+# Everything above this line is inferred from rig coverage. A capital builder runs the PARTS in one
+# structure and the HULL in another and wants to say so — so a whole rig FAMILY can be pinned to a
+# structure, and the routing obeys it instead of scoring. What a pin must NOT do is break the plan:
+# it can only choose among sites already legal for that job's activity, and everything unpinned has
+# to route exactly as it did, consumer tie-break included.
+
+# 485 = Dreadnought (capital_ship), 873 = Capital Construction Components (capital_component),
+# 27 = Battleship — covered by NEITHER structure below, which is what makes it a tie.
+_PIN_GROUPS = {100: 485, 101: 27, 102: None}   # 102 filled with a real composite group at runtime
+
+
+def _pin_structs():
+    """Three structures: a capital-hull yard, a parts yard, and a reactor. Same hull and rigs
+    throughout so the only thing that differs is WHICH FAMILY each rig is for (and the system, so
+    the fee can be told apart)."""
+    base = dict(hull="azbel", security="null", me_rig=2, te_rig=2, rx_me_rig=0, rx_te_rig=0,
+                me_rig_groups=None, te_rig_groups=None,
+                rx_me_rig_groups=None, rx_te_rig_groups=None)
+    return [
+        {**base, "id": 1, "name": "Parts yard", "build_mfg": 1, "build_rx": 0,
+         "me_rig_groups": ["capital_component"], "te_rig_groups": ["capital_component"],
+         "system_id": 30000142, "facility_tax_pct": 1.0},
+        {**base, "id": 2, "name": "Hull yard", "build_mfg": 1, "build_rx": 0,
+         "me_rig_groups": ["capital_ship"], "te_rig_groups": ["capital_ship"],
+         "system_id": 30000144, "facility_tax_pct": 5.0},
+        {**base, "id": 3, "name": "Reactor", "hull": "tatara", "build_mfg": 0, "build_rx": 1,
+         "rx_me_rig": 2, "rx_te_rig": 2,
+         "rx_me_rig_groups": ["composite"], "rx_te_rig_groups": ["composite"],
+         "system_id": 30000144, "facility_tax_pct": 5.0},
+    ]
+
+
+class _PinEnv:
+    """The routing's three outside dependencies, faked: the feature flag, the account's structure
+    list and the per-system cost index. Restores every one of them."""
+
+    def __init__(self, structs=None, on=True, index=None):
+        self.structs = _pin_structs() if structs is None else structs
+        self.on = on
+        self.index = index or {30000142: 0.01, 30000144: 0.09}
+
+    def __enter__(self):
+        from app.industry import routing
+        from app import markets, industry_cost
+        self._saved = (routing._feature_on, markets.build_structures,
+                       industry_cost.fetch_system_cost_index)
+        routing._feature_on = lambda ctx=None: self.on
+        markets.build_structures = lambda ctx: list(self.structs)
+        industry_cost.fetch_system_cost_index = lambda sid, act: self.index.get(sid, 0.0)
+        return self
+
+    def __exit__(self, *exc):
+        from app.industry import routing
+        from app import markets, industry_cost
+        routing._feature_on, markets.build_structures, industry_cost.fetch_system_cost_index = self._saved
+        return False
+
+
+def _pin_route(pins, groups=None, params=None, con=None):
+    """resolve_job_sites over the synthetic Widget→Gadget→Sprocket graph. Returns (sites, params)."""
+    from app.industry.routing import resolve_job_sites
+    con = con or _seed_con()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+    p = params if params is not None else BuildParams(
+        struct_material_mult=1.0, struct_time_mult=1.0, build_system_id=30000142,
+        facility_tax_pct=0.0, mfg_cost_index=0.01, rx_cost_index=0.01)
+    sites = resolve_job_sites(1, [(100, 1)], mfg, rx, groups or _PIN_GROUPS, p, None, pins)
+    return sites, p
+
+
+def test_a_pinned_family_is_built_where_you_said_not_where_it_scores():
+    """The whole feature: the routing would put a dreadnought in the hull yard (its rigs cover
+    capital ships), and a builder who says "capitals are built in the parts yard" gets that — with
+    the honest, lower bonus that structure really earns for the job."""
+    print("test_a_pinned_family_is_built_where_you_said_not_where_it_scores")
+    with _PinEnv():
+        auto, _ = _pin_route(None)
+        check("unpinned, the hull goes where its rig is", auto[100]["key"] == "s:2")
+        check("and earns that structure's rig", approx(auto[100]["me_pct"], 6.04))
+        check("nothing is marked as pinned", "pinned" not in auto[100])
+
+        pinned, params = _pin_route({"capital_ship": "s:1"})
+        check("pinned, the hull is built in the parts yard", pinned[100]["key"] == "s:1")
+        check("and says it is there because you said so",
+              pinned[100]["pinned"] == "capital_ship")
+        # The parts yard's rig does NOT cover a dreadnought, so the job keeps the hull ROLE bonus
+        # only. A pin moves the job; it never invents a bonus.
+        check("with only the bonus that structure really earns for it",
+              approx(pinned[100]["me_pct"], 1.0) and approx(pinned[100]["te_pct"], 20.0))
+        check("and nothing was reported as unapplied", params.pin_notes == [])
+
+
+def test_a_pinned_job_is_charged_the_system_it_was_pinned_to():
+    """routing.py's third property, for pins specifically: the job installation index is per SYSTEM,
+    so a job pinned into another structure has to be charged that structure's system and tax, or the
+    plan's ISK describes a build that never happens."""
+    print("test_a_pinned_job_is_charged_the_system_it_was_pinned_to")
+    from app.industry.graph import SCC_SURCHARGE_PCT
+    with _PinEnv():
+        auto, p_auto = _pin_route(None)
+        p_auto.job_sites = auto
+        check("unpinned, the hull pays the hull yard's system and tax",
+              approx(p_auto.job_fee_rate(100, "manufacturing"), 0.09 + 0.05 + SCC_SURCHARGE_PCT))
+
+        pinned, p_pin = _pin_route({"capital_ship": "s:1"})
+        p_pin.job_sites = pinned
+        check("pinned, it pays the PINNED structure's system and tax",
+              approx(p_pin.job_fee_rate(100, "manufacturing"), 0.01 + 0.01 + SCC_SURCHARGE_PCT))
+        check("which is the fee of the site the plan actually names",
+              approx(pinned[100]["cost_index"], 0.01) and approx(pinned[100]["tax_pct"], 1.0))
+
+
+def test_a_pin_that_cannot_be_honoured_falls_back_and_says_so():
+    """Three ways a pin can be impossible — the structure is gone, it doesn't run that activity, or
+    routing is off entirely. All three land in the same place: today's automatic routing, plus a
+    line on the plan saying the pin was not applied. Never a failure, never a silent pretence."""
+    print("test_a_pin_that_cannot_be_honoured_falls_back_and_says_so")
+    with _PinEnv():
+        # (a) a structure that no longer exists.
+        gone, p = _pin_route({"capital_ship": "s:99"})
+        check("a deleted structure routes automatically", gone[100]["key"] == "s:2")
+        check("and the job is not marked as pinned", "pinned" not in gone[100])
+        check("the plan reports exactly that pin as unapplied",
+              [(n["family"], n["reason"]) for n in p.pin_notes] == [("capital_ship", "unavailable")])
+        check("naming the family in the user's own words",
+              p.pin_notes[0]["label"] == "Capital Ship Manufacturing"
+              and p.pin_notes[0]["site_key"] == "s:99")
+
+        # (b) the WRONG ACTIVITY: a manufacturing family pinned at a refinery. It must not produce
+        # a reaction site for a manufacturing job.
+        wrong, p2 = _pin_route({"capital_ship": "s:3"})
+        check("a manufacturing family pinned to a refinery is not honoured",
+              wrong[100]["key"] == "s:2" and "pinned" not in wrong[100])
+        check("and is reported", [n["family"] for n in p2.pin_notes] == ["capital_ship"])
+
+        # …and the mirror: a reaction family pinned at a manufacturing-only structure.
+        from app.industry.categories import REACTION_CATEGORIES
+        comp = sorted(REACTION_CATEGORIES["composite"]["groups"])[0]
+        groups = {**_PIN_GROUPS, 102: comp}
+        rxwrong, p3 = _pin_route({"composite": "s:1"}, groups=groups)
+        check("a reaction family pinned to an engineering complex is not honoured",
+              rxwrong[102]["key"] == "s:3" and "pinned" not in rxwrong[102])
+        check("and is reported", [n["family"] for n in p3.pin_notes] == ["composite"])
+        # …while the same pin at the reactor is obeyed, proving the refusal was about the ACTIVITY.
+        ok, p4 = _pin_route({"composite": "s:3"}, groups=groups)
+        check("the same family pinned at the reactor IS honoured",
+              ok[102]["key"] == "s:3" and ok[102]["pinned"] == "composite" and p4.pin_notes == [])
+
+    # (c) an account with no structures left at all.
+    with _PinEnv(structs=[]):
+        empty, p5 = _pin_route({"capital_ship": "s:1"})
+        check("no structures = nothing routed, pin reported", empty == {}
+              and [n["reason"] for n in p5.pin_notes] == ["unavailable"])
+
+    # (d) the feature flag off. Nothing is routed at all, so there is nothing for a pin to attach
+    # to — which the plan says rather than leaving the user to infer it from a plan that ignored it.
+    with _PinEnv(on=False):
+        off, p6 = _pin_route({"capital_ship": "s:1"})
+        check("flag off routes nothing", off == {})
+        check("and says the pin was not applied",
+              [(n["family"], n["reason"]) for n in p6.pin_notes] == [("capital_ship", "routing_off")])
+
+
+def test_a_pin_does_not_disturb_what_is_not_pinned():
+    """The consumer tie-break is the behaviour most easily broken by a feature that reaches into the
+    walk. A component neither structure's rigs cover is a TIE, and a tie stays where its consumer is
+    being built — before the pin and after it, following the pin to its new home."""
+    print("test_a_pin_does_not_disturb_what_is_not_pinned")
+    from app.industry.categories import REACTION_CATEGORIES
+    comp = sorted(REACTION_CATEGORIES["composite"]["groups"])[0]
+    groups = {**_PIN_GROUPS, 102: comp}
+    with _PinEnv():
+        auto, _ = _pin_route(None, groups=groups)
+        check("unpinned, the tied component follows its consumer",
+              auto[100]["key"] == "s:2" and auto[101]["key"] == "s:2")
+        pinned, _ = _pin_route({"capital_ship": "s:1"}, groups=groups)
+        check("with the consumer pinned, the tied component follows it there",
+              pinned[100]["key"] == "s:1" and pinned[101]["key"] == "s:1")
+        check("and the follower is NOT itself marked pinned — it was inferred",
+              "pinned" not in pinned[101])
+        check("a family in neither the pin nor the tie still routes on its own merit",
+              auto[102]["key"] == "s:3" and pinned[102]["key"] == "s:3")
+        check("so pinning a manufacturing family left every reaction exactly where it was",
+              auto[102] == pinned[102])
+
+
+def test_a_pin_says_where_and_the_rig_fit_rule_still_says_what_bonus():
+    """The two features must not fight (6ec0f64). A Raitaru cannot FIT a capital-ship rig — but a
+    builder may still legitimately choose to build capital ships there and simply earn no rig bonus
+    for it. So the pin is never filtered by `fittable_families`; that rule keeps deciding the BONUS
+    and nothing else."""
+    print("test_a_pin_says_where_and_the_rig_fit_rule_still_says_what_bonus")
+    from app.industry.structures import fittable_families
+    check("the fit rule still says a raitaru cannot fit that rig",
+          "capital_ship" not in fittable_families("raitaru"))
+    small = [
+        {"id": 1, "name": "Little raitaru", "hull": "raitaru", "security": "null",
+         "build_mfg": 1, "build_rx": 0, "me_rig": 2, "te_rig": 2, "rx_me_rig": 0, "rx_te_rig": 0,
+         # An impossible CLAIM, saved as the user wrote it: it earns nothing (see covers()).
+         "me_rig_groups": ["capital_ship"], "te_rig_groups": ["capital_ship"],
+         "rx_me_rig_groups": None, "rx_te_rig_groups": None,
+         "system_id": 30000142, "facility_tax_pct": 1.0},
+        {"id": 2, "name": "Big azbel", "hull": "azbel", "security": "null",
+         "build_mfg": 1, "build_rx": 0, "me_rig": 2, "te_rig": 2, "rx_me_rig": 0, "rx_te_rig": 0,
+         "me_rig_groups": ["capital_ship"], "te_rig_groups": ["capital_ship"],
+         "rx_me_rig_groups": None, "rx_te_rig_groups": None,
+         "system_id": 30000144, "facility_tax_pct": 1.0},
+    ]
+    with _PinEnv(structs=small):
+        auto, _ = _pin_route(None)
+        check("unpinned, the azbel wins — it can actually fit the rig",
+              auto[100]["key"] == "s:2" and approx(auto[100]["me_pct"], 6.04))
+        pinned, p = _pin_route({"capital_ship": "s:1"})
+        check("pinned to the raitaru, the jobs go to the raitaru",
+              pinned[100]["key"] == "s:1" and pinned[100]["pinned"] == "capital_ship")
+        check("the pin was not blocked by the fit rule", p.pin_notes == [])
+        check("but the fit rule still refuses the bonus that rig cannot earn",
+              approx(pinned[100]["me_pct"], 1.0) and approx(pinned[100]["te_pct"], 15.0))
+
+
+def test_no_pins_routes_byte_for_byte_as_before():
+    """This touches the routing every plan reads, so the no-op case is the load-bearing test: with
+    no pins set, the output must be identical to what the pre-pin code produced — and the pin path
+    must not even be consulted."""
+    print("test_no_pins_routes_byte_for_byte_as_before")
+    from app.industry import routing
+    from app.industry.categories import REACTION_CATEGORIES
+    comp = sorted(REACTION_CATEGORIES["composite"]["groups"])[0]
+    groups = {**_PIN_GROUPS, 102: comp}
+    with _PinEnv():
+        none_, p1 = _pin_route(None, groups=groups)
+        empty, p2 = _pin_route({}, groups=groups)
+        junk, p3 = _pin_route({"not_a_family": "s:1", "capital_ship": ""}, groups=groups)
+        check("no pins, an empty map and an unusable map are the same routing",
+              none_ == empty == junk)
+        check("with nothing to report", p1.pin_notes == p2.pin_notes == p3.pin_notes == [])
+        check("and no site carries a pin marker",
+              all("pinned" not in s for s in none_.values()))
+
+        # The pin path is not merely a no-op here — it is never entered at all.
+        real = routing._pinned_site
+        routing._pinned_site = lambda *a, **k: (_ for _ in ()).throw(AssertionError("consulted"))
+        try:
+            check("the pin path is never consulted when nothing is pinned",
+                  _pin_route(None, groups=groups)[0] == none_)
+        finally:
+            routing._pinned_site = real
+
+        # The call the old code made, with no pins argument at all, still means the same thing.
+        con = _seed_con()
+        mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+        p = BuildParams(struct_material_mult=1.0, struct_time_mult=1.0, build_system_id=30000142,
+                        facility_tax_pct=0.0, mfg_cost_index=0.01, rx_cost_index=0.01)
+        old = routing.resolve_job_sites(1, [(100, 1)], mfg, rx, groups, p)
+        check("the pre-pin call signature is unchanged in meaning", old == none_)
+
+
+def test_a_pin_is_expressed_in_the_rig_family_registry_not_a_second_list():
+    """The pin's unit is a rig family — the taxonomy the structures are already described in. A
+    second category list would drift from it the first time a family was added, and the user would
+    be pinning in one vocabulary and rigging in another."""
+    print("test_a_pin_is_expressed_in_the_rig_family_registry_not_a_second_list")
+    from app.industry.structures import RIG_FAMILIES, family_for_group, family_registry
+    from app.industry.routing import clean_pins
+    check("a dreadnought is a capital ship", family_for_group(485) == "capital_ship")
+    check("a capital component is not", family_for_group(873) == "capital_component")
+    check("a sub-capital hull is its own family", family_for_group(27) == "ship")
+    check("a group in no family pins nothing", family_for_group(999999) is None
+          and family_for_group(None) is None)
+    check("the activity filter is what keeps a manufacturing pin out of a reaction job",
+          family_for_group(485, "manufacturing") == "capital_ship"
+          and family_for_group(485, "reaction") is None)
+    # Disjointness is what makes "the family of this group" a question with one answer.
+    seen, overlap = {}, []
+    for key, fam in RIG_FAMILIES.items():
+        for g in fam["groups"]:
+            if g in seen:
+                overlap.append((g, seen[g], key))
+            seen[g] = key
+    check("every SDE group belongs to exactly one family, so a pin has one answer", overlap == [])
+    check("every family is pinnable and comes from the one registry",
+          {f["key"] for f in family_registry()} == set(RIG_FAMILIES))
+    check("an unknown family key is dropped rather than half-applied",
+          clean_pins({"capital_ship": "s:1", "nope": "s:2", "ammunition": ""}) == {"capital_ship": "s:1"})
+
+
+def test_pins_reach_a_plan_run_without_a_browser():
+    """Stored per account and applied in `prepare_plan_inputs` like every other build option: a pin
+    decides WHERE a job is installed, so a share link or the start-now checklist that missed it would
+    name a different building from the one on the user's screen.
+
+    Referenced by the `pp_markets` ROW id ("s:<id>"), which is the key the routing already speaks —
+    not by location_id, which a hand-described structure fakes and two rows can share."""
+    print("test_pins_reach_a_plan_run_without_a_browser")
+    import inspect
+    from app.industry.graph import BuildOptions, prepare_plan_inputs
+    from app.industry import settings as ind_settings
+
+    real_get = ind_settings.get_settings
+    ind_settings.get_settings = lambda ctx: {"build_pins": {"capital_ship": "s:7"}}
+    try:
+        merged = ind_settings.apply_account_build_options(1, BuildOptions())
+        check("a bare request inherits the account's pins",
+              merged.build_pins == {"capital_ship": "s:7"})
+        explicit = ind_settings.apply_account_build_options(
+            1, BuildOptions(build_pins={"ammunition": "s:9"}))
+        check("an explicitly sent map still wins", explicit.build_pins == {"ammunition": "s:9"})
+        ind_settings.get_settings = lambda ctx: {}
+        check("and an account that pinned nothing sends nothing",
+              ind_settings.apply_account_build_options(1, BuildOptions()).build_pins == {})
+    finally:
+        ind_settings.get_settings = real_get
+
+    check("the stored map is parsed against the registry",
+          ind_settings._parse_build_pins('{"capital_ship": "s:1", "bogus": "s:2"}')
+          == {"capital_ship": "s:1"}
+          and ind_settings._parse_build_pins(None) == {}
+          and ind_settings._parse_build_pins("not json") == {})
+
+    ddl = inspect.getsource(ind_settings.ensure_industry_settings_table)
+    check("the column is added additively", "add_columns(" in ddl and "build_pins TEXT" in ddl)
+    src = inspect.getsource(prepare_plan_inputs)
+    check("and the pins reach the one place every plan resolves its inputs",
+          "build_pins" in src and "resolve_job_sites" in src)
+
+    # The flag: the pin rides on the ROUTING flag, because with routing off nothing is routed at all
+    # and a pin would have nothing to attach to.
+    from app.industry.routing import FEATURE_KEY
+    from app.features import FEATURE_REGISTRY
+    avail = inspect.getsource(ind_settings._pins_available)
+    check("pins are gated by the routing feature, not a flag of their own",
+          FEATURE_KEY == "industry_rig_routing"
+          and "from app.industry.routing import FEATURE_KEY" in avail
+          and "industry_" not in avail.split('"""')[-1].replace("app.industry.routing", ""))
+    check("which is a registered feature",
+          any(f["key"] == "industry_rig_routing" for f in FEATURE_REGISTRY))
+
+
+def test_a_pinned_step_reads_as_a_choice_not_an_inference():
+    """"I chose this building" and "the tool worked it out" are different facts about the same line.
+    The checklist already names the structure per step; a pinned one has to be distinguishable, or
+    the user cannot tell which of the two they are looking at."""
+    print("test_a_pinned_step_reads_as_a_choice_not_an_inference")
+    import inspect
+    from app.industry import schedule as sched_mod
+    src = inspect.getsource(sched_mod)
+    check("a pinned job carries the fact to the frontend", 't["site_pinned"] = site["pinned"]' in src)
+    check("and the structure list says which of them you chose",
+          '"pinned"' in inspect.getsource(sched_mod._sites_used))
+    check("unapplied pins are reported on both plan paths",
+          src.count('"build_pins_unapplied"') == 2)
+    js = open("static/industry.js").read()
+    check("the checklist marks a pinned step", "sitePinned" in js and "(pinned)" in js)
+    check("and the notice bar says when a pin was not applied",
+          "_indPinNote" in js and "build_pins_unapplied" in js)
+    rx = open("static/reactions.js").read()
+    check("the pin is set where the structure is described",
+          "_rxPinRow" in rx and "/api/industry/build-pins" in rx)
+    # The pin picker offers every family for the activities the structure runs — a Raitaru CAN build
+    # capital ships, it just earns no rig bonus for them, so the fit rule must not reach in here.
+    pin_fn = rx[rx.index("function _rxPinRow"):rx.index("// An impossible claim")]
+    check("and the picker is NOT narrowed by what the hull can fit", "_rxRigByHull" not in pin_fn)
+
 
 if __name__ == "__main__":
     main()

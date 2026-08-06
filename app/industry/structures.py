@@ -209,6 +209,28 @@ RIG_SIZE_FAMILIES: dict[str, frozenset] = {
 }
 
 
+def family_for_group(group_id: int | None, activity: str | None = None) -> str | None:
+    """Which rig family a product in SDE group `group_id` belongs to, or None.
+
+    `RIG_FAMILIES` read backwards. It is the taxonomy a user PINS in ("capital ships build over
+    there"), so the pin is expressed in the same registry the rigs are, rather than in a second
+    category list that would drift from it the first time a family is added. The group sets are
+    disjoint by construction — a group is in exactly one family — and declaration order settles it
+    if that ever stops being true.
+
+    `activity` restricts the answer to families of that activity: it is what keeps a manufacturing
+    pin from ever being consulted for a reaction job, whatever the group map says.
+    """
+    if group_id is None:
+        return None
+    for key, fam in RIG_FAMILIES.items():
+        if activity and fam["activity"] != activity:
+            continue
+        if group_id in fam["groups"]:
+            return key
+    return None
+
+
 def hull_rig_size(hull: str | None) -> str | None:
     """The rig size this hull accepts, or None if we don't know the hull."""
     return HULL_RIG_SIZE.get((hull or "").lower())

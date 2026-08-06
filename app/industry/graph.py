@@ -183,6 +183,10 @@ class BuildParams:
     # cost_index, tax_pct}. Empty = the single flat facility above, which is exactly how every
     # plan behaved before routing existed. See app.industry.structures.route_job.
     job_sites: dict = field(default_factory=dict)
+    # Pins the account set that this build could NOT honour — the structure is gone, doesn't run
+    # that activity, or routing is off entirely. Set by `resolve_job_sites` beside `job_sites`,
+    # because only the routing knows which candidates a job really had. Empty = nothing to say.
+    pin_notes: list = field(default_factory=list)
 
     def site_for(self, type_id: int, activity: str) -> dict | None:
         """Where this job is installed, or None when the plan isn't routed (one flat facility)."""
@@ -721,6 +725,11 @@ class BuildOptions(BaseModel):
     # from the account's saved setting in apply_account_build_options, so a share link and the
     # start-now checklist split a batch into the same jobs the user's screen showed.
     max_reaction_job_days: float | None = None
+    # Where a whole rig FAMILY is built, whatever the routing would have scored:
+    # {"capital_ship": "s:<market row id>", …}. Filled from the account's saved pins in
+    # apply_account_build_options, so a share link and the start-now checklist install the jobs in
+    # the same buildings the user's screen named. `{}` = infer everything, today's plan.
+    build_pins: dict[str, str] = {}
 
 
 class IndustryPlanRequest(BuildOptions):
@@ -1116,7 +1125,8 @@ def prepare_plan_inputs(ctx: int, targets: list[tuple[int, int]], opts: BuildOpt
     # facility bonus) and hands back the routing every downstream number is then computed from.
     # `{}` when the flag is off or the account described no build structure — i.e. today's plan.
     from app.industry.routing import resolve_job_sites
-    params.job_sites = resolve_job_sites(ctx, targets, mfg, rx, groups, params, opts.facility_id)
+    params.job_sites = resolve_job_sites(ctx, targets, mfg, rx, groups, params, opts.facility_id,
+                                         opts.build_pins)
 
     pool = _slot_pool(ctx)
     pools = {

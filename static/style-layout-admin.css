@@ -1135,6 +1135,8 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 /* Where a job is installed, on the checklist line. Muted — it only appears when a plan actually
    spans more than one structure, and then it's a location, not the headline. */
 .ind-do-site { flex: 0 0 auto; font-size: 11px; color: var(--clr-text-soft); white-space: nowrap; }
+/* A pinned step is the user's own decision, not the router's — read it without hunting. */
+.ind-do-site-pin { color: var(--clr-text); font-weight: 600; }
 /* First-run facility notice. A bar over a working tab, not a card that replaces it — the planner
    runs fine on the generic presets, so this informs rather than blocks. */
 .ind-fac-nudge { border-left: 3px solid var(--clr-accent); }

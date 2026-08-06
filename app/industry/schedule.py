@@ -1036,8 +1036,11 @@ def _sites_used(agg: dict, params: BuildParams) -> list[dict]:
         if not site:
             continue
         row = used.setdefault(site["key"], {"key": site["key"], "name": site["name"],
-                                            "system_id": site.get("system_id"), "steps": 0})
+                                            "system_id": site.get("system_id"), "steps": 0,
+                                            "pinned": False})
         row["steps"] += 1
+        # Whether anything here is here BECAUSE the user said so, rather than because it scored best.
+        row["pinned"] = row["pinned"] or bool(site.get("pinned"))
     return sorted(used.values(), key=lambda r: -r["steps"])
 
 
@@ -1120,6 +1123,10 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
             if site:
                 t["site"] = site["name"]
                 t["site_key"] = site["key"]
+                # A pinned job says so. "I chose this building" and "the tool worked it out" are
+                # different facts about the same line, and only one of them is worth arguing with.
+                if site.get("pinned"):
+                    t["site_pinned"] = site["pinned"]
             # Name whatever set this job's length, so the UI can say "held to 2h 32m because X
             # needs it then" rather than leaving the reader to infer it.
             if t.get("why") and t["why"].get("needed_by") is not None:
@@ -1259,6 +1266,10 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
         # appears for an account with one structure. The per-move haul list this used to carry
         # beside it was dropped: the builder knows parts routed to two structures have to travel.
         "build_sites": _sites_used(agg, params),
+        # Pins the account set that this build could not honour — the structure is gone, it doesn't
+        # run that activity, or routing is off. Reported rather than silently ignored: a pin the
+        # plan dropped without saying so is worse than no pin at all.
+        "build_pins_unapplied": list(getattr(params, "pin_notes", []) or []),
         "shopping_list": shopping,
         # What the account's reaction policy cost this build — or, when an order overrides it, what
         # reacting saved. Reported rather than quietly taken, same rule as `marginal_saving`.
@@ -1710,6 +1721,10 @@ def plan_queue_per_order(order_specs: list[dict], mfg: dict, rx: dict, prices: d
             if site:
                 t["site"] = site["name"]
                 t["site_key"] = site["key"]
+                # A pinned job says so. "I chose this building" and "the tool worked it out" are
+                # different facts about the same line, and only one of them is worth arguing with.
+                if site.get("pinned"):
+                    t["site_pinned"] = site["pinned"]
             if t.get("why") and t["why"].get("needed_by") is not None:
                 t["why"]["needed_by_name"] = names.get(t["why"]["needed_by"],
                                                        str(t["why"]["needed_by"]))
@@ -1805,8 +1820,9 @@ def plan_queue_per_order(order_specs: list[dict], mfg: dict, rx: dict, prices: d
                 if site:
                     srow = sites.setdefault(site["key"], {"key": site["key"], "name": site["name"],
                                                           "system_id": site.get("system_id"),
-                                                          "steps": 0})
+                                                          "steps": 0, "pinned": False})
                     srow["steps"] += 1
+                    srow["pinned"] = srow["pinned"] or bool(site.get("pinned"))
                 if (info["activity"] == "manufacturing" and tid not in p.owned):
                     mrow = missing.setdefault(tid, {"type_id": tid, "name": names.get(tid, str(tid)),
                                                     "runs_needed": 0, "copies": None,
@@ -1885,6 +1901,9 @@ def plan_queue_per_order(order_specs: list[dict], mfg: dict, rx: dict, prices: d
         "requirements": sorted(built_rows.values(), key=lambda r: r["name"]),
         "schedule": sched,
         "build_sites": sorted(sites.values(), key=lambda r: -r["steps"]),
+        # Same report on the per-order path: a pin is an account-wide rule, so it has to be answered
+        # however the queue was planned.
+        "build_pins_unapplied": list(getattr(params, "pin_notes", []) or []),
         "shopping_list": sorted(shopping.values(), key=lambda r: r["line_cost"] or 0.0, reverse=True),
         "reaction_policy": (reaction_reports[0] if len(reaction_reports) == 1 else
                             _merge_reaction_reports(reaction_reports)),

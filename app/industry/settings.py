@@ -86,7 +86,17 @@ def ensure_industry_settings_table():
                     # existed. Manufacturing has no equivalent on purpose: splitting a manufacturing
                     # batch spends blueprint COPIES, which cost ISK, while a reaction formula is
                     # durable and reused by every later build — so this half can stand alone.
-                    "max_reaction_job_days REAL")
+                    "max_reaction_job_days REAL",
+                    # Where a whole rig FAMILY is built, overriding the routing's inference — a JSON
+                    # object {family key: "s:<pp_markets row id>"}. Per ACCOUNT and stored here with
+                    # the other standing options rather than on an order: "capitals are built in the
+                    # Sotiyo" is how this builder operates, not a decision about one hull.
+                    # Referenced by the pp_markets ROW id, which is exactly the key routing already
+                    # speaks (`BuildSite.key`, `facility_id`), not by location_id: a hand-described
+                    # structure has a synthetic negative location, two rows can name one location,
+                    # and a row that is deleted takes its id with it — so a stale pin resolves to no
+                    # candidate and falls back, instead of silently matching a different building.
+                    "build_pins TEXT")
         # Anyone who already has saved build options has plainly used this tab before, so they must
         # not be handed a first-run screen. Safe to re-run on a restart precisely because a user who
         # has NOT been through setup owns no settings row: the frontend only seeds one once the
@@ -127,6 +137,7 @@ def get_settings(context_id: int) -> dict:
     d["reaction_policy_stored"] = bool(str(d.get("reaction_policy") or "").strip())
     d["reaction_policy"] = _parse_reaction_policy(d.get("reaction_policy"))
     d["onboarded"] = bool(d.get("onboarded"))
+    d["build_pins"] = _parse_build_pins(d.get("build_pins"))
     d["per_order_plans"] = bool(d.get("per_order_plans"))
     # None means "no ceiling", and it has to stay None rather than becoming 0.0: `apply_account_
     # build_options` only fills a field the account has an opinion about, and a 0 would read as one.
@@ -275,6 +286,49 @@ def set_max_reaction_job_days(context_id: int, days: float | None) -> float | No
     return val or None
 
 
+def _parse_build_pins(value) -> dict[str, str]:
+    """The stored family→structure pins. '' / NULL / anything unparseable means no pins, which is
+    the automatic routing — the state every account was in before this existed. Normalising is the
+    routing's own job (`routing.clean_pins`), so the registry check lives in one place."""
+    from app.industry.routing import clean_pins
+    try:
+        raw = json.loads(value or "{}")
+    except Exception:
+        return {}
+    return clean_pins(raw) if isinstance(raw, dict) else {}
+
+
+def get_build_pins(context_id: int) -> dict[str, str]:
+    return get_settings(context_id).get("build_pins") or {}
+
+
+def set_build_pins(context_id: int, pins: dict) -> dict[str, str]:
+    """Replace the account's family→structure pins. Its own write path, like `set_blacklist` and for
+    the same reason: the settings PUT is a debounced save of the whole plan form, and a slider moving
+    must not carry a stale pin map along and quietly move a build to another building.
+
+    Keyed by FAMILY, so a family can be pinned to exactly one structure by construction — there is no
+    "pinned to two places" state to detect and no reconciliation to get wrong. A blank/removed target
+    simply drops the pin. The structure is NOT validated against the account's list here: a pin
+    outlives a structure being edited, and whether it can be honoured is a question about one plan,
+    answered per job where the candidates are known.
+    """
+    from app.industry.routing import clean_pins
+    ensure_industry_settings_table()
+    clean = clean_pins(pins)
+    con = get_connection()
+    try:
+        con.execute(
+            "INSERT INTO pp_industry_settings (context_id, build_pins, updated_at) "
+            "VALUES (?,?,?) ON CONFLICT(context_id) DO UPDATE SET "
+            "build_pins=excluded.build_pins, updated_at=excluded.updated_at",
+            (context_id, json.dumps(clean), time.time()))
+        con.commit()
+    finally:
+        con.close()
+    return clean
+
+
 def get_blacklist(context_id: int) -> list[int]:
     return get_settings(context_id).get("never_build_ids") or []
 
@@ -338,6 +392,11 @@ def apply_account_build_options(context_id: int, opts):
     # is honoured at all is the feature flag's call, made once in `prepare_plan_inputs`.
     if "max_reaction_job_days" not in sent and saved.get("max_reaction_job_days"):
         update["max_reaction_job_days"] = float(saved["max_reaction_job_days"])
+    # …and so are the build pins. They decide WHERE each job is installed, so a checklist or a share
+    # link that missed them would tell the builder to install jobs in a different building from the
+    # one their own screen named — the same class of bug as every other option here.
+    if "build_pins" not in sent and saved.get("build_pins"):
+        update["build_pins"] = dict(saved["build_pins"])
     return opts.model_copy(update=update) if update else opts
 
 
@@ -514,6 +573,47 @@ def edit_job_length_policy(req: JobLengthPolicyEdit, ctx: int = Depends(require_
         raise HTTPException(status_code=403, detail="feature not enabled")
     return {"max_reaction_job_days": set_max_reaction_job_days(ctx, req.max_reaction_job_days),
             "available": True}
+
+
+class BuildPinsEdit(BaseModel):
+    """The whole map, replaced. Per FAMILY, so removing a pin is sending the map without it — there
+    is no half-state where a family is pinned to two structures to reconcile."""
+    pins: dict[str, str] = {}
+
+
+def _pins_payload(context_id: int) -> dict:
+    """The pins plus the FAMILY REGISTRY they are expressed in — the frontend never hardcodes that
+    list (same rule as the rig-family picker and ALERT_KINDS), so a family added in code appears in
+    the pin control without a second edit. Deliberately NOT narrowed by `fittable_families`: a
+    builder may pin capital ships to a Raitaru, which can build them and simply earns no rig bonus
+    for it. What a hull can FIT decides the bonus, never where a job may be installed."""
+    from app.industry.structures import family_registry
+    return {"pins": get_build_pins(context_id), "families": family_registry(),
+            "available": _pins_available(context_id)}
+
+
+def _pins_available(context_id: int) -> bool:
+    """Pins ride on the ROUTING flag: with routing off nothing is routed at all, so a pin has
+    nothing to attach to and a flag of its own would only add a state that cannot do anything."""
+    from app.features import feature_enabled_for
+    from app.industry.routing import FEATURE_KEY
+    return feature_enabled_for(FEATURE_KEY, context_id)
+
+
+@router.get("/api/industry/build-pins")
+def read_build_pins(ctx: int = Depends(require_context)):
+    """Which rig families this account builds in a fixed structure, whatever the routing scores."""
+    return _pins_payload(ctx)
+
+
+@router.post("/api/industry/build-pins")
+def edit_build_pins(req: BuildPinsEdit, ctx: int = Depends(require_context)):
+    """Gated on the rollout ladder rather than settable by anyone who can guess the endpoint: a pin
+    moves where jobs are installed and therefore what the build costs."""
+    if not _pins_available(ctx):
+        raise HTTPException(status_code=403, detail="feature not enabled")
+    set_build_pins(ctx, req.pins)
+    return _pins_payload(ctx)
 
 
 class ReactionPolicyEdit(BaseModel):

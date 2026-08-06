@@ -2662,6 +2662,22 @@ function indDismissRxDefaultNote(btn) {
   if (box && !box.querySelector('.ind-note-line')) box.remove();
 }
 
+// A pin the plan could NOT honour. Silence here would be the worst outcome: the user stated where a
+// family is built, the plan built it somewhere else, and nothing on the screen says which. One line,
+// naming the family and what happened, because the fix (re-pin it, or turn the structure back on)
+// is theirs to make.
+function _indPinNote(d) {
+  const rows = d.build_pins_unapplied || [];
+  if (!rows.length) return '';
+  const off = rows.some(r => r.reason === 'routing_off');
+  const names = rows.map(r => r.label).join(', ');
+  return `<div class="ind-note-line">Not built where you pinned it: <b>${_esc(names)}</b> — `
+    + (off ? `per-structure routing is off for this account, so every job used your selected facility.`
+           : `that structure isn't available for those jobs (removed, or it doesn't run that `
+             + `activity), so the plan routed them automatically.`)
+    + `</div>`;
+}
+
 // The one block. `withSkills` is the only thing that differs between the two renderers: the modal
 // checks whether your characters can install the jobs this plan schedules, the live build page
 // does not (and never has — don't "fix" that by quietly adding a panel to the busiest screen).
@@ -2671,7 +2687,7 @@ function _indNotices(d, withSkills) {
       + `a floor.</div>` : '';
   const body = unres + _indRxDefaultNote() + _indSkillBasisWarn(d) + _indCostBasisWarn(d)
     + _indCopyShortWarn(d) + _indParallelCopyNote(d) + _indPrintLimitNote(d)
-    + _indMissingBpWarn(d) + (withSkills ? _indSkillWarn(d) : '');
+    + _indMissingBpWarn(d) + _indPinNote(d) + (withSkills ? _indSkillWarn(d) : '');
   return body ? `<div class="ind-notes">${body}</div>` : '';
 }
 
@@ -3306,6 +3322,8 @@ function _indGroupJobs(jobs) {
       count: 0, minRuns: Infinity, maxRuns: 0, totalRuns: 0, dur: 0, runsList: [], why: j.why,
       // Which structure to install it in. Only present when the plan is routed across several.
       site: j.site,
+      // …and whether it is there because the user PINNED that family, not because it scored best.
+      sitePinned: j.site_pinned,
     });
     g.count += 1;
     g.minRuns = Math.min(g.minRuns, j.runs);
@@ -3385,8 +3403,12 @@ function indRenderInstall(d) {
           + `${_fmtHours(g.dur)}${why ? ' <span class="ind-do-why">?</span>' : ''}</span>`;
         // Where to install it. With group-specific rigs the plan may spread a build over several
         // structures, and "install 40 runs" without naming the building is half an instruction.
+        // A PINNED step says so: "I chose this building" and "the tool worked it out" are different
+        // facts about the same line, and only one of them is worth arguing with.
         const where = g.site && _indIsMultiSite()
-          ? `<span class="ind-do-site" title="Install in ${_esc(g.site)}">@ ${_esc(g.site)}</span>` : '';
+          ? `<span class="ind-do-site${g.sitePinned ? ' ind-do-site-pin' : ''}" title="Install in `
+            + `${_esc(g.site)}${g.sitePinned ? ' — you pinned this family here' : ''}">`
+            + `@ ${_esc(g.site)}${g.sitePinned ? ' (pinned)' : ''}</span>` : '';
         return `<li class="ind-do-job"><span class="ind-do-name">${_esc(g.name)}</span>${each}`
           + where
           + `<span class="ind-do-act ind-do-${g.activity}">${g.activity === 'reaction' ? 'reaction' : 'industry'}</span>`

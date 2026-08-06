@@ -2293,6 +2293,40 @@ function _rigFamRow(m, kind, activity) {
     + _rigFamSelect(kind + '-' + m.id, activity, m[col], m.hull)
     + `<span class="pp-card-hint">nothing selected = every group</span></div>`;
 }
+// ── Pins: what is ALWAYS built here, whatever the routing scores ─────────────────────────────
+// A capital builder runs the parts in one structure and the hull in another and wants to SAY so,
+// not hope the rig inference lands there. The unit is a rig family (the same registry above, read
+// from the backend), and the map is keyed by family, so a family is pinned to exactly one building
+// by construction — ticking it here takes it off wherever it was.
+//
+// Deliberately NOT narrowed by what the hull can fit: a Raitaru cannot fit a capital-ship RIG, but
+// you may still choose to build capital ships there and simply earn no rig bonus for it. The fit
+// rule decides the bonus; the pin decides the building.
+let _rxBuildPins = null;
+async function _rxLoadBuildPins() {
+  try {
+    const d = await api('/api/industry/build-pins');
+    _rxBuildPins = d.pins || {};
+  } catch (e) { _rxBuildPins = _rxBuildPins || {}; }
+  return _rxBuildPins;
+}
+function _rxPinRow(m) {
+  // Group-scope rows are somebody else's structure list; a pin is this ACCOUNT's way of operating.
+  const group = (typeof _rxMarketMount !== 'undefined' && _rxMarketMount === 'rxSettingsMarketsGroup');
+  if (!_rxRigRoutingOn() || group || m.suggested) return '';
+  const acts = [];
+  if (m.build_mfg) acts.push('manufacturing');
+  if (m.build_rx) acts.push('reaction');
+  const fams = (_rxRigFamilies || []).filter(f => acts.indexOf(f.activity) >= 0);
+  if (!fams.length) return '';
+  const mine = _rxBuildPins || {};
+  const opts = fams.map(f => `<option value="${f.key}" ${mine[f.key] === 's:' + m.id ? 'selected' : ''}>`
+    + `${_esc(f.label)}</option>`).join('');
+  return `<div class="rx-rig-row rx-rig-fam-row"><span>Always build here</span>`
+    + `<select id="bpin-${m.id}" multiple size="4" class="rx-rig-fams">${opts}</select>`
+    + `<span class="pp-card-hint">overrides the routing — nothing selected = let the plan decide</span></div>`;
+}
+
 // An impossible claim on an already-saved structure: say which one and what it was inflating,
 // and leave the fix to the user rather than rewriting what they configured.
 function _rigFitWarnings(m) {
@@ -2329,6 +2363,7 @@ function _rxBuildRowHtml(m, d) {
     <label class="rx-build-chk"><input type="checkbox" id="br-${m.id}" ${m.build_rx ? 'checked' : ''}> React here</label>
     <div class="rx-rig-row">ME rig <select id="brme-${m.id}">${_rigOpts(m.rx_me_rig)}</select> · TE rig <select id="brte-${m.id}">${_rigOpts(m.rx_te_rig)}</select></div>
     ${_rigFamRow(m, 'brmeg', 'reaction')}${_rigFamRow(m, 'brteg', 'reaction')}
+    ${_rxPinRow(m)}
     ${m.location_id < 0
       ? `<div class="pp-card-hint">Added by hand — can't be priced from: reading a structure's market needs ESI and its real in-game id.</div>`
       : `<label class="rx-build-chk"><input type="checkbox" id="bp-${m.id}" ${m.price_from ? 'checked' : ''}> Also price from here</label>`}
@@ -2477,6 +2512,20 @@ async function _rxSaveBuild(id) {
   try {
     _rxMarketData = await apiSend('POST', `/api/markets/${id}/build`, body);
   } catch (e) {}
+  // The pins live with the account's other build options, not on the structure row, so they are a
+  // second call. Sent as the WHOLE map with this structure's selection rewritten: keyed by family,
+  // so ticking one here is what unpins it from wherever it was.
+  const pinSel = document.getElementById('bpin-' + id);
+  if (pinSel) {
+    const key = 's:' + id;
+    const next = {};
+    Object.keys(_rxBuildPins || {}).forEach(f => { if (_rxBuildPins[f] !== key) next[f] = _rxBuildPins[f]; });
+    Array.from(pinSel.selectedOptions).forEach(o => { next[o.value] = key; });
+    try {
+      const d = await apiSend('POST', '/api/industry/build-pins', { pins: next });
+      _rxBuildPins = d.pins || {};
+    } catch (e) { toastError(e, 'Could not save what is always built here'); }
+  }
   _rxRenderMarketManager();
 }
 
@@ -2560,7 +2609,10 @@ async function _rxRefreshMarkets() {
     // the "what is this rig for" pickers come up empty on the first paint.
     // Hulls ride along for the same reason: the hand-added-structure form can't paint its hull
     // picker before the registry is in hand, and the registry is the only place hulls are named.
-    const [d] = await Promise.all([api('/api/markets'), _rxLoadRigFamilies(), _rxLoadHulls()]);
+    // The pins ride along too: they are drawn on the same build cards, and a card painted before
+    // them would show every family unpinned and invite the user to re-tick what is already set.
+    const [d] = await Promise.all([api('/api/markets'), _rxLoadRigFamilies(), _rxLoadHulls(),
+                                   _rxLoadBuildPins()]);
     _rxMarketData = d;
   } catch (e) {}
   _rxRenderMarketManager();

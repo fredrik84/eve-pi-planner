@@ -191,8 +191,10 @@ FEATURE_REGISTRY = [
      "description": "Say what each structure's rigs are FOR (capital ships, advanced components, "
                     "ammunition, …) and the planner picks the right structure per job: only jobs a "
                     "rig actually covers get its ME/TE, and each job's fee follows the system it "
-                    "lands in. The plan names the structure per step and lists the parts that have "
-                    "to move. A structure with no families set still covers everything.",
+                    "lands in. Or pin a family — capital ships, advanced components — to one "
+                    "structure and every job in it is installed there whatever the scoring says. "
+                    "The plan names the structure per step. A structure with no families set still "
+                    "covers everything.",
      # Starts with the testers, alongside every other Industry feature — this was asked for by the
      # builders using the tab, so admin-only would be a rung nobody needed.
      "default": False, "state": "testers"},
