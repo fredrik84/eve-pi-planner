@@ -285,23 +285,27 @@ switch); the problem is the rung, not the design.
 Two acceptable outcomes, no third: land 2f-residual #1 and #3 together and keep it at `testers`, or
 drop the flag to `hidden` until they land.
 
-## 16. Remove the dead Industry surface (2026-08-05)
+## 16. Remove the dead Industry surface — DONE 2026-08-07
 
-Three things are maintained with no caller. One commit, no behaviour change:
+Three things were maintained with no caller. Removed in one commit, no behaviour change:
 
-- **`app/industry/advisor.py` + `industry_skill_advisor` + `/api/industry/skill-advisor`.** The
-  rendering was removed on purpose (`industry.js:63` — training advice is not about THIS build, and
-  a card telling a character to start Industry I is not what somebody checking on a running build
-  came for). That reasoning is right; the conclusion left 255 lines, an endpoint and a flag behind
-  it. Delete it, or give it a home where training advice belongs — which is not the build page. The
-  PI half (`skill_roi_for`) is already shared and unaffected either way.
-- **`/api/industry/to-install`.** Superseded by the inline `install` block that rides along with
-  `queue-plan`.
-- **`/api/industry/skill-coverage`.** No caller; `analyze_plan_skills` is called directly by both
+- **`app/industry/advisor.py` + `industry_skill_advisor` + `/api/industry/skill-advisor`** — deleted
+  outright, engine and flag and `test_skill_advisor.py` with it. The rendering was removed on
+  purpose months earlier (training advice is not about THIS build); nothing replaced it and nothing
+  imported the module but its own endpoint registration. The PI half (`skill_roi_for`) is a
+  different module and is untouched. If training advice returns, it belongs on a page about the
+  character.
+- **`/api/industry/to-install`** — a four-line wrapper that re-planned the queue and called
+  `install_block`. The checklist now only ever comes from `res["install"]` on a plan that was
+  already computed, so "the checklist and the plan disagree" is impossible by construction rather
+  than fixed by convention. `test_industry.py`'s guard was re-pointed at that property instead of
+  at the deleted function's source text.
+- **`/api/industry/skill-coverage`** — no caller; `analyze_plan_skills` is called directly by both
   plan paths.
 
-Per [docs/manifesto.md](docs/manifesto.md), residue is removable rather than backlog — the point of
-this item is to actually remove it.
+976 checks in `test_industry.py` still pass, plus `test_required_skills.py`, `test_job_summary.py`
+and `test_features.py`. Docs updated in `industry-workflow.md`, `industry-planning.md`,
+`industry-planner-spec.md`, `manifesto.md` and the audit.
 
 ## 17. Stock sources have four surfaces (2026-08-05, low)
 
@@ -394,6 +398,7 @@ match any template we generate) is still unscoped.
 | — | Alliance-shared build structures as suggestions (`industry_group_structures`) | 08-05 |
 | — | Pin a rig FAMILY to a structure and every job in it is installed there, whatever the routing scores (`pp_industry_settings.build_pins`, on the `industry_rig_routing` flag). A pin can only pick among sites already legal for that job's activity; one it can't honour falls back to the automatic routing and says so. The pin decides WHERE, `fittable_families` still decides what BONUS | 08-06 |
 | 19b | Reaction plan STAGES on the dashboard: planned slots sort by `tier_order`, carry an `S<n>` badge, later stages dim/dash, and the "To install" checklist splits under stage banners. The number is `tier_order + 1` absolute, never re-ranked against what's still pending | 08-07 |
+| 16 | Dead Industry surface removed: the unrendered skill advisor (module, endpoint, flag, test), `/api/industry/to-install` and `/api/industry/skill-coverage`. No behaviour change; the checklist-vs-plan guard is now structural | 08-07 |
 | 20 | Clear all no longer strands a customer order: order rows are cleared AND the order's `assigned_runs` handed back (top row per chain, clamped at 0), with already-stranded orders repaired on the next assign. `test_clear_all_orders.py` | 08-07 |
 | 22 | Reactions shopping list stopped double-counting chains — only the top row of each assign is exploded, so a two-tier plan no longer asks for twice the goo. `test_shopping_roots.py` | 08-07 |
 | 21c | Reactions spend what you already hold (`reactions_use_stock`): an intermediate in an enabled source shortens or drops its stage and everything below it, in the plan and in the materials walk, consumed once per plan and always reported. `test_reaction_stock.py` | 08-07 |

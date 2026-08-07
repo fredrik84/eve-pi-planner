@@ -176,9 +176,10 @@ own all keep changing. The standing properties to hold:
 3. **One 3.6k-line frontend file against 22 backend modules.** The backend split; `static/industry.js`
    did not. It is the highest-risk file in the repo and the only guard over it is a `no-undef` lint
    (TODO 2e-residual).
-4. **Two endpoints exist with no UI on purpose and two with no UI by accident**
-   (`queue-plan/compare` and `per-order-plans` deliberately; `skill-coverage` and `to-install`
-   read as residue). Under this manifesto, residue is removable, not backlog.
+4. **Two endpoints exist with no UI on purpose and two did with no UI by accident**
+   (`queue-plan/compare` and `per-order-plans` deliberately; `skill-coverage` and `to-install` read
+   as residue and were removed 2026-08-07, TODO 16, along with the whole unrendered skill advisor).
+   Under this manifesto, residue is removable, not backlog — and this is it being removed.
 5. **Four settings live at both order and account level** with four different reconciliation rules.
    Each is individually justified; collectively they are hard to state in one sentence, which is the
    symptom worth watching.

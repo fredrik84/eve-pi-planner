@@ -252,7 +252,6 @@ Completed jobs feed `GET /api/industry/lifetime`.
 | `POST /api/industry/orders`, `GET`, `PATCH /{id}`, `DELETE /{id}`, `POST /reorder` | orders | the order chips + order modal |
 | `POST /api/industry/queue-plan` | orders | `indRefreshStatus` |
 | `POST /api/industry/orders/force-above` | orders | `indBuildAllAbove` |
-| `POST /api/industry/to-install` | orders | — (superseded by the inline `install` block) |
 | `POST /api/industry/queue-plan/compare` | orders | — (endpoint only; TODO 2f-residual #3) |
 | `GET/POST /api/industry/queue-plan/packing` | orders | — (diagnostic by design) |
 | `GET /api/industry/assets`, `POST /assets/refresh`, `/assets/refresh-corp`, `/assets/paste`, `/assets/sources`, `DELETE /assets/sources/{key}` | assets | Settings → Blueprints & formulas → Stock on hand |
@@ -264,8 +263,6 @@ Completed jobs feed `GET /api/industry/lifetime`.
 | `GET/POST /api/industry/blacklist` | settings | `indLoadBlacklist`, `indBlacklist` |
 | `GET/POST /api/industry/reaction-policy` | settings | `indLoadReactionPolicy`, `indSetReactionPolicy` |
 | `GET/POST /api/industry/per-order-plans` | settings | — (endpoint only; TODO 2f-residual #3) |
-| `GET /api/industry/skill-coverage` | skills | — |
-| `GET /api/industry/skill-advisor` | advisor | — (rendering removed on purpose; see the comment at `industry.js:63`) |
 | `GET/POST/DELETE /api/industry/orders/{id}/share` | shares | `indShareOrder`, `indRevokeShare` |
 | `GET /api/industry/build-status/{share_id}` | shares (public) | `static/build.html` via `/b/{id}` |
 | `GET/POST /api/industry/orders/{id}/sourcing`, `POST /sourcing/paste` | sourcing | sourcing panel |
@@ -302,7 +299,6 @@ gates one step of the path above.
 | `industry` | the tab |
 | `required_skills` | 6 — install eligibility and the skill report |
 | `industry_install_skill_aware` | 6 — the checklist agrees with the schedule about who can install |
-| `industry_skill_advisor` | — engine live, not rendered |
 | `industry_share` | 8 |
 | `industry_manual_done` | 7 |
 | `industry_blacklist` | 2 |
@@ -318,7 +314,7 @@ gates one step of the path above.
 ## Tests
 
 `test_industry.py` is the main suite. Adjacent: `test_required_skills.py`,
-`test_skill_advisor.py`, `test_skill_time_mults.py`, `test_cost_basis.py`, `test_job_summary.py`,
+`test_skill_time_mults.py`, `test_cost_basis.py`, `test_job_summary.py`,
 `test_group_structures.py`. Frontend behaviour has no browser harness (TODO 2e-residual);
 `scripts/lint_js.mjs` / the `lint-js` CI job is the only automated guard over `static/industry.js`.
 
@@ -334,11 +330,12 @@ gates one step of the path above.
 1. **`docs/code-layout.md` does not mention `app/industry/` at all.** The file whose stated job is
    "where things live" maps `app/planner*.py` module by module and skips 22 industry modules and
    9.2k lines. The endpoint index above is currently the only such map.
-2. **Six endpoints have no frontend caller.** `to-install` (superseded by the inline `install`
-   block), `queue-plan/compare` and `per-order-plans` (known — TODO 2f-residual #3),
-   `queue-plan/packing` (diagnostic by design), `skill-coverage`, and `skill-advisor` (rendering
-   removed on purpose). Three of the six are deliberate; `skill-coverage` and `to-install` are the
-   two that read as residue.
+2. **Six endpoints had no frontend caller; three were residue and are gone (2026-08-07, TODO 16).**
+   `to-install` (superseded by the inline `install` block), `skill-coverage` and `skill-advisor`
+   (engine, endpoint, flag and `app/industry/advisor.py` all deleted — the rendering had been
+   removed on purpose months earlier and nothing replaced it) were removed. `queue-plan/compare`
+   and `per-order-plans` (TODO 2f-residual #3) and `queue-plan/packing` (diagnostic by design) are
+   deliberate and stay.
 3. **Stock is expressed in four places** — the plan modal's "Materials from", the sourcing panel's
    "Pulling from", Settings → Blueprints & formulas → Stock on hand's tick list, and saved source sets — and under two
    different ownership models that coexist behind `industry_plan_sources` (account-wide tick list

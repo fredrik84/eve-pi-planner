@@ -130,8 +130,7 @@ def test_backend_gates_respect_the_whole_ladder(base: str) -> bool:
     # And the gates that sit in front of real features must accept a caller at all — a zero-arg
     # gate cannot consult a rung, which is exactly how this regressed.
     for mod, name in (("app.industry.routing", "routing"),
-                      ("app.industry.skills", "skills"),
-                      ("app.industry.advisor", "advisor")):
+                      ("app.industry.skills", "skills")):
         m = __import__(mod, fromlist=["_feature_on"])
         params = inspect.signature(m._feature_on).parameters
         ok &= check(len(params) >= 1, f"{name}._feature_on takes a caller")

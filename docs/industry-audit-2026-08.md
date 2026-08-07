@@ -168,7 +168,8 @@ Four genuine mismatches, in the order I would act on them:
    is second-order.
 2. **A feature is charging for a capability that does not exist** (`industry_per_order_plans`).
 3. **Two engines are maintained with no surface** (`skill-advisor`, plus the `skill-coverage` and
-   `to-install` routes). The manifesto calls this residue and makes it removable.
+   `to-install` routes). The manifesto calls this residue and makes it removable. **Done
+   2026-08-07** (TODO 16): all three removed, engine/flag/test included.
 4. **One concept has four surfaces** (stock sources) and one question has two mechanisms (blacklist
    vs reaction policy). Both are altitude problems, not correctness problems.
 

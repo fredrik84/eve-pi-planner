@@ -557,7 +557,7 @@ def test_marginal_threshold_scales_with_build_size():
 def test_install_assignment_spreads_and_respects_free_slots():
     """The 'do this now' checklist names WHICH character installs each job. It must never hand a
     character more jobs than it has free slots, must skip a character with none, and should spread
-    work rather than piling it on one toon. Mirrors the greedy assignment in orders.to_install."""
+    work rather than piling it on one toon. Mirrors the greedy assignment in orders.install_block."""
     print("test_install_assignment_spreads_and_respects_free_slots")
 
     def assign(ready, chars):
@@ -1315,7 +1315,7 @@ def test_blueprint_me_te_comes_from_the_copy_you_would_buy():
 
 
 def test_every_stage_gets_a_character_not_just_the_first():
-    """The to-install checklist named a character for the jobs you can start NOW; every later stage
+    """The install checklist named a character for the jobs you can start NOW; every later stage
     was anonymous, so a plan said "stage 1: 12 jobs" without ever saying who installs them. Slots are
     interchangeable and the pools are the sum of the characters' own slots, so an aggregate-feasible
     schedule is always assignable — walk the waves, release a slot when its job ends, hand each job
@@ -1401,13 +1401,15 @@ def test_the_checklist_and_the_plan_agree_on_what_is_ready():
     print("test_the_checklist_and_the_plan_agree_on_what_is_ready")
     import inspect
     from app.industry import orders
-    sig = inspect.signature(orders.to_install)
-    check("to-install accepts build options", "req" in sig.parameters)
-    check("and they are the queue's own option shape",
-          sig.parameters["req"].annotation in (orders.QueuePlanRequest, "QueuePlanRequest | None",
-                                               orders.QueuePlanRequest | None))
-    src = inspect.getsource(orders.to_install)
-    check("the caller's options reach the plan", "_run_queue_plan(ctx, req or" in src)
+    # The divergence is now structurally impossible: `to-install` (which re-planned with its own
+    # options) was deleted 2026-08-07 and the checklist is only ever derived from a plan that has
+    # already been computed — `install_block(ctx, res)` takes the result, it does not plan.
+    check("the checklist is derived from an already-planned queue, never re-planned",
+          "res" in inspect.signature(orders.install_block).parameters)
+    check("...and nothing plans a second time behind the page's back",
+          "_run_queue_plan" not in inspect.getsource(orders.install_block))
+    check("the one caller hands it the plan it just returned",
+          'res["install"] = install_block(ctx, res)' in inspect.getsource(orders))
 
     # The invariant that makes this matter: options genuinely change which jobs are ready first.
     con = _seed_con()

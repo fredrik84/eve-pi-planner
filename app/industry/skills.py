@@ -319,28 +319,3 @@ def plan_skill_gaps(context_id: int, requirements: list[dict], mfg: dict, rx: di
     """Just the gap report — the thin wrapper callers use when they don't also need eligibility."""
     res = analyze_plan_skills(context_id, requirements, mfg, rx)
     return None if res is None else res["gaps"]
-
-
-@router.get("/api/industry/skill-coverage")
-def industry_skill_coverage(ctx: int = Depends(require_context)):
-    """Diagnostic: whether the two data sources this feature needs are actually populated, per
-    account. Cheap to call and the first thing to check when the panel says nothing — it separates
-    "SDE not backfilled" from "characters never rescanned since the flag went on"."""
-    if not _feature_on(ctx):
-        return {"enabled": False}
-    ensure_char_skills_table()
-    con = get_connection()
-    try:
-        try:
-            sde_rows = con.execute("SELECT COUNT(*) AS n FROM blueprint_skills").fetchone()["n"]
-        except Exception:
-            sde_rows = 0
-        chars = _account_characters(con, ctx)
-    finally:
-        con.close()
-    return {
-        "enabled": True,
-        "sde_skill_rows": sde_rows,
-        "characters": [{"character_id": c["character_id"], "character_name": c["character_name"],
-                        "skills_known": len(c["skills"])} for c in chars],
-    }

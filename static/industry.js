@@ -60,10 +60,11 @@ async function indRefreshStaleCaches() {
   indRefreshStatus();
 }
 
-// The "what to train next" advisor no longer renders here. The engine, its endpoint
-// (/api/industry/skill-advisor) and its flag are all still in place — this is a page-density
-// decision, not a teardown: training advice is not about THIS build, and a card suggesting a
-// character start Industry I is not what somebody checking on a running build came for.
+// The "what to train next" advisor was removed entirely (2026-08-07), engine and all: training
+// advice is not about THIS build, and a card suggesting a character start Industry I is not what
+// somebody checking on a running build came for. It had been kept behind the removed rendering for
+// two months with no caller. If training advice comes back, it belongs on a page about the
+// character, not here.
 
 let _indOrders = [];
 // The status card is the live view; when it's on screen, a setting change must re-plan it.

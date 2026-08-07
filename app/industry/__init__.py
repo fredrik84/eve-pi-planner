@@ -22,13 +22,12 @@ from app.industry import (  # noqa: F401 — imported for endpoint registration 
     slots,          # /api/industry/slots
     blueprints,     # /api/industry/blueprints[/refresh]
     jobs,           # /api/industry/jobs[/refresh], /api/industry/lifetime
-    orders,         # the build queue: /api/industry/orders*, queue-plan, to-install
+    orders,         # the build queue: /api/industry/orders*, queue-plan
     assets,         # /api/industry/assets*
     bpc,            # /api/industry/bpc[/scan]
     progress,       # /api/industry/progress
     settings,       # per-account build options: /api/industry/settings
-    skills,         # required-skills-to-build: /api/industry/skill-coverage
-    advisor,        # what to train next: /api/industry/skill-advisor
+    skills,         # required-skills-to-build: analyze_plan_skills, called by both plan paths
     shares,         # customer build-status links: /api/industry/orders/{id}/share, /build-status
     sourcing,       # per-order material sourcing: /api/industry/orders/{id}/sourcing
     freshness,      # auto-refresh of stale caches: /api/industry/refresh-stale
