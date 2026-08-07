@@ -11,12 +11,11 @@ Reviewed 2026-08-05.
 
 ---
 
-## 19-residual. Reactions must say what you need to ACQUIRE, and show the stages in order (2026-08-07)
+## 19. Reactions must say what you need to ACQUIRE, and show the stages in order — DONE 2026-08-07
 
 Two defects found by using the tool on a real account (context 1, ~238 hand-declared formulas across
-41 products) right after the declaration work shipped. **Both shipped 2026-08-07** — kept here for
-the reasoning, which is load-bearing and should not be re-derived. What is still OPEN is one thing:
-the dashboard's already-assigned plan rows don't run the acquire check (see 19a's closing note).
+41 products) right after the declaration work shipped. **Both shipped 2026-08-07, nothing open** —
+kept here for the reasoning, which is load-bearing and should not be re-derived.
 
 ### 19a. An undeclared formula is read as "unknown", so plans include stages you cannot run — DONE 2026-08-07
 
@@ -69,9 +68,10 @@ handled by KEEPING unresolved paste names (`pp_blueprint_paste_unresolved`, repl
 deleted with it) and showing them in the warning itself. `test_missing_formulas.py` pins both
 directions. Rationale in `docs/reactions.md`.
 
-**Still to do here:** the dashboard's already-assigned plan rows don't run this check — the three
-planning entry points do, so a missing formula is caught before it becomes a slot, but a plan
-assigned before the flag went on won't be re-flagged.
+**Residual closed 2026-08-07:** the dashboard now runs the same check over what is already planned
+(`_plan_missing_formulas`, off every not-yet-running slot, rendered above the install checklist), so
+a plan committed before the flag went on — or one whose formula has since been sold — is flagged
+where the player is looking at it. Pinned in `test_missing_formulas.py`.
 
 ### 19b. The stages are sequenced correctly and the UI throws it away — DONE 2026-08-07
 

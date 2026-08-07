@@ -765,6 +765,21 @@ def unassign_all_reactions(context_id: int = Depends(require_context)):
     return {"ok": True, "cleared": cleared, "orders_reset": sorted(orders_reset)}
 
 
+def _plan_missing_formulas(context_id: int, characters: list[dict]) -> dict:
+    """The acquire-list for what is ALREADY planned — every not-yet-running slot on the dashboard.
+
+    Imported at call time: `library.py` is wired into the package after this module, and a
+    module-level import here would depend on that ordering. A failure degrades to "nothing to
+    report", which is this report's own empty state anyway.
+    """
+    try:
+        from app.reactions.library import missing_formulas, wanted_from_sequence
+        return missing_formulas(context_id, wanted_from_sequence(
+            [p for c in characters for p in (c.get("pending") or [])]))
+    except Exception:
+        return {"complete": False, "formulas": [], "unresolved": []}
+
+
 def _unplanned_running_totals(context_id: int, unplanned_running: list[tuple[int, float]],
                               output_qty_by_type: dict[int, float],
                               cycle_hours_by_type: dict[int, float]) -> dict[str, float]:
@@ -1067,6 +1082,12 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
         "pending_net_profit": round(pending_net_profit, 2),
         "pending_net_profit_per_day": round(pending_net_profit_per_day, 2),
         "pending_output_value": round(pending_output_value, 2),
+        # Formulas the CURRENT plan needs and the account does not hold. The three planning
+        # surfaces already refuse to hand you a stage you can't install, but only from the moment
+        # they were switched on — a plan assigned before that (or before a formula was sold) sits
+        # in these slots with nothing saying why it can't be installed. This is the same report,
+        # asked of what is actually planned. Empty unless a paste made the library complete.
+        "missing_formulas": _plan_missing_formulas(context_id, characters),
     }
 
 

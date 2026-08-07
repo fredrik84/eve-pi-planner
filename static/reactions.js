@@ -765,7 +765,12 @@ function _renderReactionsDashboard(data) {
     ? `<div class="rx-reconnect-note">⚠ Facility names show as raw IDs for <b>${needReconnect.map(c => _esc(c.character_name)).join(', ')}</b> — <button type="button" class="rx-reconnect-btn" onclick="connectReactionsTracking()">reconnect</button> to resolve them.</div>`
     : '';
 
-  el.innerHTML = reconnectNote + todoListHtml + rows + untrackedNote;
+  // ...and formulas the plan ALREADY holding these slots needs but the account doesn't have. The
+  // wizard/order/manual paths catch this before a slot is created, but only from the moment they
+  // were switched on: a plan assigned earlier — or one whose formula has since been sold — sits
+  // here looking installable. Above the checklist, because it changes what you'd install.
+  el.innerHTML = reconnectNote + _rxMissingFormulaWarn(data.missing_formulas)
+    + todoListHtml + rows + untrackedNote;
 }
 
 function _rxCancelAssignment(assignmentId) {

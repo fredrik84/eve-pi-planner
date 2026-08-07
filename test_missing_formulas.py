@@ -204,6 +204,19 @@ def main():
         check(wanted_from_sequence([]) == {} and wanted_from_sequence(None) == {},
               "and an empty plan asks about nothing")
 
+        print("the DASHBOARD asks the same question of what is already planned:")
+        _reset(con)
+        _paste("Reactor box", [f"3 x {have['fname']}\t0\t0\t-1\tComposite"])
+        from app.reactions.jobs import _plan_missing_formulas
+        rep = _plan_missing_formulas(CTX, [{"pending": [
+            {"type_id": have["output_type_id"], "runs": 4},
+            {"type_id": want["output_type_id"], "runs": 7}]}])
+        check([(r["name"], r["runs_needed"]) for r in rep["formulas"]] == [(want["pname"], 7)],
+              f"a plan already holding slots is checked too, with ITS runs (got {rep['formulas']})")
+        check(_plan_missing_formulas(CTX, []) == {
+            "complete": True, "formulas": [], "unresolved": [], "formulas_declared": 1},
+              "and an empty dashboard asks about nothing")
+
         print("with the flag off, every report is empty even on a complete library:")
         _paste("Reactor box", [f"1 x {have['fname']}\t0\t0\t-1\tComposite"])
         check(missing_formulas(CTX, wanted)["formulas"], "(precondition: it reports with the flag on)")
