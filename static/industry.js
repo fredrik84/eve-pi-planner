@@ -1027,14 +1027,15 @@ async function indLoadManualBps() {
   // Batch rows are summarised, not listed one by one: a pasted industry window is a hundred-odd
   // prints and a list that long buries the handful someone typed in themselves.
   const batches = (d.batches || []).map(b => {
-    // Where the batch is, when we know it: read out of the paste (the long layout names a structure
-    // and a container per print) or asked for at import (the short layout names neither). Display
-    // only — nothing in planning, routing or the build pins reads it yet. The container carries the
-    // row's title and the structure qualifies it in the meta line, so two cans of the same name in
-    // two structures never read identically.
-    const title = b.container || b.name;
-    const where = (b.structure && b.container) ? ` · in ${b.structure}` : '';
-    return `<div class="ind-src-row"><span class="ind-src-name">${_esc(title)}</span>`
+    // Where the batch's prints are, when we know it: read out of the paste (the long layout names a
+    // structure and a container per print) or asked for at import (the short layout names neither).
+    // Display only — nothing in planning, routing or the build pins reads it, and the batch is
+    // identified by its NAME, so the title is always the name. One batch usually spans several
+    // containers, so a place is only named when there is exactly one of them; otherwise the count.
+    const where = b.places > 1 ? ` · in ${b.places} places`
+      : (b.structure && b.container) ? ` · in ${b.container}, ${b.structure}`
+        : (b.container || b.structure) ? ` · in ${b.container || b.structure}` : '';
+    return `<div class="ind-src-row"><span class="ind-src-name">${_esc(b.name)}</span>`
     + `<span class="ind-src-meta">pasted · ${b.prints} print${b.prints === 1 ? '' : 's'}`
     + ` · ${b.products} product${b.products === 1 ? '' : 's'}${_esc(where)}</span>`
     + `<button class="ind-src-del" title="Remove this pasted batch"`
@@ -1082,11 +1083,13 @@ function _indBpPasteFormHtml() {
   return `<div class="ind-paste">
     <p class="ind-src-help">Or paste a whole industry window: in the EVE client open <b>Industry →
       Blueprints</b>, select all (Ctrl+A), copy (Ctrl+C), paste below.
-      <b>Copy it with nothing selected in the tree</b> and every line carries the structure and
-      container it is in — then each container becomes its own batch, and re-pasting that same
-      window updates each of them on its own. If you copied with a container selected the window
-      says nothing about where it is, so pick the structure below (or just name the batch).
-      Re-pasting the same place, or the same name, updates just that batch and leaves the rest alone.
+      <b>One paste is one batch, and its name is what identifies it</b> — re-pasting the same name
+      replaces that whole batch and leaves your other characters' alone, so moving prints between
+      containers in game is tracked as a move rather than counted twice.
+      <b>Copy it with nothing selected in the tree</b> and every line also carries the structure and
+      container it is in; we record and show that, and offer it as the batch name. If you copied with
+      a container selected the window says nothing about where it is, so you can pick the structure
+      below — that only labels the batch.
       <b>Note:</b> for any product a paste declares, the plan uses the declaration <i>instead of</i>
       what ESI read for it — including copies on your other characters — so paste those characters'
       windows too.</p>
@@ -1137,8 +1140,9 @@ function indBpPasteStructChanged() {
   if (sel.value === IND_BP_OTHER) other.focus();
 }
 
-// The structure the user picked for a paste that doesn't carry one. '' means they picked nothing,
-// which is the plain typed-name path.
+// The structure the user picked for a paste that doesn't carry one. Recorded on the rows and, if
+// nothing was typed, used to name the batch. '' means they picked nothing, which is the plain
+// typed-name path. It never decides what a re-paste replaces — the name does.
 function _indBpPasteStructure() {
   const sel = document.getElementById('indBpPasteStruct');
   const v = sel ? sel.value : '';
@@ -1159,11 +1163,11 @@ function _indBpPasteSummary(d) {
       + (un.length > 5 ? '…' : ''));
   }
   if ((d.ignored || []).length) bits.push(`${plural(d.ignored.length, 'line')} skipped`);
-  // A window copied with nothing selected names where each print is, and each container becomes its
-  // own batch — say so BEFORE the import, since "one paste, three batches" is otherwise a surprise.
+  // A window copied with nothing selected names where each print is. It is all ONE batch — the
+  // places are reported because they are worth seeing, not because they split anything.
   const locs = d.locations || [];
   if (locs.length) {
-    bits.push(`${plural(locs.length, 'container')} named — one batch each: `
+    bits.push(`in ${plural(locs.length, 'container')}: `
       + locs.slice(0, 4).map(l => l.name).join(', ') + (locs.length > 4 ? '…' : ''));
   }
   return bits.join(' · ') + '.';
@@ -1177,6 +1181,13 @@ async function indPreviewManualBpPaste() {
   try {
     const d = (await apiSend('POST', '/api/industry/manual-blueprints/paste/preview',
       { name: '', text })) || {};
+    // If the window said where its prints are, offer that as the batch name — the name is the
+    // batch's identity, so putting it in the box (rather than applying it invisibly) is what lets
+    // someone KEEP it across a re-paste after moving the prints somewhere else.
+    const nameEl = document.getElementById('indBpPasteName');
+    if (nameEl && !nameEl.value.trim() && d.suggested_name && (d.locations || []).length) {
+      nameEl.value = d.suggested_name;
+    }
     if (msg) {
       msg.textContent = (d.prints ? 'Will declare ' : 'Nothing to declare — ') + _indBpPasteSummary(d);
     }
@@ -1198,13 +1209,9 @@ async function indImportManualBpPaste() {
   await indLoadManualBps();       // repaints the panel, so the note has to be written after it
   const m2 = document.getElementById('indBpPasteMsg');
   if (m2) {
-    const made = r.batches || [];
-    const into = made.length > 1
-      ? `Imported into ${made.length} batches (${made.map(b => b.name).join(', ')})`
-      : `Imported "${r.name}"`;
     m2.textContent = r.error === 'empty' ? 'Nothing readable in that paste.'
       : r.error === 'unrecognized' ? "Couldn't match any blueprint names. " + _indBpPasteSummary(r)
-        : into + ' — ' + _indBpPasteSummary(r);
+        : `Imported "${r.name}" — ` + _indBpPasteSummary(r);
   }
   indLoadQueue();                 // a declared print moves both the ME/TE and the print cap
 }

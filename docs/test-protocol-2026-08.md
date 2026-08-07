@@ -136,21 +136,27 @@ replaces that batch (so re-pasting after buying or selling a print tracks it, an
 while every other character's batch and everything you typed in by hand stays put. Batches are listed
 above the typed rows with a print count and an ✕ that removes just that batch.
 
-**Every batch has a place, and the window may already know it.** The industry window copies in two
-layouts. Copy it with **nothing selected in the tree** and each line also names the structure and the
-container it is in — then *Preview* reports "N containers named — one batch each", and *Import*
-creates **one batch per container**, titled by the container with the structure beside it. Re-pasting
-that same window updates each container on its own, so moving prints between two of your own cans
-reads as a move rather than as buying and selling. Copy it with a **container selected** and the
-window says nothing about where it is: pick the structure from the *Where are these?* dropdown (it
-lists your configured build structures, plus *Somewhere else…* for free text) — or ignore it and just
-type a batch name as before, which still works exactly as it did.
+**The window may say where the prints are — that is recorded, not what identifies the batch.** The
+industry window copies in two layouts. Copy it with **nothing selected in the tree** and each line
+also names the structure and the container it is in; *Preview* then reports "in N containers: …" and
+fills the name box with a sensible default from those places. It is still **one batch** — the name
+is what identifies it, and *Import* replaces that whole batch, every row it declared last time,
+whichever containers it names now. Copy it with a **container selected** and the window says nothing
+about where it is: pick the structure from the *Where are these?* dropdown (it lists your configured
+build structures, plus *Somewhere else…* for free text) — that records the place and can name the
+batch — or ignore it and just type a batch name, which works exactly as it did. The batch row shows
+its location when all its prints are in one place, and "in N places" when they are not.
+
+**Test the MOVE, it is the case that was broken.** Paste a window of prints sitting in one container
+under a name; note the print count. Now, in game, drag those prints into a **different container**,
+copy the window again and re-paste it **under the same name**. The holding must be **unchanged** and
+there must still be **one** batch — a second batch, or a doubled count, is the per-container bug
+that this replaced.
 
 **Bug if:** a second character's paste empties the first one's prints; re-pasting the same window
-doubles a holding (in particular: re-pasting a no-selection window creating a *second* set of
-containers instead of updating the first); two containers with the **same name in different
-structures** merging into one batch; a stack prefix or a repeated line counts once; a paste deletes a
-row you typed in; or a paste that matched nothing reports success.
+doubles a holding (in particular: after moving prints between containers, as above); one paste
+producing several batches; a stack prefix or a repeated line counts once; a paste deletes a row you
+typed in; or a paste that matched nothing reports success.
 
 **Expect:** the plan's `ME n · TE n` chip on that product reads **"the blueprint you declared by
 hand"** — not "from your own blueprint" and not "un-researched". Materials and job duration move to

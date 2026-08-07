@@ -168,16 +168,49 @@ def ensure_manual_blueprints_table():
         # a paste may never delete a row a person entered by hand.
         add_columns(con, "pp_industry_blueprints",
                     "batch TEXT DEFAULT ''", "batch_name TEXT DEFAULT ''")
-        # WHERE the prints of a pasted batch physically are — read out of the paste when the window
-        # carried it, asked for when it did not (see `_split_location`). Recorded and displayed
-        # only: nothing in planning, routing or the build pins reads these yet. Kept as two fields
-        # rather than folded into `batch_name` so a later consumer gets the structure back without
-        # having to unpick a display string.
+        # WHERE each pasted print physically is — read out of the paste when the window carried it
+        # (see `_split_location`), asked for when it did not. **Recorded and displayed ONLY.**
+        # Nothing may key, group, replace, count or plan off these: prints move between containers
+        # all the time, and a model that treats a location as an identity turns a move into a
+        # duplicate (see `_batch_key`). Kept as two fields rather than folded into `batch_name` so a
+        # later consumer gets the structure back without having to unpick a display string.
         add_columns(con, "pp_industry_blueprints",
                     "structure TEXT DEFAULT ''", "container TEXT DEFAULT ''")
         con.commit()
+        _migrate_location_batches(con)
     finally:
         con.close()
+
+
+def _migrate_location_batches(con) -> None:
+    """Re-key the `paste:loc:` batches written by the short-lived per-container model.
+
+    Those rows were keyed on structure+container, which no batch is any more. Left alone they would
+    be ORPHANS: nothing the user can paste produces that key again, so the batch could never be
+    replaced — it could only sit there inflating the holding until noticed and ✕'d. Re-keying each
+    one to `_batch_key(batch_name)` — its own displayed name, e.g. `Santo BPO — MTO2-2 - Ctrl C` —
+    makes it an ordinary named batch: re-pastable under that name, replaceable, deletable.
+
+    Two batches can only collide here if they displayed identically, which the label already
+    prevented; if they somehow did, merging them is the right answer under the new model anyway.
+    Runs inside `ensure_manual_blueprints_table`, so once per process, and after the first pass the
+    SELECT matches nothing.
+    """
+    try:
+        rows = con.execute(
+            "SELECT DISTINCT COALESCE(batch,'') AS batch, COALESCE(batch_name,'') AS batch_name "
+            # The pattern is a PARAMETER, not a literal: `_pg_translate` escapes a literal `%` to
+            # `%%` for psycopg2's interpolation, which is then skipped entirely when a statement
+            # carries no params — so an inline `LIKE 'paste:loc:%'` reaches Postgres as `%%`.
+            "FROM pp_industry_blueprints WHERE COALESCE(batch,'') LIKE ?",
+            ("paste:loc:%",)).fetchall()
+        for r in rows:
+            con.execute("UPDATE pp_industry_blueprints SET batch=? WHERE batch=?",
+                        (_batch_key(r["batch_name"]), r["batch"]))
+        if rows:
+            con.commit()
+    except Exception:
+        pass                              # a fresh DB has no such rows; never block startup on this
 
 
 def _manual_enabled(context_id: int) -> bool:
@@ -747,10 +780,14 @@ def refresh_blueprints(context_id: int = Depends(require_context)):
 # holding the moment the same window is pasted again after buying a print. Replacing only its own
 # batch is the rule that survives both.
 #
-# **And a batch is a PLACE whenever the paste knows one** — one batch per container, keyed by
-# structure+container rather than by a typed name. A long-layout window spans every container the
-# character can see, so "one paste, one batch" would make it a single lump that can only be replaced
-# wholesale; per container, moving prints between two of your own cans re-pastes as what it is.
+# **ONE PASTE IS ONE BATCH, and its identity is its NAME — never where its prints are.** The long
+# layout is read for what it says (structure and container land on every row, and suggest the batch's
+# default name), but a batch is not a place. Keying a batch on its container was tried and reverted:
+# prints MOVE between containers, so a window re-pasted after a move replaced the new container and
+# left the old container's batch standing — the same five formulas counted twice. That fails in the
+# dangerous direction, because an over-counted print cap lets the planner schedule parallel jobs off
+# prints the user does not have. A re-paste under the same name replaces EVERYTHING that batch last
+# declared, whatever containers it named this time, which is what makes a move track correctly.
 
 _STACK_RE = _re.compile(r"^(\d[\d,]*)\s*[x×]\s+(.+)$", _re.IGNORECASE)
 
@@ -758,40 +795,62 @@ _PASTE_BATCH_DEFAULT = "Industry window"
 
 
 def _batch_key(label: str) -> str:
-    """A stable id for a batch NAME, so re-pasting the same window replaces it.
+    """A stable id for a batch NAME — **the only identity a batch has**, so re-pasting the same
+    window replaces it wherever its prints have moved to since.
 
     Deliberately a digest and not `hash()`: Python randomises string hashing per process, so a
     key built that way silently stops matching after a pod restart — which for this feature would
     mean a second copy of every print rather than a replacement.
+
+    Deliberately the NAME and nothing else. A key derived from a location was tried (`paste:loc:`,
+    reverted, migrated away in `_migrate_location_batches`) and it double-counted the moment a
+    builder moved prints between two of their own containers: the new place got a fresh batch and
+    the old place's batch was never named again, so nothing replaced it.
     """
     norm = (label or "").strip().lower() or _PASTE_BATCH_DEFAULT.lower()
     return "paste:" + _hashlib.sha1(norm.encode("utf-8")).hexdigest()[:16]
 
 
-def _location_batch_key(structure: str, container: str) -> str:
-    """A stable id for a batch that is a PLACE — one container inside one structure.
-
-    Derived from the two location strings and from **nothing else** — deliberately not from the
-    display label `_batch_label` builds. Same reasoning as `_batch_key` one rung further: the whole
-    value of the digest is that re-pasting the same window hits the same row and REPLACES it, and a
-    key that ran through the label would silently re-key every batch the day someone changes how a
-    batch is worded, turning the next re-paste into a duplicate instead of an update.
-
-    The structure is part of the digest, so two containers both called "Santo BPO" in two different
-    structures are two batches, not one that keeps overwriting the other.
-    """
-    norm = f"{(structure or '').strip().lower()}\x1f{(container or '').strip().lower()}"
-    return "paste:loc:" + _hashlib.sha1(norm.encode("utf-8")).hexdigest()[:16]
-
-
 def _batch_label(structure: str, container: str) -> str:
-    """How a located batch is NAMED for display. Qualified by the structure, because a container
-    name alone ("Santo BPO") is not unique across an account's structures and two batches reading
-    identically in the list is indistinguishable from a bug."""
+    """How a LOCATION reads for display, and the default name offered for a batch found in one.
+
+    Qualified by the structure, because a container name alone ("Santo BPO") is not unique across
+    an account's structures and two batches reading identically in the list is indistinguishable
+    from a bug. A label, never a key — see `_batch_key`.
+    """
     structure, container = (structure or "").strip(), (container or "").strip()
     if container and structure:
         return f"{container} — {structure}"
     return container or structure
+
+
+def _default_batch_name(locations: list[dict]) -> str:
+    """The batch name to offer when the user typed none, derived from where the paste says its
+    prints are. **A default, not a dependency** — it saves typing, and the moment it is written to a
+    row it is just a name like any other.
+
+    Stable for the same window, which is what makes an un-named re-paste land back on the same
+    batch: one container gives its qualified label, several containers in one structure give the
+    structure (so re-shuffling prints between cans inside a structure keeps the name), and several
+    structures give the first structure alphabetically plus a count. A paste with no location at all
+    gets the generic default, exactly as before.
+
+    The honest caveat: a builder who never names their batches and then moves prints to a DIFFERENT
+    STRUCTURE gets a different default, and so a second batch. Naming the batch once removes the
+    ambiguity for good, which is why the UI offers the default in the name box rather than hiding
+    it — a name the user can see is a name they can keep.
+    """
+    if not locations:
+        return _PASTE_BATCH_DEFAULT
+    if len(locations) == 1:
+        return _batch_label(locations[0]["structure"], locations[0]["container"]) \
+            or _PASTE_BATCH_DEFAULT
+    structs = sorted({(l["structure"] or "").strip() for l in locations if (l["structure"] or "")})
+    if len(structs) == 1:
+        return structs[0]
+    if not structs:
+        return _PASTE_BATCH_DEFAULT
+    return f"{structs[0]} +{len(structs) - 1} more"
 
 
 def _is_number(s: str) -> bool:
@@ -904,6 +963,7 @@ def parse_blueprint_paste(text: str) -> dict:
         parsed.append(row)
 
     empty = {"entries": [], "unknown": [], "no_product": [], "ignored": ignored, "locations": [],
+             "suggested_name": _PASTE_BATCH_DEFAULT,
              "prints": 0, "formulas": 0, "blueprints": 0, "products": 0, "lines": len(parsed)}
     if not parsed:
         return empty
@@ -949,9 +1009,11 @@ def parse_blueprint_paste(text: str) -> dict:
         me = max(0, min(10, int(r["me"])))
         te = max(0, min(20, int(r["te"])))
         runs = -1 if int(r["runs"]) < 0 else int(r["runs"])
-        # The LOCATION is part of the grouping key: the same print in two containers is two rows,
-        # because each container becomes its own batch and a merged row could only be filed under
-        # one of them. Short-layout rows all carry ('', '') and so group exactly as they always did.
+        # The LOCATION is part of the grouping key so the same print in two containers stays two
+        # rows and each one keeps the place it was found in — the columns exist to be RECORDED.
+        # It changes no total: a holding sums every row of a product (`manual_blueprints`), so two
+        # rows of 2 and 3 and one row of 5 are the same five prints. Short-layout rows all carry
+        # ('', '') and so group exactly as they always did.
         struct, cont = r.get("structure") or "", r.get("container") or ""
         key = (int(prod), me, te, runs, struct, cont)
         g = groups.setdefault(key, {
@@ -964,8 +1026,9 @@ def parse_blueprint_paste(text: str) -> dict:
     entries = list(groups.values())
     for e in entries:
         e["quantity"] = min(e["quantity"], _STACK_CAP)
-    # Every distinct place this paste named — what the UI shows before an import so "one window
-    # became three batches" is visible in the preview rather than a surprise in the list.
+    # Every distinct place this paste named — reported so the preview can say where the prints are
+    # and so a default batch name can be offered. It is a DESCRIPTION of the paste; the import files
+    # all of it under one batch whatever this says.
     locs: dict[tuple, dict] = {}
     for e in entries:
         if not (e["structure"] or e["container"]):
@@ -973,14 +1036,13 @@ def parse_blueprint_paste(text: str) -> dict:
         lk = (e["structure"], e["container"])
         loc = locs.setdefault(lk, {"structure": e["structure"], "container": e["container"],
                                    "name": _batch_label(e["structure"], e["container"]),
-                                   "batch": _location_batch_key(e["structure"], e["container"]),
                                    "prints": 0, "products": set()})
         loc["prints"] += e["quantity"]
         loc["products"].add(e["product_type_id"])
     locations = [{**v, "products": len(v["products"])}
                  for v in sorted(locs.values(), key=lambda x: x["name"].lower())]
     return {"entries": entries, "unknown": unknown, "no_product": no_product, "ignored": ignored,
-            "locations": locations,
+            "locations": locations, "suggested_name": _default_batch_name(locations),
             "prints": sum(e["quantity"] for e in entries),
             "formulas": sum(e["quantity"] for e in entries if e["formula"]),
             "blueprints": sum(e["quantity"] for e in entries if not e["formula"]),
@@ -990,50 +1052,38 @@ def parse_blueprint_paste(text: str) -> dict:
 
 def replace_blueprint_batch(context_id: int, name: str, text: str,
                             structure: str = "", container: str = "") -> dict:
-    """Import a pasted industry window as batches, REPLACING each of them and nothing else.
+    """Import one pasted industry window as ONE batch, REPLACING that whole batch and nothing else.
 
-    **One batch per CONTAINER when the paste says where its prints are.** A long-layout window with
-    no container selected spans everything the character can see, so it is not one batch — a window
-    covering three containers becomes three, each keyed by `_location_batch_key` and named by
-    `_batch_label`. Re-pasting that same window then updates each container independently, which is
-    the entire point of the batch model: the alternative is one giant batch that can only ever be
-    replaced wholesale, so moving prints between two of your own cans looks like buying and selling.
+    **A batch is its NAME.** Every row the paste yields is filed under `_batch_key(name)`, and the
+    import deletes everything that key held first — regardless of which containers the previous
+    paste named or this one does. That is precisely what makes a MOVE track: paste five formulas in
+    "Santo BPO", move them into "New Can" in game, re-paste the same window under the same name, and
+    the holding is still five. Keying per container (tried, reverted) left the old container's batch
+    standing and made it ten, which is the dangerous direction — an over-counted print cap lets the
+    planner run parallel jobs off prints that do not exist.
 
-    A SHORT-layout paste carries no location. Then `structure`/`container` — what the UI asked the
-    user for — locate the whole paste, and if they are empty too it falls back to the plain typed
-    `name`, which is exactly the batch this function has always made. A mixed paste does both: the
-    located rows go to their own batches, the rest to the named/asked-for one.
+    Where the prints are is still read and STORED per row: the long layout's own structure/container
+    when the row carried them, otherwise the `structure`/`container` the UI asked for. Display and
+    future use only. The one thing location does decide is the DEFAULT NAME when the user typed none
+    (`_default_batch_name`), which saves typing without becoming an identity.
 
     Re-pasting the same window after buying a print updates it; pasting a second character's window
-    adds to the library beside the first. Rows typed in on the form carry an empty batch and are
-    never touched by any paste.
+    under its own name adds to the library beside the first. Rows typed in on the form carry an empty
+    batch and are never touched by any paste.
     """
     ensure_manual_blueprints_table()
     res = parse_blueprint_paste(text)
-    label = (name or "").strip() or _PASTE_BATCH_DEFAULT
     ask_struct, ask_cont = (structure or "").strip(), (container or "").strip()
-    if ask_struct or ask_cont:
-        fb_key, fb_label = _location_batch_key(ask_struct, ask_cont), _batch_label(ask_struct,
-                                                                                  ask_cont)
-    else:
-        fb_key, fb_label = _batch_key(label), label
+    label = (name or "").strip() or res.get("suggested_name") or _PASTE_BATCH_DEFAULT
+    if not (name or "").strip() and not res.get("locations") and (ask_struct or ask_cont):
+        # Nothing typed and the paste named no place of its own — the place the user picked in the
+        # "Where are these?" box is the most useful name we can offer them.
+        label = _batch_label(ask_struct, ask_cont) or _PASTE_BATCH_DEFAULT
+    key = _batch_key(label)
     if not res["entries"]:
-        res.update({"added": 0, "batch": fb_key, "name": fb_label, "batches": [],
+        res.update({"added": 0, "batch": key, "name": label,
                     "error": "unrecognized" if (res["unknown"] or res["no_product"]) else "empty"})
         return res
-
-    batches: dict[str, dict] = {}
-    for e in res["entries"]:
-        e_struct, e_cont = e.get("structure") or "", e.get("container") or ""
-        if e_struct or e_cont:
-            k, lbl, s, c = (_location_batch_key(e_struct, e_cont),
-                            _batch_label(e_struct, e_cont), e_struct, e_cont)
-        else:
-            k, lbl, s, c = fb_key, fb_label, ask_struct, ask_cont
-        b = batches.setdefault(k, {"batch": k, "name": lbl, "structure": s, "container": c,
-                                   "entries": [], "prints": 0})
-        b["entries"].append(e)
-        b["prints"] += e["quantity"]
 
     con = get_connection()
     try:
@@ -1042,56 +1092,79 @@ def replace_blueprint_batch(context_id: int, name: str, text: str,
         prefer = {int(r["type_id"]): str(r["prefer"] or "") for r in con.execute(
             "SELECT type_id, prefer FROM pp_industry_blueprints WHERE context_id=? AND prefer<>''",
             (context_id,)).fetchall()}
-        # Each batch replaces ITSELF only. A container that this window no longer mentions keeps
-        # whatever it last held — the paste is evidence about the containers it names and silence
-        # about the rest, and the ✕ in the list is how a box that is really gone gets removed.
-        for b in batches.values():
-            con.execute("DELETE FROM pp_industry_blueprints WHERE context_id=? AND batch=?",
-                        (context_id, b["batch"]))
+        # The batch replaces itself WHOLE — one DELETE by key, before a single row is written. Not
+        # per container: a container this window no longer mentions is a container the user emptied,
+        # and leaving its rows behind is exactly the double-count this replaced.
+        con.execute("DELETE FROM pp_industry_blueprints WHERE context_id=? AND batch=?",
+                    (context_id, key))
         nxt = int(con.execute("SELECT COALESCE(MAX(id), 0) + 1 AS n FROM pp_industry_blueprints "
                               "WHERE context_id=?", (context_id,)).fetchone()["n"])
         now = _time.time()
-        for b in batches.values():
-            for e in b["entries"]:
-                con.execute(
-                    "INSERT INTO pp_industry_blueprints (context_id, id, type_id, me, te, runs, "
-                    "quantity, prefer, updated_at, batch, batch_name, structure, container) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    (context_id, nxt, e["product_type_id"], e["me"], e["te"], e["runs"],
-                     e["quantity"], prefer.get(e["product_type_id"], ""), now,
-                     b["batch"], b["name"], b["structure"], b["container"]))
-                nxt += 1
+        for e in res["entries"]:
+            # The row's own place if the window stated one, else the place the user was asked for.
+            e_struct = e.get("structure") or ""
+            e_cont = e.get("container") or ""
+            if not (e_struct or e_cont):
+                e_struct, e_cont = ask_struct, ask_cont
+            con.execute(
+                "INSERT INTO pp_industry_blueprints (context_id, id, type_id, me, te, runs, "
+                "quantity, prefer, updated_at, batch, batch_name, structure, container) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (context_id, nxt, e["product_type_id"], e["me"], e["te"], e["runs"],
+                 e["quantity"], prefer.get(e["product_type_id"], ""), now,
+                 key, label, e_struct, e_cont))
+            nxt += 1
         con.commit()
     finally:
         con.close()
-    made = [{k: v for k, v in b.items() if k != "entries"} for b in batches.values()]
-    primary = next((b for b in made if b["batch"] == fb_key), made[0])
-    res.update({"added": res["prints"], "batch": primary["batch"], "name": primary["name"],
-                "batches": made})
+    res.update({"added": res["prints"], "batch": key, "name": label})
     return res
 
 
 def list_blueprint_batches(context_id: int) -> list[dict]:
-    """The pasted batches this account holds — one per character's window, in practice."""
+    """The pasted batches this account holds — one per pasted window, in practice.
+
+    Grouped on the batch KEY only. The location columns are summarised, never grouped on: one batch
+    routinely spans several containers (a window copied with nothing selected in the tree names all
+    of them), and grouping by place here would report one paste as several batches sharing a key —
+    which is how the ✕ and the print counts would start disagreeing with what a re-paste replaces.
+    `places` is that span; `structure`/`container` are filled in only when there is exactly one, so
+    a caller can display a location without having to guess whether it is representative. The span
+    is folded in PYTHON from a second small query rather than as a `COUNT(DISTINCT a || sep || b)`,
+    which would need a separator literal that behaves identically on SQLite and Postgres and could
+    still be a real character in a container name.
+    """
     ensure_manual_blueprints_table()
     con = get_connection()
     try:
         rows = con.execute(
             "SELECT COALESCE(batch,'') AS batch, COALESCE(batch_name,'') AS batch_name, "
-            "COALESCE(structure,'') AS structure, COALESCE(container,'') AS container, "
             "COUNT(*) AS rows_n, SUM(quantity) AS prints, COUNT(DISTINCT type_id) AS products "
             "FROM pp_industry_blueprints WHERE context_id=? AND COALESCE(batch,'')<>'' "
-            "GROUP BY COALESCE(batch,''), COALESCE(batch_name,''), COALESCE(structure,''), "
-            "COALESCE(container,'') ORDER BY batch_name",
+            "GROUP BY COALESCE(batch,''), COALESCE(batch_name,'') ORDER BY batch_name",
             (context_id,)).fetchall()
+        places: dict[str, set] = {}
+        for r in con.execute(
+            "SELECT DISTINCT COALESCE(batch,'') AS batch, COALESCE(structure,'') AS structure, "
+            "COALESCE(container,'') AS container FROM pp_industry_blueprints "
+            "WHERE context_id=? AND COALESCE(batch,'')<>''", (context_id,)).fetchall():
+            if r["structure"] or r["container"]:
+                # ('', '') is "this row claims no place", which is not a place — counting it would
+                # report a mixed batch as one place more than it actually names.
+                places.setdefault(r["batch"], set()).add((r["structure"], r["container"]))
     except Exception:
         return []
     finally:
         con.close()
-    return [{"batch": r["batch"], "name": r["batch_name"] or _PASTE_BATCH_DEFAULT,
-             "structure": r["structure"], "container": r["container"],
-             "rows": int(r["rows_n"] or 0), "prints": int(r["prints"] or 0),
-             "products": int(r["products"] or 0)} for r in rows]
+    out = []
+    for r in rows:
+        seen = places.get(r["batch"], set())
+        only = next(iter(seen)) if len(seen) == 1 else ("", "")
+        out.append({"batch": r["batch"], "name": r["batch_name"] or _PASTE_BATCH_DEFAULT,
+                    "structure": only[0], "container": only[1], "places": len(seen),
+                    "rows": int(r["rows_n"] or 0), "prints": int(r["prints"] or 0),
+                    "products": int(r["products"] or 0)})
+    return out
 
 
 def delete_blueprint_batch(context_id: int, batch: str) -> None:
@@ -1204,13 +1277,17 @@ def edit_manual_blueprint(req: ManualBlueprintEdit, context_id: int = Depends(re
 
 
 class BlueprintPaste(BaseModel):
-    """A copied industry window, and where its prints are.
+    """A copied industry window, the name of the batch it becomes, and where its prints are.
+
+    `name` is the batch — the only thing that decides what a re-paste replaces. One window per
+    character, in practice; the name is what keeps a second character's paste from replacing the
+    first one's.
 
     `structure`/`container` are the ANSWER TO THE QUESTION the UI asks when the paste itself carries
     no location (the short layout, i.e. a container was selected in the client, which is exactly the
-    case where the window knows where it is and doesn't say). They are ignored for any row that
-    named its own location. When all three are empty the plain `name` is the batch, which is the
-    path this endpoint shipped with and still supports for anyone who would rather just type one.
+    case where the window knows where it is and doesn't say). They are RECORDED on the rows that
+    named no place of their own, and they may supply a default name when none was typed — they never
+    key, group or replace anything.
     """
     name: str = ""
     text: str
@@ -1231,8 +1308,8 @@ def preview_manual_blueprint_paste(req: BlueprintPaste,
 @router.post("/api/industry/manual-blueprints/paste")
 def import_manual_blueprint_paste(req: BlueprintPaste,
                                   context_id: int = Depends(require_context)):
-    """Import a pasted industry window, replacing only the batches it names — one per container
-    when the window says where its prints are, otherwise the single asked-for/typed batch."""
+    """Import a pasted industry window as one named batch, replacing that whole batch — every row it
+    previously declared, whatever containers this paste or the last one named."""
     if not _manual_enabled(context_id):
         raise HTTPException(status_code=403, detail="feature not enabled")
     res = replace_blueprint_batch(context_id, req.name, req.text, req.structure, req.container)

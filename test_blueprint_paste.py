@@ -18,10 +18,11 @@ industry window. This file pins what a paste is allowed to mean:
     (`… runs TAB ? TAB structure TAB container TAB category`) — read by counting back from the
     trailing category, never from absolute indices, since the layout is inferred from two real
     samples and not documented;
-  * **a batch is then a PLACE**: one batch per container, keyed on structure+container so
-    re-pasting the same window replaces each container independently and two cans of the same name
-    in two structures never collide. A short-layout paste has no location, so the user is asked for
-    a structure — or may still just type a batch name.
+  * **a location is RECORDED, never an identity**: the structure and container are stored per row
+    and shown, and they suggest a default batch name, but one paste is ONE batch keyed on its name
+    and a re-paste replaces every row that batch previously declared, whatever containers it names
+    this time. That is what makes MOVING prints between containers track as a move instead of
+    doubling the holding — the regression this file's `MOVED` case pins.
 
 In-process; run inside the container against a NON-PROD database. Seeds rows under a fabricated
 context id and removes them in a finally.
@@ -38,7 +39,7 @@ from app.industry import blueprints as bp                              # noqa: E
 from app.industry.blueprints import (                                  # noqa: E402
     ensure_char_blueprints_table, ensure_manual_blueprints_table, parse_blueprint_paste,
     replace_blueprint_batch, list_blueprint_batches, delete_blueprint_batch, manual_blueprints,
-    owned_blueprints, _batch_key, _location_batch_key, _split_location,
+    owned_blueprints, _batch_key, _batch_label, _split_location, _migrate_location_batches,
 )
 
 CTX = -98882
@@ -74,6 +75,14 @@ LONG = (
     f"Phenolic Composites Reaction Formula\t0\t0\t-1\t0\t{MTO}\tRx cans\tComposite\n"
     f"Amarr Shuttle Blueprint\t10\t20\t-1\t0\t{JITA}\tSanto BPO\tShuttle\n"
 )
+
+# THE REGRESSION. The same five formulas, before and after the user drags them into another can in
+# game. A batch keyed on its container replaced only "New Can" on the re-paste and left "Santo BPO"
+# standing, so the holding went 5 → 10 — an over-count, which is the dangerous direction: the
+# reaction formula concurrency cap stops biting and the planner schedules parallel jobs off prints
+# that do not exist. One batch, keyed on its NAME, replaces both.
+MOVED_A = f"5 x Nanotransistors Reaction Formula\t0\t0\t-1\t0\t{MTO}\tSanto BPO\tComposite\n"
+MOVED_B = f"5 x Nanotransistors Reaction Formula\t0\t0\t-1\t0\t{MTO}\tNew Can\tComposite\n"
 
 NANO, PHENOLIC, PHOTONIC, PLATINUM = 16681, 16680, 33359, 16662     # reaction OUTPUTS
 VALKYRIE, HAMMERHEAD, PACKRAT, SHUTTLE = 28296, 28270, 33700, 11134  # manufactured products
@@ -287,64 +296,93 @@ def main():
         check(_split_location(["Name", "0", "0", "-1", "Cat"]) == ("", ""),
               "fewer than 7 fields is the short layout")
 
-        print("a located paste becomes ONE BATCH PER CONTAINER:")
-        imp = replace_blueprint_batch(CTX, "ignored name", LONG)
-        check(imp["added"] == 7 and len(imp.get("batches") or []) == 3,
-              "one window spanning three containers imports as three batches")
-        listed = {b["name"]: b for b in list_blueprint_batches(CTX)}
-        check(sorted(listed) == [f"Rx cans — {MTO}", f"Santo BPO — {JITA}", f"Santo BPO — {MTO}"],
-              "and all three are listed, named from the container and qualified by the structure")
-        check(listed[f"Santo BPO — {MTO}"]["prints"] == 5
-              and listed[f"Rx cans — {MTO}"]["prints"] == 1,
-              "each carries only its own container's prints — 5 and 1")
-        check(listed[f"Santo BPO — {MTO}"]["structure"] == MTO
-              and listed[f"Santo BPO — {MTO}"]["container"] == "Santo BPO",
-              "the structure and the container are stored as their own fields, not just in the name")
+        print("a located paste is still ONE BATCH — the location is recorded, not an identity:")
+        imp = replace_blueprint_batch(CTX, "Main", LONG)
+        check(imp["added"] == 7 and imp["batch"] == _batch_key("Main"),
+              "one window spanning three containers imports as one batch, keyed on its name")
+        listed = list_blueprint_batches(CTX)
+        check(len(listed) == 1 and listed[0]["prints"] == 7,
+              "and is listed once, holding all 7 prints")
+        check(listed[0]["places"] == 3 and listed[0]["structure"] == ""
+              and listed[0]["container"] == "",
+              "the list reports the 3 places it spans, and names none of them as THE place")
+        stored = {(r["structure"], r["container"], r["quantity"]) for r in con.execute(
+            "SELECT structure, container, quantity FROM pp_industry_blueprints WHERE context_id=?",
+            (CTX,)).fetchall()}
+        check((MTO, "Santo BPO", 4) in stored and (MTO, "Rx cans", 1) in stored
+              and (JITA, "Santo BPO", 1) in stored,
+              "every row keeps the structure and container it was found in — nothing is lost")
 
-        print("two containers of the SAME NAME in different structures do not collide:")
-        check(_location_batch_key(MTO, "Santo BPO") != _location_batch_key(JITA, "Santo BPO"),
-              "the structure is part of the key, so 'Santo BPO' twice is two keys")
-        check(listed[f"Santo BPO — {MTO}"]["batch"] != listed[f"Santo BPO — {JITA}"]["batch"],
-              "and the two really are separate batches after an import")
-        check(listed[f"Santo BPO — {JITA}"]["prints"] == 1,
-              "the second structure's can holds its own one print")
+        print("THE REGRESSION: prints MOVED to another container do not double the holding:")
+        _reset(con)
+        first = replace_blueprint_batch(CTX, "Formula can", MOVED_A)
+        check(first["added"] == 5 and len(manual_blueprints(CTX)[NANO]["copies"]) == 5,
+              "5 formulas in 'Santo BPO' under batch 'Formula can' is a holding of 5")
+        moved = replace_blueprint_batch(CTX, "Formula can", MOVED_B)
+        check(moved["added"] == 5, "the same window re-pasted after the move still reads 5")
+        check(len(manual_blueprints(CTX)[NANO]["copies"]) == 5,
+              "and the holding is STILL 5 — a move is a move, not a purchase (was 10)")
+        check(len(list_blueprint_batches(CTX)) == 1,
+              "one batch, not two — the old container's rows went with the replace")
+        check(list_blueprint_batches(CTX)[0]["container"] == "New Can",
+              "and the recorded place followed the prints to where they now are")
 
-        print("re-pasting the same window REPLACES each container — it never duplicates:")
-        again = replace_blueprint_batch(CTX, "", LONG)
-        check(again["added"] == 7, "the same window imports the same 7 prints")
-        check(len(list_blueprint_batches(CTX)) == 3, "still three batches, not six")
+        print("re-pasting the same window REPLACES the whole batch — it never duplicates:")
+        _reset(con)
+        imp = replace_blueprint_batch(CTX, "Main", LONG)
+        again = replace_blueprint_batch(CTX, "Main", LONG)
+        check(again["added"] == 7 and again["batch"] == imp["batch"],
+              "the same window under the same name hits the same key — that is what makes it a"
+              " replace")
+        check(len(list_blueprint_batches(CTX)) == 1, "still one batch, not two")
         check(len(manual_blueprints(CTX)[NANO]["copies"]) == 4,
               "and the holding is unchanged — four Nanotransistors formulas, not eight")
-        check({b["batch"] for b in list_blueprint_batches(CTX)}
-              == {b["batch"] for b in imp["batches"]},
-              "the keys are identical across the two pastes — this is what makes it a replace")
-        check(_location_batch_key(f"  {MTO}  ", " Santo BPO ")
-              == _location_batch_key(MTO, "Santo BPO"),
-              "the key is a digest of the trimmed, case-folded LOCATION, not of the display label")
 
-        print("...and one container emptying is tracked, like any other re-paste:")
+        print("...and emptying one container of a multi-container batch is tracked:")
         sold = LONG.replace("4 x Nanotransistors", "2 x Nanotransistors")
-        replace_blueprint_batch(CTX, "", sold)
+        replace_blueprint_batch(CTX, "Main", sold)
         check(len(manual_blueprints(CTX)[NANO]["copies"]) == 2,
               "selling two and re-pasting leaves two")
         check(len(manual_blueprints(CTX)[PHENOLIC]["copies"]) == 1,
-              "and the OTHER container in the same structure is untouched")
+              "and the other containers' prints, re-declared by the same paste, are still there")
 
-        print("a short-layout paste can be TOLD where it is, and that place is its batch:")
+        print("a paste with no typed name is NAMED from where it says it is:")
+        _reset(con)
+        one_place = parse_blueprint_paste(MOVED_A)
+        check(one_place["suggested_name"] == _batch_label(MTO, "Santo BPO"),
+              "one container suggests that container, qualified by its structure")
+        one_struct = "".join(ln + "\n" for ln in LONG.splitlines() if JITA not in ln)
+        check(parse_blueprint_paste(one_struct)["suggested_name"] == MTO,
+              "several containers in ONE structure suggest the structure — so shuffling prints"
+              " between cans inside it keeps the same default name")
+        check(parse_blueprint_paste(LONG)["suggested_name"] == f"{JITA} +1 more",
+              "several structures suggest the first alphabetically plus a count — stable for the"
+              " same window, which is all a default has to be")
+        check(parse_blueprint_paste(SAMPLE)["suggested_name"] == "Industry window",
+              "and a paste that names no place at all keeps the generic default")
+        unnamed = replace_blueprint_batch(CTX, "", one_struct)
+        check(unnamed["name"] == MTO and unnamed["batch"] == _batch_key(MTO),
+              "the default is a NAME like any other — it is keyed by _batch_key, not by the place")
+        check(replace_blueprint_batch(CTX, "", one_struct)["batch"] == unnamed["batch"]
+              and len(list_blueprint_batches(CTX)) == 1,
+              "so an un-named re-paste of the same window lands on the same batch and replaces it")
+
+        print("a short-layout paste can be TOLD where it is — and that LABELS it, nothing more:")
         _reset(con)
         asked = replace_blueprint_batch(CTX, "", SAMPLE, structure=MTO)
         check(asked["added"] == 18 and asked["name"] == MTO,
-              "the structure the user picked names the batch")
-        check(asked["batch"] == _location_batch_key(MTO, ""),
-              "and keys it — a location batch with no container")
-        again2 = replace_blueprint_batch(CTX, "", SAMPLE, structure=MTO)
-        check(again2["batch"] == asked["batch"] and len(list_blueprint_batches(CTX)) == 1,
-              "re-picking the same structure hits the same batch and replaces it")
+              "with nothing typed and no location in the paste, the picked structure names the"
+              " batch")
+        check(asked["batch"] == _batch_key(MTO),
+              "and it is keyed as that NAME — there is no separate location key any more")
         check(list_blueprint_batches(CTX)[0]["structure"] == MTO,
-              "the asked-for structure is stored on the batch")
-        check(replace_blueprint_batch(CTX, "", SAMPLE, structure=JITA)["batch"]
-              != asked["batch"],
-              "a different structure is a different batch")
+              "the asked-for structure is recorded on the rows")
+        named = replace_blueprint_batch(CTX, "Main", SAMPLE, structure=JITA)
+        check(named["batch"] == _batch_key("Main") and named["name"] == "Main",
+              "a typed name always wins over the picked place — the place only labels")
+        by_name = {b["name"]: b for b in list_blueprint_batches(CTX)}
+        check(by_name.get("Main", {}).get("structure") == JITA,
+              "...while still being recorded on the rows it wrote")
 
         print("...and the typed-name path still works, untouched:")
         _reset(con)
@@ -352,17 +390,37 @@ def main():
         check(typed_b["batch"] == _batch_key("Main") and typed_b["name"] == "Main",
               "no location anywhere means the batch is exactly the name that was typed")
 
-        print("a MIXED paste splits by what each line knows:")
+        print("a MIXED paste is one batch, and every row keeps what it knew:")
         _reset(con)
         mixed = replace_blueprint_batch(CTX, "Main", LONG + SAMPLE)
-        made = {b["name"]: b for b in mixed["batches"]}
-        check(len(made) == 4, "three located containers plus the typed batch for the rest")
-        check(made["Main"]["prints"] == 18 and made["Main"]["structure"] == "",
-              "the short-layout rows land in the typed batch, with no place claimed for them")
-        check(made[f"Santo BPO — {MTO}"]["prints"] == 5,
-              "and the located rows land in their own containers regardless")
+        check(mixed["added"] == 25 and mixed["batch"] == _batch_key("Main"),
+              "7 located prints and 18 unlocated ones are 25 prints in one batch")
+        check(len(list_blueprint_batches(CTX)) == 1, "listed as one batch")
         check(len(manual_blueprints(CTX)[NANO]["copies"]) == 8,
-              "a product in both halves sums across the batches: 4 located + 4 typed")
+              "a product in both halves sums: 4 located + 4 unlocated")
+        placed = {r["container"] for r in con.execute(
+            "SELECT container FROM pp_industry_blueprints WHERE context_id=?", (CTX,)).fetchall()}
+        check("Santo BPO" in placed and "" in placed,
+              "the located rows kept their container and the short-layout rows claim no place")
+
+        print("the abandoned per-container batches are migrated, never orphaned:")
+        _reset(con)
+        con.execute("INSERT INTO pp_industry_blueprints (context_id, id, type_id, me, te, runs, "
+                    "quantity, prefer, updated_at, batch, batch_name, structure, container) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (CTX, 9100, NANO, 0, 0, -1, 3, "", 1.0, "paste:loc:deadbeefdeadbeef",
+                     f"Santo BPO — {MTO}", MTO, "Santo BPO"))
+        con.commit()
+        _migrate_location_batches(con)
+        migrated = list_blueprint_batches(CTX)
+        check(len(migrated) == 1 and migrated[0]["batch"] == _batch_key(f"Santo BPO — {MTO}"),
+              "a paste:loc: batch is re-keyed to the key of its own displayed name")
+        check(migrated[0]["prints"] == 3 and migrated[0]["name"] == f"Santo BPO — {MTO}",
+              "its prints and its name are untouched — only the key moved")
+        redone = replace_blueprint_batch(CTX, f"Santo BPO — {MTO}", MOVED_A)
+        check(redone["batch"] == migrated[0]["batch"]
+              and len(manual_blueprints(CTX)[NANO]["copies"]) == 5,
+              "so re-pasting under that name REPLACES it — 5, not 3+5=8 stuck forever")
 
         # ── the merge rule, across batches ────────────────────────────────────────────────────
         print("what a batch declares REPLACES the ESI reading for that product:")

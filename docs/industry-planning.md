@@ -175,20 +175,35 @@ the ESI panel (`/api/industry/manual-blueprints`, GET/POST/DELETE). Its encoding
   replaces that batch and touches no other, so a second character's window cannot wipe the first's and
   a re-paste cannot double a holding. Hand-typed rows carry `batch=''` and no paste may delete them.
   `DELETE …/manual-blueprints/batches/{batch}` drops one batch.
-- **A batch has a LOCATION, and the window often states it.** The industry window copies in two
-  layouts: the short one above (a container is selected), and a long one (nothing selected) that
-  carries where each print is — `… runs TAB ? TAB structure TAB container TAB category`. That layout
-  is **inferred from two real client copies, not documented**, so `_split_location` counts BACK from
-  the trailing category (`[-3]` structure, `[-2]` container, `<7` fields = no location) and refuses
-  numeric hits rather than depending on absolute indices or on the `0` at index 4, whose meaning is
-  unknown. A located paste becomes **one batch per container**, keyed by `_location_batch_key` on
-  structure+container (never on the display label, so re-wording a batch cannot re-key it) — so
-  re-pasting updates each container independently, and two cans named "Santo BPO" in two structures
-  are two batches. A short-layout paste is asked for a structure instead (the UI offers the
-  `/api/markets` build-structure rows the Industry Facility dropdown uses, plus free text); with
-  nothing picked, the typed-name batch is exactly what it always was. Mixed pastes split both ways.
-  `structure`/`container` are their own columns, **recorded and displayed only** — nothing in
-  planning, routing or the build pins reads them yet.
+- **The window often states WHERE its prints are — and that is recorded, never an identity.** The
+  industry window copies in two layouts: the short one above (a container is selected), and a long
+  one (nothing selected) that carries where each print is —
+  `… runs TAB ? TAB structure TAB container TAB category`. That layout is **inferred from two real
+  client copies, not documented**, so `_split_location` counts BACK from the trailing category
+  (`[-3]` structure, `[-2]` container, `<7` fields = no location) and refuses numeric hits rather
+  than depending on absolute indices or on the `0` at index 4, whose meaning is unknown. Both
+  layouts parse, mixed in one paste. The structure/container land in their own columns per row and
+  are **recorded and displayed only** — nothing keys, groups, replaces, counts or plans off them.
+  **One paste is still ONE batch, keyed on its name**, and a re-paste replaces every row that batch
+  previously declared whatever containers it names this time.
+  *Keying a batch on its container was tried and reverted (unpushed, 2026-08-07).* It double-counted
+  on a MOVE: five formulas pasted in "Santo BPO", dragged into "New Can" in game, re-pasted → the
+  new container was replaced and the old container's batch was left standing, 5 → 10. That fails in
+  the dangerous direction, since an over-counted print cap stops the reaction concurrency cap
+  biting and the planner schedules parallel jobs off prints the user does not have. Rows already
+  written under the old `paste:loc:` keys are re-keyed to `_batch_key(batch_name)` by
+  `_migrate_location_batches` (in `ensure_manual_blueprints_table`, so once per process), which
+  makes them ordinary named batches instead of orphans nothing could ever replace. The regression is
+  pinned by the `MOVED_A`/`MOVED_B` case in `test_blueprint_paste.py`.
+  Location's one remaining job is the **default batch name** when the user types none
+  (`_default_batch_name`: one container → `container — structure`, several in one structure → the
+  structure, several structures → the first plus a count, none → "Industry window"); the preview
+  puts it in the name box so the user can keep it across a move. A short-layout paste can still be
+  asked for a structure (the UI offers the `/api/markets` build-structure rows the Industry Facility
+  dropdown uses, plus free text) — that records the place on the rows and may name the batch, and a
+  typed name always wins. `list_blueprint_batches` groups on the batch key alone and summarises the
+  location: `places` is how many it spans, `structure`/`container` are filled in only when that is
+  exactly one.
 - **The merge rule is REPLACEMENT, per product**, documented in full in `owned_blueprints`'
   docstring. For a product with at least one declared print the declaration IS the holding and the
   ESI reading for that product is dropped; other products are untouched. Batches SUM with each other
