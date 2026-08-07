@@ -9,6 +9,7 @@ Find a section: `grep -n '^## ' docs/reactions.md` and read from that line — t
 
 - **Reactions suggestion engine (`app/reactions/advisor.py`)** — what the advisor suggests and on what basis
 - **A formula is one reaction at a time (`reactions_formula_cap`)** — why ten free slots can be planned as one job
+- **What you already hold is not work (`reactions_use_stock`)** — how held intermediates shorten a chain, and the one place stock is deliberately not consulted
 - **One slot model: a chain's stages reuse a reactor (`reactions_parallel_stages`)** — why stages can't run in parallel, what reuses what, and where idle reactors go
 - **Absence becomes knowledge, but only after a paste (`app/reactions/library.py`)** — when an undeclared formula means "you don't own it", and what gets reported instead of planned
 - **Stages on the dashboard are `tier_order`, shown absolute** — how chain order is rendered, and why the number is never re-ranked
@@ -45,6 +46,33 @@ Two rules it must not break: **a missing key means unknown, and unknown never re
 evidence, or an incomplete blueprint picture, caps nothing — the same rule
 `_assigned_slot_capacity` and `_print_limits` follow); and **chain tiers are sequential**, so the
 cap is per tier and one formula may serve tier 0 and then tier 1.
+
+## What you already hold is not work (`reactions_use_stock`)
+
+Reactions planned every chain from raw goo — `_explode_chain_tiers` walked the recipe and never
+asked whether the intermediate was already in the hangar. `reaction_stock_pool` (enabled sources
+only, via `owned_quantities`) is now threaded through `_explode_chain_tiers`, `_ordered_chain_tiers`
+and `_explode_shopping_list` and **consumed as the walk goes**, which is the whole design:
+
+* a unit is spent **once per plan** — two branches needing the same intermediate cannot both claim
+  it, which is why the pool is threaded through the recursion instead of read fresh at each node;
+* a tier the holding covers outright is **dropped along with everything below it** — you do not
+  react the inputs of something you already have;
+* a partial holding **shortens** the tier rather than dropping it;
+* what stock covered is always reported (`stock_covered`, or a toast on assign). A stage that
+  silently disappears is indistinguishable from a bug.
+
+Wired into every path that commits or quotes a concrete batch: suggest (one pool for the run), the
+order report (two pools off the same holding — the materials walk and the stage walk answer
+different questions and must each spend it once), order allocation (consumed host by host),
+adopt-orphan, and `assign_reaction`, which trims the client-supplied tiers. **The opportunity list
+stays stock-blind on purpose:** it is cached and its callers scale its tiers linearly, and stock
+coverage is not linear — so the trim happens at the point rows are created instead.
+
+**Known edge, accepted:** there is no reservation ledger. Two planning runs made back to back both
+see the same units, so stock can be promised twice ACROSS plans (never within one). Reserving needs
+a commitment ledger this package doesn't have; until then the honest reading is "this is what you
+hold right now", which is also what the player sees in their hangar.
 
 ## One slot model: a chain's stages reuse a reactor (`reactions_parallel_stages`)
 

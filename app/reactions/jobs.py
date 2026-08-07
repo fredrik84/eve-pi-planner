@@ -27,7 +27,7 @@ from app.reactions._router import router
 from app.reactions.settings import effective_reaction_settings
 from app.reactions.graph import (
     _load_goo_and_reached, _load_reaction_graph, _value_reaction_batch,
-    _ordered_chain_tiers, _build_opportunities, _fuel_block_ids,
+    _ordered_chain_tiers, _build_opportunities, _fuel_block_ids, reaction_stock_pool,
 )
 
 
@@ -397,6 +397,54 @@ class ChainTier(BaseModel):
     job_count: int = 1
 
 
+def _trim_tiers_by_stock(context_id: int, tiers: list) -> list[dict]:
+    """Spend held intermediates against a caller-supplied chain, IN PLACE, and report what that
+    covered as `[{type_id, name, units, runs_saved}]`.
+
+    Each tier's requirement is its `runs x output_qty`; stock is taken off the front of that and the
+    runs recomputed, with a fully-covered tier dropped from the list entirely. Deliberately does NOT
+    recurse: by the time a chain reaches this function it is already flat (`_ordered_chain_tiers`
+    exploded it), so a tier this drops may leave its own feeder tiers behind — those are still real
+    work whose output is still consumed by the tiers above them, just not by this one. The planning
+    paths that build the chain themselves (`_ordered_chain_tiers` with a pool) do the recursive
+    version, and they are what the wizard and orders use.
+
+    No pool (flag off) ⇒ the list is untouched and this returns [].
+    """
+    pool = reaction_stock_pool(context_id)
+    if not pool or not tiers:
+        return []
+    con = get_connection()
+    try:
+        out_qty = {int(r["output_type_id"]): float(r["output_qty"] or 1)
+                   for r in con.execute("SELECT output_type_id, output_qty FROM reactions")}
+    except Exception:
+        return []
+    finally:
+        con.close()
+
+    covered: list[dict] = []
+    keep = []
+    for t in tiers:
+        qty = out_qty.get(int(t.type_id), 0.0)
+        have = pool.get(int(t.type_id), 0.0)
+        if qty <= 0 or have <= 0:
+            keep.append(t)
+            continue
+        needed = t.runs * qty
+        used = min(have, needed)
+        pool[int(t.type_id)] = have - used
+        left_runs = math.ceil((needed - used) / qty)
+        covered.append({"type_id": int(t.type_id), "name": t.name, "units": round(used, 1),
+                        "runs_saved": t.runs - max(0, left_runs)})
+        if left_runs > 0:
+            t.runs = left_runs
+            t.job_count = max(1, min(t.job_count, left_runs))
+            keep.append(t)
+    tiers[:] = keep
+    return [c for c in covered if c["runs_saved"] > 0]
+
+
 class AssignRequest(BaseModel):
     character_id: int
     type_id: int
@@ -508,6 +556,12 @@ def assign_reaction(req: AssignRequest, context_id: int = Depends(require_contex
     pp_reaction_assignments financially. (Expected output value is priced LIVE off current
     market data in get_industry_jobs, not stored here — see that function's own notes on why.)"""
     ensure_reaction_assignments_table()
+    # Chain tiers arrive from the CLIENT (the wizard's suggestion, or the manual modal scaling an
+    # opportunity's recipe), and the opportunity list is deliberately stock-blind — it is cached and
+    # its tiers get scaled linearly, which stock coverage is not. So the trim happens here, at the
+    # one point every path passes through to create rows: whatever the caller asked for, a stage the
+    # hangar already covers is not committed to a reactor.
+    stock_covered = _trim_tiers_by_stock(context_id, req.chain_tiers)
     con = get_connection()
     try:
         owner = con.execute(
@@ -560,7 +614,9 @@ def assign_reaction(req: AssignRequest, context_id: int = Depends(require_contex
         con.commit()
     finally:
         con.close()
-    return {"ok": True, "replaced": replaced}
+    # `stock_covered` is why the plan may hold fewer stages than the caller asked for — returned so
+    # the UI can say so rather than leaving a stage to vanish silently.
+    return {"ok": True, "replaced": replaced, "stock_covered": stock_covered}
 
 
 class AdoptOrphanRequest(BaseModel):
@@ -601,7 +657,8 @@ def adopt_orphan_job(req: AdoptOrphanRequest, context_id: int = Depends(require_
 
     # Chain tiers (intermediate reactions this formula needs), same as assign_reaction — recorded at
     # 0 cost since the whole chain's cost already rolls up into the top-level row's unit_cost.
-    ordered = _ordered_chain_tiers(node["via"]["inputs"], req.runs, reached)
+    ordered = _ordered_chain_tiers(node["via"]["inputs"], req.runs, reached,
+                                    reaction_stock_pool(context_id))
 
     con = get_connection()
     try:
@@ -1201,7 +1258,12 @@ def _allocate_and_insert(context_id: int, type_id: int, name: str, node: dict, r
         return {"runs_assigned": 0, "characters": []}
 
     formula = node.get("via")
-    ordered_all = _ordered_chain_tiers(formula["inputs"], runs_needed, reached) if formula else []
+    # Intermediates already held are spent against this order as it is placed. `ordered_all` only
+    # sizes the chain (how many slots a host needs, which formulas are scarce), so it walks a COPY
+    # — spending the real pool here would leave nothing for the per-host walks that create the rows.
+    stock_pool = reaction_stock_pool(context_id)
+    ordered_all = _ordered_chain_tiers(formula["inputs"], runs_needed, reached,
+                                        dict(stock_pool)) if formula else []
     tier_count = len(ordered_all)
     per_chain = tier_count + 1          # one slot per intermediate, plus the product itself
     caps_by_type = formula_concurrency_caps(context_id)
@@ -1238,7 +1300,9 @@ def _allocate_and_insert(context_id: int, type_id: int, name: str, node: dict, r
         for idx, (host, share) in enumerate(zip(hosts, shares)):
             if share <= 0:
                 continue
-            tiers = _ordered_chain_tiers(formula["inputs"], share, reached) if formula else []
+            # ...and the real pool here, consumed host by host: the units exist once, so the first
+            # host's share spends them and the next host reacts what is genuinely left to react.
+            tiers = _ordered_chain_tiers(formula["inputs"], share, reached, stock_pool) if formula else []
             works = [t["runs"] * ((t["cycle_time"] or 0) / 3600.0) for _, t in tiers]
             caps = [max(1, int(t["runs"])) for _, t in tiers]
             works.append(share * top_cycle_h)

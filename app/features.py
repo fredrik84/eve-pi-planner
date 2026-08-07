@@ -311,6 +311,15 @@ FEATURE_REGISTRY = [
                     "Ferrofluid formula is one job, not ten. Chain tiers are unaffected (they run "
                     "in sequence), and a formula we have no evidence about is never capped.",
      "default": False},
+    {"key": "reactions_use_stock", "label": "Reactions: skip stages you already have the materials for",
+     "group": "Reactions",
+     "description": "Count intermediates sitting in your enabled stock sources against a chain: "
+                    "hold enough of a sub-reaction's output and that stage is shortened or dropped "
+                    "outright, along with everything below it, instead of being reacted from goo "
+                    "you already spent. What the stock covered is always named, so a stage never "
+                    "just disappears. Within one plan a unit is spent once; across two separate "
+                    "plans there is no reservation, so the same units can be promised twice.",
+     "default": False},
     {"key": "reactions_parallel_stages", "label": "Reactions: don't idle reactors waiting on a stage",
      "group": "Reactions",
      "description": "A chain's stages run one after another, so they reuse the same reactor "

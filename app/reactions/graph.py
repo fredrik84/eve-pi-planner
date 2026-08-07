@@ -562,12 +562,63 @@ def list_reaction_fuel_blocks(ctx: int = Depends(require_context)):
     return {"fuel_blocks": rows}
 
 
-def _explode_shopping_list(type_id: int, units_needed: float, reached: dict, out: dict[int, float]):
+def reaction_stock_pool(context_id: int) -> dict[int, float]:
+    """{type_id: units} the account can actually spend — ENABLED asset sources only, the same pool
+    every other read of stock in this app uses (`owned_quantities`).
+
+    Empty unless `reactions_use_stock` is on, and empty on any failure: no stock is the behaviour
+    this package had since it was written, so it is the safe direction.
+
+    **Known edge, accepted:** there is no reservation ledger. Two planning runs made back to back
+    both see the same units, so stock can be promised twice across separate plans. Within ONE plan
+    it cannot — the pool is threaded through the recursion and consumed. Reserving across plans
+    needs a commitment ledger this package does not have (Industry has one, per order); until then
+    the honest reading is "this is what you hold right now", which is also what the player sees when
+    they look in the hangar.
+    """
+    try:
+        from app.features import feature_enabled_for
+        if not feature_enabled_for("reactions_use_stock", context_id):
+            return {}
+        from app.industry.assets import owned_quantities
+        return {tid: q for tid, q in owned_quantities(context_id).items() if q > 0}
+    except Exception:
+        return {}
+
+
+def _take_from_stock(stock: dict[int, float] | None, type_id: int, units_needed: float) -> float:
+    """Spend what the account already holds of `type_id` against `units_needed`, returning what is
+    STILL needed. `stock` is mutated — a unit spent here cannot be spent again by the next branch of
+    the same plan, which is the whole reason the pool is threaded through the recursion rather than
+    read fresh at each node.
+
+    `stock` of None (the flag off, or a caller that deliberately wants the pure recipe — the
+    opportunity list, which is cached and scaled linearly by its callers) means no stock at all and
+    every caller behaves exactly as it did before assets were consulted.
+    """
+    if not stock or units_needed <= 0:
+        return units_needed
+    have = stock.get(type_id, 0.0)
+    if have <= 0:
+        return units_needed
+    used = min(have, units_needed)
+    stock[type_id] = have - used
+    return units_needed - used
+
+
+def _explode_shopping_list(type_id: int, units_needed: float, reached: dict, out: dict[int, float],
+                           stock: dict[int, float] | None = None):
     """Recursively break `units_needed` units of `type_id` down to raw moon goo / purchasable
     leaf materials, accumulating into `out`. A leaf (node["via"] is None) just needs that many
     units directly; a reaction product needs ceil(units_needed / its output_qty) actual reaction
     cycles, which in turn consume its own ME-adjusted inputs — same graph _resolve_reachable
-    already built, walked back down instead of the forward fixed-point expansion."""
+    already built, walked back down instead of the forward fixed-point expansion.
+
+    With a `stock` pool, units already in an enabled source are spent first at EVERY level: hold the
+    intermediate and neither it nor the goo underneath it is shopped for."""
+    units_needed = _take_from_stock(stock, type_id, units_needed)
+    if units_needed <= 0:
+        return
     node = reached.get(type_id)
     if not node or node["via"] is None:
         out[type_id] = out.get(type_id, 0.0) + units_needed
@@ -576,10 +627,11 @@ def _explode_shopping_list(type_id: int, units_needed: float, reached: dict, out
     reaction_runs = math.ceil(units_needed / formula["output_qty"])
     for inp in formula["inputs"]:
         eff_qty = inp["quantity"] * (1 - REACTION_ME_REDUCTION) * reaction_runs
-        _explode_shopping_list(inp["type_id"], eff_qty, reached, out)
+        _explode_shopping_list(inp["type_id"], eff_qty, reached, out, stock)
 
 
-def _explode_chain_tiers(formula_inputs: list[dict], runs: int, reached: dict, tiers: dict[int, dict]):
+def _explode_chain_tiers(formula_inputs: list[dict], runs: int, reached: dict, tiers: dict[int, dict],
+                          stock: dict[int, float] | None = None, covered: dict[int, dict] | None = None):
     """For `runs` cycles of a formula needing `formula_inputs`, finds every INTERMEDIATE reaction
     product among those inputs (recursively — a real chain can be several tiers deep, e.g. goo ->
     Ferrofluid -> Nonlinear Metamaterials) and accumulates how many of ITS OWN reaction cycles are
@@ -588,28 +640,55 @@ def _explode_chain_tiers(formula_inputs: list[dict], runs: int, reached: dict, t
     suggestion, already tracked separately, not an "extra" tier. Without this, a suggestion for a
     multi-tier product only ever told the player to install the FINAL reaction, silently assuming
     they'd already have the intermediate on hand — which since the "force real chains" fix
-    (intermediates are never just bought) is never actually true."""
+    (intermediates are never just bought) is never actually true.
+
+    ...unless they DO have it on hand. With a `stock` pool (enabled asset sources — see
+    `reaction_stock_pool`), units already held are spent against the tier's requirement before any
+    runs are planned for it, and a tier the stock covers outright is dropped along with everything
+    below it: you don't react the inputs of something already sitting in the hangar. What the stock
+    covered is recorded in `covered` so the plan can SAY why a stage vanished — a step that silently
+    disappears is indistinguishable from a bug."""
     for inp in formula_inputs:
         inp_node = reached.get(inp["type_id"])
         if not inp_node or inp_node["via"] is None:
             continue  # raw goo or a genuine purchasable leaf — nothing to react
         eff_qty = inp["quantity"] * (1 - REACTION_ME_REDUCTION) * runs
-        formula = inp_node["via"]
-        inp_runs = math.ceil(eff_qty / formula["output_qty"])
         tid = inp["type_id"]
+        wanted = eff_qty
+        eff_qty = _take_from_stock(stock, tid, eff_qty)
+        if covered is not None and eff_qty < wanted:
+            c = covered.setdefault(tid, {"type_id": tid, "units": 0.0, "runs_saved": 0})
+            c["units"] += wanted - eff_qty
+        formula = inp_node["via"]
+        if eff_qty <= 0:
+            # Fully covered — no runs, and no recursion: the inputs of a tier you already hold are
+            # not work this plan has to do.
+            if covered is not None:
+                covered[tid]["runs_saved"] += math.ceil(wanted / formula["output_qty"])
+            continue
+        inp_runs = math.ceil(eff_qty / formula["output_qty"])
+        if covered is not None and tid in covered:
+            covered[tid]["runs_saved"] += max(0, math.ceil(wanted / formula["output_qty"]) - inp_runs)
         if tid not in tiers:
             tiers[tid] = {"runs": 0, "cycle_time": formula["cycle_time"], "output_qty": formula["output_qty"]}
         tiers[tid]["runs"] += inp_runs
-        _explode_chain_tiers(formula["inputs"], inp_runs, reached, tiers)  # this tier may itself be multi-level
+        # this tier may itself be multi-level
+        _explode_chain_tiers(formula["inputs"], inp_runs, reached, tiers, stock, covered)
 
 
-def _ordered_chain_tiers(formula_inputs: list[dict], runs: int, reached: dict) -> list:
+def _ordered_chain_tiers(formula_inputs: list[dict], runs: int, reached: dict,
+                          stock: dict[int, float] | None = None,
+                          covered: dict[int, dict] | None = None) -> list:
     """Explode a formula's intermediate tiers (`_explode_chain_tiers`) and return them as a list of
     (type_id, info) ordered deepest-first (by reaction_count) — the shape every assign/order/
     opportunity path needs. Factored out so the accumulator + reaction_count sort can't drift across
-    its five call sites."""
+    its five call sites.
+
+    `stock`/`covered` are passed straight through; see `_explode_chain_tiers`. Callers that hold a
+    concrete batch pass a pool, the opportunity list deliberately does not (it is cached and its
+    callers scale its tiers linearly, and stock coverage is not linear)."""
     tier_runs: dict[int, dict] = {}
-    _explode_chain_tiers(formula_inputs, runs, reached, tier_runs)
+    _explode_chain_tiers(formula_inputs, runs, reached, tier_runs, stock, covered)
     return sorted(tier_runs.items(), key=lambda kv: reached.get(kv[0], {}).get("reaction_count", 0))
 
 

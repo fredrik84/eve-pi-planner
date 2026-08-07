@@ -370,6 +370,23 @@ function _rxStageLabel(tier) {
 // pages start looking like different products.
 let _rxMissSeq = 0;
 
+// Stages a plan does NOT have to run because the intermediate is already in an enabled stock
+// source. Said out loud wherever it applies: a stage that silently disappears from a chain reads
+// as the tool losing a step, not as it saving you one.
+function _rxToastStockCovered(res) {
+  const rows = (res && res.stock_covered) || [];
+  if (!rows.length) return;
+  const parts = rows.map(c => `${c.name} (${c.runs_saved} run${c.runs_saved === 1 ? '' : 's'})`);
+  toast(`Skipped what you already hold: ${parts.join(', ')}.`, 'info');
+}
+
+function _rxStockCoveredNote(covered) {
+  const rows = covered || [];
+  if (!rows.length) return '';
+  const parts = rows.map(c => `<b>${_esc(c.name)}</b> (${Math.round(c.units).toLocaleString()} units, ${c.runs_saved.toLocaleString()} run${c.runs_saved === 1 ? '' : 's'} saved)`);
+  return `<div class="rx-stock-covered">Already in your stock, so ${rows.length === 1 ? 'this stage was' : 'these stages were'} shortened or skipped: ${parts.join(', ')}.</div>`;
+}
+
 function _rxMissingFormulaWarn(rep) {
   if (!rep) return '';
   const rows = rep.formulas || [];
@@ -1118,7 +1135,7 @@ async function _rxSubmitManualAssign() {
       // reaction slots at once and this character has 10" tells you what to change; "Assign
       // failed" tells you nothing and reads as a bug in the tool.
     }).catch(e => { throw new Error((e && e.message) || 'Assign failed'); }))))
-    .then(() => { _rxCloseManualAssign(); onReactionsTabOpen(); })
+    .then(results => { (results || []).forEach(_rxToastStockCovered); _rxCloseManualAssign(); onReactionsTabOpen(); })
     .catch(err => { status.textContent = err.message; });
 }
 
@@ -1304,6 +1321,7 @@ function _renderReactionsSuggestions(data) {
     ? `<div class="pp-card-hint" style="margin-bottom:10px">${idleUsed} otherwise-idle reactor${idleUsed === 1 ? '' : 's'} put to work splitting the slowest steps across more jobs — same runs, same cost, finishes sooner.</div>`
     : '';
   const budgetSummary = `<div class="pp-card-hint" style="margin-bottom:10px">${bindingNote}</div>${absorbNote}${formulaNote}${idleNote}`
+    + _rxStockCoveredNote(t.stock_covered)
     + _rxMissingFormulaWarn(data.missing_formulas);
 
   // Grouped by assigned character (each is "this character's job list"), not one flat table —
@@ -1481,7 +1499,10 @@ function _rxAssignSuggestion(i, btn) {
     runs: s.runs, job_count: s.job_count || 1, input_cost: s.input_cost, reward: s.reward,
     chain_tiers: s.chain_tiers || [],
   })
-    .then(() => {
+    .then(res => {
+      // A stage the hangar already covers is not committed (see _trim_tiers_by_stock), so say which
+      // — the plan quietly holding fewer stages than the suggestion showed would read as a bug.
+      _rxToastStockCovered(res);
       // There used to be an `if (!r.ok) throw new Error()` here — a leftover from when this called
       // fetch() directly. `r` does not exist in this scope, so it threw a ReferenceError on every
       // SUCCESSFUL assign, the catch below relabelled the row "Retry", and "Assign all" reported
@@ -2096,6 +2117,7 @@ function _rxOrderReportBody(data) {
     <div class="pp-card-hint">${_esc(data.time.caveat || '')}</div>
     ${(data.time.formula_capped || []).length ? `<div class="pp-card-hint">${_esc((data.time.formula_capped || []).join(', '))} can't use every free slot — a formula is locked while a job runs on it, so that step runs on the formulas you hold.</div>` : ''}
     ${chainNote}
+    ${_rxStockCoveredNote(data.stock_covered)}
     ${_rxMissingFormulaWarn(data.missing_formulas)}
 
     <details class="rx-order-materials" style="margin-top:14px">

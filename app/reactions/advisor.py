@@ -30,6 +30,7 @@ from app.reactions._router import router
 from app.reactions.graph import (
     _load_goo_and_reached, _value_reaction_batch, _explode_chain_tiers,
     _build_opportunities, _ordered_chain_tiers, _load_reaction_graph, _fuel_block_ids,
+    reaction_stock_pool,
 )
 from app.reactions.settings import effective_reaction_settings
 from app.reactions.jobs import (
@@ -288,6 +289,11 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
     # idle-slot pass below — collected here rather than reconstructed afterwards, so a step can't
     # be left out of the widening while being in the plan.
     widen_steps: list[dict] = []
+    # Intermediates already in an enabled stock source, spent against this run's chains as it is
+    # built (see reaction_stock_pool) — and what that covered, so the wizard can say why a stage
+    # it would otherwise have listed isn't there.
+    stock_pool = reaction_stock_pool(context_id)
+    stock_covered: dict[int, dict] = {}
     formula_capped: list[str] = []      # products running in fewer jobs than the slots would allow
     isk_committed = net_profit = total_output_value = total_output_m3 = 0.0
     max_completion_hours = 0.0
@@ -346,7 +352,10 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
         top_via = reached.get(c["type_id"], {}).get("via")
         if top_via:
             # Deepest (closest to raw goo) first — the one the player must react first.
-            ordered = _ordered_chain_tiers(top_via["inputs"], runs_needed, reached)
+            # ONE stock pool for the whole run, consumed as it goes: two products that both need
+            # the same intermediate must not each be told they already have it.
+            ordered = _ordered_chain_tiers(top_via["inputs"], runs_needed, reached,
+                                            stock_pool, stock_covered)
             # Slots this suggestion is holding at its BUSIEST moment. A tier reuses the slots the
             # tier below it has finished with, so what a chain costs the character is the worst
             # tier, not the sum — the same model the assign guard commits under
@@ -522,6 +531,12 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
             # Extra jobs handed to otherwise-idle reactors so a step finishes sooner. Reported so
             # the extra job counts read as a deliberate choice rather than the tool overbooking.
             "idle_slots_used": widened,
+            # Stages this run did NOT plan because the intermediate is already in stock, named with
+            # what they covered. A step that silently vanishes reads as a bug; this is the answer.
+            "stock_covered": sorted(
+                ({**c, "name": types.get(c["type_id"], {}).get("name", str(c["type_id"])),
+                  "units": round(c["units"], 1)} for c in stock_covered.values()),
+                key=lambda c: -c["runs_saved"]),
         },
     }
 

@@ -128,15 +128,44 @@ then takes ~N cadence windows with one reactor working and the rest idle.
 
 **21c. Intermediates in stock are ignored.** Reactions never reads `pp_asset_stock` for a chain
 tier: `_explode_chain_tiers` always plans the whole chain from raw goo. Hold the intermediate
-already and the tool still tells you to react it first, when the next stage could start now. Cheap,
-and it removes a whole class of pointless waiting. **Open.**
+already and the tool still tells you to react it first, when the next stage could start now.
+
+**Shipped 2026-08-07** behind `reactions_use_stock`. `reaction_stock_pool` (enabled sources, via
+`owned_quantities`) is threaded through `_explode_chain_tiers` / `_ordered_chain_tiers` /
+`_explode_shopping_list` and CONSUMED as the walk goes, so a unit is spent once per plan; a tier the
+holding covers outright is dropped along with everything below it. Wired into suggest (one pool for
+the run), the order report, order allocation (consumed host by host), adopt-orphan, and
+`assign_reaction` — which trims the client-supplied tiers, since the opportunity list stays
+stock-blind on purpose (it is cached and its tiers get scaled linearly, which stock coverage is
+not). Coverage is always reported (`stock_covered` / an assign-time toast). `test_reaction_stock.py`.
+
+**Known edge, accepted and documented:** no reservation ledger — two separate planning runs both
+see the same units, so stock can be promised twice across plans. Within one plan it cannot.
 
 **21d. Pipelining.** Split stage 1 into N batches; when the first completes, start stage 2 on that
 output while batches 2..N still run. The honest version of "run stages at the same time", and real
 throughput — but it needs partial-output tracking and changes what an assignment row means.
 **Open, and only worth it if 21a-c don't satisfy the complaint.**
 
-Order: 21a → 21b (both done) → 21c → 21d.
+Order: 21a → 21b → 21c (all done) → 21d, which is the only one left.
+
+## 22. The general shopping list double-counts every chain (2026-08-07, found while doing 21c)
+
+`reactions_shopping_list` explodes EVERY pending assignment row down to raw leaves
+(`graph.py`, the loop over `assignments`). A chain assign stores a row per tier AND a row for the
+product, so the top row's walk already includes the intermediate's materials — and then the
+intermediate's own row adds them a second time. Measured on a two-tier synthetic chain: 7,726 goo
+becomes 15,452. **The player buys twice what they need for anything multi-tier.**
+
+The per-order materials report is NOT affected — it explodes once from the order's `target_qty`.
+This is the general "what do I buy for my speculative plan" list only.
+
+Fix is to explode only the rows nothing else covers — the TOP of each chain — rather than every
+row. `tier_order` is in the table and the top of a chain is its highest tier, but the grouping is
+per (character, product, tier) and a chain isn't stamped with a chain id, so the first concrete
+step is deciding what identifies "one chain's rows": most likely the assign that created them
+(`created_at` + character is already how they arrive together), or a real `chain_id` column added
+at insert. **Open.**
 
 ## 20. The two Reactions "clear" paths disagree about customer orders (2026-08-07, small)
 
@@ -356,6 +385,7 @@ match any template we generate) is still unscoped.
 | — | Alliance-shared build structures as suggestions (`industry_group_structures`) | 08-05 |
 | — | Pin a rig FAMILY to a structure and every job in it is installed there, whatever the routing scores (`pp_industry_settings.build_pins`, on the `industry_rig_routing` flag). A pin can only pick among sites already legal for that job's activity; one it can't honour falls back to the automatic routing and says so. The pin decides WHERE, `fittable_families` still decides what BONUS | 08-06 |
 | 19b | Reaction plan STAGES on the dashboard: planned slots sort by `tier_order`, carry an `S<n>` badge, later stages dim/dash, and the "To install" checklist splits under stage banners. The number is `tier_order + 1` absolute, never re-ranked against what's still pending | 08-07 |
+| 21c | Reactions spend what you already hold (`reactions_use_stock`): an intermediate in an enabled source shortens or drops its stage and everything below it, in the plan and in the materials walk, consumed once per plan and always reported. `test_reaction_stock.py` | 08-07 |
 | 21a-b | One slot model for reaction chains (`reactions_parallel_stages`): stages reuse a reactor instead of each reserving one, so free slots show what can really start — and reactors nobody claimed are spent splitting the slowest step across more jobs. Runs, cost and profit untouched. `test_parallel_stages.py` | 08-07 |
 | 19a | "You don't hold a formula for these" (`reactions_missing_formulas`): once a PASTED window makes the library complete, an undeclared formula is one you don't own — reported with runs and a contract price on all three planning surfaces, and kept out of every shopping list and cost total. Unresolved paste names are KEPT and shown beside the finding, because a rename otherwise reads as "you don't own this". `app/reactions/library.py`, `test_missing_formulas.py` | 08-07 |
 

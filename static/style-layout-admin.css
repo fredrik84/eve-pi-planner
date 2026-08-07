@@ -614,6 +614,14 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 }
 .rx-todo-later td { opacity: 0.68; }
 
+/* "You already hold this, so the stage was shortened or skipped" — green-edged, because unlike the
+   amber/red notices around it this is work REMOVED from the plan, not work discovered. */
+.rx-stock-covered {
+  margin: 8px 0; padding: 7px 10px; border-radius: 6px; font-size: 12px; line-height: 1.55;
+  color: #9fd8b8; background: rgba(70, 200, 138, 0.07); border: 1px solid rgba(70, 200, 138, 0.28);
+}
+.rx-stock-covered b { color: #d6f2e2; }
+
 /* Pasted names that resolved to no type, shown inside the "you don't hold a formula for these"
    notice. Amber and separated, because it qualifies the finding above it: an unresolved name is
    indistinguishable from a formula you don't own, so this is the one line that can make the rest

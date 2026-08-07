@@ -13,7 +13,7 @@ from app.esi import require_context
 
 from app.reactions._router import router
 from app.reactions.graph import (
-    _load_goo_and_reached, _explode_shopping_list, _ordered_chain_tiers,
+    _load_goo_and_reached, _explode_shopping_list, _ordered_chain_tiers, reaction_stock_pool,
     _materials_report, _value_reaction_batch,
 )
 from app.reactions.jobs import (
@@ -37,6 +37,7 @@ def _order_report(context_id: int, order: dict) -> dict:
             "time": {"tiers": [], "free_slots_now": 0, "estimated_hours": None, "caveat": None,
                       "formula_capped": []},
             "missing_formulas": {"complete": False, "formulas": [], "unresolved": []},
+            "stock_covered": [],
             "stale": True,
         }
     goo, reached, reactions_by_output, inputs_by_reaction, types = loaded
@@ -56,11 +57,18 @@ def _order_report(context_id: int, order: dict) -> dict:
         "cost_per_unit": round(total_cost / target_qty, 2) if target_qty else 0.0,
     }
 
+    # Two SEPARATE pools off the same holding, on purpose: the materials list and the stage list
+    # answer different questions about the same order ("what must I buy" / "what must I react"),
+    # and each must spend the holding once. Sharing one consumed pool between them would let the
+    # materials walk eat the units the stages needed to be told about.
     totals: dict[int, float] = {}
-    _explode_shopping_list(order["type_id"], target_qty, reached, totals)
+    _explode_shopping_list(order["type_id"], target_qty, reached, totals,
+                           dict(reaction_stock_pool(context_id)))
     materials = _materials_report(totals, reached, types)
 
-    ordered_tiers = _ordered_chain_tiers(formula["inputs"], top_level_runs, reached)
+    stock_covered: dict[int, dict] = {}
+    ordered_tiers = _ordered_chain_tiers(formula["inputs"], top_level_runs, reached,
+                                          reaction_stock_pool(context_id), stock_covered)
     chain_tiers = [
         {"type_id": tid, "name": types.get(tid, {}).get("name", str(tid)), "runs": info["runs"],
          "cycle_time": info["cycle_time"], "output_qty": info["output_qty"]}
@@ -113,6 +121,11 @@ def _order_report(context_id: int, order: dict) -> dict:
 
     return {"materials": materials, "chain_tiers": chain_tiers, "cost": cost, "time": time_report,
             "missing_formulas": missing_formulas(context_id, wanted_from_sequence(sequence)),
+            # Stages this order does not have to run because the intermediate is already held.
+            "stock_covered": sorted(
+                ({**c, "name": types.get(c["type_id"], {}).get("name", str(c["type_id"])),
+                  "units": round(c["units"], 1)} for c in stock_covered.values()),
+                key=lambda c: -c["runs_saved"]),
             "stale": False}
 
 
