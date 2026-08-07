@@ -136,9 +136,21 @@ replaces that batch (so re-pasting after buying or selling a print tracks it, an
 while every other character's batch and everything you typed in by hand stays put. Batches are listed
 above the typed rows with a print count and an ✕ that removes just that batch.
 
+**Every batch has a place, and the window may already know it.** The industry window copies in two
+layouts. Copy it with **nothing selected in the tree** and each line also names the structure and the
+container it is in — then *Preview* reports "N containers named — one batch each", and *Import*
+creates **one batch per container**, titled by the container with the structure beside it. Re-pasting
+that same window updates each container on its own, so moving prints between two of your own cans
+reads as a move rather than as buying and selling. Copy it with a **container selected** and the
+window says nothing about where it is: pick the structure from the *Where are these?* dropdown (it
+lists your configured build structures, plus *Somewhere else…* for free text) — or ignore it and just
+type a batch name as before, which still works exactly as it did.
+
 **Bug if:** a second character's paste empties the first one's prints; re-pasting the same window
-doubles a holding; a stack prefix or a repeated line counts once; a paste deletes a row you typed in;
-or a paste that matched nothing reports success.
+doubles a holding (in particular: re-pasting a no-selection window creating a *second* set of
+containers instead of updating the first); two containers with the **same name in different
+structures** merging into one batch; a stack prefix or a repeated line counts once; a paste deletes a
+row you typed in; or a paste that matched nothing reports success.
 
 **Expect:** the plan's `ME n · TE n` chip on that product reads **"the blueprint you declared by
 hand"** — not "from your own blueprint" and not "un-researched". Materials and job duration move to

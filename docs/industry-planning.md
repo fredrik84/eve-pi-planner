@@ -175,6 +175,20 @@ the ESI panel (`/api/industry/manual-blueprints`, GET/POST/DELETE). Its encoding
   replaces that batch and touches no other, so a second character's window cannot wipe the first's and
   a re-paste cannot double a holding. Hand-typed rows carry `batch=''` and no paste may delete them.
   `DELETE …/manual-blueprints/batches/{batch}` drops one batch.
+- **A batch has a LOCATION, and the window often states it.** The industry window copies in two
+  layouts: the short one above (a container is selected), and a long one (nothing selected) that
+  carries where each print is — `… runs TAB ? TAB structure TAB container TAB category`. That layout
+  is **inferred from two real client copies, not documented**, so `_split_location` counts BACK from
+  the trailing category (`[-3]` structure, `[-2]` container, `<7` fields = no location) and refuses
+  numeric hits rather than depending on absolute indices or on the `0` at index 4, whose meaning is
+  unknown. A located paste becomes **one batch per container**, keyed by `_location_batch_key` on
+  structure+container (never on the display label, so re-wording a batch cannot re-key it) — so
+  re-pasting updates each container independently, and two cans named "Santo BPO" in two structures
+  are two batches. A short-layout paste is asked for a structure instead (the UI offers the
+  `/api/markets` build-structure rows the Industry Facility dropdown uses, plus free text); with
+  nothing picked, the typed-name batch is exactly what it always was. Mixed pastes split both ways.
+  `structure`/`container` are their own columns, **recorded and displayed only** — nothing in
+  planning, routing or the build pins reads them yet.
 - **The merge rule is REPLACEMENT, per product**, documented in full in `owned_blueprints`'
   docstring. For a product with at least one declared print the declaration IS the holding and the
   ESI reading for that product is dropped; other products are untouched. Batches SUM with each other

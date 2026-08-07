@@ -1026,12 +1026,20 @@ async function indLoadManualBps() {
   try { d = await api('/api/industry/manual-blueprints'); } catch (e) { el.innerHTML = ''; return; }
   // Batch rows are summarised, not listed one by one: a pasted industry window is a hundred-odd
   // prints and a list that long buries the handful someone typed in themselves.
-  const batches = (d.batches || []).map(b =>
-    `<div class="ind-src-row"><span class="ind-src-name">${_esc(b.name)}</span>`
+  const batches = (d.batches || []).map(b => {
+    // Where the batch is, when we know it: read out of the paste (the long layout names a structure
+    // and a container per print) or asked for at import (the short layout names neither). Display
+    // only — nothing in planning, routing or the build pins reads it yet. The container carries the
+    // row's title and the structure qualifies it in the meta line, so two cans of the same name in
+    // two structures never read identically.
+    const title = b.container || b.name;
+    const where = (b.structure && b.container) ? ` · in ${b.structure}` : '';
+    return `<div class="ind-src-row"><span class="ind-src-name">${_esc(title)}</span>`
     + `<span class="ind-src-meta">pasted · ${b.prints} print${b.prints === 1 ? '' : 's'}`
-    + ` · ${b.products} product${b.products === 1 ? '' : 's'}</span>`
+    + ` · ${b.products} product${b.products === 1 ? '' : 's'}${_esc(where)}</span>`
     + `<button class="ind-src-del" title="Remove this pasted batch"`
-    + ` onclick="indDeleteManualBpBatch('${_esc(b.batch)}')">✕</button></div>`).join('');
+    + ` onclick="indDeleteManualBpBatch('${_esc(b.batch)}')">✕</button></div>`;
+  }).join('');
   const rows = (d.entries || []).filter(e => !e.batch).map(e => {
     const runs = e.kind === 'bpo' ? 'original (BPO)' : `${e.runs} run${e.runs === 1 ? '' : 's'}`;
     const pref = e.prefer === 'bpo' ? ' · use the original'
@@ -1064,6 +1072,7 @@ async function indLoadManualBps() {
     + `<button onclick="indSaveManualBp(this)">Add</button>`
     + `<span id="indManualBpMsg" class="bug-status-msg"></span></div>`;
   _indManualPick = null;
+  _indBpFillStructures();       // async, and the form is usable without it — free text still works
 }
 
 // Pasting the industry window, which is how a real library arrives — one at a time is unusable at
@@ -1072,12 +1081,23 @@ async function indLoadManualBps() {
 function _indBpPasteFormHtml() {
   return `<div class="ind-paste">
     <p class="ind-src-help">Or paste a whole industry window: in the EVE client open <b>Industry →
-      Blueprints</b>, select all (Ctrl+A), copy (Ctrl+C), paste below. <b>One paste per character</b>
-      — name it after that character, and re-pasting the same name updates just that batch and
-      leaves your other characters' alone.
+      Blueprints</b>, select all (Ctrl+A), copy (Ctrl+C), paste below.
+      <b>Copy it with nothing selected in the tree</b> and every line carries the structure and
+      container it is in — then each container becomes its own batch, and re-pasting that same
+      window updates each of them on its own. If you copied with a container selected the window
+      says nothing about where it is, so pick the structure below (or just name the batch).
+      Re-pasting the same place, or the same name, updates just that batch and leaves the rest alone.
       <b>Note:</b> for any product a paste declares, the plan uses the declaration <i>instead of</i>
       what ESI read for it — including copies on your other characters — so paste those characters'
       windows too.</p>
+    <div class="ind-src-actions">
+      <label>Where are these?
+        <select id="indBpPasteStruct" class="bug-input" onchange="indBpPasteStructChanged()">
+          <option value="">— the paste says, or just name it below —</option>
+        </select></label>
+      <input type="text" id="indBpPasteStructOther" class="bug-input" style="display:none"
+             placeholder="Structure name" autocomplete="off">
+    </div>
     <input type="text" id="indBpPasteName" placeholder="Name this batch — e.g. Main's industry window">
     <textarea id="indBpPasteText" rows="6" placeholder="Formulas:&#10;4 x Nanotransistors Reaction Formula&#9;0&#9;0&#9;-1&#9;Composite&#10;Amarr Shuttle Blueprint&#9;10&#9;20&#9;-1&#9;Shuttle"></textarea>
     <div class="ind-src-actions">
@@ -1086,6 +1106,45 @@ function _indBpPasteFormHtml() {
       <span id="indBpPasteMsg" class="ind-src-meta"></span>
     </div>
   </div>`;
+}
+
+// The structure picker's options are the account's own build structures — the same `/api/markets`
+// rows `indPopulateFacility` builds the Industry Facility dropdown from, so there is one list of
+// "your structures" and not two that can disagree. Plus free text, because prints live in plenty of
+// places that are not a build structure, and NOTHING, because typing a batch name still works and
+// this must not become a step on the way in.
+const IND_BP_OTHER = '__other';
+async function _indBpFillStructures() {
+  const sel = document.getElementById('indBpPasteStruct');
+  if (!sel) return;
+  let names = [];
+  try {
+    const d = await api('/api/markets');
+    names = (d.markets || [])
+      .filter(m => m.kind === 'structure' && (m.build_mfg || m.build_rx))
+      .map(m => m.name);
+  } catch (e) { names = []; }
+  sel.innerHTML = `<option value="">— the paste says, or just name it below —</option>`
+    + names.map(n => `<option value="${_esc(n)}">${_esc(n)}</option>`).join('')
+    + `<option value="${IND_BP_OTHER}">Somewhere else…</option>`;
+}
+
+function indBpPasteStructChanged() {
+  const sel = document.getElementById('indBpPasteStruct');
+  const other = document.getElementById('indBpPasteStructOther');
+  if (!sel || !other) return;
+  other.style.display = sel.value === IND_BP_OTHER ? '' : 'none';
+  if (sel.value === IND_BP_OTHER) other.focus();
+}
+
+// The structure the user picked for a paste that doesn't carry one. '' means they picked nothing,
+// which is the plain typed-name path.
+function _indBpPasteStructure() {
+  const sel = document.getElementById('indBpPasteStruct');
+  const v = sel ? sel.value : '';
+  if (v !== IND_BP_OTHER) return v || '';
+  const other = document.getElementById('indBpPasteStructOther');
+  return other ? (other.value || '').trim() : '';
 }
 
 // One sentence for both the preview and the result, so what the import reports can never read as a
@@ -1100,6 +1159,13 @@ function _indBpPasteSummary(d) {
       + (un.length > 5 ? '…' : ''));
   }
   if ((d.ignored || []).length) bits.push(`${plural(d.ignored.length, 'line')} skipped`);
+  // A window copied with nothing selected names where each print is, and each container becomes its
+  // own batch — say so BEFORE the import, since "one paste, three batches" is otherwise a surprise.
+  const locs = d.locations || [];
+  if (locs.length) {
+    bits.push(`${plural(locs.length, 'container')} named — one batch each: `
+      + locs.slice(0, 4).map(l => l.name).join(', ') + (locs.length > 4 ? '…' : ''));
+  }
   return bits.join(' · ') + '.';
 }
 
@@ -1125,15 +1191,20 @@ async function indImportManualBpPaste() {
   if (msg) msg.textContent = 'Importing…';
   let d = null;
   try {
-    d = (await apiSend('POST', '/api/industry/manual-blueprints/paste', { name, text })) || {};
+    d = (await apiSend('POST', '/api/industry/manual-blueprints/paste',
+      { name, text, structure: _indBpPasteStructure() })) || {};
   } catch (e) { if (msg) msg.textContent = String(e.message || e); return; }
   const r = d.imported || {};
   await indLoadManualBps();       // repaints the panel, so the note has to be written after it
   const m2 = document.getElementById('indBpPasteMsg');
   if (m2) {
+    const made = r.batches || [];
+    const into = made.length > 1
+      ? `Imported into ${made.length} batches (${made.map(b => b.name).join(', ')})`
+      : `Imported "${r.name}"`;
     m2.textContent = r.error === 'empty' ? 'Nothing readable in that paste.'
       : r.error === 'unrecognized' ? "Couldn't match any blueprint names. " + _indBpPasteSummary(r)
-        : `Imported "${r.name}" — ` + _indBpPasteSummary(r);
+        : into + ' — ' + _indBpPasteSummary(r);
   }
   indLoadQueue();                 // a declared print moves both the ME/TE and the print cap
 }
