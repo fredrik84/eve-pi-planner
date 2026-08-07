@@ -170,7 +170,7 @@ and a new `chain_id` column (could not group the rows already in the table). The
 spends held stock (21c), so it stops asking for goo to make an intermediate that is in the hangar.
 `test_shopping_roots.py`.
 
-## 20. The two Reactions "clear" paths disagree about customer orders (2026-08-07, small)
+## 20. The two Reactions "clear" paths disagree about customer orders — DONE 2026-08-07
 
 Found while diagnosing the Clear-all button (whose actual bug was a native `confirm()`, fixed in
 `6c17728`).
@@ -181,13 +181,19 @@ Found while diagnosing the Clear-all button (whose actual bug was a native `conf
 - `unassign_all_reactions` ("Clear all") deletes them — no `order_id` filter — and leaves
   `pp_reaction_orders.assigned_runs` untouched.
 
-Because `assigned_runs` is monotonic, Clear all can leave an order claiming its full run count with
-zero assignment rows: it looks fully assigned, schedules nothing, and cannot be re-assigned. Orders
-#36-#39 on context 1 are in that shape (`assigned=2000, rows=0`), though they reached it by
-cancellation rather than the button.
+Because `assigned_runs` is monotonic, Clear all could leave an order claiming its full run count
+with zero assignment rows: it looked fully assigned, scheduled nothing, and could not be
+re-assigned. Orders #36-#39 on context 1 were in that shape (`assigned=2000, rows=0`).
 
-Two honest fixes: make Clear all skip order rows like its sibling (and say so on the button), or
-have it clear them **and** reset the order's counter. Pick one; the current state is neither.
+**Fixed in place, no flag** (a defect in a shipped feature). Of the two honest options, Clear all
+now **clears order rows AND hands the runs back** — the button says clear all, and the asymmetry
+with its sibling is kept deliberately: a per-product re-assign is a narrow action, Clear all is the
+player saying clear everything. The credit is the TOP row of each chain (what `assigned_runs` was
+incremented by — `_shopping_roots` already identifies exactly those rows), clamped at zero, and the
+response reports which orders moved so the UI can say so. The confirm text and a toast now spell it
+out. Orders ALREADY stranded are repaired by `_heal_stranded_counter` on the assign path — narrow
+by design: only an open order with a counter and no rows at all, and only when the player takes a
+deliberate action, never on a read. `test_clear_all_orders.py`.
 
 ## 18. Is all of this too complicated? — storage shape and precomputation (2026-08-05, LARGE)
 
@@ -388,6 +394,7 @@ match any template we generate) is still unscoped.
 | — | Alliance-shared build structures as suggestions (`industry_group_structures`) | 08-05 |
 | — | Pin a rig FAMILY to a structure and every job in it is installed there, whatever the routing scores (`pp_industry_settings.build_pins`, on the `industry_rig_routing` flag). A pin can only pick among sites already legal for that job's activity; one it can't honour falls back to the automatic routing and says so. The pin decides WHERE, `fittable_families` still decides what BONUS | 08-06 |
 | 19b | Reaction plan STAGES on the dashboard: planned slots sort by `tier_order`, carry an `S<n>` badge, later stages dim/dash, and the "To install" checklist splits under stage banners. The number is `tier_order + 1` absolute, never re-ranked against what's still pending | 08-07 |
+| 20 | Clear all no longer strands a customer order: order rows are cleared AND the order's `assigned_runs` handed back (top row per chain, clamped at 0), with already-stranded orders repaired on the next assign. `test_clear_all_orders.py` | 08-07 |
 | 22 | Reactions shopping list stopped double-counting chains — only the top row of each assign is exploded, so a two-tier plan no longer asks for twice the goo. `test_shopping_roots.py` | 08-07 |
 | 21c | Reactions spend what you already hold (`reactions_use_stock`): an intermediate in an enabled source shortens or drops its stage and everything below it, in the plan and in the materials walk, consumed once per plan and always reported. `test_reaction_stock.py` | 08-07 |
 | 21a-b | One slot model for reaction chains (`reactions_parallel_stages`): stages reuse a reactor instead of each reserving one, so free slots show what can really start — and reactors nobody claimed are spent splitting the slowest step across more jobs. Runs, cost and profit untouched. `test_parallel_stages.py` | 08-07 |

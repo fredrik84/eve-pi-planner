@@ -786,7 +786,16 @@ function _rxCancelAssignment(assignmentId) {
 
 function _rxClearAllAssignments() {
   apiSend('DELETE', '/api/reactions/assign')
-    .then(() => { _rxLastDashboardData = null; _loadReactionsDashboard(); })
+    .then(res => {
+      // Order-linked slots are cleared too and their orders handed their runs back (see
+      // unassign_all_reactions) — say so, because "my customer order went back to 0 assigned"
+      // is not something to discover later.
+      const n = ((res && res.orders_reset) || []).length;
+      if (n) toast(`Cleared ${res.cleared} planned job${res.cleared === 1 ? '' : 's'}; ${n} customer order${n === 1 ? '' : 's'} put back to unassigned.`, 'info');
+      _rxLastDashboardData = null;
+      _loadReactionsDashboard();
+      if (typeof _rxLoadOrders === 'function') _rxLoadOrders();
+    })
     .catch(e => toastError(e, 'Clear failed'));
 }
 

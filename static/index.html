@@ -590,7 +590,7 @@
                      and the button then does nothing at all. See the comment on ppConfirm in
                      utils.js — this was the last native confirm() in the app, and it produced the
                      same silent no-op that had already been reported once against Cancel order. -->
-                <button class="pp-add-btn" onclick="ppConfirm('Clear every pending (not-yet-running) assignment?').then(ok =&gt; { if (ok) _rxClearAllAssignments(); })">Clear all</button>
+                <button class="pp-add-btn" onclick="ppConfirm('Clear every planned assignment, including slots committed to customer orders? Those orders go back to unassigned so you can re-assign them.').then(ok =&gt; { if (ok) _rxClearAllAssignments(); })">Clear all</button>
               </div>
               <div id="rxDashboardContent" class="pp-card-body">
                 <div class="pp-loading"><span class="pp-spinner"></span> Loading…</div>

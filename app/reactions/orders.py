@@ -225,6 +225,39 @@ class OrderAssignRequest(BaseModel):
     runs: int | None = None  # None = assign everything still remaining
 
 
+def _heal_stranded_counter(order: dict, context_id: int) -> dict:
+    """An OPEN order claiming committed runs while holding no assignment rows at all is stranded:
+    it looks fully assigned, schedules nothing, and `remaining <= 0` refuses to let the player
+    re-assign it. Orders #36-#39 on a real account sat in exactly that shape.
+
+    The counter is the thing that is wrong — the rows are the truth about what is committed — so it
+    is reset to zero and the order becomes assignable again. Deliberately narrow: ONLY when there
+    are no rows whatsoever. An order with rows (running or pending) has a counter that means
+    something, and a fully-assigned order with rows still gets the honest "everything has already
+    been assigned" refusal.
+
+    Runs on the ASSIGN path rather than on read: this is a repair, and a repair belongs to a
+    deliberate action the player took, not to a GET that happened to load the page.
+    """
+    if not order.get("assigned_runs"):
+        return order
+    con = get_connection()
+    try:
+        n = con.execute(
+            "SELECT COUNT(*) AS n FROM pp_reaction_assignments WHERE order_id=? AND character_id IN "
+            "(SELECT character_id FROM pp_characters WHERE context_id=?)",
+            (order["id"], context_id)).fetchone()["n"] or 0
+        if n:
+            return order
+        con.execute("UPDATE pp_reaction_orders SET assigned_runs=0 WHERE id=?", (order["id"],))
+        con.commit()
+        return dict(con.execute("SELECT * FROM pp_reaction_orders WHERE id=?", (order["id"],)).fetchone())
+    except Exception:
+        return order                    # a repair must never be the reason an assign fails
+    finally:
+        con.close()
+
+
 @router.post("/api/reactions/orders/{order_id}/assign")
 def assign_reaction_order(order_id: int, req: OrderAssignRequest, context_id: int = Depends(require_context)):
     """Commits the next batch of this order's remaining runs to a real reaction slot — see
@@ -240,6 +273,7 @@ def assign_reaction_order(order_id: int, req: OrderAssignRequest, context_id: in
         con.close()
     if order["status"] != "open":
         raise HTTPException(status_code=400, detail="This order isn't open")
+    order = _heal_stranded_counter(order, context_id)
     remaining = order["top_level_runs"] - order["assigned_runs"]
     if remaining <= 0:
         raise HTTPException(status_code=400, detail="Every run for this order has already been assigned")

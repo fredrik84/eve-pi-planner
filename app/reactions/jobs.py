@@ -28,6 +28,7 @@ from app.reactions.settings import effective_reaction_settings
 from app.reactions.graph import (
     _load_goo_and_reached, _load_reaction_graph, _value_reaction_batch,
     _ordered_chain_tiers, _build_opportunities, _fuel_block_ids, reaction_stock_pool,
+    _shopping_roots,
 )
 
 
@@ -705,8 +706,28 @@ def unassign_reaction(assignment_id: int, context_id: int = Depends(require_cont
 def unassign_all_reactions(context_id: int = Depends(require_context)):
     """Clear every pending assignment across all of the caller's characters in one go —
     "Clear all" on the dashboard, for starting a fresh suggestion set without hand-cancelling
-    each pending slot one at a time."""
+    each pending slot one at a time.
+
+    **Order-linked rows go too, and their order's counter is put back.** This used to delete them
+    and leave `pp_reaction_orders.assigned_runs` untouched, which is the one combination that
+    strands an order: it claims its full run count, holds no rows, schedules nothing, and cannot be
+    re-assigned because `remaining` is already zero. Its sibling `_clear_assignment_group` skips
+    order rows entirely (a suggestion re-assign must not eat a committed order), and that asymmetry
+    is deliberate — a per-product re-assign is a narrow action, "Clear all" is the player saying
+    clear all. What was neither honest nor useful was clearing them and keeping the number.
+
+    How much to give back: the TOP row of each chain, which is what `assigned_runs` was incremented
+    by in the first place (`_allocate_and_insert` returns the sum of the per-host shares, and each
+    host's share IS its top-level row's runs). `_shopping_roots` already identifies exactly those
+    rows, for exactly the same reason — a chain's top is the row that stands for the batch.
+
+    A row ESI has confirmed as RUNNING is deleted too, as it always was; the job keeps running
+    in-game and shows up as an orphan the player can adopt back into the plan.
+    """
     ensure_reaction_assignments_table()
+    ensure_reaction_orders_table()
+    cleared = 0
+    orders_reset: list[int] = []
     con = get_connection()
     try:
         char_ids = [r["character_id"] for r in con.execute(
@@ -715,11 +736,33 @@ def unassign_all_reactions(context_id: int = Depends(require_context)):
         )]
         if char_ids:
             placeholders = ",".join("?" * len(char_ids))
-            con.execute(f"DELETE FROM pp_reaction_assignments WHERE character_id IN ({placeholders})", char_ids)
+            rows = [dict(r) for r in con.execute(
+                f"SELECT character_id, type_id, runs, order_id, created_at, "
+                f"COALESCE(tier_order,0) AS tier_order FROM pp_reaction_assignments "
+                f"WHERE character_id IN ({placeholders})", char_ids)]
+            cleared = len(rows)
+            con.execute(f"DELETE FROM pp_reaction_assignments WHERE character_id IN ({placeholders})",
+                        char_ids)
+            by_order: dict[int, list[dict]] = {}
+            for r in rows:
+                if r.get("order_id"):
+                    by_order.setdefault(int(r["order_id"]), []).append(r)
+            for order_id, order_rows in by_order.items():
+                give_back = sum(int(r["runs"] or 0) for r in _shopping_roots(order_rows))
+                if give_back <= 0:
+                    continue
+                # Never below zero: the counter is a commitment total, and an order whose rows were
+                # already partly cleared elsewhere must not go negative and start claiming capacity
+                # it never had.
+                con.execute(
+                    "UPDATE pp_reaction_orders SET assigned_runs = "
+                    "CASE WHEN assigned_runs > ? THEN assigned_runs - ? ELSE 0 END WHERE id=?",
+                    (give_back, give_back, order_id))
+                orders_reset.append(order_id)
             con.commit()
     finally:
         con.close()
-    return {"ok": True}
+    return {"ok": True, "cleared": cleared, "orders_reset": sorted(orders_reset)}
 
 
 def _unplanned_running_totals(context_id: int, unplanned_running: list[tuple[int, float]],
