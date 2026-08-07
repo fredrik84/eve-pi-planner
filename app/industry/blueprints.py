@@ -144,6 +144,9 @@ def _blueprint_product_index(con) -> dict[int, int]:
 
 MANUAL_FEATURE_KEY = "industry_manual_blueprints"
 
+# The suffix every reaction-formula ITEM carries. Used only by the paste fallback below.
+_FORMULA_SUFFIX = " reaction formula"
+
 
 @ensure_once
 def ensure_manual_blueprints_table():
@@ -980,6 +983,50 @@ def parse_blueprint_paste(text: str) -> dict:
                 tuple(n.lower() for n in chunk),
             ).fetchall():
                 lookup[r["name"].lower()] = int(r["type_id"])
+
+        # ── Fallback: a formula named after its PRODUCT ──────────────────────────────────────
+        # Real case, 2026-08-07: a client copy carried "Fullerides Reaction Formula" while this SDE
+        # calls the item "Fulleride Reaction Formula" — singular. CCP renames things and our SDE
+        # snapshot lags it, so an exact-name miss is NOT proof the print does not exist, and telling
+        # a user who pasted 238 real formulas that one of them isn't a thing is the wrong answer.
+        #
+        # When a name ends in "Reaction Formula" the stem is the PRODUCT's name, and a product
+        # identifies its reaction uniquely (`reactions.output_type_id`). So: strip, look the stem up
+        # as a product, take the reaction that makes it.
+        #
+        # Deliberately narrow. It runs ONLY after an exact match has failed, and only resolves when
+        # the stem is a real type that some reaction actually outputs — so it can neither override a
+        # good match nor invent a print. 78 of 111 formulas in this SDE are exactly
+        # "<product> Reaction Formula" and never reach here; the 33 that differ (the "Pure …"
+        # boosters) match on their real name and never reach here either.
+        missing_names = [n for n in names if n.lower() not in lookup]
+        stems: dict[str, str] = {}          # product-name (lower) -> the name as pasted
+        for n in missing_names:
+            low = n.lower()
+            if low.endswith(_FORMULA_SUFFIX):
+                stem = low[:-len(_FORMULA_SUFFIX)].strip()
+                if stem:
+                    stems.setdefault(stem, n)
+        if stems:
+            out_to_reaction: dict[int, int] = {}
+            try:
+                for r in con.execute("SELECT reaction_id, output_type_id FROM reactions"):
+                    out_to_reaction.setdefault(int(r["output_type_id"]), int(r["reaction_id"]))
+            except Exception:
+                out_to_reaction = {}        # manufacturing-only SDE: nothing to fall back to
+            keys = sorted(stems)
+            for i in range(0, len(keys), 400):
+                chunk = keys[i:i + 400]
+                marks = ",".join("?" * len(chunk))
+                for r in con.execute(
+                    f"SELECT type_id, name FROM types WHERE LOWER(name) IN ({marks})",
+                    tuple(chunk),
+                ).fetchall():
+                    reaction_id = out_to_reaction.get(int(r["type_id"]))
+                    pasted = stems.get(r["name"].lower())
+                    if reaction_id and pasted:
+                        lookup[pasted.lower()] = reaction_id
+
         bp2prod = _blueprint_product_index(con)
         try:
             formula_ids = {int(r["reaction_id"])

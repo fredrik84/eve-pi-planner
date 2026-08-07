@@ -450,6 +450,26 @@ def main():
               and "source" not in owned_blueprints(CTX)[PHOTONIC],
               "and the holding is exactly what ESI said")
 
+
+        # A client copy carried "Fullerides Reaction Formula" (plural) where this SDE calls the item
+        # "Fulleride Reaction Formula". CCP renames things and the SDE snapshot lags, so an exact
+        # miss must not be reported as "not a real print" when 237 siblings imported fine.
+        print("a formula named after its PRODUCT still resolves:")
+        d = parse_blueprint_paste("Fullerides Reaction Formula\t0\t0\t-1\tComposite")
+        check(not d["unknown"], "the plural spelling is not reported as unknown")
+        check(len(d["entries"]) == 1 and d["entries"][0]["formula"],
+              "it resolves, and resolves as a formula")
+        exact = parse_blueprint_paste("Fulleride Reaction Formula\t0\t0\t-1\tComposite")
+        check(exact["entries"][0]["product_type_id"] == d["entries"][0]["product_type_id"],
+              "to the SAME product the exactly-named formula resolves to")
+        both = parse_blueprint_paste("Fullerides Reaction Formula\t0\t0\t-1\tComposite\n"
+                                     "Fulleride Reaction Formula\t0\t0\t-1\tComposite")
+        check(len(both["entries"]) == 1 and both["entries"][0]["quantity"] == 2,
+              "and both spellings are ONE formula held twice, not two products")
+        check("Nonsense Reaction Formula" in
+              parse_blueprint_paste("Nonsense Reaction Formula\t0\t0\t-1\tX")["unknown"],
+              "a stem that is not a real product is still reported unknown")
+
     finally:
         _reset(con)
         con.close()
