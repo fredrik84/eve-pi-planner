@@ -350,6 +350,14 @@ function _rxProductName(type_id) {
   return hit ? hit.name : `#${type_id}`;
 }
 
+// A plan row's `tier_order` IS its stage: 0 is the deepest intermediate (react first), and the
+// top-level product sits at len(chain_tiers). Displayed 1-based, absolute — NOT re-ranked against
+// whatever is still pending, so a stage whose predecessor is already running keeps its real
+// number ("Stage 2") instead of being relabelled "start now" while its input is still cooking.
+function _rxStageLabel(tier) {
+  return tier > 0 ? `Stage ${tier + 1} — after stage ${tier} finishes` : 'Stage 1 — start now';
+}
+
 let _rxLastDashboardData = null;
 
 function _loadReactionsDashboard() {
@@ -463,8 +471,13 @@ function _renderReactionsDashboard(data) {
     const _jobName = j => j.name || _rxProductName(j.product_type_id);
     const jobs = (jobsByChar.get(c.character_name) || [])
       .slice().sort((a, b) => _jobName(a).localeCompare(_jobName(b)));
+    // Then by STAGE first: a chain's intermediate rows carry a lower tier_order than the product
+    // they feed (see assign_reaction) and tier 0 must finish before tier 1 can start — the
+    // backend has always ordered by it and the payload has always carried it, but the loadout
+    // rendered every stage flat, which reads as "it isn't sequencing" when in fact it is.
     const pending = (c.pending || [])
-      .slice().sort((a, b) => a.name.localeCompare(b.name) || a.runs - b.runs);
+      .slice().sort((a, b) => (a.tier_order || 0) - (b.tier_order || 0)
+        || a.name.localeCompare(b.name) || a.runs - b.runs);
     const squares = jobs.map(j => {
       const icon = `https://images.evetech.net/types/${j.product_type_id}/icon?size=32`;
       const timer = j.hours_left != null ? _fmtHours(j.hours_left) : '—';
@@ -491,10 +504,14 @@ function _renderReactionsDashboard(data) {
     // Click to cancel the assignment (e.g. changed your mind, or already did it under a
     // different product than planned).
     for (const a of pending) {
-      const key = `${c.character_id}:${a.type_id}`;
+      const tier = a.tier_order || 0;
+      // Keyed by stage too: the same product can legitimately appear at two stages (an
+      // intermediate for one chain, the end product of another), and merging those into one
+      // checklist line would claim you can install both right now.
+      const key = `${c.character_id}:${a.type_id}:${tier}`;
       if (!todoGroups.has(key)) {
         todoGroups.set(key, {
-          character_name: c.character_name, type_id: a.type_id, name: a.name,
+          character_name: c.character_name, type_id: a.type_id, name: a.name, tier,
           count: 0, totalRuns: 0, jobRuns: new Map(), ids: [],
         });
       }
@@ -509,9 +526,17 @@ function _renderReactionsDashboard(data) {
       // speculative-profit ones without opening the order itself.
       const orderTag = a.order_label ? `<div class="rx-order-slot-tag" title="Committed to a customer order">Order: ${_esc(a.order_label)}</div>` : '';
       const orderTip = a.order_label ? ` — for order "${a.order_label}"` : '';
+      // A later-stage slot is dimmed and dashed, and says why: its inputs come out of the stage
+      // below it, so it is not startable yet. Still clickable (edit/cancel) — this is a "not
+      // yet", not a lock.
+      const stageBadge = `<span class="rx-slot-stage${tier > 0 ? ' rx-slot-stage-later' : ''}" title="${_esc(_rxStageLabel(tier))}">S${tier + 1}</span>`;
+      const stageTip = tier > 0
+        ? ` — ${_rxStageLabel(tier)}, so don't install it yet`
+        : ' — nothing has to finish first';
       squares.push(`
-        <div class="rx-slot rx-slot-pending" title="Not running yet — install ${_esc(a.name)} ×${a.runs} in-game${_esc(orderTip)}. Click to edit." onclick="_rxOpenEditAssign(${a.assignment_id}, '${c.character_id}')">
+        <div class="rx-slot rx-slot-pending${tier > 0 ? ' rx-slot-later' : ''}" title="Not running yet — install ${_esc(a.name)} ×${a.runs} in-game${_esc(orderTip)}${_esc(stageTip)}. Click to edit." onclick="_rxOpenEditAssign(${a.assignment_id}, '${c.character_id}')">
           <img class="rx-slot-icon" src="${pendingIcon}" alt="" onerror="this.style.visibility='hidden'">
+          ${stageBadge}
           <span class="rx-slot-pending-badge" onclick="event.stopPropagation();_rxCancelAssignment(${a.assignment_id})" title="Cancel this assignment">⊘</span>
           <span class="rx-slot-runs">×${a.runs}</span>
           <div class="rx-slot-pending-label">${_esc(a.name)}</div>
@@ -536,25 +561,37 @@ function _renderReactionsDashboard(data) {
   // "Needs attention"-style banner this replaces a version of was removed for nagging about
   // things you hadn't gotten to yet; this is a checklist you consult once while installing, not
   // a persistent warning.
+  // Ordered by STAGE first, then character/product: this is the install order. A chain's
+  // intermediates have to be reacted and finished before the product they feed can start, so a
+  // flat alphabetical list was telling the player to install things they cannot install yet.
   const todoRows = [...todoGroups.values()]
-    .sort((a, b) => a.character_name.localeCompare(b.character_name) || a.name.localeCompare(b.name));
+    .sort((a, b) => a.tier - b.tier
+      || a.character_name.localeCompare(b.character_name) || a.name.localeCompare(b.name));
+  const todoStages = [...new Set(todoRows.map(g => g.tier))].sort((a, b) => a - b);
+  const _todoRowHtml = g => {
+    const jobBreakdown = [...g.jobRuns.entries()].sort((a, b) => b[0] - a[0])
+      .map(([runs, n]) => n > 1 ? `${n}×${runs} runs` : `${runs} runs`).join(' + ');
+    return `
+      <tr${g.tier > 0 ? ' class="rx-todo-later"' : ''}>
+        <td>${_esc(g.character_name)}</td>
+        <td><img src="https://images.evetech.net/types/${g.type_id}/icon?size=32" alt="" style="width:16px;height:16px;border-radius:3px;vertical-align:middle;margin-right:5px" onerror="this.style.display='none'">${_esc(g.name)}</td>
+        <td>${_esc(jobBreakdown)}</td>
+        <td><b>${g.totalRuns.toLocaleString()}</b></td>
+      </tr>`;
+  };
   const todoListHtml = !todoRows.length ? '' : `
     <div class="pp-card-hint" style="font-weight:600;margin:2px 0 4px">
-      To install — ${todoRows.reduce((s, g) => s + g.totalRuns, 0).toLocaleString()} runs across ${todoRows.length} product${todoRows.length === 1 ? '' : 's'}
+      To install — ${todoRows.reduce((s, g) => s + g.totalRuns, 0).toLocaleString()} runs across ${todoRows.length} product${todoRows.length === 1 ? '' : 's'}${todoStages.length > 1 ? `, in ${todoStages.length} stages` : ''}
     </div>
     <div style="overflow-x:auto;margin-bottom:12px">
       <table class="pp-card-table" style="width:100%">
         <thead><tr><th>Character</th><th>Product</th><th>Jobs</th><th>Total runs</th></tr></thead>
-        <tbody>${todoRows.map(g => {
-          const jobBreakdown = [...g.jobRuns.entries()].sort((a, b) => b[0] - a[0])
-            .map(([runs, n]) => n > 1 ? `${n}×${runs} runs` : `${runs} runs`).join(' + ');
-          return `
-          <tr>
-            <td>${_esc(g.character_name)}</td>
-            <td><img src="https://images.evetech.net/types/${g.type_id}/icon?size=32" alt="" style="width:16px;height:16px;border-radius:3px;vertical-align:middle;margin-right:5px" onerror="this.style.display='none'">${_esc(g.name)}</td>
-            <td>${_esc(jobBreakdown)}</td>
-            <td><b>${g.totalRuns.toLocaleString()}</b></td>
-          </tr>`;
+        <tbody>${todoStages.map(tier => {
+          // The stage banner is dropped entirely when everything pending is stage 1 — the
+          // common single-step case shouldn't grow a header row that says nothing.
+          const head = todoStages.length === 1 && tier === 0 ? '' : `
+            <tr class="rx-todo-stage"><td colspan="4">${_esc(_rxStageLabel(tier))}</td></tr>`;
+          return head + todoRows.filter(g => g.tier === tier).map(_todoRowHtml).join('');
         }).join('')}</tbody>
       </table>
     </div>`;
@@ -1150,7 +1187,8 @@ function _renderReactionsSuggestions(data) {
         : `${s.runs} runs`;
       // A real multi-tier chain (goo -> intermediate -> this product) needs the intermediate(s)
       // reacted and finished FIRST — the player can't even install the top-level job until then.
-      // Shown here (before assigning), not just buried in the dashboard's flat pending list.
+      // Shown here (before assigning) as well as on the dashboard, where the same ordering is
+      // rendered as labelled stages off each plan row's tier_order.
       const chainNote = (s.chain_tiers && s.chain_tiers.length)
         ? `<div class="rx-sugg-chain">React first: ${s.chain_tiers.map(t =>
             `${_esc(t.name)} (${t.job_count > 1 ? `${t.job_count} jobs × ${Math.ceil(t.runs / t.job_count)} runs` : `${t.runs} runs`})`

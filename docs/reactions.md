@@ -9,6 +9,7 @@ Find a section: `grep -n '^## ' docs/reactions.md` and read from that line — t
 
 - **Reactions suggestion engine (`app/reactions/advisor.py`)** — what the advisor suggests and on what basis
 - **A formula is one reaction at a time (`reactions_formula_cap`)** — why ten free slots can be planned as one job
+- **Stages on the dashboard are `tier_order`, shown absolute** — how chain order is rendered, and why the number is never re-ranked
 - **Pricing: a sell-order price is not achievable profit** — the pricing rule that governs every profit figure shown for reaction goods
 - **Where the rest lives** — pointers to reaction content that belongs to another service
 
@@ -42,6 +43,21 @@ Two rules it must not break: **a missing key means unknown, and unknown never re
 evidence, or an incomplete blueprint picture, caps nothing — the same rule
 `_assigned_slot_capacity` and `_print_limits` follow); and **chain tiers are sequential**, so the
 cap is per tier and one formula may serve tier 0 and then tier 1.
+
+## Stages on the dashboard are `tier_order`, shown absolute
+
+Every `pp_reaction_assignments` row carries `tier_order` — 0 is the deepest intermediate (react
+first), the end product sits at `len(chain_tiers)` — and it has always been in the dashboard
+payload and the `ORDER BY`. Until 2026-08-07 `static/reactions.js` never read it: the loadout drew
+tier 0 and tier 1 side by side with nothing saying which had to finish first, which reads as "the
+tool isn't sequencing" when it is (`_concurrent_load` already counts the worst tier, not the sum).
+
+Planned slots and the "To install" checklist now group by stage via `_rxStageLabel`, dimming and
+dashing anything past stage 1. The displayed number is **`tier_order + 1`, absolute** — not
+re-ranked against whatever is still pending. When stage 1 is already running its plan rows are
+gone from `pending`, and re-ranking would relabel the stage-2 rows "start now" while their input
+is still cooking. A gap in the numbering is the honest reading: the missing stage is in the
+filled squares.
 
 ## Pricing: a sell-order price is not achievable profit
 

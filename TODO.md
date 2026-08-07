@@ -55,7 +55,7 @@ copy carried `Fullerides Reaction Formula` where the SDE has `Fulleride Reaction
 `ee633be` with a product-name fallback. Any implementation must make unresolved names **loud**, not
 merely reported, or a rename turns into a wrong plan.
 
-### 19b. The stages are sequenced correctly and the UI throws it away
+### 19b. The stages are sequenced correctly and the UI throws it away — DONE 2026-08-07
 
 The backend has always modelled this: every `pp_reaction_assignments` row carries `tier_order`, the
 dashboard query is `ORDER BY tier_order`, `tier_order` **is** in the API payload, and
@@ -69,8 +69,12 @@ which must finish first. The user reads that as "it isn't sequencing"; it is, in
 Fix is presentational only — group pending slots by stage, label them ("Stage 1 — start now",
 "Stage 2 — after stage 1 finishes"), grey what is not yet startable. No backend change.
 
-**Do 19b first.** It is small, low-risk, touches no planning code, and it is what would have made
-19a visible immediately — Carbon Fiber would have been sitting in a labelled Stage 1.
+**Shipped 2026-08-07**, frontend only (`reactions.js`, `style-layout-admin.css`): planned slots sort
+by `tier_order` and carry an `S<n>` badge, later stages are dimmed/dashed, and the "To install"
+checklist is split under stage banners. The stage number is `tier_order + 1` **absolute**, not
+re-ranked against what is still pending — once stage 1 is running its rows leave `pending`, and
+re-ranking would tell you to start stage 2 while its input is still cooking. Rationale is in
+`docs/reactions.md`. **19a is still open** and is the real fix.
 
 ## 20. The two Reactions "clear" paths disagree about customer orders (2026-08-07, small)
 

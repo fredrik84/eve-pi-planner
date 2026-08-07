@@ -595,6 +595,25 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .rx-slot-pending-badge:hover { background: #3a1515; border-color: #a83a3a; }
 .rx-slot-pending-label { font-size: 9px; color: #c87a7a; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 62px; }
 
+/* Stage badge on a planned slot (tier_order + 1). A chain reacts bottom-up — stage 1 first — so
+   a later stage is dimmed and dashed to read as "assigned, but not startable yet" rather than
+   "install this now". Bottom-left keeps it clear of the ⊘ (top-right) and ×runs (bottom-right)
+   badges. Not a lock: the slot stays clickable for edit/cancel. */
+.rx-slot-stage {
+  position: absolute; bottom: -5px; left: -5px; font-size: 8.5px; line-height: 1;
+  color: #8fb8dd; background: #12161f; border: 1px solid var(--clr-border); border-radius: 4px;
+  padding: 2px 4px; white-space: nowrap;
+}
+.rx-slot-stage-later { color: #c0a86a; border-color: #5c4b22; }
+.rx-slot-later { opacity: 0.62; border-style: dashed; }
+.rx-slot-later:hover { opacity: 1; }
+/* Stage banner inside the "To install" checklist, and the muted rows under a later stage. */
+.rx-todo-stage td {
+  font-size: 11px; font-weight: 600; color: var(--clr-text-dim);
+  background: #12161f; padding: 4px 8px;
+}
+.rx-todo-later td { opacity: 0.68; }
+
 /* An orphan running job (installed in-game, not in the plan): amber dashed edge to set it apart
    from a planned running slot, plus a small "⊕ plan" pill to adopt it into the recurring plan. */
 .rx-slot-orphan { border-style: dashed; border-color: #b08a3a; }
