@@ -17,6 +17,7 @@ feature. Everything else lives in `docs/`, split by service. Open only the one y
 | [docs/industry-workflow.md](docs/industry-workflow.md) | the whole Industry flow end to end: the nine steps a builder walks, and the module/endpoint/table map behind each |
 | [docs/industry-workflow-user.md](docs/industry-workflow-user.md) | the same flow written for the user — what the tab does and the order to use it in |
 | [docs/industry-audit-2026-08.md](docs/industry-audit-2026-08.md) | the Industry feature set scored against the manifesto — verdicts, removal candidates, live flag states |
+| [docs/test-protocol-2026-08.md](docs/test-protocol-2026-08.md) | what to test and where, for the 2026-08-05/06 round — plus the discoverability gaps a tester will hit |
 | [docs/industry-planner-spec.md](docs/industry-planner-spec.md) | the Industry planner's original spec |
 | [docs/platform.md](docs/platform.md) | admin, accounts, notifications, market pricing, mobile |
 | [TODO.md](TODO.md) | **source of truth for open work** and closed-with-reasoning verdicts — read before proposing anything |
