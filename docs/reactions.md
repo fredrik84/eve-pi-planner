@@ -77,7 +77,10 @@ and `_explode_shopping_list` and **consumed as the walk goes**, which is the who
 Wired into every path that commits or quotes a concrete batch: suggest (one pool for the run), the
 order report (two pools off the same holding — the materials walk and the stage walk answer
 different questions and must each spend it once), order allocation (consumed host by host),
-adopt-orphan, and `assign_reaction`, which trims the client-supplied tiers. **The opportunity list
+adopt-orphan, and `assign_reaction`, which trims the client-supplied tiers (reading each run's size
+from the formula the PLAN uses, `reached[tid]["via"]` — several formulas output the same product at
+wildly different batch sizes, 20 units vs 10,000 in this SDE, so an arbitrary `reactions` row
+misjudges coverage by that whole factor; no graph means no trim). **The opportunity list
 stays stock-blind on purpose:** it is cached and its callers scale its tiers linearly, and stock
 coverage is not linear — so the trim happens at the point rows are created instead.
 

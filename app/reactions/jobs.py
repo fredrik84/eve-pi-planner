@@ -415,19 +415,22 @@ def _trim_tiers_by_stock(context_id: int, tiers: list) -> list[dict]:
     pool = reaction_stock_pool(context_id)
     if not pool or not tiers:
         return []
-    con = get_connection()
-    try:
-        out_qty = {int(r["output_type_id"]): float(r["output_qty"] or 1)
-                   for r in con.execute("SELECT output_type_id, output_qty FROM reactions")}
-    except Exception:
-        return []
-    finally:
-        con.close()
+    # How many units a run of this product yields must come from the formula the PLAN is using —
+    # `reached[tid]["via"]` — not from an arbitrary row of `reactions`. Several formulas can output
+    # the same product with wildly different batch sizes (20 units vs 10,000 in this SDE), and
+    # reading the wrong one misjudges coverage by that same factor, in whichever direction the row
+    # order happens to fall. The graph load is cached and this only runs on a user-initiated assign
+    # with the feature on and stock present.
+    loaded = _load_goo_and_reached(context_id)
+    reached = loaded[1] if loaded else {}
+    if not reached:
+        return []                       # no graph, no evidence — leave the caller's chain alone
 
     covered: list[dict] = []
     keep = []
     for t in tiers:
-        qty = out_qty.get(int(t.type_id), 0.0)
+        via = (reached.get(int(t.type_id)) or {}).get("via") or {}
+        qty = float(via.get("output_qty") or 0)
         have = pool.get(int(t.type_id), 0.0)
         if qty <= 0 or have <= 0:
             keep.append(t)

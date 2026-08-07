@@ -165,6 +165,35 @@ def main():
         check(reaction_stock_pool(CTX) == {}, "and with the flag off there is no pool at all")
         _flag("public")
 
+        print("the ASSIGN path trims client-supplied tiers the same way:")
+        # A different code path from the graph walks: the wizard/manual modal send their chain as
+        # ChainTier models and `_trim_tiers_by_stock` edits them in place. It also has to read the
+        # run size from the formula the PLAN uses (`reached[tid]["via"]`) — several formulas output
+        # the same product at wildly different batch sizes (20 units vs 10,000 in this SDE), and an
+        # arbitrary `reactions` row misjudges coverage by that whole factor.
+        from app.reactions.graph import _load_goo_and_reached
+        from app.reactions.jobs import ChainTier, _trim_tiers_by_stock
+        _reset(con)
+        loaded = _load_goo_and_reached(CTX)
+        graph = loaded[1] if loaded else {}
+        prod = next((tid for tid, n in graph.items()
+                     if (n.get("via") or {}).get("output_qty")), None)
+        if prod is None:
+            print("  ....  no priced reaction graph in this container — assign path not exercised")
+        else:
+            qty = float(graph[prod]["via"]["output_qty"])
+            _stock(con, prod, qty * 3)
+            tiers = [ChainTier(type_id=prod, name="X", runs=10, job_count=2)]
+            cov = _trim_tiers_by_stock(CTX, tiers)
+            check(tiers and tiers[0].runs == 7,
+                  f"3 runs' worth held shortens a 10-run stage to 7 (got {tiers[0].runs if tiers else None})")
+            check(cov and cov[0]["runs_saved"] == 3, f"and says so (got {cov})")
+            check(tiers and tiers[0].job_count <= 7, "job count never exceeds the runs left")
+            full = [ChainTier(type_id=prod, name="X", runs=2, job_count=1)]
+            _trim_tiers_by_stock(CTX, full)
+            check(full == [], "a stage the holding covers outright is dropped from the assign entirely")
+        _reset(con)
+
         print("no pool means the pure recipe, byte for byte:")
         check(dict(_ordered_chain_tiers(top_inputs, 10, reached, None, {})) == base,
               "the walk with stock=None is the walk that shipped")
