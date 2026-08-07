@@ -49,8 +49,16 @@ the page.
 **Structures & Markets** (search it, hit the hammer, turn on *Manufacture here* with its rig tiers) —
 that panel is shared with Reactions and needs a character with market access.
 
-After setup, a **Setup & slots** button sits at the top of the tab: job slots, connected blueprints,
-stock on hand, and a preview-mode slider for seeing the live views before you have live data.
+After setup, a **Job slots** button sits at the top of the tab: your manufacturing/reaction capacity
+per character, links to the two account-wide panels it depends on (**Structures & Markets** and
+**Blueprints & formulas**), and — folded away below a divider — a preview-mode slider for seeing the
+live views before you have live data.
+
+What you own is not tab-local: **Settings → Blueprints & formulas** holds the blueprints and reaction
+formulas read from ESI, plus *Stock on hand* — the hangars, containers and pasted stacks the planners
+may draw from. Paste a hangar there to declare stock ESI cannot see, **including reaction formulas
+held in a corp or shared hangar**: a formula there is how we know you own it, and formulas found
+there cap how many reaction jobs can run at once. The Reactions tab links to the same panel.
 
 If you never described a build structure of your own, a one-line nudge sits above the tab saying
 costs are being figured against a generic facility. It is dismissible and does not block anything.
@@ -226,7 +234,7 @@ Deliberately behind the common path — you can use the tab for months without t
 - **Saved container sets** — name a group of boxes and pick them in one go.
 - **Corp hangars** — scanned only on request, and only if a character has the Director role.
   Everyone else pastes a hangar instead, which counts identically.
-- **Preview mode** (under Setup & slots) — fabricate progress at any percentage to see how the live
-  views look before you have live data. Nothing is saved.
-- **Blueprint and stock refresh** (under Setup & slots) — the manual version of what the tab already
-  does for you when it opens.
+- **Preview mode** (folded away at the bottom of Job slots) — fabricate progress at any percentage to
+  see how the live views look before you have live data. Nothing is saved.
+- **Blueprint and stock refresh** (Settings → Blueprints & formulas) — the manual version of what the
+  tab already does for you when it opens.

@@ -255,7 +255,7 @@ Completed jobs feed `GET /api/industry/lifetime`.
 | `POST /api/industry/to-install` | orders | — (superseded by the inline `install` block) |
 | `POST /api/industry/queue-plan/compare` | orders | — (endpoint only; TODO 2f-residual #3) |
 | `GET/POST /api/industry/queue-plan/packing` | orders | — (diagnostic by design) |
-| `GET /api/industry/assets`, `POST /assets/refresh`, `/assets/refresh-corp`, `/assets/paste`, `/assets/sources`, `DELETE /assets/sources/{key}` | assets | Setup → Stock on hand |
+| `GET /api/industry/assets`, `POST /assets/refresh`, `/assets/refresh-corp`, `/assets/paste`, `/assets/sources`, `DELETE /assets/sources/{key}` | assets | Settings → Blueprints & formulas → Stock on hand |
 | `GET/POST /api/industry/source-sets`, `DELETE /{set_id}` | assets | sourcing panel |
 | `GET /api/industry/bpc`, `POST /bpc/scan` | bpc | `indLoadBpcPrices` |
 | `GET /api/industry/progress`, `POST /progress/done` | progress | `indLoadProgress`, `indCycleDone` |
@@ -340,7 +340,7 @@ gates one step of the path above.
    removed on purpose). Three of the six are deliberate; `skill-coverage` and `to-install` are the
    two that read as residue.
 3. **Stock is expressed in four places** — the plan modal's "Materials from", the sourcing panel's
-   "Pulling from", Setup → Stock on hand's tick list, and saved source sets — and under two
+   "Pulling from", Settings → Blueprints & formulas → Stock on hand's tick list, and saved source sets — and under two
    different ownership models that coexist behind `industry_plan_sources` (account-wide tick list
    vs. a build owning its boxes). `plan_source_keys` exists to reconcile them per request.
 4. **Setup for the single most cost-relevant input is in another tab.** The facility drives every

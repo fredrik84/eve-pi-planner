@@ -1408,7 +1408,14 @@ function _rxOpenSettingsModal() {
   // (an alliance-wide setting) in Reactions where group management lives.
   const redirect = `<div class="pp-card-hint" style="margin-bottom:12px">Your reaction structures, markets &amp; freight/system rates moved to `
     + `<button class="ind-link-btn" onclick="_rxCloseSettingsModal();openSettingsModal('markets')">Settings → Structures &amp; Markets</button>`
-    + ` — now shared with the Manufacturing planner.</div>`;
+    + ` — now shared with the Manufacturing planner.</div>`
+    // Same shape as the markets redirect above, for the same reason: which reaction FORMULAS you own
+    // is account-wide, and it is what caps how many reaction jobs can run at once. It used to be
+    // reachable only through Manufacturing's Setup & slots → Stock on hand, a form that never said
+    // the word "formula" — the Reactions tab had no pointer to it at all.
+    + `<div class="pp-card-hint" style="margin-bottom:12px">The reaction <b>formulas you own</b> — and the stock the planner may draw from — live in `
+    + `<button class="ind-link-btn" onclick="_rxCloseSettingsModal();openSettingsModal('blueprints')">Settings → Blueprints &amp; formulas</button>`
+    + ` — formulas found there cap how many reaction jobs can run at once.</div>`;
   el.innerHTML = redirect + (_rxCanEditSettings() ? _rxSettingsFormHtml() : '');
   document.getElementById('rxSettingsModal').style.display = '';
   if (_rxCanEditSettings()) _loadRxSettings();

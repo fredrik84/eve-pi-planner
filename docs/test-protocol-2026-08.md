@@ -44,11 +44,12 @@ earns nothing beyond the hull role bonus.
 
 ### A3. Rename, consent copy, entry point
 
-**Where:** Settings nav; Industry → **Setup & slots**.
+**Where:** Settings nav; Industry → **Job slots**.
 
 **Expect:** the panel reads **"Structures & Markets"**. Connect buttons say "Connect a character" and
 explain that one login grants markets, blueprints, jobs, assets, skills and planets, and why it is
-one set. Setup & slots has a **"Where you build"** section with "Add a build structure".
+one set. The Job slots modal has a **"Set up in Settings"** section pointing at both
+**Structures & Markets** and **Blueprints & formulas**.
 
 **Bug if:** any "Markets & Logistics" text survives, or a connect button still says "market
 character".
@@ -79,7 +80,7 @@ most here — a stored choice must be untouched.
 ### B1. Placeholder character slots (`industry_placeholder_slots`)
 
 **Where:** Characters tab → add a placeholder → set manufacturing / reaction **slots** (0–11). Then
-Industry → Setup & slots → Job slots.
+Industry → **Job slots**.
 
 **Expect:** declared slots counted in the pool; the placeholder visibly marked; it can be handed jobs
 but never renders as skill-verified. Job times still report **"assumed"**.
@@ -99,11 +100,14 @@ reason.
 
 ### B3. Formula evidence (`industry_formulas_from_stock`)
 
-**Where:** Industry → Setup & slots → **Stock on hand** → *Paste a hangar* → paste → *Add as stock* →
-then **tick the new source**. Then plan something using those reactions.
+**Where:** Settings → **Blueprints & formulas** → *Stock on hand — materials and reaction formulas*
+→ *Paste a hangar* → paste → *Add as stock* → then **tick the new source**. Then plan something using
+those reactions. Reachable from both tabs: Reactions ⚙ Settings and Manufacturing → Job slots both
+link to it.
 
 **Expect:** formula names resolve with quantities; concurrent reaction jobs capped at how many
-formulas you hold.
+formulas you hold. The paste help and placeholder both name reaction formulas and say they cap
+concurrent jobs.
 
 **Bug if:** formula names do not resolve, or the plan still schedules more parallel jobs than you
 hold formulas.
@@ -167,11 +171,12 @@ missing it.
 Read these before filing a bug — they are known, and two of them are the reason a tester will get
 stuck.
 
-1. **Nothing in the UI mentions formulas or blueprints.** The only way to declare a formula you hold
-   is Setup & slots → Stock on hand → paste a hangar. That form is worded entirely as *materials*
-   ("Add as stock", placeholder `Tritanium / Pyerite`), never names formulas, and gives no hint that
-   the reaction concurrency cap reads it. A user whose formulas sit in a corp hangar has no way to
-   discover this path. B3 above only works because this document tells you where to click.
+1. ~~**Nothing in the UI mentions formulas or blueprints.**~~ **Fixed 2026-08-07.** The panel moved
+   to **Settings → Blueprints & formulas** (its own nav item, alongside Structures & Markets), linked
+   from both the Reactions ⚙ Settings redirect and Manufacturing → Job slots. The paste form now
+   names reaction formulas, its placeholder shows one next to a material, and the help text states
+   that formulas found there cap how many reaction jobs can run at once. Re-test B3 by finding the
+   path yourself before reading the instructions.
 2. **Pasting BLUEPRINTS does nothing.** Only reaction formulas are counted from stock; manufacturing
    blueprints are structurally excluded, because an asset row states no ME, TE or runs and a plan
    that credits an unknown-ME print is worse than one that admits it cannot see it. There is no

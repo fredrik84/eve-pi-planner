@@ -122,7 +122,8 @@ this item is to actually remove it.
 ## 17. Stock sources have four surfaces (2026-08-05, low)
 
 One concept — *which boxes may this build spend* — is expressed in the plan modal's "Materials
-from", the sourcing panel's "Pulling from", Setup → Stock on hand's tick list, and saved source
+from", the sourcing panel's "Pulling from", Settings → Blueprints & formulas → Stock on hand's
+tick list, and saved source
 sets, under **two** ownership models that coexist behind `industry_plan_sources` (account-wide tick
 list vs. a build owning its boxes). `plan_source_keys` exists solely to reconcile them per request.
 

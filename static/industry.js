@@ -568,8 +568,8 @@ function indApplyGate(hasStructure) {
     </div>
     <p class="pp-sub ind-gate-note">In <b>Settings → Structures &amp; Markets</b>: search it, hit <b>🔨</b>,
       turn on <b>Manufacture here</b> with its rig tiers. Searching structures needs a connected
-      character — there's a button for that on the same panel. It's also under <b>Setup &amp; slots</b>
-      if you dismiss this.</p>
+      character — there's a button for that on the same panel. <b>Job slots</b> links to it too if you
+      dismiss this.</p>
   </div></div>`;
 }
 
@@ -708,7 +708,7 @@ async function indLoadLifetime() {
   } catch (e) { el.innerHTML = ''; }
 }
 
-// ── Setup & slots (modal) + compact tab summary ─────────────────────────────────────────────
+// ── Job slots (modal) + compact tab summary ─────────────────────────────────────────────────
 async function indLoadSetupSummary() {
   const sum = document.getElementById('indSetupSummary');
   const rem = document.getElementById('indConnectReminder');
@@ -726,13 +726,18 @@ async function indLoadSetupSummary() {
   if (rem) {
     if (bp && !bp.connected) {
       rem.style.display = '';
-      rem.innerHTML = `Using default ME/TE. <button class="ind-link-btn" onclick="indOpenSetup()">Connect a character</button> to plan with your real blueprints and slots.`;
+      // Points at Settings → Blueprints & formulas, where the connect button now lives — it used to
+      // open Setup & slots, which no longer holds the blueprint panel.
+      rem.innerHTML = `Using default ME/TE. <button class="ind-link-btn" onclick="openSettingsModal('blueprints')">Connect a character</button> to plan with your real blueprints and reaction formulas.`;
     } else {
       rem.style.display = 'none';
     }
   }
 }
 
+// Job slots only. Blueprints, formulas and stock moved to Settings → Blueprints & formulas
+// (_loadBlueprintsSettings in planetary.js calls indLoadBlueprints/indLoadAssets on reveal), so
+// this no longer fires those two reads — the panels they paint aren't in this modal any more.
 function indOpenSetup() {
   document.getElementById('indSetupModal').style.display = '';
   const adm = document.getElementById('indAdminSection');
@@ -740,8 +745,6 @@ function indOpenSetup() {
   // to everyone would only offer an action that answers 403.
   if (adm) adm.style.display = (typeof _featuresIsAdmin !== 'undefined' && _featuresIsAdmin) ? '' : 'none';
   indLoadSlots();
-  indLoadBlueprints();
-  indLoadAssets();
 }
 
 // Replay the first-run setup screen on your own account. Admin-only, and only useful to an admin:
@@ -757,7 +760,7 @@ async function indResetOnboarding() {
   onIndustryTabOpen();      // re-runs the gate, which now renders the setup screen
 }
 
-// ── Stock on hand (ESI assets) ──────────────────────────────────────────────────────────────
+// ── Stock on hand (ESI assets) — Settings → Blueprints & formulas ───────────────────────────
 // Scanning assets makes plans subtract what you already own, and lets progress report "done"
 // without guessing a start date. Opt-in and manual — a full asset list is a heavy ESI call.
 // EVE tokens carry only the scopes granted at their last login, so characters connected before the
@@ -813,8 +816,9 @@ async function indLoadAssets() {
   try {
     const d = await api('/api/industry/assets');
     if (!d.connected) {
-      el.innerHTML = `<span class="ind-bp-hint">Tell the planner what you already own so it stops asking you to build it, `
-        + `and progress can tell what's finished.</span>`
+      el.innerHTML = `<span class="ind-bp-hint">Tell the planners what you already own — materials `
+        + `<b>and reaction formulas</b> — so they stop asking you to buy it, progress can tell `
+        + `what's finished, and the reaction concurrency cap knows how many formulas you have.</span>`
         + _indReauthHtml(d.needs_reauth)
         + `<div class="ind-src-actions">`
         + (d.scannable ? `<button class="ind-bp-btn ind-bp-connect" onclick="indRefreshAssets()">Scan assets</button>` : '')
@@ -846,7 +850,8 @@ async function indLoadAssets() {
       + `source${(d.sources || []).length === 1 ? '' : 's'} in use · ${d.distinct_types} item type${d.distinct_types === 1 ? '' : 's'} counted`
       + `${when ? ' · scanned ' + _esc(when) : ''}</span>`
       + `<button class="ind-bp-btn" onclick="indRefreshAssets()">Rescan</button></div>`
-      + `<p class="ind-src-help">Tick the hangars and containers the planner may take materials from. Nothing is used until you pick it.`
+      + `<p class="ind-src-help">Tick the hangars and containers the planners may take materials from. Nothing is used until you pick it.`
+      + ` Any <b>reaction formula</b> in a ticked source counts as one you own, and caps how many reaction jobs can run at once.`
       + (_featureActive('industry_plan_sources')
           ? ` A build with its own containers picked counts <b>those</b> and ignores this list — this is what everything else falls back on.` : '')
       + `</p>`
@@ -894,12 +899,19 @@ async function indRefreshCorpAssets() {
 
 // How corp/shared hangars get in: paste them. ESI can't read a corp hangar for ordinary members,
 // so pasting is the path that works for everyone, not a fallback.
+// It is also the ONLY way to declare a reaction formula held outside a character's personal
+// hangar — /characters/{id}/blueprints/ never returns those — and the copy used to say "materials"
+// throughout, so nobody found it. Formulas are named here on purpose; see test_formula_stock.py.
 function _indPasteFormHtml() {
   return `<div id="indPasteForm" class="ind-paste" style="display:none">
     <p class="ind-src-help">In the EVE client, open the hangar, select all (Ctrl+A), copy (Ctrl+C), paste below.
-      Works for any hangar you can see in game — including corp and shared hangars.</p>
-    <input type="text" id="indPasteName" placeholder="Name this stock — e.g. Corp hangar: Industry Materials">
-    <textarea id="indPasteText" rows="6" placeholder="Tritanium&#9;1 000 000&#10;Pyerite&#9;500 000"></textarea>
+      Works for any hangar you can see in game — including corp and shared hangars.
+      <b>Paste your reaction formulas too</b>: a formula in stock is how we know you own it, and
+      formulas found here cap how many reaction jobs can run at once — one formula, one job. ESI
+      only reports blueprints and formulas a character holds <i>personally</i>, so anything in a corp
+      or shared hangar has to arrive this way.</p>
+    <input type="text" id="indPasteName" placeholder="Name this stock — e.g. Corp hangar: Materials &amp; formulas">
+    <textarea id="indPasteText" rows="6" placeholder="Tritanium&#9;1 000 000&#10;Caesarium Cadmide Reaction Formula&#9;1"></textarea>
     <div class="ind-src-actions">
       <button class="ind-primary-btn" onclick="indSavePaste()">Add as stock</button>
       <button class="ind-bp-btn" onclick="indClosePaste()">Cancel</button>
@@ -975,10 +987,10 @@ async function indLoadBlueprints() {
   try {
     const d = await api('/api/industry/blueprints');
     if (d.connected) {
-      el.innerHTML = `<span class="ind-bp-ok">✓ ${d.owned_count} blueprint${d.owned_count === 1 ? '' : 's'} detected — using your real ME/TE</span>`
+      el.innerHTML = `<span class="ind-bp-ok">✓ ${d.owned_count} blueprint${d.owned_count === 1 ? '' : 's'} and reaction formula${d.owned_count === 1 ? '' : 's'} detected — using your real ME/TE</span>`
         + `<button class="ind-bp-btn" onclick="indRefreshBlueprints()">Refresh</button>`;
     } else {
-      el.innerHTML = `<span class="ind-bp-hint">Connect a character to auto-read your blueprints’ ME/TE and which BPOs you own — no manual entry.</span>`
+      el.innerHTML = `<span class="ind-bp-hint">Connect a character to auto-read the blueprints and reaction formulas it owns — their ME/TE and which BPOs you hold, with no manual entry.</span>`
         + `<button class="ind-bp-btn ind-bp-connect" onclick="indConnectBlueprints()">Connect blueprints</button>`;
     }
   } catch (e) { el.innerHTML = ''; }
@@ -993,10 +1005,11 @@ async function indRefreshBlueprints() {
   if (el) el.innerHTML = '<span class="ind-bp-hint">Reading blueprints…</span>';
   try { await apiSend('POST', '/api/industry/blueprints/refresh'); } catch (e) {}
   indLoadBlueprints();
+  indLoadSetupSummary();   // this panel now lives in Settings, so the tab's own summary needs telling
 }
 
 // ── Slot pool ───────────────────────────────────────────────────────────────────────────────
-// Mounted in two places — Setup & slots, and step 2 of the first-run wizard — so the markup lives
+// Mounted in two places — the Job slots modal, and step 2 of the first-run wizard — so the markup lives
 // in one function. Returns the loaded pool so a caller can react to it (the wizard warns when the
 // account has no usable slots at all).
 async function indLoadSlots(target) {

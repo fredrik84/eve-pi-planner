@@ -2860,7 +2860,12 @@ function openSettingsModal(section) {
   // and followed markets are account-wide, so show it to any logged-in user.
   const mktNav = document.getElementById('settingsNavMarkets');
   if (mktNav) mktNav.style.display = _loggedIn ? '' : 'none';
+  // Blueprints & formulas (shared by Reactions + Manufacturing) — what prints/formulas you own and
+  // which stock the planners may draw from is account-wide, same visibility rule as markets.
+  const bpNav = document.getElementById('settingsNavBlueprints');
+  if (bpNav) bpNav.style.display = _loggedIn ? '' : 'none';
   if (section === 'markets' && !_loggedIn) section = 'characters';
+  if (section === 'blueprints' && !_loggedIn) section = 'characters';
   // If the requested section is gated and not available, fall back to characters.
   if (section === 'plans' && !_loggedIn) section = 'characters';
   if (section === 'notifications' && !((_loggedIn && _featureActive('notifications')))) section = 'characters';
@@ -2895,6 +2900,11 @@ function settingsSection(name, doLoad) {
   // (industry gate, Reactions redirect, recommendation) goes through it; without this the market
   // manager stays stuck on "Loading…".
   if (name === 'markets') _loadMarketsSettings();
+  // Same "always load" reasoning as markets: openSettingsModal passes doLoad=false, and the
+  // Manufacturing/Reactions pointers jump straight here — without this both panels stay empty.
+  // The loaders live in industry.js and paint into #indBlueprints / #indAssets, which now sit in
+  // this section rather than the Job slots modal.
+  if (name === 'blueprints') _loadBlueprintsSettings();
   if (name === 'general') _loadGeneralSettings();
 }
 
@@ -2926,6 +2936,15 @@ function _loadMarketsSettings() {
   // _rxMountMarkets fetches the list itself when nothing has loaded it yet, so this no longer
   // needs a second _rxRefreshMarkets() alongside it (that fired two /api/markets calls per open).
   if (typeof _rxMountMarkets === 'function') _rxMountMarkets('settingsMarketsMgr');
+}
+
+// Blueprints & formulas settings — the ESI blueprint/formula read and the stock-source list,
+// relocated here from Manufacturing's Setup & slots modal so Reactions can reach them too (the
+// reaction concurrency cap reads exactly this stock). Reuses the industry.js loaders unchanged —
+// they render into #indBlueprints / #indAssets, which now live in this section.
+function _loadBlueprintsSettings() {
+  if (typeof indLoadBlueprints === 'function') indLoadBlueprints();
+  if (typeof indLoadAssets === 'function') indLoadAssets();
 }
 
 // General settings — local (per-browser) UI preferences, no backend. Currently just the silent

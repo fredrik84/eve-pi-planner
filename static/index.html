@@ -729,7 +729,7 @@
         <div class="ind-body">
           <div class="ind-setup-bar">
             <div id="indSetupSummary" class="ind-setup-summary"></div>
-            <button class="ind-secondary-btn" onclick="indOpenSetup()">Setup &amp; slots</button>
+            <button class="ind-secondary-btn" onclick="indOpenSetup()">Job slots</button>
           </div>
           <div id="indConnectReminder" class="ind-connect-reminder" style="display:none"></div>
           <div id="indShareBox" class="ind-share-box" style="display:none"></div>
@@ -742,7 +742,7 @@
         <div class="ind-body">
           <div class="ind-setup-bar" id="indSetupBarIdle">
             <div id="indSetupSummaryIdle" class="ind-setup-summary"></div>
-            <button class="ind-secondary-btn" onclick="indOpenSetup()">Setup &amp; slots</button>
+            <button class="ind-secondary-btn" onclick="indOpenSetup()">Job slots</button>
           </div>
           <div id="indLifetime" class="ind-lifetime"></div>
           <p class="pp-sub">Nothing building yet. Plan a product to see what it costs, what it needs
@@ -1171,6 +1171,10 @@ PVF-N9    3         95                 60             80                  100   
             <span class="settings-nav-ico">SM</span>
             <span class="settings-nav-lbl">Structures &amp; Markets</span>
           </button>
+          <button class="settings-nav-item" id="settingsNavBlueprints" onclick="settingsSection('blueprints')" style="display:none">
+            <span class="settings-nav-ico">BP</span>
+            <span class="settings-nav-lbl">Blueprints &amp; formulas</span>
+          </button>
           <button class="settings-nav-item" id="settingsNavAccount" onclick="settingsSection('account')" style="display:none">
             <span class="settings-nav-ico">AC</span>
             <span class="settings-nav-lbl">Account</span>
@@ -1188,6 +1192,26 @@ PVF-N9    3         95                 60             80                  100   
             <div class="settings-sec-hdr"><h3 class="settings-sec-title">Structures &amp; Markets</h3></div>
             <div class="settings-subsec-hint">The structures you manufacture and react in (their rigs set your ME &amp; TE), which markets to price against (your local / alliance markets first, Jita as fallback), and your jump-freight costs. Shared by the Reactions and Manufacturing planners.</div>
             <div id="settingsSecMarketsBody"><div class="pp-empty">Loading…</div></div>
+          </div>
+
+          <!-- Blueprints & formulas section (shared by Reactions + Manufacturing). Moved here out of
+               Manufacturing's "Setup & slots" modal, which was the ONLY place to declare a reaction
+               formula you own and was worded entirely as materials — so the reaction concurrency cap
+               it feeds was unreachable in practice. Same panels, same loaders (indLoadBlueprints /
+               indLoadAssets target these ids), reworded to name formulas. -->
+          <div id="settingsSecBlueprints" class="settings-section" style="display:none">
+            <div class="settings-sec-hdr"><h3 class="settings-sec-title">Blueprints &amp; formulas</h3></div>
+            <div class="settings-subsec-hint">What prints and reaction formulas you own, and which hangars the planners may take materials from. Shared by the Reactions and Manufacturing planners.</div>
+            <div class="settings-subsec">
+              <div class="settings-subsec-title">Read from ESI</div>
+              <div class="settings-subsec-hint">A connected character's own blueprints and reaction formulas, with their real ME &amp; TE. ESI returns <b>personal</b> items only — a formula sitting in a corp or shared hangar will not show up here, so add it as stock below.</div>
+              <div id="indBlueprints" class="ind-bp-row"></div>
+            </div>
+            <div class="settings-subsec">
+              <div class="settings-subsec-title">Stock on hand — materials <b>and reaction formulas</b></div>
+              <div class="settings-subsec-hint">The hangars, containers and pasted stacks the planners may draw from. Materials found here are subtracted from what a plan asks you to buy; <b>reaction formulas found here cap how many reaction jobs can run at once</b> — one formula, one job. If your formulas live in a corp or shared hangar, paste that hangar here: it is the only way to tell us about them.</div>
+              <div id="indAssets" class="ind-bp-row"></div>
+            </div>
           </div>
 
           <!-- Characters section -->
@@ -1467,7 +1491,7 @@ PVF-N9    3         95                 60             80                  100   
   </div>
 
   <!-- Reactions: settings modal (shipping/collateral/job-cost/time-efficiency) -->
-  <!-- Industry: setup & slots modal -->
+  <!-- Industry: job slots modal -->
   <div id="indOrderModal" class="pp-modal" style="display:none" onclick="if(event.target===this)indCloseOrder()">
     <div class="pp-modal-box" style="overflow-y:auto">
       <div class="pp-modal-title">Queue order
@@ -1557,38 +1581,35 @@ PVF-N9    3         95                 60             80                  100   
 
   <div id="indSetupModal" class="pp-modal" style="display:none" onclick="if(event.target===this)indCloseSetup()">
     <div class="pp-modal-box pp-modal-box-wide" style="overflow-y:auto">
-      <div class="pp-modal-title">Manufacturing setup &amp; slots
+      <div class="pp-modal-title">Job slots
         <button class="pp-modal-close" onclick="indCloseSetup()">✕</button>
       </div>
-      <div class="pp-modal-hint">Your manufacturing &amp; reaction job slots (from each character's skills), and connecting a character so the planner can read your real blueprints (ME/TE) and running jobs. Nothing here is required to plan — it just makes the numbers your own.</div>
-      <!-- Signpost, not a second form. Build structures live in Settings → Structures & Markets
-           (one pp_markets row is both "price from here" and "build here"); until this existed the
-           only pointer to them was the dismissible facility nudge, so anyone who dismissed it had
-           to guess which settings panel owned structures. -->
-      <div class="ind-modal-section">
-        <h3 class="ind-modal-h">Where you build</h3>
-        <p class="ind-src-help">A structure's rigs change the materials and time of every job. Pick
-          the closest preset in the plan form's <b>Facility</b> list, or describe the structure you
-          really build in — that lives in <b>Settings → Structures &amp; Markets</b>: search it, hit
-          <b>🔨</b>, turn on <b>Manufacture here</b> with its rig tiers.</p>
-        <div class="ind-src-actions">
-          <button class="ind-bp-btn" onclick="indCloseSetup();openSettingsModal('markets')">Add a build structure</button>
-        </div>
-      </div>
+      <div class="pp-modal-hint">Your manufacturing &amp; reaction job capacity, per character, read from their skills — plus any placeholder alts you declared slots for. This is the only tab-local setting; everything else your plans use is account-wide and lives in Settings.</div>
       <div class="ind-modal-section">
         <h3 class="ind-modal-h">Job slots</h3>
         <div id="indSlots" class="ind-slots"></div>
       </div>
+      <!-- Signposts, not second forms. Build structures live in Settings → Structures & Markets
+           (one pp_markets row is both "price from here" and "build here"), and blueprints, reaction
+           formulas and stock live in Settings → Blueprints & formulas — both shared with Reactions,
+           so neither belongs in a per-tab modal. -->
       <div class="ind-modal-section">
-        <h3 class="ind-modal-h">Blueprints &amp; jobs</h3>
-        <div id="indBlueprints" class="ind-bp-row"></div>
+        <h3 class="ind-modal-h">Set up in Settings</h3>
+        <p class="ind-src-help"><b>Where you build</b> — a structure's rigs change the materials and
+          time of every job — is under <b>Settings → Structures &amp; Markets</b>: search it, hit
+          <b>🔨</b>, turn on <b>Manufacture here</b> with its rig tiers.<br>
+          <b>Blueprints, reaction formulas and stock on hand</b> are under
+          <b>Settings → Blueprints &amp; formulas</b>, shared with the Reactions tab.</p>
+        <div class="ind-src-actions">
+          <button class="ind-bp-btn" onclick="indCloseSetup();openSettingsModal('markets')">Structures &amp; Markets</button>
+          <button class="ind-bp-btn" onclick="indCloseSetup();openSettingsModal('blueprints')">Blueprints &amp; formulas</button>
+        </div>
       </div>
-      <div class="ind-modal-section">
-        <h3 class="ind-modal-h">Stock on hand</h3>
-        <div id="indAssets" class="ind-bp-row"></div>
-      </div>
-      <div class="ind-modal-section">
-        <h3 class="ind-modal-h">Preview progress</h3>
+      <!-- Below the line: a demo toy and an admin tool. Kept working, kept out of the way — they
+           are not configuration and should not read as a step in setting the tab up. -->
+      <div style="border-top:1px solid var(--clr-border);margin:16px 0 8px"></div>
+      <details class="ind-modal-section">
+        <summary class="ind-modal-h" style="cursor:pointer">Preview progress</summary>
         <p class="ind-src-help">Haven't started building yet? Fill the queue's progress with example
           state to see how the pipeline, stage counters and queue bars look once jobs are running.
           Nothing is saved — your real numbers are untouched.</p>
@@ -1597,16 +1618,16 @@ PVF-N9    3         95                 60             80                  100   
           <input type="range" id="indSim" min="0" max="100" step="5" value="45" oninput="indSimInput()" onchange="indSimChange()" disabled>
           <span id="indSimPct" class="ind-src-meta">45% complete</span>
         </div>
-      </div>
+      </details>
       <!-- Admins only: replay the first-run setup screen. Anyone who has used this tab is marked
            set-up, so without this there is no way to see what a new user meets first. -->
-      <div class="ind-modal-section" id="indAdminSection" style="display:none">
-        <h3 class="ind-modal-h">Admin</h3>
+      <details class="ind-modal-section" id="indAdminSection" style="display:none">
+        <summary class="ind-modal-h" style="cursor:pointer">Admin</summary>
         <div class="ind-src-actions">
           <button class="ind-bp-btn" onclick="indResetOnboarding()">Replay first-run setup</button>
           <span id="indResetMsg" class="ind-src-meta">Shows the setup screen again on your own account.</span>
         </div>
-      </div>
+      </details>
     </div>
   </div>
 

@@ -652,7 +652,8 @@ part-way through setup as established on the next pod restart. `_indOnboarded` a
 That backfill has a side effect worth a control: nobody who has used the tab can ever see the screen
 again, including whoever has to check it. `POST /api/industry/onboarding/reset` (**`require_admin`**,
 and it only ever resets the CALLER's own account — it is a test affordance, not a tool over other
-users) replays it; the button is in Setup & slots, hidden unless `_featuresIsAdmin`. It writes
+users) replays it; the button is in the Job slots modal (folded under an **Admin** `<details>` below
+the divider), hidden unless `_featuresIsAdmin`. It writes
 `onboarded = 0` and **not NULL**, because the backfill claims NULL rows and would otherwise undo the
 reset at the next pod restart.
 
@@ -662,7 +663,7 @@ What first use still assumes:
 - **The build system comes from REACTIONS settings** (`account_build_defaults` → `reaction_system`),
   so a Reactions-less account quotes job fees light by the system cost index — warned by
   `_indCostBasisWarn`, which must link to **Structures & Markets** (where that field lives); it used
-  to open Setup & slots, which cannot set it.
+  to open the setup modal, which cannot set it.
 - **Slots need the skills scope AND Mass Production / Mass Reactions trained** (`_eligibility`).
   With neither trained the pools are 0, `schedule` starts nothing and the plan renders a 0h
   makespan with an empty checklist — not a crash, but it looks like one. The excluded characters
