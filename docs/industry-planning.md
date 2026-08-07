@@ -163,9 +163,23 @@ quantity, prefer)` — is the declaration layer, edited in **Settings → Bluepr
 the ESI panel (`/api/industry/manual-blueprints`, GET/POST/DELETE). Its encoding is the one
 `owned_blueprints` already used: **runs blank/-1 = a BPO**, anything else a BPC with that many runs;
 `quantity` expands into that many separate physical prints, exactly like an ESI stack.
+- **The library arrives by PASTE, one industry window per character.** Typing ~100 formulas one at a
+  time is not a usable path, and EVE's Industry → Blueprints window copies as exactly this data:
+  `[N x ]<name> TAB ME TAB TE TAB runs TAB category`. `parse_blueprint_paste` reads it (headers and
+  blank lines skipped, headers not required, category ignored, `N x ` a stack, **a repeated line a
+  separate physical print**, quantities summed per (product, ME, TE, runs), names resolved through
+  `types` + the shared `_blueprint_product_index`, anything unresolved reported not dropped);
+  `POST /api/industry/manual-blueprints/paste/preview` shows the counts without writing.
+  **Each paste is a NAMED BATCH** (`batch`/`batch_name` columns, key = a stable digest of the name —
+  not `hash()`, which is per-process randomised), modelled on `add_pasted_source`: re-pasting a name
+  replaces that batch and touches no other, so a second character's window cannot wipe the first's and
+  a re-paste cannot double a holding. Hand-typed rows carry `batch=''` and no paste may delete them.
+  `DELETE …/manual-blueprints/batches/{batch}` drops one batch.
 - **The merge rule is REPLACEMENT, per product**, documented in full in `owned_blueprints`'
   docstring. For a product with at least one declared print the declaration IS the holding and the
-  ESI reading for that product is dropped; other products are untouched. Not addition, because the
+  ESI reading for that product is dropped; other products are untouched. Batches SUM with each other
+  (they are different characters' windows), but the drop is account-wide for the product a batch
+  names — so a product two characters hold needs both windows pasted. The UI says so in one line. Not addition, because the
   two sources share no key a user can type (an ESI row's identity is its `item_id`, invisible in the
   client), so adding would double-count every re-typed print — silently and unboundedly. Replacement's
   failure is bounded and visible on the plan. It is also the rule a pasted hangar already gets.

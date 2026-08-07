@@ -122,6 +122,24 @@ decision (see `formula_print_floor` in `app/industry/blueprints.py`), not a bug.
 leave **runs blank for an original (BPO)** or type a run count for a copy, set how many you hold,
 *Add*. Then plan that product.
 
+**The fast path — paste the industry window.** One product at a time is unusable at ~100 formulas,
+so the same subsection takes a copy of EVE's own **Industry → Blueprints** window (Ctrl+A, Ctrl+C).
+*Preview* first: it reports how many formulas, how many blueprints, how many prints in total, across
+how many products, plus any name it could not place and any line it skipped — nothing is written
+until *Import*. A `4 x Name` line is four prints; **a repeated line is another physical print** (four
+identical Photonic Metamaterials lines are four formulas); `runs = -1` is a BPO and any other number
+a copy with that many runs; the trailing category column is ignored; the `Formulas:` / `Blueprints:`
+headers are optional.
+
+**One paste per character, named.** Each import is a **batch**: re-pasting under the same name
+replaces that batch (so re-pasting after buying or selling a print tracks it, and never doubles it),
+while every other character's batch and everything you typed in by hand stays put. Batches are listed
+above the typed rows with a print count and an ✕ that removes just that batch.
+
+**Bug if:** a second character's paste empties the first one's prints; re-pasting the same window
+doubles a holding; a stack prefix or a repeated line counts once; a paste deletes a row you typed in;
+or a paste that matched nothing reports success.
+
 **Expect:** the plan's `ME n · TE n` chip on that product reads **"the blueprint you declared by
 hand"** — not "from your own blueprint" and not "un-researched". Materials and job duration move to
 match the ME/TE you typed. Declared reaction formulas cap concurrent reactions exactly like owned
@@ -131,7 +149,9 @@ ones (one formula, one job). Removing the row puts the plan back where it was.
 copies and declare one, the plan believes you have one. This is deliberate (there is no id a user can
 type that would let the two be matched item by item, so adding would double-count every re-typed
 print); list every print of that product you intend to use. Products you do not declare are
-untouched. For the same reason a declared formula suppresses the paste/observed evidence for that
+untouched. **This crosses characters:** batches sum with each other, but for a product ANY batch
+names, every character's ESI-read copies of it are dropped — so if two of your characters hold the
+same print, paste both windows. For the same reason a declared formula suppresses the paste/observed evidence for that
 product — declaring three and pasting the same three is three, not six.
 
 **Prefer (the original / the copies):** only bites when you hold BOTH kinds of print for a product.

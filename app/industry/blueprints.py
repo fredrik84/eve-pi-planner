@@ -9,13 +9,15 @@ Cache-at-fetch like app/reactions' industry-jobs: store the raw filtered list pe
 fetched_at, refreshed on demand (a "Refresh blueprints" button), not polled. `owned_blueprints()`
 collapses the account's characters into one product→best-blueprint map the cost resolver consumes.
 """
+import hashlib as _hashlib
 import json as _json
 import logging
+import re as _re
 import time as _time
 from fastapi import Depends, HTTPException
 from pydantic import BaseModel
 
-from app.sde import get_connection, ensure_once
+from app.sde import get_connection, ensure_once, add_columns
 from app import esi_http
 from app.esi import require_context, BLUEPRINTS_SCOPE, CORP_INDUSTRY_JOBS_SCOPE
 
@@ -161,6 +163,11 @@ def ensure_manual_blueprints_table():
                 PRIMARY KEY (context_id, id)
             )
         """)
+        # Which PASTE a row came from — see `replace_blueprint_batch`. Empty = typed in one at a
+        # time on the form, which is why it is also the value every pre-existing row migrates to:
+        # a paste may never delete a row a person entered by hand.
+        add_columns(con, "pp_industry_blueprints",
+                    "batch TEXT DEFAULT ''", "batch_name TEXT DEFAULT ''")
         con.commit()
     finally:
         con.close()
@@ -704,6 +711,244 @@ def refresh_blueprints(context_id: int = Depends(require_context)):
         column="blueprints_json", fetch=fetch_character_blueprints)
 
 
+# ── The industry window, pasted ───────────────────────────────────────────────────────────────
+# Declaring prints one at a time is unusable at the scale a real builder has: ~100 reaction formulas
+# on one character and more on the others. EVE's own industry window copies to the clipboard as
+# exactly the data this table stores, so the whole library arrives in one paste:
+#
+#     [N x ]<name> TAB <ME> TAB <TE> TAB <runs> TAB <category>
+#
+# Nothing about the format needs translating — `runs = -1` is already this module's encoding for an
+# original, and the ME/TE columns are the numbers a corp-hangar print could otherwise not state.
+#
+# **Each paste is a NAMED BATCH, exactly like a pasted stock source** (`add_pasted_source` in
+# assets.py), and for the same reason: the user pastes ONCE PER CHARACTER. A paste that replaced the
+# whole library would wipe the previous character's prints; one that appended would double the
+# holding the moment the same window is pasted again after buying a print. Replacing only its own
+# batch is the rule that survives both.
+
+_STACK_RE = _re.compile(r"^(\d[\d,]*)\s*[x×]\s+(.+)$", _re.IGNORECASE)
+
+_PASTE_BATCH_DEFAULT = "Industry window"
+
+
+def _batch_key(label: str) -> str:
+    """A stable id for a batch NAME, so re-pasting the same window replaces it.
+
+    Deliberately a digest and not `hash()`: Python randomises string hashing per process, so a
+    key built that way silently stops matching after a pod restart — which for this feature would
+    mean a second copy of every print rather than a replacement.
+    """
+    norm = (label or "").strip().lower() or _PASTE_BATCH_DEFAULT.lower()
+    return "paste:" + _hashlib.sha1(norm.encode("utf-8")).hexdigest()[:16]
+
+
+def _parse_paste_line(line: str) -> dict | None:
+    """One industry-window row → `{name, me, te, runs, quantity}`, or None if it is not one.
+
+    None covers the section headers (`Formulas:`, `Blueprints:`) and anything else pasted along with
+    the window: they are counted and reported, never guessed at. A real row is tab-separated and its
+    second column is the ME number, which is the cheapest test that a header can never pass.
+    """
+    parts = [p.strip() for p in line.split("\t")]
+    if len(parts) < 2 or not parts[0]:
+        return None
+
+    def _num(idx: int, dflt: int) -> int | None:
+        if idx >= len(parts) or parts[idx] == "":
+            return dflt
+        try:
+            return int(float(parts[idx].replace(",", "").replace(" ", "")))
+        except ValueError:
+            return None
+
+    me = _num(1, None)
+    if me is None:
+        return None                      # column 2 is not a number — not an industry-window row
+    te, runs = _num(2, 0), _num(3, -1)
+    if te is None or runs is None:
+        return None
+    name, qty = parts[0], 1
+    m = _STACK_RE.match(name)
+    if m:
+        # "4 x Nanotransistors Reaction Formula" — a STACK of four separate physical prints. Names
+        # that merely start with a digit ("1MN Afterburner I Blueprint") do not match: the x and the
+        # space after it are required.
+        try:
+            qty = max(1, int(m.group(1).replace(",", "")))
+        except ValueError:
+            qty = 1
+        name = m.group(2).strip()
+    return {"name": name, "me": me, "te": te, "runs": runs, "quantity": qty}
+
+
+def parse_blueprint_paste(text: str) -> dict:
+    """A copied EVE industry window → the rows `pp_industry_blueprints` stores, plus what was not
+    understood. Pure: reads the SDE, writes nothing, so the preview and the import see one answer.
+
+    Grouping: **a repeated line is a separate physical print.** The window lists one line per item,
+    so four identical `Photonic Metamaterials Reaction Formula` lines are four formulas, and the
+    stack prefix multiplies each. Quantities are summed per (product, ME, TE, runs) — prints that
+    differ in research are genuinely different prints and stay separate rows.
+
+    Names resolve through the SDE `types` table and then `_blueprint_product_index()`, the same index
+    the ESI reader uses, so a declared print files under the product a plan actually asks about.
+    Anything unresolved is REPORTED: a paste that matched nothing is almost always the wrong window,
+    and dropping it silently would leave the user staring at an unchanged list.
+    """
+    parsed: list[dict] = []
+    ignored: list[str] = []
+    for raw in (text or "").splitlines():
+        line = raw.rstrip()
+        if not line.strip():
+            continue
+        row = _parse_paste_line(line)
+        if row is None:
+            ignored.append(line.strip())
+            continue
+        parsed.append(row)
+
+    empty = {"entries": [], "unknown": [], "no_product": [], "ignored": ignored,
+             "prints": 0, "formulas": 0, "blueprints": 0, "products": 0, "lines": len(parsed)}
+    if not parsed:
+        return empty
+
+    con = get_connection()
+    try:
+        lookup: dict[str, int] = {}
+        names = sorted({r["name"] for r in parsed})
+        for i in range(0, len(names), 400):
+            chunk = names[i:i + 400]
+            marks = ",".join("?" * len(chunk))
+            for r in con.execute(
+                f"SELECT type_id, name FROM types WHERE LOWER(name) IN ({marks})",
+                tuple(n.lower() for n in chunk),
+            ).fetchall():
+                lookup[r["name"].lower()] = int(r["type_id"])
+        bp2prod = _blueprint_product_index(con)
+        try:
+            formula_ids = {int(r["reaction_id"])
+                           for r in con.execute("SELECT reaction_id FROM reactions")}
+        except Exception:
+            formula_ids = set()          # a manufacturing-only SDE knows no formulas; cosmetic only
+    finally:
+        con.close()
+
+    groups: dict[tuple, dict] = {}
+    unknown: list[str] = []
+    no_product: list[str] = []
+    for r in parsed:
+        tid = lookup.get(r["name"].lower())
+        if tid is None:
+            if r["name"] not in unknown:
+                unknown.append(r["name"])
+            continue
+        prod = bp2prod.get(tid)
+        if prod is None:
+            # A real item that this SDE cannot turn into a product — a blueprint for something we
+            # do not know how to build. Filing it under itself would invent a product no plan asks
+            # for, so it is reported instead.
+            if r["name"] not in no_product:
+                no_product.append(r["name"])
+            continue
+        me = max(0, min(10, int(r["me"])))
+        te = max(0, min(20, int(r["te"])))
+        runs = -1 if int(r["runs"]) < 0 else int(r["runs"])
+        key = (int(prod), me, te, runs)
+        g = groups.setdefault(key, {
+            "product_type_id": int(prod), "name": r["name"], "me": me, "te": te, "runs": runs,
+            "quantity": 0, "kind": "bpo" if runs < 0 else "bpc",
+            "formula": tid in formula_ids,
+        })
+        g["quantity"] += int(r["quantity"])
+
+    entries = list(groups.values())
+    for e in entries:
+        e["quantity"] = min(e["quantity"], _STACK_CAP)
+    return {"entries": entries, "unknown": unknown, "no_product": no_product, "ignored": ignored,
+            "prints": sum(e["quantity"] for e in entries),
+            "formulas": sum(e["quantity"] for e in entries if e["formula"]),
+            "blueprints": sum(e["quantity"] for e in entries if not e["formula"]),
+            "products": len({e["product_type_id"] for e in entries}),
+            "lines": len(parsed)}
+
+
+def replace_blueprint_batch(context_id: int, name: str, text: str) -> dict:
+    """Import one pasted industry window as a named batch, REPLACING that batch and nothing else.
+
+    Re-pasting the same window after buying a print updates it; pasting a second character's window
+    under its own name adds to the library beside the first. Rows typed in on the form carry an
+    empty batch and are never touched by any paste.
+    """
+    ensure_manual_blueprints_table()
+    res = parse_blueprint_paste(text)
+    label = (name or "").strip() or _PASTE_BATCH_DEFAULT
+    key = _batch_key(label)
+    if not res["entries"]:
+        res.update({"added": 0, "batch": key, "name": label,
+                    "error": "unrecognized" if (res["unknown"] or res["no_product"]) else "empty"})
+        return res
+
+    con = get_connection()
+    try:
+        # The BPO-vs-BPC choice is a property of the PRODUCT (see `edit_manual_blueprint`), so a
+        # paste must carry forward one the user already made rather than blanking it.
+        prefer = {int(r["type_id"]): str(r["prefer"] or "") for r in con.execute(
+            "SELECT type_id, prefer FROM pp_industry_blueprints WHERE context_id=? AND prefer<>''",
+            (context_id,)).fetchall()}
+        con.execute("DELETE FROM pp_industry_blueprints WHERE context_id=? AND batch=?",
+                    (context_id, key))
+        nxt = int(con.execute("SELECT COALESCE(MAX(id), 0) + 1 AS n FROM pp_industry_blueprints "
+                              "WHERE context_id=?", (context_id,)).fetchone()["n"])
+        now = _time.time()
+        for e in res["entries"]:
+            con.execute(
+                "INSERT INTO pp_industry_blueprints (context_id, id, type_id, me, te, runs, "
+                "quantity, prefer, updated_at, batch, batch_name) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (context_id, nxt, e["product_type_id"], e["me"], e["te"], e["runs"],
+                 e["quantity"], prefer.get(e["product_type_id"], ""), now, key, label))
+            nxt += 1
+        con.commit()
+    finally:
+        con.close()
+    res.update({"added": res["prints"], "batch": key, "name": label})
+    return res
+
+
+def list_blueprint_batches(context_id: int) -> list[dict]:
+    """The pasted batches this account holds — one per character's window, in practice."""
+    ensure_manual_blueprints_table()
+    con = get_connection()
+    try:
+        rows = con.execute(
+            "SELECT COALESCE(batch,'') AS batch, COALESCE(batch_name,'') AS batch_name, "
+            "COUNT(*) AS rows_n, SUM(quantity) AS prints, COUNT(DISTINCT type_id) AS products "
+            "FROM pp_industry_blueprints WHERE context_id=? AND COALESCE(batch,'')<>'' "
+            "GROUP BY COALESCE(batch,''), COALESCE(batch_name,'') ORDER BY batch_name",
+            (context_id,)).fetchall()
+    except Exception:
+        return []
+    finally:
+        con.close()
+    return [{"batch": r["batch"], "name": r["batch_name"] or _PASTE_BATCH_DEFAULT,
+             "rows": int(r["rows_n"] or 0), "prints": int(r["prints"] or 0),
+             "products": int(r["products"] or 0)} for r in rows]
+
+
+def delete_blueprint_batch(context_id: int, batch: str) -> None:
+    """Drop one pasted batch. Every other batch, and everything typed in by hand, stays."""
+    ensure_manual_blueprints_table()
+    if not (batch or "").strip():
+        return                            # '' is the hand-typed rows — never deletable in bulk
+    con = get_connection()
+    try:
+        con.execute("DELETE FROM pp_industry_blueprints WHERE context_id=? AND batch=?",
+                    (context_id, batch))
+        con.commit()
+    finally:
+        con.close()
+
+
 class ManualBlueprintEdit(BaseModel):
     """One hand-declared print. `runs` absent/None = a BPO — the encoding `owned_blueprints` already
     uses internally (`runs = -1` for an original), so there is no second convention to learn.
@@ -728,7 +973,8 @@ def _manual_payload(context_id: int) -> dict:
     con = get_connection()
     try:
         rows = [dict(r) for r in con.execute(
-            "SELECT id, type_id, me, te, runs, quantity, prefer FROM pp_industry_blueprints "
+            "SELECT id, type_id, me, te, runs, quantity, prefer, COALESCE(batch,'') AS batch, "
+            "COALESCE(batch_name,'') AS batch_name FROM pp_industry_blueprints "
             "WHERE context_id=? ORDER BY id", (context_id,)).fetchall()]
         ids = {int(r["type_id"]) for r in rows}
         names = {}
@@ -741,7 +987,8 @@ def _manual_payload(context_id: int) -> dict:
     for r in rows:
         r["name"] = names.get(int(r["type_id"]), f"Type {r['type_id']}")
         r["kind"] = "bpo" if int(r["runs"] or -1) < 0 else "bpc"
-    return {"enabled": _manual_enabled(context_id), "entries": rows}
+    return {"enabled": _manual_enabled(context_id), "entries": rows,
+            "batches": list_blueprint_batches(context_id)}
 
 
 @router.get("/api/industry/manual-blueprints")
@@ -794,6 +1041,41 @@ def edit_manual_blueprint(req: ManualBlueprintEdit, context_id: int = Depends(re
         con.commit()
     finally:
         con.close()
+    return _manual_payload(context_id)
+
+
+class BlueprintPaste(BaseModel):
+    """A copied industry window, and the name of the batch it becomes. One window per character —
+    the name is what keeps a second character's paste from replacing the first one's."""
+    name: str = ""
+    text: str
+
+
+@router.post("/api/industry/manual-blueprints/paste/preview")
+def preview_manual_blueprint_paste(req: BlueprintPaste,
+                                   context_id: int = Depends(require_context)):
+    """What this paste WOULD declare — counts, and every name we could not place. Nothing is
+    written. Same parse the import runs, so the preview cannot promise a different import."""
+    if not _manual_enabled(context_id):
+        raise HTTPException(status_code=403, detail="feature not enabled")
+    return parse_blueprint_paste(req.text)
+
+
+@router.post("/api/industry/manual-blueprints/paste")
+def import_manual_blueprint_paste(req: BlueprintPaste,
+                                  context_id: int = Depends(require_context)):
+    """Import a pasted industry window as a named batch, replacing that batch only."""
+    if not _manual_enabled(context_id):
+        raise HTTPException(status_code=403, detail="feature not enabled")
+    res = replace_blueprint_batch(context_id, req.name, req.text)
+    return {**_manual_payload(context_id), "imported": res}
+
+
+@router.delete("/api/industry/manual-blueprints/batches/{batch}")
+def delete_manual_blueprint_batch(batch: str, context_id: int = Depends(require_context)):
+    """Drop one pasted batch — the other characters' batches and the hand-typed rows survive.
+    Not flag-gated, for the same reason deleting a single row isn't."""
+    delete_blueprint_batch(context_id, batch)
     return _manual_payload(context_id)
 
 

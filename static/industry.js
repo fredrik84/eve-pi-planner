@@ -1024,7 +1024,15 @@ async function indLoadManualBps() {
   sec.style.display = '';
   let d = null;
   try { d = await api('/api/industry/manual-blueprints'); } catch (e) { el.innerHTML = ''; return; }
-  const rows = (d.entries || []).map(e => {
+  // Batch rows are summarised, not listed one by one: a pasted industry window is a hundred-odd
+  // prints and a list that long buries the handful someone typed in themselves.
+  const batches = (d.batches || []).map(b =>
+    `<div class="ind-src-row"><span class="ind-src-name">${_esc(b.name)}</span>`
+    + `<span class="ind-src-meta">pasted · ${b.prints} print${b.prints === 1 ? '' : 's'}`
+    + ` · ${b.products} product${b.products === 1 ? '' : 's'}</span>`
+    + `<button class="ind-src-del" title="Remove this pasted batch"`
+    + ` onclick="indDeleteManualBpBatch('${_esc(b.batch)}')">✕</button></div>`).join('');
+  const rows = (d.entries || []).filter(e => !e.batch).map(e => {
     const runs = e.kind === 'bpo' ? 'original (BPO)' : `${e.runs} run${e.runs === 1 ? '' : 's'}`;
     const pref = e.prefer === 'bpo' ? ' · use the original'
       : e.prefer === 'bpc' ? ' · use the copies' : '';
@@ -1036,7 +1044,9 @@ async function indLoadManualBps() {
       + `<button class="ind-src-del" title="Remove this declaration"`
       + ` onclick="indDeleteManualBp(${e.id})">✕</button></div>`;
   }).join('');
-  el.innerHTML = `<div class="ind-src-list">${rows || '<span class="ind-bp-hint">Nothing declared yet.</span>'}</div>`
+  const list = batches + rows;
+  el.innerHTML = `<div class="ind-src-list">${list || '<span class="ind-bp-hint">Nothing declared yet.</span>'}</div>`
+    + _indBpPasteFormHtml()
     + `<div class="ind-manual-bp-add">`
     + `<input id="indManualBpSearch" class="bug-input" placeholder="Product (e.g. Nitrogen Fuel Block)"`
     + ` autocomplete="off" oninput="indManualBpSearch(this.value)">`
@@ -1054,6 +1064,86 @@ async function indLoadManualBps() {
     + `<button onclick="indSaveManualBp(this)">Add</button>`
     + `<span id="indManualBpMsg" class="bug-status-msg"></span></div>`;
   _indManualPick = null;
+}
+
+// Pasting the industry window, which is how a real library arrives — one at a time is unusable at
+// ~100 formulas per character. One paste per character, named: re-pasting a name replaces THAT
+// batch and leaves the others alone (same model as a pasted stock source).
+function _indBpPasteFormHtml() {
+  return `<div class="ind-paste">
+    <p class="ind-src-help">Or paste a whole industry window: in the EVE client open <b>Industry →
+      Blueprints</b>, select all (Ctrl+A), copy (Ctrl+C), paste below. <b>One paste per character</b>
+      — name it after that character, and re-pasting the same name updates just that batch and
+      leaves your other characters' alone.
+      <b>Note:</b> for any product a paste declares, the plan uses the declaration <i>instead of</i>
+      what ESI read for it — including copies on your other characters — so paste those characters'
+      windows too.</p>
+    <input type="text" id="indBpPasteName" placeholder="Name this batch — e.g. Main's industry window">
+    <textarea id="indBpPasteText" rows="6" placeholder="Formulas:&#10;4 x Nanotransistors Reaction Formula&#9;0&#9;0&#9;-1&#9;Composite&#10;Amarr Shuttle Blueprint&#9;10&#9;20&#9;-1&#9;Shuttle"></textarea>
+    <div class="ind-src-actions">
+      <button class="ind-bp-btn" onclick="indPreviewManualBpPaste()">Preview</button>
+      <button class="ind-primary-btn" onclick="indImportManualBpPaste()">Import</button>
+      <span id="indBpPasteMsg" class="ind-src-meta"></span>
+    </div>
+  </div>`;
+}
+
+// One sentence for both the preview and the result, so what the import reports can never read as a
+// different answer from what the preview promised.
+function _indBpPasteSummary(d) {
+  const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+  const bits = [`${plural(d.formulas || 0, 'formula')}, ${plural(d.blueprints || 0, 'blueprint')}`
+    + ` — ${plural(d.prints || 0, 'print')} across ${plural(d.products || 0, 'product')}`];
+  const un = (d.unknown || []).concat(d.no_product || []);
+  if (un.length) {
+    bits.push(`${plural(un.length, 'name')} not recognised: ${un.slice(0, 5).join(', ')}`
+      + (un.length > 5 ? '…' : ''));
+  }
+  if ((d.ignored || []).length) bits.push(`${plural(d.ignored.length, 'line')} skipped`);
+  return bits.join(' · ') + '.';
+}
+
+async function indPreviewManualBpPaste() {
+  const text = (document.getElementById('indBpPasteText') || {}).value || '';
+  const msg = document.getElementById('indBpPasteMsg');
+  if (!text.trim()) { if (msg) msg.textContent = 'Paste something first.'; return; }
+  if (msg) msg.textContent = 'Reading…';
+  try {
+    const d = (await apiSend('POST', '/api/industry/manual-blueprints/paste/preview',
+      { name: '', text })) || {};
+    if (msg) {
+      msg.textContent = (d.prints ? 'Will declare ' : 'Nothing to declare — ') + _indBpPasteSummary(d);
+    }
+  } catch (e) { if (msg) msg.textContent = String(e.message || e); }
+}
+
+async function indImportManualBpPaste() {
+  const name = (document.getElementById('indBpPasteName') || {}).value || '';
+  const text = (document.getElementById('indBpPasteText') || {}).value || '';
+  const msg = document.getElementById('indBpPasteMsg');
+  if (!text.trim()) { if (msg) msg.textContent = 'Paste something first.'; return; }
+  if (msg) msg.textContent = 'Importing…';
+  let d = null;
+  try {
+    d = (await apiSend('POST', '/api/industry/manual-blueprints/paste', { name, text })) || {};
+  } catch (e) { if (msg) msg.textContent = String(e.message || e); return; }
+  const r = d.imported || {};
+  await indLoadManualBps();       // repaints the panel, so the note has to be written after it
+  const m2 = document.getElementById('indBpPasteMsg');
+  if (m2) {
+    m2.textContent = r.error === 'empty' ? 'Nothing readable in that paste.'
+      : r.error === 'unrecognized' ? "Couldn't match any blueprint names. " + _indBpPasteSummary(r)
+        : `Imported "${r.name}" — ` + _indBpPasteSummary(r);
+  }
+  indLoadQueue();                 // a declared print moves both the ME/TE and the print cap
+}
+
+async function indDeleteManualBpBatch(batch) {
+  try {
+    await apiSend('DELETE', '/api/industry/manual-blueprints/batches/' + encodeURIComponent(batch));
+  } catch (e) {}
+  indLoadManualBps();
+  indLoadQueue();
 }
 
 async function indManualBpSearch(q) {
