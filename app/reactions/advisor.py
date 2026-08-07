@@ -35,7 +35,7 @@ from app.reactions.settings import effective_reaction_settings
 from app.reactions.jobs import (
     ensure_industry_jobs_table, ensure_reaction_assignments_table,
     get_industry_jobs, reaction_capable, reaction_slots, _character_capacities,
-    formula_concurrency_caps, _cap_jobs,
+    formula_concurrency_caps, _cap_jobs, _parallel_stages_on,
 )
 
 log = logging.getLogger(__name__)
@@ -143,6 +143,9 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
     # formula is locked into the reactor while a job runs on it. Sparse: a product with no key is a
     # product we have no evidence about, and is never capped (see formula_concurrency_caps).
     formula_caps = formula_concurrency_caps(context_id)
+    # One slot model (`reactions_parallel_stages`): a chain's stages reuse each other's slots, and
+    # whatever is still idle once every suggestion is placed gets spent widening the slowest steps.
+    peak_stages = _parallel_stages_on(context_id)
     committed_units = _committed_production_units()
     # Real daily traded volume (Jita/The Forge) per candidate — the market-absorption base. How much
     # you can realistically sell over the run period is trade VELOCITY × the period, not a single
@@ -281,6 +284,10 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
     touched_chars: set[int] = set()
 
     suggestions = []
+    # Every step (top-level products AND chain tiers) with the character it landed on, for the
+    # idle-slot pass below — collected here rather than reconstructed afterwards, so a step can't
+    # be left out of the widening while being in the plan.
+    widen_steps: list[dict] = []
     formula_capped: list[str] = []      # products running in fewer jobs than the slots would allow
     isk_committed = net_profit = total_output_value = total_output_m3 = 0.0
     max_completion_hours = 0.0
@@ -340,22 +347,42 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
         if top_via:
             # Deepest (closest to raw goo) first — the one the player must react first.
             ordered = _ordered_chain_tiers(top_via["inputs"], runs_needed, reached)
+            # Slots this suggestion is holding at its BUSIEST moment. A tier reuses the slots the
+            # tier below it has finished with, so what a chain costs the character is the worst
+            # tier, not the sum — the same model the assign guard commits under
+            # (`_concurrent_load`). Subtracting every tier separately (the old behaviour) charged a
+            # 3-stage chain three slots for work that never overlaps, and the character then looked
+            # full to every suggestion after it.
+            peak_used = slots_used
             for tid, info in ordered:
                 t_cycle_hours = info["cycle_time"] / 3600.0 if info["cycle_time"] else 1.0
                 t_ideal_slots = max(1, math.ceil(info["runs"] * t_cycle_hours / cadence_hours)) if cadence_hours > 0 else info["runs"]
                 # Each tier against its OWN formula count. Never across tiers: tier 0 has finished
                 # before tier 1 starts, so one formula can legitimately serve both.
                 t_cap = formula_caps.get(tid)
-                t_slots_used = max(1, min(_cap_jobs(t_cap, t_ideal_slots), remaining_slots.get(pick_id, 0)))
-                remaining_slots[pick_id] = remaining_slots.get(pick_id, 0) - t_slots_used
+                # A tier may use the slots this suggestion already reserved for its other tiers,
+                # so its ceiling is what's left PLUS that reservation.
+                headroom = remaining_slots.get(pick_id, 0) + peak_used if peak_stages else remaining_slots.get(pick_id, 0)
+                t_slots_used = max(1, min(_cap_jobs(t_cap, t_ideal_slots), headroom))
+                if peak_stages:
+                    remaining_slots[pick_id] = remaining_slots.get(pick_id, 0) - max(0, t_slots_used - peak_used)
+                    peak_used = max(peak_used, t_slots_used)
+                else:
+                    remaining_slots[pick_id] = remaining_slots.get(pick_id, 0) - t_slots_used
                 if t_cap and t_cap < t_ideal_slots:
                     formula_capped.append(types.get(tid, {}).get("name", str(tid)))
-                chain_tiers.append({
+                tier_row = {
                     "type_id": tid, "name": types.get(tid, {}).get("name", str(tid)),
                     "runs": info["runs"],
                     "job_count": t_slots_used,
                     "runs_per_job": math.ceil(info["runs"] / t_slots_used),
                     "formula_cap": t_cap,
+                }
+                chain_tiers.append(tier_row)
+                widen_steps.append({
+                    "character_id": pick_id, "tier": len(chain_tiers) - 1, "runs": info["runs"],
+                    "cycle_hours": t_cycle_hours, "jobs": t_slots_used, "cap": t_cap,
+                    "row": tier_row,
                 })
 
         cost = c["input_cost"] * xi
@@ -388,7 +415,7 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
         # exact gap by suggesting more spend to fill the whole window).
         profit_per_day = round(reward / (cadence_hours / 24), 2) if cadence_hours > 0 else None
 
-        suggestions.append({
+        top_row = {
             "type_id": c["type_id"], "name": c["name"],
             "runs": runs_needed,
             "job_count": slots_used,
@@ -428,9 +455,33 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
             # the job count down — so the UI can say WHY ten free slots are being used as one,
             # rather than leaving it looking broken. None = not capped / nothing known.
             "formula_cap": capped_by_formula,
+        }
+        suggestions.append(top_row)
+        # The top-level product's own tier sits ABOVE every chain tier (same numbering the assign
+        # path stores as `tier_order`), so widening it competes only with other suggestions' top
+        # tiers on this character, not with its own intermediates.
+        widen_steps.append({
+            "character_id": pick_id, "tier": len(chain_tiers), "runs": runs_needed,
+            "cycle_hours": cycle_hours, "jobs": slots_used, "cap": f_cap, "row": top_row,
         })
         if capped_by_formula:
             formula_capped.append(c["name"])
+
+    # Reactors nobody claimed are reactors doing nothing while a chain waits on one job. Hand them
+    # to the steps that finish soonest for it (`_widen_to_idle_slots`), then write the new job
+    # counts back onto the rows the player actually installs. Runs, cost and profit are untouched —
+    # this only splits the same work across more reactors, so the batch lands sooner.
+    widened = _widen_to_idle_slots(widen_steps, remaining_slots) if peak_stages else 0
+    if widened:
+        max_completion_hours = 0.0
+        for s in widen_steps:
+            row, jobs = s["row"], s["jobs"]
+            row["job_count"] = jobs
+            row["runs_per_job"] = math.ceil(s["runs"] / jobs)
+        for s in widen_steps:
+            if "reward" in s["row"]:            # a top-level suggestion, not a chain tier
+                s["row"]["runtime_hours"] = round((s["runs"] / s["jobs"]) * s["cycle_hours"], 1)
+                max_completion_hours = max(max_completion_hours, (s["runs"] / s["jobs"]) * s["cycle_hours"])
 
     # Built in allocation order (smallest slot-need first, see alloc_order above) — restore
     # profit-descending order for display, matching what the LP itself ranked as most valuable.
@@ -468,6 +519,9 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
             # Names of the products (and chain tiers) whose job count was held down by how many
             # formulas the account holds rather than by free slots — one UI line's worth of "why".
             "formula_capped": formula_capped,
+            # Extra jobs handed to otherwise-idle reactors so a step finishes sooner. Reported so
+            # the extra job counts read as a deliberate choice rather than the tool overbooking.
+            "idle_slots_used": widened,
         },
     }
 
@@ -479,6 +533,71 @@ class SuggestRequest(BaseModel):
     material_ids: list[int] | None = None  # None/empty = no restriction, every priced material usable
     absorb_fraction: float | None = None  # None = default _ABSORB_FRACTION; the "fill more of the buy
     # book" advisor Apply raises it to unlock a depth-bound product. Clamped to (0, 1] server-side.
+
+
+def _widen_to_idle_slots(steps: list[dict], free_by_char: dict[int, int]) -> int:
+    """Spend reactors that would otherwise sit idle on the steps that finish soonest for it.
+
+    A step is `{character_id, tier, runs, cycle_hours, jobs, cap}` and is MUTATED in place: only
+    `jobs` moves. Returns how many extra jobs were handed out.
+
+    Why this exists: every step is sized to finish inside the CADENCE window
+    (`ceil(runs x cycle / cadence)`), which is the right question for "how much work fits" and the
+    wrong one for "how fast does it finish". A 3-stage chain sized that way runs one reactor at a
+    time for three cadence windows while seven sit empty — and because the stages are sequential,
+    the wait is the whole chain's, not one step's. So once every suggestion has a home, whatever
+    capacity is STILL idle goes to whichever step the extra job helps most.
+
+    Three rules keep this honest:
+
+      * **Idle capacity only.** It runs after allocation, so it can never take a slot from a
+        suggestion that wanted one. Nothing here changes runs, cost, profit or what gets suggested
+        — only how many jobs one step is split across, and therefore when it finishes.
+      * **Slots are counted per TIER**, like everywhere else: a character's load is its worst tier,
+        so widening a tier that is not the busiest one is free and costs no idle slot at all.
+      * **Never past the formulas held** (`cap`), and never more jobs than runs — a job needs a
+        formula to install on and at least one run to do.
+    """
+    handed_out = 0
+    by_char: dict[int, list[dict]] = {}
+    for s in steps:
+        by_char.setdefault(s["character_id"], []).append(s)
+
+    def _hours(s, jobs):
+        return math.ceil(s["runs"] / max(1, jobs)) * s["cycle_hours"]
+
+    for cid, own in by_char.items():
+        idle = max(0, int(free_by_char.get(cid, 0)))
+        # NOT `while idle > 0`: widening a tier below the busiest one costs no idle reactor at all
+        # (it fits inside slots this character is already holding for its peak tier), and that is
+        # worth doing on a character with nothing spare. The loop still terminates — every pass
+        # either adds a job, bounded by runs and the formula cap, or breaks.
+        while True:
+            load: dict[int, int] = {}
+            for s in own:
+                load[s["tier"]] = load.get(s["tier"], 0) + s["jobs"]
+            peak = max(load.values(), default=0)
+            best, best_gain, best_cost = None, 0.0, 0
+            for s in own:
+                cap = s.get("cap")
+                if s["jobs"] >= s["runs"] or (cap and s["jobs"] >= cap):
+                    continue
+                # A tier below the peak has room inside slots the character is already holding, so
+                # widening it costs nothing; only pushing the busiest tier higher spends an idle
+                # reactor.
+                cost = 1 if load[s["tier"]] + 1 > peak else 0
+                if cost > idle:
+                    continue
+                gain = _hours(s, s["jobs"]) - _hours(s, s["jobs"] + 1)
+                # Free widening wins ties: it buys time back without spending capacity.
+                if gain > best_gain or (gain == best_gain and gain > 0 and cost < best_cost):
+                    best, best_gain, best_cost = s, gain, cost
+            if best is None or best_gain <= 0:
+                break
+            best["jobs"] += 1
+            handed_out += 1
+            idle -= best_cost
+    return handed_out
 
 
 _BUDGET_SENSITIVITY_STEP = 0.10  # "what if you raised your ISK budget by 10%?"

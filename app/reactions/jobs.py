@@ -451,13 +451,34 @@ def _assigned_slot_capacity(con, character_id: int) -> int:
         return 0
 
 
-def _concurrent_load(rows: list[dict], adding: dict[int, int]) -> int:
+def _parallel_stages_on(context_id: int) -> bool:
+    """Gate for ONE slot model (`reactions_parallel_stages`). Off ⇒ `_character_capacities` and the
+    dashboard count every planned row against the pool exactly as they always did.
+
+    Why a flag for what is arguably a bug fix: it makes free-slot counts BIGGER, so the wizard and
+    customer orders will schedule more work per character. That is the point, and it is also a
+    planning-behaviour change on live accounts — CLAUDE.md rule 2.
+    """
+    try:
+        from app.features import feature_enabled_for
+        return feature_enabled_for("reactions_parallel_stages", context_id)
+    except Exception:
+        return False
+
+
+def _concurrent_load(rows: list[dict], adding: dict[int, int] | None = None) -> int:
     """Peak slots a character's plan actually occupies at once.
 
     **Chain tiers are SEQUENTIAL** — tier 0 must finish before tier 1 can start — so counting every
     row against the slot pool would reject legitimate deep chains that never run simultaneously.
     What competes for slots is everything sharing a tier_order, so the load is the WORST tier, not
     the sum. `adding` is {tier_order: rows} for the assignment being considered.
+
+    **This is THE slot model** — the assign guard, `_character_capacities` and the dashboard's own
+    free-slot count all go through it. They used not to: the guard counted the worst tier while the
+    other two counted every row, so a 3-stage chain of one job each was authorised as needing one
+    slot and then reported as occupying three, and the allocators that read those numbers quietly
+    planned less work than the account had reactors for.
     """
     per_tier: dict[int, int] = {}
     for r in rows:
@@ -781,6 +802,7 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
     running_total_sec = 0.0
     total_slots = 0
     used_slots = 0
+    peak_only = _parallel_stages_on(context_id)
     tracked_any = False
     pending_isk_committed = pending_net_profit = pending_net_profit_per_day = 0.0
     pending_output_value = 0.0
@@ -851,11 +873,16 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
                     "output_value": round(row_output_value, 2),
                     "order_id": a.get("order_id"), "order_label": order_labels.get(a.get("order_id")),
                 })
-        used_slots += len(pending)
+        # What the plan occupies AT ONCE, which for pending rows is the worst tier and not the
+        # count: stage 2 is queued behind stage 1, so it is not holding a reactor while stage 1
+        # runs. Same model as the assign guard and `_character_capacities` — the three used to
+        # disagree, and this was the one the player read off the page.
+        pending_load = _concurrent_load(pending) if peak_only else len(pending)
+        used_slots += pending_load
 
         characters.append({
             "character_id": c["character_id"], "character_name": c["character_name"], "tracked": True,
-            "slots": slots, "free_slots": max(0, slots - len(active) - len(pending)),
+            "slots": slots, "free_slots": max(0, slots - len(active) - pending_load),
             "pending": pending,
             # Opted into tracking but the token lacks the structure-read scope — facility names
             # can't resolve (show "Structure #<id>"); the UI nudges a re-authorise. See
@@ -951,7 +978,12 @@ def _character_capacities(context_id: int) -> list[dict]:
     yet) — only characters that have opted into job tracking count, since we can't know a
     non-tracked character's current load. A fresh "Suggest reactions" run must not double-book
     slots a prior suggestion already claimed but hasn't been confirmed as running by ESI yet;
-    mirrors get_industry_jobs' slot math, which does the same running+pending subtraction."""
+    mirrors get_industry_jobs' slot math, which does the same running+pending subtraction.
+
+    Pending rows count by their WORST TIER, not their total (`_concurrent_load`) — a chain's stages
+    never run at the same moment, so reserving a slot for each of them at once idles reactors the
+    account really has. Behind `reactions_parallel_stages`; off, this is the old per-row sum."""
+    peak_only = _parallel_stages_on(context_id)
     ensure_industry_jobs_table()
     ensure_reaction_assignments_table()
     con = get_connection()
@@ -965,14 +997,20 @@ def _character_capacities(context_id: int) -> list[dict]:
             "SELECT character_id, jobs_json FROM pp_char_industry_jobs"
         )}
         char_ids = [c["character_id"] for c in chars]
-        pending_counts: dict[int, int] = {}
+        # Grouped by (character, TIER) rather than counted per character: what competes for a slot
+        # is everything at the same tier_order, so a character's planned load is the worst tier and
+        # not the sum (`_concurrent_load`). Counting the sum reserved a slot for every stage of a
+        # chain at once — stages that by definition never run at the same time — and every
+        # allocator downstream of this then had fewer slots to place work in than the account owns.
+        pending_tiers: dict[int, dict[int, int]] = {}
         if char_ids:
             placeholders = ",".join("?" * len(char_ids))
             for r in con.execute(
-                f"SELECT character_id, COUNT(*) AS n FROM pp_reaction_assignments "
-                f"WHERE character_id IN ({placeholders}) GROUP BY character_id", char_ids,
+                f"SELECT character_id, COALESCE(tier_order,0) AS tier_order, COUNT(*) AS n "
+                f"FROM pp_reaction_assignments WHERE character_id IN ({placeholders}) "
+                f"GROUP BY character_id, COALESCE(tier_order,0)", char_ids,
             ):
-                pending_counts[r["character_id"]] = r["n"]
+                pending_tiers.setdefault(r["character_id"], {})[int(r["tier_order"])] = r["n"]
     finally:
         con.close()
 
@@ -984,7 +1022,8 @@ def _character_capacities(context_id: int) -> list[dict]:
         row = cached.get(c["character_id"])
         jobs = _json.loads(row["jobs_json"]) if row else []
         used = len([j for j in jobs if j.get("status") in ("active", "paused", "ready")])
-        used += pending_counts.get(c["character_id"], 0)
+        tiers = pending_tiers.get(c["character_id"], {})
+        used += (max(tiers.values(), default=0) if peak_only else sum(tiers.values()))
         result.append({
             "character_id": c["character_id"], "character_name": c["character_name"],
             "free_slots": max(0, slots - used),

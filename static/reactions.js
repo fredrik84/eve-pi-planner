@@ -624,10 +624,22 @@ function _renderReactionsDashboard(data) {
     for (let i = jobs.length + pending.length; i < c.slots; i++) {
       squares.push(`<div class="rx-slot rx-slot-empty" title="Free reaction slot — click to assign your own product" onclick="_rxOpenManualAssign('${c.character_id}')"><span class="rx-slot-empty-mark">+</span></div>`);
     }
+    // A later stage is drawn as its own square — the grid is the PLAN — but it isn't holding a
+    // reactor while the stage below it runs, so it doesn't count against free slots either. Say
+    // that where the two numbers would otherwise look like they disagree.
+    // What the plan holds at once is its busiest stage, so anything beyond that peak is queued
+    // rather than occupying — exactly the number the server subtracted (`_concurrent_load`).
+    const byTier = new Map();
+    pending.forEach(a => byTier.set(a.tier_order || 0, (byTier.get(a.tier_order || 0) || 0) + 1));
+    const queued = pending.length - Math.max(0, ...byTier.values(), 0);
+    const reuseNote = (queued > 0 && _featureActive('reactions_parallel_stages'))
+      ? `<div class="pp-card-hint" style="font-size:11px;flex-basis:100%">${queued} queued job${queued === 1 ? '' : 's'} reuse a reactor an earlier stage frees up — not counted against free slots.</div>`
+      : '';
     return `
       <div class="rx-char-row">
         <div class="rx-char-label">${_esc(c.character_name)}<br><span class="pp-card-hint">${c.free_slots} / ${c.slots} free</span></div>
         <div class="rx-slot-row">${squares.join('')}</div>
+        ${reuseNote}
       </div>`;
   }).join('');
 
@@ -1047,12 +1059,19 @@ async function _rxSubmitManualAssign() {
   // its intermediate output has to be right there to feed the final reaction, this tool doesn't
   // model shipping half-finished materials between characters. Prefer the clicked character;
   // fall back to whichever tracked character actually has the room.
+  //
+  // How MUCH room: the stages run one after another, each freeing its reactor for the next, so
+  // what the chain needs at once is its busiest stage — one job — not one per stage. Demanding
+  // `chainJobs + 1` refused four-stage chains on a character with three free slots that would
+  // have run them fine, and is the same double-count the server's own guard never made
+  // (`_concurrent_load`).
+  const chainPeak = chainJobs > 0 ? (_featureActive('reactions_parallel_stages') ? 1 : chainJobs) : 0;
   let primary = null;
   if (chainJobs > 0) {
-    primary = ordered.find(c => freeLeft.get(c.character_id) >= chainJobs + 1) || null;
+    primary = ordered.find(c => freeLeft.get(c.character_id) >= chainPeak + 1) || null;
     if (!primary) {
       const names = chainTiers.map(t => t.name).join(', ');
-      status.textContent = `This needs ${chainJobs} intermediate reaction${chainJobs === 1 ? '' : 's'} first (${names}) plus at least 1 slot for the product itself, all on one character — none of your tracked characters has ${chainJobs + 1} free slots. Free up slots or lower the run count.`;
+      status.textContent = `This needs ${chainJobs} intermediate reaction${chainJobs === 1 ? '' : 's'} first (${names}) plus at least 1 slot for the product itself, all on one character — none of your tracked characters has ${chainPeak + 1} free slots. Free up slots or lower the run count.`;
       return;
     }
   }
@@ -1060,8 +1079,8 @@ async function _rxSubmitManualAssign() {
   const allocations = [];  // { char, jobs, chain_tiers }
   let remaining = jobsWanted;
   if (primary) {
-    const take = Math.min(remaining, freeLeft.get(primary.character_id) - chainJobs);
-    freeLeft.set(primary.character_id, freeLeft.get(primary.character_id) - chainJobs - take);
+    const take = Math.min(remaining, freeLeft.get(primary.character_id) - chainPeak);
+    freeLeft.set(primary.character_id, freeLeft.get(primary.character_id) - chainPeak - take);
     allocations.push({ char: primary, jobs: take, chain_tiers: chainTiers });
     remaining -= take;
   }
@@ -1278,7 +1297,13 @@ function _renderReactionsSuggestions(data) {
   // ...and the harder version of the same question: not "how many jobs can this run side by side"
   // but "can you run this step at all". Above the suggestions, because it changes what you'd
   // assign, not just how fast it finishes.
-  const budgetSummary = `<div class="pp-card-hint" style="margin-bottom:10px">${bindingNote}</div>${absorbNote}${formulaNote}`
+  // Extra jobs that went to reactors nobody else claimed. Said out loud, because "why is this
+  // product running in 5 jobs when the cadence only needed 2" should have an answer on the page.
+  const idleUsed = t.idle_slots_used || 0;
+  const idleNote = idleUsed
+    ? `<div class="pp-card-hint" style="margin-bottom:10px">${idleUsed} otherwise-idle reactor${idleUsed === 1 ? '' : 's'} put to work splitting the slowest steps across more jobs — same runs, same cost, finishes sooner.</div>`
+    : '';
+  const budgetSummary = `<div class="pp-card-hint" style="margin-bottom:10px">${bindingNote}</div>${absorbNote}${formulaNote}${idleNote}`
     + _rxMissingFormulaWarn(data.missing_formulas);
 
   // Grouped by assigned character (each is "this character's job list"), not one flat table —

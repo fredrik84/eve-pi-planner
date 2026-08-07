@@ -311,6 +311,15 @@ FEATURE_REGISTRY = [
                     "Ferrofluid formula is one job, not ten. Chain tiers are unaffected (they run "
                     "in sequence), and a formula we have no evidence about is never capped.",
      "default": False},
+    {"key": "reactions_parallel_stages", "label": "Reactions: don't idle reactors waiting on a stage",
+     "group": "Reactions",
+     "description": "A chain's stages run one after another, so they reuse the same reactor "
+                    "instead of each holding one — free slots now show what you can really start, "
+                    "not one fewer for every stage queued behind it. Whatever is still idle once "
+                    "the wizard has placed everything is spent splitting the slowest step across "
+                    "more jobs, so it finishes sooner. Never changes what gets suggested, what it "
+                    "costs or what it earns — only how many reactors do the same work.",
+     "default": False},
     {"key": "reactions_missing_formulas", "label": "Reactions: formulas you need to acquire",
      "group": "Reactions",
      "description": "Once you have PASTED your industry window, a formula you never declared is "

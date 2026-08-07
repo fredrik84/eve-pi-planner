@@ -9,6 +9,7 @@ Find a section: `grep -n '^## ' docs/reactions.md` and read from that line — t
 
 - **Reactions suggestion engine (`app/reactions/advisor.py`)** — what the advisor suggests and on what basis
 - **A formula is one reaction at a time (`reactions_formula_cap`)** — why ten free slots can be planned as one job
+- **One slot model: a chain's stages reuse a reactor (`reactions_parallel_stages`)** — why stages can't run in parallel, what reuses what, and where idle reactors go
 - **Absence becomes knowledge, but only after a paste (`app/reactions/library.py`)** — when an undeclared formula means "you don't own it", and what gets reported instead of planned
 - **Stages on the dashboard are `tier_order`, shown absolute** — how chain order is rendered, and why the number is never re-ranked
 - **Pricing: a sell-order price is not achievable profit** — the pricing rule that governs every profit figure shown for reaction goods
@@ -44,6 +45,33 @@ Two rules it must not break: **a missing key means unknown, and unknown never re
 evidence, or an incomplete blueprint picture, caps nothing — the same rule
 `_assigned_slot_capacity` and `_print_limits` follow); and **chain tiers are sequential**, so the
 cap is per tier and one formula may serve tier 0 and then tier 1.
+
+## One slot model: a chain's stages reuse a reactor (`reactions_parallel_stages`)
+
+**Within one chain, stage 2 cannot start before stage 1 finishes** — EVE requires the materials to
+exist at install time and stage 1's output IS stage 2's input. Not our choice, and not negotiable;
+"run the stages in parallel" would mean a job you cannot install.
+
+What follows from it is that a chain's stages **reuse** one reactor rather than each holding one.
+`_concurrent_load` (`jobs.py`) has always said so, but until 2026-08-07 only the assign guard asked
+it: `_character_capacities` and the dashboard's `free_slots` counted every planned row. So a
+3-stage chain of one job each was authorised as needing one slot and reported as occupying three —
+and since `_character_capacities` feeds the wizard's bin-pack and the customer-order allocation,
+both planned less work than the account had reactors for. All three now go through
+`_concurrent_load`; the advisor reserves its own peak the same way (a tier may reuse the slots its
+own suggestion holds at other tiers). The manual-assign modal's `chainJobs + 1` reservation became
+`chainPeak + 1` for the same reason.
+
+`_widen_to_idle_slots` then spends what nobody claimed. Every step is sized to fit the CADENCE
+window (`ceil(runs × cycle / cadence)`), which answers "how much work fits" and not "how fast does
+it finish" — so a 3-stage chain ran one reactor for three cadence windows with the rest idle. The
+pass runs AFTER allocation (it can never take a slot from a suggestion that wanted one), gives each
+extra job to whichever step gains the most hours, and stops at the formulas held and the runs there
+are. Widening a tier that is not the busiest costs nothing at all, so it happens even on a full
+character. **It moves `jobs` only** — runs, cost and profit are not its business — and the count is
+reported as `totals.idle_slots_used` so the extra jobs read as a choice, not an overbooking.
+
+Off ⇒ every one of those numbers is the old per-row sum. `test_parallel_stages.py` pins both.
 
 ## Absence becomes knowledge, but only after a paste (`app/reactions/library.py`)
 

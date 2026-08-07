@@ -92,7 +92,51 @@ by `tier_order` and carry an `S<n>` badge, later stages are dimmed/dashed, and t
 checklist is split under stage banners. The stage number is `tier_order + 1` **absolute**, not
 re-ranked against what is still pending — once stage 1 is running its rows leave `pending`, and
 re-ranking would tell you to start stage 2 while its input is still cooking. Rationale is in
-`docs/reactions.md`. **19a is still open** and is the real fix.
+`docs/reactions.md`.
+
+## 21. Idle reactors while a chain waits — slots are counted twice and stages never widen (2026-08-07)
+
+From using the tool: *"if we need to make stage 1 stuff, why do we occupy slots with stage 2 or 3
+unless we have slots to spare"* and *"we should run multiple stages at the same time if we have
+slots to spare"*.
+
+**The premise correction first, so nobody re-derives it:** within ONE chain, stage 2 cannot start
+before stage 1 finishes — EVE requires the materials to exist at install time, and stage 1's output
+IS stage 2's input. That is not our sequencing choice, and it is exactly why `_concurrent_load`
+counts the worst tier. What follows is everything around that constraint that we ARE leaving on
+the table.
+
+**21a and 21b shipped 2026-08-07** behind `reactions_parallel_stages` (admin-preview):
+`_concurrent_load` is now THE slot model — the guard, `_character_capacities` and the dashboard all
+ask it, the advisor reserves its own peak across tiers, and the manual-assign modal reserves
+`chainPeak + 1` instead of `chainJobs + 1`. `_widen_to_idle_slots` (advisor.py) then spends
+genuinely idle reactors on whichever step gains the most hours, capped by formulas held and runs
+available, reported as `totals.idle_slots_used`. Runs, cost and profit are untouched.
+`test_parallel_stages.py` pins both directions; rationale in `docs/reactions.md`.
+
+**21a. Two slot models, and they disagree.** `_concurrent_load` (`jobs.py:455`), the guard that
+decides whether an assign fits, counts the WORST TIER. `_character_capacities` (`jobs.py:988`) and
+the dashboard's `free_slots` (`jobs.py:858`) count EVERY pending row. So a 3-stage chain of one job
+each is authorised as needing 1 slot and then reported as occupying 3. `_character_capacities`
+feeds the wizard's bin-pack and the customer-order allocation, so both under-allocate real work;
+the manual-assign modal compounds it by reserving `chainJobs + 1` on one character.
+
+**21b. A stage never widens into free slots.** `advisor.py:346` sizes a chain tier at
+`ceil(runs × cycle / cadence)` — just enough jobs to finish within the cadence window — and never
+asks whether eight free reactors could finish it sooner. Tiers are sequential, so an N-tier chain
+then takes ~N cadence windows with one reactor working and the rest idle.
+
+**21c. Intermediates in stock are ignored.** Reactions never reads `pp_asset_stock` for a chain
+tier: `_explode_chain_tiers` always plans the whole chain from raw goo. Hold the intermediate
+already and the tool still tells you to react it first, when the next stage could start now. Cheap,
+and it removes a whole class of pointless waiting. **Open.**
+
+**21d. Pipelining.** Split stage 1 into N batches; when the first completes, start stage 2 on that
+output while batches 2..N still run. The honest version of "run stages at the same time", and real
+throughput — but it needs partial-output tracking and changes what an assignment row means.
+**Open, and only worth it if 21a-c don't satisfy the complaint.**
+
+Order: 21a → 21b (both done) → 21c → 21d.
 
 ## 20. The two Reactions "clear" paths disagree about customer orders (2026-08-07, small)
 
@@ -312,6 +356,7 @@ match any template we generate) is still unscoped.
 | — | Alliance-shared build structures as suggestions (`industry_group_structures`) | 08-05 |
 | — | Pin a rig FAMILY to a structure and every job in it is installed there, whatever the routing scores (`pp_industry_settings.build_pins`, on the `industry_rig_routing` flag). A pin can only pick among sites already legal for that job's activity; one it can't honour falls back to the automatic routing and says so. The pin decides WHERE, `fittable_families` still decides what BONUS | 08-06 |
 | 19b | Reaction plan STAGES on the dashboard: planned slots sort by `tier_order`, carry an `S<n>` badge, later stages dim/dash, and the "To install" checklist splits under stage banners. The number is `tier_order + 1` absolute, never re-ranked against what's still pending | 08-07 |
+| 21a-b | One slot model for reaction chains (`reactions_parallel_stages`): stages reuse a reactor instead of each reserving one, so free slots show what can really start — and reactors nobody claimed are spent splitting the slowest step across more jobs. Runs, cost and profit untouched. `test_parallel_stages.py` | 08-07 |
 | 19a | "You don't hold a formula for these" (`reactions_missing_formulas`): once a PASTED window makes the library complete, an undeclared formula is one you don't own — reported with runs and a contract price on all three planning surfaces, and kept out of every shopping list and cost total. Unresolved paste names are KEPT and shown beside the finding, because a rename otherwise reads as "you don't own this". `app/reactions/library.py`, `test_missing_formulas.py` | 08-07 |
 
 ---
