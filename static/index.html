@@ -585,7 +585,12 @@
                 <button class="pp-add-btn" onclick="_rxRefreshJobs(true, this)" title="Pull the latest job status from ESI now (bypasses the ~5min cache)">↻ Refresh jobs</button>
                 <button class="pp-add-btn" onclick="_rxOpenSettingsModal()">⚙ Settings</button>
                 <button class="pp-add-btn" id="rxConnectBtn" onclick="connectReactionsTracking()" style="display:none">Connect a character</button>
-                <button class="pp-add-btn" onclick="if (confirm('Clear every pending (not-yet-running) assignment?')) _rxClearAllAssignments();">Clear all</button>
+                <!-- ppConfirm, not native confirm(): a browser that has been offered "prevent this
+                     page from creating additional dialogs" makes confirm() return false silently,
+                     and the button then does nothing at all. See the comment on ppConfirm in
+                     utils.js — this was the last native confirm() in the app, and it produced the
+                     same silent no-op that had already been reported once against Cancel order. -->
+                <button class="pp-add-btn" onclick="ppConfirm('Clear every pending (not-yet-running) assignment?').then(ok =&gt; { if (ok) _rxClearAllAssignments(); })">Clear all</button>
               </div>
               <div id="rxDashboardContent" class="pp-card-body">
                 <div class="pp-loading"><span class="pp-spinner"></span> Loading…</div>
