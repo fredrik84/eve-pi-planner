@@ -11,7 +11,9 @@ collapses the account's characters into one product→best-blueprint map the cos
 """
 import json as _json
 import logging
-from fastapi import Depends
+import time as _time
+from fastapi import Depends, HTTPException
+from pydantic import BaseModel
 
 from app.sde import get_connection, ensure_once
 from app import esi_http
@@ -103,6 +105,145 @@ def classify_blueprint(quantity, runs) -> str:
     return "bpc" if quantity == -2 else "bpo"
 
 
+def _blueprint_product_index(con) -> dict[int, int]:
+    """blueprint_type_id -> product_type_id, manufacturing AND reaction formulas.
+
+    Split out of `owned_blueprints` so the hand-declaration write path resolves a typed-in blueprint
+    to the same product the ESI reader would have — two indexes that disagree would file a declared
+    print under a product no plan ever asks about.
+    """
+    idx = {r["blueprint_type_id"]: r["product_type_id"]
+           for r in con.execute("SELECT blueprint_type_id, product_type_id FROM blueprints")}
+    # ...and REACTION FORMULAS, which this map used to drop on the floor. `blueprints` is filled
+    # from the SDE's manufacturing activity only, so not one of the 112 `reaction_id`s appears in
+    # it and every formula ESI returned was discarded at this join — 50 distinct formulas sitting
+    # in the cache in production, unused. A `reaction_id` IS the formula item's own type_id (they
+    # are the "… Reaction Formula" types), so the mapping needs no new data, fetch or scope.
+    try:
+        for r in con.execute("SELECT reaction_id, output_type_id FROM reactions"):
+            idx.setdefault(r["reaction_id"], r["output_type_id"])
+    except Exception:
+        pass              # an SDE without the reactions table is a manufacturing-only answer
+    return idx
+
+
+# ── Blueprints and formulas DECLARED BY HAND ──────────────────────────────────────────────────
+# `GET /characters/{id}/blueprints/` is PERSONAL-ONLY, and there is no endpoint that answers "what
+# is in this corp hangar" without the Director role. A builder whose prints live in a corp hangar
+# can therefore state their ME/TE to us in no way at all, and every such build is planned at ME 0 /
+# TE 0 — the un-researched worst case — so its materials and its duration are both wrong. Pasting a
+# hangar as STOCK was the answer for FORMULAS (an asset row is a whole truth for a formula, which
+# has no ME/TE and cannot be copied) and deliberately credits nothing for a manufacturing blueprint,
+# because an asset row states no ME, no TE and no runs. This table is where the user states them.
+#
+# The row encoding is the one this module already uses internally: **runs NULL/absent = a BPO**
+# (`owned_blueprints` returns `runs = -1` for an original), anything else a BPC with that many runs.
+# `quantity` expands the row into that many separate physical prints, exactly like an ESI stack.
+
+MANUAL_FEATURE_KEY = "industry_manual_blueprints"
+
+
+@ensure_once
+def ensure_manual_blueprints_table():
+    con = get_connection()
+    try:
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS pp_industry_blueprints (
+                context_id INTEGER NOT NULL,
+                id         INTEGER NOT NULL,
+                type_id    INTEGER NOT NULL,
+                me         INTEGER NOT NULL DEFAULT 0,
+                te         INTEGER NOT NULL DEFAULT 0,
+                runs       INTEGER NOT NULL DEFAULT -1,
+                quantity   INTEGER NOT NULL DEFAULT 1,
+                prefer     TEXT    NOT NULL DEFAULT '',
+                updated_at REAL,
+                PRIMARY KEY (context_id, id)
+            )
+        """)
+        con.commit()
+    finally:
+        con.close()
+
+
+def _manual_enabled(context_id: int) -> bool:
+    """THE gate for hand-declared prints. One place, asked by every reader, so with the flag off
+    `owned_blueprints` is byte-for-byte the function that shipped before this existed."""
+    try:
+        from app.features import feature_enabled_for
+        return bool(feature_enabled_for(MANUAL_FEATURE_KEY, context_id))
+    except Exception:
+        return False
+
+
+def manual_blueprints(context_id: int, force: bool = False) -> dict[int, dict]:
+    """product_type_id -> `{copies, prefer}` for the prints this account has DECLARED BY HAND.
+
+    `copies` is in the same shape `owned_blueprints` builds from ESI (`{me, te, kind, runs}`, one
+    entry per physical print, a `quantity` row expanded), so the two merge without a second
+    vocabulary. `prefer` is the product-level BPO-vs-BPC choice (see `_apply_kind_preference`).
+
+    Empty unless the feature is on — `force=True` is for the admin/test path that wants the rows
+    whatever the flag says.
+    """
+    if not force and not _manual_enabled(context_id):
+        return {}
+    ensure_manual_blueprints_table()
+    con = get_connection()
+    try:
+        rows = con.execute(
+            "SELECT type_id, me, te, runs, quantity, prefer FROM pp_industry_blueprints "
+            "WHERE context_id=? ORDER BY id", (context_id,)).fetchall()
+    except Exception:
+        return {}
+    finally:
+        con.close()
+
+    out: dict[int, dict] = {}
+    for r in rows:
+        prod = int(r["type_id"])
+        slot = out.setdefault(prod, {"copies": [], "prefer": ""})
+        try:
+            runs = int(r["runs"])
+        except (TypeError, ValueError):
+            runs = -1
+        kind = "bpo" if runs < 0 else "bpc"
+        entry = {"me": int(r["me"] or 0), "te": int(r["te"] or 0), "kind": kind,
+                 "runs": -1 if kind == "bpo" else max(0, runs)}
+        try:
+            n = int(r["quantity"] or 0)
+        except (TypeError, ValueError):
+            n = 0
+        # A row declaring ZERO prints is not a print — it is the product-level preference on its
+        # own, which is how an account whose prints ESI CAN see says "use the original, not the
+        # copies" without having to re-type a holding we already read correctly.
+        for _ in range(max(0, min(n, _STACK_CAP))):
+            slot["copies"].append(dict(entry))
+        pref = str(r["prefer"] or "").strip().lower()
+        if pref in ("bpo", "bpc") and not slot["prefer"]:
+            slot["prefer"] = pref          # first row naming a preference decides; see the endpoint
+    return out
+
+
+def _apply_kind_preference(copies: list[dict], prefer: str) -> list[dict]:
+    """The account's stated BPO-vs-BPC choice for one product, applied to its whole holding.
+
+    They are not interchangeable and the difference shows up in two numbers at once: an ORIGINAL
+    consumes nothing and covers any batch, so it costs no copies but is ONE print and therefore one
+    job at a time; a stack of COPIES has finite runs and is spent, so it costs ISK once the runs run
+    out but N of them run N jobs side by side. The plan cannot pick between "cheaper" and "sooner"
+    for the builder, so the builder says.
+
+    Only ever narrows, and only when there is a real choice to make — a product holding just one
+    kind is returned untouched, so a preference can never empty a holding.
+    """
+    if prefer not in ("bpo", "bpc"):
+        return copies
+    if len({c["kind"] for c in copies}) < 2:
+        return copies
+    return [c for c in copies if c["kind"] == prefer]
+
+
 def owned_blueprints(context_id: int) -> dict[int, dict]:
     """product_type_id -> what the account owns for that product, across all its characters:
     `{me, te, kind, runs, copies, copy_count}`.
@@ -113,6 +254,34 @@ def owned_blueprints(context_id: int) -> dict[int, dict]:
     the plan will consume it (`_copy_rank`); `runs` is the TOTAL coverage (-1 = an original, which
     covers any batch); `me`/`te` describe the copy the first job will run off, and the per-job
     values come off `copies` (see BuildParams.me_te_for). Empty if nothing's connected/cached.
+
+    **Two sources, and the merge rule between them is REPLACEMENT, per product.** Beside the ESI
+    cache sits `pp_industry_blueprints` — prints the user declared by hand, which is the only way an
+    account can state the ME/TE of a print ESI cannot see (a corp hangar has no readable blueprint
+    endpoint without the Director role). For a product the user has declared at least one print for,
+    the declaration IS the holding and the ESI reading for that product is dropped. Products they
+    did not declare are untouched, so this is never account-wide.
+
+    Why replacement and not addition — the choice matters, because getting it wrong is silent:
+
+      * **The two sources cannot be reconciled item by item.** An ESI row's identity is its
+        `item_id`, which the game client never shows and the user therefore cannot type. There is no
+        key to match a declaration against a scanned row, so ADDING would double-count every print
+        that is declared *and* scanned, unboundedly and invisibly — hand-enter the 21 fuel-block
+        copies you already hold and the plan credits you with 42.
+      * **Replacement's failure is bounded and visible.** What you declared is what the plan uses
+        for that product; leave a print out and you can see it on the plan and add a row. An
+        over-count cannot be seen at all — it just quietly plans work that cannot be installed.
+      * **It is the rule this module already applies to hand-entered evidence.** A pasted hangar
+        wins outright for the formulas it names (`formula_print_floor`, precedence a), for exactly
+        the same reason: a user statement is treated as the statement it is, rather than blended
+        with a reading it may or may not overlap.
+
+    A declared product carries `source: "manual"` on its entry, and that mark is load-bearing twice
+    over: `prepare_plan_inputs` reports it as `me_source = "declared"` (the user's word, which is a
+    different kind of evidence from a measurement and must not be reported as one), and
+    `formula_print_floor` reads it to keep the stock/observed evidence layer from adding a second
+    count of the same physical formula on top of the declared one.
     """
     ensure_char_blueprints_table()
     con = get_connection()
@@ -122,18 +291,7 @@ def owned_blueprints(context_id: int) -> dict[int, dict]:
             "JOIN pp_characters c ON b.character_id = c.character_id WHERE c.context_id=?",
             (context_id,),
         ).fetchall()
-        bp2prod = {r["blueprint_type_id"]: r["product_type_id"]
-                   for r in con.execute("SELECT blueprint_type_id, product_type_id FROM blueprints")}
-        # ...and REACTION FORMULAS, which this map used to drop on the floor. `blueprints` is filled
-        # from the SDE's manufacturing activity only, so not one of the 112 `reaction_id`s appears in
-        # it and every formula ESI returned was discarded at this join — 50 distinct formulas sitting
-        # in the cache in production, unused. A `reaction_id` IS the formula item's own type_id (they
-        # are the "… Reaction Formula" types), so the mapping needs no new data, fetch or scope.
-        try:
-            for r in con.execute("SELECT reaction_id, output_type_id FROM reactions"):
-                bp2prod.setdefault(r["reaction_id"], r["output_type_id"])
-        except Exception:
-            pass          # an SDE without the reactions table is a manufacturing-only answer
+        bp2prod = _blueprint_product_index(con)
     finally:
         con.close()
 
@@ -162,8 +320,21 @@ def owned_blueprints(context_id: int) -> dict[int, dict]:
             for _ in range(max(1, min(n, _STACK_CAP))):
                 by_product.setdefault(prod, []).append(dict(entry))
 
+    # The hand-declared layer. Replacement per product, per the merge rule above — a declared
+    # product's ESI copies are discarded rather than added to, and one that declares only a
+    # preference (quantity 0) keeps its ESI copies and just states which kind to spend.
+    manual = manual_blueprints(context_id)
+    declared: set[int] = set()
+    for prod, m in manual.items():
+        if m["copies"]:
+            by_product[prod] = [dict(c) for c in m["copies"]]
+            declared.add(prod)
+
     owned: dict[int, dict] = {}
     for prod, copies in by_product.items():
+        prefer = (manual.get(prod) or {}).get("prefer") or ""
+        if prefer:
+            copies = _apply_kind_preference(copies, prefer)
         copies.sort(key=_copy_rank)
         has_bpo = any(c["kind"] == "bpo" for c in copies)
         best = copies[0]
@@ -175,6 +346,12 @@ def owned_blueprints(context_id: int) -> dict[int, dict]:
             "runs": -1 if has_bpo else sum(c["runs"] for c in copies),
             "copies": copies, "copy_count": len(copies),
         }
+        # Additive keys, and only where they mean something: an account with no declarations gets
+        # exactly the dict this function has always returned, key for key.
+        if prod in declared:
+            owned[prod]["source"] = "manual"
+        if prefer:
+            owned[prod]["prefer"] = prefer
     return owned
 
 
@@ -226,6 +403,17 @@ def _formula_stock_buckets(context_id: int) -> dict[int, dict[str, int]]:
     return buckets
 
 
+def _declared_products(owned: dict[int, dict] | None) -> set[int]:
+    """Products whose holding the user stated BY HAND (`owned_blueprints`' merge rule).
+
+    The evidence layers below must not add anything for these. A hand-declared formula, a formula
+    in a pasted hangar and a formula seen in an observed job are three descriptions of one physical
+    item at least as often as they are three items, and the declaration is the only one of the three
+    that is a statement of totality — so it answers alone.
+    """
+    return {p for p, o in (owned or {}).items() if (o or {}).get("source") == "manual"}
+
+
 def _seen_personally(owned: dict[int, dict] | None, prod: int) -> int:
     """How many prints of `prod` the personal blueprint endpoint already reported — the figure
     `_print_limits` starts from, so every "extra" in this module means extra *over this*."""
@@ -268,7 +456,10 @@ def stock_formula_prints(context_id: int, owned: dict[int, dict] | None = None) 
     a formula in a container the user hasn't ticked is not one they've said they will spend.
     """
     out: dict[int, int] = {}
+    declared = _declared_products(owned)
     for prod, b in _formula_stock_buckets(context_id).items():
+        if prod in declared:
+            continue                        # the user stated this holding — see _declared_products
         extra = _stock_extra(b, _seen_personally(owned, prod))
         if extra > 0:
             out[prod] = extra
@@ -435,6 +626,13 @@ def formula_print_floor(context_id: int, owned: dict[int, dict] | None = None) -
 
     Precedence per type, highest first:
 
+      a0. **a HAND-DECLARED holding answers alone.** `owned_blueprints` has already put the declared
+         prints in `owned` (its merge rule: a declaration replaces the ESI reading for its product),
+         so anything added here would be a second count of formulas the user has just finished
+         telling us about — the paste that names them, and the jobs they were installed on, describe
+         the same physical items. Same reasoning as (a) one rung up: a declaration is the more
+         explicit statement of the two, since a paste describes one container and a declaration
+         describes the product.
       a. **a PASTE naming that formula wins outright.** A pasted inventory is the user stating what
          they have right now, so the observed floor is NOT added on top of it. This is a product
          decision, and it has a known edge: a paste covering only ONE container suppresses job
@@ -455,8 +653,11 @@ def formula_print_floor(context_id: int, owned: dict[int, dict] | None = None) -
     """
     buckets = _formula_stock_buckets(context_id)
     observed = observed_formula_prints(context_id)
+    declared = _declared_products(owned)
     out: dict[int, int] = {}
     for prod in set(buckets) | set(observed):
+        if prod in declared:
+            continue                       # precedence a0 — the declaration is the whole answer
         b = buckets.get(prod) or {"personal": 0, "corp": 0, "paste": 0}
         seen = _seen_personally(owned, prod)
         extra = _stock_extra(b, seen)
@@ -501,6 +702,114 @@ def refresh_blueprints(context_id: int = Depends(require_context)):
     return refresh_character_cache(
         context_id, scope=BLUEPRINTS_SCOPE, table="pp_char_blueprints",
         column="blueprints_json", fetch=fetch_character_blueprints)
+
+
+class ManualBlueprintEdit(BaseModel):
+    """One hand-declared print. `runs` absent/None = a BPO — the encoding `owned_blueprints` already
+    uses internally (`runs = -1` for an original), so there is no second convention to learn.
+
+    `type_id` may be the BLUEPRINT's type or the PRODUCT's; it is resolved to the product on write,
+    since that is the only key any planner ever looks a holding up by.
+    """
+    id: int | None = None
+    type_id: int
+    me: float = 0
+    te: float = 0
+    runs: int | None = None
+    quantity: int = 1
+    prefer: str = ""
+
+
+def _manual_payload(context_id: int) -> dict:
+    """Every declared row plus the product name, so the settings list reads as items rather than
+    ids. `enabled` says whether the planner is actually consuming them — a list the plan ignores
+    must not look like one it obeys."""
+    ensure_manual_blueprints_table()
+    con = get_connection()
+    try:
+        rows = [dict(r) for r in con.execute(
+            "SELECT id, type_id, me, te, runs, quantity, prefer FROM pp_industry_blueprints "
+            "WHERE context_id=? ORDER BY id", (context_id,)).fetchall()]
+        ids = {int(r["type_id"]) for r in rows}
+        names = {}
+        if ids:
+            names = {r["type_id"]: r["name"] for r in con.execute(
+                f"SELECT type_id, name FROM types WHERE type_id IN ({','.join('?' * len(ids))})",
+                tuple(ids))}
+    finally:
+        con.close()
+    for r in rows:
+        r["name"] = names.get(int(r["type_id"]), f"Type {r['type_id']}")
+        r["kind"] = "bpo" if int(r["runs"] or -1) < 0 else "bpc"
+    return {"enabled": _manual_enabled(context_id), "entries": rows}
+
+
+@router.get("/api/industry/manual-blueprints")
+def read_manual_blueprints(context_id: int = Depends(require_context)):
+    """The prints and formulas this account has declared by hand."""
+    return _manual_payload(context_id)
+
+
+@router.post("/api/industry/manual-blueprints")
+def edit_manual_blueprint(req: ManualBlueprintEdit, context_id: int = Depends(require_context)):
+    """Declare or edit one print. Flag-gated like every other write that moves what a build costs —
+    a declared ME/TE changes every material and duration figure for its product."""
+    if not _manual_enabled(context_id):
+        raise HTTPException(status_code=403, detail="feature not enabled")
+    ensure_manual_blueprints_table()
+    con = get_connection()
+    try:
+        prod = _blueprint_product_index(con).get(int(req.type_id))
+        if prod is None:
+            # Already a product? Then it is a product we can build, and that is what we file it as.
+            row = con.execute("SELECT 1 AS ok FROM types WHERE type_id=?",
+                              (int(req.type_id),)).fetchone()
+            if not row:
+                raise HTTPException(status_code=400, detail="unknown type")
+            prod = int(req.type_id)
+        me = int(max(0.0, min(10.0, float(req.me or 0))))
+        te = int(max(0.0, min(20.0, float(req.te or 0))))
+        runs = -1 if req.runs is None or int(req.runs) < 0 else int(req.runs)
+        qty = max(0, min(int(req.quantity or 0), _STACK_CAP))
+        prefer = str(req.prefer or "").strip().lower()
+        if prefer not in ("bpo", "bpc"):
+            prefer = ""
+        if req.id:
+            con.execute(
+                "UPDATE pp_industry_blueprints SET type_id=?, me=?, te=?, runs=?, quantity=?, "
+                "prefer=?, updated_at=? WHERE context_id=? AND id=?",
+                (prod, me, te, runs, qty, prefer, _time.time(), context_id, int(req.id)))
+        else:
+            nxt = con.execute("SELECT COALESCE(MAX(id), 0) + 1 AS n FROM pp_industry_blueprints "
+                              "WHERE context_id=?", (context_id,)).fetchone()["n"]
+            con.execute(
+                "INSERT INTO pp_industry_blueprints (context_id, id, type_id, me, te, runs, "
+                "quantity, prefer, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                (context_id, int(nxt), prod, me, te, runs, qty, prefer, _time.time()))
+        # The BPO-vs-BPC choice is a property of the PRODUCT, not of one row — two rows for one
+        # product cannot sensibly disagree about which kind the plan should spend. Setting it on any
+        # row sets it for the product, so the reader's "first row wins" can never surprise anyone.
+        con.execute("UPDATE pp_industry_blueprints SET prefer=? WHERE context_id=? AND type_id=?",
+                    (prefer, context_id, prod))
+        con.commit()
+    finally:
+        con.close()
+    return _manual_payload(context_id)
+
+
+@router.delete("/api/industry/manual-blueprints/{entry_id}")
+def delete_manual_blueprint(entry_id: int, context_id: int = Depends(require_context)):
+    """Undeclare one print. Not flag-gated: removing a statement must stay possible even if the
+    feature is rolled back under an account that already made one."""
+    ensure_manual_blueprints_table()
+    con = get_connection()
+    try:
+        con.execute("DELETE FROM pp_industry_blueprints WHERE context_id=? AND id=?",
+                    (context_id, int(entry_id)))
+        con.commit()
+    finally:
+        con.close()
+    return _manual_payload(context_id)
 
 
 @router.get("/api/industry/blueprints")

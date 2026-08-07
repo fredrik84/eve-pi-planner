@@ -846,6 +846,12 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-unres { background: #3a2226; color: #e69aa0; }
 .ind-wave-jobs { display: flex; flex-wrap: wrap; gap: 6px; }
 .ind-wave-job { background: #161b28; border: 1px solid var(--clr-border); border-radius: 8px; padding: 2px 8px; font-size: 12px; color: #cdd6e6; }
+/* The hand-declaration add row. `position: relative` is load-bearing: the product typeahead reuses
+   .ind-search-results, which is absolutely positioned against its nearest positioned ancestor. */
+.ind-manual-bp-add { position: relative; display: flex; align-items: flex-end; gap: 8px;
+  flex-wrap: wrap; margin-top: 10px; font-size: 12px; }
+.ind-manual-bp-add label { display: flex; flex-direction: column; gap: 2px; color: var(--clr-text-soft); }
+.ind-manual-bp-add #indManualBpSearch { min-width: 220px; }
 .ind-bp-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 14px; font-size: 12px; }
 .ind-bp-ok { color: #7fdca6; }
 .ind-bp-hint { color: var(--clr-text-soft); }
@@ -993,6 +999,9 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
   background: #1a2030; color: var(--clr-text-soft); border: 1px solid #262d3d; }
 .ind-mete:hover { border-color: #3a4460; }
 .ind-mete-owned { color: var(--clr-green); border-color: #2c4a33; background: #16211a; }
+/* Declared by hand: green-ish like an owned print (it IS a print you hold) but teal rather than
+   the ESI green, because it is your word for it and not a reading. */
+.ind-mete-declared { color: #6fc6b0; border-color: #245046; background: #14201d; }
 .ind-mete-contract { color: var(--clr-accent); border-color: #2d4a6a; background: #151d2a; }
 .ind-mete-override { color: #e0b84a; border-color: #4a3f22; background: #221d12; }
 .ind-mete-default { color: var(--clr-red); border-color: #4a2a2f; background: #221316; }

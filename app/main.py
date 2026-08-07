@@ -136,6 +136,7 @@ def _ensure_all_tables():
         shares.ensure_inventory_shares_table,
         alert_settings.ensure_alert_settings_table, yield_stats.ensure_yield_avg_table,
         ind_bp.ensure_char_blueprints_table, ind_bp.ensure_formula_job_prints_table,
+        ind_bp.ensure_manual_blueprints_table,
         bpc.ensure_bpc_tables,
         ind_jobs.ensure_manufacturing_jobs_table, ind_jobs.ensure_manufacturing_completions_table,
         ind_orders.ensure_industry_orders_table, ind_settings.ensure_industry_settings_table,

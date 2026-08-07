@@ -283,6 +283,16 @@ FEATURE_REGISTRY = [
                     "cost. A single order can still be set to make its own.",
      # Testers, like every other Industry feature — this came from the builders using the tab.
      "default": False, "state": "testers"},
+    {"key": "industry_manual_blueprints", "label": "Industry: declare a blueprint or formula by hand",
+     "group": "Industry",
+     "description": "Type in the blueprints and reaction formulas you own — product, ME, TE, runs "
+                    "(blank = an original) and how many — for the prints ESI cannot see. The "
+                    "blueprint endpoint is PERSONAL-only, so a builder whose prints live in a corp "
+                    "hangar was planned at ME 0 / TE 0 and every material and duration figure was "
+                    "wrong. A declaration replaces what ESI read for that product (never adds to "
+                    "it, which would double-count), is reported as \"declared\" rather than "
+                    "measured, and can say whether to spend the original or the copies.",
+     "default": False, "state": "testers"},
     {"key": "industry_formulas_from_stock", "label": "Industry: count formulas in your hangars",
      "group": "Industry",
      "description": "Count reaction formulas found in your enabled stock sources (corp hangars, "

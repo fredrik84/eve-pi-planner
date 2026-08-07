@@ -116,6 +116,34 @@ hold formulas.
 holds them, or you will under-count and serialise work you can really run. This is a deliberate
 decision (see `formula_print_floor` in `app/industry/blueprints.py`), not a bug.
 
+### B3b. Blueprints declared by hand (`industry_manual_blueprints`)
+
+**Where:** Settings → **Blueprints & formulas** → *Declared by hand*. Pick a product, set ME and TE,
+leave **runs blank for an original (BPO)** or type a run count for a copy, set how many you hold,
+*Add*. Then plan that product.
+
+**Expect:** the plan's `ME n · TE n` chip on that product reads **"the blueprint you declared by
+hand"** — not "from your own blueprint" and not "un-researched". Materials and job duration move to
+match the ME/TE you typed. Declared reaction formulas cap concurrent reactions exactly like owned
+ones (one formula, one job). Removing the row puts the plan back where it was.
+
+⚠ **A declaration REPLACES what ESI read for that product** — it does not add to it. If you own three
+copies and declare one, the plan believes you have one. This is deliberate (there is no id a user can
+type that would let the two be matched item by item, so adding would double-count every re-typed
+print); list every print of that product you intend to use. Products you do not declare are
+untouched. For the same reason a declared formula suppresses the paste/observed evidence for that
+product — declaring three and pasting the same three is three, not six.
+
+**Prefer (the original / the copies):** only bites when you hold BOTH kinds of print for a product.
+The original costs no copies and covers any batch but is ONE print, so one job at a time; the copies
+run side by side but get consumed. Expect the job count AND the cost to move when you switch it. A
+row with **quantity 0** sets only the preference and declares no print — use that when your prints
+are ones ESI can already see.
+
+**Bug if:** the chip says "from your own blueprint" for something you typed in; the ME/TE you entered
+doesn't change materials or duration; a declared print is counted on top of an ESI-read one; or the
+preference changes nothing on a product where you hold both a BPO and copies.
+
 ### B4. Reactions formula cap (`reactions_formula_cap`)
 
 **Where:** Reactions → *Suggest*, and a customer order.

@@ -1109,8 +1109,26 @@ def prepare_plan_inputs(ctx: int, targets: list[tuple[int, int]], opts: BuildOpt
         if tid not in params.me_by_product:
             params.me_by_product[tid] = me_te
             params.me_source[tid] = "contract"
-    for tid in params.owned:
-        params.me_source.setdefault(tid, "owned")
+    # Where an owned product's ME/TE came from. Two provenances, never blurred:
+    #
+    #   "owned"    — READ from `GET /characters/{id}/blueprints/`. A measurement of a print the
+    #                account provably holds.
+    #   "declared" — the user TYPED it (`pp_industry_blueprints`). Not a measurement, and reported
+    #                as its own thing so the plan can say so; claiming ESI-grade knowledge for a
+    #                number somebody entered is the one thing this feature must not do.
+    #
+    # A declaration outranks the ESI read for its product, and that is already settled upstream:
+    # `owned_blueprints` REPLACES a declared product's copies rather than adding to them (see its
+    # docstring for why item-level reconciliation is impossible). The justification for that
+    # ordering belongs here too, because it is a policy and not a mechanism: ESI is measured truth
+    # about a print the user really holds, but it can only ever see their PERSONAL hangar, and the
+    # print a corp-hangar builder will actually install is one it structurally cannot see. So the
+    # two are not competing descriptions of one print — the declaration is usually about a
+    # DIFFERENT, better-researched print, and the whole reason the user bothered to type it is that
+    # we were wrong. The per-order override still wins over both, unchanged: it names one order's
+    # print, which is the more specific statement, and this one is account-level.
+    for tid, own in params.owned.items():
+        params.me_source.setdefault(tid, "declared" if own.get("source") == "manual" else "owned")
     # The user's own call comes last — they know which print they're really using.
     for key, val in (opts.me_te_overrides or {}).items():
         try:

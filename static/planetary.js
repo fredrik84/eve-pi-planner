@@ -2944,6 +2944,7 @@ function _loadMarketsSettings() {
 // they render into #indBlueprints / #indAssets, which now live in this section.
 function _loadBlueprintsSettings() {
   if (typeof indLoadBlueprints === 'function') indLoadBlueprints();
+  if (typeof indLoadManualBps === 'function') indLoadManualBps();
   if (typeof indLoadAssets === 'function') indLoadAssets();
 }
 

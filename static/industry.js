@@ -1008,6 +1008,113 @@ async function indRefreshBlueprints() {
   indLoadSetupSummary();   // this panel now lives in Settings, so the tab's own summary needs telling
 }
 
+// ── Blueprints declared by hand — Settings → Blueprints & formulas ──────────────────────────
+// The ESI panel above reads PERSONAL blueprints only, so a print in a corp or shared hangar can be
+// stated here and nowhere else. Same section on purpose: "what prints do I own" is one question.
+// A declaration REPLACES what ESI read for its product (see owned_blueprints' merge rule) — the
+// hint in index.html says so, because a user who declares one of three copies has just told the
+// plan they hold one.
+let _indManualPick = null;      // {type_id, name} chosen in the add row
+
+async function indLoadManualBps() {
+  const sec = document.getElementById('indManualBpSubsec');
+  const el = document.getElementById('indManualBps');
+  if (!el || !sec) return;
+  if (!_featureActive('industry_manual_blueprints')) { sec.style.display = 'none'; return; }
+  sec.style.display = '';
+  let d = null;
+  try { d = await api('/api/industry/manual-blueprints'); } catch (e) { el.innerHTML = ''; return; }
+  const rows = (d.entries || []).map(e => {
+    const runs = e.kind === 'bpo' ? 'original (BPO)' : `${e.runs} run${e.runs === 1 ? '' : 's'}`;
+    const pref = e.prefer === 'bpo' ? ' · use the original'
+      : e.prefer === 'bpc' ? ' · use the copies' : '';
+    // A quantity-0 row declares no print at all — it only carries the BPO-vs-BPC choice, which is
+    // how someone whose prints ESI CAN see states a preference without retyping the holding.
+    const qty = e.quantity > 0 ? `${e.quantity}× ` : 'preference only · ';
+    return `<div class="ind-src-row"><span class="ind-src-name">${_esc(e.name)}</span>`
+      + `<span class="ind-src-meta">${qty}ME ${e.me} · TE ${e.te} · ${runs}${_esc(pref)}</span>`
+      + `<button class="ind-src-del" title="Remove this declaration"`
+      + ` onclick="indDeleteManualBp(${e.id})">✕</button></div>`;
+  }).join('');
+  el.innerHTML = `<div class="ind-src-list">${rows || '<span class="ind-bp-hint">Nothing declared yet.</span>'}</div>`
+    + `<div class="ind-manual-bp-add">`
+    + `<input id="indManualBpSearch" class="bug-input" placeholder="Product (e.g. Nitrogen Fuel Block)"`
+    + ` autocomplete="off" oninput="indManualBpSearch(this.value)">`
+    + `<div id="indManualBpResults" class="ind-search-results" style="display:none"></div>`
+    + `<label>ME<input id="indManualBpMe" type="number" min="0" max="10" value="0" class="bug-input dummy-num"></label>`
+    + `<label>TE<input id="indManualBpTe" type="number" min="0" max="20" value="0" class="bug-input dummy-num"></label>`
+    + `<label title="Blank = an original (BPO), which covers any batch and is never consumed">Runs`
+    + `<input id="indManualBpRuns" type="number" min="0" placeholder="BPO" class="bug-input dummy-num"></label>`
+    + `<label title="How many separate prints you hold. 0 declares no print and only sets the BPO/BPC choice below.">Qty`
+    + `<input id="indManualBpQty" type="number" min="0" value="1" class="bug-input dummy-num"></label>`
+    + `<label title="When you hold both an original and copies of this product, which should the plan spend? The original costs no copies but runs one job at a time; copies run side by side but are consumed.">Prefer`
+    + `<select id="indManualBpPrefer" class="bug-input">`
+    + `<option value="">no preference</option><option value="bpo">the original</option>`
+    + `<option value="bpc">the copies</option></select></label>`
+    + `<button onclick="indSaveManualBp(this)">Add</button>`
+    + `<span id="indManualBpMsg" class="bug-status-msg"></span></div>`;
+  _indManualPick = null;
+}
+
+async function indManualBpSearch(q) {
+  const box = document.getElementById('indManualBpResults');
+  if (!box) return;
+  _indManualPick = null;
+  if (!q || q.trim().length < 2) { box.style.display = 'none'; return; }
+  try {
+    const d = await api('/api/industry/search?q=' + encodeURIComponent(q.trim()));
+    if (!d.results || !d.results.length) {
+      box.innerHTML = '<div class="ind-search-empty">No buildable match</div>';
+      box.style.display = ''; return;
+    }
+    box.innerHTML = d.results.map(x =>
+      `<div class="ind-search-row" onclick="indManualBpPick(${x.type_id}, '${_esc(x.name).replace(/'/g, "\\'")}')">${_esc(x.name)}</div>`
+    ).join('');
+    box.style.display = '';
+  } catch (e) { box.style.display = 'none'; }
+}
+
+function indManualBpPick(typeId, name) {
+  _indManualPick = { type_id: typeId, name: name };
+  const inp = document.getElementById('indManualBpSearch');
+  if (inp) inp.value = name;
+  const box = document.getElementById('indManualBpResults');
+  if (box) box.style.display = 'none';
+}
+
+async function indSaveManualBp(btn) {
+  const msg = document.getElementById('indManualBpMsg');
+  if (!_indManualPick) { if (msg) msg.textContent = 'Pick a product first'; return; }
+  const num = (id, dflt) => {
+    const v = document.getElementById(id);
+    const n = v ? parseInt(v.value, 10) : NaN;
+    return isNaN(n) ? dflt : n;
+  };
+  const runsEl = document.getElementById('indManualBpRuns');
+  // Blank runs is the whole encoding for "this is an original" — null on the wire, -1 in the row.
+  const runs = (runsEl && runsEl.value.trim() !== '') ? num('indManualBpRuns', 0) : null;
+  const prefEl = document.getElementById('indManualBpPrefer');
+  if (btn) btn.disabled = true;
+  try {
+    await apiSend('POST', '/api/industry/manual-blueprints', {
+      type_id: _indManualPick.type_id,
+      me: num('indManualBpMe', 0), te: num('indManualBpTe', 0),
+      runs: runs, quantity: num('indManualBpQty', 1),
+      prefer: prefEl ? prefEl.value : '',
+    });
+  } catch (e) {
+    if (msg) msg.textContent = String(e.message || e);
+    if (btn) btn.disabled = false;
+    return;
+  }
+  indLoadManualBps();
+}
+
+async function indDeleteManualBp(id) {
+  try { await apiSend('DELETE', '/api/industry/manual-blueprints/' + id); } catch (e) {}
+  indLoadManualBps();
+}
+
 // ── Slot pool ───────────────────────────────────────────────────────────────────────────────
 // Mounted in two places — the Job slots modal, and step 2 of the first-run wizard — so the markup lives
 // in one function. Returns the loaded pool so a caller can react to it (the wizard warns when the
@@ -2124,6 +2231,9 @@ let _indMeTe = {};
 
 const _IND_ME_SRC = {
   owned: 'from your own blueprint',
+  // Deliberately worded as YOUR statement, not as a reading — a typed number and an ESI-read one
+  // are different kinds of evidence and the chip is where that difference is visible.
+  declared: 'the blueprint you declared by hand',
   contract: 'assumed from the contract copy this plan buys',
   override: 'you set this',
   default: 'un-researched — no blueprint of yours and none listed',

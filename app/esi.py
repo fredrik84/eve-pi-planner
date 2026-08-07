@@ -1191,7 +1191,7 @@ _CONTEXT_OWNED_TABLES = [
     "pp_alert_settings", "pp_notification_prefs", "pp_notification_settings", "pp_notification_log",
     "pp_market_config", "pp_asset_sources", "pp_asset_stock", "pp_source_sets",
     "pp_industry_settings", "pp_industry_orders", "pp_industry_shares", "pp_industry_completions",
-    "pp_industry_manual_done", "pp_industry_sourced",
+    "pp_industry_manual_done", "pp_industry_sourced", "pp_industry_blueprints",
     "pp_account_reaction_settings", "pp_reaction_orders", "pp_reaction_completions",
     "pp_planet_submissions", "pp_oauth_pending",
 ]

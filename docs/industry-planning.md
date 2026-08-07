@@ -9,8 +9,8 @@ Find a section: `grep -n '^## ' docs/industry-planning.md` and read from that li
 ## Contents
 
 - **Make-or-buy overrides and the marginal-saving strip** — the two shortcuts that buy instead of build, `force_build_ids`, and where the user overrules them
-- **Blueprint ME/TE: where the numbers come from, and the two override paths** — precedence (override > owned > contract > 0/0), the job chip vs the order edit row
-- **Blueprint copies: coverage, per-job research, and one print per job** — runs coverage, `_print_limits`, reaction formulas, and why unknown ownership never caps
+- **Blueprint ME/TE: where the numbers come from, and the two override paths** — precedence (override > declared > owned > contract > 0/0), the job chip vs the order edit row
+- **Blueprint copies: coverage, per-job research, and one print per job** — runs coverage, `_print_limits`, reaction formulas, why unknown ownership never caps, and prints declared by hand (`industry_manual_blueprints`)
 - **Scheduling: slots, pace, cohort alignment and compaction** — `_PACE_OVERSHOOT`, `_align_cohorts`, `pace_cap`, the reaction job-length ceiling — why a job may run long but never past its consumer
 - **The Step-by-step view must account for its own total** — step offsets overlap on purpose; do not make them sum
 - **Planning each order on its own (`industry_per_order_plans`)** — the compare endpoint, first-come-first-served consumption, cross-order alignment
@@ -86,9 +86,10 @@ research (`pp_bpc_observations.me/te`, captured by the existing scan — no extr
 `bpc.representative_me_te(info)` picks the copy the plan would actually buy (**cheapest per run**,
 ties toward better research) and its ME/TE seeds `params.me_by_product`. Price and efficiency then
 describe the same purchase; costing against one copy's price and another's research was the specific
-mismatch to avoid. Precedence: **user override > owned blueprint > contract copy > ME 0/TE 0**, with
+mismatch to avoid. Precedence: **user override > declared by hand > owned blueprint > contract copy >
+ME 0/TE 0**, with
 `params.me_source` recording which, so the plan can show it. Each build step in `requirements` carries
-`me`, `te`, `me_source` (`owned`/`contract`/`override`/`default`/`reaction`); the UI renders a
+`me`, `te`, `me_source` (`owned`/`declared`/`contract`/`override`/`default`/`reaction`); the UI renders a
 colour-coded `ME n · TE n` chip on every job chip that opens an inline editor. Overrides live in
 `BuildOptions.me_te_overrides` (`{"<type_id>": [me, te]}`, string keys — JSON) and persist on the
 order (`pp_industry_orders.me_te_overrides`), unioned across the queue exactly like
@@ -148,9 +149,50 @@ copy a job will run off.
   (`blend_me_te`), with the remainder at `buy_me_te`. Using the best copy for the whole batch would
   over-credit every run after that copy runs out. `runs=None` (a bare call) weights the whole
   holding, which is the conservative reading. The `requirements` row reports that blend.
-- **Precedence is unchanged: user override > owned blueprint > contract copy > ME 0/TE 0.** An
+- **Precedence: user override > declared by hand > owned blueprint > contract copy > ME 0/TE 0.** An
   override sets `me_source[tid] = "override"`, and `copies_for` returns nothing for such a type, so
   the per-copy path can never outrank what the user said explicitly.
+
+**Prints declared by hand (`industry_manual_blueprints`).** `GET /characters/{id}/blueprints/` is
+PERSONAL-only and there is no corp-hangar blueprint endpoint without the Director role, so a builder
+whose prints live in a corp hangar could state their ME/TE nowhere at all and every such build was
+planned at ME 0 / TE 0 — materials and duration both wrong. Pasting a hangar as STOCK answers the
+FORMULA case only (an asset row carries no ME, TE or runs, so it deliberately credits nothing for a
+manufacturing blueprint). `pp_industry_blueprints` — `(context_id, id, type_id, me, te, runs,
+quantity, prefer)` — is the declaration layer, edited in **Settings → Blueprints & formulas** beside
+the ESI panel (`/api/industry/manual-blueprints`, GET/POST/DELETE). Its encoding is the one
+`owned_blueprints` already used: **runs blank/-1 = a BPO**, anything else a BPC with that many runs;
+`quantity` expands into that many separate physical prints, exactly like an ESI stack.
+- **The merge rule is REPLACEMENT, per product**, documented in full in `owned_blueprints`'
+  docstring. For a product with at least one declared print the declaration IS the holding and the
+  ESI reading for that product is dropped; other products are untouched. Not addition, because the
+  two sources share no key a user can type (an ESI row's identity is its `item_id`, invisible in the
+  client), so adding would double-count every re-typed print — silently and unboundedly. Replacement's
+  failure is bounded and visible on the plan. It is also the rule a pasted hangar already gets.
+- **It does not double-count against the formula evidence layer either.** A declared product is
+  marked `source: "manual"` on its `owned` entry, and `formula_print_floor` skips it entirely
+  (precedence **a0**, above the paste rule): a hand-declared formula, a pasted one and one observed
+  in a job are one physical item at least as often as three, and the declaration is the only one of
+  the three that claims to be the whole holding.
+- **`me_source` reports `"declared"`, never `"owned"`.** A typed number is the user's word; an ESI
+  read is a measurement. The chip on every job says which. The declaration beats the ESI read because
+  ESI can only see the PERSONAL hangar — the corp-hangar print the builder will actually install is
+  one it structurally cannot see, so they are usually not two descriptions of one print. The
+  per-order override still wins over both: it names one order's print, which is more specific than an
+  account-level statement.
+- **BPO-vs-BPC preference** (`prefer` = `''`/`bpo`/`bpc`, a property of the PRODUCT — setting it on
+  any row sets it for all rows of that product). When a holding contains both kinds, the plan is told
+  which to spend, because the two differ in two numbers at once and the math cannot choose: an
+  ORIGINAL costs no copies and covers any batch but is ONE print, so one job at a time; N COPIES run
+  N jobs side by side but have finite runs and are consumed. `_apply_kind_preference` only ever
+  narrows, and only when both kinds are present, so a preference can never empty a holding. A row
+  with `quantity = 0` declares no print and carries only the preference — how an account whose prints
+  ESI *can* see states a choice without retyping the holding.
+- Manual prints feed the copies pool, `_print_limits` and the cost basis exactly as ESI-read ones do
+  — they are the same `{me, te, kind, runs}` entries in the same `copies` list.
+- Covered by `test_manual_blueprints.py`, including the conservatism case: with the flag off nothing
+  is read, and a plan run against a holding whose dicts RAISE on the two new keys (`source`,
+  `prefer`) is byte-for-byte the plan run against a plain one.
 - Covered by `test_every_copy_the_account_holds_counts`,
   `test_a_stack_of_originals_is_not_a_copy_that_covers_nothing`,
   `test_each_job_runs_off_the_copy_it_is_installed_on`,

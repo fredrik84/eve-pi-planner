@@ -1207,6 +1207,14 @@ PVF-N9    3         95                 60             80                  100   
               <div class="settings-subsec-hint">A connected character's own blueprints and reaction formulas, with their real ME &amp; TE. ESI returns <b>personal</b> items only — a formula sitting in a corp or shared hangar will not show up here, so add it as stock below.</div>
               <div id="indBlueprints" class="ind-bp-row"></div>
             </div>
+            <!-- Declared by hand. Sits beside the ESI panel rather than in a surface of its own, so
+                 "what prints do I own" is one question with one answer. ESI reads PERSONAL items
+                 only, so a corp-hangar print can be stated here and nowhere else. -->
+            <div id="indManualBpSubsec" class="settings-subsec" style="display:none">
+              <div class="settings-subsec-title">Declared by hand</div>
+              <div class="settings-subsec-hint">Prints ESI cannot see — anything in a <b>corp or shared hangar</b>. Give the product, its ME &amp; TE, and how many you hold; leave <b>runs</b> blank for an original (BPO). What you declare here <b>replaces</b> what ESI read for that product, so list every print of it you will use.</div>
+              <div id="indManualBps"></div>
+            </div>
             <div class="settings-subsec">
               <div class="settings-subsec-title">Stock on hand — materials <b>and reaction formulas</b></div>
               <div class="settings-subsec-hint">The hangars, containers and pasted stacks the planners may draw from. Materials found here are subtracted from what a plan asks you to buy; <b>reaction formulas found here cap how many reaction jobs can run at once</b> — one formula, one job. If your formulas live in a corp or shared hangar, paste that hangar here: it is the only way to tell us about them.</div>
