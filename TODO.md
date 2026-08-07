@@ -149,23 +149,26 @@ throughput — but it needs partial-output tracking and changes what an assignme
 
 Order: 21a → 21b → 21c (all done) → 21d, which is the only one left.
 
-## 22. The general shopping list double-counts every chain (2026-08-07, found while doing 21c)
+## 22. The general shopping list double-counts every chain — DONE 2026-08-07
 
-`reactions_shopping_list` explodes EVERY pending assignment row down to raw leaves
-(`graph.py`, the loop over `assignments`). A chain assign stores a row per tier AND a row for the
-product, so the top row's walk already includes the intermediate's materials — and then the
-intermediate's own row adds them a second time. Measured on a two-tier synthetic chain: 7,726 goo
-becomes 15,452. **The player buys twice what they need for anything multi-tier.**
+`reactions_shopping_list` exploded EVERY pending assignment row down to raw leaves. A chain assign
+stores a row per tier AND a row for the product, so the top row's walk already included the
+intermediate's materials — and then the intermediate's own row added them a second time. Measured on
+a two-tier synthetic chain: 7,726 goo became 15,452. **The player bought twice what they needed for
+anything multi-tier.** The per-order materials report was never affected (it explodes once from
+`target_qty`).
 
-The per-order materials report is NOT affected — it explodes once from the order's `target_qty`.
-This is the general "what do I buy for my speculative plan" list only.
+**Fixed in place, no flag** (a defect in a shipped feature, CLAUDE.md rule 2). `_shopping_roots`
+keeps only the rows nothing else covers: a chain is identified by the assign that wrote it —
+`(character_id, created_at)`, which all three insert paths already produce in one call with one
+timestamp — and within a group only the HIGHEST tier is a root. A separate assign of the same
+product is its own group and still counts, so a product deliberately assigned on its own to sell is
+never swallowed. A group whose top row was cancelled falls back to what remains.
 
-Fix is to explode only the rows nothing else covers — the TOP of each chain — rather than every
-row. `tier_order` is in the table and the top of a chain is its highest tier, but the grouping is
-per (character, product, tier) and a chain isn't stamped with a chain id, so the first concrete
-step is deciding what identifies "one chain's rows": most likely the assign that created them
-(`created_at` + character is already how they arrive together), or a real `chain_id` column added
-at insert. **Open.**
+Rejected: "skip anything another assigned product consumes" (would eat a deliberate standalone job)
+and a new `chain_id` column (could not group the rows already in the table). The list now also
+spends held stock (21c), so it stops asking for goo to make an intermediate that is in the hangar.
+`test_shopping_roots.py`.
 
 ## 20. The two Reactions "clear" paths disagree about customer orders (2026-08-07, small)
 
@@ -385,6 +388,7 @@ match any template we generate) is still unscoped.
 | — | Alliance-shared build structures as suggestions (`industry_group_structures`) | 08-05 |
 | — | Pin a rig FAMILY to a structure and every job in it is installed there, whatever the routing scores (`pp_industry_settings.build_pins`, on the `industry_rig_routing` flag). A pin can only pick among sites already legal for that job's activity; one it can't honour falls back to the automatic routing and says so. The pin decides WHERE, `fittable_families` still decides what BONUS | 08-06 |
 | 19b | Reaction plan STAGES on the dashboard: planned slots sort by `tier_order`, carry an `S<n>` badge, later stages dim/dash, and the "To install" checklist splits under stage banners. The number is `tier_order + 1` absolute, never re-ranked against what's still pending | 08-07 |
+| 22 | Reactions shopping list stopped double-counting chains — only the top row of each assign is exploded, so a two-tier plan no longer asks for twice the goo. `test_shopping_roots.py` | 08-07 |
 | 21c | Reactions spend what you already hold (`reactions_use_stock`): an intermediate in an enabled source shortens or drops its stage and everything below it, in the plan and in the materials walk, consumed once per plan and always reported. `test_reaction_stock.py` | 08-07 |
 | 21a-b | One slot model for reaction chains (`reactions_parallel_stages`): stages reuse a reactor instead of each reserving one, so free slots show what can really start — and reactors nobody claimed are spent splitting the slowest step across more jobs. Runs, cost and profit untouched. `test_parallel_stages.py` | 08-07 |
 | 19a | "You don't hold a formula for these" (`reactions_missing_formulas`): once a PASTED window makes the library complete, an undeclared formula is one you don't own — reported with runs and a contract price on all three planning surfaces, and kept out of every shopping list and cost total. Unresolved paste names are KEPT and shown beside the finding, because a rename otherwise reads as "you don't own this". `app/reactions/library.py`, `test_missing_formulas.py` | 08-07 |

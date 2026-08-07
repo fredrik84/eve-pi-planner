@@ -9,6 +9,7 @@ Find a section: `grep -n '^## ' docs/reactions.md` and read from that line — t
 
 - **Reactions suggestion engine (`app/reactions/advisor.py`)** — what the advisor suggests and on what basis
 - **A formula is one reaction at a time (`reactions_formula_cap`)** — why ten free slots can be planned as one job
+- **The shopping list buys a chain once (`_shopping_roots`)** — why only the top row of an assign is exploded
 - **What you already hold is not work (`reactions_use_stock`)** — how held intermediates shorten a chain, and the one place stock is deliberately not consulted
 - **One slot model: a chain's stages reuse a reactor (`reactions_parallel_stages`)** — why stages can't run in parallel, what reuses what, and where idle reactors go
 - **Absence becomes knowledge, but only after a paste (`app/reactions/library.py`)** — when an undeclared formula means "you don't own it", and what gets reported instead of planned
@@ -46,6 +47,17 @@ Two rules it must not break: **a missing key means unknown, and unknown never re
 evidence, or an incomplete blueprint picture, caps nothing — the same rule
 `_assigned_slot_capacity` and `_print_limits` follow); and **chain tiers are sequential**, so the
 cap is per tier and one formula may serve tier 0 and then tier 1.
+
+## The shopping list buys a chain once (`_shopping_roots`)
+
+Every pending plan row used to be exploded to raw leaves. A chain assign stores a row per tier AND
+one for the product, and a walk from the product already covers its intermediates — so a two-tier
+chain's goo was counted twice and the player was told to buy double. `_shopping_roots` keeps only
+the rows nothing else covers: **a chain is the assign that wrote it, `(character_id, created_at)`**
+(all three insert paths write one timestamp for the whole chain), and within that group only the
+highest tier is a root. A separate assign of the same product is its own group, so a product
+deliberately assigned on its own to sell is still real demand. The per-order materials report never
+had the bug — it explodes once from `target_qty`.
 
 ## What you already hold is not work (`reactions_use_stock`)
 

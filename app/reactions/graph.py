@@ -692,6 +692,40 @@ def _ordered_chain_tiers(formula_inputs: list[dict], runs: int, reached: dict,
     return sorted(tier_runs.items(), key=lambda kv: reached.get(kv[0], {}).get("reaction_count", 0))
 
 
+def _shopping_roots(rows: list[dict]) -> list[dict]:
+    """The plan rows whose materials nothing else already accounts for.
+
+    A chain assign stores one row per intermediate AND one for the product, and exploding a row to
+    raw goo walks its WHOLE recipe — so the product's own walk already contains every intermediate's
+    materials. Exploding all of them counted a two-tier chain's goo twice (7,726 units became 15,452
+    on a synthetic chain), and the player was told to buy double for anything multi-tier.
+
+    **A chain is identified by the assign that created it: (character_id, created_at).** All of a
+    chain's rows are written in one call with a single timestamp (`assign_reaction`,
+    `_allocate_and_insert`, `adopt_orphan` all compute `now` once), and a separate assign of the
+    same product gets its own. Within a group only the HIGHEST tier is a root; everything below it
+    is an instruction to react something the root's walk already bought for.
+
+    Deliberately not "is this product an input of another assigned product": that also skips a
+    product deliberately assigned on its own to sell, which is real demand. And deliberately not a
+    new `chain_id` column, which could not group the rows already in the table.
+
+    A group whose top row was cancelled leaves its remaining tier as the new highest — correct, it
+    is genuinely the top of what is left to buy for.
+    """
+    groups: dict[tuple, list[dict]] = {}
+    for r in rows:
+        # Rounded to the millisecond: one insert writes one timestamp to every row it creates, so
+        # this is an exact match in practice; the rounding only guards float round-tripping.
+        groups.setdefault((r.get("character_id"), round(float(r.get("created_at") or 0.0), 3)),
+                          []).append(r)
+    roots: list[dict] = []
+    for rs in groups.values():
+        top = max(int(r.get("tier_order") or 0) for r in rs)
+        roots.extend(r for r in rs if int(r.get("tier_order") or 0) == top)
+    return roots
+
+
 def _materials_report(totals: dict[int, float], reached: dict, types: dict) -> list[dict]:
     """Turns a leaf-level {type_id: qty} total (as built by _explode_shopping_list) into the
     display row shape both the pending-assignments shopping list and a customer order's own
@@ -763,11 +797,12 @@ def reactions_shopping_list(include_orders: bool = False,
         if not char_ids:
             return {"materials": [], "speculative_count": 0, "order_count": 0}
         placeholders = ",".join("?" * len(char_ids))
-        rows = con.execute(
-            f"SELECT type_id, runs, order_id FROM pp_reaction_assignments "
+        rows = [dict(r) for r in con.execute(
+            f"SELECT character_id, type_id, runs, order_id, created_at, "
+            f"COALESCE(tier_order,0) AS tier_order FROM pp_reaction_assignments "
             f"WHERE character_id IN ({placeholders})",
             char_ids,
-        ).fetchall()
+        )]
     finally:
         con.close()
 
@@ -788,11 +823,18 @@ def reactions_shopping_list(include_orders: bool = False,
     goo, reached, _, _, types = loaded
 
     totals: dict[int, float] = {}
-    for a in assignments:
+    # Roots only — a chain's intermediate rows are covered by their own product's walk, and
+    # exploding both bought everything twice. See `_shopping_roots`.
+    # One stock pool across every root: the root walk re-derives each chain from raw goo and knows
+    # nothing about the stages the assign already dropped as held, so without this the list would
+    # ask the player to buy goo for an intermediate sitting in their hangar. Consumed once, so two
+    # chains needing the same intermediate don't both claim it.
+    pool = reaction_stock_pool(context_id)
+    for a in _shopping_roots(assignments):
         node = reached.get(a["type_id"])
         if not node or node["via"] is None:
             continue  # shouldn't happen (assignments are always reaction products), skip defensively
         top_units = a["runs"] * node["via"]["output_qty"]
-        _explode_shopping_list(a["type_id"], top_units, reached, totals)
+        _explode_shopping_list(a["type_id"], top_units, reached, totals, pool)
 
     return {"materials": _materials_report(totals, reached, types), **counts}
