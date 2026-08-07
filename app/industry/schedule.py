@@ -309,8 +309,10 @@ def _print_limits(params, tid: int, activity: str, runs: int) -> tuple[int | Non
     # is a union over the characters that have a cached blueprint list, so on a partly-connected
     # account every count in it is a floor: prod account 1 has 2 of 14 characters cached and still
     # shows prints for 159 types, which the cap would take for the whole truth and serialise work the
-    # builder can really run in parallel. Nothing is capped until the account's picture is complete.
-    if not params.prints_known():
+    # builder can really run in parallel. Nothing is capped until the account's picture is complete
+    # — EXCEPT a product whose holding the user DECLARED by hand, which is known on its own terms
+    # and does not wait on a scope some other character never granted (`prints_known(tid)`).
+    if not params.prints_known(tid):
         return None, False
     if activity != "manufacturing":
         own = (params.owned or {}).get(tid) or {}

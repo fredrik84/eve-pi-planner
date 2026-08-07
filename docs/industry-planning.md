@@ -303,6 +303,19 @@ ORIGINAL is one item too) plus the copies the plan already buys to cover the run
     today**. A character without the blueprints scope can never have a cache, so such an account
     stays "unknown" until it connects one — deliberately NOT a partial-credit scheme, and never a
     cap over just the subset we can see.
+  - **...EXCEPT a product the user DECLARED by hand, which is known per PRODUCT** (fixed
+    2026-08-07). The account-wide gate above is a statement about an *ESI scan*, and it was
+    suppressing caps on holdings that are not scans at all: a user declared 238 formulas, ordered
+    Reinforced Carbon Fiber, held 10 of its formula and was assigned **20** concurrent jobs, purely
+    because 12 of their 14 characters had never granted the blueprints scope. A declaration is the
+    user stating what they own — `owned_blueprints` already lets it REPLACE the ESI reading for its
+    product — so it answers the "do we know this holding" question for its own product and nothing
+    else. `blueprints.declared_products(owned)` (the `source: "manual"` mark) →
+    `BuildParams.declared_prints` → `prints_known(tid)`, asked by `_print_limits(params, tid, …)`;
+    `formula_concurrency_caps` does the same on the Reactions side, keeping a key only for declared
+    products while coverage is incomplete. `prints_known()` with no type still answers for the
+    account, which is what `print_coverage.prints_counted` reports. **An undeclared product on an
+    incomplete account is still uncapped** — that rule is untouched, and pinned by its own check.
   Silently not capping is its own kind of lie once the user knows the feature exists, so the plan
   says which state it is in: `print_coverage` (`{characters, cached, missing, complete,
   prints_counted}`). That state used to get its own banner ("this schedule assumes unlimited
@@ -310,7 +323,11 @@ ORIGINAL is one item too) plus the copies the plan already buys to cover the run
   build-time tile's tooltip instead. **The gate itself is untouched and must stay that way.** Pinned by
   `test_a_reaction_formula_is_an_item_too_and_unknown_ownership_never_serialises` and
   `test_a_half_connected_account_is_never_capped_on_what_it_half_shows` — the second exists
-  specifically so the coverage check can't be "simplified" away later.
+  specifically so the coverage check can't be "simplified" away later — plus
+  `test_manual_blueprints.py`'s "an incomplete ESI picture does not suppress a DECLARED holding's
+  cap" and `test_reactions.py`'s
+  `test_a_declared_holding_is_known_without_full_esi_coverage`, which reproduce the 20-jobs-on-10-
+  formulas report and assert the undeclared control in the same breath.
 - **What can't be bought is REPORTED, not spent on** — `print_limits` (`{name, noun, held, jobs,
   extra, hours, hours_if_held}`, `metrics.print_limited_steps`) says what holding more prints would
   save on that step, and no ISK anywhere moves for it. Measured with one formula of each held: a

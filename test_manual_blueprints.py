@@ -280,6 +280,49 @@ def main():
         check(_print_limits(_params(owned=one), formula_out, "reaction", 40) == (1, False),
               "one declared formula is one job at a time")
 
+        # ── a declaration is known per PRODUCT, not per account ───────────────────────────────
+        # The Industry half of the bug the Reactions side hit: `prints_known()` asked
+        # `blueprint_coverage().complete`, which is an account-wide fact about an ESI SCAN, and used
+        # it to suppress a cap on a holding the user had stated by hand. A declaration is not a
+        # scan. What must NOT change: an undeclared product on the same half-seen account is still
+        # a floor, and a floor never serialises real work.
+        print("an incomplete ESI picture does not suppress a DECLARED holding's cap:")
+        _reset(con)
+        _character(con)
+        _esi_cache(con, [{"type_id": rx_tid, "me": 0, "te": 0, "quantity": 3, "runs": -1}])
+        con.execute("INSERT INTO pp_characters (character_id, character_name, context_id, scopes) "
+                    "VALUES (?,?,?,?)", (CHAR - 1, "NoScope", CTX, ""))
+        con.commit()
+        cov = bp.blueprint_coverage(CTX)
+        check(not cov["complete"] and cov["missing"] == 1,
+              f"a character with no blueprint scope makes the account's picture incomplete ({cov})")
+        _declare(con, 1, formula_out, runs=-1, qty=10)
+        decl_owned = owned_blueprints(CTX)
+        half = BuildParams(owned=decl_owned, blueprint_coverage=cov,
+                           declared_prints=bp.declared_products(decl_owned))
+        check(_print_limits(half, formula_out, "reaction", 40) == (10, False),
+              "ten declared formulas cap at ten jobs even though a character was never scanned")
+        check(half.prints_known(formula_out) and not half.prints_known(),
+              "the product is known while the ACCOUNT still is not — that is the whole fix")
+
+        # The control, and the constraint: same account, a product with only a partial scan behind
+        # it. Its ESI count is a floor and must not become a cap.
+        undeclared = next((r["output_type_id"] for r in con.execute(
+            "SELECT output_type_id FROM reactions WHERE output_type_id != ? LIMIT 1",
+            (formula_out,))), None)
+        if undeclared is not None:
+            scanned = {undeclared: {"me": 0, "te": 0, "kind": "bpo", "runs": -1, "copy_count": 1,
+                                    "copies": [{"me": 0, "te": 0, "kind": "bpo", "runs": -1}]}}
+            mixed = BuildParams(owned={**decl_owned, **scanned}, blueprint_coverage=cov,
+                                declared_prints=bp.declared_products(decl_owned))
+            check(_print_limits(mixed, undeclared, "reaction", 40) == (None, False),
+                  "and an UNDECLARED product on the same account stays uncapped — absent evidence "
+                  "never serialises work")
+            check(_print_limits(mixed, formula_out, "reaction", 40) == (10, False),
+                  "with the declared one beside it still capped, in the same params")
+        con.execute("DELETE FROM pp_characters WHERE character_id=?", (CHAR - 1,))
+        con.commit()
+
         # ── BPO vs BPC ────────────────────────────────────────────────────────────────────────
         print("the BPO-vs-BPC preference moves both the print cap and the cost basis:")
         _reset(con)

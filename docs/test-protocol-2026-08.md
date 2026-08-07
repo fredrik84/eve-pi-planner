@@ -189,7 +189,16 @@ preference changes nothing on a product where you hold both a BPO and copies.
 **Expect:** with one formula, one job at a time regardless of free slots. The order's quoted time
 **lengthens** accordingly, with a line saying a formula is locked while a job runs on it.
 
-**Bug if:** suggestions still fill every free slot, or the customer quote ignores the cap.
+**Also expect (fixed 2026-08-07):** the cap fires on a product you **declared by hand** even when
+your ESI blueprint picture is incomplete — i.e. most of your characters never granted the blueprints
+scope. Declare 10 formulas of one product on such an account and an order that wants 20 slots must
+install **10** jobs; the account-wide coverage gate no longer suppresses a per-product declaration.
+A product you did **not** declare on that same account stays uncapped, which is correct: an
+incomplete scan is a floor, and capping on a floor refuses work you can really do.
+
+**Bug if:** suggestions still fill every free slot, the customer quote ignores the cap, a declared
+holding is ignored because other characters are unscanned, or an *undeclared* product starts being
+capped on a partly-scanned account.
 
 ### B5. Build pins (inside `industry_rig_routing`)
 

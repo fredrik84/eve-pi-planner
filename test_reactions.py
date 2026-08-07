@@ -685,6 +685,151 @@ def test_a_formula_is_one_reaction_at_a_time() -> bool:
     return ok
 
 
+def _seed_uncached_characters(n: int) -> list[int]:
+    """`n` extra characters on the test context with NO blueprint cache — an account whose ESI
+    blueprint picture is incomplete, which is the state 12 of the reporting user's 14 characters
+    were in."""
+    ids = [FAKE_CID + 1 + i for i in range(n)]
+    con = get_connection()
+    for cid in ids:
+        con.execute(
+            "INSERT INTO pp_characters (character_id, character_name, context_id, scopes) "
+            "VALUES (?,?,?,?) ON CONFLICT (character_id) DO UPDATE SET "
+            "context_id=excluded.context_id", (cid, f"Uncached {cid}", FAKE_CTX, ""))
+    con.commit()
+    con.close()
+    return ids
+
+
+def _clear_extra_characters(ids: list[int]) -> None:
+    con = get_connection()
+    for cid in ids:
+        for t in ("pp_char_blueprints", "pp_char_formula_jobs", "pp_char_industry_jobs"):
+            try:
+                con.execute(f"DELETE FROM {t} WHERE character_id=?", (cid,))
+            except Exception:
+                pass
+        con.execute("DELETE FROM pp_characters WHERE character_id=?", (cid,))
+    con.commit()
+    con.close()
+
+
+def _declare(product: int, quantity: int) -> None:
+    """Declare `quantity` formulas of `product` by hand — the row the T9 paste importer writes."""
+    from app.industry.blueprints import ensure_manual_blueprints_table
+    ensure_manual_blueprints_table()
+    con = get_connection()
+    con.execute("DELETE FROM pp_industry_blueprints WHERE context_id=?", (FAKE_CTX,))
+    con.execute("INSERT INTO pp_industry_blueprints (context_id, id, type_id, me, te, runs, "
+                "quantity, prefer, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                (FAKE_CTX, 1, product, 0, 0, -1, quantity, "", 1.0))
+    con.commit()
+    con.close()
+
+
+def _clear_declarations() -> None:
+    con = get_connection()
+    try:
+        con.execute("DELETE FROM pp_industry_blueprints WHERE context_id=?", (FAKE_CTX,))
+        con.commit()
+    except Exception:
+        pass
+    con.close()
+
+
+def test_a_declared_holding_is_known_without_full_esi_coverage() -> bool:
+    """**The reported bug, reproduced.** A user declared 238 reaction formulas by hand, then ordered
+    Reinforced Carbon Fiber and was assigned 20 concurrent jobs against the 10 formulas they had
+    just declared holding. Cause: both cap sites asked `blueprint_coverage().complete`, which was
+    False because 12 of their 14 characters had never granted the blueprints scope — so an
+    ACCOUNT-WIDE fact about an ESI scan suppressed a PER-PRODUCT statement the user had made by
+    hand.
+
+    The distinction the fix turns on, and the thing this test exists to keep straight:
+
+      * a DECLARATION is the user saying what they own. `owned_blueprints` already lets it REPLACE
+        the ESI reading for its product, so it is known whatever some other character's scope says
+        — and it may be capped on.
+      * an incomplete ESI SCAN is still a FLOOR, and capping on a floor serialises work the builder
+        can really do. An UNDECLARED product on the same account must stay uncapped. That rule is
+        not being relaxed here, and the third check below is what proves it.
+    """
+    print(f"\n{'='*60}\n  A declared holding is known without full ESI coverage\n{'='*60}")
+    from app.industry.blueprints import (ensure_char_blueprints_table,
+                                         ensure_formula_job_prints_table)
+    from app.reactions.jobs import _cap_jobs, formula_concurrency_caps
+
+    ensure_char_blueprints_table()
+    ensure_formula_job_prints_table()
+    ok = True
+
+    con = get_connection()
+    rx = con.execute("SELECT reaction_id, output_type_id FROM reactions "
+                     "ORDER BY reaction_id LIMIT 2").fetchall()
+    con.close()
+    if not check(len(rx) >= 2, "the SDE knows some reactions to test with"):
+        return ok
+    declared_formula, declared_product = rx[0]["reaction_id"], rx[0]["output_type_id"]
+    scanned_formula, scanned_product = rx[1]["reaction_id"], rx[1]["output_type_id"]
+
+    prev_cap = _set_feature_state("reactions_formula_cap", "public")
+    prev_manual = _set_feature_state("industry_manual_blueprints", "public")
+    extra = []
+    try:
+        _clear_formula_evidence()
+        extra = _seed_uncached_characters(13)          # 14 characters, 1 will be cached
+
+        # The one character that DID grant the scope holds three of some other formula. That
+        # product is the control: ESI evidence only, on an incomplete picture.
+        con = get_connection()
+        con.execute("INSERT INTO pp_char_blueprints (character_id, blueprints_json, fetched_at) "
+                    "VALUES (?,?,?) ON CONFLICT (character_id) DO UPDATE SET "
+                    "blueprints_json=excluded.blueprints_json",
+                    (FAKE_CID, json.dumps([{"type_id": scanned_formula, "me": 0, "te": 0,
+                                            "quantity": 3, "runs": -1}]), 1.0))
+        con.commit()
+        con.close()
+
+        from app.industry.blueprints import blueprint_coverage, owned_blueprints
+        cov = blueprint_coverage(FAKE_CTX)
+        ok &= check(not cov["complete"] and cov["missing"] == 13,
+                    f"the account's blueprint picture really is incomplete ({cov})")
+
+        _declare(declared_product, 10)
+        owned = owned_blueprints(FAKE_CTX)
+        ok &= check((owned.get(declared_product) or {}).get("copy_count") == 10,
+                    "the declaration reaches owned_blueprints as ten copies")
+        ok &= check((owned.get(declared_product) or {}).get("source") == "manual",
+                    "and is marked as the user's own statement, not a reading")
+
+        caps = formula_concurrency_caps(FAKE_CTX)
+        ok &= check(caps.get(declared_product) == 10,
+                    "a DECLARED holding caps its product at ten, despite 12 characters unscanned")
+        ok &= check(_cap_jobs(caps.get(declared_product), 20) == 10,
+                    "so an order that would have taken 20 slots installs 10 jobs (the reported bug)")
+        ok &= check(scanned_product not in caps,
+                    "while an UNDECLARED product on the same account is not capped at all — an "
+                    "incomplete scan is a floor, and a floor must never serialise real work")
+
+        # Same declaration, complete coverage: unchanged. The fix adds a way to be known, it does
+        # not alter what a fully-scanned account already did.
+        _clear_extra_characters(extra)
+        extra = []
+        ok &= check(blueprint_coverage(FAKE_CTX)["complete"], "and now the picture is complete")
+        full = formula_concurrency_caps(FAKE_CTX)
+        ok &= check(full.get(declared_product) == 10,
+                    "a declared product on a COMPLETE picture caps at ten exactly as before")
+        ok &= check(full.get(scanned_product) == 3,
+                    "and the scanned product is capped too, now that its picture is whole")
+    finally:
+        _clear_extra_characters(extra)
+        _clear_declarations()
+        _clear_formula_evidence()
+        _set_feature_state("industry_manual_blueprints", prev_manual)
+        _set_feature_state("reactions_formula_cap", prev_cap)
+    return ok
+
+
 def test_order_estimate_reflects_the_formula_cap(api: Api) -> bool:
     """The quoted time on a customer order assumes a tier's runs spread across every free slot —
     and that is the number a customer is given. It has to answer to the same formula cap the
@@ -823,6 +968,7 @@ def main() -> int:
             results.append(test_suggest_absorb_contract(api))
             results.append(test_stock_zero_falls_back_to_market())
             results.append(test_a_formula_is_one_reaction_at_a_time())
+            results.append(test_a_declared_holding_is_known_without_full_esi_coverage())
             results.append(test_order_estimate_reflects_the_formula_cap(api))
             results.append(test_suggest_and_assign_respect_the_formula_cap(api))
             _cleanup()

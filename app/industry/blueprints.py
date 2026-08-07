@@ -453,13 +453,24 @@ def _formula_stock_buckets(context_id: int) -> dict[int, dict[str, int]]:
     return buckets
 
 
-def _declared_products(owned: dict[int, dict] | None) -> set[int]:
+def declared_products(owned: dict[int, dict] | None) -> set[int]:
     """Products whose holding the user stated BY HAND (`owned_blueprints`' merge rule).
 
     The evidence layers below must not add anything for these. A hand-declared formula, a formula
     in a pasted hangar and a formula seen in an observed job are three descriptions of one physical
     item at least as often as they are three items, and the declaration is the only one of the three
     that is a statement of totality — so it answers alone.
+
+    **It is also the answer to "do we KNOW this holding", per product.** `blueprint_coverage` asks
+    that question of the ACCOUNT, and rightly so for an ESI reading: a scope that 12 of 14
+    characters never granted makes every scanned count a floor, and capping on a floor serialises
+    work the builder can really do. A DECLARATION is not a scan — it is the user stating what they
+    own, and `owned_blueprints` already treats it as authoritative enough to REPLACE the reading for
+    its product. Suppressing a declared product's cap because some *other* character never granted
+    a scope answers a per-product question with an account-wide one: a real account declared 238
+    formulas, held 10 of one of them, and was assigned 20 concurrent jobs. So both cap sites
+    (`BuildParams.prints_known`, `formula_concurrency_caps`) ask this set first and the coverage
+    gate second. Products with no declaration are untouched — they stay uncapped on a floor.
     """
     return {p for p, o in (owned or {}).items() if (o or {}).get("source") == "manual"}
 
@@ -506,10 +517,10 @@ def stock_formula_prints(context_id: int, owned: dict[int, dict] | None = None) 
     a formula in a container the user hasn't ticked is not one they've said they will spend.
     """
     out: dict[int, int] = {}
-    declared = _declared_products(owned)
+    declared = declared_products(owned)
     for prod, b in _formula_stock_buckets(context_id).items():
         if prod in declared:
-            continue                        # the user stated this holding — see _declared_products
+            continue                        # the user stated this holding — see declared_products
         extra = _stock_extra(b, _seen_personally(owned, prod))
         if extra > 0:
             out[prod] = extra
@@ -703,7 +714,7 @@ def formula_print_floor(context_id: int, owned: dict[int, dict] | None = None) -
     """
     buckets = _formula_stock_buckets(context_id)
     observed = observed_formula_prints(context_id)
-    declared = _declared_products(owned)
+    declared = declared_products(owned)
     out: dict[int, int] = {}
     for prod in set(buckets) | set(observed):
         if prod in declared:

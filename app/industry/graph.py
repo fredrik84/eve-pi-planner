@@ -86,6 +86,12 @@ class BuildParams:
     # know that (see `prints_known`). None = not stated, which is a hand-built params (a test, a
     # REPL) where `owned` IS the holding by construction.
     blueprint_coverage: dict | None = None
+    # Products whose holding the user DECLARED by hand (`owned_blueprints` marks them
+    # `source: "manual"`; `blueprints.declared_products` reads the mark). A declaration is not a
+    # scan — it is the user stating what they own — so it is KNOWN for that product whatever the
+    # account-wide coverage above says. See `prints_known`. Empty = nothing declared, which is the
+    # behaviour that shipped before hand-declaration existed.
+    declared_prints: set = field(default_factory=set)
     # product_type_id -> EXTRA concurrent reactions the account's ENABLED stock proves, over and
     # above the copies in `owned` (app.industry.blueprints.stock_formula_prints, which does the
     # de-duplication against the blueprint cache). A formula found in a hangar raises the print CAP
@@ -217,10 +223,20 @@ class BuildParams:
         ci = self.mfg_cost_index if activity == "manufacturing" else self.rx_cost_index
         return ci + self.facility_tax_pct / 100.0 + SCC_SURCHARGE_PCT
 
-    def prints_known(self) -> bool:
-        """Whether the account's blueprint holding may be read as a TOTAL rather than a floor.
+    def prints_known(self, type_id: int | None = None) -> bool:
+        """Whether the blueprint holding may be read as a TOTAL rather than a floor.
 
-        Only when EVERY character has a cached blueprint list. `owned` is a union over the cached
+        **Asked per PRODUCT when a product is named**, because the evidence comes in two kinds and
+        only one of them is account-wide. A product the user DECLARED by hand is known outright: a
+        declaration is a statement of what they own, not a partial reading of it, and
+        `owned_blueprints` already lets it REPLACE the ESI reading for that product. Gating it on
+        account-wide coverage answered a per-product question with an account-wide one and cost a
+        real user the cap they had just declared — 238 formulas declared, 10 held of the product
+        they ordered, 20 concurrent jobs assigned, because 12 of their 14 characters had never
+        granted the blueprints scope. Called with no `type_id` (the reporting sites) it still
+        answers for the account as a whole.
+
+        Otherwise: only when EVERY character has a cached blueprint list. `owned` is a union over the cached
         ones, so a partly-connected account's counts are a floor — and a cap built on a floor
         serialises jobs the builder can really run side by side, which is a plan made materially
         worse on incomplete evidence. Measured in prod: one account has 2 of 14 characters cached and
@@ -232,6 +248,8 @@ class BuildParams:
         NOT a partial-credit scheme: crediting the characters we can see is the same guess in
         smaller print.
         """
+        if type_id is not None and type_id in (self.declared_prints or ()):
+            return True
         cov = self.blueprint_coverage
         if cov is None:
             return True                    # not stated — `owned` is the holding, by construction
@@ -945,6 +963,13 @@ def resolve_build_params(context_id: int, me_pct: float, te_pct: float,
         coverage = blueprint_coverage(context_id)
     except Exception:
         owned, coverage = {}, {"characters": 0, "cached": 0, "missing": 0, "complete": False}
+    # ...except for the products the user DECLARED, which are known one product at a time and do not
+    # wait on the other characters' scopes — see BuildParams.prints_known.
+    try:
+        from app.industry.blueprints import declared_products
+        declared = declared_products(owned)
+    except Exception:
+        declared = set()
     # Reaction formulas the account keeps in a hangar or container instead of a personal blueprint
     # list — counted from ENABLED stock and from the prints their real industry jobs were installed
     # on. Same cap, different evidence; see formula_print_floor for the precedence and the
@@ -970,7 +995,7 @@ def resolve_build_params(context_id: int, me_pct: float, te_pct: float,
         mfg_cost_index=fetch_system_cost_index(sid, "manufacturing"),
         rx_cost_index=fetch_system_cost_index(sid, "reaction"),
         facility_tax_pct=tax, me_by_product=me_by_product, owned=owned,
-        blueprint_coverage=coverage, stock_prints=stock_prints,
+        blueprint_coverage=coverage, declared_prints=declared, stock_prints=stock_prints,
         build_system_id=sid, build_system_basis=basis,
         max_build_hours=max_build_hours,
         struct_material_mult=1.0 - struct_material_pct / 100.0,

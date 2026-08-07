@@ -1029,7 +1029,13 @@ def formula_concurrency_caps(context_id: int) -> dict[int, int]:
       * the flag is off — {} outright, so nothing anywhere behaves differently;
       * the account's blueprint picture is incomplete (`blueprint_coverage().complete` is false —
         the scope is opt-in per character, so a partly-connected account's counts are a FLOOR, and
-        a floor read as a total serialises real work). Mirrors `BuildParams.prints_known`;
+        a floor read as a total serialises real work) **and the user has not DECLARED that product
+        by hand**. A declaration is not a scan: it is the user stating what they own, which
+        `owned_blueprints` already treats as authoritative enough to replace the ESI reading for
+        that product, so it is known whatever some other character's scope says. Gating it on
+        account-wide coverage cost a real user the cap they had just typed in — 238 formulas
+        declared, 10 held of the product they ordered, 20 concurrent jobs assigned, because 12 of
+        their 14 characters had never granted the scope. Mirrors `BuildParams.prints_known(tid)`;
       * that particular formula was never seen by any of the three evidence sources.
 
     Concurrency only, per the evidence layer's own contract: an asset row and a job state no ME, no
@@ -1042,11 +1048,13 @@ def formula_concurrency_caps(context_id: int) -> dict[int, int]:
         return {}
     try:
         from app.industry.blueprints import (
-            blueprint_coverage, formula_print_floor, owned_blueprints)
-        if not blueprint_coverage(context_id).get("complete"):
-            return {}
+            blueprint_coverage, declared_products, formula_print_floor, owned_blueprints)
         owned = owned_blueprints(context_id)
         floor = formula_print_floor(context_id, owned)
+        declared = declared_products(owned)
+        complete = bool(blueprint_coverage(context_id).get("complete"))
+        if not complete and not declared:
+            return {}
     except Exception:
         return {}                       # evidence unavailable is evidence absent — never cap
 
@@ -1061,6 +1069,8 @@ def formula_concurrency_caps(context_id: int) -> dict[int, int]:
 
     caps: dict[int, int] = {}
     for prod in (set(owned) | set(floor)) & outputs:
+        if not complete and prod not in declared:
+            continue                              # a floor, not a total — see the docstring
         own = owned.get(prod) or {}
         held = own.get("copies")
         n_owned = (len(held) if held else 1) if own else 0
