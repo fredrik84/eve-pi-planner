@@ -9,6 +9,7 @@ Find a section: `grep -n '^## ' docs/reactions.md` and read from that line — t
 
 - **Reactions suggestion engine (`app/reactions/advisor.py`)** — what the advisor suggests and on what basis
 - **A formula is one reaction at a time (`reactions_formula_cap`)** — why ten free slots can be planned as one job
+- **Absence becomes knowledge, but only after a paste (`app/reactions/library.py`)** — when an undeclared formula means "you don't own it", and what gets reported instead of planned
 - **Stages on the dashboard are `tier_order`, shown absolute** — how chain order is rendered, and why the number is never re-ranked
 - **Pricing: a sell-order price is not achievable profit** — the pricing rule that governs every profit figure shown for reaction goods
 - **Where the rest lives** — pointers to reaction content that belongs to another service
@@ -43,6 +44,45 @@ Two rules it must not break: **a missing key means unknown, and unknown never re
 evidence, or an incomplete blueprint picture, caps nothing — the same rule
 `_assigned_slot_capacity` and `_print_limits` follow); and **chain tiers are sequential**, so the
 cap is per tier and one formula may serve tier 0 and then tier 1.
+
+## Absence becomes knowledge, but only after a paste (`app/reactions/library.py`)
+
+Everywhere else in this codebase, **absent evidence never serialises work**: a product nobody has
+said anything about is uncapped, so the tool never refuses work the player can really do. That rule
+produced a real failure — an account with ~238 hand-declared formulas ordered Reinforced Carbon
+Fiber and was told to react Carbon Fiber, a sub-reaction whose formula it does not hold — because
+"not declared" was read as "unknown" rather than "not owned".
+
+`library.py` inverts the rule in exactly one place, under exactly one condition:
+
+* **Completeness comes from a PASTE, never a toggle.** At least one pasted batch (`batch <> ''` in
+  `pp_industry_blueprints`) naming at least one reaction formula. Same reasoning that already lets
+  a paste win outright over observed jobs in `formula_print_floor`; a "my library is complete"
+  checkbox would be the knob CLAUDE.md rule 3 exists to avoid. Rows typed in one at a time never
+  make a library complete — three typed formulas are a statement about three formulas.
+* **Held is the UNION of every evidence source** (`held_formula_products`) — declared, ESI-scanned,
+  in enabled stock, observed on a job. Reporting a formula as missing when it is in the user's
+  hangar is the expensive error, so the "you have it" side is read as widely as possible.
+* **Report, never substitute.** `missing_formulas()` returns `{complete, formulas, unresolved}` and
+  nothing else touches the plan: no step is dropped, re-planned, or flipped to a market buy. The
+  rows carry the FORMULA's own `type_id` (contracts list the formula, not the product), and are
+  priced from the same public-contract index Industry uses, via `blueprint_type_prices` — a formula
+  has no row in `blueprints`, so it maps product → `reactions.reaction_id` instead. **Nothing here
+  is in any shopping list or cost total**, exactly like `metrics.missing_blueprints`.
+
+Three surfaces render it, all off the one helper: the Suggest wizard (whole batch, chain tiers
+included), a customer order (`_order_report`, off the same `sequence` the quote is built from), and
+the manual-assign modal (`POST /api/reactions/missing-formulas`, cached per product so a run-count
+keystroke isn't a request). Gated by `reactions_missing_formulas`; off ⇒ every report is empty.
+
+**The sharp edge — unresolved names.** Making absence load-bearing means a formula whose NAME
+fails to resolve is indistinguishable from one the user does not own, so a CCP rename turns into a
+confident, wrong "go buy this". It has happened: a client copy carried `Fullerides Reaction
+Formula` where the SDE has the singular (fixed in `ee633be` by the parser's product-name fallback,
+which is why that exact string now resolves). So the import KEEPS what it could not resolve
+(`pp_blueprint_paste_unresolved`, replaced per batch, deleted with the batch), and every report
+carries it for the UI to show beside the finding — an import status line that scrolled away days
+ago is not a warning.
 
 ## Stages on the dashboard are `tier_order`, shown absolute
 

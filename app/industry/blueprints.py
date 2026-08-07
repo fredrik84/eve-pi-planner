@@ -185,6 +185,68 @@ def ensure_manual_blueprints_table():
         con.close()
 
 
+@ensure_once
+def ensure_paste_unresolved_table():
+    """Names a paste could not resolve to a type, KEPT — one row per (batch, name).
+
+    They used to live for exactly as long as the import's own status line, which was fine while an
+    unmatched name only meant "we imported 237 of your 238 formulas". It stops being fine the
+    moment ABSENCE becomes knowledge (`app/reactions/library.py`): a formula whose name we failed
+    to resolve is then indistinguishable from one the user does not own, and the plan starts
+    telling them to go buy a formula sitting in their hangar. It has happened once already — a
+    client copy carried `Fullerides Reaction Formula` where the SDE has the singular, fixed in
+    `ee633be` by the product-name fallback — so the next rename is a matter of time.
+
+    Replaced per batch, exactly like the batch's own rows: a re-paste is a fresh statement about
+    that window, and a name it no longer carries is no longer unresolved.
+    """
+    con = get_connection()
+    try:
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS pp_blueprint_paste_unresolved (
+                context_id INTEGER NOT NULL,
+                batch      TEXT NOT NULL,
+                name       TEXT NOT NULL,
+                batch_name TEXT NOT NULL DEFAULT '',
+                updated_at REAL,
+                PRIMARY KEY (context_id, batch, name)
+            )
+        """)
+        con.commit()
+    finally:
+        con.close()
+
+
+def paste_unresolved_names(context_id: int) -> list[dict]:
+    """[{name, batch_name}] — every pasted line this account holds that resolved to no type."""
+    ensure_paste_unresolved_table()
+    con = get_connection()
+    try:
+        return [{"name": r["name"], "batch_name": r["batch_name"] or ""}
+                for r in con.execute(
+                    "SELECT name, batch_name FROM pp_blueprint_paste_unresolved "
+                    "WHERE context_id=? ORDER BY name", (context_id,))]
+    except Exception:
+        return []
+    finally:
+        con.close()
+
+
+def _record_unresolved(con, context_id: int, batch: str, batch_name: str, names: list[str]) -> None:
+    """Replace this batch's unresolved names — inside the import's own transaction, so the rows and
+    the warning about what is missing from them can never disagree."""
+    try:
+        con.execute("DELETE FROM pp_blueprint_paste_unresolved WHERE context_id=? AND batch=?",
+                    (context_id, batch))
+        now = _time.time()
+        for n in dict.fromkeys(names):
+            con.execute(
+                "INSERT INTO pp_blueprint_paste_unresolved (context_id, batch, name, batch_name, "
+                "updated_at) VALUES (?,?,?,?,?)", (context_id, batch, str(n)[:200], batch_name, now))
+    except Exception:
+        pass                        # never fail an import over its own footnote
+
+
 def _migrate_location_batches(con) -> None:
     """Re-key the `paste:loc:` batches written by the short-lived per-container model.
 
@@ -1130,6 +1192,7 @@ def replace_blueprint_batch(context_id: int, name: str, text: str,
     batch and are never touched by any paste.
     """
     ensure_manual_blueprints_table()
+    ensure_paste_unresolved_table()
     res = parse_blueprint_paste(text)
     ask_struct, ask_cont = (structure or "").strip(), (container or "").strip()
     label = (name or "").strip() or res.get("suggested_name") or _PASTE_BATCH_DEFAULT
@@ -1172,6 +1235,10 @@ def replace_blueprint_batch(context_id: int, name: str, text: str,
                  e["quantity"], prefer.get(e["product_type_id"], ""), now,
                  key, label, e_struct, e_cont))
             nxt += 1
+        # What this window named and we could not resolve. Kept, not just reported once — see
+        # `ensure_paste_unresolved_table`.
+        _record_unresolved(con, context_id, key, label,
+                           list(res["unknown"]) + list(res["no_product"]))
         con.commit()
     finally:
         con.close()
@@ -1230,9 +1297,14 @@ def delete_blueprint_batch(context_id: int, batch: str) -> None:
     ensure_manual_blueprints_table()
     if not (batch or "").strip():
         return                            # '' is the hand-typed rows — never deletable in bulk
+    ensure_paste_unresolved_table()
     con = get_connection()
     try:
         con.execute("DELETE FROM pp_industry_blueprints WHERE context_id=? AND batch=?",
+                    (context_id, batch))
+        # Its unresolved names go with it: they described THAT paste, and a warning about a batch
+        # the user has deleted is a warning they cannot act on.
+        con.execute("DELETE FROM pp_blueprint_paste_unresolved WHERE context_id=? AND batch=?",
                     (context_id, batch))
         con.commit()
     finally:

@@ -311,6 +311,15 @@ FEATURE_REGISTRY = [
                     "Ferrofluid formula is one job, not ten. Chain tiers are unaffected (they run "
                     "in sequence), and a formula we have no evidence about is never capped.",
      "default": False},
+    {"key": "reactions_missing_formulas", "label": "Reactions: formulas you need to acquire",
+     "group": "Reactions",
+     "description": "Once you have PASTED your industry window, a formula you never declared is "
+                    "one you don't own — so the wizard, a manual assign and a customer order say "
+                    "which formulas a plan needs that you'd have to buy first, instead of quietly "
+                    "planning a sub-reaction you can't install. Reported with a contract price, "
+                    "never added to any shopping list or cost. Without a paste nothing changes: "
+                    "absence stays 'unknown' and unknown never refuses work.",
+     "default": False},
 ]
 GROUP_ORDER = ["Dashboard", "Setup Analysis", "Planner", "Planet DB", "Characters",
                "Notifications & Alerts", "Reactions", "Industry"]

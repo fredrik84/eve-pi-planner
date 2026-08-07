@@ -318,9 +318,30 @@ def bpc_prices(type_ids: list[int], region_id: int = THE_FORGE) -> dict[int, dic
         bp_of = {r["product_type_id"]: r["blueprint_type_id"] for r in con.execute(
             f"SELECT blueprint_type_id, product_type_id FROM blueprints "
             f"WHERE product_type_id IN ({marks})", tuple(type_ids))}
-        if not bp_of:
-            return {}
-        bp_ids = list(set(bp_of.values()))
+    finally:
+        con.close()
+    if not bp_of:
+        return {}
+    by_bp = blueprint_type_prices(list(set(bp_of.values())), region_id)
+    return {prod: info for prod, bp in bp_of.items() if (info := by_bp.get(bp))}
+
+
+def blueprint_type_prices(bp_ids: list[int], region_id: int = THE_FORGE) -> dict[int, dict]:
+    """{blueprint_type_id: price info} straight off the observation index — the half of
+    `bpc_prices` that has nothing to do with `blueprints`.
+
+    Split out for reaction FORMULAS, whose "blueprint" is the reaction itself
+    (`reactions.reaction_id`) and which therefore have no row in the `blueprints` table to map
+    through. The contract scan indexes every single-blueprint contract by type_id, formulas
+    included, so the observations are already here — only the product->print mapping differs, and
+    that belongs to the caller that knows which kind of print it is asking about.
+    """
+    ensure_bpc_tables()
+    bp_ids = sorted({int(b) for b in bp_ids})
+    if not bp_ids:
+        return {}
+    con = get_connection()
+    try:
         bmarks = ",".join("?" * len(bp_ids))
         cutoff = time.time() - _HISTORY_DAYS * 86400
         rows = con.execute(
@@ -340,7 +361,7 @@ def bpc_prices(type_ids: list[int], region_id: int = THE_FORGE) -> dict[int, dic
         by_bp.setdefault(int(r["type_id"]), []).append(dict(r))
 
     out: dict[int, dict] = {}
-    for prod, bp in bp_of.items():
+    for bp in bp_ids:
         rs = by_bp.get(bp, [])
         copies = [r for r in rs if r["is_bpc"]]
         originals = [r for r in rs if not r["is_bpc"]]
@@ -356,7 +377,7 @@ def bpc_prices(type_ids: list[int], region_id: int = THE_FORGE) -> dict[int, dic
                                        "me": int(r["me"] or 0), "te": int(r["te"] or 0)}
                                       for r in copies]}
         if info["bpc"] or info["bpo"]:
-            out[prod] = info
+            out[bp] = info
     return out
 
 

@@ -11,13 +11,14 @@ Reviewed 2026-08-05.
 
 ---
 
-## 19. Reactions must say what you need to ACQUIRE, and show the stages in order (2026-08-07)
+## 19-residual. Reactions must say what you need to ACQUIRE, and show the stages in order (2026-08-07)
 
 Two defects found by using the tool on a real account (context 1, ~238 hand-declared formulas across
-41 products) right after the declaration work shipped. **The decided direction is in here — do not
-re-derive it.**
+41 products) right after the declaration work shipped. **Both shipped 2026-08-07** — kept here for
+the reasoning, which is load-bearing and should not be re-derived. What is still OPEN is one thing:
+the dashboard's already-assigned plan rows don't run the acquire check (see 19a's closing note).
 
-### 19a. An undeclared formula is read as "unknown", so plans include stages you cannot run
+### 19a. An undeclared formula is read as "unknown", so plans include stages you cannot run — DONE 2026-08-07
 
 Observed: a customer order for **Reinforced Carbon Fiber** correctly capped at the 10 formulas
 declared for it, then happily suggested reacting a pile of **Carbon Fiber** — a formula the account
@@ -54,6 +55,23 @@ NAME fails to resolve silently becomes "you don't own this". That already happen
 copy carried `Fullerides Reaction Formula` where the SDE has `Fulleride Reaction Formula`, fixed in
 `ee633be` with a product-name fallback. Any implementation must make unresolved names **loud**, not
 merely reported, or a rename turns into a wrong plan.
+
+**Shipped 2026-08-07** behind `reactions_missing_formulas` (admin-preview). New `app/reactions/
+library.py` is the whole inversion, in one place: completeness = at least one pasted batch naming a
+formula (typed-in rows never qualify), held = the UNION of declared/ESI/stock/observed evidence, and
+`missing_formulas()` reports `{complete, formulas, unresolved}` without touching a plan — no step
+dropped, nothing flipped to a market buy, nothing in a shopping list or cost total. Rows carry the
+FORMULA's type_id and are priced off the same public-contract index Industry uses (`bpc.py`'s new
+`blueprint_type_prices`, since a formula has no row in `blueprints`). All three entry points render
+it off that one helper: suggest (inline), order report (inline, off the quote's own `sequence`),
+manual assign (`POST /api/reactions/missing-formulas`, cached per product). The sharp edge is
+handled by KEEPING unresolved paste names (`pp_blueprint_paste_unresolved`, replaced per batch,
+deleted with it) and showing them in the warning itself. `test_missing_formulas.py` pins both
+directions. Rationale in `docs/reactions.md`.
+
+**Still to do here:** the dashboard's already-assigned plan rows don't run this check — the three
+planning entry points do, so a missing formula is caught before it becomes a slot, but a plan
+assigned before the flag went on won't be re-flagged.
 
 ### 19b. The stages are sequenced correctly and the UI throws it away — DONE 2026-08-07
 
@@ -293,6 +311,8 @@ match any template we generate) is still unscoped.
 | — | `docs/industry-audit-2026-08.md` — item 12 re-run against the manifesto: the every-time path cleared, `industry_per_order_plans` and `industry_skill_advisor` failed, two dead routes found, and the live flag read that corrected two of the pass-1 claims | 08-05 |
 | — | Alliance-shared build structures as suggestions (`industry_group_structures`) | 08-05 |
 | — | Pin a rig FAMILY to a structure and every job in it is installed there, whatever the routing scores (`pp_industry_settings.build_pins`, on the `industry_rig_routing` flag). A pin can only pick among sites already legal for that job's activity; one it can't honour falls back to the automatic routing and says so. The pin decides WHERE, `fittable_families` still decides what BONUS | 08-06 |
+| 19b | Reaction plan STAGES on the dashboard: planned slots sort by `tier_order`, carry an `S<n>` badge, later stages dim/dash, and the "To install" checklist splits under stage banners. The number is `tier_order + 1` absolute, never re-ranked against what's still pending | 08-07 |
+| 19a | "You don't hold a formula for these" (`reactions_missing_formulas`): once a PASTED window makes the library complete, an undeclared formula is one you don't own — reported with runs and a contract price on all three planning surfaces, and kept out of every shopping list and cost total. Unresolved paste names are KEPT and shown beside the finding, because a rename otherwise reads as "you don't own this". `app/reactions/library.py`, `test_missing_formulas.py` | 08-07 |
 
 ---
 

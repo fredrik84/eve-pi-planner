@@ -614,6 +614,17 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 }
 .rx-todo-later td { opacity: 0.68; }
 
+/* Pasted names that resolved to no type, shown inside the "you don't hold a formula for these"
+   notice. Amber and separated, because it qualifies the finding above it: an unresolved name is
+   indistinguishable from a formula you don't own, so this is the one line that can make the rest
+   of the list wrong. */
+.rx-miss-unresolved {
+  margin-top: 8px; padding: 7px 9px; border-radius: 5px; font-size: 12px; line-height: 1.5;
+  color: #e2c07a; background: rgba(230, 180, 85, 0.07); border: 1px solid rgba(230, 180, 85, 0.3);
+}
+.rx-miss-unresolved b { color: #ffd88a; }
+.rx-miss-unresolved .ind-bp-warn-sub { color: #b8a276; }
+
 /* An orphan running job (installed in-game, not in the plan): amber dashed edge to set it apart
    from a planned running slot, plus a small "⊕ plan" pill to adopt it into the recurring plan. */
 .rx-slot-orphan { border-style: dashed; border-color: #b08a3a; }

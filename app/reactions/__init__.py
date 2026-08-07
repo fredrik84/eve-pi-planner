@@ -13,6 +13,9 @@ those above it — a strict DAG, no cycles):
                  opportunity ranking, and shopping lists.
     jobs.py      live ESI industry-job tracking, the persistent plan (slots/orphans) and
                  per-character slot capacity.
+    library.py   what the account can actually REACT: whether its formula library is complete (a
+                 paste says so, nothing else does) and which formulas a plan needs that it does not
+                 hold. Reports; never re-plans. Depends on jobs.py's evidence layer at call time.
     advisor.py   the wizard suggestion engine (knapsack over what to run, then bin-packing onto
                  real characters' free slots). Depends on jobs.py, never the reverse.
     orders.py    fixed-unit customer orders (target-quantity client jobs) built on top.
@@ -48,6 +51,13 @@ from app.reactions.jobs import (  # noqa: F401 — re-exported for the package's
     _allocate_and_insert, _unplanned_running_totals,
     assign_reaction, adopt_orphan_job, unassign_reaction, unassign_all_reactions,
     ChainTier, AssignRequest, AdoptOrphanRequest,
+)
+# Formula library — "do you hold the formula for this step at all", and the acquire-list every
+# planning surface renders off it. Sits beside jobs: it reads app/industry's evidence layer at call
+# time only (same acyclic discipline as the formula cap) and nothing in this package imports it at
+# module scope except this wiring.
+from app.reactions.library import (  # noqa: F401
+    missing_formulas, wanted_from_sequence, library_state, held_formula_products,
 )
 # Suggestion engine — imported after jobs (it depends on it, never the reverse). Importing
 # registers /api/reactions/suggest.

@@ -36,6 +36,7 @@ def _order_report(context_id: int, order: dict) -> dict:
             "cost": {"material_cost": None, "job_cost": None, "total_cost": None, "cost_per_unit": None},
             "time": {"tiers": [], "free_slots_now": 0, "estimated_hours": None, "caveat": None,
                       "formula_capped": []},
+            "missing_formulas": {"complete": False, "formulas": [], "unresolved": []},
             "stale": True,
         }
     goo, reached, reactions_by_output, inputs_by_reaction, types = loaded
@@ -102,7 +103,17 @@ def _order_report(context_id: int, order: dict) -> dict:
                   "estimate, not a guarantee.",
     }
 
-    return {"materials": materials, "chain_tiers": chain_tiers, "cost": cost, "time": time_report, "stale": False}
+    # Formulas this order needs and the account does not hold. `sequence` is already every step the
+    # order runs — tiers deepest-first plus the product itself — so it is exactly the list to ask
+    # about, and asking off it means a tier can never be left out of the check while being left in
+    # the plan. Deliberately NOT in `cost`: what you must go and buy is not what the order costs to
+    # produce, and folding it in would quote the client for a formula the user may already own or
+    # may decide not to buy. Same separation `missing_blueprints` keeps on the Industry side.
+    from app.reactions.library import missing_formulas, wanted_from_sequence
+
+    return {"materials": materials, "chain_tiers": chain_tiers, "cost": cost, "time": time_report,
+            "missing_formulas": missing_formulas(context_id, wanted_from_sequence(sequence)),
+            "stale": False}
 
 
 class OrderCreateRequest(BaseModel):

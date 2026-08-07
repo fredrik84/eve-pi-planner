@@ -441,8 +441,19 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
     # won't help, there's nothing more suitable to spend it on right now.
     binding = "isk" if isk_committed >= 0.97 * isk_budget else "neither"
 
+    # Formulas this whole batch needs and the account does not hold — the wizard is the entry point
+    # that produces the deepest chains, so it is the one that would otherwise hand the player a
+    # sub-reaction they cannot install (Reinforced Carbon Fiber via an undeclared Carbon Fiber, the
+    # case that started this). Every step counts, top-level and tier alike; nothing here changes a
+    # suggestion, its cost, or the shopping list. See app/reactions/library.py.
+    from app.reactions.library import missing_formulas, wanted_from_sequence
+    wanted = wanted_from_sequence(
+        [{"type_id": s["type_id"], "runs": s["runs"]} for s in suggestions]
+        + [t for s in suggestions for t in s["chain_tiers"]])
+
     return {
         "suggestions": suggestions,
+        "missing_formulas": missing_formulas(context_id, wanted),
         "totals": {
             "isk_committed": round(isk_committed, 2),
             "isk_budget": isk_budget,

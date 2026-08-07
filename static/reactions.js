@@ -358,6 +358,84 @@ function _rxStageLabel(tier) {
   return tier > 0 ? `Stage ${tier + 1} — after stage ${tier} finishes` : 'Stage 1 — start now';
 }
 
+// ── "You don't hold a formula for these" ──────────────────────────────────────────────────────
+// The Reactions counterpart of Industry's `metrics.missing_blueprints` panel (_indMissingBpWarn),
+// deliberately the same shape and the same restraint: what you'd have to acquire, how many runs
+// the plan asks of it, what a contract costs — and NOTHING added to any shopping list or cost
+// total. The server only fills this in once a pasted industry window makes the library complete
+// (see app/reactions/library.py); until then absence stays "unknown" and this renders nothing.
+//
+// Reuses the .ind-notes / .ind-bp-* styles rather than cloning them under rx- names: it is the
+// same kind of notice saying the same kind of thing, and two copies of that CSS is how the two
+// pages start looking like different products.
+let _rxMissSeq = 0;
+
+function _rxMissingFormulaWarn(rep) {
+  if (!rep) return '';
+  const rows = rep.formulas || [];
+  const unresolved = rep.unresolved || [];
+  // The unresolved-name warning stands on its own even with nothing missing: once a paste is
+  // treated as the whole library, a name we failed to resolve is silently indistinguishable from
+  // a formula the user doesn't own (a CCP rename did exactly this once — `Fullerides` vs
+  // `Fulleride Reaction Formula`). It has to be loud where the consequence is, not in an import
+  // status line that scrolled away days ago.
+  if (!rows.length && !(rep.complete && unresolved.length)) return '';
+  const inst = ++_rxMissSeq;
+  const unresolvedHtml = !unresolved.length ? '' : `
+    <div class="rx-miss-unresolved"><b>⚠ ${unresolved.length} pasted name${unresolved.length === 1 ? '' : 's'} didn't match any item</b>
+      <div>${unresolved.slice(0, 8).map(u => _esc(u.name) + (u.batch_name ? ` <span class="ind-bp-sub2">(${_esc(u.batch_name)})</span>` : '')).join(', ')}${unresolved.length > 8 ? '…' : ''}</div>
+      <div class="ind-bp-warn-sub">A name we can't resolve looks exactly like a formula you don't own,
+      so ${rows.length ? 'a formula you do hold could still be listed above' : 'one of those can show up as missing on a plan'}.
+      Re-paste that window, or check the item's current in-game name.</div>
+    </div>`;
+  if (!rows.length) return `<div class="ind-notes">${unresolvedHtml}</div>`;
+
+  const rowsHtml = rows.map(m => `
+    <div class="ind-bp-row2">
+      <span class="ind-bp-nm">${_esc(m.name)}<span class="ind-bp-need">${_esc(m.formula_name)} · ${m.runs_needed.toLocaleString()} run${m.runs_needed === 1 ? '' : 's'} planned</span></span>
+      <span class="ind-bp-px" id="rxfpx-${inst}-${m.type_id}">checking contracts…</span>
+    </div>`).join('');
+  // Prices land after render — the contract index is a background scan and this warning must never
+  // wait on it (same rule the Industry panel follows).
+  setTimeout(() => _rxLoadFormulaPrices(inst, rows.map(m => m.type_id)), 0);
+  return `<div class="ind-notes"><div class="ind-note-block">
+      <b>You don't hold a formula for ${rows.length === 1 ? 'this' : 'these'}</b>
+      <div class="ind-bp-rows">${rowsHtml}</div>
+      <div class="ind-bp-warn-sub">You've pasted your industry window, so that paste is read as your
+      whole library — a formula it doesn't name is one you don't own, and this plan can't be
+      installed without ${rows.length === 1 ? 'it' : 'them'}. Prices are what the formula goes for on
+      Jita contracts, for comparison only: nothing here is in the materials list or any cost total.</div>
+      ${unresolvedHtml}
+    </div></div>`;
+}
+
+async function _rxLoadFormulaPrices(inst, ids) {
+  if (!ids || !ids.length) return;
+  let d = null;
+  try { d = await api('/api/reactions/formula-prices?type_ids=' + ids.join(',')); } catch (e) {}
+  ids.forEach(id => {
+    const el = document.getElementById(`rxfpx-${inst}-${id}`);
+    if (!el) return;
+    const info = d && d.prices && d.prices[id];
+    // A formula is sold as a copy (BPC) in practice; originals are checked too rather than
+    // reporting "nothing listed" when the only thing on offer is the original.
+    const bpc = info && info.bpc;
+    if (bpc && bpc.live && bpc.live.count) {
+      el.innerHTML = `<b>${_fmtIsk(bpc.live.cheapest)}</b> cheapest now`
+        + `<span class="ind-bp-sub2">${bpc.live.count} on contract · median ${_fmtIsk(bpc.live.median)}</span>`;
+    } else if (bpc && bpc.history && bpc.history.count) {
+      const days = Math.max(0, Math.round((Date.now() / 1000 - bpc.history.last_seen) / 86400));
+      el.innerHTML = `<b>≈ ${_fmtIsk(bpc.history.median)}</b> estimated`
+        + `<span class="ind-bp-sub2">none listed now · ${bpc.history.count} seen historically, last ${days === 0 ? 'today' : days + 'd ago'}</span>`;
+    } else if (info && info.bpo && (info.bpo.live || info.bpo.history)) {
+      const b = info.bpo.live || info.bpo.history;
+      el.innerHTML = `<span class="ind-bp-sub2">no copies seen — originals from ${_fmtIsk(b.cheapest)}</span>`;
+    } else {
+      el.innerHTML = '<span class="ind-bp-sub2">no contracts seen for this yet</span>';
+    }
+  });
+}
+
 let _rxLastDashboardData = null;
 
 function _loadReactionsDashboard() {
@@ -693,6 +771,9 @@ let _rxManualAssignCharId = null;
 let _rxEditingAssignmentId = null;  // set only when opened via _rxOpenEditAssign
 
 function _rxOpenManualAssign(characterId) {
+  // Fresh per modal open: declaring a formula or pasting a window between two opens has to show
+  // up. Within one open the cache is what keeps typing a run count off the network.
+  _rxMissingCache.clear();
   _rxManualAssignCharId = characterId;
   _rxEditingAssignmentId = null;
   document.getElementById('rxManualAssignTitle').firstChild.textContent = 'Assign a reaction';
@@ -856,6 +937,28 @@ function _rxScaledChainTiers(o, scale) {
   }));
 }
 
+// The manual-assign path asks the same question the wizard and an order answer inline, over the
+// generic /api/reactions/missing-formulas endpoint. Cached per PRODUCT, and only the set of
+// missing formulas comes from the server: which ones you hold doesn't change when you type a
+// different run count, so the run figures are filled in locally and the endpoint isn't hit on
+// every keystroke.
+const _rxMissingCache = new Map();
+
+function _rxMissingForProduct(typeId, wantedRuns, onLoaded) {
+  if (_rxMissingCache.has(typeId)) {
+    const rep = _rxMissingCache.get(typeId);
+    if (!rep) return null;
+    return {...rep, formulas: (rep.formulas || []).map(
+      f => ({...f, runs_needed: wantedRuns.get(f.type_id) || f.runs_needed}))};
+  }
+  _rxMissingCache.set(typeId, null);        // in flight — don't fire a second request for it
+  apiSend('POST', '/api/reactions/missing-formulas',
+          {items: [...wantedRuns.entries()].map(([tid, runs]) => ({type_id: tid, runs}))})
+    .then(rep => { _rxMissingCache.set(typeId, rep || {}); if (onLoaded) onLoaded(); })
+    .catch(() => { _rxMissingCache.set(typeId, {}); });
+  return null;
+}
+
 function _rxChainCheckboxChecked() {
   const cb = document.getElementById('rxManProduceChain');
   return !cb || cb.checked;
@@ -890,6 +993,13 @@ function _rxManualAssignPreview() {
   const chainNote = !allChainTiers.length ? '' : produceChain
     ? `<div class="rx-manual-preview-chain">Also needs ${allChainTiers.length} intermediate reaction${allChainTiers.length === 1 ? '' : 's'} first — each takes its own job slot on the same character: ${allChainTiers.map(t => `<b>${_esc(t.name)}</b> ×${t.runs}`).join(', ')}.</div>`
     : `<div class="rx-manual-preview-chain">Not producing the chain — you'll need ${allChainTiers.map(t => _esc(t.name)).join(', ')} already in stock, or this job can't actually be installed.</div>`;
+  // Which of these steps you hold no formula for. The chain tiers are asked about only when you're
+  // actually producing the chain — un-tick "produce the chain" and the intermediates become
+  // something you're sourcing yourself, not steps this plan installs.
+  const wantedRuns = new Map([[o.type_id, totalRuns]]);
+  if (produceChain) allChainTiers.forEach(t => wantedRuns.set(t.type_id, t.runs));
+  const missingHtml = _rxMissingFormulaWarn(
+    _rxMissingForProduct(o.type_id, wantedRuns, _rxManualAssignPreview));
   el.innerHTML = `
     <div class="rx-manual-preview">
       <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Input cost</span><b>${_fmtIsk(fixedCosts)}</b></div>
@@ -898,6 +1008,7 @@ function _rxManualAssignPreview() {
       <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Profit</span><b class="${profit >= 0 ? 'an-ok' : 'an-warn'}">${_fmtIsk(profit)}</b></div>
       <div class="rx-manual-preview-breakeven">Sell for at least <b>${_fmtIsk(breakEven)}</b>/unit to break even at today's material, shipping${o.job_cost ? ', job' : ''} and collateral cost.</div>
       ${chainNote}
+      ${missingHtml}
     </div>`;
 }
 
@@ -1164,7 +1275,11 @@ function _renderReactionsSuggestions(data) {
   const formulaNote = capped.length
     ? `<div class="pp-card-hint" style="margin-bottom:10px">${capped.length} step${capped.length === 1 ? '' : 's'} run in fewer jobs than your free slots allow — a formula is locked while a job runs on it, so ${_esc(capped.join(', '))} run${capped.length === 1 ? 's' : ''} on the formulas you hold.</div>`
     : '';
-  const budgetSummary = `<div class="pp-card-hint" style="margin-bottom:10px">${bindingNote}</div>${absorbNote}${formulaNote}`;
+  // ...and the harder version of the same question: not "how many jobs can this run side by side"
+  // but "can you run this step at all". Above the suggestions, because it changes what you'd
+  // assign, not just how fast it finishes.
+  const budgetSummary = `<div class="pp-card-hint" style="margin-bottom:10px">${bindingNote}</div>${absorbNote}${formulaNote}`
+    + _rxMissingFormulaWarn(data.missing_formulas);
 
   // Grouped by assigned character (each is "this character's job list"), not one flat table —
   // the engine already picks a character per suggestion based on free reaction slots; this
@@ -1956,6 +2071,7 @@ function _rxOrderReportBody(data) {
     <div class="pp-card-hint">${_esc(data.time.caveat || '')}</div>
     ${(data.time.formula_capped || []).length ? `<div class="pp-card-hint">${_esc((data.time.formula_capped || []).join(', '))} can't use every free slot — a formula is locked while a job runs on it, so that step runs on the formulas you hold.</div>` : ''}
     ${chainNote}
+    ${_rxMissingFormulaWarn(data.missing_formulas)}
 
     <details class="rx-order-materials" style="margin-top:14px">
       <summary class="pp-card-title rx-fold-summary" style="font-size:14px">
