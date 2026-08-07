@@ -2393,8 +2393,13 @@ function _rxManualOn() {
 
 function _rxManualFormHtml() {
   if (!_rxManualOn()) return '';
+  // Label, not key — the keys are lowercase because they match ESI's hull names, and rendering
+  // them raw put "raitaru" / "athanor (reactions)" in the picker. The rig size rides along because
+  // it is what decides which rig families the next control will offer.
   const hulls = (_rxHulls || []).map(h =>
-    `<option value="${_esc(h.key)}">${_esc(h.key)}${h.activity === 'reaction' ? ' (reactions)' : ''}</option>`).join('');
+    `<option value="${_esc(h.key)}">${_esc(h.label || h.key)}`
+    + `${h.rig_size_label ? ` — ${_esc(h.rig_size_label)} rigs` : ''}`
+    + `${h.activity === 'reaction' ? ' (reactions)' : ''}</option>`).join('');
   if (!hulls) return '';
   return `<div class="rx-mkt-search" style="flex-wrap:wrap;align-items:flex-start">
       <input id="rxManualName" placeholder="Structure name, e.g. 1DQ1-A - Home Azbel" style="flex:1 1 220px">

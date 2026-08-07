@@ -987,9 +987,21 @@ def list_structure_hulls(context_id: int = Depends(require_context)):
     """The pickable structure hulls, so the UI never hardcodes them — same rule (and the same
     reason) as `/api/markets/rig-families`: the hull keys drive the role bonus, and a list copied
     into JS drifts from `app.industry.structures` the first time a hull is added."""
-    from app.industry.structures import MFG_HULLS, RX_HULLS
-    return {"hulls": [{"key": h, "activity": "manufacturing"} for h in MFG_HULLS]
-                     + [{"key": h, "activity": "reaction"} for h in RX_HULLS]}
+    from app.industry.structures import MFG_HULLS, RX_HULLS, hull_rig_size, RIG_SIZE_LABEL
+
+    def _row(h: str, activity: str) -> dict:
+        # The DISPLAY name travels with the key. Without it the picker rendered the raw key, so the
+        # dropdown read "raitaru" / "athanor (reactions)" — the keys are lowercase because they are
+        # matched against ESI's hull names, which is no reason to show them that way.
+        # `rig_size` rides along because it is the one fact that decides what the structure can
+        # claim (see HULL_RIG_SIZE): naming it at the moment you pick a hull is cheaper than
+        # explaining afterwards why a rig family is missing from the next control.
+        size = hull_rig_size(h)
+        return {"key": h, "activity": activity, "label": h.title(),
+                "rig_size": size, "rig_size_label": RIG_SIZE_LABEL.get(size or "", "")}
+
+    return {"hulls": [_row(h, "manufacturing") for h in MFG_HULLS]
+                     + [_row(h, "reaction") for h in RX_HULLS]}
 
 
 @router.post("/api/markets/{market_id}/build")
