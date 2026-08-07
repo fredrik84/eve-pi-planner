@@ -11,6 +11,86 @@ Reviewed 2026-08-05.
 
 ---
 
+## 19. Reactions must say what you need to ACQUIRE, and show the stages in order (2026-08-07)
+
+Two defects found by using the tool on a real account (context 1, ~238 hand-declared formulas across
+41 products) right after the declaration work shipped. **The decided direction is in here — do not
+re-derive it.**
+
+### 19a. An undeclared formula is read as "unknown", so plans include stages you cannot run
+
+Observed: a customer order for **Reinforced Carbon Fiber** correctly capped at the 10 formulas
+declared for it, then happily suggested reacting a pile of **Carbon Fiber** — a formula the account
+does not hold. The chain traverses into sub-reactions without checking whether the user can run them:
+
+```
+Reinforced Carbon Fiber (57457) via formula 57493 consumes
+   Carbon Fiber           x200   sub-reaction formula 57490   <- NOT declared
+   Oxy-Organic Solvents   x1     sub-reaction formula 57491
+   Thermosetting Polymer  x200   sub-reaction formula 57494
+```
+
+The cause is the deliberate rule that **absent evidence never serialises work** — a product nobody
+has said anything about stays uncapped so the tool never refuses work the player can really do. That
+is correct while the app genuinely does not know. It stops being correct once the user has declared
+their whole library, because then **absence is knowledge**: not in the 238, not owned. The app
+cannot currently tell a complete declaration from a partial one, so it takes the permissive reading.
+
+**Decided (2026-08-07), two parts:**
+
+1. **Completeness is inferred from a PASTE**, not from a toggle. Pasting an industry window is a
+   complete statement about that character — the same reasoning already used for the
+   paste-overrides-floor rule in `formula_print_floor`. No new knob (CLAUDE.md rule 3).
+2. **Report what to ACQUIRE, mirroring Industry** rather than silently substituting. Industry
+   already solves exactly this shape: `metrics.missing_blueprints` (built in
+   `app/industry/schedule.py`, rendered by `_indMissingBpWarn` in `static/industry.js`) lists what
+   the build cannot proceed without, with runs needed and a contract price, and is deliberately kept
+   out of both `shopping_list` and the cost total. Reactions needs the same thing for formulas —
+   *"you don't hold a formula for these"* — and it must behave identically from **all three** entry
+   points: the Suggest wizard's multistage chains, a manual assign, and a customer order.
+
+**⚠ The sharp edge, flagged before building:** making absence load-bearing means a formula whose
+NAME fails to resolve silently becomes "you don't own this". That already happened once — a client
+copy carried `Fullerides Reaction Formula` where the SDE has `Fulleride Reaction Formula`, fixed in
+`ee633be` with a product-name fallback. Any implementation must make unresolved names **loud**, not
+merely reported, or a rename turns into a wrong plan.
+
+### 19b. The stages are sequenced correctly and the UI throws it away
+
+The backend has always modelled this: every `pp_reaction_assignments` row carries `tier_order`, the
+dashboard query is `ORDER BY tier_order`, `tier_order` **is** in the API payload, and
+`_concurrent_load` counts the WORST tier rather than the sum precisely because tier 0 must finish
+before tier 1 can start.
+
+**`tier_order` appears nowhere in `static/reactions.js`** — zero references. The frontend receives
+the ordering and renders every stage flat, so tier 0 and tier 1 sit side by side with nothing saying
+which must finish first. The user reads that as "it isn't sequencing"; it is, invisibly.
+
+Fix is presentational only — group pending slots by stage, label them ("Stage 1 — start now",
+"Stage 2 — after stage 1 finishes"), grey what is not yet startable. No backend change.
+
+**Do 19b first.** It is small, low-risk, touches no planning code, and it is what would have made
+19a visible immediately — Carbon Fiber would have been sitting in a labelled Stage 1.
+
+## 20. The two Reactions "clear" paths disagree about customer orders (2026-08-07, small)
+
+Found while diagnosing the Clear-all button (whose actual bug was a native `confirm()`, fixed in
+`6c17728`).
+
+- `_clear_assignment_group` (per-product re-assign) deliberately **skips** order-linked rows:
+  *"Rows raised by the customer-order flow belong to an order that was committed against real
+  capacity; a suggestion re-assign must not silently eat them."*
+- `unassign_all_reactions` ("Clear all") deletes them — no `order_id` filter — and leaves
+  `pp_reaction_orders.assigned_runs` untouched.
+
+Because `assigned_runs` is monotonic, Clear all can leave an order claiming its full run count with
+zero assignment rows: it looks fully assigned, schedules nothing, and cannot be re-assigned. Orders
+#36-#39 on context 1 are in that shape (`assigned=2000, rows=0`), though they reached it by
+cancellation rather than the button.
+
+Two honest fixes: make Clear all skip order rows like its sibling (and say so on the button), or
+have it clear them **and** reset the order's counter. Pick one; the current state is neither.
+
 ## 18. Is all of this too complicated? — storage shape and precomputation (2026-08-05, LARGE)
 
 A step back from feature work: **have we ended up doing this the hard way?** Two halves, and they
