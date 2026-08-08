@@ -212,7 +212,46 @@ throughput — but it needs partial-output tracking and changes what an assignme
 
 Order: 21a → 21b → 21c (all done) → 21d, which is the only one left.
 
-## 28. Reaction slot reservation and order cadence (2026-08-08, from live use)
+## 28. Reaction job layout — the priority order, stated by the user (2026-08-08)
+
+**This ordering governs. Optimise strictly in this sequence, and do not trade a higher one away for
+a lower one:**
+
+1. **Even distribution of job runs per slot per product.** Every job of a product carries the SAME
+   run count — one number to read and type, wherever it is installed.
+2. **Slot efficiency.** Use the reactors that are free. Idle capacity while a step drags on is the
+   failure mode, not a saving.
+3. **Aligned end time.** The jobs of a stage should land together, so one login collects them.
+4. **Shortest total run time.** Last. Makespan is not worth breaking any of the three above.
+
+Three attempts on 2026-08-08 all failed by optimising these out of order, and the shape of each
+failure is worth keeping:
+
+- `level_stage_runs` (kept) gives one run count per product per stage **within a character** — (1),
+  but only locally, so numbers still differ across characters.
+- The even per-host split (**reverted**) chased (1) across characters by giving every host the same
+  runs. It ignored (2): a 2-slot character got the same 250 runs as a 10-slot one and a single step
+  hit **14 days**.
+- The uniform per-host job layout (**reverted with it**) chased (1) again by capping every host to
+  the smallest host's slots — (2) sacrificed even harder.
+
+**The shape that satisfies all four, and what to build next.** Solve for a target duration `D` per
+STAGE across the slots actually available, rather than per host:
+
+    jobs_i   = ceil(total_runs_i * cycle_i / D)      # per product in the stage
+    runs_i   = ceil(total_runs_i / jobs_i)           # every job of product i carries this — (1)
+    choose the smallest D with sum(jobs_i) <= slots_available   # fills the slots — (2)
+
+Every product's jobs are then equal (1), the whole slot pool is used (2), every job in the stage
+ends at ~D (3), and D is minimised last (4). `tidy_runs` rounds `runs_i` at the end.
+
+**The one real constraint to respect:** a chain's intermediate feeds the stage above it ON THE SAME
+CHARACTER — this package does not model shipping half-finished goods between hangars — so the
+per-stage solve distributes JOBS across characters but a chain's stages must stay together. That is
+also what makes the "one number everywhere" goal reachable: the run count is a property of the
+product, the character only decides where the jobs sit.
+
+## 28b. Slot reservation and order cadence (2026-08-08, from live use)
 
 Two things reported while using the order flow, neither fixed yet:
 
