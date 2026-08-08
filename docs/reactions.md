@@ -316,8 +316,23 @@ That last rule is also the limit. Two separate chains on ONE character still get
 than sharing one, even though the output is fungible and lands in the same hangar. Sharing needs
 chain identity reworked first (a real `chain_id`, so one row can belong to more than one chain).
 
-A product whose chains are too far apart to share a number cheaply — 3 runs on one and 1000 on
-another — gets no options at all and is left exactly as it was. `test_level_runs.py`.
+**When 15% cannot buy one number, the budget widens rather than giving up.** Reported from use:
+Oxy-Organic Solvents at 35 runs on some characters and 18 on others while Carbon Fiber and
+Thermosetting Polymer levelled fine. Small requirements are the case that breaks the budget — 35
+and 18 have no common count inside 15% (35 on both overshoots the small chain by a third; 18 on
+both needs a second reactor the character may not have free), so the product was left alone. But
+one number per product is the FIRST priority and slots are the LAST, so the pass now re-runs at a
+widened budget and takes the single **cheapest** count that exists. Only the cheapest: handing the
+stage-alignment search a set of expensive options would let it buy alignment with goo.
+
+Two ceilings keep "cheapest available" honest — never more than **double the product's total**, and
+never more than **triple what any one chain asked for**. The second is not implied by the first: a
+chain needing 2 runs beside one needing 10,000 can be handed 1,000 and barely move the total, which
+is 500× the work that chain wanted. Below 10 runs a chain is exempt from the ratio, the same range
+`tidy_runs` already treats as free.
+
+A product whose chains are too far apart even for that — 3 runs on one and 1000 on another — still
+gets no options at all and is left exactly as it was. `test_level_runs.py`.
 
 **Committing a plan blocks the view (`_rxRunSteps`).** Levelling runs on the plan re-read, so the
 run counts a player sees are only true once that read lands — an assign is a POST per suggestion

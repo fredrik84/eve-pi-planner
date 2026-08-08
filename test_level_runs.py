@@ -111,6 +111,32 @@ def main():
     check(not _level_options([1000, 3], [4, 4], max_runs=10_000),
           "3 runs on one chain and 1000 on another has no cheap common number — left alone")
 
+    print("no chain is handed several times the work it asked for:")
+    # Inside the 15% total budget and still absurd: the 2-run chain would be given 1,000 runs,
+    # 500x what it needs, because next to 10,000 the overshoot barely registers in the total.
+    big = _level_options([10_000, 2], [10, 10], max_runs=10_000)
+    check(all(o["per_group"][1] * o["runs"] <= max(3 * 2, 10) for o in big),
+          "the small chain is never taken past 3x its own requirement (or 10 runs)")
+    check(all(o["per_group"][0] * o["runs"] >= 10_000 for o in big),
+          "...and the big chain still gets everything it needs")
+
+    print("when 15% cannot buy ONE number, the budget widens rather than giving up:")
+    # The reported case: Oxy-Organic Solvents at 35 runs on some characters and 18 on others.
+    # Every common count either overshoots the small chain by a third or wants a second reactor.
+    tight_oos = _level_options([35, 18], [1, 1], max_runs=125)
+    check(not tight_oos, "at 15% with no free reactor there is nothing to pick — hence two numbers")
+    wide_oos = _level_options([35, 18], [1, 1], max_runs=125, budget=1.0)
+    check(wide_oos, "widened, a common count exists")
+    cheapest = min(wide_oos, key=lambda o: (o["surplus"], o["jobs"]))
+    check(cheapest["runs"] == 35 and cheapest["jobs"] == 2,
+          f"and the cheapest of them is 35 on both, in the reactors already held (got {cheapest['runs']})")
+    check(cheapest["surplus"] == 17, f"costing 17 runs of stock (got {cheapest['surplus']})")
+    room_oos = _level_options([35, 18], [2, 2], max_runs=125, budget=1.0)
+    best_room = min(room_oos, key=lambda o: (o["surplus"], o["jobs"]))
+    check(best_room["surplus"] < 17,
+          f"given a free reactor it finds a cheaper number still (got {best_room['runs']} "
+          f"in {best_room['jobs']} jobs, {best_room['surplus']} surplus)")
+
     print("a stage is chosen to land in ONE go:")
     # Two products in a stage, one twice as slow per run. Levelling them to the same RUN count
     # would land them 50 hours apart; the same duration is what a single login collects.

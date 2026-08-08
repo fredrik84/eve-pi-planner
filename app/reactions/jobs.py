@@ -649,6 +649,16 @@ def level_stage_runs(context_id: int) -> int:
 #   2. Aligned end times — a stage lands in one go, one login collects it.
 #   3. Fewer slots — the same work in fewer, fuller jobs.
 _LEVEL_BUDGET = 0.15        # the budget tidy_runs works to: surplus is stock, but only if it's cheap
+# ...and what a product is allowed to cost when 15% cannot buy ONE number at all. Small
+# requirements are the case: 35 runs of Oxy-Organic Solvents on one chain and 18 on another have no
+# common count inside 15% — every candidate either overshoots the small one by a third or needs a
+# reactor nobody has free. Leaving it as two numbers was the wrong call: one number per product is
+# the FIRST priority (TODO 28) and slots are the last, so the pass now widens to the cheapest count
+# that exists rather than giving up. Bounded, because "cheapest available" is only safe with a
+# ceiling: never more than double the product's total, and never more than triple what any one
+# chain asked for.
+_LEVEL_FALLBACK = 1.00
+_LEVEL_GROUP_MAX = 3.0
 
 
 def _typeable(runs: int) -> bool:
@@ -667,7 +677,8 @@ def _typeable(runs: int) -> bool:
 
 
 def _level_options(totals: list[int], caps: list[int], max_runs: int,
-                    budget: float = _LEVEL_BUDGET) -> list[dict]:
+                    budget: float = _LEVEL_BUDGET,
+                    group_max: float = _LEVEL_GROUP_MAX) -> list[dict]:
     """Every run count ONE product could carry on EVERY one of its jobs, and what each costs.
 
     `totals[i]` is what chain *i* needs of this product and `caps[i]` the most jobs the character
@@ -681,10 +692,15 @@ def _level_options(totals: list[int], caps: list[int], max_runs: int,
     produces (rounding up is the only direction that is safe — the stage above consumes this one),
     the per-chain job counts, and whether the number is one a human can type without checking.
 
-    Candidates that would need more reactors than a character has, or that overshoot the real
-    requirement by more than `budget`, are not returned at all: an empty list means this product
-    genuinely cannot carry one number cheaply (3 runs on one chain and 1000 on another has no
-    common count that isn't mostly waste) and the caller leaves it alone.
+    Three things get a candidate dropped: more reactors than a character has, more than `budget`
+    overshoot across the product, and — separately — more than `group_max` times what any ONE chain
+    asked for. The last is not implied by the second: a chain needing 2 runs beside one needing
+    10,000 can be handed 1,000 runs and barely move the total, which is 500× the work that chain
+    wanted. Below 10 runs a chain is never held to the ratio; rounding 1 run to 10 is noise, and
+    `tidy_runs` already treats that range as free.
+
+    An empty list means this product genuinely cannot carry one number at that budget, and the
+    caller decides whether to widen it or leave the product alone.
     """
     need = sum(totals)
     if need <= 0 or not totals:
@@ -708,6 +724,8 @@ def _level_options(totals: list[int], caps: list[int], max_runs: int,
         jobs = [max(1, -(-int(t) // r)) for t in totals]
         if any(j > c for j, c in zip(jobs, caps)):
             continue                        # more reactors than that character actually has
+        if any(j * r > max(group_max * int(t), 10) for j, t in zip(jobs, totals)):
+            continue                        # one chain carrying several times what it asked for
         made = sum(j * r for j in jobs)
         if made - need > need * budget:
             continue                        # tidy numbers are not worth paying for in goo
@@ -857,8 +875,17 @@ def level_product_runs(context_id: int) -> int:
             totals = [sum(int(r["runs"] or 0) for r in by_chain[c]) for c in chains]
             caps = [len(by_chain[c]) + free.get(c[0], 0) for c in chains]
             max_runs = int(stage_cap_hours / cyc) if cyc > 0 else max(totals, default=0)
-            products[tid] = {"cycle": cyc, "chains": chains,
-                             "options": _level_options(totals, caps, max_runs)}
+            opts = _level_options(totals, caps, max_runs)
+            if not opts:
+                # Nothing inside the budget. Widen it, then keep only the single cheapest count —
+                # handing the stage-alignment search a set of expensive options would let it buy
+                # alignment with goo, which is not what the widening is for. It exists so the
+                # product still ends up with ONE number.
+                wide = _level_options(totals, caps, max_runs, budget=_LEVEL_FALLBACK)
+                if wide:
+                    opts = [min(wide, key=lambda o: (o["surplus"], o["jobs"],
+                                                     0 if o["tidy"] else 1, o["runs"]))]
+            products[tid] = {"cycle": cyc, "chains": chains, "options": opts}
         for tid, opt in _choose_stage_layout(products, prefer_tidy).items():
             for chain, jobs in zip(products[tid]["chains"], opt["per_group"]):
                 plan.append(((stage, tid), chain, by_product[tid][chain], opt["runs"], jobs))
