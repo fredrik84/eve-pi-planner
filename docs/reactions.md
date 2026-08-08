@@ -290,15 +290,24 @@ fifteen jobs become **twelve**. It replaces `level_stage_runs` on dashboard load
 on; off, that older within-a-character pass still runs.
 
 **How the number is chosen.** Per stage, the options for each product are every run count that
-divides some chain's requirement into a whole number of jobs, plus the round number just above
-each (`_level_options`). An option is discarded if it needs more reactors than a character has
-free, or if rounding up costs more than **15%** in surplus — the same budget `tidy_runs` works to.
-What is left is scored in the user's stated priority order (TODO 28) by `_choose_stage_layout`,
-searching over target DURATIONS rather than run counts, which is what makes alignment expressible:
+divides some chain's requirement into a whole number of jobs, plus the round number just above each
+(`_level_options`). An option is discarded if it needs more reactors than a character has free, if
+it overshoots the product's total by more than **50%**, or if it hands any ONE chain more than
+**3×** what it asked for. What is left is scored by `_choose_stage_layout`, searching over target
+DURATIONS rather than run counts — which is what makes alignment expressible — in the user's stated
+priority order (TODO 28):
 
-1. the **spread** between the first and last job of the stage to finish — a stage lands in one go;
+1. does the stage **land together** (every job finishing within 10% of the last)? A layout that
+   lands wins outright, whatever it overshoots;
 2. the **slot count** — the same work in fewer, fuller jobs;
 3. the **surplus**, and (with `reactions_tidy_runs` on) whether the number is one you can type.
+
+**Surplus is spent to land a stage or take a reactor back, and for nothing else** — *"it's fine to
+build a bit too much if it doesn't line up."* The two orderings that look more responsible are both
+wrong: ranking goo above slots picked 75 runs in 19 jobs over 125 in 12 to save 75 runs of stock,
+and scoring raw spread instead of a landed/not-landed flag bought a *little* alignment for a *lot*
+of goo — pushing a product that cannot reach the stage's duration half way there and paying in full
+for a stage that still doesn't land.
 
 **The ceiling that keeps it honest:** no job may run longer than the longest job already planned in
 that stage. Without it the cheapest answer in slots is always "one enormous job per character" —
@@ -316,23 +325,19 @@ That last rule is also the limit. Two separate chains on ONE character still get
 than sharing one, even though the output is fungible and lands in the same hangar. Sharing needs
 chain identity reworked first (a real `chain_id`, so one row can belong to more than one chain).
 
-**When 15% cannot buy one number, the budget widens rather than giving up.** Reported from use:
-Oxy-Organic Solvents at 35 runs on some characters and 18 on others while Carbon Fiber and
-Thermosetting Polymer levelled fine. Small requirements are the case that breaks the budget — 35
-and 18 have no common count inside 15% (35 on both overshoots the small chain by a third; 18 on
-both needs a second reactor the character may not have free), so the product was left alone. But
-one number per product is the FIRST priority and slots are the LAST, so the pass now re-runs at a
-widened budget and takes the single **cheapest** count that exists. Only the cheapest: handing the
-stage-alignment search a set of expensive options would let it buy alignment with goo.
+**Why the budget is 50% and not `tidy_runs`' 15%.** Reported from use: Oxy-Organic Solvents at 35
+runs on some characters and 18 on others while Carbon Fiber and Thermosetting Polymer levelled
+fine. Small requirements are the case that breaks a rounding-sized budget — 35 and 18 have no
+common count inside 15% at all (35 on both overshoots the small chain by a third; 18 on both needs
+a second reactor the character may not have free), so the product was left alone, which quietly
+ranked "cheap" above "one number" and inverted the priority list.
 
-Two ceilings keep "cheapest available" honest — never more than **double the product's total**, and
-never more than **triple what any one chain asked for**. The second is not implied by the first: a
-chain needing 2 runs beside one needing 10,000 can be handed 1,000 and barely move the total, which
-is 500× the work that chain wanted. Below 10 runs a chain is exempt from the ratio, the same range
-`tidy_runs` already treats as free.
+The per-chain **3×** ceiling is not implied by the total: a chain needing 2 runs beside one needing
+10,000 can be handed 1,000 and barely move the total, which is 500× the work that chain wanted.
+Below 10 runs a chain is exempt from the ratio, the same range `tidy_runs` already treats as free.
 
-A product whose chains are too far apart even for that — 3 runs on one and 1000 on another — still
-gets no options at all and is left exactly as it was. `test_level_runs.py`.
+A product whose chains are too far apart even for that — 3 runs on one and 1000 on another — gets
+no options at all and is left exactly as it was. `test_level_runs.py`.
 
 **Committing a plan blocks the view (`_rxRunSteps`).** Levelling runs on the plan re-read, so the
 run counts a player sees are only true once that read lands — an assign is a POST per suggestion

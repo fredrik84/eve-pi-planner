@@ -648,17 +648,24 @@ def level_stage_runs(context_id: int) -> int:
 #   1. ONE run count per product — every job of it, wherever it sits.
 #   2. Aligned end times — a stage lands in one go, one login collects it.
 #   3. Fewer slots — the same work in fewer, fuller jobs.
-_LEVEL_BUDGET = 0.15        # the budget tidy_runs works to: surplus is stock, but only if it's cheap
-# ...and what a product is allowed to cost when 15% cannot buy ONE number at all. Small
-# requirements are the case: 35 runs of Oxy-Organic Solvents on one chain and 18 on another have no
-# common count inside 15% — every candidate either overshoots the small one by a third or needs a
-# reactor nobody has free. Leaving it as two numbers was the wrong call: one number per product is
-# the FIRST priority (TODO 28) and slots are the last, so the pass now widens to the cheapest count
-# that exists rather than giving up. Bounded, because "cheapest available" is only safe with a
-# ceiling: never more than double the product's total, and never more than triple what any one
-# chain asked for.
-_LEVEL_FALLBACK = 1.00
+# How much surplus a levelled product may produce. Deliberately WIDER than the 15% `tidy_runs`
+# works to, and the reason is the user's, stated plainly: *"it's fine to build a bit too much if it
+# doesn't line up."* A budget tight enough to make rounding free is too tight to make a stage land
+# together — 35 runs of Oxy-Organic Solvents beside 18 has no common count inside 15% at all, so
+# the product kept two numbers, which quietly ranked "cheap" above "one number" and inverted the
+# priority list. Surplus is stock, and the next plan spends it (`reactions_use_stock`).
+#
+# What stops it running away is not the budget but WHEN it is allowed to be spent: see
+# `_choose_stage_layout`, which pays surplus only to land a stage together and otherwise takes the
+# cheapest count there is.
+_LEVEL_BUDGET = 0.50
+# ...and per CHAIN, which the total does not imply: a chain needing 2 runs beside one needing
+# 10,000 can be handed 1,000 and barely move the total, which is 500× the work that chain wanted.
 _LEVEL_GROUP_MAX = 3.0
+# A stage counts as landing together inside this much of its own longest job. Exact equality is
+# not reachable — run counts are integers and cycle times differ — and a stage whose jobs finish
+# within a few percent of each other is one login.
+_ALIGN_TOL = 0.10
 
 
 def _typeable(runs: int) -> bool:
@@ -699,8 +706,9 @@ def _level_options(totals: list[int], caps: list[int], max_runs: int,
     wanted. Below 10 runs a chain is never held to the ratio; rounding 1 run to 10 is noise, and
     `tidy_runs` already treats that range as free.
 
-    An empty list means this product genuinely cannot carry one number at that budget, and the
-    caller decides whether to widen it or leave the product alone.
+    This is the RANGE of what is affordable, not a recommendation — `_choose_stage_layout` decides
+    which of these is worth paying for. An empty list means the chains are too far apart to share
+    any number at all (3 runs on one and 1000 on another), and the caller leaves the product alone.
     """
     need = sum(totals)
     if need <= 0 or not totals:
@@ -742,15 +750,22 @@ def _choose_stage_layout(products: dict, prefer_tidy: bool = False) -> dict:
     and collected in the next. A job's duration is `runs × cycle`, so once every job of a product
     carries the same run count, aligning the stage is choosing run counts whose durations match.
 
-    Scored in the priority order: the SPREAD between the first and last job to finish, then the
-    slot count, then the surplus. Searching over target durations rather than over run counts
-    directly is what makes the first term meaningful — for each target every product takes the
-    longest job it can that still lands by then, which is also its cheapest in slots.
+    Searching over target DURATIONS rather than over run counts directly is what makes alignment
+    expressible: for each target every product takes the longest job it can that still lands by
+    then, which is also its cheapest in slots.
+
+    **Surplus is spent to LAND a stage, and for nothing else.** A layout whose jobs all finish
+    within `_ALIGN_TOL` of each other wins outright, however much it overshoots (inside the budget
+    `_level_options` already enforced) — *"it's fine to build a bit too much if it doesn't line
+    up."* When no target lines the stage up, the surplus ordering takes over and the cheapest count
+    wins. Without that split, a loose budget buys a little alignment for a lot of goo: a product
+    that cannot reach the stage's duration gets pushed half way there, paying in full for a stage
+    that still doesn't land together.
 
     `prefer_tidy` (the caller's `reactions_tidy_runs` state) puts a number you can type without
-    checking ahead of the last tie-break, so a stage settles on 70 rather than 67 where that costs
-    only surplus. It is not free — the surplus is real goo — which is why it follows the same flag
-    that decides whether rounding is worth paying for at all.
+    checking ahead of the surplus, so a stage settles on 70 rather than 67 where that costs only
+    surplus. It is not free — the surplus is real goo — which is why it follows the same flag that
+    decides whether rounding is worth paying for at all.
     """
     keys = [k for k, p in products.items() if p.get("options")]
     if not keys:
@@ -771,8 +786,13 @@ def _choose_stage_layout(products: dict, prefer_tidy: bool = False) -> dict:
         jobs = sum(pick[k]["jobs"] for k in keys)
         surplus = sum(pick[k]["surplus"] for k in keys)
         untidy = sum(0 if pick[k]["tidy"] else 1 for k in keys)
-        score = ((spread, jobs, untidy, surplus) if prefer_tidy
-                 else (spread, jobs, surplus, untidy))
+        landed = 0 if spread <= _ALIGN_TOL * max(durs) else 1
+        # Slots before surplus, both after landing the stage. Ranking the goo first looked
+        # responsible and picked 75 runs in 19 jobs over 125 in 12 to save 75 runs of stock —
+        # exactly backwards: fewer, fuller jobs is the whole point ("save slots, lower login
+        # cadence"), and the budget above is what keeps the surplus that buys it bounded.
+        score = ((landed, jobs, untidy, surplus, spread) if prefer_tidy
+                 else (landed, jobs, surplus, untidy, spread))
         if best_score is None or score < best_score:
             best_score, best_pick = score, pick
     return best_pick
@@ -875,17 +895,8 @@ def level_product_runs(context_id: int) -> int:
             totals = [sum(int(r["runs"] or 0) for r in by_chain[c]) for c in chains]
             caps = [len(by_chain[c]) + free.get(c[0], 0) for c in chains]
             max_runs = int(stage_cap_hours / cyc) if cyc > 0 else max(totals, default=0)
-            opts = _level_options(totals, caps, max_runs)
-            if not opts:
-                # Nothing inside the budget. Widen it, then keep only the single cheapest count —
-                # handing the stage-alignment search a set of expensive options would let it buy
-                # alignment with goo, which is not what the widening is for. It exists so the
-                # product still ends up with ONE number.
-                wide = _level_options(totals, caps, max_runs, budget=_LEVEL_FALLBACK)
-                if wide:
-                    opts = [min(wide, key=lambda o: (o["surplus"], o["jobs"],
-                                                     0 if o["tidy"] else 1, o["runs"]))]
-            products[tid] = {"cycle": cyc, "chains": chains, "options": opts}
+            products[tid] = {"cycle": cyc, "chains": chains,
+                             "options": _level_options(totals, caps, max_runs)}
         for tid, opt in _choose_stage_layout(products, prefer_tidy).items():
             for chain, jobs in zip(products[tid]["chains"], opt["per_group"]):
                 plan.append(((stage, tid), chain, by_product[tid][chain], opt["runs"], jobs))

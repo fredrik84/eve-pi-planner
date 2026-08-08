@@ -253,8 +253,8 @@ product, the character only decides where the jobs sit.
 
 **BUILT 2026-08-08 as `level_product_runs` (`reactions_level_runs`).** The D-per-stage solve above,
 with the per-chain floor made explicit: a candidate run count `r` costs chain *g* `ceil(T_g / r)`
-jobs, and only counts if every chain's character has the reactors for it and the whole product
-overshoots by no more than 15%. Scored spread → slots → surplus → typeable, searching over target
+jobs, and only counts if every chain's character has the reactors for it, the product overshoots by
+no more than 50%, and no single chain is handed more than 3x what it asked for. Scored spread → slots → surplus → typeable, searching over target
 durations. On the reported plan (375 / 360 / 360 / 300 of Carbon Fiber split 3/4/4/4) it lands on
 **125 runs everywhere in 12 jobs** instead of 125/90/90/75 in 15. Two things were added to the
 shape above and are load-bearing:
@@ -262,6 +262,10 @@ shape above and are load-bearing:
 * **a ceiling: no job may run longer than the longest job already in that stage.** Minimising slots
   with no ceiling always ends at "one enormous job per character" — here four jobs of 375 runs, 3×
   the runtime, eleven reactors idle. (4) is last in the list, not absent.
+* **surplus is spent to LAND a stage or take a reactor back, and for nothing else** — the user's
+  own rule, *"it's fine to build a bit too much if it doesn't line up."* A 15% budget could not buy
+  one number for a small product at all (Oxy-Organic Solvents stayed at 35 and 18 runs), and
+  scoring raw spread instead of a landed/not-landed flag bought a little alignment for a lot of goo.
 * **the top row of a chain is never touched**, and a chain never loses its last row of a product —
   `chain_stage_state` reads readiness per chain, so a chain that stopped mentioning a product it is
   waiting on would call the stage above ready while those jobs ran.
