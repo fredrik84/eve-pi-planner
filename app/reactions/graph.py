@@ -125,17 +125,18 @@ def _resolve_reachable(goo: dict[int, dict], purchasable: dict[int, float],
     for tid, g in goo.items():
         if g["sell_price"] > 0:
             reached[tid] = {"unit_cost": g["sell_price"], "max_qty": _PURCHASABLE_MAX_QTY,
-                             "reaction_count": 0, "via": None, "source": "group", "job_cost": 0.0,
-                             "alt_cost": None, "alt_source": None}
+                             "reaction_count": 0, "depth": 0, "via": None, "source": "group",
+                             "job_cost": 0.0, "alt_cost": None, "alt_source": None}
     for tid, buy_price in purchasable.items():
         if buy_price <= 0:
             continue
         if tid not in reached:
             reached[tid] = {"unit_cost": buy_price, "max_qty": _PURCHASABLE_MAX_QTY, "source": "market",
-                             "reaction_count": 0, "via": None, "job_cost": 0.0, "alt_cost": None, "alt_source": None}
+                             "reaction_count": 0, "depth": 0, "via": None, "job_cost": 0.0,
+                             "alt_cost": None, "alt_source": None}
         elif buy_price < reached[tid]["unit_cost"]:
             reached[tid] = {"unit_cost": buy_price, "max_qty": _PURCHASABLE_MAX_QTY, "source": "market",
-                             "reaction_count": 0, "via": None, "job_cost": 0.0,
+                             "reaction_count": 0, "depth": 0, "via": None, "job_cost": 0.0,
                              "alt_cost": reached[tid]["unit_cost"], "alt_source": "group"}
         else:
             reached[tid]["alt_cost"] = buy_price
@@ -170,11 +171,20 @@ def _resolve_reachable(goo: dict[int, dict], purchasable: dict[int, float],
                 job_cost_per_run = own_eiv_per_run * job_cost_rate + \
                     sum(q * reached[tid]["job_cost"] for tid, q in eff_qty.items())
                 reaction_count = 1 + sum(reached[inp["type_id"]]["reaction_count"] for inp in f["inputs"])
+                # DEPTH is not reaction_count. reaction_count is how many reactions are in the
+                # subtree; depth is how many STAGES deep it is — 1 + the deepest input, leaves at 0.
+                # Reinforced Carbon Fiber is the case that makes the difference load-bearing: its
+                # three inputs (Carbon Fiber, Oxy-Organic Solvents, Thermosetting Polymer) are each
+                # one step off raw goo, so they are SIBLINGS that all run at once, and only the
+                # product itself is a second stage. Ranking them by subtree size or by list position
+                # instead serialises three jobs that have no dependency on each other at all.
+                depth = 1 + max((reached[inp["type_id"]]["depth"] for inp in f["inputs"]), default=0)
                 candidate = {
                     "unit_cost": cost_per_run / f["output_qty"],
                     "job_cost": job_cost_per_run / f["output_qty"],
                     "max_qty": int(runs) * f["output_qty"],
                     "reaction_count": reaction_count,
+                    "depth": depth,
                     # Actual reaction-job cycles of THIS specific formula needed to hit max_qty
                     # (distinct from reaction_count, which is chain DEPTH/distinct-formula count,
                     # not run count) — this is what the wizard's "steps budget" (confirmed by the
@@ -428,10 +438,14 @@ def _build_opportunities_uncached(context_id: int, allowed_material_ids: set[int
         # single-tier product (the common case) — via is only set on reaction-product nodes.
         chain_tiers = []
         if node.get("via"):
-            for tier_tid, info in _ordered_chain_tiers(node["via"]["inputs"], node["top_level_runs"], reached):
+            ordered = _ordered_chain_tiers(node["via"]["inputs"], node["top_level_runs"], reached)
+            # `tier` rides along so a caller that only has this payload (the manual-assign modal)
+            # still knows which of these steps run together — position in the list does not say so.
+            for (tier_tid, info), stage in zip(ordered, tier_ranks(ordered)):
                 chain_tiers.append({
                     "type_id": tier_tid, "name": types.get(tier_tid, {}).get("name", str(tier_tid)),
-                    "runs": info["runs"], "cycle_time": info["cycle_time"], "output_qty": info["output_qty"],
+                    "runs": info["runs"], "cycle_time": info["cycle_time"],
+                    "output_qty": info["output_qty"], "tier": stage,
                 })
 
         opportunities.append({
@@ -689,7 +703,31 @@ def _ordered_chain_tiers(formula_inputs: list[dict], runs: int, reached: dict,
     callers scale its tiers linearly, and stock coverage is not linear)."""
     tier_runs: dict[int, dict] = {}
     _explode_chain_tiers(formula_inputs, runs, reached, tier_runs, stock, covered)
-    return sorted(tier_runs.items(), key=lambda kv: reached.get(kv[0], {}).get("reaction_count", 0))
+    for tid, info in tier_runs.items():
+        info["depth"] = int(reached.get(tid, {}).get("depth") or 1)
+    # Deepest-first by DEPTH — the stage a step belongs to — with reaction_count only breaking ties
+    # inside a stage for a stable order. Sorting by reaction_count alone put siblings in an
+    # arbitrary sequence, which the callers below then stamped as sequential tier_orders.
+    return sorted(tier_runs.items(),
+                  key=lambda kv: (kv[1]["depth"], reached.get(kv[0], {}).get("reaction_count", 0)))
+
+
+def tier_ranks(ordered: list) -> list[int]:
+    """Dense 0-based STAGE index per entry of an `_ordered_chain_tiers` result.
+
+    Steps that share a depth share a rank, because they have no dependency on each other and run at
+    the same time. This replaced `enumerate(...)` at every insert site, which is the bug it exists
+    for: Reinforced Carbon Fiber's three inputs — Carbon Fiber, Oxy-Organic Solvents and
+    Thermosetting Polymer, each one step off raw goo and fuel blocks — were stamped tier_order
+    0/1/2 purely from their position in a list. The dashboard then labelled them Stage 1/2/3 and
+    greyed two of them out, and `_concurrent_load` counted three simultaneous jobs as one slot.
+    They are one stage; the product they feed is the second.
+    """
+    ranks, seen = [], {}
+    for _tid, info in ordered:
+        d = int(info.get("depth") or 1)
+        ranks.append(seen.setdefault(d, len(seen)))
+    return ranks
 
 
 def _shopping_roots(rows: list[dict]) -> list[dict]:

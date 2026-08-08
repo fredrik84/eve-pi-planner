@@ -164,6 +164,90 @@ def main():
               f"the quiet tier fills up to the busy one for free (got {low['jobs']})")
         check(high["jobs"] == 3, "and the busy tier is untouched with nothing idle to give it")
 
+        print("SIBLINGS share a stage — the bug that made three parallel jobs look sequential:")
+        from app.reactions.graph import tier_ranks
+        # Reinforced Carbon Fiber's real shape: three steps one reaction off raw goo, feeding one
+        # product. Depth is what decides the stage; position in the list decides nothing.
+        ordered = [(101, {"depth": 1}), (102, {"depth": 1}), (103, {"depth": 1})]
+        check(tier_ranks(ordered) == [0, 0, 0],
+              f"three steps at the same depth are ONE stage (got {tier_ranks(ordered)})")
+        deep = [(101, {"depth": 1}), (102, {"depth": 1}), (103, {"depth": 2})]
+        check(tier_ranks(deep) == [0, 0, 1],
+              f"and a step that consumes one of them is the next (got {tier_ranks(deep)})")
+        check(tier_ranks([(101, {"depth": 2}), (102, {"depth": 5})]) == [0, 1],
+              "stages are dense — a gap in depth is not an empty stage on the dashboard")
+        check(tier_ranks([]) == [], "no tiers, no stages")
+
+        print("...and siblings each cost their own reactor, because they run at once:")
+        rows = [{"tier_order": 0}, {"tier_order": 0}, {"tier_order": 0}, {"tier_order": 1}]
+        check(_concurrent_load(rows) == 3,
+              f"three jobs in stage 1 are three slots, not one (got {_concurrent_load(rows)})")
+
+        print("a stage is DONE when ESI says its jobs are, and the next one then says so:")
+        from app.reactions.jobs import chain_stage_state
+        plan = [{"character_id": CHAR, "type_id": 101, "name": "Carbon Fiber", "tier_order": 0,
+                 "created_at": 100.0},
+                {"character_id": CHAR, "type_id": 102, "name": "Oxy-Organic Solvents",
+                 "tier_order": 0, "created_at": 100.0},
+                {"character_id": CHAR, "type_id": 103, "name": "Reinforced Carbon Fiber",
+                 "tier_order": 1, "created_at": 100.0}]
+        mid = chain_stage_state(plan, [{"product_type_id": 101, "status": "ready"},
+                                       {"product_type_id": 102, "status": "active",
+                                        "end_date": "2099-01-01T00:00:00Z"}], time.time())
+        check(mid[0]["done"] == 1 and mid[0]["running"] == 1, f"stage 1 is half finished (got {mid[0]})")
+        check(mid[1]["ready"] is False,
+              "so stage 2 is NOT startable — one of its inputs is still cooking")
+        done = chain_stage_state(plan, [{"product_type_id": 101, "status": "ready"},
+                                        {"product_type_id": 102, "status": "delivered"}], time.time())
+        check(done[0]["done"] == 2 and done[1]["ready"] is True,
+              "both finished (ready + delivered both count) and stage 2 can start")
+        past = chain_stage_state(plan, [{"product_type_id": 101, "status": "ready"},
+                                        {"product_type_id": 102, "status": "active",
+                                         "end_date": "2020-01-01T00:00:00Z"}], time.time())
+        check(past[1]["ready"] is True,
+              "a job past its end_date is finished whatever the 5-minute-stale cache still says")
+        check(chain_stage_state(plan, [], time.time())[0]["ready"] is True,
+              "stage 1 is always startable — nothing gates it")
+        two_chains = plan + [{"character_id": CHAR, "type_id": 104, "name": "Other", "tier_order": 1,
+                              "created_at": 900.0}]
+        st = chain_stage_state(two_chains, [{"product_type_id": 101, "status": "ready"},
+                                            {"product_type_id": 102, "status": "delivered"}],
+                               time.time())
+        check(any(e["chain"] == 900.0 and e["stage"] == 1 and e["ready"] for e in st),
+              "a second plan's stages are judged on ITS own chain, not the first one's progress")
+
+        print("plan rows written under the OLD position-based rule are repaired in place:")
+        from app.reactions.graph import _load_goo_and_reached
+        from app.reactions.jobs import restage_plan_rows
+        loaded = _load_goo_and_reached(CTX)
+        reached = loaded[1] if loaded else {}
+        RCF = 57457                       # Reinforced Carbon Fiber — the reported case
+        node = reached.get(RCF)
+        if not node or not node.get("via"):
+            print("  ....  Reinforced Carbon Fiber not priced in this container — repair not exercised")
+        else:
+            sibs = [i["type_id"] for i in node["via"]["inputs"]
+                    if (reached.get(i["type_id"]) or {}).get("via")]
+            _reset(con)
+            _character(con)
+            at = time.time()
+            nxt = int(con.execute("SELECT COALESCE(MAX(id), 0) + 1 AS n FROM pp_reaction_assignments")
+                      .fetchone()["n"])
+            for i, tid in enumerate(sibs + [RCF]):     # the old, wrong stamping: 0, 1, 2, 3
+                con.execute(
+                    "INSERT INTO pp_reaction_assignments (id, character_id, type_id, name, runs, "
+                    "input_cost, reward, created_at, tier_order) VALUES (?,?,?,?,?,?,?,?,?)",
+                    (nxt + i, CHAR, tid, "x", 10, 0.0, 0.0, at, i))
+            con.commit()
+            moved = restage_plan_rows(CTX)
+            after = {r["type_id"]: r["tier_order"] for r in con.execute(
+                "SELECT type_id, tier_order FROM pp_reaction_assignments WHERE character_id=?", (CHAR,))}
+            check(moved == len(sibs), f"the mis-staged rows are rewritten (got {moved})")
+            check(all(after[t] == 0 for t in sibs),
+                  f"every sibling lands in stage 1 (got {[after[t] for t in sibs]})")
+            check(after[RCF] == 1, f"and the product they feed is stage 2 (got {after[RCF]})")
+            check(restage_plan_rows(CTX) == 0, "running it again does nothing — idempotent")
+
         print("it only ever moves `jobs`:")
         s = _step(1, 0, 50, 2.0, 1)
         before = {k: v for k, v in s.items() if k != "jobs"}

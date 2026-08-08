@@ -30,7 +30,7 @@ from app.reactions._router import router
 from app.reactions.graph import (
     _load_goo_and_reached, _value_reaction_batch, _explode_chain_tiers,
     _build_opportunities, _ordered_chain_tiers, _load_reaction_graph, _fuel_block_ids,
-    reaction_stock_pool,
+    reaction_stock_pool, tier_ranks,
 )
 from app.reactions.settings import effective_reaction_settings
 from app.reactions.jobs import (
@@ -356,14 +356,21 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
             # the same intermediate must not each be told they already have it.
             ordered = _ordered_chain_tiers(top_via["inputs"], runs_needed, reached,
                                             stock_pool, stock_covered)
+            # Which of these steps run TOGETHER. Siblings (Carbon Fiber / Oxy-Organic Solvents /
+            # Thermosetting Polymer under Reinforced Carbon Fiber) share a stage and each need
+            # their own reactor at the same moment; only a real dependency makes a new stage.
+            stages = tier_ranks(ordered)
             # Slots this suggestion is holding at its BUSIEST moment. A tier reuses the slots the
             # tier below it has finished with, so what a chain costs the character is the worst
             # tier, not the sum — the same model the assign guard commits under
             # (`_concurrent_load`). Subtracting every tier separately (the old behaviour) charged a
             # 3-stage chain three slots for work that never overlaps, and the character then looked
             # full to every suggestion after it.
+            # Per STAGE, and the load of a stage is the SUM of the steps in it: three siblings are
+            # three reactors at the same moment. Only across stages does the reuse apply.
             peak_used = slots_used
-            for tid, info in ordered:
+            stage_load: dict[int, int] = {}
+            for (tid, info), stage in zip(ordered, stages):
                 t_cycle_hours = info["cycle_time"] / 3600.0 if info["cycle_time"] else 1.0
                 t_ideal_slots = max(1, math.ceil(info["runs"] * t_cycle_hours / cadence_hours)) if cadence_hours > 0 else info["runs"]
                 # Each tier against its OWN formula count. Never across tiers: tier 0 has finished
@@ -374,8 +381,11 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
                 headroom = remaining_slots.get(pick_id, 0) + peak_used if peak_stages else remaining_slots.get(pick_id, 0)
                 t_slots_used = max(1, min(_cap_jobs(t_cap, t_ideal_slots), headroom))
                 if peak_stages:
-                    remaining_slots[pick_id] = remaining_slots.get(pick_id, 0) - max(0, t_slots_used - peak_used)
-                    peak_used = max(peak_used, t_slots_used)
+                    stage_load[stage] = stage_load.get(stage, 0) + t_slots_used
+                    # Only what pushes this suggestion's busiest moment higher costs a new slot.
+                    remaining_slots[pick_id] = remaining_slots.get(pick_id, 0) - max(
+                        0, stage_load[stage] - peak_used)
+                    peak_used = max(peak_used, stage_load[stage])
                 else:
                     remaining_slots[pick_id] = remaining_slots.get(pick_id, 0) - t_slots_used
                 if t_cap and t_cap < t_ideal_slots:
@@ -385,11 +395,11 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
                     "runs": info["runs"],
                     "job_count": t_slots_used,
                     "runs_per_job": math.ceil(info["runs"] / t_slots_used),
-                    "formula_cap": t_cap,
+                    "formula_cap": t_cap, "tier": stage,
                 }
                 chain_tiers.append(tier_row)
                 widen_steps.append({
-                    "character_id": pick_id, "tier": len(chain_tiers) - 1, "runs": info["runs"],
+                    "character_id": pick_id, "tier": stage, "runs": info["runs"],
                     "cycle_hours": t_cycle_hours, "jobs": t_slots_used, "cap": t_cap,
                     "row": tier_row,
                 })
@@ -470,7 +480,8 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
         # path stores as `tier_order`), so widening it competes only with other suggestions' top
         # tiers on this character, not with its own intermediates.
         widen_steps.append({
-            "character_id": pick_id, "tier": len(chain_tiers), "runs": runs_needed,
+            "character_id": pick_id, "tier": (max(stages) + 1) if chain_tiers else 0,
+            "runs": runs_needed,
             "cycle_hours": cycle_hours, "jobs": slots_used, "cap": f_cap, "row": top_row,
         })
         if capped_by_formula:

@@ -13,6 +13,8 @@ Find a section: `grep -n '^## ' docs/reactions.md` and read from that line — t
 - **What you already hold is not work (`reactions_use_stock`)** — how held intermediates shorten a chain, and the one place stock is deliberately not consulted
 - **One slot model: a chain's stages reuse a reactor (`reactions_parallel_stages`)** — why stages can't run in parallel, what reuses what, and where idle reactors go
 - **Absence becomes knowledge, but only after a paste (`app/reactions/library.py`)** — when an undeclared formula means "you don't own it", and what gets reported instead of planned
+- **A stage is a DEPTH, not a position in a list** — why siblings share a stage, and how existing rows were repaired
+- **Knowing when the next stage can start (`chain_stage_state`)** — the ESI signal behind "stage 2 is ready"
 - **Stages on the dashboard are `tier_order`, shown absolute** — how chain order is rendered, and why the number is never re-ranked
 - **Pricing: a sell-order price is not achievable profit** — the pricing rule that governs every profit figure shown for reaction goods
 - **Where the rest lives** — pointers to reaction content that belongs to another service
@@ -154,6 +156,46 @@ which is why that exact string now resolves). So the import KEEPS what it could 
 (`pp_blueprint_paste_unresolved`, replaced per batch, deleted with the batch), and every report
 carries it for the UI to show beside the finding — an import status line that scrolled away days
 ago is not a warning.
+
+## A stage is a DEPTH, not a position in a list
+
+The bug this replaced, reported 2026-08-08 and worth stating plainly: every insert path stamped
+`tier_order` with `enumerate(...)` over the chain-tier list. Reinforced Carbon Fiber's three inputs
+— Carbon Fiber, Oxy-Organic Solvents, Thermosetting Polymer — are each **one reaction off raw goo
+and fuel blocks**, with no dependency on each other at all, and they were stamped stages 0/1/2. The
+dashboard then labelled them Stage 1/2/3 and greyed two out as "wait for the one above", and
+`_concurrent_load` counted three genuinely simultaneous jobs as one reactor.
+
+`_resolve_reachable` now carries **`depth`** on every node (leaves 0, otherwise `1 + max(input
+depths)`) — deliberately NOT `reaction_count`, which is the size of the subtree and happens to
+equal depth only for a straight chain. `tier_ranks()` turns an `_ordered_chain_tiers` result into
+dense 0-based stages where **steps sharing a depth share a stage**, and every insert path
+(`assign_reaction`, `adopt_orphan`, `_allocate_and_insert`) uses it. `assign_reaction` takes the
+stage from the client's `ChainTier.tier` when present, re-derives it from the graph when not, and
+only falls back to list position for a chain it cannot resolve at all.
+
+Two consequences that matter beyond the label: the load of a stage is the **sum** of the steps in
+it (three siblings are three reactors at once — the advisor and the assign guard both accumulate
+per stage now), and the idle-slot pass naturally pours spare reactors into stage 1, which is what
+the whole chain is waiting on.
+
+**Existing rows are repaired, not left wrong.** `restage_plan_rows` re-derives `tier_order` from
+the graph for any group whose stored stages disagree with it, runs on dashboard load, is idempotent
+(a repaired account does no writes), and does nothing at all when the graph can't price the chain.
+
+## Knowing when the next stage can start (`chain_stage_state`)
+
+"Fill stage 1, then tell me when stage 2 can go" needs a completion signal, and ESI already has one:
+an industry job reported `ready` (finished, uncollected) or `delivered` (collected), or whose
+`end_date` has passed, is work that is over. A stage is DONE when every one of its rows has such a
+job; a stage is READY when every stage below it in **its own chain** is done (chains grouped by the
+assign that wrote them, so two plans on one character don't gate each other). Stage 1 is always
+ready.
+
+The dashboard renders that as a green "Stage N is ready to start" banner, un-greys the slots of a
+ready stage, and relabels it "ready to start now" instead of "after stage 1 finishes". The
+`end_date` check matters because the jobs cache is up to five minutes stale — "can I start yet"
+should not wait on a refresh.
 
 ## Stages on the dashboard are `tier_order`, shown absolute
 

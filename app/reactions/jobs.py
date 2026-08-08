@@ -28,7 +28,7 @@ from app.reactions.settings import effective_reaction_settings
 from app.reactions.graph import (
     _load_goo_and_reached, _load_reaction_graph, _value_reaction_batch,
     _ordered_chain_tiers, _build_opportunities, _fuel_block_ids, reaction_stock_pool,
-    _shopping_roots,
+    _shopping_roots, tier_ranks,
 )
 
 
@@ -396,6 +396,187 @@ class ChainTier(BaseModel):
     name: str
     runs: int
     job_count: int = 1
+    # Which STAGE this step belongs to — steps sharing one have no dependency on each other and run
+    # side by side. Optional so an older client (or a cached suggestion) still assigns; absent, the
+    # server derives it from the graph, and only failing that falls back to list position, which is
+    # what used to be the only rule and is what serialised siblings.
+    tier: int | None = None
+
+
+def restage_plan_rows(context_id: int) -> int:
+    """Re-derive `tier_order` for plan rows written under the old "position in the list is the
+    stage" rule. Returns how many rows moved.
+
+    Every insert path used `enumerate(...)`, so three steps that run at the same time were stamped
+    stages 0/1/2 — the dashboard greyed two of them out as "wait for the one above", and
+    `_concurrent_load` counted three simultaneous jobs as one reactor. The rows already in the
+    table say that, and nobody should have to clear their plan to get the truth back.
+
+    Idempotent and cheap after the first pass: a row is only rewritten when the graph disagrees
+    with what is stored, so a repaired account does no writes and the graph is only loaded when
+    there is a row that could be wrong. No graph (unpriced/unreachable) means no repair — the
+    stored value stands rather than being replaced by a guess.
+    """
+    ensure_reaction_assignments_table()
+    con = get_connection()
+    try:
+        rows = [dict(r) for r in con.execute(
+            "SELECT a.id, a.character_id, a.type_id, a.created_at, COALESCE(a.tier_order,0) AS tier_order "
+            "FROM pp_reaction_assignments a JOIN pp_characters c ON c.character_id = a.character_id "
+            "WHERE c.context_id=?", (context_id,))]
+    except Exception:
+        return 0
+    finally:
+        con.close()
+    if not rows:
+        return 0
+
+    groups: dict[tuple, list[dict]] = {}
+    for r in rows:
+        groups.setdefault((r["character_id"], round(float(r["created_at"] or 0.0), 3)), []).append(r)
+    # Only a group holding several DISTINCT stages can be mis-staged; a flat group is already right.
+    suspect = [g for g in groups.values() if len({r["tier_order"] for r in g}) > 1]
+    if not suspect:
+        return 0
+    try:
+        loaded = _load_goo_and_reached(context_id)
+        reached = loaded[1] if loaded else {}
+    except Exception:
+        reached = {}
+    if not reached:
+        return 0
+
+    fixed = 0
+    con = get_connection()
+    try:
+        for g in suspect:
+            depths = {r["id"]: int((reached.get(int(r["type_id"])) or {}).get("depth") or 0)
+                      for r in g}
+            if not all(depths.values()):
+                continue                      # a step we cannot place — leave the whole group alone
+            order = {d: i for i, d in enumerate(sorted(set(depths.values())))}
+            for r in g:
+                want = order[depths[r["id"]]]
+                if want != r["tier_order"]:
+                    con.execute("UPDATE pp_reaction_assignments SET tier_order=? WHERE id=?",
+                                (want, r["id"]))
+                    fixed += 1
+        if fixed:
+            con.commit()
+    except Exception:
+        return 0
+    finally:
+        con.close()
+    return fixed
+
+
+def chain_stage_state(rows: list[dict], jobs: list[dict], now: float) -> list[dict]:
+    """Per-chain stage progress for one character: `[{stage, steps, done, running, todo, ready,
+    names}]`, one entry per stage of each chain the character is holding.
+
+    **What makes a stage DONE is a finished job, read from ESI.** An industry job the game reports
+    as `ready` (finished, output not collected) or `delivered` (collected), or whose `end_date` has
+    passed, is work that is over — that is the signal the player asked for, and it needs no button.
+    A job still `active`/`paused` is in progress; a planned row with no job at all is not started.
+
+    **A stage is READY when every stage below it in its own chain is done.** Stage 1 is always
+    ready. This is the answer to "can I start the next lot yet" — before this, the dashboard could
+    only say "after stage 1 finishes" and leave the player to work out whether it had.
+
+    Chains are grouped the way every other read groups them: the assign that wrote them
+    (`created_at`), so two separate plans on one character don't gate each other.
+    """
+    done_types: dict[int, int] = {}
+    live_types: dict[int, int] = {}
+    for j in jobs:
+        tid = j.get("product_type_id")
+        if not tid:
+            continue
+        status = (j.get("status") or "").lower()
+        finished = status in ("ready", "delivered")
+        if not finished and status in ("active", "paused"):
+            # ESI's own `end_date` is an ISO string (same parse the countdown uses below). A job
+            # past its end date is finished whatever the cached status says — the cache is up to
+            # five minutes stale, and "is stage 1 done" should not wait on a refresh.
+            end = j.get("end_date")
+            try:
+                finished = bool(end) and datetime.fromisoformat(
+                    str(end).replace("Z", "+00:00")).timestamp() <= now
+            except Exception:
+                finished = False
+        (done_types if finished else live_types)[tid] = \
+            (done_types if finished else live_types).get(tid, 0) + 1
+
+    out: list[dict] = []
+    groups: dict[tuple, list[dict]] = {}
+    for r in rows:
+        groups.setdefault((r.get("character_id"), round(float(r.get("created_at") or 0.0), 3)),
+                          []).append(r)
+    for g in groups.values():
+        by_stage: dict[int, list[dict]] = {}
+        for r in g:
+            by_stage.setdefault(int(r.get("tier_order") or 0), []).append(r)
+        lower_all_done = True
+        for stage in sorted(by_stage):
+            steps = by_stage[stage]
+            done = running = 0
+            for r in steps:
+                tid = int(r["type_id"])
+                if done_types.get(tid, 0) > 0:
+                    done_types[tid] -= 1
+                    done += 1
+                elif live_types.get(tid, 0) > 0:
+                    live_types[tid] -= 1
+                    running += 1
+            entry = {
+                "chain": round(float(steps[0].get("created_at") or 0.0), 3),
+                "stage": stage, "steps": len(steps), "done": done, "running": running,
+                "todo": len(steps) - done - running,
+                # Startable now: nothing below it is unfinished. The first stage always qualifies.
+                "ready": lower_all_done,
+                "names": sorted({str(r.get("name") or r["type_id"]) for r in steps}),
+            }
+            out.append(entry)
+            lower_all_done = lower_all_done and done == len(steps)
+    return out
+
+
+def _stage_of_tiers(context_id: int, product_id: int, tiers: list) -> list[int]:
+    """A STAGE index per client-supplied chain tier — steps that can run at the same time share one.
+
+    Three sources, in order of how much they know:
+
+      1. the tier's own `tier`, when the client sent one (the wizard and the opportunity list now
+         both carry it, computed from the graph's dependency depth);
+      2. the GRAPH, re-derived here — the authority, and what repairs a client that didn't send it;
+      3. list position, the old rule, kept only as a last resort for a chain we cannot resolve at
+         all. It is wrong for siblings, which is the whole reason this function exists.
+
+    Never trusts (1) blindly over (2) when the two disagree in shape: a stamped stage that skips a
+    number (0, 2) would leave an empty stage on the dashboard, so the values are re-densified.
+    """
+    if not tiers:
+        return []
+    stages: list[int] | None = None
+    stamped = [t.tier for t in tiers]
+    if all(s is not None for s in stamped):
+        stages = [int(s) for s in stamped]
+    else:
+        try:
+            loaded = _load_goo_and_reached(context_id)
+            reached = loaded[1] if loaded else {}
+            node = reached.get(int(product_id)) or {}
+            if node.get("via"):
+                depth_of = {int(tid): int((reached.get(int(tid)) or {}).get("depth") or 1)
+                            for tid, _ in [(t.type_id, None) for t in tiers]}
+                stages = [depth_of.get(int(t.type_id), 1) for t in tiers]
+        except Exception:
+            stages = None
+    if stages is None:
+        stages = list(range(len(tiers)))            # last resort — see the docstring
+    # Densify: whatever the source, stages must be 0..n with no gaps, in dependency order.
+    order = {d: i for i, d in enumerate(sorted(set(stages)))}
+    return [order[d] for d in stages]
 
 
 def _trim_tiers_by_stock(context_id: int, tiers: list) -> list[dict]:
@@ -576,7 +757,8 @@ def assign_reaction(req: AssignRequest, context_id: int = Depends(require_contex
             raise HTTPException(status_code=403, detail="Not your character")
 
         now = _time.time()
-        top_tier_order = len(req.chain_tiers)
+        tier_of = _stage_of_tiers(context_id, req.type_id, req.chain_tiers)
+        top_tier_order = (max(tier_of) + 1) if tier_of else 0
         guarded = _assign_guards_on(context_id)
         replaced = 0
         if guarded:
@@ -588,7 +770,7 @@ def assign_reaction(req: AssignRequest, context_id: int = Depends(require_contex
             # parallelism is unaffected: how many jobs a product runs side by side is `job_count`,
             # which sets the row count WITHIN the group, so it is expressed here and not by pressing
             # the button twice.
-            for tier_order, tier in enumerate(req.chain_tiers):
+            for tier_order, tier in zip(tier_of, req.chain_tiers):
                 replaced += _clear_assignment_group(con, req.character_id, tier.type_id, tier_order)
             replaced += _clear_assignment_group(con, req.character_id, req.type_id, top_tier_order)
 
@@ -598,7 +780,10 @@ def assign_reaction(req: AssignRequest, context_id: int = Depends(require_contex
             existing = [dict(r) for r in con.execute(
                 "SELECT tier_order FROM pp_reaction_assignments WHERE character_id=?",
                 (req.character_id,))]
-            adding = {i: max(1, t.job_count) for i, t in enumerate(req.chain_tiers)}
+            # Per STAGE, summed: two siblings in one stage really do hold two reactors at once.
+            adding: dict[int, int] = {}
+            for stage, t in zip(tier_of, req.chain_tiers):
+                adding[stage] = adding.get(stage, 0) + max(1, t.job_count)
             adding[top_tier_order] = max(1, req.job_count)
             peak = _concurrent_load(existing, adding)
             slots = _assigned_slot_capacity(con, req.character_id)
@@ -609,7 +794,7 @@ def assign_reaction(req: AssignRequest, context_id: int = Depends(require_contex
                     detail=f"That needs {peak} reaction slots at once and this character has "
                            f"{slots}. Assign fewer jobs, or spread them across characters.")
 
-        for tier_order, tier in enumerate(req.chain_tiers):
+        for tier_order, tier in zip(tier_of, req.chain_tiers):
             _insert_assignment_rows(con, req.character_id, tier.type_id, tier.name, tier.runs,
                                      tier.job_count, 0.0, 0.0, tier_order, now)
 
@@ -673,13 +858,15 @@ def adopt_orphan_job(req: AdoptOrphanRequest, context_id: int = Depends(require_
         if not owner:
             raise HTTPException(status_code=403, detail="Not your character")
         now = _time.time()
-        for tier_order, (tier_tid, info) in enumerate(ordered):
+        ranks = tier_ranks(ordered)
+        for (tier_tid, info), tier_order in zip(ordered, ranks):
             _insert_assignment_rows(con, req.character_id, tier_tid,
                                      types.get(tier_tid, {}).get("name", str(tier_tid)),
                                      info["runs"], 1, 0.0, 0.0, tier_order, now)
         _insert_assignment_rows(con, req.character_id, req.type_id,
                                  types.get(req.type_id, {}).get("name", str(req.type_id)),
-                                 req.runs, 1, input_cost, reward, len(ordered), now)
+                                 req.runs, 1, input_cost, reward,
+                                 (max(ranks) + 1) if ranks else 0, now)
         con.commit()
     finally:
         con.close()
@@ -854,7 +1041,8 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
         if char_ids:
             placeholders = ",".join("?" * len(char_ids))
             for r in con.execute(
-                f"SELECT id, character_id, type_id, name, runs, input_cost, reward, tier_order, order_id "
+                f"SELECT id, character_id, type_id, name, runs, input_cost, reward, tier_order, "
+                f"created_at, order_id "
                 f"FROM pp_reaction_assignments WHERE character_id IN ({placeholders}) ORDER BY tier_order", char_ids,
             ):
                 assignments.setdefault(r["character_id"], []).append(dict(r))
@@ -911,6 +1099,13 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
     # pattern _build_opportunities already uses.
     all_assigned_type_ids = list({r["type_id"] for rows in assignments.values() for r in rows})
     market_by_type = resolve_market_data(context_id, all_assigned_type_ids) if all_assigned_type_ids else {}
+
+    # Repair any plan rows still carrying the old position-based stage before anything reads them
+    # (see restage_plan_rows). Idempotent and a no-op on an account whose rows are already right.
+    try:
+        restage_plan_rows(context_id)
+    except Exception:
+        pass
 
     now = _time.time()
     running: list[dict] = []
@@ -987,7 +1182,10 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
             if not is_running:
                 pending.append({
                     "assignment_id": a["id"], "type_id": a["type_id"], "name": a["name"], "runs": a["runs"],
-                    "tier_order": a["tier_order"], "input_cost": a["input_cost"], "reward": a["reward"],
+                    "tier_order": a["tier_order"],
+                    # Which assign wrote this row — the chain it belongs to, so the UI can tell
+                    # whether ITS stage below has finished rather than some other plan's.
+                    "chain": round(float(a.get("created_at") or 0.0), 3), "input_cost": a["input_cost"], "reward": a["reward"],
                     "output_value": round(row_output_value, 2),
                     "order_id": a.get("order_id"), "order_label": order_labels.get(a.get("order_id")),
                 })
@@ -1006,6 +1204,10 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
             # can't resolve (show "Structure #<id>"); the UI nudges a re-authorise. See
             # esi.STRUCTURES_SCOPE's note on why older tokens don't carry it.
             "needs_structures": "universe.read_structures" not in (c["scopes"] or ""),
+            # Per-chain, per-stage progress read off ESI's own job states — what makes "you can
+            # start stage 2 now" a fact the page can state instead of a wait the player has to
+            # track themselves. See chain_stage_state.
+            "stages": chain_stage_state(assignments.get(c["character_id"], []), jobs, now),
         })
         # Whatever remains in running_type_counts after plan-row matching is ORPHAN jobs: running
         # in-game with no plan slot (installed outside the tool's assign flow — e.g. a corp job).
@@ -1385,13 +1587,16 @@ def _allocate_and_insert(context_id: int, type_id: int, name: str, node: dict, r
                 if tid in left:
                     left[tid] = max(0, left[tid] - slots[i])
 
-            for tier_order, (tid, info) in enumerate(tiers):
+            # Stage per step, not position in the list: siblings share a stage and run together.
+            ranks = tier_ranks(tiers)
+            for i, (tid, info) in enumerate(tiers):
                 _insert_assignment_rows(con, host["character_id"], tid,
                                          types.get(tid, {}).get("name", str(tid)),
-                                         info["runs"], slots[tier_order], 0.0, 0.0,
-                                         tier_order, now, order_id)
+                                         info["runs"], slots[i], 0.0, 0.0,
+                                         ranks[i], now, order_id)
             _insert_assignment_rows(con, host["character_id"], type_id, name, share, slots[-1],
-                                     unit_cost * share, 0.0, len(tiers), now, order_id)
+                                     unit_cost * share, 0.0,
+                                     (max(ranks) + 1) if ranks else 0, now, order_id)
             placed.append({"character_id": host["character_id"],
                             "character_name": host["character_name"],
                             "runs": share, "jobs": sum(slots)})

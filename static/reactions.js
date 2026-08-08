@@ -354,8 +354,21 @@ function _rxProductName(type_id) {
 // top-level product sits at len(chain_tiers). Displayed 1-based, absolute — NOT re-ranked against
 // whatever is still pending, so a stage whose predecessor is already running keeps its real
 // number ("Stage 2") instead of being relabelled "start now" while its input is still cooking.
-function _rxStageLabel(tier) {
-  return tier > 0 ? `Stage ${tier + 1} — after stage ${tier} finishes` : 'Stage 1 — start now';
+function _rxStageLabel(tier, ready) {
+  if (tier <= 0) return 'Stage 1 — start now';
+  // `ready` comes from ESI: every job in the stage below is finished (see chain_stage_state), so
+  // this one is startable now rather than something to keep checking back on.
+  return ready ? `Stage ${tier + 1} — ready to start now` : `Stage ${tier + 1} — after stage ${tier} finishes`;
+}
+
+// (chain, stage) -> ready, across every tracked character. Keyed on the chain because two separate
+// plans on one character must not gate each other.
+function _rxStageReady(data) {
+  const map = new Map();
+  ((data && data.characters) || []).forEach(c => (c.stages || []).forEach(s => {
+    map.set(`${c.character_id}:${s.chain}:${s.stage}`, !!s.ready);
+  }));
+  return map;
 }
 
 // ── "You don't hold a formula for these" ──────────────────────────────────────────────────────
@@ -559,6 +572,7 @@ function _renderReactionsDashboard(data) {
   // instruction over and over. Grouped by type_id (not name) so it can't accidentally merge two
   // different products that happen to share a display name.
   const todoGroups = new Map();
+  const _rxReadyStages = _rxStageReady(data);
   const rows = tracked.map(c => {
     // Sorted by product name (running AND pending) so same-product squares cluster together in
     // the row instead of appearing in arbitrary insertion order — several interleaved products
@@ -624,12 +638,13 @@ function _renderReactionsDashboard(data) {
       // A later-stage slot is dimmed and dashed, and says why: its inputs come out of the stage
       // below it, so it is not startable yet. Still clickable (edit/cancel) — this is a "not
       // yet", not a lock.
-      const stageBadge = `<span class="rx-slot-stage${tier > 0 ? ' rx-slot-stage-later' : ''}" title="${_esc(_rxStageLabel(tier))}">S${tier + 1}</span>`;
+      const ready = tier <= 0 || _rxReadyStages.get(`${c.character_id}:${a.chain}:${tier}`) === true;
+      const stageBadge = `<span class="rx-slot-stage${tier > 0 && !ready ? ' rx-slot-stage-later' : ''}" title="${_esc(_rxStageLabel(tier, ready))}">S${tier + 1}</span>`;
       const stageTip = tier > 0
-        ? ` — ${_rxStageLabel(tier)}, so don't install it yet`
+        ? (ready ? ` — ${_rxStageLabel(tier, true)}` : ` — ${_rxStageLabel(tier, false)}, so don't install it yet`)
         : ' — nothing has to finish first';
       squares.push(`
-        <div class="rx-slot rx-slot-pending${tier > 0 ? ' rx-slot-later' : ''}" title="Not running yet — install ${_esc(a.name)} ×${a.runs} in-game${_esc(orderTip)}${_esc(stageTip)}. Click to edit." onclick="_rxOpenEditAssign(${a.assignment_id}, '${c.character_id}')">
+        <div class="rx-slot rx-slot-pending${tier > 0 && !ready ? ' rx-slot-later' : ''}" title="Not running yet — install ${_esc(a.name)} ×${a.runs} in-game${_esc(orderTip)}${_esc(stageTip)}. Click to edit." onclick="_rxOpenEditAssign(${a.assignment_id}, '${c.character_id}')">
           <img class="rx-slot-icon" src="${pendingIcon}" alt="" onerror="this.style.visibility='hidden'">
           ${stageBadge}
           <span class="rx-slot-pending-badge" onclick="event.stopPropagation();_rxCancelAssignment(${a.assignment_id})" title="Cancel this assignment">⊘</span>
@@ -696,8 +711,9 @@ function _renderReactionsDashboard(data) {
         <tbody>${todoStages.map(tier => {
           // The stage banner is dropped entirely when everything pending is stage 1 — the
           // common single-step case shouldn't grow a header row that says nothing.
+          const anyReady = [..._rxReadyStages.entries()].some(([k, v]) => v && k.endsWith(`:${tier}`));
           const head = todoStages.length === 1 && tier === 0 ? '' : `
-            <tr class="rx-todo-stage"><td colspan="4">${_esc(_rxStageLabel(tier))}</td></tr>`;
+            <tr class="rx-todo-stage"><td colspan="4">${_esc(_rxStageLabel(tier, anyReady))}</td></tr>`;
           return head + todoRows.filter(g => g.tier === tier).map(_todoRowHtml).join('');
         }).join('')}</tbody>
       </table>
@@ -769,7 +785,20 @@ function _renderReactionsDashboard(data) {
   // wizard/order/manual paths catch this before a slot is created, but only from the moment they
   // were switched on: a plan assigned earlier — or one whose formula has since been sold — sits
   // here looking installable. Above the checklist, because it changes what you'd install.
-  el.innerHTML = reconnectNote + _rxMissingFormulaWarn(data.missing_formulas)
+  // "Stage 1 is finished — you can start stage 2 now." The thing the player was otherwise left to
+  // work out by watching timers: a later stage whose own predecessors are ALL done (read off ESI
+  // job states, see chain_stage_state) and which still has jobs waiting to be installed.
+  const readyNow = [];
+  (data.characters || []).forEach(c => (c.stages || []).forEach(s => {
+    if (s.stage > 0 && s.ready && s.todo > 0) {
+      readyNow.push({ character: c.character_name, stage: s.stage + 1, names: s.names || [] });
+    }
+  }));
+  const readyBanner = !readyNow.length ? '' : `
+    <div class="rx-stage-ready">✅ <b>Stage ${readyNow[0].stage} is ready to start${readyNow.length > 1 ? ' on several characters' : ` on ${_esc(readyNow[0].character)}`}</b>
+      — everything it waits on has finished. Install ${readyNow.map(r => r.names.map(_esc).join(', ')).join(' · ')}.</div>`;
+
+  el.innerHTML = reconnectNote + readyBanner + _rxMissingFormulaWarn(data.missing_formulas)
     + todoListHtml + rows + untrackedNote;
 }
 
@@ -977,6 +1006,9 @@ function _rxNumWheel(event, el) {
 function _rxScaledChainTiers(o, scale) {
   return (o.chain_tiers || []).map(t => ({
     type_id: t.type_id, name: t.name, runs: Math.max(1, Math.ceil(t.runs * scale)), job_count: 1,
+    // Which stage the step belongs to — steps sharing one run at the same time. Passed straight
+    // through from the opportunity; the server re-derives it if an older payload lacks it.
+    tier: t.tier,
   }));
 }
 
@@ -1096,7 +1128,14 @@ async function _rxSubmitManualAssign() {
   // `chainJobs + 1` refused four-stage chains on a character with three free slots that would
   // have run them fine, and is the same double-count the server's own guard never made
   // (`_concurrent_load`).
-  const chainPeak = chainJobs > 0 ? (_featureActive('reactions_parallel_stages') ? 1 : chainJobs) : 0;
+  // The chain's busiest STAGE, not its step count and not 1: steps sharing a stage (Carbon Fiber,
+  // Oxy-Organic Solvents and Thermosetting Polymer all sit one step off goo) run at the same time
+  // and each need their own reactor, while a later stage reuses what an earlier one frees.
+  const _stageCounts = new Map();
+  chainTiers.forEach(t => _stageCounts.set(t.tier || 0, (_stageCounts.get(t.tier || 0) || 0) + (t.job_count || 1)));
+  const chainPeak = chainJobs > 0
+    ? (_featureActive('reactions_parallel_stages') ? Math.max(1, ..._stageCounts.values()) : chainJobs)
+    : 0;
   let primary = null;
   if (chainJobs > 0) {
     primary = ordered.find(c => freeLeft.get(c.character_id) >= chainPeak + 1) || null;

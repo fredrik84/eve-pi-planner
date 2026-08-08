@@ -94,6 +94,37 @@ re-ranked against what is still pending — once stage 1 is running its rows lea
 re-ranking would tell you to start stage 2 while its input is still cooking. Rationale is in
 `docs/reactions.md`.
 
+## 23. Stages were positions in a list, not dependencies — DONE 2026-08-08
+
+Reported from real use: *"Carbon Fiber and Oxy-Organic Solvents can be done at the same time... They
+only need moon goo and fuel blocks. All of these should be just made at the same time and then stage
+2 should be Reinforced Carbon."* Correct, and the tool was wrong.
+
+Every insert path stamped `tier_order` with `enumerate(...)` over the chain-tier list, so
+Reinforced Carbon Fiber's three inputs — each ONE reaction off raw goo, with no dependency on each
+other — became stages 0/1/2. Item 19b then faithfully rendered that as Stage 1/2/3 with two greyed
+out, and 21a's `_concurrent_load` counted three simultaneous jobs as one reactor (under-counting
+capacity, the opposite of what 21a set out to fix).
+
+**Fixed 2026-08-08, no flag** (a defect, not a feature). `_resolve_reachable` carries `depth`
+(leaves 0, else `1 + max(input depths)` — deliberately not `reaction_count`, which is subtree size);
+`tier_ranks()` gives dense stages where equal depth means one stage; all three insert paths use it;
+`ChainTier.tier` carries it from client to server with a graph re-derivation as the authority and
+list position only as a last resort. A stage's load is now the SUM of its steps in both the advisor
+and the assign guard. `restage_plan_rows` repairs rows already stored under the old rule on
+dashboard load — idempotent, graph-guarded, verified against the real 57457 chain (0/1/2/3 →
+0/0/0/1).
+
+**Plus the follow-up ask — "tell me when stage 2 can start".** `chain_stage_state` reads ESI job
+states: `ready`/`delivered`/past `end_date` means finished, so a stage is done when all its rows
+are, and the next stage is READY when everything below it in its own chain is done. The dashboard
+shows a green "Stage N is ready to start" banner, un-greys that stage's slots and relabels it.
+`test_parallel_stages.py` covers staging, readiness and the repair; rationale in `docs/reactions.md`.
+
+**Still open:** a MANUAL "mark this stage done" for work ESI cannot see (corp jobs without the
+role), and pushing the "stage N is ready" moment through the notification engine
+(Pushover/ntfy/Discord) rather than only showing it on the page.
+
 ## 21. Idle reactors while a chain waits — slots are counted twice and stages never widen (2026-08-07)
 
 From using the tool: *"if we need to make stage 1 stuff, why do we occupy slots with stage 2 or 3
@@ -400,6 +431,7 @@ match any template we generate) is still unscoped.
 | 19b | Reaction plan STAGES on the dashboard: planned slots sort by `tier_order`, carry an `S<n>` badge, later stages dim/dash, and the "To install" checklist splits under stage banners. The number is `tier_order + 1` absolute, never re-ranked against what's still pending | 08-07 |
 | 16 | Dead Industry surface removed: the unrendered skill advisor (module, endpoint, flag, test), `/api/industry/to-install` and `/api/industry/skill-coverage`. No behaviour change; the checklist-vs-plan guard is now structural | 08-07 |
 | 20 | Clear all no longer strands a customer order: order rows are cleared AND the order's `assigned_runs` handed back (top row per chain, clamped at 0), with already-stranded orders repaired on the next assign. `test_clear_all_orders.py` | 08-07 |
+| 23 | Reaction stages are dependency DEPTH, not list position — siblings (Carbon Fiber / Oxy-Organic Solvents / Thermosetting Polymer) share one stage and run together, existing plans repaired in place, plus "stage N is ready to start" read off ESI job states | 08-08 |
 | 22 | Reactions shopping list stopped double-counting chains — only the top row of each assign is exploded, so a two-tier plan no longer asks for twice the goo. `test_shopping_roots.py` | 08-07 |
 | 21c | Reactions spend what you already hold (`reactions_use_stock`): an intermediate in an enabled source shortens or drops its stage and everything below it, in the plan and in the materials walk, consumed once per plan and always reported. `test_reaction_stock.py` | 08-07 |
 | 21a-b | One slot model for reaction chains (`reactions_parallel_stages`): stages reuse a reactor instead of each reserving one, so free slots show what can really start — and reactors nobody claimed are spent splitting the slowest step across more jobs. Runs, cost and profit untouched. `test_parallel_stages.py` | 08-07 |

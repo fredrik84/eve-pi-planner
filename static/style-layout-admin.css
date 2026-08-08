@@ -595,6 +595,15 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .rx-slot-pending-badge:hover { background: #3a1515; border-color: #a83a3a; }
 .rx-slot-pending-label { font-size: 9px; color: #c87a7a; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 62px; }
 
+/* "Stage N is ready to start" — the one banner on this page that reports GOOD news, so it reads
+   green rather than as another warning. Only shown when a later stage's predecessors are all
+   finished and it still has jobs waiting to be installed. */
+.rx-stage-ready {
+  margin: 8px 0 10px; padding: 9px 12px; border-radius: 6px; font-size: 13px; line-height: 1.55;
+  color: #a8e0c0; background: rgba(70, 200, 138, 0.09); border: 1px solid rgba(70, 200, 138, 0.35);
+}
+.rx-stage-ready b { color: #e2f7ea; }
+
 /* Stage badge on a planned slot (tier_order + 1). A chain reacts bottom-up — stage 1 first — so
    a later stage is dimmed and dashed to read as "assigned, but not startable yet" rather than
    "install this now". Bottom-left keeps it clear of the ⊘ (top-right) and ×runs (bottom-right)
