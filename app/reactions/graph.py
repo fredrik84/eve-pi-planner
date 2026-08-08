@@ -878,7 +878,8 @@ def reactions_shopping_list(include_orders: bool = False,
             (context_id,),
         )]
         if not char_ids:
-            return {"materials": [], "speculative_count": 0, "order_count": 0}
+            return {"materials": [], "formulas": {"complete": False, "formulas": [], "unresolved": []},
+                    "speculative_count": 0, "order_count": 0}
         placeholders = ",".join("?" * len(char_ids))
         rows = [dict(r) for r in con.execute(
             f"SELECT character_id, type_id, runs, order_id, created_at, "
@@ -898,11 +899,13 @@ def reactions_shopping_list(include_orders: bool = False,
     assignments = rows if include_orders else speculative
 
     if not assignments:
-        return {"materials": [], **counts}
+        return {"materials": [], "formulas": {"complete": False, "formulas": [], "unresolved": []},
+                **counts}
 
     loaded = _load_goo_and_reached(context_id)
     if loaded is None:
-        return {"materials": [], **counts}
+        return {"materials": [], "formulas": {"complete": False, "formulas": [], "unresolved": []},
+                **counts}
     goo, reached, _, _, types = loaded
 
     totals: dict[int, float] = {}
@@ -929,4 +932,12 @@ def reactions_shopping_list(include_orders: bool = False,
         _explode_shopping_list(a["type_id"], top_units, reached, totals, pool,
                                {k: v for k, v in planned.items() if k != a["type_id"]})
 
-    return {"materials": _materials_report(totals, reached, types), **counts}
+    # ...and the FORMULAS the same plan needs that the account does not hold. A shopping list is
+    # where you go to buy things, and a formula you're short of blocks the plan far harder than a
+    # missing crate of goo — but it is a CONTRACT purchase, not a multibuy line, so it stays its
+    # own section and is deliberately not folded into `materials` or any cost total (the same
+    # separation `missing_blueprints` keeps on the Industry side). Every row is asked about,
+    # including chain tiers, since a stage you cannot install stops everything above it.
+    from app.reactions.library import missing_formulas, wanted_from_sequence
+    formulas = missing_formulas(context_id, wanted_from_sequence(assignments))
+    return {"materials": _materials_report(totals, reached, types), "formulas": formulas, **counts}

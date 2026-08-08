@@ -13,6 +13,7 @@ Find a section: `grep -n '^## ' docs/reactions.md` and read from that line — t
 - **What you already hold is not work (`reactions_use_stock`)** — how held intermediates shorten a chain, and the one place stock is deliberately not consulted
 - **One slot model: a chain's stages reuse a reactor (`reactions_parallel_stages`)** — why stages can't run in parallel, what reuses what, and where idle reactors go
 - **Absence becomes knowledge, but only after a paste (`app/reactions/library.py`)** — when an undeclared formula means "you don't own it", and what gets reported instead of planned
+- **Formulas to acquire, as a shopping section** — why the formula list sits beside the materials rather than in them
 - **Re-planning ONE customer order** — the per-order clear, and the single give-back rule it shares with Clear all
 - **Landing a stage in one go (`_align_stage_jobs`)** — why the spread matters more than the total, and what moves to close it
 - **Run counts you can type (`reactions_tidy_runs`)** — bounded rounding of intermediate runs, and why the end product is never rounded
@@ -159,6 +160,20 @@ which is why that exact string now resolves). So the import KEEPS what it could 
 (`pp_blueprint_paste_unresolved`, replaced per batch, deleted with the batch), and every report
 carries it for the UI to show beside the finding — an import status line that scrolled away days
 ago is not a warning.
+
+## Formulas to acquire, as a shopping section
+
+`/api/reactions/shopping-list` carries a `formulas` block beside `materials`: the formulas the
+CURRENT plan needs and the account does not hold, from the same `missing_formulas` helper the
+wizard, an order, a manual assign and the dashboard all use. The shopping list is the page you open
+when you are about to go and buy things, so that is where the list of things to buy belongs.
+
+It stays its own section, and out of every total, for a reason that is not cosmetic: **a formula is
+a CONTRACT purchase, one item at a time, searched by name.** It cannot be multibought by quantity
+the way goo can, so it needs different actions (copy the names, check the Jita contract price) and
+must never be summed into a material cost — the player may already hold one somewhere we cannot
+see, or may decide not to buy at all. The copy button therefore emits one formula NAME per line,
+not the name-and-quantity TSV the material lists use.
 
 ## Re-planning ONE customer order
 

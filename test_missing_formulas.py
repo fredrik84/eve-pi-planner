@@ -217,6 +217,35 @@ def main():
             "complete": True, "formulas": [], "unresolved": [], "formulas_declared": 1},
               "and an empty dashboard asks about nothing")
 
+        print("the SHOPPING LIST carries the formulas to acquire, apart from the materials:")
+        from app.reactions.graph import reactions_shopping_list
+        from app.reactions.jobs import ensure_reaction_assignments_table
+        ensure_reaction_assignments_table()
+        _reset(con)
+        _paste("Reactor box", [f"3 x {have['fname']}\t0\t0\t-1\tComposite"])
+        con.execute("INSERT INTO pp_characters (character_id, character_name, context_id) "
+                    "VALUES (?,?,?)", (CHAR, "ShopTester", CTX))
+        nxt = int(con.execute("SELECT COALESCE(MAX(id), 0) + 1 AS n FROM pp_reaction_assignments")
+                  .fetchone()["n"])
+        for i, tid in enumerate([have["output_type_id"], want["output_type_id"]]):
+            con.execute(
+                "INSERT INTO pp_reaction_assignments (id, character_id, type_id, name, runs, "
+                "input_cost, reward, created_at, tier_order) VALUES (?,?,?,?,?,?,?,?,?)",
+                (nxt + i, CHAR, tid, "x", 12, 0.0, 0.0, time.time(), i))
+        con.commit()
+        shop = reactions_shopping_list(context_id=CTX)
+        rows = shop["formulas"]["formulas"]
+        check([r["name"] for r in rows] == [want["pname"]],
+              f"only the product whose formula is missing is listed (got {[r['name'] for r in rows]})")
+        check(rows and rows[0]["formula_name"] == want["fname"],
+              "named as the FORMULA you'd search contracts for, not the product")
+        check(rows and rows[0]["runs_needed"] == 12,
+              f"with the runs the plan has committed (got {rows[0]['runs_needed'] if rows else None})")
+        check(all("formula" not in m.get("name", "").lower() for m in shop["materials"]),
+              "and never mixed into the materials you'd multibuy")
+        con.execute("DELETE FROM pp_reaction_assignments WHERE character_id=?", (CHAR,))
+        con.commit()
+
         print("with the flag off, every report is empty even on a complete library:")
         _paste("Reactor box", [f"1 x {have['fname']}\t0\t0\t-1\tComposite"])
         check(missing_formulas(CTX, wanted)["formulas"], "(precondition: it reports with the flag on)")

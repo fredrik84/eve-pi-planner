@@ -152,6 +152,50 @@ function _toggleRxShoppingOrders() {
   _loadRxShoppingList();
 }
 
+// Formulas the plan needs and the account doesn't hold, as a SHOPPING section rather than a
+// warning: this is the page you open when you're about to go and buy things. Kept apart from the
+// materials tables and out of every total on purpose — a formula is bought on CONTRACT, one item
+// at a time, not multibought by quantity, so it needs different actions (copy the names, check the
+// contract price) and must never be summed into a material cost.
+function _rxFormulaShoppingSection(rep) {
+  const rows = (rep && rep.formulas) || [];
+  if (!rows.length) return _rxMissingFormulaWarn(rep);   // still shows unresolved-name warnings
+  const inst = ++_rxMissSeq;
+  setTimeout(() => _rxLoadFormulaPrices(inst, rows.map(m => m.type_id)), 0);
+  const body = rows.map(m => `
+    <tr>
+      <td>${_esc(m.formula_name)}</td>
+      <td>${_esc(m.name)}</td>
+      <td>${m.runs_needed.toLocaleString()}</td>
+      <td id="rxfpx-${inst}-${m.type_id}" class="ind-bp-px">checking contracts…</td>
+    </tr>`).join('');
+  const unresolved = (rep.unresolved || []).length
+    ? `<div class="pp-card-hint" style="color:var(--clr-amber)">⚠ ${rep.unresolved.length} name${rep.unresolved.length === 1 ? '' : 's'} in your pasted window didn't match any item, so a formula you DO own could be listed above.</div>`
+    : '';
+  return `
+    <div class="rx-shop-sec-title">Formulas to acquire
+      <span class="pp-card-hint">— ${rows.length} you don't hold; contract buys, not multibuy</span>
+      <button class="pp-add-btn" onclick="_rxCopyFormulaNames(this)">Copy names</button>
+    </div>
+    <div style="overflow-x:auto;margin-bottom:12px">
+      <table class="pp-card-table" style="width:100%">
+        <thead><tr><th>Formula</th><th>For</th><th>Runs planned</th><th>Jita contracts</th></tr></thead>
+        <tbody>${body}</tbody>
+      </table>
+    </div>
+    <div class="pp-card-hint" style="margin-bottom:10px">Not included in any cost above — what you'd pay
+      for these is a purchase you may not want to make, and you may already hold one somewhere we can't see.</div>
+    ${unresolved}`;
+}
+
+// Contracts are searched by NAME, so the useful clipboard payload is one formula name per line —
+// not a multibuy block, which cannot buy a blueprint at all.
+function _rxCopyFormulaNames(btn) {
+  _rxCopyText((_rxLastFormulaShopping || []).map(m => m.formula_name).join('\n'), btn);
+}
+
+let _rxLastFormulaShopping = [];
+
 function _loadRxShoppingList() {
   const el = document.getElementById('rxShoppingListContent');
   if (!el) return;
@@ -160,16 +204,18 @@ function _loadRxShoppingList() {
     .catch(() => ({ materials: [] }))
     .then(d => {
       _rxLastShoppingList = d.materials || [];
+      _rxLastFormulaShopping = (d.formulas && d.formulas.formulas) || [];
+      const formulaSection = _rxFormulaShoppingSection(d.formulas);
       if (!_rxLastShoppingList.length) {
         // "Nothing assigned" and "everything you have is on a customer order" are different
         // situations and used to render identically — the second one told a player with four
         // live assignments that they had none.
         const orders = d.order_count || 0;
-        el.innerHTML = orders > 0
+        el.innerHTML = formulaSection + (orders > 0
           ? `<div class="pp-empty">No speculative assignments — but ${orders} assignment${orders === 1 ? ' is' : 's are'}
              committed to customer orders, each with its own materials report on the order itself.
              <button class="pp-btn-link" onclick="_toggleRxShoppingOrders()">Include customer orders</button></div>`
-          : '<div class="pp-empty">Nothing needed right now — nothing currently assigned.</div>';
+          : '<div class="pp-empty">Nothing needed right now — nothing currently assigned.</div>');
         _renderRxReceivedDiff();
         return;
       }
@@ -212,6 +258,7 @@ function _loadRxShoppingList() {
         : `<div class="pp-card-hint" style="margin-bottom:8px">Speculative assignments only — ${d.order_count} more ${d.order_count === 1 ? 'is' : 'are'} committed to customer orders.
            <button class="pp-btn-link" onclick="_toggleRxShoppingOrders()">Include customer orders</button></div>`);
       el.innerHTML = scope
+        + formulaSection
         + section('Fetch from your alliance', group)
         + section('Buy on the market (fuel blocks, or cheaper right now than your sheet)', market);
       _renderRxReceivedDiff();
