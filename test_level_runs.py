@@ -254,8 +254,42 @@ def main():
         check(auto == [125],
               f"and back on automatic it is the longest job already planned (got {auto})")
         check(get_job_target(CTX)["mode"] == "auto", "the setting round-trips through the DB")
+
+        print("...and a customer order lays its jobs out to the same length:")
+        # An order is otherwise run flat out — every free reactor — so the setting has to reach the
+        # allocator itself, not just the levelling pass (the top row of a chain is a commitment the
+        # leveller never touches, so an order would ignore the setting entirely without this).
+        from app.reactions.jobs import _target_runs
+        check(_target_runs({"mode": "days", "hours": 120.0, "runs": None}, 3.0) == 40,
+              "5 days of a 3-hour reaction is 40 runs a job")
+        check(_target_runs({"mode": "days", "hours": 120.0, "runs": None}, 6.0) == 20,
+              "...and 20 of a 6-hour one, so the two still finish together")
+        check(_target_runs({"mode": "runs", "hours": None, "runs": 125}, 6.0) == 125,
+              "a runs target is the same number whatever the cycle")
+        check(_target_runs({"mode": "auto", "hours": None, "runs": None}, 3.0) is None,
+              "and automatic fixes nothing — the allocator keeps its own layout")
+        import inspect
+        from app.reactions import jobs as _J
+        alloc_src = inspect.getsource(_J._allocate_and_insert)
+        check('job_target["mode"] != "auto"' in alloc_src,
+              "the order allocator reads the setting")
+        check(alloc_src.index('_align_stage_jobs(align)') < alloc_src.index('if job_target["mode"]'),
+              "...and applies it AFTER the stage-align pass, which would otherwise redistribute it")
         con.execute("DELETE FROM pp_reaction_job_target WHERE context_id=?", (CTX,))
         con.commit()
+
+        print("the dashboard reports the plan it just levelled, not the one before:")
+        # The repair passes used to run at the END of GET /api/reactions/jobs, after the rows had
+        # already been read into the payload — so the load that triggered the levelling returned
+        # the OLD numbers and only the next one showed the new ones. Assign, look, and it reads as
+        # a pass that does nothing.
+        import inspect
+        from app.reactions import jobs as _J
+        src = inspect.getsource(_J.get_industry_jobs)
+        check(src.index("level_product_runs(context_id)") < src.index("FROM pp_reaction_assignments"),
+              "the plan is levelled BEFORE the rows behind the response are read")
+        check(src.index("restage_plan_rows(context_id)") < src.index("FROM pp_reaction_assignments"),
+              "...and so is the stage repair it runs beside")
 
         print("two chains on ONE character each keep their own job:")
         _reset(con)

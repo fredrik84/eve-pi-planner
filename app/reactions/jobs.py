@@ -668,6 +668,20 @@ _LEVEL_GROUP_MAX = 3.0
 _ALIGN_TOL = 0.10
 
 
+def _target_runs(target: dict, cycle_hours: float) -> int | None:
+    """The run count ONE job should carry to hit the player's chosen job length, for a reaction of
+    this cycle time — or None when they have not chosen one (`auto`).
+
+    A `days` target fixes the hours, so the run count follows the cycle: a 6-hour reaction gets half
+    the runs of a 3-hour one and the two still finish together. A `runs` target fixes the count and
+    the durations follow instead. See `get_job_target`."""
+    if target.get("hours") and cycle_hours > 0:
+        return max(1, int(target["hours"] / cycle_hours))
+    if target.get("runs"):
+        return max(1, int(target["runs"]))
+    return None
+
+
 def _typeable(runs: int) -> bool:
     """Is this a run count you copy, or one you read twice? Small numbers are fine as they are, and
     above that it is a round multiple of one of `tidy_runs`' own steps — 70, 125, 250.
@@ -899,10 +913,9 @@ def level_product_runs(context_id: int) -> int:
             chains = sorted(by_chain)
             totals = [sum(int(r["runs"] or 0) for r in by_chain[c]) for c in chains]
             caps = [len(by_chain[c]) + free.get(c[0], 0) for c in chains]
-            if target["hours"]:            # "every job runs about N days" — runs follow the cycle
-                max_runs = max(1, int(target["hours"] / cyc)) if cyc > 0 else max(totals, default=0)
-            elif target["runs"]:           # "every job carries about N runs" — durations follow
-                max_runs = max(1, target["runs"])
+            chosen = _target_runs(target, cyc)
+            if chosen:
+                max_runs = chosen
             else:
                 max_runs = int(stage_cap_hours / cyc) if cyc > 0 else max(totals, default=0)
             products[tid] = {"cycle": cyc, "chains": chains,
@@ -1471,6 +1484,27 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
     # down unrelated endpoints (Dashboard, Setup Analysis) once the pool was saturated. Never hold
     # a second get_connection() open while a first one from the same request is still live.
     time_eff = effective_reaction_settings(context_id).get("time_efficiency_pct", 0.0)
+    # Repair the plan BEFORE it is read, not after. Both passes rewrite `pp_reaction_assignments`
+    # (`restage_plan_rows` fixes stages stamped under the old position rule; the levelling pass
+    # gives each product one run count and re-splits the jobs), and they used to run at the far end
+    # of this function — after the SELECT below had already copied the rows into `assignments`. The
+    # writes landed, so a SECOND load showed the levelled plan and the one that triggered it showed
+    # the old numbers: a plan assigned and immediately re-read came back with the numbers it was
+    # asked for rather than the ones it now holds, which reads as the pass not working at all.
+    # Both open their own connections, so they must run before the read connection below exists —
+    # never two at once (the 2026-07-13 pool-exhaustion incident, noted above).
+    try:
+        restage_plan_rows(context_id)
+        # ...and give each product one run count instead of one per assign, so the numbers being
+        # typed into the industry window are the same every time. Across every character behind
+        # `reactions_level_runs` (which also re-splits the work into as many jobs as that number
+        # needs); within a character otherwise, which is as far as the row count can stay fixed.
+        if _level_runs_on(context_id):
+            level_product_runs(context_id)
+        else:
+            level_stage_runs(context_id)
+    except Exception:
+        pass
     con = get_connection()
     try:
         chars = con.execute(
@@ -1544,21 +1578,6 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
     # pattern _build_opportunities already uses.
     all_assigned_type_ids = list({r["type_id"] for rows in assignments.values() for r in rows})
     market_by_type = resolve_market_data(context_id, all_assigned_type_ids) if all_assigned_type_ids else {}
-
-    # Repair any plan rows still carrying the old position-based stage before anything reads them
-    # (see restage_plan_rows). Idempotent and a no-op on an account whose rows are already right.
-    try:
-        restage_plan_rows(context_id)
-        # ...and give each product one run count instead of one per assign, so the numbers being
-        # typed into the industry window are the same every time. Across every character behind
-        # `reactions_level_runs` (which also re-splits the work into as many jobs as that number
-        # needs); within a character otherwise, which is as far as the row count can stay fixed.
-        if _level_runs_on(context_id):
-            level_product_runs(context_id)
-        else:
-            level_stage_runs(context_id)
-    except Exception:
-        pass
 
     now = _time.time()
     running: list[dict] = []
@@ -2032,6 +2051,7 @@ def _allocate_and_insert(context_id: int, type_id: int, name: str, node: dict, r
         shares[i % len(hosts)] += 1
 
     now = _time.time()
+    job_target = get_job_target(context_id)
     unit_cost = node.get("unit_cost", 0.0) + node.get("job_cost", 0.0)
     top_cycle_h = (node.get("cycle_time") or 0) / 3600.0
     placed: list[dict] = []
@@ -2071,6 +2091,24 @@ def _allocate_and_insert(context_id: int, type_id: int, name: str, node: dict, r
                 _align_stage_jobs(align)
                 for i, a in enumerate(align):
                     slots[i] = a["jobs"]
+            # A job length the player has SET governs an order too, and is applied LAST — the align
+            # pass above moves slots within a stage and would redistribute what the target just set.
+            # An order is otherwise run flat out — every reactor that still brings the finish time
+            # down — because someone is waiting on it; but "125 runs a job" is an instruction, not a
+            # preference the as-soon-as-possible default gets to quietly ignore. Applied only when
+            # the whole chain
+            # still fits the host's free reactors: a target SHORTER than capacity allows would need
+            # slots that do not exist, and an order that cannot be laid out is worse than one laid
+            # out fast. `auto` changes nothing here.
+            if job_target["mode"] != "auto":
+                cycle_of = [((t["cycle_time"] or 0) / 3600.0) for _, t in tiers] + [top_cycle_h]
+                runs_of = [int(t["runs"]) for _, t in tiers] + [share]
+                want = []
+                for i, (rn, ch) in enumerate(zip(runs_of, cycle_of)):
+                    per = _target_runs(job_target, ch)
+                    want.append(max(1, min(caps[i], -(-rn // per))) if per else slots[i])
+                if sum(want) <= host["free_slots"]:
+                    slots = want
             for i, tid in enumerate([t for t, _ in tiers] + [type_id]):
                 if tid in left:
                     left[tid] = max(0, left[tid] - slots[i])

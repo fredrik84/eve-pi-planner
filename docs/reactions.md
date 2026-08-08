@@ -335,6 +335,21 @@ product keeps what it has rather than being half-applied.
 **`auto` is the default and that matters:** a plan built before this existed must not have its jobs
 resized by a number nobody chose.
 
+**A customer order obeys it too.** An order is otherwise laid out flat out — every free reactor that
+still brings the finish time down, because someone is waiting on it — and the levelling pass never
+touches a chain's top row, which is the order's own commitment. So without reaching the allocator
+itself (`_allocate_and_insert`), the setting would do nothing at all to an order. It is applied
+after `_align_stage_jobs`, which moves slots within a stage and would otherwise redistribute what
+the target just set, and only when the whole chain still fits the host's free reactors: a target
+shorter than capacity allows would need slots that do not exist, and an order that cannot be laid
+out is worse than one laid out fast.
+
+**The dashboard reports the plan it just levelled.** Both repair passes (`restage_plan_rows` and the
+leveller) run at the TOP of `GET /api/reactions/jobs`, before the rows behind the response are read.
+They used to run at the end, after the payload had already copied the rows — so the writes landed
+but the load that triggered them returned the old numbers and only the NEXT load showed the new
+ones. Assign a plan, look straight at it, and the pass reads as doing nothing.
+
 Deliberately NOT part of the group/account pricing settings, which a group manager sets for every
 member — nobody's alliance should be choosing their login cadence. One setting, shown in two
 places: the Reactions card and the wizard's "Run on a…" cadence, either of which writes it, because
