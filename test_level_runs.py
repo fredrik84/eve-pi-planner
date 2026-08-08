@@ -338,8 +338,11 @@ def main():
         level_product_runs(CTX)
         check(_counts(CF) == [120] and _counts(TP) == [120],
               f"asked for 120 runs a job, both products are 120 (got {_counts(CF)} / {_counts(TP)})")
-        check(_counts(OOS) == [35],
-              f"...and Oxy-Organic Solvents stays at the 35 its chains need (got {_counts(OOS)})")
+        # Reported: "there's no reason why it would make 35 oxy when it could make 120 instead."
+        # Against its own 207-run requirement 120 a job is nearly five times too much; against the
+        # stage's 4,400 runs it is rounding, and it buys the whole stage one number and one trip.
+        check(_counts(OOS) == [120],
+              f"...and Oxy-Organic Solvents joins the stage at 120 (got {_counts(OOS)})")
 
         # A length the reactors cannot reach still yields ONE number — the shortest they can do —
         # rather than dropping the product from the pass.
