@@ -522,7 +522,9 @@ function _loadReactionsDashboard() {
   // assignment updates the cached data in place instead (see _rxCancelAssignment), so this
   // full-reload path only runs on tab-open or after "Clear all", not on every small action.
   if (!_rxLastDashboardData) el.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Loading…</div>';
-  api('/api/reactions/jobs')
+  // Returned so a caller that must not finish before the plan is re-read can wait on it — the
+  // levelling pass runs on this endpoint, so "assigned" is not "settled" until it resolves.
+  const load = api('/api/reactions/jobs')
     .catch(e => { throw _rxErr(e, 'Load failed'); })
     .then(data => { _rxLastDashboardData = data; _renderReactionsDashboard(data); })
     .catch(err => {
@@ -533,6 +535,7 @@ function _loadReactionsDashboard() {
   api('/api/reactions/lifetime').catch(() => null).then(lt => {
     if (lt) { _rxLifetime = lt; if (_rxLastDashboardData) _renderReactionsDashboard(_rxLastDashboardData); }
   }).catch(() => {});
+  return load;
 }
 let _rxLifetime = null;
 
@@ -1219,14 +1222,20 @@ async function _rxSubmitManualAssign() {
   // Editing = delete the old row, then run the exact same create flow with the new values —
   // there's no dedicated update endpoint, and this is simpler than one that would have to
   // handle the same job-count-changed/chain-changed cases this already handles for a fresh
-  // assign. If the delete fails, don't touch anything else.
-  const deleteOld = _rxEditingAssignmentId
-    ? apiSend('DELETE', `/api/reactions/assign/${_rxEditingAssignmentId}`)
-        .catch(() => { throw new Error('Could not delete the old assignment'); })
-    : Promise.resolve();
-
-  deleteOld
-    .then(() => Promise.all(allocations.map(a => apiSend('POST', '/api/reactions/assign', {
+  // assign. If the delete fails, don't touch anything else — which is why it is its own step and
+  // the runner is told to stop there rather than creating the new rows beside the old ones.
+  const steps = [];
+  if (_rxEditingAssignmentId) {
+    const oldId = _rxEditingAssignmentId;
+    steps.push({
+      label: 'Remove the slot being replaced', critical: true,
+      run: () => apiSend('DELETE', `/api/reactions/assign/${oldId}`)
+        .catch(() => { throw new Error('Could not delete the old assignment'); }),
+    });
+  }
+  allocations.forEach(a => steps.push({
+    label: `${o.name} ×${(a.jobs * runsPerJob).toLocaleString()} in ${a.jobs} job${a.jobs === 1 ? '' : 's'} → ${a.char.character_name}`,
+    run: () => apiSend('POST', '/api/reactions/assign', {
       character_id: a.char.character_id, type_id: o.type_id, name: o.name,
       runs: a.jobs * runsPerJob, job_count: a.jobs,
       input_cost: costPerRun * a.jobs * runsPerJob, reward: rewardPerRun * a.jobs * runsPerJob,
@@ -1234,9 +1243,15 @@ async function _rxSubmitManualAssign() {
       // Keep what the server said. A refusal now carries a reason worth reading — "that needs 12
       // reaction slots at once and this character has 10" tells you what to change; "Assign
       // failed" tells you nothing and reads as a bug in the tool.
-    }).catch(e => { throw new Error((e && e.message) || 'Assign failed'); }))))
-    .then(results => { (results || []).forEach(_rxToastStockCovered); _rxCloseManualAssign(); onReactionsTabOpen(); })
-    .catch(err => { status.textContent = err.message; });
+    }).then(res => { _rxToastStockCovered(res); return res; })
+      .catch(e => { throw new Error((e && e.message) || 'Assign failed'); }),
+  }));
+  steps.push({ label: 'Level the run counts and re-read the plan', run: _rxReloadPlan });
+
+  _rxRunSteps(_rxEditingAssignmentId ? 'Saving this slot' : 'Assigning', steps).then(res => {
+    if (res.ok) { _rxCloseManualAssign(); onReactionsTabOpen(); return; }
+    status.textContent = 'Some of it did not go through — see the list.';
+  });
 }
 
 // ── Wizard: "Add Reaction Product" ──────────────────────────────────────────────────────────
@@ -1462,7 +1477,7 @@ function _renderReactionsSuggestions(data) {
             ${chainNote}
           </div>
           <div class="rx-sugg-reward">+${_fmtIsk(s.reward)}</div>
-          <button class="rx-sugg-assign-btn" id="rxAssignBtn${i}" onclick="_rxAssignSuggestion(${i}, this)">Assign</button>
+          <button class="rx-sugg-assign-btn" id="rxAssignBtn${i}" onclick="_rxAssignOne(${i}, this)">Assign</button>
         </div>`;
     }).join('');
     const cost = jobs.reduce((sum, s) => sum + s.input_cost, 0);
@@ -1589,7 +1604,92 @@ function _rxApplyAlignHint(hintIndex, btn) {
   _renderReactionsSuggestions(_rxLastSuggestData);
 }
 
-function _rxAssignSuggestion(i, btn) {
+// ── Committing a plan is several round trips — block the view and show them ─────────────────
+// "Assign all" is one POST per suggestion and then a re-read of the plan, and that re-read is
+// where the run counts get levelled and the jobs re-split (`level_product_runs`) — so the numbers
+// on screen are only true once the last step lands. Leaving the page live through all of it is
+// what produced the two failures this package already carries scars from: a second click
+// appending another full set of rows, and a dashboard read that raced the writes.
+//
+// So the view is blocked, and the steps run ONE AT A TIME. Sequential is not just for the
+// display: each assign has to see the slots the one before it took, and firing them together let
+// two suggestions both claim the same free reactor. A failed step marks itself and the rest still
+// run — suggestions are independent, and stopping at the first refusal would strand the others.
+let _rxStepsBusy = false;
+
+function _rxRunSteps(title, steps) {
+  const modal = document.getElementById('rxStepsModal');
+  if (!modal || !steps.length) return Promise.resolve({ ok: true, failed: [] });
+  const listEl = document.getElementById('rxStepsList');
+  const barEl = document.getElementById('rxStepsBar');
+  const actEl = document.getElementById('rxStepsActions');
+  const titleEl = document.getElementById('rxStepsTitle');
+  const MARK = { todo: '·', now: '◐', done: '✓', failed: '✕' };
+  const state = steps.map(() => 'todo');
+  const notes = steps.map(() => '');
+  const failed = [];
+  let done = 0;
+
+  const paint = () => {
+    barEl.innerHTML = _rxProgressBar(done / steps.length, `${done} of ${steps.length} done`);
+    listEl.innerHTML = steps.map((s, i) => `
+      <div class="rx-step rx-step-${state[i]}">
+        <span class="rx-step-mark">${MARK[state[i]]}</span>
+        <span>${_esc(s.label)}</span>
+        ${notes[i] ? `<span class="rx-step-note">${_esc(notes[i])}</span>` : ''}
+      </div>`).join('');
+  };
+
+  _rxStepsBusy = true;
+  titleEl.textContent = title;
+  actEl.style.display = 'none';
+  modal.style.display = '';
+  paint();
+
+  let stopped = false;
+  let chain = Promise.resolve();
+  steps.forEach((s, i) => {
+    chain = chain.then(() => {
+      // A `critical` step is one the rest depend on (deleting the row an edit replaces): if it
+      // fails, going on would leave the new jobs sitting beside the ones they were meant to be.
+      if (stopped) { notes[i] = 'skipped'; done++; paint(); return; }
+      state[i] = 'now';
+      paint();
+      return Promise.resolve().then(() => s.run())
+        .then(() => { state[i] = 'done'; })
+        .catch(err => {
+          state[i] = 'failed';
+          notes[i] = (err && err.message) ? err.message : 'failed';
+          failed.push(i);
+          if (s.critical) stopped = true;
+        })
+        .then(() => { done++; paint(); });
+    });
+  });
+  return chain.then(() => {
+    _rxStepsBusy = false;
+    if (!failed.length) { modal.style.display = 'none'; return { ok: true, failed }; }
+    // Something refused. Leave it on screen with the reason the server gave — closing over a
+    // failure is how "Assign all" used to report "some failed" with no way to see which.
+    titleEl.textContent = `${failed.length} of ${steps.length} did not go through`;
+    actEl.style.display = '';
+    return { ok: false, failed };
+  });
+}
+
+function _rxCloseSteps() {
+  if (_rxStepsBusy) return;    // there is nothing to close while it is still running
+  document.getElementById('rxStepsModal').style.display = 'none';
+}
+
+// The plan re-read every commit ends with: it is what levels the run counts and re-splits the
+// jobs, so until it lands the dashboard is showing what was asked for rather than what is there.
+function _rxReloadPlan() {
+  _rxLastDashboardData = null;
+  return Promise.resolve(_loadReactionsDashboard());
+}
+
+function _rxAssignSuggestion(i, btn, strict) {
   const s = _rxLastSuggestions[i];
   if (!s) return Promise.resolve();
   btn.disabled = true;
@@ -1611,10 +1711,25 @@ function _rxAssignSuggestion(i, btn) {
       // (reported 2026-08-01). apiSend() already rejects on a non-2xx, so reaching here IS success.
       btn.textContent = 'Assigned ✓';
     })
-    .catch(() => {
+    .catch(err => {
       btn.disabled = false;
       btn.textContent = 'Retry';
+      // Swallowed for a direct click (the button IS the report). Re-thrown when the step runner is
+      // driving, or a refused assign would tick over as a green ✓.
+      if (strict) throw err;
     });
+}
+
+// One row's Assign button. Two steps, not one: the POST, and the plan re-read that levels the run
+// counts — so this row's number is settled before the view comes back, same as Assign all.
+function _rxAssignOne(i, btn) {
+  const s = _rxLastSuggestions[i];
+  if (!s) return Promise.resolve();
+  return _rxRunSteps(`Assigning ${s.name}`, [
+    { label: `${s.name} ×${s.runs.toLocaleString()} → ${s.assigned_character}`,
+      run: () => _rxAssignSuggestion(i, btn, true) },
+    { label: 'Level the run counts and re-read the plan', run: _rxReloadPlan },
+  ]);
 }
 
 // "Just assign and sort out the best use of my slots" — commits every current suggestion at
@@ -1623,20 +1738,38 @@ function _rxAssignSuggestion(i, btn) {
 function _rxAssignAll() {
   const btn = document.getElementById('rxAssignAllBtn');
   if (btn) { btn.disabled = true; btn.textContent = 'Assigning…'; }
-  const jobs = _rxLastSuggestions.map((s, i) => {
+  const steps = [];
+  _rxLastSuggestions.forEach((s, i) => {
     const rowBtn = document.getElementById(`rxAssignBtn${i}`);
-    if (!rowBtn || rowBtn.textContent.includes('✓')) return Promise.resolve();
-    return _rxAssignSuggestion(i, rowBtn);
-  });
-  Promise.all(jobs).then(() => {
-    if (!btn) return;
-    const allDone = _rxLastSuggestions.every((s, i) => {
-      const rowBtn = document.getElementById(`rxAssignBtn${i}`);
-      return rowBtn && rowBtn.textContent.includes('✓');
+    if (!rowBtn || rowBtn.textContent.includes('✓')) return;   // already committed, don't re-post
+    steps.push({
+      label: `${s.name} ×${s.runs.toLocaleString()} → ${s.assigned_character}`,
+      run: () => _rxAssignSuggestion(i, rowBtn, true),
     });
-    btn.textContent = allDone ? 'All assigned ✓' : 'Some failed — retry below';
-    btn.disabled = allDone;
   });
+  if (!steps.length) {
+    if (btn) { btn.textContent = 'All assigned ✓'; }
+    return Promise.resolve();
+  }
+  steps.push({ label: 'Level the run counts and re-read the plan', run: _rxReloadPlan });
+  return _rxRunSteps('Assigning your plan', steps).then(res => {
+    if (btn) {
+      btn.textContent = res.ok ? 'All assigned ✓' : 'Some failed — retry below';
+      btn.disabled = res.ok;
+    }
+    // Everything landed: the dashboard now holds the real plan — levelled run counts, jobs
+    // re-split — and the suggestion list behind this shows what was ASKED for. Show the truth.
+    if (res.ok) _rxShowDashboard();
+  });
+}
+
+// Back from the wizard to the plan, without the reload `wizRCancel` does — the caller has just
+// re-read it as its last step and a second fetch would only repaint the same answer.
+function _rxShowDashboard() {
+  const wiz = document.getElementById('rxWizard');
+  const dash = document.getElementById('rxDashboard');
+  if (wiz) wiz.style.display = 'none';
+  if (dash) dash.style.display = '';
 }
 
 function _rxSortBy(key) {

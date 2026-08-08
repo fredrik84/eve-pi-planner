@@ -319,6 +319,14 @@ chain identity reworked first (a real `chain_id`, so one row can belong to more 
 A product whose chains are too far apart to share a number cheaply — 3 runs on one and 1000 on
 another — gets no options at all and is left exactly as it was. `test_level_runs.py`.
 
+**Committing a plan blocks the view (`_rxRunSteps`).** Levelling runs on the plan re-read, so the
+run counts a player sees are only true once that read lands — an assign is a POST per suggestion
+*and then* that read. All of it now runs behind a blocking overlay with one line per step, and the
+steps run **one at a time**: each assign has to see the slots the one before it took, and firing
+them together let two suggestions claim the same free reactor. A refused step keeps its server
+reason on screen and the rest still run; a `critical` step (deleting the row an edit replaces)
+stops the ones after it instead.
+
 ## Run counts you can type (`reactions_tidy_runs`)
 
 A stage's run counts come out of the chain maths exactly — 79 of one thing, 41 of another, 213 of a

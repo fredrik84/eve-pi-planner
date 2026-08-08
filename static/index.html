@@ -1709,6 +1709,20 @@ PVF-N9    3         95                 60             80                  100   
     </div>
   </div>
 
+  <!-- Committing a plan takes several round trips (one per suggestion, then the plan re-read that
+       levels and re-splits the jobs). Nothing here is safe to interrupt half-way, so the view is
+       blocked while it runs and every step says where it is. See _rxRunSteps. -->
+  <div id="rxStepsModal" class="pp-modal" style="display:none">
+    <div class="pp-modal-box" style="width:min(520px,92vw)">
+      <div class="pp-modal-title" id="rxStepsTitle">Assigning…</div>
+      <div id="rxStepsBar" class="rx-prog-wrap"></div>
+      <div id="rxStepsList" class="rx-steps"></div>
+      <div class="pp-modal-actions" id="rxStepsActions" style="display:none">
+        <button class="pp-cancel-btn" onclick="_rxCloseSteps()">Close</button>
+      </div>
+    </div>
+  </div>
+
   <script src="/utils.js?v=dev"></script>
   <script src="/app.js?v=dev"></script>
   <script src="/planetary.js?v=dev"></script>
