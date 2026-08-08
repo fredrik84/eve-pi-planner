@@ -135,6 +135,15 @@ step's per-job run count rounds UP to the largest tidy step within 15% of the re
 `_insert_assignment_rows` and mirrored in the wizard so preview and plan agree; the shopping list
 takes a `planned` map so it buys for the rounded runs rather than the bare requirement.
 
+**Stage landing aligned 2026-08-08**, from "keep the login cadence low... finish everything as
+close to each other as possible": `_align_stage_jobs` moves slots off the steps of a stage that
+would finish early and onto the one holding it up, until the spread cannot narrow further —
+slot-neutral, so it needs nobody's capacity, and it is the reactions translation of the
+manufacturing planner's `_align_cohorts` (there run counts grow to land together; here they are
+fixed by the chain, so the SPLIT moves instead). 27h -> 12h on a synthetic 80/10/10 stage with the
+same nine reactors. `_widen_to_idle_slots` now scores by the stage's finish time rather than a
+single step's hours, and the customer-order path re-balances the same way after `_fit_chain_slots`.
+
 **Still open:** a MANUAL "mark this stage done" for work ESI cannot see — a corp job installed by a
 character without the Factory_Manager role never appears in any job list we can read, so its stage
 can never complete on its own.
@@ -445,6 +454,7 @@ match any template we generate) is still unscoped.
 | 19b | Reaction plan STAGES on the dashboard: planned slots sort by `tier_order`, carry an `S<n>` badge, later stages dim/dash, and the "To install" checklist splits under stage banners. The number is `tier_order + 1` absolute, never re-ranked against what's still pending | 08-07 |
 | 16 | Dead Industry surface removed: the unrendered skill advisor (module, endpoint, flag, test), `/api/industry/to-install` and `/api/industry/skill-coverage`. No behaviour change; the checklist-vs-plan guard is now structural | 08-07 |
 | 20 | Clear all no longer strands a customer order: order rows are cleared AND the order's `assigned_runs` handed back (top row per chain, clamped at 0), with already-stranded orders repaired on the next assign. `test_clear_all_orders.py` | 08-07 |
+| 23c | Reaction stages land together (`_align_stage_jobs`): slots move off steps that would finish early onto the one gating the stage, slot-neutral — fewer logins to install and collect | 08-08 |
 | 23b | Intermediate run counts rounded to typeable numbers (`reactions_tidy_runs`), bounded at 15% over, with the shopping list buying for the rounded plan | 08-08 |
 | 23 | Reaction stages are dependency DEPTH, not list position — siblings (Carbon Fiber / Oxy-Organic Solvents / Thermosetting Polymer) share one stage and run together, existing plans repaired in place, plus "stage N is ready to start" read off ESI job states | 08-08 |
 | 22 | Reactions shopping list stopped double-counting chains — only the top row of each assign is exploded, so a two-tier plan no longer asks for twice the goo. `test_shopping_roots.py` | 08-07 |

@@ -1370,9 +1370,9 @@ function _renderReactionsSuggestions(data) {
   // Extra jobs that went to reactors nobody else claimed. Said out loud, because "why is this
   // product running in 5 jobs when the cadence only needed 2" should have an answer on the page.
   const idleUsed = t.idle_slots_used || 0;
-  const idleNote = idleUsed
-    ? `<div class="pp-card-hint" style="margin-bottom:10px">${idleUsed} otherwise-idle reactor${idleUsed === 1 ? '' : 's'} put to work splitting the slowest steps across more jobs — same runs, same cost, finishes sooner.</div>`
-    : '';
+  const alignedSlots = t.stage_aligned_slots || 0;
+  const idleNote = !idleUsed ? '' :
+    `<div class="pp-card-hint" style="margin-bottom:10px">${idleUsed} reactor${idleUsed === 1 ? '' : 's'} re-used to finish the slowest steps sooner${alignedSlots ? `, ${alignedSlots} of them moved off steps that were already going to finish early so each stage lands in one go` : ''} — same runs, same cost, fewer trips to install.</div>`;
   const budgetSummary = `<div class="pp-card-hint" style="margin-bottom:10px">${bindingNote}</div>${absorbNote}${formulaNote}${idleNote}`
     + _rxStockCoveredNote(t.stock_covered)
     + _rxMissingFormulaWarn(data.missing_formulas);

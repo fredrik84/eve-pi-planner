@@ -13,6 +13,7 @@ Find a section: `grep -n '^## ' docs/reactions.md` and read from that line — t
 - **What you already hold is not work (`reactions_use_stock`)** — how held intermediates shorten a chain, and the one place stock is deliberately not consulted
 - **One slot model: a chain's stages reuse a reactor (`reactions_parallel_stages`)** — why stages can't run in parallel, what reuses what, and where idle reactors go
 - **Absence becomes knowledge, but only after a paste (`app/reactions/library.py`)** — when an undeclared formula means "you don't own it", and what gets reported instead of planned
+- **Landing a stage in one go (`_align_stage_jobs`)** — why the spread matters more than the total, and what moves to close it
 - **Run counts you can type (`reactions_tidy_runs`)** — bounded rounding of intermediate runs, and why the end product is never rounded
 - **A stage is a DEPTH, not a position in a list** — why siblings share a stage, and how existing rows were repaired
 - **Knowing when the next stage can start (`chain_stage_state`)** — the ESI signal behind "stage 2 is ready"
@@ -157,6 +158,27 @@ which is why that exact string now resolves). So the import KEEPS what it could 
 (`pp_blueprint_paste_unresolved`, replaced per batch, deleted with the batch), and every report
 carries it for the UI to show beside the finding — an import status line that scrolled away days
 ago is not a warning.
+
+## Landing a stage in one go (`_align_stage_jobs`)
+
+Stage 2 cannot start until the LAST job of stage 1 lands, so a stage finishing at 2h / 2h / 14h is
+a 14-hour stage with two reactors idle from hour two — and two extra trips to the keyboard. The fix
+is the reactions translation of the manufacturing planner's `_align_cohorts` ("lift every job to
+the longest one already running beside it, so a wave lands in one go"), reached from the other
+direction: there, run counts are free to grow, so a short job is given more runs in fewer slots;
+here the run counts are fixed by the chain, so what moves is the SPLIT — a step that would be done
+in two hours does not need three reactors while the step everyone is waiting on has one.
+
+`_align_stage_jobs` is **slot-neutral**: it only moves a job from one step to another in the same
+stage, so it runs after `_widen_to_idle_slots` rather than competing with it, and needs nobody's
+capacity. A step is never taken below one job, never pushed past its formulas or its run count, and
+a move is only made when it genuinely lowers the stage's finish time. Measured on a synthetic
+stage of 80/10/10 runs at three reactors each: 27h → 12h, same nine reactors.
+
+The idle-slot pass now scores by the same objective — the reduction in the STAGE's finish time, not
+in one step's own hours, since an hour off a step that was already finishing early buys nothing.
+The customer-order path re-balances the same way after `_fit_chain_slots` (which minimises the SUM
+of tier durations — correct while each tier was its own stage, wrong now that siblings share one).
 
 ## Run counts you can type (`reactions_tidy_runs`)
 

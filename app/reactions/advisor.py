@@ -497,7 +497,12 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
     # counts back onto the rows the player actually installs. Runs, cost and profit are untouched —
     # this only splits the same work across more reactors, so the batch lands sooner.
     widened = _widen_to_idle_slots(widen_steps, remaining_slots) if peak_stages else 0
-    if widened:
+    # ...then land each stage in one go by moving slots off the steps that finish early
+    # (`_align_stage_jobs`). Slot-neutral, so it runs after the idle pass rather than competing
+    # with it: fewer trips to the keyboard, which is the thing a cadence is really about.
+    aligned = _align_stage_jobs(widen_steps) if peak_stages else 0
+    widened += aligned
+    if widened or aligned:
         max_completion_hours = 0.0
         for s in widen_steps:
             row, jobs = s["row"], s["jobs"]
@@ -549,6 +554,8 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
             # Extra jobs handed to otherwise-idle reactors so a step finishes sooner. Reported so
             # the extra job counts read as a deliberate choice rather than the tool overbooking.
             "idle_slots_used": widened,
+            # ...and how many were MOVED between steps of one stage so the stage lands together.
+            "stage_aligned_slots": aligned,
             # Stages this run did NOT plan because the intermediate is already in stock, named with
             # what they covered. A step that silently vanishes reads as a bug; this is the answer.
             "stock_covered": sorted(
@@ -621,7 +628,13 @@ def _widen_to_idle_slots(steps: list[dict], free_by_char: dict[int, int]) -> int
                 cost = 1 if load[s["tier"]] + 1 > peak else 0
                 if cost > idle:
                     continue
-                gain = _hours(s, s["jobs"]) - _hours(s, s["jobs"] + 1)
+                # Scored on what it does to the STAGE, not to this step alone: stage 2 waits for
+                # the last job of stage 1, so an hour off a step that finishes early buys nothing.
+                stage_now = max(_hours(o, o["jobs"]) for o in own if o["tier"] == s["tier"])
+                after = max([_hours(s, s["jobs"] + 1)]
+                            + [_hours(o, o["jobs"]) for o in own
+                               if o["tier"] == s["tier"] and o is not s])
+                gain = stage_now - after
                 # Free widening wins ties: it buys time back without spending capacity.
                 if gain > best_gain or (gain == best_gain and gain > 0 and cost < best_cost):
                     best, best_gain, best_cost = s, gain, cost
@@ -631,6 +644,63 @@ def _widen_to_idle_slots(steps: list[dict], free_by_char: dict[int, int]) -> int
             handed_out += 1
             idle -= best_cost
     return handed_out
+
+
+def _align_stage_jobs(steps: list[dict]) -> int:
+    """Land a stage in ONE go: move slots from the steps that finish early to the one that finishes
+    last, until the stage's spread cannot be narrowed further. Returns how many slots moved.
+
+    The same idea as the manufacturing planner's `_align_cohorts` ("lift every job to the longest
+    one already running beside it, so a wave lands in one go"), reached from the other direction.
+    There, run counts are free to grow, so a short job is given more runs in fewer slots. Here the
+    run counts are fixed by the chain — making extra is waste — so what moves is the SPLIT: a step
+    that would be done in two hours does not need three reactors while the step everyone is waiting
+    on has one.
+
+    **Why the spread is the thing that matters, not the total:** stage 2 cannot start until the
+    LAST job of stage 1 lands, so a stage that finishes at 2h/2h/14h is a 14h stage with two
+    reactors idle from hour two — and two extra trips to the keyboard to collect and restart. Wave
+    the whole stage in together and it is one login.
+
+    Slot-neutral by construction: it only ever moves a job from one step to another in the same
+    stage, so it can be applied after allocation without asking anyone for capacity. A step is
+    never taken below one job, never pushed past the formulas it has (`cap`) or its own run count,
+    and a move is only made when it genuinely lowers the stage's finish time.
+    """
+    moved = 0
+    by_stage: dict[tuple, list[dict]] = {}
+    for s in steps:
+        by_stage.setdefault((s["character_id"], s["tier"]), []).append(s)
+
+    def _hours(s, jobs):
+        return math.ceil(s["runs"] / max(1, jobs)) * s["cycle_hours"]
+
+    for own in by_stage.values():
+        if len(own) < 2:
+            continue                    # a stage of one step has nothing to align against
+        for _ in range(200):            # bounded: every accepted move strictly lowers the makespan
+            cur = max(_hours(s, s["jobs"]) for s in own)
+            # Who is holding the stage up, and who can spare a reactor without becoming the new
+            # bottleneck.
+            slowest = max(own, key=lambda s: _hours(s, s["jobs"]))
+            cap = slowest.get("cap")
+            if slowest["jobs"] >= slowest["runs"] or (cap and slowest["jobs"] >= cap):
+                break                   # the bottleneck cannot use another reactor anyway
+            donors = [s for s in own
+                      if s is not slowest and s["jobs"] > 1
+                      and _hours(s, s["jobs"] - 1) < cur]
+            if not donors:
+                break
+            # Give up the reactor whose own step suffers least for it.
+            donor = min(donors, key=lambda s: _hours(s, s["jobs"] - 1))
+            after = max(_hours(slowest, slowest["jobs"] + 1), _hours(donor, donor["jobs"] - 1),
+                        *[_hours(s, s["jobs"]) for s in own if s is not slowest and s is not donor])
+            if after >= cur:
+                break                   # no longer buys anything — stop rather than churn
+            donor["jobs"] -= 1
+            slowest["jobs"] += 1
+            moved += 1
+    return moved
 
 
 _BUDGET_SENSITIVITY_STEP = 0.10  # "what if you raised your ISK budget by 10%?"

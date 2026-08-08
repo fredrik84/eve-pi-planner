@@ -277,6 +277,36 @@ def main():
               f"(got {got.get(502)})")
         _reset(con)
 
+        print("a stage lands in ONE go — slots move off the steps that finish early:")
+        from app.reactions.advisor import _align_stage_jobs
+        import math as _m
+
+        def _hrs(x):
+            return _m.ceil(x["runs"] / x["jobs"]) * x["cycle_hours"]
+
+        # One heavy step and two quick ones, three reactors each. The stage is gated by the heavy
+        # one at 27h while six reactors sit idle from hour four.
+        stage = [_step(1, 0, 80, 1.0, 3), _step(1, 0, 10, 1.0, 3), _step(1, 0, 10, 1.0, 3)]
+        before = max(_hrs(x) for x in stage)
+        moved = _align_stage_jobs(stage)
+        after = max(_hrs(x) for x in stage)
+        check(moved > 0 and after < before,
+              f"the stage finishes sooner using the same reactors ({before}h -> {after}h)")
+        check(sum(x["jobs"] for x in stage) == 9, "and not one extra slot was asked for")
+        check(max(_hrs(x) for x in stage) - min(_hrs(x) for x in stage) < before - after,
+              "the steps now land close together instead of 23h apart")
+        check(all(x["jobs"] >= 1 for x in stage), "no step is ever taken below one job")
+
+        print("...and it does nothing when there is nothing to gain:")
+        even = [_step(1, 0, 10, 1.0, 1), _step(1, 0, 10, 1.0, 1)]
+        check(_align_stage_jobs(even) == 0, "an already-level stage is left alone")
+        alone = [_step(1, 0, 80, 1.0, 3)]
+        check(_align_stage_jobs(alone) == 0 and alone[0]["jobs"] == 3,
+              "a stage of one step has nothing to align against")
+        capped_stage = [_step(1, 0, 80, 1.0, 1, cap=1), _step(1, 0, 10, 1.0, 3)]
+        check(_align_stage_jobs(capped_stage) == 0,
+              "and a bottleneck that cannot use another formula is not handed one")
+
         print("it only ever moves `jobs`:")
         s = _step(1, 0, 50, 2.0, 1)
         before = {k: v for k, v in s.items() if k != "jobs"}

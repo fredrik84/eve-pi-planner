@@ -1590,6 +1590,8 @@ def _allocate_and_insert(context_id: int, type_id: int, name: str, node: dict, r
             # ...and the real pool here, consumed host by host: the units exist once, so the first
             # host's share spends them and the next host reacts what is genuinely left to react.
             tiers = _ordered_chain_tiers(formula["inputs"], share, reached, stock_pool) if formula else []
+            # Stage per step, not position in the list: siblings share a stage and run together.
+            ranks = tier_ranks(tiers)
             works = [t["runs"] * ((t["cycle_time"] or 0) / 3600.0) for _, t in tiers]
             caps = [max(1, int(t["runs"])) for _, t in tiers]
             works.append(share * top_cycle_h)
@@ -1601,12 +1603,24 @@ def _allocate_and_insert(context_id: int, type_id: int, name: str, node: dict, r
                 if tid in left:
                     caps[i] = _cap_jobs(max(1, left[tid] - after), caps[i])
             slots = _fit_chain_slots(works, caps, host["free_slots"])
+            # `_fit_chain_slots` minimises the SUM of the tier durations, which was the right
+            # objective while every tier was its own stage. Now that siblings share one, what gates
+            # the stage above is the LAST of them to land — so re-balance within each stage the
+            # same way the wizard does. Slot-neutral, so the fit above still decides how much
+            # capacity the chain gets. Imported at call time: advisor sits above this module.
+            if _parallel_stages_on(context_id) and len(tiers) > 1:
+                from app.reactions.advisor import _align_stage_jobs
+                align = [{"character_id": host["character_id"], "tier": ranks[i],
+                          "runs": int(t["runs"]), "cycle_hours": (t["cycle_time"] or 0) / 3600.0,
+                          "jobs": slots[i], "cap": caps[i]}
+                         for i, (_tid, t) in enumerate(tiers)]
+                _align_stage_jobs(align)
+                for i, a in enumerate(align):
+                    slots[i] = a["jobs"]
             for i, tid in enumerate([t for t, _ in tiers] + [type_id]):
                 if tid in left:
                     left[tid] = max(0, left[tid] - slots[i])
 
-            # Stage per step, not position in the list: siblings share a stage and run together.
-            ranks = tier_ranks(tiers)
             for i, (tid, info) in enumerate(tiers):
                 _insert_assignment_rows(con, host["character_id"], tid,
                                          types.get(tid, {}).get("name", str(tid)),
