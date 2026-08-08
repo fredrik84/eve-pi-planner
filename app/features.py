@@ -333,6 +333,16 @@ FEATURE_REGISTRY = [
                     "more jobs, so it finishes sooner. Never changes what gets suggested, what it "
                     "costs or what it earns — only how many reactors do the same work.",
      "default": False},
+    {"key": "reactions_level_runs", "label": "Reactions: one run count per product, everywhere",
+     "group": "Reactions",
+     "description": "Every job of a product carries the SAME run count on every character, instead "
+                    "of 125 runs on one and 90 and 75 on the others because three plans sized it "
+                    "separately. The work is re-split into as many jobs as that one number needs, "
+                    "so a stage also finishes in one go and usually in fewer reactors. A chain's "
+                    "own requirement is never reduced and work never moves between characters "
+                    "(the character consuming an intermediate has to be the one that made it); "
+                    "the surplus from rounding up is stock, and never more than 15%.",
+     "default": False},
     {"key": "reactions_missing_formulas", "label": "Reactions: formulas you need to acquire",
      "group": "Reactions",
      "description": "Once you have PASTED your industry window, a formula you never declared is "

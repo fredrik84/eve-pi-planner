@@ -28,7 +28,7 @@ from app.reactions.settings import effective_reaction_settings
 from app.reactions.graph import (
     _load_goo_and_reached, _load_reaction_graph, _value_reaction_batch,
     _ordered_chain_tiers, _build_opportunities, _fuel_block_ids, reaction_stock_pool,
-    _shopping_roots, tier_ranks, tidy_runs, request_memo,
+    _shopping_roots, tier_ranks, tidy_runs, request_memo, _TIDY_STEPS,
 )
 
 
@@ -381,6 +381,17 @@ def _tidy_runs_on(context_id: int) -> bool:
         return False
 
 
+def _level_runs_on(context_id: int) -> bool:
+    """Gated: levelling a product across characters is the only pass that CREATES and DELETES plan
+    rows, so it changes slot counts as well as numbers. Off, `level_stage_runs` still levels within
+    a character with the row count fixed."""
+    try:
+        from app.features import feature_enabled_for
+        return feature_enabled_for("reactions_level_runs", context_id)
+    except Exception:
+        return False
+
+
 def _insert_assignment_rows(con, character_id: int, type_id: int, name: str, runs: float,
                              job_count: int, input_cost: float, reward: float, tier_order: int,
                              now: float, order_id: int | None = None, tidy: bool = False) -> None:
@@ -616,6 +627,288 @@ def level_stage_runs(context_id: int) -> int:
                 continue                            # already one number — nothing to write
             for x in g:
                 con.execute("UPDATE pp_reaction_assignments SET runs=? WHERE id=?", (per, x["id"]))
+                changed += 1
+        if changed:
+            con.commit()
+    except Exception:
+        return 0
+    finally:
+        con.close()
+    return changed
+
+
+# ── One run count per product, across every character (`reactions_level_runs`) ─────────────────
+#
+# `level_stage_runs` above levels a product WITHIN one character, which is as far as it can go
+# without touching the row count. The complaint that outlives it is the cross-character one:
+# Carbon Fiber at 125 runs on one character, 90 on the next two and 75 on the fourth, and the same
+# shape on every other product. Four numbers to read, four to type, four different finish times.
+#
+# The priority order is the user's own (TODO 28), and it governs strictly:
+#   1. ONE run count per product — every job of it, wherever it sits.
+#   2. Aligned end times — a stage lands in one go, one login collects it.
+#   3. Fewer slots — the same work in fewer, fuller jobs.
+_LEVEL_BUDGET = 0.15        # the budget tidy_runs works to: surplus is stock, but only if it's cheap
+
+
+def _typeable(runs: int) -> bool:
+    """Is this a run count you copy, or one you read twice? Small numbers are fine as they are, and
+    above that it is a round multiple of one of `tidy_runs`' own steps — 70, 125, 250.
+
+    The step has to be worth something at that size — 68 is a multiple of 2 and is not a round
+    number, so a step only counts while it is at least a twentieth of the number itself. 70, 125
+    and 375 pass; 68 and 67 do not.
+
+    Deliberately NOT `tidy_runs(r) == r`, which asks a different question: whether r would be
+    rounded up FURTHER (70 becomes 75 inside a 15% budget). That says nothing about whether 70 is
+    easy to type, and it is."""
+    runs = int(runs)
+    return runs < 10 or any(runs % s == 0 and s * 20 >= runs for s in _TIDY_STEPS)
+
+
+def _level_options(totals: list[int], caps: list[int], max_runs: int,
+                    budget: float = _LEVEL_BUDGET) -> list[dict]:
+    """Every run count ONE product could carry on EVERY one of its jobs, and what each costs.
+
+    `totals[i]` is what chain *i* needs of this product and `caps[i]` the most jobs the character
+    holding that chain can give it (its own rows back, plus that character's free reactors). A
+    chain's intermediate has to be made by the character that will consume it — this package
+    models no way to ship a half-finished good between hangars — so a chain's requirement is a
+    floor that no levelling may go under. What is free to choose is the SPLIT: `runs` jobs of one
+    number, `ceil(total/runs)` of them, per chain.
+
+    Returned per candidate: the run count, how many jobs it costs in total, the surplus it
+    produces (rounding up is the only direction that is safe — the stage above consumes this one),
+    the per-chain job counts, and whether the number is one a human can type without checking.
+
+    Candidates that would need more reactors than a character has, or that overshoot the real
+    requirement by more than `budget`, are not returned at all: an empty list means this product
+    genuinely cannot carry one number cheaply (3 runs on one chain and 1000 on another has no
+    common count that isn't mostly waste) and the caller leaves it alone.
+    """
+    need = sum(totals)
+    if need <= 0 or not totals:
+        return []
+    # Every run count that divides some chain's requirement into a whole number of jobs, plus the
+    # tidy rounding of each — the only counts worth considering, since anything between two of them
+    # produces the same job layout for strictly more surplus.
+    cands: set[int] = set()
+    for t, cap in zip(totals, caps):
+        for j in range(1, max(1, cap) + 1):
+            r = max(1, -(-int(t) // j))
+            cands.add(r)
+            # ...and the round number just above each, one per step of the tidy ladder, so a
+            # layout that costs the same in slots can still be one you copy rather than read.
+            for step in _TIDY_STEPS:
+                cands.add(-(-r // step) * step)
+    out: list[dict] = []
+    for r in sorted(cands):
+        if r < 1 or r > max_runs:
+            continue
+        jobs = [max(1, -(-int(t) // r)) for t in totals]
+        if any(j > c for j, c in zip(jobs, caps)):
+            continue                        # more reactors than that character actually has
+        made = sum(j * r for j in jobs)
+        if made - need > need * budget:
+            continue                        # tidy numbers are not worth paying for in goo
+        out.append({"runs": r, "jobs": sum(jobs), "surplus": made - need,
+                    "per_group": jobs, "tidy": _typeable(r)})
+    return out
+
+
+def _choose_stage_layout(products: dict, prefer_tidy: bool = False) -> dict:
+    """Pick one run count per product so the whole STAGE lands together.
+
+    `products` is `{key: {"cycle": hours_per_run, "options": [_level_options entries]}}` for the
+    products of a single stage — steps with no dependency on each other, installed in one sitting
+    and collected in the next. A job's duration is `runs × cycle`, so once every job of a product
+    carries the same run count, aligning the stage is choosing run counts whose durations match.
+
+    Scored in the priority order: the SPREAD between the first and last job to finish, then the
+    slot count, then the surplus. Searching over target durations rather than over run counts
+    directly is what makes the first term meaningful — for each target every product takes the
+    longest job it can that still lands by then, which is also its cheapest in slots.
+
+    `prefer_tidy` (the caller's `reactions_tidy_runs` state) puts a number you can type without
+    checking ahead of the last tie-break, so a stage settles on 70 rather than 67 where that costs
+    only surplus. It is not free — the surplus is real goo — which is why it follows the same flag
+    that decides whether rounding is worth paying for at all.
+    """
+    keys = [k for k, p in products.items() if p.get("options")]
+    if not keys:
+        return {}
+    targets = sorted({o["runs"] * products[k]["cycle"] for k in keys for o in products[k]["options"]})
+    best_score, best_pick = None, {}
+    for d in targets:
+        pick = {}
+        for k in keys:
+            cyc = products[k]["cycle"]
+            fits = [o for o in products[k]["options"] if o["runs"] * cyc <= d + 1e-9]
+            # Nothing this product can do lands by `d` — it takes its shortest, and the stage is
+            # simply as spread as that product forces it to be.
+            pick[k] = max(fits, key=lambda o: o["runs"]) if fits else \
+                min(products[k]["options"], key=lambda o: o["runs"])
+        durs = [pick[k]["runs"] * products[k]["cycle"] for k in keys]
+        spread = round(max(durs) - min(durs), 6)
+        jobs = sum(pick[k]["jobs"] for k in keys)
+        surplus = sum(pick[k]["surplus"] for k in keys)
+        untidy = sum(0 if pick[k]["tidy"] else 1 for k in keys)
+        score = ((spread, jobs, untidy, surplus) if prefer_tidy
+                 else (spread, jobs, surplus, untidy))
+        if best_score is None or score < best_score:
+            best_score, best_pick = score, pick
+    return best_pick
+
+
+def _reaction_cycle_times() -> dict[int, float]:
+    """{output_type_id: hours per run} straight from the SDE. The structure/skill time bonus is
+    deliberately NOT applied: it scales every reaction by the same factor, and everything here
+    compares durations against each other."""
+    con = get_connection()
+    try:
+        return {int(r["output_type_id"]): (float(r["cycle_time"] or 0) / 3600.0) or 1.0
+                for r in con.execute(
+                    "SELECT output_type_id, MIN(cycle_time) AS cycle_time FROM reactions "
+                    "GROUP BY output_type_id")}
+    except Exception:
+        return {}
+    finally:
+        con.close()
+
+
+def level_product_runs(context_id: int) -> int:
+    """Give every job of ONE product the SAME run count across EVERY character, and re-split the
+    work into as many jobs as that count needs. Returns how many rows were written.
+
+    This is `level_stage_runs` taken to where the complaint actually lives. Levelling within a
+    character can only ever move numbers around inside one column of the dashboard; the reported
+    shape was 125 runs of Carbon Fiber on one character, 90 on the next two, 75 on the fourth —
+    and the same on every other product. Choosing 125 for all four costs nothing (it is what the
+    busiest character was already doing), makes every job finish at the same time, and takes the
+    fifteen jobs down to twelve.
+
+    **What it may not touch.** A chain's intermediate is consumed by the job above it ON THE SAME
+    CHARACTER, so a chain's own requirement is a floor and work never moves between characters —
+    only the split changes. The TOP row of every chain is left exactly as it is: its run count is
+    what the batch's cost, output value and profit were computed from, and it is what a customer
+    order gives back when it is cancelled. And a chain never loses its last row of a product: the
+    dashboard reads readiness per chain (`chain_stage_state`), so a chain that stopped mentioning
+    a product it is waiting on would announce the stage above as ready while those jobs ran.
+
+    That last rule is also the limit of this pass: two separate chains on ONE character still get
+    a job each rather than one shared job, even though the output is fungible and lands in the same
+    hangar. Sharing needs chain identity reworked first (a real `chain_id`, so a row can belong to
+    more than one chain) — see TODO 28.
+
+    Rows keep their chain (`created_at`), stage (`tier_order`) and order, so `_shopping_roots`,
+    `chain_stage_state` and the per-order give-back all still see what they saw before. Cost and
+    reward are re-split across the new row count, never re-totalled. Idempotent: a plan that is
+    already level is read and not written.
+    """
+    ensure_reaction_assignments_table()
+    con = get_connection()
+    try:
+        rows = [dict(r) for r in con.execute(
+            "SELECT a.id, a.character_id, a.type_id, a.name, a.runs, a.input_cost, a.reward, "
+            "a.created_at, a.order_id, COALESCE(a.tier_order,0) AS tier_order "
+            "FROM pp_reaction_assignments a JOIN pp_characters c ON c.character_id = a.character_id "
+            "WHERE c.context_id=?", (context_id,))]
+    except Exception:
+        return 0
+    finally:
+        con.close()
+    if not rows:
+        return 0
+
+    # The top of a chain is its commitment, not its plumbing — everything below it is fair game.
+    top_of_chain: dict[tuple, int] = {}
+    for r in rows:
+        key = (r["character_id"], round(float(r["created_at"] or 0.0), 3))
+        top_of_chain[key] = max(top_of_chain.get(key, 0), int(r["tier_order"] or 0))
+    inner = [r for r in rows
+             if int(r["tier_order"] or 0) < top_of_chain[(r["character_id"],
+                                                          round(float(r["created_at"] or 0.0), 3))]]
+    if not inner:
+        return 0
+
+    cycles = _reaction_cycle_times()
+    free = {c["character_id"]: int(c["free_slots"]) for c in _character_capacities(context_id)}
+
+    # (stage, product) -> (character, chain) -> the rows that chain is holding of it.
+    stages: dict[int, dict[int, dict[tuple, list[dict]]]] = {}
+    for r in inner:
+        stage = int(r["tier_order"] or 0)
+        chain = (r["character_id"], round(float(r["created_at"] or 0.0), 3))
+        stages.setdefault(stage, {}).setdefault(int(r["type_id"]), {}).setdefault(chain, []).append(r)
+
+    prefer_tidy = _tidy_runs_on(context_id)
+    plan: list[tuple] = []          # (product_key, chain_key, rows, target_runs, target_jobs)
+    for stage, by_product in stages.items():
+        # A stage may be stretched to land together, but never past the job that is already the
+        # longest in it — levelling makes a plan tidier and shorter, never slower.
+        stage_cap_hours = max(
+            (int(r["runs"] or 0) * cycles.get(int(r["type_id"]), 1.0)
+             for by_chain in by_product.values() for rs in by_chain.values() for r in rs),
+            default=0.0)
+        products: dict[int, dict] = {}
+        for tid, by_chain in by_product.items():
+            cyc = cycles.get(tid, 1.0)
+            chains = sorted(by_chain)
+            totals = [sum(int(r["runs"] or 0) for r in by_chain[c]) for c in chains]
+            caps = [len(by_chain[c]) + free.get(c[0], 0) for c in chains]
+            max_runs = int(stage_cap_hours / cyc) if cyc > 0 else max(totals, default=0)
+            products[tid] = {"cycle": cyc, "chains": chains,
+                             "options": _level_options(totals, caps, max_runs)}
+        for tid, opt in _choose_stage_layout(products, prefer_tidy).items():
+            for chain, jobs in zip(products[tid]["chains"], opt["per_group"]):
+                plan.append(((stage, tid), chain, by_product[tid][chain], opt["runs"], jobs))
+
+    # Free reactors are a per-character pool, and the pass above sized every product against it
+    # independently. Where the promises together exceed what a character has, drop whole products
+    # (the greediest first) rather than half-applying one — a product with two run counts is the
+    # thing this exists to remove.
+    while True:
+        added: dict[int, int] = {}
+        by_product_add: dict[tuple, dict[int, int]] = {}
+        for pkey, chain, rs, _runs, jobs in plan:
+            extra = max(0, jobs - len(rs))
+            if extra:
+                added[chain[0]] = added.get(chain[0], 0) + extra
+                per_char = by_product_add.setdefault(pkey, {})
+                per_char[chain[0]] = per_char.get(chain[0], 0) + extra
+        over = [cid for cid, n in added.items() if n > free.get(cid, 0)]
+        if not over:
+            break
+        worst = max(by_product_add,
+                    key=lambda p: max(by_product_add[p].get(cid, 0) for cid in over))
+        plan = [p for p in plan if p[0] != worst]
+
+    changed = 0
+    con = get_connection()
+    try:
+        for _pkey, _chain, rs, runs, jobs in plan:
+            jobs = max(1, jobs)
+            keep = sorted(rs, key=lambda r: r["id"])[:jobs]
+            drop = sorted(rs, key=lambda r: r["id"])[jobs:]
+            if not drop and jobs == len(rs) and all(int(r["runs"] or 0) == runs for r in rs):
+                continue                    # already one number, in the right number of jobs
+            cost = sum(float(r["input_cost"] or 0.0) for r in rs) / jobs
+            reward = sum(float(r["reward"] or 0.0) for r in rs) / jobs
+            for r in keep:
+                con.execute("UPDATE pp_reaction_assignments SET runs=?, input_cost=?, reward=? "
+                            "WHERE id=?", (runs, cost, reward, r["id"]))
+                changed += 1
+            for r in drop:
+                con.execute("DELETE FROM pp_reaction_assignments WHERE id=?", (r["id"],))
+                changed += 1
+            proto = rs[0]
+            for _ in range(jobs - len(keep)):
+                con.execute(
+                    "INSERT INTO pp_reaction_assignments "
+                    "(character_id, type_id, name, runs, input_cost, reward, created_at, "
+                    "tier_order, order_id) VALUES (?,?,?,?,?,?,?,?,?)",
+                    (proto["character_id"], proto["type_id"], proto["name"], runs, cost, reward,
+                     proto["created_at"], proto["tier_order"], proto["order_id"]))
                 changed += 1
         if changed:
             con.commit()
@@ -1208,9 +1501,14 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
     # (see restage_plan_rows). Idempotent and a no-op on an account whose rows are already right.
     try:
         restage_plan_rows(context_id)
-        # ...and give each product in a stage one run count instead of one per assign, so the
-        # numbers being typed into the industry window are the same every time.
-        level_stage_runs(context_id)
+        # ...and give each product one run count instead of one per assign, so the numbers being
+        # typed into the industry window are the same every time. Across every character behind
+        # `reactions_level_runs` (which also re-splits the work into as many jobs as that number
+        # needs); within a character otherwise, which is as far as the row count can stay fixed.
+        if _level_runs_on(context_id):
+            level_product_runs(context_id)
+        else:
+            level_stage_runs(context_id)
     except Exception:
         pass
 

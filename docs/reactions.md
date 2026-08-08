@@ -19,6 +19,7 @@ Find a section: `grep -n '^## ' docs/reactions.md` and read from that line — t
 - **One request, one answer (`request_memo`)** — why an order report was rebuilding the same evidence five times
 - **An order's runs follow capacity, not fairness (reverted experiment)** — why hosts get different run counts, and what the even split cost
 - **One run count per product per stage (`level_stage_runs`)** — why levelling across assigns is sound, and what it deliberately doesn't touch
+- **One run count per product, across every character (`reactions_level_runs`)** — the cross-character leveller: how the number is chosen, why it also saves slots, and the one thing it still can't merge
 - **Run counts you can type (`reactions_tidy_runs`)** — bounded rounding of intermediate runs, and why the end product is never rounded
 - **A stage is a DEPTH, not a position in a list** — why siblings share a stage, and how existing rows were repaired
 - **Knowing when the next stage can start (`chain_stage_state`)** — the ESI signal behind "stage 2 is ready"
@@ -265,11 +266,58 @@ released), rows keep their own chain and order so `_shopping_roots`, `chain_stag
 per-order give-back all still see the plans they saw before, and it writes only when the numbers
 actually differ. Runs on dashboard load beside `restage_plan_rows`.
 
-**What this does NOT do yet:** align END times across DIFFERENT products of an assembled plan. That
+**Superseded on the flag:** with `reactions_level_runs` on, `level_product_runs` (next section) runs
+in its place and levels the same product across every character, re-splitting the jobs to do it.
+This pass is what runs with the flag off, and its conservatism is the reason it can.
+
+**What this does NOT do:** align END times across DIFFERENT products of an assembled plan. That
 means moving jobs between products, and a job carries its chain — a chain that lost its rows for
 one product would stop waiting on it and could announce "stage 2 is ready" while those jobs were
 still running. `_align_stage_jobs` does it safely inside a single suggestion, where the whole chain
 is in hand; doing it across assigns needs chain identity reworked first.
+
+## One run count per product, across every character (`reactions_level_runs`)
+
+Reported again from use, and the version of the complaint the section above does not answer:
+Carbon Fiber at **125 runs on Chislen, 90 on Sajkisen414, 90 on Nuori, 75 on Ekaoni** — and the
+same shape on every other product. *"Why haven't we tried doing 120 runs for all of them? We'll
+save slots, align runtime and lower login cadence."*
+
+`level_product_runs` picks **one run count per product** and re-splits the work into as many jobs
+as that number needs. On the reported plan it lands on **125 everywhere**: the count the busiest
+character was already using, so nothing gets slower, every job now ends at the same hour, and the
+fifteen jobs become **twelve**. It replaces `level_stage_runs` on dashboard load when the flag is
+on; off, that older within-a-character pass still runs.
+
+**How the number is chosen.** Per stage, the options for each product are every run count that
+divides some chain's requirement into a whole number of jobs, plus the round number just above
+each (`_level_options`). An option is discarded if it needs more reactors than a character has
+free, or if rounding up costs more than **15%** in surplus — the same budget `tidy_runs` works to.
+What is left is scored in the user's stated priority order (TODO 28) by `_choose_stage_layout`,
+searching over target DURATIONS rather than run counts, which is what makes alignment expressible:
+
+1. the **spread** between the first and last job of the stage to finish — a stage lands in one go;
+2. the **slot count** — the same work in fewer, fuller jobs;
+3. the **surplus**, and (with `reactions_tidy_runs` on) whether the number is one you can type.
+
+**The ceiling that keeps it honest:** no job may run longer than the longest job already planned in
+that stage. Without it the cheapest answer in slots is always "one enormous job per character" —
+on the reported plan, four jobs of 375 runs, three times the runtime, while eleven reactors idle.
+
+**What it may not do.** A chain's intermediate is consumed by the job above it *on the same
+character*, so a chain's requirement is a floor and work never moves between characters — only the
+split changes. The **top row of every chain is untouched**: its run count is what the batch's cost,
+output value and profit were computed from, and what a customer order gives back when cancelled.
+And a chain never loses its last row of a product, because `chain_stage_state` reads readiness per
+chain: a chain that stopped mentioning a product it is waiting on would announce the stage above as
+ready while those jobs were still running.
+
+That last rule is also the limit. Two separate chains on ONE character still get a job each rather
+than sharing one, even though the output is fungible and lands in the same hangar. Sharing needs
+chain identity reworked first (a real `chain_id`, so one row can belong to more than one chain).
+
+A product whose chains are too far apart to share a number cheaply — 3 runs on one and 1000 on
+another — gets no options at all and is left exactly as it was. `test_level_runs.py`.
 
 ## Run counts you can type (`reactions_tidy_runs`)
 

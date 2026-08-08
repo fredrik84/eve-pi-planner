@@ -251,6 +251,26 @@ per-stage solve distributes JOBS across characters but a chain's stages must sta
 also what makes the "one number everywhere" goal reachable: the run count is a property of the
 product, the character only decides where the jobs sit.
 
+**BUILT 2026-08-08 as `level_product_runs` (`reactions_level_runs`).** The D-per-stage solve above,
+with the per-chain floor made explicit: a candidate run count `r` costs chain *g* `ceil(T_g / r)`
+jobs, and only counts if every chain's character has the reactors for it and the whole product
+overshoots by no more than 15%. Scored spread → slots → surplus → typeable, searching over target
+durations. On the reported plan (375 / 360 / 360 / 300 of Carbon Fiber split 3/4/4/4) it lands on
+**125 runs everywhere in 12 jobs** instead of 125/90/90/75 in 15. Two things were added to the
+shape above and are load-bearing:
+
+* **a ceiling: no job may run longer than the longest job already in that stage.** Minimising slots
+  with no ceiling always ends at "one enormous job per character" — here four jobs of 375 runs, 3×
+  the runtime, eleven reactors idle. (4) is last in the list, not absent.
+* **the top row of a chain is never touched**, and a chain never loses its last row of a product —
+  `chain_stage_state` reads readiness per chain, so a chain that stopped mentioning a product it is
+  waiting on would call the stage above ready while those jobs ran.
+
+**Still open — two chains on ONE character sharing a job.** The output is fungible and lands in one
+hangar, so two chains each holding a 60-run job of the same product should be one 120-run job. That
+means a row belonging to more than one chain, i.e. the `chain_id` rework item 22 also wanted.
+Everything else in the priority list is done.
+
 ## 28b. Slot reservation and order cadence (2026-08-08, from live use)
 
 Two things reported while using the order flow, neither fixed yet:
@@ -525,6 +545,7 @@ match any template we generate) is still unscoped.
 | 16 | Dead Industry surface removed: the unrendered skill advisor (module, endpoint, flag, test), `/api/industry/to-install` and `/api/industry/skill-coverage`. No behaviour change; the checklist-vs-plan guard is now structural | 08-07 |
 | 20 | Clear all no longer strands a customer order: order rows are cleared AND the order's `assigned_runs` handed back (top row per chain, clamped at 0), with already-stranded orders repaired on the next assign. `test_clear_all_orders.py` | 08-07 |
 | 27 | Customer orders load faster: `request_memo` (the evidence layer was rebuilt five times per report) plus a 2-minute cache of the priced graph (`_load_goo_and_reached`, 270ms -> 0ms warm), and progress/stale-render fixes on assign and clear | 08-08 |
+| 28 | One run count per product across EVERY character (`level_product_runs`, `reactions_level_runs`): Carbon Fiber at 125/90/90/75 on four characters becomes 125 everywhere in 12 jobs instead of 15, chosen by spread → slots → surplus and never running longer than the stage's longest job already planned. `test_level_runs.py` | 08-08 |
 | 26 | One run count per product per stage (`level_stage_runs`): three assigns that each sized Carbon Fiber separately (125/90/75) become one number typed three times, total preserved and rounded up, row count and chain identity untouched | 08-08 |
 | 25 | Formulas-to-acquire section on the reactions shopping list — the plan's missing formulas with Jita contract prices and a copy-names button, kept out of the materials tables and every cost total (a formula is a contract buy, not a multibuy line) | 08-08 |
 | 24 | "Clear its jobs" on a customer order (`DELETE /api/reactions/orders/{id}/assignments`): frees its slots, hands its runs back, keeps the order — so one order can be re-planned without Clear all or cancelling it. Give-back rule shared with Clear all | 08-08 |
