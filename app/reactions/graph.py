@@ -263,7 +263,31 @@ def _value_reaction_batch(node: dict, total_out: float, sell_price: float, volum
 # invalidation hook in five places. Callers treat the result as READ-ONLY — every write to
 # `reached` lives in `_resolve_reachable`, which builds it fresh.
 _GOO_CACHE: dict[tuple, tuple[float, object]] = {}
-_GOO_CACHE_TTL = 120.0
+_GOO_CACHE_TTL = 300.0
+# ...and SHARED, in Redis, because the in-process copy is per worker: prod runs 2 replicas x 3
+# workers, so five of every six clicks hit a cold cache and paid the full rebuild. Measured on the
+# real account: 3,305 ms cold. That is the single biggest cost on the Reactions tab, and it is the
+# same answer for every worker.
+_GOO_REDIS_TTL = 300
+
+
+def _goo_to_json(v):
+    """The result has int-keyed top-level dicts; JSON would stringify them silently. Convert on the
+    way out and back on the way in, so a cached graph is byte-identical to a fresh one."""
+    goo, reached, by_out, by_rx, types = v
+    return {"goo": {str(k): x for k, x in goo.items()},
+            "reached": {str(k): x for k, x in reached.items()},
+            "by_out": {str(k): x for k, x in by_out.items()},
+            "by_rx": {str(k): x for k, x in by_rx.items()},
+            "types": {str(k): x for k, x in types.items()}}
+
+
+def _goo_from_json(d):
+    return ({int(k): x for k, x in d["goo"].items()},
+            {int(k): x for k, x in d["reached"].items()},
+            {int(k): x for k, x in d["by_out"].items()},
+            {int(k): x for k, x in d["by_rx"].items()},
+            {int(k): x for k, x in d["types"].items()})
 
 
 def invalidate_goo_cache(context_id: int | None = None) -> None:
@@ -286,7 +310,23 @@ def _load_goo_and_reached(context_id: int, allowed_material_ids: set[int] | None
     hit = _GOO_CACHE.get(key)
     if hit and (_time.monotonic() - hit[0]) < _GOO_CACHE_TTL:
         return hit[1]
+    rkey = "rx:graph:%d:%s" % (
+        int(context_id),
+        ",".join(str(t) for t in sorted(allowed_material_ids)) if allowed_material_ids else "all")
+    shared = cache_get_json(rkey)
+    if shared:
+        try:
+            result = _goo_from_json(shared)
+            _GOO_CACHE[key] = (_time.monotonic(), result)
+            return result
+        except Exception:
+            pass                        # malformed/old shape — fall through and rebuild
     result = _load_goo_and_reached_uncached(context_id, allowed_material_ids)
+    if result is not None:
+        try:
+            cache_set_json(rkey, _goo_to_json(result), ttl=_GOO_REDIS_TTL)
+        except Exception:
+            pass                        # a cache that won't take it must never fail the request
     # Bounded: one entry per (account, material filter) actively being looked at, and stale entries
     # are dropped on the way past rather than by a background sweep.
     now = _time.monotonic()
