@@ -560,6 +560,8 @@ def chain_stage_state(rows: list[dict], jobs: list[dict], now: float) -> list[di
                 "stage": stage, "steps": len(steps), "done": done, "running": running,
                 "todo": len(steps) - done - running,
                 # Startable now: nothing below it is unfinished. The first stage always qualifies.
+                # A pooled plan needs a second condition on top of this one — see
+                # `_gate_stages_account_wide`, applied by the caller.
                 "ready": lower_all_done,
                 "names": sorted({str(r.get("name") or r["type_id"]) for r in steps}),
             }
@@ -996,12 +998,22 @@ def level_product_runs(context_id: int) -> int:
     room = {cid: max(0, int(c.get("slots") or 0) - int(c.get("running") or 0))
             for cid, c in caps_now.items()}
 
-    # (stage, product) -> (character, chain) -> the rows that chain is holding of it.
-    stages: dict[int, dict[int, dict[tuple, list[dict]]]] = {}
+    # (stage, product) -> every row of it, POOLED ACROSS CHARACTERS.
+    #
+    # Until 2026-08-08 these were kept per chain, because this package assumed an intermediate had
+    # to be reacted by the character that would consume it. That is not how the account works —
+    # reported: *"we do not need to use the same character to build the entire chain"*, the output
+    # goes to a shared hangar — and the assumption was expensive: eight characters each running a
+    # 35-run Oxy-Organic Solvents job is eight reactors doing what two would.
+    #
+    # Pooling is what makes the pass slot-efficient rather than merely tidy: the requirement is the
+    # ACCOUNT's, the run count is the product's, and which character holds a job is just where
+    # there was room. Two things elsewhere depend on the old assumption and are corrected with it —
+    # `_shopping_roots` (a moved row must not be mistaken for a chain of its own and bought for
+    # twice) and `chain_stage_state` (a chain no longer holds every stage it waits on).
+    stages: dict[int, dict[int, list[dict]]] = {}
     for r in inner:
-        stage = int(r["tier_order"] or 0)
-        chain = (r["character_id"], round(float(r["created_at"] or 0.0), 3))
-        stages.setdefault(stage, {}).setdefault(int(r["type_id"]), {}).setdefault(chain, []).append(r)
+        stages.setdefault(int(r["tier_order"] or 0), {}).setdefault(int(r["type_id"]), []).append(r)
 
     prefer_tidy = _tidy_runs_on(context_id)
     # How long the player wants ONE job to run, if they have said (see `get_job_target`). It is a
@@ -1010,21 +1022,28 @@ def level_product_runs(context_id: int) -> int:
     target = get_job_target(context_id)
     rows_by_char_stage: dict[int, dict[int, int]] = {}
     for stage, by_product in stages.items():
-        for by_chain in by_product.values():
-            for chain, rs in by_chain.items():
-                rows_by_char_stage.setdefault(chain[0], {})[stage] = \
-                    rows_by_char_stage.get(chain[0], {}).get(stage, 0) + len(rs)
+        for rs in by_product.values():
+            for r in rs:
+                cid = r["character_id"]
+                rows_by_char_stage.setdefault(cid, {})[stage] = \
+                    rows_by_char_stage.get(cid, {}).get(stage, 0) + 1
 
-    plan: list[tuple] = []          # (product_key, chain_key, rows, target_runs, target_jobs)
-    for stage, by_product in stages.items():
-        elsewhere = {cid: sum(n for st, n in per.items() if st != stage)
-                     for cid, per in rows_by_char_stage.items()}
+    plan: list[tuple] = []          # (product_key, rows, target_runs, [character per job])
+    # Jobs this pass has already placed on a character, stage by stage. Reading the ORIGINAL row
+    # counts for every stage instead let stage 0 fill a character up and stage 1 then fill it again
+    # from the same starting point — 17 jobs on an 11-slot character. Stages are walked in order so
+    # what an earlier one took is a fact by the time a later one asks.
+    committed: dict[int, int] = {}
+    for stage in sorted(stages):
+        by_product = stages[stage]
+        later = {cid: sum(n for st, n in per.items() if st > stage)
+                 for cid, per in rows_by_char_stage.items()}
         # With no target of the player's own, a stage may be stretched to land together but never
         # past the job that is already the longest in it — levelling then makes a plan tidier and
         # shorter, never slower, which is the only safe thing to do with a number nobody chose.
         stage_cap_hours = max(
             (int(r["runs"] or 0) * cycles.get(int(r["type_id"]), 1.0)
-             for by_chain in by_product.values() for rs in by_chain.values() for r in rs),
+             for rs in by_product.values() for r in rs),
             default=0.0)
         # A character's reactors are ONE pool and every product in the stage draws from it, so the
         # stage has to be solved as a whole: size it, look at what each character was actually
@@ -1040,7 +1059,8 @@ def level_product_runs(context_id: int) -> int:
         # character's load is its busiest stage, so growth in stage 0 and stage 1 does not add up.
         # ...so this stage may use whatever the character's reactors are not already committed to
         # by its OTHER stages.
-        budget = {cid: max(0, n - elsewhere.get(cid, 0)) for cid, n in room.items()}
+        budget = {cid: max(0, n - committed.get(cid, 0) - later.get(cid, 0))
+                  for cid, n in room.items()}
 
         # The shortest this stage can possibly run on the tightest character: all of its work,
         # divided by the reactors it may use. Nothing shorter is installable however the run counts
@@ -1048,13 +1068,13 @@ def level_product_runs(context_id: int) -> int:
         # rounding. Without it the loop started from the asked-for length and stepped one run at a
         # time, which never got from "5 days" to what the reactors could do: the plan came out
         # holding 20 jobs on an 11-slot character.
-        work_hours: dict[int, float] = {}
-        for tid, by_chain in by_product.items():
-            cyc = cycles.get(tid, 1.0)
-            for chain, rs in by_chain.items():
-                work_hours[chain[0]] = work_hours.get(chain[0], 0.0) + \
-                    sum(int(r["runs"] or 0) for r in rs) * cyc
-        d_floor = max((h / max(1, budget.get(cid, 1)) for cid, h in work_hours.items()), default=0.0)
+        # Pooled, so the floor is the stage's WHOLE work against every reactor it may use — not
+        # the tightest character's own share, which no longer means anything once a job can be
+        # installed wherever there is room.
+        stage_room = max(1, sum(budget.values()))
+        stage_work = sum(sum(int(r["runs"] or 0) for r in rs) * cycles.get(tid, 1.0)
+                         for tid, rs in by_product.items())
+        d_floor = stage_work / stage_room
 
         floor_runs: dict[int, int] = {}     # per product, raised when a character is over-promised
         for tid in by_product:
@@ -1066,11 +1086,13 @@ def level_product_runs(context_id: int) -> int:
         for _attempt in range(24):
             def _build(extra_hours: set[float]) -> dict:
                 built: dict[int, dict] = {}
-                for tid, by_chain in by_product.items():
+                for tid, rs_all in by_product.items():
                     cyc = cycles.get(tid, 1.0)
-                    chains = sorted(by_chain)
-                    totals = [sum(int(r["runs"] or 0) for r in by_chain[c]) for c in chains]
-                    caps = [max(1, budget.get(c[0], len(by_chain[c]))) for c in chains]
+                    # ONE pooled requirement per product: the account needs this many runs of it,
+                    # and any reactor with room can make them.
+                    chains = [None]
+                    totals = [sum(int(r["runs"] or 0) for r in rs_all)]
+                    caps = [stage_room]
                     chosen = _target_runs(target, cyc)
                     if chosen:
                         max_runs = chosen
@@ -1098,40 +1120,80 @@ def level_product_runs(context_id: int) -> int:
                 durations.add(float(target["hours"]))
             products = _build(durations)
             layout = _choose_stage_layout(products, prefer_tidy)
-            load: dict[int, int] = {}
-            per_product_load: dict[int, dict[int, int]] = {}
-            for tid, opt in layout.items():
-                for chain, jobs in zip(products[tid]["chains"], opt["per_group"]):
-                    load[chain[0]] = load.get(chain[0], 0) + jobs
-                    per_product_load.setdefault(chain[0], {})[tid] = \
-                        per_product_load.get(chain[0], {}).get(tid, 0) + jobs
-            over = [cid for cid, n in load.items() if n > budget.get(cid, 0)]
-            if not over:
+            asked = sum(opt["jobs"] for opt in layout.values())
+            if asked <= stage_room:
                 break
-            # The greediest product on the most over-promised character gives ground first, and it
-            # gives it in one step — the NEXT run count that actually changes the layout, not one
-            # more run, which would take a hundred passes to matter.
-            worst_cid = max(over, key=lambda cid: load[cid] - budget.get(cid, 0))
-            worst_tid = max(per_product_load[worst_cid], key=lambda t: per_product_load[worst_cid][t])
+            # The stage wants more reactors than the account has free for it, so the greediest
+            # product gives ground — and it gives it in one step, the NEXT run count that actually
+            # changes the layout, not one more run, which would take a hundred passes to matter.
+            worst_tid = max(layout, key=lambda t: layout[t]["jobs"])
             cur = layout[worst_tid]["runs"]
             higher = [o["runs"] for o in products[worst_tid]["options"] if o["runs"] > cur]
             nxt = min(higher) if higher else cur + max(1, cur // 4)
             if nxt <= floor_runs.get(worst_tid, 0):
                 break                       # no room left to give — take what we have
             floor_runs[worst_tid] = nxt
-        for tid, opt in layout.items():
-            for chain, jobs in zip(products[tid]["chains"], opt["per_group"]):
-                plan.append(((stage, tid), chain, by_product[tid][chain], opt["runs"], jobs))
+        # WHERE the jobs go. A character that already runs the product keeps it (no move for its
+        # own sake), then whoever has the most room — so consolidating a product onto fewer
+        # reactors moves as few rows as it can.
+        room_left = dict(budget)
+        for tid, opt in sorted(layout.items(), key=lambda kv: -kv[1]["jobs"]):
+            rs_all = sorted(by_product[tid], key=lambda r: r["id"])
+            want = max(1, opt["per_group"][0])
+            have: dict[int, int] = {}
+            for r in rs_all:
+                have[r["character_id"]] = have.get(r["character_id"], 0) + 1
+            # Who runs it: the characters already running it keep as much of it as their room
+            # allows, and only what is left over goes anywhere new. Placing purely by "most room
+            # first" was not STABLE — the next pass saw the new distribution, re-sorted, and moved
+            # twelve rows again for an identical layout, on every dashboard load.
+            quota: dict[int, int] = {}
+            left = want
+            for cid in sorted(have, key=lambda c: (-have[c], -room_left.get(c, 0), c)):
+                take = min(have[cid], max(0, room_left.get(cid, 0)), left)
+                if take:
+                    quota[cid] = take
+                    room_left[cid] -= take
+                    left -= take
+            for cid in sorted(room_left, key=lambda c: (-room_left[c], c)):
+                if left <= 0:
+                    break
+                take = min(max(0, room_left[cid]), left)
+                if take:
+                    quota[cid] = quota.get(cid, 0) + take
+                    room_left[cid] -= take
+                    left -= take
+            if left > 0:
+                continue        # nowhere to put it all — leave this product exactly as it is
+            # Rows stay put wherever the quota allows; the overflow are the ones that move, and
+            # the rows past `want` are the ones that go. Both fall out of this ordering.
+            q = dict(quota)
+            stay, move = [], []
+            for r in rs_all:
+                cid = r["character_id"]
+                if q.get(cid, 0) > 0:
+                    q[cid] -= 1
+                    stay.append(r)
+                else:
+                    move.append(r)
+            spots = [r["character_id"] for r in stay]
+            for cid in sorted(q):
+                spots += [cid] * q[cid]
+            for cid in spots:
+                committed[cid] = committed.get(cid, 0) + 1
+            plan.append(((stage, tid), stay + move, opt["runs"], spots))
 
     changed = 0
     con = get_connection()
     try:
-        for _pkey, _chain, rs, runs, jobs in plan:
-            jobs = max(1, jobs)
-            keep = sorted(rs, key=lambda r: r["id"])[:jobs]
-            drop = sorted(rs, key=lambda r: r["id"])[jobs:]
-            if not drop and jobs == len(rs) and all(int(r["runs"] or 0) == runs for r in rs):
-                continue                    # already one number, in the right number of jobs
+        for _pkey, rs, runs, spots in plan:
+            jobs = len(spots)
+            keep = rs[:jobs]
+            drop = rs[jobs:]
+            if (jobs == len(rs) and all(int(r["runs"] or 0) == runs for r in rs)
+                    and [r["character_id"] for r in rs] == spots):
+                continue                    # already one number, in the right jobs, in the right
+                                            # hands — nothing to write
             # Cost and profit are LINEAR in runs, so they scale with the work rather than being
             # re-split across it. A chain's intermediate rows carry 0 either way (the whole chain's
             # cost rolls up into its top row), but a top row carries the real ISK — and after this
@@ -1141,20 +1203,24 @@ def level_product_runs(context_id: int) -> int:
             scale = (runs * jobs) / was
             cost = sum(float(r["input_cost"] or 0.0) for r in rs) * scale / jobs
             reward = sum(float(r["reward"] or 0.0) for r in rs) * scale / jobs
-            for r in keep:
-                con.execute("UPDATE pp_reaction_assignments SET runs=?, input_cost=?, reward=? "
-                            "WHERE id=?", (runs, cost, reward, r["id"]))
+            for i, r in enumerate(keep):
+                # ...and `character_id`, because a pooled product's jobs go where there is room.
+                # Moving a row rather than deleting and re-inserting keeps its id, its chain and
+                # its order, so everything reading those still sees the plan it saw before.
+                con.execute("UPDATE pp_reaction_assignments SET runs=?, input_cost=?, reward=?, "
+                            "character_id=? WHERE id=?",
+                            (runs, cost, reward, spots[i], r["id"]))
                 changed += 1
             for r in drop:
                 con.execute("DELETE FROM pp_reaction_assignments WHERE id=?", (r["id"],))
                 changed += 1
             proto = rs[0]
-            for _ in range(jobs - len(keep)):
+            for cid in spots[len(keep):]:
                 con.execute(
                     "INSERT INTO pp_reaction_assignments "
                     "(character_id, type_id, name, runs, input_cost, reward, created_at, "
                     "tier_order, order_id) VALUES (?,?,?,?,?,?,?,?,?)",
-                    (proto["character_id"], proto["type_id"], proto["name"], runs, cost, reward,
+                    (cid, proto["type_id"], proto["name"], runs, cost, reward,
                      proto["created_at"], proto["tier_order"], proto["order_id"]))
                 changed += 1
         if changed:
@@ -1578,6 +1644,35 @@ def unassign_all_reactions(context_id: int = Depends(require_context)):
     return {"ok": True, "cleared": cleared, "orders_reset": orders_reset}
 
 
+def _gate_stages_account_wide(characters: list[dict]) -> None:
+    """A stage is startable only once every stage BELOW it is finished across the whole account.
+
+    `chain_stage_state` answers this per chain, which was the whole truth while a chain's every
+    stage lived on the character that would consume it. Pooling ended that (`level_product_runs`
+    lays a product out across whichever reactors had room), so a chain can now hold no row at all
+    for a stage it is waiting on — and "every step of MY chain below this is done" is then
+    vacuously true the moment the plan is made, which would light up "stage 2, start now" while
+    the Carbon Fiber for it sat unstarted on somebody else.
+
+    Conservative on purpose: a stage nobody has finished holds back every stage above it, even
+    across chains that do not share materials. That matches how the plan is actually worked —
+    install a stage, come back, install the next — and being early with "start now" is the failure
+    that matters here. Mutates the entries in place; no return.
+    """
+    pending: dict[int, bool] = {}
+    for c in characters:
+        for e in c.get("stages") or []:
+            if e.get("todo") or e.get("running"):
+                pending[int(e.get("stage") or 0)] = True
+    if not pending:
+        return
+    for c in characters:
+        for e in c.get("stages") or []:
+            stage = int(e.get("stage") or 0)
+            if e.get("ready") and any(pending.get(st) for st in range(stage)):
+                e["ready"] = False
+
+
 def _plan_missing_formulas(context_id: int, characters: list[dict]) -> dict:
     """The acquire-list for what is ALREADY planned — every not-yet-running slot on the dashboard.
 
@@ -1586,9 +1681,13 @@ def _plan_missing_formulas(context_id: int, characters: list[dict]) -> dict:
     report", which is this report's own empty state anyway.
     """
     try:
-        from app.reactions.library import missing_formulas, wanted_from_sequence
-        return missing_formulas(context_id, wanted_from_sequence(
-            [p for c in characters for p in (c.get("pending") or [])]))
+        from app.reactions.library import (missing_formulas, wanted_from_sequence,
+                                            jobs_from_sequence)
+        pending = [p for c in characters for p in (c.get("pending") or [])]
+        # Every pending row is one in-game job, so the row count per product is how many formulas
+        # have to be held at once (`missing_formulas`' `jobs`).
+        return missing_formulas(context_id, wanted_from_sequence(pending),
+                                jobs=jobs_from_sequence(pending))
     except Exception:
         return {"complete": False, "formulas": [], "unresolved": []}
 
@@ -1944,6 +2043,11 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
     pending_output_value += up["output_value"]
     pending_net_profit += up["net_profit"]
     pending_net_profit_per_day += up["net_profit_per_day"]
+
+    # A stage is startable only once every stage below it is done ACROSS the account — see
+    # `_gate_stages_account_wide`. Applied here, with every character's stages in hand, rather than
+    # inside `chain_stage_state`, which sees one character at a time.
+    _gate_stages_account_wide(characters)
 
     return {
         "tracked": tracked_any,

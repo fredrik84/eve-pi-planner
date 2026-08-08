@@ -117,10 +117,11 @@ def _order_report(context_id: int, order: dict) -> dict:
     # the plan. Deliberately NOT in `cost`: what you must go and buy is not what the order costs to
     # produce, and folding it in would quote the client for a formula the user may already own or
     # may decide not to buy. Same separation `missing_blueprints` keeps on the Industry side.
-    from app.reactions.library import missing_formulas, wanted_from_sequence
+    from app.reactions.library import missing_formulas, wanted_from_sequence, jobs_from_sequence
 
     return {"materials": materials, "chain_tiers": chain_tiers, "cost": cost, "time": time_report,
-            "missing_formulas": missing_formulas(context_id, wanted_from_sequence(sequence)),
+            "missing_formulas": missing_formulas(context_id, wanted_from_sequence(sequence),
+                                                 jobs=jobs_from_sequence(sequence)),
             # Stages this order does not have to run because the intermediate is already held.
             "stock_covered": sorted(
                 ({**c, "name": types.get(c["type_id"], {}).get("name", str(c["type_id"])),

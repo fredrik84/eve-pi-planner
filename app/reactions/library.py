@@ -155,13 +155,20 @@ def _library_state(context_id: int) -> dict:
 
 
 def missing_formulas(context_id: int, wanted: dict[int, int] | None,
-                     names: dict[int, str] | None = None) -> dict:
+                     names: dict[int, str] | None = None,
+                     jobs: dict[int, int] | None = None) -> dict:
     """The report every surface renders: `{complete, formulas: [...], unresolved: [...]}`.
 
     `wanted` is {product_type_id: runs the plan wants} — every step of the plan, chain tiers
     included, since a chain tier is exactly the case that started this. A row carries the product,
-    the runs asked of it, and the FORMULA's own type_id so the caller can price it off contracts
+    the runs asked of it, and the FORMULA's own type_id so the caller can price it
     (`/api/reactions/formula-prices`).
+
+    `jobs` is {product_type_id: jobs the plan runs at once}, and it is **how many copies of the
+    formula to buy** — a formula is a physical item locked into the reactor for the job's duration
+    (the same fact `formula_concurrency_caps` enforces), so four parallel Carbon Fiber jobs need
+    four formulas. Without it a row says what to buy and leaves "how many" to be worked out from a
+    slot grid.
 
     Empty — not absent — when the flag is off or the library is not complete, so a caller never has
     to ask two questions to know whether to render anything. **Nothing here is a cost**: the
@@ -185,11 +192,25 @@ def missing_formulas(context_id: int, wanted: dict[int, int] | None,
             "type_id": tid,
             "name": names.get(tid) or rx_names.get(tid) or str(tid),
             "runs_needed": int(runs or 0),
+            "formulas_needed": max(1, int((jobs or {}).get(tid, 1) or 1)),
             "formula_type_id": rx[tid],
             "formula_name": rx_names.get(rx[tid]) or f"#{rx[tid]}",
         })
     report["formulas"] = sorted(rows, key=lambda r: r["name"])
     return report
+
+
+def jobs_from_sequence(steps) -> dict[int, int]:
+    """{type_id: jobs run at once} from the same step lists `wanted_from_sequence` reads. A step
+    that does not say (an older client, or a plan row, which IS one job) counts as one."""
+    jobs: dict[int, int] = {}
+    for s in steps or []:
+        tid = s.get("type_id") if isinstance(s, dict) else getattr(s, "type_id", None)
+        if not tid:
+            continue
+        n = s.get("job_count") if isinstance(s, dict) else getattr(s, "job_count", None)
+        jobs[int(tid)] = jobs.get(int(tid), 0) + max(1, int(n or 1))
+    return jobs
 
 
 def wanted_from_sequence(steps) -> dict[int, int]:
@@ -229,12 +250,21 @@ def reactions_missing_formulas(req: MissingFormulaRequest,
 
 @router.get("/api/reactions/formula-prices")
 def reactions_formula_prices(type_ids: str = "", context_id: int = Depends(require_context)):
-    """Contract prices for the FORMULAS of the given reaction products (comma-separated product
-    type_ids) — the same public-contract index Industry prices blueprints from.
+    """MARKET prices for the FORMULAS of the given reaction products (comma-separated product
+    type_ids).
+
+    **The market, not the public-contract index** — reported from use 2026-08-08: *"Formulas is
+    only bought on the market and not via contract."* This priced them off the same contract scan
+    Industry uses for ship and module blueprints, which is right for those (a BPC with runs/ME/TE
+    on it only exists on contract) and wrong for a reaction formula, which is an item with a sell
+    order like any other. A player quoted a contract price for something they buy off the market
+    is being told the wrong number to budget with.
 
     A formula has no row in the `blueprints` table (its "blueprint" is the reaction itself), so this
-    maps product -> `reactions.reaction_id` and asks the index for that type directly. Reported,
-    never folded into a plan cost — same rule the index itself states.
+    maps product -> `reactions.reaction_id` and prices that type through the account's own followed
+    markets (`resolve_market_data`, same resolver the shopping list spends). Reported, never folded
+    into a plan cost — the formulas are what you must go and get, and charging the plan for them
+    would bill a player for a purchase they may already own or decide not to make.
     """
     ids = [int(x) for x in type_ids.split(",") if x.strip().isdigit()]
     if not ids:
@@ -244,10 +274,14 @@ def reactions_formula_prices(type_ids: str = "", context_id: int = Depends(requi
     if not formula_of:
         return {"prices": {}}
     try:
-        from app.industry.bpc import blueprint_type_prices, maybe_scan, THE_FORGE
-        maybe_scan(THE_FORGE)         # cold index refreshes in the background; never blocks this
-        by_formula = blueprint_type_prices(list(set(formula_of.values())))
+        from app.markets import resolve_market_data
+        by_formula = resolve_market_data(context_id, sorted(set(formula_of.values())))
     except Exception:
         return {"prices": {}}
-    return {"prices": {str(tid): by_formula[f] for tid, f in formula_of.items()
-                       if f in by_formula}}
+    out = {}
+    for tid, f in formula_of.items():
+        m = by_formula.get(f) or {}
+        if m.get("sell_price"):
+            out[str(tid)] = {"sell_price": m["sell_price"], "source": m.get("source") or "Jita",
+                             "volume": m.get("sell_volume")}
+    return {"prices": out}

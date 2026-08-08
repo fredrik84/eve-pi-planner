@@ -529,14 +529,15 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
     # sub-reaction they cannot install (Reinforced Carbon Fiber via an undeclared Carbon Fiber, the
     # case that started this). Every step counts, top-level and tier alike; nothing here changes a
     # suggestion, its cost, or the shopping list. See app/reactions/library.py.
-    from app.reactions.library import missing_formulas, wanted_from_sequence
-    wanted = wanted_from_sequence(
-        [{"type_id": s["type_id"], "runs": s["runs"]} for s in suggestions]
-        + [t for s in suggestions for t in s["chain_tiers"]])
+    from app.reactions.library import missing_formulas, wanted_from_sequence, jobs_from_sequence
+    steps = ([{"type_id": s["type_id"], "runs": s["runs"], "job_count": s.get("job_count", 1)}
+              for s in suggestions]
+             + [t for s in suggestions for t in s["chain_tiers"]])
+    wanted = wanted_from_sequence(steps)
 
     return {
         "suggestions": suggestions,
-        "missing_formulas": missing_formulas(context_id, wanted),
+        "missing_formulas": missing_formulas(context_id, wanted, jobs=jobs_from_sequence(steps)),
         "totals": {
             "isk_committed": round(isk_committed, 2),
             "isk_budget": isk_budget,

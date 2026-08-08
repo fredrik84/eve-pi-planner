@@ -168,22 +168,23 @@ function _rxFormulaShoppingSection(rep) {
   setTimeout(() => _rxLoadFormulaPrices(inst, rows.map(m => m.type_id)), 0);
   const body = rows.map(m => `
     <tr>
-      <td>${_esc(m.formula_name)}</td>
+      <td><b>${m.formulas_needed || 1}×</b> ${_esc(m.formula_name)}</td>
       <td>${_esc(m.name)}</td>
       <td>${m.runs_needed.toLocaleString()}</td>
-      <td id="rxfpx-${inst}-${m.type_id}" class="ind-bp-px">checking contracts…</td>
+      <td id="rxfpx-${inst}-${m.type_id}" class="ind-bp-px"
+          data-need="${m.formulas_needed || 1}">checking the market…</td>
     </tr>`).join('');
   const unresolved = (rep.unresolved || []).length
     ? `<div class="pp-card-hint" style="color:var(--clr-amber)">⚠ ${rep.unresolved.length} name${rep.unresolved.length === 1 ? '' : 's'} in your pasted window didn't match any item, so a formula you DO own could be listed above.</div>`
     : '';
   return `
     <div class="rx-shop-sec-title">Formulas to acquire
-      <span class="pp-card-hint">— ${rows.length} you don't hold; contract buys, not multibuy</span>
+      <span class="pp-card-hint">— ${rows.length} you don't hold; bought on the market, not in the multibuy above</span>
       <button class="pp-add-btn" onclick="_rxCopyFormulaNames(this)">Copy names</button>
     </div>
     <div style="overflow-x:auto;margin-bottom:12px">
       <table class="pp-card-table" style="width:100%">
-        <thead><tr><th>Formula</th><th>For</th><th>Runs planned</th><th>Jita contracts</th></tr></thead>
+        <thead><tr><th>Formula</th><th>For</th><th>Runs planned</th><th>Market</th></tr></thead>
         <tbody>${body}</tbody>
       </table>
     </div>
@@ -192,10 +193,12 @@ function _rxFormulaShoppingSection(rep) {
     ${unresolved}`;
 }
 
-// Contracts are searched by NAME, so the useful clipboard payload is one formula name per line —
-// not a multibuy block, which cannot buy a blueprint at all.
+// One line per formula, with the COUNT — the same shape a multibuy paste takes, since these are
+// bought off the market like anything else (reported 2026-08-08; they were previously treated as
+// contract buys, which is right for a ship BPC and wrong for a reaction formula).
 function _rxCopyFormulaNames(btn) {
-  _rxCopyText((_rxLastFormulaShopping || []).map(m => m.formula_name).join('\n'), btn);
+  _rxCopyText((_rxLastFormulaShopping || [])
+    .map(m => `${m.formula_name} ${m.formulas_needed || 1}`).join('\n'), btn);
 }
 
 let _rxLastFormulaShopping = [];
@@ -471,13 +474,18 @@ function _rxMissingFormulaWarn(rep) {
     </div>`;
   if (!rows.length) return `<div class="ind-notes">${unresolvedHtml}</div>`;
 
-  const rowsHtml = rows.map(m => `
+  const rowsHtml = rows.map(m => {
+    // How many COPIES to buy, not just what to buy: a formula is locked into the reactor for the
+    // job's duration, so four parallel jobs of a product need four of its formula.
+    const n = m.formulas_needed || 1;
+    return `
     <div class="ind-bp-row2">
-      <span class="ind-bp-nm">${_esc(m.name)}<span class="ind-bp-need">${_esc(m.formula_name)} · ${m.runs_needed.toLocaleString()} run${m.runs_needed === 1 ? '' : 's'} planned</span></span>
-      <span class="ind-bp-px" id="rxfpx-${inst}-${m.type_id}">checking contracts…</span>
-    </div>`).join('');
-  // Prices land after render — the contract index is a background scan and this warning must never
-  // wait on it (same rule the Industry panel follows).
+      <span class="ind-bp-nm"><b>${n}×</b> ${_esc(m.formula_name)}<span class="ind-bp-need">for ${_esc(m.name)} · ${n} job${n === 1 ? '' : 's'} at once · ${m.runs_needed.toLocaleString()} run${m.runs_needed === 1 ? '' : 's'} planned</span></span>
+      <span class="ind-bp-px" id="rxfpx-${inst}-${m.type_id}" data-need="${n}">checking the market…</span>
+    </div>`;
+  }).join('');
+  // Prices land after render — the market lookup must never hold up the warning itself (same rule
+  // the Industry panel follows).
   setTimeout(() => _rxLoadFormulaPrices(inst, rows.map(m => m.type_id)), 0);
   return `<div class="ind-notes"><div class="ind-note-block">
       <b>You don't hold a formula for ${rows.length === 1 ? 'this' : 'these'}</b>
@@ -485,7 +493,7 @@ function _rxMissingFormulaWarn(rep) {
       <div class="ind-bp-warn-sub">You've pasted your industry window, so that paste is read as your
       whole library — a formula it doesn't name is one you don't own, and this plan can't be
       installed without ${rows.length === 1 ? 'it' : 'them'}. Prices are what the formula goes for on
-      Jita contracts, for comparison only: nothing here is in the materials list or any cost total.</div>
+      the market, for comparison only: nothing here is in the materials list or any cost total.</div>
       ${unresolvedHtml}
     </div></div>`;
 }
@@ -498,24 +506,19 @@ async function _rxLoadFormulaPrices(inst, ids) {
     const el = document.getElementById(`rxfpx-${inst}-${id}`);
     if (!el) return;
     const info = d && d.prices && d.prices[id];
-    // A formula is sold as a copy (BPC) in practice; originals are checked too rather than
-    // reporting "nothing listed" when the only thing on offer is the original.
-    const bpc = info && info.bpc;
-    if (bpc && bpc.live && bpc.live.count) {
-      el.innerHTML = `<b>${_fmtIsk(bpc.live.cheapest)}</b> cheapest now`
-        + `<span class="ind-bp-sub2">${bpc.live.count} on contract · median ${_fmtIsk(bpc.live.median)}</span>`;
-    } else if (bpc && bpc.history && bpc.history.count) {
-      const days = Math.max(0, Math.round((Date.now() / 1000 - bpc.history.last_seen) / 86400));
-      el.innerHTML = `<b>≈ ${_fmtIsk(bpc.history.median)}</b> estimated`
-        + `<span class="ind-bp-sub2">none listed now · ${bpc.history.count} seen historically, last ${days === 0 ? 'today' : days + 'd ago'}</span>`;
-    } else if (info && info.bpo && (info.bpo.live || info.bpo.history)) {
-      const b = info.bpo.live || info.bpo.history;
-      el.innerHTML = `<span class="ind-bp-sub2">no copies seen — originals from ${_fmtIsk(b.cheapest)}</span>`;
-    } else {
-      el.innerHTML = '<span class="ind-bp-sub2">no contracts seen for this yet</span>';
+    // The MARKET, not the contract index — reported 2026-08-08: a reaction formula is bought off
+    // a sell order like any other item, and quoting a contract price budgets the wrong number.
+    if (!info || !info.sell_price) {
+      el.innerHTML = '<span class="ind-bp-sub2">no sell orders seen for this</span>';
+      return;
     }
+    const need = parseInt(el.dataset.need || '1', 10) || 1;
+    el.innerHTML = `<b>${_fmtIsk(info.sell_price * need)}</b>`
+      + `<span class="ind-bp-sub2">${need > 1 ? `${need} × ${_fmtIsk(info.sell_price)} · ` : ''}`
+      + `${_esc(info.source || 'Jita')}</span>`;
   });
 }
+
 
 let _rxLastDashboardData = null;
 

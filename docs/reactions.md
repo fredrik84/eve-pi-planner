@@ -363,13 +363,30 @@ a wizard sizing a weekly batch while the plan is levelled to a fortnight is two 
 question. A `runs` target has no exact hour window (the products differ), so the wizard states it
 at the standard 3-hour reaction and says so.
 
-**What it may not do.** A chain's intermediate is consumed by the job above it *on the same
-character*, so a chain's requirement is a floor and work never moves between characters — only the
-split changes. A row committed to a **customer order** is never re-shaped: its run count is the
-batch that order was quoted on, and cancelling hands exactly those runs back
-(`give_back_order_runs`). And a chain never loses its last row of a product, because
-`chain_stage_state` reads readiness per chain: a chain that stopped mentioning a product it is
-waiting on would announce the stage above as ready while those jobs were still running.
+**A product is POOLED across characters** (2026-08-08). This package used to hold that an
+intermediate must be reacted by the character that consumes it — no model of moving half-finished
+goods between hangars — so each chain's requirement was a floor of its own. That is not how the
+account works: *"we do not need to use the same character to build the entire chain."* The output
+goes to a shared hangar, and the old assumption was expensive — eight characters each running a
+35-run Oxy-Organic Solvents job is eight reactors doing what two would. So the requirement is the
+ACCOUNT's, the run count is the product's, and which character holds a job is just where there was
+room. On the reported plan that is 8 Oxy jobs down to 2, and 23 Carbon Fiber jobs down to 18.
+
+Two things depended on the old assumption and moved with it:
+
+* **`_shopping_roots`** takes the top tier of the CHAIN, not of one character's share of it. A
+  pooled intermediate can sit on a character holding nothing else of its chain, where it would look
+  like a chain of its own and have its goo bought a second time on top of the real top row's walk.
+  Still grouped per character as well, because an order writes one timestamp across every host it
+  uses and each host's top row is a real root.
+* **`_gate_stages_account_wide`** holds a stage back until every stage below it is finished across
+  the whole account. `chain_stage_state` answers that per chain, which was the whole truth while a
+  chain held all its own stages; now a chain can hold no row for a stage it waits on, and "every
+  step of MY chain below this is done" would be vacuously true the moment the plan was made.
+
+**What it may not do.** A row committed to a **customer order** is never re-shaped: its run count is
+the batch that order was quoted on, and cancelling hands exactly those runs back
+(`give_back_order_runs`).
 
 **A speculative chain's TOP row is levelled too** — it was excluded until 2026-08-08, and that is
 what left a product showing three numbers after the pass had run. The same product is an

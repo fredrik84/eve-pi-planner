@@ -338,10 +338,11 @@ FEATURE_REGISTRY = [
      "description": "Every job of a product carries the SAME run count on every character, instead "
                     "of 125 runs on one and 90 and 75 on the others because three plans sized it "
                     "separately. The work is re-split into as many jobs as that one number needs, "
-                    "so a stage also finishes in one go and usually in fewer reactors. A chain's "
-                    "own requirement is never reduced and work never moves between characters "
-                    "(the character consuming an intermediate has to be the one that made it); "
-                    "the surplus from rounding up is stock, and never more than 15%.",
+                    "so a stage also finishes in one go and usually in fewer reactors. A product "
+                    "is pooled across your characters — the account's requirement, made wherever "
+                    "there are reactors free, which assumes you keep the output somewhere every "
+                    "character can reach it. Set the job length on the Reactions card to decide "
+                    "how long a batch runs; the surplus from rounding up is stock.",
      "default": False},
     {"key": "reactions_missing_formulas", "label": "Reactions: formulas you need to acquire",
      "group": "Reactions",

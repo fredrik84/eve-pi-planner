@@ -909,14 +909,25 @@ def _shopping_roots(rows: list[dict]) -> list[dict]:
     is genuinely the top of what is left to buy for.
     """
     groups: dict[tuple, list[dict]] = {}
+    chain_top: dict[float, int] = {}
     for r in rows:
         # Rounded to the millisecond: one insert writes one timestamp to every row it creates, so
         # this is an exact match in practice; the rounding only guards float round-tripping.
-        groups.setdefault((r.get("character_id"), round(float(r.get("created_at") or 0.0), 3)),
-                          []).append(r)
+        at = round(float(r.get("created_at") or 0.0), 3)
+        groups.setdefault((r.get("character_id"), at), []).append(r)
+        chain_top[at] = max(chain_top.get(at, 0), int(r.get("tier_order") or 0))
     roots: list[dict] = []
-    for rs in groups.values():
-        top = max(int(r.get("tier_order") or 0) for r in rs)
+    for (_cid, at), rs in groups.items():
+        # The top tier of the CHAIN, not of this character's share of it. Since the levelling pass
+        # started pooling a product across characters (`level_product_runs`), an intermediate can
+        # sit on a character that holds nothing else of its chain — where it would be the highest
+        # tier present, be mistaken for a chain of its own, and have its goo bought a second time
+        # on top of what the real top row's walk already covers.
+        #
+        # Still grouped per character as well, because an ORDER writes one timestamp across every
+        # host it uses: each host's top row is a real root, and merging them by timestamp alone
+        # would drop all but one of them from the list and under-buy.
+        top = chain_top.get(at, 0)
         roots.extend(r for r in rs if int(r.get("tier_order") or 0) == top)
     return roots
 
@@ -1046,10 +1057,13 @@ def reactions_shopping_list(include_orders: bool = False,
 
     # ...and the FORMULAS the same plan needs that the account does not hold. A shopping list is
     # where you go to buy things, and a formula you're short of blocks the plan far harder than a
-    # missing crate of goo — but it is a CONTRACT purchase, not a multibuy line, so it stays its
+    # missing crate of goo — but it is a separate purchase, not a multibuy line, so it stays its
     # own section and is deliberately not folded into `materials` or any cost total (the same
     # separation `missing_blueprints` keeps on the Industry side). Every row is asked about,
     # including chain tiers, since a stage you cannot install stops everything above it.
-    from app.reactions.library import missing_formulas, wanted_from_sequence
-    formulas = missing_formulas(context_id, wanted_from_sequence(assignments))
+    from app.reactions.library import missing_formulas, wanted_from_sequence, jobs_from_sequence
+    # A plan row is exactly one in-game job, so the row count per product IS how many formulas the
+    # plan needs at once — see `missing_formulas`' `jobs`.
+    formulas = missing_formulas(context_id, wanted_from_sequence(assignments),
+                                jobs=jobs_from_sequence(assignments))
     return {"materials": _materials_report(totals, reached, types), "formulas": formulas, **counts}
