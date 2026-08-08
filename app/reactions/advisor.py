@@ -30,13 +30,13 @@ from app.reactions._router import router
 from app.reactions.graph import (
     _load_goo_and_reached, _value_reaction_batch, _explode_chain_tiers,
     _build_opportunities, _ordered_chain_tiers, _load_reaction_graph, _fuel_block_ids,
-    reaction_stock_pool, tier_ranks,
+    reaction_stock_pool, tier_ranks, tidy_runs,
 )
 from app.reactions.settings import effective_reaction_settings
 from app.reactions.jobs import (
     ensure_industry_jobs_table, ensure_reaction_assignments_table,
     get_industry_jobs, reaction_capable, reaction_slots, _character_capacities,
-    formula_concurrency_caps, _cap_jobs, _parallel_stages_on,
+    formula_concurrency_caps, _cap_jobs, _parallel_stages_on, _tidy_runs_on,
 )
 
 log = logging.getLogger(__name__)
@@ -147,6 +147,10 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
     # One slot model (`reactions_parallel_stages`): a chain's stages reuse each other's slots, and
     # whatever is still idle once every suggestion is placed gets spent widening the slowest steps.
     peak_stages = _parallel_stages_on(context_id)
+    # Intermediate run counts are rounded to numbers a human can type (see tidy_runs). Computed
+    # HERE as well as at insert time so the wizard shows exactly what the plan will hold — a
+    # preview that says 27 and a plan that says 30 is worse than either number on its own.
+    tidy_on = _tidy_runs_on(context_id)
     committed_units = _committed_production_units()
     # Real daily traded volume (Jita/The Forge) per candidate — the market-absorption base. How much
     # you can realistically sell over the run period is trade VELOCITY × the period, not a single
@@ -394,7 +398,8 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
                     "type_id": tid, "name": types.get(tid, {}).get("name", str(tid)),
                     "runs": info["runs"],
                     "job_count": t_slots_used,
-                    "runs_per_job": math.ceil(info["runs"] / t_slots_used),
+                    "runs_per_job": (tidy_runs(math.ceil(info["runs"] / t_slots_used))
+                                     if tidy_on else math.ceil(info["runs"] / t_slots_used)),
                     "formula_cap": t_cap, "tier": stage,
                 }
                 chain_tiers.append(tier_row)
@@ -497,7 +502,9 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
         for s in widen_steps:
             row, jobs = s["row"], s["jobs"]
             row["job_count"] = jobs
-            row["runs_per_job"] = math.ceil(s["runs"] / jobs)
+            per = math.ceil(s["runs"] / jobs)
+            # A chain tier (no `reward` key) keeps its tidy number after widening too.
+            row["runs_per_job"] = tidy_runs(per) if (tidy_on and "reward" not in row) else per
         for s in widen_steps:
             if "reward" in s["row"]:            # a top-level suggestion, not a chain tier
                 s["row"]["runtime_hours"] = round((s["runs"] / s["jobs"]) * s["cycle_hours"], 1)

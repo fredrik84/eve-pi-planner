@@ -248,6 +248,35 @@ def main():
             check(after[RCF] == 1, f"and the product they feed is stage 2 (got {after[RCF]})")
             check(restage_plan_rows(CTX) == 0, "running it again does nothing — idempotent")
 
+        print("intermediate run counts are rounded to numbers a human can type:")
+        from app.reactions.graph import tidy_runs
+        check(tidy_runs(79) == 80 and tidy_runs(41) == 45 and tidy_runs(213) == 225,
+              f"79->80, 41->45, 213->225 (got {tidy_runs(79)}, {tidy_runs(41)}, {tidy_runs(213)})")
+        check(all(tidy_runs(n) == n for n in (1, 3, 7, 9)),
+              "anything under 10 runs is left exactly as it is — already easy to type")
+        check(all(tidy_runs(n) >= n for n in range(1, 3000)),
+              "NEVER rounds down — the stage above would come up short")
+        worst = max((tidy_runs(n) - n) / n for n in range(10, 3000))
+        check(worst <= 0.15, f"and never overshoots the requirement by more than 15% (worst {worst:.0%})")
+        check(all(tidy_runs(n) == n for n in (10, 100, 500, 2500)),
+              "a number that is already tidy is left alone")
+
+        print("...and the rows committed to the plan carry the tidy number:")
+        from app.reactions.jobs import _insert_assignment_rows
+        _reset(con)
+        _character(con)
+        now = time.time()
+        _insert_assignment_rows(con, CHAR, 501, "Rounded", 79, 1, 0.0, 0.0, 0, now, tidy=True)
+        _insert_assignment_rows(con, CHAR, 502, "Exact", 79, 1, 0.0, 0.0, 1, now, tidy=False)
+        con.commit()
+        got = {r["type_id"]: r["runs"] for r in con.execute(
+            "SELECT type_id, runs FROM pp_reaction_assignments WHERE character_id=?", (CHAR,))}
+        check(got.get(501) == 80, f"an intermediate row is rounded (got {got.get(501)})")
+        check(got.get(502) == 79,
+              f"the end product is NOT — its runs are what cost and profit were computed from "
+              f"(got {got.get(502)})")
+        _reset(con)
+
         print("it only ever moves `jobs`:")
         s = _step(1, 0, 50, 2.0, 1)
         before = {k: v for k, v in s.items() if k != "jobs"}

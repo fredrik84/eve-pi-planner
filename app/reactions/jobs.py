@@ -28,7 +28,7 @@ from app.reactions.settings import effective_reaction_settings
 from app.reactions.graph import (
     _load_goo_and_reached, _load_reaction_graph, _value_reaction_batch,
     _ordered_chain_tiers, _build_opportunities, _fuel_block_ids, reaction_stock_pool,
-    _shopping_roots, tier_ranks,
+    _shopping_roots, tier_ranks, tidy_runs,
 )
 
 
@@ -371,9 +371,19 @@ def reactions_lifetime(context_id: int = Depends(require_context)):
     return completions.lifetime(LEDGER, context_id)
 
 
+def _tidy_runs_on(context_id: int) -> bool:
+    """Gated: rounding buys a little surplus intermediate with real ISK, and it changes the numbers
+    on a plan people are already used to reading."""
+    try:
+        from app.features import feature_enabled_for
+        return feature_enabled_for("reactions_tidy_runs", context_id)
+    except Exception:
+        return False
+
+
 def _insert_assignment_rows(con, character_id: int, type_id: int, name: str, runs: float,
                              job_count: int, input_cost: float, reward: float, tier_order: int,
-                             now: float, order_id: int | None = None) -> None:
+                             now: float, order_id: int | None = None, tidy: bool = False) -> None:
     """One product's worth of a job commitment, split into `job_count` separate assignment rows
     (one per actual in-game job install — see assign_reaction's own docstring for why). Shared by
     assign_reaction (order_id always None there — no behavior change) and the customer-order
@@ -381,6 +391,12 @@ def _insert_assignment_rows(con, character_id: int, type_id: int, name: str, run
     between the two callers."""
     job_count = max(1, job_count)
     runs_per_job = math.ceil(runs / job_count)
+    # `tidy` is passed for INTERMEDIATE steps only. Their output is consumed by the stage above, so
+    # a little surplus is stock rather than waste — whereas the top-level product's run count is
+    # what the batch's cost, output and profit were all computed from, and moving it would make
+    # every one of those figures a lie. See `tidy_runs`.
+    if tidy:
+        runs_per_job = tidy_runs(runs_per_job)
     for _ in range(job_count):
         con.execute(
             "INSERT INTO pp_reaction_assignments "
@@ -794,9 +810,10 @@ def assign_reaction(req: AssignRequest, context_id: int = Depends(require_contex
                     detail=f"That needs {peak} reaction slots at once and this character has "
                            f"{slots}. Assign fewer jobs, or spread them across characters.")
 
+        tidy = _tidy_runs_on(context_id)
         for tier_order, tier in zip(tier_of, req.chain_tiers):
             _insert_assignment_rows(con, req.character_id, tier.type_id, tier.name, tier.runs,
-                                     tier.job_count, 0.0, 0.0, tier_order, now)
+                                     tier.job_count, 0.0, 0.0, tier_order, now, tidy=tidy)
 
         _insert_assignment_rows(con, req.character_id, req.type_id, req.name, req.runs,
                                  req.job_count, req.input_cost, req.reward, top_tier_order, now)
@@ -862,7 +879,8 @@ def adopt_orphan_job(req: AdoptOrphanRequest, context_id: int = Depends(require_
         for (tier_tid, info), tier_order in zip(ordered, ranks):
             _insert_assignment_rows(con, req.character_id, tier_tid,
                                      types.get(tier_tid, {}).get("name", str(tier_tid)),
-                                     info["runs"], 1, 0.0, 0.0, tier_order, now)
+                                     info["runs"], 1, 0.0, 0.0, tier_order, now,
+                                     tidy=_tidy_runs_on(context_id))
         _insert_assignment_rows(con, req.character_id, req.type_id,
                                  types.get(req.type_id, {}).get("name", str(req.type_id)),
                                  req.runs, 1, input_cost, reward,
@@ -1593,7 +1611,7 @@ def _allocate_and_insert(context_id: int, type_id: int, name: str, node: dict, r
                 _insert_assignment_rows(con, host["character_id"], tid,
                                          types.get(tid, {}).get("name", str(tid)),
                                          info["runs"], slots[i], 0.0, 0.0,
-                                         ranks[i], now, order_id)
+                                         ranks[i], now, order_id, tidy=_tidy_runs_on(context_id))
             _insert_assignment_rows(con, host["character_id"], type_id, name, share, slots[-1],
                                      unit_cost * share, 0.0,
                                      (max(ranks) + 1) if ranks else 0, now, order_id)

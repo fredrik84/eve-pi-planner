@@ -13,6 +13,7 @@ Find a section: `grep -n '^## ' docs/reactions.md` and read from that line — t
 - **What you already hold is not work (`reactions_use_stock`)** — how held intermediates shorten a chain, and the one place stock is deliberately not consulted
 - **One slot model: a chain's stages reuse a reactor (`reactions_parallel_stages`)** — why stages can't run in parallel, what reuses what, and where idle reactors go
 - **Absence becomes knowledge, but only after a paste (`app/reactions/library.py`)** — when an undeclared formula means "you don't own it", and what gets reported instead of planned
+- **Run counts you can type (`reactions_tidy_runs`)** — bounded rounding of intermediate runs, and why the end product is never rounded
 - **A stage is a DEPTH, not a position in a list** — why siblings share a stage, and how existing rows were repaired
 - **Knowing when the next stage can start (`chain_stage_state`)** — the ESI signal behind "stage 2 is ready"
 - **Stages on the dashboard are `tier_order`, shown absolute** — how chain order is rendered, and why the number is never re-ranked
@@ -156,6 +157,30 @@ which is why that exact string now resolves). So the import KEEPS what it could 
 (`pp_blueprint_paste_unresolved`, replaced per batch, deleted with the batch), and every report
 carries it for the UI to show beside the finding — an import status line that scrolled away days
 ago is not a warning.
+
+## Run counts you can type (`reactions_tidy_runs`)
+
+A stage's run counts come out of the chain maths exactly — 79 of one thing, 41 of another, 213 of a
+third — and every one of them is typed by hand into the industry window, one job at a time. Reading
+an exact figure per job is the friction the plan exists to remove.
+
+`tidy_runs()` rounds an INTERMEDIATE step's per-job run count UP to the next tidy number, taking the
+largest step (1000/500/250/100/50/25/10/5/2) that lands within **15%** of the true requirement:
+79 → 80, 41 → 45, 213 → 225, 137 → 150. Three rules make it safe:
+
+* **Never down.** The stage above consumes this one's output; coming up short means it cannot run.
+* **Never the end product.** Its run count is what the batch's cost, output value and profit were
+  all computed from — moving it would make every one of those figures wrong.
+* **Never below 10 runs.** "3 runs" is already easy, and rounding it to 5 is a 67% overshoot.
+
+Applied at `_insert_assignment_rows` (the one choke point for what gets committed) and mirrored in
+the wizard's own tier rows, so the preview and the plan show the same number. The surplus is stock,
+not waste — and with `reactions_use_stock` on, the next plan spends it.
+
+**The shopping list follows the plan, not the ideal.** `_explode_shopping_list` takes a `planned`
+map of what each intermediate row will really produce and buys for that where it exceeds the bare
+requirement, so a rounded-up job is a job the player can actually fill. It only ever raises the
+figure: a plan holding LESS than the requirement is a short plan, not a cheaper shopping run.
 
 ## A stage is a DEPTH, not a position in a list
 

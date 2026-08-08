@@ -81,6 +81,23 @@ def main():
     check(len(roots) == 2 and {r["character_id"] for r in roots} == {1, 2},
           f"each character's chain keeps its own root (got {len(roots)})")
 
+    print("the list buys for the runs the plan will ACTUALLY run, not the bare requirement:")
+    # Intermediate run counts get rounded up so they are typeable (tidy_runs); the materials for
+    # those extra runs have to be bought or the player installs a job they cannot fill.
+    from test_reaction_stock import _reached, TOP as G_TOP, MID as G_MID, GOO2 as G_GOO2
+    from app.reactions.graph import _explode_shopping_list
+    r = _reached()
+    exact, rounded = {}, {}
+    _explode_shopping_list(G_TOP, 100, r, exact)
+    _explode_shopping_list(G_TOP, 100, r, rounded, None, {G_MID: 10_000.0})
+    check(rounded.get(G_GOO2, 0) > exact.get(G_GOO2, 0),
+          "a planned intermediate above the requirement raises what its inputs cost")
+    lower = {}
+    _explode_shopping_list(G_TOP, 100, r, lower, None, {G_MID: 1.0})
+    check(lower.get(G_GOO2, 0) == exact.get(G_GOO2, 0),
+          "and a plan holding LESS than the requirement never lowers the list — that is a short "
+          "plan, not a cheaper one")
+
     print("edge cases don't throw:")
     check(_shopping_roots([]) == [], "no rows, no roots")
     check(len(_shopping_roots([{"character_id": 1, "type_id": TOP, "runs": 1,

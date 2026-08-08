@@ -128,6 +128,13 @@ stage stays ready. Fixing its dedupe fixed a live bug: `_process_context` only a
 to alerts with a `planet_id`, so BOTH existing reaction kinds re-sent on every 15-minute tick of
 every scheduler process. Alerts now carry their own `dedupe_id`. `test_alerts.py`.
 
+**Run counts tidied 2026-08-08** (`reactions_tidy_runs`), from "align the number of runs a bit
+better — it's all over the place and that makes it annoying to start the jobs": an intermediate
+step's per-job run count rounds UP to the largest tidy step within 15% of the requirement (79→80,
+41→45, 213→225), never down, never the end product, never under 10 runs. Applied at
+`_insert_assignment_rows` and mirrored in the wizard so preview and plan agree; the shopping list
+takes a `planned` map so it buys for the rounded runs rather than the bare requirement.
+
 **Still open:** a MANUAL "mark this stage done" for work ESI cannot see — a corp job installed by a
 character without the Factory_Manager role never appears in any job list we can read, so its stage
 can never complete on its own.
@@ -438,6 +445,7 @@ match any template we generate) is still unscoped.
 | 19b | Reaction plan STAGES on the dashboard: planned slots sort by `tier_order`, carry an `S<n>` badge, later stages dim/dash, and the "To install" checklist splits under stage banners. The number is `tier_order + 1` absolute, never re-ranked against what's still pending | 08-07 |
 | 16 | Dead Industry surface removed: the unrendered skill advisor (module, endpoint, flag, test), `/api/industry/to-install` and `/api/industry/skill-coverage`. No behaviour change; the checklist-vs-plan guard is now structural | 08-07 |
 | 20 | Clear all no longer strands a customer order: order rows are cleared AND the order's `assigned_runs` handed back (top row per chain, clamped at 0), with already-stranded orders repaired on the next assign. `test_clear_all_orders.py` | 08-07 |
+| 23b | Intermediate run counts rounded to typeable numbers (`reactions_tidy_runs`), bounded at 15% over, with the shopping list buying for the rounded plan | 08-08 |
 | 23 | Reaction stages are dependency DEPTH, not list position — siblings (Carbon Fiber / Oxy-Organic Solvents / Thermosetting Polymer) share one stage and run together, existing plans repaired in place, plus "stage N is ready to start" read off ESI job states | 08-08 |
 | 22 | Reactions shopping list stopped double-counting chains — only the top row of each assign is exploded, so a two-tier plan no longer asks for twice the goo. `test_shopping_roots.py` | 08-07 |
 | 21c | Reactions spend what you already hold (`reactions_use_stock`): an intermediate in an enabled source shortens or drops its stage and everything below it, in the plan and in the materials walk, consumed once per plan and always reported. `test_reaction_stock.py` | 08-07 |

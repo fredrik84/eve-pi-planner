@@ -621,7 +621,8 @@ def _take_from_stock(stock: dict[int, float] | None, type_id: int, units_needed:
 
 
 def _explode_shopping_list(type_id: int, units_needed: float, reached: dict, out: dict[int, float],
-                           stock: dict[int, float] | None = None):
+                           stock: dict[int, float] | None = None,
+                           planned: dict[int, float] | None = None):
     """Recursively break `units_needed` units of `type_id` down to raw moon goo / purchasable
     leaf materials, accumulating into `out`. A leaf (node["via"] is None) just needs that many
     units directly; a reaction product needs ceil(units_needed / its output_qty) actual reaction
@@ -630,6 +631,13 @@ def _explode_shopping_list(type_id: int, units_needed: float, reached: dict, out
 
     With a `stock` pool, units already in an enabled source are spent first at EVERY level: hold the
     intermediate and neither it nor the goo underneath it is shopped for."""
+    # What the PLAN will actually run of this step, when that is more than the chain strictly
+    # needs — intermediate run counts get rounded up to numbers a human can type (`tidy_runs`), and
+    # the materials for those extra runs have to be on the shopping list or the player installs a
+    # job they cannot fill. Only ever raises the figure; a plan short of the requirement is not
+    # something to quietly buy less for.
+    if planned:
+        units_needed = max(units_needed, float(planned.get(type_id, 0.0)))
     units_needed = _take_from_stock(stock, type_id, units_needed)
     if units_needed <= 0:
         return
@@ -641,7 +649,7 @@ def _explode_shopping_list(type_id: int, units_needed: float, reached: dict, out
     reaction_runs = math.ceil(units_needed / formula["output_qty"])
     for inp in formula["inputs"]:
         eff_qty = inp["quantity"] * (1 - REACTION_ME_REDUCTION) * reaction_runs
-        _explode_shopping_list(inp["type_id"], eff_qty, reached, out, stock)
+        _explode_shopping_list(inp["type_id"], eff_qty, reached, out, stock, planned)
 
 
 def _explode_chain_tiers(formula_inputs: list[dict], runs: int, reached: dict, tiers: dict[int, dict],
@@ -710,6 +718,43 @@ def _ordered_chain_tiers(formula_inputs: list[dict], runs: int, reached: dict,
     # arbitrary sequence, which the callers below then stamped as sequential tier_orders.
     return sorted(tier_runs.items(),
                   key=lambda kv: (kv[1]["depth"], reached.get(kv[0], {}).get("reaction_count", 0)))
+
+
+# Steps a run count is allowed to be rounded up to, largest first. The rule below takes the FIRST
+# one that lands within the overshoot budget, so a big number gets a big round step and a small one
+# gets a small step — 213 -> 225, 79 -> 80, 41 -> 45, 11 -> 12.
+_TIDY_STEPS = (1000, 500, 250, 100, 50, 25, 10, 5, 2)
+_TIDY_BUDGET = 0.15          # never overshoot the real requirement by more than this
+
+
+def tidy_runs(runs: int, budget: float = _TIDY_BUDGET) -> int:
+    """Round a run count UP to a number a human can type without checking, or leave it alone.
+
+    Why round at all: these numbers are entered by hand in the industry window, one job at a time,
+    and a stage of three products at 79 / 41 / 213 runs is three lookups every time you sit down to
+    install. Rounding is the difference between reading the plan and copying it.
+
+    Why round UP, never down: the next stage consumes this stage's output, and coming up short
+    means the stage above cannot run at all. Overshooting produces a little surplus, which is
+    material the account keeps — and with `reactions_use_stock` on, the surplus is spent by the
+    next plan rather than sitting there.
+
+    Why a BUDGET: the surplus is real ISK, so a tidy number is only worth it if it is nearly free.
+    Nothing rounds past 15% over the true requirement, and anything under 10 runs is left exactly
+    as it is — "3 runs" is already easy to type and rounding it to 5 would be a 67% overshoot.
+    """
+    runs = int(runs)
+    if runs < 10:
+        return runs
+    for step in _TIDY_STEPS:
+        if step >= runs:
+            continue                    # a step bigger than the number itself is not a rounding
+        up = -(-runs // step) * step    # ceil to the next multiple
+        if up == runs:
+            return runs                 # already a tidy number
+        if (up - runs) / runs <= budget:
+            return up
+    return runs
 
 
 def tier_ranks(ordered: list) -> list[int]:
@@ -868,11 +913,20 @@ def reactions_shopping_list(include_orders: bool = False,
     # ask the player to buy goo for an intermediate sitting in their hangar. Consumed once, so two
     # chains needing the same intermediate don't both claim it.
     pool = reaction_stock_pool(context_id)
+    # Units each planned intermediate row will actually produce, so the walk below buys for the
+    # rounded run counts rather than the bare requirement (see `_explode_shopping_list`'s `planned`).
+    planned: dict[int, float] = {}
+    for a in assignments:
+        node = reached.get(a["type_id"])
+        if node and node.get("via"):
+            planned[a["type_id"]] = planned.get(a["type_id"], 0.0) + a["runs"] * node["via"]["output_qty"]
     for a in _shopping_roots(assignments):
         node = reached.get(a["type_id"])
         if not node or node["via"] is None:
             continue  # shouldn't happen (assignments are always reaction products), skip defensively
         top_units = a["runs"] * node["via"]["output_qty"]
-        _explode_shopping_list(a["type_id"], top_units, reached, totals, pool)
+        # The root's own units come from its row; `planned` only ever raises what's BELOW it.
+        _explode_shopping_list(a["type_id"], top_units, reached, totals, pool,
+                               {k: v for k, v in planned.items() if k != a["type_id"]})
 
     return {"materials": _materials_report(totals, reached, types), **counts}

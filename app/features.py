@@ -305,6 +305,16 @@ FEATURE_REGISTRY = [
                     "Ferrofluid formula is one job, not ten. Chain tiers are unaffected (they run "
                     "in sequence), and a formula we have no evidence about is never capped.",
      "default": False},
+    {"key": "reactions_tidy_runs", "label": "Reactions: round intermediate runs to tidy numbers",
+     "group": "Reactions",
+     "description": "Round the run count of an INTERMEDIATE reaction up to a number you can type "
+                    "without checking — 79 stays 80, 41 becomes 45, 213 becomes 225 — instead of "
+                    "making you read an exact figure for every job. Never more than 15% over what "
+                    "the chain needs, never applied to the end product (its runs are what the "
+                    "cost and profit were computed from), and never rounded down, which would "
+                    "leave the next stage short. The extra output is stock, and gets spent by "
+                    "your next plan.",
+     "default": False},
     {"key": "reactions_use_stock", "label": "Reactions: skip stages you already have the materials for",
      "group": "Reactions",
      "description": "Count intermediates sitting in your enabled stock sources against a chain: "
