@@ -2158,7 +2158,8 @@ function _rxCreateOrder() {
 
 function _rxOpenOrderDetail(orderId) {
   document.getElementById('rxOrderDetailModal').style.display = '';
-  document.getElementById('rxOrderDetailContent').innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Loading…</div>';
+  document.getElementById('rxOrderDetailContent').innerHTML =
+    '<div class="pp-loading"><span class="pp-spinner"></span> Pricing this order against today\'s market…</div>';
   _rxFetchOrderDetail(orderId);
 }
 
@@ -2179,8 +2180,13 @@ async function _rxClearOrderAssignments(orderId) {
   if (!await ppConfirm('Free every reaction slot this order holds and hand its runs back, so you '
       + 'can assign it again? The order itself is kept. Jobs already running in-game keep running '
       + '— they show up as orphans you can add back to the plan.')) return;
+  // Say what is happening: the clear itself is quick, but the modal that follows re-prices the
+  // whole chain live, and a button that just sat there looked like nothing had happened.
+  const el = document.getElementById('rxOrderDetailContent');
+  if (el) el.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Freeing this order\'s slots…</div>';
   try {
     const res = await apiSend('DELETE', `/api/reactions/orders/${orderId}/assignments`);
+    if (el) el.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Slots freed — re-pricing the order…</div>';
     const running = (res && res.running_cleared) || 0;
     toast(`Freed ${res.cleared} planned job${res.cleared === 1 ? '' : 's'}; ${res.runs_returned.toLocaleString()} run${res.runs_returned === 1 ? '' : 's'} back to unassigned.`
       + (running ? ` ${running} was already running in-game and continues as an orphan.` : ''), 'info');
@@ -2188,7 +2194,10 @@ async function _rxClearOrderAssignments(orderId) {
     _rxLoadOrders();
     _rxLastDashboardData = null;
     _loadReactionsDashboard();
-  } catch (e) { toastError(e, 'Could not clear this order\'s jobs'); }
+  } catch (e) {
+    toastError(e, 'Could not clear this order\'s jobs');
+    _rxFetchOrderDetail(orderId);        // put the modal back rather than leaving it spinning
+  }
 }
 
 function _rxCloseOrderDetail() {

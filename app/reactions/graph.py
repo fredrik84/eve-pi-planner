@@ -4,7 +4,9 @@ walks the reaction graph to cost every reachable product (_resolve_reachable), v
 batch (_value_reaction_batch — the single source of truth for reaction economics), and builds the
 opportunity ranking + shopping lists. Depends on settings for pricing config; never on jobs/orders,
 so it imports first with no cycle."""
+import contextvars as _contextvars
 import math
+import time as _time
 
 from fastapi import Depends, HTTPException
 
@@ -576,6 +578,45 @@ def list_reaction_fuel_blocks(ctx: int = Depends(require_context)):
     return {"fuel_blocks": rows}
 
 
+# ── One request, one answer ────────────────────────────────────────────────────────────────────
+# The evidence layer (owned blueprints, the print floor, enabled stock, the paste library) is
+# genuinely expensive on a real account — fourteen characters' blueprint JSON, the whole asset
+# table, every observed job — and a single order report asked for it FIVE times: two stock pools,
+# the formula caps, and `missing_formulas` rebuilding the same blueprint evidence a second time.
+# Each answer is identical within one request, so this collapses them.
+#
+# Scoped to the REQUEST, not a TTL cache, and that distinction is the point: pasting a window or
+# re-scanning assets must show up on the very next page load, not in thirty seconds. A ContextVar
+# gives that for free — Starlette runs each request (sync endpoints included) in its own copied
+# context, so the store cannot leak between requests. The 5-second stamp is belt-and-braces for any
+# execution path that somehow reuses a context, and a direct call outside a request (every test in
+# this repo) simply gets a fresh store and no memoisation worth the name.
+_RX_MEMO: _contextvars.ContextVar = _contextvars.ContextVar("rx_request_memo", default=None)
+
+
+def begin_request_memo() -> None:
+    """Open a memo scope for THIS request. Called by the HTTP middleware in `app.main`, and by
+    nothing else — a scope nobody opened means no memoisation at all, which is deliberately what a
+    direct call gets (every test in this repo, and any background job)."""
+    _RX_MEMO.set({})
+
+
+def request_memo(key, build):
+    """Compute `build()` once per request for `key`, or just call it when no scope is open.
+
+    Scoped to the REQUEST rather than a TTL cache, and the distinction is the point: pasting a
+    window or re-scanning assets must show up on the very next page load, not in thirty seconds. It
+    also means a test that seeds rows and reads them back in the same breath sees its own writes,
+    which a time-based cache would quietly break.
+    """
+    store = _RX_MEMO.get()
+    if store is None:
+        return build()
+    if key not in store:
+        store[key] = build()
+    return store[key]
+
+
 def reaction_stock_pool(context_id: int) -> dict[int, float]:
     """{type_id: units} the account can actually spend — ENABLED asset sources only, the same pool
     every other read of stock in this app uses (`owned_quantities`).
@@ -590,14 +631,20 @@ def reaction_stock_pool(context_id: int) -> dict[int, float]:
     the honest reading is "this is what you hold right now", which is also what the player sees when
     they look in the hangar.
     """
-    try:
-        from app.features import feature_enabled_for
-        if not feature_enabled_for("reactions_use_stock", context_id):
+    def _build():
+        try:
+            from app.features import feature_enabled_for
+            if not feature_enabled_for("reactions_use_stock", context_id):
+                return {}
+            from app.industry.assets import owned_quantities
+            return {tid: q for tid, q in owned_quantities(context_id).items() if q > 0}
+        except Exception:
             return {}
-        from app.industry.assets import owned_quantities
-        return {tid: q for tid, q in owned_quantities(context_id).items() if q > 0}
-    except Exception:
-        return {}
+
+    # A COPY per caller, always: the pool is consumed as a plan is walked, and two callers in one
+    # request (an order report walks materials and stages separately) must each spend the holding
+    # once rather than share one draining dict.
+    return dict(request_memo(("stock_pool", context_id), _build))
 
 
 def _take_from_stock(stock: dict[int, float] | None, type_id: int, units_needed: float) -> float:

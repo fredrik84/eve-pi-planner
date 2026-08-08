@@ -41,6 +41,7 @@ from pydantic import BaseModel
 from app.sde import get_connection
 from app.esi import require_context
 from app.reactions._router import router
+from app.reactions.graph import request_memo
 
 FEATURE_KEY = "reactions_missing_formulas"
 
@@ -95,17 +96,27 @@ def held_formula_products(context_id: int) -> set[int]:
     have is a step they cannot run (which is the status quo), while the cost of missing one they do
     have is telling them to buy something already in their hangar.
     """
-    try:
-        from app.industry.blueprints import formula_print_floor, owned_blueprints
-        owned = owned_blueprints(context_id)
-        floor = formula_print_floor(context_id, owned)
-    except Exception:
-        return set()                  # evidence unavailable is evidence absent — see library_state
-    rx, _ = _reaction_index()
-    return (set(owned) | set(floor)) & set(rx)
+    def _build():
+        try:
+            from app.industry.blueprints import formula_print_floor, owned_blueprints
+            owned = owned_blueprints(context_id)
+            floor = formula_print_floor(context_id, owned)
+        except Exception:
+            return set()              # evidence unavailable is evidence absent — see library_state
+        rx, _ = _reaction_index()
+        return (set(owned) | set(floor)) & set(rx)
+
+    # Reads every character's blueprint JSON, the asset table and every observed job — and an order
+    # report asks for it twice over (here and in `formula_concurrency_caps`). Once per request.
+    return set(request_memo(("held_formulas", context_id), _build))
 
 
 def library_state(context_id: int) -> dict:
+    """Memoised per request — see `_library_state`."""
+    return request_memo(("library_state", context_id), lambda: _library_state(context_id))
+
+
+def _library_state(context_id: int) -> dict:
     """Whether this account's formula library can be read as COMPLETE, and the caveats on it.
 
     `{complete, formulas_declared, batches, unresolved: [{name, batch_name}]}`.

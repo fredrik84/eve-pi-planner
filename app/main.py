@@ -50,6 +50,21 @@ from app.groups import router as groups_router
 from app.markets import router as markets_router
 
 app = FastAPI(title="EVE PI Planner")
+
+
+@app.middleware("http")
+async def _reactions_request_memo(request, call_next):
+    """Open a per-request memo scope for the reactions evidence layer.
+
+    That layer (owned blueprints, the print floor, enabled stock, the pasted library) is expensive
+    on a real account and identical within one request, and a single customer-order report asked
+    for it five times over. The scope is opened HERE rather than inside the package so that a
+    direct call — every test, and any background job — gets no memoisation and therefore always
+    sees its own writes. See `app.reactions.graph.request_memo`.
+    """
+    from app.reactions.graph import begin_request_memo
+    begin_request_memo()
+    return await call_next(request)
 app.include_router(analyzer_router)          # the original Find-Buildables analyzer
 app.include_router(planetary_router)
 app.include_router(esi_router)

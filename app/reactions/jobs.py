@@ -28,7 +28,7 @@ from app.reactions.settings import effective_reaction_settings
 from app.reactions.graph import (
     _load_goo_and_reached, _load_reaction_graph, _value_reaction_batch,
     _ordered_chain_tiers, _build_opportunities, _fuel_block_ids, reaction_stock_pool,
-    _shopping_roots, tier_ranks, tidy_runs,
+    _shopping_roots, tier_ranks, tidy_runs, request_memo,
 )
 
 
@@ -1491,6 +1491,12 @@ def _formula_caps_on(context_id: int) -> bool:
 
 
 def formula_concurrency_caps(context_id: int) -> dict[int, int]:
+    """Memoised per request — see `_formula_concurrency_caps` for the rules it applies."""
+    return dict(request_memo(("formula_caps", context_id),
+                             lambda: _formula_concurrency_caps(context_id)))
+
+
+def _formula_concurrency_caps(context_id: int) -> dict[int, int]:
     """reaction product_type_id -> how many jobs of that product may run AT ONCE, for the products
     we have evidence about. **A MISSING KEY MEANS UNKNOWN, and unknown never refuses** — the same
     rule `_assigned_slot_capacity` follows, and the reason this returns a sparse map rather than a
@@ -1661,10 +1667,37 @@ def _allocate_and_insert(context_id: int, type_id: int, name: str, node: dict, r
     if chain_caps:
         hosts = hosts[:max(1, min(chain_caps.values()))]
 
-    capacity = sum(h["free_slots"] for h in hosts)
-    shares = [int(runs_needed * h["free_slots"] / capacity) for h in hosts]
-    for i in range(runs_needed - sum(shares)):      # rounding remainder, roomiest first
-        shares[i % len(hosts)] += 1
+    # How the order's runs are split across the characters that will run it.
+    #
+    # Proportional-to-free-slots is what this did, and it is optimal for pure throughput: the
+    # roomiest character does the most work, everybody finishes around the same time. It is also
+    # what produced "125 runs for one character, 100 for another, 75 for another" — three different
+    # numbers to read and type for the SAME product, on an order the player installs character by
+    # character. That cost is paid every single time the order is installed.
+    #
+    # An EVEN split makes every host's chain identical: same runs, same jobs, same numbers, one
+    # routine repeated. The runs cannot simply be levelled afterwards the way `level_stage_runs`
+    # levels them within a character, because a chain's intermediate feeds the stage above it ON
+    # THAT CHARACTER — this package deliberately does not model shipping half-finished goods
+    # between hangars — so a host given fewer runs than its own top tier consumes is a broken plan,
+    # not an untidy one. Making the shares equal at the source is the only version that is both
+    # tidy and correct.
+    #
+    # The trade-off, stated: a character with fewer free slots runs the same work in fewer jobs and
+    # so takes longer, where the proportional split would have given it less to do. Capacity it
+    # cannot use is left for another order rather than being spent making this one uneven.
+    uniform = _parallel_stages_on(context_id)
+    if uniform:
+        hosts = hosts[:max(1, min(len(hosts), runs_needed))]
+        base, extra = divmod(runs_needed, len(hosts))
+        if base == 0:                               # fewer runs than hosts — one run each, no more
+            hosts, base, extra = hosts[:runs_needed], 1, 0
+        shares = [base + (1 if i < extra else 0) for i in range(len(hosts))]
+    else:
+        capacity = sum(h["free_slots"] for h in hosts)
+        shares = [int(runs_needed * h["free_slots"] / capacity) for h in hosts]
+        for i in range(runs_needed - sum(shares)):  # rounding remainder, roomiest first
+            shares[i % len(hosts)] += 1
 
     now = _time.time()
     unit_cost = node.get("unit_cost", 0.0) + node.get("job_cost", 0.0)
@@ -1691,7 +1724,12 @@ def _allocate_and_insert(context_id: int, type_id: int, name: str, node: dict, r
             for i, tid in enumerate([t for t, _ in tiers] + [type_id]):
                 if tid in left:
                     caps[i] = _cap_jobs(max(1, left[tid] - after), caps[i])
-            slots = _fit_chain_slots(works, caps, host["free_slots"])
+            # One layout for every host when the shares are even: the same work in the same number
+            # of jobs means the same runs-per-job everywhere, which is the point of the even split.
+            # Bounded by the SMALLEST host, since a layout one of them cannot install is not a
+            # layout. Per-host formula limits still apply on top (`caps` above).
+            budget = min(h["free_slots"] for h in hosts) if uniform else host["free_slots"]
+            slots = _fit_chain_slots(works, caps, budget)
             # `_fit_chain_slots` minimises the SUM of the tier durations, which was the right
             # objective while every tier was its own stage. Now that siblings share one, what gates
             # the stage above is the LAST of them to land — so re-balance within each stage the
