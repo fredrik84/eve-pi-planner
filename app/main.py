@@ -54,15 +54,15 @@ app = FastAPI(title="EVE PI Planner")
 
 @app.middleware("http")
 async def _reactions_request_memo(request, call_next):
-    """Open a per-request memo scope for the reactions evidence layer.
+    """Open a per-request memo scope for the expensive evidence layers.
 
     That layer (owned blueprints, the print floor, enabled stock, the pasted library) is expensive
     on a real account and identical within one request, and a single customer-order report asked
     for it five times over. The scope is opened HERE rather than inside the package so that a
     direct call — every test, and any background job — gets no memoisation and therefore always
-    sees its own writes. See `app.reactions.graph.request_memo`.
+    sees its own writes. See `app.cache.request_memo`.
     """
-    from app.reactions.graph import begin_request_memo
+    from app.cache import begin_request_memo
     begin_request_memo()
     return await call_next(request)
 app.include_router(analyzer_router)          # the original Find-Buildables analyzer

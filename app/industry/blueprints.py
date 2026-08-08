@@ -21,6 +21,7 @@ from app.sde import get_connection, ensure_once, add_columns
 from app import esi_http
 from app.esi import require_context, BLUEPRINTS_SCOPE, CORP_INDUSTRY_JOBS_SCOPE
 
+from app.cache import request_memo
 from app.industry._router import router
 from app.industry.char_cache import refresh_character_cache
 
@@ -395,6 +396,15 @@ def owned_blueprints(context_id: int) -> dict[int, dict]:
     `formula_print_floor` reads it to keep the stock/observed evidence layer from adding a second
     count of the same physical formula on top of the declared one.
     """
+    return dict(request_memo(("owned_blueprints", context_id),
+                             lambda: _owned_blueprints(context_id)))
+
+
+def _owned_blueprints(context_id: int) -> dict[int, dict]:
+    """The real read — memoised per request by `owned_blueprints`. On an account with fourteen
+    characters this parses fourteen blueprint JSON blobs and indexes the whole `blueprints` table,
+    and a single reactions order report asked for it twice over (the formula cap and the
+    missing-formula check each rebuilt it), on top of every Industry plan path that wants it."""
     ensure_char_blueprints_table()
     con = get_connection()
     try:
@@ -774,8 +784,10 @@ def formula_print_floor(context_id: int, owned: dict[int, dict] | None = None) -
          negative is clamped to 0 and the caller's own count stands).
       d. no evidence at all → nothing here, and `_print_limits` leaves the type uncapped.
     """
-    buckets = _formula_stock_buckets(context_id)
-    observed = observed_formula_prints(context_id)
+    buckets = request_memo(("formula_buckets", context_id),
+                           lambda: _formula_stock_buckets(context_id))
+    observed = request_memo(("observed_formulas", context_id),
+                            lambda: observed_formula_prints(context_id))
     declared = declared_products(owned)
     out: dict[int, int] = {}
     for prod in set(buckets) | set(observed):

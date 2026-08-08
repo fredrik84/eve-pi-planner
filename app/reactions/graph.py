@@ -13,7 +13,8 @@ from fastapi import Depends, HTTPException
 from app.sde import get_connection, load_pi_data
 from app.markets import resolve_market_data
 from app.industry_cost import fetch_system_cost_index, fetch_adjusted_prices
-from app.cache import cache_get_json, cache_set_json
+from app.cache import (cache_get_json, cache_set_json,  # noqa: F401 — re-exported
+                       begin_request_memo, request_memo)
 from app.esi import require_context
 from app.groups import member_group
 
@@ -641,32 +642,6 @@ def list_reaction_fuel_blocks(ctx: int = Depends(require_context)):
 # context, so the store cannot leak between requests. The 5-second stamp is belt-and-braces for any
 # execution path that somehow reuses a context, and a direct call outside a request (every test in
 # this repo) simply gets a fresh store and no memoisation worth the name.
-_RX_MEMO: _contextvars.ContextVar = _contextvars.ContextVar("rx_request_memo", default=None)
-
-
-def begin_request_memo() -> None:
-    """Open a memo scope for THIS request. Called by the HTTP middleware in `app.main`, and by
-    nothing else — a scope nobody opened means no memoisation at all, which is deliberately what a
-    direct call gets (every test in this repo, and any background job)."""
-    _RX_MEMO.set({})
-
-
-def request_memo(key, build):
-    """Compute `build()` once per request for `key`, or just call it when no scope is open.
-
-    Scoped to the REQUEST rather than a TTL cache, and the distinction is the point: pasting a
-    window or re-scanning assets must show up on the very next page load, not in thirty seconds. It
-    also means a test that seeds rows and reads them back in the same breath sees its own writes,
-    which a time-based cache would quietly break.
-    """
-    store = _RX_MEMO.get()
-    if store is None:
-        return build()
-    if key not in store:
-        store[key] = build()
-    return store[key]
-
-
 def reaction_stock_pool(context_id: int) -> dict[int, float]:
     """{type_id: units} the account can actually spend — ENABLED asset sources only, the same pool
     every other read of stock in this app uses (`owned_quantities`).

@@ -92,3 +92,32 @@ def cache_mset_json(items: dict, ttl: int = 300):
 
 def charlist_key(context_id: int) -> str:
     return f"charlist:{context_id}"
+
+
+# ── Per-request memo ───────────────────────────────────────────────────────────────────────────
+# Lives here rather than in either feature package because BOTH use it: the reactions evidence
+# layer and app/industry's blueprint reads are the same expensive queries, and app/industry must
+# not import app/reactions (the dependency runs the other way).
+#
+# Scoped to the request, never a TTL: a paste or an asset rescan has to show up on the very next
+# page load, and a test that seeds rows and reads them back must see its own writes. The scope is
+# opened by middleware in app.main, so a direct call — every test, any background job — gets no
+# memoisation at all.
+import contextvars as _contextvars
+
+_REQUEST_MEMO: _contextvars.ContextVar = _contextvars.ContextVar("pp_request_memo", default=None)
+
+
+def begin_request_memo() -> None:
+    """Open a memo scope for THIS request. Called by the HTTP middleware and nothing else."""
+    _REQUEST_MEMO.set({})
+
+
+def request_memo(key, build):
+    """Compute `build()` once per request for `key`, or just call it when no scope is open."""
+    store = _REQUEST_MEMO.get()
+    if store is None:
+        return build()
+    if key not in store:
+        store[key] = build()
+    return store[key]
