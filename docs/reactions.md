@@ -323,9 +323,15 @@ So there is one setting, `get_job_target`, in its own per-account table:
 
 | mode | means | run counts | finish times |
 | --- | --- | --- | --- |
-| `days` | every job runs about this long | differ per product (a 6h reaction gets half the runs of a 3h one) | **land together** |
+| `days` | **the whole batch is done in about this long** — split across as many reactors as that takes | differ per product (a 6h reaction gets half the runs of a 3h one) | **land together** |
 | `runs` | every job carries about this run count | the same everywhere | differ per product |
 | `auto` | no opinion — the default | levelled per product | never longer than the stage's longest job already planned |
+
+**`days` is a makespan, not a per-job length** — confirmed with the user 2026-08-08. "5 days" is
+"I want to come back in 5 days and collect it", so the work is spread over more, shorter jobs until
+it fits that window. Where the free reactors cannot reach it, the jobs land on the shortest length
+those reactors can do and nothing is said about it (also the user's call: they would rather have
+the nearest achievable plan than a warning).
 
 It is a **target, not a ceiling**: jobs grow to fill it, which is what lands a stage together and
 keeps the number of logins down. The surplus budget and the 3×-per-chain ceiling still bound what
@@ -382,8 +388,12 @@ reintroducing:
   alone (3 runs beside 1000 has no shared count that isn't mostly waste);
 * every product in a stage was sized against the character's WHOLE free-slot pool, so two products
   each promised the same four reactors and the plan asked for eight — resolved by dropping one
-  product from the pass, which left it showing its old numbers. The pool is now split between the
-  products that character holds in that stage;
+  product from the pass, which left it showing its old numbers. **A stage is now solved as a
+  whole:** size it, look at what each character was promised, and where that exceeds what it has,
+  force the greediest product onto a longer run count (fewer jobs) and solve again. Run counts only
+  rise, so it settles. Splitting the pool evenly instead (`free // products`) was tried and was
+  worse — it handed each product one reactor when one of them needed four, which is what made a
+  5-day target come out as 94-run jobs;
 * and the per-product pick inside the stage search took the LARGEST count that fit, paying eight
   runs of goo for 8 jobs of 36 where 8 jobs of 35 was the same layout.
 

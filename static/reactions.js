@@ -576,13 +576,17 @@ function _rxRenderJobTarget() {
   valEl.min = t.mode === 'runs' ? '1' : '0.5';
   if (t.mode !== 'auto') valEl.value = t.mode === 'runs' ? Math.round(t.value) : t.value;
   if (t.mode === 'days') {
-    // The run count a window buys is per PRODUCT — the standard 3h reaction gets twice what a 6h
-    // one does — so state the common case rather than pretending there is a single answer.
-    hintEl.textContent = `≈ ${Math.floor((t.hours || 0) / _RX_STD_CYCLE_H)} runs a job on a 3-hour `
-      + 'reaction, half that on a 6-hour one. Every job of a stage finishes together.';
+    // The window is how long until the WHOLE batch is done, so it is split across as many reactors
+    // as that takes. What it buys per job is per PRODUCT — a 3h reaction gets twice the runs of a
+    // 6h one and the two still land together — so state the common case, not a single answer.
+    hintEl.textContent = `The whole batch finishes in about ${t.value} day${t.value === 1 ? '' : 's'}`
+      + `: ≈ ${Math.floor((t.hours || 0) / _RX_STD_CYCLE_H)} runs a job on a 3-hour reaction, half `
+      + 'that on a 6-hour one, in as many jobs as that takes. If your free reactors can\'t reach it, '
+      + 'jobs land on the shortest length they can do.';
   } else if (t.mode === 'runs') {
-    hintEl.textContent = `≈ ${(t.value * _RX_STD_CYCLE_H / 24).toFixed(1)} days a job on a 3-hour `
-      + 'reaction, twice that on a 6-hour one. Same number everywhere, different finish times.';
+    hintEl.textContent = `Every job carries ${Math.round(t.value)} runs — ≈ `
+      + `${(t.value * _RX_STD_CYCLE_H / 24).toFixed(1)} days on a 3-hour reaction, twice that on a `
+      + '6-hour one. Same number everywhere, different finish times.';
   } else {
     hintEl.textContent = 'No opinion — jobs are levelled to one run count per product, and never '
       + 'made to run longer than the longest job already planned in their stage.';

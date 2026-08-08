@@ -699,7 +699,8 @@ def _typeable(runs: int) -> bool:
 
 def _level_options(totals: list[int], caps: list[int], max_runs: int,
                     budget: float = _LEVEL_BUDGET,
-                    group_max: float = _LEVEL_GROUP_MAX) -> list[dict]:
+                    group_max: float = _LEVEL_GROUP_MAX,
+                    min_runs: int = 0) -> list[dict]:
     """Every run count ONE product could carry on EVERY one of its jobs, and what each costs.
 
     `totals[i]` is what chain *i* needs of this product and `caps[i]` the most jobs the character
@@ -741,7 +742,9 @@ def _level_options(totals: list[int], caps: list[int], max_runs: int,
                 cands.add(-(-r // step) * step)
     out: list[dict] = []
     for r in sorted(cands):
-        if r < 1 or r > max_runs:
+        # `min_runs` is the caller giving ground: the stage solve raises it when a character was
+        # promised more reactors than it has, since a longer run count is fewer jobs.
+        if r < max(1, min_runs) or (r > max_runs and r > min_runs):
             continue
         jobs = [max(1, -(-int(t) // r)) for t in totals]
         if any(j > c for j, c in zip(jobs, caps)):
@@ -764,7 +767,7 @@ def _level_options(totals: list[int], caps: list[int], max_runs: int,
     # The per-chain ceiling still applies, and is the one thing that can genuinely leave a product
     # alone: 3 runs on one chain beside 1000 on another has no shared count that isn't mostly
     # waste, and inventing one would be worse than two honest numbers.
-    floor = max(1, max(-(-int(t) // max(1, c)) for t, c in zip(totals, caps)))
+    floor = max(1, min_runs, max(-(-int(t) // max(1, c)) for t, c in zip(totals, caps)))
     jobs = [max(1, -(-int(t) // floor)) for t in totals]
     if any(j * floor > max(group_max * int(t), 10) for j, t in zip(jobs, totals)):
         return []
@@ -936,34 +939,62 @@ def level_product_runs(context_id: int) -> int:
             (int(r["runs"] or 0) * cycles.get(int(r["type_id"]), 1.0)
              for by_chain in by_product.values() for rs in by_chain.values() for r in rs),
             default=0.0)
-        # A character's free reactors are ONE pool, and every product in the stage would otherwise
-        # be sized against all of them — so two products each promised the same four slots and the
-        # plan asked for eight. Split the pool between the products that character actually holds
-        # in this stage: conservative (a product may not use its share) but it means no product has
-        # to be DROPPED to make the arithmetic fit, which is what used to happen and left the
-        # dropped one showing three numbers.
+        # A character's reactors are ONE pool and every product in the stage draws from it, so the
+        # stage has to be solved as a whole: size it, look at what each character was actually
+        # promised, and where that exceeds what it has, force the greediest product onto a LONGER
+        # run count — fewer jobs — and solve again. Run counts only ever rise here, so it settles.
+        #
+        # Two earlier answers to this were both wrong. Dropping the over-committed product from the
+        # pass left it showing its old three numbers. Splitting the pool evenly between the products
+        # (free // products) handed each of them one reactor when one of them needed four, which is
+        # what made a "5 days" target come out as 94-run jobs.
         #
         # Per stage rather than across all of them, which is right under the one-slot model: a
         # character's load is its busiest stage, so growth in stage 0 and stage 1 does not add up.
-        products_per_char: dict[int, int] = {}
+        budget: dict[int, int] = {}
         for by_chain in by_product.values():
-            for cid in {c[0] for c in by_chain}:
-                products_per_char[cid] = products_per_char.get(cid, 0) + 1
-        share = {cid: free.get(cid, 0) // max(1, n) for cid, n in products_per_char.items()}
+            for chain, rs in by_chain.items():
+                budget[chain[0]] = budget.get(chain[0], 0) + len(rs)
+        for cid in list(budget):
+            budget[cid] += free.get(cid, 0)
+
+        floor_runs: dict[int, int] = {}     # per product, raised when a character is over-promised
+        layout: dict[int, dict] = {}
         products: dict[int, dict] = {}
-        for tid, by_chain in by_product.items():
-            cyc = cycles.get(tid, 1.0)
-            chains = sorted(by_chain)
-            totals = [sum(int(r["runs"] or 0) for r in by_chain[c]) for c in chains]
-            caps = [len(by_chain[c]) + share.get(c[0], 0) for c in chains]
-            chosen = _target_runs(target, cyc)
-            if chosen:
-                max_runs = chosen
-            else:
-                max_runs = int(stage_cap_hours / cyc) if cyc > 0 else max(totals, default=0)
-            products[tid] = {"cycle": cyc, "chains": chains,
-                             "options": _level_options(totals, caps, max_runs)}
-        for tid, opt in _choose_stage_layout(products, prefer_tidy).items():
+        for _attempt in range(8):
+            products = {}
+            for tid, by_chain in by_product.items():
+                cyc = cycles.get(tid, 1.0)
+                chains = sorted(by_chain)
+                totals = [sum(int(r["runs"] or 0) for r in by_chain[c]) for c in chains]
+                caps = [len(by_chain[c]) + free.get(c[0], 0) for c in chains]
+                chosen = _target_runs(target, cyc)
+                if chosen:
+                    max_runs = chosen
+                else:
+                    max_runs = int(stage_cap_hours / cyc) if cyc > 0 else max(totals, default=0)
+                products[tid] = {"cycle": cyc, "chains": chains,
+                                 "options": _level_options(totals, caps, max_runs,
+                                                            min_runs=floor_runs.get(tid, 0))}
+            layout = _choose_stage_layout(products, prefer_tidy)
+            load: dict[int, int] = {}
+            per_product_load: dict[int, dict[int, int]] = {}
+            for tid, opt in layout.items():
+                for chain, jobs in zip(products[tid]["chains"], opt["per_group"]):
+                    load[chain[0]] = load.get(chain[0], 0) + jobs
+                    per_product_load.setdefault(chain[0], {})[tid] = \
+                        per_product_load.get(chain[0], {}).get(tid, 0) + jobs
+            over = [cid for cid, n in load.items() if n > budget.get(cid, 0)]
+            if not over:
+                break
+            # The greediest product on the most over-promised character gives ground first.
+            worst_cid = max(over, key=lambda cid: load[cid] - budget.get(cid, 0))
+            worst_tid = max(per_product_load[worst_cid], key=lambda t: per_product_load[worst_cid][t])
+            nxt = layout[worst_tid]["runs"] + 1
+            if nxt <= floor_runs.get(worst_tid, 0):
+                break                       # no room left to give — take what we have
+            floor_runs[worst_tid] = nxt
+        for tid, opt in layout.items():
             for chain, jobs in zip(products[tid]["chains"], opt["per_group"]):
                 plan.append(((stage, tid), chain, by_product[tid][chain], opt["runs"], jobs))
 
@@ -1053,7 +1084,8 @@ def _typeable(runs: int) -> bool:
 
 def _level_options(totals: list[int], caps: list[int], max_runs: int,
                     budget: float = _LEVEL_BUDGET,
-                    group_max: float = _LEVEL_GROUP_MAX) -> list[dict]:
+                    group_max: float = _LEVEL_GROUP_MAX,
+                    min_runs: int = 0) -> list[dict]:
     """Every run count ONE product could carry on EVERY one of its jobs, and what each costs.
 
     `totals[i]` is what chain *i* needs of this product and `caps[i]` the most jobs the character
@@ -1095,7 +1127,9 @@ def _level_options(totals: list[int], caps: list[int], max_runs: int,
                 cands.add(-(-r // step) * step)
     out: list[dict] = []
     for r in sorted(cands):
-        if r < 1 or r > max_runs:
+        # `min_runs` is the caller giving ground: the stage solve raises it when a character was
+        # promised more reactors than it has, since a longer run count is fewer jobs.
+        if r < max(1, min_runs) or (r > max_runs and r > min_runs):
             continue
         jobs = [max(1, -(-int(t) // r)) for t in totals]
         if any(j > c for j, c in zip(jobs, caps)):
@@ -1118,7 +1152,7 @@ def _level_options(totals: list[int], caps: list[int], max_runs: int,
     # The per-chain ceiling still applies, and is the one thing that can genuinely leave a product
     # alone: 3 runs on one chain beside 1000 on another has no shared count that isn't mostly
     # waste, and inventing one would be worse than two honest numbers.
-    floor = max(1, max(-(-int(t) // max(1, c)) for t, c in zip(totals, caps)))
+    floor = max(1, min_runs, max(-(-int(t) // max(1, c)) for t, c in zip(totals, caps)))
     jobs = [max(1, -(-int(t) // floor)) for t in totals]
     if any(j * floor > max(group_max * int(t), 10) for j, t in zip(jobs, totals)):
         return []
