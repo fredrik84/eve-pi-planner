@@ -359,11 +359,33 @@ at the standard 3-hour reaction and says so.
 
 **What it may not do.** A chain's intermediate is consumed by the job above it *on the same
 character*, so a chain's requirement is a floor and work never moves between characters — only the
-split changes. The **top row of every chain is untouched**: its run count is what the batch's cost,
-output value and profit were computed from, and what a customer order gives back when cancelled.
-And a chain never loses its last row of a product, because `chain_stage_state` reads readiness per
-chain: a chain that stopped mentioning a product it is waiting on would announce the stage above as
-ready while those jobs were still running.
+split changes. A row committed to a **customer order** is never re-shaped: its run count is the
+batch that order was quoted on, and cancelling hands exactly those runs back
+(`give_back_order_runs`). And a chain never loses its last row of a product, because
+`chain_stage_state` reads readiness per chain: a chain that stopped mentioning a product it is
+waiting on would announce the stage above as ready while those jobs were still running.
+
+**A speculative chain's TOP row is levelled too** — it was excluded until 2026-08-08, and that is
+what left a product showing three numbers after the pass had run. The same product is an
+intermediate under one chain and a standalone job to sell on the next character, and the player
+types both; levelling one and not the other read the row's position in a chain as if it were a
+property of the product. Its `input_cost`/`reward` scale with the runs (both are linear in them),
+so the plan's cost and profit stay true.
+
+**Three ways it used to quietly do nothing**, all fixed the same day and all worth not
+reintroducing:
+
+* a product whose chains had no affordable common count was left alone entirely. Now it falls back
+  to the smallest count every chain can be split into with the reactors it has — that count always
+  exists, which is what makes one number per product a property of this pass rather than something
+  it manages when the arithmetic is kind. Only the 3×-per-chain ceiling can still leave a product
+  alone (3 runs beside 1000 has no shared count that isn't mostly waste);
+* every product in a stage was sized against the character's WHOLE free-slot pool, so two products
+  each promised the same four reactors and the plan asked for eight — resolved by dropping one
+  product from the pass, which left it showing its old numbers. The pool is now split between the
+  products that character holds in that stage;
+* and the per-product pick inside the stage search took the LARGEST count that fit, paying eight
+  runs of goo for 8 jobs of 36 where 8 jobs of 35 was the same layout.
 
 That last rule is also the limit. Two separate chains on ONE character still get a job each rather
 than sharing one, even though the output is fungible and lands in the same hangar. Sharing needs

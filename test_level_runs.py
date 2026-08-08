@@ -35,6 +35,7 @@ from app.reactions.jobs import (_choose_stage_layout, _level_options,    # noqa:
 CTX = -98794
 CHARS = [(-9371, "Chislen"), (-9372, "Sajkisen414"), (-9373, "Nuori"), (-9374, "Ekaoni")]
 CF, OOS, RCF = 57453, 57454, 57455       # Carbon Fiber, Oxy-Organic Solvents, the product above
+TP = 57456                               # Thermosetting Polymer — the third sibling of that stage
 FLAG = "reactions_level_runs"
 
 failures = []
@@ -211,9 +212,13 @@ def main():
             check(per_char.get(cid, 0) >= 1, f"{name} keeps at least one Carbon Fiber job")
         check(sum(per_char.get(c, 0) for c, _ in CHARS) * counts[0] <= 1.15 * 1395,
               "the rounding-up surplus stays inside 15%")
-        tops = [r for r in after if r["type_id"] == RCF]
-        check(len(tops) == 4 and sorted(r["runs"] for r in tops) == [30, 38, 38, 40],
-              "the top row of every chain — its commitment — is untouched")
+        # The product a chain is FOR gets one number too. It did not until 2026-08-08, and that
+        # exclusion is what left a product showing three numbers after the pass had run: the same
+        # product is an intermediate under one chain and a standalone job on the next character,
+        # and the player types both.
+        tops = sorted({r["runs"] for r in after if r["type_id"] == RCF})
+        check(len(tops) == 1, f"the product at the top of a chain is levelled as well (got {tops})")
+        check(tops[0] >= 40, f"...never below what the biggest of them asked for (got {tops[0]})")
         check(level_product_runs(CTX) == 0, "running it again writes nothing — idempotent")
 
         print("a stage is never made SLOWER than it already was:")
@@ -277,6 +282,98 @@ def main():
               "...and applies it AFTER the stage-align pass, which would otherwise redistribute it")
         con.execute("DELETE FROM pp_reaction_job_target WHERE context_id=?", (CTX,))
         con.commit()
+
+        print("the reported 8-character plan comes out with ONE number per product:")
+        # Pasted off the dashboard 2026-08-08, after the pass had supposedly run: Thermosetting
+        # Polymer at 100/125/175, Carbon Fiber at 90/100/125. Three numbers on two products, and
+        # the reasons were structural — a standalone job is the top of its own chain (excluded from
+        # levelling at the time), and a character whose free reactors ran out had its product
+        # dropped from the pass entirely rather than levelled to a bigger count.
+        REPORTED = [  # character -> [(type_id, total runs, jobs)] exactly as it was on screen
+            ("Chislen", [(CF, 375, 3), (OOS, 35, 1), (TP, 375, 3)]),
+            ("ekaoni", [(CF, 300, 4), (OOS, 30, 1), (TP, 300, 3)]),
+            ("Mimonama", [(CF, 180, 2), (OOS, 18, 1), (TP, 175, 1)]),
+            ("Nuori", [(CF, 360, 4), (OOS, 35, 1), (TP, 360, 4)]),
+            ("sajkisen", [(CF, 360, 4), (OOS, 35, 1), (TP, 360, 4)]),
+            ("Sarmaras", [(CF, 180, 2), (OOS, 18, 1), (TP, 175, 1)]),
+            ("Uittaras", [(CF, 180, 2), (OOS, 18, 1), (TP, 175, 1)]),
+            ("Vauhilen", [(CF, 180, 2), (OOS, 18, 1), (TP, 175, 1)]),
+        ]
+
+        def _build_reported():
+            for i, (name, _rows) in enumerate(REPORTED):
+                con.execute("DELETE FROM pp_reaction_assignments WHERE character_id=?", (-9500 - i,))
+                con.execute("DELETE FROM pp_char_industry_jobs WHERE character_id=?", (-9500 - i,))
+            con.execute("DELETE FROM pp_characters WHERE context_id=?", (CTX,))
+            con.execute("DELETE FROM pp_reaction_job_target WHERE context_id=?", (CTX,))
+            con.commit()
+            for i, (name, rows) in enumerate(REPORTED):
+                cid = -9500 - i
+                con.execute("INSERT INTO pp_characters (character_id, character_name, context_id, "
+                            "scopes, mass_reactions, advanced_mass_reactions) VALUES (?,?,?,?,?,?)",
+                            (cid, name, CTX, "esi-industry.read_character_jobs.v1", 5, 5))
+                con.execute("INSERT INTO pp_char_industry_jobs (character_id, jobs_json, fetched_at)"
+                            " VALUES (?,?,?)", (cid, json.dumps([]), time.time()))
+                _plan(con, cid, 1000.0 + i,
+                      [(tid, str(tid), -(-total // jobs), jobs, 0) for tid, total, jobs in rows]
+                      + [(RCF, "Reinforced Carbon Fiber", 40, 1, 1)])
+
+        def _counts(tid):
+            return sorted({r["runs"] for r in _cf_rows(con) if r["type_id"] == tid})
+
+        _build_reported()
+        check(len(_counts(TP)) == 4 and len(_counts(CF)) == 3,
+              "before: four numbers for Thermosetting Polymer, three for Carbon Fiber")
+        level_product_runs(CTX)
+        for tid, nm in [(CF, "Carbon Fiber"), (TP, "Thermosetting Polymer"),
+                        (OOS, "Oxy-Organic Solvents"), (RCF, "Reinforced Carbon Fiber")]:
+            got = _counts(tid)
+            check(len(got) == 1, f"{nm}: one number across all eight characters (got {got})")
+        check(level_product_runs(CTX) == 0, "and a second pass over it writes nothing")
+
+        _build_reported()
+        con.execute("INSERT INTO pp_reaction_job_target (context_id, mode, value) VALUES (?,?,?)",
+                    (CTX, "runs", 120))
+        con.commit()
+        level_product_runs(CTX)
+        check(_counts(CF) == [120] and _counts(TP) == [120],
+              f"asked for 120 runs a job, both products are 120 (got {_counts(CF)} / {_counts(TP)})")
+        check(_counts(OOS) == [35],
+              f"...and Oxy-Organic Solvents stays at the 35 its chains need (got {_counts(OOS)})")
+
+        # A length the reactors cannot reach still yields ONE number — the shortest they can do —
+        # rather than dropping the product from the pass.
+        _build_reported()
+        con.execute("INSERT INTO pp_reaction_job_target (context_id, mode, value) VALUES (?,?,?)",
+                    (CTX, "days", 5))
+        con.commit()
+        level_product_runs(CTX)
+        check(len(_counts(CF)) == 1 and len(_counts(TP)) == 1,
+              f"an unreachable 5-day target still levels (got {_counts(CF)} / {_counts(TP)})")
+        for i, _ in enumerate(REPORTED):
+            con.execute("DELETE FROM pp_reaction_assignments WHERE character_id=?", (-9500 - i,))
+            con.execute("DELETE FROM pp_char_industry_jobs WHERE character_id=?", (-9500 - i,))
+        con.execute("DELETE FROM pp_characters WHERE context_id=?", (CTX,))
+        con.execute("DELETE FROM pp_reaction_job_target WHERE context_id=?", (CTX,))
+        con.commit()
+
+        print("a row committed to a CUSTOMER ORDER is never re-shaped:")
+        # Its run count is the batch the order was quoted on, and cancelling hands exactly those
+        # runs back (give_back_order_runs) — moving it would make the order's own arithmetic wrong.
+        _reset(con)
+        _characters(con)
+        cid = CHARS[0][0]
+        _plan(con, cid, 5000.0, [(CF, "Carbon Fiber", 90, 2, 0), (RCF, "RCF", 20, 1, 1)])
+        con.execute("INSERT INTO pp_reaction_assignments (character_id, type_id, name, runs, "
+                    "input_cost, reward, created_at, tier_order, order_id) VALUES (?,?,?,?,?,?,?,?,?)",
+                    (cid, CF, "Carbon Fiber", 137, 0.0, 0.0, 6000.0, 0, 4242))
+        con.commit()
+        level_product_runs(CTX)
+        ordered_rows = [dict(r) for r in con.execute(
+            "SELECT runs FROM pp_reaction_assignments WHERE order_id=4242")]
+        check([r["runs"] for r in ordered_rows] == [137],
+              f"the order's 137 runs are exactly as they were (got {[r['runs'] for r in ordered_rows]})")
+        _reset(con)
 
         print("the dashboard reports the plan it just levelled, not the one before:")
         # The repair passes used to run at the END of GET /api/reactions/jobs, after the rows had
