@@ -270,6 +270,14 @@ shape above and are load-bearing:
   `chain_stage_state` reads readiness per chain, so a chain that stopped mentioning a product it is
   waiting on would call the stage above ready while those jobs ran.
 
+**Added 2026-08-08 — job length is the player's call.** `pp_reaction_job_target` (`get_job_target`,
+`/api/reactions/job-target`): `days` per job, `runs` per job, or `auto`. It sets the pass's duration
+ceiling, so the layout is solved for the window the player actually wants to come back to instead of
+whatever the plan happened to already run. `auto` is the default — a plan built before this existed
+must not be resized by a number nobody chose. One setting, written from both the Reactions card and
+the wizard's cadence dropdown; deliberately not in the group pricing settings, since a group manager
+should not be choosing a member's login cadence.
+
 **Still open — two chains on ONE character sharing a job.** The output is fungible and lands in one
 hangar, so two chains each holding a 60-run job of the same product should be one 120-run job. That
 means a row belonging to more than one chain, i.e. the `chain_id` rework item 22 also wanted.

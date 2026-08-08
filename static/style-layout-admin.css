@@ -543,6 +543,14 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .rx-prog-fill { height: 100%; background: linear-gradient(90deg, #3a7bd5, #5aa9e6); border-radius: 5px; transition: width 0.3s; }
 .rx-prog-fill.rx-prog-done { background: linear-gradient(90deg, #2f9e6f, #46c88a); }
 
+/* "Job length" — the one preference in the reaction job layout (see get_job_target). Sits between
+   the card title and the reactor grid it governs. */
+.rx-jobtarget {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 8px 14px; border-bottom: 1px solid var(--clr-border);
+}
+.rx-jobtarget .pp-label { margin: 0; }
+
 /* Step list of a blocking commit (assigning a plan) — one line per round trip, so a wait that
    used to be a frozen button is a queue you can watch drain. See _rxRunSteps. */
 .rx-steps { display: flex; flex-direction: column; gap: 2px; max-height: 46vh; overflow-y: auto; }

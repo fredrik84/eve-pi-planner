@@ -24,7 +24,7 @@ from app.esi import require_context, _get_valid_token
 from app import completions
 
 from app.reactions._router import router
-from app.reactions.settings import effective_reaction_settings
+from app.reactions.settings import effective_reaction_settings, get_job_target
 from app.reactions.graph import (
     _load_goo_and_reached, _load_reaction_graph, _value_reaction_batch,
     _ordered_chain_tiers, _build_opportunities, _fuel_block_ids, reaction_stock_pool,
@@ -880,10 +880,15 @@ def level_product_runs(context_id: int) -> int:
         stages.setdefault(stage, {}).setdefault(int(r["type_id"]), {}).setdefault(chain, []).append(r)
 
     prefer_tidy = _tidy_runs_on(context_id)
+    # How long the player wants ONE job to run, if they have said (see `get_job_target`). It is a
+    # TARGET, not a ceiling: jobs grow to fill it, which is what makes a stage land together and
+    # what keeps the number of logins down. Unset ("auto") keeps this pass's own rule below.
+    target = get_job_target(context_id)
     plan: list[tuple] = []          # (product_key, chain_key, rows, target_runs, target_jobs)
     for stage, by_product in stages.items():
-        # A stage may be stretched to land together, but never past the job that is already the
-        # longest in it — levelling makes a plan tidier and shorter, never slower.
+        # With no target of the player's own, a stage may be stretched to land together but never
+        # past the job that is already the longest in it — levelling then makes a plan tidier and
+        # shorter, never slower, which is the only safe thing to do with a number nobody chose.
         stage_cap_hours = max(
             (int(r["runs"] or 0) * cycles.get(int(r["type_id"]), 1.0)
              for by_chain in by_product.values() for rs in by_chain.values() for r in rs),
@@ -894,7 +899,12 @@ def level_product_runs(context_id: int) -> int:
             chains = sorted(by_chain)
             totals = [sum(int(r["runs"] or 0) for r in by_chain[c]) for c in chains]
             caps = [len(by_chain[c]) + free.get(c[0], 0) for c in chains]
-            max_runs = int(stage_cap_hours / cyc) if cyc > 0 else max(totals, default=0)
+            if target["hours"]:            # "every job runs about N days" — runs follow the cycle
+                max_runs = max(1, int(target["hours"] / cyc)) if cyc > 0 else max(totals, default=0)
+            elif target["runs"]:           # "every job carries about N runs" — durations follow
+                max_runs = max(1, target["runs"])
+            else:
+                max_runs = int(stage_cap_hours / cyc) if cyc > 0 else max(totals, default=0)
             products[tid] = {"cycle": cyc, "chains": chains,
                              "options": _level_options(totals, caps, max_runs)}
         for tid, opt in _choose_stage_layout(products, prefer_tidy).items():

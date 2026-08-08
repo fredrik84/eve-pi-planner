@@ -20,6 +20,7 @@ Find a section: `grep -n '^## ' docs/reactions.md` and read from that line — t
 - **An order's runs follow capacity, not fairness (reverted experiment)** — why hosts get different run counts, and what the even split cost
 - **One run count per product per stage (`level_stage_runs`)** — why levelling across assigns is sound, and what it deliberately doesn't touch
 - **One run count per product, across every character (`reactions_level_runs`)** — the cross-character leveller: how the number is chosen, why it also saves slots, and the one thing it still can't merge
+- **Job length is the player's call (`pp_reaction_job_target`)** — the one preference in the job layout: days or runs per job, why `auto` is the default, and why it is not a group setting
 - **Run counts you can type (`reactions_tidy_runs`)** — bounded rounding of intermediate runs, and why the end product is never rounded
 - **A stage is a DEPTH, not a position in a list** — why siblings share a stage, and how existing rows were repaired
 - **Knowing when the next stage can start (`chain_stage_state`)** — the ESI signal behind "stage 2 is ready"
@@ -309,9 +310,37 @@ and scoring raw spread instead of a landed/not-landed flag bought a *little* ali
 of goo — pushing a product that cannot reach the stage's duration half way there and paying in full
 for a stage that still doesn't land.
 
-**The ceiling that keeps it honest:** no job may run longer than the longest job already planned in
-that stage. Without it the cheapest answer in slots is always "one enormous job per character" —
-on the reported plan, four jobs of 375 runs, three times the runtime, while eleven reactors idle.
+**The ceiling that keeps it honest:** with no job length set, no job may run longer than the longest
+job already planned in that stage. Without it the cheapest answer in slots is always "one enormous
+job per character" — on the reported plan, four jobs of 375 runs, three times the runtime, while
+eleven reactors idle.
+
+### Job length is the player's call (`pp_reaction_job_target`)
+
+Everything above follows from the chains and the reactors. How long to leave a batch cooking does
+not — *"maybe we should let the user decide the average length they want to do the reaction for."*
+So there is one setting, `get_job_target`, in its own per-account table:
+
+| mode | means | run counts | finish times |
+| --- | --- | --- | --- |
+| `days` | every job runs about this long | differ per product (a 6h reaction gets half the runs of a 3h one) | **land together** |
+| `runs` | every job carries about this run count | the same everywhere | differ per product |
+| `auto` | no opinion — the default | levelled per product | never longer than the stage's longest job already planned |
+
+It is a **target, not a ceiling**: jobs grow to fill it, which is what lands a stage together and
+keeps the number of logins down. The surplus budget and the 3×-per-chain ceiling still bound what
+that costs, and a target the free reactors cannot reach simply doesn't produce options — the
+product keeps what it has rather than being half-applied.
+
+**`auto` is the default and that matters:** a plan built before this existed must not have its jobs
+resized by a number nobody chose.
+
+Deliberately NOT part of the group/account pricing settings, which a group manager sets for every
+member — nobody's alliance should be choosing their login cadence. One setting, shown in two
+places: the Reactions card and the wizard's "Run on a…" cadence, either of which writes it, because
+a wizard sizing a weekly batch while the plan is levelled to a fortnight is two answers to one
+question. A `runs` target has no exact hour window (the products differ), so the wizard states it
+at the standard 3-hour reaction and says so.
 
 **What it may not do.** A chain's intermediate is consumed by the job above it *on the same
 character*, so a chain's requirement is a floor and work never moves between characters — only the

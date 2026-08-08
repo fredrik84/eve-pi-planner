@@ -221,6 +221,42 @@ def main():
         check(counts[0] <= longest,
               f"no job runs longer than the longest job already planned ({counts[0]} <= {longest})")
 
+        print("the player's own job length decides how long a job runs:")
+        # A 3-hour reaction: 5 days is 40 runs, 15 days is 120. Same plan, same chains — the only
+        # thing that moved is what the player said they wanted to come back to.
+        from app.reactions.settings import ensure_job_target_table, get_job_target
+        ensure_job_target_table()
+
+        def _target(mode, value):
+            con.execute("DELETE FROM pp_reaction_job_target WHERE context_id=?", (CTX,))
+            con.execute("INSERT INTO pp_reaction_job_target (context_id, mode, value) "
+                        "VALUES (?,?,?)", (CTX, mode, value))
+            con.commit()
+
+        def _replan():
+            _reset(con)
+            _characters(con)
+            for (cid, _), (runs, jobs) in zip(CHARS, [(125, 3), (90, 4), (90, 4), (75, 4)]):
+                _plan(con, cid, 1000.0 + cid, [(CF, "Carbon Fiber", runs, jobs, 0),
+                                               (RCF, "Reinforced Carbon Fiber", 40, 1, 1)])
+            level_product_runs(CTX)
+            return sorted({r["runs"] for r in _cf_rows(con) if r["type_id"] == CF})
+
+        _target("days", 5)
+        five = _replan()
+        check(len(five) == 1 and five[0] <= 40,
+              f"5 days a job on a 3-hour reaction is 40 runs or fewer (got {five})")
+        _target("runs", 100)
+        hundred = _replan()
+        check(hundred == [100], f"asking for 100 runs a job gives exactly that (got {hundred})")
+        _target("auto", 0)
+        auto = _replan()
+        check(auto == [125],
+              f"and back on automatic it is the longest job already planned (got {auto})")
+        check(get_job_target(CTX)["mode"] == "auto", "the setting round-trips through the DB")
+        con.execute("DELETE FROM pp_reaction_job_target WHERE context_id=?", (CTX,))
+        con.commit()
+
         print("two chains on ONE character each keep their own job:")
         _reset(con)
         _characters(con)

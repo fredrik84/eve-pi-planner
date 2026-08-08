@@ -123,6 +123,10 @@ async function onReactionsTabOpen() {
       if (show) _rxLoadOrders();
     });
   }
+  // Same flag race as the orders card above — the job-length row is gated on an admin-preview
+  // flag, so it has to wait for the flags to land or it stays hidden until the tab is re-opened.
+  Promise.resolve(typeof _loadFeatures === 'function' ? _loadFeatures() : null)
+    .then(() => _rxLoadJobTarget()).then(_rxSyncWizardCadence);
 }
 
 function _onRxAdvancedToggle(el) {
@@ -538,6 +542,116 @@ function _loadReactionsDashboard() {
   return load;
 }
 let _rxLifetime = null;
+
+// ── Job length: how long ONE reaction job should run ────────────────────────────────────────
+// The only part of the job layout that is a preference rather than a fact about the plan. Two
+// ways to say it because players think in both — "about 5 days a job" or "about 125 runs a job" —
+// and `auto`, the default, means the levelling pass keeps its own rule of never running a job
+// longer than the longest one already planned. One stored setting, shown in two places: here, and
+// as the wizard's "Run on a..." cadence, so the batch a suggestion is sized for and the length the
+// plan is levelled to cannot drift apart.
+let _rxJobTarget = { mode: 'auto', value: 0, hours: null, runs: null, cadence_hours: null };
+const _RX_STD_CYCLE_H = 3;   // 94 of the 112 reactions in the SDE; the rest are 6h. See settings.py
+
+function _rxLoadJobTarget() {
+  const row = document.getElementById('rxJobTargetRow');
+  if (!row) return Promise.resolve();
+  if (!_featureActive('reactions_level_runs')) { row.style.display = 'none'; return Promise.resolve(); }
+  return api('/api/reactions/job-target').then(t => {
+    _rxJobTarget = t || _rxJobTarget;
+    row.style.display = '';
+    _rxRenderJobTarget();
+  }).catch(() => {});
+}
+
+function _rxRenderJobTarget() {
+  const modeEl = document.getElementById('rxJobTargetMode');
+  const valEl = document.getElementById('rxJobTargetValue');
+  const hintEl = document.getElementById('rxJobTargetHint');
+  if (!modeEl || !valEl || !hintEl) return;
+  const t = _rxJobTarget;
+  modeEl.value = t.mode || 'auto';
+  valEl.style.display = t.mode === 'auto' ? 'none' : '';
+  valEl.step = t.mode === 'runs' ? '5' : '0.5';
+  valEl.min = t.mode === 'runs' ? '1' : '0.5';
+  if (t.mode !== 'auto') valEl.value = t.mode === 'runs' ? Math.round(t.value) : t.value;
+  if (t.mode === 'days') {
+    // The run count a window buys is per PRODUCT — the standard 3h reaction gets twice what a 6h
+    // one does — so state the common case rather than pretending there is a single answer.
+    hintEl.textContent = `≈ ${Math.floor((t.hours || 0) / _RX_STD_CYCLE_H)} runs a job on a 3-hour `
+      + 'reaction, half that on a 6-hour one. Every job of a stage finishes together.';
+  } else if (t.mode === 'runs') {
+    hintEl.textContent = `≈ ${(t.value * _RX_STD_CYCLE_H / 24).toFixed(1)} days a job on a 3-hour `
+      + 'reaction, twice that on a 6-hour one. Same number everywhere, different finish times.';
+  } else {
+    hintEl.textContent = 'No opinion — jobs are levelled to one run count per product, and never '
+      + 'made to run longer than the longest job already planned in their stage.';
+  }
+}
+
+function _rxJobTargetModeChanged() {
+  const mode = document.getElementById('rxJobTargetMode').value;
+  // A sensible starting number for the mode being switched INTO, so the field is never blank:
+  // a week, or the runs a week buys on a standard reaction.
+  const val = mode === 'auto' ? 0 : (mode === 'days' ? 7 : 56);
+  _rxJobTarget = Object.assign({}, _rxJobTarget, { mode, value: val });
+  _rxRenderJobTarget();
+  _rxSaveJobTarget();
+}
+
+function _rxSaveJobTarget() {
+  const mode = document.getElementById('rxJobTargetMode').value;
+  const raw = parseFloat(document.getElementById('rxJobTargetValue').value);
+  const value = mode === 'auto' ? 0 : raw;
+  if (mode !== 'auto' && !(value > 0)) return;
+  apiSend('PUT', '/api/reactions/job-target', { mode, value })
+    .then(t => {
+      _rxJobTarget = t;
+      _rxRenderJobTarget();
+      _rxSyncWizardCadence();
+      // The plan is levelled to this on the next read, so show the answer rather than describing
+      // it — changing the length and seeing nothing move reads as a setting that does nothing.
+      return _rxReloadPlan();
+    })
+    .then(() => toast('Job length saved — the plan has been re-levelled to it.', 'info'))
+    .catch(err => toastError(err, 'Could not save the job length'));
+}
+
+// The wizard sizes a batch against a check-in window in HOURS. A `days` target is that window
+// exactly; a `runs` target is one only at a given cycle time, so it is converted at the standard
+// 3-hour reaction and the dropdown says so rather than presenting it as exact.
+function _rxSyncWizardCadence() {
+  const sel = document.getElementById('wizRCadence');
+  if (!sel) return;
+  const custom = sel.querySelector('option[data-jobtarget]');
+  if (custom) custom.remove();
+  const hours = _rxJobTarget.cadence_hours;
+  if (!hours) return;
+  const match = [...sel.options].find(o => Math.abs(parseFloat(o.value) - hours) < 0.01);
+  if (match) { sel.value = match.value; return; }
+  const opt = document.createElement('option');
+  opt.value = String(hours);
+  opt.dataset.jobtarget = '1';
+  opt.textContent = _rxJobTarget.mode === 'runs'
+    ? `Your job length (${Math.round(_rxJobTarget.value)} runs ≈ ${(hours / 24).toFixed(1)} days)`
+    : `Your job length (${(hours / 24).toFixed(1)} days)`;
+  sel.insertBefore(opt, sel.firstChild);
+  sel.value = opt.value;
+}
+
+// ...and the other direction: picking a cadence in the wizard IS setting the job length. One
+// setting, two places — a wizard that sized a weekly batch while the plan was levelled to a
+// fortnight would be two answers to one question.
+function _rxWizCadenceChanged(sel) {
+  if (!sel || !_featureActive('reactions_level_runs')) return;
+  const opt = sel.options[sel.selectedIndex];
+  if (!opt || opt.dataset.jobtarget) return;      // re-picking the setting's own entry is a no-op
+  const days = (parseFloat(sel.value) || 0) / 24;
+  if (!(days > 0)) return;
+  apiSend('PUT', '/api/reactions/job-target', { mode: 'days', value: days })
+    .then(t => { _rxJobTarget = t; _rxRenderJobTarget(); _rxSyncWizardCadence(); })
+    .catch(() => {});
+}
 
 // Trigger the ESI job-status fetch (POST /api/reactions/jobs/refresh) and reload the dashboard if
 // it actually pulled anything. force=true (manual "Refresh jobs" button) bypasses the server's

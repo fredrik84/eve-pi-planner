@@ -321,3 +321,111 @@ def api_reset_account_reaction_settings(ctx: int = Depends(require_context)):
     _invalidate_reaction_settings_cache(ctx)
     group = member_group(ctx)
     return get_reaction_settings(group["id"] if group else None)
+
+
+# ── How long ONE reaction job should run (`pp_reaction_job_target`) ────────────────────────────
+#
+# The one judgement the levelling pass cannot make for the player: how long they want to leave a
+# batch cooking before they come back. Everything else about a job layout follows from the chains
+# and the reactors, but "125 runs a job, so about a fortnight" versus "two days" is a preference
+# about logging in, not a fact about the plan.
+#
+# Deliberately NOT part of the shipping/pricing settings above: those are a GROUP's rates, set by
+# a manager for everyone in it, and nobody's alliance should be choosing their login cadence. Its
+# own table, its own endpoint, per context.
+#
+# Two ways to say the same thing, because players think in both:
+#   * `days`  — every job runs about this long, whatever the product. Run counts differ per
+#               product (a 6-hour reaction gets half the runs of a 3-hour one) and a stage's jobs
+#               land together, which is what makes one login collect the lot.
+#   * `runs`  — every job carries about this run count, whatever the product. The number is the
+#               same everywhere on the plan; the durations are not.
+#
+# `auto` is the default and means "no opinion": the pass keeps its own rule of never running a job
+# longer than the longest one already planned in that stage. It matters that this is the default —
+# a plan built before this existed must not have its jobs resized by a number nobody chose.
+_JOB_TARGET_MODES = ("auto", "days", "runs")
+# What one reaction run takes for 94 of the 112 reactions in the SDE (the rest are 6 hours). Only
+# used to state a `runs` target as an approximate window for the wizard's cadence, which needs one
+# number of hours and cannot have a per-product one.
+_STANDARD_CYCLE_HOURS = 3.0
+
+
+@ensure_once
+def ensure_job_target_table():
+    con = get_connection()
+    try:
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS pp_reaction_job_target (
+                context_id INTEGER PRIMARY KEY,
+                mode       TEXT NOT NULL DEFAULT 'auto',
+                value      REAL NOT NULL DEFAULT 0
+            )
+        """)
+        con.commit()
+    finally:
+        con.close()
+
+
+def get_job_target(context_id: int) -> dict:
+    """`{mode, value, hours, runs}` for one account. `hours`/`runs` are the resolved target, either
+    of which is None when the mode does not fix it: a `days` target fixes the hours and leaves the
+    run count to the product's cycle time, a `runs` target does the opposite, and `auto` fixes
+    neither."""
+    ensure_job_target_table()
+    con = get_connection()
+    try:
+        row = con.execute("SELECT mode, value FROM pp_reaction_job_target WHERE context_id=?",
+                          (context_id,)).fetchone()
+    except Exception:
+        return {"mode": "auto", "value": 0.0, "hours": None, "runs": None}
+    finally:
+        con.close()
+    mode = (row["mode"] if row else "auto") or "auto"
+    value = float(row["value"] or 0) if row else 0.0
+    if mode not in _JOB_TARGET_MODES or value <= 0:
+        mode, value = "auto", 0.0
+    return {
+        "mode": mode, "value": value,
+        "hours": value * 24.0 if mode == "days" else None,
+        "runs": int(value) if mode == "runs" else None,
+        # What the wizard's cadence dropdown needs: one window in hours. A `runs` target has no
+        # exact one (the products differ), so it is stated at the standard cycle and labelled as
+        # approximate rather than silently presented as exact.
+        "cadence_hours": (value * 24.0 if mode == "days"
+                          else (value * _STANDARD_CYCLE_HOURS if mode == "runs" else None)),
+    }
+
+
+class JobTargetUpdate(BaseModel):
+    mode: str = "auto"
+    value: float = 0.0
+
+
+@router.get("/api/reactions/job-target")
+def api_get_job_target(ctx: int = Depends(require_context)):
+    return get_job_target(ctx)
+
+
+@router.put("/api/reactions/job-target")
+def api_set_job_target(req: JobTargetUpdate, ctx: int = Depends(require_context)):
+    mode = (req.mode or "auto").strip().lower()
+    if mode not in _JOB_TARGET_MODES:
+        raise HTTPException(400, f"mode must be one of {', '.join(_JOB_TARGET_MODES)}")
+    value = 0.0 if mode == "auto" else float(req.value or 0)
+    if mode != "auto" and value <= 0:
+        raise HTTPException(400, "a job length has to be more than zero")
+    # A run count is typed into the industry window, so it is a whole number; days can be a half.
+    if mode == "runs":
+        value = float(int(value))
+    ensure_job_target_table()
+    con = get_connection()
+    try:
+        con.execute(
+            "INSERT INTO pp_reaction_job_target (context_id, mode, value) VALUES (?,?,?) "
+            "ON CONFLICT (context_id) DO UPDATE SET mode=excluded.mode, value=excluded.value",
+            (ctx, mode, value))
+        con.commit()
+    finally:
+        con.close()
+    return get_job_target(ctx)

@@ -592,6 +592,20 @@
                      same silent no-op that had already been reported once against Cancel order. -->
                 <button class="pp-add-btn" onclick="ppConfirm('Clear every planned assignment, including slots committed to customer orders? Those orders go back to unassigned so you can re-assign them.').then(ok =&gt; { if (ok) _rxClearAllAssignments(); })">Clear all</button>
               </div>
+              <!-- How long ONE job should run: the only part of the job layout that is a
+                   preference rather than a fact about the plan. Hidden until the levelling pass
+                   is on for this account, since nothing else reads it. -->
+              <div id="rxJobTargetRow" class="rx-jobtarget" style="display:none">
+                <label class="pp-label" for="rxJobTargetMode" title="How long you want one reaction job to run before you come back to it">Job length</label>
+                <select id="rxJobTargetMode" class="pp-select" onchange="_rxJobTargetModeChanged()">
+                  <option value="auto">Automatic</option>
+                  <option value="days">Days per job</option>
+                  <option value="runs">Runs per job</option>
+                </select>
+                <input type="number" id="rxJobTargetValue" class="pp-num-input" style="width:80px;display:none"
+                       min="0.5" step="0.5" onchange="_rxSaveJobTarget()">
+                <span id="rxJobTargetHint" class="pp-card-hint"></span>
+              </div>
               <div id="rxDashboardContent" class="pp-card-body">
                 <div class="pp-loading"><span class="pp-spinner"></span> Loading…</div>
               </div>
@@ -670,7 +684,7 @@
                 <input type="number" id="wizRDepth" class="pp-num-input" style="width:70px" value="2" min="1" max="10">
 
                 <label class="pp-label" for="wizRCadence" title="How long you want each batch to run before you check back in and start the next one">Run on a...</label>
-                <select id="wizRCadence" class="pp-select">
+                <select id="wizRCadence" class="pp-select" onchange="_rxWizCadenceChanged(this)">
                   <option value="24">Daily basis</option>
                   <option value="168" selected>Weekly basis</option>
                   <option value="336">Every 2 weeks</option>
