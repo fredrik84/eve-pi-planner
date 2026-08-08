@@ -679,6 +679,30 @@ function _renderReactionsDashboard(data) {
       g.totalRuns += a.runs;
       g.jobRuns.set(a.runs, (g.jobRuns.get(a.runs) || 0) + 1);
       g.ids.push(a.assignment_id);
+    }
+    // One square per DISTINCT planned job, not per row. Levelling gives every job of a product the
+    // same run count (`level_product_runs`), so what used to be three different numbers is now
+    // three identical squares — and a chain's later stage adds its own on top of those, which put
+    // a 10-slot character at 13 squares and wrapped the row onto a second line even though none
+    // of the queued ones is holding a reactor. Identical jobs (same product, stage, run count and
+    // order) collapse into ONE square carrying "+N": the same instruction, and how many more
+    // times to repeat it. Adjacent-merge is enough because `pending` is already sorted by exactly
+    // those keys.
+    const pendGroups = [];
+    for (const a of pending) {
+      const tier = a.tier_order || 0;
+      const ready = tier <= 0 || _rxReadyStages.get(`${c.character_id}:${a.chain}:${tier}`) === true;
+      const last = pendGroups[pendGroups.length - 1];
+      if (last && last.a.type_id === a.type_id && last.tier === tier && last.a.runs === a.runs
+          && (last.a.order_label || '') === (a.order_label || '') && last.ready === ready) {
+        last.n++;
+        continue;
+      }
+      pendGroups.push({ a, tier, ready, n: 1 });
+    }
+    for (const grp of pendGroups) {
+      const a = grp.a;
+      const tier = grp.tier;
       const pendingIcon = `https://images.evetech.net/types/${a.type_id}/icon?size=32`;
       // A slot committed to a customer order (see the Customer orders card) carries the
       // order's client label — lets a player tell client-committed slots apart from
@@ -688,23 +712,27 @@ function _renderReactionsDashboard(data) {
       // A later-stage slot is dimmed and dashed, and says why: its inputs come out of the stage
       // below it, so it is not startable yet. Still clickable (edit/cancel) — this is a "not
       // yet", not a lock.
-      const ready = tier <= 0 || _rxReadyStages.get(`${c.character_id}:${a.chain}:${tier}`) === true;
+      const ready = grp.ready;
       const stageBadge = `<span class="rx-slot-stage${tier > 0 && !ready ? ' rx-slot-stage-later' : ''}" title="${_esc(_rxStageLabel(tier, ready))}">S${tier + 1}</span>`;
       const stageTip = tier > 0
         ? (ready ? ` — ${_rxStageLabel(tier, true)}` : ` — ${_rxStageLabel(tier, false)}, so don't install it yet`)
         : ' — nothing has to finish first';
+      // "+2" = two MORE jobs exactly like this one. The count, not the total, because the square
+      // shows one job's run count and the whole point is that you type the same number again.
+      const moreBadge = grp.n > 1
+        ? `<span class="rx-slot-more" title="${grp.n} identical jobs — install ${_esc(a.name)} ×${a.runs} ${grp.n} times">+${grp.n - 1}</span>`
+        : '';
+      const moreTip = grp.n > 1 ? ` — ${grp.n} identical jobs` : '';
       squares.push(`
-        <div class="rx-slot rx-slot-pending${tier > 0 && !ready ? ' rx-slot-later' : ''}" title="Not running yet — install ${_esc(a.name)} ×${a.runs} in-game${_esc(orderTip)}${_esc(stageTip)}. Click to edit." onclick="_rxOpenEditAssign(${a.assignment_id}, '${c.character_id}')">
+        <div class="rx-slot rx-slot-pending${tier > 0 && !ready ? ' rx-slot-later' : ''}" title="Not running yet — install ${_esc(a.name)} ×${a.runs} in-game${_esc(moreTip)}${_esc(orderTip)}${_esc(stageTip)}. Click to edit." onclick="_rxOpenEditAssign(${a.assignment_id}, '${c.character_id}')">
           <img class="rx-slot-icon" src="${pendingIcon}" alt="" onerror="this.style.visibility='hidden'">
           ${stageBadge}
-          <span class="rx-slot-pending-badge" onclick="event.stopPropagation();_rxCancelAssignment(${a.assignment_id})" title="Cancel this assignment">⊘</span>
+          ${moreBadge}
+          <span class="rx-slot-pending-badge" onclick="event.stopPropagation();_rxCancelAssignment(${a.assignment_id})" title="Cancel ${grp.n > 1 ? 'one of these jobs' : 'this assignment'}">⊘</span>
           <span class="rx-slot-runs">×${a.runs}</span>
           <div class="rx-slot-pending-label">${_esc(a.name)}</div>
           ${orderTag}
         </div>`);
-    }
-    for (let i = jobs.length + pending.length; i < c.slots; i++) {
-      squares.push(`<div class="rx-slot rx-slot-empty" title="Free reaction slot — click to assign your own product" onclick="_rxOpenManualAssign('${c.character_id}')"><span class="rx-slot-empty-mark">+</span></div>`);
     }
     // A later stage is drawn as its own square — the grid is the PLAN — but it isn't holding a
     // reactor while the stage below it runs, so it doesn't count against free slots either. Say
@@ -714,6 +742,15 @@ function _renderReactionsDashboard(data) {
     const byTier = new Map();
     pending.forEach(a => byTier.set(a.tier_order || 0, (byTier.get(a.tier_order || 0) || 0) + 1));
     const queued = pending.length - Math.max(0, ...byTier.values(), 0);
+    // Free squares are what this character can START now, so they are counted against the PEAK
+    // stage rather than every planned row: a queued later stage is reusing a reactor the stage
+    // below frees, not holding one of its own. Counting rows hid free reactors the server was
+    // reporting as free — the same disagreement the note below exists to explain.
+    const occupying = jobs.length + (_featureActive('reactions_parallel_stages')
+      ? Math.max(0, ...byTier.values(), 0) : pending.length);
+    for (let i = occupying; i < c.slots; i++) {
+      squares.push(`<div class="rx-slot rx-slot-empty" title="Free reaction slot — click to assign your own product" onclick="_rxOpenManualAssign('${c.character_id}')"><span class="rx-slot-empty-mark">+</span></div>`);
+    }
     const reuseNote = (queued > 0 && _featureActive('reactions_parallel_stages'))
       ? `<div class="pp-card-hint" style="font-size:11px;flex-basis:100%">${queued} queued job${queued === 1 ? '' : 's'} reuse a reactor an earlier stage frees up — not counted against free slots.</div>`
       : '';

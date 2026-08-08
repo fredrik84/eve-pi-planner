@@ -610,6 +610,13 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 }
 .rx-slot-pending-badge:hover { background: #3a1515; border-color: #a83a3a; }
 .rx-slot-pending-label { font-size: 9px; color: #c87a7a; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 62px; }
+/* "+2" — identical planned jobs folded into one square (see the pendGroups merge). Top-left is
+   the one free corner: stage badge is bottom-left, run count bottom-right, cancel top-right. */
+.rx-slot-more {
+  position: absolute; top: -5px; left: -5px; font-size: 9px; line-height: 1; font-weight: 600;
+  color: #cfe0f0; background: #232c3d; border: 1px solid #3a5a82; border-radius: 4px;
+  padding: 2px 4px; white-space: nowrap;
+}
 
 /* "Stage N is ready to start" — the one banner on this page that reports GOOD news, so it reads
    green rather than as another warning. Only shown when a later stage's predecessors are all
