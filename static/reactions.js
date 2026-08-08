@@ -680,25 +680,29 @@ function _renderReactionsDashboard(data) {
       g.jobRuns.set(a.runs, (g.jobRuns.get(a.runs) || 0) + 1);
       g.ids.push(a.assignment_id);
     }
-    // One square per DISTINCT planned job, not per row. Levelling gives every job of a product the
-    // same run count (`level_product_runs`), so what used to be three different numbers is now
-    // three identical squares — and a chain's later stage adds its own on top of those, which put
-    // a 10-slot character at 13 squares and wrapped the row onto a second line even though none
-    // of the queued ones is holding a reactor. Identical jobs (same product, stage, run count and
-    // order) collapse into ONE square carrying "+N": the same instruction, and how many more
-    // times to repeat it. Adjacent-merge is enough because `pending` is already sorted by exactly
-    // those keys.
+    // One square per job for everything you can START — the row IS the character's reactors, and
+    // folding those made a full character look empty. What overflowed the row was the other kind:
+    // a chain's LATER stage, which is drawn because the grid is the plan, but is not holding a
+    // reactor yet (it reuses the one the stage below frees). Ten startable jobs plus a queued
+    // stage 2 put a 10-slot character at 13 squares and wrapped it onto a second line.
+    //
+    // So only the queued ones fold: identical later-stage jobs (same product, stage, run count and
+    // order) become ONE square carrying "+N" — the same instruction, and how many more times to
+    // repeat it once the stage below lands. Adjacent-merge is enough because `pending` is already
+    // sorted by exactly those keys.
     const pendGroups = [];
     for (const a of pending) {
       const tier = a.tier_order || 0;
       const ready = tier <= 0 || _rxReadyStages.get(`${c.character_id}:${a.chain}:${tier}`) === true;
+      const queuedJob = tier > 0 && !ready;
       const last = pendGroups[pendGroups.length - 1];
-      if (last && last.a.type_id === a.type_id && last.tier === tier && last.a.runs === a.runs
-          && (last.a.order_label || '') === (a.order_label || '') && last.ready === ready) {
+      if (queuedJob && last && last.queued
+          && last.a.type_id === a.type_id && last.tier === tier && last.a.runs === a.runs
+          && (last.a.order_label || '') === (a.order_label || '')) {
         last.n++;
         continue;
       }
-      pendGroups.push({ a, tier, ready, n: 1 });
+      pendGroups.push({ a, tier, ready, queued: queuedJob, n: 1 });
     }
     for (const grp of pendGroups) {
       const a = grp.a;

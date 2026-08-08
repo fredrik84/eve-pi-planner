@@ -418,14 +418,20 @@ gone from `pending`, and re-ranking would relabel the stage-2 rows "start now" w
 is still cooking. A gap in the numbering is the honest reading: the missing stage is in the
 filled squares.
 
-**Identical planned jobs are ONE square with a `+N` badge.** Levelling made the plan repetitive on
-purpose — every job of a product carries the same run count — so a 10-slot character was drawing
-thirteen squares (ten startable plus a queued stage 2) and wrapping onto a second line, which reads
-as "you assigned more than I have". Planned jobs matching on product, stage, run count and order
-now fold into one square carrying `+N` — the same instruction and how many more times to repeat it.
-Empty squares are counted against the **peak stage**, not the row count, so a queued later stage no
-longer hides free reactors; `free_slots / slots` on the row label stays the authoritative number,
-and the "To install" checklist below still lists every job.
+**A queued later stage is ONE square with a `+N` badge.** A 10-slot character was drawing thirteen
+squares — ten startable jobs plus a chain's queued stage 2 — and wrapping onto a second line, which
+reads as "you assigned more than I have". Identical later-stage jobs (matching on product, stage,
+run count and order) now fold into one square carrying `+N`: the same instruction, and how many more
+times to repeat it once the stage below lands.
+
+**Startable jobs are never folded**, deliberately. The first version folded every planned job and a
+fully-committed character came out as two squares and a lot of nothing — the row IS the reactors,
+and one square per job is what makes a full character look full. Only the jobs that are not holding
+a reactor collapse.
+
+Empty squares are counted against the **peak stage** rather than the row count, so a queued later
+stage no longer hides free reactors; `free_slots / slots` on the row label stays the authoritative
+number, and the "To install" checklist below still lists every job.
 
 ## Pricing: a sell-order price is not achievable profit
 
