@@ -246,7 +246,57 @@ def _value_reaction_batch(node: dict, total_out: float, sell_price: float, volum
     return result
 
 
+# The priced graph, kept for a couple of minutes per account. In-process rather than Redis: the
+# structures are keyed by int type_id and full of nested dicts, and a JSON round-trip would both
+# stringify every key and cost more than the rebuild it replaces.
+#
+# What it saves is real. Every order report, every shopping list and every suggest run rebuilds
+# this: two full scans of `reactions`/`reaction_inputs`, the type table, the alliance sheet, a
+# Redis round-trip per priced material, and the fixed-point expansion over the whole graph. Opening
+# three orders in a row did it three times, for prices that are themselves cached for fifteen
+# minutes upstream and cannot have moved.
+#
+# Two minutes is chosen against what the number is FOR: material prices update on a 15-minute
+# cache, so nothing here goes stale inside the window, while a settings change (reaction system,
+# time efficiency, the group's own sheet) shows up on the next page load rather than needing an
+# invalidation hook in five places. Callers treat the result as READ-ONLY — every write to
+# `reached` lives in `_resolve_reachable`, which builds it fresh.
+_GOO_CACHE: dict[tuple, tuple[float, object]] = {}
+_GOO_CACHE_TTL = 120.0
+
+
+def invalidate_goo_cache(context_id: int | None = None) -> None:
+    """Drop the cached priced graph — for one account, or all of them.
+
+    Called when a setting that CHANGES the graph is saved (reaction system, time efficiency,
+    shipping), so a settings change is visible immediately instead of after the TTL. Anything that
+    only moves prices doesn't need this: those come from caches of their own and the two-minute
+    window is well inside them.
+    """
+    if context_id is None:
+        _GOO_CACHE.clear()
+        return
+    for k in [k for k in _GOO_CACHE if k[0] == int(context_id)]:
+        _GOO_CACHE.pop(k, None)
+
+
 def _load_goo_and_reached(context_id: int, allowed_material_ids: set[int] | None = None):
+    key = (int(context_id), frozenset(allowed_material_ids) if allowed_material_ids else None)
+    hit = _GOO_CACHE.get(key)
+    if hit and (_time.monotonic() - hit[0]) < _GOO_CACHE_TTL:
+        return hit[1]
+    result = _load_goo_and_reached_uncached(context_id, allowed_material_ids)
+    # Bounded: one entry per (account, material filter) actively being looked at, and stale entries
+    # are dropped on the way past rather than by a background sweep.
+    now = _time.monotonic()
+    for k, (ts, _v) in list(_GOO_CACHE.items()):
+        if now - ts >= _GOO_CACHE_TTL:
+            _GOO_CACHE.pop(k, None)
+    _GOO_CACHE[key] = (now, result)
+    return result
+
+
+def _load_goo_and_reached_uncached(context_id: int, allowed_material_ids: set[int] | None = None):
     """Shared setup for both the profitability table and the shopping-list export: the alliance
     goo stock, the reaction graph, and the fixed-point `reached` expansion (see
     _resolve_reachable) from that goo through to every producible product. Returns

@@ -341,27 +341,17 @@ def main():
         check(level_stage_runs(CTX) == 0, "running it again writes nothing — idempotent")
         _reset(con)
 
-        print("an order gives every host the SAME work, not a share of its slot count:")
-        # Proportional-to-free-slots is what produced "125 runs for one character, 100 for another,
-        # 75 for another" — three numbers for one product on an order installed character by
-        # character. The runs cannot be levelled afterwards the way `level_stage_runs` levels them
-        # WITHIN a character: a chain's intermediate feeds the stage above it on that same
-        # character, so a host given fewer runs than its own top tier eats is a broken plan.
+        print("an order still splits runs by CAPACITY, not evenly:")
+        # An even split was tried 2026-08-08 so every character showed the same numbers, and
+        # reverted the same day: a 2-slot character handed the same runs as a 10-slot one put a
+        # single step at 14 days. Tidy numbers are not worth a fortnight of cadence.
         import inspect
         from app.reactions import jobs as J
         src = inspect.getsource(J._allocate_and_insert)
-        check("divmod(runs_needed, len(hosts))" in src,
-              "the even split is what the allocator computes when hosts are uniform")
-        check("min(h[\"free_slots\"] for h in hosts) if uniform" in src,
-              "and one job layout, bounded by the smallest host, so every host installs the same")
-        # The arithmetic itself, which is what actually has to hold.
-        for total, n in ((300, 3), (301, 3), (2, 3), (1000, 7)):
-            hosts = min(n, total)
-            base, extra = divmod(total, hosts)
-            shares = [base + (1 if i < extra else 0) for i in range(hosts)]
-            check(sum(shares) == total, f"{total} across {n} hosts still totals {total}")
-            check(max(shares) - min(shares) <= 1,
-                  f"...and differs by at most one run between hosts (got {shares})")
+        check('int(runs_needed * h["free_slots"] / capacity)' in src,
+              "shares follow each host's free slots, so the order finishes as early as it can")
+        check("divmod(runs_needed, len(hosts))" not in src,
+              "and the even split is gone, not merely disabled")
 
         print("it only ever moves `jobs`:")
         s = _step(1, 0, 50, 2.0, 1)

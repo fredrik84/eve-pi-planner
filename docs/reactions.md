@@ -17,7 +17,7 @@ Find a section: `grep -n '^## ' docs/reactions.md` and read from that line — t
 - **Re-planning ONE customer order** — the per-order clear, and the single give-back rule it shares with Clear all
 - **Landing a stage in one go (`_align_stage_jobs`)** — why the spread matters more than the total, and what moves to close it
 - **One request, one answer (`request_memo`)** — why an order report was rebuilding the same evidence five times
-- **Every host of an order does the same work** — the even split, and why the runs can't be levelled afterwards
+- **An order's runs follow capacity, not fairness (reverted experiment)** — why hosts get different run counts, and what the even split cost
 - **One run count per product per stage (`level_stage_runs`)** — why levelling across assigns is sound, and what it deliberately doesn't touch
 - **Run counts you can type (`reactions_tidy_runs`)** — bounded rounding of intermediate runs, and why the end product is never rounded
 - **A stage is a DEPTH, not a position in a list** — why siblings share a stage, and how existing rows were repaired
@@ -232,24 +232,18 @@ breath has to see its own writes. The scope is opened by a middleware in `app.ma
 call — every test, any background job — gets no memoisation at all. `reaction_stock_pool` still
 hands each caller its own COPY, since the pool is consumed as a plan is walked.
 
-## Every host of an order does the same work
+## An order's runs follow capacity, not fairness (reverted experiment)
 
-An order's runs used to be split across characters in proportion to their free slots. That is
-optimal for throughput and it is what produced *"125 runs for one character, 100 for another, 75
-for another"* — three numbers to read and type for one product, on an order installed character by
-character, paid every time it is installed.
+Shares are PROPORTIONAL to each host's free slots: the roomiest character does the most work, so
+every host finishes at roughly the same time and the order completes as early as its capacity
+allows. That is also why one product shows different run counts on different characters, which is a
+real cost paid every time the order is installed by hand.
 
-Under `reactions_parallel_stages` the split is EVEN and every host gets the same job layout (bounded
-by the smallest host), so each character's chain is identical: same runs, same jobs, one routine
-repeated. The runs cannot be levelled after the fact the way `level_stage_runs` levels them within a
-character — a chain's intermediate feeds the stage above it ON THAT CHARACTER, since this package
-deliberately doesn't model shipping half-finished goods between hangars, so a host given fewer runs
-than its own top tier consumes is a broken plan rather than an untidy one. Making the shares equal
-at the source is the only version that is both tidy and correct.
-
-**The trade-off, stated:** a character with fewer free slots runs the same work in fewer jobs and so
-takes longer, where the proportional split would have given it less to do. Capacity it cannot use is
-left for another order rather than spent making this one uneven.
+An EVEN split was tried on 2026-08-08 to make those numbers identical, and reverted the same day:
+handing a 2-slot character the same 250 runs as a 10-slot one put a single step at **14 days**. The
+two goals genuinely conflict and finishing sooner wins. If it is revisited, the answer is not an
+even split but a bound on how far apart hosts may FINISH — pick the hosts whose capacity is
+comparable, split evenly among those, and leave the rest out of the order.
 
 ## One run count per product per stage (`level_stage_runs`)
 

@@ -212,6 +212,28 @@ throughput — but it needs partial-output tracking and changes what an assignme
 
 Order: 21a → 21b → 21c (all done) → 21d, which is the only one left.
 
+## 28. Reaction slot reservation and order cadence (2026-08-08, from live use)
+
+Two things reported while using the order flow, neither fixed yet:
+
+1. **A later stage reserves slots it cannot use.** "Reinforced Carbon Fibers are slot allocated
+   which blocks 10 slots from doing anything else." Stage-2 rows are created at assign time and
+   counted against capacity from that moment, but they cannot be installed until stage 1 lands.
+   21a made the accounting the PEAK across stages rather than the sum, which was the conservative
+   choice — the honest one for "what can I start now" is to count only the startable stage, and
+   let a later stage claim its slots when it becomes ready (`chain_stage_state` already knows
+   when that is). Needs care: the assign guard must still refuse a chain that can never fit.
+2. **An order can be quoted at an absurd cadence.** 250 runs of Thermosetting Polymer came out at
+   14 days. The even-split experiment (reverted, see below) caused that instance, but the general
+   gap is real: nothing bounds how long a single step may take. The wizard has a cadence; an order
+   has none, and `_fit_chain_slots` will happily put a fortnight's work on one reactor. Wanted: a
+   ceiling on any one step's duration, spilling to more hosts (or refusing) rather than quoting it.
+
+**Reverted 2026-08-08:** the even per-host split. It made every character show the same run counts,
+and put a 2-slot character on the same 250 runs as a 10-slot one — a single step at 14 days. Tidy
+numbers are not worth a fortnight. If revisited: bound how far apart hosts may FINISH, splitting
+evenly only among hosts of comparable capacity.
+
 ## 22. The general shopping list double-counts every chain — DONE 2026-08-07
 
 `reactions_shopping_list` exploded EVERY pending assignment row down to raw leaves. A chain assign
@@ -463,7 +485,7 @@ match any template we generate) is still unscoped.
 | 19b | Reaction plan STAGES on the dashboard: planned slots sort by `tier_order`, carry an `S<n>` badge, later stages dim/dash, and the "To install" checklist splits under stage banners. The number is `tier_order + 1` absolute, never re-ranked against what's still pending | 08-07 |
 | 16 | Dead Industry surface removed: the unrendered skill advisor (module, endpoint, flag, test), `/api/industry/to-install` and `/api/industry/skill-coverage`. No behaviour change; the checklist-vs-plan guard is now structural | 08-07 |
 | 20 | Clear all no longer strands a customer order: order rows are cleared AND the order's `assigned_runs` handed back (top row per chain, clamped at 0), with already-stranded orders repaired on the next assign. `test_clear_all_orders.py` | 08-07 |
-| 27 | Customer orders load faster (`request_memo`: the evidence layer was rebuilt five times per report) and every host of an order gets the SAME runs and job layout instead of a share of its slot count — one number to type per product, not one per character | 08-08 |
+| 27 | Customer orders load faster: `request_memo` (the evidence layer was rebuilt five times per report) plus a 2-minute cache of the priced graph (`_load_goo_and_reached`, 270ms -> 0ms warm), and progress/stale-render fixes on assign and clear | 08-08 |
 | 26 | One run count per product per stage (`level_stage_runs`): three assigns that each sized Carbon Fiber separately (125/90/75) become one number typed three times, total preserved and rounded up, row count and chain identity untouched | 08-08 |
 | 25 | Formulas-to-acquire section on the reactions shopping list — the plan's missing formulas with Jita contract prices and a copy-names button, kept out of the materials tables and every cost total (a formula is a contract buy, not a multibuy line) | 08-08 |
 | 24 | "Clear its jobs" on a customer order (`DELETE /api/reactions/orders/{id}/assignments`): frees its slots, hands its runs back, keeps the order — so one order can be re-planned without Clear all or cancelling it. Give-back rule shared with Clear all | 08-08 |

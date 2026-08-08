@@ -1984,8 +1984,10 @@ let _rxOrders = [];
 
 function _rxLoadOrders() {
   const el = document.getElementById('rxOrdersContent');
-  if (!el) return;
-  api('/api/reactions/orders')
+  if (!el) return Promise.resolve();
+  // Returns its promise so a caller that wants to say "refreshing…" can await the refresh really
+  // finishing, rather than guessing.
+  return api('/api/reactions/orders')
     .catch(e => { throw _rxErr(e, 'Load failed'); })
     .then(data => { _rxOrders = data.orders || []; _renderRxOrdersList(_rxOrders); })
     .catch(err => { el.innerHTML = `<div class="pp-empty">${_esc(err.message)}</div>`; });
@@ -2164,13 +2166,26 @@ function _rxOpenOrderDetail(orderId) {
 }
 
 function _rxFetchOrderDetail(orderId) {
-  api(`/api/reactions/orders/${orderId}`)
+  // Which order the modal is showing RIGHT NOW. A slow response for an order the user has since
+  // closed (or navigated away from) must not paint itself over whatever they are looking at —
+  // "I closed the modal and the page suddenly jumped and filled in" is exactly that race.
+  _rxOpenOrderId = orderId;
+  return api(`/api/reactions/orders/${orderId}`)
     .catch(() => { throw new Error('Failed to load order'); })
-    .then(data => _renderRxOrderDetail(data))
+    .then(data => {
+      if (_rxOpenOrderId !== orderId) return;          // stale response — drop it
+      const modal = document.getElementById('rxOrderDetailModal');
+      if (modal && modal.style.display === 'none') return;
+      _renderRxOrderDetail(data);
+    })
     .catch(err => {
-      document.getElementById('rxOrderDetailContent').innerHTML = `<div class="pp-empty">${_esc(err.message)}</div>`;
+      if (_rxOpenOrderId !== orderId) return;
+      const el = document.getElementById('rxOrderDetailContent');
+      if (el) el.innerHTML = `<div class="pp-empty">${_esc(err.message)}</div>`;
     });
 }
+
+let _rxOpenOrderId = null;
 
 // "Clear its jobs" — drop everything this order holds in reaction slots and give it its runs back,
 // leaving the order itself alone so it can be assigned again. The counterpart to "Assign next
@@ -2202,6 +2217,7 @@ async function _rxClearOrderAssignments(orderId) {
 
 function _rxCloseOrderDetail() {
   document.getElementById('rxOrderDetailModal').style.display = 'none';
+  _rxOpenOrderId = null;               // anything still in flight for it is now stale
 }
 
 // The cost/time/materials report body, shared by the order-detail modal AND the pre-commit review
@@ -2384,12 +2400,21 @@ function _rxAssignOrderBatch(orderId) {
   const status = document.getElementById('rxOrderDetailStatus');
   const btn = document.getElementById('rxOrderAssignBtn');
   if (btn) { btn.disabled = true; btn.textContent = 'Assigning…'; }
+  // Assigning an order is the slowest thing on this page — it plans the whole chain, checks
+  // formulas and slots per character, writes the rows, and is then followed by three refreshes.
+  // Say what is happening at each step: a silent minute reads as a hang, and the page suddenly
+  // filling in afterwards reads as a bug.
+  if (status) status.textContent = 'Planning the chain and claiming reaction slots…';
   apiSend('POST', `/api/reactions/orders/${orderId}/assign`, {})
-    .then(data => {
-      if (status) status.textContent = `Assigned ${data.runs_assigned.toLocaleString()} run${data.runs_assigned === 1 ? '' : 's'} to ${data.characters.map(c => c.character_name).join(', ')}.`;
-      _rxFetchOrderDetail(orderId);
-      _rxLoadOrders();
-      onReactionsTabOpen();
+    .then(async data => {
+      const where = data.characters.map(c => c.character_name).join(', ');
+      if (status) status.textContent = `Assigned ${data.runs_assigned.toLocaleString()} run${data.runs_assigned === 1 ? '' : 's'} to ${where} — refreshing…`;
+      // Sequential and awaited, so "refreshing" ends when the page really is refreshed, and the
+      // three requests don't race each other to re-render the same panels.
+      await _rxFetchOrderDetail(orderId);
+      await _rxLoadOrders();
+      await onReactionsTabOpen();
+      if (status) status.textContent = `Assigned ${data.runs_assigned.toLocaleString()} run${data.runs_assigned === 1 ? '' : 's'} to ${where}.`;
     })
     .catch(err => {
       if (status) status.textContent = err.message;

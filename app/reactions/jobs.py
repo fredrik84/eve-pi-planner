@@ -1667,37 +1667,23 @@ def _allocate_and_insert(context_id: int, type_id: int, name: str, node: dict, r
     if chain_caps:
         hosts = hosts[:max(1, min(chain_caps.values()))]
 
-    # How the order's runs are split across the characters that will run it.
+    # How the order's runs are split across the characters that will run it: PROPORTIONAL to each
+    # host's free slots. The roomiest character does the most work, so every host finishes at
+    # roughly the same time and the order completes as early as its capacity allows.
     #
-    # Proportional-to-free-slots is what this did, and it is optimal for pure throughput: the
-    # roomiest character does the most work, everybody finishes around the same time. It is also
-    # what produced "125 runs for one character, 100 for another, 75 for another" — three different
-    # numbers to read and type for the SAME product, on an order the player installs character by
-    # character. That cost is paid every single time the order is installed.
+    # An EVEN split was tried on 2026-08-08 to make the numbers identical on every character (they
+    # differ under this rule — 125 here, 100 there — and that is a real cost, paid every time the
+    # order is installed by hand). It was reverted the same day: giving a 2-slot character the same
+    # 250 runs as a 10-slot one put a single step at **14 days**, and no amount of tidiness is worth
+    # a fortnight of cadence. The two goals genuinely conflict, and finishing sooner wins.
     #
-    # An EVEN split makes every host's chain identical: same runs, same jobs, same numbers, one
-    # routine repeated. The runs cannot simply be levelled afterwards the way `level_stage_runs`
-    # levels them within a character, because a chain's intermediate feeds the stage above it ON
-    # THAT CHARACTER — this package deliberately does not model shipping half-finished goods
-    # between hangars — so a host given fewer runs than its own top tier consumes is a broken plan,
-    # not an untidy one. Making the shares equal at the source is the only version that is both
-    # tidy and correct.
-    #
-    # The trade-off, stated: a character with fewer free slots runs the same work in fewer jobs and
-    # so takes longer, where the proportional split would have given it less to do. Capacity it
-    # cannot use is left for another order rather than being spent making this one uneven.
-    uniform = _parallel_stages_on(context_id)
-    if uniform:
-        hosts = hosts[:max(1, min(len(hosts), runs_needed))]
-        base, extra = divmod(runs_needed, len(hosts))
-        if base == 0:                               # fewer runs than hosts — one run each, no more
-            hosts, base, extra = hosts[:runs_needed], 1, 0
-        shares = [base + (1 if i < extra else 0) for i in range(len(hosts))]
-    else:
-        capacity = sum(h["free_slots"] for h in hosts)
-        shares = [int(runs_needed * h["free_slots"] / capacity) for h in hosts]
-        for i in range(runs_needed - sum(shares)):  # rounding remainder, roomiest first
-            shares[i % len(hosts)] += 1
+    # If this is revisited: the fix is not an even split but capping how far apart hosts may FINISH
+    # — pick the hosts whose capacity is comparable, split evenly among those, and leave the rest
+    # out of this order entirely.
+    capacity = sum(h["free_slots"] for h in hosts)
+    shares = [int(runs_needed * h["free_slots"] / capacity) for h in hosts]
+    for i in range(runs_needed - sum(shares)):      # rounding remainder, roomiest first
+        shares[i % len(hosts)] += 1
 
     now = _time.time()
     unit_cost = node.get("unit_cost", 0.0) + node.get("job_cost", 0.0)
@@ -1724,12 +1710,7 @@ def _allocate_and_insert(context_id: int, type_id: int, name: str, node: dict, r
             for i, tid in enumerate([t for t, _ in tiers] + [type_id]):
                 if tid in left:
                     caps[i] = _cap_jobs(max(1, left[tid] - after), caps[i])
-            # One layout for every host when the shares are even: the same work in the same number
-            # of jobs means the same runs-per-job everywhere, which is the point of the even split.
-            # Bounded by the SMALLEST host, since a layout one of them cannot install is not a
-            # layout. Per-host formula limits still apply on top (`caps` above).
-            budget = min(h["free_slots"] for h in hosts) if uniform else host["free_slots"]
-            slots = _fit_chain_slots(works, caps, budget)
+            slots = _fit_chain_slots(works, caps, host["free_slots"])
             # `_fit_chain_slots` minimises the SUM of the tier durations, which was the right
             # objective while every tier was its own stage. Now that siblings share one, what gates
             # the stage above is the LAST of them to land — so re-balance within each stage the
