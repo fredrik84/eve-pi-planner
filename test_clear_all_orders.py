@@ -142,6 +142,40 @@ def main():
         check(res["cleared"] == 2 and res["orders_reset"] == [],
               "nothing to give back when no order was involved")
 
+        print("clearing ONE order frees its slots and hands back only ITS runs:")
+        from app.reactions.orders import clear_reaction_order_assignments
+        _reset(con)
+        _character(con)
+        _order(con, -5010, 500, 300)
+        _order(con, -5011, 400, 200)
+        _rows(con, [(MID, 0, 600), (TOP, 1, 300)], order_id=-5010, at=1000.0)
+        _rows(con, [(MID, 0, 400), (TOP, 1, 200)], order_id=-5011, at=2000.0)
+        _rows(con, [(TOP, 0, 50)])                       # a speculative row, nothing to do with either
+        res = clear_reaction_order_assignments(-5010, context_id=CTX)
+        check(res["cleared"] == 2, f"only that order's rows are freed (got {res['cleared']})")
+        check(res["runs_returned"] == 300, f"and only its runs come back (got {res['runs_returned']})")
+        check(_assigned(con, -5010) == 0, "the cleared order is fully unassigned again")
+        check(_assigned(con, -5011) == 200, "the other order is untouched")
+        left = con.execute("SELECT COUNT(*) AS n FROM pp_reaction_assignments WHERE character_id=?",
+                           (CHAR,)).fetchone()["n"]
+        check(left == 3, f"its sibling's rows and the speculative row survive (got {left})")
+        check(res["order"]["status"] == "open" and res["order"]["top_level_runs"] == 500,
+              "the ORDER itself is kept — this is a re-plan, not a cancellation")
+
+        print("...and it is how a stranded order gets moving again:")
+        _order(con, -5012, 200, 200)                     # counter set, no rows
+        res = clear_reaction_order_assignments(-5012, context_id=CTX)
+        check(res["cleared"] == 0 and _assigned(con, -5012) == 0,
+              "no rows to free, but the stale counter is reset so it can be assigned")
+
+        print("...and another account cannot touch it:")
+        try:
+            clear_reaction_order_assignments(-5011, context_id=CTX - 1)
+            check(False, "clearing someone else's order must 404")
+        except Exception as exc:
+            check(getattr(exc, "status_code", None) == 404,
+                  f"clearing someone else's order 404s (got {exc})")
+
         print("an already-stranded order is repaired when the player next assigns it:")
         _reset(con)
         _character(con)

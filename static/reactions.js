@@ -2124,6 +2124,26 @@ function _rxFetchOrderDetail(orderId) {
     });
 }
 
+// "Clear its jobs" — drop everything this order holds in reaction slots and give it its runs back,
+// leaving the order itself alone so it can be assigned again. The counterpart to "Assign next
+// batch": before this, re-planning ONE order meant Clear all (the whole account) or cancelling the
+// order (which throws it away).
+async function _rxClearOrderAssignments(orderId) {
+  if (!await ppConfirm('Free every reaction slot this order holds and hand its runs back, so you '
+      + 'can assign it again? The order itself is kept. Jobs already running in-game keep running '
+      + '— they show up as orphans you can add back to the plan.')) return;
+  try {
+    const res = await apiSend('DELETE', `/api/reactions/orders/${orderId}/assignments`);
+    const running = (res && res.running_cleared) || 0;
+    toast(`Freed ${res.cleared} planned job${res.cleared === 1 ? '' : 's'}; ${res.runs_returned.toLocaleString()} run${res.runs_returned === 1 ? '' : 's'} back to unassigned.`
+      + (running ? ` ${running} was already running in-game and continues as an orphan.` : ''), 'info');
+    _rxFetchOrderDetail(orderId);
+    _rxLoadOrders();
+    _rxLastDashboardData = null;
+    _loadReactionsDashboard();
+  } catch (e) { toastError(e, 'Could not clear this order\'s jobs'); }
+}
+
 function _rxCloseOrderDetail() {
   document.getElementById('rxOrderDetailModal').style.display = 'none';
 }
@@ -2192,6 +2212,7 @@ function _renderRxOrderDetail(data) {
 
   const actionButtons = o.status === 'open' ? `
       ${remaining > 0 ? `<button id="rxOrderAssignBtn" onclick="_rxAssignOrderBatch(${o.id})">Assign next batch (${remaining.toLocaleString()} run${remaining === 1 ? '' : 's'} left)</button>` : '<span class="pp-card-hint">Every run has been assigned.</span>'}
+      ${o.assigned_runs > 0 ? `<button class="pp-add-btn" onclick="_rxClearOrderAssignments(${o.id})" title="Free every slot this order holds and hand its runs back, so you can assign it again from scratch. The order itself is kept.">Clear its jobs</button>` : ''}
       <button class="pp-add-btn" onclick="_rxCompleteOrder(${o.id})">Mark completed</button>
       <button class="pp-danger-btn" onclick="_rxCancelOrder(${o.id})">Cancel order</button>
       ${o.assigned_runs === 0 ? `<button class="pp-danger-btn" onclick="_rxDeleteOrder(${o.id})">Delete</button>` : ''}

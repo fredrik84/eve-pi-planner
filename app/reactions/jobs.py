@@ -951,26 +951,11 @@ def unassign_all_reactions(context_id: int = Depends(require_context)):
             cleared = len(rows)
             con.execute(f"DELETE FROM pp_reaction_assignments WHERE character_id IN ({placeholders})",
                         char_ids)
-            by_order: dict[int, list[dict]] = {}
-            for r in rows:
-                if r.get("order_id"):
-                    by_order.setdefault(int(r["order_id"]), []).append(r)
-            for order_id, order_rows in by_order.items():
-                give_back = sum(int(r["runs"] or 0) for r in _shopping_roots(order_rows))
-                if give_back <= 0:
-                    continue
-                # Never below zero: the counter is a commitment total, and an order whose rows were
-                # already partly cleared elsewhere must not go negative and start claiming capacity
-                # it never had.
-                con.execute(
-                    "UPDATE pp_reaction_orders SET assigned_runs = "
-                    "CASE WHEN assigned_runs > ? THEN assigned_runs - ? ELSE 0 END WHERE id=?",
-                    (give_back, give_back, order_id))
-                orders_reset.append(order_id)
+            orders_reset = give_back_order_runs(con, rows)
             con.commit()
     finally:
         con.close()
-    return {"ok": True, "cleared": cleared, "orders_reset": sorted(orders_reset)}
+    return {"ok": True, "cleared": cleared, "orders_reset": orders_reset}
 
 
 def _plan_missing_formulas(context_id: int, characters: list[dict]) -> dict:
@@ -986,6 +971,38 @@ def _plan_missing_formulas(context_id: int, characters: list[dict]) -> dict:
             [p for c in characters for p in (c.get("pending") or [])]))
     except Exception:
         return {"complete": False, "formulas": [], "unresolved": []}
+
+
+def give_back_order_runs(con, rows: list[dict]) -> list[int]:
+    """Hand a customer order back the runs its deleted plan rows were holding. Returns the ids of
+    the orders that moved. Does NOT commit — the caller owns the transaction that deleted the rows,
+    and the counter must move with them or not at all.
+
+    **How much comes back is the TOP row of each chain**, which is exactly what `assigned_runs` was
+    incremented by (`_allocate_and_insert` returns the sum of the per-host shares, and a host's
+    share IS its top-level row's runs). `_shopping_roots` already identifies those rows, for the
+    same reason: a chain's top stands for the batch, its tiers are the work underneath.
+
+    Shared by "Clear all" and the per-order clear so the two can never drift into disagreeing about
+    what a cleared order is owed — the disagreement that stranded orders #36-#39 in the first place.
+    """
+    by_order: dict[int, list[dict]] = {}
+    for r in rows:
+        if r.get("order_id"):
+            by_order.setdefault(int(r["order_id"]), []).append(r)
+    moved: list[int] = []
+    for order_id, order_rows in by_order.items():
+        give_back = sum(int(r["runs"] or 0) for r in _shopping_roots(order_rows))
+        if give_back <= 0:
+            continue
+        # Never below zero: the counter is a commitment total, and an order whose rows were already
+        # partly cleared elsewhere must not go negative and start claiming capacity it never had.
+        con.execute(
+            "UPDATE pp_reaction_orders SET assigned_runs = "
+            "CASE WHEN assigned_runs > ? THEN assigned_runs - ? ELSE 0 END WHERE id=?",
+            (give_back, give_back, order_id))
+        moved.append(order_id)
+    return sorted(moved)
 
 
 def _unplanned_running_totals(context_id: int, unplanned_running: list[tuple[int, float]],

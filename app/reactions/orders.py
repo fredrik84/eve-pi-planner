@@ -18,7 +18,7 @@ from app.reactions.graph import (
 )
 from app.reactions.jobs import (
     _character_capacities, ensure_reaction_orders_table, ensure_reaction_assignments_table,
-    _allocate_and_insert, formula_concurrency_caps, _cap_jobs,
+    _allocate_and_insert, formula_concurrency_caps, _cap_jobs, give_back_order_runs,
 )
 
 
@@ -301,6 +301,87 @@ def assign_reaction_order(order_id: int, req: OrderAssignRequest, context_id: in
     finally:
         con.close()
     return {"order": order, "runs_assigned": result["runs_assigned"], "characters": result["characters"]}
+
+
+@router.delete("/api/reactions/orders/{order_id}/assignments")
+def clear_reaction_order_assignments(order_id: int, context_id: int = Depends(require_context)):
+    """Drop everything this order has committed to reaction slots and hand it back its runs, so it
+    can be assigned again from scratch. The order itself survives — status, client, target quantity
+    and all.
+
+    The counterpart the order flow was missing. "Assign next batch" only ever adds, `Clear all`
+    wipes the whole account, and cancelling the order to free its slots throws the order away — so
+    re-planning one order (different characters, a changed batch size, a formula that has since
+    been sold) meant clearing everything or recreating the order by hand.
+
+    A row ESI already shows as RUNNING is cleared too, and its in-game job keeps running: it
+    becomes an ORPHAN on the dashboard, adoptable back into a plan with one click. That is the same
+    thing `Clear all` does, and the count is reported so the UI can say so before the player
+    commits to it rather than after.
+    """
+    ensure_reaction_orders_table()
+    ensure_reaction_assignments_table()
+    con = get_connection()
+    try:
+        order = _get_order_or_404(con, order_id, context_id)
+        rows = [dict(r) for r in con.execute(
+            "SELECT a.character_id, a.type_id, a.runs, a.order_id, a.created_at, "
+            "COALESCE(a.tier_order,0) AS tier_order FROM pp_reaction_assignments a "
+            "WHERE a.order_id=? AND a.character_id IN "
+            "(SELECT character_id FROM pp_characters WHERE context_id=?)", (order_id, context_id))]
+        if not rows:
+            # Nothing committed, but the counter may still claim runs — the stranded shape this
+            # endpoint exists to make recoverable. Reset it so the order can move again.
+            con.execute("UPDATE pp_reaction_orders SET assigned_runs=0 WHERE id=?", (order_id,))
+            con.commit()
+            return {"ok": True, "cleared": 0, "runs_returned": order["assigned_runs"] or 0,
+                    "running_cleared": 0, "order": _order_row(con, order_id)}
+        con.execute(
+            "DELETE FROM pp_reaction_assignments WHERE order_id=? AND character_id IN "
+            "(SELECT character_id FROM pp_characters WHERE context_id=?)", (order_id, context_id))
+        give_back_order_runs(con, rows)
+        con.commit()
+        after = _order_row(con, order_id)
+    finally:
+        con.close()
+    returned = (order["assigned_runs"] or 0) - (after["assigned_runs"] or 0)
+    return {"ok": True, "cleared": len(rows), "runs_returned": returned,
+            "running_cleared": _running_rows_among(context_id, rows), "order": after}
+
+
+def _order_row(con, order_id: int) -> dict:
+    return dict(con.execute("SELECT * FROM pp_reaction_orders WHERE id=?", (order_id,)).fetchone())
+
+
+def _running_rows_among(context_id: int, rows: list[dict]) -> int:
+    """How many of the cleared rows had a live in-game job behind them — the ones that carry on
+    running as orphans. Counted per (character, product) against the cached ESI snapshot, the same
+    count-aware matching the dashboard uses, so N running jobs cover exactly N rows."""
+    try:
+        con = get_connection()
+        try:
+            jobs_by_char = {r["character_id"]: r["jobs_json"] for r in con.execute(
+                "SELECT j.character_id, j.jobs_json FROM pp_char_industry_jobs j "
+                "JOIN pp_characters c ON c.character_id = j.character_id WHERE c.context_id=?",
+                (context_id,))}
+        finally:
+            con.close()
+        import json as _json
+        live: dict[tuple, int] = {}
+        for cid, blob in jobs_by_char.items():
+            for j in _json.loads(blob or "[]"):
+                if j.get("status") in ("active", "paused", "ready"):
+                    key = (cid, j.get("product_type_id"))
+                    live[key] = live.get(key, 0) + 1
+        n = 0
+        for r in rows:
+            key = (r["character_id"], r["type_id"])
+            if live.get(key, 0) > 0:
+                live[key] -= 1
+                n += 1
+        return n
+    except Exception:
+        return 0                        # a best-effort footnote must never fail the clear
 
 
 class OrderStatusRequest(BaseModel):

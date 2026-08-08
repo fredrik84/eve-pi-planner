@@ -13,6 +13,7 @@ Find a section: `grep -n '^## ' docs/reactions.md` and read from that line — t
 - **What you already hold is not work (`reactions_use_stock`)** — how held intermediates shorten a chain, and the one place stock is deliberately not consulted
 - **One slot model: a chain's stages reuse a reactor (`reactions_parallel_stages`)** — why stages can't run in parallel, what reuses what, and where idle reactors go
 - **Absence becomes knowledge, but only after a paste (`app/reactions/library.py`)** — when an undeclared formula means "you don't own it", and what gets reported instead of planned
+- **Re-planning ONE customer order** — the per-order clear, and the single give-back rule it shares with Clear all
 - **Landing a stage in one go (`_align_stage_jobs`)** — why the spread matters more than the total, and what moves to close it
 - **Run counts you can type (`reactions_tidy_runs`)** — bounded rounding of intermediate runs, and why the end product is never rounded
 - **A stage is a DEPTH, not a position in a list** — why siblings share a stage, and how existing rows were repaired
@@ -158,6 +159,24 @@ which is why that exact string now resolves). So the import KEEPS what it could 
 (`pp_blueprint_paste_unresolved`, replaced per batch, deleted with the batch), and every report
 carries it for the UI to show beside the finding — an import status line that scrolled away days
 ago is not a warning.
+
+## Re-planning ONE customer order
+
+`DELETE /api/reactions/orders/{id}/assignments` ("Clear its jobs") frees every slot an order holds
+and hands its runs back, keeping the order itself. It closes a gap in the order flow: "Assign next
+batch" only ever adds, `Clear all` wipes the whole account, and cancelling the order to free its
+slots throws the order away — so re-planning one order (different characters, a changed batch, a
+formula since sold) meant one of those three blunt instruments.
+
+The give-back rule lives in **one** place, `give_back_order_runs`, shared with `Clear all`: the
+credit is the TOP row of each chain, which is exactly what `assigned_runs` was incremented by, and
+it never goes below zero. Two paths computing that separately is what stranded orders #36-#39.
+
+An order with a counter but no rows — the stranded shape — is also repaired by this endpoint, so
+there are now two ways out of it: clear it explicitly, or just try to assign it
+(`_heal_stranded_counter`). A row whose job is already RUNNING is cleared too and the job carries
+on in-game as an orphan; the count comes back in `running_cleared` so the UI says so before the
+player commits, not after.
 
 ## Landing a stage in one go (`_align_stage_jobs`)
 
