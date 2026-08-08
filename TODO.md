@@ -121,9 +121,16 @@ are, and the next stage is READY when everything below it in its own chain is do
 shows a green "Stage N is ready to start" banner, un-greys that stage's slots and relabels it.
 `test_parallel_stages.py` covers staging, readiness and the repair; rationale in `docs/reactions.md`.
 
-**Still open:** a MANUAL "mark this stage done" for work ESI cannot see (corp jobs without the
-role), and pushing the "stage N is ready" moment through the notification engine
-(Pushover/ntfy/Discord) rather than only showing it on the page.
+**The push shipped 2026-08-08 too:** `reaction_stage_ready`, a twelfth alert kind computed off the
+same `chain_stage_state` the page renders, so a notification and the screen cannot disagree. Gets
+mute/severity/Dashboard-card/Pushover-ntfy-Discord plumbing for free; 12h cooldown since a ready
+stage stays ready. Fixing its dedupe fixed a live bug: `_process_context` only applied the cooldown
+to alerts with a `planet_id`, so BOTH existing reaction kinds re-sent on every 15-minute tick of
+every scheduler process. Alerts now carry their own `dedupe_id`. `test_alerts.py`.
+
+**Still open:** a MANUAL "mark this stage done" for work ESI cannot see — a corp job installed by a
+character without the Factory_Manager role never appears in any job list we can read, so its stage
+can never complete on its own.
 
 ## 21. Idle reactors while a chain waits — slots are counted twice and stages never widen (2026-08-07)
 

@@ -9,14 +9,15 @@ call `compute_alerts()` — a single source of truth so a push notification and 
 shown on screen can never drift apart, and both automatically respect each account's configured
 thresholds and muted kinds (app/alert_settings.py) without re-implementing that logic.
 
-Eleven kinds (app.alert_settings.ALERT_KINDS): four threshold-based (expired, expiring,
+Twelve kinds (app.alert_settings.ALERT_KINDS): four threshold-based (expired, expiring,
 storage_full, factory_refill), four correctness-based, stored per-scan by
 app.esi._detect_colony_issues (ext_unrouted, fac_unfed, fac_output, p0_mismatch) — always
 "high" severity — schedule_sync (an extractor running a different program length than the
 fleet's norm), always "warn" severity, computed fleet-wide via _extractor_program_lengths() —
-and two Reactions-specific kinds (reaction_finishing_soon, reaction_completed — see
-_reaction_alerts() below), unrelated to PI colonies entirely but folded into the same flat list
-so they get the same mute/severity/dashboard/push plumbing for free. The threshold-based kinds compute their own severity
+and three Reactions-specific kinds (reaction_finishing_soon, reaction_completed and
+reaction_stage_ready — see _reaction_alerts() and _stage_ready_alerts() below), unrelated to PI
+colonies entirely but folded into the same flat list so they get the same
+mute/severity/dashboard/push plumbing for free. The threshold-based kinds compute their own severity
 from the account's configured thresholds (see inline comments below).
 """
 import json as _json
@@ -116,6 +117,9 @@ def _reaction_alerts(context_id: int, muted: set, now: float) -> list[dict]:
                 "severity": "warn",
                 "character_id": r["character_id"], "character_name": r["character_name"],
                 "planet_id": None, "location": None, "hours_left": round(soonest_running, 1),
+                # Per character: these alerts are not about a planet, and without a key the
+                # scheduler's cooldown check had nothing to match on and re-sent every tick.
+                "dedupe_id": r["character_id"],
             })
         # Completed = one or more jobs finished and sitting idle — go collect the output and restart the
         # slot. `runs` carries the finished-job count so the message can say how many.
@@ -125,11 +129,81 @@ def _reaction_alerts(context_id: int, muted: set, now: float) -> list[dict]:
                 "severity": "warn",
                 "character_id": r["character_id"], "character_name": r["character_name"],
                 "planet_id": None, "location": None, "hours_left": None, "runs": done_count,
+                "dedupe_id": r["character_id"],
                 # Which products finished + their run counts — the notification layer turns this into
                 # a "sell it to a local buy order for more than hauling to Jita" hint (local_sell_hint).
                 "products": [{"type_id": tid, "runs": runs} for tid, runs in done_runs.items()],
             })
 
+    alerts.extend(_stage_ready_alerts(context_id, muted, now))
+    return alerts
+
+
+def _stage_ready_alerts(context_id: int, muted: set, now: float) -> list[dict]:
+    """reaction_stage_ready: everything a later stage of a chain was waiting on has FINISHED, and
+    that stage still has jobs to install.
+
+    This is the one reaction alert that reports an opportunity rather than a problem — the moment
+    the player has been waiting for. A multi-stage chain otherwise means watching timers to work
+    out whether stage 1 is really done, which is exactly the manual bookkeeping this tool exists to
+    remove ("notify the user that you can now start stage 2").
+
+    Reuses `chain_stage_state` — the same function the Reactions dashboard renders its stage banner
+    from — so a push and the page can never disagree about whether a stage is ready. Cheap: one
+    query, and it short-circuits for the vast majority of accounts, which hold no multi-stage plan
+    at all.
+
+    Each alert carries a `dedupe_id` derived from (character, chain, stage), because a ready stage
+    STAYS ready until the player installs it — without a per-stage key the 15-minute scheduler
+    would re-send the same "you can start stage 2" every tick.
+    """
+    if "reaction_stage_ready" in muted:
+        return []
+    from app.reactions.jobs import chain_stage_state
+
+    con = get_connection()
+    try:
+        rows = [dict(r) for r in con.execute(
+            "SELECT a.character_id, a.type_id, a.name, a.created_at, "
+            "COALESCE(a.tier_order,0) AS tier_order, c.character_name "
+            "FROM pp_reaction_assignments a JOIN pp_characters c ON c.character_id = a.character_id "
+            "WHERE c.context_id=?", (context_id,))]
+        jobs_by_char = {r["character_id"]: r["jobs_json"] for r in con.execute(
+            "SELECT j.character_id, j.jobs_json FROM pp_char_industry_jobs j "
+            "JOIN pp_characters c ON c.character_id = j.character_id WHERE c.context_id=?",
+            (context_id,))}
+    except Exception:
+        return []                       # tables may not exist yet — never break PI alerts
+    finally:
+        con.close()
+    if not rows:
+        return []
+
+    by_char: dict[int, list[dict]] = {}
+    for r in rows:
+        by_char.setdefault(r["character_id"], []).append(r)
+
+    alerts: list[dict] = []
+    for cid, own in by_char.items():
+        if len({r["tier_order"] for r in own}) < 2:
+            continue                    # single-stage plan — nothing was ever waiting
+        try:
+            jobs = _json.loads(jobs_by_char.get(cid) or "[]")
+        except Exception:
+            jobs = []
+        name = own[0]["character_name"]
+        for st in chain_stage_state(own, jobs, now):
+            if st["stage"] <= 0 or not st["ready"] or st["todo"] <= 0:
+                continue
+            alerts.append({
+                "kind": "reaction_stage_ready",
+                "severity": "warn",
+                "character_id": cid, "character_name": name,
+                "planet_id": None, "location": None, "hours_left": None,
+                "stage": st["stage"] + 1, "names": st["names"], "runs": st["todo"],
+                # Stable per (character, chain, stage) — see the docstring.
+                "dedupe_id": abs(hash((cid, st["chain"], st["stage"]))) % (2 ** 31),
+            })
     return alerts
 
 

@@ -261,6 +261,72 @@ def test_reaction_finishing_soon() -> bool:
     return ok
 
 
+def test_reaction_stage_ready() -> bool:
+    """The chain stage whose inputs have all finished — the "you can start stage 2 now" ping.
+
+    It is the only reaction alert that reports an opportunity rather than a problem, and the only
+    one that must NOT fire while any job it waits on is still running.
+    """
+    print(f"\n{'='*60}\n  reaction_stage_ready (a later chain stage became startable)\n{'='*60}")
+    ok = True
+    con = get_connection()
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS pp_char_industry_jobs (
+            character_id INTEGER PRIMARY KEY, jobs_json TEXT NOT NULL DEFAULT '[]', fetched_at REAL
+        )
+    """)
+    from app.reactions.jobs import ensure_reaction_assignments_table
+    ensure_reaction_assignments_table()
+    con.execute("DELETE FROM pp_char_industry_jobs WHERE character_id=?", (FAKE_CID,))
+    con.execute("DELETE FROM pp_reaction_assignments WHERE character_id=?", (FAKE_CID,))
+    at = time.time()
+    nxt = int(con.execute("SELECT COALESCE(MAX(id), 0) + 1 AS n FROM pp_reaction_assignments")
+              .fetchone()["n"])
+    # Two siblings in stage 1 feeding one product in stage 2 — the reported chain's shape.
+    for i, (tid, nm, tier) in enumerate([(101, "Carbon Fiber", 0), (102, "Oxy-Organic Solvents", 0),
+                                          (103, "Reinforced Carbon Fiber", 1)]):
+        con.execute(
+            "INSERT INTO pp_reaction_assignments (id, character_id, type_id, name, runs, "
+            "input_cost, reward, created_at, tier_order) VALUES (?,?,?,?,?,?,?,?,?)",
+            (nxt + i, FAKE_CID, tid, nm, 10, 0.0, 0.0, at, tier))
+
+    def _jobs(js):
+        con.execute("DELETE FROM pp_char_industry_jobs WHERE character_id=?", (FAKE_CID,))
+        con.execute("INSERT INTO pp_char_industry_jobs (character_id, jobs_json, fetched_at) "
+                    "VALUES (?,?,?)", (FAKE_CID, json.dumps(js), time.time()))
+        con.commit()
+
+    far = datetime.fromtimestamp(time.time() + 72 * 3600, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+    _jobs([{"status": "ready", "product_type_id": 101},
+           {"status": "active", "end_date": far, "product_type_id": 102}])
+    mid = [a for a in compute_alerts(FAKE_CTX) if a["kind"] == "reaction_stage_ready"]
+    ok &= check(not mid, f"nothing fires while a stage-1 job is still running (got {mid})")
+
+    _jobs([{"status": "ready", "product_type_id": 101},
+           {"status": "delivered", "product_type_id": 102}])
+    fired = [a for a in compute_alerts(FAKE_CTX) if a["kind"] == "reaction_stage_ready"]
+    ok &= check(len(fired) == 1, f"one alert once every stage-1 job is finished (got {fired})")
+    if fired:
+        a = fired[0]
+        ok &= check(a["stage"] == 2, f"names the stage that became startable (got {a['stage']})")
+        ok &= check(a["names"] == ["Reinforced Carbon Fiber"],
+                    f"and what to install (got {a['names']})")
+        ok &= check(a.get("dedupe_id") is not None,
+                    "carries a dedupe key — a ready stage stays ready, so the 15-minute "
+                    "scheduler must not re-send it every tick")
+    # ...and a single-stage plan never fires at all: nothing was ever waiting on anything.
+    con.execute("DELETE FROM pp_reaction_assignments WHERE character_id=? AND tier_order>0", (FAKE_CID,))
+    con.commit()
+    ok &= check(not [a for a in compute_alerts(FAKE_CTX) if a["kind"] == "reaction_stage_ready"],
+                "a flat, single-stage plan produces no stage-ready alert")
+
+    con.execute("DELETE FROM pp_reaction_assignments WHERE character_id=?", (FAKE_CID,))
+    con.execute("DELETE FROM pp_char_industry_jobs WHERE character_id=?", (FAKE_CID,))
+    con.commit()
+    con.close()
+    return ok
+
+
 def test_live_dashboard_renders_expected_cards(base: str) -> bool:
     print(f"\n{'='*60}\n  Live /api/dashboard renders the expected issue cards\n{'='*60}")
     ok = True
@@ -316,6 +382,7 @@ def main() -> int:
         test_all_eight_kinds_detected(),
         test_muting_excludes_from_engine_output(),
         test_reaction_finishing_soon(),
+        test_reaction_stage_ready(),
         test_live_dashboard_renders_expected_cards(base),
     ]
     _cleanup()

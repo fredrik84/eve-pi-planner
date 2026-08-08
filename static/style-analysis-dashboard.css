@@ -174,11 +174,15 @@
 .dash-issue { padding: 8px 11px; border-radius: 5px; border-left: 3px solid; }
 .dash-issue-high { background: #1f1416; border-left-color: var(--clr-red); }
 .dash-issue-warn { background: #1f1c12; border-left-color: var(--clr-amber); }
+/* A reaction stage that became startable — the one card here reporting an opportunity rather than
+   a problem, so it reads green against the amber/red issues around it. */
+.dash-issue-ok { background: #121c17; border-left-color: #46c88a; }
 .dash-issue-char { color: #fff; font-weight: 700; font-size: 13px; margin-bottom: 3px; }
 .dash-issue-items { margin: 0; padding-left: 18px; }
 .dash-issue-items li { font-size: 13px; margin: 2px 0; }
 .dash-il-high { color: #ef9aa2; }
 .dash-il-warn { color: #e0c07a; }
+.dash-il-ok { color: #9fd8b8; }
 
 /* ── Extraction-runtime advice (Setup Analysis) ─────────────────────────────── */
 .ext-graph { display: block; width: 100%; max-width: 600px; height: auto; background: #0c161c; border: 1px solid #163040; border-radius: 6px; margin: 10px 0 6px; }

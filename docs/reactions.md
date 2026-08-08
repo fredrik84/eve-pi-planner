@@ -197,6 +197,18 @@ ready stage, and relabels it "ready to start now" instead of "after stage 1 fini
 `end_date` check matters because the jobs cache is up to five minutes stale — "can I start yet"
 should not wait on a refresh.
 
+**...and it pushes.** `reaction_stage_ready` is a twelfth alert kind (`app/alerts.py`
+`_stage_ready_alerts`), computed off the same `chain_stage_state` the page renders, so a
+notification and the screen can never disagree. It flows through the existing engine for free:
+per-account mute, min-severity, the PI Dashboard's own card (green — the only alert here that is an
+opportunity rather than a problem) and Pushover/ntfy/Discord. Cooldown 12h, because a ready stage
+STAYS ready until it is installed.
+
+That required fixing the dedupe: `_process_context` only consulted the cooldown when an alert had a
+`planet_id`, so every reaction kind — which has none — re-sent on all six schedulers' 15-minute
+ticks. Alerts may now carry their own `dedupe_id` (per character for the two existing reaction
+kinds, per character+chain+stage for this one), and only a genuinely keyless alert skips the check.
+
 ## Stages on the dashboard are `tier_order`, shown absolute
 
 Every `pp_reaction_assignments` row carries `tier_order` — 0 is the deepest intermediate (react

@@ -1,9 +1,10 @@
 """Notification support: background scheduler + channel settings + event logic.
 
 Supported channels: Pushover, ntfy.sh, Discord webhook (see notifiers.py).
-Events: the same 11 alert kinds the Dashboard shows (app.alert_settings.ALERT_KINDS) — expired,
+Events: the same 12 alert kinds the Dashboard shows (app.alert_settings.ALERT_KINDS) — expired,
 expiring, storage_full, factory_refill, ext_unrouted, fac_unfed, fac_output, p0_mismatch,
-schedule_sync, reaction_finishing_soon, reaction_completed. Event detection itself lives in
+schedule_sync, reaction_finishing_soon, reaction_completed, reaction_stage_ready. Event
+detection itself lives in
 app.alerts.compute_alerts(); this
 module is purely a consumer (kind/severity filtering, cooldown, batching, sending) — it does not
 implement its own detection, so a push notification and what's shown on the Dashboard can never
@@ -163,6 +164,10 @@ _COOLDOWN_HOURS = {
     # every 4h (like factory_refill) — long enough not to spam, short enough to remind you to reseat
     # the slot so it isn't sitting idle.
     "reaction_completed": 4.0,
+    # A ready stage stays ready until the player installs it, so this is a "persistent state"
+    # kind rather than a decaying one — nag rarely. Its dedupe_id is per (character, chain,
+    # stage), so a SECOND chain reaching its own stage 2 still pings inside the window.
+    "reaction_stage_ready": 12.0,
 }
 
 
@@ -230,14 +235,23 @@ def _process_context(con, context_id: int):
         if min_severity == "high" and a["severity"] != "high":
             continue
         cooldown_h = _COOLDOWN_HOURS.get(a["kind"], 2.0)
-        if a["planet_id"] is not None and _recently_notified(con, context_id, a["kind"], a["planet_id"], cooldown_h):
+        # What identifies THIS occurrence for cooldown purposes. A colony alert is about a planet;
+        # a reactions alert is not, and used to fall through with no key at all — so every kind
+        # with `planet_id: None` re-sent on all six schedulers' 15-minute ticks, forever. An alert
+        # may now name its own key (`dedupe_id`), and only a genuinely keyless alert skips the
+        # check.
+        key = a.get("dedupe_id", a.get("planet_id"))
+        if key is not None and _recently_notified(con, context_id, a["kind"], key, cooldown_h):
             continue
+        a["_dedupe_key"] = key
         by_kind.setdefault(a["kind"], []).append(a)
 
     for kind, evs in by_kind.items():
         title, body = _format_batch(kind, evs)
         if kind == "reaction_completed":
             body += _reaction_completed_sale_hint(context_id, evs)
+        if kind == "reaction_stage_ready":
+            body = _stage_ready_body(evs)
         for setting in settings:
             status = "ok"
             try:
@@ -249,8 +263,10 @@ def _process_context(con, context_id: int):
                 status = f"error: {exc}"
                 log.warning("Notification send failed (%s/%s): %s", setting["channel"], kind, exc)
             for ev in evs:
+                # Log under the SAME key the cooldown reads back (`_dedupe_key`), or the check
+                # above would never find what was just sent.
                 _log_send(con, context_id, setting["channel"], kind,
-                          ev["character_name"], ev["planet_id"], status)
+                          ev["character_name"], ev.get("_dedupe_key", ev["planet_id"]), status)
 
 
 def _collapse_line(evs: list[dict], singular: str, plural: str) -> str:
@@ -281,6 +297,7 @@ _KIND_LABELS = {
     "schedule_sync":  ("Extractor schedule out of sync", "extractor", "extractors"),
     "reaction_finishing_soon": ("Reactions finishing soon", "character", "characters"),
     "reaction_completed": ("Reactions completed", "character", "characters"),
+    "reaction_stage_ready": ("Reaction stage ready to start", "stage", "stages"),
 }
 
 
@@ -301,6 +318,20 @@ def _isk(n: float) -> str:
     if abs(n) >= 1e3:
         return f"{n / 1e3:.0f}k"
     return f"{n:.0f}"
+
+
+def _stage_ready_body(evs: list[dict]) -> str:
+    """"Stage 2 is ready to start on Alt — install Reinforced Carbon Fiber."
+
+    Names the products, because the whole point of the ping is that the player can act on it
+    without opening the site to find out what it was about.
+    """
+    lines = []
+    for e in sorted(evs, key=lambda x: (x.get("character_name") or "", x.get("stage") or 0)):
+        what = ", ".join(e.get("names") or []) or f"{e.get('runs', 0)} job(s)"
+        lines.append(f"Stage {e.get('stage')} is ready on {e.get('character_name')} — "
+                     f"everything it waits on has finished. Install {what}.")
+    return "\n".join(lines)
 
 
 def _reaction_completed_sale_hint(context_id: int, evs: list[dict]) -> str:

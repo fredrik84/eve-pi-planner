@@ -179,6 +179,8 @@ function _renderSyncWarn(data) {
 //    reaction_refill_hours left (a lead-time warning).
 //  • reaction_completed — one or more jobs have FINISHED and are sitting idle; go collect the
 //    output and restart the slot.
+//  • reaction_stage_ready — a later stage of a chain can be started now: everything below it in
+//    that chain has finished. The one alert here that is an opportunity, not a problem.
 function _renderReactionAlerts(data) {
   const items = data.reaction_alerts;
   if (!_featureActive('reactions') || !items || !items.length) return '';
@@ -186,7 +188,17 @@ function _renderReactionAlerts(data) {
   // completed reactions collapses to a single line instead of one card each, which filled the screen.
   const done = items.filter(a => a.kind === 'reaction_completed');
   const soon = items.filter(a => a.kind === 'reaction_finishing_soon');
+  const ready = items.filter(a => a.kind === 'reaction_stage_ready');
   const rows = [];
+  // Good news first, and styled as such: a chain stage whose inputs have all finished is work you
+  // can start right now, not a problem to fix.
+  if (ready.length) {
+    const tally = ready.map(a => `${_esc(a.character_name)} — stage ${a.stage}: ${(a.names || []).map(_esc).join(', ')}`).join(' · ');
+    rows.push(`<div class="dash-issue dash-issue-ok">
+        <div class="dash-issue-char">${ready.length} stage${ready.length === 1 ? '' : 's'} ready to start</div>
+        <ul class="dash-issue-items"><li class="dash-il-ok">Everything they wait on has finished — ${tally}</li></ul>
+      </div>`);
+  }
   if (done.length) {
     const totalRuns = done.reduce((s, a) => s + (a.runs || 1), 0);
     const tally = done.slice().sort((a, b) => (b.runs || 1) - (a.runs || 1))
