@@ -307,6 +307,40 @@ def main():
         check(_align_stage_jobs(capped_stage) == 0,
               "and a bottleneck that cannot use another formula is not handed one")
 
+        print("one product in one stage gets ONE run count, however many assigns made it:")
+        from app.reactions.jobs import level_stage_runs
+        _reset(con)
+        _character(con)
+        nxt = int(con.execute("SELECT COALESCE(MAX(id), 0) + 1 AS n FROM pp_reaction_assignments")
+                  .fetchone()["n"])
+        # The reported shape: three separate assigns each sized their own chain's Carbon Fiber.
+        for i, (runs, at) in enumerate([(125, 100.0), (90, 200.0), (75, 300.0)]):
+            con.execute(
+                "INSERT INTO pp_reaction_assignments (id, character_id, type_id, name, runs, "
+                "input_cost, reward, created_at, tier_order) VALUES (?,?,?,?,?,?,?,?,?)",
+                (nxt + i, CHAR, 57453, "Carbon Fiber", runs, 0.0, 0.0, at, 0))
+        # ...and a DIFFERENT product in the same stage, which must not be levelled against it.
+        con.execute(
+            "INSERT INTO pp_reaction_assignments (id, character_id, type_id, name, runs, "
+            "input_cost, reward, created_at, tier_order) VALUES (?,?,?,?,?,?,?,?,?)",
+            (nxt + 3, CHAR, 57454, "Oxy-Organic Solvents", 6, 0.0, 0.0, 100.0, 0))
+        con.commit()
+        changed = level_stage_runs(CTX)
+        rows = [dict(r) for r in con.execute(
+            "SELECT type_id, runs FROM pp_reaction_assignments WHERE character_id=?", (CHAR,))]
+        cf = [r["runs"] for r in rows if r["type_id"] == 57453]
+        check(changed == 3 and len(set(cf)) == 1,
+              f"every Carbon Fiber job carries the same number now (got {cf})")
+        check(sum(cf) >= 125 + 90 + 75,
+              f"and the total is preserved, rounded UP not down (got {sum(cf)} vs 290)")
+        check(sum(cf) - (125 + 90 + 75) < len(cf),
+              "the rounding costs less than one extra run per job")
+        check([r["runs"] for r in rows if r["type_id"] == 57454] == [6],
+              "a different product in the same stage is left alone")
+        check(len(rows) == 4, "no row is created or destroyed — the slot count is untouched")
+        check(level_stage_runs(CTX) == 0, "running it again writes nothing — idempotent")
+        _reset(con)
+
         print("it only ever moves `jobs`:")
         s = _step(1, 0, 50, 2.0, 1)
         before = {k: v for k, v in s.items() if k != "jobs"}

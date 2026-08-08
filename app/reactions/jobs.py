@@ -557,6 +557,75 @@ def chain_stage_state(rows: list[dict], jobs: list[dict], now: float) -> list[di
     return out
 
 
+def level_stage_runs(context_id: int) -> int:
+    """Give every job of ONE product, in ONE stage, on ONE character the SAME run count. Returns
+    how many rows changed.
+
+    The complaint this exists for: "for Carbon Fibers I see 125 runs, 90 runs, 75 runs — it's all
+    over the place". Those are three separate assigns, each of which sized its own chain's Carbon
+    Fiber requirement exactly and correctly. Nothing was wrong with any one of them; what was wrong
+    was reading three numbers off the screen and typing three different values into three
+    consecutive jobs on the same character.
+
+    **Why levelling them is sound and not a fudge:** the product is fungible. Carbon Fiber made for
+    one chain is Carbon Fiber, it lands in the same hangar, and the stage above draws from the pool
+    rather than from a particular job. So only the TOTAL for a (character, stage, product) has to
+    hold, and how it is split across that product's jobs is ours to choose. The total is preserved,
+    or rounded UP when the split doesn't divide evenly — never down, which would leave the stage
+    above short.
+
+    Deliberately conservative about everything else:
+
+      * **row count is untouched**, so no slot is claimed or released and the capacity every other
+        part of this package computed still holds;
+      * **rows keep their own chain and order**, so `_shopping_roots`, `chain_stage_state` and the
+        per-order give-back all still see exactly the plans they saw before;
+      * it only writes when the numbers actually differ, so it is idempotent and free on a plan
+        that is already level.
+    """
+    ensure_reaction_assignments_table()
+    tidy = _tidy_runs_on(context_id)
+    con = get_connection()
+    try:
+        rows = [dict(r) for r in con.execute(
+            "SELECT a.id, a.character_id, a.type_id, a.runs, COALESCE(a.tier_order,0) AS tier_order "
+            "FROM pp_reaction_assignments a JOIN pp_characters c ON c.character_id = a.character_id "
+            "WHERE c.context_id=?", (context_id,))]
+    except Exception:
+        return 0
+    finally:
+        con.close()
+    if not rows:
+        return 0
+
+    groups: dict[tuple, list[dict]] = {}
+    for r in rows:
+        groups.setdefault((r["character_id"], r["tier_order"], r["type_id"]), []).append(r)
+
+    changed = 0
+    con = get_connection()
+    try:
+        for g in groups.values():
+            if len(g) < 2:
+                continue
+            total = sum(int(x["runs"] or 0) for x in g)
+            per = -(-total // len(g))               # ceil: never leave the stage above short
+            if tidy:
+                per = tidy_runs(per)
+            if all(int(x["runs"] or 0) == per for x in g):
+                continue                            # already one number — nothing to write
+            for x in g:
+                con.execute("UPDATE pp_reaction_assignments SET runs=? WHERE id=?", (per, x["id"]))
+                changed += 1
+        if changed:
+            con.commit()
+    except Exception:
+        return 0
+    finally:
+        con.close()
+    return changed
+
+
 def _stage_of_tiers(context_id: int, product_id: int, tiers: list) -> list[int]:
     """A STAGE index per client-supplied chain tier — steps that can run at the same time share one.
 
@@ -1139,6 +1208,9 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
     # (see restage_plan_rows). Idempotent and a no-op on an account whose rows are already right.
     try:
         restage_plan_rows(context_id)
+        # ...and give each product in a stage one run count instead of one per assign, so the
+        # numbers being typed into the industry window are the same every time.
+        level_stage_runs(context_id)
     except Exception:
         pass
 

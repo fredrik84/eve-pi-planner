@@ -144,6 +144,15 @@ fixed by the chain, so the SPLIT moves instead). 27h -> 12h on a synthetic 80/10
 same nine reactors. `_widen_to_idle_slots` now scores by the stage's finish time rather than a
 single step's hours, and the customer-order path re-balances the same way after `_fit_chain_slots`.
 
+**Still open — aligning END times across DIFFERENT products of an assembled plan.** `level_stage_runs`
+(2026-08-08) gives one product one run count per stage, and `_align_stage_jobs` levels finish times
+inside a single suggestion, but a plan built from several assigns can still have its products
+finishing at different times. Fixing that means moving JOBS between products, and a job carries its
+chain: a chain that lost its rows for a product would stop waiting on it and could announce
+"stage 2 is ready" while those jobs were still running. **Chain identity has to be reworked first**
+— most likely a real `chain_id` stamped at insert, which item 22 also wanted — so this is not a
+small follow-up.
+
 **Still open:** a MANUAL "mark this stage done" for work ESI cannot see — a corp job installed by a
 character without the Factory_Manager role never appears in any job list we can read, so its stage
 can never complete on its own.
@@ -454,6 +463,7 @@ match any template we generate) is still unscoped.
 | 19b | Reaction plan STAGES on the dashboard: planned slots sort by `tier_order`, carry an `S<n>` badge, later stages dim/dash, and the "To install" checklist splits under stage banners. The number is `tier_order + 1` absolute, never re-ranked against what's still pending | 08-07 |
 | 16 | Dead Industry surface removed: the unrendered skill advisor (module, endpoint, flag, test), `/api/industry/to-install` and `/api/industry/skill-coverage`. No behaviour change; the checklist-vs-plan guard is now structural | 08-07 |
 | 20 | Clear all no longer strands a customer order: order rows are cleared AND the order's `assigned_runs` handed back (top row per chain, clamped at 0), with already-stranded orders repaired on the next assign. `test_clear_all_orders.py` | 08-07 |
+| 26 | One run count per product per stage (`level_stage_runs`): three assigns that each sized Carbon Fiber separately (125/90/75) become one number typed three times, total preserved and rounded up, row count and chain identity untouched | 08-08 |
 | 25 | Formulas-to-acquire section on the reactions shopping list — the plan's missing formulas with Jita contract prices and a copy-names button, kept out of the materials tables and every cost total (a formula is a contract buy, not a multibuy line) | 08-08 |
 | 24 | "Clear its jobs" on a customer order (`DELETE /api/reactions/orders/{id}/assignments`): frees its slots, hands its runs back, keeps the order — so one order can be re-planned without Clear all or cancelling it. Give-back rule shared with Clear all | 08-08 |
 | 23c | Reaction stages land together (`_align_stage_jobs`): slots move off steps that would finish early onto the one gating the stage, slot-neutral — fewer logins to install and collect | 08-08 |

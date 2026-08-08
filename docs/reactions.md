@@ -16,6 +16,7 @@ Find a section: `grep -n '^## ' docs/reactions.md` and read from that line — t
 - **Formulas to acquire, as a shopping section** — why the formula list sits beside the materials rather than in them
 - **Re-planning ONE customer order** — the per-order clear, and the single give-back rule it shares with Clear all
 - **Landing a stage in one go (`_align_stage_jobs`)** — why the spread matters more than the total, and what moves to close it
+- **One run count per product per stage (`level_stage_runs`)** — why levelling across assigns is sound, and what it deliberately doesn't touch
 - **Run counts you can type (`reactions_tidy_runs`)** — bounded rounding of intermediate runs, and why the end product is never rounded
 - **A stage is a DEPTH, not a position in a list** — why siblings share a stage, and how existing rows were repaired
 - **Knowing when the next stage can start (`chain_stage_state`)** — the ESI signal behind "stage 2 is ready"
@@ -213,6 +214,32 @@ The idle-slot pass now scores by the same objective — the reduction in the STA
 in one step's own hours, since an hour off a step that was already finishing early buys nothing.
 The customer-order path re-balances the same way after `_fit_chain_slots` (which minimises the SUM
 of tier durations — correct while each tier was its own stage, wrong now that siblings share one).
+
+## One run count per product per stage (`level_stage_runs`)
+
+Reported from use: *"for Carbon Fibers I see 125 runs, 90 runs, 75 runs — it's all over the
+place."* Those are three separate assigns, each of which sized its own chain's Carbon Fiber
+requirement exactly and correctly. Nothing was wrong with any one of them; what was wrong was
+reading three numbers off the screen and typing three different values into three consecutive jobs
+on one character.
+
+`level_stage_runs` gives every job of one product, in one stage, on one character the same run
+count. **It is sound because the product is fungible** — Carbon Fiber made for one chain is Carbon
+Fiber, it lands in the same hangar, and the stage above draws from the pool rather than from a
+particular job. Only the TOTAL for a (character, stage, product) has to hold, and how it splits
+across that product's jobs is ours to choose. The total is preserved, or rounded UP where it
+doesn't divide evenly (125/90/75 → 97/97/97), never down.
+
+Conservative about everything else, deliberately: the row count is untouched (no slot claimed or
+released), rows keep their own chain and order so `_shopping_roots`, `chain_stage_state` and the
+per-order give-back all still see the plans they saw before, and it writes only when the numbers
+actually differ. Runs on dashboard load beside `restage_plan_rows`.
+
+**What this does NOT do yet:** align END times across DIFFERENT products of an assembled plan. That
+means moving jobs between products, and a job carries its chain — a chain that lost its rows for
+one product would stop waiting on it and could announce "stage 2 is ready" while those jobs were
+still running. `_align_stage_jobs` does it safely inside a single suggestion, where the whole chain
+is in hand; doing it across assigns needs chain identity reworked first.
 
 ## Run counts you can type (`reactions_tidy_runs`)
 
