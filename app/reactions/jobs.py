@@ -986,7 +986,15 @@ def level_product_runs(context_id: int) -> int:
         return 0
 
     cycles = _reaction_cycle_times()
-    free = {c["character_id"]: int(c["free_slots"]) for c in _character_capacities(context_id)}
+    caps_now = {c["character_id"]: c for c in _character_capacities(context_id)}
+    # What the plan may hold on a character, counting EVERY planned job on it, not just the busiest
+    # stage: reactors it has, minus the jobs really running in game. `free_slots` is the peak-tier
+    # number — right for "what can I start now", and wrong here, because it let this pass grow
+    # stage 1 into reactors that stage 2 was already holding a row in. Reported as "12 slots
+    # assigned to characters that only have 10". A row is a line in the plan whether or not it can
+    # be installed yet, and the plan must fit the reactors.
+    room = {cid: max(0, int(c.get("slots") or 0) - int(c.get("running") or 0))
+            for cid, c in caps_now.items()}
 
     # (stage, product) -> (character, chain) -> the rows that chain is holding of it.
     stages: dict[int, dict[int, dict[tuple, list[dict]]]] = {}
@@ -1000,8 +1008,17 @@ def level_product_runs(context_id: int) -> int:
     # TARGET, not a ceiling: jobs grow to fill it, which is what makes a stage land together and
     # what keeps the number of logins down. Unset ("auto") keeps this pass's own rule below.
     target = get_job_target(context_id)
+    rows_by_char_stage: dict[int, dict[int, int]] = {}
+    for stage, by_product in stages.items():
+        for by_chain in by_product.values():
+            for chain, rs in by_chain.items():
+                rows_by_char_stage.setdefault(chain[0], {})[stage] = \
+                    rows_by_char_stage.get(chain[0], {}).get(stage, 0) + len(rs)
+
     plan: list[tuple] = []          # (product_key, chain_key, rows, target_runs, target_jobs)
     for stage, by_product in stages.items():
+        elsewhere = {cid: sum(n for st, n in per.items() if st != stage)
+                     for cid, per in rows_by_char_stage.items()}
         # With no target of the player's own, a stage may be stretched to land together but never
         # past the job that is already the longest in it — levelling then makes a plan tidier and
         # shorter, never slower, which is the only safe thing to do with a number nobody chose.
@@ -1021,24 +1038,39 @@ def level_product_runs(context_id: int) -> int:
         #
         # Per stage rather than across all of them, which is right under the one-slot model: a
         # character's load is its busiest stage, so growth in stage 0 and stage 1 does not add up.
-        budget: dict[int, int] = {}
-        for by_chain in by_product.values():
+        # ...so this stage may use whatever the character's reactors are not already committed to
+        # by its OTHER stages.
+        budget = {cid: max(0, n - elsewhere.get(cid, 0)) for cid, n in room.items()}
+
+        # The shortest this stage can possibly run on the tightest character: all of its work,
+        # divided by the reactors it may use. Nothing shorter is installable however the run counts
+        # are chosen, so it seeds the floor — the give-ground loop below then only has to fix
+        # rounding. Without it the loop started from the asked-for length and stepped one run at a
+        # time, which never got from "5 days" to what the reactors could do: the plan came out
+        # holding 20 jobs on an 11-slot character.
+        work_hours: dict[int, float] = {}
+        for tid, by_chain in by_product.items():
+            cyc = cycles.get(tid, 1.0)
             for chain, rs in by_chain.items():
-                budget[chain[0]] = budget.get(chain[0], 0) + len(rs)
-        for cid in list(budget):
-            budget[cid] += free.get(cid, 0)
+                work_hours[chain[0]] = work_hours.get(chain[0], 0.0) + \
+                    sum(int(r["runs"] or 0) for r in rs) * cyc
+        d_floor = max((h / max(1, budget.get(cid, 1)) for cid, h in work_hours.items()), default=0.0)
 
         floor_runs: dict[int, int] = {}     # per product, raised when a character is over-promised
+        for tid in by_product:
+            cyc = cycles.get(tid, 1.0)
+            if cyc > 0 and d_floor > 0:
+                floor_runs[tid] = max(1, int(d_floor / cyc))
         layout: dict[int, dict] = {}
         products: dict[int, dict] = {}
-        for _attempt in range(8):
+        for _attempt in range(24):
             def _build(extra_hours: set[float]) -> dict:
                 built: dict[int, dict] = {}
                 for tid, by_chain in by_product.items():
                     cyc = cycles.get(tid, 1.0)
                     chains = sorted(by_chain)
                     totals = [sum(int(r["runs"] or 0) for r in by_chain[c]) for c in chains]
-                    caps = [len(by_chain[c]) + free.get(c[0], 0) for c in chains]
+                    caps = [max(1, budget.get(c[0], len(by_chain[c]))) for c in chains]
                     chosen = _target_runs(target, cyc)
                     if chosen:
                         max_runs = chosen
@@ -1076,10 +1108,14 @@ def level_product_runs(context_id: int) -> int:
             over = [cid for cid, n in load.items() if n > budget.get(cid, 0)]
             if not over:
                 break
-            # The greediest product on the most over-promised character gives ground first.
+            # The greediest product on the most over-promised character gives ground first, and it
+            # gives it in one step — the NEXT run count that actually changes the layout, not one
+            # more run, which would take a hundred passes to matter.
             worst_cid = max(over, key=lambda cid: load[cid] - budget.get(cid, 0))
             worst_tid = max(per_product_load[worst_cid], key=lambda t: per_product_load[worst_cid][t])
-            nxt = layout[worst_tid]["runs"] + 1
+            cur = layout[worst_tid]["runs"]
+            higher = [o["runs"] for o in products[worst_tid]["options"] if o["runs"] > cur]
+            nxt = min(higher) if higher else cur + max(1, cur // 4)
             if nxt <= floor_runs.get(worst_tid, 0):
                 break                       # no room left to give — take what we have
             floor_runs[worst_tid] = nxt
@@ -1986,6 +2022,12 @@ def _character_capacities(context_id: int) -> list[dict]:
         result.append({
             "character_id": c["character_id"], "character_name": c["character_name"],
             "free_slots": max(0, slots - used),
+            # The reactors this character HAS, and how many are taken by jobs really running in
+            # game. `free_slots` above nets off pending rows by their worst tier — right for "what
+            # can I start now", wrong for "how many rows may this plan hold in total", which is
+            # what the levelling pass has to answer (see level_product_runs' budget).
+            "slots": slots,
+            "running": len([j for j in jobs if j.get("status") in ("active", "paused", "ready")]),
         })
     return result
 

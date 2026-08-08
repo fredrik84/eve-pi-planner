@@ -344,6 +344,20 @@ def main():
         check(_counts(OOS) == [120],
               f"...and Oxy-Organic Solvents joins the stage at 120 (got {_counts(OOS)})")
 
+        def _over_capacity():
+            """Characters holding more planned jobs than they have reactors — counting EVERY row,
+            not just the busiest stage. Reported as "12 slots assigned to characters that only
+            have 10": a row is a line in the plan whether or not it can be installed yet."""
+            from app.reactions.jobs import _character_capacities
+            slots = {c["character_id"]: c["slots"] for c in _character_capacities(CTX)}
+            held = {}
+            for r in _cf_rows(con):
+                held[r["character_id"]] = held.get(r["character_id"], 0) + 1
+            return {cid: (n, slots.get(cid, 0)) for cid, n in held.items() if n > slots.get(cid, 0)}
+
+        check(not _over_capacity(),
+              f"no character holds more jobs than it has reactors (over: {_over_capacity()})")
+
         # A length the reactors cannot reach still yields ONE number — the shortest they can do —
         # rather than dropping the product from the pass.
         _build_reported()
@@ -353,6 +367,10 @@ def main():
         level_product_runs(CTX)
         check(len(_counts(CF)) == 1 and len(_counts(TP)) == 1,
               f"an unreachable 5-day target still levels (got {_counts(CF)} / {_counts(TP)})")
+        # ...and asking for something the reactors cannot do must not make the plan overflow them:
+        # the give-ground loop is seeded with the shortest the tightest character can actually run.
+        check(not _over_capacity(),
+              f"...without overflowing anyone's reactors (over: {_over_capacity()})")
         for i, _ in enumerate(REPORTED):
             con.execute("DELETE FROM pp_reaction_assignments WHERE character_id=?", (-9500 - i,))
             con.execute("DELETE FROM pp_char_industry_jobs WHERE character_id=?", (-9500 - i,))

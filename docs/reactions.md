@@ -378,6 +378,19 @@ types both; levelling one and not the other read the row's position in a chain a
 property of the product. Its `input_cost`/`reward` scale with the runs (both are linear in them),
 so the plan's cost and profit stay true.
 
+**The plan must fit the reactors, counting every row.** The budget for a stage is the character's
+reactors minus the jobs really running in game, minus the rows it holds in its OTHER stages —
+deliberately NOT `free_slots`, which nets pending rows off by their busiest tier. That number
+answers "what can I start now"; this one answers "how many rows may the plan hold", and using the
+first let this pass grow stage 1 into reactors stage 2 already had a row in ("12 slots assigned to
+characters that only have 10"). A row is a line in the plan whether or not it can be installed yet.
+
+Where a stage cannot fit, the greediest product is pushed onto a longer run count and the stage is
+solved again — and the loop is **seeded with the shortest duration the tightest character can
+actually run** (all its work ÷ the reactors it may use). Stepping up one run at a time from the
+asked-for length, as the first version did, never got from "5 days" to what the reactors could do
+and left 20 jobs on an 11-slot character.
+
 **Three ways it used to quietly do nothing**, all fixed the same day and all worth not
 reintroducing:
 
