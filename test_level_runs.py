@@ -88,74 +88,56 @@ def main():
     ensure_reaction_assignments_table()
 
     print("the run counts one product could carry, and what each costs:")
-    # The reported case as pure numbers: four chains needing 375 / 360 / 360 / 300 of one product,
-    # currently split 3 / 4 / 4 / 4 ways. Plenty of headroom, no ceiling worth the name.
-    opts = _level_options([375, 360, 360, 300], [10, 10, 10, 10], max_runs=10_000)
+    # The reported case as pure numbers, POOLED: the account needs 1,395 runs of one product
+    # (375 + 360 + 360 + 300 across four chains) and has 40 reactors it may spend on the stage.
+    # Which character makes a given run is a placement question, not one the run count answers —
+    # so the search sees one requirement and one reactor budget.
+    opts = _level_options(1395, 40, max_runs=10_000)
     by_runs = {o["runs"]: o for o in opts}
-    check(all(len(set(o["per_group"])) >= 0 for o in opts) and opts, "there are options at all")
+    check(bool(opts), "there are options at all")
     check(125 in by_runs and by_runs[125]["jobs"] == 12,
           f"125 runs everywhere is 12 jobs, not 15 (got {by_runs.get(125, {}).get('jobs')})")
-    check(by_runs[125]["per_group"] == [3, 3, 3, 3],
-          f"and three jobs on every character (got {by_runs[125]['per_group']})")
     check(by_runs[125]["surplus"] == 1500 - 1395,
           f"the surplus is 105 runs of stock (got {by_runs[125]['surplus']})")
     check(all(o["surplus"] <= 0.50 * 1395 for o in opts),
           "nothing offered overshoots the real requirement by more than the budget")
-    check(all(o["runs"] * min(o["per_group"]) >= 0 for o in opts) and
-          all(sum(j * o["runs"] for j in [o["per_group"][i]]) >= [375, 360, 360, 300][i]
-              for o in opts for i in range(4)),
-          "every option still covers every chain's own requirement in full")
+    check(all(o["jobs"] * o["runs"] >= 1395 for o in opts),
+          "every option still covers the requirement in full")
 
-    print("...and it never asks for a reactor the character does not have:")
-    tight = _level_options([375, 360, 360, 300], [3, 4, 4, 4], max_runs=10_000)
-    check(all(all(j <= c for j, c in zip(o["per_group"], [3, 4, 4, 4])) for o in tight),
-          "no option exceeds the per-character job cap")
-    check(any(o["runs"] == 125 for o in tight), "125 still fits inside 3/4/4/4 slots")
-    check(not _level_options([1000, 3], [4, 4], max_runs=10_000),
-          "3 runs on one chain and 1000 on another has no cheap common number — left alone")
+    print("...and it never asks for a reactor the stage does not have:")
+    tight = _level_options(1395, 15, max_runs=10_000)
+    check(all(o["jobs"] <= 15 for o in tight), "no option exceeds the reactor budget")
+    check(any(o["runs"] == 125 for o in tight), "125 still fits inside 15 reactors")
 
-    print("no chain is handed several times the work it asked for:")
-    # Inside the 15% total budget and still absurd: the 2-run chain would be given 1,000 runs,
-    # 500x what it needs, because next to 10,000 the overshoot barely registers in the total.
-    big = _level_options([10_000, 2], [10, 10], max_runs=10_000)
-    check(all(o["per_group"][1] * o["runs"] <= max(3 * 2, 10) for o in big),
-          "the small chain is never taken past 3x its own requirement (or 10 runs)")
-    check(all(o["per_group"][0] * o["runs"] >= 10_000 for o in big),
-          "...and the big chain still gets everything it needs")
-
-    print("a small product still gets ONE number — 15% was too tight to buy one:")
-    # The reported case: Oxy-Organic Solvents at 35 runs on some characters and 18 on others.
-    # Every common count either overshoots the small chain by a third (35 on both) or wants a
-    # second reactor (18 on both) — so at a rounding-sized budget the product kept two numbers.
-    oos = _level_options([35, 18], [1, 1], max_runs=125)
-    check(oos, "with no free reactor there is still a common count")
-    check(all(o["surplus"] > 0.15 * 53 for o in oos),
-          "...and every one of them costs more than 15%, which is why this needed widening")
+    print("a small product gets ONE number, in as few reactors as it needs:")
+    # The reported case: Oxy-Organic Solvents at 35 runs on some characters and 18 on others,
+    # 53 runs in total. Pooled, that is one 53-run job — the two numbers were an artefact of
+    # making each chain's intermediate on the character that would consume it.
+    oos = _level_options(53, 2, max_runs=125)
+    check(oos, "with two reactors there is a common count")
     layout_oos = _choose_stage_layout({OOS: {"cycle": 3.0, "options": oos}})
-    check(layout_oos[OOS]["runs"] == 35 and layout_oos[OOS]["jobs"] == 2,
-          f"35 on both, in the reactors already held (got {layout_oos[OOS]['runs']})")
-    check(layout_oos[OOS]["surplus"] == 17, f"costing 17 runs of stock (got {layout_oos[OOS]['surplus']})")
-    room = _choose_stage_layout({OOS: {"cycle": 3.0, "options": _level_options([35, 18], [2, 2], 125)}})
-    check(room[OOS]["runs"] == 35 and room[OOS]["jobs"] == 2,
-          f"a free reactor does not change it — 18 runs in 3 jobs would waste less goo and cost a "
-          f"reactor to do it (got {room[OOS]['runs']} in {room[OOS]['jobs']})")
+    check(layout_oos[OOS]["runs"] == 53 and layout_oos[OOS]["jobs"] == 1,
+          f"one job of 53 runs (got {layout_oos[OOS]['jobs']} × {layout_oos[OOS]['runs']})")
+    check(layout_oos[OOS]["surplus"] == 0, f"and no surplus at all (got {layout_oos[OOS]['surplus']})")
+    room = _choose_stage_layout({OOS: {"cycle": 3.0, "options": _level_options(53, 4, 125)}})
+    check(room[OOS]["runs"] == 53 and room[OOS]["jobs"] == 1,
+          f"spare reactors do not split it further — fewer, fuller jobs is the point "
+          f"(got {room[OOS]['jobs']} × {room[OOS]['runs']})")
 
     print("surplus is spent to LAND a stage, and for nothing else:")
     # Two products in one stage: 300 runs of a 1h reaction (300h) beside 80 of a 3h one (240h).
     # Building 100 of the second instead of the 80 it needs lands both at 300h — worth paying for.
-    fast = _level_options([300], [4], 300)
-    landed = _choose_stage_layout({CF: {"cycle": 1.0, "options": fast},
-                                   OOS: {"cycle": 3.0, "options": _level_options([80], [4], 300)}})
+    landed = _choose_stage_layout({CF: {"cycle": 1.0, "options": _level_options(300, 4, 300)},
+                                   OOS: {"cycle": 3.0, "options": _level_options(80, 4, 300)}})
     d_fast = landed[CF]["runs"] * 1.0
     d_slow = landed[OOS]["runs"] * 3.0
     check(abs(d_fast - d_slow) <= 0.10 * max(d_fast, d_slow),
           f"the stage lands together ({d_fast}h vs {d_slow}h)")
     check(landed[OOS]["surplus"] > 0, "which took building more of the shorter one than it needs")
-    # ...and when landing together is out of reach (the slow one may not exceed its own 100 runs),
+    # ...and when landing together is out of reach (the slow one may not exceed its own 80 runs),
     # nothing is paid for getting closer.
-    # One reactor each and the shorter one capped at what it needs: nothing can close the 60h gap.
-    stuck = _choose_stage_layout({CF: {"cycle": 1.0, "options": _level_options([300], [1], 300)},
-                                  OOS: {"cycle": 3.0, "options": _level_options([80], [1], 80)}})
+    stuck = _choose_stage_layout({CF: {"cycle": 1.0, "options": _level_options(300, 1, 300)},
+                                  OOS: {"cycle": 3.0, "options": _level_options(80, 1, 80)}})
     check(stuck[OOS]["surplus"] == 0 and stuck[CF]["surplus"] == 0,
           "a stage that cannot land together buys no partial alignment at all")
 
@@ -163,8 +145,8 @@ def main():
     # Two products in a stage, one twice as slow per run. Levelling them to the same RUN count
     # would land them 50 hours apart; the same duration is what a single login collects.
     layout = _choose_stage_layout({
-        CF: {"cycle": 1.0, "options": _level_options([200, 200], [8, 8], 200)},
-        OOS: {"cycle": 2.0, "options": _level_options([100, 100], [8, 8], 100)},
+        CF: {"cycle": 1.0, "options": _level_options(400, 16, 200)},
+        OOS: {"cycle": 2.0, "options": _level_options(200, 16, 100)},
     })
     d_cf = layout[CF]["runs"] * 1.0
     d_oos = layout[OOS]["runs"] * 2.0
@@ -174,12 +156,12 @@ def main():
           "which means the same DURATION, not naively the same number")
 
     print("...and settles on a number you can type when tidy runs are on:")
-    # 200 and 120 needed, four reactors: 67 is the cheapest number in goo, 70 the one you can type
-    # without checking. Same five jobs either way — the only difference is the surplus.
-    pair = {CF: {"cycle": 1.0, "options": _level_options([200, 120], [4, 4], 70)}}
-    check(_choose_stage_layout(pair)[CF]["runs"] == 67, "off: the cheapest number wins (67)")
-    check(_choose_stage_layout(pair, prefer_tidy=True)[CF]["runs"] == 70,
-          "on: the tidy number wins for the same job count (70)")
+    # 320 runs across at most 8 reactors, none longer than 70: 64 is the cheapest number in goo,
+    # 65 the one you can type without checking. Same five jobs either way — only the surplus moves.
+    pair = {CF: {"cycle": 1.0, "options": _level_options(320, 8, 70)}}
+    check(_choose_stage_layout(pair)[CF]["runs"] == 64, "off: the cheapest number wins (64)")
+    check(_choose_stage_layout(pair, prefer_tidy=True)[CF]["runs"] == 65,
+          "on: the tidy number wins for the same job count (65)")
 
     con = get_connection()
     try:

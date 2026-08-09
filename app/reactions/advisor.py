@@ -28,14 +28,11 @@ from app.esi import require_context
 from app.market import fetch_daily_volume
 from app.reactions._router import router
 from app.reactions.graph import (
-    _load_goo_and_reached, _value_reaction_batch, _explode_chain_tiers,
-    _build_opportunities, _ordered_chain_tiers, _load_reaction_graph, _fuel_block_ids,
-    reaction_stock_pool, tier_ranks, tidy_runs,
+    _load_goo_and_reached, _build_opportunities, _ordered_chain_tiers, _load_reaction_graph,
+    _fuel_block_ids, reaction_stock_pool, tier_ranks, tidy_runs,
 )
-from app.reactions.settings import effective_reaction_settings
 from app.reactions.jobs import (
-    ensure_industry_jobs_table, ensure_reaction_assignments_table,
-    get_industry_jobs, reaction_capable, reaction_slots, _character_capacities,
+    ensure_industry_jobs_table, ensure_reaction_assignments_table, _character_capacities,
     formula_concurrency_caps, _cap_jobs, _parallel_stages_on, _tidy_runs_on,
 )
 
@@ -233,17 +230,14 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
     hvars = h.addVariables(n, lb=[0.0] * n, ub=[1.0] * n)
     h.maximize(sum(float(c["net_profit_instant"]) * hvars[i] for i, c in enumerate(candidates)))
     h.addConstr(sum(float(c["input_cost"]) * hvars[i] for i, c in enumerate(candidates)) <= float(isk_budget))
-    # Real reaction slots are ALSO a shared, limited resource across every chosen candidate —
-    # the per-candidate cadence cap above only checked each one against the single BEST
-    # character's slots in isolation, so the LP could (and did, in a real reported case) fund
-    # several products that each look individually cadence-feasible but together demand more
-    # slots than actually exist across the account; stage 2's real bin-packing then has no
-    # choice but to badly overshoot the chosen cadence on whichever gets scheduled last (a real
-    # instance: two suggestions landing at 24d/10d runtimes against a much shorter cadence).
+    # Real reaction slots are ALSO a shared, limited resource across every chosen candidate — the
+    # per-candidate cadence cap above only checked each one against the single BEST character's
+    # slots in isolation, so without this the LP funds several products that each look individually
+    # cadence-feasible but together demand more slots than the account has, and stage 2 then has no
+    # choice but to overshoot the cadence badly on whichever is scheduled last.
     # Uses the continuous (non-ceiled) slot-demand — runs × cycle_hours ÷ cadence_hours — so it
-    # stays linear in x_i; the ceil() rounding that can nudge stage 2's actual slot count up by
-    # a fraction per suggestion is a minor, expected difference, not the systemic multi-week
-    # overshoot this constraint fixes.
+    # stays linear in x_i; the ceil() rounding that can nudge stage 2's actual slot count up by a
+    # fraction per suggestion is a minor, expected difference.
     total_free_slots = sum(c["free_slots"] for c in chars_for_cap)
     slot_demand = [c["top_level_runs"] * (c["cycle_time"] / 3600.0 if c["cycle_time"] else 1.0) / cadence_hours
                    for c in candidates]
@@ -259,15 +253,11 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
     if not chosen:
         return empty
 
-    # Stage 2 below allocates real slots in ASCENDING ideal-slot-need order (smallest first),
-    # not this profit order — letting the biggest, most profit-heavy candidate go first would
-    # let it greedily claim its ENTIRE ideal slot count, leaving only rounding scraps for
-    # smaller candidates; a small candidate losing even 1 slot to ceil() rounding can lose HALF
-    # its allocation (a real reported case: needed 2 slots, got 1, runtime nearly doubled),
-    # while a big candidate absorbing that same 1-slot shortfall barely moves its own
-    # percentage. Smallest-need-first minimizes the worst-case overshoot across the whole set.
-    # `suggestions` is re-sorted back to this original profit order before being returned, so
-    # display order is unaffected — only the internal allocation order changes.
+    # Stage 2 below allocates real slots in ASCENDING ideal-slot-need order (smallest first), not
+    # this profit order: a small candidate losing even 1 slot to ceil() rounding can lose HALF its
+    # allocation, while a big candidate absorbing the same shortfall barely moves. Smallest-first
+    # minimizes the worst-case overshoot across the set. `suggestions` is re-sorted back to profit
+    # order before being returned, so display order is unaffected.
     def _ideal_slots_for(c, xi):
         runs_needed = max(1, round(c["top_level_runs"] * xi))
         cycle_hours = c["cycle_time"] / 3600.0 if c["cycle_time"] else 1.0
@@ -330,13 +320,10 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
         touched_chars.add(pick_id)
 
         # Stage 1's cadence cap sized every candidate assuming it COULD land on the single best
-        # character's free-slot count — but only one candidate ever actually can. Once it's
-        # known here which REAL character (and how many of ITS slots) this suggestion landed
-        # on, downscale runs_needed (and everything computed from it below, via xi) to what
-        # those specific slots can really finish within cadence, instead of keeping the full
-        # run count and letting real duration balloon past what was asked for (a real reported
-        # case: multiple suggestions each independently sized for a "best" character that only
-        # one of them could actually get, landing at 11d4h against a much shorter cadence).
+        # character's free-slot count — but only one candidate ever actually can. Now that the REAL
+        # character (and how many of ITS slots) is known, downscale runs_needed — and everything
+        # computed from it below, via xi — to what those specific slots can finish within the
+        # cadence, rather than keeping the run count and letting the real duration balloon.
         if slots_used < ideal_slots:
             achievable_runs = max(1, int(slots_used * cadence_hours / cycle_hours))
             xi *= min(1.0, achievable_runs / runs_needed)
@@ -366,12 +353,9 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
             stages = tier_ranks(ordered)
             # Slots this suggestion is holding at its BUSIEST moment. A tier reuses the slots the
             # tier below it has finished with, so what a chain costs the character is the worst
-            # tier, not the sum — the same model the assign guard commits under
-            # (`_concurrent_load`). Subtracting every tier separately (the old behaviour) charged a
-            # 3-stage chain three slots for work that never overlaps, and the character then looked
-            # full to every suggestion after it.
-            # Per STAGE, and the load of a stage is the SUM of the steps in it: three siblings are
-            # three reactors at the same moment. Only across stages does the reuse apply.
+            # STAGE, not the sum — the same model the assign guard commits under
+            # (`_concurrent_load`). The load of a stage is the SUM of the steps in it: three
+            # siblings are three reactors at the same moment. Only across stages does reuse apply.
             peak_used = slots_used
             stage_load: dict[int, int] = {}
             for (tid, info), stage in zip(ordered, stages):

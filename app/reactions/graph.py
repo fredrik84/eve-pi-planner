@@ -4,7 +4,6 @@ walks the reaction graph to cost every reachable product (_resolve_reachable), v
 batch (_value_reaction_batch — the single source of truth for reaction economics), and builds the
 opportunity ranking + shopping lists. Depends on settings for pricing config; never on jobs/orders,
 so it imports first with no cycle."""
-import contextvars as _contextvars
 import math
 import time as _time
 
@@ -13,8 +12,7 @@ from fastapi import Depends, HTTPException
 from app.sde import get_connection, load_pi_data
 from app.markets import resolve_market_data
 from app.industry_cost import fetch_system_cost_index, fetch_adjusted_prices
-from app.cache import (cache_get_json, cache_set_json,  # noqa: F401 — re-exported
-                       begin_request_memo, request_memo)
+from app.cache import cache_get_json, cache_set_json, request_memo
 from app.esi import require_context
 from app.groups import member_group
 
@@ -267,7 +265,9 @@ _GOO_CACHE_TTL = 300.0
 # ...and SHARED, in Redis, because the in-process copy is per worker: prod runs 2 replicas x 3
 # workers, so five of every six clicks hit a cold cache and paid the full rebuild. Measured on the
 # real account: 3,305 ms cold. That is the single biggest cost on the Reactions tab, and it is the
-# same answer for every worker.
+# same answer for every worker. Which also settles the invalidation question above for good: a
+# process-local drop cannot clear the shared copy or the other five workers' own, so the TTL is the
+# only honest expiry there is. Don't add an invalidation hook that only clears `_GOO_CACHE`.
 _GOO_REDIS_TTL = 300
 
 
@@ -288,21 +288,6 @@ def _goo_from_json(d):
             {int(k): x for k, x in d["by_out"].items()},
             {int(k): x for k, x in d["by_rx"].items()},
             {int(k): x for k, x in d["types"].items()})
-
-
-def invalidate_goo_cache(context_id: int | None = None) -> None:
-    """Drop the cached priced graph — for one account, or all of them.
-
-    Called when a setting that CHANGES the graph is saved (reaction system, time efficiency,
-    shipping), so a settings change is visible immediately instead of after the TTL. Anything that
-    only moves prices doesn't need this: those come from caches of their own and the two-minute
-    window is well inside them.
-    """
-    if context_id is None:
-        _GOO_CACHE.clear()
-        return
-    for k in [k for k in _GOO_CACHE if k[0] == int(context_id)]:
-        _GOO_CACHE.pop(k, None)
 
 
 def _load_goo_and_reached(context_id: int, allowed_material_ids: set[int] | None = None):

@@ -291,10 +291,10 @@ fifteen jobs become **twelve**. It replaces `level_stage_runs` on dashboard load
 on; off, that older within-a-character pass still runs.
 
 **How the number is chosen.** Per stage, the options for each product are every run count that
-divides some chain's requirement into a whole number of jobs, plus the round number just above each
-(`_level_options`). An option is discarded if it needs more reactors than a character has free, if
-it overshoots the product's total by more than **50%**, or if it hands any ONE chain more than
-**3×** what it asked for. What is left is scored by `_choose_stage_layout`, searching over target
+divides the ACCOUNT's requirement for it into a whole number of jobs, plus the round number just
+above each (`_level_options`). An option is discarded if it needs more reactors than the stage has,
+or if it overshoots that requirement by more than **50%**. What is left is scored by
+`_choose_stage_layout`, searching over target
 DURATIONS rather than run counts — which is what makes alignment expressible — in the user's stated
 priority order (TODO 28):
 
@@ -334,7 +334,7 @@ those reactors can do and nothing is said about it (also the user's call: they w
 the nearest achievable plan than a warning).
 
 It is a **target, not a ceiling**: jobs grow to fill it, which is what lands a stage together and
-keeps the number of logins down. The surplus budget and the 3×-per-chain ceiling still bound what
+keeps the number of logins down. The surplus budget still bounds what
 that costs, and a target the free reactors cannot reach simply doesn't produce options — the
 product keeps what it has rather than being half-applied.
 
@@ -411,11 +411,10 @@ and left 20 jobs on an 11-slot character.
 **Three ways it used to quietly do nothing**, all fixed the same day and all worth not
 reintroducing:
 
-* a product whose chains had no affordable common count was left alone entirely. Now it falls back
-  to the smallest count every chain can be split into with the reactors it has — that count always
-  exists, which is what makes one number per product a property of this pass rather than something
-  it manages when the arithmetic is kind. Only the 3×-per-chain ceiling can still leave a product
-  alone (3 runs beside 1000 has no shared count that isn't mostly waste);
+* a product with no affordable common count was left alone entirely. Now it falls back to the
+  smallest count its work can be split into with the reactors there are — that count always exists,
+  which is what makes one number per product a property of this pass rather than something it
+  manages when the arithmetic is kind;
 * every product in a stage was sized against the character's WHOLE free-slot pool, so two products
   each promised the same four reactors and the plan asked for eight — resolved by dropping one
   product from the pass, which left it showing its old numbers. **A stage is now solved as a
@@ -438,12 +437,13 @@ common count inside 15% at all (35 on both overshoots the small chain by a third
 a second reactor the character may not have free), so the product was left alone, which quietly
 ranked "cheap" above "one number" and inverted the priority list.
 
-The per-chain **3×** ceiling is not implied by the total: a chain needing 2 runs beside one needing
-10,000 can be handed 1,000 and barely move the total, which is 500× the work that chain wanted.
-Below 10 runs a chain is exempt from the ratio, the same range `tidy_runs` already treats as free.
-
-A product whose chains are too far apart even for that — 3 runs on one and 1000 on another — gets
-no options at all and is left exactly as it was. `test_level_runs.py`.
+**A second, per-CHAIN ceiling was retired on 2026-08-09** — 3× what any one chain asked for, on top
+of the 50% total. It was there because a chain needing 2 runs beside one needing 10,000 could be
+handed 1,000 and barely move the total. Pooling made it unreachable: the search sees ONE requirement
+per product per stage, so "any one chain" and "the whole product" became the same quantity and the
+per-chain rule reduced to the total budget it sat beside. It was carried for a day as dead
+plumbing — list-shaped `totals`/`caps`/`per_group` arguments with exactly one element in them — and
+the whole of it went with the ceiling. `test_level_runs.py`.
 
 **Committing a plan blocks the view (`_rxRunSteps`).** Levelling runs on the plan re-read, so the
 run counts a player sees are only true once that read lands — an assign is a POST per suggestion

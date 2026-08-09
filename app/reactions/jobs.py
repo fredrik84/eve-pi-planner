@@ -1,13 +1,13 @@
-"""Personal reaction-job tracking, plan slots, orphan handling, and the suggestion engine — the
-'what is running / what should I run' layer. Reads live ESI industry jobs (opt-in scope), matches
-them against the persistent plan (pp_reaction_assignments), values everything via the graph layer,
-and the wizard knapsack suggests what to react next. Depends on settings + graph; orders builds on
-top of this (so this must not import orders)."""
+"""Personal reaction-job tracking, plan slots and orphan handling — the 'what is running / what am
+I committed to' layer. Reads live ESI industry jobs (opt-in scope), matches them against the
+persistent plan (pp_reaction_assignments), levels that plan's run counts, and values everything via
+the graph layer. Depends on settings + graph; advisor (the suggestion engine) and orders build on
+top of this, so this must not import either."""
 import json as _json
 import logging
 import math
 import time as _time
-from datetime import datetime, timezone
+from datetime import datetime
 
 log = logging.getLogger(__name__)
 
@@ -18,16 +18,14 @@ from pydantic import BaseModel
 
 from app.sde import get_connection, load_pi_data, ensure_once
 from app.markets import resolve_market_data
-from app.market import fetch_daily_volume
-from app.cache import cache_invalidate, charlist_key, cache_get_json, cache_set_json
+from app.cache import cache_invalidate, charlist_key
 from app.esi import require_context, _get_valid_token
 from app import completions
 
 from app.reactions._router import router
 from app.reactions.settings import effective_reaction_settings, get_job_target
 from app.reactions.graph import (
-    _load_goo_and_reached, _load_reaction_graph, _value_reaction_batch,
-    _ordered_chain_tiers, _build_opportunities, _fuel_block_ids, reaction_stock_pool,
+    _load_goo_and_reached, _value_reaction_batch, _ordered_chain_tiers, reaction_stock_pool,
     _shopping_roots, tier_ranks, tidy_runs, request_memo, _TIDY_STEPS,
 )
 
@@ -661,9 +659,6 @@ def level_stage_runs(context_id: int) -> int:
 # `_choose_stage_layout`, which pays surplus only to land a stage together and otherwise takes the
 # cheapest count there is.
 _LEVEL_BUDGET = 0.50
-# ...and per CHAIN, which the total does not imply: a chain needing 2 runs beside one needing
-# 10,000 can be handed 1,000 and barely move the total, which is 500× the work that chain wanted.
-_LEVEL_GROUP_MAX = 3.0
 # A stage counts as landing together inside this much of its own longest job. Exact equality is
 # not reachable — run counts are integers and cycle times differ — and a stage whose jobs finish
 # within a few percent of each other is one login.
@@ -673,7 +668,6 @@ _ALIGN_TOL = 0.10
 # wrong yardstick for a run count the whole stage shares, and a candidate that never gets offered
 # can never be weighed against what it buys.
 _STAGE_SCAN_BUDGET = 20.0
-_STAGE_SCAN_GROUP_MAX = 20.0
 
 
 def _target_runs(target: dict, cycle_hours: float) -> int | None:
@@ -705,22 +699,19 @@ def _typeable(runs: int) -> bool:
     return runs < 10 or any(runs % s == 0 and s * 20 >= runs for s in _TIDY_STEPS)
 
 
-def _level_options(totals: list[int], caps: list[int], max_runs: int,
-                    budget: float = _LEVEL_BUDGET,
-                    group_max: float = _LEVEL_GROUP_MAX,
+def _level_options(total: int, cap: int, max_runs: int, budget: float = _LEVEL_BUDGET,
                     min_runs: int = 0, extra: list[int] | None = None) -> list[dict]:
     """Every run count ONE product could carry on EVERY one of its jobs, and what each costs.
 
-    `totals[i]` is what chain *i* needs of this product and `caps[i]` the most jobs the character
-    holding that chain can give it (its own rows back, plus that character's free reactors). A
-    chain's intermediate has to be made by the character that will consume it — this package
-    models no way to ship a half-finished good between hangars — so a chain's requirement is a
-    floor that no levelling may go under. What is free to choose is the SPLIT: `runs` jobs of one
-    number, `ceil(total/runs)` of them, per chain.
+    `total` is the ACCOUNT's requirement for this product in this stage and `cap` the most jobs the
+    stage may spend on it. Both are pooled: a product's output lands in a shared hangar, so which
+    character makes a given run is a placement question (`level_product_runs` answers it) and not
+    something the run count has to respect. What is free to choose here is the SPLIT: jobs of one
+    number, `ceil(total/runs)` of them.
 
-    Returned per candidate: the run count, how many jobs it costs in total, the surplus it
-    produces (rounding up is the only direction that is safe — the stage above consumes this one),
-    the per-chain job counts, and whether the number is one a human can type without checking.
+    Returned per candidate: the run count, how many jobs it costs, the surplus it produces (rounding
+    up is the only direction that is safe — the stage above consumes this one), and whether the
+    number is one a human can type without checking.
 
     `extra` seeds counts from OUTSIDE this product — the durations the rest of its stage is
     considering. Without it a product can only ever propose counts derived from its own
@@ -728,78 +719,58 @@ def _level_options(totals: list[int], caps: list[int], max_runs: int,
     reach the 120 its stage-mates were settling on however clearly that was the right answer. A
     product cannot join a stage it is not allowed to name.
 
-    Three things get a candidate dropped: more reactors than a character has, more than `budget`
-    overshoot across the product, and — separately — more than `group_max` times what any ONE chain
-    asked for. The last is not implied by the second: a chain needing 2 runs beside one needing
-    10,000 can be handed 1,000 runs and barely move the total, which is 500× the work that chain
-    wanted. Below 10 runs a chain is never held to the ratio; rounding 1 run to 10 is noise, and
-    `tidy_runs` already treats that range as free.
+    Two things get a candidate dropped: more jobs than `cap`, and more than `budget` overshoot. Both
+    are a loose sanity range when this is called from the stage solve, which passes a far wider
+    budget and judges the real cost across the whole stage instead (`_stage_affordable`) — a small
+    product's own requirement is the wrong yardstick for a run count the whole stage shares.
 
     This is the RANGE of what is affordable, not a recommendation — `_choose_stage_layout` decides
-    which of these is worth paying for. An empty list means the chains are too far apart to share
-    any number at all (3 runs on one and 1000 on another), and the caller leaves the product alone.
+    which of these is worth paying for.
     """
-    need = sum(totals)
-    if need <= 0 or not totals:
+    total = int(total)
+    cap = max(1, int(cap))
+    if total <= 0:
         return []
-    # Every run count that divides some chain's requirement into a whole number of jobs, plus the
-    # tidy rounding of each — the only counts worth considering, since anything between two of them
+    # Every run count that divides the requirement into a whole number of jobs, plus the tidy
+    # rounding of each — the only counts worth considering, since anything between two of them
     # produces the same job layout for strictly more surplus.
-    cands: set[int] = set(int(e) for e in (extra or []) if e and int(e) > 0)
-    for t, cap in zip(totals, caps):
-        for j in range(1, max(1, cap) + 1):
-            r = max(1, -(-int(t) // j))
-            cands.add(r)
-            # ...and the round number just above each, one per step of the tidy ladder, so a
-            # layout that costs the same in slots can still be one you copy rather than read.
-            for step in _TIDY_STEPS:
-                cands.add(-(-r // step) * step)
+    cands: set[int] = {int(e) for e in (extra or []) if e and int(e) > 0}
+    for j in range(1, cap + 1):
+        r = max(1, -(-total // j))
+        cands.add(r)
+        # ...and the round number just above each, one per step of the tidy ladder, so a layout
+        # that costs the same in slots can still be one you copy rather than read.
+        for step in _TIDY_STEPS:
+            cands.add(-(-r // step) * step)
     out: list[dict] = []
     for r in sorted(cands):
-        # `min_runs` is the caller giving ground: the stage solve raises it when a character was
+        # `min_runs` is the caller giving ground: the stage solve raises it when the stage was
         # promised more reactors than it has, since a longer run count is fewer jobs.
         if r < max(1, min_runs) or (r > max_runs and r > min_runs):
             continue
-        jobs = [max(1, -(-int(t) // r)) for t in totals]
-        if any(j > c for j, c in zip(jobs, caps)):
-            continue                        # more reactors than that character actually has
-        if any(j * r > max(group_max * int(t), 10) for j, t in zip(jobs, totals)):
-            continue                        # one chain carrying several times what it asked for
-        made = sum(j * r for j in jobs)
-        if made - need > need * budget:
+        jobs = max(1, -(-total // r))
+        if jobs > cap:
+            continue                        # more reactors than the stage actually has
+        made = jobs * r
+        if made - total > total * budget:
             continue                        # tidy numbers are not worth paying for in goo
-        # NB both bounds above are a loose sanity range when this is called from the stage solve,
-        # which passes wider ones and judges the real cost across the whole stage instead — see
-        # `_stage_affordable`. A product's own requirement is the wrong yardstick for a stage-wide
-        # run count: a small sibling looks profligate against itself and is rounding against the
-        # batch it belongs to.
-        out.append({"runs": r, "jobs": sum(jobs), "surplus": made - need,
-                    "per_group": jobs, "tidy": _typeable(r)})
+        out.append({"runs": r, "jobs": jobs, "surplus": made - total, "tidy": _typeable(r)})
     if out:
         return out
     # Nothing affordable, and a product showing three numbers is the thing this exists to remove —
-    # so fall back to the SMALLEST count every chain can actually be split into with the reactors
-    # it has, whatever that costs in surplus. That count always exists (it is what the tightest
-    # chain is already doing), which is what makes "one number per product" a property of this pass
-    # rather than something it manages when the arithmetic is kind.
-    #
-    # The per-chain ceiling still applies, and is the one thing that can genuinely leave a product
-    # alone: 3 runs on one chain beside 1000 on another has no shared count that isn't mostly
-    # waste, and inventing one would be worse than two honest numbers.
-    floor = max(1, min_runs, max(-(-int(t) // max(1, c)) for t, c in zip(totals, caps)))
-    jobs = [max(1, -(-int(t) // floor)) for t in totals]
-    if any(j * floor > max(group_max * int(t), 10) for j, t in zip(jobs, totals)):
-        return []
-    made = sum(j * floor for j in jobs)
-    return [{"runs": floor, "jobs": sum(jobs), "surplus": made - need,
-             "per_group": jobs, "tidy": _typeable(floor)}]
+    # so fall back to the SMALLEST count the work can be split into with the reactors there are,
+    # whatever that costs in surplus. That count always exists, which is what makes "one number per
+    # product" a property of this pass rather than something it manages when the arithmetic is kind.
+    floor = max(1, min_runs, -(-total // cap))
+    jobs = max(1, -(-total // floor))
+    return [{"runs": floor, "jobs": jobs, "surplus": jobs * floor - total, "tidy": _typeable(floor)}]
 
 
 def _choose_stage_layout(products: dict, prefer_tidy: bool = False) -> dict:
     """Pick one run count per product so the whole STAGE lands together.
 
-    `products` is `{key: {"cycle": hours_per_run, "options": [...], "totals": [...], "chains": [...]}}`
-    for the products of a single stage — steps with no dependency on each other, installed in one sitting
+    `products` is `{key: {"cycle": hours_per_run, "options": [...], "total": runs_needed}}` for the
+    products of a single stage — steps with no dependency on each other, installed in one sitting
     and collected in the next. A job's duration is `runs × cycle`, so once every job of a product
     carries the same run count, aligning the stage is choosing run counts whose durations match.
 
@@ -831,9 +802,8 @@ def _choose_stage_layout(products: dict, prefer_tidy: bool = False) -> dict:
             cyc = products[k]["cycle"]
             fits = [o for o in products[k]["options"] if o["runs"] * cyc <= d + 1e-9]
             # Of what fits by `d`, prefer the counts that actually LAND there — then the fewest
-            # jobs, then the least surplus. Taking the largest count that fits (the first version)
-            # bought nothing when two counts cost the same in reactors: 8 jobs of 36 runs instead
-            # of 8 jobs of 35, eight runs of goo for an identical layout.
+            # jobs, then the least surplus. Never simply the largest count that fits: that pays goo
+            # for an identical layout (8 jobs of 36 where 8 of 35 was the same five reactors).
             near = [o for o in fits if o["runs"] * cyc >= (1 - _ALIGN_TOL) * d]
             pool = near or fits
             # Nothing this product can do lands by `d` — it takes its shortest, and the stage is
@@ -850,10 +820,9 @@ def _choose_stage_layout(products: dict, prefer_tidy: bool = False) -> dict:
         surplus = sum(pick[k]["surplus"] for k in keys)
         untidy = sum(0 if pick[k]["tidy"] else 1 for k in keys)
         landed = 0 if spread <= _ALIGN_TOL * max(durs) else 1
-        # Slots before surplus, both after landing the stage. Ranking the goo first looked
-        # responsible and picked 75 runs in 19 jobs over 125 in 12 to save 75 runs of stock —
-        # exactly backwards: fewer, fuller jobs is the whole point ("save slots, lower login
-        # cadence"), and the budget above is what keeps the surplus that buys it bounded.
+        # Slots before surplus, both after landing the stage — fewer, fuller jobs is the whole point
+        # ("save slots, lower login cadence"), and the budget above bounds the surplus that buys it.
+        # Ranking the goo first is the trap; docs/reactions.md has what it cost.
         score = ((landed, jobs, untidy, surplus, spread) if prefer_tidy
                  else (landed, jobs, surplus, untidy, spread))
         if best_score is None or score < best_score:
@@ -876,27 +845,16 @@ def _stage_affordable(products: dict, pick: dict) -> bool:
     times too much; against the stage's 4,400 runs it is 8% of the batch, and it buys the one thing
     the stage is for — every job the same length, collected in one trip.
 
-    Two ceilings, both now stage-wide: the surplus across the stage, and what any one CHAIN is
-    handed against everything that chain asked for in this stage. A product with no `totals` (the
-    unit tests, which exercise the search itself) is not checked."""
+    One ceiling, stage-wide: the surplus across everything the stage makes. A product with no
+    `total` (the unit tests, which exercise the search itself) is not checked."""
     need = made = 0
-    per_chain: dict[tuple, list[int]] = {}
     for k, opt in pick.items():
-        totals = products[k].get("totals")
-        chains = products[k].get("chains")
-        if totals is None or chains is None:
+        total = products[k].get("total")
+        if total is None:
             return True
-        for chain, t, j in zip(chains, totals, opt["per_group"]):
-            need += int(t)
-            made += j * opt["runs"]
-            row = per_chain.setdefault(chain, [0, 0])
-            row[0] += int(t)
-            row[1] += j * opt["runs"]
-    if need <= 0:
-        return True
-    if made - need > need * _LEVEL_BUDGET:
-        return False
-    return all(m <= max(_LEVEL_GROUP_MAX * n, 10) for n, m in per_chain.values())
+        need += int(total)
+        made += opt["jobs"] * opt["runs"]
+    return need <= 0 or made - need <= need * _LEVEL_BUDGET
 
 
 def _reaction_cycle_times() -> dict[int, float]:
@@ -959,23 +917,13 @@ def level_product_runs(context_id: int) -> int:
     if not rows:
         return 0
 
-    # What may NOT be re-shaped: the TOP row of a customer order's chain. Its run count is the batch
+    # What may NOT be re-shaped: the TOP row of a customer ORDER's chain. Its run count is the batch
     # that order was quoted and priced on, and cancelling the order hands exactly those runs back
     # (`give_back_order_runs`), so moving it would make the order's own arithmetic wrong.
     #
-    # An order's INTERMEDIATES are not that. They are plumbing — the same Carbon Fiber, in the same
-    # hangar, that a speculative chain makes — and excluding them (which this did until 2026-08-08)
-    # is why a re-planned order still showed a different run count on every character: the order
-    # allocator sizes each host separately, and the one pass that could have levelled them across
-    # hosts had been told to keep its hands off.
-    #
-    # Everything else is fair game, INCLUDING the top row of a speculative chain — which it was not
-    # until 2026-08-08, and that exclusion is what left a product showing three numbers after the
-    # pass had run. A Thermosetting Polymer job is a Thermosetting Polymer job: on one character it
-    # is an intermediate under Reinforced Carbon Fiber, on the next it is a product assigned on its
-    # own to sell, and the player types both. Levelling one and not the other was reading the row's
-    # position in a chain as if it were a property of the product. Its `input_cost`/`reward` scale
-    # with the runs, so the plan's cost and profit stay true (see the write below).
+    # Everything else is fair game — an order's intermediates, and the top row of a speculative
+    # chain. Both were excluded once and both exclusions left a product showing several numbers
+    # after the pass had run; see docs/reactions.md, "A speculative chain's TOP row is levelled too".
     top_of_chain: dict[tuple, int] = {}
     for r in rows:
         key = (r["character_id"], round(float(r["created_at"] or 0.0), 3))
@@ -998,19 +946,12 @@ def level_product_runs(context_id: int) -> int:
     room = {cid: max(0, int(c.get("slots") or 0) - int(c.get("running") or 0))
             for cid, c in caps_now.items()}
 
-    # (stage, product) -> every row of it, POOLED ACROSS CHARACTERS.
-    #
-    # Until 2026-08-08 these were kept per chain, because this package assumed an intermediate had
-    # to be reacted by the character that would consume it. That is not how the account works —
-    # reported: *"we do not need to use the same character to build the entire chain"*, the output
-    # goes to a shared hangar — and the assumption was expensive: eight characters each running a
-    # 35-run Oxy-Organic Solvents job is eight reactors doing what two would.
-    #
-    # Pooling is what makes the pass slot-efficient rather than merely tidy: the requirement is the
-    # ACCOUNT's, the run count is the product's, and which character holds a job is just where
-    # there was room. Two things elsewhere depend on the old assumption and are corrected with it —
-    # `_shopping_roots` (a moved row must not be mistaken for a chain of its own and bought for
-    # twice) and `chain_stage_state` (a chain no longer holds every stage it waits on).
+    # (stage, product) -> every row of it, POOLED ACROSS CHARACTERS: the requirement is the
+    # ACCOUNT's, the run count is the product's, and which character holds a job is just where there
+    # was room. That is what makes this pass slot-efficient rather than merely tidy, and two things
+    # elsewhere are corrected to match it — `_shopping_roots` (a moved row must not be mistaken for
+    # a chain of its own and bought for twice) and `_gate_stages_account_wide` (a chain no longer
+    # holds every stage it waits on). docs/reactions.md, "A product is POOLED across characters".
     stages: dict[int, dict[int, list[dict]]] = {}
     for r in inner:
         stages.setdefault(int(r["tier_order"] or 0), {}).setdefault(int(r["type_id"]), []).append(r)
@@ -1046,31 +987,18 @@ def level_product_runs(context_id: int) -> int:
              for rs in by_product.values() for r in rs),
             default=0.0)
         # A character's reactors are ONE pool and every product in the stage draws from it, so the
-        # stage has to be solved as a whole: size it, look at what each character was actually
-        # promised, and where that exceeds what it has, force the greediest product onto a LONGER
-        # run count — fewer jobs — and solve again. Run counts only ever rise here, so it settles.
-        #
-        # Two earlier answers to this were both wrong. Dropping the over-committed product from the
-        # pass left it showing its old three numbers. Splitting the pool evenly between the products
-        # (free // products) handed each of them one reactor when one of them needed four, which is
-        # what made a "5 days" target come out as 94-run jobs.
-        #
-        # Per stage rather than across all of them, which is right under the one-slot model: a
-        # character's load is its busiest stage, so growth in stage 0 and stage 1 does not add up.
-        # ...so this stage may use whatever the character's reactors are not already committed to
-        # by its OTHER stages.
+        # stage is solved as a whole (the give-ground loop below). Per stage rather than across all
+        # of them, which is right under the one-slot model: a character's load is its busiest stage,
+        # so growth in stage 0 and stage 1 does not add up — this stage may use whatever the
+        # character's reactors are not already committed to by its OTHER stages.
         budget = {cid: max(0, n - committed.get(cid, 0) - later.get(cid, 0))
                   for cid, n in room.items()}
 
-        # The shortest this stage can possibly run on the tightest character: all of its work,
-        # divided by the reactors it may use. Nothing shorter is installable however the run counts
-        # are chosen, so it seeds the floor — the give-ground loop below then only has to fix
-        # rounding. Without it the loop started from the asked-for length and stepped one run at a
-        # time, which never got from "5 days" to what the reactors could do: the plan came out
-        # holding 20 jobs on an 11-slot character.
-        # Pooled, so the floor is the stage's WHOLE work against every reactor it may use — not
-        # the tightest character's own share, which no longer means anything once a job can be
-        # installed wherever there is room.
+        # The shortest this stage can possibly run: all of its work, divided by every reactor it may
+        # use. Nothing shorter is installable however the run counts are chosen, so it seeds the
+        # floor and the give-ground loop below only has to fix rounding — without it that loop
+        # started from the asked-for length and stepped one run at a time, which never got from
+        # "5 days" to what the reactors could do.
         stage_room = max(1, sum(budget.values()))
         stage_work = sum(sum(int(r["runs"] or 0) for r in rs) * cycles.get(tid, 1.0)
                          for tid, rs in by_product.items())
@@ -1090,23 +1018,21 @@ def level_product_runs(context_id: int) -> int:
                     cyc = cycles.get(tid, 1.0)
                     # ONE pooled requirement per product: the account needs this many runs of it,
                     # and any reactor with room can make them.
-                    chains = [None]
-                    totals = [sum(int(r["runs"] or 0) for r in rs_all)]
-                    caps = [stage_room]
+                    total = sum(int(r["runs"] or 0) for r in rs_all)
                     chosen = _target_runs(target, cyc)
                     if chosen:
                         max_runs = chosen
                     else:
-                        max_runs = int(stage_cap_hours / cyc) if cyc > 0 else max(totals, default=0)
+                        max_runs = int(stage_cap_hours / cyc) if cyc > 0 else total
                     # The counts that would land this product on a duration the rest of the stage
                     # is considering — see `_level_options`' `extra`.
                     extra = [max(1, int(h / cyc)) for h in extra_hours if cyc > 0]
                     built[tid] = {
-                        "cycle": cyc, "chains": chains, "totals": totals,
+                        "cycle": cyc, "total": total,
                         # Wide here on purpose: what a run count really costs is judged across the
                         # whole stage (`_stage_affordable`), not against this one product's needs.
-                        "options": _level_options(totals, caps, max_runs, budget=_STAGE_SCAN_BUDGET,
-                                                  group_max=_STAGE_SCAN_GROUP_MAX,
+                        "options": _level_options(total, stage_room, max_runs,
+                                                  budget=_STAGE_SCAN_BUDGET,
                                                   min_runs=floor_runs.get(tid, 0), extra=extra),
                     }
                 return built
@@ -1139,7 +1065,7 @@ def level_product_runs(context_id: int) -> int:
         room_left = dict(budget)
         for tid, opt in sorted(layout.items(), key=lambda kv: -kv[1]["jobs"]):
             rs_all = sorted(by_product[tid], key=lambda r: r["id"])
-            want = max(1, opt["per_group"][0])
+            want = max(1, opt["jobs"])
             have: dict[int, int] = {}
             for r in rs_all:
                 have[r["character_id"]] = have.get(r["character_id"], 0) + 1
@@ -1232,17 +1158,6 @@ def level_product_runs(context_id: int) -> int:
     return changed
 
 
-# ── One run count per product, across every character (`reactions_level_runs`) ─────────────────
-#
-# `level_stage_runs` above levels a product WITHIN one character, which is as far as it can go
-# without touching the row count. The complaint that outlives it is the cross-character one:
-# Carbon Fiber at 125 runs on one character, 90 on the next two and 75 on the fourth, and the same
-# shape on every other product. Four numbers to read, four to type, four different finish times.
-#
-# The priority order is the user's own (TODO 28), and it governs strictly:
-#   1. ONE run count per product — every job of it, wherever it sits.
-#   2. Aligned end times — a stage lands in one go, one login collects it.
-#   3. Fewer slots — the same work in fewer, fuller jobs.
 def _stage_of_tiers(context_id: int, product_id: int, tiers: list) -> list[int]:
     """A STAGE index per client-supplied chain tier — steps that can run at the same time share one.
 
@@ -2341,17 +2256,9 @@ def _allocate_and_insert(context_id: int, type_id: int, name: str, node: dict, r
 
     # How the order's runs are split across the characters that will run it: PROPORTIONAL to each
     # host's free slots. The roomiest character does the most work, so every host finishes at
-    # roughly the same time and the order completes as early as its capacity allows.
-    #
-    # An EVEN split was tried on 2026-08-08 to make the numbers identical on every character (they
-    # differ under this rule — 125 here, 100 there — and that is a real cost, paid every time the
-    # order is installed by hand). It was reverted the same day: giving a 2-slot character the same
-    # 250 runs as a 10-slot one put a single step at **14 days**, and no amount of tidiness is worth
-    # a fortnight of cadence. The two goals genuinely conflict, and finishing sooner wins.
-    #
-    # If this is revisited: the fix is not an even split but capping how far apart hosts may FINISH
-    # — pick the hosts whose capacity is comparable, split evenly among those, and leave the rest
-    # out of this order entirely.
+    # roughly the same time and the order completes as early as its capacity allows. That is why one
+    # product shows different run counts on different hosts; an even split was tried and reverted —
+    # docs/reactions.md, "An order's runs follow capacity, not fairness".
     capacity = sum(h["free_slots"] for h in hosts)
     shares = [int(runs_needed * h["free_slots"] / capacity) for h in hosts]
     for i in range(runs_needed - sum(shares)):      # rounding remainder, roomiest first
