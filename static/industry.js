@@ -842,10 +842,17 @@ async function indLoadAssets() {
           : sc.kind === 'paste' ? 'pasted' : sc.corp ? 'corp hangar' : 'hangar';
         const del = sc.kind === 'paste'
           ? `<button class="ind-src-del" title="Remove this pasted stock" onclick="event.preventDefault();indDeleteSource('${_esc(sc.key)}')">✕</button>` : '';
+        // "What's in it" is a question the list could not answer — it said where a paste was and
+        // how many item types it held, which is not enough to see whether the formula you pasted
+        // it for is actually in there (reported 2026-08-08).
+        const eid = 'indsrc-' + _srcDomId(sc.key);
         return `<label class="ind-src-row"><input type="checkbox" ${sc.enabled ? 'checked' : ''} `
           + `onchange="indToggleSource('${_esc(sc.key)}', this.checked)">`
           + `<span class="ind-src-name">${_esc(sc.name)}</span>`
-          + `<span class="ind-src-meta">${sub} · ${sc.item_count} item type${sc.item_count === 1 ? '' : 's'}</span>${del}</label>`;
+          + `<span class="ind-src-meta">${sub} · ${sc.item_count} item type${sc.item_count === 1 ? '' : 's'}</span>`
+          + `<button class="ind-src-peek" title="Show what this holds"`
+          + ` onclick="event.preventDefault();indToggleSourceItems('${_esc(sc.key)}')">contents</button>`
+          + `${del}</label><div class="ind-src-items" id="${eid}" style="display:none"></div>`;
       }).join('') + `</div>`).join('');
     el.innerHTML = `<div class="ind-src-hd"><span class="ind-bp-ok">✓ ${d.enabled_sources} of ${(d.sources || []).length} `
       + `source${(d.sources || []).length === 1 ? '' : 's'} in use · ${d.distinct_types} item type${d.distinct_types === 1 ? '' : 's'} counted`
@@ -903,14 +910,13 @@ async function indRefreshCorpAssets() {
 // It is also the ONLY way to declare a reaction formula held outside a character's personal
 // hangar — /characters/{id}/blueprints/ never returns those — and the copy used to say "materials"
 // throughout, so nobody found it. Formulas are named here on purpose; see test_formula_stock.py.
+// Four sentences of justification became one line of instruction — reported 2026-08-08 as
+// "extremely long winded". Why a paste is the only way to declare a corp-hangar formula is real,
+// but it belongs where someone goes looking for it, not in front of the box every time.
 function _indPasteFormHtml() {
   return `<div id="indPasteForm" class="ind-paste" style="display:none">
-    <p class="ind-src-help">In the EVE client, open the hangar, select all (Ctrl+A), copy (Ctrl+C), paste below.
-      Works for any hangar you can see in game — including corp and shared hangars.
-      <b>Paste your reaction formulas too</b>: a formula in stock is how we know you own it, and
-      formulas found here cap how many reaction jobs can run at once — one formula, one job. ESI
-      only reports blueprints and formulas a character holds <i>personally</i>, so anything in a corp
-      or shared hangar has to arrive this way.</p>
+    <p class="ind-src-help">In game: open the hangar, <b>Ctrl+A</b>, <b>Ctrl+C</b>, paste here.
+      Include reaction formulas — a corp or shared hangar can only be declared this way.</p>
     <input type="text" id="indPasteName" placeholder="Name this stock — e.g. Corp hangar: Materials &amp; formulas">
     <textarea id="indPasteText" rows="6" placeholder="Tritanium&#9;1 000 000&#10;Caesarium Cadmide Reaction Formula&#9;1"></textarea>
     <div class="ind-src-actions">
@@ -919,6 +925,55 @@ function _indPasteFormHtml() {
       <span id="indPasteMsg" class="ind-src-meta"></span>
     </div>
   </div>`;
+}
+
+// One DOM id per source key: keys carry ':' and '/' (char:123, corp:456, paste:1), neither of
+// which can go in an id and be selected back out.
+function _srcDomId(key) {
+  return String(key).replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+const _indSrcItems = {};      // key -> rows, so re-opening a source doesn't re-fetch it
+
+async function indToggleSourceItems(key) {
+  const el = document.getElementById('indsrc-' + _srcDomId(key));
+  if (!el) return;
+  if (el.style.display !== 'none') { el.style.display = 'none'; return; }
+  el.style.display = '';
+  if (!_indSrcItems[key]) {
+    el.innerHTML = '<span class="ind-bp-hint">Reading…</span>';
+    try {
+      const d = await api('/api/industry/assets/sources/' + encodeURIComponent(key) + '/items');
+      _indSrcItems[key] = d.items || [];
+    } catch (e) {
+      el.innerHTML = `<span class="ind-bp-hint">${_esc(String(e.message || e))}</span>`;
+      return;
+    }
+  }
+  const items = _indSrcItems[key];
+  if (!items.length) { el.innerHTML = '<span class="ind-bp-hint">Nothing in it.</span>'; return; }
+  // Formulas first and marked: they are why most of these pastes exist, and one of them being
+  // missing is the thing you came here to check.
+  const fx = items.filter(i => i.formula);
+  const rest = items.filter(i => !i.formula);
+  const row = i => `<div class="ind-src-item${i.formula ? ' ind-src-item-fx' : ''}">`
+    + `<span>${_esc(i.name)}</span><span>${Number(i.qty).toLocaleString()}</span></div>`;
+  el.innerHTML = (fx.length
+      ? `<div class="ind-src-item-hd">${fx.length} reaction formula${fx.length === 1 ? '' : 's'}</div>`
+        + fx.map(row).join('') : '')
+    + (rest.length
+      ? `<div class="ind-src-item-hd">${rest.length} other item type${rest.length === 1 ? '' : 's'}</div>`
+        + rest.map(row).join('') : '');
+}
+
+// The "why" behind the paste rules is real and belongs where someone goes looking for it, not in
+// front of the box every time (reported 2026-08-08: "extremely long winded").
+function indTogglePasteHelp(a) {
+  const box = a && a.closest('.ind-paste') && a.closest('.ind-paste').querySelector('.ind-paste-help');
+  if (!box) return;
+  const open = box.style.display === 'none';
+  box.style.display = open ? '' : 'none';
+  a.textContent = open ? 'Hide details' : 'Details';
 }
 
 function indOpenPaste() {
@@ -1036,11 +1091,17 @@ async function indLoadManualBps() {
     const where = b.places > 1 ? ` · in ${b.places} places`
       : (b.structure && b.container) ? ` · in ${b.container}, ${b.structure}`
         : (b.container || b.structure) ? ` · in ${b.container || b.structure}` : '';
+    // ...and WHAT is in it. The row said how many prints and where they were, which is enough to
+    // know a paste landed and not enough to know whether the formula you pasted it for is in there
+    // (reported 2026-08-08: "I can see where it's located, but I cannot see what it contains").
     return `<div class="ind-src-row"><span class="ind-src-name">${_esc(b.name)}</span>`
     + `<span class="ind-src-meta">pasted · ${b.prints} print${b.prints === 1 ? '' : 's'}`
     + ` · ${b.products} product${b.products === 1 ? '' : 's'}${_esc(where)}</span>`
+    + `<button class="ind-src-peek" title="Show what this batch declares"`
+    + ` onclick="indToggleBatchItems('${_esc(b.batch)}')">contents</button>`
     + `<button class="ind-src-del" title="Remove this pasted batch"`
-    + ` onclick="indDeleteManualBpBatch('${_esc(b.batch)}')">✕</button></div>`;
+    + ` onclick="indDeleteManualBpBatch('${_esc(b.batch)}')">✕</button></div>`
+    + `<div class="ind-src-items" id="indbpb-${_srcDomId(b.batch)}" style="display:none"></div>`;
   }).join('');
   const rows = (d.entries || []).filter(e => !e.batch).map(e => {
     const runs = e.kind === 'bpo' ? 'original (BPO)' : `${e.runs} run${e.runs === 1 ? '' : 's'}`;
@@ -1074,7 +1135,43 @@ async function indLoadManualBps() {
     + `<button onclick="indSaveManualBp(this)">Add</button>`
     + `<span id="indManualBpMsg" class="bug-status-msg"></span></div>`;
   _indManualPick = null;
+  _indBpBatchEntries = {};
+  for (const e of d.entries || []) {
+    if (e.batch) (_indBpBatchEntries[e.batch] = _indBpBatchEntries[e.batch] || []).push(e);
+  }
   _indBpFillStructures();       // async, and the form is usable without it — free text still works
+}
+
+// The batch's own prints, already in the payload — no second round trip, and no way for the list
+// and the contents to disagree about what was imported.
+let _indBpBatchEntries = {};
+
+function indToggleBatchItems(batch) {
+  const el = document.getElementById('indbpb-' + _srcDomId(batch));
+  if (!el) return;
+  if (el.style.display !== 'none') { el.style.display = 'none'; return; }
+  el.style.display = '';
+  const entries = (_indBpBatchEntries[batch] || []).slice()
+    .sort((a, b) => a.name.localeCompare(b.name));
+  if (!entries.length) { el.innerHTML = '<span class="ind-bp-hint">Nothing in it.</span>'; return; }
+  // Formulas first and marked: a reaction library is what most of these pastes are for, and one
+  // of them being absent is the thing you opened this to check.
+  const isFx = e => /Reaction Formula/i.test(e.name || '');
+  const fx = entries.filter(isFx);
+  const rest = entries.filter(e => !isFx(e));
+  const row = e => {
+    const runs = e.kind === 'bpo' ? 'BPO' : `${e.runs} run${e.runs === 1 ? '' : 's'}`;
+    const me = (e.me || e.te) ? ` · ME ${e.me}/TE ${e.te}` : '';
+    return `<div class="ind-src-item${isFx(e) ? ' ind-src-item-fx' : ''}">`
+      + `<span>${e.quantity > 1 ? `${e.quantity}× ` : ''}${_esc(e.name)}</span>`
+      + `<span>${_esc(runs)}${_esc(me)}</span></div>`;
+  };
+  el.innerHTML = (fx.length
+      ? `<div class="ind-src-item-hd">${fx.length} reaction formula${fx.length === 1 ? '' : 's'}</div>`
+        + fx.map(row).join('') : '')
+    + (rest.length
+      ? `<div class="ind-src-item-hd">${rest.length} other blueprint${rest.length === 1 ? '' : 's'}</div>`
+        + rest.map(row).join('') : '');
 }
 
 // Pasting the industry window, which is how a real library arrives — one at a time is unusable at
@@ -1082,18 +1179,17 @@ async function indLoadManualBps() {
 // batch and leaves the others alone (same model as a pasted stock source).
 function _indBpPasteFormHtml() {
   return `<div class="ind-paste">
-    <p class="ind-src-help">Or paste a whole industry window: in the EVE client open <b>Industry →
-      Blueprints</b>, select all (Ctrl+A), copy (Ctrl+C), paste below.
-      <b>One paste is one batch, and its name is what identifies it</b> — re-pasting the same name
-      replaces that whole batch and leaves your other characters' alone, so moving prints between
-      containers in game is tracked as a move rather than counted twice.
-      <b>Copy it with nothing selected in the tree</b> and every line also carries the structure and
-      container it is in; we record and show that, and offer it as the batch name. If you copied with
-      a container selected the window says nothing about where it is, so you can pick the structure
-      below — that only labels the batch.
-      <b>Note:</b> for any product a paste declares, the plan uses the declaration <i>instead of</i>
-      what ESI read for it — including copies on your other characters — so paste those characters'
-      windows too.</p>
+    <p class="ind-src-help">Or paste a whole industry window: in game open <b>Industry →
+      Blueprints</b>, <b>Ctrl+A</b>, <b>Ctrl+C</b>, paste here. One paste is one batch — re-pasting
+      the same name replaces it.
+      <a href="#" onclick="event.preventDefault();indTogglePasteHelp(this)">Details</a></p>
+    <div class="ind-paste-help" style="display:none">
+      <p class="ind-src-help">Copy it with <b>nothing selected in the tree</b> and every line carries
+      the structure and container it sits in — we record that and offer it as the batch name.
+      Otherwise pick the structure below; it only labels the batch.</p>
+      <p class="ind-src-help">A pasted product's declaration is used <b>instead of</b> what ESI read
+      for it, on every character — so paste each character's window, not just one.</p>
+    </div>
     <div class="ind-src-actions">
       <label>Where are these?
         <select id="indBpPasteStruct" class="bug-input" onchange="indBpPasteStructChanged()">

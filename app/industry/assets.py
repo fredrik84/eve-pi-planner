@@ -36,7 +36,7 @@ from __future__ import annotations
 import json
 import time
 
-from fastapi import Depends
+from fastapi import Depends, HTTPException
 from pydantic import BaseModel
 
 from app.db import get_connection
@@ -919,6 +919,40 @@ def industry_assets_paste(req: PasteStock, ctx: int = Depends(require_context)):
     res = add_pasted_source(ctx, req.name, req.text)
     res.update(assets_status(ctx))
     return res
+
+
+@router.get("/api/industry/assets/sources/{key}/items")
+def industry_assets_source_items(key: str, ctx: int = Depends(require_context)):
+    """What one source actually HOLDS: `[{type_id, name, qty, formula}]`, biggest stacks first.
+
+    Reported from use 2026-08-08: *"I've pasted a bunch of formulas and I can see where it's
+    located, but I cannot see what it contains."* The list showed a name, "pasted", and an item-type
+    count — enough to know a paste landed, and not enough to know whether the formula you pasted it
+    for is in there. A source you cannot read the contents of is a source you have to take on faith,
+    and this one caps how many reaction jobs the planner will schedule.
+
+    `formula` marks a reaction formula, since that is the reason most of these pastes exist.
+    """
+    ensure_asset_tables()
+    con = get_connection()
+    try:
+        owns = con.execute("SELECT 1 FROM pp_asset_sources WHERE context_id=? AND key=?",
+                           (ctx, key)).fetchone()
+        if not owns:
+            raise HTTPException(status_code=404, detail="No such stock source")
+        rows = [dict(r) for r in con.execute(
+            "SELECT s.type_id, s.qty, COALESCE(t.name, '') AS name FROM pp_asset_stock s "
+            "LEFT JOIN types t ON t.type_id = s.type_id "
+            "WHERE s.context_id=? AND s.key=? ORDER BY s.qty DESC", (ctx, key))]
+        # A formula is the reaction's own "blueprint" type, so the reactions table is the authority
+        # on which of these are formulas rather than a name match on "Reaction Formula".
+        formula_ids = {int(r["reaction_id"]) for r in con.execute(
+            "SELECT reaction_id FROM reactions")}
+    finally:
+        con.close()
+    return {"items": [{"type_id": r["type_id"], "name": r["name"] or f"#{r['type_id']}",
+                       "qty": r["qty"], "formula": int(r["type_id"]) in formula_ids}
+                      for r in rows]}
 
 
 @router.delete("/api/industry/assets/sources/{key}")

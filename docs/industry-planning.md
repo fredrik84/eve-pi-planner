@@ -175,6 +175,18 @@ the ESI panel (`/api/industry/manual-blueprints`, GET/POST/DELETE). Its encoding
   replaces that batch and touches no other, so a second character's window cannot wipe the first's and
   a re-paste cannot double a holding. Hand-typed rows carry `batch=''` and no paste may delete them.
   `DELETE …/manual-blueprints/batches/{batch}` drops one batch.
+- **A batch says what it CONTAINS, not just how much it holds.** The settings row gave a name, a
+  print count and a location — enough to know a paste landed, not enough to know whether the formula
+  you pasted it for is in there ("I can see where it's located, but I cannot see what it contains",
+  2026-08-08). A **contents** toggle folds the batch's own entries out beneath it, reaction formulas
+  first and marked, since a reaction library is what most of these pastes are for. Rendered from the
+  `entries` the payload already carries — no second round trip, and no way for the summary and the
+  contents to disagree. Pasted STOCK sources answer the same question through
+  `GET /api/industry/assets/sources/{key}/items`, which they needed a real endpoint for.
+- **The paste box explains itself in one line.** The rules above are real, and all of them used to be
+  printed in front of the textarea every time ("extremely long winded", same report). What stays is
+  the instruction — open the window, Ctrl+A, Ctrl+C, paste, one paste is one batch — with the rest
+  behind a **Details** toggle, where someone who wants to know why goes looking for it.
 - **The window often states WHERE its prints are — and that is recorded, never an identity.** The
   industry window copies in two layouts: the short one above (a container is selected), and a long
   one (nothing selected) that carries where each print is —

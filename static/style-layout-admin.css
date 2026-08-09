@@ -1262,6 +1262,23 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-src-name { color: #eef2f8; }
 .ind-src-meta { margin-left: auto; font-size: 11px; color: var(--clr-text-soft); }
 .ind-src-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+/* "contents" — what a stock source actually holds, folded out under it. */
+.ind-src-peek {
+  background: none; border: 1px solid var(--clr-border); border-radius: 4px;
+  color: var(--clr-text-dim); cursor: pointer; font-size: 10.5px; padding: 1px 6px; margin-left: 8px;
+}
+.ind-src-peek:hover { color: var(--clr-text); border-color: #3a5a82; background: none; }
+.ind-src-items { margin: 2px 0 8px 28px; max-height: 260px; overflow-y: auto; }
+.ind-src-item-hd {
+  font-size: 10.5px; font-weight: 600; color: var(--clr-text-soft); text-transform: uppercase;
+  letter-spacing: .03em; margin: 6px 0 2px;
+}
+.ind-src-item {
+  display: flex; justify-content: space-between; gap: 12px; font-size: 12px;
+  padding: 2px 4px; color: var(--clr-text-dim); border-bottom: 1px solid #1a1f2c;
+}
+.ind-src-item:last-child { border-bottom: none; }
+.ind-src-item-fx { color: #8fb8dd; }
 .ind-src-del { margin-left: 8px; background: none; border: none; color: #e69aa0; cursor: pointer; font-size: 13px; padding: 0 4px; }
 .ind-src-del:hover { color: #ff6b74; }
 /* Where a container is: station/structure heading over its boxes, in every list that shows them */
