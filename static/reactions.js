@@ -2436,7 +2436,7 @@ function _rxOrderReportBody(data) {
 
     <div class="pp-card-title" style="margin-top:14px;font-size:14px">Time estimate</div>
     <div class="rx-manual-preview">
-      <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Start to finish</span><b>~${_fmtHours(data.time.estimated_hours)}</b></div>
+      <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Start to finish</span><b>${data.time.estimated_hours == null ? 'Can&rsquo;t say yet' : '~' + _fmtHours(data.time.estimated_hours)}</b></div>
       <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Free slots now</span><b>${data.time.free_slots_now}</b></div>
     </div>
     <div class="pp-card-hint">${_esc(data.time.caveat || '')}</div>
