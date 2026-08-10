@@ -2032,30 +2032,50 @@ function _rxSysPick(id, name) {
   _rxSysHide(id);
 }
 
+// The freight/system/tax fields, built once for both the GROUP default form and the personal
+// override. They were two near-identical copies, each carrying its own paragraph explaining the
+// same six fields — so the copy drifted and every edit had to be made twice. The two forms are
+// never on screen together (the group one is manager-only, in Reactions ⚙; the personal one lives
+// in Settings → Structures & Markets and the two onboarding flows), so sharing the markup costs
+// the user nothing and halves the words.
+function _rxRateFieldsHtml(prefix, mine) {
+  const p = mine ? 'Your ' : '';
+  return `
+    <div class="pp-target-form" style="margin-top:8px">
+      <label class="pp-label" for="${prefix}Import">${p || ''}Freight in, ISK/m³</label>
+      <input type="number" id="${prefix}Import" class="pp-num-input" style="width:120px">
+
+      <label class="pp-label" for="${prefix}Export">${p || ''}Freight out, ISK/m³</label>
+      <input type="number" id="${prefix}Export" class="pp-num-input" style="width:120px">
+
+      <label class="pp-label" for="${prefix}Collateral">Courier collateral %</label>
+      <input type="number" id="${prefix}Collateral" class="pp-num-input" style="width:100px" step="0.1">
+
+      <label class="pp-label" for="${prefix}System">Reaction${mine ? ' / build' : ''} system</label>
+      ${_rxSystemInputHtml(prefix + 'System')}
+
+      <label class="pp-label" for="${prefix}Tax">Facility tax %</label>
+      <input type="number" id="${prefix}Tax" class="pp-num-input" style="width:100px" step="0.1">
+
+      ${_rxTimeEffFieldHtml(prefix, 'Time efficiency %')}
+    </div>`;
+}
+
+// The two things here that silently change your numbers if you get them wrong. Everything else the
+// fields say for themselves.
+const _RX_RATE_NOTES = `
+  <div class="settings-note">No system set means <b>job install fees are left out</b> of every
+    estimate — for manufacturing as well as reactions.</div>
+  <div class="settings-note">Time efficiency can't be detected. Compare one real job's duration
+    against the formula's raw time and enter the difference.</div>`;
+
 function _rxSettingsFormHtml() {
   return `
     <div class="pp-card-title" style="font-size:13px;margin-top:4px">Group defaults
-      <span class="pp-card-hint">— your group's shared shipping/collateral/job-cost rate; members inherit this unless they set their own below</span>
+      <span class="pp-card-hint">— members inherit these unless they set their own</span>
     </div>
-    <div class="pp-target-form" style="margin-top:8px">
-      <label class="pp-label" for="rxSetImport">Import ISK/m³</label>
-      <input type="number" id="rxSetImport" class="pp-num-input" style="width:120px">
-
-      <label class="pp-label" for="rxSetExport">Export ISK/m³</label>
-      <input type="number" id="rxSetExport" class="pp-num-input" style="width:120px">
-
-      <label class="pp-label" for="rxSetCollateral">Export collateral %</label>
-      <input type="number" id="rxSetCollateral" class="pp-num-input" style="width:100px" step="0.1">
-
-      <label class="pp-label" for="rxSetSystem">Reaction system</label>
-      ${_rxSystemInputHtml('rxSetSystem')}
-
-      <label class="pp-label" for="rxSetTax">Facility tax %</label>
-      <input type="number" id="rxSetTax" class="pp-num-input" style="width:100px" step="0.1">
-
-      ${_rxTimeEffFieldHtml('rxSet', 'Time efficiency %')}
-    </div>
-    <div class="pp-card-hint" style="margin-top:2px">Reaction system + facility tax estimate real job-installation fees (EVE's system cost index × EIV, plus your structure's tax). Leave the system blank to skip this — nothing changes until it's set. Time efficiency % shortens every duration/runtime estimate the tool shows — there's no way to auto-detect this (ESI only reports a job's facility once it's already installed), so check your real in-game job duration against the formula's raw time and enter the % difference here.</div>
+    ${_rxRateFieldsHtml('rxSet', false)}
+    ${_RX_RATE_NOTES}
     <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:8px">
       <button onclick="_saveRxSettings()">Save</button>
       <span id="rxSettingsMsg" class="pp-card-hint"></span>
@@ -2094,32 +2114,15 @@ function _saveRxSettings() {
 // within one alliance. No override saved = use the group's rate (or the global default).
 function _rxAccountSettingsFormHtml() {
   return `
-    <div class="pp-card-title" style="font-size:13px;margin-top:4px">Your settings
-      <span class="pp-card-hint">— overrides the group default above for you personally only (real JF cost/reaction system/rig fit genuinely varies account to account)</span>
+    <div class="pp-card-title" style="font-size:13px;margin-top:4px">Your rates
+      <span class="pp-card-hint">— yours only; overrides any group default</span>
     </div>
-    <div class="pp-target-form" style="margin-top:8px">
-      <div class="pp-card-hint" id="rxAcctSettingsHint" style="margin-bottom:8px;grid-column:1/-1"></div>
-      <label class="pp-label" for="rxAcctImport">Your import ISK/m³</label>
-      <input type="number" id="rxAcctImport" class="pp-num-input" style="width:120px">
-
-      <label class="pp-label" for="rxAcctExport">Your export ISK/m³</label>
-      <input type="number" id="rxAcctExport" class="pp-num-input" style="width:120px">
-
-      <label class="pp-label" for="rxAcctCollateral">Your export collateral %</label>
-      <input type="number" id="rxAcctCollateral" class="pp-num-input" style="width:100px" step="0.1">
-
-      <label class="pp-label" for="rxAcctSystem" title="Drives job-installation fees for reactions AND manufacturing — the Industry planner reads this same value">Your reaction / build system</label>
-      ${_rxSystemInputHtml('rxAcctSystem')}
-
-      <label class="pp-label" for="rxAcctTax">Your facility tax %</label>
-      <input type="number" id="rxAcctTax" class="pp-num-input" style="width:100px" step="0.1">
-
-      ${_rxTimeEffFieldHtml('rxAcct', 'Your time efficiency %')}
-    </div>
-    <div class="pp-card-hint" style="margin-top:2px">System + facility tax estimate real job-installation fees, for <b>manufacturing as well as reactions</b> — the Industry planner reads this same setting, and quotes fees light without it. Leave the system blank to skip this — nothing changes until it's set. Time efficiency % shortens every duration/runtime estimate — check your real in-game job duration against the formula's raw time and enter the % difference (we can't auto-detect this, ESI only reports a job's facility once it's already installed).</div>
+    <div class="pp-card-hint" id="rxAcctSettingsHint" style="margin:6px 0 0"></div>
+    ${_rxRateFieldsHtml('rxAcct', true)}
+    ${_RX_RATE_NOTES}
     <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:8px">
-      <button onclick="_saveRxAccountSettings()">Save my rate</button>
-      <button class="pp-cancel-btn" onclick="_resetRxAccountSettings()">Use default instead</button>
+      <button onclick="_saveRxAccountSettings()">Save my rates</button>
+      <button class="pp-cancel-btn" onclick="_resetRxAccountSettings()">Use group default</button>
       <span id="rxAcctSettingsMsg" class="pp-card-hint"></span>
     </div>`;
 }
@@ -2760,7 +2763,7 @@ function _rxCharListHtml(d) {
   return `<div class="rx-gate-charlist">${rows}</div>`
     + `<button class="rx-onboard-connect" style="margin-top:4px" onclick="connectReactionsMarket()">`
     + `${chars.length ? 'Connect another character' : 'Connect a character'}</button>`
-    + `<div class="pp-card-hint" style="margin-top:6px">Characters connected here get reaction slots AND market access. The <b>market character</b> reads your structure market — pick one that can dock at it. You can also add characters from the Dashboard (those contribute slots but not market access). ${_connectScopeNote()}</div>`;
+    + `<div class="pp-card-hint" style="margin-top:6px">Characters added here bring reaction slots and market access. Pick a <b>market character</b> that can dock at your structure.</div>`;
 }
 
 function _rxUpdateSaveBtn() {
@@ -2988,9 +2991,8 @@ function _rxManualFormHtml() {
       <select id="rxManualHull">${hulls}</select>
       ${_rxSystemInputHtml('rxManualSystem')}
       <button class="pp-add-btn" onclick="_rxManualAdd()">Add by hand</button>
-      <div class="pp-card-hint" style="flex:1 1 100%">You can BUILD in a hand-added structure, but not
-        price from it — reading a structure's market needs ESI and the structure's real in-game id.
-        Its security (and so its rig bonuses) comes from the system you pick.</div>
+      <div class="settings-note" style="flex:1 1 100%"><span>You can <b>build</b> in a hand-added
+        structure but not <b>price</b> from it — reading a market needs its real in-game id.</span></div>
       <span id="rxManualMsg" class="pp-card-hint"></span>
     </div>`;
 }
@@ -3139,9 +3141,9 @@ function _rxMarketManagerHtml(d) {
   const structs = pricing.filter(m => m.kind === 'structure');
   const unreadable = structs.length && !d.connected;
   const warn = unreadable
-    ? `<div class="pp-warn" style="margin:0 0 8px">⚠ Your structure market${structs.length > 1 ? 's' : ''} can't be read — no connected character has market access, so pricing falls back to Jita (in Reactions <b>and</b> Manufacturing). Connect a character that can dock there to fix it. ${_connectScopeNote()}</div>`
+    ? `<div class="settings-note"><span>Your structure market${structs.length > 1 ? 's' : ''} can't be read, so pricing <b>falls back to Jita</b>. Connect a character that can dock there.</span></div>`
     : (d.connected ? '' : `<div class="pp-card-hint" style="margin:0 0 8px">Searching structures needs a `
-        + `connected character (public regions work without one). ${_connectScopeNote()}`
+        + `connected character — public regions work without one.`
         + ` <button class="ind-link-btn" onclick="connectReactionsMarket()">Connect one</button></div>`);
   return inheritNote + warn
     + `<div class="rx-mkt-sec"><div class="rx-mkt-sec-h">Price against — in priority order</div>`
@@ -3150,7 +3152,7 @@ function _rxMarketManagerHtml(d) {
     + `<input id="rxMarketSearchInput" placeholder="Search a structure or region…" onkeydown="if(event.key==='Enter')_rxMarketSearch()">`
     + `<button class="pp-add-btn" onclick="_rxMarketSearch()">Search</button>`
     + `<div id="rxMarketSearchResults"></div></div></div>`
-    + `<div class="rx-mkt-sec"><div class="rx-mkt-sec-h">Structures you build in <span class="pp-card-hint">their rigs set your ME &amp; TE — no ordering needed</span></div>`
+    + `<div class="rx-mkt-sec"><div class="rx-mkt-sec-h">Structures you build in <span class="pp-card-hint">their rigs set your ME &amp; TE</span></div>`
     + (build.length ? build.map(m => _rxBuildRowHtml(m, d)).join('') : `<div class="pp-card-hint">None yet — search above and choose <b>+ Build</b> on a structure.</div>`)
     + _rxManualFormHtml()
     + `</div>`
@@ -3225,7 +3227,7 @@ async function _rxMarketSearch() {
     // market-scope character, so this empty result IS their dead end unless the way out is on it.
     box.innerHTML = !d.connected
       ? `<div class="pp-card-hint">No matches. Searching for a <b>structure</b> needs a connected
-           character — public regions work without one. ${_connectScopeNote()}</div>`
+           character — public regions work without one.</div>`
         + `<div class="settings-connect-row"><button class="pp-connect-btn" onclick="connectReactionsMarket()">`
         + `Connect a character</button></div>`
       : '<div class="pp-card-hint">No matches.</div>';

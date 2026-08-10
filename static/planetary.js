@@ -2925,8 +2925,8 @@ function _loadMarketsSettings() {
     + `<div class="pp-card-hint" style="margin:6px 0 8px">Follow a public region market and/or a player structure market.</div>`
     + `<div class="settings-connect-row">`
     +   `<button class="pp-connect-btn" onclick="connectReactionsMarket()">Connect a character</button>`
-    +   `<span class="pp-card-hint">Required to search structures and read their markets — public`
-    +   ` regions work without one. ${_connectScopeNote()}</span>`
+    +   `<span class="pp-card-hint">Needed to search structures and read their markets. Public`
+    +   ` regions work without one.</span>`
     + `</div>`
     + `<div id="settingsMarketsMgr" class="pp-target-form" style="margin:8px 0 16px;display:block"><div class="pp-empty">Loading…</div></div>`
     + `<div style="border-top:1px solid var(--clr-border);margin-bottom:12px"></div>`;
