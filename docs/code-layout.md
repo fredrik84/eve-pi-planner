@@ -3,14 +3,41 @@
 Module-by-module map of `app/` and `static/`. Read this before adding a route, a module, or a
 large frontend block. Back to [CLAUDE.md](../CLAUDE.md).
 
-Find a module: `grep -n '`app/' docs/code-layout.md` and read from that line — the file is ordered
-backend first (`app/main.py` outward, then the layout generator at `### Factory Layout generator`),
-then the frontend `static/*.js` and the CSS bundles at the end. What a subsystem *does* lives in
-the service file ([pi.md](pi.md), [reactions.md](reactions.md),
+**Don't read this file whole.** `grep -n '^#' docs/code-layout.md`, then read the one section you
+need. For the functions *inside* a module, don't read the module either — run
+`scripts/symbols.sh <file>`.
+
+What a subsystem *does* lives in the service file ([pi.md](pi.md), [reactions.md](reactions.md),
 [industry-planning.md](industry-planning.md), [industry-running.md](industry-running.md),
 [platform.md](platform.md)); this file only says where it is.
 
+## Contents
+
+| Section | Covers |
+| --- | --- |
+| `app/main.py` — composition only | routers, startup, page routes, the analyzer's odd corners |
+| `app/planner.py` and the planner family | the acyclic split: algo ← planner ← advisor ← dashboard, plus `planner_store` |
+| `_run_plan` helpers and shared plan helpers | the named helpers the orchestrator calls |
+| Fuel-block planner | `fuelblock_planner.py` + the BOM/ME math in `fuelblocks.py` |
+| Factory planet-type filter | `factory_planet_types`, the shortage warning |
+| CCU + planet-size scaled templates | the bundle token format, per-toon CC |
+| Extractor templates | 10 heads where possible; basics scale down |
+| `FIT_HEADROOM = 0.10` | why nothing is built to 100% of budget |
+| `min_cc` and the CC ladder | "how far must I train Command Center Upgrades?" |
+| Extractors are power-grid-bound | never CPU-bound; `resources.binding` |
+| Storage-less extractor option | launchpad as hub, P0-led template names |
+| On-planet refining cap (basics/8) | `fitted_extractor_basics`, why it must stay one loop |
+| Head cost is FLAT | size moves links only — do not reintroduce spokes |
+| OPEN: `PLANET_DIAM` not calibrated | prod diameters are all 0; the 2× discrepancy |
+| Per-character CCU | ESI skill vs the what-if override |
+| Factory Layout generator (`app/layout.py`) | the standalone template exporter |
+| Frontend JS (`static/*.js`) | load order, why the split is safe, asset cache-busting |
+| CSS bundles | the `style-*.css` slices and their cascade order |
+| After planner changes | run `test_distribution.py` against the container |
+
 ## Code layout
+
+## `app/main.py` — composition only
 
 `app/main.py` is **composition only** — routers, startup/shutdown, the page routes (`/`, `/s/{id}`,
 `/b/{id}`) and the `/api/*` catch-all. The original Find-Buildables analyzer (`/api/analyze`,
@@ -21,6 +48,8 @@ the ORIGINAL inventory share (`app/shares.py`, its own tiny store), unrelated to
 only caller of `highspy`+`numpy` (~55 MB of the image), lazily imported inside the solve so they
 cost nothing at startup. Retiring the feature = delete `analyzer.py`, `pi.py`, `optimizer.py`,
 `shares.py` and those two requirements.
+
+## `app/planner.py` and the planner family
 
 `app/planner.py` is **plan orchestration** — `_run_plan`, `/api/plan`, `/api/debug/plan`,
 `/api/pi-lifetime`, and the shared plan math (P1 requirement tracing, `_effective_fph`,
@@ -55,7 +84,10 @@ plan-config, `pp_shares`, profiles, plan snapshots and colony flags — is in
 `planner_store`. **Importing a planner helper from another module? Check which of these it lives in
 now** — `fuelblock_planner`, `fuelblocks`, `admin` and `esi_data` all had to be repointed.
 
+## `_run_plan` helpers and shared plan helpers
+
 `_run_plan(req, context_id)` orchestrates; the heavy lifting is in named helpers (refactored out of one giant function):
+
 - `_compute_slot_budget` → factory count + `_compute_factory_shares`
 - `_build_need_list` → Bresenham-ordered extractor slots
 - `_assign_extractors` → Pass 1 (existing) → swap → Pass 2 → post-swap; calls `_run_swap_pass`
@@ -69,6 +101,8 @@ paths): `_load_char_planet_config`, `_build_p1_info_raw`, `_fetch_planets_and_re
 `_set_computed_ext_cap`, `_run_extractor_pipeline`, `_pick_factory_system`. These were
 extracted to de-duplicate the two run functions (~150 lines of copy-paste).
 
+## Fuel-block planner (`app/fuelblock_planner.py`, `app/fuelblocks.py`)
+
 **Fuel-block planner** lives in `app/fuelblock_planner.py` (own `APIRouter`, registered in
 `main.py` after `planner_router`): `FuelBlockPlanRequest`, `_run_fuelblock_plan`,
 `_compute_fuelblock_budget`, `_assign_fuelblock_factories`, `_system_security`, and the
@@ -77,6 +111,8 @@ extracted to de-duplicate the two run functions (~150 lines of copy-paste).
 (avoids a circular import). The BOM/ME math (`resolve_bom`, `compute_basket_p1_reqs`,
 `resolve_rig`/`sec_band`, `me_keep_factor`, `apply_effective_me`) is consolidated in
 `app/fuelblocks.py`.
+
+## Factory planet-type filter
 
 **Factory planet-type filter.** `FuelBlockPlanRequest.factory_planet_types` (None →
 `DEFAULT_FACTORY_PLANET_TYPES = ["Barren","Temperate"]`, the smallest planets / least link
@@ -99,6 +135,8 @@ factory assignments when `best_fac_system` is set); the UI shows a `.plan-ptype-
 warning under the chips that clears when the user widens the planet types (more real planets
 become available → unpinned drops to 0).
 
+## CCU + planet-size scaled templates
+
 **CCU + planet-size scaled templates.** The bundle token format is
 `id[:lp[:count[:cc[:planet_type]]]]` (`/api/layout/bundle` in
 `planetary.py`, backwards compatible). `cc`/`planet_type` pass through to `generate_layout`,
@@ -113,6 +151,8 @@ extractor token per `(p1_type_id, a.effective_ccu, best_planet_type)` from each 
 CCU, not the factory's (the old `expand=1` path leaked the factory CC onto extractors). The
 P1→P0 planet type comes from the slot's `best_planet_type`.
 
+## Extractor templates — 10 heads where possible, basics scale
+
 **Extractor template = 10 heads where possible; basics scale.** `generate_extractor_layout` keeps
 all 10 extractor heads (full P0 extraction, matching the planner's flat 48k P0/cycle model) and
 scales **only** the basic (P1) factory count down to fit a lower CC (8→6→4→1 at CC5→4→3→2 on a
@@ -123,6 +163,8 @@ command centre cost. `generate_layout` passes `cc_level` into the tier-1 path (d
 extractor templates must scale with the toon's real CC, not default to CC5). **Factory** planets
 still scale by CC — the packed facility count (`component_factory_rate`/`_packed_rate` →
 `generate_layout` `max_count`) drops at lower CC, so the planner places more factory planets.
+
+## `FIT_HEADROOM = 0.10` — nothing is built to 100% of budget
 
 **Nothing is built to 100% of the budget (`FIT_HEADROOM = 0.10`).** Every fitting decision —
 extractor basics, heads, packed factory units — and the `min_cc` advice leave ~10% of BOTH the CPU
@@ -136,6 +178,8 @@ gets 4, and P2 `max_count` dropped 22→20. Changing this constant changes plan 
 `fitted_extractor_basics` → `_basics_factor` → throughput — so **bump `_LAYOUT_CALC_VER`** in
 planner.py (v2 = the headroom change) to invalidate the 30-day Redis layout cache.
 
+## `min_cc` and the CC ladder
+
 **`min_cc` — the level a layout actually needs.** `min_cc_for(cpu, pg)` returns the lowest CC level
 whose budget fits the draw *with headroom* (None if nothing does); it's in every `compute_resources`
 result and in the extractor/factory/split summaries. Levels above it buy nothing for that template.
@@ -146,9 +190,13 @@ what each of CC1–CC5 fits on this planet (`heads`, `basics`, `product_per_hour
 the clickable ladder row on extractor cards. Cheap to compute (~6ms/level); do NOT build it by
 recursing into `generate_extractor_layout` (use the internal `_fit`).
 
+## Extractors are power-grid-bound, never CPU-bound
+
 **Extractors are power-grid-bound, never CPU-bound** (~32-45% CPU at any level, vs 87-89% PG). The
 layout card leads with PG and mutes CPU on extractor cards for that reason; factories vary (a P4
 chain is CPU-bound at 78%/70%). `resources.binding` says which.
+
+## Storage-less extractor option + P0-led names
 
 **Storage-less extractor option + P0-led names.** `build_extractor_template(no_storage=)` /
 `generate_extractor_layout` / `generate_layout` / `bundle_templates` / `fitted_extractor_basics` all
@@ -162,6 +210,8 @@ the **PI Templates bundle** (`/api/layout/bundle?...&no_storage=1`, also `/api/l
 profiles (no DB column) and NOT yet a checkbox in the Factory Layout tab. Extractor template `Cmt`
 (in-game name + zip filename) leads with the **P0** you select for hotspots, then the P1:
 `"Felsic Magma → Silicon (Lava)"`; split planets too.
+
+## On-planet refining cap (basics/8)
 
 **On-planet refining cap (basics/8).** An extractor planet's P1 output isn't just extraction — its
 Basic Industry Facilities convert P0→P1, and 8 basics = full conversion of a 100%-quality planet
@@ -186,6 +236,8 @@ yet place *more* extractor planets to compensate. Split legs aren't capped (edge
 mitigation that lifts the cap: drop the separate storage facility and buffer P0 in the launchpad
 (frees ~700 PG → often restores a basic on big planets) — not built.
 
+## Head cost is FLAT — planet size moves LINKS only
+
 **Heads cost a FLAT 110 CPU / 550 PG — planet size moves LINKS, nothing else.** `HEAD_COST` is the
 whole per-head cost; EVE charges by head count and by nothing else (EVE University: "each
 additional head consumes an amount of CPU (110) and Powergrid (550)"). Between 2026-06-13 and
@@ -205,6 +257,8 @@ Now: heads flat, size only in the link formula, so a bigger planet sheds basics 
 `_basics_factor`) — `_LAYOUT_CALC_VER` is at **v3**. Covered by
 `test_head_cost_is_flat_and_size_only_moves_links` in `test_min_cc.py`.
 
+## OPEN: `PLANET_DIAM` is not calibrated
+
 **OPEN: `PLANET_DIAM` is not calibrated and prod has no real diameters.** The type defaults (Gas
 40000, Ice 6000, Storm 30000) don't match the SDE's celestial radii under either reading of
 `mapDenormalize.radius`, and every `pp_planets.diameter` in production is **0** — so
@@ -213,6 +267,8 @@ That script's `diameter_km = radius_m / 500` is also unverified: for F18-AY VIII
 while the client reads ~110,000, so one of the two is off by 2×. Settle it against a real in-game
 exported template's `Diam` field before populating, because link PG (and therefore how much fits)
 scales directly with it.
+
+## Per-character CCU
 
 **Per-character CCU** defaults to each toon's real ESI Command Center Upgrades skill
 (`command_center_upgrades`, skill id 2505, fetched in `esi.py`); `_build_char_list` uses the
@@ -326,11 +382,16 @@ single-tier-per-planet and not what this generates.)
   storage round-trips — this generator routes intermediates tier-to-tier directly), and
   CPU/PG is not simulated.
 
+## Frontend JS (`static/*.js`)
+
 Frontend JS is split across files loaded in order from `index.html`: **`utils.js`** (loaded first — shared formatting helpers: `fmtIsk`/`_fmtIsk`/`_fmtHours`/`_fmtDHM`/`_esc`/`_fmtWalletDate`/`_fmtCacheTime`), **`app.js`** (tab nav, ESI login popup, mobile pull-to-refresh, DOMContentLoaded boot), **`planetary.js`** (the core — shared state + `_featureActive`, the PI-planner wizard + `renderFinalPlan`, Characters/header, profiles/shares, tab-entry hooks like `onPlanetDbTabOpen`), **`dashboard.js`** (Dashboard tab: overview, maintenance routine, spare-capacity, the global `rescanAll`), **`admin.js`** (Admin tab: planet submissions, feature flags, baskets, admin users, bug triage), **`planetdb.js`** (Planet DB tab: constellation/region filter, planet list + chunked table, import modal), **`refill.js`** (PI-Planner refill tool: saved-plans bar, build/refill mode, P1-stack distribution), **`analysis.js`** (Setup Analysis tab), and **`layout.js`** (Factory Layout tab). Feature files were carved out of `planetary.js` for maintainability. The split is load-order-safe because the JS is **all declarations except one top-level statement** (the `DOMContentLoaded` listener in core) — functions are global and resolve at call time, so feature files just load after `planetary.js`. When carving more out: cut only at top-level boundaries (verify each file with `node --check`), keep shared state/util in `planetary.js`, and never split a wizard/dashboard interdependency you can't trace. Asset cache-busting is automatic — `index.html` ships `?v=dev` and `app/main.py` stamps the running build's `GIT_COMMIT` onto every asset URL at serve time (`ASSET_VERSION`/`_page()`), so there is **no `?v=` number to bump** any more. Deploy of static-only changes can be a `docker cp` into the container, but always `docker compose build && up -d --force-recreate` to bake in before calling it shipped.
+
+## CSS bundles
 
 CSS is likewise split into `style-*.css` files loaded in order from `index.html`, sliced at the
 original file's section-comment boundaries with **zero rule reordering** (each file is a contiguous
 slice of what used to be one `style.css`, verified byte-identical when concatenated back together):
+
 **`style-base.css`** (page shell/header/sidebar nav/input grid/buttons), **`style-components.css`**
 (pills/warnings/tables/tier badges/pipeline summary + Planetary Planning intro),
 **`style-contribute.css`** (Contribute tab + bug reporting), **`style-wizard.css`** (plan
@@ -341,6 +402,8 @@ lightbox/how-it-works poster/remaining Admin sections + **the final mobile `@med
 file must stay last**, since its overrides target selectors defined in every earlier file). When
 carving further: only cut at existing section-comment boundaries and never move a rule past a
 `@media` block that shares its selectors, or the cascade order (and thus the rendered result) changes.
+
+## After planner changes
 
 **Always run `test_distribution.py` against the container after planner changes** (see Testing) — this was repeatedly the difference between "looks done" and "actually correct."
 

@@ -895,6 +895,7 @@ def level_product_runs(context_id: int) -> int:
     reward are re-split across the new row count, never re-totalled. Idempotent: a plan that is
     already level is read and not written.
     """
+    # ── Step 1: load every assignment row for this account ──────────────────────────────────────
     ensure_reaction_assignments_table()
     con = get_connection()
     try:
@@ -910,6 +911,7 @@ def level_product_runs(context_id: int) -> int:
     if not rows:
         return 0
 
+    # ── Step 2: exclude what may not be re-shaped (an ORDER chain's top row) ────────────────────
     # What may NOT be re-shaped: the TOP row of a customer ORDER's chain. Its run count is the batch
     # that order was quoted and priced on, and cancelling the order hands exactly those runs back
     # (`give_back_order_runs`), so moving it would make the order's own arithmetic wrong.
@@ -928,6 +930,7 @@ def level_product_runs(context_id: int) -> int:
     if not inner:
         return 0
 
+    # ── Step 3: capacity — what the plan may hold per character ─────────────────────────────────
     cycles = _reaction_cycle_times()
     caps_now = {c["character_id"]: c for c in _character_capacities(context_id)}
     # What the plan may hold on a character, counting EVERY planned job on it, not just the busiest
@@ -939,6 +942,7 @@ def level_product_runs(context_id: int) -> int:
     room = {cid: max(0, int(c.get("slots") or 0) - int(c.get("running") or 0))
             for cid, c in caps_now.items()}
 
+    # ── Step 4: pool rows into (stage, product) buckets across characters ───────────────────────
     # (stage, product) -> every row of it, POOLED ACROSS CHARACTERS: the requirement is the
     # ACCOUNT's, the run count is the product's, and which character holds a job is just where there
     # was room. That is what makes this pass slot-efficient rather than merely tidy, and two things
@@ -964,6 +968,7 @@ def level_product_runs(context_id: int) -> int:
     # from the same starting point — 17 jobs on an 11-slot character. Stages are walked in order so
     # what an earlier one took is a fact by the time a later one asks.
     committed: dict[int, int] = {}
+    # ── Step 5: per stage — size every product to one shared run count ──────────────────────────
     for stage in sorted(stages):
         by_product = stages[stage]
         later = {cid: sum(n for st, n in per.items() if st > stage)
@@ -1000,6 +1005,7 @@ def level_product_runs(context_id: int) -> int:
                 floor_runs[tid] = max(1, int(d_floor / cyc))
         layout: dict[int, dict] = {}
         products: dict[int, dict] = {}
+        # ── Step 5a: give-ground loop — shrink until the stage fits its reactors ────────────────
         for _attempt in range(24):
             def _build(extra_hours: set[float]) -> dict:
                 built: dict[int, dict] = {}
@@ -1042,6 +1048,7 @@ def level_product_runs(context_id: int) -> int:
             if nxt <= floor_runs.get(worst_tid, 0):
                 break                       # no room left to give — take what we have
             floor_runs[worst_tid] = nxt
+        # ── Step 5b: place the jobs (stable: who already runs it keeps it) ──────────────────────
         # WHERE the jobs go. A character that already runs the product keeps it (no move for its
         # own sake), then whoever has the most room — so consolidating a product onto fewer
         # reactors moves as few rows as it can.
@@ -1092,6 +1099,7 @@ def level_product_runs(context_id: int) -> int:
                 committed[cid] = committed.get(cid, 0) + 1
             plan.append(((stage, tid), stay + move, opt["runs"], spots))
 
+    # ── Step 6: write the plan back — update, delete, insert ────────────────────────────────────
     changed = 0
     con = get_connection()
     try:
@@ -1783,6 +1791,7 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
     not yet actually running" instructions (see assign_reaction) — a context can hold several
     characters (an account's own alts, or characters from separate EVE accounts logged into the
     same session), and each authorises the tracking scope independently."""
+    # ── Step 1: repair the plan BEFORE reading it (own connections — never two at once) ─────────
     ensure_industry_jobs_table()
     ensure_reaction_assignments_table()
     ensure_reaction_orders_table()
@@ -1815,6 +1824,7 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
             level_stage_runs(context_id)
     except Exception:
         pass
+    # ── Step 2: one connection — characters, cached ESI jobs, assignments, orders, SDE lookups ───
     con = get_connection()
     try:
         chars = con.execute(
@@ -1887,6 +1897,7 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
     finally:
         con.close()
 
+    # ── Step 3: price the plan live off today's market ──────────────────────────────────────────
     # Expected output value is priced LIVE off today's market, not stored at assign-time — a
     # stored snapshot would need retroactive backfilling for every row created before this
     # existed (impossible — no way to know a past market price) and would go stale for older
@@ -1895,6 +1906,7 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
     all_assigned_type_ids = list({r["type_id"] for rows in assignments.values() for r in rows})
     market_by_type = resolve_market_data(context_id, all_assigned_type_ids) if all_assigned_type_ids else {}
 
+    # ── Step 4: per character — match running jobs to plan rows, build pending + stages ─────────
     now = _time.time()
     running: list[dict] = []
     characters: list[dict] = []
@@ -1993,6 +2005,7 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
             # track themselves. See chain_stage_state.
             "stages": chain_stage_state(assignments.get(c["character_id"], []), jobs, now),
         })
+        # ── Step 4a: orphan jobs (running in-game with no plan slot) and running-job rows ───────
         # Whatever remains in running_type_counts after plan-row matching is ORPHAN jobs: running
         # in-game with no plan slot (installed outside the tool's assign flow — e.g. a corp job).
         # Flag each running job as orphan/planned here, collect orphans for SDE-recipe valuation
@@ -2037,6 +2050,7 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
                 "orphan": is_orphan,
             })
 
+    # ── Step 5: flag intermediates consumed by another running reaction ─────────────────────────
     # Flag each running job that is an INTERMEDIATE consumed by another running reaction: its
     # product is an input to some other running job's recipe, so its output feeds the next tier
     # on-site rather than being a separately sellable end product. Lets the "produced units" export
@@ -2052,6 +2066,7 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
     for j in running:
         j["consumed"] = j["product_type_id"] in consumed_types
 
+    # ── Step 6: fold in unplanned running jobs, then gate stages account-wide ───────────────────
     # Fold in running jobs that had no plan slot (see _unplanned_running_totals) — valued from our
     # own SDE recipe so in-game/corp jobs still count toward the committed totals.
     up = _unplanned_running_totals(context_id, unplanned_running, output_qty_by_type, cycle_hours_by_type)
@@ -2065,6 +2080,7 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
     # inside `chain_stage_state`, which sees one character at a time.
     _gate_stages_account_wide(characters)
 
+    # ── Step 7: assemble the dashboard payload ──────────────────────────────────────────────────
     return {
         "tracked": tracked_any,
         "characters": characters,

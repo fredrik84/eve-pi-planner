@@ -97,6 +97,7 @@ def _committed_production_units() -> dict[int, float]:
 
 def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int, cadence_hours: float,
                         material_ids: set[int] | None = None, absorb_fraction: float | None = None) -> dict:
+    # ── Step 1: filter opportunities down to viable candidates ──────────────────────────────────
     # How much of the standing Jita buy-order depth a batch is allowed to fill. Defaults to the
     # conservative _ABSORB_FRACTION (sell without moving the price); the advisor's "fill more of the
     # buy book" hint lets the player raise it per re-run to unlock a specific depth-bound product,
@@ -121,6 +122,7 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
     if not candidates:
         return empty
 
+    # ── Step 2: rank by profit per step, truncate to the pool ───────────────────────────────────
     # Rank by profit per step (the "least work most profitable" ordering) and truncate to a small
     # pool BEFORE the cap loop — the batch caps below scale net_profit_instant and top_level_runs
     # by the same factor, so the per-run ratio (this sort key) is cap-invariant and truncating here
@@ -129,6 +131,7 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
     candidates.sort(key=lambda o: -(o["net_profit_instant"] / o["top_level_runs"]))
     candidates = candidates[:_CANDIDATE_POOL_SIZE]
 
+    # ── Step 3: cap each candidate's batch (cadence, formulas, market absorption) ───────────────
     # Cap each candidate's usable batch size so a huge, cheap-per-unit chain doesn't get most of
     # the ISK budget allocated to a run count that could never actually finish within the
     # player's chosen cadence (e.g. "weekly") even using every free reaction slot at once — the
@@ -218,6 +221,7 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
     if not candidates:
         return empty
 
+    # ── Step 4: LP — pick the profit-maximising mix under ISK + slot budgets ────────────────────
     import highspy  # lazy: only ever needed here, keeps it off the cold-start path (matches app.optimizer)
     n = len(candidates)
     h = highspy.Highs()
@@ -253,6 +257,7 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
     if not chosen:
         return empty
 
+    # ── Step 5: allocation order (smallest slot-need first) ─────────────────────────────────────
     # Stage 2 below allocates real slots in ASCENDING ideal-slot-need order (smallest first), not
     # this profit order: a small candidate losing even 1 slot to ceil() rounding can lose HALF its
     # allocation, while a big candidate absorbing the same shortfall barely moves. Smallest-first
@@ -265,6 +270,7 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
 
     alloc_order = sorted(chosen, key=lambda cx: _ideal_slots_for(cx[0], cx[1]))
 
+    # ── Step 6: allocate real slots per suggestion ──────────────────────────────────────────────
     # Stage 2: allocate real reaction slots to each chosen product, all targeting completion
     # within roughly one cadence period — NOT a queue over unbounded future time (the old model),
     # since everything here is sized to finish around the same ~cadence window. Each suggestion
@@ -333,6 +339,7 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
         duration_hours = (runs_needed / slots_used) * cycle_hours
         max_completion_hours = max(max_completion_hours, duration_hours)
 
+        # ── Step 6a: chain tiers — the intermediates that must react first ──────────────────────
         # Chain tiers: any INTERMEDIATE reaction this product's own formula needs (e.g.
         # goo -> Ferrofluid -> this product) — each is a SEPARATE job the player must install
         # and let finish BEFORE the top-level reaction can even start, since the "force real
@@ -393,6 +400,7 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
                     "row": tier_row,
                 })
 
+        # ── Step 6b: accumulate totals and build the suggestion row ─────────────────────────────
         cost = c["input_cost"] * xi
         reward = c["net_profit_instant"] * xi
         output_qty = c["output_qty"] * xi
@@ -476,6 +484,7 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
         if capped_by_formula:
             formula_capped.append(c["name"])
 
+    # ── Step 7: spend idle reactors, then align each stage ──────────────────────────────────────
     # Reactors nobody claimed are reactors doing nothing while a chain waits on one job. Hand them
     # to the steps that finish soonest for it (`_widen_to_idle_slots`), then write the new job
     # counts back onto the rows the player actually installs. Runs, cost and profit are untouched —
@@ -499,6 +508,7 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
                 s["row"]["runtime_hours"] = round((s["runs"] / s["jobs"]) * s["cycle_hours"], 1)
                 max_completion_hours = max(max_completion_hours, (s["runs"] / s["jobs"]) * s["cycle_hours"])
 
+    # ── Step 8: restore display order, decide what bound the batch ──────────────────────────────
     # Built in allocation order (smallest slot-need first, see alloc_order above) — restore
     # profit-descending order for display, matching what the LP itself ranked as most valuable.
     suggestions.sort(key=lambda s: -s["reward"])
@@ -508,6 +518,7 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
     # won't help, there's nothing more suitable to spend it on right now.
     binding = "isk" if isk_committed >= 0.97 * isk_budget else "neither"
 
+    # ── Step 9: formulas this batch needs and the account lacks ─────────────────────────────────
     # Formulas this whole batch needs and the account does not hold — the wizard is the entry point
     # that produces the deepest chains, so it is the one that would otherwise hand the player a
     # sub-reaction they cannot install (Reinforced Carbon Fiber via an undeclared Carbon Fiber, the
