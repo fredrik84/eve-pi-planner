@@ -994,6 +994,8 @@ def resolve_build_params(context_id: int, me_pct: float, te_pct: float,
     me_by_product = {p: blend_me_te(o.get("copies") or [o], None, (me_pct, te_pct))
                      for p, o in owned.items()}
     mfg_skill, rx_skill, skill_basis = account_industry_time_mults(context_id, with_basis=True)
+    _marg = (MARGINAL_BUILD_PCT_OF_TOTAL if marginal_pct is None
+             else max(0.0, min(25.0, float(marginal_pct))))
     return BuildParams(
         me_pct=me_pct, te_pct=te_pct,
         mfg_skill_time_mult=mfg_skill, rx_skill_time_mult=rx_skill, skill_time_basis=skill_basis,
@@ -1013,10 +1015,13 @@ def resolve_build_params(context_id: int, me_pct: float, te_pct: float,
         # is why the slider alone can't express this: at 0% the 5m floor still applies, so small
         # components keep getting bought. Building at an outright LOSS is still refused; "ignore
         # marginal savings" means small gains count, not that paying more to build is sensible.
-        marginal_pct_of_total=(0.0 if force_build else
-                               (MARGINAL_BUILD_PCT_OF_TOTAL if marginal_pct is None
-                                else max(0.0, min(25.0, float(marginal_pct))))),
-        min_saving_isk=(0.0 if force_build else MIN_BUILD_SAVING_ISK),
+        marginal_pct_of_total=(0.0 if force_build else _marg),
+        # The floor is the DEFAULT policy's small-build half, not a second opinion the user cannot
+        # reach. Asking for 0% says "build anything that saves anything at all", so keeping a 5m
+        # floor that went on buying the long tail made the control lie about what it did. Dropped
+        # whenever the user asks for zero — by the slider or by the checkbox; every other setting
+        # keeps it, which is what still makes a cheap hull buy-and-assemble.
+        min_saving_isk=(0.0 if (force_build or _marg <= 0.0) else MIN_BUILD_SAVING_ISK),
         force_build_ids=set(force_build_ids or ()),
         never_build_ids=set(never_build_ids or ()),
         margin_pct=(MARGIN_DEFAULT_PCT if margin_pct is None

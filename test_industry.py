@@ -1121,9 +1121,14 @@ def test_force_build_ignores_the_shortcuts():
     forced = resolve_build_params(0, 0, 0, None, None, 0.0, 0, 0, force_build=True)
     check("force_build zeroes the percentage", forced.marginal_pct_of_total == 0.0)
     check("force_build zeroes the floor too", forced.min_saving_isk == 0.0)
-    # The slider alone cannot: at 0% the floor still stands.
+    # 0% on the slider means 0%: asking for "build anything that saves anything" has to drop the
+    # absolute floor too, or the control silently goes on buying the long tail.
     slider0 = resolve_build_params(0, 0, 0, None, None, 0.0, 0, 0, marginal_pct=0)
-    check("the slider at 0 still keeps the floor", slider0.min_saving_isk == MIN_BUILD_SAVING_ISK)
+    check("the slider at 0 zeroes the percentage", slider0.marginal_pct_of_total == 0.0)
+    check("the slider at 0 drops the floor as well", slider0.min_saving_isk == 0.0)
+    # ...and every other setting keeps it — that's what makes a cheap hull buy-and-assemble.
+    slider3 = resolve_build_params(0, 0, 0, None, None, 0.0, 0, 0, marginal_pct=3)
+    check("a non-zero slider keeps the floor", slider3.min_saving_isk == MIN_BUILD_SAVING_ISK)
 
     # A component whose saving is small: bought under the floor, built when forced.
     P_floor = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0,

@@ -1570,7 +1570,7 @@ function _indMetricTiles(m) {
     `What to quote the customer: ${_indMarginPct()}% over net cost. Adjust with the margin slider above.`]);
   // Turn the percentage into the number it actually means for THIS build.
   if (m.marginal_threshold) tiles.push(['Build threshold', fmtIsk(m.marginal_threshold),
-    `Anything that would save less than this by building is bought instead (${m.marginal_pct}% of the build, floor 5m). Adjust with the slider above.`]);
+    `Anything that would save less than this by building is bought instead (${m.marginal_pct}% of the build${m.marginal_pct > 0 ? ', floor 5m' : ''}). Adjust with the slider above.`]);
   else if (m.total_job_hours != null) tiles.push(['Total job time', _fmtHours(m.total_job_hours), '']);
   return `<div class="an-stats">` + tiles.map(([l, v, t]) =>
     `<div class="an-stat"${t ? ` title="${_esc(t)}"` : ''}><div class="an-stat-lbl">${l}</div><div class="an-stat-val">${v}</div></div>`).join('') + `</div>`;
