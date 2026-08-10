@@ -731,10 +731,16 @@ def _explode_shopping_list(type_id: int, units_needed: float, reached: dict, out
     # What the PLAN will actually run of this step, when that is more than the chain strictly
     # needs — intermediate run counts get rounded up to numbers a human can type (`tidy_runs`), and
     # the materials for those extra runs have to be on the shopping list or the player installs a
-    # job they cannot fill. Only ever raises the figure; a plan short of the requirement is not
-    # something to quietly buy less for.
-    if planned:
-        units_needed = max(units_needed, float(planned.get(type_id, 0.0)))
+    # job they cannot fill.
+    #
+    # **`planned` is a BUDGET that gets spent, not a floor applied at every visit.** It is an
+    # account-wide total (every row of this product, on every character), while a visit here is one
+    # consumer's share of it. Treating it as a floor multiplied the whole list by the number of
+    # roots — 8 characters' worth of goo bought 8 times over, which is how a plan needing ~540k
+    # Atmospheric Gases was quoted at 11 million. So each visit claims its share and leaves the
+    # rest; whatever is still unclaimed once every root has walked is topped up by the caller.
+    if planned is not None:
+        planned[type_id] = max(0.0, float(planned.get(type_id, 0.0)) - units_needed)
     units_needed = _take_from_stock(stock, type_id, units_needed)
     if units_needed <= 0:
         return
@@ -1031,14 +1037,37 @@ def reactions_shopping_list(include_orders: bool = False,
         node = reached.get(a["type_id"])
         if node and node.get("via"):
             planned[a["type_id"]] = planned.get(a["type_id"], 0.0) + a["runs"] * node["via"]["output_qty"]
+    # Roots summed PER PRODUCT before walking, not walked one row at a time. Pooling splits one
+    # chain's top row across several characters, so the same product is now several roots; walking
+    # each separately made the per-visit arithmetic (`planned`, and the rounding in
+    # `_explode_shopping_list`'s `ceil`) repeat once per row instead of once per product.
+    top_units: dict[int, float] = {}
     for a in _shopping_roots(assignments):
         node = reached.get(a["type_id"])
         if not node or node["via"] is None:
             continue  # shouldn't happen (assignments are always reaction products), skip defensively
-        top_units = a["runs"] * node["via"]["output_qty"]
-        # The root's own units come from its row; `planned` only ever raises what's BELOW it.
-        _explode_shopping_list(a["type_id"], top_units, reached, totals, pool,
-                               {k: v for k, v in planned.items() if k != a["type_id"]})
+        top_units[a["type_id"]] = (top_units.get(a["type_id"], 0.0)
+                                   + a["runs"] * node["via"]["output_qty"])
+    for tid, units in top_units.items():
+        # A root's own units come from its rows; `planned` only ever tops up what is BELOW it.
+        planned.pop(tid, None)
+        _explode_shopping_list(tid, units, reached, totals, pool, planned)
+    # Anything the plan will run that no chain above it asked for — a rounded-up intermediate, or a
+    # levelled row making more than its consumers need. Its materials still have to be bought, or
+    # the player installs a job they cannot fill. Walked once, after every root has claimed its
+    # share, so this is the surplus and nothing else.
+    #
+    # Rounded DOWN to whole reaction runs. What is left over after the roots have claimed their
+    # share is usually a fraction of a run — the plan states a row's output before the ME reduction
+    # its consumers get the benefit of — and `_explode_shopping_list` would `ceil` that fraction
+    # into a whole extra job's worth of goo. Buying a run the plan does not hold is the same error
+    # as not buying one it does, in the other direction.
+    for tid, extra in sorted(planned.items()):
+        node = reached.get(tid)
+        out_qty = ((node or {}).get("via") or {}).get("output_qty") or 0.0
+        whole = math.floor(extra / out_qty) * out_qty if (extra > 0 and out_qty > 0) else 0.0
+        if whole > 0:
+            _explode_shopping_list(tid, whole, reached, totals, pool, None)
 
     # ...and the FORMULAS the same plan needs that the account does not hold. A shopping list is
     # where you go to buy things, and a formula you're short of blocks the plan far harder than a

@@ -22,6 +22,7 @@ market data.
     docker compose cp test_shopping_roots.py web:/srv/app/ && \
       docker compose exec web python3 test_shopping_roots.py
 """
+import math
 import sys
 
 sys.path.insert(0, ".")
@@ -84,19 +85,51 @@ def main():
     print("the list buys for the runs the plan will ACTUALLY run, not the bare requirement:")
     # Intermediate run counts get rounded up so they are typeable (tidy_runs); the materials for
     # those extra runs have to be bought or the player installs a job they cannot fill.
+    #
+    # `planned` is a BUDGET the walk SPENDS, not a floor it re-applies at every visit — so the
+    # shape under test is the pair the endpoint runs: walk the roots, then top up whatever share
+    # of `planned` no root claimed, rounded down to whole reaction runs.
     from test_reaction_stock import _reached, TOP as G_TOP, MID as G_MID, GOO2 as G_GOO2
     from app.reactions.graph import _explode_shopping_list
     r = _reached()
-    exact, rounded = {}, {}
-    _explode_shopping_list(G_TOP, 100, r, exact)
-    _explode_shopping_list(G_TOP, 100, r, rounded, None, {G_MID: 10_000.0})
+
+    def shop(roots, planned):
+        """The endpoint's walk: roots summed per product, then the unclaimed surplus."""
+        totals, p = {}, dict(planned)
+        for tid, units in roots.items():
+            p.pop(tid, None)
+            _explode_shopping_list(tid, units, r, totals, None, p)
+        for tid, extra in sorted(p.items()):
+            oq = ((r.get(tid) or {}).get("via") or {}).get("output_qty") or 0.0
+            whole = math.floor(extra / oq) * oq if (extra > 0 and oq > 0) else 0.0
+            if whole > 0:
+                _explode_shopping_list(tid, whole, r, totals, None, None)
+        return totals
+
+    exact = shop({G_TOP: 100}, {})
+    rounded = shop({G_TOP: 100}, {G_MID: 10_000.0})
     check(rounded.get(G_GOO2, 0) > exact.get(G_GOO2, 0),
           "a planned intermediate above the requirement raises what its inputs cost")
-    lower = {}
-    _explode_shopping_list(G_TOP, 100, r, lower, None, {G_MID: 1.0})
+    lower = shop({G_TOP: 100}, {G_MID: 1.0})
     check(lower.get(G_GOO2, 0) == exact.get(G_GOO2, 0),
           "and a plan holding LESS than the requirement never lowers the list — that is a short "
           "plan, not a cheaper one")
+
+    print("...and the same plan spread over more characters buys the SAME materials:")
+    # The regression this exists for. `planned` is an ACCOUNT-WIDE total, and it used to be applied
+    # as a floor inside every root's walk — so pooling one chain's top row across eight characters
+    # made eight roots and bought the whole account's goo eight times. Reported from use: a plan
+    # needing ~540k Atmospheric Gases was quoted at 11 million, and ~15k fuel blocks at 244k.
+    #
+    # Two roots of one product totalling 100 runs must cost exactly what one root of 100 costs:
+    # where the jobs sit is not a material requirement.
+    one_root = shop({G_TOP: 100}, {G_MID: 10_000.0})
+    # ...expressed the way the endpoint sees it after pooling: the SAME 100 units, summed from two
+    # rows rather than one, against the same account-wide planned figure.
+    split = shop({G_TOP: 40 + 60}, {G_MID: 10_000.0})
+    check(split == one_root,
+          f"splitting a chain across characters changes nothing "
+          f"(goo {split.get(G_GOO2, 0):.0f} vs {one_root.get(G_GOO2, 0):.0f})")
 
     print("edge cases don't throw:")
     check(_shopping_roots([]) == [], "no rows, no roots")
