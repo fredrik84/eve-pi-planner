@@ -583,7 +583,7 @@
               <div class="pp-card-title">Reactions
                 <span class="pp-card-hint">— your reaction capacity and currently-running jobs</span>
                 <button class="pp-add-btn" onclick="_rxRefreshJobs(true, this)" title="Pull the latest job status from ESI now (bypasses the ~5min cache)">↻ Refresh jobs</button>
-                <button class="pp-add-btn" onclick="_rxOpenSettingsModal()">⚙ Settings</button>
+                <button class="pp-add-btn" onclick="openSettingsModal('markets')">⚙ Settings</button>
                 <button class="pp-add-btn" id="rxConnectBtn" onclick="connectReactionsTracking()" style="display:none">Connect a character</button>
                 <!-- ppConfirm, not native confirm(): a browser that has been offered "prevent this
                      page from creating additional dialogs" makes confirm() return false silently,
@@ -1646,17 +1646,6 @@ PVF-N9    3         95                 60             80                  100   
       </details>
     </div>
   </div>
-
-  <div id="rxSettingsModal" class="pp-modal" style="display:none">
-    <div class="pp-modal-box pp-modal-box-wide" style="overflow-y:auto">
-      <div class="pp-modal-title">Reactions settings
-        <button class="pp-modal-close" onclick="_rxCloseSettingsModal()">✕</button>
-      </div>
-      <div class="pp-modal-hint">Shipping/collateral rates, job-installation cost estimation, and how much faster your real reaction jobs finish than the raw formula time — these drive every cost and duration figure the Reactions tab shows.</div>
-      <div id="rxSettingsModalContent"><div class="pp-empty">Loading…</div></div>
-    </div>
-  </div>
-
 
   <!-- Reactions: new customer order modal -->
   <div id="rxNewOrderModal" class="pp-modal" style="display:none">

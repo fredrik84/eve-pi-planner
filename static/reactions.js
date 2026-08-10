@@ -1891,33 +1891,6 @@ function _renderReactions() {
 // on the Metrics card, not buried at the bottom of the (collapsed-by-default) Advanced table,
 // which real feedback confirmed was undiscoverable ("Why is it there? That doesn't help me at
 // all.") once time-efficiency became something people actually need to configure up front.
-function _rxOpenSettingsModal() {
-  const el = document.getElementById('rxSettingsModalContent');
-  // Markets + your personal freight/system rates moved to the global Settings → Structures & Markets
-  // section (shared with Manufacturing). Leave a redirect here; keep the group-manager DEFAULTS
-  // (an alliance-wide setting) in Reactions where group management lives.
-  const redirect = `<div class="pp-card-hint" style="margin-bottom:12px">Your reaction structures, markets &amp; freight/system rates moved to `
-    + `<button class="ind-link-btn" onclick="_rxCloseSettingsModal();openSettingsModal('markets')">Settings → Structures &amp; Markets</button>`
-    + ` — now shared with the Manufacturing planner.</div>`
-    // Same shape as the markets redirect above, for the same reason: which reaction FORMULAS you own
-    // is account-wide, and it is what caps how many reaction jobs can run at once. It used to be
-    // reachable only through Manufacturing's Setup & slots → Stock on hand, a form that never said
-    // the word "formula" — the Reactions tab had no pointer to it at all.
-    + `<div class="pp-card-hint" style="margin-bottom:12px">The reaction <b>formulas you own</b> — and the stock the planner may draw from — live in `
-    + `<button class="ind-link-btn" onclick="_rxCloseSettingsModal();openSettingsModal('blueprints')">Settings → Blueprints &amp; formulas</button>`
-    + ` — formulas found there cap how many reaction jobs can run at once.</div>`;
-  el.innerHTML = redirect + (_rxCanEditSettings() ? _rxSettingsFormHtml() : '');
-  document.getElementById('rxSettingsModal').style.display = '';
-  if (_rxCanEditSettings()) _loadRxSettings();
-}
-
-function _rxCloseSettingsModal() {
-  document.getElementById('rxSettingsModal').style.display = 'none';
-  document.getElementById('rxSettingsModalContent').innerHTML = '';  // drop stale market-manager IDs
-  if (_rxMarketMount === 'rxSettingsMarkets') _rxMarketMount = null;
-  _rxApplyGate();  // refresh the top summary bar / gate state
-}
-
 // Site admins can always preview/edit; a non-admin sees the form only if they manage at least
 // one group — GET/PUT /api/reactions/settings always resolves to THEIR OWN group (via
 // membership), so this is just a visibility check, not a scoping one.
@@ -2079,8 +2052,7 @@ function _rxSettingsFormHtml() {
     <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:8px">
       <button onclick="_saveRxSettings()">Save</button>
       <span id="rxSettingsMsg" class="pp-card-hint"></span>
-    </div>
-    <div style="border-top:1px solid var(--clr-border);margin-top:16px"></div>`;
+    </div>`;
 }
 
 function _loadRxSettings() {
@@ -2706,10 +2678,10 @@ async function _rxDeleteOrder(orderId) {
 // ── Local / alliance market pricing (local_market flag) ───────────────────────────────
 // First-run flow: the Reactions tab is BLOCKED behind an inline onboarding gate (#rxGate) until
 // the user connects at least one character and clicks Save. After that the gate never shows again
-// (per-context `onboarded` flag) and all changes are made from the Reactions ⚙ Settings modal,
+// (per-context `onboarded` flag) and all changes are made from Settings → Structures & Markets,
 // which hosts the same market manager + freight forms. The market list + search is a reusable
-// component mounted into either the gate (#rxOnboardMarkets) or the Settings modal
-// (#rxSettingsMarkets); _rxMarketMount tracks which one is live.
+// component mounted into either the gate (#rxOnboardMarkets) or that settings section
+// (#settingsMarketsMgr); _rxMarketMount tracks which one is live.
 let _rxMarketData = null;
 let _rxMarketMount = null;
 
@@ -2825,7 +2797,7 @@ async function _rxCompleteOnboarding() {
 function _rxAfterConnect() {
   const gate = document.getElementById('rxGate');
   if (gate && gate.style.display !== 'none') { _rxReloadGateData(); return; }
-  const settings = document.getElementById('rxSettingsModal');
+  const settings = document.getElementById('settingsModal');
   if (settings && settings.style.display !== 'none') { _rxRefreshMarkets(); return; }
   if (typeof onReactionsTabOpen === 'function') onReactionsTabOpen();
 }
@@ -2919,9 +2891,7 @@ async function _rxLoadBuildPins() {
   return _rxBuildPins;
 }
 function _rxPinRow(m) {
-  // Group-scope rows are somebody else's structure list; a pin is this ACCOUNT's way of operating.
-  const group = (typeof _rxMarketMount !== 'undefined' && _rxMarketMount === 'rxSettingsMarketsGroup');
-  if (!_rxRigRoutingOn() || group || m.suggested) return '';
+  if (!_rxRigRoutingOn() || m.suggested) return '';
   const acts = [];
   if (m.build_mfg) acts.push('manufacturing');
   if (m.build_rx) acts.push('reaction');
@@ -3108,7 +3078,7 @@ async function _rxSaveBuild(id) {
     build_mfg: v('bm').checked, build_rx: v('br').checked,
     me_rig: +v('bmme').value, te_rig: +v('bmte').value,
     rx_me_rig: +v('brme').value, rx_te_rig: +v('brte').value,
-    scope: (typeof _rxMarketMount !== 'undefined' && _rxMarketMount === 'rxSettingsMarketsGroup') ? 'group' : 'account',
+    scope: 'account',
   };
   // What each rig is for. Only sent when the picker is on screen — an omitted field leaves the
   // stored value alone, so a save from a build without this UI can't silently blank it.

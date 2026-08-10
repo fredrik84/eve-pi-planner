@@ -2931,8 +2931,17 @@ function _loadMarketsSettings() {
     + `<div id="settingsMarketsMgr" class="pp-target-form" style="margin:8px 0 16px;display:block"><div class="pp-empty">Loading…</div></div>`
     + `<div style="border-top:1px solid var(--clr-border);margin-bottom:12px"></div>`;
   const freight = (typeof _rxAccountSettingsFormHtml === 'function') ? _rxAccountSettingsFormHtml() : '';
-  body.innerHTML = marketMgr + freight;
+  // ...and the GROUP default beneath it, for a manager. It used to live in a Reactions-only modal
+  // that, for everyone who is not a manager, contained nothing but two links to this page — so the
+  // gear on the Reactions tab now opens this section and the two forms finally sit together, which
+  // is the only place the distinction between "mine" and "my group's" is legible.
+  const groupDefaults = (typeof _rxCanEditSettings === 'function' && _rxCanEditSettings()
+                          && typeof _rxSettingsFormHtml === 'function')
+    ? `<div style="border-top:1px solid var(--clr-border);margin:16px 0 0"></div>` + _rxSettingsFormHtml()
+    : '';
+  body.innerHTML = marketMgr + freight + groupDefaults;
   if (typeof _loadRxAccountSettings === 'function') _loadRxAccountSettings();
+  if (groupDefaults && typeof _loadRxSettings === 'function') _loadRxSettings();
   // _rxMountMarkets fetches the list itself when nothing has loaded it yet, so this no longer
   // needs a second _rxRefreshMarkets() alongside it (that fired two /api/markets calls per open).
   if (typeof _rxMountMarkets === 'function') _rxMountMarkets('settingsMarketsMgr');
