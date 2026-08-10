@@ -15,6 +15,7 @@ Find a section: `grep -n '^## ' docs/reactions.md` and read from that line — t
 - **Absence becomes knowledge, but only after a paste (`app/reactions/library.py`)** — when an undeclared formula means "you don't own it", and what gets reported instead of planned
 - **Formulas to acquire, as a shopping section** — why the formula list sits beside the materials rather than in them
 - **Re-planning ONE customer order** — the per-order clear, and the single give-back rule it shares with Clear all
+- **The headline numbers are valued from the PLAN, not from stored costs** — why committed ISK read 4.93m and profit/day read 0, and how an order's price is handled
 - **Landing a stage in one go (`_align_stage_jobs`)** — why the spread matters more than the total, and what moves to close it
 - **One request, one answer (`request_memo`)** — why an order report was rebuilding the same evidence five times
 - **An order's runs follow capacity, not fairness (reverted experiment)** — why hosts get different run counts, and what the even split cost
@@ -227,6 +228,46 @@ there are now two ways out of it: clear it explicitly, or just try to assign it
 (`_heal_stranded_counter`). A row whose job is already RUNNING is cleared too and the job carries
 on in-game as an orphan; the count comes back in `running_cleared` so the UI says so before the
 player commits, not after.
+
+## The headline numbers are valued from the PLAN, not from stored costs
+
+`ISK committed`, `Expected output value` and `Expected profit / day` used to be plain sums of each
+row's `input_cost`/`reward`, written once at assign time. Both were wrong, and reported as such
+(2026-08-10):
+
+* **`ISK committed` read 4.93m against a plan holding ~590m of materials.** Chain-tier rows are
+  stored at zero cost (three insert sites do it deliberately — the chain's cost used to roll up into
+  its one top row), and pooling made intermediates the bulk of the rows. So almost the entire plan
+  was counted as free.
+* **`Expected profit / day` read 0.** A customer order's top row is stored at zero *reward* on
+  purpose, because an order's revenue is what the client agreed to pay and nothing here can derive
+  it. A plan of orders plus their intermediates therefore had no row carrying profit at all.
+
+`_plan_totals` replaces both sums. **Committed is the plan's own materials at today's unit cost** —
+literally the shopping list, priced (`_plan_materials`), which is the ISK you actually have to
+spend. **Output value counts only END products**, the rows nothing else in the plan consumes
+(`_plan_intermediates`, read from the recipes rather than from whether a cost happens to be zero —
+that proxy is what mislabelled an order's top row). **Profit per day divides by the plan's
+makespan**, the sum over stages of the longest job in each, because stages run in sequence.
+
+### An order needs a price, and without one it is UNKNOWN — never zero
+
+`pp_reaction_orders.client_price` is the one figure the tool cannot work out, so it is the one
+number the user types (CLAUDE.md rule 3 allows exactly this: a knob only where the math genuinely
+cannot decide). Optional, and NULL means *not told*.
+
+An unpriced order is **excluded from profit on both sides** — its production cost stays in
+`isk_committed`, because that ISK is spent either way, but pairing that spend with a revenue of zero
+would report a large loss on what might be the most profitable work in the plan. The count comes
+back as `unpriced_orders` so the dashboard says the figure is understated rather than showing a
+confident number for something nobody supplied. Priced orders are valued at the agreed price,
+apportioned by how much of the order is assigned so far, so a half-assigned order books half its
+invoice.
+
+The same block drives the order's own **profit panel**, shown both in the review step before the
+order is created (the preview endpoint takes the typed price) and in the order detail afterwards:
+what the client pays, what it costs to produce, the profit, the margin on the price, and a warning
+when the order loses money.
 
 ## Landing a stage in one go (`_align_stage_jobs`)
 

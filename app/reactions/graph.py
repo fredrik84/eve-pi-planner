@@ -746,7 +746,8 @@ def _explode_shopping_list(type_id: int, units_needed: float, reached: dict, out
 
 
 def _plan_materials(assignments: list[dict], reached: dict,
-                    stock: dict[int, float] | None = None) -> dict[int, float]:
+                    stock: dict[int, float] | None = None,
+                    made_in_house: set[int] | None = None) -> dict[int, float]:
     """What the PLAN has to buy, computed ROW BY ROW. `{type_id: units}`.
 
     **A plan row is exactly one in-game job**, and that is the unit the game itself does material
@@ -767,7 +768,11 @@ def _plan_materials(assignments: list[dict], reached: dict,
     (`_explode_shopping_list`) and stock legitimately applies to it — nothing is going to be
     installed for it.
     """
-    made_in_house = {int(a["type_id"]) for a in assignments}
+    # Passed in when costing a SUBSET of a plan (see `_plan_totals`' unpriced-order split): the
+    # skip rule has to stay the whole plan's, or a subset would start buying an intermediate the
+    # rows outside it produce.
+    if made_in_house is None:
+        made_in_house = {int(a["type_id"]) for a in assignments}
     out: dict[int, float] = {}
     for a in assignments:
         node = reached.get(a["type_id"])

@@ -34,6 +34,8 @@ def _order_report(context_id: int, order: dict) -> dict:
         return {
             "materials": [], "chain_tiers": [],
             "cost": {"material_cost": None, "job_cost": None, "total_cost": None, "cost_per_unit": None},
+            "profit": {"client_price": order.get("client_price"), "price_per_unit": None,
+                        "profit": None, "margin_pct": None},
             "time": {"tiers": [], "free_slots_now": 0, "estimated_hours": None, "caveat": None,
                       "formula_capped": []},
             "missing_formulas": {"complete": False, "formulas": [], "unresolved": []},
@@ -55,6 +57,21 @@ def _order_report(context_id: int, order: dict) -> dict:
         "material_cost": round(v["input_cost"], 2), "job_cost": round(v["job_cost"], 2),
         "total_cost": round(total_cost, 2),
         "cost_per_unit": round(total_cost / target_qty, 2) if target_qty else 0.0,
+    }
+
+    # What the job is WORTH, which for an order is whatever the client agreed to pay — the one
+    # figure nothing here can derive. Absent a price the answer is "not known", never 0: the
+    # dashboard used to report an unpriced order as zero profit, which reads as "this earns
+    # nothing" rather than "nobody has said". `None` all the way through keeps the two apart.
+    price = order.get("client_price")
+    price = float(price) if price not in (None, "") else None
+    profit = {
+        "client_price": price,
+        "price_per_unit": round(price / target_qty, 2) if (price and target_qty) else None,
+        "profit": round(price - total_cost, 2) if price is not None else None,
+        # Margin on the PRICE (what fraction of the invoice is yours to keep), not markup on cost —
+        # it is the number that compares against a market sale, which is also a share of revenue.
+        "margin_pct": round((price - total_cost) / price * 100, 1) if price else None,
     }
 
     # Two SEPARATE pools off the same holding, on purpose: the materials list and the stage list
@@ -130,7 +147,8 @@ def _order_report(context_id: int, order: dict) -> dict:
     # may decide not to buy. Same separation `missing_blueprints` keeps on the Industry side.
     from app.reactions.library import missing_formulas, wanted_from_sequence, jobs_from_sequence
 
-    return {"materials": materials, "chain_tiers": chain_tiers, "cost": cost, "time": time_report,
+    return {"materials": materials, "chain_tiers": chain_tiers, "cost": cost, "profit": profit,
+            "time": time_report,
             "missing_formulas": missing_formulas(context_id, wanted_from_sequence(sequence),
                                                  jobs=jobs_from_sequence(sequence)),
             # Stages this order does not have to run because the intermediate is already held.
@@ -146,6 +164,9 @@ class OrderCreateRequest(BaseModel):
     target_qty: float
     client_name: str | None = None
     notes: str | None = None
+    # What the client pays for the whole order. Optional, and None means "not told" rather than
+    # free — see `_order_report`'s profit block.
+    client_price: float | None = None
 
 
 def _resolve_order_target(context_id: int, req: OrderCreateRequest) -> tuple[str, int]:
@@ -173,6 +194,7 @@ def preview_reaction_order(req: OrderCreateRequest, context_id: int = Depends(re
         "top_level_runs": top_level_runs, "assigned_runs": 0,
         "client_name": (req.client_name or "").strip() or None,
         "notes": (req.notes or "").strip() or None, "status": "preview",
+        "client_price": req.client_price if (req.client_price or 0) > 0 else None,
     }
     return {"order": order, "preview": True, **_order_report(context_id, order)}
 
@@ -185,10 +207,11 @@ def create_reaction_order(req: OrderCreateRequest, context_id: int = Depends(req
     try:
         order_id = con.execute(
             "INSERT INTO pp_reaction_orders (context_id, type_id, name, target_qty, top_level_runs, "
-            "assigned_runs, client_name, notes, status, created_at) VALUES (?,?,?,?,?,0,?,?,'open',?) "
-            "RETURNING id",
+            "assigned_runs, client_name, notes, status, created_at, client_price) "
+            "VALUES (?,?,?,?,?,0,?,?,'open',?,?) RETURNING id",
             (context_id, req.type_id, name, req.target_qty, top_level_runs,
-             (req.client_name or "").strip() or None, (req.notes or "").strip() or None, _time.time()),
+             (req.client_name or "").strip() or None, (req.notes or "").strip() or None, _time.time(),
+             req.client_price if (req.client_price or 0) > 0 else None),
         ).fetchone()[0]
         con.commit()
         order = dict(con.execute("SELECT * FROM pp_reaction_orders WHERE id=?", (order_id,)).fetchone())

@@ -17,6 +17,7 @@ from fastapi import Depends, HTTPException
 from pydantic import BaseModel
 
 from app.sde import get_connection, load_pi_data, ensure_once
+from app.db import add_columns
 from app.markets import resolve_market_data
 from app.cache import cache_invalidate, charlist_key
 from app.esi import require_context, _get_valid_token
@@ -297,6 +298,12 @@ def ensure_reaction_orders_table():
             )
         """)
         con.commit()
+        # What the CLIENT pays for the whole order. The one number this tool cannot derive: an
+        # order's revenue is whatever was negotiated, not a market price. Without it an order's
+        # profit is unknowable, and the dashboard was reporting that as 0 — asserting no profit
+        # rather than admitting it did not know. NULL stays "not told", which reads as unknown
+        # everywhere and never as zero.
+        add_columns(con, "pp_reaction_orders", "client_price DOUBLE PRECISION")
     finally:
         con.close()
 
@@ -1615,6 +1622,121 @@ def give_back_order_runs(con, rows: list[dict]) -> list[int]:
     return sorted(moved)
 
 
+def _plan_intermediates(context_id: int, rows: list[dict]) -> set[int]:
+    """Products in this plan that ANOTHER row of it consumes — the plan's intermediates.
+
+    Structural, from the recipes: a product is an intermediate here if something else the plan makes
+    eats it. That replaced reading it off the stored costs (`input_cost == 0 and reward == 0`),
+    which mislabelled a customer order's top row — stored at zero reward deliberately — as an
+    intermediate, and with it every figure derived from the distinction. Empty on no graph, which
+    degrades to "everything is an end product": the same reading the package had before chains.
+    """
+    if not rows:
+        return set()
+    try:
+        loaded = _load_goo_and_reached(context_id)
+        reached = loaded[1] if loaded else {}
+    except Exception:
+        return set()
+    if not reached:
+        return set()
+    made = {int(r["type_id"]) for r in rows}
+    return {int(i["type_id"])
+            for tid in made
+            for i in (((reached.get(tid) or {}).get("via") or {}).get("inputs") or [])} & made
+
+
+def _plan_totals(context_id: int, rows: list[dict], order_meta: dict[int, dict],
+                 cycle_hours_by_type: dict[int, float], output_qty_by_type: dict[int, float],
+                 market_by_type: dict) -> dict:
+    """What the whole plan costs, is worth, and earns per day — valued from the ROWS and today's
+    prices, never from the per-row `input_cost`/`reward` written at assign time.
+
+    Those stored figures were the old source and they were wrong twice over. **Chain-tier rows are
+    stored at zero cost**, so a plan whose goo all sits in intermediates reported almost nothing
+    committed (4.93m against a real ~590m of materials). And **a customer order's top row is stored
+    at zero reward** on purpose — an order's revenue is what the client agreed to pay, which nothing
+    here can derive — so a plan made of orders reported zero profit per day, asserting that it earns
+    nothing rather than admitting nobody had said.
+
+    So:
+
+    * **committed** is the plan's materials at their current unit cost — literally the shopping
+      list, priced (`_plan_materials`), which is the ISK you actually have to spend;
+    * **output value** counts only END products, the rows nothing else in the plan consumes. An
+      intermediate's value is already inside the product above it;
+    * an ORDER's revenue is its `client_price`, apportioned across however much of it is assigned
+      so far. An order with no price contributes to neither revenue nor profit, and is counted in
+      `unpriced_orders` so the caller can say so instead of showing a confident zero;
+    * **profit per day** divides by the plan's MAKESPAN — stages run in sequence, so it is the sum
+      over stages of the longest job in each. Dividing each row by its own duration (the old rule)
+      over-counts badly on a plan that is mostly short parallel jobs.
+    """
+    out = {"isk_committed": 0.0, "output_value": 0.0, "net_profit": 0.0,
+           "net_profit_per_day": 0.0, "unpriced_orders": 0}
+    if not rows:
+        return out
+    loaded = _load_goo_and_reached(context_id)
+    reached = loaded[1] if loaded else {}
+    if not reached:
+        return out
+
+    # What the plan must BUY: its own materials, row by row, at the price the graph settled on.
+    from app.reactions.graph import _plan_materials
+    in_house = {int(r["type_id"]) for r in rows}
+
+    def _cost(subset):
+        pool = reaction_stock_pool(context_id)
+        return sum(units * float((reached.get(tid) or {}).get("unit_cost") or 0.0)
+                   for tid, units in _plan_materials(subset, reached, pool, in_house).items())
+
+    out["isk_committed"] = _cost(rows)
+
+    # END products only — anything another row eats is not sellable output. Same set the per-row
+    # display uses, so a row shown as an intermediate can never be counted as revenue.
+    consumed = _plan_intermediates(context_id, rows)
+
+    order_revenue: dict[int, float] = {}
+    for r in rows:
+        tid = int(r["type_id"])
+        if tid in consumed:
+            continue
+        oid = r.get("order_id")
+        if oid:
+            # An order is sold at its agreed price, not at the market — apportioned by how much of
+            # it this row represents, so a half-assigned order contributes half its invoice.
+            meta = order_meta.get(int(oid)) or {}
+            price, total_runs = meta.get("client_price"), meta.get("top_level_runs") or 0
+            if not price or total_runs <= 0:
+                order_revenue.setdefault(int(oid), 0.0)     # priced at nothing = not priced
+                continue
+            out["output_value"] += float(price) * (int(r["runs"] or 0) / total_runs)
+        else:
+            m = market_by_type.get(tid)
+            oq = output_qty_by_type.get(tid, 0.0)
+            if m and oq:
+                out["output_value"] += int(r["runs"] or 0) * oq * m["sell_price"]
+    out["unpriced_orders"] = len([o for o, v in order_revenue.items() if v == 0.0])
+
+    # An order nobody has priced is EXCLUDED from profit on both sides — its cost is real and stays
+    # in `isk_committed` (you spend it either way), but pairing that spend with a revenue of zero
+    # would report a large loss on an order that may be the most profitable thing in the plan. The
+    # honest figure is the profit of the work we can actually value, with the omission declared.
+    unpriced_ids = {o for o, v in order_revenue.items() if v == 0.0}
+    valued = [r for r in rows if int(r.get("order_id") or 0) not in unpriced_ids] \
+        if unpriced_ids else rows
+    out["net_profit"] = out["output_value"] - (_cost(valued) if unpriced_ids else out["isk_committed"])
+    # Makespan: stages are sequential, so the plan is done when the last stage's longest job is.
+    by_stage: dict[int, float] = {}
+    for r in rows:
+        hours = int(r["runs"] or 0) * cycle_hours_by_type.get(int(r["type_id"]), 0.0)
+        st = int(r.get("tier_order") or 0)
+        by_stage[st] = max(by_stage.get(st, 0.0), hours)
+    days = sum(by_stage.values()) / 24.0
+    out["net_profit_per_day"] = out["net_profit"] / days if days > 0 else 0.0
+    return out
+
+
 def _unplanned_running_totals(context_id: int, unplanned_running: list[tuple[int, float]],
                               output_qty_by_type: dict[int, float],
                               cycle_hours_by_type: dict[int, float]) -> dict[str, float]:
@@ -1718,12 +1840,18 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
         # speculative-profit ones at a glance.
         order_ids = list({a["order_id"] for rows in assignments.values() for a in rows if a.get("order_id")})
         order_labels: dict[int, str] = {}
+        order_meta: dict[int, dict] = {}
         if order_ids:
             placeholders_o = ",".join("?" * len(order_ids))
             for r in con.execute(
-                f"SELECT id, client_name FROM pp_reaction_orders WHERE id IN ({placeholders_o})", order_ids,
+                f"SELECT id, client_name, client_price, top_level_runs FROM pp_reaction_orders "
+                f"WHERE id IN ({placeholders_o})", order_ids,
             ):
                 order_labels[r["id"]] = r["client_name"] or f"Order #{r['id']}"
+                # ...and what the client pays, so an order's rows can be valued at the agreed price
+                # rather than at a market rate nobody is selling them at. See `_plan_totals`.
+                order_meta[r["id"]] = {"client_price": r["client_price"],
+                                       "top_level_runs": r["top_level_runs"]}
         # output_type_id -> cycle hours, so a stored assignment (which only keeps `runs`, not its
         # own formula) can be turned into a real duration for the profit/day normalization below —
         # PI's headline number is already a rate (value_per_day), so Reactions' should be too.
@@ -1776,8 +1904,16 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
     used_slots = 0
     peak_only = _parallel_stages_on(context_id)
     tracked_any = False
-    pending_isk_committed = pending_net_profit = pending_net_profit_per_day = 0.0
-    pending_output_value = 0.0
+    # Which planned products another planned row consumes — the structural read of "this is an
+    # intermediate", replacing the old `input_cost == 0 and reward == 0` proxy.
+    all_rows = [a for rows_ in assignments.values() for a in rows_]
+    consumed_by_plan = _plan_intermediates(context_id, all_rows)
+    plan_totals = _plan_totals(context_id, all_rows, order_meta,
+                                cycle_hours_by_type, output_qty_by_type, market_by_type)
+    pending_isk_committed = plan_totals["isk_committed"]
+    pending_net_profit = plan_totals["net_profit"]
+    pending_net_profit_per_day = plan_totals["net_profit_per_day"]
+    pending_output_value = plan_totals["output_value"]
     unplanned_running: list[tuple[int, float]] = []  # (product_type_id, runs) of running jobs with
     # no covering plan row — installed straight in-game (e.g. a corp job) rather than via the tool's
     # assign flow. Valued after the loop from our own SDE recipe so they still count in the totals.
@@ -1814,29 +1950,17 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
             is_running = running_type_counts.get(a["type_id"], 0) > 0
             if is_running:
                 running_type_counts[a["type_id"]] -= 1
-            # Chain-tier rows (intermediate reactions) carry no sellable output — their product is
-            # consumed by the next tier up; assign_reaction stores them with input_cost=reward=0,
-            # so they contribute 0 to every total below (the whole chain's cost/profit already
-            # lives on the top-level row) and can't double-count a multi-tier chain.
-            is_chain_tier = a["input_cost"] == 0 and a["reward"] == 0
+            # An INTERMEDIATE is a product another row of this plan consumes — its output is not
+            # sellable, it feeds the stage above. Read structurally (`in_house`, below) rather than
+            # from the stored `input_cost == 0 and reward == 0`, which was only ever a proxy: it
+            # also caught a customer order's top row (stored at zero reward on purpose) and any row
+            # whose costs had not been written, and it is the reason the headline totals were wrong.
+            is_chain_tier = a["type_id"] in consumed_by_plan
             m = market_by_type.get(a["type_id"])
             out_qty_per_run = output_qty_by_type.get(a["type_id"], 0.0)
             # Output valued at the Fuzzworks SELL (list) price — what the product is worth on the
             # market sold the normal way — matching the opportunity list's order_value.
             row_output_value = (a["runs"] * out_qty_per_run * m["sell_price"]) if (m and out_qty_per_run and not is_chain_tier) else 0.0
-            # The committed totals cover the WHOLE pipeline — running jobs AND not-yet-started
-            # plan rows — not just the "to install" ones. A running job is still committed ISK with
-            # output value coming; excluding it (the old behavior) made these numbers collapse the
-            # moment a job started. Real market data required to price it (no live price = no guess).
-            pending_isk_committed += a["input_cost"]
-            pending_net_profit += a["reward"]
-            pending_output_value += row_output_value
-            # Per-day rate for this specific job: its own real duration (runs × the product's own
-            # cycle time), not a shared cadence — a committed job's completion time is a fact.
-            if a["reward"] > 0:
-                duration_hours = a["runs"] * cycle_hours_by_type.get(a["type_id"], 0)
-                if duration_hours > 0:
-                    pending_net_profit_per_day += a["reward"] / (duration_hours / 24)
             # Only NOT-yet-running rows show up as "to install" squares.
             if not is_running:
                 pending.append({
@@ -1957,6 +2081,10 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
         # in these slots with nothing saying why it can't be installed. This is the same report,
         # asked of what is actually planned. Empty unless a paste made the library complete.
         "missing_formulas": _plan_missing_formulas(context_id, characters),
+        # Orders in the plan with no agreed price. Their production cost IS counted (it is real ISK
+        # you spend) but they contribute no revenue, so the profit figure understates by however
+        # much they are worth. Reported so the UI can say that rather than show a confident number.
+        "unpriced_orders": plan_totals["unpriced_orders"],
     }
 
 

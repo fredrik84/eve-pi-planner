@@ -837,14 +837,25 @@ function _renderReactionsDashboard(data) {
     : 'Time left';
 
   const usedSlots = data.total_slots - data.free_slots;
+  // An order with no agreed price costs real ISK but brings in a revenue the tool was never told,
+  // so both value tiles understate. Say so under them rather than let a confident-looking number
+  // stand for a figure nobody has supplied.
+  const unpriced = data.unpriced_orders || 0;
+  const unpricedNote = unpriced
+    ? `<div class="pp-card-hint">${unpriced} order${unpriced === 1 ? '' : 's'} in this plan
+       ${unpriced === 1 ? 'has' : 'have'} no agreed price, so ${unpriced === 1 ? 'its' : 'their'}
+       production cost counts but the revenue does not — expected value and profit are lower than
+       the truth. Set a price on the order to include it.</div>`
+    : '';
   const overviewTiles = `<div class="an-stats">
       ${_dashTile(_fmtIsk(data.pending_isk_committed), 'ISK committed')}
       ${_dashTile(_fmtIsk(data.pending_output_value), 'Expected output value')}
-      ${_dashTile(_fmtIsk(data.pending_net_profit_per_day), 'Expected profit / day', 'an-ok')}
+      ${_dashTile(_fmtIsk(data.pending_net_profit_per_day), 'Expected profit / day',
+                  (data.pending_net_profit_per_day || 0) >= 0 ? 'an-ok' : 'an-bad')}
       ${_dashTile(`${usedSlots}<span class="an-of"> / ${data.total_slots}</span>`, 'Slots used')}
       ${_dashTile(String(pendingCount), 'Jobs to install', pendingCount > 0 ? 'an-warn' : '')}
       ${_dashTile(timeLeftVal, timeLeftLbl)}
-    </div>`;
+    </div>${unpricedNote}`;
 
   // Overall completion of everything currently running — a "total complete" bar under the tiles.
   const progressBar = data.running_progress_pct != null
@@ -2210,6 +2221,7 @@ function _rxOpenNewOrderModal() {
   document.getElementById('rxOrderProduct').value = '';
   document.getElementById('rxOrderQty').value = 100;
   document.getElementById('rxOrderClient').value = '';
+  document.getElementById('rxOrderPrice').value = '';
   document.getElementById('rxOrderNotes').value = '';
   document.getElementById('rxOrderCreateStatus').textContent = '';
   _rxOrderResetReview();
@@ -2308,7 +2320,9 @@ function _rxReviewOrder() {
   const rv = document.getElementById('rxOrderReview');
   rv.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Working out the order…</div>';
   document.getElementById('rxOrderCreateBtn').style.display = 'none';
-  apiSend('POST', '/api/reactions/orders/preview', { type_id: o.type_id, target_qty: qty })
+  const price = parseFloat(document.getElementById('rxOrderPrice').value);
+  apiSend('POST', '/api/reactions/orders/preview',
+          { type_id: o.type_id, target_qty: qty, client_price: price > 0 ? price : null })
     .then(data => {
       rv.innerHTML = `<div class="pp-card-hint" style="margin-top:12px">Review — <b>${_esc(data.order.name)}</b>: ${Math.round(data.order.target_qty).toLocaleString()} units → ${data.order.top_level_runs.toLocaleString()} run${data.order.top_level_runs === 1 ? '' : 's'}</div>${_rxOrderReportBody(data)}`;
       document.getElementById('rxOrderCreateBtn').style.display = '';
@@ -2324,9 +2338,11 @@ function _rxCreateOrder() {
   if (!qty || qty <= 0) { status.textContent = 'Enter how many units the client wants.'; return; }
   const clientName = document.getElementById('rxOrderClient').value.trim();
   const notes = document.getElementById('rxOrderNotes').value.trim();
+  const price = parseFloat(document.getElementById('rxOrderPrice').value);
   status.textContent = 'Creating…';
   apiSend('POST', '/api/reactions/orders',
-          { type_id: o.type_id, target_qty: qty, client_name: clientName || null, notes: notes || null })
+          { type_id: o.type_id, target_qty: qty, client_name: clientName || null, notes: notes || null,
+            client_price: price > 0 ? price : null })
     .then(data => {
       _rxCloseNewOrderModal();
       _rxLoadOrders();
@@ -2334,6 +2350,29 @@ function _rxCreateOrder() {
       _renderRxOrderDetail(data);
     })
     .catch(err => { status.textContent = err.message; });
+}
+
+// What the order EARNS. Only a price the user typed can answer it — an order's revenue is what was
+// negotiated, not a market rate — so with no price this states the cost and says the profit is not
+// set, rather than showing a zero that reads as "this earns nothing".
+function _rxOrderProfitHtml(data) {
+  const p = data.profit || {};
+  if (p.client_price == null) {
+    return `<div class="pp-card-hint">No markup applied — this is what it costs you to produce.
+      Set a price agreed with the client to see the profit on it.</div>`;
+  }
+  const profit = p.profit || 0;
+  const good = profit >= 0;
+  return `
+    <div class="pp-card-title" style="margin-top:14px;font-size:14px">Profit on this order</div>
+    <div class="rx-manual-preview">
+      <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Client pays</span><b>${_fmtIsk(p.client_price)}</b></div>
+      <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Cost to produce</span><b>${_fmtIsk(data.cost.total_cost)}</b></div>
+      <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Profit</span><b class="${good ? 'an-ok' : 'an-bad'}">${_fmtIsk(profit)}</b></div>
+      ${p.margin_pct == null ? '' : `<div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Margin</span><b class="${good ? 'an-ok' : 'an-bad'}">${p.margin_pct.toFixed(1)}%</b></div>`}
+      ${p.price_per_unit == null ? '' : `<div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Per unit</span><b>${_fmtIsk(p.price_per_unit)} sold, ${_fmtIsk(data.cost.cost_per_unit)} to make</b></div>`}
+    </div>
+    ${good ? '' : '<div class="pp-card-hint">This order costs more to produce than the client is paying.</div>'}`;
 }
 
 // ── Order detail / report view ───────────────────────────────────────────────────────────────
@@ -2432,7 +2471,7 @@ function _rxOrderReportBody(data) {
       <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Total</span><b>${_fmtIsk(data.cost.total_cost)}</b></div>
       <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Per unit</span><b>${_fmtIsk(data.cost.cost_per_unit)}</b></div>
     </div>
-    <div class="pp-card-hint">No markup applied — decide what to charge the client yourself.</div>
+    ${_rxOrderProfitHtml(data)}
 
     <div class="pp-card-title" style="margin-top:14px;font-size:14px">Time estimate</div>
     <div class="rx-manual-preview">
