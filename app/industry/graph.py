@@ -1107,7 +1107,14 @@ def prepare_plan_inputs(ctx: int, targets: list[tuple[int, int]], opts: BuildOpt
     # the SDE's only taxonomy, shared with rig routing.
     params.buy_all_reactions = bool(opts.buy_all_reactions)
     params.buy_reaction_categories = {str(k) for k in (opts.buy_reaction_categories or ())}
-    params.build_reactions_anyway = bool(opts.build_reactions_anyway)
+    # "Build everything" means everything, reactions included. The standing policy and this checkbox
+    # were independent, so a user who ticked a box labelled *build everything* still had every
+    # reaction bought at market — and, worse, silently: pricing a reaction at its Jita price is what
+    # the parent's build cost is then compared against, so the components ABOVE it lose make-or-buy
+    # too and their whole sub-chain leaves the plan. Measured on a Revelation: the policy took
+    # Reinforced Carbon Fiber demand from ~26k to 6.4k, because buying the goo made Core Temperature
+    # Regulator look dearer to build than to buy. The per-order override stays exactly as it was.
+    params.build_reactions_anyway = bool(opts.build_reactions_anyway or opts.force_build)
     params.type_groups = groups
     # The reaction job-length ceiling, in hours. THE one flag gate for the feature, placed here
     # because every plan path resolves its params through this function: with the flag off the field

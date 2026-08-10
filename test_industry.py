@@ -206,6 +206,47 @@ def test_unpriced_input_does_not_kill_the_plan():
     check("materials cost is MineralA only", approx(res["metrics"]["materials_cost"], 1000.0))
 
 
+def test_build_everything_also_reacts():
+    """A checkbox that says "build everything" has to mean reactions too.
+
+    The standing reaction policy and force_build used to be independent, so ticking it still bought
+    every reaction at market — and that is not a self-contained mistake: a reaction priced at its
+    Jita price is what its CONSUMER's build cost gets compared against, so the components above it
+    lose make-or-buy as well and their whole sub-chain leaves the shopping list. On a real Revelation
+    that took Reinforced Carbon Fiber from ~26k to 6.4k without saying why.
+    """
+    print("test_build_everything_also_reacts")
+    import inspect
+    from app.industry.graph import prepare_plan_inputs
+
+    # 102 Sprocket is the synthetic graph's reaction.
+    policy = BuildParams(buy_all_reactions=True)
+    check("the standing policy buys a reaction", policy.reaction_policy_buys(102, "reaction"))
+    check("...and never a manufactured part", not policy.reaction_policy_buys(101, "manufacturing"))
+    overridden = BuildParams(buy_all_reactions=True, build_reactions_anyway=True)
+    check("the override reaches the policy", not overridden.reaction_policy_buys(102, "reaction"))
+    check("but the counterfactual still reports what it would have said",
+          overridden.reaction_policy_buys(102, "reaction", ignore_override=True))
+
+    # The wiring: force_build is one of the two things that sets the override.
+    src = inspect.getsource(prepare_plan_inputs)
+    check("build-everything switches the reaction policy off with it",
+          "opts.build_reactions_anyway or opts.force_build" in src)
+
+    # ...and the cost consequence, which is the whole point: with the policy on, the reaction is
+    # bought and its inputs leave the plan entirely.
+    con = _seed_con()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+    bought = build_plan(100, 1, mfg, rx, _prices(SELL), ADJ, policy, NAMES)
+    shop_b = {s["type_id"]: s["qty"] for s in bought["shopping_list"]}
+    check("policy on: the reaction is a shopping row", 102 in shop_b)
+    check("policy on: its input has left the plan", 202 not in shop_b)
+    built = build_plan(100, 1, mfg, rx, _prices(SELL), ADJ, overridden, NAMES)
+    shop_f = {s["type_id"]: s["qty"] for s in built["shopping_list"]}
+    check("override: the reaction is built instead", 102 not in shop_f)
+    check("override: its input is back on the list", shop_f.get(202, 0) > 0)
+
+
 def test_quantity_scales_and_excess():
     print("test_quantity_scales_and_excess (reaction output_qty=2 → odd demand leaves excess)")
     con = _seed_con()
@@ -2652,6 +2693,7 @@ def main():
     test_make_or_buy_flips()
     test_root_forced_build()
     test_unpriced_input_does_not_kill_the_plan()
+    test_build_everything_also_reacts()
     test_quantity_scales_and_excess()
     test_demand_aggregation_shares_batches()
     test_excess_ledger()
