@@ -718,29 +718,19 @@ def _take_from_stock(stock: dict[int, float] | None, type_id: int, units_needed:
 
 
 def _explode_shopping_list(type_id: int, units_needed: float, reached: dict, out: dict[int, float],
-                           stock: dict[int, float] | None = None,
-                           planned: dict[int, float] | None = None):
+                           stock: dict[int, float] | None = None):
     """Recursively break `units_needed` units of `type_id` down to raw moon goo / purchasable
     leaf materials, accumulating into `out`. A leaf (node["via"] is None) just needs that many
     units directly; a reaction product needs ceil(units_needed / its output_qty) actual reaction
     cycles, which in turn consume its own ME-adjusted inputs — same graph _resolve_reachable
     already built, walked back down instead of the forward fixed-point expansion.
 
+    **A REQUIREMENT, derived from a recipe** — for work nobody has planned yet (a customer order
+    being quoted, or an intermediate a plan does not cover). What the PLAN will run is a different
+    question with a different answer, and `_plan_materials` is the one that answers it.
+
     With a `stock` pool, units already in an enabled source are spent first at EVERY level: hold the
     intermediate and neither it nor the goo underneath it is shopped for."""
-    # What the PLAN will actually run of this step, when that is more than the chain strictly
-    # needs — intermediate run counts get rounded up to numbers a human can type (`tidy_runs`), and
-    # the materials for those extra runs have to be on the shopping list or the player installs a
-    # job they cannot fill.
-    #
-    # **`planned` is a BUDGET that gets spent, not a floor applied at every visit.** It is an
-    # account-wide total (every row of this product, on every character), while a visit here is one
-    # consumer's share of it. Treating it as a floor multiplied the whole list by the number of
-    # roots — 8 characters' worth of goo bought 8 times over, which is how a plan needing ~540k
-    # Atmospheric Gases was quoted at 11 million. So each visit claims its share and leaves the
-    # rest; whatever is still unclaimed once every root has walked is topped up by the caller.
-    if planned is not None:
-        planned[type_id] = max(0.0, float(planned.get(type_id, 0.0)) - units_needed)
     units_needed = _take_from_stock(stock, type_id, units_needed)
     if units_needed <= 0:
         return
@@ -752,7 +742,48 @@ def _explode_shopping_list(type_id: int, units_needed: float, reached: dict, out
     reaction_runs = math.ceil(units_needed / formula["output_qty"])
     for inp in formula["inputs"]:
         eff_qty = inp["quantity"] * (1 - REACTION_ME_REDUCTION) * reaction_runs
-        _explode_shopping_list(inp["type_id"], eff_qty, reached, out, stock, planned)
+        _explode_shopping_list(inp["type_id"], eff_qty, reached, out, stock)
+
+
+def _plan_materials(assignments: list[dict], reached: dict,
+                    stock: dict[int, float] | None = None) -> dict[int, float]:
+    """What the PLAN has to buy, computed ROW BY ROW. `{type_id: units}`.
+
+    **A plan row is exactly one in-game job**, and that is the unit the game itself does material
+    arithmetic in: a job's requirement is `ceil(quantity x runs x (1 - ME))`, rounded once, per job.
+    Deriving the list from a recursive walk over aggregated units instead got two things wrong, both
+    in the direction that leaves you unable to install the last job:
+
+      * it rounded once per BATCH, not per job — 19 jobs needing 587 fuel blocks each is 11,153,
+        while `ceil(5 x 2280 x 0.978)` is 11,150, and three blocks short is one job you cannot start;
+      * it re-applied the stock pool underneath rows the plan still holds. Stock shortens a chain
+        when it is ASSIGNED (`_trim_tiers_by_stock`); subtracting it a second time here bought goo
+        for 440 runs of a product the plan was going to install 480 runs of.
+
+    **An input the plan makes for itself is skipped**, since its own rows are in this same walk and
+    account for it — which is what `_shopping_roots` and the old `planned` budget existed to
+    approximate, and why both are gone from this path. An input the plan does NOT hold is real work
+    the plan depends on and nobody has scheduled, so it is derived from its recipe
+    (`_explode_shopping_list`) and stock legitimately applies to it — nothing is going to be
+    installed for it.
+    """
+    made_in_house = {int(a["type_id"]) for a in assignments}
+    out: dict[int, float] = {}
+    for a in assignments:
+        node = reached.get(a["type_id"])
+        if not node or not node.get("via"):
+            continue                    # not a reachable reaction product — nothing to buy for
+        runs = int(a["runs"] or 0)
+        if runs <= 0:
+            continue
+        for inp in node["via"]["inputs"]:
+            tid = int(inp["type_id"])
+            if tid in made_in_house:
+                continue                # another row of this plan produces it
+            # Per JOB, rounded once — the game's own arithmetic.
+            qty = math.ceil(inp["quantity"] * runs * (1 - REACTION_ME_REDUCTION))
+            _explode_shopping_list(tid, qty, reached, out, stock)
+    return out
 
 
 def _explode_chain_tiers(formula_inputs: list[dict], runs: int, reached: dict, tiers: dict[int, dict],
@@ -1022,52 +1053,13 @@ def reactions_shopping_list(include_orders: bool = False,
                 **counts}
     goo, reached, _, _, types = loaded
 
-    totals: dict[int, float] = {}
-    # Roots only — a chain's intermediate rows are covered by their own product's walk, and
-    # exploding both bought everything twice. See `_shopping_roots`.
-    # One stock pool across every root: the root walk re-derives each chain from raw goo and knows
-    # nothing about the stages the assign already dropped as held, so without this the list would
-    # ask the player to buy goo for an intermediate sitting in their hangar. Consumed once, so two
-    # chains needing the same intermediate don't both claim it.
-    pool = reaction_stock_pool(context_id)
-    # Units each planned intermediate row will actually produce, so the walk below buys for the
-    # rounded run counts rather than the bare requirement (see `_explode_shopping_list`'s `planned`).
-    planned: dict[int, float] = {}
-    for a in assignments:
-        node = reached.get(a["type_id"])
-        if node and node.get("via"):
-            planned[a["type_id"]] = planned.get(a["type_id"], 0.0) + a["runs"] * node["via"]["output_qty"]
-    # Roots summed PER PRODUCT before walking, not walked one row at a time. Pooling splits one
-    # chain's top row across several characters, so the same product is now several roots; walking
-    # each separately made the per-visit arithmetic (`planned`, and the rounding in
-    # `_explode_shopping_list`'s `ceil`) repeat once per row instead of once per product.
-    top_units: dict[int, float] = {}
-    for a in _shopping_roots(assignments):
-        node = reached.get(a["type_id"])
-        if not node or node["via"] is None:
-            continue  # shouldn't happen (assignments are always reaction products), skip defensively
-        top_units[a["type_id"]] = (top_units.get(a["type_id"], 0.0)
-                                   + a["runs"] * node["via"]["output_qty"])
-    for tid, units in top_units.items():
-        # A root's own units come from its rows; `planned` only ever tops up what is BELOW it.
-        planned.pop(tid, None)
-        _explode_shopping_list(tid, units, reached, totals, pool, planned)
-    # Anything the plan will run that no chain above it asked for — a rounded-up intermediate, or a
-    # levelled row making more than its consumers need. Its materials still have to be bought, or
-    # the player installs a job they cannot fill. Walked once, after every root has claimed its
-    # share, so this is the surplus and nothing else.
+    # Row by row — a plan row is one in-game job, and the game rounds materials per job. See
+    # `_plan_materials` for why deriving this from a recursive walk over the chain got it wrong in
+    # both directions at once (short on fuel blocks, short on anything the account also held).
     #
-    # Rounded DOWN to whole reaction runs. What is left over after the roots have claimed their
-    # share is usually a fraction of a run — the plan states a row's output before the ME reduction
-    # its consumers get the benefit of — and `_explode_shopping_list` would `ceil` that fraction
-    # into a whole extra job's worth of goo. Buying a run the plan does not hold is the same error
-    # as not buying one it does, in the other direction.
-    for tid, extra in sorted(planned.items()):
-        node = reached.get(tid)
-        out_qty = ((node or {}).get("via") or {}).get("output_qty") or 0.0
-        whole = math.floor(extra / out_qty) * out_qty if (extra > 0 and out_qty > 0) else 0.0
-        if whole > 0:
-            _explode_shopping_list(tid, whole, reached, totals, pool, None)
+    # One stock pool for the whole list, consumed as it goes, so two rows needing the same
+    # unplanned intermediate don't both claim it.
+    totals = _plan_materials(assignments, reached, reaction_stock_pool(context_id))
 
     # ...and the FORMULAS the same plan needs that the account does not hold. A shopping list is
     # where you go to buy things, and a formula you're short of blocks the plan far harder than a

@@ -69,26 +69,36 @@ highest tier is a root. A separate assign of the same product is its own group, 
 deliberately assigned on its own to sell is still real demand. The per-order materials report never
 had the bug — it explodes once from `target_qty`.
 
-**...and once per PRODUCT, not once per row (fixed 2026-08-10).** `planned` — how much of each
-intermediate the plan will actually run, so the list buys for a rounded-up job rather than the bare
-requirement — is an ACCOUNT-WIDE total, and it was applied as a floor *inside every root's walk*.
-That was right while a root was one whole chain on one character. Pooling made one chain's top row
-several roots, and every one of them then bought the entire account's intermediates: reported from
-use as **11 million Atmospheric Gases against a real need near 540k, and 244k fuel blocks against
-~15k** — an over-count of exactly one factor per root.
+**The list is computed PER ROW now, not by walking the chain (2026-08-10).** `_plan_materials`
+replaced the root walk outright, and `_shopping_roots` no longer serves this path at all (it still
+identifies what a cancelled order owes back — `give_back_order_runs`).
 
-Two changes fix it, and they belong together:
+Why the walk had to go. It derived materials by recursing over the chain in aggregate UNITS, which
+got three things wrong in sequence, each found only after the one before it was fixed:
 
-* roots are **summed per product** before walking, so a product is exploded once however many rows
-  it is split across;
-* `planned` is a **budget the walk spends**, not a floor it re-applies — each visit claims its
-  share, and whatever no root claimed is topped up once at the end, **rounded down to whole
-  reaction runs**. Rounding the leftover up instead bought a phantom job's worth of goo: the
-  remainder is normally a fraction of a run, because a row's stated output is pre-ME and its
-  consumers get the ME benefit.
+1. **A per-root multiplication.** `planned` — how much of each intermediate the plan would really
+   run — is an account-wide total and was applied as a floor *inside every root's walk*. Correct
+   while one chain lived on one character; pooling made one chain several roots, and each bought the
+   whole account's intermediates. Reported as **11 million Atmospheric Gases against a real 1.16m,
+   and 244k fuel blocks against 24.6k**.
+2. **Rounding per BATCH, not per job.** The game rounds materials once per job:
+   `ceil(5 x 120 x 0.978) = 587` a job, 19 jobs = **11,153** fuel blocks. Aggregated,
+   `ceil(5 x 2280 x 0.978)` = **11,150**. Three short is one job you cannot install.
+3. **Stock deducted twice.** A holding shortens a chain when it is ASSIGNED
+   (`_trim_tiers_by_stock`); subtracting it again at read time bought goo for 440 runs of a product
+   whose 4 planned jobs were going to run 480 — reported as **78,240 Hydrocarbons short**, exactly
+   40 runs' worth.
 
-The invariant to keep: **the same plan spread over more characters buys the same materials.** Where
-a job sits is not a material requirement. `test_shopping_roots.py` pins it.
+All three have one cause: **the plan rows already state the work, and re-deriving it from a recipe
+can only disagree with them.** A row is one in-game job. So the list is now: for each row, its
+formula's direct inputs at `ceil(quantity x runs x (1 - ME))`; an input another row produces is
+skipped (the plan makes it); an input nothing in the plan produces is real unscheduled work and is
+derived from its recipe, where a stock holding legitimately applies because nothing will be
+installed for it.
+
+The invariant, pinned in `test_shopping_roots.py` against the reported plan's six hand-computed
+totals: **the list equals what the game asks for, job by job** — and neither where the jobs sit nor
+what sits in the hangar changes it.
 
 ## What you already hold is not work (`reactions_use_stock`)
 

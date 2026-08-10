@@ -82,54 +82,60 @@ def main():
     check(len(roots) == 2 and {r["character_id"] for r in roots} == {1, 2},
           f"each character's chain keeps its own root (got {len(roots)})")
 
-    print("the list buys for the runs the plan will ACTUALLY run, not the bare requirement:")
-    # Intermediate run counts get rounded up so they are typeable (tidy_runs); the materials for
-    # those extra runs have to be bought or the player installs a job they cannot fill.
-    #
-    # `planned` is a BUDGET the walk SPENDS, not a floor it re-applies at every visit — so the
-    # shape under test is the pair the endpoint runs: walk the roots, then top up whatever share
-    # of `planned` no root claimed, rounded down to whole reaction runs.
-    from test_reaction_stock import _reached, TOP as G_TOP, MID as G_MID, GOO2 as G_GOO2
-    from app.reactions.graph import _explode_shopping_list
-    r = _reached()
+    print("the list is computed PER ROW, and matches what the game asks for:")
+    # The reported plan, verbatim (2026-08-10): 19 jobs x 120 runs of Carbon Fiber and of
+    # Thermosetting Polymer, 4 jobs x 120 runs of Oxy-Organic Solvents, under Reinforced Carbon
+    # Fiber. The six totals below were computed by hand off the in-game requirements and are the
+    # oracle this test exists to hold us to.
+    from app.reactions.graph import _plan_materials, REACTION_ME_REDUCTION as RME
+    RCF_T, CF_T, OOS_T, TP_T = 57457, 57453, 57454, 57455
+    HYDRO, ATM, EVAP, SILI, O2_FB, H2_FB = 16633, 16634, 16635, 16636, 4312, 4246
+    rx = {
+        CF_T:  {"via": {"output_qty": 200.0, "inputs": [
+            {"type_id": H2_FB, "quantity": 5}, {"type_id": HYDRO, "quantity": 100},
+            {"type_id": EVAP, "quantity": 100}]}},
+        TP_T:  {"via": {"output_qty": 200.0, "inputs": [
+            {"type_id": O2_FB, "quantity": 5}, {"type_id": ATM, "quantity": 100},
+            {"type_id": SILI, "quantity": 100}]}},
+        OOS_T: {"via": {"output_qty": 10.0, "inputs": [
+            {"type_id": O2_FB, "quantity": 5}, {"type_id": HYDRO, "quantity": 2000},
+            {"type_id": ATM, "quantity": 2000}]}},
+        RCF_T: {"via": {"output_qty": 200.0, "inputs": [
+            {"type_id": CF_T, "quantity": 200}, {"type_id": OOS_T, "quantity": 1},
+            {"type_id": TP_T, "quantity": 200}]}},
+    }
+    for leaf in (HYDRO, ATM, EVAP, SILI, O2_FB, H2_FB):
+        rx[leaf] = {"via": None}
 
-    def shop(roots, planned):
-        """The endpoint's walk: roots summed per product, then the unclaimed surplus."""
-        totals, p = {}, dict(planned)
-        for tid, units in roots.items():
-            p.pop(tid, None)
-            _explode_shopping_list(tid, units, r, totals, None, p)
-        for tid, extra in sorted(p.items()):
-            oq = ((r.get(tid) or {}).get("via") or {}).get("output_qty") or 0.0
-            whole = math.floor(extra / oq) * oq if (extra > 0 and oq > 0) else 0.0
-            if whole > 0:
-                _explode_shopping_list(tid, whole, r, totals, None, None)
-        return totals
+    plan = ([{"type_id": CF_T, "runs": 120} for _ in range(19)]
+            + [{"type_id": TP_T, "runs": 120} for _ in range(19)]
+            + [{"type_id": OOS_T, "runs": 120} for _ in range(4)]
+            + [{"type_id": RCF_T, "runs": 233} for _ in range(10)])
+    EXPECT = {HYDRO: 1_161_864, ATM: 1_161_864, EVAP: 222_984, SILI: 222_984,
+              O2_FB: 13_501, H2_FB: 11_153}
+    got = {t: math.ceil(q) for t, q in _plan_materials(plan, rx).items()}
+    for tid, want in EXPECT.items():
+        check(got.get(tid) == want,
+              f"{tid}: {got.get(tid, 0):,} (expected {want:,})")
+    check(set(got) == set(EXPECT), f"and nothing else on the list (got {sorted(set(got)-set(EXPECT))})")
 
-    exact = shop({G_TOP: 100}, {})
-    rounded = shop({G_TOP: 100}, {G_MID: 10_000.0})
-    check(rounded.get(G_GOO2, 0) > exact.get(G_GOO2, 0),
-          "a planned intermediate above the requirement raises what its inputs cost")
-    lower = shop({G_TOP: 100}, {G_MID: 1.0})
-    check(lower.get(G_GOO2, 0) == exact.get(G_GOO2, 0),
-          "and a plan holding LESS than the requirement never lowers the list — that is a short "
-          "plan, not a cheaper one")
+    print("...rounded per JOB, the way the game does, never per batch:")
+    # 5 fuel blocks x 120 runs x 0.978 = 586.8 -> 587 a job, 19 jobs = 11,153. Rounding the batch
+    # instead gives 11,150 and leaves you three blocks short of installing the 19th job.
+    per_job = math.ceil(5 * 120 * (1 - RME)) * 19
+    per_batch = math.ceil(5 * 120 * 19 * (1 - RME))
+    check(got[H2_FB] == per_job and per_job > per_batch,
+          f"{per_job:,} per job, not {per_batch:,} per batch")
 
-    print("...and the same plan spread over more characters buys the SAME materials:")
-    # The regression this exists for. `planned` is an ACCOUNT-WIDE total, and it used to be applied
-    # as a floor inside every root's walk — so pooling one chain's top row across eight characters
-    # made eight roots and bought the whole account's goo eight times. Reported from use: a plan
-    # needing ~540k Atmospheric Gases was quoted at 11 million, and ~15k fuel blocks at 244k.
-    #
-    # Two roots of one product totalling 100 runs must cost exactly what one root of 100 costs:
-    # where the jobs sit is not a material requirement.
-    one_root = shop({G_TOP: 100}, {G_MID: 10_000.0})
-    # ...expressed the way the endpoint sees it after pooling: the SAME 100 units, summed from two
-    # rows rather than one, against the same account-wide planned figure.
-    split = shop({G_TOP: 40 + 60}, {G_MID: 10_000.0})
-    check(split == one_root,
-          f"splitting a chain across characters changes nothing "
-          f"(goo {split.get(G_GOO2, 0):.0f} vs {one_root.get(G_GOO2, 0):.0f})")
+    print("...and a product the PLAN makes is never also bought, or deducted from stock:")
+    # Oxy-Organic Solvents is made by its own rows, so holding 400 of it must not shrink the goo
+    # the plan's 4 OOS jobs will consume — those jobs are still going to be installed. Deducting it
+    # a second time here is what put the list 78,240 Hydrocarbons short of the plan.
+    held = _plan_materials(plan, rx, {OOS_T: 400.0, CF_T: 100_000.0})
+    check(math.ceil(held[HYDRO]) == EXPECT[HYDRO],
+          f"holding 400 Oxy-Organic Solvents changes nothing (got {math.ceil(held[HYDRO]):,})")
+    check(OOS_T not in held and CF_T not in held,
+          "and an in-house product never appears as something to buy")
 
     print("edge cases don't throw:")
     check(_shopping_roots([]) == [], "no rows, no roots")
