@@ -381,7 +381,16 @@ def apply_account_build_options(context_id: int, opts):
         update["never_build_ids"] = list(saved["never_build_ids"])
     # …and so is the reaction policy: it is the same kind of standing rule, so the checklist and the
     # customer's share link have to follow it too, or they quote a build the user isn't making.
-    policy = saved.get("reaction_policy") or {}
+    # …gated on its own feature, which it never was: only the FRONTEND asked the flag, so on an
+    # account without it the default policy (buy composites & intermediates) was fully in force with
+    # no control anywhere on the page to see or change it. That is the wrong half to ship — the
+    # effect live, the escape hatch invisible — and it is expensive here, because buying a reaction
+    # prices it at market inside every consumer's build cost, so the components ABOVE it lose
+    # make-or-buy too and their sub-chains leave the plan. Flag off = no policy at all, which is the
+    # plan that shipped before the feature existed.
+    from app.features import feature_enabled_for
+    policy = (saved.get("reaction_policy") or {}) if feature_enabled_for(
+        "industry_reaction_policy", context_id) else {}
     if "buy_all_reactions" not in sent and policy.get("build_reactions") is False:
         update["buy_all_reactions"] = True
     if "buy_reaction_categories" not in sent and policy.get("buy_categories"):

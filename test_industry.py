@@ -206,6 +206,33 @@ def test_unpriced_input_does_not_kill_the_plan():
     check("materials cost is MineralA only", approx(res["metrics"]["materials_cost"], 1000.0))
 
 
+def test_reaction_policy_is_gated_by_its_own_feature():
+    """The policy's EFFECT shipped without its flag: only the frontend asked
+    `industry_reaction_policy`, so an account without the feature had the default (buy composites &
+    intermediates) fully in force and no control anywhere to see or change it. Flag off must mean the
+    plan that shipped before the feature existed."""
+    print("test_reaction_policy_is_gated_by_its_own_feature")
+    from app.industry.graph import BuildOptions
+    from app.industry import settings as ind_settings
+    from app import features as feat
+
+    saved = {"reaction_policy": {"build_reactions": False, "buy_categories": ["composite"]}}
+    real_get, real_flag = ind_settings.get_settings, feat.feature_enabled_for
+    ind_settings.get_settings = lambda ctx: dict(saved)
+    try:
+        feat.feature_enabled_for = lambda key, ctx=None: key != "industry_reaction_policy"
+        off = ind_settings.apply_account_build_options(1, BuildOptions())
+        check("flag off: the account-wide switch does not apply", off.buy_all_reactions is False)
+        check("flag off: no family is bought either", not off.buy_reaction_categories)
+
+        feat.feature_enabled_for = lambda key, ctx=None: True
+        on = ind_settings.apply_account_build_options(1, BuildOptions())
+        check("flag on: the stored policy applies", on.buy_all_reactions is True)
+        check("flag on: and its families", list(on.buy_reaction_categories) == ["composite"])
+    finally:
+        ind_settings.get_settings, feat.feature_enabled_for = real_get, real_flag
+
+
 def test_build_everything_also_reacts():
     """A checkbox that says "build everything" has to mean reactions too.
 
@@ -2693,6 +2720,7 @@ def main():
     test_make_or_buy_flips()
     test_root_forced_build()
     test_unpriced_input_does_not_kill_the_plan()
+    test_reaction_policy_is_gated_by_its_own_feature()
     test_build_everything_also_reacts()
     test_quantity_scales_and_excess()
     test_demand_aggregation_shares_batches()
@@ -4568,13 +4596,21 @@ def test_the_reaction_category_registry_is_the_single_source():
         # …and it reaches plans run without a browser: a share link or a checklist quoting a build
         # the user isn't making is the bug this whole settings module exists to end.
         from app.industry.graph import BuildOptions
+        from app import features as _feat
         S.set_reaction_policy(7, False, [])
-        opts = S.apply_account_build_options(7, BuildOptions())
-        check("a plan run without a browser follows the standing rule",
-              opts.buy_all_reactions is True)
-        check("but an explicit request still wins",
-              S.apply_account_build_options(
-                  7, BuildOptions(buy_all_reactions=False)).buy_all_reactions is False)
+        # …for an account that HAS the feature. Applying it without one was the bug: the control is
+        # frontend-gated, so an account without the flag got the policy with nowhere to change it.
+        _real_flag = _feat.feature_enabled_for
+        _feat.feature_enabled_for = lambda key, ctx=None: True
+        try:
+            opts = S.apply_account_build_options(7, BuildOptions())
+            check("a plan run without a browser follows the standing rule",
+                  opts.buy_all_reactions is True)
+            check("but an explicit request still wins",
+                  S.apply_account_build_options(
+                      7, BuildOptions(buy_all_reactions=False)).buy_all_reactions is False)
+        finally:
+            _feat.feature_enabled_for = _real_flag
     finally:
         restore()
 
