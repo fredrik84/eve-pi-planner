@@ -489,9 +489,14 @@ def resolve_unit_costs(mfg: dict, rx: dict, prices: dict, adjusted: dict,
             ok = True
             for inp in recipe["inputs"]:
                 child = unit(inp["type_id"], inner)
+                # Keep resolving the siblings even once one input is unpriceable. `explode` reads
+                # `memo[...]` for EVERY input of a node it builds, and the root is always built
+                # whatever its own decision says — so bailing out here left the root's remaining
+                # inputs unmemoized and the plan died with a KeyError on the first of them. Only
+                # `ok` decides the outcome; the extra walk just fills the cache the explode needs.
                 if child["unit_cost"] is None:
                     ok = False
-                    break
+                    continue
                 qty = effective_material_qty(inp["quantity"], 1, me, mult)
                 total_in += child["unit_cost"] * qty
                 eiv += inp["quantity"] * adjusted.get(inp["type_id"], 0.0)

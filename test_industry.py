@@ -186,6 +186,26 @@ def test_root_forced_build():
     check("root shows buy alt", approx(res["tree"]["buy_unit_cost"], 10.0))
 
 
+def test_unpriced_input_does_not_kill_the_plan():
+    print("test_unpriced_input_does_not_kill_the_plan (an unresolvable input must not eat siblings)")
+    con = _seed_con()
+    mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
+    # Widget = 2x Gadget + 10x MineralA, in that order. Strip every price under Gadget so Gadget
+    # can be neither bought nor built: it resolves "unresolved". The root is built regardless of
+    # its own decision, so `explode` still walks BOTH inputs — and MineralA, which comes after the
+    # unresolvable one, has to be in the memo or the whole plan 500s on a KeyError.
+    sell = {200: 100.0, 100: 100000.0}
+    res = build_plan(100, 1, mfg, rx, _prices(sell), ADJ, BuildParams(), NAMES)
+    shop = {s["type_id"]: s["qty"] for s in res["shopping_list"]}
+    check("sibling after the unresolvable one survives", shop.get(200) == 10)
+    check("unresolvable input is reported, not priced", 101 not in shop)
+    check("root still built", res["tree"]["decision"] == "build")
+    tree_kids = {i["type_id"]: i for i in res["tree"]["inputs"]}
+    check("gadget node marked unresolved", tree_kids[101]["decision"] == "unresolved")
+    # The unresolvable branch must not be silently costed as free.
+    check("materials cost is MineralA only", approx(res["metrics"]["materials_cost"], 1000.0))
+
+
 def test_quantity_scales_and_excess():
     print("test_quantity_scales_and_excess (reaction output_qty=2 → odd demand leaves excess)")
     con = _seed_con()
@@ -2626,6 +2646,7 @@ def main():
     test_build_all()
     test_make_or_buy_flips()
     test_root_forced_build()
+    test_unpriced_input_does_not_kill_the_plan()
     test_quantity_scales_and_excess()
     test_demand_aggregation_shares_batches()
     test_excess_ledger()
