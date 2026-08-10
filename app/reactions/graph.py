@@ -910,12 +910,14 @@ def tier_ranks(ordered: list) -> list[int]:
 
 
 def _shopping_roots(rows: list[dict]) -> list[dict]:
-    """The plan rows whose materials nothing else already accounts for.
+    """The TOP row of each chain in `rows` — the row that stands for the batch.
 
-    A chain assign stores one row per intermediate AND one for the product, and exploding a row to
-    raw goo walks its WHOLE recipe — so the product's own walk already contains every intermediate's
-    materials. Exploding all of them counted a two-tier chain's goo twice (7,726 units became 15,452
-    on a synthetic chain), and the player was told to buy double for anything multi-tier.
+    **The shopping list no longer uses this** (see `_plan_materials`, which works from the plan rows
+    directly and needs no notion of a root). Its one live caller is `give_back_order_runs`: a
+    cancelled order is owed back exactly what `assigned_runs` was incremented by, which is the sum
+    of its chains' top rows. The name is historical — it was built for the shopping list, where a
+    chain assign stores a row per intermediate AND one for the product, and exploding all of them
+    counted a two-tier chain's goo twice.
 
     **A chain is identified by the assign that created it: (character_id, created_at).** All of a
     chain's rows are written in one call with a single timestamp (`assign_reaction`,
