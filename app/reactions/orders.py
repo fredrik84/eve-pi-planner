@@ -94,21 +94,32 @@ def _order_report(context_id: int, order: dict) -> dict:
     for tier in sequence:
         cycle_hours = (tier["cycle_time"] or 3600) / 3600.0
         cap = caps.get(tier["type_id"])
-        by_slots = min(free_slots_now, tier["runs"]) or 1
+        by_slots = max(1, min(free_slots_now, tier["runs"]))
         jobs_used = _cap_jobs(cap, by_slots)
         if cap and cap < by_slots:
             formula_capped.append(tier["name"])
         tier["formula_cap"] = cap
         estimated_hours += math.ceil(tier["runs"] / jobs_used) * cycle_hours
 
+    # **No free reactors means no estimate, not a one-reactor estimate.** With `free_slots_now` at
+    # zero the loop above used to fall back to a single job per tier — the whole order run end to
+    # end in one reactor — and quoted the customer that number. On a fully-assigned account that is
+    # how "~51d 3h" appeared on an order the tool would not even accept: `_allocate_and_insert`
+    # refuses outright when no character has a free slot per tier, so the figure described a layout
+    # that was never on offer. A quote nobody can install is worse than saying we cannot say yet.
+    no_capacity = free_slots_now <= 0
     time_report = {
-        "tiers": sequence, "free_slots_now": free_slots_now, "estimated_hours": round(estimated_hours, 1),
+        "tiers": sequence, "free_slots_now": free_slots_now,
+        "estimated_hours": None if no_capacity else round(estimated_hours, 1),
         # Which steps are held below your free-slot count by how many formulas you hold — one line
         # of "why", so an order quoted at ten times the obvious time doesn't read as a broken tool.
         "formula_capped": formula_capped,
-        "caveat": "Assumes your current free reaction slots stay free until each tier finishes, run in "
-                  "sequence (each intermediate tier must finish before the next starts) — a rough "
-                  "estimate, not a guarantee.",
+        "caveat": ("Every reaction slot you have is already running or planned, so there is nothing "
+                   "to estimate against yet — free some up (or clear part of the plan) and this "
+                   "will fill in.") if no_capacity else
+                  (f"Assumes the {free_slots_now} reaction slot(s) you have free right now stay free "
+                   "until each tier finishes, run in sequence (each intermediate tier must finish "
+                   "before the next starts) — a rough estimate, not a guarantee."),
     }
 
     # Formulas this order needs and the account does not hold. `sequence` is already every step the
