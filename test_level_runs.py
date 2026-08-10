@@ -211,63 +211,6 @@ def main():
         check(counts[0] <= longest,
               f"no job runs longer than the longest job already planned ({counts[0]} <= {longest})")
 
-        print("the player's own job length decides how long a job runs:")
-        # A 3-hour reaction: 5 days is 40 runs, 15 days is 120. Same plan, same chains — the only
-        # thing that moved is what the player said they wanted to come back to.
-        from app.reactions.settings import ensure_job_target_table, get_job_target
-        ensure_job_target_table()
-
-        def _target(mode, value):
-            con.execute("DELETE FROM pp_reaction_job_target WHERE context_id=?", (CTX,))
-            con.execute("INSERT INTO pp_reaction_job_target (context_id, mode, value) "
-                        "VALUES (?,?,?)", (CTX, mode, value))
-            con.commit()
-
-        def _replan():
-            _reset(con)
-            _characters(con)
-            for (cid, _), (runs, jobs) in zip(CHARS, [(125, 3), (90, 4), (90, 4), (75, 4)]):
-                _plan(con, cid, 1000.0 + cid, [(CF, "Carbon Fiber", runs, jobs, 0),
-                                               (RCF, "Reinforced Carbon Fiber", 40, 1, 1)])
-            level_product_runs(CTX)
-            return sorted({r["runs"] for r in _cf_rows(con) if r["type_id"] == CF})
-
-        _target("days", 5)
-        five = _replan()
-        check(len(five) == 1 and five[0] <= 40,
-              f"5 days a job on a 3-hour reaction is 40 runs or fewer (got {five})")
-        _target("runs", 100)
-        hundred = _replan()
-        check(hundred == [100], f"asking for 100 runs a job gives exactly that (got {hundred})")
-        _target("auto", 0)
-        auto = _replan()
-        check(len(auto) == 1 and auto[0] <= 125,
-              f"and back on automatic nothing runs longer than the longest job planned (got {auto})")
-        check(get_job_target(CTX)["mode"] == "auto", "the setting round-trips through the DB")
-
-        print("...and a customer order lays its jobs out to the same length:")
-        # An order is otherwise run flat out — every free reactor — so the setting has to reach the
-        # allocator itself, not just the levelling pass (the top row of a chain is a commitment the
-        # leveller never touches, so an order would ignore the setting entirely without this).
-        from app.reactions.jobs import _target_runs
-        check(_target_runs({"mode": "days", "hours": 120.0, "runs": None}, 3.0) == 40,
-              "5 days of a 3-hour reaction is 40 runs a job")
-        check(_target_runs({"mode": "days", "hours": 120.0, "runs": None}, 6.0) == 20,
-              "...and 20 of a 6-hour one, so the two still finish together")
-        check(_target_runs({"mode": "runs", "hours": None, "runs": 125}, 6.0) == 125,
-              "a runs target is the same number whatever the cycle")
-        check(_target_runs({"mode": "auto", "hours": None, "runs": None}, 3.0) is None,
-              "and automatic fixes nothing — the allocator keeps its own layout")
-        import inspect
-        from app.reactions import jobs as _J
-        alloc_src = inspect.getsource(_J._allocate_and_insert)
-        check('job_target["mode"] != "auto"' in alloc_src,
-              "the order allocator reads the setting")
-        check(alloc_src.index('_align_stage_jobs(align)') < alloc_src.index('if job_target["mode"]'),
-              "...and applies it AFTER the stage-align pass, which would otherwise redistribute it")
-        con.execute("DELETE FROM pp_reaction_job_target WHERE context_id=?", (CTX,))
-        con.commit()
-
         print("the reported 8-character plan comes out with ONE number per product:")
         # Pasted off the dashboard 2026-08-08, after the pass had supposedly run: Thermosetting
         # Polymer at 100/125/175, Carbon Fiber at 90/100/125. Three numbers on two products, and
@@ -290,7 +233,6 @@ def main():
                 con.execute("DELETE FROM pp_reaction_assignments WHERE character_id=?", (-9500 - i,))
                 con.execute("DELETE FROM pp_char_industry_jobs WHERE character_id=?", (-9500 - i,))
             con.execute("DELETE FROM pp_characters WHERE context_id=?", (CTX,))
-            con.execute("DELETE FROM pp_reaction_job_target WHERE context_id=?", (CTX,))
             con.commit()
             for i, (name, rows) in enumerate(REPORTED):
                 cid = -9500 - i
@@ -316,18 +258,10 @@ def main():
             check(len(got) == 1, f"{nm}: one number across all eight characters (got {got})")
         check(level_product_runs(CTX) == 0, "and a second pass over it writes nothing")
 
-        _build_reported()
-        con.execute("INSERT INTO pp_reaction_job_target (context_id, mode, value) VALUES (?,?,?)",
-                    (CTX, "runs", 120))
-        con.commit()
-        level_product_runs(CTX)
-        check(_counts(CF) == [120] and _counts(TP) == [120],
-              f"asked for 120 runs a job, both products are 120 (got {_counts(CF)} / {_counts(TP)})")
-        # Reported: "there's no reason why it would make 35 oxy when it could make 120 instead."
-        # Against its own 207-run requirement 120 a job is nearly five times too much; against the
-        # stage's 4,400 runs it is rounding, and it buys the whole stage one number and one trip.
-        # Pooled, so the eight 35-run jobs become the two the account's 207 runs actually need —
-        # reported: "you can consolidate the 8 slots we use for oxy to fewer".
+        # Reported: "there's no reason why it would make 35 oxy when it could make 120 instead" and
+        # "you can consolidate the 8 slots we use for oxy to fewer". Pooled, the eight 35-run jobs
+        # become the two the account's 207 runs actually need — which is what the stage solve
+        # arrives at on its own, with no length for the player to set (removed 2026-08-10).
         oos_rows = [r for r in _cf_rows(con) if r["type_id"] == OOS]
         check(len(_counts(OOS)) == 1 and len(oos_rows) <= 3,
               f"...and Oxy-Organic Solvents consolidates to a couple of jobs "
@@ -349,24 +283,10 @@ def main():
         check(not _over_capacity(),
               f"no character holds more jobs than it has reactors (over: {_over_capacity()})")
 
-        # A length the reactors cannot reach still yields ONE number — the shortest they can do —
-        # rather than dropping the product from the pass.
-        _build_reported()
-        con.execute("INSERT INTO pp_reaction_job_target (context_id, mode, value) VALUES (?,?,?)",
-                    (CTX, "days", 5))
-        con.commit()
-        level_product_runs(CTX)
-        check(len(_counts(CF)) == 1 and len(_counts(TP)) == 1,
-              f"an unreachable 5-day target still levels (got {_counts(CF)} / {_counts(TP)})")
-        # ...and asking for something the reactors cannot do must not make the plan overflow them:
-        # the give-ground loop is seeded with the shortest the tightest character can actually run.
-        check(not _over_capacity(),
-              f"...without overflowing anyone's reactors (over: {_over_capacity()})")
         for i, _ in enumerate(REPORTED):
             con.execute("DELETE FROM pp_reaction_assignments WHERE character_id=?", (-9500 - i,))
             con.execute("DELETE FROM pp_char_industry_jobs WHERE character_id=?", (-9500 - i,))
         con.execute("DELETE FROM pp_characters WHERE context_id=?", (CTX,))
-        con.execute("DELETE FROM pp_reaction_job_target WHERE context_id=?", (CTX,))
         con.commit()
 
         print("a row committed to a CUSTOMER ORDER is never re-shaped:")

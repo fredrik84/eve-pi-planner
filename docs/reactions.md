@@ -20,7 +20,6 @@ Find a section: `grep -n '^## ' docs/reactions.md` and read from that line — t
 - **An order's runs follow capacity, not fairness (reverted experiment)** — why hosts get different run counts, and what the even split cost
 - **One run count per product per stage (`level_stage_runs`)** — why levelling across assigns is sound, and what it deliberately doesn't touch
 - **One run count per product, across every character (`reactions_level_runs`)** — the cross-character leveller: how the number is chosen, why it also saves slots, and the one thing it still can't merge
-- **Job length is the player's call (`pp_reaction_job_target`)** — the one preference in the job layout: days or runs per job, why `auto` is the default, and why it is not a group setting
 - **Run counts you can type (`reactions_tidy_runs`)** — bounded rounding of intermediate runs, and why the end product is never rounded
 - **A stage is a DEPTH, not a position in a list** — why siblings share a stage, and how existing rows were repaired
 - **Knowing when the next stage can start (`chain_stage_state`)** — the ESI signal behind "stage 2 is ready"
@@ -69,6 +68,27 @@ the rows nothing else covers: **a chain is the assign that wrote it, `(character
 highest tier is a root. A separate assign of the same product is its own group, so a product
 deliberately assigned on its own to sell is still real demand. The per-order materials report never
 had the bug — it explodes once from `target_qty`.
+
+**...and once per PRODUCT, not once per row (fixed 2026-08-10).** `planned` — how much of each
+intermediate the plan will actually run, so the list buys for a rounded-up job rather than the bare
+requirement — is an ACCOUNT-WIDE total, and it was applied as a floor *inside every root's walk*.
+That was right while a root was one whole chain on one character. Pooling made one chain's top row
+several roots, and every one of them then bought the entire account's intermediates: reported from
+use as **11 million Atmospheric Gases against a real need near 540k, and 244k fuel blocks against
+~15k** — an over-count of exactly one factor per root.
+
+Two changes fix it, and they belong together:
+
+* roots are **summed per product** before walking, so a product is exploded once however many rows
+  it is split across;
+* `planned` is a **budget the walk spends**, not a floor it re-applies — each visit claims its
+  share, and whatever no root claimed is topped up once at the end, **rounded down to whole
+  reaction runs**. Rounding the leftover up instead bought a phantom job's worth of goo: the
+  remainder is normally a fraction of a run, because a row's stated output is pre-ME and its
+  consumers get the ME benefit.
+
+The invariant to keep: **the same plan spread over more characters buys the same materials.** Where
+a job sits is not a material requirement. `test_shopping_roots.py` pins it.
 
 ## What you already hold is not work (`reactions_use_stock`)
 
@@ -310,58 +330,28 @@ and scoring raw spread instead of a landed/not-landed flag bought a *little* ali
 of goo — pushing a product that cannot reach the stage's duration half way there and paying in full
 for a stage that still doesn't land.
 
-**The ceiling that keeps it honest:** with no job length set, no job may run longer than the longest
+**The ceiling that keeps it honest:** no job may run longer than the longest
 job already planned in that stage. Without it the cheapest answer in slots is always "one enormous
 job per character" — on the reported plan, four jobs of 375 runs, three times the runtime, while
 eleven reactors idle.
 
-### Job length is the player's call (`pp_reaction_job_target`)
+### Job length was a setting, and is not one any more (removed 2026-08-10)
 
-Everything above follows from the chains and the reactors. How long to leave a batch cooking does
-not — *"maybe we should let the user decide the average length they want to do the reaction for."*
-So there is one setting, `get_job_target`, in its own per-account table:
+There used to be one preference here, `pp_reaction_job_target`: `auto`, `days` per job or `runs` per
+job, stored per account and shown both on the Reactions card and as the wizard's cadence. It is
+**gone**, and the automatic rule above is the only rule.
 
-| mode | means | run counts | finish times |
-| --- | --- | --- | --- |
-| `days` | **the whole batch is done in about this long** — split across as many reactors as that takes | differ per product (a 6h reaction gets half the runs of a 3h one) | **land together** |
-| `runs` | every job carries about this run count | the same everywhere | differ per product |
-| `auto` | no opinion — the default | levelled per product | never longer than the stage's longest job already planned |
+Removed on the user's own report: *"the job length dropdown is not useful for me at all, it barely
+works and I need to set it to automatic. If I set it to 7 days it doesn't align to 7 days."* And
+that is the honest reading of what it could do — a target only produces options the free reactors
+can actually reach, so on a busy account most of what was asked for came back as something else,
+with nothing on screen explaining the gap. A knob that silently does not do what it says is worse
+than no knob (CLAUDE.md rule 3: the best UI is read-only). On the reported plan automatic lands on
+120 runs with a couple of stragglers at 110, which is what the 7-day setting had been reaching for
+anyway.
 
-**`days` is a makespan, not a per-job length** — confirmed with the user 2026-08-08. "5 days" is
-"I want to come back in 5 days and collect it", so the work is spread over more, shorter jobs until
-it fits that window. Where the free reactors cannot reach it, the jobs land on the shortest length
-those reactors can do and nothing is said about it (also the user's call: they would rather have
-the nearest achievable plan than a warning).
-
-It is a **target, not a ceiling**: jobs grow to fill it, which is what lands a stage together and
-keeps the number of logins down. The surplus budget still bounds what
-that costs, and a target the free reactors cannot reach simply doesn't produce options — the
-product keeps what it has rather than being half-applied.
-
-**`auto` is the default and that matters:** a plan built before this existed must not have its jobs
-resized by a number nobody chose.
-
-**A customer order obeys it too.** An order is otherwise laid out flat out — every free reactor that
-still brings the finish time down, because someone is waiting on it — and the levelling pass never
-touches a chain's top row, which is the order's own commitment. So without reaching the allocator
-itself (`_allocate_and_insert`), the setting would do nothing at all to an order. It is applied
-after `_align_stage_jobs`, which moves slots within a stage and would otherwise redistribute what
-the target just set, and only when the whole chain still fits the host's free reactors: a target
-shorter than capacity allows would need slots that do not exist, and an order that cannot be laid
-out is worse than one laid out fast.
-
-**The dashboard reports the plan it just levelled.** Both repair passes (`restage_plan_rows` and the
-leveller) run at the TOP of `GET /api/reactions/jobs`, before the rows behind the response are read.
-They used to run at the end, after the payload had already copied the rows — so the writes landed
-but the load that triggered them returned the old numbers and only the NEXT load showed the new
-ones. Assign a plan, look straight at it, and the pass reads as doing nothing.
-
-Deliberately NOT part of the group/account pricing settings, which a group manager sets for every
-member — nobody's alliance should be choosing their login cadence. One setting, shown in two
-places: the Reactions card and the wizard's "Run on a…" cadence, either of which writes it, because
-a wizard sizing a weekly batch while the plan is levelled to a fortnight is two answers to one
-question. A `runs` target has no exact hour window (the products differ), so the wizard states it
-at the standard 3-hour reaction and says so.
+If a job length is ever wanted again, the missing piece is not the setting — it is telling the
+player what the reactors can actually deliver, and why the number they typed was not it.
 
 **A product is POOLED across characters** (2026-08-08). This package used to hold that an
 intermediate must be reacted by the character that consumes it — no model of moving half-finished

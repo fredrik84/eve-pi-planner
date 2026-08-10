@@ -23,7 +23,7 @@ from app.esi import require_context, _get_valid_token
 from app import completions
 
 from app.reactions._router import router
-from app.reactions.settings import effective_reaction_settings, get_job_target
+from app.reactions.settings import effective_reaction_settings
 from app.reactions.graph import (
     _load_goo_and_reached, _value_reaction_batch, _ordered_chain_tiers, reaction_stock_pool,
     _shopping_roots, tier_ranks, tidy_runs, request_memo, _TIDY_STEPS,
@@ -670,20 +670,6 @@ _ALIGN_TOL = 0.10
 _STAGE_SCAN_BUDGET = 20.0
 
 
-def _target_runs(target: dict, cycle_hours: float) -> int | None:
-    """The run count ONE job should carry to hit the player's chosen job length, for a reaction of
-    this cycle time — or None when they have not chosen one (`auto`).
-
-    A `days` target fixes the hours, so the run count follows the cycle: a 6-hour reaction gets half
-    the runs of a 3-hour one and the two still finish together. A `runs` target fixes the count and
-    the durations follow instead. See `get_job_target`."""
-    if target.get("hours") and cycle_hours > 0:
-        return max(1, int(target["hours"] / cycle_hours))
-    if target.get("runs"):
-        return max(1, int(target["runs"]))
-    return None
-
-
 def _typeable(runs: int) -> bool:
     """Is this a run count you copy, or one you read twice? Small numbers are fine as they are, and
     above that it is a round multiple of one of `tidy_runs`' own steps — 70, 125, 250.
@@ -957,10 +943,6 @@ def level_product_runs(context_id: int) -> int:
         stages.setdefault(int(r["tier_order"] or 0), {}).setdefault(int(r["type_id"]), []).append(r)
 
     prefer_tidy = _tidy_runs_on(context_id)
-    # How long the player wants ONE job to run, if they have said (see `get_job_target`). It is a
-    # TARGET, not a ceiling: jobs grow to fill it, which is what makes a stage land together and
-    # what keeps the number of logins down. Unset ("auto") keeps this pass's own rule below.
-    target = get_job_target(context_id)
     rows_by_char_stage: dict[int, dict[int, int]] = {}
     for stage, by_product in stages.items():
         for rs in by_product.values():
@@ -979,9 +961,9 @@ def level_product_runs(context_id: int) -> int:
         by_product = stages[stage]
         later = {cid: sum(n for st, n in per.items() if st > stage)
                  for cid, per in rows_by_char_stage.items()}
-        # With no target of the player's own, a stage may be stretched to land together but never
-        # past the job that is already the longest in it — levelling then makes a plan tidier and
-        # shorter, never slower, which is the only safe thing to do with a number nobody chose.
+        # A stage may be stretched to land together but never past the job that is already the
+        # longest in it — levelling then makes a plan tidier and shorter, never slower, which is the
+        # only safe thing to do with a number nobody chose.
         stage_cap_hours = max(
             (int(r["runs"] or 0) * cycles.get(int(r["type_id"]), 1.0)
              for rs in by_product.values() for r in rs),
@@ -1019,11 +1001,7 @@ def level_product_runs(context_id: int) -> int:
                     # ONE pooled requirement per product: the account needs this many runs of it,
                     # and any reactor with room can make them.
                     total = sum(int(r["runs"] or 0) for r in rs_all)
-                    chosen = _target_runs(target, cyc)
-                    if chosen:
-                        max_runs = chosen
-                    else:
-                        max_runs = int(stage_cap_hours / cyc) if cyc > 0 else total
+                    max_runs = int(stage_cap_hours / cyc) if cyc > 0 else total
                     # The counts that would land this product on a duration the rest of the stage
                     # is considering — see `_level_options`' `extra`.
                     extra = [max(1, int(h / cyc)) for h in extra_hours if cyc > 0]
@@ -1042,8 +1020,6 @@ def level_product_runs(context_id: int) -> int:
             # length rather than each product landing wherever its own arithmetic happened to.
             products = _build(set())
             durations = {o["runs"] * p["cycle"] for p in products.values() for o in p["options"]}
-            if target.get("hours"):
-                durations.add(float(target["hours"]))
             products = _build(durations)
             layout = _choose_stage_layout(products, prefer_tidy)
             asked = sum(opt["jobs"] for opt in layout.values())
@@ -2265,7 +2241,6 @@ def _allocate_and_insert(context_id: int, type_id: int, name: str, node: dict, r
         shares[i % len(hosts)] += 1
 
     now = _time.time()
-    job_target = get_job_target(context_id)
     unit_cost = node.get("unit_cost", 0.0) + node.get("job_cost", 0.0)
     top_cycle_h = (node.get("cycle_time") or 0) / 3600.0
     placed: list[dict] = []
@@ -2305,24 +2280,6 @@ def _allocate_and_insert(context_id: int, type_id: int, name: str, node: dict, r
                 _align_stage_jobs(align)
                 for i, a in enumerate(align):
                     slots[i] = a["jobs"]
-            # A job length the player has SET governs an order too, and is applied LAST — the align
-            # pass above moves slots within a stage and would redistribute what the target just set.
-            # An order is otherwise run flat out — every reactor that still brings the finish time
-            # down — because someone is waiting on it; but "125 runs a job" is an instruction, not a
-            # preference the as-soon-as-possible default gets to quietly ignore. Applied only when
-            # the whole chain
-            # still fits the host's free reactors: a target SHORTER than capacity allows would need
-            # slots that do not exist, and an order that cannot be laid out is worse than one laid
-            # out fast. `auto` changes nothing here.
-            if job_target["mode"] != "auto":
-                cycle_of = [((t["cycle_time"] or 0) / 3600.0) for _, t in tiers] + [top_cycle_h]
-                runs_of = [int(t["runs"]) for _, t in tiers] + [share]
-                want = []
-                for i, (rn, ch) in enumerate(zip(runs_of, cycle_of)):
-                    per = _target_runs(job_target, ch)
-                    want.append(max(1, min(caps[i], -(-rn // per))) if per else slots[i])
-                if sum(want) <= host["free_slots"]:
-                    slots = want
             for i, tid in enumerate([t for t, _ in tiers] + [type_id]):
                 if tid in left:
                     left[tid] = max(0, left[tid] - slots[i])
