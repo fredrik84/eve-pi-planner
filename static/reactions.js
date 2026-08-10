@@ -842,10 +842,10 @@ function _renderReactionsDashboard(data) {
   // stand for a figure nobody has supplied.
   const unpriced = data.unpriced_orders || 0;
   const unpricedNote = unpriced
-    ? `<div class="pp-card-hint">${unpriced} order${unpriced === 1 ? '' : 's'} in this plan
-       ${unpriced === 1 ? 'has' : 'have'} no agreed price, so ${unpriced === 1 ? 'its' : 'their'}
-       production cost counts but the revenue does not — expected value and profit are lower than
-       the truth. Set a price on the order to include it.</div>`
+    ? `<div class="settings-note"><span>${unpriced} order${unpriced === 1 ? '' : 's'} here
+       ${unpriced === 1 ? 'has' : 'have'} no agreed price, so ${unpriced === 1 ? 'it is' : 'they are'}
+       valued at <b>market</b> rather than at the invoice. Set the price on the order for the real
+       figure.</span></div>`
     : '';
   const overviewTiles = `<div class="an-stats">
       ${_dashTile(_fmtIsk(data.pending_isk_committed), 'ISK committed')}
@@ -2360,9 +2360,19 @@ function _rxCreateOrder() {
 // set, rather than showing a zero that reads as "this earns nothing".
 function _rxOrderProfitHtml(data) {
   const p = data.profit || {};
+  const id = data.order && data.order.id;
+  // A price is agreed, changed and re-agreed — usually AFTER the work is planned — so it has to be
+  // editable wherever the order is shown, not just typed once when it is created.
+  const editor = !id ? '' : `
+    <div class="rx-mkt-search" style="margin-top:8px">
+      <input type="number" id="rxOrderPriceEdit" min="0" step="1000000" style="flex:0 1 200px"
+             placeholder="Total ISK for the order" value="${p.client_price == null ? '' : p.client_price}">
+      <button class="pp-add-btn" onclick="_rxSaveOrderPrice(${id})">${p.client_price == null ? 'Set price' : 'Update price'}</button>
+      <span id="rxOrderPriceMsg" class="pp-card-hint"></span>
+    </div>`;
   if (p.client_price == null) {
-    return `<div class="pp-card-hint">No markup applied — this is what it costs you to produce.
-      Set a price agreed with the client to see the profit on it.</div>`;
+    return `<div class="pp-card-hint" style="margin-top:10px">No price agreed yet — this is what it
+      costs you to produce. Enter what the client pays to see the profit.</div>${editor}`;
   }
   const profit = p.profit || 0;
   const good = profit >= 0;
@@ -2375,7 +2385,20 @@ function _rxOrderProfitHtml(data) {
       ${p.margin_pct == null ? '' : `<div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Margin</span><b class="${good ? 'an-ok' : 'an-bad'}">${p.margin_pct.toFixed(1)}%</b></div>`}
       ${p.price_per_unit == null ? '' : `<div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Per unit</span><b>${_fmtIsk(p.price_per_unit)} sold, ${_fmtIsk(data.cost.cost_per_unit)} to make</b></div>`}
     </div>
-    ${good ? '' : '<div class="pp-card-hint">This order costs more to produce than the client is paying.</div>'}`;
+    ${good ? '' : '<div class="settings-note"><span>This order costs more to produce than the client is paying.</span></div>'}
+    ${editor}`;
+}
+
+// Save the agreed price on an existing order and re-render from the response, which is the full
+// report recomputed — so the profit, margin and the dashboard's own figures all move together.
+function _rxSaveOrderPrice(orderId) {
+  const el = document.getElementById('rxOrderPriceEdit');
+  const msg = document.getElementById('rxOrderPriceMsg');
+  const raw = parseFloat(el.value);
+  msg.textContent = 'Saving…';
+  apiSend('POST', `/api/reactions/orders/${orderId}/price`, { client_price: raw > 0 ? raw : null })
+    .then(data => { _renderRxOrderDetail(data); _rxLoadOrders(); _rxReloadPlan(); })
+    .catch(err => { msg.textContent = err.message; });
 }
 
 // ── Order detail / report view ───────────────────────────────────────────────────────────────

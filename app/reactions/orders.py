@@ -419,6 +419,36 @@ def _running_rows_among(context_id: int, rows: list[dict]) -> int:
         return 0                        # a best-effort footnote must never fail the clear
 
 
+class OrderPriceRequest(BaseModel):
+    # None or 0 clears it back to "not told" — an order can lose its price as legitimately as it
+    # gains one (a deal falls through, a number was typed wrong).
+    client_price: float | None = None
+
+
+@router.post("/api/reactions/orders/{order_id}/price")
+def set_reaction_order_price(order_id: int, req: OrderPriceRequest,
+                             context_id: int = Depends(require_context)):
+    """Set (or clear) what the client pays for an order that already exists.
+
+    The price shipped as a create-form field only, which meant every order made before it — and any
+    order where the number was agreed after the work was planned, which is the normal way round —
+    could never be given one. Its revenue then stayed unknown forever and the dashboard reported
+    the whole plan as earning nothing. Editable is the point: a price is a negotiation, not a
+    property of the recipe.
+    """
+    ensure_reaction_orders_table()
+    price = req.client_price if (req.client_price or 0) > 0 else None
+    con = get_connection()
+    try:
+        _get_order_or_404(con, order_id, context_id)
+        con.execute("UPDATE pp_reaction_orders SET client_price=? WHERE id=?", (price, order_id))
+        con.commit()
+        order = dict(con.execute("SELECT * FROM pp_reaction_orders WHERE id=?", (order_id,)).fetchone())
+    finally:
+        con.close()
+    return {"order": order, **_order_report(context_id, order)}
+
+
 class OrderStatusRequest(BaseModel):
     status: str  # 'completed' or 'cancelled'
 

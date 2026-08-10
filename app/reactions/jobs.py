@@ -1702,30 +1702,31 @@ def _plan_totals(context_id: int, rows: list[dict], order_meta: dict[int, dict],
         if tid in consumed:
             continue
         oid = r.get("order_id")
-        if oid:
-            # An order is sold at its agreed price, not at the market — apportioned by how much of
+        meta = order_meta.get(int(oid)) if oid else None
+        price = (meta or {}).get("client_price")
+        total_runs = (meta or {}).get("top_level_runs") or 0
+        if oid and price and total_runs > 0:
+            # An order is sold at its AGREED price, not at the market — apportioned by how much of
             # it this row represents, so a half-assigned order contributes half its invoice.
-            meta = order_meta.get(int(oid)) or {}
-            price, total_runs = meta.get("client_price"), meta.get("top_level_runs") or 0
-            if not price or total_runs <= 0:
-                order_revenue.setdefault(int(oid), 0.0)     # priced at nothing = not priced
-                continue
             out["output_value"] += float(price) * (int(r["runs"] or 0) / total_runs)
         else:
+            # No agreed price (or not an order at all): value the goods at what they are worth on
+            # the market. For an order that is a STAND-IN, not the invoice — but it is the honest
+            # floor ("if the client fell through you could sell these"), and it beats reporting a
+            # plan full of real work as producing nothing, which is what a hard 0 did.
+            if oid:
+                order_revenue.setdefault(int(oid), 0.0)
             m = market_by_type.get(tid)
             oq = output_qty_by_type.get(tid, 0.0)
             if m and oq:
                 out["output_value"] += int(r["runs"] or 0) * oq * m["sell_price"]
     out["unpriced_orders"] = len([o for o, v in order_revenue.items() if v == 0.0])
 
-    # An order nobody has priced is EXCLUDED from profit on both sides — its cost is real and stays
-    # in `isk_committed` (you spend it either way), but pairing that spend with a revenue of zero
-    # would report a large loss on an order that may be the most profitable thing in the plan. The
-    # honest figure is the profit of the work we can actually value, with the omission declared.
-    unpriced_ids = {o for o, v in order_revenue.items() if v == 0.0}
-    valued = [r for r in rows if int(r.get("order_id") or 0) not in unpriced_ids] \
-        if unpriced_ids else rows
-    out["net_profit"] = out["output_value"] - (_cost(valued) if unpriced_ids else out["isk_committed"])
+    # Every row is now valued one way or the other — at the client's price where there is one, at
+    # the market otherwise — so profit is simply value minus cost. `unpriced_orders` no longer means
+    # "left out of this number"; it means "part of it is a market estimate, not an invoice", which
+    # is what the dashboard says.
+    out["net_profit"] = out["output_value"] - out["isk_committed"]
     # Makespan: stages are sequential, so the plan is done when the last stage's longest job is.
     by_stage: dict[int, float] = {}
     for r in rows:

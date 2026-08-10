@@ -256,13 +256,18 @@ makespan**, the sum over stages of the longest job in each, because stages run i
 number the user types (CLAUDE.md rule 3 allows exactly this: a knob only where the math genuinely
 cannot decide). Optional, and NULL means *not told*.
 
-An unpriced order is **excluded from profit on both sides** — its production cost stays in
-`isk_committed`, because that ISK is spent either way, but pairing that spend with a revenue of zero
-would report a large loss on what might be the most profitable work in the plan. The count comes
-back as `unpriced_orders` so the dashboard says the figure is understated rather than showing a
-confident number for something nobody supplied. Priced orders are valued at the agreed price,
-apportioned by how much of the order is assigned so far, so a half-assigned order books half its
-invoice.
+A priced order is valued at the agreed price, apportioned by how much of it is assigned so far, so
+a half-assigned order books half its invoice. **An unpriced one is valued at MARKET instead** — a
+stand-in, not the invoice, but the honest floor ("if the client fell through you could sell these")
+and far better than the alternative. Reported first as excluded-from-profit and then as a hard zero,
+both of which produced the same complaint: an order that was the only thing occupying every reactor
+showed an expected value and a profit per day of **0**. `unpriced_orders` now means *part of this is
+a market estimate*, which is what the dashboard says.
+
+**The price is editable after the fact** (`POST /api/reactions/orders/{id}/price`), which the first
+cut got wrong by shipping it as a create-form field only: every order made before it, and every
+order where the number is agreed after the work is planned — the normal way round — could never be
+given one, so its revenue stayed unknown forever.
 
 The same block drives the order's own **profit panel**, shown both in the review step before the
 order is created (the preview endpoint takes the typed price) and in the order detail afterwards:
