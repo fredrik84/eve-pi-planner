@@ -416,31 +416,48 @@ def read_industry_settings(ctx: int = Depends(require_context)):
     return {"settings": s}
 
 
+_SETTINGS_COLUMNS = ("struct_material_pct", "struct_time_pct", "prioritize_speed", "marginal_pct",
+                     "force_build", "margin_pct", "facility_id")
+
+
+def save_settings(context_id: int, fields: dict) -> None:
+    """Upsert the plan-form settings row, writing ONLY the keys present in `fields`.
+
+    Two callers with deliberately different habits share it: the PUT below sends the whole form on
+    every knob move (so a key present with a None value legitimately clears that column), while the
+    consolidated build-setup patch writes one section at a time and must not touch the rest. Keying
+    off presence rather than value serves both, and it is why there is one column list here instead
+    of the same SQL written twice.
+    """
+    use = {k: v for k, v in fields.items() if k in _SETTINGS_COLUMNS}
+    if not use:
+        return
+    for flag in ("prioritize_speed", "force_build"):
+        if flag in use:
+            use[flag] = None if use[flag] is None else int(use[flag])
+    if "facility_id" in use:
+        use["facility_id"] = (use["facility_id"] or "")[:40]
+    ensure_industry_settings_table()
+    keys = list(use)
+    con = get_connection()
+    try:
+        con.execute(
+            f"INSERT INTO pp_industry_settings (context_id, {', '.join(keys)}, updated_at) "
+            f"VALUES ({','.join('?' * (len(keys) + 2))}) "
+            f"ON CONFLICT(context_id) DO UPDATE SET "
+            + ", ".join(f"{k}=excluded.{k}" for k in keys)
+            + ", updated_at=excluded.updated_at",
+            (context_id, *[use[k] for k in keys], time.time()))
+        con.commit()
+    finally:
+        con.close()
+
+
 @router.put("/api/industry/settings")
 def write_industry_settings(req: IndustrySettings, ctx: int = Depends(require_context)):
     """Save the plan form's options. Sent whenever a knob moves, so a plan run on the user's behalf
     later — a share link, a checklist — uses the settings they actually build with."""
-    ensure_industry_settings_table()
-    con = get_connection()
-    try:
-        con.execute(
-            "INSERT INTO pp_industry_settings (context_id, struct_material_pct, struct_time_pct, "
-            "prioritize_speed, marginal_pct, force_build, margin_pct, facility_id, updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(context_id) DO UPDATE SET "
-            "struct_material_pct=excluded.struct_material_pct, struct_time_pct=excluded.struct_time_pct, "
-            "prioritize_speed=excluded.prioritize_speed, marginal_pct=excluded.marginal_pct, "
-            "force_build=excluded.force_build, margin_pct=excluded.margin_pct, "
-            "facility_id=excluded.facility_id, "
-            "updated_at=excluded.updated_at",
-            (ctx, req.struct_material_pct, req.struct_time_pct,
-             None if req.prioritize_speed is None else int(req.prioritize_speed),
-             req.marginal_pct,
-             None if req.force_build is None else int(req.force_build),
-             req.margin_pct,
-             (req.facility_id or "")[:40], time.time()))
-        con.commit()
-    finally:
-        con.close()
+    save_settings(ctx, req.model_dump())
     return {"ok": True}
 
 

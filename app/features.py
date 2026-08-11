@@ -277,6 +277,17 @@ FEATURE_REGISTRY = [
                     "cost. A single order can still be set to make its own.",
      # Testers, like every other Industry feature — this came from the builders using the tab.
      "default": False, "state": "testers"},
+    {"key": "industry_build_setup", "label": "Industry: one place for build settings",
+     "group": "Industry",
+     "description": "Collects every rule that shapes a build — facility, build threshold, reactions, "
+                    "never-build list, job length, build pins, stock sources — into a single Build "
+                    "setup dialog, instead of eight strips scattered down the plan card that don't "
+                    "read as settings. The same dialog edits an order's overrides, showing which "
+                    "values it inherits and which this build changed. The strips stay as read-only "
+                    "summaries of what is in force, each linking into the section that set it.",
+     # Testers, like every other Industry feature. Storage is untouched: this is a surface over the
+     # stores that already own each field, not a new settings table (see TODO 18 Half A).
+     "default": False, "state": "testers"},
     {"key": "industry_manual_blueprints", "label": "Industry: declare a blueprint or formula by hand",
      "group": "Industry",
      "description": "Type in the blueprints and reaction formulas you own — product, ME, TE, runs "

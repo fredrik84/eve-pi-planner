@@ -27,6 +27,7 @@ from app.industry import (  # noqa: F401 — imported for endpoint registration 
     bpc,            # /api/industry/bpc[/scan]
     progress,       # /api/industry/progress
     settings,       # per-account build options: /api/industry/settings
+    build_setup,    # one read/write surface over all of them: /api/industry/build-setup
     skills,         # required-skills-to-build: analyze_plan_skills, called by both plan paths
     shares,         # customer build-status links: /api/industry/orders/{id}/share, /build-status
     sourcing,       # per-order material sourcing: /api/industry/orders/{id}/sourcing

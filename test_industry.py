@@ -9,6 +9,7 @@ Run: python3 test_industry.py
 """
 import json
 import math
+import inspect
 import sqlite3
 import time
 from app.db import get_connection
@@ -204,6 +205,77 @@ def test_unpriced_input_does_not_kill_the_plan():
     check("gadget node marked unresolved", tree_kids[101]["decision"] == "unresolved")
     # The unresolvable branch must not be silently costed as free.
     check("materials cost is MineralA only", approx(res["metrics"]["materials_cost"], 1000.0))
+
+
+def test_build_setup_is_one_surface_over_the_stores_that_already_own_each_field():
+    """Config was spread over six write paths and eight inline strips, none of which read as
+    settings. `build_setup` collects them into one read and one SPARSE patch — over the SAME stores,
+    deliberately not a new settings table (TODO 18 Half A's open question is left untouched).
+
+    The invariant that matters most is the sparseness: writing one section must not clobber the
+    others, which is exactly what pushed the reaction policy, the blacklist and the pins out of the
+    debounced settings PUT in the first place."""
+    print("test_build_setup_is_one_surface_over_the_stores_that_already_own_each_field")
+    from app.industry import settings as S
+    from app.industry import build_setup as B
+    from app import features as feat
+
+    check("it owns no storage of its own",
+          "CREATE TABLE" not in inspect.getsource(B).upper())
+    check("order_id is a parameter, not a forked body",
+          "order_id: int | None = None" in inspect.getsource(B.read_build_setup))
+
+    con, restore = _patch_db(S)
+    real_flag = feat.feature_enabled_for
+    try:
+        S.ensure_industry_settings_table.__wrapped__()
+        feat.feature_enabled_for = lambda key, ctx=None: True
+
+        acct = B.account_setup(7)
+        check("every section is present in one read",
+              set(acct) == set(B._SECTION_FEATURES))
+        check("and each carries the pick-list it is expressed in",
+              acct["reactions"]["categories"] and "families" in acct["pins"])
+
+        # Sparse patch: set the facility, then the threshold. The second must not clear the first.
+        B.apply_patch(7, B.BuildSetupPatch(facility={"facility_id": "sotiyo-1",
+                                                     "struct_material_pct": 4.2}))
+        B.apply_patch(7, B.BuildSetupPatch(threshold={"marginal_pct": 0.0, "force_build": True}))
+        after = B.account_setup(7)
+        check("the second section wrote", after["threshold"]["marginal_pct"] == 0.0
+              and after["threshold"]["force_build"] is True)
+        check("and did NOT clobber the first", after["facility"]["facility_id"] == "sotiyo-1"
+              and after["facility"]["struct_material_pct"] == 4.2)
+
+        # Sections owned by other stores round-trip through the same patch.
+        B.apply_patch(7, B.BuildSetupPatch(reactions={"buy_categories": []},
+                                           never_build={"type_ids": [34, 35]}))
+        after2 = B.account_setup(7)
+        check("the reaction policy went to its own store",
+              after2["reactions"]["policy"]["buy_categories"] == [])
+        check("the blacklist went to its own store",
+              sorted(after2["never_build"]["type_ids"]) == [34, 35])
+        check("and the settings row is still intact",
+              after2["facility"]["facility_id"] == "sotiyo-1")
+
+        # A section the account may not see is refused, never silently dropped.
+        feat.feature_enabled_for = lambda key, ctx=None: key != "industry_reaction_policy"
+        avail = B._available(7)
+        check("an off feature closes its section", avail["reactions"] is False)
+        try:
+            B.apply_patch(7, B.BuildSetupPatch(reactions={"build_reactions": False}))
+            check("a write to a closed section is refused", False)
+        except Exception as e:
+            check("a write to a closed section is refused", "403" in str(e) or "not enabled" in str(e))
+        check("and the stored value is untouched",
+              B.account_setup(7)["reactions"]["policy"]["buy_categories"] == [])
+    finally:
+        feat.feature_enabled_for = real_flag
+        restore()
+
+    from app.features import FEATURE_REGISTRY
+    check("the surface is gated like every other Industry feature",
+          any(f["key"] == "industry_build_setup" for f in FEATURE_REGISTRY))
 
 
 def test_reaction_policy_is_gated_by_its_own_feature():
@@ -2720,6 +2792,7 @@ def main():
     test_make_or_buy_flips()
     test_root_forced_build()
     test_unpriced_input_does_not_kill_the_plan()
+    test_build_setup_is_one_surface_over_the_stores_that_already_own_each_field()
     test_reaction_policy_is_gated_by_its_own_feature()
     test_build_everything_also_reacts()
     test_quantity_scales_and_excess()
