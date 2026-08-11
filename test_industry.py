@@ -207,6 +207,56 @@ def test_unpriced_input_does_not_kill_the_plan():
     check("materials cost is MineralA only", approx(res["metrics"]["materials_cost"], 1000.0))
 
 
+def test_build_rules_has_one_home_and_the_strip_stops_being_a_control():
+    """String matching, and weak by construction (see test_nav_gating) — but the invariant it guards
+    is not: with the surface ON there must be exactly ONE place to change a rule. Two ways to set the
+    same thing is how the config came to be spread over eight strips nobody recognised as settings."""
+    print("test_build_rules_has_one_home_and_the_strip_stops_being_a_control")
+    js = open("static/industry.js").read()
+    pj = open("static/planetary.js").read()
+    html = open("static/index.html").read()
+
+    check("the account's rules live in the Settings modal, where the app already says they live",
+          'id="settingsNavBuildrules"' in html and 'id="settingsSecBuildrulesBody"' in html)
+    check("the nav entry is gated on the feature",
+          "settingsNavBuildrules" in pj and "_featureActive('industry_build_setup')" in pj)
+    check("a deep link to a gated section falls back rather than showing an empty pane",
+          "if (section === 'buildrules' && !(_loggedIn && _featureActive('industry_build_setup')))" in pj)
+    check("the section loads on reveal, like markets and blueprints",
+          "if (name === 'buildrules') _loadBuildRulesSettings();" in pj)
+
+    check("one renderer serves both modes", js.count("function _indRulesSectionsHtml(") == 1)
+    check("...and the order dialog uses it", "_indRulesSectionsHtml()" in js
+          and 'function _indRulesPaint(' in js)
+    check("order mode says what is inherited and what this build changed",
+          "function _indInheritTag(" in js and "ind-rule-changed" in js)
+
+    # The conversion: with the surface on, the reaction strip is a summary; with it off, byte-for-
+    # byte the control that shipped before.
+    bar = js[js.index("function _indReactionPolicyBar("):]
+    bar = bar[:bar.index("\nfunction ")]
+    check("the strip defers to the summary when the surface is on",
+          "if (_indRulesActive()) return _indRxSummaryBar(d);" in bar)
+    check("and still renders its own control when it is off",
+          "indSetReactionPolicy(" in bar and "indToggleReactionCats()" in bar)
+    summary = js[js.index("function _indRxSummaryBar("):]
+    summary = summary[:summary.index("\nfunction ") if "\nfunction " in summary else len(summary)]
+    check("the summary sets nothing itself", "indSetReactionPolicy(" not in summary
+          and "indSetReactionCat(" not in summary)
+    check("but still reports what the rule cost this build",
+          "adds" in summary and "fmtIsk(" in summary)
+    check("and routes to the one place that can change it",
+          "openSettingsModal('buildrules')" in summary)
+
+    # The per-component overrule strip is a DECISION, not a setting — it must stay interactive.
+    marg = js[js.index("function _indMarginalBar("):]
+    marg = marg[:marg.index("\nfunction ")]
+    check("the borderline-components strip is left alone", "_indRulesActive()" not in marg)
+
+    check("an order gets the same dialog, gated", "indOpenRules(${o.id}" in js
+          and "_indRulesActive()" in js)
+
+
 def test_build_setup_is_one_surface_over_the_stores_that_already_own_each_field():
     """Config was spread over six write paths and eight inline strips, none of which read as
     settings. `build_setup` collects them into one read and one SPARSE patch — over the SAME stores,
@@ -2792,6 +2842,7 @@ def main():
     test_make_or_buy_flips()
     test_root_forced_build()
     test_unpriced_input_does_not_kill_the_plan()
+    test_build_rules_has_one_home_and_the_strip_stops_being_a_control()
     test_build_setup_is_one_surface_over_the_stores_that_already_own_each_field()
     test_reaction_policy_is_gated_by_its_own_feature()
     test_build_everything_also_reacts()

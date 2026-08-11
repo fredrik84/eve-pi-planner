@@ -1180,6 +1180,10 @@ PVF-N9    3         95                 60             80                  100   
             <span class="settings-nav-ico">BP</span>
             <span class="settings-nav-lbl">Blueprints &amp; formulas</span>
           </button>
+          <button class="settings-nav-item" id="settingsNavBuildrules" onclick="settingsSection('buildrules')" style="display:none">
+            <span class="settings-nav-ico">BR</span>
+            <span class="settings-nav-lbl">Build rules</span>
+          </button>
           <button class="settings-nav-item" id="settingsNavAccount" onclick="settingsSection('account')" style="display:none">
             <span class="settings-nav-ico">AC</span>
             <span class="settings-nav-lbl">Account</span>
@@ -1204,6 +1208,14 @@ PVF-N9    3         95                 60             80                  100   
                formula you own and was worded entirely as materials — so the reaction concurrency cap
                it feeds was unreachable in practice. Same panels, same loaders (indLoadBlueprints /
                indLoadAssets target these ids), reworded to name formulas. -->
+          <!-- Build rules: every standing rule that shapes a build, in the one place the Job slots
+               modal already tells people account-wide settings live. The same renderer serves the
+               per-order override dialog (indSetupModal's sibling) — see _indRulesSectionsHtml. -->
+          <div id="settingsSecBuildrules" class="settings-section" style="display:none">
+            <div class="settings-sec-hdr"><h3 class="settings-sec-title">Build rules</h3></div>
+            <div class="settings-subsec-hint">The standing rules every build follows: where you build, what's worth building rather than buying, which reactions you run, and which boxes a build may spend. A single order can override any of them without changing what's here.</div>
+            <div id="settingsSecBuildrulesBody"><div class="ind-loading">Loading…</div></div>
+          </div>
           <div id="settingsSecBlueprints" class="settings-section" style="display:none">
             <div class="settings-sec-hdr"><h3 class="settings-sec-title">Blueprints &amp; formulas</h3></div>
             <div class="settings-subsec-hint">What prints and formulas you own, and which hangars the planners may take materials from. Used by Reactions and Manufacturing alike.</div>
@@ -1644,6 +1656,22 @@ PVF-N9    3         95                 60             80                  100   
           <span id="indResetMsg" class="ind-src-meta">Shows the setup screen again on your own account.</span>
         </div>
       </details>
+    </div>
+  </div>
+
+  <!-- Per-order overrides. Same renderer as Settings → Build rules, in "order" mode: every field
+       states what it inherits, and only what you change is stored on the order. -->
+  <div id="indRulesModal" class="pp-modal" style="display:none" onclick="if(event.target===this)indCloseRules()">
+    <div class="pp-modal-box pp-modal-box-wide" style="overflow-y:auto">
+      <div class="pp-modal-title" id="indRulesTitle">Build setup
+        <button class="pp-modal-close" onclick="indCloseRules()">✕</button>
+      </div>
+      <div class="pp-modal-hint" id="indRulesHint"></div>
+      <div id="indRulesBody"><div class="ind-loading">Loading…</div></div>
+      <div class="pp-modal-actions">
+        <button class="ind-bp-btn" onclick="indCloseRules()">Cancel</button>
+        <button class="ind-bp-btn ind-bp-btn-primary" id="indRulesSave" onclick="indSaveRules()">Save</button>
+      </div>
     </div>
   </div>
 

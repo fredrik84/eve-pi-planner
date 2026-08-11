@@ -2854,6 +2854,10 @@ function openSettingsModal(section) {
   if (notifNav) notifNav.style.display = (_loggedIn && _featureActive('notifications')) ? '' : 'none';
   const alertsNav = document.getElementById('settingsNavAlerts');
   if (alertsNav) alertsNav.style.display = (_loggedIn && _featureActive('alert_settings')) ? '' : 'none';
+  // Build rules: the Industry tab's standing rules, in the place the Job slots modal already
+  // tells people account-wide settings live. Gated on its own feature.
+  const brNav = document.getElementById('settingsNavBuildrules');
+  if (brNav) brNav.style.display = (_loggedIn && _featureActive('industry_build_setup')) ? '' : 'none';
   const acctNav = document.getElementById('settingsNavAccount');
   if (acctNav) acctNav.style.display = _loggedIn ? '' : 'none';
   // Structures & Markets (shared by Reactions + Manufacturing) — build structures, freight rates
@@ -2871,6 +2875,7 @@ function openSettingsModal(section) {
   if (section === 'notifications' && !((_loggedIn && _featureActive('notifications')))) section = 'characters';
   if (section === 'alerts' && !((_loggedIn && _featureActive('alert_settings')))) section = 'characters';
   if (section === 'account' && !_loggedIn) section = 'characters';
+  if (section === 'buildrules' && !(_loggedIn && _featureActive('industry_build_setup'))) section = 'characters';
   modal.style.display = 'flex';
   _settingsOpen = true;
   settingsSection(section, false);
@@ -2906,6 +2911,8 @@ function settingsSection(name, doLoad) {
   // this section rather than the Job slots modal.
   if (name === 'blueprints') _loadBlueprintsSettings();
   if (name === 'general') _loadGeneralSettings();
+  // Always load, same reasoning as markets/blueprints: every jump-in passes doLoad=false.
+  if (name === 'buildrules') _loadBuildRulesSettings();
 }
 
 // Structures & Markets settings — the shared build-structure list, market-follow list and

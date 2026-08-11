@@ -523,6 +523,12 @@ function _indStatusHeadline(d) {
     return `<span class="ind-order-chip ind-oc-${st}" id="oc-${o.id}">${pos}${tag}<b>${o.quantity}×</b> ${_esc(o.name)}`
       + (lbl ? `<span class="ind-oc-state">${lbl}</span>` : '') + eta + mrg + forced + mete + rxo
       + `<button class="ind-oc-edit" title="Rename, change the quantity, margin or blueprint ME/TE" onclick="indEditOrder(${o.id})">✎</button>`
+      // The build rules for THIS order, in the same dialog the account's standing rules use. The
+      // inline knobs stay for the order's own identity (name, quantity); what a build is *costed
+      // against* is a different question and belongs beside the defaults it overrides.
+      + (_indRulesActive()
+          ? `<button class="ind-oc-edit" title="Build setup for this order — what it inherits and what it overrides"`
+            + ` onclick="indOpenRules(${o.id}, ${JSON.stringify(o.label || '')})">⚙</button>` : '')
       + src + share
       + `<button class="ind-oc-del" title="Remove from the build" onclick="indRemoveOrder(${o.id})">✕</button></span>`;
   }).join('');
@@ -2145,6 +2151,11 @@ function indSetReactionCat(key, buy) {
 
 function _indReactionPolicyBar(d) {
   if (!_featureActive('industry_reaction_policy') || !_indRxPolicy) return '';
+  // With the consolidated surface on, this strip STOPS being a control and becomes a statement of
+  // what is in force with a way through to the thing that set it. Two places to change one rule is
+  // how the sprawl started; the summary keeps the manifesto's "report what the shortcut cost"
+  // without the disguised-control problem that hid this setting in the first place.
+  if (_indRulesActive()) return _indRxSummaryBar(d);
   const pol = _indRxPolicy.policy || {};
   const cats = _indRxPolicy.categories || [];
   const runs = pol.build_reactions !== false;
@@ -4121,3 +4132,310 @@ document.addEventListener('DOMContentLoaded', () => {
   // Re-run the current plan when the speed priority flips, so the effect is immediate.
   if (ps) ps.addEventListener('change', () => { if (_indPicked && document.getElementById('indResult').innerHTML.trim()) indRunPlan(); });
 });
+
+// ── Build rules: one renderer, two modes ──────────────────────────────────────────────────────
+// Configuration used to live in eight strips down the plan card plus six write paths, and none of
+// the strips read as a setting — the app's own author could not find the reaction control. This is
+// the single surface over them (GET/POST /api/industry/build-setup), rendered in two modes:
+//
+//   account — Settings → Build rules. The standing rules.
+//   order   — the per-order dialog. The SAME sections, each stating what it inherits, storing only
+//             what this build actually changed.
+//
+// Two modes rather than two components on purpose: a global and its override that are rendered by
+// different code are a pair that will drift, and the drift shows up as a plan that disagrees with
+// the screen that configured it.
+let _indRules = null;          // {account, available, order}
+let _indRulesMode = 'account';
+let _indRulesOrderId = null;
+
+function _indRulesActive() { return _featureActive('industry_build_setup'); }
+
+async function _indLoadRules(orderId) {
+  const q = orderId != null ? `?order_id=${encodeURIComponent(orderId)}` : '';
+  _indRules = await api('/api/industry/build-setup' + q);
+  return _indRules;
+}
+
+// ── Section renderers. Each returns '' when its feature is off, so a closed section is absent
+// rather than shown and refused by the POST.
+function _indRuleRow(label, body, note) {
+  return `<div class="ind-rule-row"><div class="ind-rule-lbl">${_esc(label)}</div>`
+    + `<div class="ind-rule-ctl">${body}`
+    + (note ? `<div class="ind-src-meta">${note}</div>` : '') + `</div></div>`;
+}
+
+// In order mode a field either INHERITS or is CHANGED, and it has to say which — an inherited value
+// shown as a plain choice is how an override gets made by accident.
+function _indInheritTag(field) {
+  if (_indRulesMode !== 'order') return '';
+  const on = ((_indRules.order || {}).overridden || []).includes(field);
+  return on ? `<span class="ind-rule-tag ind-rule-changed">changed for this build</span>`
+            : `<span class="ind-rule-tag">inherited</span>`;
+}
+
+function _indRulesFacility(a) {
+  const f = a.facility || {};
+  return _indRuleRow('Where you build',
+    `<div class="ind-src-meta">Structure and rigs come from <b>Settings → Structures &amp; Markets</b>`
+    + ` — a rig changes the materials and time of every job.</div>`
+    + `<div class="ind-src-actions"><button class="ind-bp-btn" onclick="indCloseRules();openSettingsModal('markets')">Open Structures &amp; Markets</button></div>`,
+    f.facility_id ? `Currently: <b>${_esc(f.facility_id)}</b>`
+      + (f.struct_material_pct != null ? ` · ME ${f.struct_material_pct}%` : '')
+      + (f.struct_time_pct != null ? ` · TE ${f.struct_time_pct}%` : '')
+      : 'No structure chosen — jobs are costed without a rig bonus.');
+}
+
+function _indRulesThreshold(a) {
+  const t = a.threshold || {};
+  const pct = t.marginal_pct == null ? 3 : t.marginal_pct;
+  return _indRuleRow('Worth building?',
+    `<label class="ind-opt-check"><input type="checkbox" id="ir-force" ${t.force_build ? 'checked' : ''}`
+    + ` onchange="indRulesForceToggle(this)"> Build everything — ignore small savings and slow batches, and react your own materials</label>`
+    + `<div class="ind-field ind-field-marg" id="ir-marg-wrap"${t.force_build ? ' style="opacity:.45"' : ''}>`
+    + `<label for="ir-marg">Build only if it saves <b id="ir-marg-pct">${pct}%</b> of the build</label>`
+    + `<input type="range" id="ir-marg" min="0" max="10" step="0.5" value="${pct}"`
+    + ` ${t.force_build ? 'disabled' : ''} oninput="document.getElementById('ir-marg-pct').textContent=this.value+'%'"></div>`
+    + `<label class="ind-opt-check"><input type="checkbox" id="ir-speed" ${t.prioritize_speed ? 'checked' : ''}>`
+    + ` Prioritize speed — buy slow bulk materials to finish sooner</label>`,
+    'At 0% nothing is bought for being a small saving — there is no hidden floor under it.');
+}
+
+function _indRulesReactions(a) {
+  if (!_indRules.available.reactions) return '';
+  const p = (a.reactions || {}).policy || {};
+  const cats = (a.reactions || {}).categories || [];
+  const bought = new Set(p.buy_categories || []);
+  if (_indRulesMode === 'order') {
+    const on = ((_indRules.order || {}).values || {}).build_reactions;
+    return _indRuleRow('Reactions',
+      `<label class="ind-opt-check"><input type="checkbox" id="ir-rx-own" ${on ? 'checked' : ''}>`
+      + ` React this build's own materials, whatever the account rule says</label> ${_indInheritTag('build_reactions')}`,
+      `Account rule: ${bought.size ? _esc([...bought].join(', ')) + ' bought in' : 'all reactions made here'}.`);
+  }
+  return _indRuleRow('Reactions',
+    `<label class="ind-opt-check"><input type="checkbox" id="ir-rx-run" ${p.build_reactions !== false ? 'checked' : ''}`
+    + ` onchange="indRulesRxToggle(this)"> This account runs its own reactions</label>`
+    + `<div id="ir-rx-cats"${p.build_reactions === false ? ' style="display:none"' : ''}>`
+    + cats.map(c => `<label class="ind-opt-check" title="${_esc(c.description || '')}">`
+        + `<input type="checkbox" class="ir-rx-cat" data-key="${_esc(c.key)}" ${bought.has(c.key) ? 'checked' : ''}>`
+        + ` buy ${_esc(c.label)} instead</label>`).join('') + `</div>`,
+    (a.reactions || {}).defaulted
+      ? '<b>Still on the default</b> — composites &amp; intermediates are bought in. That is a default, not a choice you made.'
+      : '');
+}
+
+function _indRulesNeverBuild(a) {
+  if (!_indRules.available.never_build || _indRulesMode === 'order') return '';
+  const ids = (a.never_build || {}).type_ids || [];
+  return _indRuleRow('Never build',
+    ids.length
+      ? `<div class="ind-forced-chips">` + ids.map(t =>
+          `<span class="ind-never-badge">${_esc(_indRulesName(t))}`
+          + ` <button class="ind-link-btn" onclick="indRulesDropNeverBuild(${t})">×</button></span>`).join('') + `</div>`
+      : `<div class="ind-src-meta">Nothing — the cost engine decides every component.</div>`,
+    'Add one from the shopping list: any bought row has a "never build this" action.');
+}
+
+function _indRulesName(t) {
+  const hit = ((_indRules.account.never_build || {}).names || {})[t];
+  return hit || ('#' + t);
+}
+
+function _indRulesJobLength(a) {
+  if (!_indRules.available.job_length || _indRulesMode === 'order') return '';
+  const d = (a.job_length || {}).max_reaction_job_days;
+  return _indRuleRow('Longest reaction job',
+    `<input type="number" id="ir-joblen" min="0" step="0.5" style="width:80px" value="${d == null ? '' : d}"> days`,
+    'Blank or 0 = no ceiling. A reaction has no per-job run cap, so a big batch will otherwise sit in one slot for weeks.');
+}
+
+function _indRulesSources(a) {
+  if (!_indRules.available.sources) return '';
+  const srcs = (a.sources || {}).sources || [];
+  const chosen = _indRulesMode === 'order'
+    ? new Set(((_indRules.order || {}).values || {}).source_keys || [])
+    : new Set(srcs.filter(s => s.enabled).map(s => s.key));
+  if (!srcs.length) {
+    return _indRuleRow('Materials from',
+      `<div class="ind-src-meta">No boxes scanned yet — set them up under <b>Settings → Blueprints &amp; formulas</b>.</div>`);
+  }
+  return _indRuleRow('Materials from',
+    srcs.map(s => `<label class="ind-opt-check"><input type="checkbox" class="ir-src" data-key="${_esc(s.key)}"`
+      + ` ${chosen.has(s.key) ? 'checked' : ''}> ${_esc(s.name)}`
+      + (s.place ? ` <span class="ind-src-meta">${_esc(s.place)}</span>` : '')
+      + (s.corp ? ` <span class="ind-src-meta">corp</span>` : '') + `</label>`).join('')
+      + (_indRulesMode === 'order' ? ' ' + _indInheritTag('source_keys') : ''),
+    'Stock in a ticked box is spent before anything is bought.');
+}
+
+function _indRulesMargin(a) {
+  const m = _indRulesMode === 'order'
+    ? ((_indRules.order || {}).values || {}).margin_pct
+    : (a.margin || {}).margin_pct;
+  return _indRuleRow('Customer margin',
+    `<input type="number" id="ir-margin" min="0" max="100" step="0.5" style="width:80px"`
+    + ` value="${m == null ? '' : m}"> % over net cost `
+    + (_indRulesMode === 'order' ? _indInheritTag('margin_pct') : ''),
+    'Blank = the account default. Priced off NET cost, so over-production you keep is not billed twice.');
+}
+
+function _indRulesSectionsHtml() {
+  const a = _indRules.account;
+  return [_indRulesFacility(a), _indRulesThreshold(a), _indRulesReactions(a),
+          _indRulesNeverBuild(a), _indRulesJobLength(a), _indRulesSources(a),
+          _indRulesMargin(a)].filter(Boolean).join('');
+}
+
+function indRulesForceToggle(cb) {
+  const w = document.getElementById('ir-marg-wrap');
+  const r = document.getElementById('ir-marg');
+  if (r) r.disabled = cb.checked;
+  if (w) w.style.opacity = cb.checked ? '.45' : '';
+}
+
+function indRulesRxToggle(cb) {
+  const c = document.getElementById('ir-rx-cats');
+  if (c) c.style.display = cb.checked ? '' : 'none';
+}
+
+async function indRulesDropNeverBuild(typeId) {
+  const ids = ((_indRules.account.never_build || {}).type_ids || []).filter(t => t !== typeId);
+  try {
+    await apiSend('POST', '/api/industry/build-setup', { never_build: { type_ids: ids } });
+    await _indLoadRules(_indRulesOrderId);
+    _indRulesPaint();
+  } catch (e) { toastError(e, 'Could not update the never-build list'); }
+}
+
+// ── Account mode: the Settings section ────────────────────────────────────────────────────────
+async function _loadBuildRulesSettings() {
+  const body = document.getElementById('settingsSecBuildrulesBody');
+  if (!body) return;
+  _indRulesMode = 'account';
+  _indRulesOrderId = null;
+  try { await _indLoadRules(null); }
+  catch (e) { body.innerHTML = `<div class="ind-src-meta">Could not load build rules.</div>`; return; }
+  body.innerHTML = _indRulesSectionsHtml()
+    + `<div class="ind-src-actions"><button class="ind-bp-btn ind-bp-btn-primary" onclick="indSaveRules()">Save build rules</button>`
+    + `<span class="ind-src-meta" id="ir-saved"></span></div>`;
+}
+
+// ── Order mode: the dialog ────────────────────────────────────────────────────────────────────
+async function indOpenRules(orderId, label) {
+  const m = document.getElementById('indRulesModal');
+  if (!m) return;
+  _indRulesMode = orderId == null ? 'account' : 'order';
+  _indRulesOrderId = orderId;
+  m.style.display = 'flex';
+  document.getElementById('indRulesTitle').firstChild.textContent =
+    orderId == null ? 'Build setup ' : `Build setup — ${label || ('order #' + orderId)} `;
+  document.getElementById('indRulesBody').innerHTML = `<div class="ind-loading">Loading…</div>`;
+  try { await _indLoadRules(orderId); }
+  catch (e) { document.getElementById('indRulesBody').innerHTML =
+    `<div class="ind-src-meta">Could not load build rules.</div>`; return; }
+  _indRulesPaint();
+}
+
+function _indRulesPaint() {
+  const hint = document.getElementById('indRulesHint');
+  if (hint) {
+    hint.innerHTML = _indRulesMode === 'order'
+      ? `This build inherits your account rules. Only what you change here is stored on the order — `
+        + `everything else follows <b>Settings → Build rules</b> and keeps following it when you change it there.`
+      : `Your standing rules. Every build follows these unless it overrides one.`;
+  }
+  const body = document.getElementById('indRulesBody');
+  if (body) body.innerHTML = _indRulesSectionsHtml();
+}
+
+function indCloseRules() {
+  const m = document.getElementById('indRulesModal');
+  if (m) m.style.display = 'none';
+}
+
+// ── Save. Account mode writes the consolidated patch; order mode PATCHes the order, because an
+// override belongs to the order row and must not touch the account's standing rules.
+function _indRulesReadForm() {
+  const val = id => { const e = document.getElementById(id); return e ? e.value : null; };
+  const on = id => { const e = document.getElementById(id); return e ? e.checked : null; };
+  const cats = [...document.querySelectorAll('.ir-rx-cat')].filter(c => c.checked)
+    .map(c => c.dataset.key);
+  const srcs = [...document.querySelectorAll('.ir-src')].filter(c => c.checked)
+    .map(c => c.dataset.key);
+  return { val, on, cats, srcs };
+}
+
+async function indSaveRules() {
+  const f = _indRulesReadForm();
+  try {
+    if (_indRulesMode === 'order') {
+      const body = {};
+      const rx = f.on('ir-rx-own');
+      if (rx !== null) body.build_reactions = rx;
+      const mg = f.val('ir-margin');
+      body.margin_pct = (mg === '' || mg === null) ? null : parseFloat(mg);
+      if (_indRules.available.sources) body.source_keys = f.srcs;
+      await apiSend('PATCH', `/api/industry/orders/${_indRulesOrderId}`, body);
+      toast('Saved for this build', 'success');
+      indCloseRules();
+      if (typeof indRefreshStatus === 'function') indRefreshStatus();
+      return;
+    }
+    const patch = {};
+    patch.threshold = { marginal_pct: parseFloat(f.val('ir-marg')),
+                        force_build: f.on('ir-force'), prioritize_speed: f.on('ir-speed') };
+    const mg = f.val('ir-margin');
+    patch.margin = { margin_pct: (mg === '' || mg === null) ? null : parseFloat(mg) };
+    if (_indRules.available.reactions) {
+      patch.reactions = { build_reactions: f.on('ir-rx-run'), buy_categories: f.cats };
+    }
+    if (_indRules.available.job_length) {
+      const d = f.val('ir-joblen');
+      patch.job_length = { max_reaction_job_days: (d === '' || d === null) ? null : parseFloat(d) };
+    }
+    if (_indRules.available.sources && document.querySelector('.ir-src')) {
+      patch.sources = { keys: f.srcs, enabled: true };
+    }
+    const res = await apiSend('POST', '/api/industry/build-setup', patch);
+    _indRules.account = res.account;
+    const saved = document.getElementById('ir-saved');
+    if (saved) { saved.textContent = 'Saved.'; setTimeout(() => { saved.textContent = ''; }, 2500); }
+    toast('Build rules saved', 'success');
+    indCloseRules();
+    // The rules that were just changed are the ones the plan is priced against, so re-run it.
+    if (_indPicked && (document.getElementById('indResult') || {}).innerHTML) indRunPlan();
+  } catch (e) { toastError(e, 'Could not save'); }
+}
+
+// ── Read-only summaries, shown in place of the old strips once Build rules is on ───────────────
+// Each states what is in force and what it cost THIS build, and links into the section that set it.
+// The cost half is not decoration: a rule that quietly removes a whole sub-chain from the shopping
+// list — as the reaction policy did, taking a Revelation's carbon fibre from ~26k to 6.4k — has to
+// be legible where the number it changed is being read.
+function _indRuleSummary(label, state, cost, onclick) {
+  return `<div class="ind-forced-bar ind-rule-summary">`
+    + `<span class="ind-forced-lbl">${_esc(label)}:</span> <span>${state}</span>`
+    + (cost ? ` <span class="ind-rxp-delta">${cost}</span>` : '')
+    + ` <button class="ind-link-btn" onclick="${onclick}">change</button></div>`;
+}
+
+function _indRxSummaryBar(d) {
+  const pol = _indRxPolicy.policy || {};
+  const cats = _indRxPolicy.categories || [];
+  const bought = new Set(pol.buy_categories || []);
+  const some = cats.filter(c => bought.has(c.key));
+  const state = pol.build_reactions === false ? 'bought in, not made here'
+    : some.length ? `${_esc(some.map(c => c.label.toLowerCase()).join(', '))} bought in`
+    : 'made here';
+  const rp = (d && d.reaction_policy) || null;
+  let cost = '';
+  if (rp && rp.isk) {
+    const n = (rp.items || []).length;
+    const what = `${n} reaction output${n === 1 ? '' : 's'}`;
+    cost = rp.overridden ? `reacting ${what} here saves ${fmtIsk(rp.isk)}`
+      : rp.isk > 0 ? `buying ${what} in adds ${fmtIsk(rp.isk)} to this build`
+      : `buying ${what} in saves ${fmtIsk(-rp.isk)}`;
+  }
+  return _indRuleSummary('Reactions', state, cost, "openSettingsModal('buildrules')");
+}
