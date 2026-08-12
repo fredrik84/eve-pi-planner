@@ -355,6 +355,16 @@ FEATURE_REGISTRY = [
                     "character can reach it. Set the job length on the Reactions card to decide "
                     "how long a batch runs; the surplus from rounding up is stock.",
      "default": False},
+    {"key": "reactions_pack_hosts", "label": "Reactions: an order fills one character before it uses two",
+     "group": "Reactions",
+     "description": "A customer order is placed on the FEWEST characters whose reactors can hold "
+                    "it, instead of being shared out across every character with a free slot. The "
+                    "jobs are the same jobs and they finish at the same time — parallelism comes "
+                    "from reactors, not from characters — so the only thing that changes is how "
+                    "many characters you log in to install and collect it. An order spills onto a "
+                    "second character exactly when the first runs out of reactors, which is the "
+                    "point at which spreading it genuinely does make it finish sooner.",
+     "default": False},
     {"key": "reactions_missing_formulas", "label": "Reactions: formulas you need to acquire",
      "group": "Reactions",
      "description": "Once you have PASTED your industry window, a formula you never declared is "

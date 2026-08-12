@@ -19,6 +19,7 @@ Find a section: `grep -n '^## ' docs/reactions.md` and read from that line — t
 - **Landing a stage in one go (`_align_stage_jobs`)** — why the spread matters more than the total, and what moves to close it
 - **One request, one answer (`request_memo`)** — why an order report was rebuilding the same evidence five times
 - **An order's runs follow capacity, not fairness (reverted experiment)** — why hosts get different run counts, and what the even split cost
+- **An order fills one character before it uses two (`reactions_pack_hosts`)** — why packing is free, and how it differs from the reverted even split
 - **One run count per product per stage (`level_stage_runs`)** — why levelling across assigns is sound, and what it deliberately doesn't touch
 - **One run count per product, across every character (`reactions_level_runs`)** — the cross-character leveller: how the number is chosen, why it also saves slots, and the one thing it still can't merge
 - **Run counts you can type (`reactions_tidy_runs`)** — bounded rounding of intermediate runs, and why the end product is never rounded
@@ -322,6 +323,36 @@ handing a 2-slot character the same 250 runs as a 10-slot one put a single step 
 two goals genuinely conflict and finishing sooner wins. If it is revisited, the answer is not an
 even split but a bound on how far apart hosts may FINISH — pick the hosts whose capacity is
 comparable, split evenly among those, and leave the rest out of the order.
+
+## An order fills one character before it uses two (`reactions_pack_hosts`)
+
+Reported from use: *"the Customer Order slot assignment spreads it over multiple characters when
+there's free slots for a single one. It's less logins and management to just do as much as possible
+on 1 character and then overflow to 1 other, then 1 other."*
+
+**Packing costs nothing, and that is the whole argument.** Parallelism comes from REACTORS, not from
+characters. Twelve jobs sitting on one character's twelve free reactors start together and finish
+together with the same twelve spread four-and-four-and-two-and-two across four characters. The split
+bought no time at all and cost three extra logins to install and three more to collect — pure
+overhead against the constraint the whole tool is built around.
+
+So `_allocate_and_insert` takes hosts roomiest-first only until their free slots cover the work
+(`_pack_hosts`), and stops. An order spills onto a second character exactly when the first runs out
+of reactors, which is the one case where spreading genuinely does land it sooner.
+
+**What "cover the work" means.** `_useful_slots` is `_fit_chain_slots`' own stopping rule read
+account-wide: a tier can use no more jobs than it has runs, or than there are formulas of it
+(`formula_concurrency_caps`), because past that point a slot only buys an empty job. It is
+deliberately the SUM over the chain's tiers, in the units a host's `free_slots` is spent in, even
+though a chain's stages run sequentially and never occupy all of them at once
+(`_concurrent_load`). That over-states occupancy and so errs towards one host more than strictly
+needed — never towards cramming an order onto a character that cannot install it.
+
+**This is not the reverted even split** (see "An order's runs follow capacity, not fairness"). That
+experiment changed the JOBS, handing a 2-slot character the same 250 runs as a 10-slot one and
+putting a single step at 14 days. Here the job layout is untouched — only which characters hold it
+changes, and a host still takes a share proportional to its own reactors. Flagged because it moves
+where live orders get placed, not because the reasoning is in doubt.
 
 ## One run count per product per stage (`level_stage_runs`)
 
