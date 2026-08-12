@@ -365,6 +365,15 @@ FEATURE_REGISTRY = [
                     "second character exactly when the first runs out of reactors, which is the "
                     "point at which spreading it genuinely does make it finish sooner.",
      "default": False},
+    {"key": "reactions_stage_pipeline", "label": "Reactions: stages drawn as a pipeline, like builds",
+     "group": "Reactions",
+     "description": "The 'to install' list becomes the same pipeline the Industry tab draws for a "
+                    "build: columns are the stages, rows are your characters, and each cell is what "
+                    "that character installs at that stage — so a stage looks and reads the same "
+                    "wherever you meet it. Nothing about the plan changes, only how it is drawn: "
+                    "the same jobs, run counts and stage order as the table it replaces, with the "
+                    "stages you cannot start yet marked as waiting on the one below.",
+     "default": False},
     {"key": "reactions_missing_formulas", "label": "Reactions: formulas you need to acquire",
      "group": "Reactions",
      "description": "Once you have PASTED your industry window, a formula you never declared is "

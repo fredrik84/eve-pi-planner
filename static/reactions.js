@@ -436,6 +436,78 @@ function _rxStageReady(data) {
 // pages start looking like different products.
 let _rxMissSeq = 0;
 
+// The stage list drawn the way Manufacturing draws its build pipeline: columns are stages, rows
+// are the characters holding work, a cell is what that character installs at that stage. The grid,
+// the cards and the classes are Manufacturing's own (`_indPipelineHtml`, `.ind-pipe*`) rather than
+// a lookalike — a stage is the same idea on both tabs, and two different pictures of it was the
+// complaint. Reusing the stylesheet is also what stops them drifting apart again.
+//
+// Rows are CHARACTERS because that is the constraint the plan is built around: an intermediate has
+// to be on the character reacting the thing above it, so a chain never splits and a row is exactly
+// one login's worth of work. Manufacturing's rows are buildings for the same reason — the row is
+// wherever the work physically has to happen.
+function _rxPipelineHtml(todoRows, readyStages) {
+  if (!todoRows.length) return '';
+  const tiers = [...new Set(todoRows.map(g => g.tier))].sort((a, b) => a - b);
+  const chars = [];
+  todoRows.forEach(g => {
+    if (!chars.some(c => c.id === g.character_id)) {
+      chars.push({ id: g.character_id, name: g.character_name });
+    }
+  });
+  chars.sort((a, b) => a.name.localeCompare(b.name));
+  // Ready is per (character, stage): any chain of theirs at that stage whose inputs have landed.
+  // Stage 1 needs nothing to finish first, so it is always installable.
+  const ready = (cid, tier) => tier <= 0
+    || [...readyStages.entries()].some(([k, v]) => v && k.startsWith(`${cid}:`) && k.endsWith(`:${tier}`));
+  const anyReady = tier => chars.some(c => ready(c.id, tier));
+
+  let html = '<div class="ind-pipe-corner"></div>';
+  tiers.forEach((tier, i) => {
+    const jobs = todoRows.filter(g => g.tier === tier).reduce((s, g) => s + g.count, 0);
+    const last = i === tiers.length - 1;
+    html += `<div class="ind-pipe-hd${last ? ' ind-pipe-hd-final' : ' ind-pipe-hd-flow'}"`
+      + ` title="${_esc(_rxStageLabel(tier, anyReady(tier)))}">`
+      + `Stage ${tier + 1}<span>${jobs}</span></div>`;
+  });
+
+  chars.forEach(c => {
+    const mine = todoRows.filter(g => g.character_id === c.id);
+    const jobs = mine.reduce((s, g) => s + g.count, 0);
+    html += `<div class="ind-pipe-rowlbl ind-row-rx">`
+      + `<span class="ind-pipe-rowname">${_esc(c.name)}</span>`
+      + `<span class="ind-pipe-rowsub" title="${jobs} job${jobs === 1 ? '' : 's'} to install">`
+      + `${jobs} job${jobs === 1 ? '' : 's'}</span></div>`;
+    tiers.forEach((tier, i) => {
+      const last = i === tiers.length - 1;
+      const cards = mine.filter(g => g.tier === tier).map(g => {
+        // The run count is the number you type into the job, and the job count is how many times
+        // you type it — the two things the player is actually reading this to find out.
+        const isReady = ready(c.id, tier);
+        let state = '';
+        if (tier > 0) {
+          state = isReady
+            ? '<span class="ind-pipe-state ind-st-run">ready</span>'
+            : `<span class="ind-pipe-state ind-st-wait">after stage ${tier}</span>`;
+        }
+        const tip = `${g.name} — ${g.count} job${g.count === 1 ? '' : 's'} of ${g.totalRuns.toLocaleString()} runs`
+          + ` on ${c.name}${tier > 0 ? ' — ' + _rxStageLabel(tier, isReady) : ''}`;
+        return `<div class="ind-pipe-card ind-pipe-build" data-tid="${g.type_id}" title="${_esc(tip)}">`
+          + `<span class="ind-pipe-name">${_esc(g.name)}</span>`
+          + `<span class="ind-pipe-meta"><span class="ind-pipe-qty">×${g.totalRuns.toLocaleString()}</span>`
+          + `<span class="ind-pipe-runs">${g.count}&nbsp;job${g.count === 1 ? '' : 's'}</span>${state}</span></div>`;
+      }).join('');
+      html += `<div class="ind-pipe-cell ind-row-rx${last ? ' ind-pipe-final' : ''}">${cards}</div>`;
+    });
+  });
+
+  const totalRuns = todoRows.reduce((s, g) => s + g.totalRuns, 0);
+  return `<details class="ind-details" open><summary>Reaction pipeline</summary>`
+    + `<p class="ind-pipe-hint">Each row is a character, each column a stage — ${totalRuns.toLocaleString()} runs`
+    + ` to install${tiers.length > 1 ? `, in ${tiers.length} stages you start in order` : ''}.</p>`
+    + `<div class="ind-pipe-scroll"><div class="ind-pipe" style="--ind-cols:${tiers.length}">${html}</div></div></details>`;
+}
+
 // Stages a plan does NOT have to run because the intermediate is already in an enabled stock
 // source. Said out loud wherever it applies: a stage that silently disappears from a chain reads
 // as the tool losing a step, not as it saving you one.
@@ -676,7 +748,8 @@ function _renderReactionsDashboard(data) {
       const key = `${c.character_id}:${a.type_id}:${tier}`;
       if (!todoGroups.has(key)) {
         todoGroups.set(key, {
-          character_name: c.character_name, type_id: a.type_id, name: a.name, tier,
+          character_id: c.character_id, character_name: c.character_name,
+          type_id: a.type_id, name: a.name, tier,
           count: 0, totalRuns: 0, jobRuns: new Map(), ids: [],
         });
       }
@@ -798,7 +871,12 @@ function _renderReactionsDashboard(data) {
         <td><b>${g.totalRuns.toLocaleString()}</b></td>
       </tr>`;
   };
-  const todoListHtml = !todoRows.length ? '' : `
+  // The same rows, drawn as Manufacturing's pipeline instead of a stage-bannered table. One
+  // surface replaces the other rather than sitting beside it: two readings of the same list is
+  // exactly the inconsistency this is here to remove.
+  const todoListHtml = _featureActive('reactions_stage_pipeline')
+    ? _rxPipelineHtml(todoRows, _rxReadyStages)
+    : !todoRows.length ? '' : `
     <div class="pp-card-hint" style="font-weight:600;margin:2px 0 4px">
       To install — ${todoRows.reduce((s, g) => s + g.totalRuns, 0).toLocaleString()} runs across ${todoRows.length} product${todoRows.length === 1 ? '' : 's'}${todoStages.length > 1 ? `, in ${todoStages.length} stages` : ''}
     </div>

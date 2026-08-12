@@ -26,6 +26,7 @@ Find a section: `grep -n '^## ' docs/reactions.md` and read from that line — t
 - **A stage is a DEPTH, not a position in a list** — why siblings share a stage, and how existing rows were repaired
 - **Knowing when the next stage can start (`chain_stage_state`)** — the ESI signal behind "stage 2 is ready"
 - **Stages on the dashboard are `tier_order`, shown absolute** — how chain order is rendered, and why the number is never re-ranked
+- **The stage list is Manufacturing's pipeline (`reactions_stage_pipeline`)** — why the two tabs share a grid, and why rows are characters
 - **Pricing: a sell-order price is not achievable profit** — the pricing rule that governs every profit figure shown for reaction goods
 - **Where the rest lives** — pointers to reaction content that belongs to another service
 
@@ -635,6 +636,31 @@ a reactor collapse.
 Empty squares are counted against the **peak stage** rather than the row count, so a queued later
 stage no longer hides free reactors; `free_slots / slots` on the row label stays the authoritative
 number, and the "To install" checklist below still lists every job.
+
+## The stage list is Manufacturing's pipeline (`reactions_stage_pipeline`)
+
+Reported from use: *"the list of stages can be condensed to the same way we do build pipeline in
+manufacturing. So we have a consistent way of displaying data."*
+
+The "To install" table grouped its rows under stage BANNERS — a stage was a horizontal rule in a
+list. Industry draws the identical idea as a grid: columns are stages, rows are where the work
+physically happens, cells are the steps. Two pictures of one concept, on two tabs of one tool.
+
+`_rxPipelineHtml` renders the same `todoGroups` rows into that grid, **reusing Manufacturing's own
+`.ind-pipe*` classes rather than cloning them into `rx-` lookalikes.** The stylesheet is what stops
+the two drifting apart again, which is the actual complaint — a private copy would look consistent
+on the day it shipped and not six months later.
+
+**Rows are characters, and that is not an arbitrary mapping.** Manufacturing's rows are buildings
+because a build happens in one. A reaction chain's intermediate has to be in the hangar of the
+character reacting the thing above it (`_allocate_and_insert` — a chain never splits across
+characters), so the character IS the place the work happens, and a row is exactly one login's worth
+of it. Columns carry the stage's total job count in the header; a cell carries the product, its
+total runs, how many jobs to install, and — for anything past stage 1 — whether its inputs have
+landed (`chain_stage_state`) or it is still waiting on the stage below.
+
+It REPLACES the table rather than sitting beside it. Two readings of one list is the inconsistency
+being removed, so shipping both would have been the bug.
 
 ## Pricing: a sell-order price is not achievable profit
 
