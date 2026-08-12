@@ -213,6 +213,8 @@ def set_reaction_policy(context_id: int, build_reactions: bool, buy_categories: 
     """Replace the account's reaction build policy. Its OWN write path, like `set_blacklist` and for
     the same reason: the settings PUT is a debounced save of the whole plan form, so every knob move
     would carry a stale policy along with it and quietly undo a change made elsewhere on the page."""
+    from app.industry.graph import clear_account_snapshot
+    clear_account_snapshot(context_id)
     from app.industry.categories import REACTION_CATEGORIES
     ensure_industry_settings_table()
     policy = {"build_reactions": bool(build_reactions),
@@ -350,6 +352,8 @@ def set_component_rules(context_id: int, never: list[int], always: list[int]) ->
     `always` wins a collision: it is the more specific instruction — the same precedence the
     resolver already applies.
     """
+    from app.industry.graph import clear_account_snapshot
+    clear_account_snapshot(context_id)
     ensure_industry_settings_table()
     a = sorted({int(t) for t in (always or [])})
     n = sorted({int(t) for t in (never or [])} - set(a))
@@ -473,6 +477,8 @@ def save_settings(context_id: int, fields: dict) -> None:
     off presence rather than value serves both, and it is why there is one column list here instead
     of the same SQL written twice.
     """
+    from app.industry.graph import clear_account_snapshot
+    clear_account_snapshot(context_id)
     use = {k: v for k, v in fields.items() if k in _SETTINGS_COLUMNS}
     if not use:
         return

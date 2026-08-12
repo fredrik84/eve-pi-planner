@@ -447,6 +447,10 @@ def _store(context_id: int, sources: dict, stock: dict, scope_keys: set[str],
     ensure_asset_tables()
     if not scope_keys and not scope:
         return
+    # Stock feeds `formula_print_floor`, which is part of the account snapshot every plan is built
+    # from — see graph._account_snapshot.
+    from app.industry.graph import clear_account_snapshot
+    clear_account_snapshot(context_id)
     con = get_connection()
     try:
         keys = list(scope_keys) or ["\x00none"]     # a non-key, so the IN clause stays valid
@@ -716,6 +720,9 @@ def list_sources(context_id: int) -> list[dict]:
 
 
 def set_sources(context_id: int, keys: list[str], enabled: bool) -> None:
+    # Stock feeds `formula_print_floor`, which is in the account snapshot every plan is built from.
+    from app.industry.graph import clear_account_snapshot
+    clear_account_snapshot(context_id)
     ensure_asset_tables()
     con = get_connection()
     try:

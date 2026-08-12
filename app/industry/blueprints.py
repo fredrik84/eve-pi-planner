@@ -834,9 +834,14 @@ def refresh_blueprints(context_id: int = Depends(require_context)):
     """Re-read owned blueprints from ESI for the caller's characters that granted the blueprint
     scope. Best-effort per character — one failure never blocks the others."""
     ensure_char_blueprints_table()
-    return refresh_character_cache(
+    out = refresh_character_cache(
         context_id, scope=BLUEPRINTS_SCOPE, table="pp_char_blueprints",
         column="blueprints_json", fetch=fetch_character_blueprints)
+    # The account snapshot every plan is built from holds this reading — see graph._account_snapshot.
+    # Dropping it here is what makes a refresh visible on the next plan instead of up to a TTL later.
+    from app.industry.graph import clear_account_snapshot
+    clear_account_snapshot(context_id)
+    return out
 
 
 # ── The industry window, pasted ───────────────────────────────────────────────────────────────
@@ -1343,6 +1348,11 @@ def _manual_payload(context_id: int) -> dict:
     """Every declared row plus the product name, so the settings list reads as items rather than
     ids. `enabled` says whether the planner is actually consuming them — a list the plan ignores
     must not look like one it obeys."""
+    # Every manual-blueprint write returns through here, and a declared print changes the ME/TE the
+    # plan is built on — so the account snapshot must not outlive the edit. Also fires on the plain
+    # read, which is a rare settings-page call and costs one extra rebuild rather than a wrong plan.
+    from app.industry.graph import clear_account_snapshot
+    clear_account_snapshot(context_id)
     ensure_manual_blueprints_table()
     con = get_connection()
     try:

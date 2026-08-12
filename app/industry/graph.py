@@ -942,22 +942,44 @@ def _fallback_build_system(context_id: int, tax: float) -> tuple[int, float, str
     return _REFERENCE_SYSTEM_ID, tax, "reference"
 
 
-def resolve_build_params(context_id: int, me_pct: float, te_pct: float,
-                         system_id: int | None, facility_tax_pct: float | None,
-                         max_build_hours: float = 0.0,
-                         struct_material_pct: float = 0.0, struct_time_pct: float = 0.0,
-                         marginal_pct: float | None = None, force_build: bool = False,
-                         force_build_ids: list[int] | None = None,
-                         margin_pct: float | None = None,
-                         never_build_ids: list[int] | None = None) -> BuildParams:
-    """Build the resolver's params, auto-deriving the build system + tax from the account's
-    Reactions settings when the request didn't override them — so the caller needn't supply a
-    system id or tax by hand."""
-    d_sid, d_tax, basis = account_build_defaults(context_id, with_basis=True)
-    sid = system_id if system_id is not None else d_sid
-    tax = facility_tax_pct if facility_tax_pct is not None else d_tax
-    if system_id is not None:
-        basis = "request"          # the caller named a system; nothing was defaulted
+# ── Per-account snapshot ──────────────────────────────────────────────────────────────────────
+# Measured on prod before this existed: `resolve_build_params` cost 1.3-4.9s of a page load whose
+# actual PLANNING was 30ms. All of it is per-account reads — the blueprint holding, its coverage,
+# declared products, stock formula prints, the account's skills and its build defaults — and none
+# of them change between the two calls a single page load makes, so the whole cost was paid twice
+# for an identical answer.
+#
+# Cached here rather than caching `resolve_build_params` itself, deliberately: that function also
+# takes the REQUEST's knobs (me_pct, marginal_pct, force_build, the per-order id lists), so keying a
+# cache on all of them would either explode or — far worse — hand back a params object built with
+# somebody else's ME. What is cached is only the part that depends on nothing but the account.
+#
+# The TTL is short and the invalidation is explicit: anything that writes one of these reads calls
+# `clear_account_snapshot`. The TTL is the backstop for what that misses, not the mechanism.
+_ACCOUNT_CACHE: dict[int, tuple[float, dict]] = {}
+_ACCOUNT_TTL = 90.0
+
+
+def clear_account_snapshot(context_id: int | None = None):
+    """Drop a context's cached account reads — or every context when called bare. Called by the
+    writes that can change any of them: a blueprint or asset refresh, a skills scan, a settings
+    save. A miss here costs one slow plan; a stale hit costs a plan built on numbers the user has
+    just changed and can see are wrong, so this errs towards dropping too much."""
+    if context_id is None:
+        _ACCOUNT_CACHE.clear()
+    else:
+        _ACCOUNT_CACHE.pop(int(context_id), None)
+
+
+def _account_snapshot(context_id: int) -> dict:
+    """Everything `resolve_build_params` reads that depends only on the ACCOUNT."""
+    import time as _t
+    hit = _ACCOUNT_CACHE.get(context_id)
+    now = _t.time()
+    if hit and now - hit[0] < _ACCOUNT_TTL:
+        return hit[1]
+
+    defaults = account_build_defaults(context_id, with_basis=True)
     # Auto per-product ME/TE from the account's real owned blueprints (empty if not connected).
     try:
         from app.industry.blueprints import owned_blueprints, blueprint_coverage
@@ -987,13 +1009,44 @@ def resolve_build_params(context_id: int, me_pct: float, te_pct: float,
             stock_prints = formula_print_floor(context_id, owned)
     except Exception:
         stock_prints = {}
+
+    snap = {"defaults": defaults, "owned": owned, "coverage": coverage, "declared": declared,
+            "stock_prints": stock_prints,
+            "skills": account_industry_time_mults(context_id, with_basis=True)}
+    _ACCOUNT_CACHE[context_id] = (now, snap)
+    return snap
+
+
+def resolve_build_params(context_id: int, me_pct: float, te_pct: float,
+                         system_id: int | None, facility_tax_pct: float | None,
+                         max_build_hours: float = 0.0,
+                         struct_material_pct: float = 0.0, struct_time_pct: float = 0.0,
+                         marginal_pct: float | None = None, force_build: bool = False,
+                         force_build_ids: list[int] | None = None,
+                         margin_pct: float | None = None,
+                         never_build_ids: list[int] | None = None) -> BuildParams:
+    """Build the resolver's params, auto-deriving the build system + tax from the account's
+    Reactions settings when the request didn't override them — so the caller needn't supply a
+    system id or tax by hand."""
+    snap = _account_snapshot(context_id)
+    d_sid, d_tax, basis = snap["defaults"]
+    sid = system_id if system_id is not None else d_sid
+    tax = facility_tax_pct if facility_tax_pct is not None else d_tax
+    if system_id is not None:
+        basis = "request"          # the caller named a system; nothing was defaulted
+    owned, coverage = snap["owned"], snap["coverage"]
+    declared, stock_prints = snap["declared"], snap["stock_prints"]
     # The per-product aggregate is a runs-weighted figure over the WHOLE holding, not the best copy:
     # crediting a 20-run batch with the ME of a 5-run copy under-states its materials. The per-JOB
     # value comes off the copies themselves (BuildParams.me_te_for / build_tasks). This map is only
     # the fallback for a product with no copies to read.
+    #
+    # NOT cached with the rest: it takes the caller's me_pct/te_pct as the fallback, so it is a
+    # function of the REQUEST as well as the account. It is pure CPU over data already in hand,
+    # which is not what made this function slow.
     me_by_product = {p: blend_me_te(o.get("copies") or [o], None, (me_pct, te_pct))
                      for p, o in owned.items()}
-    mfg_skill, rx_skill, skill_basis = account_industry_time_mults(context_id, with_basis=True)
+    mfg_skill, rx_skill, skill_basis = snap["skills"]
     _marg = (MARGINAL_BUILD_PCT_OF_TOTAL if marginal_pct is None
              else max(0.0, min(25.0, float(marginal_pct))))
     return BuildParams(
