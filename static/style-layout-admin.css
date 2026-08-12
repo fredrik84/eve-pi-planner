@@ -1594,3 +1594,29 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
    reach for, not the primary way progress is recorded (that is ESI). */
 .ind-step-done-all { margin-left: auto; font-size: 11px; white-space: nowrap; }
 .ind-step-hd { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+
+/* Build rules: stacked checkbox groups. These were inline .ind-opt-check labels sharing one row,
+   which read as a cramped run-on line once a group had three or more entries. */
+.ind-rule-checks { display: flex; flex-direction: column; gap: 5px; }
+.ind-rule-checks .ind-opt-check { display: flex; align-items: baseline; gap: 7px; }
+
+/* One row per overruled component: name, which rule it is under, and a way to drop it. */
+.ind-rule-list { display: flex; flex-direction: column; gap: 4px; }
+.ind-rule-item { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+.ind-rule-item-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+                      white-space: nowrap; font-size: 13px; }
+/* A two-way segmented control, not two checkboxes: the rules are mutually exclusive and the
+   control should say so by construction. */
+.ind-rule-seg { display: inline-flex; border: 1px solid var(--clr-border); border-radius: 6px;
+                overflow: hidden; flex-shrink: 0; }
+.ind-rule-segbtn { border: 0; background: none; color: var(--clr-text-dim); cursor: pointer;
+                   font-size: 11px; padding: 4px 10px; white-space: nowrap; }
+.ind-rule-segbtn + .ind-rule-segbtn { border-left: 1px solid var(--clr-border); }
+.ind-rule-segbtn:hover { color: var(--clr-text); }
+.ind-rule-segbtn.on { background: var(--clr-accent); color: #0d1017; font-weight: 600; }
+.ind-rule-add { position: relative; margin-top: 8px; }
+.ind-rule-add input { width: 100%; max-width: 320px; }
+.ind-rule-sugg { display: flex; flex-direction: column; margin-top: 4px; max-width: 320px; }
+.ind-rule-sugg-hit { text-align: left; border: 0; background: none; color: var(--clr-text);
+                     cursor: pointer; padding: 5px 8px; font-size: 12px; border-radius: 5px; }
+.ind-rule-sugg-hit:hover { background: var(--clr-border); }

@@ -17,6 +17,7 @@ async function onIndustryTabOpen() {
   // (they live in the shared Structures & Markets settings). indPopulateFacility fills the facility
   // map with your structures, so we can tell from it whether a build structure exists yet.
   await indPopulateFacility();
+  indApplyBuildRulesGate();     // the way in to the standing rules, if this account has the surface
   _indRestoringSettings = true;
   await _indApplySavedSettings();
   indRestoreMarginal();
@@ -4231,7 +4232,7 @@ function _indRulesReactions(a) {
   return _indRuleRow('Reactions',
     `<label class="ind-opt-check"><input type="checkbox" id="ir-rx-run" ${p.build_reactions !== false ? 'checked' : ''}`
     + ` onchange="indRulesRxToggle(this)"> This account runs its own reactions</label>`
-    + `<div id="ir-rx-cats"${p.build_reactions === false ? ' style="display:none"' : ''}>`
+    + `<div id="ir-rx-cats" class="ind-rule-checks"${p.build_reactions === false ? ' style="display:none"' : ''}>`
     + cats.map(c => `<label class="ind-opt-check" title="${_esc(c.description || '')}">`
         + `<input type="checkbox" class="ir-rx-cat" data-key="${_esc(c.key)}" ${bought.has(c.key) ? 'checked' : ''}>`
         + ` buy ${_esc(c.label)} instead</label>`).join('') + `</div>`,
@@ -4240,21 +4241,93 @@ function _indRulesReactions(a) {
       : '');
 }
 
-function _indRulesNeverBuild(a) {
-  if (!_indRules.available.never_build || _indRulesMode === 'order') return '';
-  const ids = (a.never_build || {}).type_ids || [];
-  return _indRuleRow('Never build',
-    ids.length
-      ? `<div class="ind-forced-chips">` + ids.map(t =>
-          `<span class="ind-never-badge">${_esc(_indRulesName(t))}`
-          + ` <button class="ind-link-btn" onclick="indRulesDropNeverBuild(${t})">×</button></span>`).join('') + `</div>`
-      : `<div class="ind-src-meta">Nothing — the cost engine decides every component.</div>`,
-    'Add one from the shopping list: any bought row has a "never build this" action.');
+// One list, one rule per component. Two lists ("never build" / "build anyway") were one list
+// wearing two hats: a component is always-buy, always-build, or left to the cost engine, and it
+// cannot be two of those. A row per type with a two-way toggle makes the exclusion visible and
+// makes changing your mind one click instead of a delete here and an add there.
+function _indRulesComponents(a) {
+  if (!_indRules.available.components || _indRulesMode === 'order') return '';
+  const items = (a.components || {}).items || [];
+  const rows = items.length
+    ? `<div class="ind-rule-list">` + items.map(it =>
+        `<div class="ind-rule-item"><span class="ind-rule-item-name">${_esc(it.name)}</span>`
+        + `<span class="ind-rule-seg">`
+        + `<button class="ind-rule-segbtn${it.rule === 'build' ? ' on' : ''}"`
+        + ` onclick="indRulesSetComponent(${it.type_id}, 'build')"`
+        + ` title="Build this whatever the shortcuts say">always build</button>`
+        + `<button class="ind-rule-segbtn${it.rule === 'buy' ? ' on' : ''}"`
+        + ` onclick="indRulesSetComponent(${it.type_id}, 'buy')"`
+        + ` title="Always buy this, whatever the cost engine works out">always buy</button>`
+        + `</span>`
+        + `<button class="ind-link-btn" onclick="indRulesSetComponent(${it.type_id}, null)"`
+        + ` title="Remove the rule — let the cost engine decide again">×</button></div>`).join('')
+      + `</div>`
+    : `<div class="ind-src-meta">No overrules — the cost engine decides every component.</div>`;
+  return _indRuleRow('Components',
+    rows
+    + `<div class="ind-rule-add">`
+    + `<input type="text" id="ir-comp-q" placeholder="Add a component…" autocomplete="off"`
+    + ` oninput="indRulesCompSearch()" onkeydown="if(event.key==='Escape')indRulesCompClear()">`
+    + `<div class="ind-rule-sugg" id="ir-comp-sugg"></div></div>`,
+    'A rule here applies to every build. A single order can still overrule it for itself.');
 }
 
-function _indRulesName(t) {
-  const hit = ((_indRules.account.never_build || {}).names || {})[t];
-  return hit || ('#' + t);
+let _indCompSearchT = null;
+function indRulesCompClear() {
+  const el = document.getElementById('ir-comp-sugg');
+  if (el) el.innerHTML = '';
+}
+
+function indRulesCompSearch() {
+  clearTimeout(_indCompSearchT);
+  _indCompSearchT = setTimeout(async () => {
+    const q = (document.getElementById('ir-comp-q') || {}).value || '';
+    const box = document.getElementById('ir-comp-sugg');
+    if (!box) return;
+    if (q.trim().length < 2) { box.innerHTML = ''; return; }
+    let hits = [];
+    try { hits = (await api('/api/industry/search?q=' + encodeURIComponent(q.trim()))) || []; }
+    catch (e) { box.innerHTML = ''; return; }
+    const have = new Set(((_indRules.account.components || {}).items || []).map(i => i.type_id));
+    box.innerHTML = (hits.items || hits).slice(0, 8).filter(h => !have.has(h.type_id)).map(h =>
+      `<button class="ind-rule-sugg-hit" onclick="indRulesAddComponent(${h.type_id})">`
+      + `${_esc(h.name)}</button>`).join('') || `<div class="ind-src-meta">No match.</div>`;
+  }, 220);
+}
+
+function indRulesAddComponent(typeId) {
+  const q = document.getElementById('ir-comp-q');
+  if (q) q.value = '';
+  indRulesCompClear();
+  // New rules default to "always buy": that is what the old blacklist meant, so an existing habit
+  // keeps working, and it is the safer of the two — buying something you could have built costs
+  // ISK, while building something you cannot costs a plan that will not run.
+  return indRulesSetComponent(typeId, 'buy');
+}
+
+// `rule` null removes the overrule entirely. Written straight through rather than collected on
+// Save: this list is edited by clicking, and a click that looks like it took effect has to have.
+async function indRulesSetComponent(typeId, rule) {
+  const items = ((_indRules.account.components || {}).items || [])
+    .filter(i => i.type_id !== typeId);
+  if (rule) items.push({ type_id: typeId, rule });
+  try {
+    const res = await apiSend('POST', '/api/industry/build-setup', { components: { items } });
+    _indRules.account = res.account;
+    _indRulesRepaintOpen();
+  } catch (e) { toastError(e, 'Could not save'); }
+}
+
+// Repaint whichever surface is showing — the Settings pane or the order dialog.
+function _indRulesRepaintOpen() {
+  const pane = document.getElementById('settingsSecBuildrulesBody');
+  const modal = document.getElementById('indRulesModal');
+  if (modal && modal.style.display !== 'none') { _indRulesPaint(); return; }
+  if (pane) {
+    pane.innerHTML = _indRulesSectionsHtml()
+      + `<div class="ind-src-actions"><button class="ind-bp-btn ind-bp-btn-primary" onclick="indSaveRules()">Save build rules</button>`
+      + `<span class="ind-src-meta" id="ir-saved"></span></div>`;
+  }
 }
 
 function _indRulesJobLength(a) {
@@ -4276,10 +4349,11 @@ function _indRulesSources(a) {
       `<div class="ind-src-meta">No boxes scanned yet — set them up under <b>Settings → Blueprints &amp; formulas</b>.</div>`);
   }
   return _indRuleRow('Materials from',
-    srcs.map(s => `<label class="ind-opt-check"><input type="checkbox" class="ir-src" data-key="${_esc(s.key)}"`
+    `<div class="ind-rule-checks">` + srcs.map(s => `<label class="ind-opt-check"><input type="checkbox" class="ir-src" data-key="${_esc(s.key)}"`
       + ` ${chosen.has(s.key) ? 'checked' : ''}> ${_esc(s.name)}`
       + (s.place ? ` <span class="ind-src-meta">${_esc(s.place)}</span>` : '')
       + (s.corp ? ` <span class="ind-src-meta">corp</span>` : '') + `</label>`).join('')
+      + `</div>`
       + (_indRulesMode === 'order' ? ' ' + _indInheritTag('source_keys') : ''),
     'Stock in a ticked box is spent before anything is bought.');
 }
@@ -4298,7 +4372,7 @@ function _indRulesMargin(a) {
 function _indRulesSectionsHtml() {
   const a = _indRules.account;
   return [_indRulesFacility(a), _indRulesThreshold(a), _indRulesReactions(a),
-          _indRulesNeverBuild(a), _indRulesJobLength(a), _indRulesSources(a),
+          _indRulesComponents(a), _indRulesJobLength(a), _indRulesSources(a),
           _indRulesMargin(a)].filter(Boolean).join('');
 }
 
@@ -4312,15 +4386,6 @@ function indRulesForceToggle(cb) {
 function indRulesRxToggle(cb) {
   const c = document.getElementById('ir-rx-cats');
   if (c) c.style.display = cb.checked ? '' : 'none';
-}
-
-async function indRulesDropNeverBuild(typeId) {
-  const ids = ((_indRules.account.never_build || {}).type_ids || []).filter(t => t !== typeId);
-  try {
-    await apiSend('POST', '/api/industry/build-setup', { never_build: { type_ids: ids } });
-    await _indLoadRules(_indRulesOrderId);
-    _indRulesPaint();
-  } catch (e) { toastError(e, 'Could not update the never-build list'); }
 }
 
 // ── Account mode: the Settings section ────────────────────────────────────────────────────────
@@ -4509,4 +4574,12 @@ function _indStageTypeIds(stageIdx) {
   const need = {};
   ((_indProgress && _indProgress.types) || []).forEach(t => { need[t.type_id] = t.required_runs; });
   return (col.builds || []).map(b => b.type_id).filter(t => need[t]);
+}
+
+// Show the way in to the standing rules on the plan form itself. A page whose every number is
+// shaped by rules it never mentions is how those rules went unfound in the first place — so this
+// is a control, not a sentence in a hint nobody reads.
+function indApplyBuildRulesGate() {
+  const b = document.getElementById('indBuildRulesBtn');
+  if (b) b.style.display = _indRulesActive() ? '' : 'none';
 }

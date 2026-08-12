@@ -311,6 +311,37 @@ def test_build_rules_has_one_home_and_the_strip_stops_being_a_control():
     check("an order gets the same dialog, gated", "indOpenRules(${o.id}" in js
           and "_indRulesActive()" in js)
 
+    # The plan form has to point at the rules shaping its own numbers — nothing on it did, which is
+    # the whole reason they went unfound.
+    check("the plan form offers a way in to the standing rules",
+          'id="indBuildRulesBtn"' in html and "openSettingsModal('buildrules')" in html)
+    check("...gated, and lifted where the tab is set up",
+          "function indApplyBuildRulesGate(" in js and "indApplyBuildRulesGate();" in js)
+
+    # One list with a two-way toggle, not two lists.
+    comp = js[js.index("function _indRulesComponents("):]
+    comp = comp[:comp.index("\nlet _indCompSearchT")]
+    check("components are one list carrying a rule each",
+          "'build'" in comp and "'buy'" in comp and "ind-rule-seg" in comp)
+    check("a rule can be dropped back to 'let the engine decide'",
+          "indRulesSetComponent(${it.type_id}, null)" in comp)
+    check("and a component can be ADDED, not only removed",
+          "ir-comp-q" in comp and "indRulesCompSearch()" in comp)
+    setc = js[js.index("async function indRulesSetComponent("):]
+    setc = setc[:setc.index("\n// Repaint whichever surface")]
+    check("both rules are written in ONE request, so they cannot overlap",
+          setc.count("apiSend(") == 1 and "components: { items }" in setc)
+    check("the two old separate list writers are gone",
+          "indRulesDropNeverBuild" not in js and "_indRulesNeverBuild" not in js)
+
+    # Cramped checkbox rows were the reported symptom.
+    check("checkbox groups stack instead of sharing a line",
+          'id="ir-rx-cats" class="ind-rule-checks"' in js
+          and '`<div class="ind-rule-checks">` + srcs.map' in js)
+    css = open("static/style-layout-admin.css").read()
+    check("...and the class actually stacks them",
+          ".ind-rule-checks { display: flex; flex-direction: column;" in css)
+
 
 def test_build_setup_is_one_surface_over_the_stores_that_already_own_each_field():
     """Config was spread over six write paths and eight inline strips, none of which read as
@@ -353,13 +384,23 @@ def test_build_setup_is_one_surface_over_the_stores_that_already_own_each_field(
               and after["facility"]["struct_material_pct"] == 4.2)
 
         # Sections owned by other stores round-trip through the same patch.
-        B.apply_patch(7, B.BuildSetupPatch(reactions={"buy_categories": []},
-                                           never_build={"type_ids": [34, 35]}))
+        B.apply_patch(7, B.BuildSetupPatch(
+            reactions={"buy_categories": []},
+            components={"items": [{"type_id": 34, "rule": "buy"},
+                                  {"type_id": 35, "rule": "buy"},
+                                  {"type_id": 36, "rule": "build"}]}))
         after2 = B.account_setup(7)
         check("the reaction policy went to its own store",
               after2["reactions"]["policy"]["buy_categories"] == [])
-        check("the blacklist went to its own store",
-              sorted(after2["never_build"]["type_ids"]) == [34, 35])
+        rules = {i["type_id"]: i["rule"] for i in after2["components"]["items"]}
+        check("both component rules went to their stores",
+              rules == {34: "buy", 35: "buy", 36: "build"})
+        check("...and they are stored disjointly, not as two overlapping lists",
+              sorted(S.get_blacklist(7)) == [34, 35] and S.get_always_build(7) == [36])
+        # One list, one rule: a type cannot be under both, whatever a caller sends.
+        S.set_component_rules(7, never=[34, 36], always=[36])
+        check("a collision resolves to the more specific rule, in the STORE",
+              S.get_blacklist(7) == [34] and S.get_always_build(7) == [36])
         check("and the settings row is still intact",
               after2["facility"]["facility_id"] == "sotiyo-1")
 
@@ -367,6 +408,8 @@ def test_build_setup_is_one_surface_over_the_stores_that_already_own_each_field(
         feat.feature_enabled_for = lambda key, ctx=None: key != "industry_reaction_policy"
         avail = B._available(7)
         check("an off feature closes its section", avail["reactions"] is False)
+        check("the merged component section replaced the two lists",
+              "components" in avail and "never_build" not in avail)
         try:
             B.apply_patch(7, B.BuildSetupPatch(reactions={"build_reactions": False}))
             check("a write to a closed section is refused", False)

@@ -50,6 +50,10 @@ def ensure_industry_settings_table():
                     # than per order because it's a standing way of operating, not a decision about
                     # one build — an order overrides it with force_build_ids.
                     "never_build_ids TEXT",
+                    # …and its mirror: build THESE whatever the shortcuts say. One type can only be
+                    # in one of the two — see `set_component_rules`, which is the only writer of
+                    # both and keeps them disjoint.
+                    "always_build_ids TEXT",
                     # Has the first-run setup screen been completed? Mirrors pp_markets.onboarded.
                     # Per ACCOUNT, not per browser: "I've set this up" is a fact about the account,
                     # and a localStorage flag would re-ask on every new device and forget on a
@@ -130,6 +134,7 @@ def get_settings(context_id: int) -> dict:
     finally:
         con.close()
     d["never_build_ids"] = _parse_ids(d.get("never_build_ids"))
+    d["always_build_ids"] = _parse_ids(d.get("always_build_ids"))
     # Keep the RAW column beside the parsed policy: a NULL/blank one is an account that has never
     # used the control, which is who the code default speaks for and who the build page tells that
     # the default moved. Other writers (onboarding, source memory, freshness) create the ROW, so
@@ -329,6 +334,39 @@ def set_build_pins(context_id: int, pins: dict) -> dict[str, str]:
     return clean
 
 
+def get_always_build(context_id: int) -> list[int]:
+    return get_settings(context_id).get("always_build_ids") or []
+
+
+def set_component_rules(context_id: int, never: list[int], always: list[int]) -> dict:
+    """Replace BOTH per-component lists in one write, because they are one decision.
+
+    A type is "always buy this", "always build this", or neither — never two of them at once. Two
+    independent setters could store a type in both, and the resolver would then answer with whichever
+    rule it happened to check first (`force_build_ids` wins today, but that is a tie-break, not a
+    thing a user should be able to create). Writing them together is what makes the exclusion a
+    property of the store rather than a convention the UI has to keep.
+
+    `always` wins a collision: it is the more specific instruction — the same precedence the
+    resolver already applies.
+    """
+    ensure_industry_settings_table()
+    a = sorted({int(t) for t in (always or [])})
+    n = sorted({int(t) for t in (never or [])} - set(a))
+    con = get_connection()
+    try:
+        con.execute(
+            "INSERT INTO pp_industry_settings (context_id, never_build_ids, always_build_ids, "
+            "updated_at) VALUES (?,?,?,?) ON CONFLICT(context_id) DO UPDATE SET "
+            "never_build_ids=excluded.never_build_ids, "
+            "always_build_ids=excluded.always_build_ids, updated_at=excluded.updated_at",
+            (context_id, json.dumps(n), json.dumps(a), time.time()))
+        con.commit()
+    finally:
+        con.close()
+    return {"never_build_ids": n, "always_build_ids": a}
+
+
 def get_blacklist(context_id: int) -> list[int]:
     return get_settings(context_id).get("never_build_ids") or []
 
@@ -379,6 +417,12 @@ def apply_account_build_options(context_id: int, opts):
     # customer's share link included — not only to plans a browser asks for.
     if "never_build_ids" not in sent and saved.get("never_build_ids"):
         update["never_build_ids"] = list(saved["never_build_ids"])
+    # …and the mirror. Unioned with anything the caller sent rather than replaced: an order's own
+    # "build this one anyway" is an addition to the standing rule, not a statement that the standing
+    # rule no longer applies to every other component on it.
+    if saved.get("always_build_ids"):
+        update["force_build_ids"] = sorted(set(getattr(opts, "force_build_ids", None) or ())
+                                           | {int(t) for t in saved["always_build_ids"]})
     # …and so is the reaction policy: it is the same kind of standing rule, so the checklist and the
     # customer's share link have to follow it too, or they quote a build the user isn't making.
     # …gated on its own feature, which it never was: only the FRONTEND asked the flag, so on an

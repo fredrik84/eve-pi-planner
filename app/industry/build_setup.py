@@ -36,7 +36,7 @@ _SECTION_FEATURES: dict[str, str | None] = {
     "threshold": None,
     "margin": None,
     "reactions": "industry_reaction_policy",
-    "never_build": "industry_blacklist",
+    "components": "industry_blacklist",
     "job_length": "industry_job_length_policy",
     "pins": None,              # rides on the routing flag — see settings._pins_available
     "sources": "industry_plan_sources",
@@ -64,7 +64,7 @@ def account_setup(context_id: int) -> dict:
     category registry travels with the policy, `_pins_payload` already knows its families, and
     duplicating either here is how the modal and the old strip would come to disagree.
     """
-    from app.industry.settings import (get_settings, get_blacklist, get_max_reaction_job_days,
+    from app.industry.settings import (get_settings, get_max_reaction_job_days,
                                        _policy_payload, _pins_payload)
     s = get_settings(context_id) or {}
     policy = _policy_payload(context_id)
@@ -83,11 +83,48 @@ def account_setup(context_id: int) -> dict:
                       # Still on the code default rather than a choice — the one thing that made
                       # composites get bought on accounts that never opened this control.
                       "defaulted": policy["defaulted"]},
-        "never_build": {"type_ids": get_blacklist(context_id)},
+        "components": _components_section(context_id),
         "job_length": {"max_reaction_job_days": get_max_reaction_job_days(context_id)},
         "pins": {"pins": pins["pins"], "families": pins["families"]},
         "sources": _sources_section(context_id),
     }
+
+
+def _components_section(context_id: int) -> dict:
+    """The per-component overrules as ONE list, each row carrying which rule it is under.
+
+    They were two lists — "never build" and (per order only) "build anyway" — and that is one list
+    wearing two hats: a component is always-buy, always-build, or left to the cost engine, and it
+    cannot be two of those. Two lists let a type appear in both and made the user reconcile a
+    contradiction the resolver would silently break a tie on. One row per type with a `rule` makes
+    the exclusion visible and makes "change my mind about this component" one click instead of a
+    delete in one list and an add in another.
+
+    Names come along because a list of type ids is not something anyone can read.
+    """
+    from app.industry.settings import get_blacklist, get_always_build
+    never, always = get_blacklist(context_id), get_always_build(context_id)
+    ids = sorted(set(never) | set(always))
+    names = _type_names(ids)
+    return {"items": [{"type_id": t, "name": names.get(t, str(t)),
+                       # `always` wins a collision, matching the resolver's own precedence — the
+                       # store keeps them disjoint, so this only matters for a row written before
+                       # `set_component_rules` became the only writer.
+                       "rule": "build" if t in set(always) else "buy"} for t in ids]}
+
+
+def _type_names(ids: list[int]) -> dict[int, str]:
+    if not ids:
+        return {}
+    from app.db import get_connection
+    con = get_connection()
+    try:
+        rows = con.execute(
+            f"SELECT type_id, name FROM types WHERE type_id IN ({','.join('?' * len(ids))})",
+            tuple(ids)).fetchall()
+        return {r["type_id"]: r["name"] for r in rows}
+    finally:
+        con.close()
 
 
 def _sources_section(context_id: int) -> dict:
@@ -143,7 +180,7 @@ class BuildSetupPatch(BaseModel):
     threshold: dict | None = None
     margin: dict | None = None
     reactions: dict | None = None
-    never_build: dict | None = None
+    components: dict | None = None
     job_length: dict | None = None
     pins: dict | None = None
     sources: dict | None = None
@@ -156,8 +193,9 @@ def apply_patch(context_id: int, patch: BuildSetupPatch) -> list[str]:
     A section the account may not see is REFUSED, not ignored: silently dropping a write is how a
     user comes to believe a setting took effect when it did not.
     """
-    from app.industry.settings import (set_blacklist, set_reaction_policy, get_reaction_policy,
-                                       set_max_reaction_job_days, set_build_pins, save_settings)
+    from app.industry.settings import (set_component_rules, set_reaction_policy,
+                                       get_reaction_policy, set_max_reaction_job_days,
+                                       set_build_pins, save_settings)
     avail = _available(context_id)
     sent = {k: v for k, v in patch.model_dump(exclude_unset=True).items() if v is not None}
     denied = [k for k in sent if not avail.get(k, False)]
@@ -185,9 +223,14 @@ def apply_patch(context_id: int, patch: BuildSetupPatch) -> list[str]:
                             p.get("build_reactions", cur["build_reactions"]),
                             p.get("buy_categories", cur["buy_categories"]))
         written.append("reactions")
-    if "never_build" in sent:
-        set_blacklist(context_id, [int(t) for t in (sent["never_build"].get("type_ids") or [])])
-        written.append("never_build")
+    if "components" in sent:
+        # Both lists in ONE write — see set_component_rules. Splitting them here would recreate
+        # exactly the window where a type can be in both.
+        items = sent["components"].get("items") or []
+        set_component_rules(context_id,
+                            [int(i["type_id"]) for i in items if i.get("rule") != "build"],
+                            [int(i["type_id"]) for i in items if i.get("rule") == "build"])
+        written.append("components")
     if "job_length" in sent:
         set_max_reaction_job_days(context_id, sent["job_length"].get("max_reaction_job_days"))
         written.append("job_length")
