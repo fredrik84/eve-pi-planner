@@ -36,8 +36,7 @@ def analyze_placements(body: dict = Body(...), pp_session: str = Cookie(default=
     type_ids = [int(t) for t in (body.get("type_ids") or [])]
     if not type_ids:
         return {"placements": {}}
-    from app.features import feature_enabled
-    blend_on = feature_enabled("measured_yield_blend")
+    blend_on = True          # measured-yield blending is permanent (flag retired 2026-08-12)
     pi = load_pi_data()
     types, sch = pi["types"], pi["schematics"]
     con = get_connection()
@@ -778,8 +777,7 @@ def derive_redeploy_candidates(context_id: int) -> dict:
     # p0_name → character_name → best planet. Best-effort (never blocks the core advice).
     placements: dict = {}
     try:
-        from app.features import feature_enabled
-        blend_on = feature_enabled("measured_yield_blend")
+        blend_on = True      # measured-yield blending is permanent (flag retired 2026-08-12)
         con2 = get_connection()
         foot, occ = _char_footprint(con2, context_id)
         nm_by_cid = {r["cid"]: r["nm"] for r in planets}

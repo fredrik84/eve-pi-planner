@@ -35,7 +35,7 @@ const _fmtCompact = n => {
 let _anExpanded = new Set();   // material type_ids whose planet breakdown is expanded
 
 // Material-supply display mode: "Fed %" (default) vs "Extraction avg" (absolute P0/hr-per-planet
-// numbers, gated by the extraction_targets flag — see renderAnalysis's barRows).
+// numbers — see renderAnalysis's barRows).
 let _anShowExtractAvg = false;
 function _toggleExtractAvgMode() {
   _anShowExtractAvg = !_anShowExtractAvg;
@@ -176,14 +176,13 @@ async function onAnalyzeTabOpen() {
 
 let _skillRoi = null;
 async function _fetchSkillRoi() {
-  if (!_featureActive('skill_roi')) { _skillRoi = null; return; }
   try { _skillRoi = await api('/api/skill-roi'); }
   catch (e) { _skillRoi = null; }
 }
 
 // "Train these skills for more output" — forward-looking ROI section for the Setup Analysis tab.
 function _renderSkillRoiSection() {
-  if (!_featureActive('skill_roi') || !_skillRoi) return '';
+  if (!_skillRoi) return '';
   const sugs = _skillRoi.suggestions || [];
   const enough = _skillRoi.enough || [];
   if (!sugs.length && !enough.length) return '';
@@ -232,7 +231,6 @@ function _renderSkillRoiSection() {
 //                redeploy to a genuinely richer free planet (only when one exists).
 let _redeploy = null;
 async function _fetchRedeployCandidates() {
-  if (!_featureActive('redeploy_depletion') && !_featureActive('redeploy_proximity')) { _redeploy = null; return; }
   try { _redeploy = await api('/api/redeploy-candidates'); }
   catch (e) { _redeploy = null; }
 }
@@ -292,7 +290,7 @@ function _overlapClustersFor(p1name) {
 // moving on it). Sized to just close the shortage, not fix everything.
 function _redeployPlan(rows) {
   if (!_redeploy) return { chosen: [], materials: [] };
-  const proxOn = _featureActive('redeploy_proximity'), deplOn = _featureActive('redeploy_depletion');
+  const proxOn = _featureActive('redeploy_proximity'), deplOn = true;
   const chosen = [];
   const RECLAIM = 0.05;   // ignore sub-5% "decline" as scan noise (matches the reseat lever)
   const depl = () => (deplOn ? (_redeploy.depleting || []) : []);
@@ -645,7 +643,7 @@ function renderAnalysis() {
     }
   }
 
-  const avgMode = _featureActive('extraction_targets') && _anShowExtractAvg;
+  const avgMode = _anShowExtractAvg;
   const barRows = rows.map(r => {
     // The displayed %/band is the REFINED, EXPORTED throughput (r.have / need) — the SAME number the
     // headline "Plan fed at" uses, and what actually sustains the full production cycle. It is NOT the
@@ -942,9 +940,7 @@ function renderAnalysis() {
 
   statusEl.innerHTML = head + _staleSupplyNote(rows) + stats + proj;
 
-  const modeToggle = _featureActive('extraction_targets')
-    ? `<button type="button" class="an-mode-toggle" onclick="_toggleExtractAvgMode()">${avgMode ? 'Show: Fed %' : 'Show: Extraction avg'}</button>`
-    : '';
+  const modeToggle = `<button type="button" class="an-mode-toggle" onclick="_toggleExtractAvgMode()">${avgMode ? 'Show: Fed %' : 'Show: Extraction avg'}</button>`;
   const supplyLegend = avgMode
     ? `Numbers = current → comfortable target P0/hr per planet (+${Math.round(_HEALTHY_BUFFER * 100)}% cushion). Click a row for the fix.`
     : `Bar = how fed each input is. % = extraction headroom: <span class="an-ovr-ok">+10% or more healthy</span>, <span class="an-ovr-tight">0–10% tight</span> (dips as heads decay), <span class="an-ovr-short">below 0 short</span>. Click a row for the fix.`;
@@ -1217,7 +1213,7 @@ function _overlapBlockedKeys(p1name) {
 // same-planet relocate (move the extractor to a different area of the planet), redeploy a last resort.
 function _reseatExhaustedKeys() {
   const s = new Set();
-  if (!_featureActive('redeploy_depletion') || !_redeploy) return s;
+  if (!_redeploy) return s;
   (_redeploy.depleting || []).forEach(d => {
     if (d.reseat_tracked && d.reseats_confirmed < 2) return;   // not enough confirmed reseats yet
     s.add(d.planet_id + '|' + d.character);
@@ -1448,7 +1444,6 @@ function _burndownSection(rows) {
 // account-wide rebalance picture — this only ever compares a planet against ITS OWN downstream need,
 // and only ever suggests reseating the planet it already has, never redeploying/relocating it.
 function _hybridReseatSection() {
-  if (!_featureActive('hybrid_colonies')) return '';
   const rows = [];
   (_ppCharsData || []).forEach(ch => (ch.planets || []).forEach(p => {
     if (!p.is_hybrid) return;

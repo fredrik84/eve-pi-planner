@@ -181,8 +181,6 @@ function _featureActive(key, dflt = false) {
 function _applyTabGates() {
   const gates = [
     { key: 'factory_layout', storageKey: 'ppNavFeatLayout', cls: 'nav-feat-layout', tab: 'layout' },
-    { key: 'planet_db',      storageKey: 'ppNavFeatPdb',    cls: 'nav-feat-pdb',    tab: 'planetdb' },
-    { key: 'reactions',      storageKey: 'ppNavFeatRx',     cls: 'nav-feat-reactions', tab: 'reactions' },
     { key: 'industry',       storageKey: 'ppNavFeatIndustry', cls: 'nav-feat-industry', tab: 'industry' },
   ];
   const cur = localStorage.getItem('activeTab');
@@ -363,7 +361,7 @@ function renderHeaderSession(loggedIn, chars, sessionCharId) {
   // re-fetches it), so a plain truthiness check kept showing "cached until HH:MM" long after
   // HH:MM had passed. Gate on it still being in the future too.
   const _nowSec = Date.now() / 1000;
-  const _allCached = _featureActive('esi_cache_skip') && _rescanTargets.length > 0
+  const _allCached = _rescanTargets.length > 0
     && _rescanTargets.every(c => c.next_data_at && c.next_data_at > _nowSec);
   // The "no new data until" phrase is wrapped separately so it can be hidden on narrow mobile
   // headers (style-misc-responsive.css) without losing the time itself — the full phrase is
@@ -484,7 +482,7 @@ function renderCharacters(chars, loggedIn) {
   // real characters keep their server order.
   chars = [...(chars || [])].sort((a, b) => (a.wallet_only ? 1 : 0) - (b.wallet_only ? 1 : 0));
   const dummyCard = document.getElementById('dummyCharCard');
-  if (dummyCard) dummyCard.style.display = (loggedIn && _featureActive('dummy_characters')) ? '' : 'none';
+  if (dummyCard) dummyCard.style.display = loggedIn ? '' : 'none';
   // Industry job slots are a second, separately-flagged thing a placeholder can declare.
   const dummyJobSlots = document.getElementById('dummyJobSlotFields');
   if (dummyJobSlots) dummyJobSlots.style.display = _featureActive('industry_placeholder_slots') ? '' : 'none';
@@ -679,7 +677,7 @@ function renderCharacters(chars, loggedIn) {
         <span title="Command Center Upgrades level">CCU ${c.ccu}</span>
         ${c.planetology != null ? `<span title="Planetology skill">Planetology ${c.planetology}</span>` : ''}
         ${c.adv_planetology != null ? `<span title="Advanced Planetology skill">Adv ${c.adv_planetology}</span>` : ''}
-        ${_featureActive('reactions') && (c.reactions_opted_in || c.reaction_slots > 1)
+        ${(c.reactions_opted_in || c.reaction_slots > 1)
           ? `<span title="Reaction slots — 1 base + Mass Reactions + Advanced Mass Reactions">RX ${c.reaction_slots} slot${c.reaction_slots !== 1 ? 's' : ''}</span>` : ''}
       </div>`;
 
@@ -693,7 +691,7 @@ function renderCharacters(chars, loggedIn) {
     const rxReconnect = (c.reactions_needs_structures && rxJobs.length)
       ? `<div class="pp-char-rx-reconnect">⚠ Facility names can't load — <button type="button" class="pp-char-rx-reconnect-btn" onclick="connectReactionsTracking()">reconnect this character</button> to show them.</div>`
       : '';
-    const rxBlock = (_featureActive('reactions') && c.reactions_opted_in)
+    const rxBlock = c.reactions_opted_in
       ? `<div class="pp-char-rx">
            <div class="pp-char-rx-title">Reactions · ${rxJobs.length}/${c.reaction_slots} slot${c.reaction_slots !== 1 ? 's' : ''} running</div>
            ${rxJobs.length
@@ -709,7 +707,7 @@ function renderCharacters(chars, loggedIn) {
     // Also gate on it still being in the future — next_data_at is a fixed timestamp from the
     // last scan, so once real time passes it a plain truthiness check kept showing a stale
     // "No new data until HH:MM" long after HH:MM had passed.
-    const cacheHint = (c.next_data_at && c.next_data_at > Date.now() / 1000 && _featureActive('esi_cache_skip'))
+    const cacheHint = (c.next_data_at && c.next_data_at > Date.now() / 1000)
       ? `<span class="pp-cache-hint" title="ESI hasn't regenerated this character's colony data yet — a rescan now would return the same cached data.">No new data until ${_fmtEpochClock(c.next_data_at)}</span>`
       : '';
 
@@ -853,7 +851,6 @@ function _toggleSepOpen() { _sepOpen = !_sepOpen; _renderMoveCharacterSection();
 function _renderMoveCharacterSection() {
   const el = document.getElementById('moveCharSection');
   if (!el) return;
-  if (!_featureActive('move_character')) { el.innerHTML = ''; return; }
   const dep = _facDeployment();
   if (!_sepHasWork(dep)) { el.innerHTML = ''; return; }
   const head = `<div class="an-sep-head an-lever-click" onclick="_toggleSepOpen()">`
@@ -1207,12 +1204,6 @@ async function loadPiProducts() {
 async function _refreshBaskets() {
   await _loadFeatures();
   const dl = document.getElementById('productList');
-  // Gated feature (default on): when an admin has hidden baskets from the public, don't list them.
-  if (!_featureActive('baskets', true)) {
-    _baskets = [];
-    if (dl) dl.querySelectorAll('option[data-basket-id]').forEach(o => o.remove());
-    return;
-  }
   try { _baskets = (await api('/api/baskets')).baskets || []; }
   catch (e) { _baskets = []; }
   if (!dl) return;
@@ -2129,12 +2120,11 @@ function renderFinalPlan(data, opts = {}) {
     const savedLbl = (s.split_planets > 0)
       ? `${s.split_planets} split → ${s.planets_saved} planet${s.planets_saved !== 1 ? 's' : ''} reinvested`
       : (splitOn ? 'no overproduction slack to reclaim' : 'reuse planets → more factories');
-    // Gated feature (default on): hide the split control when an admin has pulled it from the public.
-    const splitStatHtml = _featureActive('split_extraction', true) ? `
+    const splitStatHtml = `
         <div class="plan-stat plan-split-ctrl" title="Split P1 production: where two P0s share a planet type, host both on one planet (2 ECUs sharing the 10-head budget → two P1 lines). The planets this frees are reinvested into more factory planets — so output rises only by what those real extra factories produce (it needs overproduction slack to reclaim; with none, nothing to split). Head counts on split planets are guidance — real yield varies with hotspot placement and depletion.">
           <span class="plan-split-seg">${splitBtns}</span>
           <span class="plan-stat-lbl">split planets · ${savedLbl}</span>
-        </div>` : '';
+        </div>`;
     // Distribution method: how extractor counts are split across resources. Each button gets
     // its own tooltip (one combined title on the wrapper was unreadable and ambiguous).
     const distMode = (_wiz.distMode || s.distribution_mode || 'stability');
@@ -2851,9 +2841,9 @@ function openSettingsModal(section) {
   const plansNav = document.getElementById('settingsNavPlans');
   if (plansNav) plansNav.style.display = _loggedIn ? '' : 'none';
   const notifNav = document.getElementById('settingsNavNotifications');
-  if (notifNav) notifNav.style.display = (_loggedIn && _featureActive('notifications')) ? '' : 'none';
+  if (notifNav) notifNav.style.display = _loggedIn ? '' : 'none';
   const alertsNav = document.getElementById('settingsNavAlerts');
-  if (alertsNav) alertsNav.style.display = (_loggedIn && _featureActive('alert_settings')) ? '' : 'none';
+  if (alertsNav) alertsNav.style.display = _loggedIn ? '' : 'none';
   // Build rules: the Industry tab's standing rules, in the place the Job slots modal already
   // tells people account-wide settings live. Gated on its own feature.
   const brNav = document.getElementById('settingsNavBuildrules');
@@ -2872,8 +2862,8 @@ function openSettingsModal(section) {
   if (section === 'blueprints' && !_loggedIn) section = 'characters';
   // If the requested section is gated and not available, fall back to characters.
   if (section === 'plans' && !_loggedIn) section = 'characters';
-  if (section === 'notifications' && !((_loggedIn && _featureActive('notifications')))) section = 'characters';
-  if (section === 'alerts' && !((_loggedIn && _featureActive('alert_settings')))) section = 'characters';
+  if (section === 'notifications' && !_loggedIn) section = 'characters';
+  if (section === 'alerts' && !_loggedIn) section = 'characters';
   if (section === 'account' && !_loggedIn) section = 'characters';
   if (section === 'buildrules' && !(_loggedIn && _featureActive('industry_build_setup'))) section = 'characters';
   modal.style.display = 'flex';
@@ -3219,7 +3209,7 @@ function _renderAlertSettings(s) {
   set('alertStorageUrgentHours', s.storage_urgent_hours);
   set('alertReactionRefillHours', s.reaction_refill_hours);
   const reactionSubsec = document.getElementById('alertReactionSubsec');
-  if (reactionSubsec) reactionSubsec.style.display = (typeof _featureActive === 'function' && _featureActive('reactions')) ? '' : 'none';
+  if (reactionSubsec) reactionSubsec.style.display = '';
   const listEl = document.getElementById('alertMutedList');
   if (listEl && s.available_kinds) {
     const muted = new Set(s.muted_kinds || []);

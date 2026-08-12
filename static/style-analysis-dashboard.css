@@ -335,10 +335,7 @@
 .sync-muted-note { margin-top: 10px; font-size: 11.5px; color: var(--clr-text-dim); }
 .sync-muted-note a { color: #5a9fd4; }
 
-/* ── PI "Up next" agenda (Dashboard, feature-gated) ───────────────────────────── */
-.tl-preview-tag { margin-left: 8px; font-size: 10px; font-weight: 700; letter-spacing: 0.6px;
-  text-transform: uppercase; color: var(--clr-amber); border: 1px solid #5a4a1f; border-radius: 4px;
-  padding: 1px 6px; vertical-align: middle; }
+/* ── PI "Up next" agenda (Dashboard) ──────────────────────────────────────────── */
 /* the next (soonest) task — prominent, accent-bordered */
 .tl-next { display: flex; align-items: baseline; justify-content: space-between; gap: 16px;
   flex-wrap: wrap; padding: 12px 14px; border: 1px solid #2a4a6a; border-radius: 8px;

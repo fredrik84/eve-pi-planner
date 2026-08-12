@@ -13,10 +13,10 @@ Find a section: `grep -n '^## ' docs/pi.md` and read from that line — this fil
 - **Setup Analysis tab + "Current setup" demand (`/api/my-setup-plan`)** — the endpoint behind the tab
 - **Setup Analysis: what the advice must do** — sustain-the-cycle policy, the fix ladder, refining-limited detection, redeploy candidates — read before changing any advice
 - **Shared alert engine (`app/alerts.py`) + configurable thresholds (`app/alert_settings.py`)** — one detection engine, per-kind muting, notification prefs
-- **Fill-factories meter (Dashboard, `pad_fill` flag)** — the dashboard meter
+- **Fill-factories meter (Dashboard)** — the dashboard meter
 - **Refill "empty pads" toggle** — the m³-capped refill split
-- **Dashboard "Up next" agenda (`timeline` flag)** — what needs doing next, at a glance
-- **Skill-ROI advisor (`skill_roi` flag, Setup Analysis)** — which skill buys the most output, and the already-enough case
+- **Dashboard "Up next" agenda** — what needs doing next, at a glance
+- **Skill-ROI advisor (Setup Analysis)** — which skill buys the most output, and the already-enough case
 - **Shared plan links + rich previews (Open Graph)** — `/s/{id}` and how it unfurls in Discord
 - **Fuel-block performance: the regression procedure** — how to prove a fuel-block change did not regress the plan — run this before shipping one
 
@@ -234,7 +234,7 @@ diagnostics only (the avg-P0/hr admin mode, and deciding heads-limited vs refini
   colony to a richer planet"), never a per-colony wall.
 - `_P0_PER_P1 = 150`; `redeploy_at`/`reseat_at` are epoch **seconds**.
 
-### Redeploy candidates (`redeploy_proximity`, `redeploy_depletion`)
+### Redeploy candidates (`redeploy_proximity` gates the overlap half)
 
 - **Overlap is measured on reachable footprints, not head positions or shared planets.** Two of your
   characters on the same planet is normal distribution, not a problem; overlapping *reachable areas*
@@ -306,13 +306,13 @@ single read path `compute_alerts()` and the settings endpoints all use, so they 
 account only). `ALERT_KINDS` is the key+label registry — `GET /api/alert-settings` echoes it back
 as `available_kinds` so the frontend never hardcodes labels (the same registry is reused by
 `GET /api/notifications/prefs` for the same reason). UI: Settings modal → **Alerts** section
-(`settingsSecAlerts`, gated by the `alert_settings` flag like `notifications` gates its own
-section) — 5 threshold number-inputs (`.settings-field-row`, label left/control right/hairline
+(`settingsSecAlerts`, shown to any logged-in user — its flag, and the one that gated the
+notifications section beside it, were both retired 2026-08-12) — 5 threshold number-inputs (`.settings-field-row`, label left/control right/hairline
 divider — replaces an earlier ad-hoc inline layout that misaligned once there were several rows of
 differing label length) + a "Muted alerts" 2-column checkbox grid (`.settings-toggle-grid`),
 Save/Reset.
 
-## Fill-factories meter (Dashboard, `pad_fill` flag)
+## Fill-factories meter (Dashboard)
 
 "How far does the P1 in my extractor pads go toward filling all my factories?" Backend
 `_pad_fill_meter(parsed, pi, types)` in planner.py (attached as `pad_fill` in the dashboard payload):
@@ -338,16 +338,16 @@ ON) ignores `input_m3` and fills to a clean 30,000 m³ (3 LP), matching the usua
 you drop the next batch" workflow. Off = subtract the last-scan contents. m³/unit is 0.19 (verified);
 the under-fill people hit was the stale `input_m3`, not the volume constant.
 
-## Dashboard "Up next" agenda (`timeline` flag)
+## Dashboard "Up next" agenda
 
 Account-level sorted list of the next maintenance tasks (Restart extractors / Haul extractor P1 /
 Refill factories) with countdown + absolute clock time, on the Dashboard under Maintenance routine.
 `_renderTimelineCard(t)` reuses the existing dashboard `*_due_hours` totals (no extra request).
 **Deliberately NOT a single-cycle line** — extractor and factory cadences desync badly (several
 extractor restarts per factory refill), so a "you are here on one timeline" viz is misleading; a
-sorted agenda is honest. Gated by `timeline`; shows an "admin preview" tag only while not public.
+sorted agenda is honest. Public since June 2026; its flag and the "admin preview" tag it drove were retired 2026-08-12.
 
-## Skill-ROI advisor (`skill_roi` flag, Setup Analysis)
+## Skill-ROI advisor (Setup Analysis)
 
 `GET /api/skill-roi` (session-scoped): per character, the output gain from the next level of the two
 yield skills — **Interplanetary Consolidation** (<5 → +1 planet ≈ one colony's average value/day,

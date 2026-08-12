@@ -108,8 +108,7 @@ def _fetch_p0_planets(
     """Return {p0_name: [planets sorted by value DESC]}. Planets thinner than `min_density`%
     are excluded (the density cap), so the planner can't pile extractors onto deposits it isn't
     worth setting up — at the cost of some residual on resources that then can't reach their need."""
-    from app.features import feature_enabled
-    blend_on = feature_enabled("measured_yield_blend")
+    blend_on = True          # measured-yield blending is permanent (flag retired 2026-08-12)
     thresh = max(0.01, float(min_density or 0))
     result: dict[str, list[dict]] = {}
     where_extra = ""

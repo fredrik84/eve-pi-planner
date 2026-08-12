@@ -171,8 +171,7 @@ html.nav-li .tab[data-pimode="build"] { display: flex; }
    heading with nothing beneath it. Tie the group's own visibility to the same conditions as its
    contents. (_hideEmptyNavGroups() in planetary.js covers the cases CSS can't see — a feature
    switched off at runtime, or a group page-restriction hiding the last item.) */
-html.nav-li.nav-feat-reactions #industryNavGroup,
-html.nav-li.nav-feat-industry #industryNavGroup { display: flex; }
+html.nav-li #industryNavGroup { display: flex; }
 .nav-group-empty { display: none; }
 
 html.nav-adm #adminNavGroup,
@@ -182,8 +181,8 @@ html.nav-grpmgr #adminNavGroup { display: flex; }
    CRUD) are hidden per-button by _applyAdminNavVisibility() in planetary.js, not by CSS, since
    which buttons qualify is a JS-side list, not a fixed selector. */
 html.nav-feat-layout .tab[data-tab="layout"] { display: flex; }
-html.nav-li.nav-feat-pdb .tab[data-tab="planetdb"] { display: flex; }
-html.nav-li.nav-feat-reactions .tab[data-tab="reactions"] { display: flex; }
+html.nav-li .tab[data-tab="planetdb"] { display: flex; }
+html.nav-li .tab[data-tab="reactions"] { display: flex; }
 html.nav-li.nav-feat-industry .tab[data-tab="industry"] { display: flex; }
 
 /* Donation note pinned to the bottom of the sticky sidebar — always on screen,

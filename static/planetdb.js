@@ -191,9 +191,9 @@ function renderPlanetTable(planets) {
 
   const wrap = container.querySelector('.pp-planet-table-wrap');
   const tbody = container.querySelector('tbody');
-  // Computed once per render, not per-cell: whether to show the pooled real-world measured-yield
-  // annotation (app/yield_stats.py) alongside each planet's static submitted richness value.
-  const showMeasured = _featureActive('measured_yield');
+  // The pooled real-world measured-yield annotation (app/yield_stats.py) shown alongside each
+  // planet's static submitted richness value. Permanent since the flag was retired.
+  const showMeasured = true;
   _ppRender = { rows: planets, cursor: 0, tbody, cols: _ppActiveCols, wrap, showMeasured };
   _ppRenderChunk();
 

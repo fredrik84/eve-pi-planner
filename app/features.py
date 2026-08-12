@@ -24,80 +24,21 @@ router = APIRouter()
 # loadAdminFeatures) so the list stays scannable as it grows; pick the app area the feature's
 # `description` names first (most descriptions already lead with "On the X tab:" / "On X:").
 # GROUP_ORDER below controls display order; a group missing from it sorts last.
+#
+# **A flag is a ROLLOUT control, and it should be retired once the rollout is over.** 18 of these
+# were removed on 2026-08-12: every one had been `public` since June or July, which means the flag
+# had stopped deciding anything and was only a permanent conditional in the code plus a line in a
+# list nobody could scan any more. Retiring one means deleting its entry here and its
+# `feature_enabled`/`_featureActive` call sites, so the behaviour is simply how the app works.
+#
+# What that costs, stated plainly: the retrofitted kill switch goes with it. That was the argument
+# for adding a flag to an already-shipped feature, and it is a real one — but a switch nobody has
+# touched in two months is not insurance, it is a conditional you have to reason about every time
+# you read the code around it. Retire when the answer to "would we ever turn this off again?" is no.
 FEATURE_REGISTRY = [
-    {"key": "timeline", "label": "PI process timeline", "group": "Dashboard",
-     "description": "Account-level “you are here” timeline on the Dashboard: "
-                    "extractors started → haul P1 → refill factories.",
-     "default": False},
-    {"key": "split_extraction", "label": "Split extraction", "group": "Planner",
-     "description": "Plan two P0s on one planet type (2 ECUs share the 10 heads) and "
-                    "reinvest the freed planets into more factories.",
-     "default": True},
-    {"key": "baskets", "label": "Custom production baskets", "group": "Planner",
-     "description": "Pick a custom multi-product basket as a planning target in the product picker.",
-     "default": True},
-    {"key": "skill_roi", "label": "Skill-ROI advisor", "group": "Setup Analysis",
-     "description": "On Setup Analysis: which character skills (Interplanetary Consolidation, "
-                    "Command Center Upgrades) to train for more output, ranked by ISK/day.",
-     "default": False},
-    {"key": "move_character", "label": "Move a character to another account", "group": "Setup Analysis",
-     "description": "On Setup Analysis: the 1:1 colony-swap tool for moving a character's PI to a "
-                    "character on another account.",
-     "default": False},
-    {"key": "schedule_sync", "label": "Extractor schedule sync warning", "group": "Dashboard",
-     "description": "On the Dashboard: warn when an extractor runs a different program length than "
-                    "the rest of the fleet (drifts off your batch restart). Mutable per character.",
-     "default": False},
-    {"key": "pad_fill", "label": "Fill-factories meter", "group": "Dashboard",
-     "description": "On the Dashboard: how far the P1 in your extractor pads would go toward filling "
-                    "every factory's 30,000 m³ buffer — a binding-material % + per-material breakdown.",
-     "default": False},
-    {"key": "dummy_characters", "label": "Placeholder characters", "group": "Characters",
-     "description": "On the Characters tab: add placeholder toons (no ESI login) that contribute "
-                    "planet slots + CCU level to plans without logging the alt in.",
-     "default": False},
     {"key": "factory_layout", "label": "Factory Layout tab", "group": "Planner",
      "description": "Show the Factory Layout tab — generates importable EVE PI templates for any "
                     "P1–P4 product.",
-     "default": False},
-    {"key": "planet_db", "label": "Planet DB tab", "group": "Planet DB",
-     "description": "Show the Planet DB tab — the shared planet density database the planner "
-                    "uses; also lets users submit and browse planet data.",
-     "default": False},
-    {"key": "notifications", "label": "Notifications", "group": "Notifications & Alerts",
-     "description": "Let users configure Pushover / ntfy.sh / Discord alerts for extractor "
-                    "expiry and factory refill reminders.",
-     "default": False},
-    {"key": "esi_cache_skip", "label": "ESI cache-aware rescan", "group": "Characters",
-     "description": "Skip re-fetching a colony/skills from ESI while its cache (Expires header) "
-                    "hasn't lapsed yet — faster rescans — and show a “no new data until” hint "
-                    "in the UI.",
-     "default": False},
-    {"key": "measured_yield", "label": "Measured yield in Planet DB", "group": "Planet DB",
-     "description": "On the Planet DB tab: show a real measured average extraction yield "
-                    "(pooled across all users' actual colonies) alongside a planet's static "
-                    "richness value, where enough samples exist.",
-     "default": False},
-    {"key": "hybrid_colonies", "label": "Hybrid colony analysis", "group": "Setup Analysis",
-     "description": "Track hand-built colonies that run extraction + a P1→P2+ factory chain "
-                    "on one planet: surfaces their real demand in Setup Analysis and suggests "
-                    "reseats to close their own shortfall (never a redeploy).",
-     "default": False},
-    {"key": "measured_yield_blend", "label": "Measured yield in planning weights", "group": "Planner",
-     "description": "Nudge the planner's extractor placement toward planets with real pooled "
-                    "yield data, confidence-weighted by sample count — never overrides the "
-                    "static richness value, and does nothing for the ~99% of planets with no "
-                    "measured data yet. Separate from the Planet DB display flag since this "
-                    "changes real plan output, not just a badge.",
-     "default": False},
-    {"key": "alert_settings", "label": "Configurable Dashboard alerts", "group": "Notifications & Alerts",
-     "description": "Settings → Alerts: customize the extractor-expiry warning window and "
-                    "storage-fill warning/severity thresholds used by the Dashboard's colony "
-                    "warnings, instead of the fixed defaults.",
-     "default": False},
-    {"key": "extraction_targets", "label": "Extraction targets reference", "group": "Setup Analysis",
-     "description": "On Setup Analysis: each material row shows its P0 source name and a comfortable "
-                    "P0/hr-per-planet target at a glance — a reference while reseating extractor heads.",
      "default": False},
     {"key": "redeploy_proximity", "label": "Overlapping extraction ranges", "group": "Setup Analysis",
      "description": "On Setup Analysis: flag when two colonies on the same planet have overlapping "
@@ -105,20 +46,6 @@ FEATURE_REGISTRY = [
                     "and reseating can't escape it, so it suggests redeploying one command centre to "
                     "a clear area. Overlap % cutoff is set in Settings → General. Needs a rescan to "
                     "capture extractor positions.",
-     "default": False},
-    {"key": "redeploy_depletion", "label": "Depleting-deposit redeploy advice", "group": "Setup Analysis",
-     "description": "On Setup Analysis: flag an extractor colony whose measured install-yield has "
-                    "trended down across the last several programs — the deposit is exhausting, so a "
-                    "reseat only chases a sinking ceiling and the fix is to redeploy the CC to a fresh "
-                    "planet.",
-     "default": False},
-    {"key": "reactions", "label": "Reactions tracking", "group": "Reactions",
-     "description": "Adds a Reactions tab: ranks the most profitable moon-goo reaction chains, "
-                    "priced from your alliance's own price sheet if it has one (see Admin → "
-                    "Groups) or live market prices otherwise, to ship and sell. This only "
-                    "controls whether the nav tab shows — the tool itself is open to any "
-                    "logged-in user regardless of this flag's state, so rolling it to 'public' "
-                    "just reveals the tab to everyone.",
      "default": False},
     {"key": "reaction_orders", "label": "Reactions: customer orders", "group": "Reactions",
      "description": "On the Reactions tab: track a fixed-unit order for another player — runs "

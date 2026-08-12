@@ -19,7 +19,12 @@ import urllib.error
 # state VALUE: an admin can change visibility at runtime, so the live state legitimately
 # diverges from the code default. The durable invariant is "the key exists and state is one of
 # the valid values" (app/features.py VALID_STATES: hidden/admin/testers/public).
-EXPECTED_FEATURES = ["timeline", "split_extraction", "baskets", "skill_roi", "move_character", "schedule_sync", "pad_fill", "measured_yield", "hybrid_colonies", "measured_yield_blend", "alert_settings", "local_market"]
+# A spread across the groups that still HAVE a flag. The 18 fully-rolled-out ones this list
+# used to name were retired on 2026-08-12 — a feature everyone has had for two months is not
+# a rollout control, and the registry is the Admin tab's list before it is anything else.
+EXPECTED_FEATURES = ["industry", "industry_manual_done", "industry_share", "factory_layout",
+                     "redeploy_proximity", "local_market", "reactions_parallel_stages",
+                     "reactions_pack_hosts", "reactions_stage_pipeline", "reactions_manual_done"]
 VALID_STATES = {"hidden", "admin", "testers", "public"}
 
 
@@ -77,7 +82,7 @@ def test_features(base: str) -> bool:
 
 def test_feature_toggle_gated(base: str) -> bool:
     print(f"\n{'='*60}\n  POST /api/features/<key> is admin-gated\n{'='*60}")
-    code = post_status(f"{base}/api/features/timeline", {"state": "public"})
+    code = post_status(f"{base}/api/features/industry", {"state": "public"})
     return check(code == 403, f"anonymous toggle rejected (got HTTP {code})")
 
 

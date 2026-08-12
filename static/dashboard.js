@@ -54,7 +54,7 @@ async function rescanAll() {
   // Reactions tool. force=1 (explicit user action); the endpoint no-ops for non-opted-in toons.
   // Awaited BEFORE loadCharacters so the refreshed jobs are already in the charlist payload it
   // fetches (refresh clears the charlist cache), surfacing them in the Characters tab immediately.
-  if (typeof _featureActive === 'function' && _featureActive('reactions') && typeof _rxRefreshJobs === 'function') {
+  if (typeof _rxRefreshJobs === 'function') {
     try { await _rxRefreshJobs(true); } catch (e) { /* best-effort — never block the colony rescan */ }
   }
   _rescanning = false;
@@ -101,7 +101,7 @@ function _renderTimelineCard(t) {
     { lbl: 'Restart extractors', due: t.restart_due_hours, loc: t.restart_due_loc },
     { lbl: 'Haul extractor P1',  due: t.empty_due_hours,   loc: t.empty_due_loc || t.empty_pads_loc },
     { lbl: 'Refill factories',   due: t.refill_due_hours,  loc: t.refill_due_loc || t.refill_factories_loc },
-    ...(_featureActive('reactions') && t.reactions_tracked
+    ...(t.reactions_tracked
       ? [{ lbl: 'Reactions done', due: t.reactions_time_left_hours, loc: t.reactions_time_left_loc }]
       : []),
     ...(_featureActive('industry') && t.manufacturing_tracked
@@ -117,10 +117,6 @@ function _renderTimelineCard(t) {
   // floors and drops minutes past 12h/24h, which made the same job read 1 minute off between cards.
   const rel = h => (h < 0.05 ? 'now' : 'in ' + _fmtDHM(h));
 
-  // "admin preview" only while it's still admin-gated (not yet rolled out to the public).
-  const isPublic = !!(_features['timeline'] && _features['timeline'].state === 'public');
-  const previewTag = isPublic ? '' : '<span class="tl-preview-tag">admin preview</span>';
-
   const next = jobs[0], rest = jobs.slice(1);
   const restHtml = rest.map(j => `
     <li class="tl-up-item">
@@ -132,7 +128,6 @@ function _renderTimelineCard(t) {
     <section class="pp-card tl-card">
       <div class="pp-card-title">Up next
         <span class="pp-card-hint">— your next PI tasks</span>
-        ${previewTag}
       </div>
       <div class="pp-card-body">
         <div class="tl-next">
@@ -155,7 +150,7 @@ function _clearSyncMutes() { _syncMutes.clear(); _saveSyncMutes(); if (_dashData
 // "Extractor schedule out of sync" card — only the gated feature, only non-muted offenders.
 function _renderSyncWarn(data) {
   const sw = data.sync_warn;
-  if (!_featureActive('schedule_sync') || !sw || !sw.off || !sw.off.length) return '';
+  if (!sw || !sw.off || !sw.off.length) return '';
   const visible = sw.off.filter(o => !_syncMutes.has(String(o.cid)));
   if (!visible.length) {
     return _syncMutes.size ? `<section class="pp-card dash-issues"><div class="pp-card-body"><div class="sync-muted-note">${_syncMutes.size} character${_syncMutes.size !== 1 ? 's' : ''} muted from the extractor-sync check. <a href="#" onclick="_clearSyncMutes();return false;">Unmute all</a></div></div></section>` : '';
@@ -183,7 +178,7 @@ function _renderSyncWarn(data) {
 //    that chain has finished. The one alert here that is an opportunity, not a problem.
 function _renderReactionAlerts(data) {
   const items = data.reaction_alerts;
-  if (!_featureActive('reactions') || !items || !items.length) return '';
+  if (!items || !items.length) return '';
   // ONE row per KIND (not per character) with an inline per-character tally — a whole fleet of
   // completed reactions collapses to a single line instead of one card each, which filled the screen.
   const done = items.filter(a => a.kind === 'reaction_completed');
@@ -247,7 +242,7 @@ function renderDashboard(data) {
   });
   const topProd = Object.values(prodAgg).sort((a, b) => (b.tier - a.tier) || (b.units - a.units))[0] || null;
   const _pf = data.pad_fill;
-  const _pfShow = _pf && typeof _featureActive === 'function' && _featureActive('pad_fill');
+  const _pfShow = !!_pf;
   const tiles = [
     ...(_pfShow ? [_dashTile(Math.round(_pf.fill_pct * 100) + '%',
         isMobile ? 'to fill factories' : 'to fully fill factories',
@@ -260,7 +255,7 @@ function renderDashboard(data) {
     // reactions_net_profit_per_day is each pending job's own reward ÷ its own real duration
     // (runs × cycle time) — a genuine ISK/day rate, same units as PI's value_per_day, so the
     // combined tile below is a real sum of two rates now, not a rate + a lump sum.
-    ...(_featureActive('reactions') && t.reactions_tracked ? [
+    ...(t.reactions_tracked ? [
       _dashTile(_fmtIsk(t.reactions_net_profit_per_day || 0), 'Reactions profit / day', 'an-ok'),
       _dashTile(_fmtIsk((t.value_per_day || 0) + (t.reactions_net_profit_per_day || 0)), 'Total PI + Reactions / day'),
     ] : []),
@@ -332,9 +327,9 @@ function renderDashboard(data) {
   };
   // PI process timeline (admin-gated PoC): one account-level "you are here" line from
   // "extractors started" to the next maintenance jobs, using the same due/cadence the routine card has.
-  const timelineHtml = _featureActive('timeline') ? _renderTimelineCard(t) : '';
+  const timelineHtml = _renderTimelineCard(t);
 
-  const showReactionsTile = _featureActive('reactions') && t.reactions_tracked;
+  const showReactionsTile = !!t.reactions_tracked;
   const showMfgTile = _featureActive('industry') && t.manufacturing_tracked;
   const routineHtml = (t.empty_pads_hours != null || t.refill_factories_hours != null || t.restart_extractors_hours != null || showReactionsTile || showMfgTile) ? `
     <section class="pp-card">
@@ -354,7 +349,7 @@ function renderDashboard(data) {
   const _pfCls = _pfShow ? (_pf.fill_pct >= 1 ? 'an-ok' : (_pf.fill_pct < 0.9 ? 'an-warn' : '')) : '';
   // Reactions completion — overall progress of running reaction jobs (time-weighted, from the
   // backend). Shown as a second bar row alongside the factory fill when reactions is in use.
-  const _rxTracked = _featureActive('reactions') && t.reactions_tracked;
+  const _rxTracked = !!t.reactions_tracked;
   const _rxProg = t.reactions_progress_pct;
   const _rxProgShow = _rxTracked && _rxProg != null;
   const factoryFillRow = _pfShow ? `

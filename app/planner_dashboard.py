@@ -382,8 +382,7 @@ def dashboard(pp_session: str = Cookie(default=None)):
     # anyone who hasn't opted into job tracking (same "empty is safe" shape reaction_alerts
     # above already relies on). Calling get_industry_jobs directly (not through its own route)
     # bypasses its require_context FastAPI dependency, which is fine here: it's always the
-    # caller's OWN context_id anyway, so there's no privacy boundary being skipped, only a
-    # feature-visibility one the frontend enforces via _featureActive('reactions'). Wrapped
+    # caller's OWN context_id anyway, so there's no privacy boundary being skipped. Wrapped
     # defensively — a problem on the Reactions side must never take down the core PI dashboard.
     reactions_tracked = False
     reactions_time_left_hours = reactions_net_profit = reactions_isk_committed = None
