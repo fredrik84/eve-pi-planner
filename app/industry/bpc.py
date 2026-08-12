@@ -46,9 +46,54 @@ _HISTORY_DAYS = 120           # how far back an estimate may draw
 _scan_lock = threading.Lock()
 _scanning: set[int] = set()
 
+# ── Read caches ───────────────────────────────────────────────────────────────────────────────
+# Measured on prod: `acquisition_costs` cost 276-662ms of a plan, and every plan pays it twice a
+# page load for an identical answer. None of what it reads is per-account — the product->blueprint
+# map is SDE, and the observation index only changes when a contract scan writes to it — so this
+# caches the reads themselves rather than the per-account result. Two accounts asking about the
+# same Revelation get the same answer, and so do two different builds that share a component.
+#
+# `_PRICE_CACHE` is keyed per BLUEPRINT, not per call, so a build that shares 20 components with the
+# last one only queries what is new. Misses are cached as None: most product ids in a plan have no
+# contract history at all, and re-asking for them every time was most of the query.
+#
+# Nothing in here is mutated in place by callers — `acquisition_costs` hands the listing lists
+# onward and `schedule.py` filters them into NEW lists — so the entries are safe to share.
+_BP_OF_PRODUCT: dict[int, int | None] = {}     # product type -> its blueprint type (SDE, static)
+_PRICE_CACHE: dict[tuple[int, int], tuple[float, dict | None]] = {}
+_PRICE_TTL = 600.0
+_cache_lock = threading.Lock()
+_TABLES_READY = False
+
+
+def clear_price_cache(region_id: int | None = None):
+    """Drop cached contract prices for a region — or all of them when called bare. Called by the
+    scan writes (`_flush`, `_release`), which are the only thing that can change the answer inside
+    this process. Another replica's scan is what the TTL is for."""
+    with _cache_lock:
+        if region_id is None:
+            _PRICE_CACHE.clear()
+        else:
+            for k in [k for k in _PRICE_CACHE if k[0] == region_id]:
+                _PRICE_CACHE.pop(k, None)
+
+
+def reset_caches():
+    """Drop every process-lifetime cache in this module, the table-ready flag included. For tests,
+    which swap the database underneath it and must not inherit the previous one's answers."""
+    global _TABLES_READY
+    with _cache_lock:
+        _TABLES_READY = False
+        _BP_OF_PRODUCT.clear()
+        _PRICE_CACHE.clear()
 
 
 def ensure_bpc_tables():
+    # Idempotent DDL, but it is not free: measured at ~35ms a call on prod, and the price path calls
+    # it twice per plan. Once per process is all it can usefully do.
+    global _TABLES_READY
+    if _TABLES_READY:
+        return
     con = get_connection()
     try:
         con.execute("""
@@ -78,6 +123,7 @@ def ensure_bpc_tables():
         # A thread lock only guards ONE process, and prod runs several replicas — so the lease that
         # decides who scans has to live in the shared database, not in memory.
         add_columns(con, "pp_bpc_scan", "lease_until REAL", "owner TEXT")
+        _TABLES_READY = True
     finally:
         con.close()
 
@@ -150,6 +196,7 @@ def _release(region_id: int, owner: str, seen: int, indexed: int) -> None:
         con.commit()
     finally:
         con.close()
+    clear_price_cache(region_id)      # the scan's end moves the live cutoff, not just the rows
 
 
 def _flush(batch: list[tuple], region_id: int, seen: int, indexed: int,
@@ -177,6 +224,7 @@ def _flush(batch: list[tuple], region_id: int, seen: int, indexed: int,
         con.commit()
     finally:
         con.close()
+    clear_price_cache(region_id)      # this page's observations just changed the answer
 
 
 def _run_scan(region_id: int) -> None:
@@ -312,14 +360,23 @@ def bpc_prices(type_ids: list[int], region_id: int = THE_FORGE) -> dict[int, dic
     ensure_bpc_tables()
     if not type_ids:
         return {}
-    con = get_connection()
-    try:
-        marks = ",".join("?" * len(type_ids))
-        bp_of = {r["product_type_id"]: r["blueprint_type_id"] for r in con.execute(
-            f"SELECT blueprint_type_id, product_type_id FROM blueprints "
-            f"WHERE product_type_id IN ({marks})", tuple(type_ids))}
-    finally:
-        con.close()
+    # SDE, so it cannot change under a running process — cached for the process's life, misses
+    # (a product with no blueprint at all) included, since those are most of a plan's id list.
+    unknown = sorted({int(t) for t in type_ids} - _BP_OF_PRODUCT.keys())
+    if unknown:
+        con = get_connection()
+        try:
+            marks = ",".join("?" * len(unknown))
+            found = {r["product_type_id"]: r["blueprint_type_id"] for r in con.execute(
+                f"SELECT blueprint_type_id, product_type_id FROM blueprints "
+                f"WHERE product_type_id IN ({marks})", tuple(unknown))}
+        finally:
+            con.close()
+        with _cache_lock:
+            for t in unknown:
+                _BP_OF_PRODUCT[t] = found.get(t)
+    bp_of = {t: bp for t in {int(x) for x in type_ids}
+             if (bp := _BP_OF_PRODUCT.get(t)) is not None}
     if not bp_of:
         return {}
     by_bp = blueprint_type_prices(list(set(bp_of.values())), region_id)
@@ -340,14 +397,22 @@ def blueprint_type_prices(bp_ids: list[int], region_id: int = THE_FORGE) -> dict
     bp_ids = sorted({int(b) for b in bp_ids})
     if not bp_ids:
         return {}
+    now = time.time()
+    with _cache_lock:
+        want = [b for b in bp_ids
+                if not ((hit := _PRICE_CACHE.get((region_id, b))) and now - hit[0] < _PRICE_TTL)]
+    if not want:            # every blueprint asked about is already priced — no query at all
+        return {b: info for b in bp_ids
+                if (info := (_PRICE_CACHE.get((region_id, b)) or (0, None))[1]) is not None}
+
     con = get_connection()
     try:
-        bmarks = ",".join("?" * len(bp_ids))
-        cutoff = time.time() - _HISTORY_DAYS * 86400
+        bmarks = ",".join("?" * len(want))
+        cutoff = now - _HISTORY_DAYS * 86400
         rows = con.execute(
             f"SELECT type_id, is_bpc, runs, me, te, price, last_seen FROM pp_bpc_observations "
             f"WHERE region_id=? AND type_id IN ({bmarks}) AND last_seen >= ?",
-            (region_id, *bp_ids, cutoff),
+            (region_id, *want, cutoff),
         ).fetchall()
         st = _scan_state(region_id)
     finally:
@@ -360,8 +425,8 @@ def blueprint_type_prices(bp_ids: list[int], region_id: int = THE_FORGE) -> dict
     for r in rows:
         by_bp.setdefault(int(r["type_id"]), []).append(dict(r))
 
-    out: dict[int, dict] = {}
-    for bp in bp_ids:
+    fresh: dict[int, dict | None] = {}
+    for bp in want:
         rs = by_bp.get(bp, [])
         copies = [r for r in rs if r["is_bpc"]]
         originals = [r for r in rs if not r["is_bpc"]]
@@ -376,9 +441,15 @@ def blueprint_type_prices(bp_ids: list[int], region_id: int = THE_FORGE) -> dict
                 "bpc_listings_hist": [{"price": r["price"], "runs": int(r["runs"] or 0),
                                        "me": int(r["me"] or 0), "te": int(r["te"] or 0)}
                                       for r in copies]}
-        if info["bpc"] or info["bpo"]:
-            out[bp] = info
-    return out
+        # A blueprint nobody has ever contracted is cached as None rather than left out, so the next
+        # plan doesn't query for it again — "no data" is an answer and it is the common one.
+        fresh[bp] = info if (info["bpc"] or info["bpo"]) else None
+
+    with _cache_lock:
+        for bp, info in fresh.items():
+            _PRICE_CACHE[(region_id, bp)] = (now, info)
+        return {b: info for b in bp_ids
+                if (info := (_PRICE_CACHE.get((region_id, b)) or (0, None))[1]) is not None}
 
 
 def cost_for_runs(info: dict, runs_needed: int) -> dict:

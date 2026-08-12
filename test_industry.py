@@ -2993,6 +2993,7 @@ def main():
     test_blueprint_cost_affects_make_or_buy()
     test_cost_breakdown_adds_up()
     test_blueprint_copies_cover_the_runs()
+    test_bpc_price_cache_is_invalidated_by_the_scan()
     test_scan_lease_is_single_writer_across_replicas()
     test_esi_budget_guard()
     test_job_runner_lease_and_toggle()
@@ -3128,6 +3129,7 @@ def test_runs_needed_is_never_reported_as_runs_on_the_copy():
     # The cap `build_tasks` reads has to be a key the real producer sets, not one only tests write.
     import app.industry.bpc as B
     dbcon, restore = _patch_db(B)
+    B.reset_caches()          # this module caches per process; the DB just changed under it
     try:
         dbcon.execute("CREATE TABLE blueprints (blueprint_type_id INTEGER PRIMARY KEY, "
                       "product_type_id INTEGER, output_qty INTEGER, base_time INTEGER, "
@@ -3151,10 +3153,55 @@ def test_runs_needed_is_never_reported_as_runs_on_the_copy():
                       "runs, me, te, price, first_seen, last_seen) VALUES (9, ?, 1000, 1, 40, 10, "
                       "18, 7100000, ?, ?)", (B.THE_FORGE, now, now))
         dbcon.commit()
+        # Written straight to the table, so nothing invalidated the price cache — the real writer
+        # is `_flush`, which does (see test_bpc_price_cache_is_invalidated_by_the_scan).
+        B.clear_price_cache()
         check("the biggest copy on offer sets the cap",
               B.acquisition_costs([100], {})[100].get("runs_per_copy") == 40)
     finally:
         restore()
+        B.reset_caches()
+
+
+def test_bpc_price_cache_is_invalidated_by_the_scan():
+    """Contract prices are cached per blueprint because pricing them was 276-662ms of every plan
+    and a page load plans twice. The cache is only safe if the one thing that changes the answer —
+    a scan writing observations — drops it. A stale price here is a wrong make-or-buy decision."""
+    print("test_bpc_price_cache_is_invalidated_by_the_scan")
+    import app.industry.bpc as B
+    dbcon, restore = _patch_db(B)
+    B.reset_caches()
+    try:
+        dbcon.execute("CREATE TABLE blueprints (blueprint_type_id INTEGER PRIMARY KEY, "
+                      "product_type_id INTEGER, output_qty INTEGER, base_time INTEGER, "
+                      "max_runs INTEGER)")
+        dbcon.execute("INSERT INTO blueprints VALUES (1000, 100, 1, 3600, 1)")
+        B.ensure_bpc_tables()
+        now = time.time()
+        dbcon.execute("INSERT INTO pp_bpc_observations (contract_id, region_id, type_id, is_bpc, "
+                      "runs, me, te, price, first_seen, last_seen) VALUES (1, ?, 1000, 1, 1, 0, 0, "
+                      "?, ?, ?)", (B.THE_FORGE, 20e6, now, now))
+        dbcon.commit()
+        check("the first plan prices the copy", B.acquisition_costs([100], {})[100]["price"] == 20e6)
+
+        # A repeat inside the window is served from the cache — that IS the win being bought.
+        dbcon.execute("INSERT INTO pp_bpc_observations (contract_id, region_id, type_id, is_bpc, "
+                      "runs, me, te, price, first_seen, last_seen) VALUES (2, ?, 1000, 1, 1, 0, 0, "
+                      "?, ?, ?)", (B.THE_FORGE, 5e6, now, now))
+        dbcon.commit()
+        check("a repeat does not re-query", B.acquisition_costs([100], {})[100]["price"] == 20e6)
+
+        # ...and the scan's own write is what makes the cheaper contract visible.
+        B._flush([], B.THE_FORGE, 0, 0)
+        check("the scan's write drops it", B.acquisition_costs([100], {})[100]["price"] == 5e6)
+
+        # A product nobody contracts is cached as a miss, and a miss must stay a miss — not
+        # resurface as a phantom price on the next plan.
+        check("an unlisted product has no price", 101 not in B.acquisition_costs([101], {}))
+        check("and still none on a repeat", 101 not in B.acquisition_costs([101], {}))
+    finally:
+        restore()
+        B.reset_caches()
 
 
 def test_structure_bonus():
