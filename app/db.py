@@ -103,6 +103,7 @@ _EPOCH_COLUMNS = [
     ("pp_plan_baseline", "saved_at"),
     ("pp_reaction_assignments", "created_at"),
     ("pp_reaction_completions", "completed_at"),
+    ("pp_reaction_manual_done", "marked_at"),
     ("pp_reaction_orders", "created_at"),
 ]
 

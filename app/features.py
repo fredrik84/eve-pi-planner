@@ -374,6 +374,17 @@ FEATURE_REGISTRY = [
                     "the same jobs, run counts and stage order as the table it replaces, with the "
                     "stages you cannot start yet marked as waiting on the one below.",
      "default": False},
+    {"key": "reactions_manual_done", "label": "Reactions: mark a reaction installed or done by hand",
+     "group": "Reactions",
+     "description": "The same three states an Industry build step has, on your reaction plan: "
+                    "click a step to say you have installed it, again when it has finished, and "
+                    "once more to take it back. For when ESI cannot tell us — the job cache is up "
+                    "to five minutes stale, a job installed under a different product than planned "
+                    "matches nothing, and a stage reacted before this tool saw it has no job to "
+                    "read — so the page stops saying 'after stage 1 finishes' about a stage that "
+                    "finished an hour ago. A mark only ever brings a stage forward: it can never "
+                    "hide a job ESI can actually see, and it is never counted as ISK earned.",
+     "default": False},
     {"key": "reactions_missing_formulas", "label": "Reactions: formulas you need to acquire",
      "group": "Reactions",
      "description": "Once you have PASTED your industry window, a formula you never declared is "

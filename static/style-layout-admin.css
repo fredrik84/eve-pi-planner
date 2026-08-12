@@ -632,6 +632,20 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
   transform: translateY(-1px);
 }
 .rx-slot-pending-badge:hover { background: #3a1515; border-color: #a83a3a; }
+/* The hand-mark tick, sat beside the ⊘ cancel badge — the only corner with room, and the two do
+   belong together: one says "I have done this", the other "I am not going to". */
+.rx-slot-mark-badge {
+  position: absolute; top: -5px; right: 14px; font-size: 10px; line-height: 1;
+  color: #7fdca6; background: #101a14; border: 1px solid #2f6b48; border-radius: 50%;
+  width: 16px; height: 16px; display: flex; align-items: center; justify-content: center;
+  cursor: pointer; transition: background 0.15s, border-color 0.15s;
+}
+.rx-slot-mark-badge:hover { background: #163524; border-color: #3a9668; }
+/* Marked installed by hand: a job in progress ESI cannot see yet, so it reads like a running slot
+   rather than a red "go do this" — which is the entire reason for having said so. */
+.rx-slot-marked { border-color: #2f6b48; background: linear-gradient(160deg, #16241c, #131e18); }
+.rx-slot-marked:hover { border-color: #3a9668; }
+.rx-slot-marked .rx-slot-pending-label { color: #8fc7a5; }
 .rx-slot-pending-label { font-size: 9px; color: #c87a7a; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 62px; }
 /* "+2" — identical planned jobs folded into one square (see the pendGroups merge). Top-left is
    the one free corner: stage badge is bottom-left, run count bottom-right, cancel top-right. */

@@ -26,6 +26,7 @@ Find a section: `grep -n '^## ' docs/reactions.md` and read from that line — t
 - **A stage is a DEPTH, not a position in a list** — why siblings share a stage, and how existing rows were repaired
 - **Knowing when the next stage can start (`chain_stage_state`)** — the ESI signal behind "stage 2 is ready"
 - **Stages on the dashboard are `tier_order`, shown absolute** — how chain order is rendered, and why the number is never re-ranked
+- **Marking a reaction running or done by hand (`reactions_manual_done`)** — why a mark is a floor and not a replacement, and what it does to the slot count
 - **The stage list is Manufacturing's pipeline (`reactions_stage_pipeline`)** — why the two tabs share a grid, and why rows are characters
 - **Pricing: a sell-order price is not achievable profit** — the pricing rule that governs every profit figure shown for reaction goods
 - **Where the rest lives** — pointers to reaction content that belongs to another service
@@ -636,6 +637,51 @@ a reactor collapse.
 Empty squares are counted against the **peak stage** rather than the row count, so a queued later
 stage no longer hides free reactors; `free_slots / slots` on the row label stays the authoritative
 number, and the "To install" checklist below still lists every job.
+
+## Marking a reaction running or done by hand (`reactions_manual_done`)
+
+Reported from use: *"we can't mark reaction as done manually. We should have the same functionality
+as manufacturing."*
+
+ESI is the signal for what is running and what has landed, and it is right nearly always. The
+exceptions are the ones that strand a player: the job cache is up to five minutes stale, a job
+installed under a different product than planned matches no plan row, and a chain reacted before
+this tool ever saw it has no job to read at all. In every one of those the dashboard says *"after
+stage 1 finishes"* about a stage that finished an hour ago, and there was no way to say otherwise.
+
+So: the same three states, the same click cycle and the same wording as an Industry build step
+(`app/industry/progress.py`) — not started → installed → done → not started, one write per click,
+wrapping round so a misclick costs a click and never data.
+
+**A mark is a FLOOR under what was observed, never a replacement for it.** `chain_stage_state`
+takes the higher of the ESI count and the hand count per (character, product, stage), exactly as
+`resolve_done` does on the Industry side. A tick can therefore bring a stage forward; it can never
+hide a job ESI can actually see. A `running` mark does *not* release the stage above — running is
+not finished, and gating on it would be the one way this feature could make a plan wrong.
+
+**Keyed on (character, product, stage), deliberately not on the row id.** `level_product_runs`
+re-splits a product's work and DELETES and re-inserts rows to do it, so a mark keyed on a row id
+would silently detach from the job it was about. The triple is what the dashboard groups by, what
+the pipeline draws a card for, and what the player is pointing at. `_RX_ALL` (-1) means "however
+many jobs the plan holds today", which is what keeps a whole-group mark meaningful across a
+re-split; a partial mark stores a count and is capped at what the plan currently holds.
+
+**What a mark does to the slot count, and why it differs by state.** A job marked DONE has given
+its reactor back — counting it would idle a slot the character really has — so it drops out of
+`pending_load` and out of the loadout's squares. One marked RUNNING is the opposite: it is cooking
+right now and ESI simply cannot see it yet, so it holds its slot exactly as an ESI-reported job
+would, and its square turns green instead of red. Getting these two the wrong way round is the one
+mistake here that would cost the player real capacity. The frontend filters the squares on the same
+rule the backend uses for `free_slots`, so the row count and the slot count cannot contradict each
+other on one screen.
+
+**A marked row stays in `pending`**, carrying its mark, rather than vanishing — a row that
+disappeared when ticked would be a mark you could set and never clear. The checklist skips marked
+rows because it is about work left to do; the pipeline draws them because it is about state.
+
+Like the Industry equivalent, `/api/reactions/mark` writes nothing to the completion ledgers: those
+feed lifetime turnover and profit, and a tick is a statement about this plan's progress, not
+evidence of an ISK-bearing job that really ran.
 
 ## The stage list is Manufacturing's pipeline (`reactions_stage_pipeline`)
 

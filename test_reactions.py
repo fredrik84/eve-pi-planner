@@ -378,6 +378,58 @@ def test_an_order_fills_one_character_before_it_uses_two() -> bool:
     return ok
 
 
+def test_a_reaction_can_be_marked_running_or_done_by_hand() -> bool:
+    """ESI is the signal for what is running and what has landed, and it is right nearly always —
+    but the job cache is up to five minutes stale, a job installed under a different product than
+    planned matches nothing, and a chain reacted before this tool saw it has no job to read. In all
+    three the page said "after stage 1 finishes" about a stage that was over, with no way to say so.
+    A mark is a FLOOR under what was observed: it can bring a stage forward, never hide a real job."""
+    from app.reactions.jobs import chain_stage_state, manual_jobs, _RX_DONE, _RX_RUNNING, _RX_ALL
+
+    rows = [{"character_id": 1, "type_id": 11, "tier_order": 0, "runs": 5, "created_at": 100.0,
+             "name": "Carbon Fiber"},
+            {"character_id": 1, "type_id": 12, "tier_order": 1, "runs": 5, "created_at": 100.0,
+             "name": "Reinforced Carbon Fibers"}]
+    st = lambda marks: {s["stage"]: s for s in chain_stage_state(rows, [], 0.0, marks)}
+
+    bare = st(None)
+    ok = check(bare[0]["ready"] and not bare[1]["ready"],
+               "with no jobs and no marks, stage 2 waits on stage 1")
+
+    done = st({(1, 11, 0): (_RX_ALL, _RX_DONE)})
+    ok &= check(done[0]["done"] == 1, "marking stage 1 done counts it as done")
+    ok &= check(done[1]["ready"], "and that is what lets stage 2 start — the whole point")
+
+    run = st({(1, 11, 0): (_RX_ALL, _RX_RUNNING)})
+    ok &= check(run[0]["running"] == 1 and run[0]["done"] == 0,
+                "marking it merely installed counts as running, not done")
+    ok &= check(not run[1]["ready"],
+                "and a running stage does NOT release the stage above — running is not finished")
+
+    # A mark must never be able to un-see a job ESI reports. Same rule as `resolve_done`.
+    jobs = [{"product_type_id": 11, "status": "delivered"}]
+    seen = st({(1, 11, 0): (_RX_ALL, _RX_RUNNING)})
+    esi = {s["stage"]: s for s in chain_stage_state(rows, jobs, 0.0,
+                                                    {(1, 11, 0): (_RX_ALL, _RX_RUNNING)})}
+    ok &= check(esi[0]["done"] == 1 and esi[1]["ready"],
+                "a 'running' mark cannot downgrade a job ESI already reports as delivered")
+    ok &= check(seen[0]["running"] == 1, "(and with no ESI job the same mark still reads running)")
+
+    # Partial marks resolve against the plan, and the states are alternatives rather than a ladder.
+    marks = {(1, 11, 0): (2, _RX_DONE)}
+    ok &= check(manual_jobs(marks, 1, 11, 0, 4, _RX_DONE) == 2, "2 of 4 jobs marked done is 2")
+    ok &= check(manual_jobs(marks, 1, 11, 0, 4, _RX_RUNNING) == 0,
+                "and asking the same group for 'running' is 0 — one mark, not a ladder")
+    ok &= check(manual_jobs({(1, 11, 0): (_RX_ALL, _RX_DONE)}, 1, 11, 0, 7, _RX_DONE) == 7,
+                "'all' follows the plan's job count, so it survives a re-split")
+    ok &= check(manual_jobs(marks, 1, 11, 0, 1, _RX_DONE) == 1,
+                "a mark is capped at what the plan actually holds today")
+    ok &= check(manual_jobs(marks, 99, 11, 0, 4, _RX_DONE) == 0
+                and manual_jobs(marks, 1, 11, 5, 4, _RX_DONE) == 0,
+                "another character or another stage is a different group entirely")
+    return ok
+
+
 def test_assigning_twice_does_not_book_it_twice() -> bool:
     """`POST /api/reactions/assign` was a bare INSERT, so a retry appended a second full set of
     rows — and a frontend bug that reported every SUCCESSFUL assign as failed turned two
@@ -494,6 +546,7 @@ def run_unit_tests() -> bool:
         test_explode_shopping_list(),
         test_a_chain_spreads_over_the_slots_it_has(),
         test_an_order_fills_one_character_before_it_uses_two(),
+        test_a_reaction_can_be_marked_running_or_done_by_hand(),
         test_assigning_twice_does_not_book_it_twice(),
         test_explode_chain_tiers(),
         test_value_reaction_batch(),

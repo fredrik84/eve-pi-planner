@@ -502,7 +502,156 @@ def restage_plan_rows(context_id: int) -> int:
     return fixed
 
 
-def chain_stage_state(rows: list[dict], jobs: list[dict], now: float) -> list[dict]:
+# ── Marking a reaction running or done by hand (`reactions_manual_done`) ───────────────────────
+# ESI is the signal for what is running and what has landed, and it is right nearly always. The
+# exceptions are the ones that strand a player: the job cache is up to five minutes stale, a job
+# installed under a different product than planned matches nothing, and a chain reacted before this
+# tool ever saw it has no jobs to read. In every one of those the page says "after stage 1
+# finishes" about a stage that finished an hour ago, and there is no way to say otherwise.
+#
+# So the same three states Industry has, on the same terms (`app/industry/progress.py`): a mark is
+# a FLOOR under what was observed, never a replacement for it — `chain_stage_state` takes the
+# higher of the two — so a tick can bring a stage forward and can never hide a job ESI can see.
+_RX_ALL = -1                       # "all the jobs of this group", whatever the plan says today
+_RX_DONE, _RX_RUNNING = "done", "running"
+_RX_STATES = (_RX_RUNNING, _RX_DONE)
+
+
+def _manual_done_on(context_id: int) -> bool:
+    try:
+        from app.features import feature_enabled_for
+        return feature_enabled_for("reactions_manual_done", context_id)
+    except Exception:
+        return False
+
+
+@ensure_once
+def ensure_reaction_manual_done_table():
+    con = get_connection()
+    try:
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS pp_reaction_manual_done (
+                context_id   INTEGER NOT NULL,
+                character_id INTEGER NOT NULL,
+                type_id      INTEGER NOT NULL,
+                tier_order   INTEGER NOT NULL DEFAULT 0,
+                jobs         INTEGER NOT NULL DEFAULT -1,
+                state        TEXT    NOT NULL DEFAULT 'done',
+                marked_at    REAL    NOT NULL,
+                PRIMARY KEY (context_id, character_id, type_id, tier_order)
+            )
+        """)
+        con.commit()
+    finally:
+        con.close()
+
+
+def _assert_owns_character(context_id: int, character_id: int) -> None:
+    """403 unless the character belongs to this account — CLAUDE.md rule 8. A mark is per
+    character, so the id arrives from the client and has to be checked like any other."""
+    con = get_connection()
+    try:
+        owner = con.execute("SELECT 1 FROM pp_characters WHERE character_id=? AND context_id=?",
+                            (int(character_id), context_id)).fetchone()
+    finally:
+        con.close()
+    if not owner:
+        raise HTTPException(status_code=403, detail="Not your character")
+
+
+def _manual_key(character_id, type_id, tier_order) -> tuple[int, int, int]:
+    """(character, product, stage) — the plan's own grouping, and deliberately NOT the row id.
+
+    A row id does not survive the levelling passes: `level_product_runs` re-splits a product's work
+    and DELETES and re-inserts rows to do it, so a mark keyed on one would silently detach from the
+    job it was about. This triple is what the dashboard groups by, what the pipeline draws a card
+    for, and what the player is actually pointing at when they tick something."""
+    return (int(character_id), int(type_id), int(tier_order or 0))
+
+
+def reaction_manual_marks(context_id: int) -> dict[tuple[int, int, int], tuple[int, str]]:
+    """{(character, product, stage): (jobs, state)} the player has marked by hand."""
+    ensure_reaction_manual_done_table()
+    con = get_connection()
+    try:
+        rows = con.execute(
+            "SELECT character_id, type_id, tier_order, jobs, state FROM pp_reaction_manual_done "
+            "WHERE context_id=?", (context_id,)).fetchall()
+    except Exception:
+        return {}
+    finally:
+        con.close()
+    return {_manual_key(r["character_id"], r["type_id"], r["tier_order"]):
+            (int(r["jobs"]), str(r["state"] or _RX_DONE)) for r in rows}
+
+
+def manual_jobs(marks: dict, character_id: int, type_id: int, tier_order: int,
+                steps: int, state: str = _RX_DONE) -> int:
+    """How many of a group's `steps` jobs are hand-marked into `state`, resolved against the plan.
+
+    A group carries at most ONE mark, so asking for `done` on a group marked `running` is 0 — the
+    states are alternatives, not a ladder. `_RX_ALL` means "however many the plan holds today",
+    which is what keeps a mark meaningful after the leveller re-splits the work into more jobs."""
+    m = marks.get(_manual_key(character_id, type_id, tier_order))
+    if m is None or m[1] != state:
+        return 0
+    return steps if m[0] == _RX_ALL else max(0, min(m[0], steps))
+
+
+def set_reaction_manual(context_id: int, character_id: int, type_id: int, tier_order: int,
+                        jobs: int | None, state: str = _RX_DONE) -> None:
+    """Mark a group (`jobs=None` → all of it, or a count) or clear it (`jobs=0`).
+
+    One row per group, so setting either state replaces the other — which is what makes the
+    not started → running → done → not started click cycle one write each time instead of a pair
+    of half-states that can disagree."""
+    ensure_reaction_manual_done_table()
+    if state not in _RX_STATES:
+        state = _RX_DONE
+    cid, tid, tier = _manual_key(character_id, type_id, tier_order)
+    con = get_connection()
+    try:
+        if jobs is not None and jobs <= 0:
+            con.execute("DELETE FROM pp_reaction_manual_done WHERE context_id=? AND character_id=? "
+                        "AND type_id=? AND tier_order=?", (context_id, cid, tid, tier))
+        else:
+            con.execute(
+                "INSERT INTO pp_reaction_manual_done (context_id, character_id, type_id, "
+                "tier_order, jobs, state, marked_at) VALUES (?,?,?,?,?,?,?) "
+                "ON CONFLICT(context_id, character_id, type_id, tier_order) DO UPDATE SET "
+                "jobs=excluded.jobs, state=excluded.state, marked_at=excluded.marked_at",
+                (context_id, cid, tid, tier, _RX_ALL if jobs is None else int(jobs), state,
+                 _time.time()))
+        con.commit()
+    finally:
+        con.close()
+
+
+class ReactionMarkRequest(BaseModel):
+    character_id: int
+    type_id: int
+    tier_order: int = 0
+    state: str = _RX_DONE
+    jobs: int | None = None            # None = the whole group; 0 clears the mark
+
+
+@router.post("/api/reactions/mark")
+def mark_reaction(req: ReactionMarkRequest, context_id: int = Depends(require_context)):
+    """Mark a planned reaction running or done by hand, or clear the mark.
+
+    Like the Industry equivalent it writes nothing to the completion ledgers: those feed lifetime
+    turnover and profit, and a tick is a statement about this plan's progress, not evidence of an
+    ISK-bearing job that really ran."""
+    if not _manual_done_on(context_id):
+        raise HTTPException(status_code=404, detail="Not enabled")
+    _assert_owns_character(context_id, req.character_id)
+    set_reaction_manual(context_id, req.character_id, req.type_id, req.tier_order,
+                        req.jobs, req.state)
+    return {"ok": True}
+
+
+def chain_stage_state(rows: list[dict], jobs: list[dict], now: float,
+                      marks: dict | None = None) -> list[dict]:
     """Per-chain stage progress for one character: `[{stage, steps, done, running, todo, ready,
     names}]`, one entry per stage of each chain the character is holding.
 
@@ -560,6 +709,21 @@ def chain_stage_state(rows: list[dict], jobs: list[dict], now: float) -> list[di
                 elif live_types.get(tid, 0) > 0:
                     live_types[tid] -= 1
                     running += 1
+            # A hand mark is a FLOOR under what ESI showed, per (character, product, stage), never a
+            # replacement for it: the higher of the two wins, exactly as `resolve_done` does on the
+            # Industry side. So a tick can bring a stage forward when the job cache is stale or the
+            # job was installed outside this tool, and can never hide work ESI can actually see.
+            if marks:
+                by_product: dict[int, list[dict]] = {}
+                for r in steps:
+                    by_product.setdefault(int(r["type_id"]), []).append(r)
+                m_done = m_run = 0
+                for tid, rs in by_product.items():
+                    cid = rs[0].get("character_id")
+                    m_done += manual_jobs(marks, cid, tid, stage, len(rs), _RX_DONE)
+                    m_run += manual_jobs(marks, cid, tid, stage, len(rs), _RX_RUNNING)
+                done = min(len(steps), max(done, m_done))
+                running = min(len(steps) - done, max(running, m_run))
             entry = {
                 "chain": round(float(steps[0].get("created_at") or 0.0), 3),
                 "stage": stage, "steps": len(steps), "done": done, "running": running,
@@ -1824,6 +1988,9 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
             level_stage_runs(context_id)
     except Exception:
         pass
+    # What the player has marked running or done by hand. Own connection, so it belongs here with
+    # the other step-1 reads and not inside the one below — never two at once.
+    marks = reaction_manual_marks(context_id) if _manual_done_on(context_id) else {}
     # ── Step 2: one connection — characters, cached ESI jobs, assignments, orders, SDE lookups ───
     con = get_connection()
     try:
@@ -1953,6 +2120,23 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
             tid = j.get("product_type_id")
             running_type_counts[tid] = running_type_counts.get(tid, 0) + 1
 
+        # How many rows of each (product, stage) group the player has marked by hand, spent row by
+        # row below so marking 2 of a group's 4 jobs leaves the other 2 alone. A marked row STAYS in
+        # `pending` and carries the mark instead of vanishing: the page has to be able to draw it
+        # and let the player take the mark back, and a row that quietly disappeared when ticked
+        # would be a mark you could set and never clear.
+        manual_left: dict[tuple[int, int, str], int] = {}
+        if marks:
+            grouped: dict[tuple[int, int], int] = {}
+            for a in assignments.get(c["character_id"], []):
+                k = (a["type_id"], int(a.get("tier_order") or 0))
+                grouped[k] = grouped.get(k, 0) + 1
+            for (tid, tier), n in grouped.items():
+                for st in _RX_STATES:
+                    got = manual_jobs(marks, c["character_id"], tid, tier, n, st)
+                    if got:
+                        manual_left[(tid, tier, st)] = got
+
         pending = []
         for a in assignments.get(c["character_id"], []):
             # A live ESI job of this product covers a planned slot: it's hidden from the "to
@@ -1963,6 +2147,16 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
             is_running = running_type_counts.get(a["type_id"], 0) > 0
             if is_running:
                 running_type_counts[a["type_id"]] -= 1
+            # A hand mark on a row ESI has nothing to say about. Done is spent first: with a group
+            # part-done and part-running, the finished ones are the ones that are certainly over.
+            marked = None
+            if not is_running:
+                tier_a = int(a.get("tier_order") or 0)
+                for st in (_RX_DONE, _RX_RUNNING):
+                    if manual_left.get((a["type_id"], tier_a, st), 0) > 0:
+                        manual_left[(a["type_id"], tier_a, st)] -= 1
+                        marked = st
+                        break
             # An INTERMEDIATE is a product another row of this plan consumes — its output is not
             # sellable, it feeds the stage above. Read structurally (`in_house`, below) rather than
             # from the stored `input_cost == 0 and reward == 0`, which was only ever a proxy: it
@@ -1979,6 +2173,10 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
                 pending.append({
                     "assignment_id": a["id"], "type_id": a["type_id"], "name": a["name"], "runs": a["runs"],
                     "tier_order": a["tier_order"],
+                    # `running` or `done` when the player said so by hand and ESI has not caught up
+                    # (or never will). Absent otherwise. Keeps the row on the page so the mark can
+                    # be taken back, while the checklist and the slot count both read it.
+                    "marked": marked,
                     # Which assign wrote this row — the chain it belongs to, so the UI can tell
                     # whether ITS stage below has finished rather than some other plan's.
                     "chain": round(float(a.get("created_at") or 0.0), 3), "input_cost": a["input_cost"], "reward": a["reward"],
@@ -1989,7 +2187,12 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
         # count: stage 2 is queued behind stage 1, so it is not holding a reactor while stage 1
         # runs. Same model as the assign guard and `_character_capacities` — the three used to
         # disagree, and this was the one the player read off the page.
-        pending_load = _concurrent_load(pending) if peak_only else len(pending)
+        # A job marked DONE has given its reactor back — it is over, and counting it would idle a
+        # slot the character really has. One marked RUNNING is the opposite: it is cooking right
+        # now, ESI simply cannot see it yet, so it holds its slot exactly as a job ESI reports
+        # would. Getting this backwards is what would make a hand mark cost the player capacity.
+        holding = [p for p in pending if p.get("marked") != _RX_DONE]
+        pending_load = _concurrent_load(holding) if peak_only else len(holding)
         used_slots += pending_load
 
         characters.append({
@@ -2003,7 +2206,13 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
             # Per-chain, per-stage progress read off ESI's own job states — what makes "you can
             # start stage 2 now" a fact the page can state instead of a wait the player has to
             # track themselves. See chain_stage_state.
-            "stages": chain_stage_state(assignments.get(c["character_id"], []), jobs, now),
+            "stages": chain_stage_state(assignments.get(c["character_id"], []), jobs, now, marks),
+            # What this character has been marked by hand, so the page can draw the tick it is
+            # showing rather than infer it back out of a covered row that now looks like any other.
+            "marks": [{"type_id": tid, "tier_order": tier, "state": st,
+                       "jobs": None if n == _RX_ALL else n}
+                      for (cid, tid, tier), (n, st) in (marks or {}).items()
+                      if cid == c["character_id"]],
         })
         # ── Step 4a: orphan jobs (running in-game with no plan slot) and running-job rows ───────
         # Whatever remains in running_type_counts after plan-row matching is ORPHAN jobs: running

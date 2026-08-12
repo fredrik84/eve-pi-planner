@@ -436,6 +436,48 @@ function _rxStageReady(data) {
 // pages start looking like different products.
 let _rxMissSeq = 0;
 
+// ── Marking a reaction running or done by hand (`reactions_manual_done`) ──────────────────────
+// The same three states, the same click cycle and the same wording as a build step in the Industry
+// tab (`indCycleDone`). ESI is right nearly always; this is for when it isn't — a job cache up to
+// five minutes stale, a job installed under a different product than planned, or a stage reacted
+// before this tool ever saw it — and the page would otherwise keep saying "after stage 1 finishes"
+// about a stage that finished an hour ago.
+const _RX_MARK_NEXT = { none: 'running', running: 'done', done: 'none' };
+
+// What a (character, product, stage) group is marked as. Read off the rows themselves so it can
+// never disagree with what the backend used for the slot count and the stage gate.
+function _rxMarkOf(rows) {
+  const marked = rows.filter(r => r.marked);
+  if (!marked.length) return 'none';
+  // A part-marked group reads as the state it has ALREADY reached, never as the one it hasn't:
+  // "2 of 4 done" is a group with work still to install, so it must not look finished.
+  return marked.length < rows.length ? 'running'
+    : (marked.every(r => r.marked === 'done') ? 'done' : 'running');
+}
+
+// none → running → done → none. One write per click, wrapping round, so a misclick costs a click
+// and never data — the same forgiving cycle the build pipeline uses.
+function rxCycleMark(characterId, typeId, tier) {
+  const next = _RX_MARK_NEXT[_rxMarkOfGroup(characterId, typeId, tier)] || 'running';
+  apiSend('POST', '/api/reactions/mark', {
+    character_id: Number(characterId), type_id: Number(typeId), tier_order: Number(tier),
+    // 'none' clears it: the setter reads jobs=0 as "forget this group", whatever state is sent.
+    state: next === 'none' ? 'done' : next, jobs: next === 'none' ? 0 : null,
+  })
+    .then(() => { _rxLastDashboardData = null; _loadReactionsDashboard(); })
+    .catch(toastError);
+}
+
+// The current state of a group, off the last payload — `rxCycleMark` needs it before it writes.
+function _rxMarkOfGroup(characterId, typeId, tier) {
+  const c = ((_rxLastDashboardData && _rxLastDashboardData.characters) || [])
+    .find(x => String(x.character_id) === String(characterId));
+  if (!c) return 'none';
+  const rows = (c.pending || []).filter(p => String(p.type_id) === String(typeId)
+    && (p.tier_order || 0) === Number(tier));
+  return rows.length ? _rxMarkOf(rows) : 'none';
+}
+
 // The stage list drawn the way Manufacturing draws its build pipeline: columns are stages, rows
 // are the characters holding work, a cell is what that character installs at that stage. The grid,
 // the cards and the classes are Manufacturing's own (`_indPipelineHtml`, `.ind-pipe*`) rather than
@@ -461,6 +503,7 @@ function _rxPipelineHtml(todoRows, readyStages) {
   const ready = (cid, tier) => tier <= 0
     || [...readyStages.entries()].some(([k, v]) => v && k.startsWith(`${cid}:`) && k.endsWith(`:${tier}`));
   const anyReady = tier => chars.some(c => ready(c.id, tier));
+  const markable = _featureActive('reactions_manual_done');
 
   let html = '<div class="ind-pipe-corner"></div>';
   tiers.forEach((tier, i) => {
@@ -484,18 +527,37 @@ function _rxPipelineHtml(todoRows, readyStages) {
         // The run count is the number you type into the job, and the job count is how many times
         // you type it — the two things the player is actually reading this to find out.
         const isReady = ready(c.id, tier);
-        let state = '';
-        if (tier > 0) {
+        const mark = markable ? _rxMarkOf(g.rows || []) : 'none';
+        const jobs = (g.count || 0) + (g.markedCount || 0);
+        const runs = g.totalRuns || (g.rows || []).reduce((s, r) => s + (r.runs || 0), 0);
+        // A hand mark is the card's state when there is one — it is the more specific statement,
+        // and it is the player's own. Otherwise the card says what the stage gate says.
+        let state = '', cls = '';
+        if (mark === 'done') {
+          state = '<span class="ind-pipe-state ind-st-done">✓ done</span>';
+          cls = ' ind-pipe-is-done';
+        } else if (mark === 'running') {
+          state = `<span class="ind-pipe-state ind-st-run">${g.markedCount} installed</span>`;
+          cls = ' ind-pipe-is-run';
+        } else if (tier > 0) {
           state = isReady
             ? '<span class="ind-pipe-state ind-st-run">ready</span>'
             : `<span class="ind-pipe-state ind-st-wait">after stage ${tier}</span>`;
+          if (!isReady) cls = ' ind-pipe-is-wait';
         }
-        const tip = `${g.name} — ${g.count} job${g.count === 1 ? '' : 's'} of ${g.totalRuns.toLocaleString()} runs`
-          + ` on ${c.name}${tier > 0 ? ' — ' + _rxStageLabel(tier, isReady) : ''}`;
-        return `<div class="ind-pipe-card ind-pipe-build" data-tid="${g.type_id}" title="${_esc(tip)}">`
+        const nextTip = mark === 'done' ? ' Click to set it back to not started.'
+          : mark === 'running' ? ' Click when it has finished.'
+          : ' Click to say it is installed.';
+        const tip = `${g.name} — ${jobs} job${jobs === 1 ? '' : 's'} of ${runs.toLocaleString()} runs`
+          + ` on ${c.name}${tier > 0 ? ' — ' + _rxStageLabel(tier, isReady) : ''}`
+          + (markable ? nextTip : '');
+        const onclick = markable
+          ? ` onclick="rxCycleMark('${c.id}', ${g.type_id}, ${tier})"` : '';
+        return `<div class="ind-pipe-card ind-pipe-build${cls}${markable ? ' ind-pipe-markable' : ''}"`
+          + `${onclick} data-tid="${g.type_id}" title="${_esc(tip)}">`
           + `<span class="ind-pipe-name">${_esc(g.name)}</span>`
-          + `<span class="ind-pipe-meta"><span class="ind-pipe-qty">×${g.totalRuns.toLocaleString()}</span>`
-          + `<span class="ind-pipe-runs">${g.count}&nbsp;job${g.count === 1 ? '' : 's'}</span>${state}</span></div>`;
+          + `<span class="ind-pipe-meta"><span class="ind-pipe-qty">×${runs.toLocaleString()}</span>`
+          + `<span class="ind-pipe-runs">${jobs}&nbsp;job${jobs === 1 ? '' : 's'}</span>${state}</span></div>`;
       }).join('');
       html += `<div class="ind-pipe-cell ind-row-rx${last ? ' ind-pipe-final' : ''}">${cards}</div>`;
     });
@@ -504,7 +566,8 @@ function _rxPipelineHtml(todoRows, readyStages) {
   const totalRuns = todoRows.reduce((s, g) => s + g.totalRuns, 0);
   return `<details class="ind-details" open><summary>Reaction pipeline</summary>`
     + `<p class="ind-pipe-hint">Each row is a character, each column a stage — ${totalRuns.toLocaleString()} runs`
-    + ` to install${tiers.length > 1 ? `, in ${tiers.length} stages you start in order` : ''}.</p>`
+    + ` to install${tiers.length > 1 ? `, in ${tiers.length} stages you start in order` : ''}.`
+    + `${markable ? ' Click a step to step it on: not started → installed → done.' : ''}</p>`
     + `<div class="ind-pipe-scroll"><div class="ind-pipe" style="--ind-cols:${tiers.length}">${html}</div></div></details>`;
 }
 
@@ -751,9 +814,18 @@ function _renderReactionsDashboard(data) {
           character_id: c.character_id, character_name: c.character_name,
           type_id: a.type_id, name: a.name, tier,
           count: 0, totalRuns: 0, jobRuns: new Map(), ids: [],
+          rows: [], markedCount: 0,
         });
       }
       const g = todoGroups.get(key);
+      g.rows.push(a);
+      // A row the player has ticked is no longer something to install, so it leaves the counts the
+      // checklist is built from — but the GROUP stays, carrying its mark, because that is what the
+      // pipeline draws and what you click to take the mark back.
+      if (a.marked) {
+        g.markedCount++;
+        continue;
+      }
       g.count++;
       g.totalRuns += a.runs;
       g.jobRuns.set(a.runs, (g.jobRuns.get(a.runs) || 0) + 1);
@@ -770,7 +842,11 @@ function _renderReactionsDashboard(data) {
     // repeat it once the stage below lands. Adjacent-merge is enough because `pending` is already
     // sorted by exactly those keys.
     const pendGroups = [];
-    for (const a of pending) {
+    // A job marked DONE has given its reactor back, so it stops holding a square — the same call
+    // the backend makes for `free_slots`, and the two must agree or the row count and the slot
+    // count contradict each other on one screen. One marked RUNNING keeps its square: it IS
+    // occupying a reactor, it just isn't one ESI can see yet.
+    for (const a of pending.filter(p => p.marked !== 'done')) {
       const tier = a.tier_order || 0;
       const ready = tier <= 0 || _rxReadyStages.get(`${c.character_id}:${a.chain}:${tier}`) === true;
       const queuedJob = tier > 0 && !ready;
@@ -806,11 +882,24 @@ function _renderReactionsDashboard(data) {
         ? `<span class="rx-slot-more" title="${grp.n} identical jobs — install ${_esc(a.name)} ×${a.runs} ${grp.n} times">+${grp.n - 1}</span>`
         : '';
       const moreTip = grp.n > 1 ? ` — ${grp.n} identical jobs` : '';
+      // The mark also has to be reachable without the pipeline view, since that is its own flag —
+      // and the square is where a player looking at a stale ⊘ actually is. Same click cycle,
+      // stop-propagated so it doesn't open the editor the square is otherwise wired to.
+      const markBadge = _featureActive('reactions_manual_done')
+        ? `<span class="rx-slot-mark-badge" title="ESI hasn't seen this yet — click to say you installed it, again when it has finished" onclick="event.stopPropagation();rxCycleMark('${c.character_id}', ${a.type_id}, ${tier})">✓</span>`
+        : '';
+      // Marked installed by hand: it reads as a job in progress, not as a red "go do this", which
+      // is the whole point of having said so.
+      const isMarked = a.marked === 'running';
+      const pendTitle = isMarked
+        ? `You marked this installed — ${_esc(a.name)} ×${a.runs}, waiting for ESI to confirm it${_esc(orderTip)}. Click to edit.`
+        : `Not running yet — install ${_esc(a.name)} ×${a.runs} in-game${_esc(moreTip)}${_esc(orderTip)}${_esc(stageTip)}. Click to edit.`;
       squares.push(`
-        <div class="rx-slot rx-slot-pending${tier > 0 && !ready ? ' rx-slot-later' : ''}" title="Not running yet — install ${_esc(a.name)} ×${a.runs} in-game${_esc(moreTip)}${_esc(orderTip)}${_esc(stageTip)}. Click to edit." onclick="_rxOpenEditAssign(${a.assignment_id}, '${c.character_id}')">
+        <div class="rx-slot rx-slot-pending${isMarked ? ' rx-slot-marked' : ''}${tier > 0 && !ready && !isMarked ? ' rx-slot-later' : ''}" title="${pendTitle}" onclick="_rxOpenEditAssign(${a.assignment_id}, '${c.character_id}')">
           <img class="rx-slot-icon" src="${pendingIcon}" alt="" onerror="this.style.visibility='hidden'">
           ${stageBadge}
           ${moreBadge}
+          ${markBadge}
           <span class="rx-slot-pending-badge" onclick="event.stopPropagation();_rxCancelAssignment(${a.assignment_id})" title="Cancel ${grp.n > 1 ? 'one of these jobs' : 'this assignment'}">⊘</span>
           <span class="rx-slot-runs">×${a.runs}</span>
           <div class="rx-slot-pending-label">${_esc(a.name)}</div>
@@ -856,7 +945,13 @@ function _renderReactionsDashboard(data) {
   // Ordered by STAGE first, then character/product: this is the install order. A chain's
   // intermediates have to be reacted and finished before the product they feed can start, so a
   // flat alphabetical list was telling the player to install things they cannot install yet.
+  // A group whose every job is ticked has nothing left to install. It stays in `todoGroups` so the
+  // pipeline can draw it and offer the mark back; the checklist below is about work, so it drops.
   const todoRows = [...todoGroups.values()]
+    .filter(g => g.count > 0)
+    .sort((a, b) => a.tier - b.tier
+      || a.character_name.localeCompare(b.character_name) || a.name.localeCompare(b.name));
+  const pipeRows = [...todoGroups.values()]
     .sort((a, b) => a.tier - b.tier
       || a.character_name.localeCompare(b.character_name) || a.name.localeCompare(b.name));
   const todoStages = [...new Set(todoRows.map(g => g.tier))].sort((a, b) => a - b);
@@ -875,7 +970,7 @@ function _renderReactionsDashboard(data) {
   // surface replaces the other rather than sitting beside it: two readings of the same list is
   // exactly the inconsistency this is here to remove.
   const todoListHtml = _featureActive('reactions_stage_pipeline')
-    ? _rxPipelineHtml(todoRows, _rxReadyStages)
+    ? _rxPipelineHtml(pipeRows, _rxReadyStages)
     : !todoRows.length ? '' : `
     <div class="pp-card-hint" style="font-weight:600;margin:2px 0 4px">
       To install — ${todoRows.reduce((s, g) => s + g.totalRuns, 0).toLocaleString()} runs across ${todoRows.length} product${todoRows.length === 1 ? '' : 's'}${todoStages.length > 1 ? `, in ${todoStages.length} stages` : ''}
