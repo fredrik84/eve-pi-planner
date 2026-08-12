@@ -37,8 +37,10 @@ async function onIndustryTabOpen() {
 
   indLoadSetupSummary();     // fire-and-forget: independent of the build status below
   indLoadLifetime();
-  await indLoadBlacklist();  // awaited: the shopping list renders its chips from this
-  await indLoadReactionPolicy();   // same: the decision strip renders from it
+  // Both are awaited because renders below read their globals — but neither reads the other's, so
+  // they go together rather than one after the next. Two serial round trips on the way in to a page
+  // whose expensive work hasn't started yet is latency paid for nothing.
+  await Promise.all([indLoadBlacklist(), indLoadReactionPolicy()]);
   // If something is already cooking, that's what you came to look at — show the live build first
   // and fold the planner away. With an empty queue there's nothing to check, so lead with planning.
   await indRefreshStatus();
