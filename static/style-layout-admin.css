@@ -260,8 +260,13 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
   background: #141720;
   border: 1px solid var(--clr-border);
   border-radius: 10px;
-  width: min(860px, 94vw);
-  height: min(680px, 86vh);  /* fixed height so sections don't resize the modal */
+  /* Fill the space that's there. The old 860×680 cap was set when this held short lists; it now
+     carries Structures & Markets, Blueprints & formulas and Build rules, all of which are wide
+     forms that were scrolling inside a box with empty screen either side of it. Still CAPPED
+     rather than free: a settings form measured in whole-screen widths is harder to read, not
+     easier, and the fixed height is what stops the box resizing as you switch sections. */
+  width: min(1320px, 95vw);
+  height: min(940px, 92vh);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -285,7 +290,9 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
   flex-direction: column;
   gap: 2px;
   padding: 16px 10px;
-  width: 150px;
+  /* Wide enough for the longest label ("Blueprints & formulas") to sit on one line now that the
+     box has the room — the wrap was only ever there because the modal was narrow. */
+  width: 178px;
   flex-shrink: 0;
   border-right: 1px solid var(--clr-border);
   overflow-y: auto;
@@ -325,9 +332,12 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .settings-modal-content {
   flex: 1;
   overflow-y: auto;
-  padding: 20px 24px;
+  padding: 22px 28px;
   min-width: 0;
 }
+/* Prose and single-column forms stay readable; anything that genuinely wants the width (tables,
+   the market and structure lists) sets its own and is unaffected. */
+.settings-subsec-hint, .settings-sec-hdr + .settings-subsec-hint, .ind-src-help { max-width: 90ch; }
 .settings-section { display: flex; flex-direction: column; gap: 16px; }
 .settings-sec-hdr {
   display: flex;
