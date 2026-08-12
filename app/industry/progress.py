@@ -39,7 +39,7 @@ import json
 import time
 from datetime import datetime
 
-from fastapi import Depends
+from fastapi import Depends, HTTPException
 from pydantic import BaseModel
 
 from app.db import add_columns, get_connection
@@ -579,9 +579,19 @@ def industry_progress(simulate: float | None = None, ctx: int = Depends(require_
 
 
 class MarkDone(BaseModel):
-    type_id: int
+    type_id: int | None = None
     runs: int | None = None      # None = all of it; 0 = clear the mark
     state: str = _STATE_DONE     # "done" or "running" — which of the two the mark claims
+    # A whole STAGE at once. Every step of a stage finishes before the next can start, so "that
+    # stage is done" is a thing a builder says in one breath and used to have to click out one step
+    # at a time — and a half-marked stage is the state where the checklist is most wrong. The list
+    # is what the caller's own stage model holds; the server does not re-derive it, because the
+    # stage a step belongs to is a property of the PLAN and the caller is holding the plan.
+    # `runs` is not offered with it: a stage-level statement is about whole steps by construction.
+    type_ids: list[int] | None = None
+
+    def targets(self) -> list[int]:
+        return [int(t) for t in (self.type_ids or ([] if self.type_id is None else [self.type_id]))]
 
 
 @router.post("/api/industry/progress/done")
@@ -593,7 +603,13 @@ def industry_mark_done(req: MarkDone, ctx: int = Depends(require_context)):
     holds for `running` for exactly the same reason — arguably more plainly, since a job that has
     merely started has earned nothing at all. Same rule the simulated-progress preview follows.
     """
-    set_manual_done(ctx, int(req.type_id), req.runs, req.state)
+    targets = req.targets()
+    if not targets:
+        raise HTTPException(status_code=400, detail="type_id or type_ids is required")
+    # One mark or a whole stage, through the same setter — a stage is a list of steps and nothing
+    # else, so a second write path for it would only be a second thing to keep in step.
+    for tid in targets:
+        set_manual_done(ctx, tid, None if len(targets) > 1 else req.runs, req.state)
     # Customer links cache their payload for a minute. Either mark moves their progress bar — a
     # "running" one flips a stage from waiting to building on the customer's page — so
     # without this the builder ticks a step done, looks at the link they handed over, and sees it

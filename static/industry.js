@@ -2609,13 +2609,20 @@ function _indDoneBtn(t, typeId, cls) {
 // twice over just to watch a card turn green.
 async function _indPostDone(typeId, runs, state) {
   state = state || 'done';
-  const painted = _indApplyDoneLocally(typeId, runs, state);
+  // Does this mark FINISH the step? "Do this now" and the pipeline's stage gating are computed
+  // server-side and arrive on the plan (`d.install`) — the local fast path can recompute progress
+  // because that is just max(observed, manual), but it cannot work out what became installable as a
+  // result, and recomputing the checklist here is exactly what item 16 removed so the plan and the
+  // checklist could never disagree. So a completing mark gives up the fast path and re-plans: that
+  // is the one case where the whole point of the click is that the NEXT stage should appear.
+  const completes = _indMarkCompletesStep(typeId, runs, state);
+  const painted = !completes && _indApplyDoneLocally(typeId, runs, state);
   if (painted) _indPaintStatus(_indLastPlan, { local: true });
   try {
     const fresh = await apiSend('POST', '/api/industry/progress/done', { type_id: typeId, runs, state });
     _indProgress = (fresh && !fresh.empty) ? fresh : _indProgress;
-    // Nothing was painted locally (no plan in hand, or preview mode) — fall back to the full path,
-    // which is what used to happen every time.
+    // Nothing was painted locally (no plan in hand, preview mode, or a mark that completes a step
+    // and therefore needs the server's view of what is ready next) — fall back to the full path.
     if (painted) _indPaintStatus(_indLastPlan, { local: true }); else indRefreshStatus();
   } catch (e) {
     toastError(e, 'Could not save');
@@ -2817,8 +2824,16 @@ function _indStepsHtml(d, model) {
     // Several batches = the same stage restarted as slots freed, not extra decisions to make.
     const batches = s.batches.size > 1
       ? `<span class="ind-step-note">in ${s.batches.size} batches as slots free</span>` : '';
+    // A stage finishes as a unit — nothing in the next one can start until all of it has landed —
+    // so it is worth being able to say so in one click instead of stepping through every job.
+    // Offered only on a stage that has steps we can mark, and only where the mark can do anything.
+    const stageMark = (_featureActive('industry_manual_done') && s.key !== 'x'
+                       && _indStageTypeIds(s.key).length)
+      ? `<button class="ind-link-btn ind-step-done-all" onclick="indMarkStageDone(${JSON.stringify(s.key)})"`
+        + ` title="Mark every job in this step finished, and move the checklist on to the next one">mark stage done</button>`
+      : '';
     html += `<div class="ind-step${first ? ' ind-step-now' : ' ind-step-later'}">`
-      + `<div class="ind-step-hd"><span class="ind-step-num">${n}</span>${_esc(title)} — ${jobs} ${when}${runs}${batches}</div>`
+      + `<div class="ind-step-hd"><span class="ind-step-num">${n}</span>${_esc(title)} — ${jobs} ${when}${runs}${batches}${stageMark}</div>`
       + _indStepItems(items, first) + `</div>`;
   });
   // Say what the total MEASURES, and name the step that drives it. Two numbers on one screen that
@@ -4438,4 +4453,60 @@ function _indRxSummaryBar(d) {
       : `buying ${what} in saves ${fmtIsk(-rp.isk)}`;
   }
   return _indRuleSummary('Reactions', state, cost, "openSettingsModal('buildrules')");
+}
+
+// Does a mark FINISH a step? Only a completing mark needs the server's view of what became
+// installable — see _indPostDone. A partial ("3 of 12 runs"), a "running" mark and an un-mark all
+// leave the stage gating exactly where it was, so they keep the fast local repaint.
+function _indMarkCompletesStep(typeId, runs, state) {
+  if (state !== 'done') return false;                 // running / clearing never unblocks anything
+  const t = (_indProgTypeMap() || {})[typeId];
+  if (!t || !t.required_runs) return true;            // nothing to reason with — take the safe path
+  if (runs === 0) return false;                       // an un-mark
+  const marked = runs === null || runs === undefined ? t.required_runs : runs;
+  const observed = t.observed_runs != null ? t.observed_runs : 0;
+  return Math.max(observed, marked) >= t.required_runs;
+}
+
+// Mark every step of a stage done in one action. A stage completes as a unit — nothing in the next
+// one can start until all of it has landed — so ticking it out step by step was busywork whose
+// intermediate states were all wrong. One call, one re-plan, and the checklist moves on.
+async function indMarkStageDone(stageIdx) {
+  const ids = _indStageTypeIds(stageIdx);
+  if (!ids.length) return;
+  const model = _indStageModelForPlan();
+  const label = ((model.cols || [])[stageIdx] || {}).label || 'this stage';
+  if (!await ppConfirm(`Mark ${label} done? ${ids.length} step${ids.length === 1 ? '' : 's'} `
+        + `will be marked finished — click any of them again to correct it.`,
+        { okLabel: 'Mark stage done', danger: false })) return;
+  try {
+    const fresh = await apiSend('POST', '/api/industry/progress/done',
+                                { type_ids: ids, state: 'done' });
+    _indProgress = (fresh && !fresh.empty) ? fresh : _indProgress;
+  } catch (e) { toastError(e, 'Could not save'); }
+  // Always the full path: the whole point is that the next stage becomes startable, and only a
+  // re-planned `install` block knows that.
+  indRefreshStatus();
+}
+
+// The stage model for the plan currently on screen, derived the same way the pipeline derives it.
+function _indStageModelForPlan() {
+  const d = _indLastPlan;
+  if (!d) return { cols: [], stageOf: {} };
+  const boughtIds = new Set((d.shopping_list || []).map(s => s.type_id));
+  const roots = d.trees || d.tree;
+  const tiersData = roots ? _indComputeTiers(roots, boughtIds)
+    : { byType: {}, tiers: {}, maxT: 0, inputsOf: {}, consumersOf: {} };
+  return _indStageModel(tiersData);
+}
+
+// The BUILT steps a stage owns. `cols` is indexed by stage, and each column already carries the
+// builds that belong to it — the same list the pipeline column renders, so the button can never
+// mark a different set of steps from the ones shown under it.
+function _indStageTypeIds(stageIdx) {
+  const col = (_indStageModelForPlan().cols || [])[stageIdx];
+  if (!col) return [];
+  const need = {};
+  ((_indProgress && _indProgress.types) || []).forEach(t => { need[t.type_id] = t.required_runs; });
+  return (col.builds || []).map(b => b.type_id).filter(t => need[t]);
 }

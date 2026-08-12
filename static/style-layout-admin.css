@@ -1580,3 +1580,7 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
   .ind-rule-row { flex-direction: column; gap: 6px; }
   .ind-rule-lbl { flex: none; }
 }
+/* "mark stage done" — an action on the stage header, deliberately quiet: it is a correction you
+   reach for, not the primary way progress is recorded (that is ESI). */
+.ind-step-done-all { margin-left: auto; font-size: 11px; white-space: nowrap; }
+.ind-step-hd { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }

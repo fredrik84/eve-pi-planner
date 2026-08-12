@@ -207,6 +207,61 @@ def test_unpriced_input_does_not_kill_the_plan():
     check("materials cost is MineralA only", approx(res["metrics"]["materials_cost"], 1000.0))
 
 
+def test_completing_a_step_re_plans_so_the_checklist_moves_on():
+    """"Do this now" and the stage gating are computed server-side and ride on the plan
+    (`d.install`). The local fast path after a hand-mark recomputes PROGRESS — which is just
+    max(observed, manual) — but it cannot know what became installable, so a mark that finished a
+    stage repainted the pipeline and left the checklist showing work already done. Item 16 removed
+    `/api/industry/to-install` precisely so the checklist could only ever come from a computed plan,
+    which rules out rebuilding it in the browser: a completing mark gives up the fast path instead."""
+    print("test_completing_a_step_re_plans_so_the_checklist_moves_on")
+    js = open("static/industry.js").read()
+
+    post = js[js.index("async function _indPostDone("):]
+    post = post[:post.index("\n// Apply a mark")]
+    check("a completing mark skips the local repaint",
+          "const completes = _indMarkCompletesStep(typeId, runs, state);" in post
+          and "const painted = !completes && _indApplyDoneLocally(" in post)
+    check("...and therefore falls through to the full refresh", "indRefreshStatus();" in post)
+
+    comp = js[js.index("function _indMarkCompletesStep("):]
+    comp = comp[:comp.index("\n// Mark every step")]
+    check("'running' never counts as completing", "if (state !== 'done') return false;" in comp)
+    check("an un-mark never counts either", "if (runs === 0) return false;" in comp)
+    check("a partial mark only completes when it covers the requirement",
+          ">= t.required_runs" in comp)
+    check("and an unknown step takes the safe path", "return true;" in comp)
+
+    # The stage-level action.
+    stage = js[js.index("async function indMarkStageDone("):]
+    stage = stage[:stage.index("\n// The stage model for the plan")]
+    check("a stage is marked in ONE call, not one per step",
+          stage.count("apiSend(") == 1 and "type_ids: ids" in stage)
+    check("it always re-plans rather than repainting locally", "indRefreshStatus();" in stage)
+    check("and it asks first, through the app's own confirm", "await ppConfirm(" in stage)
+
+    ids = js[js.index("function _indStageTypeIds("):]
+    ids = ids[:ids.index("\nfunction ") if "\nfunction " in ids else len(ids)]
+    check("the button marks exactly the steps its column shows",
+          "col.builds" in ids and "required_runs" in ids)
+
+    check("the control is gated with the rest of hand-marking",
+          "_featureActive('industry_manual_done') && s.key !== 'x'" in js)
+
+    from app.industry.progress import MarkDone
+    check("one step and a whole stage go through one request model",
+          MarkDone(type_id=34).targets() == [34]
+          and MarkDone(type_ids=[34, 35]).targets() == [34, 35])
+    check("an empty request is refused rather than silently doing nothing",
+          MarkDone().targets() == [])
+    import inspect
+    from app.industry import progress as P
+    src = inspect.getsource(P.industry_mark_done)
+    check("...and the endpoint says so", "type_id or type_ids is required" in src)
+    check("a stage mark is whole steps by construction, never partial",
+          "None if len(targets) > 1 else req.runs" in src)
+
+
 def test_build_rules_has_one_home_and_the_strip_stops_being_a_control():
     """String matching, and weak by construction (see test_nav_gating) — but the invariant it guards
     is not: with the surface ON there must be exactly ONE place to change a rule. Two ways to set the
@@ -2842,6 +2897,7 @@ def main():
     test_make_or_buy_flips()
     test_root_forced_build()
     test_unpriced_input_does_not_kill_the_plan()
+    test_completing_a_step_re_plans_so_the_checklist_moves_on()
     test_build_rules_has_one_home_and_the_strip_stops_being_a_control()
     test_build_setup_is_one_surface_over_the_stores_that_already_own_each_field()
     test_reaction_policy_is_gated_by_its_own_feature()
