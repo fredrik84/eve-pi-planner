@@ -41,6 +41,75 @@ _RXS_DEFAULTS = {"import_isk_per_m3": 1200.0, "export_isk_per_m3": 1200.0, "expo
 _GLOBAL_SETTINGS_GROUP_ID = 0  # sentinel "no group" row — kept as a real (non-NULL) value since
 # a nullable PRIMARY KEY doesn't behave consistently across SQLite and Postgres.
 
+# The group table and the per-account override table carry the SAME six settings columns — one is
+# keyed by group_id, the other by context_id, and nothing else about them differs. These four
+# helpers are what both sides share; keep them in step when a setting is added.
+_RXS_COLS = ("import_isk_per_m3, export_isk_per_m3, export_collateral_pct, "
+             "reaction_system, facility_tax_pct, time_efficiency_pct")
+# Columns added after the tables first shipped — applied to either table on startup.
+_RXS_LATE_COLS = ("reaction_system TEXT", "facility_tax_pct REAL NOT NULL DEFAULT 0",
+                  "time_efficiency_pct REAL NOT NULL DEFAULT 0")
+
+
+def _add_settings_columns(con, table: str) -> None:
+    """Best-effort ALTER for the late columns — already-there raises and is the normal case."""
+    for coldef in _RXS_LATE_COLS:
+        try:
+            con.execute(f"ALTER TABLE {table} ADD COLUMN {coldef}")
+            con.commit()
+        except Exception:
+            pass
+
+
+def _settings_row(row) -> dict:
+    """Row -> settings dict. The two tax/efficiency columns coalesce because rows written before
+    those columns existed carry NULL, and the pricing math wants a number."""
+    return {
+        "import_isk_per_m3": row["import_isk_per_m3"],
+        "export_isk_per_m3": row["export_isk_per_m3"],
+        "export_collateral_pct": row["export_collateral_pct"],
+        "reaction_system": row["reaction_system"],
+        "facility_tax_pct": row["facility_tax_pct"] or 0.0,
+        "time_efficiency_pct": row["time_efficiency_pct"] or 0.0,
+    }
+
+
+def _read_settings(table: str, key_col: str, key_val) -> dict | None:
+    """Caller ensures the table first — which `ensure_*` applies is the caller's business."""
+    con = get_connection()
+    try:
+        row = con.execute(
+            f"SELECT {_RXS_COLS} FROM {table} WHERE {key_col}=?", (key_val,)
+        ).fetchone()
+    finally:
+        con.close()
+    return _settings_row(row) if row else None
+
+
+def _upsert_settings(table: str, key_col: str, key_val, req: "ReactionSettingsUpdate") -> None:
+    con = get_connection()
+    try:
+        con.execute(
+            f"INSERT INTO {table} ({key_col}, import_isk_per_m3, export_isk_per_m3, "
+            "export_collateral_pct, reaction_system, facility_tax_pct, time_efficiency_pct) "
+            f"VALUES (?,?,?,?,?,?,?) ON CONFLICT ({key_col}) DO UPDATE SET "
+            "import_isk_per_m3=excluded.import_isk_per_m3, export_isk_per_m3=excluded.export_isk_per_m3, "
+            "export_collateral_pct=excluded.export_collateral_pct, reaction_system=excluded.reaction_system, "
+            "facility_tax_pct=excluded.facility_tax_pct, time_efficiency_pct=excluded.time_efficiency_pct",
+            (key_val, req.import_isk_per_m3, req.export_isk_per_m3, req.export_collateral_pct,
+             (req.reaction_system or "").strip() or None, req.facility_tax_pct, req.time_efficiency_pct),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+
+def _group_defaults(context_id: int) -> dict:
+    """The settings the caller inherits when they have no personal override: their group's row, or
+    the global-default row when they're in no priced group."""
+    group = member_group(context_id)
+    return get_reaction_settings(group["id"] if group else None)
+
 
 @ensure_once
 def ensure_reaction_settings_table():
@@ -72,13 +141,7 @@ def ensure_reaction_settings_table():
             )
         """)
         con.commit()
-        for coldef in ("reaction_system TEXT", "facility_tax_pct REAL NOT NULL DEFAULT 0",
-                       "time_efficiency_pct REAL NOT NULL DEFAULT 0"):
-            try:
-                con.execute(f"ALTER TABLE pp_reaction_settings ADD COLUMN {coldef}")
-                con.commit()
-            except Exception:
-                pass
+        _add_settings_columns(con, "pp_reaction_settings")
         if migrate_row:
             from app.groups import bootstrap_group_id
             for gid in (_GLOBAL_SETTINGS_GROUP_ID, bootstrap_group_id()):
@@ -102,24 +165,7 @@ def get_reaction_settings(group_id: int | None = None) -> dict:
     as app.alert_settings)."""
     ensure_reaction_settings_table()
     gid = group_id if group_id is not None else _GLOBAL_SETTINGS_GROUP_ID
-    con = get_connection()
-    try:
-        row = con.execute(
-            "SELECT import_isk_per_m3, export_isk_per_m3, export_collateral_pct, "
-            "reaction_system, facility_tax_pct, time_efficiency_pct FROM pp_reaction_settings WHERE group_id=?", (gid,)
-        ).fetchone()
-    finally:
-        con.close()
-    if not row:
-        return dict(_RXS_DEFAULTS)
-    return {
-        "import_isk_per_m3": row["import_isk_per_m3"],
-        "export_isk_per_m3": row["export_isk_per_m3"],
-        "export_collateral_pct": row["export_collateral_pct"],
-        "reaction_system": row["reaction_system"],
-        "facility_tax_pct": row["facility_tax_pct"] or 0.0,
-        "time_efficiency_pct": row["time_efficiency_pct"] or 0.0,
-    }
+    return _read_settings("pp_reaction_settings", "group_id", gid) or dict(_RXS_DEFAULTS)
 
 
 @ensure_once
@@ -134,36 +180,13 @@ def ensure_account_reaction_settings_table():
         )
     """)
     con.commit()
-    for coldef in ("reaction_system TEXT", "facility_tax_pct REAL NOT NULL DEFAULT 0",
-                   "time_efficiency_pct REAL NOT NULL DEFAULT 0"):
-        try:
-            con.execute(f"ALTER TABLE pp_account_reaction_settings ADD COLUMN {coldef}")
-            con.commit()
-        except Exception:
-            pass
+    _add_settings_columns(con, "pp_account_reaction_settings")
     con.close()
 
 
 def _account_reaction_settings_override(context_id: int) -> dict | None:
     ensure_account_reaction_settings_table()
-    con = get_connection()
-    try:
-        row = con.execute(
-            "SELECT import_isk_per_m3, export_isk_per_m3, export_collateral_pct, "
-            "reaction_system, facility_tax_pct, time_efficiency_pct FROM pp_account_reaction_settings WHERE context_id=?", (context_id,)
-        ).fetchone()
-    finally:
-        con.close()
-    if not row:
-        return None
-    return {
-        "import_isk_per_m3": row["import_isk_per_m3"],
-        "export_isk_per_m3": row["export_isk_per_m3"],
-        "export_collateral_pct": row["export_collateral_pct"],
-        "reaction_system": row["reaction_system"],
-        "facility_tax_pct": row["facility_tax_pct"] or 0.0,
-        "time_efficiency_pct": row["time_efficiency_pct"] or 0.0,
-    }
+    return _read_settings("pp_account_reaction_settings", "context_id", context_id)
 
 
 _SETTINGS_CACHE: dict[int, tuple[float, dict]] = {}
@@ -195,12 +218,7 @@ def effective_reaction_settings(context_id: int) -> dict:
     hit = _SETTINGS_CACHE.get(context_id)
     if hit and now - hit[0] < _SETTINGS_TTL:
         return dict(hit[1])
-    override = _account_reaction_settings_override(context_id)
-    if override:
-        result = override
-    else:
-        group = member_group(context_id)
-        result = get_reaction_settings(group["id"] if group else None)
+    result = _account_reaction_settings_override(context_id) or _group_defaults(context_id)
     _SETTINGS_CACHE[context_id] = (now, result)
     return dict(result)
 
@@ -221,8 +239,7 @@ class ReactionSettingsUpdate(BaseModel):
 def api_get_reaction_settings(ctx: int = Depends(require_context)):
     """Always the CALLER's own group's settings (or the global default) — a manager only ever
     needs to see/edit their own group's rate, never someone else's."""
-    group = member_group(ctx)
-    return get_reaction_settings(group["id"] if group else None)
+    return _group_defaults(ctx)
 
 
 def _resolve_system_id(name: str | None) -> int | None:
@@ -255,21 +272,7 @@ def api_update_reaction_settings(req: ReactionSettingsUpdate, ctx: int = Depends
         raise HTTPException(status_code=403, detail="Only a manager of your group can edit its reaction settings")
     _validate_reaction_system(req.reaction_system)
     ensure_reaction_settings_table()
-    con = get_connection()
-    try:
-        con.execute(
-            "INSERT INTO pp_reaction_settings (group_id, import_isk_per_m3, export_isk_per_m3, "
-            "export_collateral_pct, reaction_system, facility_tax_pct, time_efficiency_pct) "
-            "VALUES (?,?,?,?,?,?,?) ON CONFLICT (group_id) DO UPDATE SET "
-            "import_isk_per_m3=excluded.import_isk_per_m3, export_isk_per_m3=excluded.export_isk_per_m3, "
-            "export_collateral_pct=excluded.export_collateral_pct, reaction_system=excluded.reaction_system, "
-            "facility_tax_pct=excluded.facility_tax_pct, time_efficiency_pct=excluded.time_efficiency_pct",
-            (group["id"], req.import_isk_per_m3, req.export_isk_per_m3, req.export_collateral_pct,
-             (req.reaction_system or "").strip() or None, req.facility_tax_pct, req.time_efficiency_pct),
-        )
-        con.commit()
-    finally:
-        con.close()
+    _upsert_settings("pp_reaction_settings", "group_id", group["id"], req)
     _invalidate_reaction_settings_cache()  # a group default affects every member — clear all
     return get_reaction_settings(group["id"])
 
@@ -280,8 +283,7 @@ def api_get_account_reaction_settings(ctx: int = Depends(require_context)):
     falls back to otherwise — the Settings UI shows both so a user can see what rate they're
     actually getting and whether it's their own override or an inherited default."""
     override = _account_reaction_settings_override(ctx)
-    group = member_group(ctx)
-    default = get_reaction_settings(group["id"] if group else None)
+    default = _group_defaults(ctx)
     return {"override": override, "default": default, "effective": override or default}
 
 
@@ -289,21 +291,7 @@ def api_get_account_reaction_settings(ctx: int = Depends(require_context)):
 def api_update_account_reaction_settings(req: ReactionSettingsUpdate, ctx: int = Depends(require_context)):
     _validate_reaction_system(req.reaction_system)
     ensure_account_reaction_settings_table()
-    con = get_connection()
-    try:
-        con.execute(
-            "INSERT INTO pp_account_reaction_settings (context_id, import_isk_per_m3, export_isk_per_m3, "
-            "export_collateral_pct, reaction_system, facility_tax_pct, time_efficiency_pct) "
-            "VALUES (?,?,?,?,?,?,?) ON CONFLICT (context_id) DO UPDATE SET "
-            "import_isk_per_m3=excluded.import_isk_per_m3, export_isk_per_m3=excluded.export_isk_per_m3, "
-            "export_collateral_pct=excluded.export_collateral_pct, reaction_system=excluded.reaction_system, "
-            "facility_tax_pct=excluded.facility_tax_pct, time_efficiency_pct=excluded.time_efficiency_pct",
-            (ctx, req.import_isk_per_m3, req.export_isk_per_m3, req.export_collateral_pct,
-             (req.reaction_system or "").strip() or None, req.facility_tax_pct, req.time_efficiency_pct),
-        )
-        con.commit()
-    finally:
-        con.close()
+    _upsert_settings("pp_account_reaction_settings", "context_id", ctx, req)
     _invalidate_reaction_settings_cache(ctx)
     return {"ok": True}
 
@@ -319,5 +307,4 @@ def api_reset_account_reaction_settings(ctx: int = Depends(require_context)):
     finally:
         con.close()
     _invalidate_reaction_settings_cache(ctx)
-    group = member_group(ctx)
-    return get_reaction_settings(group["id"] if group else None)
+    return _group_defaults(ctx)

@@ -13,12 +13,13 @@ from app.esi import require_context
 
 from app.reactions._router import router
 from app.reactions.graph import (
-    _load_goo_and_reached, _explode_shopping_list, _ordered_chain_tiers, reaction_stock_pool,
+    _load_goo_and_reached, _explode_shopping_list, _ordered_chain_tiers, reaction_stock_pool, _stock_covered_report,
     _materials_report, _value_reaction_batch,
 )
 from app.reactions.jobs import (
     _character_capacities, ensure_reaction_orders_table, ensure_reaction_assignments_table,
     _allocate_and_insert, formula_concurrency_caps, _cap_jobs, give_back_order_runs,
+    live_reaction_runs,
 )
 
 
@@ -176,10 +177,7 @@ def _order_report(context_id: int, order: dict) -> dict:
             "missing_formulas": missing_formulas(context_id, wanted_from_sequence(sequence),
                                                  jobs=jobs_from_sequence(sequence)),
             # Stages this order does not have to run because the intermediate is already held.
-            "stock_covered": sorted(
-                ({**c, "name": types.get(c["type_id"], {}).get("name", str(c["type_id"])),
-                  "units": round(c["units"], 1)} for c in stock_covered.values()),
-                key=lambda c: -c["runs_saved"]),
+            "stock_covered": _stock_covered_report(stock_covered, types),
             "stale": False}
 
 
@@ -238,7 +236,7 @@ def create_reaction_order(req: OrderCreateRequest, context_id: int = Depends(req
              req.client_price if (req.client_price or 0) > 0 else None),
         ).fetchone()[0]
         con.commit()
-        order = dict(con.execute("SELECT * FROM pp_reaction_orders WHERE id=?", (order_id,)).fetchone())
+        order = _order_row(con, order_id)
     finally:
         con.close()
     return {"order": order, **_order_report(context_id, order)}
@@ -310,7 +308,7 @@ def _heal_stranded_counter(order: dict, context_id: int) -> dict:
             return order
         con.execute("UPDATE pp_reaction_orders SET assigned_runs=0 WHERE id=?", (order["id"],))
         con.commit()
-        return dict(con.execute("SELECT * FROM pp_reaction_orders WHERE id=?", (order["id"],)).fetchone())
+        return _order_row(con, order["id"])
     except Exception:
         return order                    # a repair must never be the reason an assign fails
     finally:
@@ -356,7 +354,7 @@ def assign_reaction_order(order_id: int, req: OrderAssignRequest, context_id: in
         con.execute("UPDATE pp_reaction_orders SET assigned_runs = assigned_runs + ? WHERE id=?",
                      (result["runs_assigned"], order_id))
         con.commit()
-        order = dict(con.execute("SELECT * FROM pp_reaction_orders WHERE id=?", (order_id,)).fetchone())
+        order = _order_row(con, order_id)
     finally:
         con.close()
     return {"order": order, "runs_assigned": result["runs_assigned"], "characters": result["characters"]}
@@ -395,9 +393,7 @@ def clear_reaction_order_assignments(order_id: int, context_id: int = Depends(re
             con.commit()
             return {"ok": True, "cleared": 0, "runs_returned": order["assigned_runs"] or 0,
                     "running_cleared": 0, "order": _order_row(con, order_id)}
-        con.execute(
-            "DELETE FROM pp_reaction_assignments WHERE order_id=? AND character_id IN "
-            "(SELECT character_id FROM pp_characters WHERE context_id=?)", (order_id, context_id))
+        _release_order_slots(con, order_id, context_id)
         give_back_order_runs(con, rows)
         con.commit()
         after = _order_row(con, order_id)
@@ -406,6 +402,15 @@ def clear_reaction_order_assignments(order_id: int, context_id: int = Depends(re
     returned = (order["assigned_runs"] or 0) - (after["assigned_runs"] or 0)
     return {"ok": True, "cleared": len(rows), "runs_returned": returned,
             "running_cleared": _running_rows_among(context_id, rows), "order": after}
+
+
+def _release_order_slots(con, order_id: int, context_id: int) -> int:
+    """Delete the plan rows an order holds and return how many there were. Scoped to the account's
+    own characters as defence in depth even where the caller has already ownership-checked the
+    order (CLAUDE.md rule 8) — one statement, so that scoping cannot drift between callers."""
+    return con.execute(
+        "DELETE FROM pp_reaction_assignments WHERE order_id=? AND character_id IN "
+        "(SELECT character_id FROM pp_characters WHERE context_id=?)", (order_id, context_id)).rowcount
 
 
 def _order_row(con, order_id: int) -> dict:
@@ -417,24 +422,10 @@ def _running_rows_among(context_id: int, rows: list[dict]) -> int:
     running as orphans. Counted per (character, product) against the cached ESI snapshot, the same
     count-aware matching the dashboard uses, so N running jobs cover exactly N rows."""
     try:
-        con = get_connection()
-        try:
-            jobs_by_char = {r["character_id"]: r["jobs_json"] for r in con.execute(
-                "SELECT j.character_id, j.jobs_json FROM pp_char_industry_jobs j "
-                "JOIN pp_characters c ON c.character_id = j.character_id WHERE c.context_id=?",
-                (context_id,))}
-        finally:
-            con.close()
-        import json as _json
-        live: dict[tuple, int] = {}
-        for cid, blob in jobs_by_char.items():
-            for j in _json.loads(blob or "[]"):
-                if j.get("status") in ("active", "paused", "ready"):
-                    key = (cid, j.get("product_type_id"))
-                    live[key] = live.get(key, 0) + 1
+        live = {k: len(v) for k, v in live_reaction_runs(context_id).items()}
         n = 0
         for r in rows:
-            key = (r["character_id"], r["type_id"])
+            key = (int(r["character_id"]), int(r["type_id"]))
             if live.get(key, 0) > 0:
                 live[key] -= 1
                 n += 1
@@ -467,7 +458,7 @@ def set_reaction_order_price(order_id: int, req: OrderPriceRequest,
         _get_order_or_404(con, order_id, context_id)
         con.execute("UPDATE pp_reaction_orders SET client_price=? WHERE id=?", (price, order_id))
         con.commit()
-        order = dict(con.execute("SELECT * FROM pp_reaction_orders WHERE id=?", (order_id,)).fetchone())
+        order = _order_row(con, order_id)
     finally:
         con.close()
     return {"order": order, **_order_report(context_id, order)}
@@ -493,13 +484,10 @@ def set_reaction_order_status(order_id: int, req: OrderStatusRequest, context_id
         _get_order_or_404(con, order_id, context_id)
         # Release the slots this order claimed (scoped to the account's own characters as defence in
         # depth — the order is already ownership-checked above).
-        freed = con.execute(
-            "DELETE FROM pp_reaction_assignments WHERE order_id=? AND character_id IN "
-            "(SELECT character_id FROM pp_characters WHERE context_id=?)",
-            (order_id, context_id)).rowcount
+        freed = _release_order_slots(con, order_id, context_id)
         con.execute("UPDATE pp_reaction_orders SET status=? WHERE id=?", (req.status, order_id))
         con.commit()
-        order = dict(con.execute("SELECT * FROM pp_reaction_orders WHERE id=?", (order_id,)).fetchone())
+        order = _order_row(con, order_id)
     finally:
         con.close()
     return {"order": order, "freed_slots": freed}

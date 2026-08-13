@@ -2317,27 +2317,40 @@ function _rxSettingsFormHtml() {
     </div>`;
 }
 
+// The group form and the personal-override form carry the SAME six rate fields, differing only
+// in their id prefix (rxSet / rxAcct) — these two keep them reading and writing identically.
+function _rxFillRateFields(prefix, s) {
+  document.getElementById(prefix + 'Import').value = s.import_isk_per_m3;
+  document.getElementById(prefix + 'Export').value = s.export_isk_per_m3;
+  document.getElementById(prefix + 'Collateral').value = (s.export_collateral_pct * 100).toFixed(2);
+  document.getElementById(prefix + 'System').value = s.reaction_system || '';
+  document.getElementById(prefix + 'Tax').value = ((s.facility_tax_pct || 0) * 100).toFixed(2);
+  _rxSetTimeEffValue(prefix, (s.time_efficiency_pct || 0) * 100);
+}
+
+function _rxRatePayload(prefix) {
+  const num = id => parseFloat(document.getElementById(prefix + id).value) || 0;
+  return {
+    import_isk_per_m3: num('Import'),
+    export_isk_per_m3: num('Export'),
+    export_collateral_pct: num('Collateral') / 100,
+    reaction_system: document.getElementById(prefix + 'System').value.trim() || null,
+    facility_tax_pct: num('Tax') / 100,
+    time_efficiency_pct: num('TimeEff') / 100,
+  };
+}
+
 function _loadRxSettings() {
   api('/api/reactions/settings').catch(() => null).then(s => {
     if (!s) return;
-    document.getElementById('rxSetImport').value = s.import_isk_per_m3;
-    document.getElementById('rxSetExport').value = s.export_isk_per_m3;
-    document.getElementById('rxSetCollateral').value = (s.export_collateral_pct * 100).toFixed(2);
-    document.getElementById('rxSetSystem').value = s.reaction_system || '';
-    document.getElementById('rxSetTax').value = ((s.facility_tax_pct || 0) * 100).toFixed(2);
-    _rxSetTimeEffValue('rxSet', (s.time_efficiency_pct || 0) * 100);
+    _rxFillRateFields('rxSet', s);
   });
 }
 
 function _saveRxSettings() {
   const msg = document.getElementById('rxSettingsMsg');
   apiSend('PUT', '/api/reactions/settings', {
-      import_isk_per_m3: parseFloat(document.getElementById('rxSetImport').value) || 0,
-      export_isk_per_m3: parseFloat(document.getElementById('rxSetExport').value) || 0,
-      export_collateral_pct: (parseFloat(document.getElementById('rxSetCollateral').value) || 0) / 100,
-      reaction_system: document.getElementById('rxSetSystem').value.trim() || null,
-      facility_tax_pct: (parseFloat(document.getElementById('rxSetTax').value) || 0) / 100,
-      time_efficiency_pct: (parseFloat(document.getElementById('rxSetTimeEff').value) || 0) / 100,
+      ..._rxRatePayload('rxSet'),
   })
     .then(() => { msg.textContent = 'Saved.'; onReactionsTabOpen(); })
     .catch(err => { msg.textContent = err.message; });
@@ -2365,12 +2378,7 @@ function _loadRxAccountSettings() {
   api('/api/reactions/account-settings').catch(() => null).then(s => {
     if (!s) return;
     const eff = s.override || s.default;
-    document.getElementById('rxAcctImport').value = eff.import_isk_per_m3;
-    document.getElementById('rxAcctExport').value = eff.export_isk_per_m3;
-    document.getElementById('rxAcctCollateral').value = (eff.export_collateral_pct * 100).toFixed(2);
-    document.getElementById('rxAcctSystem').value = eff.reaction_system || '';
-    document.getElementById('rxAcctTax').value = ((eff.facility_tax_pct || 0) * 100).toFixed(2);
-    _rxSetTimeEffValue('rxAcct', (eff.time_efficiency_pct || 0) * 100);
+    _rxFillRateFields('rxAcct', eff);
     const hint = document.getElementById('rxAcctSettingsHint');
     if (hint) {
       hint.textContent = s.override
@@ -2383,12 +2391,7 @@ function _loadRxAccountSettings() {
 function _saveRxAccountSettings() {
   const msg = document.getElementById('rxAcctSettingsMsg');
   apiSend('PUT', '/api/reactions/account-settings', {
-      import_isk_per_m3: parseFloat(document.getElementById('rxAcctImport').value) || 0,
-      export_isk_per_m3: parseFloat(document.getElementById('rxAcctExport').value) || 0,
-      export_collateral_pct: (parseFloat(document.getElementById('rxAcctCollateral').value) || 0) / 100,
-      reaction_system: document.getElementById('rxAcctSystem').value.trim() || null,
-      facility_tax_pct: (parseFloat(document.getElementById('rxAcctTax').value) || 0) / 100,
-      time_efficiency_pct: (parseFloat(document.getElementById('rxAcctTimeEff').value) || 0) / 100,
+      ..._rxRatePayload('rxAcct'),
   })
     .then(() => { msg.textContent = 'Saved.'; onReactionsTabOpen(); })
     .catch(err => { msg.textContent = err.message; });

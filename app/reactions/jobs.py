@@ -24,6 +24,7 @@ from app.esi import require_context, _get_valid_token
 from app import completions
 
 from app.reactions._router import router
+from app.reactions._flags import flag_on
 from app.reactions.settings import effective_reaction_settings
 from app.reactions.graph import (
     _load_goo_and_reached, _value_reaction_batch, _ordered_chain_tiers, reaction_stock_pool,
@@ -80,6 +81,15 @@ REACTION_ACTIVITY_ID = 9
 LEDGER = "pp_reaction_completions"
 
 
+def _name_facilities(jobs: list[dict], access_token: str) -> list[dict]:
+    """Stamp a readable `facility_name` on each job. Shared by the personal and corp fetches — the
+    two differ in which endpoint they read and how they filter, never in this."""
+    for j in jobs:
+        fac_id = j.get("facility_id")
+        j["facility_name"] = _resolve_structure_name(fac_id, access_token) if fac_id else "Unknown"
+    return jobs
+
+
 def fetch_industry_jobs(character_id: int, access_token: str) -> list[dict]:
     """Fetch this character's reaction jobs (activity_id 9) from ESI, resolving each distinct
     facility to a readable name. Best-effort: returns [] on any failure rather than raising —
@@ -93,10 +103,7 @@ def fetch_industry_jobs(character_id: int, access_token: str) -> list[dict]:
         return []
 
     reaction_jobs = [j for j in jobs if j.get("activity_id") == REACTION_ACTIVITY_ID]
-    for j in reaction_jobs:
-        fac_id = j.get("facility_id")
-        j["facility_name"] = _resolve_structure_name(fac_id, access_token) if fac_id else "Unknown"
-    return reaction_jobs
+    return _name_facilities(reaction_jobs, access_token)
 
 
 def fetch_corp_industry_jobs(character_id: int, access_token: str) -> list[dict]:
@@ -123,10 +130,7 @@ def fetch_corp_industry_jobs(character_id: int, access_token: str) -> list[dict]
         return []
 
     reaction_jobs = [j for j in jobs if j.get("activity_id") == REACTION_ACTIVITY_ID and j.get("installer_id") == character_id]
-    for j in reaction_jobs:
-        fac_id = j.get("facility_id")
-        j["facility_name"] = _resolve_structure_name(fac_id, access_token) if fac_id else "Unknown"
-    return reaction_jobs
+    return _name_facilities(reaction_jobs, access_token)
 
 
 # ESI's industry-jobs endpoint caches ~5 min; a plain tab-open refresh must not re-hit ESI more
@@ -379,22 +383,14 @@ def reactions_lifetime(context_id: int = Depends(require_context)):
 def _tidy_runs_on(context_id: int) -> bool:
     """Gated: rounding buys a little surplus intermediate with real ISK, and it changes the numbers
     on a plan people are already used to reading."""
-    try:
-        from app.features import feature_enabled_for
-        return feature_enabled_for("reactions_tidy_runs", context_id)
-    except Exception:
-        return False
+    return flag_on("reactions_tidy_runs", context_id)
 
 
 def _level_runs_on(context_id: int) -> bool:
     """Gated: levelling a product across characters is the only pass that CREATES and DELETES plan
     rows, so it changes slot counts as well as numbers. Off, `level_stage_runs` still levels within
     a character with the row count fixed."""
-    try:
-        from app.features import feature_enabled_for
-        return feature_enabled_for("reactions_level_runs", context_id)
-    except Exception:
-        return False
+    return flag_on("reactions_level_runs", context_id)
 
 
 def _insert_assignment_rows(con, character_id: int, type_id: int, name: str, runs: float,
@@ -421,6 +417,56 @@ def _insert_assignment_rows(con, character_id: int, type_id: int, name: str, run
             (character_id, type_id, name, runs_per_job, input_cost / job_count, reward / job_count,
              now, tier_order, order_id),
         )
+
+
+def live_reaction_runs(context_id: int) -> dict[tuple[int, int], list[int]]:
+    """Every job this account has RUNNING in game, as (character_id, product_type_id) -> the run
+    count each of those jobs carries, in the order ESI reported them.
+
+    Opens its own connection, so it must be called BEFORE the request connection in
+    `get_industry_jobs` is opened, never inside it — see the two-connections rule there.
+
+    Count-aware on purpose: a product can hold several plan rows on one character (one per slot),
+    and only as many of them are covered as there are jobs actually running. `len(v)` is that count;
+    the list itself is what lets a row adopt the run count really installed rather than the one the
+    plan proposed.
+    """
+    con = get_connection()
+    try:
+        cached = {r["character_id"]: _json.loads(r["jobs_json"] or "[]")
+                  for r in con.execute(
+                      "SELECT j.character_id, j.jobs_json FROM pp_char_industry_jobs j "
+                      "JOIN pp_characters c ON c.character_id = j.character_id "
+                      "WHERE c.context_id = ?", (context_id,))}
+    finally:
+        con.close()
+    out: dict[tuple[int, int], list[int]] = {}
+    for cid, jobs in cached.items():
+        for job in jobs or []:
+            if (job.get("status") or "").lower() in ("active", "paused", "ready"):
+                out.setdefault((int(cid), int(job.get("product_type_id") or 0)),
+                               []).append(int(job.get("runs") or 0))
+    return out
+
+
+def _plan_rows(context_id: int, cols: str) -> list[dict]:
+    """Every plan row this account owns, with whichever columns the caller needs.
+
+    The three levellers/repairs below all open with the same read — the JOIN through pp_characters
+    is what scopes the plan to the account (CLAUDE.md: scope every per-user query by context_id).
+    An unreadable table returns [], and every caller treats that the same way it treats an empty
+    plan: nothing to do.
+    """
+    con = get_connection()
+    try:
+        return [dict(r) for r in con.execute(
+            f"SELECT {cols} "
+            "FROM pp_reaction_assignments a JOIN pp_characters c ON c.character_id = a.character_id "
+            "WHERE c.context_id=?", (context_id,))]
+    except Exception:
+        return []
+    finally:
+        con.close()
 
 
 class ChainTier(BaseModel):
@@ -450,16 +496,7 @@ def restage_plan_rows(context_id: int) -> int:
     stored value stands rather than being replaced by a guess.
     """
     ensure_reaction_assignments_table()
-    con = get_connection()
-    try:
-        rows = [dict(r) for r in con.execute(
-            "SELECT a.id, a.character_id, a.type_id, a.created_at, COALESCE(a.tier_order,0) AS tier_order "
-            "FROM pp_reaction_assignments a JOIN pp_characters c ON c.character_id = a.character_id "
-            "WHERE c.context_id=?", (context_id,))]
-    except Exception:
-        return 0
-    finally:
-        con.close()
+    rows = _plan_rows(context_id, "a.id, a.character_id, a.type_id, a.created_at, COALESCE(a.tier_order,0) AS tier_order")
     if not rows:
         return 0
 
@@ -518,11 +555,7 @@ _RX_STATES = (_RX_RUNNING, _RX_DONE)
 
 
 def _manual_done_on(context_id: int) -> bool:
-    try:
-        from app.features import feature_enabled_for
-        return feature_enabled_for("reactions_manual_done", context_id)
-    except Exception:
-        return False
+    return flag_on("reactions_manual_done", context_id)
 
 
 @ensure_once
@@ -767,16 +800,7 @@ def level_stage_runs(context_id: int) -> int:
     """
     ensure_reaction_assignments_table()
     tidy = _tidy_runs_on(context_id)
-    con = get_connection()
-    try:
-        rows = [dict(r) for r in con.execute(
-            "SELECT a.id, a.character_id, a.type_id, a.runs, COALESCE(a.tier_order,0) AS tier_order "
-            "FROM pp_reaction_assignments a JOIN pp_characters c ON c.character_id = a.character_id "
-            "WHERE c.context_id=?", (context_id,))]
-    except Exception:
-        return 0
-    finally:
-        con.close()
+    rows = _plan_rows(context_id, "a.id, a.character_id, a.type_id, a.runs, COALESCE(a.tier_order,0) AS tier_order")
     if not rows:
         return 0
 
@@ -1157,8 +1181,7 @@ def _reaction_cadence_hours(context_id: int) -> float:
     a cadence must not be resized by one.
     """
     try:
-        from app.features import feature_enabled_for
-        if not feature_enabled_for("industry_job_length_policy", context_id):
+        if not flag_on("industry_job_length_policy", context_id):
             return 0.0
         from app.industry.settings import get_max_reaction_job_days
         return max(0.0, float(get_max_reaction_job_days(context_id) or 0.0)) * 24.0
@@ -1392,17 +1415,8 @@ def level_product_runs(context_id: int) -> int:
     """
     # ── Step 1: load every assignment row for this account ──────────────────────────────────────
     ensure_reaction_assignments_table()
-    con = get_connection()
-    try:
-        rows = [dict(r) for r in con.execute(
-            "SELECT a.id, a.character_id, a.type_id, a.name, a.runs, a.input_cost, a.reward, "
-            "a.created_at, a.order_id, COALESCE(a.tier_order,0) AS tier_order "
-            "FROM pp_reaction_assignments a JOIN pp_characters c ON c.character_id = a.character_id "
-            "WHERE c.context_id=?", (context_id,))]
-    except Exception:
-        return 0
-    finally:
-        con.close()
+    rows = _plan_rows(context_id, "a.id, a.character_id, a.type_id, a.name, a.runs, a.input_cost, a.reward, "
+                      "a.created_at, a.order_id, COALESCE(a.tier_order,0) AS tier_order")
     if not rows:
         return 0
 
@@ -1419,28 +1433,9 @@ def level_product_runs(context_id: int) -> int:
     frozen: set[int] = set()
     orphan_running: dict[int, int] = {}
     try:
-        con = get_connection()
-        try:
-            cached = {r["character_id"]: _json.loads(r["jobs_json"] or "[]")
-                      for r in con.execute(
-                          "SELECT j.character_id, j.jobs_json FROM pp_char_industry_jobs j "
-                          "JOIN pp_characters c ON c.character_id = j.character_id "
-                          "WHERE c.context_id = ?", (context_id,))}
-        finally:
-            con.close()
-        live: dict[tuple, int] = {}
-        for cid, jobs in cached.items():
-            for job in jobs or []:
-                if (job.get("status") or "").lower() in ("active", "paused", "ready"):
-                    k = (int(cid), int(job.get("product_type_id") or 0))
-                    live[k] = live.get(k, 0) + 1
+        live_runs = live_reaction_runs(context_id)
+        live = {k: len(v) for k, v in live_runs.items()}
         adopt: list[tuple] = []
-        live_runs: dict[tuple, list[int]] = {}
-        for cid, jobs in cached.items():
-            for job in jobs or []:
-                if (job.get("status") or "").lower() in ("active", "paused", "ready"):
-                    live_runs.setdefault((int(cid), int(job.get("product_type_id") or 0)),
-                                          []).append(int(job.get("runs") or 0))
         # Freeze the WHOLE (character, product, stage) group once any of its jobs is running — not
         # just the matched rows. Freezing row-by-row left the untouched siblings alone in the pass,
         # which re-levelled them against a requirement the frozen ones no longer contributed to and
@@ -1558,6 +1553,11 @@ def level_product_runs(context_id: int) -> int:
     # from the same starting point — 17 jobs on an 11-slot character. Stages are walked in order so
     # what an earlier one took is a fact by the time a later one asks.
     committed: dict[int, int] = {}
+    # Both are per-ACCOUNT, so they are the same number for every stage. `_reaction_time_mult`
+    # re-reads and re-parses every character's `jobs_json` and writes the measurement back, so
+    # asking it once per stage was a full scan per stage for one value.
+    _tmult = _reaction_time_mult(context_id)
+    cadence_h = _reaction_cadence_hours(context_id)
     # ── Step 5: per stage — size every product to one shared run count ──────────────────────────
     for stage in sorted(stages):
         by_product = stages[stage]
@@ -1578,9 +1578,8 @@ def level_product_runs(context_id: int) -> int:
         # The cadence is REAL hours and every duration here is raw SDE hours, so it has to be
         # converted before it can be compared with them: a 7-day window is 7 days of wall clock,
         # which is `7d / mult` worth of the SDE's idea of time. Getting this wrong is what made a
-        # 7-day ceiling plan 56-run jobs instead of 119.
-        _tmult = _reaction_time_mult(context_id)
-        cadence_h = _reaction_cadence_hours(context_id)
+        # 7-day ceiling plan 56-run jobs instead of 119. (`_tmult`/`cadence_h` are hoisted above
+        # the loop — both are per-account.)
         stage_cap_hours = (cadence_h / _tmult if cadence_h else 0.0) or max(
             (int(r["runs"] or 0) * cycles.get(int(r["type_id"]), 1.0)
              for rs in by_product.values() for r in rs),
@@ -2002,11 +2001,7 @@ class AssignRequest(BaseModel):
 def _assign_guards_on(context_id: int) -> bool:
     """Gated: both halves change what a repeated press DOES. Replacing rather than appending is
     almost always what was meant, but "almost" is why it rolls out rather than lands."""
-    try:
-        from app.features import feature_enabled_for
-        return feature_enabled_for("reactions_assign_guard", context_id)
-    except Exception:
-        return False
+    return flag_on("reactions_assign_guard", context_id)
 
 
 def _clear_assignment_group(con, character_id: int, type_id: int, tier_order: int) -> int:
@@ -2047,11 +2042,7 @@ def _parallel_stages_on(context_id: int) -> bool:
     customer orders will schedule more work per character. That is the point, and it is also a
     planning-behaviour change on live accounts — CLAUDE.md rule 2.
     """
-    try:
-        from app.features import feature_enabled_for
-        return feature_enabled_for("reactions_parallel_stages", context_id)
-    except Exception:
-        return False
+    return flag_on("reactions_parallel_stages", context_id)
 
 
 def _concurrent_load(rows: list[dict], adding: dict[int, int] | None = None) -> int:
@@ -3023,11 +3014,7 @@ def _formula_caps_on(context_id: int) -> bool:
     """Gated: capping changes what gets suggested and what an assign commits, so it rolls out
     rather than lands. Off ⇒ `formula_concurrency_caps` returns {} ⇒ the slot math is exactly what
     it was."""
-    try:
-        from app.features import feature_enabled_for
-        return feature_enabled_for("reactions_formula_cap", context_id)
-    except Exception:
-        return False
+    return flag_on("reactions_formula_cap", context_id)
 
 
 def formula_concurrency_caps(context_id: int) -> dict[int, int]:
@@ -3111,11 +3098,7 @@ def _pack_hosts_on(context_id: int) -> bool:
     """Gate for filling one character before using two (`reactions_pack_hosts`). Off ⇒ an order is
     shared across every character with room, exactly as it always was. Flagged because it changes
     where live orders get placed, not because it is in doubt — CLAUDE.md rule 2."""
-    try:
-        from app.features import feature_enabled_for
-        return feature_enabled_for("reactions_pack_hosts", context_id)
-    except Exception:
-        return False
+    return flag_on("reactions_pack_hosts", context_id)
 
 
 # How much speed an extra character has to buy to be worth the login. Adding a host with F free

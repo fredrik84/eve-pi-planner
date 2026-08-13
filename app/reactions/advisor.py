@@ -29,7 +29,7 @@ from app.market import fetch_daily_volume
 from app.reactions._router import router
 from app.reactions.graph import (
     _load_goo_and_reached, _build_opportunities, _ordered_chain_tiers, _load_reaction_graph,
-    _fuel_block_ids, reaction_stock_pool, tier_ranks, tidy_runs,
+    _fuel_block_ids, reaction_stock_pool, _stock_covered_report, tier_ranks, tidy_runs,
 )
 from app.reactions.jobs import (
     ensure_industry_jobs_table, ensure_reaction_assignments_table, _character_capacities,
@@ -554,10 +554,7 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
             "stage_aligned_slots": aligned,
             # Stages this run did NOT plan because the intermediate is already in stock, named with
             # what they covered. A step that silently vanishes reads as a bug; this is the answer.
-            "stock_covered": sorted(
-                ({**c, "name": types.get(c["type_id"], {}).get("name", str(c["type_id"])),
-                  "units": round(c["units"], 1)} for c in stock_covered.values()),
-                key=lambda c: -c["runs_saved"]),
+            "stock_covered": _stock_covered_report(stock_covered, types),
         },
     }
 
@@ -569,6 +566,13 @@ class SuggestRequest(BaseModel):
     material_ids: list[int] | None = None  # None/empty = no restriction, every priced material usable
     absorb_fraction: float | None = None  # None = default _ABSORB_FRACTION; the "fill more of the buy
     # book" advisor Apply raises it to unlock a depth-bound product. Clamped to (0, 1] server-side.
+
+
+def _step_hours(s, jobs: int) -> float:
+    """How long a planned step takes when its runs are spread over `jobs` reactors — whole jobs
+    only, so the step is as long as its longest reactor. Both the widen and the align pass compare
+    candidate layouts with this; they must measure the same way or they undo each other."""
+    return math.ceil(s["runs"] / max(1, jobs)) * s["cycle_hours"]
 
 
 def _widen_to_idle_slots(steps: list[dict], free_by_char: dict[int, int]) -> int:
@@ -599,9 +603,6 @@ def _widen_to_idle_slots(steps: list[dict], free_by_char: dict[int, int]) -> int
     for s in steps:
         by_char.setdefault(s["character_id"], []).append(s)
 
-    def _hours(s, jobs):
-        return math.ceil(s["runs"] / max(1, jobs)) * s["cycle_hours"]
-
     for cid, own in by_char.items():
         idle = max(0, int(free_by_char.get(cid, 0)))
         # NOT `while idle > 0`: widening a tier below the busiest one costs no idle reactor at all
@@ -626,9 +627,9 @@ def _widen_to_idle_slots(steps: list[dict], free_by_char: dict[int, int]) -> int
                     continue
                 # Scored on what it does to the STAGE, not to this step alone: stage 2 waits for
                 # the last job of stage 1, so an hour off a step that finishes early buys nothing.
-                stage_now = max(_hours(o, o["jobs"]) for o in own if o["tier"] == s["tier"])
-                after = max([_hours(s, s["jobs"] + 1)]
-                            + [_hours(o, o["jobs"]) for o in own
+                stage_now = max(_step_hours(o, o["jobs"]) for o in own if o["tier"] == s["tier"])
+                after = max([_step_hours(s, s["jobs"] + 1)]
+                            + [_step_hours(o, o["jobs"]) for o in own
                                if o["tier"] == s["tier"] and o is not s])
                 gain = stage_now - after
                 # Free widening wins ties: it buys time back without spending capacity.
@@ -668,29 +669,26 @@ def _align_stage_jobs(steps: list[dict]) -> int:
     for s in steps:
         by_stage.setdefault((s["character_id"], s["tier"]), []).append(s)
 
-    def _hours(s, jobs):
-        return math.ceil(s["runs"] / max(1, jobs)) * s["cycle_hours"]
-
     for own in by_stage.values():
         if len(own) < 2:
             continue                    # a stage of one step has nothing to align against
         for _ in range(200):            # bounded: every accepted move strictly lowers the makespan
-            cur = max(_hours(s, s["jobs"]) for s in own)
+            cur = max(_step_hours(s, s["jobs"]) for s in own)
             # Who is holding the stage up, and who can spare a reactor without becoming the new
             # bottleneck.
-            slowest = max(own, key=lambda s: _hours(s, s["jobs"]))
+            slowest = max(own, key=lambda s: _step_hours(s, s["jobs"]))
             cap = slowest.get("cap")
             if slowest["jobs"] >= slowest["runs"] or (cap and slowest["jobs"] >= cap):
                 break                   # the bottleneck cannot use another reactor anyway
             donors = [s for s in own
                       if s is not slowest and s["jobs"] > 1
-                      and _hours(s, s["jobs"] - 1) < cur]
+                      and _step_hours(s, s["jobs"] - 1) < cur]
             if not donors:
                 break
             # Give up the reactor whose own step suffers least for it.
-            donor = min(donors, key=lambda s: _hours(s, s["jobs"] - 1))
-            after = max(_hours(slowest, slowest["jobs"] + 1), _hours(donor, donor["jobs"] - 1),
-                        *[_hours(s, s["jobs"]) for s in own if s is not slowest and s is not donor])
+            donor = min(donors, key=lambda s: _step_hours(s, s["jobs"] - 1))
+            after = max(_step_hours(slowest, slowest["jobs"] + 1), _step_hours(donor, donor["jobs"] - 1),
+                        *[_step_hours(s, s["jobs"]) for s in own if s is not slowest and s is not donor])
             if after >= cur:
                 break                   # no longer buys anything — stop rather than churn
             donor["jobs"] -= 1

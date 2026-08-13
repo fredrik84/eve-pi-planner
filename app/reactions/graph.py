@@ -17,6 +17,7 @@ from app.esi import require_context
 from app.groups import member_group
 
 from app.reactions._router import router
+from app.reactions._flags import flag_on
 from app.reactions.settings import effective_reaction_settings, _resolve_system_id
 
 
@@ -683,8 +684,7 @@ def reaction_stock_pool(context_id: int) -> dict[int, float]:
     """
     def _build():
         try:
-            from app.features import feature_enabled_for
-            if not feature_enabled_for("reactions_use_stock", context_id):
+            if not flag_on("reactions_use_stock", context_id):
                 return {}
             from app.industry.assets import owned_quantities
             return {tid: q for tid, q in owned_quantities(context_id).items() if q > 0}
@@ -715,6 +715,19 @@ def _take_from_stock(stock: dict[int, float] | None, type_id: int, units_needed:
     used = min(have, units_needed)
     stock[type_id] = have - used
     return units_needed - used
+
+
+def _stock_covered_report(stock_covered: dict, types: dict) -> list[dict]:
+    """The "you already hold this, so it is not work" note, named and newest-saving first.
+
+    `_ordered_chain_tiers` fills `stock_covered` as it walks; a stage that silently vanishes from a
+    plan reads as a bug, so both the wizard and an order report say which ones went and what they
+    covered. Same shape on both, because it is the same answer.
+    """
+    return sorted(
+        ({**c, "name": types.get(c["type_id"], {}).get("name", str(c["type_id"])),
+          "units": round(c["units"], 1)} for c in stock_covered.values()),
+        key=lambda c: -c["runs_saved"])
 
 
 def _explode_shopping_list(type_id: int, units_needed: float, reached: dict, out: dict[int, float],

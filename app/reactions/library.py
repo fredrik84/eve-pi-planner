@@ -41,6 +41,7 @@ from pydantic import BaseModel
 from app.sde import get_connection
 from app.esi import require_context
 from app.reactions._router import router
+from app.reactions._flags import flag_on
 from app.reactions.graph import request_memo
 
 FEATURE_KEY = "reactions_missing_formulas"
@@ -50,11 +51,7 @@ def _feature_on(context_id: int) -> bool:
     """Gated: this changes what the wizard, a manual assign and an order all say you can run, so it
     rolls out rather than lands (CLAUDE.md rule 2). Off ⇒ every report here is empty ⇒ the three
     surfaces read exactly as they did before."""
-    try:
-        from app.features import feature_enabled_for
-        return bool(feature_enabled_for(FEATURE_KEY, context_id))
-    except Exception:
-        return False
+    return flag_on(FEATURE_KEY, context_id)
 
 
 def _reaction_index() -> tuple[dict[int, int], dict[int, str]]:
