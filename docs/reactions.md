@@ -664,7 +664,28 @@ now it did 65 runs per"*, which is `168 / 0.85 / 3.00`, the skills fallback. The
 measurement is persisted (`pp_industry_settings.reaction_time_mult`) and reused until a newer one
 replaces it, so an idle account still plans at the rate it actually reacts at.
 
-**A first suggestion is right without ever having reacted (`route_job`).** Measurement cannot help
+**A first suggestion is still NOT right without having reacted — routing was tried and measured
+wrong (2026-08-13).** The plan below was implemented and then backed out of the ceiling, because the
+acceptance test failed on the only account that can check it.
+
+`_routed_reaction_time_mult` asks `structures.route_job` the same question the planner asks when it
+costs and times a job, per product, resolving the rig against the produced type's group. It returns
+a **67%** time reduction for that account's Composite reactions; the same account's real ESI jobs
+measure **44.9%**. A 7-day ceiling built on 67% allows 199-run jobs — **11.6 real days** — which is
+the identical 40% over-claim as `struct_time_pct` and `rx_bonus.te`, arrived at more carefully.
+
+Whether the app's rig-coverage model or the account's saved structure config is wrong is not
+knowable from inside this function, and the asymmetry settles what to do meanwhile: under-claiming
+costs a suggestion too many short jobs, over-claiming quietly breaks the promise the cadence exists
+to make. So the unmeasured case stays on skills alone.
+
+**What the helper now buys is a check.** For any account that has ever reacted, comparing
+`_reaction_time_mult` (measured) with `_routed_reaction_time_mult` (modelled) is a one-line test of
+whether the structure model matches reality — and the first account it was pointed at disagrees by
+22 percentage points. That gap is worth understanding before the model is trusted to size a job,
+and it affects what the Industry planner quotes too, not just this.
+
+**The original plan, kept because the reasoning still holds:** Measurement cannot help
 a new account — *"if they start jobs from the suggestion it'll be either wrong, or they have done all
 the work manually"* — so with nothing measured the bonus is ROUTED:
 `reaction_time_mult_for(context_id, type_id)` asks `structures.route_job` the same question the rest

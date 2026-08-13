@@ -1120,9 +1120,18 @@ def reaction_time_mult_for(context_id: int, type_id: int | None = None) -> float
     measured = _reaction_time_mult(context_id, _derive=False)
     if measured:
         return measured
-    routed = _routed_reaction_time_mult(context_id, type_id) if type_id else 0.0
-    skills = _reaction_skill_mult(context_id)
-    return max(0.01, min(1.0, skills * routed)) if routed else skills
+    # **Routing is NOT used here, and the measurement is why.** `_routed_reaction_time_mult` is a
+    # faithful implementation of what the app believes the structure gives — it asks `route_job`
+    # exactly as the planner does elsewhere — and on the one account that can be checked it returns
+    # a 67% time reduction against a MEASURED 44.9%. That would size a 7-day job at 199 runs, i.e.
+    # 11.6 real days: the same 40% over-claim as the two cruder sources, arrived at more carefully.
+    #
+    # Whether the app or the account's saved rig config is wrong is not knowable from here, and the
+    # asymmetry decides it: under-claiming costs a suggestion too many short jobs, over-claiming
+    # quietly breaks the promise the cadence exists to make. So skills alone until a routed figure
+    # can be validated against a real measurement — which is now a one-line comparison for any
+    # account that has ever reacted (`reaction_time_mult` vs `_routed_reaction_time_mult`).
+    return _reaction_skill_mult(context_id)
 
 
 def _reaction_skill_mult(context_id: int) -> float:
