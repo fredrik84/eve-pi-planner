@@ -1452,6 +1452,13 @@ def level_product_runs(context_id: int) -> int:
     # The characters this plan already occupies. They are a login you are making anyway, so their
     # reactors cost nothing extra to use; anyone else has to be worth the trip (Step 5b).
     involved = {int(r["character_id"]) for r in rows}
+    # ...and, separately, the characters whose REACTORS are worth a login at all — computed from
+    # capacity, not from who happens to hold a row today. A pending row is not a commitment: nothing
+    # is installed, so moving it costs nothing, and a row sitting on a character the packing rule
+    # would never have chosen is pure overhead. Rows that are genuinely RUNNING are a different
+    # matter and `room` already nets those out.
+    lean_set = {h["character_id"] for h in _lean_hosts(
+        [{"character_id": cid, "free_slots": n} for cid, n in room.items() if n > 0])}
     rows_by_char_stage: dict[int, dict[int, int]] = {}
     for stage, by_product in stages.items():
         for rs in by_product.values():
@@ -1596,7 +1603,14 @@ def level_product_runs(context_id: int) -> int:
             # twelve rows again for an identical layout, on every dashboard load.
             quota: dict[int, int] = {}
             left = want
-            for cid in sorted(have, key=lambda c: (-have[c], -room_left.get(c, 0), c)):
+            # The characters worth a login go first, even where a lesser one already holds rows of
+            # this product: with nothing installed there is no churn to avoid, and consolidating is
+            # the whole point. *"No one is running any products right now, so there's no reason why
+            # it should give it to that character."*
+            for cid in sorted(have, key=lambda c: (0 if c in lean_set else 1,
+                                                    -have[c], -room_left.get(c, 0), c)):
+                if cid not in lean_set:
+                    continue                # ...only if the worthwhile ones cannot absorb it
                 take = min(have[cid], max(0, room_left.get(cid, 0)), left)
                 if take:
                     quota[cid] = take
@@ -1626,6 +1640,20 @@ def level_product_runs(context_id: int) -> int:
                     quota[cid] = quota.get(cid, 0) + take
                     room_left[cid] -= take
                     left -= take
+            # Only now the characters the packing rule would not have picked, and only for what
+            # is genuinely left over: an account whose worthwhile characters are full does still
+            # need them.
+            if left > 0:
+                for cid in sorted(have, key=lambda c: (-have[c], -room_left.get(c, 0), c)):
+                    if left <= 0:
+                        break
+                    if cid in lean_set:
+                        continue
+                    take = min(have[cid], max(0, room_left.get(cid, 0)), left)
+                    if take:
+                        quota[cid] = quota.get(cid, 0) + take
+                        room_left[cid] -= take
+                        left -= take
             if left > 0:
                 continue        # nowhere to put it all — leave this product exactly as it is
             # Rows stay put wherever the quota allows; the overflow are the ones that move, and

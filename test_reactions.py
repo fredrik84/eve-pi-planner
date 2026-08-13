@@ -679,6 +679,19 @@ def test_the_leveller_does_not_reach_for_a_character_the_assign_left_out() -> bo
     ok &= check(joins(10, 20), "and a character carrying real weight is always worth the trip")
     ok &= check(not joins(0, 5), "a character with no free reactor is never added")
 
+    # A row that is merely PLANNED is not a commitment: nothing is installed, so moving it costs
+    # nothing and a row on a character the packing rule would never have picked is pure overhead.
+    # The stability rule ("whoever already runs it keeps it") exists to stop churn between loads,
+    # and it must not be read as protecting a placement no one is running.
+    import app.reactions.jobs as _J2
+    room = {1: 10, 2: 10, 3: 10, 4: 5}
+    lean = {h["character_id"] for h in _J2._lean_hosts(
+        [{"character_id": c, "free_slots": n} for c, n in room.items() if n > 0])}
+    ok &= check(lean == {1, 2, 3},
+                "the 5-reactor character is not worth a login beside three 10s")
+    ok &= check(4 not in lean,
+                "so a pending row parked on it should move, not be preserved by stability")
+
     # The threshold is the same number the order allocator uses — one rule, not two that drift.
     import app.reactions.jobs as _J
     hosts = [{"character_id": 1, "free_slots": 10}, {"character_id": 2, "free_slots": 10},
