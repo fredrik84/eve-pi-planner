@@ -1453,8 +1453,7 @@ def level_product_runs(context_id: int) -> int:
     prefer_tidy = _tidy_runs_on(context_id)
     # The characters this plan already occupies. They are a login you are making anyway, so their
     # reactors cost nothing extra to use; anyone else has to be worth the trip (Step 5b).
-    involved = {int(r["character_id"]) for r in rows}
-    # ...and, separately, the characters whose REACTORS are worth a login at all — computed from
+    # The characters whose REACTORS are worth a login at all — computed from
     # capacity, not from who happens to hold a row today. A pending row is not a commitment: nothing
     # is installed, so moving it costs nothing, and a row sitting on a character the packing rule
     # would never have chosen is pure overhead. Rows that are genuinely RUNNING are a different
@@ -1636,18 +1635,16 @@ def level_product_runs(context_id: int) -> int:
             # the next dashboard load, saw a spare reactor on a fourth, and put a single job there.
             # Reported as a plan that "suddenly swapped 3x7 slots to 3x7 + 1x1" while watching it.
             #
-            # A character already in the plan is always a candidate — you are logging in to it
-            # regardless, so its reactors are free in the sense that matters. A character NOT in the
-            # plan has to earn the trip: it joins only if its room is worth `_WORTH_A_LOGIN` of what
-            # the plan can already reach. When the involved characters are full that share is 1.0
-            # and it joins immediately, which is the case where spreading is genuinely necessary.
-            reachable = sum(max(0, room_left.get(c, 0)) for c in involved)
+            # Gated on the characters worth a login, NOT on "already holds a row" — that was the bug in
+            # the first cut of this: a character the packing rule would never have chosen kept its
+            # place forever simply because an earlier plan had put it there, and every later pass
+            # read that as evidence it belonged. Where the worthwhile characters cannot hold it all,
+            # the fallback below still uses whoever can.
             for cid in sorted(room_left, key=lambda c: (-room_left[c], c)):
                 if left <= 0:
                     break
                 free = max(0, room_left.get(cid, 0))
-                if cid not in involved and (free <= 0
-                                            or free / float(reachable + free) < _WORTH_A_LOGIN):
+                if cid not in lean_set or free <= 0:
                     continue
                 take = min(free, left)
                 if take:

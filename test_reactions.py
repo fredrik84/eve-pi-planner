@@ -716,6 +716,85 @@ def test_the_leveller_does_not_reach_for_a_character_the_assign_left_out() -> bo
     return ok
 
 
+def test_the_leveller_consolidates_a_stray_host_off_the_plan() -> bool:
+    """The reported plan, seeded and run through the REAL levelling pass: 7/7/6 jobs on three
+    10-reactor characters plus a single job stranded on a 5-reactor fourth. *"Suddenly we have an
+    extra slot on 3 characters again, it still doesn't distribute stuff."*
+
+    Two bugs kept that row in place. The stage budget charged stage 2's rows against stage 1's
+    reactors, so three 10-reactor characters read as exactly full at 21 + 9 rows; and the overflow
+    placement was gated on "already holds a row", which let any historical placement re-justify
+    itself on every pass forever. Gated on the characters worth a login instead, computed from
+    reactors."""
+    import time as _t
+    from app.db import get_connection
+    import app.reactions.jobs as J
+
+    CTX = 777099
+    CH = [(9910001, "Big A", 10), (9910002, "Big B", 10), (9910003, "Big C", 10),
+          (9910004, "Small D", 5)]
+    S1, S2 = (16673, "Crystalline Carbonide"), (16681, "Fullerides")
+    con = get_connection()
+    for cid, nm, slots in CH:
+        con.execute("DELETE FROM pp_characters WHERE character_id=?", (cid,))
+        mr = min(5, slots - 1)
+        con.execute("INSERT INTO pp_characters (context_id,character_id,character_name,"
+                    "mass_reactions,advanced_mass_reactions,scopes) VALUES (?,?,?,?,?,?)",
+                    (CTX, cid, nm, mr, max(0, slots - 1 - mr),
+                     "esi-industry.read_character_jobs.v1"))
+        con.execute("DELETE FROM pp_reaction_assignments WHERE character_id=?", (cid,))
+    now = _t.time()
+    for cid, n in ((9910001, 7), (9910002, 7), (9910003, 6), (9910004, 1)):
+        for _ in range(n):
+            con.execute("INSERT INTO pp_reaction_assignments (character_id,type_id,name,runs,"
+                        "input_cost,reward,created_at,tier_order,order_id) VALUES (?,?,?,?,?,?,?,?,?)",
+                        (cid, S1[0], S1[1], 113, 0, 0, now, 0, None))
+    for cid in (9910001, 9910002, 9910003):
+        for _ in range(3):
+            con.execute("INSERT INTO pp_reaction_assignments (character_id,type_id,name,runs,"
+                        "input_cost,reward,created_at,tier_order,order_id) VALUES (?,?,?,?,?,?,?,?,?)",
+                        (cid, S2[0], S2[1], 111, 0, 0, now, 1, None))
+    con.commit(); con.close()
+
+    saved = (J._level_runs_on, J._tidy_runs_on, J._parallel_stages_on,
+             J._reaction_cadence_hours, J._reaction_time_mult)
+    J._level_runs_on = lambda c: True
+    J._tidy_runs_on = lambda c: True
+    J._parallel_stages_on = lambda c: True
+    J._reaction_cadence_hours = lambda c: 168.0
+    J._reaction_time_mult = lambda c, _derive=True: 0.468
+
+    def hosts():
+        con = get_connection()
+        rs = con.execute("SELECT DISTINCT c.character_name nm FROM pp_reaction_assignments a "
+                         "JOIN pp_characters c ON c.character_id=a.character_id "
+                         "WHERE c.context_id=?", (CTX,)).fetchall()
+        con.close()
+        return {r["nm"] for r in rs}
+    try:
+        ok = check(hosts() == {"Big A", "Big B", "Big C", "Small D"},
+                   "seeded with the stray 5-reactor host holding one job")
+        for _ in range(3):
+            J.level_product_runs(CTX)
+        after = hosts()
+        ok &= check("Small D" not in after,
+                    f"the stray host is emptied by the levelling pass (left: {sorted(after)})")
+        ok &= check(after == {"Big A", "Big B", "Big C"},
+                    "and the work stays on the three characters worth a login")
+        # Stable: running it again must not put it back, which is how this was first noticed.
+        J.level_product_runs(CTX)
+        ok &= check("Small D" not in hosts(), "and a further pass does not re-add it")
+        return ok
+    finally:
+        (J._level_runs_on, J._tidy_runs_on, J._parallel_stages_on,
+         J._reaction_cadence_hours, J._reaction_time_mult) = saved
+        con = get_connection()
+        for cid, _n, _s in CH:
+            con.execute("DELETE FROM pp_reaction_assignments WHERE character_id=?", (cid,))
+            con.execute("DELETE FROM pp_characters WHERE character_id=?", (cid,))
+        con.commit(); con.close()
+
+
 def test_a_reaction_can_be_marked_running_or_done_by_hand() -> bool:
     """ESI is the signal for what is running and what has landed, and it is right nearly always —
     but the job cache is up to five minutes stale, a job installed under a different product than
@@ -888,6 +967,7 @@ def run_unit_tests() -> bool:
         test_a_cadence_ceiling_holds_every_job_inside_the_week(),
         test_the_leveller_never_plans_more_jobs_than_formulas_owned(),
         test_the_leveller_does_not_reach_for_a_character_the_assign_left_out(),
+        test_the_leveller_consolidates_a_stray_host_off_the_plan(),
         test_the_cadence_ceiling_is_measured_in_real_time_not_sde_time(),
         test_the_cadence_reaches_an_orders_own_top_row(),
         test_a_reaction_can_be_marked_running_or_done_by_hand(),
