@@ -1414,14 +1414,20 @@ def level_product_runs(context_id: int) -> int:
     # Everything else is fair game — an order's intermediates, and the top row of a speculative
     # chain. Both were excluded once and both exclusions left a product showing several numbers
     # after the pass had run; see docs/reactions.md, "A speculative chain's TOP row is levelled too".
-    top_of_chain: dict[tuple, int] = {}
+    # The top row is a property of the ORDER, not of a character. Keyed per (character, chain) this
+    # protected any row that was merely the highest tier THAT CHARACTER happened to hold: a host
+    # carrying one stage-1 job and nothing above it looked like the order's quoted batch, so the
+    # leveller was forbidden from moving it and a stray host could never be consolidated away.
+    # Found only on prod — a fixture built with `order_id=None` never reaches this branch at all.
+    top_of_order: dict[int, int] = {}
     for r in rows:
-        key = (r["character_id"], round(float(r["created_at"] or 0.0), 3))
-        top_of_chain[key] = max(top_of_chain.get(key, 0), int(r["tier_order"] or 0))
+        oid = r.get("order_id")
+        if oid is None:
+            continue
+        top_of_order[int(oid)] = max(top_of_order.get(int(oid), 0), int(r["tier_order"] or 0))
     inner = [r for r in rows
              if not (r.get("order_id")
-                     and int(r["tier_order"] or 0) == top_of_chain[
-                         (r["character_id"], round(float(r["created_at"] or 0.0), 3))])]
+                     and int(r["tier_order"] or 0) == top_of_order[int(r["order_id"])])]
     if not inner:
         return 0
 

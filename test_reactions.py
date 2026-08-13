@@ -748,12 +748,12 @@ def test_the_leveller_consolidates_a_stray_host_off_the_plan() -> bool:
         for _ in range(n):
             con.execute("INSERT INTO pp_reaction_assignments (character_id,type_id,name,runs,"
                         "input_cost,reward,created_at,tier_order,order_id) VALUES (?,?,?,?,?,?,?,?,?)",
-                        (cid, S1[0], S1[1], 113, 0, 0, now, 0, None))
+                        (cid, S1[0], S1[1], 113, 0, 0, now, 0, 4242))
     for cid in (9910001, 9910002, 9910003):
         for _ in range(3):
             con.execute("INSERT INTO pp_reaction_assignments (character_id,type_id,name,runs,"
                         "input_cost,reward,created_at,tier_order,order_id) VALUES (?,?,?,?,?,?,?,?,?)",
-                        (cid, S2[0], S2[1], 111, 0, 0, now, 1, None))
+                        (cid, S2[0], S2[1], 111, 0, 0, now, 1, 4242))
     con.commit(); con.close()
 
     saved = (J._level_runs_on, J._tidy_runs_on, J._parallel_stages_on,
@@ -784,6 +784,18 @@ def test_the_leveller_consolidates_a_stray_host_off_the_plan() -> bool:
         # Stable: running it again must not put it back, which is how this was first noticed.
         J.level_product_runs(CTX)
         ok &= check("Small D" not in hosts(), "and a further pass does not re-add it")
+
+        # The order's own top row (stage 2) must still be untouched — it is the batch the order was
+        # quoted on. The FIRST version of this test used order_id=None and so never exercised the
+        # exclusion at all, which is why it passed locally while prod stayed on four characters.
+        con = get_connection()
+        s2 = [dict(r) for r in con.execute(
+            "SELECT a.runs, c.character_name nm FROM pp_reaction_assignments a "
+            "JOIN pp_characters c ON c.character_id=a.character_id "
+            "WHERE c.context_id=? AND a.tier_order=1", (CTX,))]
+        con.close()
+        ok &= check(len(s2) == 9 and all(r["runs"] == 111 for r in s2),
+                    "the order's quoted top row is left exactly as it was")
         return ok
     finally:
         (J._level_runs_on, J._tidy_runs_on, J._parallel_stages_on,
