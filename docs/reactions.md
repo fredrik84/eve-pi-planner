@@ -603,7 +603,15 @@ stage solve never did.** It capped a stage at `stage_cap_hours`, the longest job
 to already run, which is why a Reactions plan could quote a fortnight on one reactor with the
 ceiling sitting right there unused.
 
-`_reaction_cadence_hours` now feeds that cap, so `_level_options` drops any run count above it. It
+**One number, two places.** The control sits on the Reactions card as a single row above the
+pipeline it shapes (`_rxCadenceHtml`, "Come back every N days") and reads/writes the same
+`/api/industry/build-setup` that Build rules does — so whichever you touch last is what both show,
+and there is no second setting to drift. It hides itself when `available.job_length` is false rather
+than showing a control that 403s, which is the contract that surface already has for every section.
+Changing it re-fetches the plan instead of re-rendering the cached one: the run counts on screen are
+exactly what just changed.
+
+`_reaction_cadence_hours` feeds that cap, so `_level_options` drops any run count above it. It
 is HARD, not advisory: a stage that cannot fit the window at its leanest layout is split finer until
 it does. On the reported stage at 1.53 h/run:
 

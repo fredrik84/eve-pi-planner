@@ -436,6 +436,56 @@ function _rxStageReady(data) {
 // pages start looking like different products.
 let _rxMissSeq = 0;
 
+// ── Login cadence, on the surface it shapes ───────────────────────────────────────────────────
+// *"I'd prefer to be able to schedule my jobs on a Saturday and handle the next stage a week later
+// on a Saturday when I have time to play."* The setting is `max_reaction_job_days` and it already
+// existed — Build rules → "Longest reaction job", on the Industry tab. This is the SAME value on
+// the surface it actually shapes, not a second one: both read and write `/api/industry/build-setup`,
+// so whichever you touch last is what both show.
+let _rxCadenceDays = null;      // null until loaded; '' or a number after
+let _rxCadenceAvail = false;
+
+async function _rxLoadCadence() {
+  try {
+    const r = await api('/api/industry/build-setup');
+    _rxCadenceAvail = !!(r.available && r.available.job_length);
+    const d = ((r.account || r).job_length || {}).max_reaction_job_days;
+    _rxCadenceDays = (d == null) ? '' : d;
+  } catch (e) {
+    _rxCadenceAvail = false;                 // the flag is off, or the surface 403'd — show nothing
+  }
+}
+
+function _rxCadenceHtml() {
+  if (!_rxCadenceAvail) return '';
+  const v = _rxCadenceDays == null ? '' : _rxCadenceDays;
+  const set = v !== '' && Number(v) > 0;
+  return `<div class="rx-cadence">
+      <label for="rxCadence">Come back every</label>
+      <input type="number" id="rxCadence" min="0" step="0.5" value="${_esc(String(v))}"
+             onchange="_rxSaveCadence(this.value)" title="No reaction job will be planned longer than this, so a stage lands inside the window you set. Blank or 0 = no ceiling.">
+      <span>days</span>
+      <span class="rx-cadence-note">${set
+        ? 'No job is planned longer than this, so a stage finishes inside the window — it costs reactors when the work does not fit.'
+        : 'No ceiling: a batch can sit in one reactor for as long as the work takes. Set a number to plan around a fixed play day.'}</span>
+    </div>`;
+}
+
+function _rxSaveCadence(value) {
+  const raw = String(value).trim();
+  const days = raw === '' ? null : parseFloat(raw);
+  if (days !== null && (!isFinite(days) || days < 0)) { toastError(new Error('Days must be 0 or more')); return; }
+  apiSend('POST', '/api/industry/build-setup', { job_length: { max_reaction_job_days: days } })
+    .then(() => {
+      _rxCadenceDays = days == null ? '' : days;
+      // The cadence reshapes the plan on the next read, so re-fetch rather than re-render what we
+      // already have — the run counts on screen are exactly what just changed.
+      _rxLastDashboardData = null;
+      _loadReactionsDashboard();
+    })
+    .catch(e => toastError(e, 'Could not save the cadence'));
+}
+
 // ── Marking a reaction running or done by hand (`reactions_manual_done`) ──────────────────────
 // The same three states, the same click cycle and the same wording as a build step in the Industry
 // tab (`indCycleDone`). ESI is right nearly always; this is for when it isn't — a job cache up to
@@ -682,6 +732,11 @@ function _loadReactionsDashboard() {
   if (!_rxLastDashboardData) el.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Loading…</div>';
   // Returned so a caller that must not finish before the plan is re-read can wait on it — the
   // levelling pass runs on this endpoint, so "assigned" is not "settled" until it resolves.
+  // The cadence is fetched alongside, not before: a failure there must not stop the plan loading,
+  // and the render reads whatever it has (nothing, until the first fetch lands).
+  if (_rxCadenceDays === null) _rxLoadCadence().then(() => {
+    if (_rxLastDashboardData) _renderReactionsDashboard(_rxLastDashboardData);
+  });
   const load = api('/api/reactions/jobs')
     .catch(e => { throw _rxErr(e, 'Load failed'); })
     .then(data => { _rxLastDashboardData = data; _renderReactionsDashboard(data); })
@@ -1097,7 +1152,7 @@ function _renderReactionsDashboard(data) {
       — everything it waits on has finished. Install ${readyNow.map(r => r.names.map(_esc).join(', ')).join(' · ')}.</div>`;
 
   el.innerHTML = reconnectNote + readyBanner + _rxMissingFormulaWarn(data.missing_formulas)
-    + todoListHtml + rows + untrackedNote;
+    + _rxCadenceHtml() + todoListHtml + rows + untrackedNote;
 }
 
 function _rxCancelAssignment(assignmentId) {
