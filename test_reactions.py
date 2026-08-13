@@ -344,37 +344,44 @@ def test_a_chain_spreads_over_the_slots_it_has() -> bool:
     return ok
 
 
-def test_an_order_fills_one_character_before_it_uses_two() -> bool:
-    """Reported from use: an order was shared across four characters when one had the reactors for
-    all of it — four logins to install and four to collect, for jobs that start and finish at the
-    same moment either way. Parallelism comes from REACTORS, not characters, so an order spills onto
-    a second character only when the first runs out of them."""
-    from app.reactions.jobs import _pack_hosts, _useful_slots
+def test_an_order_skips_characters_it_would_give_one_job() -> bool:
+    """Reported from a live order (#45, 1000 runs of Reinforced Carbon Fiber): stage 1 was spread
+    over 5 characters, two of them holding ONE job each; stage 2 over SEVEN, five holding one each.
+    Every one of those is a login to install a single job and a second trip to collect it, while the
+    characters that already have jobs sit on free reactors. Parallelism comes from reactors, so
+    moving that work costs nothing.
 
-    hosts = [{"character_id": 1, "free_slots": 12}, {"character_id": 2, "free_slots": 8},
-             {"character_id": 3, "free_slots": 6}, {"character_id": 4, "free_slots": 4}]
-    ids = lambda hs: [h["character_id"] for h in hs]
+    The FIRST attempt at this measured `_useful_slots` — the theoretical most an order could use —
+    which for a 1000-run order is in the thousands, so it kept every host and did nothing at all on
+    the exact order that prompted it. This pins the rule that replaced it."""
+    from app.reactions.jobs import _lean_hosts, _MIN_JOBS_PER_TIER
 
-    ok = check(ids(_pack_hosts(hosts, 12)) == [1], "12 jobs fit the 12-slot character alone")
-    ok &= check(ids(_pack_hosts(hosts, 8)) == [1], "and so does anything smaller")
-    ok &= check(ids(_pack_hosts(hosts, 13)) == [1, 2],
-                "13 spills onto exactly one more character, not all of them")
-    ok &= check(ids(_pack_hosts(hosts, 21)) == [1, 2, 3], "and 21 onto exactly two more")
-    ok &= check(ids(_pack_hosts(hosts, 999)) == [1, 2, 3, 4],
-                "an order bigger than the account still uses every character")
-    ok &= check(ids(_pack_hosts(hosts, 0)) == [1] and ids(_pack_hosts([], 5)) == [],
-                "a zero requirement still lands somewhere, and no hosts stays no hosts")
+    # The reported account: three 10-slot characters and four 5-slot ones, on a 4-tier chain
+    # (3 intermediates + the product), so `per_chain` is 4 and the floor is 8 free reactors.
+    big = [{"character_id": i, "free_slots": 10} for i in (1, 2, 3)]
+    small = [{"character_id": i, "free_slots": 5} for i in (4, 5, 6, 7)]
+    ids = lambda hs: sorted(h["character_id"] for h in hs)
 
-    # The number hosts are picked to cover is the point past which a slot only buys an empty job —
-    # `_fit_chain_slots`' own stopping rule, read across the whole order rather than one host.
-    tiers = [(101, {"runs": 40}), (102, {"runs": 6})]
-    ok &= check(_useful_slots(tiers, {}, 100, 20) == 66,
-                "uncapped, it is every tier's runs plus the product's")
-    ok &= check(_useful_slots(tiers, {101: 3}, 100, 20) == 29,
-                "a formula you own 3 of caps that tier at 3 jobs")
-    ok &= check(_useful_slots([], {}, 100, 5) == 5, "a chainless product is just its own runs")
-    ok &= check(_useful_slots(tiers, {101: 3, 102: 1, 100: 2}, 100, 20) == 6,
-                "and a fully-capped chain needs very few characters")
+    ok = check(ids(_lean_hosts(big + small, 4)) == [1, 2, 3],
+               "the 5-slot characters are dropped from a 4-tier chain — one job a stage is not a trip")
+    ok &= check(_MIN_JOBS_PER_TIER == 2, "the floor is two jobs a tier, not one")
+
+    # A shallower chain needs less room, so the same characters become worth involving again.
+    ok &= check(ids(_lean_hosts(big + small, 2)) == [1, 2, 3, 4, 5, 6, 7],
+                "on a 2-tier chain a 5-slot character clears the floor and keeps its share")
+
+    # Never strand an order: an account with nothing but small characters still gets to place it.
+    ok &= check(ids(_lean_hosts(small, 4)) == [4, 5, 6, 7],
+                "when NO character clears the floor every one is kept — spreading beats refusing")
+    ok &= check(_lean_hosts([], 4) == [], "no hosts stays no hosts")
+
+    # It trims the tail; it does not hunt for one character. The jobs are unchanged, so more
+    # reactors running them is still sooner finished.
+    ok &= check(len(_lean_hosts(big, 4)) == 3,
+                "every character that clears the floor is kept, not just the roomiest")
+    ok &= check(ids(_lean_hosts([{"character_id": 1, "free_slots": 8},
+                                 {"character_id": 2, "free_slots": 7}], 4)) == [1],
+                "the floor is exact — 8 clears a 4-tier chain, 7 does not")
     return ok
 
 
@@ -545,7 +552,7 @@ def run_unit_tests() -> bool:
         test_resolve_reachable(),
         test_explode_shopping_list(),
         test_a_chain_spreads_over_the_slots_it_has(),
-        test_an_order_fills_one_character_before_it_uses_two(),
+        test_an_order_skips_characters_it_would_give_one_job(),
         test_a_reaction_can_be_marked_running_or_done_by_hand(),
         test_assigning_twice_does_not_book_it_twice(),
         test_explode_chain_tiers(),

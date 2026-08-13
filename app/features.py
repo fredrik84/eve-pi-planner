@@ -282,15 +282,16 @@ FEATURE_REGISTRY = [
                     "character can reach it. Set the job length on the Reactions card to decide "
                     "how long a batch runs; the surplus from rounding up is stock.",
      "default": False},
-    {"key": "reactions_pack_hosts", "label": "Reactions: an order fills one character before it uses two",
+    {"key": "reactions_pack_hosts", "label": "Reactions: an order skips characters it would give one job",
      "group": "Reactions",
-     "description": "A customer order is placed on the FEWEST characters whose reactors can hold "
-                    "it, instead of being shared out across every character with a free slot. The "
-                    "jobs are the same jobs and they finish at the same time — parallelism comes "
-                    "from reactors, not from characters — so the only thing that changes is how "
-                    "many characters you log in to install and collect it. An order spills onto a "
-                    "second character exactly when the first runs out of reactors, which is the "
-                    "point at which spreading it genuinely does make it finish sooner.",
+     "description": "A character only joins a customer order if it has the reactors to take a real "
+                    "share of every stage — at least two jobs a stage — instead of every character "
+                    "with a free slot getting a token job. The work goes to the characters that "
+                    "are already making the trip and have reactors to spare, so the jobs, the run "
+                    "counts and the finish time are all unchanged and the only thing that drops is "
+                    "how many characters you log in to install and collect it. If no character "
+                    "clears the bar, every one is used exactly as before — an order is never "
+                    "refused for being spread thin.",
      "default": False, "state": "testers"},
     {"key": "reactions_stage_pipeline", "label": "Reactions: stages drawn as a pipeline, like builds",
      "group": "Reactions",

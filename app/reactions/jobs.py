@@ -2495,36 +2495,37 @@ def _pack_hosts_on(context_id: int) -> bool:
         return False
 
 
-def _useful_slots(tiers: list, chain_caps: dict[int, int], type_id: int, runs_needed: int) -> int:
-    """Reactors this order can turn into real jobs at all, counted account-wide.
+# A character that would be handed one job is a login that buys almost nothing. Two per tier is the
+# floor at which hosting a chain is worth the trip; below it the work goes to a character already
+# making the trip anyway.
+_MIN_JOBS_PER_TIER = 2
 
-    `_fit_chain_slots` already knows where the point is for ONE host — a tier never gets more jobs
-    than it has runs, or than there are formulas of it, because past that a slot only buys an empty
-    job. This is the same stopping rule read across the whole order, and it is what decides how many
-    characters are needed: hosts are taken until their free slots reach this number.
 
-    Deliberately the SUM over the chain's tiers, in the same units `_fit_chain_slots` spends a
-    host's `free_slots` in. A chain's stages do run one after another (`_concurrent_load`), so this
-    over-states what is occupied at any one moment — erring towards one more host than strictly
-    needed, never towards cramming an order onto a character that cannot install it.
+def _lean_hosts(hosts: list[dict], per_chain: int,
+                min_per_tier: int = _MIN_JOBS_PER_TIER) -> list[dict]:
+    """The characters worth involving in an order at all — the rest of the work goes to them.
+
+    Reported from use: *"in stage 1 of my Customer Order 2 characters out of 5 needed only has 1 job
+    each. Both of those jobs could be on the other 3. There's free slots on them."* And for the
+    stage above it, ten jobs spread over SEVEN characters, five of them holding a single job.
+
+    `_fit_chain_slots` gives every tier at least one slot, so a character with barely `per_chain`
+    reactors free contributes exactly one job per stage however small its share — a whole login, to
+    install one job and come back later to collect it. The characters that DO have room can take
+    that work without a second trip, because parallelism comes from reactors and they have spare.
+
+    So a host has to clear `per_chain × min_per_tier` free reactors to join: enough to give every
+    tier of the chain a real share rather than a token one. Everyone who clears it is kept — this
+    trims the tail, it does not hunt for the single roomiest character, because the jobs themselves
+    are unchanged and more reactors running them is still sooner finished.
+
+    **Never returns empty, and never strands an order.** If no character clears the floor, every
+    host stays: an account of small characters genuinely does need to spread, and refusing to place
+    the order would be a worse answer than a few extra logins.
     """
-    total = sum(_cap_jobs(chain_caps.get(tid), max(1, int(t["runs"]))) for tid, t in tiers)
-    return total + _cap_jobs(chain_caps.get(type_id), max(1, runs_needed))
-
-
-def _pack_hosts(hosts: list[dict], useful: int) -> list[dict]:
-    """The fewest of `hosts` (already sorted roomiest first) whose free slots cover `useful`.
-
-    Never returns empty: an order that outgrows every character still has to be placed somewhere,
-    and the caller's own guard has already refused the case where no character can hold one chain.
-    """
-    picked, have = [], 0
-    for h in hosts:
-        if have >= useful:
-            break
-        picked.append(h)
-        have += h["free_slots"]
-    return picked or hosts[:1]
+    floor = max(1, per_chain * max(1, min_per_tier))
+    keep = [h for h in hosts if h["free_slots"] >= floor]
+    return keep or hosts
 
 
 def _fit_chain_slots(works: list[float], caps: list[int], budget: int) -> list[int]:
@@ -2626,21 +2627,22 @@ def _allocate_and_insert(context_id: int, type_id: int, name: str, node: dict, r
     # scarcest formula in the chain is therefore also the most characters this order can use.
     if chain_caps:
         hosts = hosts[:max(1, min(chain_caps.values()))]
-    # ...and then PACK rather than spread: take the roomiest characters until their reactors cover
-    # the work and stop, instead of giving every character with a free slot a slice.
+    # ...and then drop the characters that would only be handed a token job per stage. Parallelism
+    # comes from REACTORS, not from characters, so moving that work onto a character with reactors
+    # to spare costs nothing and saves a whole login each way. See `_lean_hosts`.
     #
-    # Parallelism comes from REACTORS, not from characters. Twelve jobs on one character's twelve
-    # reactors and the same twelve spread over four characters start together and finish together —
-    # the split bought nothing and cost three extra logins to install and three more to collect. So
-    # an order spills onto a second character exactly when the first runs out of reactors, which is
-    # the one case where spreading really does make it land sooner.
+    # The first attempt at this packed hosts until their free slots covered `_useful_slots` — the
+    # theoretical most an order could use, which for a 1000-run order is in the thousands, so every
+    # host was always kept and the whole thing was a no-op on the very order that prompted it.
+    # The number that matters is not what the order COULD use, it is whether a given character is
+    # worth a trip.
     #
     # This is not the reverted even-split (docs/reactions.md, "An order's runs follow capacity, not
     # fairness"): that one changed the JOBS, handing a 2-slot character the same 250 runs as a
     # 10-slot one and putting a step at 14 days. The jobs here are untouched — only which characters
     # hold them changes, and a host still takes a share proportional to its own reactors.
     if _pack_hosts_on(context_id):
-        hosts = _pack_hosts(hosts, _useful_slots(ordered_all, chain_caps, type_id, runs_needed))
+        hosts = _lean_hosts(hosts, per_chain)
 
     # How the order's runs are split across the characters that will run it: PROPORTIONAL to each
     # host's free slots. The roomiest character does the most work, so every host finishes at
