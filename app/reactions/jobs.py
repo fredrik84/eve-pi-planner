@@ -1204,7 +1204,7 @@ def _seed_cadence_counts(products: dict, keys: list, time_mult: float = 1.0) -> 
 
 
 def _choose_stage_layout(products: dict, prefer_tidy: bool = False,
-                          time_mult: float = 1.0, slots_for_stage: int = 0) -> dict:
+                          time_mult: float = 1.0) -> dict:
     """Pick one run count per product so the whole STAGE lands together.
 
     `products` is `{key: {"cycle": hours_per_run, "options": [...], "total": runs_needed}}` for the
@@ -1280,24 +1280,8 @@ def _choose_stage_layout(products: dict, prefer_tidy: bool = False,
         # Cadence fit sits after the numbers you type and before the goo: it is a usability
         # property like `numbers` is, and the same budget bounds what it can spend.
         drift = max(_cadence_drift(d_ * time_mult) for d_ in durs)
-        # (2) Not the FEWEST jobs — the jobs that FILL the reactors this stage may use. *"It should
-        # probably try and match number of runs to expected slots?"* Minimising job count left
-        # reactors idle and made every job longer; sized to the slots, each reactor works and the
-        # run count falls out of the player's own capacity instead of a duration ceiling. Never
-        # over the pool: that is a job with no reactor to install it in.
-        if slots_for_stage <= 0:
-            fill = jobs
-        elif jobs <= slots_for_stage:
-            fill = slots_for_stage - jobs
-        else:
-            fill = jobs * 1000
-        # (3) ...and a number you can TYPE ahead of the goo it costs. Under a cadence ceiling the
-        # untidy count is what you get by default — 113 under a 119 ceiling, while the industry
-        # window offers 120 — so the plan hands over an awkward number and the game offers a
-        # plausible wrong one. Ranking tidiness above surplus buys the round number with goo, which
-        # is the trade `reactions_tidy_runs` exists to make.
-        score = ((landed, fill, numbers, untidy, drift, surplus, spread) if prefer_tidy
-                 else (landed, fill, numbers, drift, surplus, untidy, spread))
+        score = ((landed, jobs, numbers, drift, untidy, surplus, spread) if prefer_tidy
+                 else (landed, jobs, numbers, drift, surplus, untidy, spread))
         if best_score is None or score < best_score:
             best_score, best_pick = score, pick
 
@@ -1326,24 +1310,8 @@ def _choose_stage_layout(products: dict, prefer_tidy: bool = False,
         # Cadence fit sits after the numbers you type and before the goo: it is a usability
         # property like `numbers` is, and the same budget bounds what it can spend.
         drift = max(_cadence_drift(d_ * time_mult) for d_ in durs)
-        # (2) Not the FEWEST jobs — the jobs that FILL the reactors this stage may use. *"It should
-        # probably try and match number of runs to expected slots?"* Minimising job count left
-        # reactors idle and made every job longer; sized to the slots, each reactor works and the
-        # run count falls out of the player's own capacity instead of a duration ceiling. Never
-        # over the pool: that is a job with no reactor to install it in.
-        if slots_for_stage <= 0:
-            fill = jobs
-        elif jobs <= slots_for_stage:
-            fill = slots_for_stage - jobs
-        else:
-            fill = jobs * 1000
-        # (3) ...and a number you can TYPE ahead of the goo it costs. Under a cadence ceiling the
-        # untidy count is what you get by default — 113 under a 119 ceiling, while the industry
-        # window offers 120 — so the plan hands over an awkward number and the game offers a
-        # plausible wrong one. Ranking tidiness above surplus buys the round number with goo, which
-        # is the trade `reactions_tidy_runs` exists to make.
-        score = ((landed, fill, numbers, untidy, drift, surplus, spread) if prefer_tidy
-                 else (landed, fill, numbers, drift, surplus, untidy, spread))
+        score = ((landed, jobs, numbers, drift, untidy, surplus, spread) if prefer_tidy
+                 else (landed, jobs, numbers, drift, surplus, untidy, spread))
         if best_score is None or score < best_score:
             best_score, best_pick = score, pick
 
@@ -1576,18 +1544,13 @@ def level_product_runs(context_id: int) -> int:
     # matter and `room` already nets those out.
     lean_set = {h["character_id"] for h in _lean_hosts(
         [{"character_id": cid, "free_slots": n} for cid, n in room.items() if n > 0])}
-    # Counted over EVERY row, not just the reshapeable ones. A frozen row and an order's protected
-    # top row still occupy a reactor — being forbidden to move them does not make them weightless.
-    # Built from `inner`, a stage's budget silently ignored them: with an order's 3 stage-2 rows
-    # excluded, stage 1 was handed the character's whole pool and placed 10 jobs beside them, i.e.
-    # 13 rows on 10 reactors. Restricted is about what may be RESHAPED; capacity is about what is
-    # there.
     rows_by_char_stage: dict[int, dict[int, int]] = {}
-    for r in rows:
-        cid = r["character_id"]
-        st = int(r["tier_order"] or 0)
-        rows_by_char_stage.setdefault(cid, {})[st] = \
-            rows_by_char_stage.get(cid, {}).get(st, 0) + 1
+    for stage, by_product in stages.items():
+        for rs in by_product.values():
+            for r in rs:
+                cid = r["character_id"]
+                rows_by_char_stage.setdefault(cid, {})[stage] = \
+                    rows_by_char_stage.get(cid, {}).get(stage, 0) + 1
 
     plan: list[tuple] = []          # (product_key, rows, target_runs, [character per job])
     # Jobs this pass has already placed on a character, stage by stage. Reading the ORIGINAL row
@@ -1645,10 +1608,7 @@ def level_product_runs(context_id: int) -> int:
         # floor and the give-ground loop below only has to fix rounding — without it that loop
         # started from the asked-for length and stepped one run at a time, which never got from
         # "5 days" to what the reactors could do.
-        # The reactors worth FILLING — the characters a login is being made to anyway. Summed over
-        # everyone, "fill the pool" reaches straight back for the host the packing rule excluded.
-        _lean_room = sum(n for cid, n in budget.items() if cid in lean_set)
-        stage_room = max(1, _lean_room or sum(budget.values()))
+        stage_room = max(1, sum(budget.values()))
         # Unknown stays unknown: a product with no evidence caps nothing, the same rule every other
         # consumer of this follows. Read once per stage rather than per product — it is memoised,
         # but the intent is that one plan sees one answer.
@@ -1707,8 +1667,7 @@ def level_product_runs(context_id: int) -> int:
             products = _build(set())
             durations = {o["runs"] * p["cycle"] for p in products.values() for o in p["options"]}
             products = _build(durations)
-            layout = _choose_stage_layout(products, prefer_tidy, time_mult=_tmult,
-                                          slots_for_stage=stage_room)
+            layout = _choose_stage_layout(products, prefer_tidy, time_mult=_tmult)
             asked = sum(opt["jobs"] for opt in layout.values())
             if asked <= stage_room:
                 break
