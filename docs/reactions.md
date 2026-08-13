@@ -578,6 +578,23 @@ On the reported stage (Carbon Fiber 1045, Thermosetting Polymer 1100, Oxy-Organi
 cannot reach the shared count keeps its own — one number is a preference, not a rule — and
 `_stage_affordable` plus `_level_options`' budget still bound the goo any of it spends.
 
+**Landing under a whole day, not just past one.** Reported as a small matter and treated as one:
+a job of 7d07h is worse than one of 6d23h, because the player comes back on a whole-day rhythm,
+finds it unfinished, and slips a few more hours every cycle. `_cadence_drift` scores a duration 0
+when it lands on or within `_CADENCE_GRACE` (3h) under a day boundary and 1 otherwise, ranked after
+`numbers` and before the surplus — a usability property like the shared count is.
+
+It needs `_seed_cadence_counts` to fire at all. A product only ever proposes `ceil(total/j)` and the
+tidy rounding above it, so Carbon Fiber offers 105 and 110 and nothing between; at 1.53 h/run that is
+7d00h18m with no 6d23h alternative in the set. The seeder adds, for each candidate, the largest count
+that costs the SAME jobs and still lands under a boundary — searching down only as far as
+`ceil(total/j)`, so coverage never drops.
+
+**It is ranked below the job count, so it will not always fire, and that is deliberate.** On the
+reported stage it cannot: Thermosetting Polymer needs 1100 runs over 10 jobs, `ceil(1100/10)` is
+exactly 110, and 109 × 10 = 1090 does not cover it — so landing under 7 days there costs an
+eleventh job. A reactor is worth more than 18 minutes of drift.
+
 **What it costs, stated plainly: time.** 110 runs is a longer job than 95, so the stage lands about
 two days later on a twelve-day order. That is the stated priority order — *"I want it to be easy"*
 above *"I want to be time efficient"* — and it is the trade being made, not a free win.

@@ -834,6 +834,13 @@ _LEVEL_BUDGET = 0.50
 # not reachable — run counts are integers and cycle times differ — and a stage whose jobs finish
 # within a few percent of each other is one login.
 _ALIGN_TOL = 0.10
+# A job that runs 7 days and 7 hours is worse than one that runs 6 days and 23: the player comes
+# back on a whole-day rhythm, finds it unfinished, and every cycle after that slips a few more
+# hours. So a duration that lands just UNDER a day boundary is worth preferring over one that
+# steps just past it. Bucketed rather than minimised outright — chasing the last hour would spend
+# real goo for nothing a player can feel.
+_CADENCE_H = 24.0
+_CADENCE_GRACE = 3.0
 # What the stage solve lets `_level_options` OFFER, before `_stage_affordable` judges the layout as
 # a whole. Deliberately far wider than the real budget: a small product's own requirement is the
 # wrong yardstick for a run count the whole stage shares, and a candidate that never gets offered
@@ -923,6 +930,58 @@ def _level_options(total: int, cap: int, max_runs: int, budget: float = _LEVEL_B
     return [{"runs": floor, "jobs": jobs, "surplus": jobs * floor - total, "tidy": _typeable(floor)}]
 
 
+
+def _cadence_drift(hours: float) -> int:
+    """0 when a job lands on, or just under, a whole-day boundary — 1 otherwise.
+
+    `slack` is how long after the job finishes the next boundary falls: 0 means it lands exactly on
+    one, a small number means just under it, and a large one means it stepped past the last boundary
+    and the player is waiting most of a day for nothing. 6d23h scores 0; 7d07h scores 1.
+    """
+    if hours <= 0:
+        return 0
+    slack = (_CADENCE_H - (hours % _CADENCE_H)) % _CADENCE_H
+    return 0 if slack <= _CADENCE_GRACE else 1
+
+
+
+def _seed_cadence_counts(products: dict, keys: list) -> dict:
+    """Offer, alongside each candidate, the largest run count that costs the SAME jobs and still
+    lands under a whole-day boundary.
+
+    Without this the cadence preference can never fire. A product's candidates come from its own
+    requirement — `ceil(total/j)` and the tidy rounding above each — so Carbon Fiber offers 105 and
+    110 and nothing between. At 1.53 h/run, 110 runs is 7 days and 18 minutes: a player on a
+    whole-day rhythm comes back to an unfinished job and slips a little further every cycle. 109 is
+    6 days 23 hours, costs the same ten jobs, and needs only to be a candidate to be chosen.
+
+    Never lowers the job count's coverage: `r'` is searched down only as far as `ceil(total/j)`, so
+    the same number of jobs still covers the requirement.
+    """
+    out = dict(products)
+    for k in keys:
+        p = products[k]
+        cyc, total = p.get("cycle") or 0.0, int(p.get("total") or 0)
+        if cyc <= 0 or total <= 0:
+            continue
+        extra, seen = [], {o["runs"] for o in p["options"]}
+        for o in p["options"]:
+            if _cadence_drift(o["runs"] * cyc) == 0:
+                continue                       # already lands where we want it
+            floor = max(1, -(-total // max(1, o["jobs"])))
+            for r in range(int(o["runs"]) - 1, floor - 1, -1):
+                if _cadence_drift(r * cyc) == 0:
+                    if r not in seen and -(-total // r) == o["jobs"]:
+                        made = o["jobs"] * r
+                        extra.append({"runs": r, "jobs": o["jobs"], "surplus": made - total,
+                                      "tidy": _typeable(r)})
+                        seen.add(r)
+                    break
+        if extra:
+            out[k] = {**p, "options": sorted(p["options"] + extra, key=lambda o: o["runs"])}
+    return out
+
+
 def _choose_stage_layout(products: dict, prefer_tidy: bool = False) -> dict:
     """Pick one run count per product so the whole STAGE lands together.
 
@@ -951,6 +1010,7 @@ def _choose_stage_layout(products: dict, prefer_tidy: bool = False) -> dict:
     keys = [k for k, p in products.items() if p.get("options")]
     if not keys:
         return {}
+    products = _seed_cadence_counts(products, keys)
     targets = sorted({o["runs"] * products[k]["cycle"] for k in keys for o in products[k]["options"]})
     # ONE run count for the whole stage, offered as a candidate layout in its own right rather than
     # left to fall out of the per-product picks — because it never does. Each product picks the
@@ -995,8 +1055,11 @@ def _choose_stage_layout(products: dict, prefer_tidy: bool = False) -> dict:
         # stage. Fewer, fuller jobs is still the whole point ("save slots, lower login cadence") and
         # the budget above bounds the surplus any of this can spend. Ranking the goo first is the
         # trap; docs/reactions.md has what it cost.
-        score = ((landed, jobs, numbers, untidy, surplus, spread) if prefer_tidy
-                 else (landed, jobs, numbers, surplus, untidy, spread))
+        # Cadence fit sits after the numbers you type and before the goo: it is a usability
+        # property like `numbers` is, and the same budget bounds what it can spend.
+        drift = max(_cadence_drift(d_) for d_ in durs)
+        score = ((landed, jobs, numbers, drift, untidy, surplus, spread) if prefer_tidy
+                 else (landed, jobs, numbers, drift, surplus, untidy, spread))
         if best_score is None or score < best_score:
             best_score, best_pick = score, pick
 
@@ -1022,8 +1085,11 @@ def _choose_stage_layout(products: dict, prefer_tidy: bool = False) -> dict:
         untidy = sum(0 if pick[k]["tidy"] else 1 for k in keys)
         landed = 0 if spread <= _ALIGN_TOL * max(durs) else 1
         numbers = len({pick[k]["runs"] for k in keys})
-        score = ((landed, jobs, numbers, untidy, surplus, spread) if prefer_tidy
-                 else (landed, jobs, numbers, surplus, untidy, spread))
+        # Cadence fit sits after the numbers you type and before the goo: it is a usability
+        # property like `numbers` is, and the same budget bounds what it can spend.
+        drift = max(_cadence_drift(d_) for d_ in durs)
+        score = ((landed, jobs, numbers, drift, untidy, surplus, spread) if prefer_tidy
+                 else (landed, jobs, numbers, drift, surplus, untidy, spread))
         if best_score is None or score < best_score:
             best_score, best_pick = score, pick
 

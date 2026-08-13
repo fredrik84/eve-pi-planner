@@ -429,6 +429,27 @@ def test_a_stage_settles_on_one_run_count_across_its_products() -> bool:
         ok &= check(o["jobs"] * o["runs"] - need <= need * 0.5,
                     f"{k}'s overshoot stays inside the levelling budget")
 
+    # A job that lands 7d07h is worse than one at 6d23h: the player comes back on a whole-day
+    # rhythm, finds it unfinished, and slips further every cycle. Preferred, but ranked below the
+    # job count — it is not worth an extra reactor.
+    from app.reactions.jobs import _cadence_drift, _seed_cadence_counts
+    ok &= check(_cadence_drift(168) == 0 and _cadence_drift(165) == 0,
+                "landing on or just under a whole day is what we want")
+    ok &= check(_cadence_drift(175) == 1, "and 7 hours past a boundary is what we don't")
+    ok &= check(_cadence_drift(0) == 0, "a zero-length job is not a drift")
+
+    # The preference can only fire if such a count is a CANDIDATE, and it never is on its own: a
+    # product proposes ceil(total/j) and the tidy rounding above it, so 110 is offered and 109 is
+    # not. At 1.53 h/run that is the difference between 7d00h18m and 6d23h.
+    seeded = _seed_cadence_counts(
+        {"X": {"cycle": 1.53, "total": 1045,
+               "options": _level_options(1045, cap=11, max_runs=100000)}}, ["X"])
+    runs = {o["runs"] for o in seeded["X"]["options"]}
+    ok &= check(109 in runs, "the same-jobs count that lands under a day boundary is seeded in")
+    for o in seeded["X"]["options"]:
+        ok &= check(o["jobs"] * o["runs"] >= 1045,
+                    f"seeded count {o['runs']} x {o['jobs']} still covers the requirement")
+
     # A product that genuinely cannot reach the shared number keeps its own count rather than
     # being dragged to one it cannot afford — one number is a preference, not a rule.
     solo = {"Only": {"cycle": 3.0, "total": 7,
