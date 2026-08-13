@@ -28,6 +28,7 @@ Find a section: `grep -n '^## ' docs/reactions.md` and read from that line — t
 - **A stage is a DEPTH, not a position in a list** — why siblings share a stage, and how existing rows were repaired
 - **Knowing when the next stage can start (`chain_stage_state`)** — the ESI signal behind "stage 2 is ready"
 - **Stages on the dashboard are `tier_order`, shown absolute** — how chain order is rendered, and why the number is never re-ranked
+- **Warning when the installed jobs will come up short** — why under-production shouts and over-production is silent
 - **Marking a reaction running or done by hand (`reactions_manual_done`)** — why a mark is a floor and not a replacement, and what it does to the slot count
 - **The stage list is Manufacturing's pipeline (`reactions_stage_pipeline`)** — why the two tabs share a grid, and why rows are characters
 - **Pricing: a sell-order price is not achievable profit** — the pricing rule that governs every profit figure shown for reaction goods
@@ -855,6 +856,27 @@ a reactor collapse.
 Empty squares are counted against the **peak stage** rather than the row count, so a queued later
 stage no longer hides free reactors; `free_slots / slots` on the row label stays the authoritative
 number, and the "To install" checklist below still lists every job.
+
+## Warning when the installed jobs will come up short (2026-08-13)
+
+Reported after a batch where three jobs went in at 120 runs where the plan said 113: *"We should
+warn the user when they underproduce number of runs so they can add the extra runs. But
+overproducing should not be bothered with honestly."*
+
+**The asymmetry is the design, not a simplification.** Under-producing means the stage above cannot
+start, and it is invisible until the last job — by which point the player is in a structure with the
+materials already bought, which is exactly where this was found. Over-producing is stock: 21 spare
+runs of Thermosetting Polymer get used. A warning nobody needs to act on is one they learn to
+ignore, so the surplus case says nothing at all.
+
+`get_industry_jobs` credits each plan row with the runs its ESI job REALLY carries rather than the
+runs the plan proposed — the two differ the moment the industry window's default is accepted — and
+reports `under_production` per product: what was planned, what is covered, and the runs to add.
+Rendered as one amber block above the plan (`_rxUnderProductionWarn`), listing the number to type.
+
+The gap it exists to catch is one the app helped create: with a cadence set, the ceiling caps runs
+just below a round number (113 under a 119 ceiling) while the industry window offers the round one.
+Sizing to typeable numbers under the ceiling would stop it arising; this catches it either way.
 
 ## Marking a reaction running or done by hand (`reactions_manual_done`)
 

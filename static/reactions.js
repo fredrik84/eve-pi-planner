@@ -486,6 +486,22 @@ function _rxSaveCadence(value) {
     .catch(e => toastError(e, 'Could not save the cadence'));
 }
 
+// A product the installed jobs will not make enough of, with the runs to add. One-directional on
+// purpose: under-producing means the stage above cannot start and you find out in a structure with
+// the materials already bought, while over-producing is just stock. *"We should warn the user when
+// they underproduce number of runs so they can add the extra runs. But overproducing should not be
+// bothered with honestly."*
+function _rxUnderProductionWarn(items) {
+  if (!items || !items.length) return '';
+  const rows = items.map(i => `<li><b>${_esc(i.name)}</b> — add <b>${i.short_runs.toLocaleString()}</b> `
+    + `run${i.short_runs === 1 ? '' : 's'} <span class="rx-under-detail">(${i.covered.toLocaleString()} `
+    + `of ${i.planned.toLocaleString()} installed)</span></li>`).join('');
+  const one = items.length === 1;
+  return `<div class="rx-under-warn">⚠ <b>${one ? 'A product' : `${items.length} products`} will come up short</b>`
+    + ` — a job went in with fewer runs than planned, so the stage above it cannot start.`
+    + ` Add ${one ? 'this' : 'these'} and it lands even:<ul>${rows}</ul></div>`;
+}
+
 // ── Marking a reaction running or done by hand (`reactions_manual_done`) ──────────────────────
 // The same three states, the same click cycle and the same wording as a build step in the Industry
 // tab (`indCycleDone`). ESI is right nearly always; this is for when it isn't — a job cache up to
@@ -1151,7 +1167,8 @@ function _renderReactionsDashboard(data) {
     <div class="rx-stage-ready">✅ <b>Stage ${readyNow[0].stage} is ready to start${readyNow.length > 1 ? ' on several characters' : ` on ${_esc(readyNow[0].character)}`}</b>
       — everything it waits on has finished. Install ${readyNow.map(r => r.names.map(_esc).join(', ')).join(' · ')}.</div>`;
 
-  el.innerHTML = reconnectNote + readyBanner + _rxMissingFormulaWarn(data.missing_formulas)
+  el.innerHTML = reconnectNote + _rxUnderProductionWarn(data.under_production) + readyBanner
+    + _rxMissingFormulaWarn(data.missing_formulas)
     + _rxCadenceHtml() + todoListHtml + rows + untrackedNote;
 }
 

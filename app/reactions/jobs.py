@@ -2634,6 +2634,13 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
     # ── Step 4: per character — match running jobs to plan rows, build pending + stages ─────────
     now = _time.time()
     running: list[dict] = []
+    # Per product, account-wide: what the plan asks for, and what the jobs really installed will
+    # make. Compared once at the end — under-production is a failure the player must hear about (the
+    # stage above cannot start, and they find out in a structure with the materials already bought);
+    # over-production is just stock, and is deliberately silent.
+    _want: dict[int, int] = {}
+    _cover: dict[int, int] = {}
+    _pname: dict[int, str] = {}
     characters: list[dict] = []
     # Time-weighted overall completion of all running jobs: Σ elapsed / Σ total duration.
     running_elapsed_sec = 0.0
@@ -2674,9 +2681,14 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
         # naive set-membership would wrongly clear every pending row for a product the moment
         # just ONE of its several intended jobs gets installed.
         running_type_counts: dict[int, int] = {}
+        # ...and the RUN COUNT each of those jobs really carries, oldest first, so a row can be
+        # credited with what was actually installed rather than what the plan proposed. The two
+        # differ whenever the industry window's default is accepted instead of the planned number.
+        running_runs: dict[int, list[int]] = {}
         for j in active:
             tid = j.get("product_type_id")
             running_type_counts[tid] = running_type_counts.get(tid, 0) + 1
+            running_runs.setdefault(tid, []).append(int(j.get("runs") or 0))
 
         # How many rows of each (product, stage) group the player has marked by hand, spent row by
         # row below so marking 2 of a group's 4 jobs leaves the other 2 alone. A marked row STAYS in
@@ -2705,6 +2717,16 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
             is_running = running_type_counts.get(a["type_id"], 0) > 0
             if is_running:
                 running_type_counts[a["type_id"]] -= 1
+                # What this row is really going to make. A job installed at 120 runs where the plan
+                # said 113 covers MORE than the row promised; one installed at 100 covers less, and
+                # that is the case worth telling the player about.
+                got = running_runs.get(a["type_id"]) or []
+                made = got.pop(0) if got else int(a["runs"] or 0)
+                _cover[a["type_id"]] = _cover.get(a["type_id"], 0) + made
+            else:
+                _cover[a["type_id"]] = _cover.get(a["type_id"], 0) + int(a["runs"] or 0)
+            _want[a["type_id"]] = _want.get(a["type_id"], 0) + int(a["runs"] or 0)
+            _pname[a["type_id"]] = a["name"]
             # A hand mark on a row ESI has nothing to say about. Done is spent first: with a group
             # part-done and part-running, the finished ones are the ones that are certainly over.
             marked = None
@@ -2848,9 +2870,23 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
     _gate_stages_account_wide(characters)
 
     # ── Step 7: assemble the dashboard payload ──────────────────────────────────────────────────
+    # One entry per product that will fall SHORT, with the runs to add. A job installed at fewer
+    # runs than planned is the only way this happens, and it is invisible until the stage above
+    # refuses to start — reported after a batch where three jobs went in at 120 runs instead of the
+    # planned 113. Over-production produces nothing here on purpose: 21 runs of spare goo is stock,
+    # not a problem, and a warning nobody needs to act on is one they learn to ignore.
+    under_production = [
+        {"type_id": tid, "name": _pname.get(tid, str(tid)),
+         "planned": _want[tid], "covered": _cover.get(tid, 0),
+         "short_runs": _want[tid] - _cover.get(tid, 0)}
+        for tid in sorted(_want, key=lambda t: -(_want[t] - _cover.get(t, 0)))
+        if _want[tid] - _cover.get(tid, 0) > 0
+    ]
+
     return {
         "tracked": tracked_any,
         "characters": characters,
+        "under_production": under_production,
         "running": sorted(running, key=lambda r: r["hours_left"] if r["hours_left"] is not None else 1e9),
         "running_progress_pct": round(running_elapsed_sec / running_total_sec, 4) if running_total_sec > 0 else None,
         "total_slots": total_slots,

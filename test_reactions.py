@@ -832,6 +832,70 @@ def test_the_leveller_consolidates_a_stray_host_off_the_plan() -> bool:
         con.commit(); con.close()
 
 
+def test_it_warns_when_installed_jobs_will_come_up_short() -> bool:
+    """Reported after a batch where three jobs went in at 120 runs where the plan said 113: *"We
+    should warn the user when they underproduce number of runs so they can add the extra runs. But
+    overproducing should not be bothered with honestly."*
+
+    The asymmetry is the whole design. Under-producing means the stage above cannot start, and it
+    is invisible until the last job — in a structure, with the materials already bought. Over-
+    producing is stock. A warning nobody needs to act on is one they learn to ignore."""
+    import time as _t, json as _json
+    from app.db import get_connection
+    import app.reactions.jobs as J
+
+    CTX, CID, TID = 777096, 9940001, 16673
+    J.ensure_industry_jobs_table()
+    saved = (J._level_runs_on, J._tidy_runs_on)
+    J._level_runs_on, J._tidy_runs_on = (lambda c: False), (lambda c: False)
+
+    def setup(job_runs):
+        con = get_connection()
+        con.execute("DELETE FROM pp_characters WHERE character_id=?", (CID,))
+        con.execute("INSERT INTO pp_characters (context_id,character_id,character_name,"
+                    "mass_reactions,advanced_mass_reactions,scopes) VALUES (?,?,?,?,?,?)",
+                    (CTX, CID, "Prod", 5, 4, "esi-industry.read_character_jobs.v1"))
+        con.execute("DELETE FROM pp_reaction_assignments WHERE character_id=?", (CID,))
+        con.execute("DELETE FROM pp_char_industry_jobs WHERE character_id=?", (CID,))
+        now = _t.time()
+        for _ in range(4):
+            con.execute("INSERT INTO pp_reaction_assignments (character_id,type_id,name,runs,"
+                        "input_cost,reward,created_at,tier_order,order_id) VALUES (?,?,?,?,?,?,?,?,?)",
+                        (CID, TID, "Crystalline Carbonide", 113, 0, 0, now, 0, None))
+        jobs = [{"product_type_id": TID, "runs": r, "status": "active", "duration": r * 3 * 3600}
+                for r in job_runs]
+        con.execute("INSERT INTO pp_char_industry_jobs (character_id,jobs_json,fetched_at) "
+                    "VALUES (?,?,?)", (CID, _json.dumps(jobs), now))
+        con.commit(); con.close()
+
+    try:
+        setup([113, 113])
+        ok = check(not (J.get_industry_jobs(context_id=CTX).get("under_production") or []),
+                   "installing exactly what was planned says nothing")
+
+        setup([120, 120])
+        ok &= check(not (J.get_industry_jobs(context_id=CTX).get("under_production") or []),
+                    "and installing MORE than planned is silent — surplus is stock, not a problem")
+
+        setup([100, 100])
+        up = J.get_industry_jobs(context_id=CTX).get("under_production") or []
+        ok &= check(len(up) == 1, "installing fewer runs than planned raises exactly one warning")
+        if up:
+            ok &= check(up[0]["short_runs"] == 26,
+                        f"...naming the runs to add (2 jobs 13 short each = 26, got {up[0]['short_runs']})")
+            ok &= check(up[0]["planned"] == 452 and up[0]["covered"] == 426,
+                        "and what is covered against what the plan asked for")
+            ok &= check(up[0]["name"] == "Crystalline Carbonide", "and which product it is")
+        return ok
+    finally:
+        J._level_runs_on, J._tidy_runs_on = saved
+        con = get_connection()
+        con.execute("DELETE FROM pp_reaction_assignments WHERE character_id=?", (CID,))
+        con.execute("DELETE FROM pp_char_industry_jobs WHERE character_id=?", (CID,))
+        con.execute("DELETE FROM pp_characters WHERE character_id=?", (CID,))
+        con.commit(); con.close()
+
+
 def test_a_reaction_can_be_marked_running_or_done_by_hand() -> bool:
     """ESI is the signal for what is running and what has landed, and it is right nearly always —
     but the job cache is up to five minutes stale, a job installed under a different product than
@@ -1005,6 +1069,7 @@ def run_unit_tests() -> bool:
         test_the_leveller_never_plans_more_jobs_than_formulas_owned(),
         test_the_leveller_does_not_reach_for_a_character_the_assign_left_out(),
         test_the_leveller_consolidates_a_stray_host_off_the_plan(),
+        test_it_warns_when_installed_jobs_will_come_up_short(),
         test_the_cadence_ceiling_is_measured_in_real_time_not_sde_time(),
         test_the_cadence_reaches_an_orders_own_top_row(),
         test_a_reaction_can_be_marked_running_or_done_by_hand(),
