@@ -1434,11 +1434,40 @@ def level_product_runs(context_id: int) -> int:
                 if (job.get("status") or "").lower() in ("active", "paused", "ready"):
                     k = (int(cid), int(job.get("product_type_id") or 0))
                     live[k] = live.get(k, 0) + 1
+        adopt: list[tuple] = []
+        live_runs: dict[tuple, list[int]] = {}
+        for cid, jobs in cached.items():
+            for job in jobs or []:
+                if (job.get("status") or "").lower() in ("active", "paused", "ready"):
+                    live_runs.setdefault((int(cid), int(job.get("product_type_id") or 0)),
+                                          []).append(int(job.get("runs") or 0))
+        # Freeze the WHOLE (character, product, stage) group once any of its jobs is running — not
+        # just the matched rows. Freezing row-by-row left the untouched siblings alone in the pass,
+        # which re-levelled them against a requirement the frozen ones no longer contributed to and
+        # deleted one outright. Once you have started installing a product, its layout is settled.
+        started = {(int(cid), int(tid)) for (cid, tid), n in live.items() if n > 0}
         for r in sorted(rows, key=lambda r: r["id"]):
             k = (int(r["character_id"]), int(r["type_id"]))
+            if k in started:
+                frozen.add(int(r["id"]))
             if live.get(k, 0) > 0:
                 live[k] -= 1
-                frozen.add(int(r["id"]))
+                # ...and the row takes the run count the job REALLY carries. A plan that says 113
+                # where the reactor is running 120 is lying about what will be made, which is what
+                # the under-production warning and every materials figure are computed from.
+                got = live_runs.get(k) or []
+                real = got.pop(0) if got else None
+                if real and real != int(r["runs"] or 0):
+                    adopt.append((real, int(r["id"])))
+                    r["runs"] = real
+        if adopt:
+            con = get_connection()
+            try:
+                for real, rid in adopt:
+                    con.execute("UPDATE pp_reaction_assignments SET runs=? WHERE id=?", (real, rid))
+                con.commit()
+            finally:
+                con.close()
         # Whatever running jobs are LEFT after matching are orphans — installed outside this plan,
         # so they hold a reactor no row accounts for. Everything matched is already represented by
         # its row, and subtracting it from `room` as well counts the same reactor twice.
