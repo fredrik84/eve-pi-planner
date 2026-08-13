@@ -1406,6 +1406,48 @@ def level_product_runs(context_id: int) -> int:
     if not rows:
         return 0
 
+    # ── Step 1b: freeze what the player has already INSTALLED ───────────────────────────────────
+    # A row whose job is running in game is not a proposal any more — it is a job with a run count
+    # the player typed in and materials they have already bought against. Re-splitting it changes
+    # the numbers underneath work in progress, which is how a plan came back wanting 11,736 of an
+    # intermediate the installed jobs were never going to make: *"I've been moving between
+    # structures about 5 times now to get this sorted with the amounts."*
+    #
+    # Frozen per (character, product, stage), because that is the group this pass re-splits: as many
+    # rows as there are running jobs of it stay exactly as they are, and only the ones still waiting
+    # to be installed are fair game. A plan half-installed therefore settles instead of chasing.
+    frozen: set[int] = set()
+    orphan_running: dict[int, int] = {}
+    try:
+        con = get_connection()
+        try:
+            cached = {r["character_id"]: _json.loads(r["jobs_json"] or "[]")
+                      for r in con.execute(
+                          "SELECT j.character_id, j.jobs_json FROM pp_char_industry_jobs j "
+                          "JOIN pp_characters c ON c.character_id = j.character_id "
+                          "WHERE c.context_id = ?", (context_id,))}
+        finally:
+            con.close()
+        live: dict[tuple, int] = {}
+        for cid, jobs in cached.items():
+            for job in jobs or []:
+                if (job.get("status") or "").lower() in ("active", "paused", "ready"):
+                    k = (int(cid), int(job.get("product_type_id") or 0))
+                    live[k] = live.get(k, 0) + 1
+        for r in sorted(rows, key=lambda r: r["id"]):
+            k = (int(r["character_id"]), int(r["type_id"]))
+            if live.get(k, 0) > 0:
+                live[k] -= 1
+                frozen.add(int(r["id"]))
+        # Whatever running jobs are LEFT after matching are orphans — installed outside this plan,
+        # so they hold a reactor no row accounts for. Everything matched is already represented by
+        # its row, and subtracting it from `room` as well counts the same reactor twice.
+        for (cid, _tid), n in live.items():
+            if n > 0:
+                orphan_running[cid] = orphan_running.get(cid, 0) + n
+    except Exception:
+        frozen, orphan_running = set(), {}
+
     # ── Step 2: exclude what may not be re-shaped (an ORDER chain's top row) ────────────────────
     # What may NOT be re-shaped: the TOP row of a customer ORDER's chain. Its run count is the batch
     # that order was quoted and priced on, and cancelling the order hands exactly those runs back
@@ -1426,8 +1468,9 @@ def level_product_runs(context_id: int) -> int:
             continue
         top_of_order[int(oid)] = max(top_of_order.get(int(oid), 0), int(r["tier_order"] or 0))
     inner = [r for r in rows
-             if not (r.get("order_id")
-                     and int(r["tier_order"] or 0) == top_of_order[int(r["order_id"])])]
+             if int(r["id"]) not in frozen
+             and not (r.get("order_id")
+                      and int(r["tier_order"] or 0) == top_of_order[int(r["order_id"])])]
     if not inner:
         return 0
 
@@ -1440,7 +1483,13 @@ def level_product_runs(context_id: int) -> int:
     # stage 1 into reactors that stage 2 was already holding a row in. Reported as "12 slots
     # assigned to characters that only have 10". A row is a line in the plan whether or not it can
     # be installed yet, and the plan must fit the reactors.
-    room = {cid: max(0, int(c.get("slots") or 0) - int(c.get("running") or 0))
+    # Reactors this character's PLAN may occupy. Only jobs running OUTSIDE the plan are netted off:
+    # a running job that matches a plan row is that row being executed, and the row is still in the
+    # list below, so subtracting it as well counts one reactor twice. That double count is what made
+    # a plan shuffle itself the moment ESI first saw the jobs the player had just installed —
+    # reported as "it just inventoried my jobs, and suddenly it pushed all the staged jobs to other
+    # slots", which is the worst possible moment to move anything.
+    room = {cid: max(0, int(c.get("slots") or 0) - orphan_running.get(cid, 0))
             for cid, c in caps_now.items()}
     # Whether a planned row on another stage holds a reactor at the same time — see `budget` below.
     peak_only = _parallel_stages_on(context_id)
