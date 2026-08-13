@@ -649,6 +649,21 @@ With nothing observed it falls back to the skills multiplier alone, which under-
 purpose: a smaller claimed bonus means a bigger apparent job, fewer runs allowed, and a job that
 lands inside the ceiling. Over-claiming is the direction that breaks the promise the cadence makes.
 
+**The cadence reaches the order's own product too (`split_order_tops_to_cadence`).** Reported on a
+7-day setting: stage 1 obediently came down to 6.88-day jobs while stage 2 sat at **14 days**, so the
+whole order still took three weeks and the cadence bought nothing. `level_product_runs` deliberately
+never reshapes a customer order's top row — its run count is the batch the order was quoted on, and
+cancelling hands exactly those runs back (`give_back_order_runs`) — so the cadence stopped one stage
+short of the thing being sold.
+
+It is split separately, and **the total is preserved exactly**, which is what makes it safe: the
+batch goes into the fewest jobs that each fit the window, with the remainder riding on one of them
+rather than rounded up across all of them — *"I'd rather we underfill 1 slot to line up the others"*.
+1001 runs over a 119-run ceiling becomes 2 jobs of 112 and 7 of 111, summing to 1001, with the input
+cost split by the same proportions. Same product, same character, same chain timestamp, same total:
+nothing the order's arithmetic reads has changed, only the row COUNT, and every consumer of that
+counts rows rather than assuming one. Held to the formulas owned like everything else.
+
 **One number, two places.** The control sits on the Reactions card as a single row above the
 pipeline it shapes (`_rxCadenceHtml`, "Come back every N days") and reads/writes the same
 `/api/industry/build-setup` that Build rules does — so whichever you touch last is what both show,

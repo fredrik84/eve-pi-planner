@@ -568,6 +568,69 @@ def test_the_cadence_ceiling_is_measured_in_real_time_not_sde_time() -> bool:
     return ok
 
 
+def test_the_cadence_reaches_an_orders_own_top_row() -> bool:
+    """Reported on a 7-day cadence: stage 1 obediently came down to 6.88-day jobs while stage 2 sat
+    at **14 days**, so the order still took three weeks and the cadence bought nothing.
+
+    `level_product_runs` deliberately never reshapes a customer order's top row — its run count is
+    the batch the order was quoted on and cancelling hands exactly those runs back
+    (`give_back_order_runs`). So it is split separately, and the total is preserved EXACTLY: the
+    remainder rides on one job instead of being rounded up across all of them."""
+    import time as _t
+    from app.db import get_connection
+    import app.reactions.jobs as J
+
+    CTX, CID, TID = 777051, 991235, 16673
+    J.ensure_reaction_assignments_table()
+    real_cad, real_mult = J._reaction_cadence_hours, J._reaction_time_mult
+    J._reaction_cadence_hours = lambda c: 168.0          # 7 days
+    J._reaction_time_mult = lambda c: 0.4680             # the measured rate
+    con = get_connection()
+    con.execute("DELETE FROM pp_characters WHERE character_id=?", (CID,))
+    con.execute("INSERT INTO pp_characters (context_id, character_id, character_name, "
+                "mass_reactions, advanced_mass_reactions, scopes) VALUES (?,?,?,?,?,?)",
+                (CTX, CID, "Order Top Probe", 5, 5, "x"))
+    con.execute("DELETE FROM pp_reaction_assignments WHERE character_id=?", (CID,))
+    con.execute("INSERT INTO pp_reaction_assignments (character_id,type_id,name,runs,input_cost,"
+                "reward,created_at,tier_order,order_id) VALUES (?,?,?,?,?,?,?,?,?)",
+                (CID, TID, "Crystalline Carbonide", 1001, 100100.0, 50050.0, _t.time(), 1, 999))
+    con.commit(); con.close()
+    try:
+        wrote = J.split_order_tops_to_cadence(CTX)
+        con = get_connection()
+        rs = [dict(r) for r in con.execute(
+            "SELECT runs, input_cost FROM pp_reaction_assignments WHERE character_id=?", (CID,))]
+        con.close()
+        cyc = J._reaction_cycle_times().get(TID, 0.0)
+        longest = max(r["runs"] for r in rs) * cyc * 0.4680 / 24.0
+
+        ok = check(wrote == len(rs) and len(rs) > 1, f"the batch was split into {len(rs)} jobs")
+        ok &= check(sum(r["runs"] for r in rs) == 1001,
+                    "the order's total is preserved EXACTLY — its arithmetic depends on it")
+        ok &= check(abs(sum(r["input_cost"] for r in rs) - 100100.0) < 1.0,
+                    "and so is what the batch cost")
+        ok &= check(longest <= 7.0, f"every job now lands inside the week ({longest:.2f} d)")
+        ok &= check(len({r["runs"] for r in rs}) <= 2,
+                    "the remainder rides on one job rather than being spread over all of them")
+
+        # A batch already inside the window is left alone entirely.
+        con = get_connection()
+        con.execute("DELETE FROM pp_reaction_assignments WHERE character_id=?", (CID,))
+        con.execute("INSERT INTO pp_reaction_assignments (character_id,type_id,name,runs,input_cost,"
+                    "reward,created_at,tier_order,order_id) VALUES (?,?,?,?,?,?,?,?,?)",
+                    (CID, TID, "Crystalline Carbonide", 50, 5000.0, 0.0, _t.time(), 1, 999))
+        con.commit(); con.close()
+        ok &= check(J.split_order_tops_to_cadence(CTX) == 0,
+                    "a batch that already fits is not touched")
+        return ok
+    finally:
+        J._reaction_cadence_hours, J._reaction_time_mult = real_cad, real_mult
+        con = get_connection()
+        con.execute("DELETE FROM pp_reaction_assignments WHERE character_id=?", (CID,))
+        con.execute("DELETE FROM pp_characters WHERE character_id=?", (CID,))
+        con.commit(); con.close()
+
+
 def test_a_reaction_can_be_marked_running_or_done_by_hand() -> bool:
     """ESI is the signal for what is running and what has landed, and it is right nearly always —
     but the job cache is up to five minutes stale, a job installed under a different product than
@@ -740,6 +803,7 @@ def run_unit_tests() -> bool:
         test_a_cadence_ceiling_holds_every_job_inside_the_week(),
         test_the_leveller_never_plans_more_jobs_than_formulas_owned(),
         test_the_cadence_ceiling_is_measured_in_real_time_not_sde_time(),
+        test_the_cadence_reaches_an_orders_own_top_row(),
         test_a_reaction_can_be_marked_running_or_done_by_hand(),
         test_assigning_twice_does_not_book_it_twice(),
         test_explode_chain_tiers(),

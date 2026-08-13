@@ -1533,6 +1533,85 @@ def level_product_runs(context_id: int) -> int:
     return changed
 
 
+
+def split_order_tops_to_cadence(context_id: int) -> int:
+    """Split a customer ORDER's top row into jobs that fit the cadence. Returns rows written.
+
+    `level_product_runs` deliberately never reshapes an order's top row: its run count is the batch
+    the order was quoted on, and cancelling hands exactly those runs back
+    (`give_back_order_runs`). Correct — and it meant the cadence stopped at the order's own product.
+    Reported on a 7-day setting: stage 1 obediently came down to 6.88-day jobs while stage 2 sat at
+    **14 days**, so the whole order still took three weeks and the cadence bought nothing.
+
+    **The total is preserved EXACTLY, which is what makes this safe.** The batch is split into the
+    fewest jobs that each fit the window, and the remainder rides on one of them rather than being
+    rounded up across all of them — *"I'd rather we underfill 1 slot to line up the others"*. 1001
+    runs over a 119-run ceiling becomes 8 jobs of 112 and one of 105, summing to 1001. Nothing the
+    order's arithmetic reads has changed: same product, same character, same chain timestamp, same
+    total. Only the row COUNT differs, and every consumer of that counts rows rather than assuming
+    one.
+
+    Held to the formulas owned like everything else — a batch that cannot be split far enough to
+    fit is split as far as it can be, since more of it inside the window is still better than none.
+    """
+    cadence_h = _reaction_cadence_hours(context_id)
+    if cadence_h <= 0:
+        return 0
+    mult = _reaction_time_mult(context_id)
+    cyc = _reaction_cycle_times()
+    fcaps = {t: c for t, c in (formula_concurrency_caps(context_id) or {}).items() if c}
+    con = get_connection()
+    try:
+        rows = [dict(r) for r in con.execute(
+            "SELECT a.id, a.character_id, a.type_id, a.name, a.runs, a.input_cost, a.reward, "
+            "a.tier_order, a.created_at, a.order_id FROM pp_reaction_assignments a "
+            "JOIN pp_characters c ON c.character_id = a.character_id "
+            "WHERE c.context_id = ? AND a.order_id IS NOT NULL", (context_id,))]
+        top: dict[tuple, int] = {}
+        for r in rows:
+            k = (r["character_id"], round(float(r["created_at"] or 0.0), 3))
+            top[k] = max(top.get(k, 0), int(r["tier_order"] or 0))
+
+        written = 0
+        for r in rows:
+            k = (r["character_id"], round(float(r["created_at"] or 0.0), 3))
+            if int(r["tier_order"] or 0) != top[k]:
+                continue                       # an intermediate — the leveller already has it
+            raw = cyc.get(int(r["type_id"]), 0.0)
+            runs = int(r["runs"] or 0)
+            if raw <= 0 or runs <= 0:
+                continue
+            per_job_cap = int((cadence_h / mult) / raw)
+            if per_job_cap <= 0 or runs <= per_job_cap:
+                continue                       # already inside the window
+            jobs = -(-runs // per_job_cap)
+            cap = fcaps.get(int(r["type_id"]))
+            if cap:
+                jobs = min(jobs, max(1, int(cap)))
+            if jobs <= 1:
+                continue
+            base, rem = divmod(runs, jobs)
+            if base <= 0:
+                continue
+            # `rem` jobs carry one extra run; the rest carry `base`. Sums to `runs` exactly.
+            sizes = [base + 1] * rem + [base] * (jobs - rem)
+            unit_cost = float(r["input_cost"] or 0.0) / runs
+            unit_reward = float(r["reward"] or 0.0) / runs
+            con.execute("DELETE FROM pp_reaction_assignments WHERE id=?", (r["id"],))
+            for n in sizes:
+                con.execute(
+                    "INSERT INTO pp_reaction_assignments (character_id, type_id, name, runs, "
+                    "input_cost, reward, created_at, tier_order, order_id) VALUES (?,?,?,?,?,?,?,?,?)",
+                    (r["character_id"], r["type_id"], r["name"], n, round(unit_cost * n, 2),
+                     round(unit_reward * n, 2), r["created_at"], r["tier_order"], r["order_id"]))
+                written += 1
+        if written:
+            con.commit()
+        return written
+    finally:
+        con.close()
+
+
 def _stage_of_tiers(context_id: int, product_id: int, tiers: list) -> list[int]:
     """A STAGE index per client-supplied chain tier — steps that can run at the same time share one.
 
@@ -2206,6 +2285,10 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
             level_product_runs(context_id)
         else:
             level_stage_runs(context_id)
+        # ...and the one thing the leveller may not touch: a customer order's own top row. It is
+        # split here instead, preserving the batch total exactly, so the cadence reaches the whole
+        # chain rather than stopping one stage short of the product being sold.
+        split_order_tops_to_cadence(context_id)
     except Exception:
         pass
     # What the player has marked running or done by hand. Own connection, so it belongs here with
