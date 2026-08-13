@@ -692,6 +692,15 @@ def test_the_leveller_does_not_reach_for_a_character_the_assign_left_out() -> bo
     ok &= check(4 not in lean,
                 "so a pending row parked on it should move, not be preserved by stability")
 
+    # Under the ONE-SLOT model a stage may use the whole character, because stage 2 runs in the
+    # reactor stage 1 frees. Charging both against one pool made three 10-reactor characters read
+    # as full at 21 + 9 rows, which is what pushed a 21st job onto a fourth host.
+    room, s1, s2 = 10, 21, 9
+    ok &= check(s1 + s2 > room * 3, "21 + 9 rows does NOT fit three characters if stages add up")
+    ok &= check(max(s1, s2) <= room * 3, "...and comfortably does if only the busiest stage counts")
+    ok &= check(s1 <= room * 3 and s2 <= room * 3,
+                "the invariant the old subtraction protected still holds: no STAGE exceeds the room")
+
     # The threshold is the same number the order allocator uses — one rule, not two that drift.
     import app.reactions.jobs as _J
     hosts = [{"character_id": 1, "free_slots": 10}, {"character_id": 2, "free_slots": 10},

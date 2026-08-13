@@ -1436,6 +1436,8 @@ def level_product_runs(context_id: int) -> int:
     # be installed yet, and the plan must fit the reactors.
     room = {cid: max(0, int(c.get("slots") or 0) - int(c.get("running") or 0))
             for cid, c in caps_now.items()}
+    # Whether a planned row on another stage holds a reactor at the same time — see `budget` below.
+    peak_only = _parallel_stages_on(context_id)
 
     # ── Step 4: pool rows into (stage, product) buckets across characters ───────────────────────
     # (stage, product) -> every row of it, POOLED ACROSS CHARACTERS: the requirement is the
@@ -1505,8 +1507,20 @@ def level_product_runs(context_id: int) -> int:
         # of them, which is right under the one-slot model: a character's load is its busiest stage,
         # so growth in stage 0 and stage 1 does not add up — this stage may use whatever the
         # character's reactors are not already committed to by its OTHER stages.
-        budget = {cid: max(0, n - committed.get(cid, 0) - later.get(cid, 0))
-                  for cid, n in room.items()}
+        # Under the one-slot model that is literally true, so nothing is subtracted: stage 2 runs in
+        # the reactor stage 1 frees, and charging both against the same pool made three 10-reactor
+        # characters read as full at 21 + 9 rows — which is how a packed plan grew a fourth host
+        # holding one job. Each stage may use the whole character. The invariant the original
+        # subtraction protected still holds by construction: no single stage is placed beyond
+        # `room`, and a stage is all that competes for reactors at once (`_concurrent_load`).
+        #
+        # With the flag OFF every planned row does hold a reactor, so the old cross-stage
+        # subtraction is exactly right and stays.
+        if peak_only:
+            budget = dict(room)
+        else:
+            budget = {cid: max(0, n - committed.get(cid, 0) - later.get(cid, 0))
+                      for cid, n in room.items()}
 
         # The shortest this stage can possibly run: all of its work, divided by every reactor it may
         # use. Nothing shorter is installable however the run counts are chosen, so it seeds the
