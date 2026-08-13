@@ -78,9 +78,33 @@ def _order_report(context_id: int, order: dict) -> dict:
     # answer different questions about the same order ("what must I buy" / "what must I react"),
     # and each must spend the holding once. Sharing one consumed pool between them would let the
     # materials walk eat the units the stages needed to be told about.
+    # **Sized off the PLAN ROWS once the order has any, not off `target_qty`.** The two diverge the
+    # moment the levelling pass rounds a run count up: an order for 1000 top-level runs was being
+    # planned as 1130 runs of each intermediate, so the report under-stated the intermediates'
+    # inputs by 13% — and the report is what people buy from. A plan row is one in-game job, which
+    # is the unit the game does material arithmetic in (`_plan_materials`), so this also picks up
+    # the per-job rounding the aggregate walk cannot express.
+    #
+    # Falls back to the target-quantity walk when nothing is assigned yet, which is the quote
+    # before any commitment — there are no rows to read and the ideal is the honest answer.
     totals: dict[int, float] = {}
-    _explode_shopping_list(order["type_id"], target_qty, reached, totals,
-                           dict(reaction_stock_pool(context_id)))
+    plan_rows: list[dict] = []
+    if order.get("id"):
+        con = get_connection()
+        try:
+            plan_rows = [dict(r) for r in con.execute(
+                "SELECT a.character_id, a.type_id, a.name, a.runs, a.tier_order "
+                "FROM pp_reaction_assignments a WHERE a.order_id=?", (order["id"],))]
+        except Exception:
+            plan_rows = []
+        finally:
+            con.close()
+    if plan_rows:
+        from app.reactions.graph import _plan_materials
+        totals = _plan_materials(plan_rows, reached, dict(reaction_stock_pool(context_id)))
+    else:
+        _explode_shopping_list(order["type_id"], target_qty, reached, totals,
+                               dict(reaction_stock_pool(context_id)))
     materials = _materials_report(totals, reached, types)
 
     stock_covered: dict[int, dict] = {}
