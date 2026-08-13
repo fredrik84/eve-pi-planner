@@ -952,6 +952,12 @@ def _choose_stage_layout(products: dict, prefer_tidy: bool = False) -> dict:
     if not keys:
         return {}
     targets = sorted({o["runs"] * products[k]["cycle"] for k in keys for o in products[k]["options"]})
+    # ONE run count for the whole stage, offered as a candidate layout in its own right rather than
+    # left to fall out of the per-product picks — because it never does. Each product picks the
+    # cheapest count that lands by the target, and cheapest means least surplus: Carbon Fiber's
+    # 1045 divides exactly by 95, so it takes 95 and the stage reads 95/100/100 forever. The stage
+    # can only settle on one number if "one number" is a thing being scored.
+    uniform = sorted({o["runs"] for k in keys for o in products[k]["options"]})
     best_score, best_pick = None, {}
     for d in targets:
         pick = {}
@@ -977,13 +983,50 @@ def _choose_stage_layout(products: dict, prefer_tidy: bool = False) -> dict:
         surplus = sum(pick[k]["surplus"] for k in keys)
         untidy = sum(0 if pick[k]["tidy"] else 1 for k in keys)
         landed = 0 if spread <= _ALIGN_TOL * max(durs) else 1
-        # Slots before surplus, both after landing the stage — fewer, fuller jobs is the whole point
-        # ("save slots, lower login cadence"), and the budget above bounds the surplus that buys it.
-        # Ranking the goo first is the trap; docs/reactions.md has what it cost.
-        score = ((landed, jobs, untidy, surplus, spread) if prefer_tidy
-                 else (landed, jobs, surplus, untidy, spread))
+        # How many DIFFERENT run counts the stage asks you to type. Landing a stage is about when
+        # its jobs finish; this is about what you read off the screen while starting them.
+        # *"I don't want to have to look for Carbon Fibers for each slot every time I start it to
+        # figure out how many runs. The more similar number of job runs (preferably equal) between
+        # products the better."* `_ALIGN_TOL` alone does not get there: with every product on the
+        # same cycle time, 95 and 100 finish 5% apart and already count as landed, so nothing was
+        # trying to close the last gap — and 95 won on surplus.
+        numbers = len({pick[k]["runs"] for k in keys})
+        # Slots first, then how many numbers there are to type, then the goo. Both after landing the
+        # stage. Fewer, fuller jobs is still the whole point ("save slots, lower login cadence") and
+        # the budget above bounds the surplus any of this can spend. Ranking the goo first is the
+        # trap; docs/reactions.md has what it cost.
+        score = ((landed, jobs, numbers, untidy, surplus, spread) if prefer_tidy
+                 else (landed, jobs, numbers, surplus, untidy, spread))
         if best_score is None or score < best_score:
             best_score, best_pick = score, pick
+
+    # ...and the same scoring over the layouts where every product carries the SAME count. A
+    # product that has no option at `r` keeps its own best, so a stage still gets most of the
+    # benefit when one product genuinely cannot reach the shared number.
+    for r in uniform:
+        pick = {}
+        for k in keys:
+            same = [o for o in products[k]["options"] if o["runs"] == r]
+            if same:
+                pick[k] = same[0]
+            elif best_pick.get(k):
+                pick[k] = best_pick[k]
+            else:
+                pick[k] = min(products[k]["options"], key=lambda o: o["runs"])
+        if not _stage_affordable(products, pick):
+            continue
+        durs = [pick[k]["runs"] * products[k]["cycle"] for k in keys]
+        spread = round(max(durs) - min(durs), 6)
+        jobs = sum(pick[k]["jobs"] for k in keys)
+        surplus = sum(pick[k]["surplus"] for k in keys)
+        untidy = sum(0 if pick[k]["tidy"] else 1 for k in keys)
+        landed = 0 if spread <= _ALIGN_TOL * max(durs) else 1
+        numbers = len({pick[k]["runs"] for k in keys})
+        score = ((landed, jobs, numbers, untidy, surplus, spread) if prefer_tidy
+                 else (landed, jobs, numbers, surplus, untidy, spread))
+        if best_score is None or score < best_score:
+            best_score, best_pick = score, pick
+
     if best_pick:
         return best_pick
     # Every layout the stage could take is over the budget — so take the cheapest one there is

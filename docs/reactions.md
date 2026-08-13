@@ -22,6 +22,7 @@ Find a section: `grep -n '^## ' docs/reactions.md` and read from that line — t
 - **An order stops at the character not worth a login (`reactions_pack_hosts`)** — the marginal-gain rule, why it needs no cadence, and two earlier attempts that did nothing
 - **One run count per product per stage (`level_stage_runs`)** — why levelling across assigns is sound, and what it deliberately doesn't touch
 - **One run count per product, across every character (`reactions_level_runs`)** — the cross-character leveller: how the number is chosen, why it also saves slots, and the one thing it still can't merge
+- **One run count for a whole STAGE, not just per product (`reactions_level_runs`)** — why matching durations was not enough, and why a shared count has to be a candidate
 - **Run counts you can type (`reactions_tidy_runs`)** — bounded rounding of intermediate runs, and why the end product is never rounded
 - **A stage is a DEPTH, not a position in a list** — why siblings share a stage, and how existing rows were repaired
 - **Knowing when the next stage can start (`chain_stage_state`)** — the ESI signal behind "stage 2 is ready"
@@ -549,6 +550,37 @@ steps run **one at a time**: each assign has to see the slots the one before it 
 them together let two suggestions claim the same free reactor. A refused step keeps its server
 reason on screen and the rest still run; a `critical` step (deleting the row an edit replaces)
 stops the ones after it instead.
+
+## One run count for a whole STAGE, not just per product (`reactions_level_runs`)
+
+Reported: *"I don't want to have to look for Carbon Fibers for each slot every time I start it to
+figure out how many runs. The more similar number of job runs (preferably equal) between products
+the better. Makes it faster to start and less taxing."*
+
+`level_product_runs` already gave every job of ONE product the same count. Across products in a
+stage it did not, and `_ALIGN_TOL` was never going to close that: it lands a stage by matching
+DURATIONS, and with every product on the same cycle time 95 runs and 100 runs finish 5% apart —
+comfortably inside the tolerance, so the stage already counted as landed and nothing was trying to
+close the last gap. 95 then won on surplus, because Carbon Fiber's 1045 divides by it exactly.
+
+Two changes in `_choose_stage_layout`:
+
+* **`numbers` is scored** — how many DIFFERENT run counts the stage asks you to type — ranked after
+  slots and before surplus. Landing a stage is about when its jobs finish; this is about what you
+  read off the screen while starting them, and they are not the same question.
+* **A shared count is offered as a candidate layout.** This is the load-bearing half. Each product's
+  own pick takes the cheapest count that lands by the target, and cheapest means least surplus, so a
+  shared number never falls out on its own however it is scored afterwards. The stage can only
+  settle on one number if "one number" is a thing being proposed.
+
+On the reported stage (Carbon Fiber 1045, Thermosetting Polymer 1100, Oxy-Organic Solvents 100, all
+3.00 h/run) it moves 95/100/100 in 23 jobs to **110/110/100 in 21 jobs**. A product that genuinely
+cannot reach the shared count keeps its own — one number is a preference, not a rule — and
+`_stage_affordable` plus `_level_options`' budget still bound the goo any of it spends.
+
+**What it costs, stated plainly: time.** 110 runs is a longer job than 95, so the stage lands about
+two days later on a twelve-day order. That is the stated priority order — *"I want it to be easy"*
+above *"I want to be time efficient"* — and it is the trade being made, not a free win.
 
 ## Run counts you can type (`reactions_tidy_runs`)
 

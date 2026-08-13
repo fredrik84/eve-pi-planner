@@ -392,6 +392,52 @@ def test_an_order_stops_at_the_character_that_is_not_worth_a_login() -> bool:
     return ok
 
 
+def test_a_stage_settles_on_one_run_count_across_its_products() -> bool:
+    """Reported: *"I don't want to have to look for Carbon Fibers for each slot every time I start
+    it to figure out how many runs. The more similar number of job runs (preferably equal) between
+    products the better."*
+
+    `_ALIGN_TOL` does not get there on its own. It lands a stage by matching DURATIONS, and with
+    every product on the same cycle time 95 and 100 finish 5% apart — already "landed" — so nothing
+    was closing the last gap, and 95 won on surplus because 1045 divides by it exactly.
+
+    Two things were needed: scoring how many DIFFERENT numbers a stage asks you to type, and
+    offering a shared count as a candidate layout. The second matters because the per-product pick
+    always takes its own cheapest count first, so a shared number never falls out on its own."""
+    from app.reactions.jobs import _choose_stage_layout, _level_options
+
+    # Stage 1 of the reported order #45 — three products, all 3.00 h/run, real requirements.
+    def stage():
+        out = {}
+        for k, total, cap in (("Carbon Fiber", 1045, 11), ("Thermosetting Polymer", 1100, 11),
+                              ("Oxy-Organic Solvents", 100, 1)):
+            out[k] = {"cycle": 3.0, "total": total,
+                      "options": _level_options(total, cap=cap, max_runs=100000)}
+        return out
+
+    pick = _choose_stage_layout(stage(), prefer_tidy=True)
+    runs = {k: o["runs"] for k, o in pick.items()}
+    ok = check(runs["Carbon Fiber"] == runs["Thermosetting Polymer"],
+               f"the two big products share one run count (got {runs})")
+    ok &= check(len(set(runs.values())) < 3,
+                "the stage asks for fewer numbers than it has products")
+    ok &= check(all(o["jobs"] >= 1 for o in pick.values()), "every product still gets a job")
+
+    # The surplus it spends is real goo, so it stays inside the budget the options already enforce.
+    for k, o in pick.items():
+        need = stage()[k]["total"]
+        ok &= check(o["jobs"] * o["runs"] - need <= need * 0.5,
+                    f"{k}'s overshoot stays inside the levelling budget")
+
+    # A product that genuinely cannot reach the shared number keeps its own count rather than
+    # being dragged to one it cannot afford — one number is a preference, not a rule.
+    solo = {"Only": {"cycle": 3.0, "total": 7,
+                     "options": _level_options(7, cap=1, max_runs=100000)}}
+    ok &= check(len(_choose_stage_layout(solo, prefer_tidy=True)) == 1,
+                "a single-product stage still resolves")
+    return ok
+
+
 def test_a_reaction_can_be_marked_running_or_done_by_hand() -> bool:
     """ESI is the signal for what is running and what has landed, and it is right nearly always —
     but the job cache is up to five minutes stale, a job installed under a different product than
@@ -560,6 +606,7 @@ def run_unit_tests() -> bool:
         test_explode_shopping_list(),
         test_a_chain_spreads_over_the_slots_it_has(),
         test_an_order_stops_at_the_character_that_is_not_worth_a_login(),
+        test_a_stage_settles_on_one_run_count_across_its_products(),
         test_a_reaction_can_be_marked_running_or_done_by_hand(),
         test_assigning_twice_does_not_book_it_twice(),
         test_explode_chain_tiers(),
