@@ -622,6 +622,33 @@ stage solve never did.** It capped a stage at `stage_cap_hours`, the longest job
 to already run, which is why a Reactions plan could quote a fortnight on one reactor with the
 ceiling sitting right there unused.
 
+**The ceiling is measured in REAL hours, and that was the bug that made it useless.**
+`_reaction_cycle_times` returns the raw SDE cycle and documents that the structure/skill bonus is
+deliberately not applied, *"it scales every reaction by the same factor, and everything here compares
+durations against each other"*. That was sound until the cadence arrived: a common factor cancels out
+of a comparison between two durations and does **not** cancel out of a comparison with seven days.
+Reported in game: one run of Carbon Fiber is 1h24m14s against the SDE's 3h, so the ceiling allowed 56
+runs a job where the truth is 119, and the job count came out roughly double.
+
+`_reaction_time_mult` supplies the factor and `stage_cap_hours` becomes `cadence / mult`, so the
+existing raw-hours math is untouched. Effect on the reported stage:
+
+| | ceiling | Carbon Fiber | stage 1 jobs |
+| --- | --- | --- | --- |
+| before | 56 runs | 55 × 19 | 41 |
+| **after** | **119 runs** | **117 × 9** | **20** |
+
+**Measured off real jobs, not derived from settings.** ESI gives every job a `duration` and a run
+count, so the ratio is an observation — 0.4680 across 13 jobs on the reported account, matching the
+player's hand measurement to four decimals. Deriving it was tried first and is wrong:
+`struct_time_pct` is the INDUSTRY facility's number (62% there) and reactions run in a different
+structure (44.9%), which would have allowed 173-run jobs — **10 real days against a 7-day ceiling.**
+A measurement cannot drift away from the structure the player actually reacts in.
+
+With nothing observed it falls back to the skills multiplier alone, which under-claims the bonus on
+purpose: a smaller claimed bonus means a bigger apparent job, fewer runs allowed, and a job that
+lands inside the ceiling. Over-claiming is the direction that breaks the promise the cadence makes.
+
 **One number, two places.** The control sits on the Reactions card as a single row above the
 pipeline it shapes (`_rxCadenceHtml`, "Come back every N days") and reads/writes the same
 `/api/industry/build-setup` that Build rules does — so whichever you touch last is what both show,

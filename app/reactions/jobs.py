@@ -946,6 +946,67 @@ def _cadence_drift(hours: float) -> int:
 
 
 
+
+def _reaction_time_mult(context_id: int) -> float:
+    """What a reaction job REALLY takes, as a fraction of its SDE cycle time — MEASURED.
+
+    `_reaction_cycle_times` returns the raw SDE number and says, correctly, that the bonus is not
+    applied because everything there compares durations against each other — a factor common to
+    every product cancels out of a comparison. **It does not cancel out of a comparison with seven
+    days.** The cadence ceiling was the first absolute consumer of those durations and it sized
+    every job against a clock running 2.1x slow: one run of Carbon Fiber is 1h24m14s in game against
+    the SDE's 3h, so a 7-day ceiling allowed 56 runs where the truth is 119, and the job count came
+    out roughly double.
+
+    **Read off real jobs, not derived from settings.** ESI gives every job a `duration` and a run
+    count, so the ratio is a measurement rather than a reconstruction of hull, rigs, security and
+    skills. The derivation was tried and is wrong: `struct_time_pct` is the INDUSTRY facility's
+    number (62% on the reported account) and reactions run in a different structure entirely
+    (44.9% there), which would have allowed 173-run jobs — 10 real days against a 7-day ceiling. A
+    measurement cannot drift away from the structure the player actually reacts in.
+
+    The median across jobs, so one oddity cannot move it, and only jobs whose product has a known
+    SDE cycle.
+
+    **The fallback errs SHORT, deliberately.** With nothing observed it falls back to the skills
+    multiplier alone, which under-claims the bonus: a smaller claimed bonus means a bigger apparent
+    job, which means FEWER runs allowed and a job that lands inside the ceiling. Over-claiming is
+    the direction that breaks the promise the cadence makes.
+    """
+    cyc = _reaction_cycle_times()
+    mults: list[float] = []
+    try:
+        con = get_connection()
+        try:
+            rows = con.execute(
+                "SELECT j.jobs_json FROM pp_char_industry_jobs j JOIN pp_characters c "
+                "ON c.character_id = j.character_id WHERE c.context_id = ?", (context_id,)).fetchall()
+        finally:
+            con.close()
+        for r in rows:
+            for job in (_json.loads(r["jobs_json"]) or []):
+                runs = int(job.get("runs") or 0)
+                raw = cyc.get(int(job.get("product_type_id") or 0), 0.0)
+                dur = float(job.get("duration") or 0.0) / 3600.0
+                if runs > 0 and raw > 0 and dur > 0:
+                    m = (dur / runs) / raw
+                    if 0.01 <= m <= 1.0:        # a bonus, never a penalty
+                        mults.append(m)
+    except Exception:
+        mults = []
+    if mults:
+        mults.sort()
+        return mults[len(mults) // 2]
+    try:
+        from app.industry.graph import account_industry_time_mults
+        rx = account_industry_time_mults(context_id)[1]
+        if rx and 0 < float(rx) <= 1.0:
+            return float(rx)
+    except Exception:
+        pass
+    return 1.0
+
+
 def _reaction_cadence_hours(context_id: int) -> float:
     """The longest one reaction job may run, in hours — 0 when the account has set no cadence.
 
@@ -967,7 +1028,7 @@ def _reaction_cadence_hours(context_id: int) -> float:
         return 0.0
 
 
-def _seed_cadence_counts(products: dict, keys: list) -> dict:
+def _seed_cadence_counts(products: dict, keys: list, time_mult: float = 1.0) -> dict:
     """Offer, alongside each candidate, the largest run count that costs the SAME jobs and still
     lands under a whole-day boundary.
 
@@ -988,11 +1049,11 @@ def _seed_cadence_counts(products: dict, keys: list) -> dict:
             continue
         extra, seen = [], {o["runs"] for o in p["options"]}
         for o in p["options"]:
-            if _cadence_drift(o["runs"] * cyc) == 0:
+            if _cadence_drift(o["runs"] * cyc * time_mult) == 0:
                 continue                       # already lands where we want it
             floor = max(1, -(-total // max(1, o["jobs"])))
             for r in range(int(o["runs"]) - 1, floor - 1, -1):
-                if _cadence_drift(r * cyc) == 0:
+                if _cadence_drift(r * cyc * time_mult) == 0:
                     if r not in seen and -(-total // r) == o["jobs"]:
                         made = o["jobs"] * r
                         extra.append({"runs": r, "jobs": o["jobs"], "surplus": made - total,
@@ -1004,7 +1065,8 @@ def _seed_cadence_counts(products: dict, keys: list) -> dict:
     return out
 
 
-def _choose_stage_layout(products: dict, prefer_tidy: bool = False) -> dict:
+def _choose_stage_layout(products: dict, prefer_tidy: bool = False,
+                          time_mult: float = 1.0) -> dict:
     """Pick one run count per product so the whole STAGE lands together.
 
     `products` is `{key: {"cycle": hours_per_run, "options": [...], "total": runs_needed}}` for the
@@ -1032,7 +1094,7 @@ def _choose_stage_layout(products: dict, prefer_tidy: bool = False) -> dict:
     keys = [k for k, p in products.items() if p.get("options")]
     if not keys:
         return {}
-    products = _seed_cadence_counts(products, keys)
+    products = _seed_cadence_counts(products, keys, time_mult)
     targets = sorted({o["runs"] * products[k]["cycle"] for k in keys for o in products[k]["options"]})
     # ONE run count for the whole stage, offered as a candidate layout in its own right rather than
     # left to fall out of the per-product picks — because it never does. Each product picks the
@@ -1079,7 +1141,7 @@ def _choose_stage_layout(products: dict, prefer_tidy: bool = False) -> dict:
         # trap; docs/reactions.md has what it cost.
         # Cadence fit sits after the numbers you type and before the goo: it is a usability
         # property like `numbers` is, and the same budget bounds what it can spend.
-        drift = max(_cadence_drift(d_) for d_ in durs)
+        drift = max(_cadence_drift(d_ * time_mult) for d_ in durs)
         score = ((landed, jobs, numbers, drift, untidy, surplus, spread) if prefer_tidy
                  else (landed, jobs, numbers, drift, surplus, untidy, spread))
         if best_score is None or score < best_score:
@@ -1109,7 +1171,7 @@ def _choose_stage_layout(products: dict, prefer_tidy: bool = False) -> dict:
         numbers = len({pick[k]["runs"] for k in keys})
         # Cadence fit sits after the numbers you type and before the goo: it is a usability
         # property like `numbers` is, and the same budget bounds what it can spend.
-        drift = max(_cadence_drift(d_) for d_ in durs)
+        drift = max(_cadence_drift(d_ * time_mult) for d_ in durs)
         score = ((landed, jobs, numbers, drift, untidy, surplus, spread) if prefer_tidy
                  else (landed, jobs, numbers, drift, surplus, untidy, spread))
         if best_score is None or score < best_score:
@@ -1280,8 +1342,13 @@ def level_product_runs(context_id: int) -> int:
         # It is a HARD ceiling: `_level_options` drops any run count above it, so a stage that
         # cannot fit the week at the leanest layout is split finer until it does. That costs
         # reactors, and it is the point — a cadence you cannot rely on is not a cadence.
+        # The cadence is REAL hours and every duration here is raw SDE hours, so it has to be
+        # converted before it can be compared with them: a 7-day window is 7 days of wall clock,
+        # which is `7d / mult` worth of the SDE's idea of time. Getting this wrong is what made a
+        # 7-day ceiling plan 56-run jobs instead of 119.
+        _tmult = _reaction_time_mult(context_id)
         cadence_h = _reaction_cadence_hours(context_id)
-        stage_cap_hours = cadence_h or max(
+        stage_cap_hours = (cadence_h / _tmult if cadence_h else 0.0) or max(
             (int(r["runs"] or 0) * cycles.get(int(r["type_id"]), 1.0)
              for rs in by_product.values() for r in rs),
             default=0.0)
@@ -1351,7 +1418,7 @@ def level_product_runs(context_id: int) -> int:
             products = _build(set())
             durations = {o["runs"] * p["cycle"] for p in products.values() for o in p["options"]}
             products = _build(durations)
-            layout = _choose_stage_layout(products, prefer_tidy)
+            layout = _choose_stage_layout(products, prefer_tidy, time_mult=_tmult)
             asked = sum(opt["jobs"] for opt in layout.values())
             if asked <= stage_room:
                 break

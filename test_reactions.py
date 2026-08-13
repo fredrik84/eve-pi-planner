@@ -528,6 +528,46 @@ def test_the_leveller_never_plans_more_jobs_than_formulas_owned() -> bool:
     return ok
 
 
+def test_the_cadence_ceiling_is_measured_in_real_time_not_sde_time() -> bool:
+    """Reported: a 7-day ceiling produced 55-run jobs and doubled the work. *"1 run of Carbon Fibers
+    from my ingame numbers is 1h 24m 14s. 120 runs is 7d 0h 28m 48s."*
+
+    `_reaction_cycle_times` returns the RAW SDE cycle and documents that the structure/skill bonus is
+    deliberately not applied, because everything using it compares durations against each other and a
+    common factor cancels. The cadence ceiling was the first ABSOLUTE consumer of those durations, and
+    a common factor does not cancel against seven days: at 3.00 SDE hours against a real 1.4039, the
+    ceiling allowed 56 runs where the truth is 119."""
+    from app.reactions.jobs import _level_options, _cadence_drift
+
+    RAW, REAL = 3.00, 1.40389
+    MULT, CAD = REAL / RAW, 7 * 24.0
+    ok = check(abs(120 * REAL - 168.48) < 0.1,
+               "120 runs really is 7d and ~29m — the reported measurement")
+
+    before = int(CAD / RAW)                       # the bug: cadence compared to SDE hours
+    after = int((CAD / MULT) / RAW)               # the fix: cadence converted to SDE hours
+    ok &= check(before == 56 and after == 119,
+                f"the ceiling goes from {before} to {after} runs a job")
+    ok &= check(after * REAL <= CAD, "and {} runs really does land inside the week".format(after))
+    ok &= check((after + 1) * REAL > CAD, "...while one more run would not")
+
+    # The job count is what the player feels: 1045 runs of Carbon Fiber.
+    lo = min(_level_options(1045, cap=30, max_runs=before), key=lambda o: o["jobs"])["jobs"]
+    hi = min(_level_options(1045, cap=30, max_runs=after), key=lambda o: o["jobs"])["jobs"]
+    ok &= check(lo == 19 and hi == 9, f"which halves the jobs for one product ({lo} -> {hi})")
+
+    # The day-boundary preference has to measure REAL time too, or it lands on the wrong boundary.
+    ok &= check(_cadence_drift(119 * RAW * MULT) == 0,
+                "a 119-run job scores as landing under a whole day in REAL hours")
+    # ...and the two measurements genuinely disagree — a run count that lands under a boundary in
+    # real hours frequently does not in SDE hours, which is a different job being preferred.
+    disagree = [r for r in range(20, 200)
+                if _cadence_drift(r * RAW * MULT) != _cadence_drift(r * RAW)]
+    ok &= check(len(disagree) > 40,
+                f"real and SDE hours pick different jobs for {len(disagree)} of 180 run counts")
+    return ok
+
+
 def test_a_reaction_can_be_marked_running_or_done_by_hand() -> bool:
     """ESI is the signal for what is running and what has landed, and it is right nearly always —
     but the job cache is up to five minutes stale, a job installed under a different product than
@@ -699,6 +739,7 @@ def run_unit_tests() -> bool:
         test_a_stage_settles_on_one_run_count_across_its_products(),
         test_a_cadence_ceiling_holds_every_job_inside_the_week(),
         test_the_leveller_never_plans_more_jobs_than_formulas_owned(),
+        test_the_cadence_ceiling_is_measured_in_real_time_not_sde_time(),
         test_a_reaction_can_be_marked_running_or_done_by_hand(),
         test_assigning_twice_does_not_book_it_twice(),
         test_explode_chain_tiers(),
