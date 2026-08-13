@@ -2495,37 +2495,49 @@ def _pack_hosts_on(context_id: int) -> bool:
         return False
 
 
-# A character that would be handed one job is a login that buys almost nothing. Two per tier is the
-# floor at which hosting a chain is worth the trip; below it the work goes to a character already
-# making the trip anyway.
-_MIN_JOBS_PER_TIER = 2
+# How much speed an extra character has to buy to be worth the login. Adding a host with F free
+# reactors to the S you already have cuts the remaining wait by F/(S+F); below this, it doesn't.
+_WORTH_A_LOGIN = 0.20
 
 
-def _lean_hosts(hosts: list[dict], per_chain: int,
-                min_per_tier: int = _MIN_JOBS_PER_TIER) -> list[dict]:
-    """The characters worth involving in an order at all — the rest of the work goes to them.
+def _lean_hosts(hosts: list[dict], min_gain: float = _WORTH_A_LOGIN) -> list[dict]:
+    """The characters worth involving in an order, roomiest first — the rest of the work goes to
+    them.
 
-    Reported from use: *"in stage 1 of my Customer Order 2 characters out of 5 needed only has 1 job
-    each. Both of those jobs could be on the other 3. There's free slots on them."* And for the
-    stage above it, ten jobs spread over SEVEN characters, five of them holding a single job.
+    Reported from a live order (#45, 1000 runs of Reinforced Carbon Fiber): stage 1 spread over 5
+    characters with two holding ONE job each, stage 2 over SEVEN with five holding one each — while
+    the characters that already had jobs sat on free reactors. *"To lessen logins we should try and
+    run as lean as possible... it's fully possible to not spread the Stage 2 work over all
+    characters."*
 
-    `_fit_chain_slots` gives every tier at least one slot, so a character with barely `per_chain`
-    reactors free contributes exactly one job per stage however small its share — a whole login, to
-    install one job and come back later to collect it. The characters that DO have room can take
-    that work without a second trip, because parallelism comes from reactors and they have spare.
+    **The rule is marginal gain, and it needs no cadence.** An order's wait is its reactor-hours
+    divided by the reactors running them, so a host with `F` free slots added to the `S` already
+    committed cuts that wait by `F / (S + F)`. Keep taking hosts while that is worth a login and
+    stop at the first one that isn't. It is the same reasoning `_fit_chain_slots` already uses to
+    hand slots to tiers, one level up: spend the next unit where it actually buys something.
 
-    So a host has to clear `per_chain × min_per_tier` free reactors to join: enough to give every
-    tier of the chain a real share rather than a token one. Everyone who clears it is kept — this
-    trims the tail, it does not hunt for the single roomiest character, because the jobs themselves
-    are unchanged and more reactors running them is still sooner finished.
+    Why this rather than a job-length ceiling: a duration ceiling needs a number nobody has set
+    (`max_reaction_job_days` defaults to None, deliberately), and it answers the wrong question —
+    "is this job too long" instead of "is this character worth the trip". A relative gain needs no
+    unit at all and scales itself: a small order lands on ONE character because the second buys
+    nothing, and a huge one still spreads because every host is pulling real weight.
 
-    **Never returns empty, and never strands an order.** If no character clears the floor, every
-    host stays: an account of small characters genuinely does need to spread, and refusing to place
-    the order would be a worse answer than a few extra logins.
+    On the reported account (three 10-slot characters, four 5-slot) the 4th character buys 14% and
+    the run stops at three — 30 slots against the 33 the sprawl over seven was really using.
+
+    The FIRST host is always kept whatever it buys: the order has to be placed somewhere.
     """
-    floor = max(1, per_chain * max(1, min_per_tier))
-    keep = [h for h in hosts if h["free_slots"] >= floor]
-    return keep or hosts
+    if not hosts:
+        return []
+    ranked = sorted(hosts, key=lambda h: -h["free_slots"])
+    keep, have = [ranked[0]], max(1, ranked[0]["free_slots"])
+    for h in ranked[1:]:
+        f = h["free_slots"]
+        if f <= 0 or f / float(have + f) < min_gain:
+            break                       # ...and everyone past it buys less still — they are sorted
+        keep.append(h)
+        have += f
+    return keep
 
 
 def _fit_chain_slots(works: list[float], caps: list[int], budget: int) -> list[int]:
@@ -2627,22 +2639,23 @@ def _allocate_and_insert(context_id: int, type_id: int, name: str, node: dict, r
     # scarcest formula in the chain is therefore also the most characters this order can use.
     if chain_caps:
         hosts = hosts[:max(1, min(chain_caps.values()))]
-    # ...and then drop the characters that would only be handed a token job per stage. Parallelism
-    # comes from REACTORS, not from characters, so moving that work onto a character with reactors
-    # to spare costs nothing and saves a whole login each way. See `_lean_hosts`.
+    # ...and then stop at the character that no longer buys enough speed to be worth the login.
+    # An order's wait is its reactor-hours over the reactors running them, so each extra host cuts
+    # that wait by its own share of the pool — keep taking them while that is worth a trip.
+    # See `_lean_hosts`; the hosts kept still split the runs proportionally, just as before.
     #
-    # The first attempt at this packed hosts until their free slots covered `_useful_slots` — the
-    # theoretical most an order could use, which for a 1000-run order is in the thousands, so every
-    # host was always kept and the whole thing was a no-op on the very order that prompted it.
-    # The number that matters is not what the order COULD use, it is whether a given character is
-    # worth a trip.
+    # Two earlier attempts at this are worth not repeating. The first packed hosts until their free
+    # slots covered `_useful_slots` — the theoretical most an order could EVER use, which is in the
+    # thousands for any real order, so nothing was ever dropped. The second required a fixed floor
+    # of free slots per host, which fixed the one-job tail but still had no answer for "these three
+    # characters could hold the whole thing". Both asked about the order; the question is about the
+    # character.
     #
     # This is not the reverted even-split (docs/reactions.md, "An order's runs follow capacity, not
     # fairness"): that one changed the JOBS, handing a 2-slot character the same 250 runs as a
-    # 10-slot one and putting a step at 14 days. The jobs here are untouched — only which characters
-    # hold them changes, and a host still takes a share proportional to its own reactors.
+    # 10-slot one. Here the split across the hosts that remain is untouched and still proportional.
     if _pack_hosts_on(context_id):
-        hosts = _lean_hosts(hosts, per_chain)
+        hosts = _lean_hosts(hosts)
 
     # How the order's runs are split across the characters that will run it: PROPORTIONAL to each
     # host's free slots. The roomiest character does the most work, so every host finishes at

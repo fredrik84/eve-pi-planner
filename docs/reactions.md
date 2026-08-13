@@ -19,7 +19,7 @@ Find a section: `grep -n '^## ' docs/reactions.md` and read from that line — t
 - **Landing a stage in one go (`_align_stage_jobs`)** — why the spread matters more than the total, and what moves to close it
 - **One request, one answer (`request_memo`)** — why an order report was rebuilding the same evidence five times
 - **An order's runs follow capacity, not fairness (reverted experiment)** — why hosts get different run counts, and what the even split cost
-- **An order skips characters it would give one job (`reactions_pack_hosts`)** — the two-jobs-a-stage floor, and the no-op first attempt worth not repeating
+- **An order stops at the character not worth a login (`reactions_pack_hosts`)** — the marginal-gain rule, why it needs no cadence, and two earlier attempts that did nothing
 - **One run count per product per stage (`level_stage_runs`)** — why levelling across assigns is sound, and what it deliberately doesn't touch
 - **One run count per product, across every character (`reactions_level_runs`)** — the cross-character leveller: how the number is chosen, why it also saves slots, and the one thing it still can't merge
 - **Run counts you can type (`reactions_tidy_runs`)** — bounded rounding of intermediate runs, and why the end product is never rounded
@@ -326,41 +326,53 @@ two goals genuinely conflict and finishing sooner wins. If it is revisited, the 
 even split but a bound on how far apart hosts may FINISH — pick the hosts whose capacity is
 comparable, split evenly among those, and leave the rest out of the order.
 
-## An order skips characters it would give one job (`reactions_pack_hosts`)
+## An order stops at the character not worth a login (`reactions_pack_hosts`)
 
-Reported from a live order (#45, 1000 runs of Reinforced Carbon Fiber): *"in stage 1 of my Customer
-Order 2 characters out of 5 needed only has 1 job each. Both of those jobs could be on the other 3.
-There's free slots on them. To lessen logins we should try and run as lean as possible."* Stage 2 of
-the same order was spread over **seven** characters, five of them holding a single job.
+Reported from a live order (#45, 1000 runs of Reinforced Carbon Fiber): stage 1 spread over 5
+characters with two holding ONE job each, stage 2 over **seven** with five holding one each — while
+the characters that already had jobs sat on free reactors. *"To lessen logins we should try and run
+as lean as possible... it's fully possible to not spread the Stage 2 work over all characters."*
 
-**Moving that work costs nothing.** Parallelism comes from REACTORS, not from characters — the jobs
-are the same jobs, and a character with spare reactors runs them at the same time the token host
-would have. What it saves is a whole login to install and a second trip to collect.
+**The rule is marginal gain, and it deliberately needs no cadence.** An order's wait is its
+reactor-hours divided by the reactors running them, so a host with `F` free slots added to the `S`
+already committed cuts that wait by `F / (S + F)`. `_lean_hosts` takes hosts roomiest-first while
+that is worth a login (`_WORTH_A_LOGIN`, 20%) and stops at the first one that isn't. It is the same
+reasoning `_fit_chain_slots` already uses to hand slots to tiers, one level up.
 
-`_fit_chain_slots` gives every tier at least one slot, so a character with barely `per_chain`
-reactors free contributes exactly one job per stage however small its share. `_lean_hosts` therefore
-requires a host to clear **`per_chain × 2` free reactors** to join at all: enough for a real share of
-every tier rather than a token one. On the reported account — three 10-slot characters and four
-5-slot ones, on a 4-tier chain — the floor is 8 and the order lands on three characters instead of
-seven.
+On the reported account — three 10-slot characters, four 5-slot ones — the 4th buys 5/35 = 14% and
+the order lands on three:
 
-Everyone who clears the floor is kept. It trims the tail; it does not hunt for the single roomiest
-character, because the jobs are unchanged and more reactors running them is still sooner finished.
+| chars | reactors | order #45 |
+| --- | --- | --- |
+| 7 (before) | 33 | ~12.3 days |
+| **3** | **30** | **~13.5 days** |
+| 1 | 10 | ~41 days |
 
-**The first implementation of this was a no-op, which is worth recording.** It packed hosts until
-their free slots covered `_useful_slots` — the theoretical most an order could ever use, which is
-`sum(runs per tier)` and therefore in the *thousands* for any real order. Every host always cleared
-it, so nothing was ever dropped, on the very order that prompted the feature. The lesson: the
-question is not what the order COULD use, it is whether a given character is worth a trip.
+**Four fewer logins each way for ~1.2 days of a 12-day order.** Note the honest comparison: the
+sprawl over seven was only using 33 of the account's 50 reactors, because the small characters have
+five each — so packing gives up far less speed than the character count suggests.
 
-**Never strands an order.** If no character clears the floor, every host is kept — an account of
-small characters genuinely does need to spread, and refusing to place the order would be a worse
-answer than a few extra logins.
+**Why a relative gain rather than a job-length ceiling.** A duration ceiling needs a number nobody
+has set (`max_reaction_job_days` is `None` by default, deliberately — see TODO 28) and it answers
+the wrong question: "is this job too long" instead of "is this character worth the trip". A relative
+gain needs no unit at all and scales itself — a small order lands on ONE character because the
+second buys nothing, a large one still spreads because every host pulls real weight.
+
+**It also serves "don't buy more formulas".** Every host runs the whole chain and so needs one
+formula of every tier for itself (`formula_concurrency_caps`); fewer hosts is strictly fewer
+formulas the order demands at once.
+
+**Two earlier attempts are recorded because both looked right and did nothing.** The first packed
+hosts until their free slots covered `_useful_slots` — the theoretical most an order could ever use,
+`sum(runs per tier)`, in the thousands for any real order — so every host always cleared it and the
+feature was a no-op on the very order that prompted it. The second required a fixed floor of free
+slots per host, which removed the one-job tail but still had no answer for "these three characters
+could hold the whole thing". Both asked a question about the ORDER; the question is about the
+CHARACTER.
 
 **This is not the reverted even split** (see "An order's runs follow capacity, not fairness"). That
-one changed the JOBS, handing a 2-slot character the same 250 runs as a 10-slot one and putting a
-step at 14 days. Here the job layout is untouched — only which characters hold it changes, and a
-host still takes a share proportional to its own reactors.
+one changed the JOBS, handing a 2-slot character the same 250 runs as a 10-slot one. Here the split
+across the hosts that remain is untouched and still proportional to their reactors.
 
 ## One run count per product per stage (`level_stage_runs`)
 

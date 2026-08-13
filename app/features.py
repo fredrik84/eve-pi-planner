@@ -282,16 +282,17 @@ FEATURE_REGISTRY = [
                     "character can reach it. Set the job length on the Reactions card to decide "
                     "how long a batch runs; the surplus from rounding up is stock.",
      "default": False},
-    {"key": "reactions_pack_hosts", "label": "Reactions: an order skips characters it would give one job",
+    {"key": "reactions_pack_hosts", "label": "Reactions: an order stops at the character not worth a login",
      "group": "Reactions",
-     "description": "A character only joins a customer order if it has the reactors to take a real "
-                    "share of every stage — at least two jobs a stage — instead of every character "
-                    "with a free slot getting a token job. The work goes to the characters that "
-                    "are already making the trip and have reactors to spare, so the jobs, the run "
-                    "counts and the finish time are all unchanged and the only thing that drops is "
-                    "how many characters you log in to install and collect it. If no character "
-                    "clears the bar, every one is used exactly as before — an order is never "
-                    "refused for being spread thin.",
+     "description": "A customer order is placed on the fewest characters that still finish it in a "
+                    "reasonable time, instead of every character with a free slot getting a slice. "
+                    "Each extra character has to cut the remaining wait by at least a fifth to be "
+                    "worth the login; past that the work goes to the characters already making the "
+                    "trip. On a 7-character account an order that was sprawling over all of them "
+                    "lands on three — for about a day on a twelve-day order, and four fewer "
+                    "characters to log in, tab through and collect from. Fewer characters also "
+                    "means fewer formulas the order needs at once, since each one runs the whole "
+                    "chain.",
      "default": False, "state": "testers"},
     {"key": "reactions_stage_pipeline", "label": "Reactions: stages drawn as a pipeline, like builds",
      "group": "Reactions",

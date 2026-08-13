@@ -344,44 +344,51 @@ def test_a_chain_spreads_over_the_slots_it_has() -> bool:
     return ok
 
 
-def test_an_order_skips_characters_it_would_give_one_job() -> bool:
-    """Reported from a live order (#45, 1000 runs of Reinforced Carbon Fiber): stage 1 was spread
-    over 5 characters, two of them holding ONE job each; stage 2 over SEVEN, five holding one each.
-    Every one of those is a login to install a single job and a second trip to collect it, while the
-    characters that already have jobs sit on free reactors. Parallelism comes from reactors, so
-    moving that work costs nothing.
+def test_an_order_stops_at_the_character_that_is_not_worth_a_login() -> bool:
+    """Reported from a live order (#45, 1000 runs of Reinforced Carbon Fiber): stage 1 spread over 5
+    characters with two holding ONE job each, stage 2 over SEVEN with five holding one — while the
+    characters that already had jobs sat on free reactors.
 
-    The FIRST attempt at this measured `_useful_slots` — the theoretical most an order could use —
-    which for a 1000-run order is in the thousands, so it kept every host and did nothing at all on
-    the exact order that prompted it. This pins the rule that replaced it."""
-    from app.reactions.jobs import _lean_hosts, _MIN_JOBS_PER_TIER
+    The rule is marginal gain and needs no cadence: an order's wait is its reactor-hours over the
+    reactors running them, so a host with F free slots added to S already committed cuts the wait by
+    F/(S+F). Take hosts while that is worth a login; stop at the first one that isn't."""
+    from app.reactions.jobs import _lean_hosts, _WORTH_A_LOGIN
 
-    # The reported account: three 10-slot characters and four 5-slot ones, on a 4-tier chain
-    # (3 intermediates + the product), so `per_chain` is 4 and the floor is 8 free reactors.
-    big = [{"character_id": i, "free_slots": 10} for i in (1, 2, 3)]
-    small = [{"character_id": i, "free_slots": 5} for i in (4, 5, 6, 7)]
-    ids = lambda hs: sorted(h["character_id"] for h in hs)
+    ids = lambda hs: [h["character_id"] for h in hs]
+    mk = lambda *fs: [{"character_id": i, "free_slots": f} for i, f in enumerate(fs)]
 
-    ok = check(ids(_lean_hosts(big + small, 4)) == [1, 2, 3],
-               "the 5-slot characters are dropped from a 4-tier chain — one job a stage is not a trip")
-    ok &= check(_MIN_JOBS_PER_TIER == 2, "the floor is two jobs a tier, not one")
+    ok = check(_WORTH_A_LOGIN == 0.20, "an extra character must cut the wait by a fifth")
 
-    # A shallower chain needs less room, so the same characters become worth involving again.
-    ok &= check(ids(_lean_hosts(big + small, 2)) == [1, 2, 3, 4, 5, 6, 7],
-                "on a 2-tier chain a 5-slot character clears the floor and keeps its share")
+    # The reported account: three 10-slot characters and four 5-slot ones. The 4th buys 5/35 = 14%.
+    real = mk(10, 10, 10, 5, 5, 5, 5)
+    keep = _lean_hosts(real)
+    ok &= check(ids(keep) == [0, 1, 2], "it stops at three characters on the reported account")
+    ok &= check(sum(h["free_slots"] for h in keep) == 30,
+                "which is 30 reactors — against the 33 the sprawl over seven was really using")
 
-    # Never strand an order: an account with nothing but small characters still gets to place it.
-    ok &= check(ids(_lean_hosts(small, 4)) == [4, 5, 6, 7],
-                "when NO character clears the floor every one is kept — spreading beats refusing")
-    ok &= check(_lean_hosts([], 4) == [], "no hosts stays no hosts")
+    # It scales itself, which is the point of a RELATIVE gain: a small order lands on one character
+    # because the second buys nothing, a big spread-out account still uses everyone.
+    ok &= check(ids(_lean_hosts(mk(10, 1))) == [0],
+                "a character worth 1 slot beside 10 buys 9% and is not worth the login")
+    ok &= check(ids(_lean_hosts(mk(10, 10, 10, 10))) == [0, 1, 2, 3],
+                "four equal characters all pull real weight, so all four are used")
+    # 5 equal hosts: the 5th buys exactly 5/25 = 20% and clears the bar, the 6th buys 16.7%.
+    ok &= check(ids(_lean_hosts(mk(5, 5, 5, 5, 5, 5, 5))) == [0, 1, 2, 3, 4],
+                "equal small characters keep going until the next one drops under a fifth")
 
-    # It trims the tail; it does not hunt for one character. The jobs are unchanged, so more
-    # reactors running them is still sooner finished.
-    ok &= check(len(_lean_hosts(big, 4)) == 3,
-                "every character that clears the floor is kept, not just the roomiest")
-    ok &= check(ids(_lean_hosts([{"character_id": 1, "free_slots": 8},
-                                 {"character_id": 2, "free_slots": 7}], 4)) == [1],
-                "the floor is exact — 8 clears a 4-tier chain, 7 does not")
+    # Order matters: hosts are ranked by room, so the first one under the bar ends it.
+    ok &= check(ids(_lean_hosts(mk(2, 10, 3, 9))) == [1, 3],
+                "hosts are taken roomiest-first regardless of the order they arrive in")
+
+    # Never strand an order, and never divide by zero.
+    ok &= check(ids(_lean_hosts(mk(4))) == [0], "one character is always kept — it has to go somewhere")
+    ok &= check(_lean_hosts([]) == [], "no hosts stays no hosts")
+    ok &= check(ids(_lean_hosts(mk(10, 0, 0))) == [0], "a character with no free reactor is never added")
+
+    # Packing also serves the "don't buy more formulas" rule: every host needs one formula of every
+    # tier, so fewer hosts is strictly fewer formulas required.
+    ok &= check(len(_lean_hosts(real)) < len(real),
+                "fewer hosts than the account has — so fewer formulas the order demands at once")
     return ok
 
 
@@ -552,7 +559,7 @@ def run_unit_tests() -> bool:
         test_resolve_reachable(),
         test_explode_shopping_list(),
         test_a_chain_spreads_over_the_slots_it_has(),
-        test_an_order_skips_characters_it_would_give_one_job(),
+        test_an_order_stops_at_the_character_that_is_not_worth_a_login(),
         test_a_reaction_can_be_marked_running_or_done_by_hand(),
         test_assigning_twice_does_not_book_it_twice(),
         test_explode_chain_tiers(),
