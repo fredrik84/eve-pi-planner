@@ -796,6 +796,31 @@ def test_the_leveller_consolidates_a_stray_host_off_the_plan() -> bool:
         con.close()
         ok &= check(len(s2) == 9 and all(r["runs"] == 111 for r in s2),
                     "the order's quoted top row is left exactly as it was")
+
+        # ...and NO character ends up holding more rows than it has reactors. Consolidating by
+        # freeing the stage budget instead put 8 stage-1 rows beside 3 stage-2 on a 10-reactor
+        # character — 11 rows on 10 reactors, which is the incident the cross-stage subtraction
+        # was added for in the first place. A row is a line in the plan whether or not it can be
+        # installed yet, and the plan has to fit the reactors.
+        con = get_connection()
+        per = [dict(r) for r in con.execute(
+            "SELECT c.character_name nm, COUNT(*) n FROM pp_reaction_assignments a "
+            "JOIN pp_characters c ON c.character_id=a.character_id "
+            "WHERE c.context_id=? GROUP BY c.character_name", (CTX,))]
+        con.close()
+        cap = {nm: slots for _cid, nm, slots in CH}
+        over = [(r["nm"], r["n"], cap[r["nm"]]) for r in per if r["n"] > cap[r["nm"]]]
+        ok &= check(not over, f"no character holds more rows than reactors (over: {over})")
+        # NOT a fixed row count: consolidating lets the pass re-split 21 jobs of 113 into 20 of
+        # 119, which is the same work in one fewer reactor. What must hold is that the work is
+        # still covered — a dropped row is silently under-producing the order.
+        con = get_connection()
+        s1 = con.execute("SELECT COALESCE(SUM(a.runs),0) t FROM pp_reaction_assignments a "
+                         "JOIN pp_characters c ON c.character_id=a.character_id "
+                         "WHERE c.context_id=? AND a.tier_order=0", (CTX,)).fetchone()["t"]
+        con.close()
+        ok &= check(s1 >= 21 * 113,
+                    f"the stage-1 work is still fully covered ({s1} runs vs 2373 needed)")
         return ok
     finally:
         (J._level_runs_on, J._tidy_runs_on, J._parallel_stages_on,

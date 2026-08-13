@@ -1512,20 +1512,18 @@ def level_product_runs(context_id: int) -> int:
         # of them, which is right under the one-slot model: a character's load is its busiest stage,
         # so growth in stage 0 and stage 1 does not add up — this stage may use whatever the
         # character's reactors are not already committed to by its OTHER stages.
-        # Under the one-slot model that is literally true, so nothing is subtracted: stage 2 runs in
-        # the reactor stage 1 frees, and charging both against the same pool made three 10-reactor
-        # characters read as full at 21 + 9 rows — which is how a packed plan grew a fourth host
-        # holding one job. Each stage may use the whole character. The invariant the original
-        # subtraction protected still holds by construction: no single stage is placed beyond
-        # `room`, and a stage is all that competes for reactors at once (`_concurrent_load`).
+        # Every planned row is a line in the plan the character has to hold, so a stage may only
+        # use what its OTHER stages have not already claimed. Removing this to free up placement
+        # room was a mistake: it let stage 1 grow to 8 rows beside stage 2's 3 on a 10-reactor
+        # character — 11 rows on 10 reactors, the very shape the subtraction was added for
+        # ("12 slots assigned to characters that only have 10").
         #
-        # With the flag OFF every planned row does hold a reactor, so the old cross-stage
-        # subtraction is exactly right and stays.
-        if peak_only:
-            budget = dict(room)
-        else:
-            budget = {cid: max(0, n - committed.get(cid, 0) - later.get(cid, 0))
-                      for cid, n in room.items()}
+        # It was never the thing blocking consolidation either. The stray host stayed because the
+        # overflow gate read "already holds a row" as justification, and because an order's
+        # protected top row was keyed per character rather than per order. With both fixed, 21
+        # stage-1 rows land 7/7/7 inside this budget with nothing left over.
+        budget = {cid: max(0, n - committed.get(cid, 0) - later.get(cid, 0))
+                  for cid, n in room.items()}
 
         # The shortest this stage can possibly run: all of its work, divided by every reactor it may
         # use. Nothing shorter is installable however the run counts are chosen, so it seeds the
