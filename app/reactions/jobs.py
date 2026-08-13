@@ -1440,6 +1440,9 @@ def level_product_runs(context_id: int) -> int:
         stages.setdefault(int(r["tier_order"] or 0), {}).setdefault(int(r["type_id"]), []).append(r)
 
     prefer_tidy = _tidy_runs_on(context_id)
+    # The characters this plan already occupies. They are a login you are making anyway, so their
+    # reactors cost nothing extra to use; anyone else has to be worth the trip (Step 5b).
+    involved = {int(r["character_id"]) for r in rows}
     rows_by_char_stage: dict[int, dict[int, int]] = {}
     for stage, by_product in stages.items():
         for rs in by_product.values():
@@ -1590,10 +1593,26 @@ def level_product_runs(context_id: int) -> int:
                     quota[cid] = take
                     room_left[cid] -= take
                     left -= take
+            # ...and only THEN somewhere new — held to the same "worth a login" test the order
+            # allocator uses (`_lean_hosts`). Without it these two passes disagreed by
+            # construction: the assign packed an order onto three characters, then this pass ran on
+            # the next dashboard load, saw a spare reactor on a fourth, and put a single job there.
+            # Reported as a plan that "suddenly swapped 3x7 slots to 3x7 + 1x1" while watching it.
+            #
+            # A character already in the plan is always a candidate — you are logging in to it
+            # regardless, so its reactors are free in the sense that matters. A character NOT in the
+            # plan has to earn the trip: it joins only if its room is worth `_WORTH_A_LOGIN` of what
+            # the plan can already reach. When the involved characters are full that share is 1.0
+            # and it joins immediately, which is the case where spreading is genuinely necessary.
+            reachable = sum(max(0, room_left.get(c, 0)) for c in involved)
             for cid in sorted(room_left, key=lambda c: (-room_left[c], c)):
                 if left <= 0:
                     break
-                take = min(max(0, room_left[cid]), left)
+                free = max(0, room_left.get(cid, 0))
+                if cid not in involved and (free <= 0
+                                            or free / float(reachable + free) < _WORTH_A_LOGIN):
+                    continue
+                take = min(free, left)
                 if take:
                     quota[cid] = quota.get(cid, 0) + take
                     room_left[cid] -= take

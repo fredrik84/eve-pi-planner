@@ -364,6 +364,18 @@ second buys nothing, a large one still spreads because every host pulls real wei
 formula of every tier for itself (`formula_concurrency_caps`); fewer hosts is strictly fewer
 formulas the order demands at once.
 
+**The LEVELLER has to obey this too, or the two passes undo each other.** `_lean_hosts` lived only
+in `_allocate_and_insert`, so an order was packed onto three characters at assign time and then
+`level_product_runs` — which re-splits the whole plan on every dashboard load — saw a spare reactor
+on a fourth and put a single job there. Reported while watching the page: *"it did right... but when
+I was looking at it suddenly swapped the 3x7 slots to 3x7 slots + 1x1 slot."*
+
+Step 5b now applies the same test when it places overflow: a character **already in the plan** is a
+login you are making anyway, so its reactors cost nothing extra; a character outside it joins only
+if its room is worth `_WORTH_A_LOGIN` of what the plan can already reach. When the involved
+characters are full that share is 1.0 and it joins immediately — which is the case where spreading
+is genuinely necessary rather than merely available.
+
 **Two earlier attempts are recorded because both looked right and did nothing.** The first packed
 hosts until their free slots covered `_useful_slots` — the theoretical most an order could ever use,
 `sum(runs per tier)`, in the thousands for any real order — so every host always cleared it and the

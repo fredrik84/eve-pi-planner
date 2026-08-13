@@ -656,6 +656,39 @@ def test_the_cadence_reaches_an_orders_own_top_row() -> bool:
         con.commit(); con.close()
 
 
+def test_the_leveller_does_not_reach_for_a_character_the_assign_left_out() -> bool:
+    """Reported while watching the page: *"it did right... but when I was looking at it suddenly
+    swapped the 3x 7 slots to 3x7 slots + 1x1 slot."*
+
+    The two passes disagreed by construction. `_allocate_and_insert` packs an order onto the fewest
+    characters worth a login (`_lean_hosts`); `level_product_runs` re-splits the whole plan on EVERY
+    dashboard load and placed jobs against slot room alone, so it saw a spare reactor on a fourth
+    character and put a single job there. Same rule on both sides now: a character already in the
+    plan is a login you are making anyway, and anyone else has to earn the trip."""
+    from app.reactions.jobs import _WORTH_A_LOGIN
+
+    # The placement rule, stated the way Step 5b applies it.
+    def joins(free: int, reachable: int) -> bool:
+        return free > 0 and free / float(reachable + free) >= _WORTH_A_LOGIN
+
+    ok = check(not joins(1, 12),
+               "a 4th character with 1 reactor does not join 3 that still have 12 between them")
+    ok &= check(not joins(5, 30), "nor 5 reactors against the reported account's 30")
+    ok &= check(joins(5, 0),
+                "but when the characters in the plan are FULL, a new one joins at once")
+    ok &= check(joins(10, 20), "and a character carrying real weight is always worth the trip")
+    ok &= check(not joins(0, 5), "a character with no free reactor is never added")
+
+    # The threshold is the same number the order allocator uses — one rule, not two that drift.
+    import app.reactions.jobs as _J
+    hosts = [{"character_id": 1, "free_slots": 10}, {"character_id": 2, "free_slots": 10},
+             {"character_id": 3, "free_slots": 10}, {"character_id": 4, "free_slots": 5}]
+    kept = {h["character_id"] for h in _J._lean_hosts(hosts)}
+    ok &= check(kept == {1, 2, 3},
+                "the assign path drops the same 4th character the leveller now refuses to add")
+    return ok
+
+
 def test_a_reaction_can_be_marked_running_or_done_by_hand() -> bool:
     """ESI is the signal for what is running and what has landed, and it is right nearly always —
     but the job cache is up to five minutes stale, a job installed under a different product than
@@ -827,6 +860,7 @@ def run_unit_tests() -> bool:
         test_a_stage_settles_on_one_run_count_across_its_products(),
         test_a_cadence_ceiling_holds_every_job_inside_the_week(),
         test_the_leveller_never_plans_more_jobs_than_formulas_owned(),
+        test_the_leveller_does_not_reach_for_a_character_the_assign_left_out(),
         test_the_cadence_ceiling_is_measured_in_real_time_not_sde_time(),
         test_the_cadence_reaches_an_orders_own_top_row(),
         test_a_reaction_can_be_marked_running_or_done_by_hand(),
