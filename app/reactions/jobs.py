@@ -947,7 +947,7 @@ def _cadence_drift(hours: float) -> int:
 
 
 
-def _reaction_time_mult(context_id: int) -> float:
+def _reaction_time_mult(context_id: int, _derive: bool = True) -> float:
     """What a reaction job REALLY takes, as a fraction of its SDE cycle time — MEASURED.
 
     `_reaction_cycle_times` returns the raw SDE number and says, correctly, that the bonus is not
@@ -1022,14 +1022,9 @@ def _reaction_time_mult(context_id: int) -> float:
     # is wired, skills alone: it under-claims, which makes jobs look longer, which allows fewer runs
     # and lands INSIDE the window. Too many short jobs is a bad suggestion; a job that overruns the
     # cadence is a broken promise.
-    try:
-        from app.industry.graph import account_industry_time_mults
-        rx = account_industry_time_mults(context_id)[1]
-        if rx and 0 < float(rx) <= 1.0:
-            return float(rx)
-    except Exception:
-        pass
-    return 1.0
+    if not _derive:
+        return 0.0                  # caller wants measurement only, and there is none
+    return _reaction_skill_mult(context_id)
 
 
 def _remembered_time_mult(context_id: int) -> float:
@@ -1065,6 +1060,80 @@ def _remember_time_mult(context_id: int, mult: float) -> None:
             con.close()
     except Exception:
         pass
+
+
+
+def _routed_reaction_time_mult(context_id: int, type_id: int) -> float:
+    """The structure time multiplier a job making `type_id` would ACTUALLY get, 0.0 if unknowable.
+
+    This is the piece that makes a first suggestion right. A brand new account has never run a
+    reaction, so there is nothing to measure — and *"if they start jobs from the suggestion it'll be
+    either wrong, or they have done all the work manually."*
+
+    Two cruder sources were tried and both over-claimed, in the direction that overruns the cadence:
+    `struct_time_pct` is the MANUFACTURING facility's number (62% where reactions get 44.9%), and
+    `build_structures()[].rx_bonus.te` is the structure's BEST case over any rig it carries (67% on
+    a Tatara whose Carbon Fiber jobs get 44.9%) — that one would have allowed 199-run jobs, 11.6
+    real days against a 7-day ceiling.
+
+    `route_job` is the answer the rest of the app already uses to cost and time a job: it resolves
+    the rig bonus against the PRODUCED TYPE'S GROUP (`bonus_for` → `covers`), so a Composite rig
+    does nothing for a job it does not cover. Same call, same sites, same product — so this cannot
+    disagree with what the planner elsewhere says the job will take.
+    """
+    try:
+        from app.markets import build_structures
+        from app.industry.structures import BuildSite, route_job
+        con = get_connection()
+        try:
+            g = con.execute("SELECT group_id FROM types WHERE type_id=?", (int(type_id),)).fetchone()
+        finally:
+            con.close()
+        gid = int(g["group_id"]) if g and g["group_id"] is not None else None
+        sites = []
+        for st in (build_structures(context_id) or []):
+            if st.get("kind") != "structure" or not st.get("build_rx"):
+                continue
+            sites.append(BuildSite(
+                key=f"s:{st.get('id')}", name=st.get("name") or "", activity="reaction",
+                hull=st.get("hull"), security=st.get("security"),
+                me_rig=int(st.get("rx_me_rig") or 0), te_rig=int(st.get("rx_te_rig") or 0),
+                me_families=tuple(st.get("rx_me_rig_groups") or ()),
+                te_families=tuple(st.get("rx_te_rig_groups") or ()),
+                system_id=st.get("system_id")))
+        if not sites:
+            return 0.0
+        pick = route_job(sites, gid)
+        tm = float((pick or {}).get("time_mult") or 0.0)
+        return tm if 0.0 < tm <= 1.0 else 0.0
+    except Exception:
+        return 0.0
+
+
+def reaction_time_mult_for(context_id: int, type_id: int | None = None) -> float:
+    """The time multiplier for ONE product: measured if we have ever seen a job, otherwise routed.
+
+    Measurement still wins — it is the only source that cannot be wrong about the structure the
+    player really reacts in. Routing is what answers the account that has not reacted yet, and it
+    is per PRODUCT because the rig bonus is.
+    """
+    measured = _reaction_time_mult(context_id, _derive=False)
+    if measured:
+        return measured
+    routed = _routed_reaction_time_mult(context_id, type_id) if type_id else 0.0
+    skills = _reaction_skill_mult(context_id)
+    return max(0.01, min(1.0, skills * routed)) if routed else skills
+
+
+def _reaction_skill_mult(context_id: int) -> float:
+    try:
+        from app.industry.graph import account_industry_time_mults
+        rx = account_industry_time_mults(context_id)[1]
+        if rx and 0 < float(rx) <= 1.0:
+            return float(rx)
+    except Exception:
+        pass
+    return 1.0
 
 
 def _reaction_cadence_hours(context_id: int) -> float:
@@ -1450,7 +1519,13 @@ def level_product_runs(context_id: int) -> int:
                     # ONE pooled requirement per product: the account needs this many runs of it,
                     # and any reactor with room can make them.
                     total = sum(int(r["runs"] or 0) for r in rs_all)
-                    max_runs = int(stage_cap_hours / cyc) if cyc > 0 else total
+                    # Per PRODUCT, because the structure's rig bonus is: a Composite rig does
+                    # nothing for a job it does not cover, so one account-wide number would be
+                    # wrong for every product outside the rig's families. `stage_cap_hours` is
+                    # already `cadence / account mult`; re-scale it by this product's own.
+                    _pm = reaction_time_mult_for(context_id, tid) if cadence_h else 0.0
+                    _cap_h = (cadence_h / _pm) if (_pm and cadence_h) else stage_cap_hours
+                    max_runs = int(_cap_h / cyc) if cyc > 0 else total
                     # The counts that would land this product on a duration the rest of the stage
                     # is considering — see `_level_options`' `extra`.
                     extra = [max(1, int(h / cyc)) for h in extra_hours if cyc > 0]

@@ -652,7 +652,26 @@ now it did 65 runs per"*, which is `168 / 0.85 / 3.00`, the skills fallback. The
 measurement is persisted (`pp_industry_settings.reaction_time_mult`) and reused until a newer one
 replaces it, so an idle account still plans at the rate it actually reacts at.
 
-With nothing ever measured it falls back to the skills multiplier alone, which under-claims the bonus on
+**A first suggestion is right without ever having reacted (`route_job`).** Measurement cannot help
+a new account — *"if they start jobs from the suggestion it'll be either wrong, or they have done all
+the work manually"* — so with nothing measured the bonus is ROUTED:
+`reaction_time_mult_for(context_id, type_id)` asks `structures.route_job` the same question the rest
+of the app asks when it costs and times a job, and takes its `time_mult`. Per PRODUCT, because
+`bonus_for` resolves the rig against the produced type's group — a Composite rig does nothing for a
+job it does not cover, so one account-wide number would be wrong for everything outside the rig's
+families.
+
+That distinction is the whole reason the two earlier attempts failed, both by over-claiming:
+`struct_time_pct` is the MANUFACTURING facility's (62% where reactions get 44.9%), and
+`rx_bonus.te` is the structure's best case over any rig it carries (67% on a Tatara whose Carbon
+Fiber jobs get 44.9%) — that one would have allowed 199-run jobs, 11.6 real days against a 7-day
+ceiling. Routing cannot drift that way because it is the same call, the same sites and the same
+product the planner already uses.
+
+Measurement still wins where it exists: it is the only source that cannot be wrong about the
+structure the player really reacts in. Routing answers the account that has not reacted yet.
+
+With no structures configured either, it falls back to the skills multiplier alone, which under-claims the bonus on
 purpose: a smaller claimed bonus means a bigger apparent job, fewer runs allowed, and a job that
 lands inside the ceiling. Over-claiming is the direction that breaks the promise the cadence makes.
 
