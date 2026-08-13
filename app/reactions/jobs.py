@@ -1299,6 +1299,10 @@ def level_product_runs(context_id: int) -> int:
         # started from the asked-for length and stepped one run at a time, which never got from
         # "5 days" to what the reactors could do.
         stage_room = max(1, sum(budget.values()))
+        # Unknown stays unknown: a product with no evidence caps nothing, the same rule every other
+        # consumer of this follows. Read once per stage rather than per product — it is memoised,
+        # but the intent is that one plan sees one answer.
+        fcaps = {t: c for t, c in (formula_concurrency_caps(context_id) or {}).items() if c}
         stage_work = sum(sum(int(r["runs"] or 0) for r in rs) * cycles.get(tid, 1.0)
                          for tid, rs in by_product.items())
         d_floor = stage_work / stage_room
@@ -1327,7 +1331,15 @@ def level_product_runs(context_id: int) -> int:
                         "cycle": cyc, "total": total,
                         # Wide here on purpose: what a run count really costs is judged across the
                         # whole stage (`_stage_affordable`), not against this one product's needs.
-                        "options": _level_options(total, stage_room, max_runs,
+                        # A formula is a physical item locked in the reactor while a job runs on
+                        # it, so a product can never hold more parallel jobs than there are
+                        # formulas of it. The assign paths have always applied this
+                        # (`formula_concurrency_caps`); THIS pass never asked, and it re-splits the
+                        # work on every dashboard load — which is how a plan came back asking for 21
+                        # jobs of Carbon Fiber against 20 formulas. A tighter cadence makes it bite
+                        # harder, because a shorter job means more of them.
+                        "options": _level_options(total, min(stage_room, fcaps.get(tid, stage_room)),
+                                                  max_runs,
                                                   budget=_STAGE_SCAN_BUDGET,
                                                   min_runs=floor_runs.get(tid, 0), extra=extra),
                     }

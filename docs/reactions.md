@@ -22,6 +22,7 @@ Find a section: `grep -n '^## ' docs/reactions.md` and read from that line — t
 - **An order stops at the character not worth a login (`reactions_pack_hosts`)** — the marginal-gain rule, why it needs no cadence, and two earlier attempts that did nothing
 - **One run count per product per stage (`level_stage_runs`)** — why levelling across assigns is sound, and what it deliberately doesn't touch
 - **One run count per product, across every character (`reactions_level_runs`)** — the cross-character leveller: how the number is chosen, why it also saves slots, and the one thing it still can't merge
+- **The leveller has to respect the formula cap too** — why a re-split could ask for a job you cannot install
 - **One run count for a whole STAGE, not just per product (`reactions_level_runs`)** — why matching durations was not enough, and why a shared count has to be a candidate
 - **Run counts you can type (`reactions_tidy_runs`)** — bounded rounding of intermediate runs, and why the end product is never rounded
 - **A stage is a DEPTH, not a position in a list** — why siblings share a stage, and how existing rows were repaired
@@ -550,6 +551,24 @@ steps run **one at a time**: each assign has to see the slots the one before it 
 them together let two suggestions claim the same free reactor. A refused step keeps its server
 reason on screen and the rest still run; a `critical` step (deleting the row an edit replaces)
 stops the ones after it instead.
+
+## The leveller has to respect the formula cap too (2026-08-13)
+
+Reported: *"it also suggested to do 21 slots of Carbon Fiber... but I only have 20 formulas"* — and
+21 Thermosetting Polymer against 20 of those.
+
+Every ASSIGN path applied `formula_concurrency_caps` — the wizard bin-pack, the manual assign, the
+customer-order allocation, the quoted estimate. **`level_product_runs` did not**, and it re-splits
+the whole plan on every dashboard load against the SLOTS a character has. So a plan that was legal
+the moment it was placed came back, minutes later, asking for a job the account physically cannot
+install. The cap now bounds the per-product job count in the stage solve
+(`min(stage_room, fcaps[tid])`), and unknown still caps nothing — the same rule every other consumer
+of that evidence follows.
+
+**A tighter cadence makes it bite harder, which is how it surfaced.** A 7-day ceiling at 3 h/run
+caps a job at 56 runs, so 1045 runs of Carbon Fiber needs 19-21 jobs instead of 10 — and a product
+that used to sit comfortably under its formula count now runs straight past it. The bug predates the
+cadence; the cadence is what made it reachable.
 
 ## One run count for a whole STAGE, not just per product (`reactions_level_runs`)
 

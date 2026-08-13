@@ -497,6 +497,37 @@ def test_a_cadence_ceiling_holds_every_job_inside_the_week() -> bool:
     return ok
 
 
+def test_the_leveller_never_plans_more_jobs_than_formulas_owned() -> bool:
+    """Reported: *"it also suggested to do 21 slots of Carbon Fiber... but I only have 20 formulas"*
+    — and 21 Thermosetting Polymer against 20 of those.
+
+    A formula is a physical item locked into the reactor for the job's duration, so a product can
+    never hold more parallel jobs than there are formulas of it. Every ASSIGN path applied that
+    (`formula_concurrency_caps`); `level_product_runs` never asked, and it re-splits the whole plan
+    on every dashboard load — so a plan that was legal when placed came back asking for a job the
+    account cannot install. A tighter cadence makes it bite harder: a shorter job means more of
+    them."""
+    from app.reactions.jobs import _level_options
+
+    # Carbon Fiber's real shape: 1045 runs, room for 21 jobs, a 7-day ceiling at 3 h/run = 56 runs.
+    room, formulas, max_runs = 21, 20, 56
+    loose = _level_options(1045, cap=room, max_runs=max_runs)
+    ok = check(max(o["jobs"] for o in loose) == 21,
+               "against slots alone the pass would offer 21 jobs — the reported bug")
+
+    capped = _level_options(1045, cap=min(room, formulas), max_runs=max_runs)
+    ok &= check(max(o["jobs"] for o in capped) <= formulas,
+                "held to the formulas owned, it never offers more than 20")
+    ok &= check(all(o["jobs"] * o["runs"] >= 1045 for o in capped),
+                "and every count it does offer still covers the requirement")
+
+    # Unknown stays unknown — no evidence about a formula must never refuse real work.
+    unknown = _level_options(1045, cap=room, max_runs=max_runs)
+    ok &= check(max(o["jobs"] for o in unknown) == room,
+                "a product with no formula evidence is capped by slots alone, as before")
+    return ok
+
+
 def test_a_reaction_can_be_marked_running_or_done_by_hand() -> bool:
     """ESI is the signal for what is running and what has landed, and it is right nearly always —
     but the job cache is up to five minutes stale, a job installed under a different product than
@@ -667,6 +698,7 @@ def run_unit_tests() -> bool:
         test_an_order_stops_at_the_character_that_is_not_worth_a_login(),
         test_a_stage_settles_on_one_run_count_across_its_products(),
         test_a_cadence_ceiling_holds_every_job_inside_the_week(),
+        test_the_leveller_never_plans_more_jobs_than_formulas_owned(),
         test_a_reaction_can_be_marked_running_or_done_by_hand(),
         test_assigning_twice_does_not_book_it_twice(),
         test_explode_chain_tiers(),
