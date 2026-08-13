@@ -595,6 +595,29 @@ reported stage it cannot: Thermosetting Polymer needs 1100 runs over 10 jobs, `c
 exactly 110, and 109 × 10 = 1090 does not cover it — so landing under 7 days there costs an
 eleventh job. A reactor is worth more than 18 minutes of drift.
 
+**The cadence is a real ceiling, and it is the setting you already had.** Reported: *"I'd prefer to
+be able to schedule my jobs on a Saturday and handle the next stage a week later on a Saturday."*
+`max_reaction_job_days` (Build rules → "Longest reaction job", behind `industry_job_length_policy`)
+has existed since the Industry scheduler shipped and the Industry side reads it — **the Reactions
+stage solve never did.** It capped a stage at `stage_cap_hours`, the longest job the plan happened
+to already run, which is why a Reactions plan could quote a fortnight on one reactor with the
+ceiling sitting right there unused.
+
+`_reaction_cadence_hours` now feeds that cap, so `_level_options` drops any run count above it. It
+is HARD, not advisory: a stage that cannot fit the window at its leanest layout is split finer until
+it does. On the reported stage at 1.53 h/run:
+
+| cadence | layout | longest job | jobs |
+| --- | --- | --- | --- |
+| none / 14d | 110 / 110 / 100 | 7.01 d | 21 |
+| **7 d** | **105 / 100 / 100** | **6.69 d** | **22** |
+| 3.5 d | 53 / 53 / 50 | 3.38 d | 43 |
+
+Fitting the week costs one extra reactor here, and a half-week cadence costs twenty-one. That is the
+trade, and it is the right way round: **a cadence you cannot rely on is not a cadence.** Unset means
+0, which is the old behaviour exactly — a plan built before anyone chose a cadence must not be
+resized by one.
+
 **What it costs, stated plainly: time.** 110 runs is a longer job than 95, so the stage lands about
 two days later on a twelve-day order. That is the stated priority order — *"I want it to be easy"*
 above *"I want to be time efficient"* — and it is the trade being made, not a free win.

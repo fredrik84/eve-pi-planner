@@ -945,6 +945,28 @@ def _cadence_drift(hours: float) -> int:
 
 
 
+
+def _reaction_cadence_hours(context_id: int) -> float:
+    """The longest one reaction job may run, in hours — 0 when the account has set no cadence.
+
+    One setting, shared with the Industry scheduler (`max_reaction_job_days`, Build rules →
+    "Longest reaction job"), rather than a second Reactions-owned number meaning almost the same
+    thing. Industry has read it since it existed; this side did not, which is why a Reactions plan
+    could quote a fortnight on one reactor while the ceiling sat right there unused.
+
+    Behind the same flag Industry gates it with, and 0 when unset — a plan built before anyone chose
+    a cadence must not be resized by one.
+    """
+    try:
+        from app.features import feature_enabled_for
+        if not feature_enabled_for("industry_job_length_policy", context_id):
+            return 0.0
+        from app.industry.settings import get_max_reaction_job_days
+        return max(0.0, float(get_max_reaction_job_days(context_id) or 0.0)) * 24.0
+    except Exception:
+        return 0.0
+
+
 def _seed_cadence_counts(products: dict, keys: list) -> dict:
     """Offer, alongside each candidate, the largest run count that costs the SAME jobs and still
     lands under a whole-day boundary.
@@ -1249,7 +1271,17 @@ def level_product_runs(context_id: int) -> int:
         # A stage may be stretched to land together but never past the job that is already the
         # longest in it — levelling then makes a plan tidier and shorter, never slower, which is the
         # only safe thing to do with a number nobody chose.
-        stage_cap_hours = max(
+        # The window every job in this stage has to land inside. The account's cadence when it has
+        # set one — *"I'd prefer to be able to schedule my jobs on a Saturday and handle the next
+        # stage a week later on a Saturday"* — and otherwise whatever the plan already runs, which
+        # is the old behaviour and keeps a plan built before this existed from being resized by a
+        # number nobody chose.
+        #
+        # It is a HARD ceiling: `_level_options` drops any run count above it, so a stage that
+        # cannot fit the week at the leanest layout is split finer until it does. That costs
+        # reactors, and it is the point — a cadence you cannot rely on is not a cadence.
+        cadence_h = _reaction_cadence_hours(context_id)
+        stage_cap_hours = cadence_h or max(
             (int(r["runs"] or 0) * cycles.get(int(r["type_id"]), 1.0)
              for rs in by_product.values() for r in rs),
             default=0.0)

@@ -459,6 +459,44 @@ def test_a_stage_settles_on_one_run_count_across_its_products() -> bool:
     return ok
 
 
+def test_a_cadence_ceiling_holds_every_job_inside_the_week() -> bool:
+    """Reported: *"I'd prefer to be able to schedule my jobs on a Saturday and handle the next stage
+    a week later on a Saturday when I have time to play."*
+
+    The setting already existed — `max_reaction_job_days`, Build rules → "Longest reaction job" —
+    and the Industry scheduler had read it since it shipped. The Reactions stage solve never did,
+    so it capped a stage at whatever the plan happened to already run. It is a HARD ceiling: a
+    stage that cannot fit the window at its leanest layout is split finer until it does, because a
+    cadence you cannot rely on is not a cadence."""
+    from app.reactions.jobs import _choose_stage_layout, _level_options
+
+    CYC = 1.53      # hours per run after structure + skill bonuses
+    def stage(cap_hours):
+        out = {}
+        for k, total in (("Carbon Fiber", 1045), ("Thermosetting Polymer", 1100),
+                         ("Oxy-Organic Solvents", 100)):
+            out[k] = {"cycle": CYC, "total": total,
+                      "options": _level_options(total, cap=30, max_runs=int(cap_hours / CYC))}
+        return out
+
+    ok = True
+    for days in (14, 7, 3.5):
+        pick = _choose_stage_layout(stage(days * 24), prefer_tidy=True)
+        longest = max(o["runs"] * CYC for o in pick.values()) / 24.0
+        ok &= check(longest <= days + 1e-6,
+                    f"at a {days}-day cadence no job runs longer ({longest:.2f} d)")
+        ok &= check(all(o["jobs"] * o["runs"] >= stage(days * 24)[k]["total"]
+                        for k, o in pick.items()),
+                    f"...and the {days}-day layout still covers every requirement")
+
+    # Tighter cadence, more jobs — that is the trade being made, and it should be visible.
+    wide = _choose_stage_layout(stage(14 * 24), prefer_tidy=True)
+    tight = _choose_stage_layout(stage(3.5 * 24), prefer_tidy=True)
+    ok &= check(sum(o["jobs"] for o in tight.values()) > sum(o["jobs"] for o in wide.values()),
+                "a tighter cadence costs reactors — the ceiling is real, not advisory")
+    return ok
+
+
 def test_a_reaction_can_be_marked_running_or_done_by_hand() -> bool:
     """ESI is the signal for what is running and what has landed, and it is right nearly always —
     but the job cache is up to five minutes stale, a job installed under a different product than
@@ -628,6 +666,7 @@ def run_unit_tests() -> bool:
         test_a_chain_spreads_over_the_slots_it_has(),
         test_an_order_stops_at_the_character_that_is_not_worth_a_login(),
         test_a_stage_settles_on_one_run_count_across_its_products(),
+        test_a_cadence_ceiling_holds_every_job_inside_the_week(),
         test_a_reaction_can_be_marked_running_or_done_by_hand(),
         test_assigning_twice_does_not_book_it_twice(),
         test_explode_chain_tiers(),
