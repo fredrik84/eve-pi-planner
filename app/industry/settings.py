@@ -46,6 +46,11 @@ def ensure_industry_settings_table():
         """)
         # Added after the table shipped; additive ALTER is this codebase's migration convention.
         add_columns(con, "pp_industry_settings", "margin_pct REAL",
+                    # The reaction time multiplier last MEASURED off this account's real ESI jobs
+                    # (`_reaction_time_mult`). Remembered rather than recomputed because reactors
+                    # are idle exactly when a re-plan happens, and measuring only from live jobs
+                    # made the cadence ceiling flip between 119 and 65 runs a job.
+                    "reaction_time_mult REAL",
                     # The account's "always buy these" list, a JSON id array. Stored here rather
                     # than per order because it's a standing way of operating, not a decision about
                     # one build — an order overrides it with force_build_ids.

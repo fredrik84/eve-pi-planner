@@ -996,7 +996,16 @@ def _reaction_time_mult(context_id: int) -> float:
         mults = []
     if mults:
         mults.sort()
-        return mults[len(mults) // 2]
+        measured = mults[len(mults) // 2]
+        _remember_time_mult(context_id, measured)
+        return measured
+    # Nothing running RIGHT NOW is the normal state between cycles, not an absence of evidence —
+    # reactors are idle exactly when the player is about to re-plan, which is when this is asked.
+    # Measuring only from live jobs made the ceiling flip between 119 and 65 runs depending on
+    # whether anything happened to be cooking, so the last real measurement is kept and reused.
+    remembered = _remembered_time_mult(context_id)
+    if remembered:
+        return remembered
     try:
         from app.industry.graph import account_industry_time_mults
         rx = account_industry_time_mults(context_id)[1]
@@ -1005,6 +1014,41 @@ def _reaction_time_mult(context_id: int) -> float:
     except Exception:
         pass
     return 1.0
+
+
+def _remembered_time_mult(context_id: int) -> float:
+    """The last measured reaction time multiplier for this account, or 0.0 if never measured."""
+    try:
+        from app.industry.settings import ensure_industry_settings_table
+        ensure_industry_settings_table()
+        con = get_connection()
+        try:
+            r = con.execute("SELECT reaction_time_mult FROM pp_industry_settings WHERE context_id=?",
+                            (context_id,)).fetchone()
+        finally:
+            con.close()
+        v = float((r and r["reaction_time_mult"]) or 0.0)
+        return v if 0.01 <= v <= 1.0 else 0.0
+    except Exception:
+        return 0.0
+
+
+def _remember_time_mult(context_id: int, mult: float) -> None:
+    """Persist a measurement so an idle account keeps planning to the rate it really reacts at."""
+    try:
+        from app.industry.settings import ensure_industry_settings_table
+        ensure_industry_settings_table()
+        con = get_connection()
+        try:
+            con.execute(
+                "INSERT INTO pp_industry_settings (context_id, reaction_time_mult) VALUES (?,?) "
+                "ON CONFLICT(context_id) DO UPDATE SET reaction_time_mult=excluded.reaction_time_mult",
+                (context_id, float(mult)))
+            con.commit()
+        finally:
+            con.close()
+    except Exception:
+        pass
 
 
 def _reaction_cadence_hours(context_id: int) -> float:

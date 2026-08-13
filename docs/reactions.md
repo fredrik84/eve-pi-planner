@@ -645,7 +645,14 @@ player's hand measurement to four decimals. Deriving it was tried first and is w
 structure (44.9%), which would have allowed 173-run jobs — **10 real days against a 7-day ceiling.**
 A measurement cannot drift away from the structure the player actually reacts in.
 
-With nothing observed it falls back to the skills multiplier alone, which under-claims the bonus on
+**And the measurement is REMEMBERED, which the first cut got wrong.** Reactors are idle exactly when
+a player re-plans, so reading only live jobs meant the ceiling flipped between 119 and 65 runs a job
+depending on whether anything happened to be cooking — reported as *"I set the cadence to 7 days and
+now it did 65 runs per"*, which is `168 / 0.85 / 3.00`, the skills fallback. The last real
+measurement is persisted (`pp_industry_settings.reaction_time_mult`) and reused until a newer one
+replaces it, so an idle account still plans at the rate it actually reacts at.
+
+With nothing ever measured it falls back to the skills multiplier alone, which under-claims the bonus on
 purpose: a smaller claimed bonus means a bigger apparent job, fewer runs allowed, and a job that
 lands inside the ceiling. Over-claiming is the direction that breaks the promise the cadence makes.
 

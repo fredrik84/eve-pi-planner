@@ -559,6 +559,20 @@ def test_the_cadence_ceiling_is_measured_in_real_time_not_sde_time() -> bool:
     # The day-boundary preference has to measure REAL time too, or it lands on the wrong boundary.
     ok &= check(_cadence_drift(119 * RAW * MULT) == 0,
                 "a 119-run job scores as landing under a whole day in REAL hours")
+    # An idle account must keep the rate it measured. Reactors are idle exactly when a re-plan
+    # happens, so measuring only from LIVE jobs made the ceiling flip 119 <-> 65 between cycles.
+    import app.reactions.jobs as _J
+    CTX = 777051
+    _J._remember_time_mult(CTX, 0.4680)
+    ok &= check(abs(_J._reaction_time_mult(CTX) - 0.4680) < 1e-6,
+                "a measured rate is remembered and used with nothing running")
+    ok &= check(int((CAD / _J._reaction_time_mult(CTX)) / RAW) == 119,
+                "so an idle account still gets the 119-run ceiling, not the 65-run fallback")
+    from app.db import get_connection as _gc
+    _c = _gc(); _c.execute("UPDATE pp_industry_settings SET reaction_time_mult=NULL WHERE context_id=?", (CTX,)); _c.commit(); _c.close()
+    ok &= check(_J._reaction_time_mult(CTX) < 1.0,
+                "and with no measurement ever taken it falls back rather than guessing 1.0")
+
     # ...and the two measurements genuinely disagree — a run count that lands under a boundary in
     # real hours frequently does not in SDE hours, which is a different job being preferred.
     disagree = [r for r in range(20, 200)
