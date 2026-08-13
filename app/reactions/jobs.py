@@ -1006,6 +1006,22 @@ def _reaction_time_mult(context_id: int) -> float:
     remembered = _remembered_time_mult(context_id)
     if remembered:
         return remembered
+    # Never measured, and nothing remembered — a brand new account, which is the case that matters
+    # most: *"I want it to be good in the first suggestion for a user, not when they've started some
+    # jobs... if they start jobs from the suggestion it'll be either wrong, or they have done all
+    # the work manually."* That is right, and this fallback does NOT yet answer it.
+    #
+    # Deriving the structure bonus was tried TWICE and over-claimed both times, which is the
+    # direction that breaks the cadence's promise:
+    #   * `struct_time_pct` is the MANUFACTURING facility's number — 62% where reactions get 44.9%.
+    #   * `build_structures()[].rx_bonus.te` is the structure's BEST case, "what it gives a job its
+    #     rigs actually cover" (app/markets.py) — 67% on a Tatara whose Carbon Fiber jobs get 44.9%.
+    #     It would have allowed 199-run jobs: 11.6 real days against a 7-day ceiling.
+    # The honest source is `app.industry.structures.route_job`, resolved per PRODUCT against the
+    # produced type's rig group, the same way the rest of the app already prices a job. Until that
+    # is wired, skills alone: it under-claims, which makes jobs look longer, which allows fewer runs
+    # and lands INSIDE the window. Too many short jobs is a bad suggestion; a job that overruns the
+    # cadence is a broken promise.
     try:
         from app.industry.graph import account_industry_time_mults
         rx = account_industry_time_mults(context_id)[1]
