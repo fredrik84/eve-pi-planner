@@ -696,8 +696,13 @@ def test_the_leveller_does_not_reach_for_a_character_the_assign_left_out() -> bo
     # reactor stage 1 frees. Charging both against one pool made three 10-reactor characters read
     # as full at 21 + 9 rows, which is what pushed a 21st job onto a fourth host.
     room, s1, s2 = 10, 21, 9
-    ok &= check(s1 + s2 > room * 3, "21 + 9 rows does NOT fit three characters if stages add up")
-    ok &= check(max(s1, s2) <= room * 3, "...and comfortably does if only the busiest stage counts")
+    ok &= check(s1 + s2 == room * 3,
+                "21 + 9 rows fills three 10-reactor characters EXACTLY — zero slack, which is why "
+                "one job had nowhere to land")
+    ok &= check(room - (s2 // 3) == 7 and 7 * 3 == s1,
+                "charging stage 2 first left stage 1 exactly 7 each, so any uneven split spills")
+    ok &= check(max(s1, s2) <= room * 3 and room * 3 - s1 == 9,
+                "counting only the busiest stage leaves 9 reactors spare, so it cannot spill")
     ok &= check(s1 <= room * 3 and s2 <= room * 3,
                 "the invariant the old subtraction protected still holds: no STAGE exceeds the room")
 
