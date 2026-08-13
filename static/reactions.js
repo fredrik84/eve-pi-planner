@@ -478,6 +478,19 @@ function _rxMarkOfGroup(characterId, typeId, tier) {
   return rows.length ? _rxMarkOf(rows) : 'none';
 }
 
+// "95 runs × 3 jobs" — the number you TYPE, and how many times you type it. Never the group total:
+// "×285  3 jobs" reads as three jobs of 285 runs, i.e. three times the work really being asked for.
+// A group whose jobs are not all the same size says so rather than averaging them away.
+function _rxPerJobLabel(rows) {
+  if (!rows.length) return '';
+  const bySize = new Map();
+  rows.forEach(r => bySize.set(r.runs, (bySize.get(r.runs) || 0) + 1));
+  const parts = [...bySize.entries()].sort((a, b) => b[0] - a[0])
+    .map(([runs, n]) => `${runs.toLocaleString()}\u00a0×\u00a0${n}`);
+  const jobs = rows.length;
+  return `${parts.join(' + ')}\u00a0job${jobs === 1 ? '' : 's'}`;
+}
+
 // The stage list drawn the way Manufacturing draws its build pipeline: columns are stages, rows
 // are the characters holding work, a cell is what that character installs at that stage. The grid,
 // the cards and the classes are Manufacturing's own (`_indPipelineHtml`, `.ind-pipe*`) rather than
@@ -548,16 +561,20 @@ function _rxPipelineHtml(todoRows, readyStages) {
         const nextTip = mark === 'done' ? ' Click to set it back to not started.'
           : mark === 'running' ? ' Click when it has finished.'
           : ' Click to say it is installed.';
-        const tip = `${g.name} — ${jobs} job${jobs === 1 ? '' : 's'} of ${runs.toLocaleString()} runs`
-          + ` on ${c.name}${tier > 0 ? ' — ' + _rxStageLabel(tier, isReady) : ''}`
+        // PER-JOB runs × how many jobs — never the group total. "×285  3 jobs" reads as three
+        // jobs of 285 runs, which is three times the work actually being asked for; the number
+        // that gets typed into the industry window is the per-job one.
+        const perJob = _rxPerJobLabel(g.rows || []);
+        const tip = `${g.name} — ${perJob} on ${c.name} (${runs.toLocaleString()} runs in total)`
+          + `${tier > 0 ? ' — ' + _rxStageLabel(tier, isReady) : ''}`
           + (markable ? nextTip : '');
         const onclick = markable
           ? ` onclick="rxCycleMark('${c.id}', ${g.type_id}, ${tier})"` : '';
         return `<div class="ind-pipe-card ind-pipe-build${cls}${markable ? ' ind-pipe-markable' : ''}"`
           + `${onclick} data-tid="${g.type_id}" title="${_esc(tip)}">`
           + `<span class="ind-pipe-name">${_esc(g.name)}</span>`
-          + `<span class="ind-pipe-meta"><span class="ind-pipe-qty">×${runs.toLocaleString()}</span>`
-          + `<span class="ind-pipe-runs">${jobs}&nbsp;job${jobs === 1 ? '' : 's'}</span>${state}</span></div>`;
+          + `<span class="ind-pipe-meta"><span class="ind-pipe-runs">${_esc(perJob)}</span>`
+          + `${state}</span></div>`;
       }).join('');
       html += `<div class="ind-pipe-cell ind-row-rx${last ? ' ind-pipe-final' : ''}">${cards}</div>`;
     });
