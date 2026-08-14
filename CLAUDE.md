@@ -26,6 +26,7 @@ scripts/symbols.sh app static                # a whole tree
 | [docs/code-layout.md](docs/code-layout.md) | adding a route or module, or finding where something lives |
 | [docs/pi.md](docs/pi.md) | the PI planner: planning algorithm, colony simulation, Setup Analysis advice, alerts, fuel blocks |
 | [docs/reactions.md](docs/reactions.md) | the Reactions tool: the advisor, and how reaction goods must be priced |
+| [docs/reactions-repair-2026-08.md](docs/reactions-repair-2026-08.md) | **the 2026-08-14 audit and its repair spec** — the pricing rule's violations, the two clocks, the collapsed cadence ceiling, and the three-agent work split. Read before touching Reactions |
 | [docs/industry-planning.md](docs/industry-planning.md) | Industry up to the moment a build starts: make-or-buy, blueprints, scheduling, quoting |
 | [docs/industry-running.md](docs/industry-running.md) | Industry after it starts: progress, sourcing, corp hangars, customer status links |
 | [docs/industry-workflow.md](docs/industry-workflow.md) | the whole Industry flow end to end: the nine steps a builder walks, and the module/endpoint/table map behind each |

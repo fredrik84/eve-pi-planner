@@ -14,6 +14,62 @@ Reviewed 2026-08-05.
 
 ---
 
+## 29. Reactions: the profit numbers are not instant-sell (2026-08-14, HIGH, ungated)
+
+The pricing invariant (`CLAUDE.md:184`, `docs/reactions.md:958-962`) holds in the advisor and
+nowhere else. `_plan_totals` values output at `sell_price` (`jobs.py:2395`) and nets it against
+materials only — no job fee, freight or collateral, all three of which `_value_reaction_batch`
+charges. The running-job modal does the same and derives an ROI from it (`reactions_job_detail`,
+`graph.py:620-622`), and the completions ledger records **"Lifetime net profit"** at sell price
+(`jobs.py:355`), compounding over the life of the account. **None of it is flag-gated.** Profit
+reads ~3.3× high on an illustrative plan — derive the real figure before quoting it as measured.
+
+Ships with the clock fix, not separately: the typed `time_efficiency_pct` (default 0%,
+`graph.py:58`) drives every user-facing duration and ETA while the *measured* `_reaction_time_mult`
+(`jobs.py:981`) is read only by the cadence machinery, understating speed **~2.14×** (measured
+0.4680, `docs/reactions.md:669`). Profit-per-day is therefore ~1.5× out, the two errors opposing —
+so repricing alone makes it look worse before it looks right.
+
+Full spec, evidence and work split: [docs/reactions-repair-2026-08.md](docs/reactions-repair-2026-08.md)
+§WS1. Fix in place, no flag (defect in a shipped feature). Needs a guard test that fails if any
+user-facing profit field derives from `sell_price` — the rule was written first and drifted past.
+
+## 30. Reactions: the cadence ceiling collapses, and ease costs are invisible (2026-08-14, HIGH)
+
+`_level_options` (`jobs.py:937`) drops a run count only when `r > max_runs AND r > min_runs`, so
+once `min_runs > max_runs` the option set collapses to exactly `min_runs` whatever duration it
+implies — 11.7 days on a 7-day cadence, reproduced at `max_runs=119`, `min_runs=200`. Three
+independent routes abandon the ceiling (the give-ground loop `:1609`, the seed `:1544-1550`,
+`_level_options`' own fallback `:952`) and all three must be closed. It is wider than the cadence:
+with none set, the same branch exceeds `stage_cap_hours` and breaks the "never slower" promise at
+`jobs.py:1493-1494`. The docstring at `:1502-1504` and `docs/reactions.md:742` both assert a HARD
+ceiling and are factually false.
+
+**Decided 2026-08-14: the cadence is a stated target, not an absolute** — the plan may exceed it and
+must say so on the row. Today a pending row shows runs and never a duration.
+
+Also here: an order is quoted uncapped and re-shaped a page load later
+(`split_order_tops_to_cadence`, no free-slot check, rows invisible to the leveller — adjacent to
+§28b item 2, not item 1); `_collection_slot` buckets by 24h on a weekly rhythm and outranks surplus;
+the 50% stage budget is denominated in runs, not ISK; and the surplus the solver computes
+(`jobs.py:945`) reaches no payload and no UI, so Reactions fails the manifesto's scoring question 5
+outright. Spec: §WS2.
+
+## 31. Reactions is not answerable without Industry, and none of it is public (2026-08-14)
+
+The manifesto's untested claim, tested, failing on three counts: the cadence control is gated on
+`industry_job_length_policy` (`reactions.js:451`, `jobs.py:1147`), `reactions_missing_formulas` is
+unreachable because the only paste UI sits behind `industry_manual_blueprints`, and formula caps and
+stock fail soft to "you own nothing". **Decided 2026-08-14: make it genuinely standalone** — a
+Reactions-owned cadence flag reading the same stored `max_reaction_job_days`, and its own paste route.
+
+Also: two cadence controls on one tab in two units with only one persisted (merge them), and **not
+one Reactions flag defaults to public** — the default user gets the tool the last month's work
+replaced. Needs the §14 forcing question written for Reactions, but **after 29 and 30 land**:
+promoting `level_runs` today ships the collapsed ceiling to everyone. Spec: §WS3.
+
+---
+
 ## 19. Reactions must say what you need to ACQUIRE, and show the stages in order — DONE 2026-08-07
 
 Two defects found by using the tool on a real account (context 1, ~238 hand-declared formulas across
