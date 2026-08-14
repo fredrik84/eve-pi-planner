@@ -64,3 +64,21 @@ verdict column says what the evidence would have to be.
 | Remove the dead `_muted` assignment | **Done** (2026-07-30). Deleted; `pyflakes app/planner_dashboard.py` is clean. `_alert` stays — it still supplies the display thresholds; only the mute set was dead (muting moved inside `compute_alerts()`). |
 | Disconnect a character | **Done** (2026-07-30). Premise was stale: the UI button and `DELETE /api/characters/{id}` already shipped. The real bug was that it cleared 2 of 10 per-character tables. Now deletes all of them, clears the market-reader + saved-plan references, re-points the session instead of logging you out, revokes the ESI grant, and keeps `pp_bugs` + the completions ledgers. Hard delete, not soft unlink — a retained row keeps a live refresh token. `test_disconnect_character.py`, 6 groups. |
 | `DELETE /api/me` orphaned rows | **Done** (2026-07-30). Cleared 3 per-character + 4 context tables, orphaning ~20 others. Now works from shared `_CHAR_OWNED_TABLES` + `_CONTEXT_OWNED_TABLES` in `app/esi.py` (9 + 19 tables, verified). Completions ledgers and per-character records DO go here (unlike the per-character disconnect — the account itself is going away); `pp_bugs` is anonymised so admins keep the report; group-scoped markets/settings survive. `pp_shares`/`pp_inventory_shares` have no owner column and cannot be cleaned by account, by construction. `test_delete_account.py`, 5 groups. |
+
+## Closed from TODO.md on 2026-08-14
+
+Removed from the live backlog because they are finished — the reasoning that produced each
+is in the code, its docs and the git log, and re-reading it every session cost more than it
+was worth.
+
+| # | What | Verdict | When |
+|---|---|---|---|
+| 29 | Reactions: the profit numbers are not instant-sell (2026-08-14, HIGH, ungated) | Reactions profit figures moved to instant-sell (buy orders) against a FULL cost base — materials + job fees + freight + collateral. Covered the lifetime ledger, the dashboard tiles and the job modal, all three of which were live and ungated. Guard test `test_reactions_profit_clock.py` fails on any new sell-priced profit field | 08-14 |
+| 30 | Reactions: the cadence ceiling collapses, and ease costs are invisible (2026-08-14, HIGH) | The cadence ceiling no longer collapses: all three escape routes closed, and a breach that genuinely cannot be avoided is now REPORTED on the row (`cadence_over_h`, `⏱ +Nh`) rather than taken silently. Levelling budget re-denominated in ISK; orders paced at quote time so the quote and the dashboard agree; ease cost surfaced with a remedy | 08-14 |
+| 31 | Reactions is not answerable without Industry, and none of it is public (2026-08-14) | Reactions owns its cadence (`reactions_cadence`) and its own formula-paste route, so a reactions-only account no longer needs a Manufacturing flag. `reactions_missing_formulas` was unreachable by construction before this and now fires. Rollout question survives as §32 | 08-14 |
+| 19 | Reactions must say what you need to ACQUIRE, and show the stages in order | Reactions says what to ACQUIRE and shows stages in dependency order | 08-07 |
+| 23 | Stages were positions in a list, not dependencies | Stages are dependencies, not list positions | 08-08 |
+| 28b | Slot reservation and order cadence (2026-08-08, from live use) | Both halves done. (1) A later stage no longer reserves slots it cannot use — pending rows count by their WORST TIER, not the sum, so a chain's stages stop each holding a reactor (`_character_capacities`, behind `reactions_parallel_stages`). (2) An order can no longer be quoted at an absurd cadence: `_allocate_and_insert` takes the cadence at quote time and a step that still overruns says so. Verified 2026-08-14 | 08-14 |
+| 22 | The general shopping list double-counts every chain | General shopping list no longer double-counts a chain | 08-07 |
+| 20 | The two Reactions "clear" paths disagree about customer orders | The two Reactions 'clear' paths agree about customer orders | 08-07 |
+| 16 | Remove the dead Industry surface | Dead Industry surface removed | 08-07 |

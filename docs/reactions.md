@@ -33,6 +33,7 @@ Find a section: `grep -n '^## ' docs/reactions.md` and read from that line — t
 - **The stage list is Manufacturing's pipeline (`reactions_stage_pipeline`)** — why the two tabs share a grid, and why rows are characters
 - **Pricing: a sell-order price is not achievable profit** — the pricing rule that governs every profit figure shown for reaction goods
 - **Reactions owns its cadence and its paste (`reactions_cadence`)** — the two places Manufacturing flags used to decide what a Reactions user could reach, and the one stored rhythm behind both cadence controls
+- **Idea, not backlog: make the ranking aware of what you already hold** — why the LP ignores your surplus, why it is not simply a bug, and what a fix would have to touch
 - **Where the rest lives** — pointers to reaction content that belongs to another service
 
 ---
@@ -1085,6 +1086,28 @@ own nothing" — the safe direction (a cap that does not bind never blocks a pla
 formula panel says so rather than leaving a user to wonder why their cap never binds. That is a UI
 note, deliberately, not a rewrite: making those reads standalone is a much larger change with no
 reported cost behind it.
+
+## Idea, not backlog: make the ranking aware of what you already hold
+
+**Not planned, not scheduled, and deliberately not in TODO.md** — recorded here so the reasoning
+survives without costing a backlog read. Raised 2026-08-14 and parked: *"we can add it as a future
+feature, but right now I don't really care."*
+
+**The observation.** `_build_opportunities_uncached` asks for a chain's tiers with no stock pool,
+and the result is Redis-cached; held stock enters only later, at step 6a of the advisor, *after* the
+LP has already chosen. So a product whose intermediates you already hold ranks identically to one
+bought from scratch. Week 1 over-produces X; week 2 the LP picks a chain needing no X — because X's
+zero marginal cost was never in the objective — and X sits.
+
+**Why it is not simply a bug to fix.** The opportunity list is stock-blind *on purpose*: it is
+cached, and its callers scale its tiers linearly, which stock coverage is not (see the section on
+that above). Any fix has to make stock a term in the **objective**, not a trim of the cached tiers,
+or it breaks the linearity the cache depends on.
+
+**Why it might be worth doing anyway.** It would turn dead surplus back into ranked value rather
+than merely reporting it — the ease-cost line says what over-production cost, but nothing yet spends
+it. If attempted: new feature flag, and it needs the LP objective and the sort key, which is why it
+was kept away from the 2026-08-14 repair (WS1 was editing exactly those lines).
 
 ## Where the rest lives
 
