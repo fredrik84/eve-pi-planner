@@ -293,6 +293,20 @@ FEATURE_REGISTRY = [
                     "SAME stored value the Industry scheduler reads (Build rules → 'Longest "
                     "reaction job'), written from either side — one number, never two.",
      "default": False},
+    {"key": "reactions_default_system", "label": "Reactions: work out where jobs are installed when no system is set",
+     "group": "Reactions",
+     "description": "Job install fees used to be left out of every estimate unless you typed a "
+                    "reaction system in by hand, and the app reported the hole in a settings note "
+                    "rather than filling it. That was survivable while 'cost' meant the shopping "
+                    "list; it stopped being so once profit was netted against the full cost, "
+                    "because a missing fee reads as profit you do not have. With this on, the fee "
+                    "is quoted against a structure you have already told us you BUILD in (with "
+                    "that building's own tax), or against Jita as a clearly-labelled floor when we "
+                    "know nothing — and the card always says which of the three it used, so an "
+                    "inference never reads as something you stated. Typing a system in still wins. "
+                    "It uses the same resolver the Industry planner does, so the two can never "
+                    "quote one job at two different fees.",
+     "default": False},
     {"key": "reactions_ease_cost", "label": "Reactions: say what an easy plan costs, and how to get it back",
      "group": "Reactions",
      "description": "The plan spends real ISK to save you clicks — it rounds run counts up so a "

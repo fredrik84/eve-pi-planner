@@ -2583,15 +2583,46 @@ function _rxRateFieldsHtml(prefix, mine) {
 
       ${_rxTimeEffFieldHtml(prefix, 'Time efficiency % (override)')}
       <div id="${prefix}TimeEffDerived" class="pp-card-hint" style="grid-column:1/-1"></div>
+      <div id="${prefix}JobFeeNote" style="grid-column:1/-1"></div>
     </div>`;
 }
 
 // The one thing here that silently changes your numbers if you get it wrong. Everything else the
 // fields say for themselves — including time efficiency, which is now measured (see
 // _rxTimeEffNote) rather than something the player has to work out by hand.
-const _RX_RATE_NOTES = `
-  <div class="settings-note">No system set means <b>job install fees are left out</b> of every
-    estimate — for manufacturing as well as reactions.</div>`;
+// Left blank when nothing is stored: `_rxJobFeeNote` below says where the fee actually comes from,
+// and two notes in the same box disagreeing about the same number is the thing being fixed.
+const _RX_RATE_NOTES = '';
+
+// Where the install fee in your estimates comes from. This replaced a note that reported the hole
+// instead of filling it — "No system set means job install fees are left out" — which was fine
+// while `cost` meant the shopping list and stopped being fine on 2026-08-14, when profit began to
+// be netted against the FULL cost. A fee left at zero then reads as profit you do not have.
+// The rule this follows is the same one `_rxTimeEffNote` follows: a number the app worked out has
+// to say it worked it out, because an inference that reads like a statement is worse than a blank.
+function _rxJobFeeNote(prefix, s) {
+  const el = document.getElementById(prefix + 'JobFeeNote');
+  if (!el) return;
+  const basis = (s && s.job_fee_basis) || 'none';
+  el.innerHTML = _rxJobFeeNoteHtml(basis);
+}
+
+function _rxJobFeeNoteHtml(basis) {
+  if (basis === 'configured') return '';   // they typed it in; the field speaks for itself
+  if (basis === 'structure') {
+    return `<div class="settings-note">No system set, so job install fees are quoted against
+      <b>a structure you build in</b>, with that building's own tax. Name a system above to
+      override it.</div>`;
+  }
+  if (basis === 'reference') {
+    return `<div class="settings-note">No system set and no structure on file, so install fees are
+      quoted against <b>Jita as a reference floor</b> — it will read low if you react in null-sec.
+      Name a system above for a real number.</div>`;
+  }
+  return `<div class="settings-note">No system set, so <b>job install fees are left out</b> of
+    every estimate, which overstates profit by the fee. Name a system above, or ask an admin for
+    "work out where jobs are installed".</div>`;
+}
 
 // What the app is REALLY using for time efficiency, and where it got it. The old note here said
 // "Time efficiency can't be detected" — that was false in this codebase: reaction_time_mult_for
@@ -2645,6 +2676,7 @@ function _rxFillRateFields(prefix, s, derived) {
   document.getElementById(prefix + 'Tax').value = ((s.facility_tax_pct || 0) * 100).toFixed(2);
   _rxSetTimeEffValue(prefix, (s.time_efficiency_pct || 0) * 100);
   _rxTimeEffNote(prefix, { ...(derived || s), time_efficiency_pct: s.time_efficiency_pct || 0 });
+  _rxJobFeeNote(prefix, derived || s);
 }
 
 function _rxRatePayload(prefix) {

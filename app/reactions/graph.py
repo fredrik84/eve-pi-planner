@@ -291,6 +291,63 @@ def _goo_from_json(d):
             {int(k): x for k, x in d["types"].items()})
 
 
+def _reaction_fee_system(context_id: int, settings: dict) -> tuple[int | None, float, str]:
+    """Which system's install fee a reaction job is quoted at: `(system_id, facility_tax, basis)`.
+
+    `basis` is one of `configured` / `structure` / `reference` / `none`, and it is meant to be SHOWN
+    — the same contract as `time_efficiency_source`. A cost the app worked out for itself has to say
+    it worked it out, or the next reader cannot tell an inference from a statement.
+
+    **Why this stopped being the account's typed field alone.** An unset `reaction_system` left
+    `job_cost_rate` at 0, so install fees fell out of every estimate and the app reported the hole
+    in a settings note instead of filling it. That was survivable while "cost" meant the shopping
+    list. It stopped being survivable on 2026-08-14, when profit began to be netted against a FULL
+    cost base (materials + fees + freight + collateral): a missing fee is now a silently overstated
+    profit, not merely an absent line. CLAUDE.md rule 3 — no knob for a number the app can work out.
+
+    Delegates to Industry's `account_build_defaults`, which already answers exactly this question
+    (the account's own field first, then a structure it has told us it BUILDS in, with that
+    building's own tax, then Jita as an explicitly-labelled floor). Reusing it is rule 4, and it
+    matters more than the saved lines: two services quoting one job at two fees is the same class of
+    defect as the two clocks this repair removed.
+
+    Never fatal. If the resolver cannot be reached, this falls back to the typed field alone — the
+    behaviour that shipped before — because a missing fee is better than a failed page.
+    """
+    # The CALLER's settings decide the configured case, before any inference is consulted. This is
+    # not the same as letting `account_build_defaults` find it: that re-reads the account's stored
+    # row, while `settings` here is whatever this request resolved (a group default, an account
+    # override). Delegating the configured case too would let the inference quietly answer for a
+    # system the caller had already been handed, which is how one job ends up quoted at two fees.
+    named = settings.get("reaction_system")
+    if named:
+        sid = _resolve_system_id(named)
+        if sid:
+            return sid, float(settings.get("facility_tax_pct") or 0.0), "configured"
+    try:
+        from app.industry.graph import account_build_defaults
+        sid, tax, basis = account_build_defaults(context_id, with_basis=True)
+        if sid:
+            return int(sid), float(tax or 0.0), basis
+    except Exception:
+        pass
+    return None, 0.0, "none"
+
+
+def reaction_fee_basis(context_id: int) -> str:
+    """`_reaction_fee_system`'s basis alone, for the surfaces that must say where the fee came from.
+
+    Separate from the graph load on purpose: that result is cached per account and consumed in a
+    dozen places, and widening its tuple to carry one label would touch every one of them for a
+    string only the settings card and the cost tiles read.
+    """
+    try:
+        from app.reactions.settings import effective_reaction_settings
+        return _reaction_fee_system(context_id, effective_reaction_settings(context_id))[2]
+    except Exception:
+        return "none"
+
+
 def _load_goo_and_reached(context_id: int, allowed_material_ids: set[int] | None = None):
     key = (int(context_id), frozenset(allowed_material_ids) if allowed_material_ids else None)
     hit = _GOO_CACHE.get(key)
@@ -431,16 +488,16 @@ def _load_goo_and_reached_uncached(context_id: int, allowed_material_ids: set[in
     # job_cost roll-up. Both are 0 (no effect, current behavior preserved) unless the caller's
     # effective settings actually name a reaction system — an unconfigured account never pays
     # the extra ESI round-trip for adjusted prices either.
-    reaction_system = settings.get("reaction_system")
+    sys_id, facility_tax, _fee_basis = _reaction_fee_system(context_id, settings)
     job_cost_rate = 0.0
     adjusted_prices: dict[int, float] = {}
-    if reaction_system:
-        cost_index = fetch_system_cost_index(_resolve_system_id(reaction_system))
+    if sys_id:
+        cost_index = fetch_system_cost_index(sys_id)
         # CCP adds a flat 4% SCC (Secure Commerce Commission) surcharge to EVERY industry job,
         # on top of the system cost index and the structure's facility tax — a fixed CCP tax, not
         # configurable per structure/system. Without it our estimate understates every job by 4%
         # of EIV; verified against the in-game breakdown (index + facility tax + 4% SCC = total).
-        job_cost_rate = cost_index + (settings.get("facility_tax_pct") or 0.0) + SCC_SURCHARGE_PCT
+        job_cost_rate = cost_index + facility_tax + SCC_SURCHARGE_PCT
         if job_cost_rate > 0:
             adjusted_prices = fetch_adjusted_prices(list(all_input_ids))
 

@@ -912,9 +912,17 @@ def account_build_defaults(context_id: int, with_basis: bool = False):
 
 
 def _default_system_on(context_id: int) -> bool:
+    """Either flag opens the inference, because both services ask this one question.
+
+    `reactions_default_system` exists so a reactions-only account can be given it without being
+    handed a Manufacturing flag — the same gap, and the same fix, as the cadence (2026-08-14). An
+    account with only the Reactions flag also gets the inference on the Industry side; that is
+    harmless by construction, since an account not using Industry has no Industry quote to move.
+    """
     try:
         from app.features import feature_enabled_for
-        return feature_enabled_for("industry_default_build_system", context_id)
+        return bool(feature_enabled_for("industry_default_build_system", context_id)
+                    or feature_enabled_for("reactions_default_system", context_id))
     except Exception:
         return False
 

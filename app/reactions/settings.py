@@ -315,7 +315,19 @@ def api_get_reaction_settings(ctx: int = Depends(require_context)):
     te_pct, te_source = derived_time_efficiency(ctx)
     out["derived_time_efficiency_pct"] = te_pct
     out["time_efficiency_source"] = te_source
+    out["job_fee_basis"] = _job_fee_basis(ctx)
     return out
+
+
+def _job_fee_basis(ctx: int) -> str:
+    """Where the install fee in this account's estimates comes from — see `reaction_fee_basis`.
+
+    Imported inside the call because `app.reactions.graph` imports this module at load."""
+    try:
+        from app.reactions.graph import reaction_fee_basis
+        return reaction_fee_basis(ctx)
+    except Exception:
+        return "none"
 
 
 def _resolve_system_id(name: str | None) -> int | None:
@@ -366,7 +378,8 @@ def api_get_account_reaction_settings(ctx: int = Depends(require_context)):
     # replaced. `source` distinguishes a measurement from the skills-only estimate.
     te_pct, te_source = derived_time_efficiency(ctx)
     return {"override": override, "default": default, "effective": override or default,
-            "derived_time_efficiency_pct": te_pct, "time_efficiency_source": te_source}
+            "derived_time_efficiency_pct": te_pct, "time_efficiency_source": te_source,
+            "job_fee_basis": _job_fee_basis(ctx)}
 
 
 @router.put("/api/reactions/account-settings")
