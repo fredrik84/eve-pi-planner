@@ -151,21 +151,6 @@ their own merits.
 
 First step: pick one. Everything else in the Industry backlog is second-order to it.
 
-## 15. `industry_per_order_plans` should not sit at `testers` half-landed (2026-08-05)
-
-The flag's own description states its purpose: *a job outputs to exactly ONE container, so a batch
-shared between two builds has nowhere to deliver — this is what lets a builder run a container per
-customer.* Container-as-output is not modelled (2f-residual #1), and the setting has no UI
-(2f-residual #3, with `available` already sitting in the read response for a frontend nobody wrote).
-
-So what is rolled out to testers today is the half that **costs money** — planning apart is +2.45%
-net on a 2× Archon, +0.96% on a Phoenix queue, measured — without the capability that spends it.
-The compare endpoint is the manifesto's rule followed exactly (put the number on it before the
-switch); the problem is the rung, not the design.
-
-Two acceptable outcomes, no third: land 2f-residual #1 and #3 together and keep it at `testers`, or
-drop the flag to `hidden` until they land.
-
 ## 17. Stock sources have four surfaces (2026-08-05, low)
 
 One concept — *which boxes may this build spend* — is expressed in the plan modal's "Materials
@@ -174,56 +159,28 @@ tick list, and saved source
 sets, under **two** ownership models that coexist behind `industry_plan_sources` (account-wide tick
 list vs. a build owning its boxes). `plan_source_keys` exists solely to reconcile them per request.
 
-Altitude, not correctness — every surface is individually justified and the feature is right. Worth
-scoping only once `industry_plan_sources` settles which ownership model wins, since that decision
-removes one of the two on its own.
+**Decided by the user 2026-08-14: the PER-BUILD model wins.** *"Per build was what I've asked for
+earlier. My users want to use a selectable container per plan because that's how they track what
+they've acquired."* So a build owns its boxes, and the account-wide tick list is the one to retire —
+it becomes the fallback for orders queued before per-plan sources, nothing more.
 
-## 12-residual. The user-facing workflow has no home in the product (2026-08-05)
+That also settles the output side: the container a build delivers INTO is a property of the plan
+(shipped 2026-08-14), which is the same decision applied to the other direction.
 
-Item 12 shipped as two documents (see Shipped). The user-facing one was written as "a candidate for
-the How-it-works page or onboarding" and is still only a doc — which is one of the audit's own
-findings: **nothing in the product states the path.** The How-it-works page is Planetary Industry
-only (one mention of "Planetary Industry", none of manufacturing or reactions), and the Industry
-onboarding covers setup and stops. Steps 1-9 exist nowhere a user can read them.
+Altitude, not correctness — every surface is individually justified and the feature is right. The
+work now is to retire the account-wide model rather than to reconcile the two: `plan_source_keys`
+exists solely to translate between them per request, and it can go with it.
 
-**Unblocked and approved by the user 2026-08-14: build How-it-works pages for Manufacturing and
-Reactions, the way Planetary Industry already has one.** It was previously held behind item 14 on
-the grounds that writing a tab's workflow for an audience that cannot open the tab is work in the
-wrong order; the user is handling feature access separately, so that objection no longer holds. The
-source material exists — steps 1-9 are already written in `docs/industry-workflow-user.md`; what is
-missing is a place in the PRODUCT to read them.
+## 2f-residual. Print locking across orders (2026-08-05)
 
-## 2f-residual. A job's output container, and prints across orders (2026-08-05)
+The last of the three per-order-planning leftovers; the other two (container as plan output, and the
+missing UI) shipped 2026-08-14.
 
-Per-order planning shipped (see Shipped below) and these three are what it deliberately left:
-
-1. **Container as PLAN output.** The point of the whole exercise, and still not modelled: an order
-   names the box its materials come from, and the output belongs in the same one. Every scheduled
-   job now carries `order_id`, which is the hook. Needs a UI answer for "no container bound" — corp
-   hangars need the Director role and not everyone has one.
-
-   **Design settled by the user (2026-08-14): the container is a property of the PLAN — a reaction
-   plan or a manufacturing plan — not of a job.** That is the whole answer to the modelling question
-   this item has been sitting on. One box per plan, chosen once, inherited by every job in it;
-   nothing is configured per job, and the "shared batch has nowhere to deliver" problem disappears
-   because the batch belongs to one plan by construction. It also means the setting is one control
-   on the plan, not a column on `pp_industry_schedule` rows, and it applies to both services rather
-   than being an Industry-only concept.
-2. **Print locking ACROSS orders.** Per-order copy RUNS are consumed correctly, but two orders
-   sharing one BPO each see it and may each schedule a concurrent job off it. Fixing it properly
-   means making the print a scheduling resource rather than a per-plan cap — bigger than it looks,
-   and it only bites an account planning apart with a single original per type.
-3. **No UI.** The account setting and `/api/industry/queue-plan/compare` are endpoints only; nothing
-   on the build page offers either. Deliberate — the measured cost of splitting was the gate on
-   going further, and it is now known (+2.45% net on a 2× Archon, +0.96% on a Phoenix queue).
-
-**#1 and #3 are one piece of work, not two.** The 2026-08-05 audit made the link explicit: #3's
-flag (`industry_per_order_plans`) exists *because* of #1 — a job outputs to exactly one container,
-so a shared batch has nowhere to deliver — which means the flag currently ships the half that costs
-ISK without the half that justifies it. Do them together, or neither; see item 15 for the rung
-decision in the meantime.
-
----
+**Two orders sharing one BPO can each schedule a concurrent job off it.** Per-order copy RUNS are
+consumed correctly, but the print itself is not a scheduling resource — it is a per-plan cap — so
+each plan sees the whole original. Fixing it properly means making the print a resource the
+scheduler allocates, which is bigger than it looks. It only bites an account planning apart with a
+single original per type.
 
 ---
 

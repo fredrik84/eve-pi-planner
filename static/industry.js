@@ -178,6 +178,7 @@ function _indExpandSets(keys, picked) {
 // which is recorded against the order rather than added to the planner's global stock (stock you
 // can't actually draw from is the one error that makes the planner build too little).
 let _indPlanSources = [];      // the scanned source list, as the plan modal last saw it
+let _indLastOutputKey = '';    // the output box the last build used — same reasoning as _indLastSourceKey
 
 async function indLoadPlanSources() {
   const field = document.getElementById('indPlanSrcField');
@@ -205,7 +206,47 @@ async function indLoadPlanSources() {
     + (multi ? `<button type="button" class="ind-src-add" onclick="indAddPlanSource()" `
         + `title="This build's materials are gathered from more than one box">+ another box</button>` : '');
   field.style.display = '';
+  _indRenderOutputPicker();
   indOnPlanSourceChange();
+}
+
+// The output box. One row, never a set: a job delivers to exactly ONE container, so offering a
+// multi-pick here would be offering something EVE cannot do. Gated with the per-plan sources
+// surface because that is the model this belongs to — each build owning its boxes.
+function _indRenderOutputPicker() {
+  const field = document.getElementById('indPlanOutField');
+  const rows = document.getElementById('indPlanOutRows');
+  if (!field || !rows) return;
+  if (!_featureActive('industry_plan_sources')) { field.style.display = 'none'; return; }
+  const remembered = _indLastOutputKey && _indPlanSources.some(x => x.key === _indLastOutputKey)
+    ? _indLastOutputKey : '';
+  rows.innerHTML = _indSourceRowHtml(_indPlanSources, remembered, '_indOnPlanOutputChange()',
+    {id: 'indPlanOut', blank: '— same box as the materials —'});
+  field.style.display = '';
+  _indOnPlanOutputChange();
+}
+
+// Says which box the output will actually go to and WHY — stated, or inherited from the materials
+// box. An inherited answer that reads like a stated one is the thing this note exists to prevent.
+function _indOnPlanOutputChange() {
+  const hint = document.getElementById('indPlanOutHint');
+  if (!hint) return;
+  const chosen = (document.getElementById('indPlanOut') || {}).value || '';
+  if (chosen) {
+    hint.textContent = 'Finished items are tracked as belonging to this box.';
+    return;
+  }
+  const inputs = _indPlanSourceKeys();
+  if (inputs.length) {
+    const src = _indPlanSources.find(x => x.key === inputs[0]);
+    hint.textContent = 'Follows the materials box' + (src ? ` — ${src.label || src.name || inputs[0]}` : '') + '.';
+  } else {
+    hint.textContent = 'No box bound, so output lands wherever you install the job.';
+  }
+}
+
+function _indPlanOutputKey() {
+  return (document.getElementById('indPlanOut') || {}).value || '';
 }
 
 function indAddPlanSource() {
@@ -3436,7 +3477,7 @@ async function indAddToQueue() {
         // server this plan owns its stock. Without the flag the old single field goes up alone and
         // the account-wide behaviour is untouched.
         ...(_featureActive('industry_plan_sources')
-              ? { source_keys: keys }
+              ? { source_keys: keys, output_source_key: _indPlanOutputKey() }
               : { source_key: srcSel === '__paste' ? '' : srcSel }) });
     // A paste is per-order sourcing, not planner stock: it says what's already gathered for THIS
     // build, so it lands on the order's checklist and nowhere else. Best-effort — the order itself
@@ -3446,6 +3487,7 @@ async function indAddToQueue() {
       catch (e) {}
     }
     document.getElementById('indResult').innerHTML = '';
+    _indLastOutputKey = _indPlanOutputKey();   // a builder running a can per build answers this the same way every time
     _indForcedTypes.clear();       // they live on the order now
     const lb = document.getElementById('indLabel');
     if (lb) lb.value = '';          // don't inherit the last customer on the next order
@@ -4371,11 +4413,39 @@ function _indRulesMargin(a) {
     'Blank = the account default. Priced off NET cost, so over-production you keep is not billed twice.');
 }
 
+// The per-order-plans rung, which had NO UI at all until 2026-08-14 — the account setting and
+// /api/industry/queue-plan/compare were endpoints only, so what shipped to testers was the half
+// that COSTS money (shared components built once per order, copies bought per order) without the
+// capability that justifies it. The measured cost is stated on the control rather than discovered
+// after the fact: +2.45% net on a 2x Archon, +0.96% on a Phoenix queue. Account-level only — it is
+// a statement about how the whole queue is planned, not about one build.
+function _indRulesPerOrder(a) {
+  if (_indRulesMode === 'order') return '';
+  const po = a.per_order_plans || {};
+  if (!po.available) return '';
+  return _indRuleRow('Plan each build apart',
+    `<label class="ind-opt-check"><input type="checkbox" id="ir-perorder" ${po.enabled ? 'checked' : ''}`
+    + ` onchange="indRulesPerOrderToggle(this)"> Keep every build's materials and jobs separate</label>`
+    + `<div class="ind-src-meta" id="ir-perorder-note"></div>`,
+    'On, a component shared by two builds is built <b>twice</b>, once for each — which is what lets '
+    + 'each build deliver into its own container. Off, the queue batches it once and is cheaper. '
+    + 'Measured: <b>+2.45%</b> net on a 2× Archon, <b>+0.96%</b> on a Phoenix queue.');
+}
+
+function indRulesPerOrderToggle(cb) {
+  const note = document.getElementById('ir-perorder-note');
+  if (note) {
+    note.innerHTML = cb.checked
+      ? 'Each build is planned on its own — more ISK, and every build has a box of its own to deliver to.'
+      : 'The queue is planned as one shared batch — cheaper, and a shared component belongs to no single build.';
+  }
+}
+
 function _indRulesSectionsHtml() {
   const a = _indRules.account;
   return [_indRulesFacility(a), _indRulesThreshold(a), _indRulesReactions(a),
           _indRulesComponents(a), _indRulesJobLength(a), _indRulesSources(a),
-          _indRulesMargin(a)].filter(Boolean).join('');
+          _indRulesPerOrder(a), _indRulesMargin(a)].filter(Boolean).join('');
 }
 
 function indRulesForceToggle(cb) {

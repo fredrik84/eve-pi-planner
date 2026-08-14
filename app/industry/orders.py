@@ -82,6 +82,19 @@ def ensure_industry_orders_table():
             # list, exactly as it did before. The column is what makes the change non-retroactive:
             # an in-flight build cannot silently lose sight of a can it was already counting.
             "sources_owned INTEGER DEFAULT 0",
+            # Where this build's OUTPUT belongs. A job in EVE delivers to exactly one container, so
+            # a batch shared between two builds has nowhere to go — which is the whole reason
+            # `industry_per_order_plans` exists, and the half that was missing until 2026-08-14.
+            #
+            # **It is a property of the PLAN, not of a job** (user's ruling, 2026-08-14). One box
+            # chosen once, inherited by every job in the order — nothing is configured per job, and
+            # the shared-batch problem disappears because a batch belongs to one plan by
+            # construction. Jobs already carry `order_id`, so nothing needs a column of its own.
+            #
+            # Blank means "not stated", which is NOT an error: output then lands wherever the job is
+            # installed, exactly as it always did. Corp hangars need the Director role and not every
+            # builder has one, so this can never be required.
+            "output_source_key TEXT DEFAULT ''",
         )
         con.commit()
     finally:
@@ -104,6 +117,9 @@ class OrderCreate(BaseModel):
     # are accepted so an older client (or a caller that only ever binds one) needs no change at all;
     # `source_keys` wins when both are sent, since it is the more complete statement.
     source_keys: list[str] = []
+    # Where the OUTPUT goes. Chosen while planning for the same reason the input boxes are: "which
+    # box is this build's" is decided when the build is decided. '' = not stated, which is allowed.
+    output_source_key: str = ""
 
 
 class OrderUpdate(BaseModel):
@@ -118,6 +134,7 @@ class OrderUpdate(BaseModel):
     status: str | None = None
     source_key: str | None = None    # '' unbinds the order from its container
     source_keys: list[str] | None = None   # the whole bound set; [] unbinds every box
+    output_source_key: str | None = None   # '' clears it; output then lands where the job is installed
 
 
 def _parse_map(value) -> dict:
@@ -160,11 +177,45 @@ def _normalise_source_keys(keys) -> list[str]:
     return list(dict.fromkeys((str(k) or "").strip()[:80] for k in (keys or []) if str(k).strip()))
 
 
+def order_output_source_key(row) -> tuple[str, str]:
+    """Where this order's OUTPUT belongs: `(key, basis)`.
+
+    `basis` is `stated` / `inherited` / `none`, and it is meant to be SHOWN — the same contract as
+    the job-fee and time-efficiency sources. A box the app picked has to say it picked it.
+
+    **The plan owns this, not the job** (user's ruling, 2026-08-14). A job delivers to exactly one
+    container, so making it a per-job setting is what made the shared-batch case unanswerable; one
+    box per plan, inherited by every job in it, has no such case.
+
+    Falls back to the FIRST bound input box, because the same container is normally both: a builder
+    gathers a build into a box and wants the output back in it — that is how they track what they
+    have acquired. `none` is a legitimate answer, not a failure: output then lands wherever the job
+    is installed, which is what happened before this existed, and corp hangars need the Director
+    role so a box can never be required.
+    """
+    d = dict(row) if not isinstance(row, dict) else row
+    stated = (d.get("output_source_key") or "").strip()
+    if stated:
+        return stated, "stated"
+    inputs = order_source_keys(d)
+    if inputs:
+        return inputs[0], "inherited"
+    return "", "none"
+
+
 def _order_dict(con, row) -> dict:
     """Row → API shape: the overrides come back as {type_id, name} so the UI can show WHICH
     components were overridden without a second lookup per order."""
     d = dict(row)
     d["source_keys"] = order_source_keys(d)
+    out_key, out_basis = order_output_source_key(d)
+    d["output_source_key"] = out_key
+    d["output_source_basis"] = out_basis
+    try:
+        from app.industry.sourcing import source_name
+        d["output_source_name"] = source_name(d.get("context_id"), out_key) if out_key else None
+    except Exception:
+        d["output_source_name"] = None
     ids = _parse_ids(d.get("force_build_ids"))
     d["force_build_ids"] = ids
     d["me_te_overrides"] = _parse_map(d.get("me_te_overrides"))
@@ -221,14 +272,15 @@ def create_order(req: OrderCreate, ctx: int = Depends(require_context)):
         oid = con.execute(
             "INSERT INTO pp_industry_orders (context_id, product_type_id, name, quantity, mode, "
             "priority, status, created_at, label, force_build_ids, me_te_overrides, margin_pct, "
-            "build_reactions, source_key, source_keys, sources_owned) "
-            "VALUES (?,?,?,?,?,?, 'queued', ?,?,?,?,?,?,?,?,?) RETURNING id",
+            "build_reactions, source_key, source_keys, sources_owned, output_source_key) "
+            "VALUES (?,?,?,?,?,?, 'queued', ?,?,?,?,?,?,?,?,?,?) RETURNING id",
             (ctx, req.product_type_id, name or str(req.product_type_id), req.quantity, req.mode,
              int(_time.time()), _time.time(), (req.label or "").strip()[:60],
              json.dumps(sorted({int(t) for t in req.force_build_ids})),
              json.dumps(req.me_te_overrides or {}), req.margin_pct,
              1 if req.build_reactions else 0,
-             keys[0] if keys else "", json.dumps(keys), 1 if owned else 0),
+             keys[0] if keys else "", json.dumps(keys), 1 if owned else 0,
+             (req.output_source_key or "").strip()),
         ).fetchone()[0]
         con.commit()
         from app.industry.sourcing import remember_source_default, enable_bound_sources
@@ -326,6 +378,10 @@ def update_order(order_id: int, req: OrderUpdate, ctx: int = Depends(require_con
         owned = sent and bool(bound)
         if bound is not None:
             sets.append("source_key=?"); params.append(bound[0] if bound else "")
+        if req.output_source_key is not None:
+            # '' is a real instruction here (clear it), not "unset", so this is an explicit
+            # `is not None` rather than a truthiness test.
+            sets.append("output_source_key=?"); params.append(req.output_source_key.strip())
             sets.append("source_keys=?"); params.append(json.dumps(bound))
             if sent:
                 # Editing the set through the per-plan picker is the user taking ownership of this
@@ -503,6 +559,7 @@ def _run_queue_plan(ctx: int, req: QueuePlanRequest, want_full: bool = False) ->
             "SELECT id, product_type_id, quantity, force_build_ids, me_te_overrides, margin_pct, "
             "COALESCE(build_reactions,0) AS build_reactions, "
             "COALESCE(source_key,'') AS source_key, COALESCE(source_keys,'') AS source_keys, "
+            "COALESCE(output_source_key,'') AS output_source_key, "
             "COALESCE(sources_owned,0) AS sources_owned FROM pp_industry_orders "
             "WHERE context_id=? AND status='queued' ORDER BY priority DESC, id", (ctx,),
         ).fetchall()
@@ -841,6 +898,7 @@ def force_build_above(req: ForceAboveRequest, ctx: int = Depends(require_context
             "SELECT id, product_type_id, quantity, force_build_ids, me_te_overrides, "
             "COALESCE(build_reactions,0) AS build_reactions, "
             "COALESCE(source_key,'') AS source_key, COALESCE(source_keys,'') AS source_keys, "
+            "COALESCE(output_source_key,'') AS output_source_key, "
             "COALESCE(sources_owned,0) AS sources_owned "
             "FROM pp_industry_orders WHERE context_id=? AND status='queued' "
             "ORDER BY priority DESC, id", (ctx,),

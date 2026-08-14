@@ -63,6 +63,8 @@
           <div class="nav-group-hd"><span class="nav-ico">IN</span><span class="nav-lbl">Industry</span></div>
           <button class="tab tab-sub" data-tab="reactions"><span class="nav-ico">RX</span><span class="nav-lbl">Reactions</span></button>
           <button class="tab tab-sub" data-tab="industry"><span class="nav-ico">MF</span><span class="nav-lbl">Manufacturing</span></button>
+          <button class="tab tab-sub" data-tab="rxhowitworks"><span class="nav-ico">i</span><span class="nav-lbl">Reactions — how it works</span></button>
+          <button class="tab tab-sub" data-tab="mfhowitworks"><span class="nav-ico">i</span><span class="nav-lbl">Manufacturing — how it works</span></button>
         </div>
         <div class="nav-group" id="adminNavGroup">
           <div class="nav-group-hd"><span class="nav-ico">AD</span><span class="nav-lbl">Admin</span></div>
@@ -182,6 +184,40 @@
         </div>
       </div>
     </div><!-- /tab-howitworks -->
+
+    <!-- ── Tab: Manufacturing — how it works (static help) ───────────────────
+    <div id="tab-mfhowitworks" class="tab-panel" style="display:none">
+      <div class="pp-layout">
+        <div class="pp-main" style="grid-column: 1 / -1; max-width: 100%;">
+          <section class="pp-card">
+            <div class="pp-card-title">Manufacturing — how it works
+              <span class="pp-card-hint">— the order you actually use the tab in</span>
+            </div>
+            <!-- Body lives in static/help/manufacturing.html, fetched on first open. Help copy does not
+                 belong in index.html: it is documentation, it is long, and every byte
+                 of it was being shipped to every visitor on every load. -->
+            <div id="tab-mfhowitworks-body"><div class="pp-loading"><span class="pp-spinner"></span> Loading…</div></div>
+          </section>
+        </div>
+      </div>
+    </div><!-- /tab-mfhowitworks -->
+
+    <!-- ── Tab: Reactions — how it works (static help) ───────────────────────── -->
+    <div id="tab-rxhowitworks" class="tab-panel" style="display:none">
+      <div class="pp-layout">
+        <div class="pp-main" style="grid-column: 1 / -1; max-width: 100%;">
+          <section class="pp-card">
+            <div class="pp-card-title">Reactions — how it works
+              <span class="pp-card-hint">— what it decides for you, and what it leaves to you</span>
+            </div>
+            <!-- Body lives in static/help/reactions.html, fetched on first open. Help copy does not
+                 belong in index.html: it is documentation, it is long, and every byte
+                 of it was being shipped to every visitor on every load. -->
+            <div id="tab-rxhowitworks-body"><div class="pp-loading"><span class="pp-spinner"></span> Loading…</div></div>
+          </section>
+        </div>
+      </div>
+    </div><!-- /tab-rxhowitworks -->
 
     <!-- ── Tab: PI Planner ─────────────────────────────────────────────────── -->
     <div id="tab-planner" class="tab-panel" style="display:none">
@@ -1588,6 +1624,16 @@ PVF-N9    3         95                 60             80                  100   
         <div class="ind-field ind-field-src" id="indPlanSrcField" style="display:none">
           <label for="indPlanSrc" title="The boxes this build is gathered into. What's in them counts as this build's stock, so the plan stops asking you to buy what you already have.">Materials from <span class="pp-card-hint">— optional</span></label>
           <div id="indPlanSrcRows" class="ind-srcrows"></div>
+        </div>
+        <!-- Where the OUTPUT goes. A job delivers to exactly one container, so this is a property
+             of the PLAN, not of a job (decided 2026-08-14) — one box, chosen once, inherited by
+             every job in the build. Left blank it follows the first "Materials from" box, because
+             a builder gathers a build into a can and wants the output back in it; that inheritance
+             is stated on the build page rather than assumed silently. -->
+        <div class="ind-field ind-field-src" id="indPlanOutField" style="display:none">
+          <label for="indPlanOut" title="The container this build's finished items are delivered to. Left blank it follows the box the materials come from. Output only lands here if you install the jobs with that container selected in-game.">Deliver output to <span class="pp-card-hint">— optional</span></label>
+          <div id="indPlanOutRows" class="ind-srcrows"></div>
+          <div id="indPlanOutHint" class="pp-card-hint"></div>
         </div>
         <div class="ind-plan-actions">
           <!-- The way in to the standing rules, from the screen those rules are shaping. The whole

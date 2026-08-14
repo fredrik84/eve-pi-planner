@@ -427,6 +427,29 @@ function renderFactorySplit(plan) {
 
 // ── Tab navigation ────────────────────────────────────────────────────────────
 
+
+// Help copy is fetched, not shipped in index.html. It is documentation — long, static, and read by
+// a fraction of visitors — so inlining it made every page load carry it. Fetched once per session
+// and cached in the DOM; a failure leaves a link rather than an empty card, because the content is
+// a plain file the user can open directly.
+const _HELP_SRC = {mfhowitworks: '/help/manufacturing.html', rxhowitworks: '/help/reactions.html'};
+const _helpLoaded = {};
+
+async function loadHelpPanel(name) {
+  const el = document.getElementById('tab-' + name + '-body');
+  const src = _HELP_SRC[name];
+  if (!el || !src || _helpLoaded[name]) return;
+  try {
+    const r = await fetch(src, {credentials: 'same-origin'});
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    el.innerHTML = await r.text();
+    _helpLoaded[name] = true;
+  } catch (e) {
+    el.innerHTML = '<div class="pp-empty">Could not load this page. '
+      + '<a href="' + src + '" target="_blank" rel="noopener">Open it directly</a>.</div>';
+  }
+}
+
 function switchTab(name) {
   // Defense-in-depth: nav buttons for a restricted page are hidden (_applyPageRestriction), but
   // a stale localStorage 'activeTab' or a direct call could still reach here — bounce to the
@@ -452,6 +475,7 @@ function switchTab(name) {
   if (name === 'characters' && typeof loadCharacters === 'function') loadCharacters();
   if (name === 'analyze' && typeof onAnalyzeTabOpen === 'function') onAnalyzeTabOpen();
   if (name === 'admin' && typeof onAdminTabOpen === 'function') onAdminTabOpen();
+  if (name === 'mfhowitworks' || name === 'rxhowitworks') loadHelpPanel(name);
   localStorage.setItem('activeTab', name);
 }
 
