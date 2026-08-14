@@ -87,8 +87,78 @@ def main() -> int:
     finally:
         con.close()
 
+    round_trip()
     print("\n" + ("FAILED: " + "; ".join(_fails) if _fails else "all checks passed"))
     return 1 if _fails else 0
+
+
+def round_trip() -> None:
+    """The WRITE path, through the real endpoint functions.
+
+    The helper above is pure and was green while the write path was broken: a 2026-08-14 edit nested
+    `source_keys=?` inside `if req.output_source_key is not None:`, so every PATCH that bound
+    containers WITHOUT also sending an output box silently dropped the whole set and never set
+    `sources_owned` — the core mechanic of per-plan sources, returning 200 the whole time. Testing
+    the helper alone is what let that ship, so this exercises create and update for real.
+    """
+    from app.industry.orders import (OrderCreate, OrderUpdate, create_order, update_order,
+                                     ensure_industry_orders_table)
+    from app.sde import get_connection
+    ensure_industry_orders_table()
+    ctx = 424242                      # a context of its own, so nothing real is touched
+    # Any buildable type will do — the binding is what is under test, not the recipe. Looked up
+    # rather than hardcoded so a different SDE cannot turn this into a false failure.
+    tid = None
+    # The same two tables `create_order` validates against, so this can never skip for a reason
+    # the endpoint would not also have.
+    with get_connection() as con:
+        r = con.execute("SELECT product_type_id AS t FROM blueprints "
+                        "UNION SELECT output_type_id AS t FROM reactions LIMIT 1").fetchone()
+        if r:
+            tid = int(dict(r)["t"])
+    check(tid is not None, "a buildable type exists to test the write path with")
+    if tid is None:
+        return
+    made = create_order(OrderCreate(product_type_id=tid, quantity=1,
+                                    source_keys=["hangar:a", "corp:b:1"],
+                                    output_source_key="corp:out:9"), ctx=ctx)
+    oid = made["id"]
+    try:
+        print("\ncreate stores BOTH bindings, not one at the cost of the other:")
+        check(made.get("output_source_key") == "corp:out:9",
+              f"the output box is persisted by create (got {made.get('output_source_key')!r})")
+        check(made.get("source_keys") == ["hangar:a", "corp:b:1"],
+              f"...and the material boxes survive alongside it (got {made.get('source_keys')})")
+
+        print("\nTHE REGRESSION: binding containers WITHOUT an output box must not drop them:")
+        up = update_order(oid, OrderUpdate(source_keys=["hangar:x", "hangar:y"]), ctx=ctx)
+        check(up.get("source_keys") == ["hangar:x", "hangar:y"],
+              f"the new set is stored (got {up.get('source_keys')})")
+        with get_connection() as con:
+            row = dict(con.execute(
+                "SELECT source_keys, sources_owned, output_source_key FROM pp_industry_orders "
+                "WHERE id=?", (oid,)).fetchone())
+        check((row.get("source_keys") or "") not in ("", "null"),
+              f"...and really reached the column, not just the response (got {row.get('source_keys')!r})")
+        check(int(row.get("sources_owned") or 0) == 1,
+              f"...and the plan took OWNERSHIP of its stock (sources_owned={row.get('sources_owned')})")
+        check((row.get("output_source_key") or "") == "corp:out:9",
+              "...while leaving the output box it never mentioned alone")
+
+        print("\nand setting only the output box must not disturb the material boxes:")
+        up = update_order(oid, OrderUpdate(output_source_key="corp:other:2"), ctx=ctx)
+        check(up.get("output_source_key") == "corp:other:2", "the output box is updated")
+        check(up.get("source_keys") == ["hangar:x", "hangar:y"],
+              f"...and the material set is untouched (got {up.get('source_keys')})")
+
+        print("\nclearing is distinguishable from never setting:")
+        up = update_order(oid, OrderUpdate(output_source_key=""), ctx=ctx)
+        check(up.get("output_source_basis") in ("inherited", "none"),
+              f"cleared falls back rather than staying stated (got {up.get('output_source_basis')!r})")
+    finally:
+        with get_connection() as con:
+            con.execute("DELETE FROM pp_industry_orders WHERE context_id=?", (ctx,))
+            con.commit()
 
 
 if __name__ == "__main__":

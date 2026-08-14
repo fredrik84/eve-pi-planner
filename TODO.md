@@ -116,29 +116,6 @@ per build.
 **Do not start at step 3.** Retiring either ownership model before the ledger exists removes the only
 thing currently preventing a double-spend.
 
-## 2f-residual. Print locking across orders — bounded, not modelled (2026-08-05, part-done 2026-08-14)
-
-**Half done, and the honest half is written down rather than claimed.** A print is one item and is
-locked while a job runs on it. Planned as one batch that was always respected; planned per order,
-each order was built on its own and saw the whole holding, so two orders each planned up to
-`prints` concurrent jobs off the SAME original.
-
-**Shipped 2026-08-14:** an order's claim is carried to the next one (`prints_used` →
-`params.prints_claimed` → `_less_claimed`), first come first served down the queue — the same rule
-already used for stock, contracts and copy-runs. Over-booking drops from *orders × prints* to
-*orders*. `test_print_locking.py`.
-
-**What is left, and why it is not a rounding error.** `_less_claimed` floors at 1, because an order
-with no print left still has to plan its jobs and emitting zero would be a plan that cannot be
-executed. So **N orders can still each plan one concurrent job off a single original.** Closing that
-means making the print a **time-shared resource inside `schedule()`** — claimed when a job starts,
-released when it ends — rather than a per-plan cap. That is the real fix and it is a scheduler
-change, not a parameter change.
-
-Worth doing when someone actually plans several orders apart against a single original per type;
-until then the bound above is the safe direction to be wrong in (too few concurrent jobs, never too
-many).
-
 ## Shipped and closed
 
 Moved to [TODO-archive.md](TODO-archive.md) — the one-line shipped list and the

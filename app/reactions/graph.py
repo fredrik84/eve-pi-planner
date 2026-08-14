@@ -331,6 +331,20 @@ def _reaction_fee_system(context_id: int, settings: dict) -> tuple[int | None, f
             return int(sid), float(tax or 0.0), basis
     except Exception:
         pass
+    # Industry's gate said no (or it has none). Reactions asks its OWN flag and reaches the same
+    # helper directly. Deliberately not an `or` inside `_default_system_on`: those are rollout-ladder
+    # flags rather than per-account opt-ins, so ORing them would let the Reactions rung move job fees
+    # on every Industry quote — a money-moving change behind a switch that never mentions Industry.
+    try:
+        from app.features import feature_enabled_for
+        if feature_enabled_for("reactions_default_system", context_id):
+            from app.industry.graph import _fallback_build_system
+            sid, tax, basis = _fallback_build_system(
+                context_id, float(settings.get("facility_tax_pct") or 0.0))
+            if sid:
+                return int(sid), float(tax or 0.0), basis
+    except Exception:
+        pass
     return None, 0.0, "none"
 
 

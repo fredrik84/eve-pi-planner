@@ -4421,8 +4421,8 @@ function _indRulesMargin(a) {
 // a statement about how the whole queue is planned, not about one build.
 function _indRulesPerOrder(a) {
   if (_indRulesMode === 'order') return '';
+  if (!_indRules.available.per_order_plans) return '';
   const po = a.per_order_plans || {};
-  if (!po.available) return '';
   return _indRuleRow('Plan each build apart',
     `<label class="ind-opt-check"><input type="checkbox" id="ir-perorder" ${po.enabled ? 'checked' : ''}`
     + ` onchange="indRulesPerOrderToggle(this)"> Keep every build's materials and jobs separate</label>`
@@ -4548,6 +4548,11 @@ async function indSaveRules() {
     }
     if (_indRules.available.sources && document.querySelector('.ir-src')) {
       patch.sources = { keys: f.srcs, enabled: true };
+    }
+    // Its own endpoint, not a build-setup section: turning it on re-prices every queued build, so
+    // it has a POST that states that rather than riding along with the rest of the rules.
+    if (_indRules.available.per_order_plans && document.getElementById('ir-perorder')) {
+      await apiSend('POST', '/api/industry/per-order-plans', { enabled: f.on('ir-perorder') });
     }
     const res = await apiSend('POST', '/api/industry/build-setup', patch);
     _indRules.account = res.account;

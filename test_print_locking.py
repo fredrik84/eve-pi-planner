@@ -1,21 +1,26 @@
 #!/usr/bin/env python3
-"""Two orders cannot both plan jobs off the same print.
+"""A blueprint is an item: jobs running off one print never overlap in time.
 
-A blueprint is an item and it is LOCKED while a job runs on it. Planned as one batch that was
-already respected; planned per order (`industry_per_order_plans`) each order was built on its own
-and saw the whole holding, so two orders each planned up to `prints` concurrent jobs off the SAME
-original — 2f-residual #2.
+A print is locked while a job is installed on it. The scheduler modelled runs and slots and never
+this, so one owned BPO planned as many simultaneous jobs as there were free slots. Capping
+concurrency inside one plan fixed it for a single batch, but a per-plan cap cannot see a second
+plan — so with `industry_per_order_plans` two orders planned apart each scheduled jobs off the SAME
+original (2f-residual #2).
 
-**What is pinned is the claim arithmetic, not a whole schedule.** `_less_claimed` is the single
-point where an earlier order's claim reaches the print cap, and these are its contract:
+`schedule()` now takes `print_caps` and treats a print exactly like a slot: a job needs a free slot
+AND a free print to start, and the print is released when the job ends. That is what neither
+approximation could express — a claim is permanent, whereas a print is merely BUSY, so it can be
+handed to the next job the moment the first finishes. Correct and cheaper than serialising.
 
-  * with nothing claimed the count is returned untouched — the aggregated plan, which never sets
-    `prints_claimed`, must be byte-for-byte what it always was;
-  * a claim reduces what is left;
-  * it FLOORS AT 1 on purpose: an order with no print left still has to plan its jobs, and emitting
-    zero would be a plan that cannot be executed rather than one that is merely optimistic. This is
-    the known residue — it bounds the over-booking, it does not model a print being handed on when
-    a job ends.
+What is pinned:
+
+  * with one print, no two jobs of that type are ever running at the same instant — across ORDERS,
+    since the resource is keyed on the real `type_id` which is shared;
+  * with N prints, at most N overlap;
+  * the print is REUSED rather than spent — n jobs on one print still all get scheduled, they just
+    queue;
+  * a type absent from `print_caps` is unlimited, which is the old behaviour and the right default:
+    a type we have observed nothing about must never be serialised on absent evidence.
 
 In-process; run inside the container against a NON-PROD database.
 
@@ -35,35 +40,69 @@ def check(cond: bool, msg: str) -> None:
         _fails.append(msg)
 
 
-class _P:
-    """Just enough of BuildParams for the helper under test."""
-    def __init__(self, claimed=None):
-        if claimed is not None:
-            self.prints_claimed = claimed
+def _run(n_jobs: int, caps, pools=8, type_id=1000, keys=None):
+    """Schedule `n_jobs` one-hour jobs of one type and return their (start, end) placements."""
+    from app.industry.schedule import Task, schedule
+    tasks = []
+    for i in range(n_jobs):
+        t = Task(task_id=f"t{i}", type_id=type_id, activity="manufacturing", runs=1,
+                 duration=3600.0)
+        # Distinct sched keys, as separately-planned orders produce — otherwise they would be one
+        # batch and the question would not arise.
+        t.key = (keys[i] if keys else i, type_id)
+        tasks.append(t)
+    by_key = {t.key: [t] for t in tasks}
+    schedule(tasks, by_key, {}, {"manufacturing": pools}, {}, print_caps=caps)
+    return [(t.start, t.end) for t in tasks]
+
+
+def _max_overlap(spans) -> int:
+    """The most jobs running at the same instant."""
+    events = []
+    for s, e in spans:
+        events.append((s, 1)); events.append((e, -1))
+    events.sort(key=lambda x: (x[0], x[1]))
+    cur = best = 0
+    for _, d in events:
+        cur += d
+        best = max(best, cur)
+    return best
 
 
 def main() -> int:
-    from app.industry.schedule import _less_claimed
+    print("\nONE print, eight free slots — the case that used to plan eight simultaneous jobs:")
+    spans = _run(8, {1000: 1})
+    check(_max_overlap(spans) == 1,
+          f"never more than one job at a time (peak {_max_overlap(spans)})")
+    check(len(spans) == 8 and all(e > 0 for _, e in spans),
+          "...and all eight are still scheduled — the print is reused, not spent")
+    check(max(e for _, e in spans) == 8 * 3600.0,
+          f"...so they queue end to end (makespan {max(e for _, e in spans)/3600:.0f}h, want 8h)")
 
-    print("\nthe aggregated plan is untouched — nothing claimed, nothing subtracted:")
-    check(_less_claimed(_P(), 4, 7) == 7, "no attribute at all leaves the count alone")
-    check(_less_claimed(_P({}), 4, 7) == 7, "an empty claim map leaves it alone")
-    check(_less_claimed(_P({99: 3}), 4, 7) == 7, "a claim on a DIFFERENT type leaves it alone")
+    print("\nthree prints:")
+    spans = _run(9, {1000: 3})
+    check(_max_overlap(spans) == 3, f"at most three overlap (peak {_max_overlap(spans)})")
+    check(max(e for _, e in spans) == 3 * 3600.0, "9 jobs on 3 prints takes 3 hours")
 
-    print("\nan earlier order's claim reduces what is left:")
-    check(_less_claimed(_P({4: 2}), 4, 7) == 5, "7 prints, 2 claimed -> 5 (got %d)"
-          % _less_claimed(_P({4: 2}), 4, 7))
-    check(_less_claimed(_P({4: 6}), 4, 7) == 1, "7 prints, 6 claimed -> 1")
+    print("\nunknown ownership must NOT serialise — no cap is the old behaviour:")
+    spans = _run(8, None)
+    check(_max_overlap(spans) == 8, f"all eight run together (peak {_max_overlap(spans)})")
+    spans = _run(8, {2222: 1})            # a cap on a DIFFERENT type
+    check(_max_overlap(spans) == 8, "a cap on another type changes nothing")
 
-    print("\n...and floors at 1 rather than emitting a plan that cannot run:")
-    check(_less_claimed(_P({4: 7}), 4, 7) == 1, "every print claimed still leaves 1")
-    check(_less_claimed(_P({4: 99}), 4, 7) == 1, "over-claiming cannot go below 1 or negative")
-    check(_less_claimed(_P({4: 1}), 4, 1) == 1, "one print, one claim -> still 1 (the known residue)")
+    print("\nTHE CROSS-ORDER CASE: two orders, one original between them:")
+    # Keys namespaced per order, exactly as plan_queue_per_order builds them. The print resource is
+    # keyed on type_id, which is NOT namespaced — that is what makes the two orders contend.
+    spans = _run(6, {1000: 1}, keys=[0, 0, 0, 1, 1, 1])
+    check(_max_overlap(spans) == 1,
+          f"two separately-planned orders still cannot both use the print (peak {_max_overlap(spans)})")
+    check(len(set(s for s, _ in spans)) == 6,
+          "...and every job gets its own start time rather than being dropped")
 
-    print("\nthe single-print case is the one that motivated this:")
-    before = 1          # what an order used to see with one owned BPO
-    after = _less_claimed(_P({4: 1}), 4, 1)
-    check(after <= before, "a second order never sees MORE than the first did")
+    print("\nthe print is handed on the instant a job ends, not held for the plan:")
+    spans = sorted(_run(3, {1000: 1}))
+    check(spans[1][0] == spans[0][1] and spans[2][0] == spans[1][1],
+          f"each job starts exactly when the previous ended (got {[(s/3600, e/3600) for s, e in spans]})")
 
     print("\n" + ("FAILED: " + "; ".join(_fails) if _fails else "all checks passed"))
     return 1 if _fails else 0

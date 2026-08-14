@@ -276,22 +276,6 @@ def _copy_limits(params, tid: int, activity: str,
     return copies, (max(limits) if limits else None), buy_runs
 
 
-def _less_claimed(params, tid: int, prints: int) -> int:
-    """`prints` minus what an earlier order in this queue already has jobs on.
-
-    Only ever set on the per-order path (`plan_queue_per_order`), where each order is planned on its
-    own and would otherwise each see the whole holding — two orders both planning off one original
-    is the thing this subtracts. The aggregated plan never sets it and is untouched.
-
-    **Floors at 1, deliberately.** An order with no print left still has to plan its jobs somehow,
-    and emitting zero would be a plan that cannot be executed rather than one that is merely
-    optimistic. The residue is the known limit recorded at `prints_used`: this bounds the
-    over-booking, it does not model a print being handed on when a job ends.
-    """
-    claimed = int((getattr(params, "prints_claimed", None) or {}).get(tid, 0))
-    return max(1, prints - claimed) if claimed > 0 else prints
-
-
 def _print_limits(params, tid: int, activity: str, runs: int) -> tuple[int | None, bool]:
     """(how many physical PRINTS this type can run jobs off, whether more can be bought).
 
@@ -342,7 +326,7 @@ def _print_limits(params, tid: int, activity: str, runs: int) -> tuple[int | Non
         n_stock = int((params.stock_prints or {}).get(tid) or 0)
         if not n_owned and not n_stock:
             return None, False               # ownership unobserved — never cap on absent evidence
-        return _less_claimed(params, tid, max(1, n_owned + n_stock)), False
+        return max(1, n_owned + n_stock), False
     copies = params.copies_for(tid, activity)
     acq = (params.bp_acquire or {}).get(tid) or {}
     buy_runs = int(acq.get("runs_per_copy") or 0)
@@ -355,7 +339,7 @@ def _print_limits(params, tid: int, activity: str, runs: int) -> tuple[int | Non
     bought = math.ceil(short / buy_runs) if (short > 0 and can_buy) else 0
     # Owning nothing and buying nothing for runs still means ONE print: the original a `bpo_only`
     # type forces you to buy, or the single copy behind an unpriced listing.
-    return _less_claimed(params, tid, max(1, len(copies) + bought)), can_buy
+    return max(1, len(copies) + bought), can_buy
 
 
 def _jobs_on_copies(runs: int, n: int, copies: list[dict], fallback: tuple[float, float],
@@ -961,11 +945,27 @@ def _fifo_priority(crit: dict[int, float], rank: dict[int, int]) -> dict[int, tu
 
 
 def schedule(tasks: list[Task], by_type: dict, deps: dict, pools: dict[str, int],
-             priority: dict[int, float]) -> dict:
+             priority: dict[int, float], print_caps: dict[int, int] | None = None) -> dict:
     """Event-driven resource-constrained list scheduler. Fills each pool's free slots with the
     highest-priority ready tasks, advancing time to the next job completion when nothing more can
-    start. Returns makespan, per-task placements, and waves (tasks grouped by start time)."""
+    start. Returns makespan, per-task placements, and waves (tasks grouped by start time).
+
+    `print_caps` makes a BLUEPRINT a second resource alongside the slot pool: `{type_id: how many
+    physical prints exist}`. A print is one item and is locked for the duration of the job on it, so
+    a job needs a free slot AND a free print to start, and the print comes back when the job ends —
+    exactly like a slot, just pooled per type rather than per activity.
+
+    This is what a per-plan cap could not express. Capping concurrency inside one plan cannot see a
+    second plan, so two orders planned apart each scheduled jobs off the same original; and
+    subtracting an earlier order's claim only bounded it, because a claim is permanent while a print
+    is merely busy. Here the print is genuinely handed on when the earlier job finishes, which is
+    both correct and cheaper than either approximation.
+
+    Omitted (or a type absent from it) = unlimited, which is the old behaviour and the right default:
+    a type we have observed nothing about must never be serialised on absent evidence."""
     free = dict(pools)
+    caps = dict(print_caps or {})
+    prints_free = dict(caps)
     completed: set[int] = set()
     running: list[Task] = []
     started: set[str] = set()
@@ -981,11 +981,18 @@ def schedule(tasks: list[Task], by_type: dict, deps: dict, pools: dict[str, int]
         )
         started_any = False
         for t in ready:
-            if free.get(t.activity, 0) > 0:
+            # A job needs a free SLOT and a free PRINT. `t.type_id` is the product, which is what
+            # identifies the blueprint or formula it runs off — and it is shared across orders, so
+            # two separately-planned builds contend for the same item here rather than each
+            # believing they hold it.
+            has_print = t.type_id not in prints_free or prints_free[t.type_id] > 0
+            if free.get(t.activity, 0) > 0 and has_print:
                 t.slot = pools[t.activity] - free[t.activity]
                 t.start = now
                 t.end = now + t.duration
                 free[t.activity] -= 1
+                if t.type_id in prints_free:
+                    prints_free[t.type_id] -= 1
                 started.add(t.task_id)
                 running.append(t)
                 remaining -= 1
@@ -1002,6 +1009,8 @@ def schedule(tasks: list[Task], by_type: dict, deps: dict, pools: dict[str, int]
         now = next_end
         for t in [x for x in running if x.end == next_end]:
             free[t.activity] += 1
+            if t.type_id in prints_free:
+                prints_free[t.type_id] = min(caps[t.type_id], prints_free[t.type_id] + 1)
             running.remove(t)
         for tid in by_type:
             if tid not in completed and all(x.end and x.end <= now for x in by_type[tid]):
@@ -1601,14 +1610,13 @@ def plan_queue_per_order(order_specs: list[dict], mfg: dict, rx: dict, prices: d
     # time-shared resource in `schedule()` rather than a per-plan cap. Until then the floor of 1
     # below means N orders can still plan N concurrent jobs off one original — down from N x prints,
     # which is what shipped before this.
-    prints_used: dict[int, int] = {}
+    print_caps: dict[int, int] = {}
 
     def _pool_for(p: BuildParams) -> BuildParams:
         """`p` with every contract bought and every copy-run spent by an earlier order removed."""
-        if not spent_listings and not owned_used and not prints_used:
+        if not spent_listings and not owned_used:
             return p
         p = copy.copy(p)
-        p.prints_claimed = dict(prints_used)
         if spent_listings and p.bp_acquire:
             acq = dict(p.bp_acquire)
             for tid_, used in spent_listings.items():
@@ -1683,11 +1691,15 @@ def plan_queue_per_order(order_specs: list[dict], mfg: dict, rx: dict, prices: d
                     plan_out=o_plan, start_out=o_start)
         # Only prints that CANNOT be bought are contended: where more are purchasable the plan buys
         # them, and `spent_listings` above already stops two orders buying the same listing.
+        # How many physical prints exist for each type. Recorded once, from the first order that
+        # plans it — no earlier order has touched the count at that point, so it is the true holding.
+        # Only types whose prints CANNOT be bought are contended: where more are purchasable the plan
+        # buys them, and `spent_listings` already stops two orders buying the same listing.
         for t_, pl_ in o_plan.items():
             pr_ = pl_.get("prints")
-            if pr_ is None or pl_.get("can_buy_prints"):
+            if pr_ is None or pl_.get("can_buy_prints") or t_ in print_caps:
                 continue
-            prints_used[t_] = prints_used.get(t_, 0) + min(int(pr_), int(pl_.get("n_wide") or 1))
+            print_caps[t_] = int(pr_)
         ctxs.append({"idx": idx, "spec": spec, "type_id": tid, "quantity": qty, "params": p,
                      "memo": memo, "unit": unit, "agg": agg, "deps": o_deps, "depths": depths,
                      "plan": o_plan, "start": o_start})
@@ -1732,7 +1744,7 @@ def plan_queue_per_order(order_specs: list[dict], mfg: dict, rx: dict, prices: d
             all_tasks.extend(tasks)
             per_ctx.append({"tasks": tasks, "by_type": o_by_type,
                             "parallel": o_parallel, "gaps": o_gaps})
-        sched = schedule(all_tasks, by_key, deps, pools, priority)
+        sched = schedule(all_tasks, by_key, deps, pools, priority, print_caps=print_caps)
         return {"tasks": all_tasks, "by_key": by_key, "sched": sched, "per_ctx": per_ctx}
 
     built = _emit(True)

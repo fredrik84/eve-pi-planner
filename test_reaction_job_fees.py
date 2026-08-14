@@ -97,13 +97,27 @@ def main() -> int:
         check(sid3 is not None, "and it resolves to a real system")
         check(abs(tax3 - 0.05) < 1e-9, f"the account's own facility tax is used, not a structure's (got {tax3})")
 
-        print("\nReactions and Industry resolve the SAME system — one job, one fee:")
+        print("\nwith BOTH inferences on, the two services resolve the SAME system:")
         _set_flag("reactions_default_system", "public")
+        _set_flag("industry_default_build_system", "public")
         r_sid, _, _ = _reaction_fee_system(ctx, {"reaction_system": None, "facility_tax_pct": 0.0})
         i_sid, _, i_basis = account_build_defaults(ctx, with_basis=True)
         check(r_sid == i_sid,
-              f"the two services agree about where jobs are installed ({r_sid} vs {i_sid})")
+              f"one job, one fee — they cannot diverge ({r_sid} vs {i_sid})")
         check(i_basis in ("structure", "reference"), f"on the same basis (got '{i_basis}')")
+
+        print("\n...but the REACTIONS flag alone must not move an INDUSTRY quote:")
+        # These are rollout-ladder flags, not per-account opt-ins. `_default_system_on` briefly
+        # ORed the Reactions flag in, which would have let the Reactions rung start charging
+        # inferred job fees on every Industry user's build — a money-moving change behind a switch
+        # that never mentions Industry. Reactions reaches the same helper through its own gate.
+        _set_flag("industry_default_build_system", "admin")
+        _set_flag("reactions_default_system", "public")
+        r_sid2, _, r_basis2 = _reaction_fee_system(ctx, {"reaction_system": None, "facility_tax_pct": 0.0})
+        i_sid2, _, i_basis2 = account_build_defaults(ctx, with_basis=True)
+        check(r_sid2 is not None, f"Reactions still infers on its own flag (got {r_sid2})")
+        check(i_sid2 is None and i_basis2 == "none",
+              f"...while Industry stays exactly where it was (got {i_sid2}, '{i_basis2}')")
     finally:
         for k, v in prior.items():
             _set_flag(k, v)

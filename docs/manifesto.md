@@ -135,7 +135,7 @@ adds a knob belongs in the second list only if a real player judgement lives beh
    is not the gap; sharing a gate was.** What remains, and is now stated in the UI rather than
    silent, is that stock-sourced formula counts still read as "you own nothing" for an account with
    no Industry features — the safe direction, since a cap that does not bind never refuses work.
-   The live rollout question that outlives it is `TODO.md` §32: not one Reactions flag defaults to
+   The live rollout question that outlives it is §32 (held by the user — see `TODO-archive.md`): not one Reactions flag defaults to
    public, so the standalone tool is standalone for admins.
 3. **The pricing rule is right and load-bearing.** Instant-sell as the profit signal is correct and
    must survive every future feature; it is called out here because it is the single rule whose

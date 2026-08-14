@@ -212,7 +212,7 @@ def _order_dict(con, row) -> dict:
     d["output_source_key"] = out_key
     d["output_source_basis"] = out_basis
     try:
-        from app.industry.sourcing import source_name
+        from app.industry.assets import source_name
         d["output_source_name"] = source_name(d.get("context_id"), out_key) if out_key else None
     except Exception:
         d["output_source_name"] = None
@@ -378,10 +378,6 @@ def update_order(order_id: int, req: OrderUpdate, ctx: int = Depends(require_con
         owned = sent and bool(bound)
         if bound is not None:
             sets.append("source_key=?"); params.append(bound[0] if bound else "")
-        if req.output_source_key is not None:
-            # '' is a real instruction here (clear it), not "unset", so this is an explicit
-            # `is not None` rather than a truthiness test.
-            sets.append("output_source_key=?"); params.append(req.output_source_key.strip())
             sets.append("source_keys=?"); params.append(json.dumps(bound))
             if sent:
                 # Editing the set through the per-plan picker is the user taking ownership of this
@@ -389,6 +385,14 @@ def update_order(order_id: int, req: OrderUpdate, ctx: int = Depends(require_con
                 # Clearing every box hands it back, rather than leaving a plan that owns nothing and
                 # can therefore count nothing.
                 sets.append("sources_owned=?"); params.append(1 if bound else 0)
+        # SEPARATE from the block above, and it must stay separate: the output box is its own
+        # binding, so a PATCH that sets only it must not touch `source_keys`, and a PATCH that sets
+        # only the sources must not clear it. Nesting these two under one `if` shipped on
+        # 2026-08-14 and silently dropped every multi-box bind that did not also send an output box.
+        if req.output_source_key is not None:
+            # '' is a real instruction here (clear it), not "unset", so this is an explicit
+            # `is not None` rather than a truthiness test.
+            sets.append("output_source_key=?"); params.append(req.output_source_key.strip())
         if req.status is not None:
             if req.status not in _VALID_STATUSES:
                 raise HTTPException(status_code=400, detail=f"status must be one of {_VALID_STATUSES}")

@@ -40,6 +40,7 @@ _SECTION_FEATURES: dict[str, str | None] = {
     "job_length": "industry_job_length_policy",
     "pins": None,              # rides on the routing flag — see settings._pins_available
     "sources": "industry_plan_sources",
+    "per_order_plans": "industry_per_order_plans",
 }
 
 
@@ -87,6 +88,11 @@ def account_setup(context_id: int) -> dict:
         "job_length": {"max_reaction_job_days": get_max_reaction_job_days(context_id)},
         "pins": {"pins": pins["pins"], "families": pins["families"]},
         "sources": _sources_section(context_id),
+        # Whether the queue is planned order by order rather than as one shared batch. It lives here
+        # because it is a standing RULE about how planning works, and because the control had no
+        # home at all until 2026-08-14 — the setting and `/queue-plan/compare` were endpoints only,
+        # so what shipped to testers was the half that costs ISK without the half that spends it.
+        "per_order_plans": {"enabled": bool(s.get("per_order_plans"))},
     }
 
 

@@ -2616,8 +2616,9 @@ function _rxJobFeeNoteHtml(basis) {
   }
   if (basis === 'reference') {
     return `<div class="settings-note">No system set and no structure on file, so install fees are
-      quoted against <b>Jita as a reference floor</b> — it will read low if you react in null-sec.
-      Name a system above for a real number.</div>`;
+      quoted against <b>Jita as a reference</b>, whose cost index sits at the top of the range — so
+      the fee reads <b>high</b> if you react somewhere quieter. Conservative on purpose; name a
+      system above for a real number.</div>`;
   }
   return `<div class="settings-note">No system set, so <b>job install fees are left out</b> of
     every estimate, which overstates profit by the fee. Name a system above, or ask an admin for

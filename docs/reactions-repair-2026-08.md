@@ -2,7 +2,7 @@
 
 What a three-reviewer audit of the Reactions service found, what to do about it, and how the work
 splits across implementing agents. Back to [CLAUDE.md](../CLAUDE.md). Backlog entries §29, §30 and §31 — **all three closed 2026-08-14**, verdicts in
-[TODO-archive.md](../TODO-archive.md). The open question this left is `TODO.md` §32, the rollout.
+[TODO-archive.md](../TODO-archive.md). The open question this left is §32, the rollout — held by the user, in `TODO-archive.md`.
 
 Find a section: `grep -n '^## ' docs/reactions-repair-2026-08.md` and read from that line.
 
@@ -438,7 +438,7 @@ parallel-stage slot reuse, no levelled run counts, no host packing, the old tabl
 pipeline, no manual mark, no missing-formula report and no cadence — precisely the tool the last
 month's work existed to replace. The good behaviour is the exception.
 
-TODO §14 forces this choice for Industry and has no Reactions equivalent, with more force here
+TODO §14 (now in `TODO-archive.md`, held by the user) forces this choice for Industry and has no Reactions equivalent, with more force here
 because the manifesto calls Reactions standalone and public-facing. **Write the equivalent forcing
 entry**: for each of the thirteen, promote it or record why not. The registry's own rule applies —
 retire a flag when the answer to "would we ever turn this off again?" is no. `formula_cap`,
@@ -575,7 +575,7 @@ material cost direction; the order profit panel (`orders.py:55-76`); `give_back_
 `library.py`; the under-production warning's one-directional design; every manual escape hatch.
 
 **Do not propose reverting** — already tried, measured and rejected, each with its reasoning
-recorded: the even per-host split (`docs/reactions.md:319-330` and TODO.md §28), the job-length
+recorded: the even per-host split (`docs/reactions.md:319-330` and the job-layout priority order, now in `docs/reactions.md`), the job-length
 dropdown (`:466`), `_cadence_drift`'s 0/1 flag (`:620`), `_seed_cadence_counts` (`:635`), the
 per-chain 3× ceiling (`:552`), and every structure-config-derived time multiplier —
 `struct_time_pct`, `rx_bonus.te`, `_routed_reaction_time_mult` (`:671, :686, :690`).

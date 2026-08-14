@@ -912,17 +912,18 @@ def account_build_defaults(context_id: int, with_basis: bool = False):
 
 
 def _default_system_on(context_id: int) -> bool:
-    """Either flag opens the inference, because both services ask this one question.
+    """Industry's own gate on the inference — this flag and no other.
 
-    `reactions_default_system` exists so a reactions-only account can be given it without being
-    handed a Manufacturing flag — the same gap, and the same fix, as the cadence (2026-08-14). An
-    account with only the Reactions flag also gets the inference on the Industry side; that is
-    harmless by construction, since an account not using Industry has no Industry quote to move.
+    It briefly ORed in `reactions_default_system` (2026-08-14) so a reactions-only account could
+    reach the inference. That was wrong and was reverted the same day: these are ROLLOUT-LADDER
+    flags, not per-account opt-ins, so promoting the Reactions one would have moved job fees on
+    every Industry user's quote through a switch that says nothing about Industry. Reactions reaches
+    the same inference through `app.reactions.graph._reaction_fee_system`, which asks its own flag
+    and calls `_fallback_build_system` itself — the shared machinery without the shared gate.
     """
     try:
         from app.features import feature_enabled_for
-        return bool(feature_enabled_for("industry_default_build_system", context_id)
-                    or feature_enabled_for("reactions_default_system", context_id))
+        return feature_enabled_for("industry_default_build_system", context_id)
     except Exception:
         return False
 
