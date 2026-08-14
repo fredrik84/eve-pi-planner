@@ -75,38 +75,69 @@ accretion — `pp_baskets_old`, `pp_profiles_new`, `pp_session` alongside `pp_se
 `pp_characters_context`, and two pairs of near-identically-named settings tables. Whatever the
 verdict on the blob, that is worth a pass on its own.
 
-## 17. Stock sources have four surfaces (2026-08-05, low)
+## 17. Stock: reserve what a plan has claimed, then one pool is enough (2026-08-05, reframed 2026-08-14)
 
-One concept — *which boxes may this build spend* — is expressed in the plan modal's "Materials
-from", the sourcing panel's "Pulling from", Settings → Blueprints & formulas → Stock on hand's
-tick list, and saved source
-sets, under **two** ownership models that coexist behind `industry_plan_sources` (account-wide tick
-list vs. a build owning its boxes). `plan_source_keys` exists solely to reconcile them per request.
+**Reframed by the user 2026-08-14, and it turns the item inside out:** *"If we track what is
+assigned to slots I'm actually fine with doing account wide stock. Otherwise we should track it via
+the plans. I still want us to inventory containers if they choose it as a material source."*
 
-**Decided by the user 2026-08-14: the PER-BUILD model wins.** *"Per build was what I've asked for
-earlier. My users want to use a selectable container per plan because that's how they track what
-they've acquired."* So a build owns its boxes, and the account-wide tick list is the one to retire —
-it becomes the fallback for orders queued before per-plan sources, nothing more.
+So the two ownership models are not really a taste question. **Per-plan boxes are doing a job that
+belongs to a reservation ledger** — stopping two plans from spending the same units — and they are
+doing it by partitioning the pool, which is a blunt instrument that also costs the user a decision
+per build.
 
-That also settles the output side: the container a build delivers INTO is a property of the plan
-(shipped 2026-08-14), which is the same decision applied to the other direction.
+**What is actually true today** (verified 2026-08-14, not assumed):
 
-Altitude, not correctness — every surface is individually justified and the feature is right. The
-work now is to retire the account-wide model rather than to reconcile the two: `plan_source_keys`
-exists solely to translate between them per request, and it can go with it.
+* `owned_quantities` / `source_quantities_multi` read `pp_asset_stock` raw. **Nothing anywhere
+  subtracts units already promised to a queued order or an installed job.** Reactions states the
+  same gap outright — *"there is no reservation ledger"* (`docs/reactions.md`, `graph.py`) — so this
+  is one missing mechanism, not two.
+* The gap is only between PLANNING and INSTALLING. Once a job is installed the materials physically
+  leave the container, so the next ESI scan is correct on its own. What can be double-promised is
+  the window in between.
+* **Containers picked as a material source ARE inventoried already.** The scan writes every source
+  it discovers into `pp_asset_sources` and its contents into `pp_asset_stock`; `enabled` only gates
+  the account-wide pool, and a per-plan read goes by key and ignores it. The user's requirement here
+  is met — no work needed, and do not "fix" `enabled` into the per-plan read.
 
-## 2f-residual. Print locking across orders (2026-08-05)
+**The work, in order:**
 
-The last of the three per-order-planning leftovers; the other two (container as plan output, and the
-missing UI) shipped 2026-08-14.
+1. **A reservation ledger.** Units committed by a queued order or an uninstalled scheduled job are
+   subtracted from what the next plan may count. Keyed per (context, type), released when the order
+   is cleared or when the scan shows the materials gone. This is the piece that makes the rest
+   optional.
+2. **Then account-wide stock is safe**, and the per-build set stops being a correctness mechanism.
+   Keep it as a *tracking* convenience — the user's builders bind a can per build to track what they
+   have acquired, which is a real use even when the arithmetic no longer needs it — but it stops
+   being the thing standing between two builds and a double-spend.
+3. **Only then** collapse the surfaces: `plan_source_keys` exists solely to translate between the
+   two models per request and goes with the model it reconciles.
 
-**Two orders sharing one BPO can each schedule a concurrent job off it.** Per-order copy RUNS are
-consumed correctly, but the print itself is not a scheduling resource — it is a per-plan cap — so
-each plan sees the whole original. Fixing it properly means making the print a resource the
-scheduler allocates, which is bigger than it looks. It only bites an account planning apart with a
-single original per type.
+**Do not start at step 3.** Retiring either ownership model before the ledger exists removes the only
+thing currently preventing a double-spend.
 
----
+## 2f-residual. Print locking across orders — bounded, not modelled (2026-08-05, part-done 2026-08-14)
+
+**Half done, and the honest half is written down rather than claimed.** A print is one item and is
+locked while a job runs on it. Planned as one batch that was always respected; planned per order,
+each order was built on its own and saw the whole holding, so two orders each planned up to
+`prints` concurrent jobs off the SAME original.
+
+**Shipped 2026-08-14:** an order's claim is carried to the next one (`prints_used` →
+`params.prints_claimed` → `_less_claimed`), first come first served down the queue — the same rule
+already used for stock, contracts and copy-runs. Over-booking drops from *orders × prints* to
+*orders*. `test_print_locking.py`.
+
+**What is left, and why it is not a rounding error.** `_less_claimed` floors at 1, because an order
+with no print left still has to plan its jobs and emitting zero would be a plan that cannot be
+executed. So **N orders can still each plan one concurrent job off a single original.** Closing that
+means making the print a **time-shared resource inside `schedule()`** — claimed when a job starts,
+released when it ends — rather than a per-plan cap. That is the real fix and it is a scheduler
+change, not a parameter change.
+
+Worth doing when someone actually plans several orders apart against a single original per type;
+until then the bound above is the safe direction to be wrong in (too few concurrent jobs, never too
+many).
 
 ## Shipped and closed
 

@@ -276,6 +276,22 @@ def _copy_limits(params, tid: int, activity: str,
     return copies, (max(limits) if limits else None), buy_runs
 
 
+def _less_claimed(params, tid: int, prints: int) -> int:
+    """`prints` minus what an earlier order in this queue already has jobs on.
+
+    Only ever set on the per-order path (`plan_queue_per_order`), where each order is planned on its
+    own and would otherwise each see the whole holding — two orders both planning off one original
+    is the thing this subtracts. The aggregated plan never sets it and is untouched.
+
+    **Floors at 1, deliberately.** An order with no print left still has to plan its jobs somehow,
+    and emitting zero would be a plan that cannot be executed rather than one that is merely
+    optimistic. The residue is the known limit recorded at `prints_used`: this bounds the
+    over-booking, it does not model a print being handed on when a job ends.
+    """
+    claimed = int((getattr(params, "prints_claimed", None) or {}).get(tid, 0))
+    return max(1, prints - claimed) if claimed > 0 else prints
+
+
 def _print_limits(params, tid: int, activity: str, runs: int) -> tuple[int | None, bool]:
     """(how many physical PRINTS this type can run jobs off, whether more can be bought).
 
@@ -326,7 +342,7 @@ def _print_limits(params, tid: int, activity: str, runs: int) -> tuple[int | Non
         n_stock = int((params.stock_prints or {}).get(tid) or 0)
         if not n_owned and not n_stock:
             return None, False               # ownership unobserved — never cap on absent evidence
-        return max(1, n_owned + n_stock), False
+        return _less_claimed(params, tid, max(1, n_owned + n_stock)), False
     copies = params.copies_for(tid, activity)
     acq = (params.bp_acquire or {}).get(tid) or {}
     buy_runs = int(acq.get("runs_per_copy") or 0)
@@ -339,7 +355,7 @@ def _print_limits(params, tid: int, activity: str, runs: int) -> tuple[int | Non
     bought = math.ceil(short / buy_runs) if (short > 0 and can_buy) else 0
     # Owning nothing and buying nothing for runs still means ONE print: the original a `bpo_only`
     # type forces you to buy, or the single copy behind an unpriced listing.
-    return max(1, len(copies) + bought), can_buy
+    return _less_claimed(params, tid, max(1, len(copies) + bought)), can_buy
 
 
 def _jobs_on_copies(runs: int, n: int, copies: list[dict], fallback: tuple[float, float],
@@ -1574,11 +1590,25 @@ def plan_queue_per_order(order_specs: list[dict], mfg: dict, rx: dict, prices: d
     # are NOT consumed (they run forever) — only copies are.
     owned_used: dict[int, int] = {}
 
+    # Concurrent PRINTS an earlier order has already claimed. A print is one item and it is locked
+    # while a job runs on it, so two orders cannot both plan jobs off the same original — but each
+    # order planned on its own saw the whole holding and did exactly that (2f-residual #2). Same
+    # first-come-first-served rule as the stock, the contracts and the copy-runs above, and for the
+    # same physical reason.
+    #
+    # **This BOUNDS the over-booking, it does not model it.** A print freed when an earlier order's
+    # job ends is genuinely available to a later one, and expressing that needs the print to be a
+    # time-shared resource in `schedule()` rather than a per-plan cap. Until then the floor of 1
+    # below means N orders can still plan N concurrent jobs off one original — down from N x prints,
+    # which is what shipped before this.
+    prints_used: dict[int, int] = {}
+
     def _pool_for(p: BuildParams) -> BuildParams:
         """`p` with every contract bought and every copy-run spent by an earlier order removed."""
-        if not spent_listings and not owned_used:
+        if not spent_listings and not owned_used and not prints_used:
             return p
         p = copy.copy(p)
+        p.prints_claimed = dict(prints_used)
         if spent_listings and p.bp_acquire:
             acq = dict(p.bp_acquire)
             for tid_, used in spent_listings.items():
@@ -1651,6 +1681,13 @@ def plan_queue_per_order(order_specs: list[dict], mfg: dict, rx: dict, prices: d
         o_start: dict[int, float] = {}
         build_tasks(agg, mfg, rx, p, pools, depths=depths, deps=o_deps, align=False,
                     plan_out=o_plan, start_out=o_start)
+        # Only prints that CANNOT be bought are contended: where more are purchasable the plan buys
+        # them, and `spent_listings` above already stops two orders buying the same listing.
+        for t_, pl_ in o_plan.items():
+            pr_ = pl_.get("prints")
+            if pr_ is None or pl_.get("can_buy_prints"):
+                continue
+            prints_used[t_] = prints_used.get(t_, 0) + min(int(pr_), int(pl_.get("n_wide") or 1))
         ctxs.append({"idx": idx, "spec": spec, "type_id": tid, "quantity": qty, "params": p,
                      "memo": memo, "unit": unit, "agg": agg, "deps": o_deps, "depths": depths,
                      "plan": o_plan, "start": o_start})
