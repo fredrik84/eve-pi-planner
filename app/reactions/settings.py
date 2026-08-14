@@ -28,15 +28,25 @@ _RXS_DEFAULTS = {"import_isk_per_m3": 1200.0, "export_isk_per_m3": 1200.0, "expo
                   # than silently assuming some arbitrary system's cost index applies to you.
                   "reaction_system": None, "facility_tax_pct": 0.0,
                   # Real reaction job duration in-game is shorter than raw SDE cycle_time — reactor
-                  # efficiency rigs, skills, and structure/security bonuses all reduce it, and unlike
-                  # material consumption (REACTION_ME_REDUCTION, a single well-known T1 rig figure)
-                  # there's no one fixed number: it depends on the player's actual fit and where they
-                  # react, which we have NO way to detect (ESI only reports facility for a job
-                  # that's already installed, not one we're still planning, and a corp hangar
-                  # reachable from every character isn't tied to one structure anyway — confirmed
-                  # with the user 2026-07-13). So this is a manual figure, same pattern as
-                  # reaction_system/facility_tax_pct: 0% default (today's un-corrected behavior)
-                  # until a player sets their own observed reduction.
+                  # efficiency rigs, skills, and structure/security bonuses all reduce it.
+                  #
+                  # This used to be a hand-typed number defaulting to 0%, on the grounds that the
+                  # bonus could not be detected. **That is no longer true in this codebase.**
+                  # `reaction_time_mult_for` (app/reactions/jobs.py) reads the real ratio off ESI job
+                  # durations — measured, persisted, and falling back to the account's skills alone
+                  # when nothing has ever been observed. Leaving the typed 0% default in place meant
+                  # every duration and ETA the player reads was quoted off a clock running ~2.14x
+                  # slow (measured multiplier 0.4680) while the leveller, which DID read the
+                  # measurement, sized the same jobs off the real one. Two clocks, one plan.
+                  #
+                  # So 0 no longer means "no bonus" — it means **not overridden**, and
+                  # `effective_reaction_settings` derives the real figure. A non-zero value is an
+                  # explicit override and always wins (CLAUDE.md rule 3: no knob for a computable
+                  # number; rule 5: live data trumps unless reliably derivable — both point here).
+                  # Kept as 0-means-unset rather than NULL because the column ships
+                  # `REAL NOT NULL DEFAULT 0` on two tables and SQLite cannot drop a NOT NULL; a
+                  # deliberate "exactly 0%" override is indistinguishable from the un-set state and
+                  # is also the one value the measurement can never legitimately be.
                   "time_efficiency_pct": 0.0}
 _GLOBAL_SETTINGS_GROUP_ID = 0  # sentinel "no group" row — kept as a real (non-NULL) value since
 # a nullable PRIMARY KEY doesn't behave consistently across SQLite and Postgres.
@@ -63,7 +73,12 @@ def _add_settings_columns(con, table: str) -> None:
 
 def _settings_row(row) -> dict:
     """Row -> settings dict. The two tax/efficiency columns coalesce because rows written before
-    those columns existed carry NULL, and the pricing math wants a number."""
+    those columns existed carry NULL, and the pricing math wants a number.
+
+    `time_efficiency_pct` comes back RAW here — the stored override, 0 when unset. Only
+    `effective_reaction_settings` derives the measured figure; the settings FORMS must keep seeing
+    what was actually typed, or a derived value would be written straight back as an override the
+    next time anyone pressed Save."""
     return {
         "import_isk_per_m3": row["import_isk_per_m3"],
         "export_isk_per_m3": row["export_isk_per_m3"],
@@ -202,6 +217,44 @@ def _invalidate_reaction_settings_cache(context_id: int | None = None) -> None:
         _SETTINGS_CACHE.pop(context_id, None)
 
 
+_DERIVING: set[int] = set()
+
+
+def derived_time_efficiency(context_id: int) -> tuple[float, str]:
+    """The account's REAL reaction time efficiency as a fraction 0-1, and where it came from.
+
+    `reaction_time_mult_for` returns what a reaction job really takes as a fraction of its raw SDE
+    cycle time — measured from ESI job durations where the account has ever reacted, the skills
+    multiplier alone where it has not. Time efficiency is the other half of that: `1 - mult`.
+
+    Returns ("measured" | "skills" | "none", ...) so the UI can say whether the number is a
+    measurement or an estimate that will tighten after the first real job (there is no honest way
+    to present a guess as a fact — see the repair spec's 3e).
+
+    Imported lazily: `app.reactions.settings` is the base layer of the package and must not import
+    the jobs module at module scope. Failure is never fatal — a settings read that cannot reach the
+    DB falls back to "no derivation", which is the old behaviour."""
+    # The cache entry is written only AFTER this returns, so anything reached from here that asks
+    # for settings again would recurse forever. Nothing does today; the guard is what keeps that
+    # true when someone adds a settings read to the measurement path.
+    if context_id in _DERIVING:
+        return 0.0, "none"
+    _DERIVING.add(context_id)
+    try:
+        from app.reactions.jobs import _reaction_time_mult, _reaction_skill_mult
+        measured = _reaction_time_mult(context_id, _derive=False)
+        if measured and 0.0 < measured < 1.0:
+            return 1.0 - float(measured), "measured"
+        skills = _reaction_skill_mult(context_id)
+        if skills and 0.0 < skills < 1.0:
+            return 1.0 - float(skills), "skills"
+    except Exception:
+        pass
+    finally:
+        _DERIVING.discard(context_id)
+    return 0.0, "none"
+
+
 def effective_reaction_settings(context_id: int) -> dict:
     """The shipping/collateral rate actually used to price a specific account's reactions,
     resolved personal override -> group default -> global default. JF/import costs genuinely
@@ -213,12 +266,26 @@ def effective_reaction_settings(context_id: int) -> dict:
     resolves this several times (every _load_goo_and_reached, the value math, the job-cost math)
     and each miss is 2-3 DB round-trips. The account-settings endpoints invalidate the caller's
     entry on edit; the group-default case is bounded by _SETTINGS_TTL. Returns a fresh copy so a
-    caller can't mutate the cached dict."""
+    caller can't mutate the cached dict.
+
+    **`time_efficiency_pct` is DERIVED here** unless the account (or its group) typed an explicit
+    override. See _RXS_DEFAULTS for why: the bonus is measurable from ESI job durations, so the
+    clock every user-facing duration and ETA is quoted off is now the same one the leveller already
+    sized jobs against. `time_efficiency_source` says which of measured/skills/override/none it is,
+    so a surface can admit that an unmeasured account's figure is an estimate. The memoization
+    above is what keeps the measurement's cost bounded — it is a scan of the account's cached ESI
+    job JSON, paid at most once per _SETTINGS_TTL per account, not once per priced material."""
     now = _time.monotonic()
     hit = _SETTINGS_CACHE.get(context_id)
     if hit and now - hit[0] < _SETTINGS_TTL:
         return dict(hit[1])
     result = _account_reaction_settings_override(context_id) or _group_defaults(context_id)
+    result = dict(result)
+    override = float(result.get("time_efficiency_pct") or 0.0)
+    if override > 0.0:
+        result["time_efficiency_source"] = "override"
+    else:
+        result["time_efficiency_pct"], result["time_efficiency_source"] = derived_time_efficiency(context_id)
     _SETTINGS_CACHE[context_id] = (now, result)
     return dict(result)
 
@@ -231,15 +298,24 @@ class ReactionSettingsUpdate(BaseModel):
     # installation cost is skipped entirely rather than guessed.
     reaction_system: str | None = None
     facility_tax_pct: float = 0.0
-    # Fraction 0-1 (e.g. 0.532 for 53.2%) — see _RXS_DEFAULTS for why this can't be auto-detected.
+    # Fraction 0-1 (e.g. 0.532 for 53.2%), and an OVERRIDE only: 0 means "use the measured figure"
+    # (see _RXS_DEFAULTS and effective_reaction_settings), not "no reactor bonus".
     time_efficiency_pct: float = 0.0
 
 
 @router.get("/api/reactions/settings")
 def api_get_reaction_settings(ctx: int = Depends(require_context)):
     """Always the CALLER's own group's settings (or the global default) — a manager only ever
-    needs to see/edit their own group's rate, never someone else's."""
-    return _group_defaults(ctx)
+    needs to see/edit their own group's rate, never someone else's.
+
+    Carries the caller's own DERIVED time efficiency alongside the stored group value for the same
+    reason the account endpoint does: the typed field is an override, and the form has to say what
+    the app uses when it is left unset."""
+    out = dict(_group_defaults(ctx))
+    te_pct, te_source = derived_time_efficiency(ctx)
+    out["derived_time_efficiency_pct"] = te_pct
+    out["time_efficiency_source"] = te_source
+    return out
 
 
 def _resolve_system_id(name: str | None) -> int | None:
@@ -284,7 +360,13 @@ def api_get_account_reaction_settings(ctx: int = Depends(require_context)):
     actually getting and whether it's their own override or an inherited default."""
     override = _account_reaction_settings_override(ctx)
     default = _group_defaults(ctx)
-    return {"override": override, "default": default, "effective": override or default}
+    # ...and the DERIVED time efficiency, so the form can say what the app is really using when the
+    # typed field is left at 0 — the knob is an override now, not the source of truth, and a form
+    # that shows a blank 0 next to a plan sized off 53.2% is exactly the two-clocks confusion this
+    # replaced. `source` distinguishes a measurement from the skills-only estimate.
+    te_pct, te_source = derived_time_efficiency(ctx)
+    return {"override": override, "default": default, "effective": override or default,
+            "derived_time_efficiency_pct": te_pct, "time_efficiency_source": te_source}
 
 
 @router.put("/api/reactions/account-settings")

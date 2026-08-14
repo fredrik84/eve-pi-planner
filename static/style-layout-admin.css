@@ -737,6 +737,28 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 }
 .rx-slot-orphan-badge:hover { background: #3a2f14; border-color: #b08a3a; color: #ffe08a; }
 
+/* A planned job that will run PAST the job-length window the player set. Amber like the orphan and
+   the under-production warning rather than red: the plan is not broken, it is telling you a trade
+   it had to make — the stage has more reactor-hours of work than the free reactors can turn over
+   inside that window, and the cadence is a stated target, not a hard ceiling. */
+.rx-slot-over { border-color: #b08a3a; }
+.rx-slot-over-badge {
+  position: absolute; bottom: -7px; left: -5px; font-size: 8px; line-height: 1; white-space: nowrap;
+  color: #f0c860; background: #241d0e; border: 1px solid #7a5f2a; border-radius: 6px;
+  padding: 2px 4px;
+}
+
+/* What ease cost, with the remedy attached (`reactions_ease_cost`). Deliberately NOT the amber of
+   the under-production warning: nothing here needs acting on, it is a price being reported so the
+   player can decide whether they want it back. Same reason it sits below the cadence row rather
+   than at the top of the card. */
+.rx-ease-cost {
+  border: 1px solid var(--clr-border); border-left: 3px solid #5a7fa8; border-radius: 6px;
+  background: #111721; padding: 9px 12px; margin: 6px 0 10px; font-size: 12px;
+  color: var(--clr-text-soft); line-height: 1.5;
+}
+.rx-ease-cost b { color: var(--clr-text); }
+
 /* A <details><summary class="pp-card-title"> used as a foldable card header: the plain
    .pp-card-title class alone renders fine as a <div>, but a <summary> defaults to
    display:list-item — without overriding that, the flex/full-width background from

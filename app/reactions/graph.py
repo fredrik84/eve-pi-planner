@@ -581,10 +581,23 @@ def reactions_opportunities(context_id: int = Depends(require_context)):
 def reactions_job_detail(type_id: int, runs: int = 1, context_id: int = Depends(require_context)):
     """Full breakdown for ONE running (or hypothetical) reaction job of `runs` runs of `type_id`:
     the materials it consumes, input/job cost, output value and net profit, units produced and
-    total runtime — priced LIVE the same way the opportunity list is (Fuzzworks sell + the caller's
+    total runtime — priced LIVE the same way the opportunity list is (the caller's own
     group/import settings), so the modal a player opens off a running slot agrees with the rest of
     the tool. Reuses _value_reaction_batch (the single source of truth for reaction economics) and
-    the shopping-list explode rather than re-deriving any of it."""
+    the shopping-list explode rather than re-deriving any of it.
+
+    **`output_value` and `net_profit` are the INSTANT-SELL figures** — what buy orders pay today,
+    less every cost. That is CLAUDE.md's pricing invariant: a reaction good's sell-order price is
+    not achievable profit, and the modal's profit line (and the ROI the frontend derives from it)
+    is exactly a profit figure. Until 2026-08-14 both were quoted at sell orders while
+    `instant_value` was computed and never read by anything. The sell-order pair is still returned,
+    as `sell_order_value` / `net_profit_order`, and the modal labels them as the patient answer
+    rather than the achievable one.
+
+    `runtime_hours` comes off the graph's `cycle_time`, which is the raw SDE figure reduced by the
+    account's time efficiency — now DERIVED from measured job durations rather than a hand-typed
+    0% (see app.reactions.settings). So the quoted duration is the clock the account really reacts
+    at, not one running ~2.14x slow."""
     runs = max(1, runs)
     loaded = _load_goo_and_reached(context_id)
     node = loaded[1].get(type_id) if loaded else None
@@ -617,9 +630,15 @@ def reactions_job_detail(type_id: int, runs: int = 1, context_id: int = Depends(
         "runtime_hours": round(cycle_time * runs / 3600.0, 2),
         "input_cost": round(v["input_cost"], 2),
         "job_cost": round(v["job_cost"], 2),
-        "output_value": round(v["output_value"], 2),
+        # Instant-sell (buy orders) — the achievable pair, and what the modal shows as Profit.
+        "output_value": round(v.get("instant_value", 0.0), 2),
         "instant_value": round(v.get("instant_value", 0.0), 2),
-        "net_profit": round(v["net_profit"], 2),
+        "net_profit": round(v.get("net_profit_instant", v["net_profit"]), 2),
+        # Sell orders — market context, shown as "if you sell to orders (patience required)".
+        "sell_order_value": round(v["output_value"], 2),
+        "net_profit_order": round(v["net_profit"], 2),
+        "shipping": round(v["shipping"], 2),
+        "collateral": round(v["collateral"], 2),
         "priced": m is not None,
         "materials": materials,
     }

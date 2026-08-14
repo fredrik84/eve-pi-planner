@@ -237,9 +237,9 @@ player commits, not after.
 
 ## The headline numbers are valued from the PLAN, not from stored costs
 
-`ISK committed`, `Expected output value` and `Expected profit / day` used to be plain sums of each
-row's `input_cost`/`reward`, written once at assign time. Both were wrong, and reported as such
-(2026-08-10):
+The tiles (today `Materials committed`, `Full cost`, `Expected output value (instant sell)` and
+`Expected profit / day`) used to be plain sums of each row's `input_cost`/`reward`, written once at
+assign time. Both were wrong, and reported as such (2026-08-10):
 
 * **`ISK committed` read 4.93m against a plan holding ~590m of materials.** Chain-tier rows are
   stored at zero cost (three insert sites do it deliberately — the chain's cost used to roll up into
@@ -249,12 +249,30 @@ row's `input_cost`/`reward`, written once at assign time. Both were wrong, and r
   purpose, because an order's revenue is what the client agreed to pay and nothing here can derive
   it. A plan of orders plus their intermediates therefore had no row carrying profit at all.
 
-`_plan_totals` replaces both sums. **Committed is the plan's own materials at today's unit cost** —
-literally the shopping list, priced (`_plan_materials`), which is the ISK you actually have to
-spend. **Output value counts only END products**, the rows nothing else in the plan consumes
-(`_plan_intermediates`, read from the recipes rather than from whether a cost happens to be zero —
-that proxy is what mislabelled an order's top row). **Profit per day divides by the plan's
-makespan**, the sum over stages of the longest job in each, because stages run in sequence.
+`_plan_totals` replaces both sums. **Output value counts only END products**, the rows nothing else
+in the plan consumes (`_plan_intermediates`, read from the recipes rather than from whether a cost
+happens to be zero — that proxy is what mislabelled an order's top row). **Profit per day divides
+by the plan's makespan**, the sum over stages of the longest job in each, because stages run in
+sequence — one definition, shared with the orphan-job half of the tile and with the wizard's
+`sequential_makespan_hours`, rather than two rates added together.
+
+### Two costs, and profit is netted against the larger one
+
+Settled 2026-08-14 (open question a of the repair spec). The tile that used to read `ISK committed`
+is **`Materials committed`**: the plan's own materials at today's unit cost, literally the shopping
+list, priced (`_plan_materials`). It is a useful number — it is what you go and buy — and it is
+**not** the cost base for profit. A shopping list does not carry job install fees, export freight or
+courier collateral, and all three are ISK the plan really spends, so netting revenue against it
+flattered every plan by exactly those three.
+
+So `_plan_totals` returns both: `isk_committed`/`materials_committed` (the list) and `total_cost`
+(the list + `job_fees` + `freight` + `collateral`, charged on END products only, since the recipe
+roll-up already folds every intermediate's fees into the product above it). **`net_profit` is
+derived from `total_cost`**, and the dashboard shows the gap broken out under the tiles rather than
+leaving a reader to wonder why two cost figures disagree.
+
+Output is valued at **buy orders** — see the pricing section below — with the sell-order total kept
+separately as `sell_order_value` and rendered as market context only.
 
 ### An order needs a price, and without one it is UNKNOWN — never zero
 
@@ -739,9 +757,14 @@ than showing a control that 403s, which is the contract that surface already has
 Changing it re-fetches the plan instead of re-rendering the cached one: the run counts on screen are
 exactly what just changed.
 
-`_reaction_cadence_hours` feeds that cap, so `_level_options` drops any run count above it. It
-is HARD, not advisory: a stage that cannot fit the window at its leanest layout is split finer until
-it does. On the reported stage at 1.53 h/run:
+`_reaction_cadence_hours` feeds that cap, so `_level_options` offers only the run counts that fit
+under it — whenever any of them do. **It is a stated TARGET, not a hard ceiling** (decided
+2026-08-14). A stage that can be split finer to fit the window is; a stage that genuinely cannot —
+more reactor-hours of work than its free reactors can turn over inside the window — overruns, and
+records by how much (`cadence_over_h`, written by the leveller onto every row of the group and drawn
+as a `⏱ +Nh` badge on the pending slot). The alternative is not available: with fewer reactors than
+the work needs, no split fits, and the code that claimed otherwise was not enforcing the ceiling but
+collapsing its own option set to one unmeasured answer. On the reported stage at 1.53 h/run:
 
 | cadence | layout | longest job | jobs |
 | --- | --- | --- | --- |
@@ -750,9 +773,37 @@ it does. On the reported stage at 1.53 h/run:
 | 3.5 d | 53 / 53 / 50 | 3.38 d | 43 |
 
 Fitting the week costs one extra reactor here, and a half-week cadence costs twenty-one. That is the
-trade, and it is the right way round: **a cadence you cannot rely on is not a cadence.** Unset means
-0, which is the old behaviour exactly — a plan built before anyone chose a cadence must not be
-resized by one.
+trade, and it is the right way round: **a cadence you cannot rely on is not a cadence** — which is
+exactly why a plan that cannot hold it has to say so out loud rather than quietly quote eleven days
+on a seven-day rhythm. Unset means 0, which is the old behaviour exactly — a plan built before
+anyone chose a cadence must not be resized by one. Note the breach is wider than the cadence: with
+none set the ceiling falls back to the longest job the plan already runs, and the same routes broke
+the promise attached to that (*levelling makes a plan tidier and shorter, never slower*) for every
+account with `reactions_level_runs` on.
+
+The window carries `_CADENCE_GRACE` (3h) at every truncation point — the leveller's per-product
+`max_runs`, `split_order_tops_to_cadence`'s `per_job_cap`, and `_allocate_and_insert`'s pace loop.
+Truncating at exactly 168.0h rejected a layout landing at 168h04m and charged an extra job and an
+extra reactor for four minutes, while `_collection_slot` was already saying 171h is the same session.
+
+**The badge absorbs the same grace**, and that is not a detail: every pass that SIZES a job spends
+the grace deliberately, so a breach measured against the bare cadence would flag a plan for doing
+exactly what it was told. `cadence_over_h` is therefore `duration − (cadence + grace)` at all three
+sites that write it. One definition of "over the window", everywhere — two surfaces disagreeing
+about that is the class of defect this repair exists to remove.
+
+**An order is paced at quote time**, in `_allocate_and_insert`, not only on the next dashboard read.
+It used to run flat out on the argument that a customer is waiting, while
+`split_order_tops_to_cadence` paced it a page later — so the layout shown at commit and the layout
+shown on the dashboard disagreed about the same order. The pacing is bounded by the host's free
+reactors and by the formulas of each tier, so it only ever spends slots `_fit_chain_slots` did not
+need.
+
+An order's rows are the one part of a plan the leveller never touches — its top row is excluded by
+design, because the run count is the batch the order was quoted on. So `_insert_assignment_rows`
+stamps `cadence_over_h` as it writes them, and `split_order_tops_to_cadence` re-measures it for the
+shorter jobs it creates rather than letting a `DELETE`+`INSERT` reset it to the column default.
+Without both, the badge could never appear on the one kind of plan a customer is waiting for.
 
 **What it costs, stated plainly: time.** 110 runs is a longer job than 95, so the stage lands about
 two days later on a twelve-day order. That is the stated priority order — *"I want it to be easy"*
@@ -959,7 +1010,23 @@ being removed, so shipping both would have been the bug.
 
 Reaction goods are repriced aggressively, so the sell-order price is not what you can actually
 realise. Use **instant-sell (buy orders)** as the "what you can make" signal everywhere the user
-reads a profit figure; never `sell_volume` or `net_profit_order`.
+reads a profit figure.
+
+**The rule is about the achievable-profit SIGNAL, not about the word "sell".** A sell-order figure
+may appear as explicitly-labelled market context beside the achievable one; it may never be the
+number a decision is read off, and nothing may derive from it. Settled 2026-08-14 (open question b
+of the repair spec): the opportunity fold-out keeps `sell_order_value` and `net_profit_order` as
+*"Value at sell orders"* and *"Profit if you sell to orders (patience required)"*, and `sell_volume`
+as *"Sell depth (market context)"* beside `buy_volume`. The wording is the compliance —
+`reactions.js` carries the same note at the render site so the next audit does not re-flag them.
+
+Everything that IS a profit signal is buy-priced and netted against the **full** cost base
+(materials + job install fees + export freight + courier collateral, i.e.
+`_value_reaction_batch`'s `fixed_costs`): the opportunity ranking and the wizard's LP, the dashboard
+tiles, the running-job modal and its ROI, an adopted orphan's stored `reward`, and the completions
+ledger behind *Lifetime net profit*. The last four were quoting sell orders until 2026-08-14, none
+of them gated. `test_reactions_profit_clock.py` is the guard: it fails if a profit field is fed a
+sell-side expression anywhere in `app/reactions`.
 
 ## Where the rest lives
 

@@ -23,14 +23,22 @@ const _RX_CORE_COLUMNS = [
 ];
 // Rendered as "Label: value" chips in the fold-out row, not table cells — order here is display
 // order, not column order, so it's fine that these vary in shape (a plain number vs. ISK).
+//
+// The two sell-side fields here are DELIBERATE and were kept after the 2026-08-14 pricing audit
+// (docs/reactions-repair-2026-08.md, open question b). CLAUDE.md's rule — a reaction good's
+// sell-order price is not achievable profit — is about the ACHIEVABLE-PROFIT signal, which is the
+// `Profit` column above (net_profit_instant) and every profit figure the dashboard, the wizard and
+// the job modal show. These two are market context: what the same goods fetch if you list them and
+// wait. They are labelled explicitly so nobody can read them as the headline number, and neither
+// one feeds anything. Do not re-flag them; do not promote either into a profit position.
 const _RX_DETAIL_FIELDS = [
   { key: 'steps',                label: 'Steps',           fmt: v => String(v) },
   { key: 'job_cost',             label: 'Job cost',        fmt: v => _fmtIsk(v) },
-  { key: 'sell_order_value',     label: 'Sell order value', fmt: v => _fmtIsk(v) },
-  { key: 'net_profit_order',     label: 'Profit (order)',  fmt: v => _fmtIsk(v) },
+  { key: 'sell_order_value',     label: 'Value at sell orders', fmt: v => _fmtIsk(v) },
+  { key: 'net_profit_order',     label: 'Profit if you sell to orders (patience required)', fmt: v => _fmtIsk(v) },
   { key: 'profit_per_m3_instant', label: 'ISK/m³',         fmt: v => v == null ? '—' : Math.round(v).toLocaleString() },
   { key: 'buy_volume',           label: 'Buy depth',       fmt: v => Math.round(v).toLocaleString() },
-  { key: 'sell_volume',          label: 'Sell depth',      fmt: v => Math.round(v).toLocaleString() },
+  { key: 'sell_volume',          label: 'Sell depth (market context)', fmt: v => Math.round(v).toLocaleString() },
 ];
 
 function _rxToggleOppDetail(typeId) {
@@ -500,6 +508,63 @@ function _rxUnderProductionWarn(items) {
   return `<div class="rx-under-warn">⚠ <b>${one ? 'A product' : `${items.length} products`} will come up short</b>`
     + ` — a job went in with fewer runs than planned, so the stage above it cannot start.`
     + ` Add ${one ? 'this' : 'these'} and it lands even:<ul>${rows}</ul></div>`;
+}
+
+// What EASE cost, in ISK, and what would get it back (`reactions_ease_cost`).
+//
+// The plan spends real goo to save you clicks: run counts are rounded up so a stage lands in one go
+// and reads as one number, and docs/reactions.md says plainly that the surplus "comes straight off
+// the margin". The manifesto's fifth scoring question — *"Any shortcut that trades ISK for time must
+// report what it cost rather than taking it quietly"* — is the one this tool was failing outright.
+//
+// **A number with a remedy, not a nag.** The line says what was spent AND what dropping to
+// per-product run counts would recover, against the jobs and logins the shared count bought — the
+// point being that the player can act on it. That is what makes it different from the
+// under-production warning, which shouts because a stage is about to be blocked. The asymmetry that
+// warning defends (loud on under-production, silent on over) is untouched: spare goo is still stock.
+//
+// Aggregated HERE rather than sent as a plan-level total, because the backend emits it per row.
+// Each figure belongs to a (product, stage) GROUP — the leveller pools a product across every
+// character, so the same number is stamped on every row of the pool. Summing rows would multiply it
+// by the job count; the map is what takes each group exactly once.
+function _rxEaseCostLine(data) {
+  if (!_featureActive('reactions_ease_cost')) return '';
+  const groups = new Map();
+  (data.characters || []).forEach(c => (c.pending || []).forEach(a => {
+    const key = `${a.type_id}:${a.tier_order || 0}`;
+    const seen = groups.get(key);
+    // Take a STAMPED row over the first one seen. The leveller writes one identical note onto every
+    // row of a group, so any of them will do — but a group can also contain rows the leveller never
+    // touched, and those carry zeros: a customer order's top row is excluded from the pass by
+    // design. Keeping whichever arrived first would silently drop a whole product's surplus the
+    // moment such a row sorted ahead of the levelled ones.
+    if (seen && (seen.surplus_isk || 0) >= (a.surplus_isk || 0)) return;
+    groups.set(key, a);
+  }));
+  let surplus = 0, recover = 0, jobsSaved = 0, retype = 0;
+  groups.forEach(a => {
+    surplus += a.surplus_isk || 0;
+    recover += a.recoverable_isk || 0;
+    jobsSaved += a.jobs_saved || 0;
+    // A product whose count would change if you dropped the shared number is one more figure to
+    // read off the screen and type in — which is exactly what the shared count was buying. Counted
+    // off `can_recover`, which the backend derives from the run counts themselves: `recoverable_isk`
+    // is 0 both when there is nothing to recover AND when the product has no live price, so
+    // counting products off an ISK figure quietly under-reports the moment a price goes missing.
+    if (a.can_recover) retype++;
+  });
+  if (surplus <= 0) return '';
+  // Logins, not jobs: a job saved on a character you were logging into anyway costs nothing extra,
+  // and the thing the player actually feels is the trip. Same reasoning as `_lean_hosts`.
+  const bought = [];
+  if (jobsSaved > 0) bought.push(`${jobsSaved} job${jobsSaved === 1 ? '' : 's'}`);
+  const boughtTxt = bought.length ? ` to save you ${bought.join(' and ')}` : '';
+  const remedy = recover > 0
+    ? ` Drop to per-product run counts to recover about <b>${_fmtIsk(recover)}</b>, at ${retype} more `
+      + `number${retype === 1 ? '' : 's'} to type.`
+    : ` There is nothing cheaper available at this stage — the surplus is what the run counts round to.`;
+  return `<div class="rx-ease-cost">💡 This layout holds <b>${_fmtIsk(surplus)}</b> of surplus `
+    + `intermediates${boughtTxt}.${remedy} The extra output is stock, and your next plan spends it.</div>`;
 }
 
 // ── Marking a reaction running or done by hand (`reactions_manual_done`) ──────────────────────
@@ -979,13 +1044,31 @@ function _renderReactionsDashboard(data) {
       // Marked installed by hand: it reads as a job in progress, not as a red "go do this", which
       // is the whole point of having said so.
       const isMarked = a.marked === 'running';
+      // How long this job will run. A pending square used to show only its run count, so the one
+      // thing the cadence is about — "will this be done before I next log in" — was the one thing
+      // the plan never said. Same corner the running square puts its remaining time in.
+      const plannedH = a.hours || 0;
+      const durCorner = plannedH > 0
+        ? `<div class="rx-slot-timer-corner" title="Runs for ${_esc(_fmtHours(plannedH))} once installed">${_esc(_fmtHours(plannedH))}</div>`
+        : '';
+      // ...and when it runs PAST the window the player set. The cadence is a stated target, not a
+      // hard ceiling: a stage with more work than its free reactors can turn over inside the week
+      // overruns rather than being split into jobs there is nothing to install them with. This is
+      // the plan admitting it, on the row it happened to, instead of the number just being wrong.
+      const overH = a.cadence_over_h || 0;
+      const overBadge = overH > 0
+        ? `<span class="rx-slot-over-badge" title="Runs ${_esc(_fmtHours(overH))} past your job-length window — this stage needs more reactor time than the reactors you have free can give it inside that window, so it overruns rather than being split finer.">⏱ +${_esc(_fmtHours(overH))}</span>`
+        : '';
+      const overTip = overH > 0 ? ` — ⚠ ${_fmtHours(overH)} past your job-length window` : '';
       const pendTitle = isMarked
         ? `You marked this installed — ${_esc(a.name)} ×${a.runs}, waiting for ESI to confirm it${_esc(orderTip)}. Click to edit.`
-        : `Not running yet — install ${_esc(a.name)} ×${a.runs} in-game${_esc(moreTip)}${_esc(orderTip)}${_esc(stageTip)}. Click to edit.`;
+        : `Not running yet — install ${_esc(a.name)} ×${a.runs} in-game${_esc(moreTip)}${_esc(orderTip)}${_esc(stageTip)}${_esc(overTip)}. Click to edit.`;
       squares.push(`
-        <div class="rx-slot rx-slot-pending${isMarked ? ' rx-slot-marked' : ''}${tier > 0 && !ready && !isMarked ? ' rx-slot-later' : ''}" title="${pendTitle}" onclick="_rxOpenEditAssign(${a.assignment_id}, '${c.character_id}')">
+        <div class="rx-slot rx-slot-pending${isMarked ? ' rx-slot-marked' : ''}${overH > 0 ? ' rx-slot-over' : ''}${tier > 0 && !ready && !isMarked ? ' rx-slot-later' : ''}" title="${pendTitle}" onclick="_rxOpenEditAssign(${a.assignment_id}, '${c.character_id}')">
+          ${durCorner}
           <img class="rx-slot-icon" src="${pendingIcon}" alt="" onerror="this.style.visibility='hidden'">
           ${stageBadge}
+          ${overBadge}
           ${moreBadge}
           ${markBadge}
           <span class="rx-slot-pending-badge" onclick="event.stopPropagation();_rxCancelAssignment(${a.assignment_id})" title="Cancel ${grp.n > 1 ? 'one of these jobs' : 'this assignment'}">⊘</span>
@@ -1108,15 +1191,35 @@ function _renderReactionsDashboard(data) {
        valued at <b>market</b> rather than at the invoice. Set the price on the order for the real
        figure.</span></div>`
     : '';
+  // Two different costs, and the difference is the point. "Materials committed" is the priced
+  // shopping list — what you go and buy — and it is NOT what profit is netted against; the full
+  // cost adds job install fees, export freight and courier collateral, which are real ISK a
+  // shopping list never shows. Reporting profit against the shopping list alone (what this did
+  // until 2026-08-14) flattered every plan by exactly those three. The extras line says what the
+  // gap is made of rather than leaving a reader to wonder why two cost tiles disagree.
+  const costExtras = (data.pending_total_cost || 0) - (data.pending_isk_committed || 0);
+  const costNote = costExtras > 0
+    ? `<div class="settings-note"><span>Full cost adds <b>${_fmtIsk(data.pending_job_fees)}</b> job
+       install fees, <b>${_fmtIsk(data.pending_freight)}</b> freight and
+       <b>${_fmtIsk(data.pending_collateral)}</b> courier collateral to the shopping list. Profit is
+       netted against that, not against materials alone.</span></div>`
+    : '';
+  // Output and profit are quoted at BUY orders (instant sell) — what you can actually get today.
+  // See CLAUDE.md: a reaction good's sell-order price is not achievable profit.
+  const sellCtx = (data.pending_sell_order_value || 0) > (data.pending_output_value || 0)
+    ? ` · ${_fmtIsk(data.pending_sell_order_value)} at sell orders`
+    : '';
   const overviewTiles = `<div class="an-stats">
-      ${_dashTile(_fmtIsk(data.pending_isk_committed), 'ISK committed')}
-      ${_dashTile(_fmtIsk(data.pending_output_value), 'Expected output value')}
+      ${_dashTile(_fmtIsk(data.pending_isk_committed), 'Materials committed')}
+      ${_dashTile(_fmtIsk(data.pending_total_cost), 'Full cost (incl. fees, freight, collateral)')}
+      ${_dashTile(_fmtIsk(data.pending_output_value), 'Expected output value (instant sell)')}
       ${_dashTile(_fmtIsk(data.pending_net_profit_per_day), 'Expected profit / day',
                   (data.pending_net_profit_per_day || 0) >= 0 ? 'an-ok' : 'an-bad')}
       ${_dashTile(`${usedSlots}<span class="an-of"> / ${data.total_slots}</span>`, 'Slots used')}
       ${_dashTile(String(pendingCount), 'Jobs to install', pendingCount > 0 ? 'an-warn' : '')}
       ${_dashTile(timeLeftVal, timeLeftLbl)}
-    </div>${unpricedNote}`;
+    </div>${sellCtx ? `<div class="settings-note"><span>Output is valued at what buy orders pay
+      today${sellCtx} if you list them and wait.</span></div>` : ''}${costNote}${unpricedNote}`;
 
   // Overall completion of everything currently running — a "total complete" bar under the tiles.
   const progressBar = data.running_progress_pct != null
@@ -1134,11 +1237,20 @@ function _renderReactionsDashboard(data) {
   let lifetimeTiles = '';
   if (_rxLifetime && _rxLifetime.jobs > 0) {
     const since = _rxLifetime.since ? new Date(_rxLifetime.since * 1000).toLocaleDateString() : null;
+    // The ledger is forward-only — a completion is recorded once and there is no past market price
+    // to re-derive — so jobs finished before 2026-08-14 are still valued at sell orders against
+    // materials and job fees, while everything since is buy-priced against the full cost base.
+    // Both regimes live in one total. Healing as new jobs land is the right behaviour; rendering
+    // the mixture with no disclosure is not, so the tiles say so rather than reading as one number.
     lifetimeTiles = `<div class="an-stats" style="margin-top:10px">
         ${_dashTile(_fmtIsk(_rxLifetime.turnover), 'Lifetime turnover' + (since ? ` · since ${since}` : ''))}
         ${_dashTile(_fmtIsk(_rxLifetime.net_profit), 'Lifetime net profit', 'an-ok')}
         ${_dashTile(_rxLifetime.jobs.toLocaleString(), 'Reactions completed')}
-      </div>`;
+      </div>
+      <div class="settings-note"><span>Jobs that finished before 14 Aug 2026 are recorded at
+      sell-order prices and without freight or collateral; everything since is at buy orders
+      against the full cost. The ledger is forward-only — past entries cannot be repriced — so this
+      total is a mixture that settles as new jobs complete.</span></div>`;
   }
   if (metricsEl) metricsEl.innerHTML = overviewTiles + progressBar + producedBtn + lifetimeTiles;
 
@@ -1169,7 +1281,9 @@ function _renderReactionsDashboard(data) {
 
   el.innerHTML = reconnectNote + _rxUnderProductionWarn(data.under_production) + readyBanner
     + _rxMissingFormulaWarn(data.missing_formulas)
-    + _rxCadenceHtml() + todoListHtml + rows + untrackedNote;
+    // Under the cadence row it is about, and above the checklist it would change — the remedy is
+    // "type more numbers", so it belongs where the numbers are about to be read.
+    + _rxCadenceHtml() + _rxEaseCostLine(data) + todoListHtml + rows + untrackedNote;
 }
 
 function _rxCancelAssignment(assignmentId) {
@@ -1466,7 +1580,7 @@ async function _rxSubmitManualAssign() {
   if (runsPerJob <= 0 || jobsWanted <= 0 || !o.top_level_runs) { status.textContent = 'Enter runs per job and concurrent jobs.'; return; }
 
   // Per-run rates, matching the exact input_cost/reward split _rxAssignSuggestion already uses:
-  // input_cost = raw material spend only (the "ISK committed" tile), reward = fully netted
+  // input_cost = raw material spend only (the "Materials committed" tile), reward = fully netted
   // profit (materials + shipping + collateral + job cost already subtracted) — see
   // app.reactions._build_opportunities.
   const costPerRun = o.input_cost / o.top_level_runs;
@@ -2166,14 +2280,21 @@ function _rxCanEditSettings() {
 // convenience picker over the underlying %, not an authoritative lookup table. "Custom" always
 // reveals the exact-number field for whatever a player has actually measured against their real
 // in-game job duration (see the caveat text below the field).
-const _RX_TIME_EFF_PRESETS = [0, 10, 20, 30, 40, 50, 60, 70];
+// 0 is NOT one of them any more, and that matters: since the field became an override, a stored 0
+// means "use the measurement", not "no reactor bonus". Offering 0% as the neutral-looking first
+// entry invited a player to pick the number that reads as "leave it alone" and get a behaviour
+// nobody intended. `auto` is the neutral entry now — it writes 0, which is the same stored value,
+// but says what that value does (CLAUDE.md rule 3: surface the computed answer, keep the knob for
+// where the judgement is genuinely the user's).
+const _RX_TIME_EFF_PRESETS = [10, 20, 30, 40, 50, 60, 70];
 
 function _rxTimeEffFieldHtml(prefix, label) {
   const opts = _RX_TIME_EFF_PRESETS.map(p => `<option value="${p}">${p}%</option>`).join('');
   return `
-      <label class="pp-label" for="${prefix}TimeEffPreset" title="How much shorter real reaction job duration is than the raw formula time, from reactor efficiency rigs/skills/structure bonuses">${label}</label>
+      <label class="pp-label" for="${prefix}TimeEffPreset" title="How much shorter real reaction job duration is than the raw formula time. Measured from your own jobs unless you override it here.">${label}</label>
       <div style="display:flex;align-items:center;gap:8px">
-        <select id="${prefix}TimeEffPreset" class="pp-select" style="width:140px" onchange="_rxTimeEffPresetChanged('${prefix}')">
+        <select id="${prefix}TimeEffPreset" class="pp-select" style="width:190px" onchange="_rxTimeEffPresetChanged('${prefix}')">
+          <option value="auto">Auto — use my measurement</option>
           ${opts}
           <option value="custom">Custom…</option>
         </select>
@@ -2182,7 +2303,8 @@ function _rxTimeEffFieldHtml(prefix, label) {
 }
 
 // Selecting a preset hides the free-entry field and syncs its value (still the thing actually
-// sent on Save); picking "Custom" reveals it for an exact measured figure.
+// sent on Save); picking "Custom" reveals it for an exact figure; "Auto" writes 0, which is what
+// the backend reads as "no override — derive it" (see effective_reaction_settings).
 function _rxTimeEffPresetChanged(prefix) {
   const preset = document.getElementById(`${prefix}TimeEffPreset`).value;
   const input = document.getElementById(`${prefix}TimeEff`);
@@ -2191,20 +2313,22 @@ function _rxTimeEffPresetChanged(prefix) {
     input.focus();
   } else {
     input.style.display = 'none';
-    input.value = preset;
+    input.value = preset === 'auto' ? 0 : preset;
   }
 }
 
-// Sets both the preset dropdown and the underlying field from a saved fraction (0-1) — selects
-// the matching preset if the value lands on one exactly, else falls back to "Custom" with the
-// field shown so the precise figure is still visible, not silently rounded away.
+// Sets both the preset dropdown and the underlying field from a saved fraction (0-1). A stored 0
+// is not a 0% override — it is the un-set state — so it selects "Auto"; a value landing exactly on
+// a preset selects it; anything else falls back to "Custom" with the field shown so the precise
+// figure is still visible, not silently rounded away.
 function _rxSetTimeEffValue(prefix, pct) {
   const rounded = Math.round(pct * 10) / 10;
   document.getElementById(`${prefix}TimeEff`).value = rounded;
   const presetSelect = document.getElementById(`${prefix}TimeEffPreset`);
+  const auto = !(rounded > 0);
   const match = _RX_TIME_EFF_PRESETS.includes(rounded);
-  presetSelect.value = match ? String(rounded) : 'custom';
-  document.getElementById(`${prefix}TimeEff`).style.display = match ? 'none' : '';
+  presetSelect.value = auto ? 'auto' : (match ? String(rounded) : 'custom');
+  document.getElementById(`${prefix}TimeEff`).style.display = (auto || match) ? 'none' : '';
 }
 
 // ── Solar-system typeahead (shared by the group and account system fields) ─────────────────
@@ -2292,17 +2416,44 @@ function _rxRateFieldsHtml(prefix, mine) {
       <label class="pp-label" for="${prefix}Tax">Facility tax %</label>
       <input type="number" id="${prefix}Tax" class="pp-num-input" style="width:100px" step="0.1">
 
-      ${_rxTimeEffFieldHtml(prefix, 'Time efficiency %')}
+      ${_rxTimeEffFieldHtml(prefix, 'Time efficiency % (override)')}
+      <div id="${prefix}TimeEffDerived" class="pp-card-hint" style="grid-column:1/-1"></div>
     </div>`;
 }
 
-// The two things here that silently change your numbers if you get them wrong. Everything else the
-// fields say for themselves.
+// The one thing here that silently changes your numbers if you get it wrong. Everything else the
+// fields say for themselves — including time efficiency, which is now measured (see
+// _rxTimeEffNote) rather than something the player has to work out by hand.
 const _RX_RATE_NOTES = `
   <div class="settings-note">No system set means <b>job install fees are left out</b> of every
-    estimate — for manufacturing as well as reactions.</div>
-  <div class="settings-note">Time efficiency can't be detected. Compare one real job's duration
-    against the formula's raw time and enter the difference.</div>`;
+    estimate — for manufacturing as well as reactions.</div>`;
+
+// What the app is REALLY using for time efficiency, and where it got it. The old note here said
+// "Time efficiency can't be detected" — that was false in this codebase: reaction_time_mult_for
+// reads the ratio straight off ESI job durations. Leaving the typed 0% in charge meant every
+// duration and ETA on screen was quoted off a clock running ~2.14x slow while the leveller sized
+// the same jobs off the measured one. The field survives only as an override, and this line is
+// what stops it looking unset when it is simply being derived. "skills" is honestly labelled as an
+// estimate that tightens after the first real job, rather than presented as a fact.
+function _rxTimeEffNote(prefix, s) {
+  const el = document.getElementById(prefix + 'TimeEffDerived');
+  if (!el) return;
+  const pct = ((s && s.derived_time_efficiency_pct) || 0) * 100;
+  const src = (s && s.time_efficiency_source) || 'none';
+  const typed = (s && s.time_efficiency_pct) || 0;
+  if (typed > 0) {
+    el.innerHTML = `Using your typed override of <b>${(typed * 100).toFixed(1)}%</b>.`
+      + (pct > 0 ? ` Measured from your own jobs: <b>${pct.toFixed(1)}%</b> — clear this field to use it.` : '');
+  } else if (src === 'measured') {
+    el.innerHTML = `Measured from your own reaction jobs: <b>${pct.toFixed(1)}%</b>. Leave this blank
+      unless you need to override it.`;
+  } else if (src === 'skills') {
+    el.innerHTML = `Estimated from your skills alone: <b>${pct.toFixed(1)}%</b> — deliberately
+      cautious. It tightens to a real measurement after your first reaction job finishes.`;
+  } else {
+    el.innerHTML = 'No measurement yet — durations use the raw formula time until a job finishes.';
+  }
+}
 
 function _rxSettingsFormHtml() {
   return `
@@ -2319,13 +2470,16 @@ function _rxSettingsFormHtml() {
 
 // The group form and the personal-override form carry the SAME six rate fields, differing only
 // in their id prefix (rxSet / rxAcct) — these two keep them reading and writing identically.
-function _rxFillRateFields(prefix, s) {
+// `derived` carries the measured time efficiency (and its source); it rides on the same payload
+// for the group form and comes off the account endpoint's top level for the personal one.
+function _rxFillRateFields(prefix, s, derived) {
   document.getElementById(prefix + 'Import').value = s.import_isk_per_m3;
   document.getElementById(prefix + 'Export').value = s.export_isk_per_m3;
   document.getElementById(prefix + 'Collateral').value = (s.export_collateral_pct * 100).toFixed(2);
   document.getElementById(prefix + 'System').value = s.reaction_system || '';
   document.getElementById(prefix + 'Tax').value = ((s.facility_tax_pct || 0) * 100).toFixed(2);
   _rxSetTimeEffValue(prefix, (s.time_efficiency_pct || 0) * 100);
+  _rxTimeEffNote(prefix, { ...(derived || s), time_efficiency_pct: s.time_efficiency_pct || 0 });
 }
 
 function _rxRatePayload(prefix) {
@@ -2378,7 +2532,7 @@ function _loadRxAccountSettings() {
   api('/api/reactions/account-settings').catch(() => null).then(s => {
     if (!s) return;
     const eff = s.override || s.default;
-    _rxFillRateFields('rxAcct', eff);
+    _rxFillRateFields('rxAcct', eff, s);
     const hint = document.getElementById('rxAcctSettingsHint');
     if (hint) {
       hint.textContent = s.override
@@ -2838,7 +2992,9 @@ function _renderRxJobDetail(d) {
   const profitCls = d.net_profit >= 0 ? 'an-ok' : 'an-warn';
   // ROI = profit per ISK invested. net_profit = output_value - total cost (see _value_reaction_batch),
   // so the total cost invested is output_value - net_profit — robust regardless of which cost
-  // components (materials, job, shipping) are present.
+  // components (materials, job, shipping) are present. Both are the INSTANT-SELL pair now (the
+  // backend returns buy-order value in `output_value`), so the ROI is achievable rather than
+  // aspirational; the sell-order figures come through separately and are shown as context.
   const totalCost = d.output_value - d.net_profit;
   const roiPct = totalCost > 0 ? (d.net_profit / totalCost) * 100 : null;
   const roiStr = roiPct != null ? `${roiPct >= 0 ? '+' : ''}${roiPct.toFixed(1)}%` : '';
@@ -2864,8 +3020,11 @@ function _renderRxJobDetail(d) {
     <div class="rx-manual-preview" style="margin-top:10px">
       <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Input cost</span><b>${_fmtIsk(d.input_cost)}</b></div>
       ${d.job_cost ? `<div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Job install fees</span><b>${_fmtIsk(d.job_cost)}</b></div>` : ''}
-      <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Output value</span><b>${_fmtIsk(d.output_value)} <span class="rx-manual-preview-units">(${Math.round(d.units).toLocaleString()} units)</span></b></div>
+      ${d.shipping ? `<div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Freight + collateral</span><b>${_fmtIsk(d.shipping + (d.collateral || 0))}</b></div>` : ''}
+      <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Output value (instant sell)</span><b>${_fmtIsk(d.output_value)} <span class="rx-manual-preview-units">(${Math.round(d.units).toLocaleString()} units)</span></b></div>
       <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Profit</span><b class="${profitCls}">${_fmtIsk(d.net_profit)}${roiStr ? ` <span class="rx-manual-preview-units">(${roiStr})</span>` : ''}</b></div>
+      ${d.net_profit_order != null && d.net_profit_order !== d.net_profit
+        ? `<div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Profit if you sell to orders (patience required)</span><b>${_fmtIsk(d.net_profit_order)}</b></div>` : ''}
     </div>
 
     <div class="pp-card-title" style="margin-top:14px;font-size:14px">Materials used

@@ -270,6 +270,33 @@ def ensure_reaction_assignments_table():
             con.commit()
         except Exception:
             pass
+        # What the LEVELLER decided, written down so the dashboard can report it. All four are
+        # per (stage, product) and stamped identically on every row of that group — the leveller
+        # pools a product across characters, so the group is the unit the number belongs to, and
+        # a reader must take each value ONCE per (type_id, tier_order) rather than summing rows.
+        #
+        # Why persisted rather than recomputed: `level_product_runs` runs in Step 1 of
+        # `get_industry_jobs`, before the read that builds the rows, and it is the only place that
+        # knows the counterfactual (what a per-product layout would have cost). Recomputing in
+        # Step 4 would mean running the whole stage solve a second time, on a second connection,
+        # for numbers the first run already had in hand.
+        #
+        #   cadence_over_h — REAL hours this product's job runs PAST the ceiling, 0 when it fits.
+        #                    The cadence is a target, not an absolute (2026-08-14): a stage that
+        #                    genuinely cannot fit its window overruns and says so here.
+        #   surplus_runs   — runs of this product the layout makes beyond what the plan needs.
+        #   jobs_saved     — jobs the shared count saved against the cheapest per-product one.
+        #   recover_runs   — surplus that per-product run counts would give back.
+        #
+        # Through `add_columns` rather than a bare try/except chain: Postgres aborts the WHOLE
+        # transaction on a failed statement, so a later already-exists ALTER rolls back the earlier
+        # ones that had genuinely succeeded. That cost this project real columns once — see
+        # `app/db.py`.
+        add_columns(con, "pp_reaction_assignments",
+                    "cadence_over_h REAL NOT NULL DEFAULT 0",
+                    "surplus_runs INTEGER NOT NULL DEFAULT 0",
+                    "jobs_saved INTEGER NOT NULL DEFAULT 0",
+                    "recover_runs INTEGER NOT NULL DEFAULT 0")
     finally:
         con.close()
 
@@ -324,10 +351,23 @@ def log_reaction_completions(context_id: int) -> int:
     """Record reaction jobs for this context that FINISHED since the last sweep. Scan, dedupe and
     insert are shared (app.completions); this supplies the reaction VALUATION.
 
-    A reachable product is valued through the full recipe roll-up (materials + job fees) via
-    `_value_reaction_batch`. An unreachable one — goo the price sheet doesn't cover — still
-    contributes turnover from raw output x sell price, with net left at 0 rather than overstated
-    from an input cost we can't actually compute."""
+    A reachable product is valued through the full recipe roll-up via `_value_reaction_batch`. An
+    unreachable one — goo the price sheet doesn't cover — still contributes turnover from raw
+    output x price, with net left at 0 rather than overstated from an input cost we can't actually
+    compute.
+
+    **Priced at BUY orders (instant sell), not at sell orders.** This ledger is the account's
+    *lifetime net profit* — the one figure a player reads as fact rather than forecast, and it
+    compounds over every job for the life of the account. CLAUDE.md's pricing invariant applies
+    with the most force here: a reaction good's sell-order price is not achievable profit. It was
+    quoting `sell_price` until 2026-08-14, which overstated every completed job by the buy/sell
+    spread on top of a cost base that charged materials and job fees but not freight or collateral.
+    Both are fixed here; `fixed_costs` is the full base (materials + job fees + freight +
+    collateral), so net is exactly `_value_reaction_batch`'s `net_profit_instant`.
+
+    Rows already written stay as they were — a completion is recorded once, forward-only, and
+    there is no past market price to re-derive. So the ledger heals as new jobs land rather than
+    all at once."""
     ensure_industry_jobs_table()
     ensure_reaction_completions_table()
     pending = completions.pending_completions(
@@ -352,14 +392,20 @@ def log_reaction_completions(context_id: int) -> int:
     valued = []
     for jid, cid, tid, runs, end_ts in pending:
         node = reached.get(tid)
-        sell = (market.get(tid) or {}).get("sell_price", 0.0) or 0.0
+        m = market.get(tid) or {}
+        sell = m.get("sell_price", 0.0) or 0.0
+        # The achievable price: what a buy order pays today. `sell` is still passed because
+        # _value_reaction_batch charges courier collateral against the sell value regardless of how
+        # the goods are actually sold (the standard freight-collateral reference).
+        buy = m.get("buy_price", 0.0) or 0.0
         vol = (types.get(tid, {}) or {}).get("volume", 0.0) or 0.0
         if node and node.get("via") and runs > 0:
             total_out = runs * node["via"]["output_qty"]
-            v = _value_reaction_batch(node, total_out, sell_price=sell, volume=vol, settings=settings)
-            out_val, inp_cost = v["output_value"], v["input_cost"] + v["job_cost"]
+            v = _value_reaction_batch(node, total_out, sell_price=sell, volume=vol, settings=settings,
+                                      buy_price=buy)
+            out_val, inp_cost = v["instant_value"], v["fixed_costs"]
         else:
-            out_val = (runs * out_qty_by_type.get(tid, 0.0) * sell) if runs > 0 else 0.0
+            out_val = (runs * out_qty_by_type.get(tid, 0.0) * buy) if runs > 0 else 0.0
             inp_cost = 0.0
         valued.append((jid, cid, tid, runs, end_ts, out_val, inp_cost))
     return completions.record_completions(LEDGER, context_id, valued)
@@ -395,12 +441,29 @@ def _level_runs_on(context_id: int) -> bool:
 
 def _insert_assignment_rows(con, character_id: int, type_id: int, name: str, runs: float,
                              job_count: int, input_cost: float, reward: float, tier_order: int,
-                             now: float, order_id: int | None = None, tidy: bool = False) -> None:
+                             now: float, order_id: int | None = None, tidy: bool = False,
+                             cycle_hours: float = 0.0, cadence_h: float = 0.0) -> None:
     """One product's worth of a job commitment, split into `job_count` separate assignment rows
     (one per actual in-game job install — see assign_reaction's own docstring for why). Shared by
     assign_reaction (order_id always None there — no behavior change) and the customer-order
     assign flow (_allocate_and_insert, order_id set) so the row-insertion shape can't drift
-    between the two callers."""
+    between the two callers.
+
+    `cycle_hours` and `cadence_h` are both REAL wall-clock hours, and passing them is what lets a
+    row say it runs past the player's job-length window. An order's rows never reach the leveller
+    (its top row is excluded from `inner` by design — the run count is what the order was quoted
+    on), so nothing else will ever stamp them: if the breach is not recorded at the moment the row
+    is written, it is not recorded at all, and the badge that decision 1 promises never appears on
+    the one kind of plan a customer is waiting for. Both default to 0, which records no breach —
+    the manual-assign path has no cadence to measure against.
+
+    Measured against `cadence_h + _CADENCE_GRACE`, exactly as the leveller measures its own
+    (`level_product_runs` builds `cap_hours_by_tid` with the grace already in it). The grace is the
+    slack a player who is not punctual to the minute already absorbs, and every pass that SIZES a
+    job spends it deliberately rather than buying another reactor for four minutes. A badge that
+    then reported those four minutes as a breach would flag the plan for doing the thing it was
+    told to do — and, worse, would mean two surfaces disagreeing about what "over the window" means,
+    which is the whole class of defect this repair exists to remove."""
     job_count = max(1, job_count)
     runs_per_job = math.ceil(runs / job_count)
     # `tidy` is passed for INTERMEDIATE steps only. Their output is consumed by the stage above, so
@@ -409,13 +472,19 @@ def _insert_assignment_rows(con, character_id: int, type_id: int, name: str, run
     # every one of those figures a lie. See `tidy_runs`.
     if tidy:
         runs_per_job = tidy_runs(runs_per_job)
+    # Measured AFTER `tidy_runs`, because rounding a run count up makes the job longer and it is
+    # the row's real duration that either fits the window or does not.
+    over_h = 0.0
+    if cadence_h > 0 and cycle_hours > 0:
+        over_h = max(0.0, runs_per_job * cycle_hours - (cadence_h + _CADENCE_GRACE))
     for _ in range(job_count):
         con.execute(
             "INSERT INTO pp_reaction_assignments "
-            "(character_id, type_id, name, runs, input_cost, reward, created_at, tier_order, order_id) "
-            "VALUES (?,?,?,?,?,?,?,?,?)",
+            "(character_id, type_id, name, runs, input_cost, reward, created_at, tier_order, "
+            "order_id, cadence_over_h) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
             (character_id, type_id, name, runs_per_job, input_cost / job_count, reward / job_count,
-             now, tier_order, order_id),
+             now, tier_order, order_id, round(over_h, 2)),
         )
 
 
@@ -912,6 +981,18 @@ def _level_options(total: int, cap: int, max_runs: int, budget: float = _LEVEL_B
     budget and judges the real cost across the whole stage instead (`_stage_affordable`) — a small
     product's own requirement is the wrong yardstick for a run count the whole stage shares.
 
+    **`max_runs` is a target, not an absolute** (decision of 2026-08-14). Options that fit under it
+    are returned alone whenever any exist. Only when none are affordable does the last-resort branch
+    run, and it weighs the over-ceiling counts and the always-available floor TOGETHER, returning
+    whichever breaches least — which is often nothing at all. Every option carries `over_runs`, how
+    far past the ceiling it reaches, so nothing here can exceed the ceiling silently and nothing
+    claims a breach it did not have to make.
+
+    That distinction used to be a truth-table bug rather than a policy: `r > max_runs and
+    r > min_runs` let exactly ONE candidate (`r == min_runs`) through when `min_runs > max_runs` and
+    dropped every larger one, so the option set collapsed to a single answer whatever duration it
+    implied, and the caller could not tell it had happened.
+
     This is the RANGE of what is affordable, not a recommendation — `_choose_stage_layout` decides
     which of these is worth paying for.
     """
@@ -931,10 +1012,12 @@ def _level_options(total: int, cap: int, max_runs: int, budget: float = _LEVEL_B
         for step in _TIDY_STEPS:
             cands.add(-(-r // step) * step)
     out: list[dict] = []
+    over: list[dict] = []               # the same options, but past the ceiling — used only if
+                                        # `out` is empty, and each says by how much it overruns
     for r in sorted(cands):
         # `min_runs` is the caller giving ground: the stage solve raises it when the stage was
         # promised more reactors than it has, since a longer run count is fewer jobs.
-        if r < max(1, min_runs) or (r > max_runs and r > min_runs):
+        if r < max(1, min_runs):
             continue
         jobs = max(1, -(-total // r))
         if jobs > cap:
@@ -942,26 +1025,61 @@ def _level_options(total: int, cap: int, max_runs: int, budget: float = _LEVEL_B
         made = jobs * r
         if made - total > total * budget:
             continue                        # tidy numbers are not worth paying for in goo
-        out.append({"runs": r, "jobs": jobs, "surplus": made - total, "tidy": _typeable(r)})
+        opt = {"runs": r, "jobs": jobs, "surplus": made - total, "tidy": _typeable(r),
+               # Runs past the ceiling. In the SAME space `max_runs` was computed in — the caller
+               # derived it from a cap in raw-SDE hours (`level_product_runs`, Step 5), so this is
+               # a raw-SDE run count and the caller converts it to real hours to report it.
+               "over_runs": max(0, r - max_runs)}
+        (out if r <= max_runs else over).append(opt)
     if out:
         return out
-    # Nothing affordable, and a product showing three numbers is the thing this exists to remove —
-    # so fall back to the SMALLEST count the work can be split into with the reactors there are,
-    # whatever that costs in surplus. That count always exists, which is what makes "one number per
-    # product" a property of this pass rather than something it manages when the arithmetic is kind.
+    # Nothing inside the ceiling was AFFORDABLE. Before giving ground, add the one count that is
+    # always available whatever it costs in surplus: the SMALLEST the work can be split into with
+    # the reactors there are. A product showing three numbers is the thing this pass exists to
+    # remove, and this floor is what makes "one number per product" a property of the pass rather
+    # than something it manages when the arithmetic is kind. It ignores `budget` on purpose — that
+    # is what "last resort" means — and it may or may not be over the ceiling.
     floor = max(1, min_runs, -(-total // cap))
-    jobs = max(1, -(-total // floor))
-    return [{"runs": floor, "jobs": jobs, "surplus": jobs * floor - total, "tidy": _typeable(floor)}]
+    f_jobs = max(1, -(-total // floor))
+    pool = list(over)
+    if all(o["runs"] != floor for o in pool):
+        pool.append({"runs": floor, "jobs": f_jobs, "surplus": f_jobs * floor - total,
+                     "tidy": _typeable(floor), "over_runs": max(0, floor - max_runs)})
+    # Then take the LEAST-breaching counts of everything on the table — ties included, nothing
+    # worse. Two ways this ordering matters, and both were found the hard way:
+    #
+    #   * The floor has to be weighed HERE, not after `over`. Trying `over` first and only falling
+    #     through to the floor when it was empty meant a floor that fits UNDER the ceiling never got
+    #     considered once any over-ceiling option existed — a spurious breach badge on a row where a
+    #     within-ceiling layout was available. Narrow (it needs the give-ground loop to have raised
+    #     `min_runs` to within a run or two of `max_runs`) but real: ~32k of 413k swept parameter
+    #     combinations, overrunning by 1-13 runs. Decision 1 says a stage that CAN be split finer to
+    #     fit is, so a breach that had an alternative is a lie about the plan.
+    #   * Least-breaching, not the whole set. The stage solve ranks fewest-jobs first, so handing it
+    #     everything over the ceiling would make it take the longest job on offer: a 6,000-run
+    #     requirement that missed by 37% came back as ONE job of 6,000 rather than 44 of 137.
+    #     Missing a target is not permission to abandon it.
+    least = min(o["over_runs"] for o in pool)
+    return [o for o in pool if o["over_runs"] == least]
 
 
 
-def _collection_slot(hours: float) -> int:
-    """Which whole-day session the player actually COLLECTS this job in.
+def _collection_slot(hours: float, bucket_h: float = _CADENCE_H) -> int:
+    """Which SESSION the player actually COLLECTS this job in. `hours` is real wall-clock hours.
 
-    A job is collected on a login and logins fall on a day rhythm, so what a run count really costs
-    in time is not its duration but the session it lands in. 6d23h and 7d00h18m are both collected
-    on day 7 — `_CADENCE_GRACE` is the slack a player who is not punctual to the minute already
-    absorbs — while 7d07h is not collected until day 8 and the reactor idles until then.
+    A job is collected on a login, so what a run count really costs in time is not its duration but
+    the session it lands in. 6d23h and 7d00h18m are both collected in the same session under a
+    weekly rhythm — `_CADENCE_GRACE` is the slack a player who is not punctual to the minute
+    already absorbs — while 7d07h waits for the next one and the reactor idles until then.
+
+    **`bucket_h` is the player's own rhythm, not a calendar.** The rhythm is a DURATION of their
+    choosing — *"nothing longer than N days"* — with no weekday, no time of day and no timezone
+    (decision of 2026-08-14). So the bucket is the account's cadence when it has set one, and 24h
+    only as the fallback when it has not. Bucketing a weekly player by the day was modelling a
+    rhythm they do not have: under a 7-day cadence every layout that respects the ceiling is
+    collected in the same session anyway, and where the daily bucket disagreed it was actively
+    harmful — `slot` outranks both `surplus` and `untidy` in `_choose_stage_layout`'s score, so the
+    solver would pay real goo to finish on a day the player does not log in.
 
     Scored ascending: a layout collected in an earlier session wins.
 
@@ -972,10 +1090,36 @@ def _collection_slot(hours: float) -> int:
     """
     if hours <= 0:
         return 0
-    return math.ceil(max(0.0, hours - _CADENCE_GRACE) / _CADENCE_H)
+    bucket = bucket_h if bucket_h and bucket_h > 0 else _CADENCE_H
+    return math.ceil(max(0.0, hours - _CADENCE_GRACE) / bucket)
 
 
 
+
+
+def _override_time_mult(context_id: int) -> float:
+    """The account's TYPED time-efficiency override as a time multiplier, or 0.0 when none is set.
+
+    One number, one clock. `time_efficiency_pct` reduces the graph's `cycle_time` at load
+    (`app/reactions/graph.py`), and this is the same value expressed the way the leveller's
+    raw-SDE space wants it: `mult = 1 - pct`. Both sides of the app therefore quote the same
+    duration for the same job, which is the entire point of the 2026-08-14 repair.
+
+    Returns a MULTIPLIER on raw SDE time — dimensionless, so it converts real hours to raw-SDE
+    hours by division exactly as the measured multiplier does. It does not itself belong to either
+    space; every caller states which one it is in.
+
+    0.0 means "nothing typed, use the measurement". Never fatal: a settings read that cannot reach
+    the DB falls back to the measurement, which is the old behaviour."""
+    try:
+        s = effective_reaction_settings(context_id)
+        if s.get("time_efficiency_source") != "override":
+            return 0.0
+        pct = float(s.get("time_efficiency_pct") or 0.0)
+        mult = 1.0 - pct
+        return mult if 0.01 <= mult < 1.0 else 0.0
+    except Exception:
+        return 0.0
 
 
 def _reaction_time_mult(context_id: int, _derive: bool = True) -> float:
@@ -1003,7 +1147,20 @@ def _reaction_time_mult(context_id: int, _derive: bool = True) -> float:
     multiplier alone, which under-claims the bonus: a smaller claimed bonus means a bigger apparent
     job, which means FEWER runs allowed and a job that lands inside the ceiling. Over-claiming is
     the direction that breaks the promise the cadence makes.
+
+    **An explicit `time_efficiency_pct` override outranks the measurement** — but only on the
+    `_derive` path. The typed field's whole remaining purpose is to say *"my clock is not what you
+    measured"*, and honouring it in the graph while the leveller kept measuring re-created the
+    two-clocks defect in the one place a user reached for deliberately: a typed 53.2% gave the graph
+    0.468 and the leveller 0.85, a 1.82x disagreement, so the plan was split ~1.8x finer than the
+    window the account had just said it could fill. `_derive=False` means "measurement only" and is
+    the path `derived_time_efficiency` reads, so the override is deliberately invisible there —
+    that is what keeps the settings resolver from consulting itself.
     """
+    if _derive:
+        mult = _override_time_mult(context_id)
+        if mult:
+            return mult
     cyc = _reaction_cycle_times()
     mults: list[float] = []
     try:
@@ -1095,7 +1252,16 @@ def _remember_time_mult(context_id: int, mult: float) -> None:
 
 
 def reaction_time_mult_for(context_id: int, type_id: int | None = None) -> float:
-    """The time multiplier for ONE product: measured if we have ever seen a job, else skills alone.
+    """The time multiplier for ONE product: the account's typed override if it set one, else
+    measured if we have ever seen a job, else skills alone.
+
+    **This is the chokepoint every duration in the package resolves through**, which is why the
+    override is applied HERE rather than in each caller: `level_product_runs`' per-product ceiling,
+    `split_order_tops_to_cadence`'s per-job cap and the graph's own `cycle_time` then all quote one
+    clock. Honouring the typed field in the graph alone was the two-clocks defect surviving in the
+    one path a user reached for deliberately — a typed 53.2% gave the graph 0.468 against the
+    leveller's 0.85 and split every plan ~1.8x finer than the window the account had just said it
+    could fill.
 
     `type_id` is accepted because the bonus really is per PRODUCT — the rig covers a group, not a
     hangar — but nothing here reads it yet: there is no per-product source that has survived being
@@ -1115,6 +1281,9 @@ def reaction_time_mult_for(context_id: int, type_id: int | None = None) -> float
     has to be validated against `_reaction_time_mult` on an account that has really reacted BEFORE
     it is wired in — that comparison is what retired the routed attempt (removed 2026-08-14).
     """
+    override = _override_time_mult(context_id)
+    if override:
+        return override
     measured = _reaction_time_mult(context_id, _derive=False)
     if measured:
         return measured
@@ -1153,7 +1322,7 @@ def _reaction_cadence_hours(context_id: int) -> float:
 
 
 def _choose_stage_layout(products: dict, prefer_tidy: bool = False,
-                          time_mult: float = 1.0) -> dict:
+                          time_mult: float = 1.0, bucket_h: float = _CADENCE_H) -> dict:
     """Pick one run count per product so the whole STAGE lands together.
 
     `products` is `{key: {"cycle": hours_per_run, "options": [...], "total": runs_needed}}` for the
@@ -1177,6 +1346,10 @@ def _choose_stage_layout(products: dict, prefer_tidy: bool = False,
     checking ahead of the surplus, so a stage settles on 70 rather than 67 where that costs only
     surplus. It is not free — the surplus is real goo — which is why it follows the same flag that
     decides whether rounding is worth paying for at all.
+
+    `time_mult` converts the raw-SDE durations in `products` into REAL hours, which is the only
+    space `_collection_slot` is meaningful in; `bucket_h` is the player's own collection rhythm in
+    real hours (their cadence, or 24h when they have not set one).
     """
     keys = [k for k, p in products.items() if p.get("options")]
     if not keys:
@@ -1228,7 +1401,7 @@ def _choose_stage_layout(products: dict, prefer_tidy: bool = False,
         # Which login the stage is collected on — after the numbers you type, before the goo. A
         # session earlier is worth surplus; a longer job inside the SAME session is not, which is
         # why this is the collected slot and not the raw duration.
-        slot = max(_collection_slot(d_ * time_mult) for d_ in durs)
+        slot = max(_collection_slot(d_ * time_mult, bucket_h) for d_ in durs)
         score = ((landed, jobs, numbers, slot, untidy, surplus, spread) if prefer_tidy
                  else (landed, jobs, numbers, slot, surplus, untidy, spread))
         if best_score is None or score < best_score:
@@ -1259,7 +1432,7 @@ def _choose_stage_layout(products: dict, prefer_tidy: bool = False,
         # Which login the stage is collected on — after the numbers you type, before the goo. A
         # session earlier is worth surplus; a longer job inside the SAME session is not, which is
         # why this is the collected slot and not the raw duration.
-        slot = max(_collection_slot(d_ * time_mult) for d_ in durs)
+        slot = max(_collection_slot(d_ * time_mult, bucket_h) for d_ in durs)
         score = ((landed, jobs, numbers, slot, untidy, surplus, spread) if prefer_tidy
                  else (landed, jobs, numbers, slot, surplus, untidy, spread))
         if best_score is None or score < best_score:
@@ -1283,15 +1456,45 @@ def _stage_affordable(products: dict, pick: dict) -> bool:
     times too much; against the stage's 4,400 runs it is 8% of the batch, and it buys the one thing
     the stage is for — every job the same length, collected in one trip.
 
+    **Denominated in ISK, not in runs.** Runs of different products cost wildly different money, so
+    a ratio of run counts is not a budget at all: a stage of Carbon Fiber (1,956 runs, cheap) beside
+    a costly sibling (196 runs) reads `need = 2,152`, which lets 1,076 runs of surplus through — and
+    every one of them may land on the expensive product, multiplying its material bill while the
+    ratio still reports a comfortable 50%. `unit_value` (ISK per run, set by `level_product_runs`
+    from the product's own instant-sell price) is what makes the 50% mean the same thing for every
+    product in the stage, and it is also what lets the dashboard state the cost of this trade in
+    ISK — a budget you cannot state in ISK cannot report a cost in ISK.
+
+    Falls back to counting runs when no product carries a `unit_value` (the unit tests, and any
+    account whose market lookup came back empty): a coarse budget is better than none.
+
+    **The tradeoff this makes, stated plainly: the layout is now price-dependent.** Denominating in
+    runs made the budget a pure function of the plan; denominating in ISK makes it a threshold on
+    today's market, so a stage sitting near the 50% boundary can re-shape between two page loads
+    with nothing about the plan having changed. That is in tension with this pass's own stated
+    purpose — *"the numbers being typed into the industry window are the same every time"* — and it
+    is a real cost, not a theoretical one. It is accepted because the alternative is worse: a budget
+    denominated in incomparable units is not a budget at all (see the Carbon Fiber case above), and
+    it cannot report what it spent in ISK, which is the whole of `reactions_ease_cost`. The
+    exposure is narrow — only a stage whose surplus is within a hair of 50% can flip, and both
+    sides of the flip are layouts this function already judged acceptable — so no hysteresis is
+    applied today. If a plan is ever reported as shuffling with no edit behind it, this threshold
+    is the first place to look, and the fix is a dead band (accept the previous layout unless the
+    new one is better by some margin), not a return to counting runs.
+
     One ceiling, stage-wide: the surplus across everything the stage makes. A product with no
     `total` (the unit tests, which exercise the search itself) is not checked."""
-    need = made = 0
+    need = made = 0.0
+    # ALL of them, not any: with one product unpriced its runs would weigh 0 against its
+    # stage-mates' ISK, which is a different (and much tighter) budget rather than a coarser one.
+    priced = bool(pick) and all(float(products[k].get("unit_value") or 0.0) > 0 for k in pick)
     for k, opt in pick.items():
         total = products[k].get("total")
         if total is None:
             return True
-        need += int(total)
-        made += opt["jobs"] * opt["runs"]
+        unit = float(products[k].get("unit_value") or 0.0) if priced else 1.0
+        need += int(total) * unit
+        made += opt["jobs"] * opt["runs"] * unit
     return need <= 0 or made - need <= need * _LEVEL_BUDGET
 
 
@@ -1304,6 +1507,23 @@ def _reaction_cycle_times() -> dict[int, float]:
         return {int(r["output_type_id"]): (float(r["cycle_time"] or 0) / 3600.0) or 1.0
                 for r in con.execute(
                     "SELECT output_type_id, MIN(cycle_time) AS cycle_time FROM reactions "
+                    "GROUP BY output_type_id")}
+    except Exception:
+        return {}
+    finally:
+        con.close()
+
+
+def _reaction_output_qtys() -> dict[int, float]:
+    """{output_type_id: units produced per run} straight from the SDE. Paired with
+    `_reaction_cycle_times` so a run count can be turned into an ISK figure: one run of a product is
+    worth `output_qty × price`, which is what lets the levelling budget and the surplus it spends be
+    stated in money rather than in run counts of incomparable things."""
+    con = get_connection()
+    try:
+        return {int(r["output_type_id"]): float(r["output_qty"] or 0.0)
+                for r in con.execute(
+                    "SELECT output_type_id, MAX(output_qty) AS output_qty FROM reactions "
                     "GROUP BY output_type_id")}
     except Exception:
         return {}
@@ -1343,7 +1563,14 @@ def level_product_runs(context_id: int) -> int:
     # ── Step 1: load every assignment row for this account ──────────────────────────────────────
     ensure_reaction_assignments_table()
     rows = _plan_rows(context_id, "a.id, a.character_id, a.type_id, a.name, a.runs, a.input_cost, a.reward, "
-                      "a.created_at, a.order_id, COALESCE(a.tier_order,0) AS tier_order")
+                      "a.created_at, a.order_id, COALESCE(a.tier_order,0) AS tier_order, "
+                      # ...and what the LAST pass wrote down about what this layout cost, so an
+                      # unchanged plan can be left genuinely untouched rather than re-stamped with
+                      # the same four numbers on every dashboard load.
+                      "COALESCE(a.cadence_over_h,0) AS cadence_over_h, "
+                      "COALESCE(a.surplus_runs,0) AS surplus_runs, "
+                      "COALESCE(a.jobs_saved,0) AS jobs_saved, "
+                      "COALESCE(a.recover_runs,0) AS recover_runs")
     if not rows:
         return 0
 
@@ -1427,6 +1654,21 @@ def level_product_runs(context_id: int) -> int:
 
     # ── Step 3: capacity — what the plan may hold per character ─────────────────────────────────
     cycles = _reaction_cycle_times()
+    # ISK per RUN of each product, so the levelling budget and the surplus it spends can be stated
+    # in money (`_stage_affordable`). Instant-sell (buy orders) is the price a reaction good is
+    # really worth — see CLAUDE.md's pricing invariant — and surplus intermediates are stock, so
+    # what they are worth is what you would get for them, not what they are listed at. Empty when
+    # the market lookup fails, and the budget falls back to counting runs.
+    unit_values: dict[int, float] = {}
+    try:
+        _oq = _reaction_output_qtys()
+        _tids = sorted({int(r["type_id"]) for r in rows})
+        for tid, m in (resolve_market_data(context_id, _tids) or {}).items():
+            v = float((m or {}).get("buy_price") or 0.0) * _oq.get(int(tid), 0.0)
+            if v > 0:
+                unit_values[int(tid)] = v
+    except Exception:
+        unit_values = {}
     caps_now = {c["character_id"]: c for c in _character_capacities(context_id)}
     # What the plan may hold on a character, counting EVERY planned job on it, not just the busiest
     # stage: reactors it has, minus the jobs really running in game. `free_slots` is the peak-tier
@@ -1466,13 +1708,23 @@ def level_product_runs(context_id: int) -> int:
     # matter and `room` already nets those out.
     lean_set = {h["character_id"] for h in _lean_hosts(
         [{"character_id": cid, "free_slots": n} for cid, n in room.items() if n > 0])}
+    # Rows per (character, stage) — counted over EVERY row, not just the re-shapeable ones. A
+    # frozen row and a customer order's protected top row are excluded from `inner` because this
+    # pass may not move them, but they are still lines in the plan holding a reactor. Counting only
+    # `inner` meant an order's own top rows were invisible to `later` and to `budget`, so stage 1
+    # was sized against reactors the order was already holding. (Adjacent to TODO §28b item 2 — the
+    # opposite mechanism from item 1, which is later stages over-reserving slots they cannot use.)
     rows_by_char_stage: dict[int, dict[int, int]] = {}
-    for stage, by_product in stages.items():
-        for rs in by_product.values():
-            for r in rs:
-                cid = r["character_id"]
-                rows_by_char_stage.setdefault(cid, {})[stage] = \
-                    rows_by_char_stage.get(cid, {}).get(stage, 0) + 1
+    inner_ids = {int(r["id"]) for r in inner}
+    excluded_by_char_stage: dict[int, dict[int, int]] = {}
+    for r in rows:
+        cid = r["character_id"]
+        st = int(r["tier_order"] or 0)
+        rows_by_char_stage.setdefault(cid, {})[st] = \
+            rows_by_char_stage.get(cid, {}).get(st, 0) + 1
+        if int(r["id"]) not in inner_ids:
+            excluded_by_char_stage.setdefault(cid, {})[st] = \
+                excluded_by_char_stage.get(cid, {}).get(st, 0) + 1
 
     plan: list[tuple] = []          # (product_key, rows, target_runs, [character per job])
     # Jobs this pass has already placed on a character, stage by stage. Reading the ORIGINAL row
@@ -1490,18 +1742,23 @@ def level_product_runs(context_id: int) -> int:
         by_product = stages[stage]
         later = {cid: sum(n for st, n in per.items() if st > stage)
                  for cid, per in rows_by_char_stage.items()}
-        # A stage may be stretched to land together but never past the job that is already the
-        # longest in it — levelling then makes a plan tidier and shorter, never slower, which is the
-        # only safe thing to do with a number nobody chose.
         # The window every job in this stage has to land inside. The account's cadence when it has
-        # set one — *"I'd prefer to be able to schedule my jobs on a Saturday and handle the next
-        # stage a week later on a Saturday"* — and otherwise whatever the plan already runs, which
-        # is the old behaviour and keeps a plan built before this existed from being resized by a
-        # number nobody chose.
+        # set one — *"nothing longer than N days"*, a DURATION and not a calendar — and otherwise
+        # whatever the plan already runs, which is the old behaviour and keeps a plan built before
+        # this existed from being resized by a number nobody chose.
         #
-        # It is a HARD ceiling: `_level_options` drops any run count above it, so a stage that
-        # cannot fit the week at the leanest layout is split finer until it does. That costs
-        # reactors, and it is the point — a cadence you cannot rely on is not a cadence.
+        # **It is a TARGET, not a hard ceiling** (decision of 2026-08-14). `_level_options` offers
+        # only the counts that fit whenever any fit, so a stage that CAN be split finer is; a stage
+        # that genuinely cannot — more reactor-hours of work than its free reactors can hold inside
+        # the window — overruns, and every route that gets it there now records by how much
+        # (`over_h` below) so the row can say so. The alternative, forcing the ceiling, is not
+        # available: with fewer reactors than the work needs, no split fits, and pretending
+        # otherwise is what made the option set collapse to a single unmeasured answer.
+        #
+        # It is also wider than the cadence: with none set, this falls back to the longest job the
+        # plan already runs, and the promise attached to that — *levelling makes a plan tidier and
+        # shorter, never slower* — is the one the same breach broke, silently, for every account
+        # with `reactions_level_runs` on.
         # The cadence is REAL hours and every duration here is raw SDE hours, so it has to be
         # converted before it can be compared with them: a 7-day window is 7 days of wall clock,
         # which is `7d / mult` worth of the SDE's idea of time. Getting this wrong is what made a
@@ -1526,7 +1783,13 @@ def level_product_runs(context_id: int) -> int:
         # overflow gate read "already holds a row" as justification, and because an order's
         # protected top row was keyed per character rather than per order. With both fixed, 21
         # stage-1 rows land 7/7/7 inside this budget with nothing left over.
-        budget = {cid: max(0, n - committed.get(cid, 0) - later.get(cid, 0))
+        #
+        # `excluded_here` is the rows AT THIS STAGE this pass may not re-shape — an order's
+        # protected top row, and anything frozen because its job is already installed. They hold a
+        # reactor exactly as a re-shapeable row does, and leaving them out is what let a stage be
+        # sized against reactors an order's own rows were holding.
+        budget = {cid: max(0, n - committed.get(cid, 0) - later.get(cid, 0)
+                           - excluded_by_char_stage.get(cid, {}).get(stage, 0))
                   for cid, n in room.items()}
 
         # The shortest this stage can possibly run: all of its work, divided by every reactor it may
@@ -1543,11 +1806,52 @@ def level_product_runs(context_id: int) -> int:
                          for tid, rs in by_product.items())
         d_floor = stage_work / stage_room
 
+        # The ceiling in RAW-SDE hours and the run count it permits, per product — hoisted out of
+        # `_build` so the seed and the give-ground loop below can both compare against it instead of
+        # each quietly stepping past a number only `_build` could see. Two of the three routes that
+        # abandoned the ceiling did exactly that.
+        #
+        # UNITS: `cadence_h` and `_CADENCE_GRACE` are REAL hours; `cycles` and everything derived
+        # from them here are RAW SDE hours. Dividing by the time multiplier converts real → raw.
+        # `_pm` is this product's own multiplier (a structure's rig bonus covers some families and
+        # not others), so a per-product ceiling is re-derived from the cadence rather than rescaled
+        # off the account-wide `stage_cap_hours`.
+        #
+        # The grace is the same slack `_collection_slot` already absorbs: truncating at exactly
+        # 168.0h rejected a layout landing at 168h04m and charged an extra job and an extra reactor
+        # for four minutes nobody can feel.
+        cap_hours_by_tid: dict[int, float] = {}
+        max_runs_by_tid: dict[int, int] = {}
+        mult_by_tid: dict[int, float] = {}
+        for tid, rs_all in by_product.items():
+            cyc = cycles.get(tid, 1.0)
+            _pm = reaction_time_mult_for(context_id, tid) if cadence_h else 0.0
+            _cap_h = (((cadence_h + _CADENCE_GRACE) / _pm) if (_pm and cadence_h)
+                      else stage_cap_hours)
+            cap_hours_by_tid[tid] = _cap_h
+            mult_by_tid[tid] = _pm or _tmult or 1.0
+            max_runs_by_tid[tid] = (int(_cap_h / cyc) if cyc > 0
+                                    else sum(int(r["runs"] or 0) for r in rs_all))
+
+        # How far past the ceiling this stage ended up, per product, in REAL hours. 0 while the
+        # ceiling holds. Every route that can breach it writes here: the seed below, the give-ground
+        # loop, and `_level_options`' own fallback — the last of which reports itself through
+        # `over_runs` on the option it returns, so it is measured off the final layout rather than
+        # guessed at.
+        over_h: dict[int, float] = {}
         floor_runs: dict[int, int] = {}     # per product, raised when a character is over-promised
         for tid in by_product:
             cyc = cycles.get(tid, 1.0)
             if cyc > 0 and d_floor > 0:
+                # The seed: the shortest this stage could possibly run given its reactors. It has
+                # never referenced `max_runs`, so a reactor-tight stage breached on attempt 0,
+                # before the give-ground loop ran at all. It still may — forcing it here would only
+                # hand `_level_options` an empty option set — but it no longer does so silently.
                 floor_runs[tid] = max(1, int(d_floor / cyc))
+                if floor_runs[tid] > max_runs_by_tid.get(tid, floor_runs[tid]):
+                    over_h[tid] = max(over_h.get(tid, 0.0),
+                                      (floor_runs[tid] * cyc - cap_hours_by_tid[tid])
+                                      * mult_by_tid.get(tid, 1.0))
         layout: dict[int, dict] = {}
         products: dict[int, dict] = {}
         # ── Step 5a: give-ground loop — shrink until the stage fits its reactors ────────────────
@@ -1559,18 +1863,17 @@ def level_product_runs(context_id: int) -> int:
                     # ONE pooled requirement per product: the account needs this many runs of it,
                     # and any reactor with room can make them.
                     total = sum(int(r["runs"] or 0) for r in rs_all)
-                    # Per PRODUCT, because the structure's rig bonus is: a Composite rig does
-                    # nothing for a job it does not cover, so one account-wide number would be
-                    # wrong for every product outside the rig's families. `stage_cap_hours` is
-                    # already `cadence / account mult`; re-scale it by this product's own.
-                    _pm = reaction_time_mult_for(context_id, tid) if cadence_h else 0.0
-                    _cap_h = (cadence_h / _pm) if (_pm and cadence_h) else stage_cap_hours
-                    max_runs = int(_cap_h / cyc) if cyc > 0 else total
+                    # Per PRODUCT, computed above: the structure's rig bonus covers some reaction
+                    # families and not others, so one account-wide ceiling would be wrong for every
+                    # product outside them. Raw-SDE hours and a raw-SDE run count.
+                    max_runs = max_runs_by_tid.get(tid, total)
                     # The counts that would land this product on a duration the rest of the stage
                     # is considering — see `_level_options`' `extra`.
                     extra = [max(1, int(h / cyc)) for h in extra_hours if cyc > 0]
                     built[tid] = {
                         "cycle": cyc, "total": total,
+                        # ISK per run, so the stage budget is judged in money (`_stage_affordable`).
+                        "unit_value": unit_values.get(int(tid), 0.0),
                         # Wide here on purpose: what a run count really costs is judged across the
                         # whole stage (`_stage_affordable`), not against this one product's needs.
                         # A formula is a physical item locked in the reactor while a job runs on
@@ -1593,7 +1896,10 @@ def level_product_runs(context_id: int) -> int:
             products = _build(set())
             durations = {o["runs"] * p["cycle"] for p in products.values() for o in p["options"]}
             products = _build(durations)
-            layout = _choose_stage_layout(products, prefer_tidy, time_mult=_tmult)
+            # The rhythm the stage is collected on: the account's cadence when it has set one,
+            # 24h when it has not. Real hours, matching `_collection_slot`'s argument.
+            layout = _choose_stage_layout(products, prefer_tidy, time_mult=_tmult,
+                                          bucket_h=cadence_h or _CADENCE_H)
             asked = sum(opt["jobs"] for opt in layout.values())
             if asked <= stage_room:
                 break
@@ -1606,7 +1912,49 @@ def level_product_runs(context_id: int) -> int:
             nxt = min(higher) if higher else cur + max(1, cur // 4)
             if nxt <= floor_runs.get(worst_tid, 0):
                 break                       # no room left to give — take what we have
+            # Giving ground means a LONGER job, so this is the route that walks the ceiling. It was
+            # raised with no reference to `max_runs` at all; it still may cross it — the stage has
+            # more work than reactors and something has to give — but it now says so.
+            _cyc_w = cycles.get(worst_tid, 1.0)
+            if nxt > max_runs_by_tid.get(worst_tid, nxt):
+                over_h[worst_tid] = max(
+                    over_h.get(worst_tid, 0.0),
+                    (nxt * _cyc_w - cap_hours_by_tid.get(worst_tid, nxt * _cyc_w))
+                    * mult_by_tid.get(worst_tid, 1.0))
             floor_runs[worst_tid] = nxt
+        # ── Step 5a-bis: measure what the answer actually cost ──────────────────────────────────
+        # The BREACH, measured off the layout that was chosen rather than trusted to the route that
+        # produced it. `_level_options`' own fallback is the third breach route and it needs no loop
+        # to get there, so this is the only place all three are certainly caught. Real hours, so the
+        # row can print it: raw-SDE duration minus the raw-SDE ceiling, × this product's multiplier.
+        #
+        # The WHY is structural and the same in every case, which is why it is not stored as text:
+        # a stage whose work exceeds what its free reactors can turn over inside the window has no
+        # split that fits, so the plan overruns rather than pretending otherwise (decision of
+        # 2026-08-14 — the cadence is a stated target).
+        for tid, opt in layout.items():
+            _cyc = cycles.get(tid, 1.0)
+            _capr = cap_hours_by_tid.get(tid, 0.0)
+            if _capr > 0 and opt["runs"] * _cyc > _capr:
+                over_h[tid] = max(over_h.get(tid, 0.0),
+                                  (opt["runs"] * _cyc - _capr) * mult_by_tid.get(tid, 1.0))
+        # ...and what EASE cost. The counterfactual is per-product run counts — every product on the
+        # cheapest count its own requirement allows — against the shared layout actually chosen.
+        # Only `_choose_stage_layout`'s inputs know it, which is why it is computed here and written
+        # down rather than re-derived later from rows that no longer carry the alternatives.
+        # `recover_runs` is what dropping to per-product counts would give back; `jobs_saved` is
+        # what the shared count bought. Both per (stage, product), in RUNS — the dashboard prices
+        # them, because it is the surface that holds today's market.
+        ease: dict[int, dict] = {}
+        for tid, opt in layout.items():
+            opts = (products.get(tid) or {}).get("options") or []
+            cheapest = min(opts, key=lambda o: (o["surplus"], o["jobs"])) if opts else opt
+            ease[tid] = {
+                "surplus_runs": max(0, int(opt.get("surplus") or 0)),
+                "recover_runs": max(0, int(opt.get("surplus") or 0) - int(cheapest.get("surplus") or 0)),
+                "jobs_saved": max(0, int(cheapest.get("jobs") or 0) - int(opt.get("jobs") or 0)),
+            }
+
         # ── Step 5b: place the jobs (stable: who already runs it keeps it) ──────────────────────
         # WHERE the jobs go. A character that already runs the product keeps it (no move for its
         # own sake), then whoever has the most room — so consolidating a product onto fewer
@@ -1691,20 +2039,42 @@ def level_product_runs(context_id: int) -> int:
                 spots += [cid] * q[cid]
             for cid in spots:
                 committed[cid] = committed.get(cid, 0) + 1
-            plan.append(((stage, tid), stay + move, opt["runs"], spots))
+            # ...and what this answer cost, stamped on every row of the group so the dashboard can
+            # report it without re-solving the stage. Per (stage, product): a reader takes it ONCE
+            # per group, not once per row.
+            note = dict(ease.get(tid) or {"surplus_runs": 0, "recover_runs": 0, "jobs_saved": 0})
+            note["cadence_over_h"] = round(over_h.get(tid, 0.0), 2)
+            plan.append(((stage, tid), stay + move, opt["runs"], spots, note))
 
     # ── Step 6: write the plan back — update, delete, insert ────────────────────────────────────
     changed = 0
+    _noted = False          # a cost note was written for a group whose layout did not change
     con = get_connection()
     try:
-        for _pkey, rs, runs, spots in plan:
+        for _pkey, rs, runs, spots, note in plan:
             jobs = len(spots)
             keep = rs[:jobs]
             drop = rs[jobs:]
-            if (jobs == len(rs) and all(int(r["runs"] or 0) == runs for r in rs)
-                    and [r["character_id"] for r in rs] == spots):
-                continue                    # already one number, in the right jobs, in the right
-                                            # hands — nothing to write
+            settled = (jobs == len(rs) and all(int(r["runs"] or 0) == runs for r in rs)
+                       and [r["character_id"] for r in rs] == spots)
+            if settled:
+                # Already one number, in the right jobs, in the right hands — but what that answer
+                # COST is re-measured every pass (prices move, and so does the free-reactor count),
+                # so the note is written even when the layout is not. It is not counted in
+                # `changed`: this pass reports rows re-shaped, and an unchanged plan must still read
+                # as idempotent.
+                for r in rs:
+                    if (abs(float(r.get("cadence_over_h") or 0.0) - note["cadence_over_h"]) < 0.01
+                            and int(r.get("surplus_runs") or 0) == note["surplus_runs"]
+                            and int(r.get("jobs_saved") or 0) == note["jobs_saved"]
+                            and int(r.get("recover_runs") or 0) == note["recover_runs"]):
+                        continue                # the note is already what it should be
+                    con.execute("UPDATE pp_reaction_assignments SET cadence_over_h=?, "
+                                "surplus_runs=?, jobs_saved=?, recover_runs=? WHERE id=?",
+                                (note["cadence_over_h"], note["surplus_runs"],
+                                 note["jobs_saved"], note["recover_runs"], r["id"]))
+                    _noted = True
+                continue
             # Cost and profit are LINEAR in runs, so they scale with the work rather than being
             # re-split across it. A chain's intermediate rows carry 0 either way (the whole chain's
             # cost rolls up into its top row), but a top row carries the real ISK — and after this
@@ -1719,8 +2089,11 @@ def level_product_runs(context_id: int) -> int:
                 # Moving a row rather than deleting and re-inserting keeps its id, its chain and
                 # its order, so everything reading those still sees the plan it saw before.
                 con.execute("UPDATE pp_reaction_assignments SET runs=?, input_cost=?, reward=?, "
-                            "character_id=? WHERE id=?",
-                            (runs, cost, reward, spots[i], r["id"]))
+                            "character_id=?, cadence_over_h=?, surplus_runs=?, jobs_saved=?, "
+                            "recover_runs=? WHERE id=?",
+                            (runs, cost, reward, spots[i], note["cadence_over_h"],
+                             note["surplus_runs"], note["jobs_saved"], note["recover_runs"],
+                             r["id"]))
                 changed += 1
             for r in drop:
                 con.execute("DELETE FROM pp_reaction_assignments WHERE id=?", (r["id"],))
@@ -1730,11 +2103,14 @@ def level_product_runs(context_id: int) -> int:
                 con.execute(
                     "INSERT INTO pp_reaction_assignments "
                     "(character_id, type_id, name, runs, input_cost, reward, created_at, "
-                    "tier_order, order_id) VALUES (?,?,?,?,?,?,?,?,?)",
+                    "tier_order, order_id, cadence_over_h, surplus_runs, jobs_saved, recover_runs) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (cid, proto["type_id"], proto["name"], runs, cost, reward,
-                     proto["created_at"], proto["tier_order"], proto["order_id"]))
+                     proto["created_at"], proto["tier_order"], proto["order_id"],
+                     note["cadence_over_h"], note["surplus_runs"], note["jobs_saved"],
+                     note["recover_runs"]))
                 changed += 1
-        if changed:
+        if changed or _noted:
             con.commit()
     except Exception:
         return 0
@@ -1761,8 +2137,16 @@ def split_order_tops_to_cadence(context_id: int) -> int:
     total. Only the row COUNT differs, and every consumer of that counts rows rather than assuming
     one.
 
-    Held to the formulas owned like everything else — a batch that cannot be split far enough to
-    fit is split as far as it can be, since more of it inside the window is still better than none.
+    Held to the formulas owned like everything else — AND to the reactors owned, which it was not:
+    it wrote N rows where there was 1 with no free-slot check at all, while `level_product_runs` was
+    hardened for exactly that ("12 slots assigned to characters that only have 10"). A split that
+    does not fit the character's remaining room is taken as far as the room allows.
+
+    Since 2026-08-14 the order is paced at QUOTE time instead (`_allocate_and_insert`), so on a
+    freshly committed order this pass finds every top row already inside the window and writes
+    nothing. It stays because orders committed before that, and orders whose cadence was set or
+    tightened afterwards, still need it — and because it is the second half of the guarantee that
+    the commit-time quote and the dashboard agree.
     """
     cadence_h = _reaction_cadence_hours(context_id)
     if cadence_h <= 0:
@@ -1770,11 +2154,30 @@ def split_order_tops_to_cadence(context_id: int) -> int:
     mult = _reaction_time_mult(context_id)
     cyc = _reaction_cycle_times()
     fcaps = {t: c for t, c in (formula_concurrency_caps(context_id) or {}).items() if c}
+    # Reactors per character, and what the plan already holds on each — this pass may only spend
+    # what is genuinely left. Read before the connection below opens: `_character_capacities` and
+    # `_plan_rows` open their own, and two at once is the 2026-07-13 pool-exhaustion incident.
+    room: dict[int, int] = {}
+    try:
+        room = {c["character_id"]: max(0, int(c.get("slots") or 0))
+                for c in _character_capacities(context_id)}
+        for r in _plan_rows(context_id, "a.id, a.character_id"):
+            cid = r["character_id"]
+            if cid in room:
+                room[cid] -= 1
+    except Exception:
+        room = {}
     con = get_connection()
     try:
         rows = [dict(r) for r in con.execute(
             "SELECT a.id, a.character_id, a.type_id, a.name, a.runs, a.input_cost, a.reward, "
-            "a.tier_order, a.created_at, a.order_id FROM pp_reaction_assignments a "
+            "a.tier_order, a.created_at, a.order_id, "
+            # Carried across the re-split below. They are the leveller's cost note for the group,
+            # and a row that is deleted and re-inserted must not silently lose it — see the INSERT.
+            "COALESCE(a.surplus_runs,0) AS surplus_runs, "
+            "COALESCE(a.jobs_saved,0) AS jobs_saved, "
+            "COALESCE(a.recover_runs,0) AS recover_runs "
+            "FROM pp_reaction_assignments a "
             "JOIN pp_characters c ON c.character_id = a.character_id "
             "WHERE c.context_id = ? AND a.order_id IS NOT NULL", (context_id,))]
         top: dict[tuple, int] = {}
@@ -1791,15 +2194,29 @@ def split_order_tops_to_cadence(context_id: int) -> int:
             runs = int(r["runs"] or 0)
             if raw <= 0 or runs <= 0:
                 continue
-            per_job_cap = int((cadence_h / mult) / raw)
+            # UNITS: `raw` is RAW SDE hours per run; `cadence_h` and `_CADENCE_GRACE` are REAL
+            # hours. Dividing by the measured multiplier converts the window into raw-SDE space,
+            # which is the space `raw` lives in. The grace is the same slack `_collection_slot`
+            # absorbs — truncating at exactly 168.0h charged an extra job for four minutes.
+            per_job_cap = int(((cadence_h + _CADENCE_GRACE) / mult) / raw)
             if per_job_cap <= 0 or runs <= per_job_cap:
                 continue                       # already inside the window
             jobs = -(-runs // per_job_cap)
             cap = fcaps.get(int(r["type_id"]))
             if cap:
                 jobs = min(jobs, max(1, int(cap)))
+            # ...and the character's own reactors. One row becomes `jobs` rows, so the split costs
+            # `jobs - 1` more lines in the plan; a character with two reactors free cannot hold nine
+            # of them however well that would fit the cadence. Splitting as far as the room allows
+            # is still better than not splitting at all — and when either cap binds the job stays
+            # over the window, which the INSERT below measures and records on every row it writes.
+            free = room.get(r["character_id"])
+            if free is not None:
+                jobs = min(jobs, max(1, free + 1))
             if jobs <= 1:
                 continue
+            if free is not None:
+                room[r["character_id"]] = max(0, free - (jobs - 1))
             base, rem = divmod(runs, jobs)
             if base <= 0:
                 continue
@@ -1809,11 +2226,33 @@ def split_order_tops_to_cadence(context_id: int) -> int:
             unit_reward = float(r["reward"] or 0.0) / runs
             con.execute("DELETE FROM pp_reaction_assignments WHERE id=?", (r["id"],))
             for n in sizes:
+                # **The breach, re-measured for the row that is actually being written.** A DELETE
+                # plus INSERT that omits these four columns does not leave them alone — it resets
+                # them to the schema default, so a row that arrived here carrying a real overrun
+                # left claiming none. Reported: `cadence_over_h: 673.2` became six rows of `0.0`,
+                # each 450h against a 24h window, silently.
+                #
+                # `cadence_over_h` is RECOMPUTED rather than carried, because the split is exactly
+                # the thing that changes it: the point of this pass is to make the job shorter, so
+                # the old row's overrun is not this row's. It is 0 whenever the split succeeded,
+                # and the residual whenever a formula cap or the free-reactor check bound first.
+                #
+                # UNITS: `n * raw` is RAW SDE hours; x `mult` makes it real wall-clock hours, the
+                # space `cadence_h` is in and the space the badge prints. `_CADENCE_GRACE` is
+                # absorbed, matching `per_job_cap` above and the leveller's own measurement — the
+                # split deliberately spends the grace, so reporting it back as a breach would flag
+                # the plan for doing what it was told.
+                over_h = max(0.0, n * raw * mult - (cadence_h + _CADENCE_GRACE))
+                # The other three are the leveller's cost note for this (stage, product) group and
+                # have nothing to do with the split, so they are carried across unchanged.
                 con.execute(
                     "INSERT INTO pp_reaction_assignments (character_id, type_id, name, runs, "
-                    "input_cost, reward, created_at, tier_order, order_id) VALUES (?,?,?,?,?,?,?,?,?)",
+                    "input_cost, reward, created_at, tier_order, order_id, cadence_over_h, "
+                    "surplus_runs, jobs_saved, recover_runs) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (r["character_id"], r["type_id"], r["name"], n, round(unit_cost * n, 2),
-                     round(unit_reward * n, 2), r["created_at"], r["tier_order"], r["order_id"]))
+                     round(unit_reward * n, 2), r["created_at"], r["tier_order"], r["order_id"],
+                     round(over_h, 2), int(r.get("surplus_runs") or 0),
+                     int(r.get("jobs_saved") or 0), int(r.get("recover_runs") or 0)))
                 written += 1
         if written:
             con.commit()
@@ -2114,9 +2553,17 @@ def adopt_orphan_job(req: AdoptOrphanRequest, context_id: int = Depends(require_
     out_qty = node["via"]["output_qty"]
     total_out = req.runs * out_qty
     vol = (types.get(req.type_id, {}).get("volume") or 0.0)
-    v = _value_reaction_batch(node, total_out, m["sell_price"] if m else 0.0, vol, settings)
+    # Priced at BUY orders (instant sell), like every other profit figure in the package: the
+    # adopted row's `reward` is a profit, and a reaction good's sell-order price is not achievable
+    # profit (CLAUDE.md). `sell_price` is still passed so _value_reaction_batch can charge courier
+    # collateral against the sell value, which is the freight reference's rule regardless of how
+    # the goods are actually sold. Netted against `fixed_costs` — the full base, not materials and
+    # job fees alone — so an adopted row agrees with the plan totals it joins.
+    sell = (m or {}).get("sell_price") or 0.0
+    buy = (m or {}).get("buy_price") or 0.0
+    v = _value_reaction_batch(node, total_out, sell, vol, settings, buy_price=buy)
     input_cost = v["input_cost"]   # materials only — matches how plan rows store input_cost
-    reward = v["net_profit"]
+    reward = v["net_profit_instant"]
 
     # Chain tiers (intermediate reactions this formula needs), same as assign_reaction — recorded at
     # 0 cost since the whole chain's cost already rolls up into the top-level row's unit_cost.
@@ -2334,25 +2781,47 @@ def _plan_totals(context_id: int, rows: list[dict], order_meta: dict[int, dict],
 
     So:
 
-    * **committed** is the plan's materials at their current unit cost — literally the shopping
-      list, priced (`_plan_materials`), which is the ISK you actually have to spend;
+    * **isk_committed is MATERIALS ONLY** — the plan's materials at their current unit cost,
+      literally the shopping list, priced (`_plan_materials`). It is a useful number in its own
+      right ("what I must go and buy") and the dashboard labels it *Materials committed*. It is
+      NOT the cost base for profit;
+    * **total_cost** is that plus the costs a shopping list does not carry: job install fees,
+      export freight and courier collateral, from `_value_reaction_batch` on the END products (the
+      recipe roll-up already folds every intermediate's fees into the product above it, so
+      charging end products only is the whole chain, counted once). **Profit is derived from
+      total_cost**, never from the materials-only figure — netting revenue against an incomplete
+      cost is how a plan reported a margin it does not have;
     * **output value** counts only END products, the rows nothing else in the plan consumes. An
-      intermediate's value is already inside the product above it;
+      intermediate's value is already inside the product above it. Valued at the **buy** order
+      price (instant sell) per CLAUDE.md's pricing invariant: a reaction good's sell-order price is
+      not achievable profit, and this tile feeds a profit figure. It was quoting `sell_price` until
+      2026-08-14;
     * an ORDER's revenue is its `client_price`, apportioned across however much of it is assigned
       so far. An order with no price contributes to neither revenue nor profit, and is counted in
       `unpriced_orders` so the caller can say so instead of showing a confident zero;
     * **profit per day** divides by the plan's MAKESPAN — stages run in sequence, so it is the sum
       over stages of the longest job in each. Dividing each row by its own duration (the old rule)
-      over-counts badly on a plan that is mostly short parallel jobs.
+      over-counts badly on a plan that is mostly short parallel jobs. `makespan_hours` is returned
+      so the caller can combine this half with the orphan-job half under ONE definition of "per
+      day" instead of adding two incompatible rates together.
+
+    Every duration here is in TIME-EFFICIENCY-REDUCED hours: `cycle_hours_by_type` is built by the
+    caller from raw SDE cycle_time x (1 - time_efficiency_pct), and that efficiency is now the
+    account's measured reaction multiplier (see effective_reaction_settings). It is NOT the
+    raw-SDE space the leveller works in.
     """
-    out = {"isk_committed": 0.0, "output_value": 0.0, "net_profit": 0.0,
-           "net_profit_per_day": 0.0, "unpriced_orders": 0}
+    out = {"isk_committed": 0.0, "materials_committed": 0.0, "job_fees": 0.0, "freight": 0.0,
+           "collateral": 0.0, "total_cost": 0.0, "output_value": 0.0, "sell_order_value": 0.0,
+           "net_profit": 0.0, "net_profit_per_day": 0.0, "makespan_hours": 0.0,
+           "unpriced_orders": 0}
     if not rows:
         return out
     loaded = _load_goo_and_reached(context_id)
     reached = loaded[1] if loaded else {}
+    types = loaded[4] if loaded else {}
     if not reached:
         return out
+    settings = effective_reaction_settings(context_id)
 
     # What the plan must BUY: its own materials, row by row, at the price the graph settled on.
     from app.reactions.graph import _plan_materials
@@ -2363,13 +2832,25 @@ def _plan_totals(context_id: int, rows: list[dict], order_meta: dict[int, dict],
         return sum(units * float((reached.get(tid) or {}).get("unit_cost") or 0.0)
                    for tid, units in _plan_materials(subset, reached, pool, in_house).items())
 
-    out["isk_committed"] = _cost(rows)
+    out["isk_committed"] = out["materials_committed"] = _cost(rows)
 
     # END products only — anything another row eats is not sellable output. Same set the per-row
     # display uses, so a row shown as an intermediate can never be counted as revenue.
     consumed = _plan_intermediates(context_id, rows)
 
     order_revenue: dict[int, float] = {}
+    # An order's invoice is apportioned across its TOP-tier rows only. A tier counts as consumed
+    # only if a surviving row's recipe still lists it, so a tier whose only consumer was trimmed
+    # away (`_trim_tiers_by_stock`) becomes a phantom end product and used to book a SECOND slice
+    # of the same client_price — narrow, but it inflated revenue silently rather than failing
+    # loudly. The order's real product is whatever sits at its highest stage; anything below that
+    # is intermediate stock and is valued at the market like any other unsold output.
+    order_top_tier: dict[int, int] = {}
+    for r in rows:
+        oid = r.get("order_id")
+        if oid and int(r["type_id"]) not in consumed:
+            order_top_tier[int(oid)] = max(order_top_tier.get(int(oid), -1),
+                                           int(r.get("tier_order") or 0))
     for r in rows:
         tid = int(r["type_id"])
         if tid in consumed:
@@ -2378,35 +2859,61 @@ def _plan_totals(context_id: int, rows: list[dict], order_meta: dict[int, dict],
         meta = order_meta.get(int(oid)) if oid else None
         price = (meta or {}).get("client_price")
         total_runs = (meta or {}).get("top_level_runs") or 0
-        if oid and price and total_runs > 0:
+        # What the chain really costs beyond its materials: job install fees, export freight and
+        # courier collateral. Charged on end products only — the recipe roll-up on `node` already
+        # carries every intermediate's fees — so this is the whole chain, counted once.
+        node = reached.get(tid)
+        oq = output_qty_by_type.get(tid, 0.0)
+        m = market_by_type.get(tid)
+        total_out = int(r["runs"] or 0) * oq
+        v = None
+        if node and node.get("via") and total_out > 0:
+            vol = ((types.get(tid, {}) or {}).get("volume") or 0.0)
+            sell = (m or {}).get("sell_price", 0.0) or 0.0
+            buy = (m or {}).get("buy_price", 0.0) or 0.0
+            v = _value_reaction_batch(node, total_out, sell, vol, settings, buy_price=buy)
+            out["job_fees"] += v["job_cost"]
+            out["freight"] += v["shipping"]
+            out["collateral"] += v["collateral"]
+        is_order_top = bool(oid) and int(r.get("tier_order") or 0) == order_top_tier.get(int(oid or 0), -1)
+        if oid and price and total_runs > 0 and is_order_top:
             # An order is sold at its AGREED price, not at the market — apportioned by how much of
             # it this row represents, so a half-assigned order contributes half its invoice.
             out["output_value"] += float(price) * (int(r["runs"] or 0) / total_runs)
+            out["sell_order_value"] += float(price) * (int(r["runs"] or 0) / total_runs)
         else:
             # No agreed price (or not an order at all): value the goods at what they are worth on
             # the market. For an order that is a STAND-IN, not the invoice — but it is the honest
             # floor ("if the client fell through you could sell these"), and it beats reporting a
             # plan full of real work as producing nothing, which is what a hard 0 did.
-            if oid:
+            if oid and not price:
                 order_revenue.setdefault(int(oid), 0.0)
-            m = market_by_type.get(tid)
-            oq = output_qty_by_type.get(tid, 0.0)
-            if m and oq:
-                out["output_value"] += int(r["runs"] or 0) * oq * m["sell_price"]
+            if v is not None:
+                # Buy orders, not sell: this feeds a profit figure (CLAUDE.md's pricing invariant).
+                out["output_value"] += v["instant_value"]
+                out["sell_order_value"] += v["output_value"]
+            elif m and oq:
+                out["output_value"] += total_out * (m.get("buy_price") or 0.0)
+                out["sell_order_value"] += total_out * (m.get("sell_price") or 0.0)
     out["unpriced_orders"] = len([o for o, v in order_revenue.items() if v == 0.0])
 
     # Every row is now valued one way or the other — at the client's price where there is one, at
     # the market otherwise — so profit is simply value minus cost. `unpriced_orders` no longer means
     # "left out of this number"; it means "part of it is a market estimate, not an invoice", which
-    # is what the dashboard says.
-    out["net_profit"] = out["output_value"] - out["isk_committed"]
+    # is what the dashboard says. The cost it is netted against is the FULL one, not the shopping
+    # list: job fees, freight and collateral are ISK the plan really spends.
+    out["total_cost"] = (out["materials_committed"] + out["job_fees"]
+                         + out["freight"] + out["collateral"])
+    out["net_profit"] = out["output_value"] - out["total_cost"]
     # Makespan: stages are sequential, so the plan is done when the last stage's longest job is.
+    # Reduced hours (see the docstring), and returned so the orphan half can share this definition.
     by_stage: dict[int, float] = {}
     for r in rows:
         hours = int(r["runs"] or 0) * cycle_hours_by_type.get(int(r["type_id"]), 0.0)
         st = int(r.get("tier_order") or 0)
         by_stage[st] = max(by_stage.get(st, 0.0), hours)
-    days = sum(by_stage.values()) / 24.0
+    out["makespan_hours"] = sum(by_stage.values())
+    days = out["makespan_hours"] / 24.0
     out["net_profit_per_day"] = out["net_profit"] / days if days > 0 else 0.0
     return out
 
@@ -2414,14 +2921,30 @@ def _plan_totals(context_id: int, rows: list[dict], order_meta: dict[int, dict],
 def _unplanned_running_totals(context_id: int, unplanned_running: list[tuple[int, float]],
                               output_qty_by_type: dict[int, float],
                               cycle_hours_by_type: dict[int, float]) -> dict[str, float]:
-    """Committed-total deltas (ISK / output value / net profit / profit-per-day) for ORPHAN running
+    """Committed-total deltas (ISK / output value / net profit / makespan) for ORPHAN running
     jobs — ones running in-game with no plan slot (see get_industry_jobs). ESI gives only product +
     run count, so they're valued from our own SDE recipe via _value_reaction_batch, priced with the
     caller's own settings (group sheet, reaction system, time efficiency) exactly like every other
     path. Lazy: the (heavier) reaction cost graph loads only when there ARE such jobs, so a fully-
     planned dashboard pays nothing. A product with no reachable recipe or no live market price is
-    skipped rather than guessed — same rule the opportunity list follows."""
-    totals = {"isk_committed": 0.0, "output_value": 0.0, "net_profit": 0.0, "net_profit_per_day": 0.0}
+    skipped rather than guessed — same rule the opportunity list follows.
+
+    **Two things this used to get wrong, and one tile carried both.** It valued output at
+    `sell_price` — the achievable-profit signal must be the buy order (CLAUDE.md's pricing
+    invariant) — and it netted against materials + job fees only. Both fixed: `fixed_costs` is the
+    full base and `instant_value` is what a buy order pays.
+
+    **And it returns no rate.** It used to compute `net_profit / (runs x cycle / 24)` per job and
+    SUM those, which is exactly the over-counting rule `_plan_totals`' own docstring abandoned: a
+    handful of short parallel jobs each report a huge daily rate and the sum is nonsense. That sum
+    was then ADDED to the plan's makespan-derived rate, so one tile held two incompatible
+    definitions of "per day". It now returns `makespan_hours` — orphan jobs run in parallel, so
+    theirs is the longest single job — and the caller derives ONE rate for both halves.
+
+    Hours here are TIME-EFFICIENCY-REDUCED (`cycle_hours_by_type`), not raw SDE."""
+    totals = {"isk_committed": 0.0, "output_value": 0.0, "sell_order_value": 0.0,
+              "job_fees": 0.0, "freight": 0.0, "collateral": 0.0, "total_cost": 0.0,
+              "net_profit": 0.0, "makespan_hours": 0.0}
     if not unplanned_running:
         return totals
     graph = _load_goo_and_reached(context_id)
@@ -2437,13 +2960,21 @@ def _unplanned_running_totals(context_id: int, unplanned_running: list[tuple[int
             continue
         total_out = runs * output_qty_by_type.get(tid, 0.0)
         vol = (types.get(tid, {}).get("volume") or 0.0)
-        v = _value_reaction_batch(node, total_out, m["sell_price"], vol, settings)
+        v = _value_reaction_batch(node, total_out, m["sell_price"], vol, settings,
+                                  buy_price=(m.get("buy_price") or 0.0))
         totals["isk_committed"] += v["input_cost"]
-        totals["output_value"] += v["output_value"]
-        totals["net_profit"] += v["net_profit"]
+        totals["job_fees"] += v["job_cost"]
+        totals["freight"] += v["shipping"]
+        totals["collateral"] += v["collateral"]
+        totals["total_cost"] += v["fixed_costs"]
+        totals["output_value"] += v["instant_value"]
+        totals["sell_order_value"] += v["output_value"]
+        totals["net_profit"] += v["net_profit_instant"]
         cyc = cycle_hours_by_type.get(tid, 0)
         if cyc > 0 and runs > 0:
-            totals["net_profit_per_day"] += v["net_profit"] / (runs * cyc / 24)
+            # Parallel, not sequential: these are separate jobs already in reactors, so the orphan
+            # half is done when its LONGEST one is.
+            totals["makespan_hours"] = max(totals["makespan_hours"], runs * cyc)
     return totals
 
 
@@ -2512,8 +3043,14 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
         if char_ids:
             placeholders = ",".join("?" * len(char_ids))
             for r in con.execute(
+                # ...and what the leveller decided this layout cost (Step 1 wrote them, per
+                # (stage, product) — see `ensure_reaction_assignments_table`). They are read here
+                # rather than recomputed because the pass that knows the counterfactual has already
+                # run and closed its connection by the time these rows are read.
                 f"SELECT id, character_id, type_id, name, runs, input_cost, reward, tier_order, "
-                f"created_at, order_id "
+                f"created_at, order_id, COALESCE(cadence_over_h,0) AS cadence_over_h, "
+                f"COALESCE(surplus_runs,0) AS surplus_runs, COALESCE(jobs_saved,0) AS jobs_saved, "
+                f"COALESCE(recover_runs,0) AS recover_runs "
                 f"FROM pp_reaction_assignments WHERE character_id IN ({placeholders}) ORDER BY tier_order", char_ids,
             ):
                 assignments.setdefault(r["character_id"], []).append(dict(r))
@@ -2689,17 +3226,48 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
             # from the stored `input_cost == 0 and reward == 0`, which was only ever a proxy: it
             # also caught a customer order's top row (stored at zero reward on purpose) and any row
             # whose costs had not been written, and it is the reason the headline totals were wrong.
-            is_chain_tier = a["type_id"] in consumed_by_plan
             m = market_by_type.get(a["type_id"])
             out_qty_per_run = output_qty_by_type.get(a["type_id"], 0.0)
-            # Output valued at the Fuzzworks SELL (list) price — what the product is worth on the
-            # market sold the normal way — matching the opportunity list's order_value.
-            row_output_value = (a["runs"] * out_qty_per_run * m["sell_price"]) if (m and out_qty_per_run and not is_chain_tier) else 0.0
+            # There is deliberately NO per-row `output_value` here any more. It was quoted at the
+            # sell price while `pending_output_value` — the tile a user actually reads — is quoted
+            # at buy orders, so the payload contradicted itself by the whole spread (290.7m against
+            # 277.5m on a live plan). Nothing in `reactions.js` ever read it, so deleting it is
+            # strictly better than repricing a field with no reader: one fewer number that can drift,
+            # and one of the two remaining entries off the pricing guard's known-open list.
+            # How long this job will actually run, so a pending row can say what it costs in time.
+            # UNITS: `cycle_hours_by_type` is the time-efficiency-REDUCED clock (see its build
+            # above), i.e. real wall-clock hours — the same space every other duration on this page
+            # is in, and the space `cadence_over_h` was converted into by the leveller.
+            row_hours = round(int(a["runs"] or 0) * cycle_hours_by_type.get(a["type_id"], 0.0), 2)
+            # What the levelling pass decided, and what it cost — priced HERE because this is the
+            # surface holding today's market, while the pass that chose the layout is not.
+            #
+            # Instant-sell (buy orders), per CLAUDE.md's pricing invariant: surplus intermediates
+            # are stock, and what stock is worth is what you would actually get for it. Both figures
+            # are per (type_id, tier_order) and repeated on every row of that group — a reader takes
+            # each ONCE per group rather than summing rows, since the leveller pools a product
+            # across characters and the number belongs to the pool.
+            _unit_isk = (float(m["buy_price"]) * out_qty_per_run) if (m and out_qty_per_run) else 0.0
             # Only NOT-yet-running rows show up as "to install" squares.
             if not is_running:
                 pending.append({
                     "assignment_id": a["id"], "type_id": a["type_id"], "name": a["name"], "runs": a["runs"],
                     "tier_order": a["tier_order"],
+                    "hours": row_hours,
+                    # Real hours this job runs PAST the player's window, 0 when it fits. The cadence
+                    # is a stated target, not an absolute: a stage with more work than its free
+                    # reactors can turn over inside the window overruns, and this is it saying so
+                    # rather than the plan quietly quoting eleven days on a seven-day rhythm.
+                    "cadence_over_h": round(float(a.get("cadence_over_h") or 0.0), 2),
+                    "surplus_isk": round(int(a.get("surplus_runs") or 0) * _unit_isk, 2),
+                    "recoverable_isk": round(int(a.get("recover_runs") or 0) * _unit_isk, 2),
+                    "jobs_saved": int(a.get("jobs_saved") or 0),
+                    # Whether dropping to a per-product run count would give anything back at all —
+                    # DERIVED here rather than left to the reader to infer from `recoverable_isk`,
+                    # which is 0 both when there is nothing to recover and when the product simply
+                    # has no live price. The "N more numbers to type" half of the remedy counts
+                    # products, not ISK, so it must not silently shrink when a price goes missing.
+                    "can_recover": int(a.get("recover_runs") or 0) > 0,
                     # `running` or `done` when the player said so by hand and ESI has not caught up
                     # (or never will). Absent otherwise. Keeps the row on the page so the mark can
                     # be taken back, while the checklist and the slot count both read it.
@@ -2707,7 +3275,6 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
                     # Which assign wrote this row — the chain it belongs to, so the UI can tell
                     # whether ITS stage below has finished rather than some other plan's.
                     "chain": round(float(a.get("created_at") or 0.0), 3), "input_cost": a["input_cost"], "reward": a["reward"],
-                    "output_value": round(row_output_value, 2),
                     "order_id": a.get("order_id"), "order_label": order_labels.get(a.get("order_id")),
                 })
         # What the plan occupies AT ONCE, which for pending rows is the worst tier and not the
@@ -2806,10 +3373,26 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
     # Fold in running jobs that had no plan slot (see _unplanned_running_totals) — valued from our
     # own SDE recipe so in-game/corp jobs still count toward the committed totals.
     up = _unplanned_running_totals(context_id, unplanned_running, output_qty_by_type, cycle_hours_by_type)
-    pending_isk_committed += up["isk_committed"]
+    pending_isk_committed += up["isk_committed"]          # MATERIALS only, both halves
     pending_output_value += up["output_value"]
     pending_net_profit += up["net_profit"]
-    pending_net_profit_per_day += up["net_profit_per_day"]
+    # The full cost base behind the profit figure: materials plus job install fees, export freight
+    # and courier collateral. `pending_isk_committed` deliberately stays materials-only — it is the
+    # priced shopping list and the dashboard labels it as one — but profit is never netted against
+    # it. See `_plan_totals`.
+    pending_total_cost = plan_totals["total_cost"] + up["total_cost"]
+    pending_job_fees = plan_totals["job_fees"] + up["job_fees"]
+    pending_freight = plan_totals["freight"] + up["freight"]
+    pending_collateral = plan_totals["collateral"] + up["collateral"]
+    pending_sell_order_value = plan_totals["sell_order_value"] + up["sell_order_value"]
+    # ONE definition of "per day" for both halves. The plan's own half is makespan-derived (stages
+    # are sequential; see `_plan_totals`); the orphan half is the longest job already in a reactor.
+    # The two run CONCURRENTLY — orphans are cooking while the plan waits to be installed — so the
+    # combined window is the longer of the two, not their sum. Adding the two halves' RATES, which
+    # is what this did until 2026-08-14, mixed a makespan rate with a sum of per-job rates and
+    # over-counted whichever half was made of short parallel jobs.
+    _span_h = max(plan_totals["makespan_hours"], up["makespan_hours"])
+    pending_net_profit_per_day = pending_net_profit / (_span_h / 24.0) if _span_h > 0 else 0.0
 
     # A stage is startable only once every stage below it is done ACROSS the account — see
     # `_gate_stages_account_wide`. Applied here, with every character's stages in hand, rather than
@@ -2838,10 +3421,21 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
         "running_progress_pct": round(running_elapsed_sec / running_total_sec, 4) if running_total_sec > 0 else None,
         "total_slots": total_slots,
         "free_slots": max(0, total_slots - used_slots),
+        # MATERIALS only — the priced shopping list. Rendered as "Materials committed"; it is not
+        # what profit is netted against (that is pending_total_cost). See `_plan_totals`.
         "pending_isk_committed": round(pending_isk_committed, 2),
+        # The full cost base, and its parts, so the UI can show what the shopping list leaves out.
+        "pending_total_cost": round(pending_total_cost, 2),
+        "pending_job_fees": round(pending_job_fees, 2),
+        "pending_freight": round(pending_freight, 2),
+        "pending_collateral": round(pending_collateral, 2),
         "pending_net_profit": round(pending_net_profit, 2),
         "pending_net_profit_per_day": round(pending_net_profit_per_day, 2),
+        # Output at BUY orders (instant sell) — the achievable figure profit is derived from.
         "pending_output_value": round(pending_output_value, 2),
+        # ...and the same output at sell orders, as market context only. Never netted into profit.
+        "pending_sell_order_value": round(pending_sell_order_value, 2),
+        "pending_makespan_hours": round(_span_h, 2),
         # Formulas the CURRENT plan needs and the account does not hold. The three planning
         # surfaces already refuse to hand you a stage you can't install, but only from the moment
         # they were switched on — a plan assigned before that (or before a formula was sold) sits
@@ -3120,13 +3714,22 @@ def _allocate_and_insert(context_id: int, type_id: int, name: str, node: dict, r
     every run end to end. A real 400,000-unit Reinforced Carbon Fiber order became four jobs of
     ~2000 runs each while fifty-five reaction slots sat idle.
 
-    **A customer order runs flat out, not to a cadence.** The Suggest wizard sizes speculative work
-    against a check-in cadence, because there the question is what to leave running until you next
-    log in. An order is a commitment someone is waiting on, so the only sensible target is as soon
-    as possible: take every free slot that still reduces the finish time, and stop at the point
-    where another slot would only add an empty job. Assign a smaller batch (`req.runs`) when you
-    want to keep slots back for other work — that is the knob, rather than pacing every order as if
-    nobody were waiting for it.
+    **An order is paced to the cadence, HERE, at quote time** (2026-08-14). It used to run flat out
+    on the argument that a customer is waiting, while `split_order_tops_to_cadence` paced it anyway
+    on the next dashboard load — so the layout the player showed the customer at commit time and
+    the layout the dashboard showed a page later were different, about the same order. That
+    disagreement is the defect, not the pacing: the two surfaces have to answer the same question
+    the same way, and the honest place to answer it is where the commitment is made.
+
+    Pacing is also no longer destructive. The cadence is a stated target rather than an absolute, so
+    a chain that cannot fit its window inside the reactors and formulas available overruns and says
+    so, instead of being split until it fits. What the cadence buys is still what it always bought:
+    every tier of the order collected on the rhythm the player actually logs in on.
+
+    Take every free slot that still reduces the finish time, stop where another slot would only add
+    an empty job — then add whatever more the cadence needs, as far as the free slots and the
+    formulas allow. Assign a smaller batch (`req.runs`) when you want to keep slots back for other
+    work; that is still the knob.
 
     **Each character gets a COMPLETE chain.** An intermediate's output has to be physically on the
     character running the job that consumes it, so the split across characters is by whole chains
@@ -3203,6 +3806,16 @@ def _allocate_and_insert(context_id: int, type_id: int, name: str, node: dict, r
     now = _time.time()
     unit_cost = node.get("unit_cost", 0.0) + node.get("job_cost", 0.0)
     top_cycle_h = (node.get("cycle_time") or 0) / 3600.0
+    # The window every job of this order should land inside — the same stored setting the dashboard
+    # paces against, so the quote the customer is shown and the plan the next page load draws are
+    # one answer rather than two.
+    #
+    # UNITS: every `cycle_time` in this function comes from the reaction GRAPH, which has already
+    # applied the time-efficiency reduction (`app/reactions/graph.py`'s `cycle_time` at load). So
+    # these are REAL hours and `cadence_h` — also real hours — is compared against them directly.
+    # No `_reaction_time_mult` conversion here; that belongs to `level_product_runs`, which works in
+    # raw-SDE hours because it reads `_reaction_cycle_times` instead.
+    order_cadence_h = _reaction_cadence_hours(context_id)
     placed: list[dict] = []
     left = dict(chain_caps)             # formulas of each type still unspoken for, account-wide
     con = get_connection()
@@ -3240,18 +3853,56 @@ def _allocate_and_insert(context_id: int, type_id: int, name: str, node: dict, r
                 _align_stage_jobs(align)
                 for i, a in enumerate(align):
                     slots[i] = a["jobs"]
+            # ...and THEN pace it. `_fit_chain_slots` spends slots on finishing sooner overall; this
+            # spends what is left on making no single job outrun the player's window. Applied after
+            # the alignment because it only ever ADDS jobs, so it cannot undo a slot-neutral
+            # rebalance — it takes the reactors that rebalance did not need.
+            #
+            # It is a target, not an absolute: bounded by the host's free reactors and by the
+            # formulas of each tier, so a chain that genuinely cannot fit stays over the window
+            # rather than being split into jobs there is nothing to install them with. Those
+            # over-window jobs carry the same breach badge the levelled plan does — stamped by
+            # `_insert_assignment_rows` below, which is the ONLY chance they get: an order's rows
+            # are excluded from the leveller by design, so nothing else will ever measure them.
+            #
+            # REAL hours throughout: every `cycle_time` here comes off the graph, which has already
+            # applied the account's time efficiency.
+            per_run_h = [((t["cycle_time"] or 0) / 3600.0) for _, t in tiers] + [top_cycle_h]
+            if order_cadence_h > 0:
+                tier_runs = [int(t["runs"]) for _, t in tiers] + [share]
+                want_jobs = []
+                for i, (c_h, r_n) in enumerate(zip(per_run_h, tier_runs)):
+                    cap_runs = int((order_cadence_h + _CADENCE_GRACE) / c_h) if c_h > 0 else 0
+                    want_jobs.append(-(-r_n // cap_runs) if cap_runs > 0 else slots[i])
+                spare = max(0, host["free_slots"] - sum(slots))
+                # Worst overrun first: with one reactor to give, it goes to the tier that is
+                # furthest past the window, not to whichever happens to be listed first.
+                for i in sorted(range(len(slots)), key=lambda j: -(want_jobs[j] - slots[j])):
+                    if spare <= 0:
+                        break
+                    add = min(max(0, want_jobs[i] - slots[i]),
+                              max(0, caps[i] - slots[i]), spare)
+                    slots[i] += add
+                    spare -= add
             for i, tid in enumerate([t for t, _ in tiers] + [type_id]):
                 if tid in left:
                     left[tid] = max(0, left[tid] - slots[i])
 
+            # Every row carries its own duration and the window it was paced against, so a job the
+            # caps above could not bring inside the window says so on the dashboard instead of
+            # looking like any other row. `_insert_assignment_rows` absorbs `_CADENCE_GRACE` the
+            # same way the pace loop above spends it and the same way the leveller measures — one
+            # definition of "over the window" on every surface.
             for i, (tid, info) in enumerate(tiers):
                 _insert_assignment_rows(con, host["character_id"], tid,
                                          types.get(tid, {}).get("name", str(tid)),
                                          info["runs"], slots[i], 0.0, 0.0,
-                                         ranks[i], now, order_id, tidy=_tidy_runs_on(context_id))
+                                         ranks[i], now, order_id, tidy=_tidy_runs_on(context_id),
+                                         cycle_hours=per_run_h[i], cadence_h=order_cadence_h)
             _insert_assignment_rows(con, host["character_id"], type_id, name, share, slots[-1],
                                      unit_cost * share, 0.0,
-                                     (max(ranks) + 1) if ranks else 0, now, order_id)
+                                     (max(ranks) + 1) if ranks else 0, now, order_id,
+                                     cycle_hours=top_cycle_h, cadence_h=order_cadence_h)
             placed.append({"character_id": host["character_id"],
                             "character_name": host["character_name"],
                             "runs": share, "jobs": sum(slots)})

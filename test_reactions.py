@@ -466,9 +466,17 @@ def test_a_cadence_ceiling_holds_every_job_inside_the_week() -> bool:
 
     The setting already existed — `max_reaction_job_days`, Build rules → "Longest reaction job" —
     and the Industry scheduler had read it since it shipped. The Reactions stage solve never did,
-    so it capped a stage at whatever the plan happened to already run. It is a HARD ceiling: a
-    stage that cannot fit the window at its leanest layout is split finer until it does, because a
-    cadence you cannot rely on is not a cadence."""
+    so it capped a stage at whatever the plan happened to already run.
+
+    **Both directions, per the decision of 2026-08-14.** The cadence is a stated TARGET: where a
+    stage can be split to fit the window it is, and where it genuinely cannot — more reactor-hours
+    of work than the free reactors can turn over inside the window — it overruns and every option
+    says by how much. Forcing it is not available: with too few reactors no split fits, and the code
+    that claimed to force it was in fact collapsing its own option set to one unmeasured answer.
+
+    The invariant this pins is the pair, not either half: **no run count is ever silently over the
+    ceiling.** An option over the ceiling may only come back when no option under it exists, and it
+    must carry `over_runs`."""
     from app.reactions.jobs import _choose_stage_layout, _level_options
 
     CYC = 1.53      # hours per run after structure + skill bonuses
@@ -495,6 +503,84 @@ def test_a_cadence_ceiling_holds_every_job_inside_the_week() -> bool:
     tight = _choose_stage_layout(stage(3.5 * 24), prefer_tidy=True)
     ok &= check(sum(o["jobs"] for o in tight.values()) > sum(o["jobs"] for o in wide.values()),
                 "a tighter cadence costs reactors — the ceiling is real, not advisory")
+
+    # ── ...and where it CANNOT hold, the breach is reported ─────────────────────────────────────
+    # The pair is the invariant. Take each layout the ceiling can be met at and assert nothing in it
+    # claims a breach; then take a stage with fewer reactors than its work needs and assert every
+    # option it is offered says how far past the window it reaches.
+    for days in (14, 7, 3.5):
+        fits = stage(days * 24)
+        ok &= check(all(o.get("over_runs", 0) == 0 for p in fits.values() for o in p["options"]),
+                    f"at {days} days every offered count fits, and none claims a breach")
+
+    # Reproduced against the real branch: a 7-day window on Carbon Fiber is 119 runs; a stage whose
+    # reactors force at least 200 runs a job cannot meet it at any layout. The old truth table
+    # (`r > max_runs and r > min_runs`) let exactly ONE candidate through — r == min_runs — and
+    # dropped every larger one, so the answer was 200 runs (11.7 days on a 7-day cadence) with
+    # nothing recording that it had happened.
+    squeezed = _level_options(1000, cap=5, max_runs=119, min_runs=200, budget=20.0)
+    ok &= check(bool(squeezed) and all(o["over_runs"] > 0 for o in squeezed),
+                "a stage that cannot fit still answers, and every option says it is over")
+    ok &= check(len({o["over_runs"] for o in squeezed}) == 1
+                and min(o["runs"] for o in squeezed) == 200,
+                f"and only the LEAST-breaching counts are offered "
+                f"(got {sorted(o['runs'] for o in squeezed)})")
+    ok &= check(squeezed[0]["over_runs"] == squeezed[0]["runs"] - 119,
+                "measured against the ceiling itself, in runs")
+    # Missing a target is not permission to abandon it. The stage solve ranks fewest-jobs first, so
+    # offering the whole over-ceiling set would hand it the longest job on the list: a 6,000-run
+    # requirement that misses the ceiling by a third would come back as ONE job of 6,000.
+    huge = _level_options(6000, cap=44, max_runs=100, budget=20.0)
+    ok &= check(max(o["runs"] for o in huge) < 500,
+                f"a badly over-committed stage still lands near the ceiling, not miles past it "
+                f"(longest offered {max(o['runs'] for o in huge)} runs against a 100-run ceiling)")
+
+    # The third route needs no loop at all: `min_runs` is not guaranteed to be among the candidates
+    # (they are divisors of `total` plus tidy steps), and when it is not, `_level_options`' own
+    # fallback fires — `floor = max(1, min_runs, ceil(total/cap))`, which ignored `max_runs`
+    # outright and reported nothing about it.
+    fallback = _level_options(1000, cap=5, max_runs=119, min_runs=1500, budget=20.0)
+    ok &= check(len(fallback) == 1 and fallback[0]["runs"] >= 1500,
+                f"with nothing offerable the fallback still answers (got {fallback})")
+    ok &= check(fallback[0]["over_runs"] == fallback[0]["runs"] - 119,
+                "and the fallback says how far over the ceiling it went, which it never used to")
+
+    # ...and a breach is never claimed when one was AVOIDABLE. The floor — the smallest count the
+    # work splits into with the reactors there are — is always available and frequently sits UNDER
+    # the ceiling, but it used to be reachable only after the over-ceiling branch had already
+    # returned, so an option 3 runs over won where a fitting one existed. Decision 1 says a stage
+    # that can be split finer to fit IS, so a badge with an alternative behind it is a lie about the
+    # plan. 30 runs across 2 reactors under a 17-run ceiling: the floor is exactly 17, two jobs.
+    avoidable = _level_options(30, cap=2, max_runs=17, min_runs=17, budget=20.0)
+    ok &= check(all(o["over_runs"] == 0 for o in avoidable),
+                f"a within-ceiling floor is taken instead of a 3-run overrun "
+                f"(got {[(o['runs'], o['over_runs']) for o in avoidable]})")
+    ok &= check(all(o["jobs"] * o["runs"] >= 30 for o in avoidable),
+                "...and it still covers the requirement")
+
+    # The pair, stated once: an over-ceiling option may only appear when no under-ceiling one does,
+    # AND only when the floor cannot fit either. Swept rather than spot-checked, because the
+    # spurious-breach case only appears once the give-ground loop has raised `min_runs` to within a
+    # run or two of `max_runs` — a band no hand-picked example lands in by accident.
+    mixed = spurious = empty = 0
+    for total in range(30, 220, 7):
+        for cap in range(2, 9):
+            for mr in range(10, 90, 3):
+                for mn in range(max(1, mr - 6), mr + 2):
+                    opts = _level_options(total, cap=cap, max_runs=mr, min_runs=mn, budget=20.0)
+                    if not opts:
+                        empty += 1
+                        continue
+                    if any(o["over_runs"] > 0 for o in opts) and any(o["over_runs"] == 0 for o in opts):
+                        mixed += 1
+                    # The floor always exists; if it fits, nothing returned may claim a breach.
+                    floor = max(1, mn, -(-total // cap))
+                    if floor <= mr and min(o["over_runs"] for o in opts) > 0:
+                        spurious += 1
+    ok &= check(mixed == 0, f"no parameter combination mixes fitting and breaching options ({mixed})")
+    ok &= check(empty == 0, f"every combination answers with something ({empty} empty)")
+    ok &= check(spurious == 0,
+                f"no combination reports a breach while a within-ceiling floor existed ({spurious})")
     return ok
 
 

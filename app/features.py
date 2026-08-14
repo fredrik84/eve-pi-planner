@@ -282,6 +282,15 @@ FEATURE_REGISTRY = [
                     "character can reach it. Set the job length on the Reactions card to decide "
                     "how long a batch runs; the surplus from rounding up is stock.",
      "default": False},
+    {"key": "reactions_ease_cost", "label": "Reactions: say what an easy plan costs, and how to get it back",
+     "group": "Reactions",
+     "description": "The plan spends real ISK to save you clicks — it rounds run counts up so a "
+                    "stage lands in one go and reads as one number, and the surplus comes straight "
+                    "off the margin. This says how much, in ISK, and what dropping to per-product "
+                    "run counts would recover, against the jobs and logins the shared count saved. "
+                    "A number with a remedy attached, not a nag: the under-production warning is "
+                    "still the only thing that shouts, and spare goo is still stock.",
+     "default": False},
     {"key": "reactions_pack_hosts", "label": "Reactions: an order stops at the character not worth a login",
      "group": "Reactions",
      "description": "A customer order is placed on the fewest characters that still finish it in a "

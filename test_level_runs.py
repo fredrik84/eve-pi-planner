@@ -29,6 +29,7 @@ sys.path.insert(0, ".")
 from app.db import get_connection                                        # noqa: E402
 from app.features import ensure_features_table                           # noqa: E402
 from app.reactions.jobs import (_choose_stage_layout, _level_options,    # noqa: E402
+                                _stage_affordable,
                                 ensure_industry_jobs_table, ensure_reaction_assignments_table,
                                 level_product_runs)
 
@@ -162,6 +163,37 @@ def main():
     check(_choose_stage_layout(pair)[CF]["runs"] == 64, "off: the cheapest number wins (64)")
     check(_choose_stage_layout(pair, prefer_tidy=True)[CF]["runs"] == 65,
           "on: the tidy number wins for the same job count (65)")
+
+    print("the levelling budget is denominated in ISK, not in runs:")
+    # The reported shape: a stage of Carbon Fiber (1,956 runs, cheap) beside a costly sibling (196
+    # runs). Counting RUNS the stage needs 2,152, so 1,076 runs of surplus reads as a comfortable
+    # 50% — and every one of them may land on the expensive product, multiplying its material bill
+    # while the ratio never moves. Runs of different products are not comparable quantities.
+    cheap_side = {"cycle": 1.0, "total": 1956, "unit_value": 1.0}
+    dear_side = {"cycle": 1.0, "total": 196, "unit_value": 100.0}
+    products = {CF: dict(cheap_side), OOS: dict(dear_side)}
+    pick = {CF: {"runs": 1956, "jobs": 1, "surplus": 0, "tidy": True},
+            OOS: {"runs": 1272, "jobs": 1, "surplus": 1076, "tidy": True}}
+    made, need = 1956 + 1272, 1956 + 196
+    check(made - need == int(0.50 * need),
+          f"in RUNS the overshoot is exactly the 50% budget ({made - need} of {need})")
+    unpriced = {CF: {k: v for k, v in cheap_side.items() if k != "unit_value"},
+                OOS: {k: v for k, v in dear_side.items() if k != "unit_value"}}
+    check(_stage_affordable(unpriced, pick),
+          "counting runs, the layout passes — which is the defect, not the fix")
+    check(not _stage_affordable(products, pick),
+          "counting ISK it does not: the surplus is 5x the stage's whole material bill")
+    # ...and a layout that really is inside the budget still passes once it is priced, so this is a
+    # re-denomination and not a tightening in disguise.
+    modest = {CF: {"runs": 2000, "jobs": 1, "surplus": 44, "tidy": True},
+              OOS: {"runs": 200, "jobs": 1, "surplus": 4, "tidy": True}}
+    check(_stage_affordable(products, modest),
+          "a genuinely small overshoot is affordable in ISK exactly as it was in runs")
+    # A product with no price at all must not weigh 0 against its stage-mates' ISK — that is a
+    # tighter budget, not a coarser one. All or nothing, and unpriced falls back to counting runs.
+    half = {CF: dict(cheap_side), OOS: {k: v for k, v in dear_side.items() if k != "unit_value"}}
+    check(_stage_affordable(half, pick),
+          "one unpriced product falls the whole stage back to runs rather than skewing the ISK")
 
     con = get_connection()
     try:
@@ -335,6 +367,53 @@ def main():
               f"both chains carry the same number (got {sorted({r['runs'] for r in rows})})")
         check(len(chains) == 2 and all(c["n"] >= 1 for c in chains),
               "and neither chain lost its last row — the dashboard still knows it is waiting")
+        _reset(con)
+
+        print("a stage that CANNOT fit its window overruns — and says by how much:")
+        # The third breach route, and the one that needs no cadence at all: with none set the
+        # ceiling falls back to "the longest job the plan already runs", and `d_floor` — the
+        # shortest this stage could possibly run given its reactors — is computed with no reference
+        # to it. A stage with far more work than reactors therefore breached on attempt 0, before
+        # the give-ground loop ran, and broke the docstring's own promise (*levelling makes a plan
+        # tidier and shorter, never slower*) in silence, for every account with the flag on.
+        #
+        # 60 jobs of 100 runs: 6,000 runs of work against the account's 44 reactors is at least
+        # 137 runs a job, against a 100-run ceiling. There is no split that fits — which is exactly
+        # why the answer must be reported rather than forced.
+        _reset(con)
+        _characters(con)
+        cid = CHARS[0][0]
+        _plan(con, cid, 4000.0, [(CF, "Carbon Fiber", 100, 60, 0)])
+        level_product_runs(CTX)
+        breached = [dict(r) for r in con.execute(
+            "SELECT a.runs, COALESCE(a.cadence_over_h,0) AS over FROM pp_reaction_assignments a "
+            "JOIN pp_characters c ON c.character_id=a.character_id WHERE c.context_id=? "
+            "AND a.type_id=?", (CTX, CF))]
+        check(bool(breached), "the stage still produced a plan rather than failing")
+        check(max(r["runs"] for r in breached) > 100,
+              f"it really did have to run longer than anything already planned "
+              f"(got {max(r['runs'] for r in breached)} runs against a 100-run ceiling)")
+        check(all(r["over"] > 0 for r in breached),
+              f"and EVERY row of it records the overrun in real hours "
+              f"(got {sorted({round(r['over'], 1) for r in breached})})")
+
+        print("...while a stage that fits reports no overrun at all:")
+        # The other direction, and the one that must not become noisy: the same product with room
+        # to breathe stays inside the ceiling, and the breach field stays at zero.
+        _reset(con)
+        _characters(con)
+        for cid_, _ in CHARS:
+            _plan(con, cid_, 5000.0 + cid_, [(CF, "Carbon Fiber", 100, 3, 0)])
+        level_product_runs(CTX)
+        calm = [dict(r) for r in con.execute(
+            "SELECT a.runs, COALESCE(a.cadence_over_h,0) AS over FROM pp_reaction_assignments a "
+            "JOIN pp_characters c ON c.character_id=a.character_id WHERE c.context_id=?", (CTX,))]
+        check(bool(calm) and all(r["over"] == 0 for r in calm),
+              f"no row claims a breach when the ceiling holds "
+              f"(got {sorted({r['over'] for r in calm})})")
+        check(all(r["runs"] <= 100 for r in calm),
+              f"and no job runs longer than the longest already planned "
+              f"(got {max(r['runs'] for r in calm)})")
         _reset(con)
     finally:
         con.close()

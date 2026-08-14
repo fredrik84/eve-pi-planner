@@ -38,6 +38,63 @@ from app.reactions.jobs import (
 
 log = logging.getLogger(__name__)
 
+
+def _earning_window_h(chain_hours: float, windows: int, cadence_hours: float) -> float:
+    """How long one suggestion really ties the account up — the ONE rule every rate here divides by.
+
+    Two things can bound it and the honest answer is the larger:
+
+      * **the login rhythm.** Stages are sequential and a stage is installed on a visit, so a chain
+        `windows` stages deep is not finished until the `windows`-th check-in however short its
+        intermediates are. This is the term the ranking and the LP objective already used (as a
+        plain window COUNT — same rule, different unit);
+      * **the chain's own job time**, when the work genuinely runs longer than the rhythm.
+
+    Returning `max` of the two is what keeps the displayed ISK/day, the sort key and the LP
+    objective saying the same thing about the same chain. They disagreed by 2.33x on the common
+    shape — a deep chain with short intermediates — because the rate divided by job time alone.
+
+    Real (time-efficiency-reduced) hours, matching `sequential_makespan_hours`. With no cadence set
+    there is no rhythm to bound anything, so the chain's own time is the whole answer."""
+    windows = max(1, int(windows or 1))
+    if cadence_hours and cadence_hours > 0:
+        return max(windows * cadence_hours, chain_hours or 0.0)
+    return chain_hours or 0.0
+
+
+def sequential_makespan_hours(steps: list[dict]) -> dict[int, float]:
+    """How long each plan really takes: **the sum over stages of the longest job in each stage.**
+
+    Reaction stages are strictly sequential — an intermediate must finish before the tier above it
+    can be installed — while the jobs WITHIN a stage run side by side in their own reactors. So a
+    plan's duration is neither the sum of its jobs nor the longest one; it is this.
+
+    This is the SAME rule the dashboard applies to a stored plan (`_plan_totals` in
+    app/reactions/jobs.py, which groups rows by `tier_order` and sums the per-stage maxima). It
+    lives in one named function so the two surfaces cannot drift apart again: the wizard used to
+    quote a max() over top-level rows only, which excluded every chain tier and so reported a
+    3-stage chain as taking one stage's time, while the dashboard reported the truth for the same
+    plan. That disagreement is the whole point of the reconciliation test.
+
+    `steps` are widen_step dicts: `runs`, `jobs`, `cycle_hours` (TIME-EFFICIENCY-REDUCED — real
+    wall-clock, not the leveller's raw-SDE space), `tier` (the stage), and `top_row` identifying
+    which suggestion the step belongs to. Returns {id(top_row): hours}; suggestions run in parallel
+    on their own slots, so the plan's own makespan is the max over the values.
+    """
+    stage_hours: dict[tuple[int, int], float] = {}
+    for s in steps:
+        top = s.get("top_row")
+        if top is None:
+            continue
+        h = (s["runs"] / max(1, s["jobs"])) * s["cycle_hours"]
+        key = (id(top), int(s["tier"]))
+        stage_hours[key] = max(stage_hours.get(key, 0.0), h)
+    out: dict[int, float] = {}
+    for (row_id, _tier), h in stage_hours.items():
+        out[row_id] = out.get(row_id, 0.0) + h
+    return out
+
+
 # ── Wizard suggestion engine ────────────────────────────────────────────────────────────────
 # Two stages, not one monolithic LP: WHAT to run (a knapsack — genuinely an LP's job) and WHO
 # runs it (bin-packing onto real characters/slots — not naturally an LP, and keeping it a
@@ -122,13 +179,33 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
     if not candidates:
         return empty
 
+    # How many cadence windows a chain really occupies. `depth` is the number of SEQUENTIAL stages
+    # (1 + the deepest input; siblings that run together share a stage — see _resolve_reachable),
+    # which is not the same as `steps`/reaction_count, the size of the whole subtree.
+    #
+    # **A stage costs a whole window even when the jobs in it are short**, and that is the point the
+    # rate divisor got wrong at first. You install a stage, and you come back on your rhythm — the
+    # next stage cannot start until you do. So a 3-stage weekly chain whose intermediates take four
+    # hours each still delivers on week three, not on day eight. Dividing such a chain's reward by
+    # its own job-time (`max(cadence, chain_hours)` ~ 1.3 windows) reported it 2.33x high while the
+    # ranking was already discounting it by 3 — two definitions of the same thing in one function.
+    # `_earning_window_h` below is the single rule both now use.
+    def _chain_windows(o) -> int:
+        return max(1, int((reached.get(o["type_id"]) or {}).get("depth") or 1))
+
     # ── Step 2: rank by profit per step, truncate to the pool ───────────────────────────────────
     # Rank by profit per step (the "least work most profitable" ordering) and truncate to a small
     # pool BEFORE the cap loop — the batch caps below scale net_profit_instant and top_level_runs
     # by the same factor, so the per-run ratio (this sort key) is cap-invariant and truncating here
     # is identical to truncating after, but it means the market-history fetch only ever runs for the
     # pool (≤ _CANDIDATE_POOL_SIZE types), not every reachable product.
-    candidates.sort(key=lambda o: -(o["net_profit_instant"] / o["top_level_runs"]))
+    #
+    # Discounted by chain depth. `max_chain_depth` FILTERS depth and nothing discounted it, so the
+    # deepest chains — the ones occupying the most windows for one payout, and so the ones whose
+    # rate this wizard most overstated — were also the ones the ranking preferred. Dividing by the
+    # window count makes the key a profit RATE, which is what the ordering was always meant to be.
+    # Depth is cap-invariant like the rest of the key, so truncating here is still safe.
+    candidates.sort(key=lambda o: -(o["net_profit_instant"] / o["top_level_runs"] / _chain_windows(o)))
     candidates = candidates[:_CANDIDATE_POOL_SIZE]
 
     # ── Step 3: cap each candidate's batch (cadence, formulas, market absorption) ───────────────
@@ -232,7 +309,12 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
     # most one variable fractional at the ISK cap), and this stays small/fast and easy to
     # hand-verify, matching this codebase's existing app.optimizer approach.
     hvars = h.addVariables(n, lb=[0.0] * n, ub=[1.0] * n)
-    h.maximize(sum(float(c["net_profit_instant"]) * hvars[i] for i, c in enumerate(candidates)))
+    # Maximise profit per WINDOW, not absolute profit. The ISK and slot constraints below are both
+    # per-window resources, so an objective in absolute profit quietly rewarded a candidate for
+    # occupying three windows to earn what a shallower one earns in one — the same over-preference
+    # for depth the sort key above now discounts. See `_chain_windows`.
+    h.maximize(sum(float(c["net_profit_instant"]) / _chain_windows(c) * hvars[i]
+                   for i, c in enumerate(candidates)))
     h.addConstr(sum(float(c["input_cost"]) * hvars[i] for i, c in enumerate(candidates)) <= float(isk_budget))
     # Real reaction slots are ALSO a shared, limited resource across every chosen candidate — the
     # per-candidate cadence cap above only checked each one against the single BEST character's
@@ -296,7 +378,7 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
     stock_covered: dict[int, dict] = {}
     formula_capped: list[str] = []      # products running in fewer jobs than the slots would allow
     isk_committed = net_profit = total_output_value = total_output_m3 = 0.0
-    max_completion_hours = 0.0
+    max_completion_hours = 0.0          # replaced wholesale by the makespan pass in Step 7a
     for c, xi in alloc_order:
         runs_needed = max(1, round(c["top_level_runs"] * xi))
         cycle_hours = c["cycle_time"] / 3600.0 if c["cycle_time"] else 1.0
@@ -337,7 +419,9 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
 
         runs_per_job = math.ceil(runs_needed / slots_used)
         duration_hours = (runs_needed / slots_used) * cycle_hours
-        max_completion_hours = max(max_completion_hours, duration_hours)
+        # Every widen_step belonging to THIS suggestion, so its stages can be added up into one
+        # sequential duration once Step 7 has finished moving job counts around.
+        my_steps: list[dict] = []
 
         # ── Step 6a: chain tiers — the intermediates that must react first ──────────────────────
         # Chain tiers: any INTERMEDIATE reaction this product's own formula needs (e.g.
@@ -394,11 +478,13 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
                     "formula_cap": t_cap, "tier": stage,
                 }
                 chain_tiers.append(tier_row)
-                widen_steps.append({
+                _step = {
                     "character_id": pick_id, "tier": stage, "runs": info["runs"],
                     "cycle_hours": t_cycle_hours, "jobs": t_slots_used, "cap": t_cap,
                     "row": tier_row,
-                })
+                }
+                widen_steps.append(_step)
+                my_steps.append(_step)
 
         # ── Step 6b: accumulate totals and build the suggestion row ─────────────────────────────
         cost = c["input_cost"] * xi
@@ -423,12 +509,10 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
         align_extra_isk = round(align_extra_runs * (c["input_cost"] / c["top_level_runs"]), 2) if align_extra_runs > 0 else 0.0
         align_extra_reward = round(align_extra_runs * (c["net_profit_instant"] / c["top_level_runs"]), 2) if align_extra_runs > 0 else 0.0
 
-        # Profit normalized to ISK/day, matching how the PI planner already reports value_per_day
-        # — divided by the CADENCE window (not this suggestion's own, possibly-shorter runtime),
-        # since a batch that finishes early just leaves its claimed slots idle until the next
-        # cadence check-in; the cadence-normalized rate is the honest "average ISK/day this
-        # delivers" including that idle time (the align hint above already targets closing this
-        # exact gap by suggesting more spend to fill the whole window).
+        # Profit normalized to ISK/day, matching how the PI planner already reports value_per_day.
+        # A PLACEHOLDER only: the real divisor is `_earning_window_h`, and it cannot be known until
+        # Step 7 has finished deciding the job counts every stage's duration comes from. Step 7a
+        # overwrites this for every suggestion; nothing between here and there reads it.
         profit_per_day = round(reward / (cadence_hours / 24), 2) if cadence_hours > 0 else None
 
         top_row = {
@@ -452,6 +536,8 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
             "aligned_runs_per_job": max_runs_per_job_for_cadence,
             "aligned_input_cost": round(c["input_cost"] * align_ratio, 2),
             "aligned_reward": round(c["net_profit_instant"] * align_ratio, 2),
+            # Placeholder, like `profit_per_day` above — Step 7a re-divides it by the same
+            # `_earning_window_h` so the two rates on one row can never be on different rules.
             "aligned_profit_per_day": round(c["net_profit_instant"] * align_ratio / (cadence_hours / 24), 2) if cadence_hours > 0 else None,
             "aligned_output_qty": round(c["output_qty"] * align_ratio, 1),
             "aligned_output_value": round(c["instant_sell_value"] * align_ratio, 2),
@@ -476,11 +562,17 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
         # The top-level product's own tier sits ABOVE every chain tier (same numbering the assign
         # path stores as `tier_order`), so widening it competes only with other suggestions' top
         # tiers on this character, not with its own intermediates.
-        widen_steps.append({
+        _top_step = {
             "character_id": pick_id, "tier": (max(stages) + 1) if chain_tiers else 0,
             "runs": runs_needed,
             "cycle_hours": cycle_hours, "jobs": slots_used, "cap": f_cap, "row": top_row,
-        })
+        }
+        widen_steps.append(_top_step)
+        my_steps.append(_top_step)
+        # Back-link every one of this suggestion's steps to the row its duration belongs to, so the
+        # sequential-makespan pass below can group stages by suggestion.
+        for _s in my_steps:
+            _s["top_row"] = top_row
         if capped_by_formula:
             formula_capped.append(c["name"])
 
@@ -496,7 +588,6 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
     aligned = _align_stage_jobs(widen_steps) if peak_stages else 0
     widened += aligned
     if widened or aligned:
-        max_completion_hours = 0.0
         for s in widen_steps:
             row, jobs = s["row"], s["jobs"]
             row["job_count"] = jobs
@@ -506,7 +597,39 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
         for s in widen_steps:
             if "reward" in s["row"]:            # a top-level suggestion, not a chain tier
                 s["row"]["runtime_hours"] = round((s["runs"] / s["jobs"]) * s["cycle_hours"], 1)
-                max_completion_hours = max(max_completion_hours, (s["runs"] / s["jobs"]) * s["cycle_hours"])
+
+    # ── Step 7a: the plan's real MAKESPAN, chain tiers included ─────────────────────────────────
+    # `max_completion_hours` used to be a max() over rows carrying a `reward` — i.e. top-level
+    # suggestions only — so the wizard's ETA never saw the intermediate stages at all, on a tool
+    # whose whole point is that an intermediate is never bought pre-made. A 3-stage chain quoted
+    # the duration of its last stage.
+    #
+    # The rule here is the one `_plan_totals` already documents and the dashboard already reports:
+    # **stages are sequential, so a plan's makespan is the sum over stages of the longest job in
+    # each.** Applied per suggestion (suggestions run in parallel on their own slots), then the
+    # plan is done when the slowest suggestion is. Two surfaces, one definition — the wizard's
+    # totals and the dashboard's now reconcile for the same plan, which they did not before.
+    #
+    # Hours here are TIME-EFFICIENCY-REDUCED: `cycle_hours` comes off the graph's `cycle_time`,
+    # already scaled by the account's (now measured) time efficiency. NOT the leveller's raw-SDE
+    # space.
+    hours_by_suggestion = sequential_makespan_hours(widen_steps)
+    max_completion_hours = max(hours_by_suggestion.values(), default=0.0)
+    # ...and each suggestion's rate against the window it really occupies — `_earning_window_h`,
+    # the same rule the sort key and the LP objective use, so the number on the row and the reason
+    # it is ranked where it is cannot disagree. `completion_hours` above deliberately stays pure
+    # job time: it answers "when do the jobs finish", which is what the dashboard's makespan also
+    # answers, while the rate answers "per elapsed day, including the check-ins you have to make".
+    plan_window_h = 0.0
+    for row in suggestions:
+        chain_h = hours_by_suggestion.get(id(row), 0.0)
+        row["chain_hours"] = round(chain_h, 1)
+        window_h = _earning_window_h(chain_h, _chain_windows(row), cadence_hours)
+        row["earning_window_h"] = round(window_h, 1)
+        plan_window_h = max(plan_window_h, window_h)
+        row["profit_per_day"] = round(row["reward"] / (window_h / 24), 2) if window_h > 0 else None
+        if row.get("aligned_reward") is not None and window_h > 0:
+            row["aligned_profit_per_day"] = round(row["aligned_reward"] / (window_h / 24), 2)
 
     # ── Step 8: restore display order, decide what bound the batch ──────────────────────────────
     # Built in allocation order (smallest slot-need first, see alloc_order above) — restore
@@ -537,10 +660,21 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
             "isk_committed": round(isk_committed, 2),
             "isk_budget": isk_budget,
             "net_profit": round(net_profit, 2),
-            "net_profit_per_day": round(net_profit / (cadence_hours / 24), 2) if cadence_hours > 0 and suggestions else None,
+            # Against the plan's real window — the longer of the cadence and its MAKESPAN, which
+            # now includes the chain tiers (Step 7a). Dividing a multi-stage plan's profit by a
+            # single cadence window was the totals-line half of the same ~3x overstatement the
+            # per-row rate carried, and it is the number the purchase decision is actually made on.
+            # Against the plan's own earning window — the widest of its suggestions', by the one
+            # rule `_earning_window_h` states. Suggestions run in parallel on their own slots, so
+            # the plan turns over as often as its slowest chain does.
+            "net_profit_per_day": (round(net_profit / (plan_window_h / 24), 2)
+                                   if suggestions and plan_window_h > 0 else None),
             "output_value": round(total_output_value, 2),
             "output_m3": round(total_output_m3, 1),
             "characters_used": len(touched_chars),
+            # Sum over stages of the longest job in each — the same rule the dashboard's
+            # `_plan_totals` uses, so the two surfaces reconcile. Chain tiers included; they were
+            # excluded entirely before 2026-08-14.
             "completion_hours": round(max_completion_hours, 1) if suggestions else None,
             "binding": binding,
             "absorb_fill_pct": round(frac * 100),
