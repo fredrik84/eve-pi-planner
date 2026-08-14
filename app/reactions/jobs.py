@@ -1719,8 +1719,9 @@ def level_product_runs(context_id: int) -> int:
     # frozen row and a customer order's protected top row are excluded from `inner` because this
     # pass may not move them, but they are still lines in the plan holding a reactor. Counting only
     # `inner` meant an order's own top rows were invisible to `later` and to `budget`, so stage 1
-    # was sized against reactors the order was already holding. (Adjacent to TODO §28b item 2 — the
-    # opposite mechanism from item 1, which is later stages over-reserving slots they cannot use.)
+    # was sized against reactors the order was already holding. (This was TODO §28b item 2, closed
+    # 2026-08-14 — see TODO-archive.md. Its item 1 is the opposite mechanism, later stages
+    # over-reserving slots they cannot use, fixed by counting the worst tier in `_concurrent_load`.)
     rows_by_char_stage: dict[int, dict[int, int]] = {}
     inner_ids = {int(r["id"]) for r in inner}
     excluded_by_char_stage: dict[int, dict[int, int]] = {}

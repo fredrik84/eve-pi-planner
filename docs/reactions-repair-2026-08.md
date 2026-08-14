@@ -1,8 +1,8 @@
 # eve-pi-planner — Reactions repair spec (2026-08-14)
 
 What a three-reviewer audit of the Reactions service found, what to do about it, and how the work
-splits across implementing agents. Back to [CLAUDE.md](../CLAUDE.md). Backlog entries:
-[TODO.md](../TODO.md) §29, §30, §31.
+splits across implementing agents. Back to [CLAUDE.md](../CLAUDE.md). Backlog entries §29, §30 and §31 — **all three closed 2026-08-14**, verdicts in
+[TODO-archive.md](../TODO-archive.md). The open question this left is `TODO.md` §32, the rollout.
 
 Find a section: `grep -n '^## ' docs/reactions-repair-2026-08.md` and read from that line.
 
@@ -292,7 +292,7 @@ the `_level_runs_on` branch so it fires even with levelling off. Consequences, i
   check.
 * **Those order top rows are excluded from `inner` (`jobs.py:1421-1424`)**, so `rows_by_char_stage` /
   `committed` never count them and the leveller sizes stage 1 against reactors the order's own rows
-  are holding. Count them. This is **adjacent to TODO §28b item 2**, not item 1 — item 1 is the
+  are holding. Count them. This is **adjacent to TODO §28b item 2** (closed 2026-08-14, see TODO-archive.md), not item 1 — item 1 is the
   opposite mechanism (later stages *over*-reserving slots they cannot use).
 * When the formula cap binds (`jobs.py:1797-1800`) the job stays over the cadence and nothing says
   so — same surfacing requirement as 2a.

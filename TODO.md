@@ -30,10 +30,10 @@ check Admin → Features before acting on any row):
 | flag | registry default | recommendation |
 | --- | --- | --- |
 | `reactions_formula_cap` | admin | **public, and then retire.** A formula is one reaction at a time — a game rule, not a preference. Off, plans schedule parallel jobs off a single formula, i.e. work that cannot be installed. "Would we ever turn this off again?" is no. |
-| `reactions_tidy_runs` | admin | **public.** Bounded rounding (15%, `_TIDY_BUDGET`) of intermediate runs only; end products untouched. Now that §30's ease-cost line reports what the rounding costs and how to get it back, its price is visible rather than quiet. |
+| `reactions_tidy_runs` | admin | **public.** Bounded rounding (15%, `_TIDY_BUDGET`) of intermediate runs only; end products untouched. Now that the ease-cost line reports what the rounding costs and how to get it back, its price is visible rather than quiet. |
 | `reactions_use_stock` | admin | **public.** Not subtracting what you already hold is the tool telling you to buy things in your own hangar. Fails soft to empty, so the risk is one-directional. |
 | `reactions_parallel_stages` | admin | **public.** Its own description says it never changes what is suggested, what it costs or what it earns — only how many reactors do the work. A pure correctness fix to the slot count. |
-| `reactions_level_runs` | admin | **public — but only now.** Promoting it before §30 landed would have shipped the collapsed ceiling (a 7-day cadence answering 11.7 days) and the invisible surplus to everyone. Both are fixed and pinned; this is the one to watch on the way out. |
+| `reactions_level_runs` | admin | **public — but only now.** Promoting it before the 2026-08-14 cadence repair (archived) would have shipped the collapsed ceiling (a 7-day cadence answering 11.7 days) and the invisible surplus to everyone. Both are fixed and pinned; this is the one to watch on the way out. |
 | `reactions_cadence` | admin | **testers first, then public.** New on 2026-08-14 and the newest code in the set. It is also the flag with the strongest claim to `public` eventually: the cadence is the tool's headline setting and gating it means gating the product. |
 | `reactions_ease_cost` | admin | **testers.** New surface, and the number it reports (`surplus_isk` / `recoverable_isk`) wants a real account's eyes on it before it is stated to everyone as fact. |
 | `reactions_missing_formulas` | admin | **testers.** Only reachable at all since 2026-08-14, so it has effectively never run for anyone. Its failure mode is confidently telling a user to buy a formula they hold; watch the unresolved-name reports for a round before widening. |
@@ -86,7 +86,7 @@ quote one job at two fees, and the settings card always names the basis — `con
 
 **`max_chain_depth` (wizard page 1, default 2).** A search-space limiter, not a player judgement —
 the tool ranks by profit anyway, so the honest version is to search deeper and let the ranking
-decide. Two things stop this being a one-liner: §29's finding that the wizard's rate is overstated
+decide. Two things stop this being a one-liner: the 2026-08-14 finding (archived) that the wizard's rate is overstated
 in proportion to chain depth (`profit_per_day` divides by one cadence window while tiers run
 sequentially) means a deeper search would *preferentially* surface the rows whose numbers are least
 trustworthy, and depth genuinely costs runtime in the LP. First step is not to remove the control
