@@ -32,6 +32,7 @@ Find a section: `grep -n '^## ' docs/reactions.md` and read from that line — t
 - **Marking a reaction running or done by hand (`reactions_manual_done`)** — why a mark is a floor and not a replacement, and what it does to the slot count
 - **The stage list is Manufacturing's pipeline (`reactions_stage_pipeline`)** — why the two tabs share a grid, and why rows are characters
 - **Pricing: a sell-order price is not achievable profit** — the pricing rule that governs every profit figure shown for reaction goods
+- **Reactions owns its cadence and its paste (`reactions_cadence`)** — the two places Manufacturing flags used to decide what a Reactions user could reach, and the one stored rhythm behind both cadence controls
 - **Where the rest lives** — pointers to reaction content that belongs to another service
 
 ---
@@ -1027,6 +1028,63 @@ tiles, the running-job modal and its ROI, an adopted orphan's stored `reward`, a
 ledger behind *Lifetime net profit*. The last four were quoting sell orders until 2026-08-14, none
 of them gated. `test_reactions_profit_clock.py` is the guard: it fails if a profit field is fed a
 sell-side expression anywhere in `app/reactions`.
+
+## Reactions owns its cadence and its paste (`reactions_cadence`, 2026-08-14)
+
+The manifesto claims Reactions is a business in its own right and that the tool should be
+answerable without ever opening Manufacturing. Tested on 2026-08-14, that failed on two counts —
+both structural, neither cosmetic — and this is what was done about them.
+
+**The cadence.** `_reaction_cadence_hours` gated on `industry_job_length_policy`, and the frontend
+read `/api/industry/build-setup`, whose `job_length` section is gated on the same flag. So the
+tool's headline setting — *"nothing longer than N days"*, the number the entire plan is shaped
+around — was switched off by a decision taken about another tab, and a reactions-only account could
+not reach it at all. `reactions_cadence` is this side's own key. **Either flag opens it; neither
+owns the number.**
+
+**The storage did not move and must not.** `max_reaction_job_days` in `pp_industry_settings` is one
+row, written from Build rules and from the Reactions card, read by `app/industry/graph.py` and
+`app/reactions/jobs.py`. A cadence is a fact about the player's week, not about a tab. What changed
+is the door (`GET`/`POST /api/reactions/cadence`, `app/reactions/settings.py`) — two thin endpoints
+over one pair of accessors, not a second store and not an `if source ==` branch on the Industry one.
+
+**And the wizard's dropdown is that same number.** "Run on a… Daily/Weekly/2 weeks/Monthly"
+defaulted to 168h, was never persisted, and was re-picked from scratch every time the wizard opened,
+while the ceiling that reshapes the very plan it produces sat unset on the card below. The normal
+path was therefore: pick Weekly, plan a week, then have `level_product_runs` re-shape it against no
+ceiling at all. The dropdown is now seeded from the stored cadence and writes back when changed
+(`_rxSyncWizardCadence` / `_rxWizCadenceChanged`), and `SuggestRequest.cadence_hours` is optional —
+omitted means "the account's rhythm" (`_resolve_cadence_hours`), with weekly still the fallback when
+none is set. A cadence the presets cannot express (2.5 days) becomes an option rather than being
+rounded onto one; silently changing the rhythm to fit a dropdown is the same disagreement in a
+smaller form.
+
+**The paste.** `reactions_missing_formulas` reports only once a pasted window makes the library
+complete — and the only paste form in the product sat inside `#indManualBpSubsec`, hidden unless
+`industry_manual_blueprints` was on. A Reactions-group flag that cannot fire without an
+Industry-group flag is **unreachable by construction**, not merely awkward. Reactions now has its
+own route to the same store: `POST /api/reactions/formulas/paste{,/preview}`,
+`GET /api/reactions/formulas/library`, calling `parse_blueprint_paste` / `replace_blueprint_batch`
+directly, with a form in Settings → *Blueprints & formulas* beside the Industry panel. Same batches,
+same batch-name replacement rule, one library — paste on either side and both show it.
+
+No flag for that: it is a route to an existing feature, and the REPORT it feeds is still gated on
+`reactions_missing_formulas` (pinned by `test_reactions_standalone.py`). Two reads had to follow it,
+or the change would have been worse than the bug:
+
+* `_library_state` no longer requires `industry_manual_blueprints`. The evidence is a pasted row in
+  `pp_industry_blueprints`; a flag on another tab was never what made it true.
+* `held_formula_products` unions in `manual_blueprints(..., force=True)`. `owned_blueprints` folds
+  declarations in only when that Industry flag is on, so without this a user who pasted their whole
+  window through the Reactions route would have been told to go and buy **every formula in it** —
+  the completeness rule pointed the one direction it must never point.
+
+**What still degrades soft, and is now said out loud.** `held_formula_products`' stock sources and
+`reaction_stock_pool` both fail to empty when their Industry features are off, which reads as "you
+own nothing" — the safe direction (a cap that does not bind never blocks a plan) but silent. The
+formula panel says so rather than leaving a user to wonder why their cap never binds. That is a UI
+note, deliberately, not a rewrite: making those reads standalone is a much larger change with no
+reported cost behind it.
 
 ## Where the rest lives
 

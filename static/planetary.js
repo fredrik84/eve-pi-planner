@@ -2951,6 +2951,10 @@ function _loadMarketsSettings() {
 function _loadBlueprintsSettings() {
   if (typeof indLoadBlueprints === 'function') indLoadBlueprints();
   if (typeof indLoadManualBps === 'function') indLoadManualBps();
+  // The reactions-side formula paste. Same store, same section, its own route — it is here rather
+  // than only inside the Industry sub-panel because a reactions-only account has no Industry flags
+  // and pasting the window is the one act that makes "formulas you need to acquire" work at all.
+  if (typeof rxLoadFormulaLibrary === 'function') rxLoadFormulaLibrary();
   if (typeof indLoadAssets === 'function') indLoadAssets();
 }
 

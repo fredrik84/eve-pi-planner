@@ -378,6 +378,64 @@ def api_update_account_reaction_settings(req: ReactionSettingsUpdate, ctx: int =
     return {"ok": True}
 
 
+# ── The login cadence, owned by Reactions ────────────────────────────────────────────────────────
+# "Nothing longer than N days." The number lives in `pp_industry_settings.max_reaction_job_days`
+# and it STAYS there — Industry's scheduler has read it since it existed and one stored rhythm is
+# the whole point (decision 4, docs/reactions-repair-2026-08.md). What Reactions did not have was a
+# way in: the only read/write surface was `/api/industry/build-setup`, whose `job_length` section is
+# gated on `industry_job_length_policy`, so the Reactions tab's cadence row rendered nothing for an
+# account that had never been given a Manufacturing flag.
+#
+# So: a thin Reactions endpoint over the SAME two accessors, with its own key to the door. Not a
+# second store, not a mode switch on the Industry endpoint (CLAUDE.md rule 4) — two thin endpoints
+# calling one pair of helpers.
+CADENCE_FEATURE_KEY = "reactions_cadence"
+
+
+def _cadence_available(context_id: int) -> bool:
+    """Either flag opens the setting. `industry_job_length_policy` is still honoured because
+    accounts already have it on and the control must not vanish from under them; `reactions_cadence`
+    is the one a reactions-only account can be given."""
+    try:
+        from app.features import feature_enabled_for
+        return bool(feature_enabled_for(CADENCE_FEATURE_KEY, context_id)
+                    or feature_enabled_for("industry_job_length_policy", context_id))
+    except Exception:
+        return False
+
+
+class ReactionCadenceUpdate(BaseModel):
+    # Days, not hours: this is the unit the player thinks in and the unit the store holds. None or 0
+    # means no ceiling, which is the documented default and not an error.
+    max_reaction_job_days: float | None = None
+
+
+def _cadence_payload(context_id: int) -> dict:
+    from app.industry.settings import get_max_reaction_job_days
+    days = get_max_reaction_job_days(context_id) if _cadence_available(context_id) else None
+    return {"available": _cadence_available(context_id), "max_reaction_job_days": days}
+
+
+@router.get("/api/reactions/cadence")
+def api_get_reaction_cadence(ctx: int = Depends(require_context)):
+    """How often this account comes back, in days — the same value Build rules shows."""
+    return _cadence_payload(ctx)
+
+
+@router.post("/api/reactions/cadence")
+def api_set_reaction_cadence(req: ReactionCadenceUpdate, ctx: int = Depends(require_context)):
+    """Write the cadence from the Reactions side. Whichever surface wrote last is what both show,
+    because there is only one row."""
+    if not _cadence_available(ctx):
+        raise HTTPException(status_code=403, detail="feature not enabled")
+    days = req.max_reaction_job_days
+    if days is not None and (days != days or days < 0):     # NaN or negative
+        raise HTTPException(status_code=400, detail="Days must be 0 or more")
+    from app.industry.settings import set_max_reaction_job_days
+    set_max_reaction_job_days(ctx, days if (days or 0) > 0 else None)
+    return _cadence_payload(ctx)
+
+
 @router.delete("/api/reactions/account-settings")
 def api_reset_account_reaction_settings(ctx: int = Depends(require_context)):
     """Revert to the group/global default by removing the personal override."""

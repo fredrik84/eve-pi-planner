@@ -68,6 +68,97 @@ one Reactions flag defaults to public** — the default user gets the tool the l
 replaced. Needs the §14 forcing question written for Reactions, but **after 29 and 30 land**:
 promoting `level_runs` today ships the collapsed ceiling to everyone. Spec: §WS3.
 
+**Landed 2026-08-14 (WS3):** the cadence is Reactions-owned behind `reactions_cadence` (either flag
+opens the same stored `max_reaction_job_days` — one row, two doors); the wizard's "Run on a…"
+dropdown is now a view of that stored setting rather than a second, forgotten one; and Reactions has
+its own paste route (`/api/reactions/formulas/paste`), which makes `reactions_missing_formulas` able
+to fire at all. Pinned by `test_reactions_standalone.py`. **What is still open here is §32** — the
+rollout decision — **and §33**, the two knobs nobody decided to add.
+
+## 32. Roll Reactions out, or write down why not (2026-08-14) — DECIDE
+
+§14's forcing question, for Reactions, and with more force: the manifesto calls this service
+standalone and public-facing, and as of today it is standalone **for admins**. A normal logged-in
+user gets no orders, no formula cap (so plans schedule parallel jobs off one formula), no tidy runs,
+no stock subtraction, no parallel-stage slot reuse, no levelled run counts, no cadence, no ease-cost
+line and no missing-formula report. **The good behaviour is the exception.** The last month of work
+exists to replace exactly the tool the default user is getting.
+
+Registry defaults as of 2026-08-14, **15 Reactions flags, none public** (live prod state is not
+readable from a dev session and the DB row wins once created — these are code defaults only, so
+check Admin → Features before acting on any row):
+
+| flag | registry default | recommendation |
+| --- | --- | --- |
+| `reactions_formula_cap` | admin | **public, and then retire.** A formula is one reaction at a time — a game rule, not a preference. Off, plans schedule parallel jobs off a single formula, i.e. work that cannot be installed. "Would we ever turn this off again?" is no. |
+| `reactions_tidy_runs` | admin | **public.** Bounded rounding (15%, `_TIDY_BUDGET`) of intermediate runs only; end products untouched. Now that §30's ease-cost line reports what the rounding costs and how to get it back, its price is visible rather than quiet. |
+| `reactions_use_stock` | admin | **public.** Not subtracting what you already hold is the tool telling you to buy things in your own hangar. Fails soft to empty, so the risk is one-directional. |
+| `reactions_parallel_stages` | admin | **public.** Its own description says it never changes what is suggested, what it costs or what it earns — only how many reactors do the work. A pure correctness fix to the slot count. |
+| `reactions_level_runs` | admin | **public — but only now.** Promoting it before §30 landed would have shipped the collapsed ceiling (a 7-day cadence answering 11.7 days) and the invisible surplus to everyone. Both are fixed and pinned; this is the one to watch on the way out. |
+| `reactions_cadence` | admin | **testers first, then public.** New on 2026-08-14 and the newest code in the set. It is also the flag with the strongest claim to `public` eventually: the cadence is the tool's headline setting and gating it means gating the product. |
+| `reactions_ease_cost` | admin | **testers.** New surface, and the number it reports (`surplus_isk` / `recoverable_isk`) wants a real account's eyes on it before it is stated to everyone as fact. |
+| `reactions_missing_formulas` | admin | **testers.** Only reachable at all since 2026-08-14, so it has effectively never run for anyone. Its failure mode is confidently telling a user to buy a formula they hold; watch the unresolved-name reports for a round before widening. |
+| `reactions_assign_guard` | testers | **public, and then retire.** It refuses to book more reaction slots than a character has. A guard against an impossible plan is not a preview feature. |
+| `reactions_pack_hosts` | testers | **public.** Places an order on the fewest characters worth a login. Measured (7 characters → 3, ~1 day on a 12-day order) and squarely the effort constraint the manifesto names. |
+| `reactions_stage_pipeline` | testers | **public.** Presentation only — the same jobs, run counts and stage order as the table it replaces, drawn the way Industry already draws a build. Keeping two renderings alive is the cost of leaving it. |
+| `reactions_manual_done` | testers | **public.** An escape hatch for when ESI cannot tell us (5-minute stale cache, a job installed under a different product). A mark can only ever bring a stage forward and is never counted as ISK earned. |
+| `reaction_orders` | admin | **hold, and say why.** Customer orders are a real second product surface, not a refinement of the first, and §28b (slot reservation) is still open against it. Not "inertia" — a named gap. |
+| `local_market` | admin | **hold.** Following an alliance/structure market needs a connected character and a market to follow; it is the one item here that does nothing at all for a user who has not set it up, so `public` would put an empty card in front of everybody. Reconsider once the setup card is reachable in two clicks. |
+| `local_sell_hint` | admin | **hold, with `local_market`.** It is that feature's alert half and cannot be evaluated separately. |
+
+**The decision this needs from the user is one line:** is the ladder being climbed, or is there a
+known gap holding the gate? If it is the former, the twelve rows above marked public/testers move,
+the three `hold` rows stay put with their reason on record, and the two `retire` candidates
+(`reactions_formula_cap`, `reactions_assign_guard`) lose their flag entirely — delete the entry and its
+`feature_enabled` / `_featureActive` call sites, per the registry's own rule at the top of
+`app/features.py`). If it is the latter, name the gap here — that is then the next thing to build.
+
+**Not for an implementing agent to do unilaterally.** Rolling a flag out is a product decision and
+this entry is a recommendation, not a change. First step: pick one.
+
+**Two things the decision should know, both found in verification rather than by design:**
+
+* **Reactions-pasted formulas are Industry declarations in waiting.** The Reactions paste route is
+  ungated by design (it is a route to an existing feature, not a new one) and writes to
+  `pp_industry_blueprints`. It is invisible to Industry today — proved with `industry_manual_blueprints`
+  off, where Industry's `manual_blueprints()` and `owned_blueprints()` both come back empty while the
+  Reactions side sees the formulas. But an admin who later turns that flag on for the same user will
+  find declarations on the Industry tab that the user never pasted there. Defensible — they are the
+  user's own statements about their own prints — but it should be a decision, not a surprise.
+* **`industry_reaction_policy` is not in the table above and that is deliberate.** It is
+  reaction-*named* but sits in the Industry group and governs Industry's behaviour, so it rolls out
+  with Industry (§14), not with this. Noted because a reader will go looking for it.
+
+## 33. Two Reactions knobs for numbers the app can work out (2026-08-14, low)
+
+Both are CLAUDE.md rule-3 failures — a knob where a computed answer belongs — and neither appears on
+the manifesto's list of what Reactions *deliberately* leaves to the user (run vs sell, risk
+tolerance, corp politics). Written up rather than implemented, because in one case the "cleanup" is
+a user-visible change of what people are charged.
+
+**`reaction_system` (Settings → reaction rates).** Left blank, *"job install fees are left out of
+every estimate"* — and the app says so in a note instead of fixing it, while
+`industry_default_build_system` already infers the equivalent for Industry. Deriving it is the
+obvious move and it was **declined twice, by two agents, for the same concrete reason**: it means
+editing `graph.py` outside any current grant, coupling Reactions' cost base to an Industry-owned
+setting, and — the real point — **silently starting to charge job install fees on accounts where
+every user currently pays zero.** Every ISK figure in the service would move, downward, with no
+change the user made. That is not a cleanup; it is a repricing.
+
+So the condition on doing it: the fee has to become **visible**, not merely correct. A derived
+system must be shown as derived and where it came from (the same way `time_efficiency_source` now
+says "measured" vs "estimated from your skills"), and the first plan after the change should say
+that install fees are now included. Do it with that, or not at all.
+
+**`max_chain_depth` (wizard page 1, default 2).** A search-space limiter, not a player judgement —
+the tool ranks by profit anyway, so the honest version is to search deeper and let the ranking
+decide. Two things stop this being a one-liner: §29's finding that the wizard's rate is overstated
+in proportion to chain depth (`profit_per_day` divides by one cadence window while tiers run
+sequentially) means a deeper search would *preferentially* surface the rows whose numbers are least
+trustworthy, and depth genuinely costs runtime in the LP. First step is not to remove the control
+but to check, on a real account, whether raising the default from 2 changes the top of the ranking
+at all now that WS1's per-day fix has landed. If it does not, move it behind the wizard's front page.
+
 ---
 
 ## 19. Reactions must say what you need to ACQUIRE, and show the stages in order — DONE 2026-08-07

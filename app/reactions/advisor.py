@@ -696,7 +696,13 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
 class SuggestRequest(BaseModel):
     isk_budget: float
     max_chain_depth: int = 2
-    cadence_hours: float = 168.0  # default weekly — how long you want a batch to run before checking back in
+    # How long a batch runs before you come back. **Omitted means "use the account's cadence"** —
+    # the stored `max_reaction_job_days` the Reactions card and Build rules both write, which is the
+    # ceiling `level_product_runs` will reshape this very plan against on the next dashboard read.
+    # It defaulted to a hard-coded 168h, so a wizard that never asked and a leveller that read the
+    # setting could size the same plan around two different weeks. Weekly is still the fallback when
+    # no cadence is set — see _resolve_cadence_hours.
+    cadence_hours: float | None = None
     material_ids: list[int] | None = None  # None/empty = no restriction, every priced material usable
     absorb_fraction: float | None = None  # None = default _ABSORB_FRACTION; the "fill more of the buy
     # book" advisor Apply raises it to unlock a depth-bound product. Clamped to (0, 1] server-side.
@@ -908,17 +914,49 @@ def _build_advisor(context_id: int, isk_budget: float, max_chain_depth: int, cad
     return {"budget_hint": budget_hint, "align_hints": align_hints, "fuel_block_hints": fuel_block_hints}
 
 
+_DEFAULT_CADENCE_H = 168.0        # weekly — the historical wizard default, kept as the fallback
+
+
+def _resolve_cadence_hours(context_id: int, sent: float | None) -> float:
+    """The one rhythm this plan is built around: what the caller asked for, else the account's own
+    stored cadence, else weekly.
+
+    The wizard sends what its dropdown shows and its dropdown IS the stored setting, so in practice
+    these agree — this is what makes them agree for any other caller, and what stops a client that
+    omits the field from silently getting a different week than the leveller will use.
+
+    **Always returns a positive number**, by construction: `_reaction_cadence_hours` is clamped at 0
+    and 0 falls through to weekly. It is therefore NOT a validator — an explicitly invalid `sent`
+    (0 or negative) is rejected by the endpoint before this is called, not quietly rewritten here.
+    """
+    if sent is not None and sent > 0:
+        return float(sent)
+    try:
+        from app.reactions.jobs import _reaction_cadence_hours
+        stored = _reaction_cadence_hours(context_id)
+    except Exception:
+        stored = 0.0
+    return float(stored) if stored and stored > 0 else _DEFAULT_CADENCE_H
+
+
 @router.post("/api/reactions/suggest")
 def suggest_reactions(req: SuggestRequest, context_id: int = Depends(require_context)):
-    if req.isk_budget <= 0 or req.max_chain_depth <= 0 or req.cadence_hours <= 0:
+    # OMITTED and INVALID are different answers, and the difference is deliberate. `None` means "use
+    # the account's rhythm" and is the normal path. An explicitly sent 0 or negative window is bad
+    # input and still gets the documented empty result — answering it with a weekly plan would be
+    # inventing an input the caller never gave, which is the silent kind of wrong this repair is
+    # about. `_resolve_cadence_hours` can never return <= 0, so it is checked here or nowhere.
+    if (req.isk_budget <= 0 or req.max_chain_depth <= 0
+            or (req.cadence_hours is not None and req.cadence_hours <= 0)):
         return {"suggestions": [], "totals": {
             "isk_committed": 0.0, "isk_budget": req.isk_budget, "net_profit": 0.0, "net_profit_per_day": None,
             "output_value": 0.0, "output_m3": 0.0, "characters_used": 0, "completion_hours": None, "binding": "neither", "formula_capped": []},
             "advisor": {"budget_hint": None, "align_hints": [], "fuel_block_hints": []}}
+    cadence_hours = _resolve_cadence_hours(context_id, req.cadence_hours)
     material_ids = set(req.material_ids) if req.material_ids else None
-    result = _suggest_reactions(context_id, req.isk_budget, req.max_chain_depth, req.cadence_hours,
+    result = _suggest_reactions(context_id, req.isk_budget, req.max_chain_depth, cadence_hours,
                                  material_ids, req.absorb_fraction)
-    result["advisor"] = _build_advisor(context_id, req.isk_budget, req.max_chain_depth, req.cadence_hours,
+    result["advisor"] = _build_advisor(context_id, req.isk_budget, req.max_chain_depth, cadence_hours,
                                         material_ids, result["totals"]["net_profit"],
                                         result["totals"].get("net_profit_per_day"), result["totals"]["binding"],
                                         result["suggestions"], req.absorb_fraction)

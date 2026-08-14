@@ -444,24 +444,141 @@ function _rxStageReady(data) {
 // pages start looking like different products.
 let _rxMissSeq = 0;
 
+// ── Pasting your industry window, from the Reactions side ─────────────────────────────────────
+// The completeness rule is "a paste says so, nothing else does" (app/reactions/library.py) — and
+// the only paste form in the product used to sit inside the Industry tab's manual-blueprints
+// panel, hidden behind `industry_manual_blueprints`. So a Reactions feature could not fire for
+// anyone without a Manufacturing flag: unreachable by construction, not merely awkward.
+//
+// Same store, same batches, same batch-name rule as that panel — the two forms write through
+// different routes to one library, so pasting here shows up there and vice versa.
+async function rxLoadFormulaLibrary() {
+  const el = document.getElementById('rxFormulaLibrary');
+  if (!el) return;
+  let d = null;
+  try { d = await api('/api/reactions/formulas/library'); } catch (e) { el.innerHTML = ''; return; }
+  const batches = (d.batches_list || []).map(b =>
+    `<div class="ind-src-row"><span class="ind-src-name">${_esc(b.name)}</span>`
+    + `<span class="ind-src-meta">pasted · ${b.prints} print${b.prints === 1 ? '' : 's'}`
+    + ` · ${b.products} product${b.products === 1 ? '' : 's'}</span>`
+    + `<button class="ind-src-del" title="Remove this pasted batch"`
+    + ` onclick="rxDeleteFormulaBatch('${_esc(b.batch)}')">✕</button></div>`).join('');
+  // Two different questions, and a user has to be able to tell them apart: `complete` is whether
+  // the evidence is there, `enabled` is whether the report that reads it is switched on.
+  const state = d.complete
+    ? `<div class="settings-note"><span><b>${d.formulas_declared} formula${d.formulas_declared === 1 ? '' : 's'} declared.</b>`
+      + ` Your library reads as complete, so a formula you have not pasted is one the plan will tell you to acquire.`
+      + (d.enabled ? '' : ' (The missing-formula report is not switched on for this account yet — the paste is still counted.)')
+      + `</span></div>`
+    : `<div class="settings-note"><span>Nothing pasted yet — every formula is <b>unknown</b>, and unknown never refuses work.`
+      + ` Paste the window and absence starts meaning "you don't own it".</span></div>`;
+  // The honest note about what a reactions-only account silently does not get. Both of these fail
+  // SOFT to empty, which reads as "you own nothing" rather than as an error — the safe direction,
+  // but silent, and a user who wonders why their formula cap never binds deserves the sentence.
+  const soft = `<div class="ind-src-help">Formula counts found in your <b>stock sources</b> (corp hangars,
+    pasted stacks) and the per-formula job cap read from them are shared with Manufacturing and are
+    only counted while that side is enabled for your account. Until then they read as "you own
+    none", which never blocks a plan — it just means the cap does not bind. A paste here is always
+    counted.</div>`;
+  const unres = (d.unresolved || []).length
+    ? `<div class="ind-src-help">Not recognised in your paste: ${(d.unresolved || []).slice(0, 8)
+        .map(u => _esc(u.name)).join(', ')}${(d.unresolved || []).length > 8 ? '…' : ''}
+       — these count as formulas you do NOT hold, so check them if a name looks like a typo on our side.</div>`
+    : '';
+  el.innerHTML = state
+    + `<div class="ind-src-list">${batches || '<span class="ind-bp-hint">No pasted batches.</span>'}</div>`
+    + `<div class="ind-paste">
+        <p class="ind-src-help">In game open <b>Industry → Blueprints</b>, <b>Ctrl+A</b>,
+          <b>Ctrl+C</b>, paste here. One paste is one batch — re-pasting the same name replaces it,
+          so paste each character's window under its own name.</p>
+        <input type="text" id="rxBpPasteName" placeholder="Name this batch — e.g. Main's industry window">
+        <textarea id="rxBpPasteText" rows="6" placeholder="Formulas:&#10;4 x Nanotransistors Reaction Formula&#9;0&#9;0&#9;-1&#9;Composite"></textarea>
+        <div class="ind-src-actions">
+          <button class="ind-bp-btn" onclick="rxPreviewFormulaPaste()">Preview</button>
+          <button class="ind-primary-btn" onclick="rxImportFormulaPaste()">Import</button>
+          <span id="rxBpPasteMsg" class="ind-src-meta"></span>
+        </div>
+      </div>`
+    + unres + soft;
+}
+
+// One sentence for the preview and for the result, so the import can never report a different
+// answer from the one the preview promised.
+function _rxPasteSummary(d) {
+  const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+  const bits = [`${plural(d.formulas || 0, 'formula')}, ${plural(d.blueprints || 0, 'blueprint')}`
+    + ` — ${plural(d.prints || 0, 'print')} across ${plural(d.products || 0, 'product')}`];
+  const un = (d.unknown || []).concat(d.no_product || []);
+  if (un.length) bits.push(`${plural(un.length, 'name')} not recognised: ${un.slice(0, 5).join(', ')}${un.length > 5 ? '…' : ''}`);
+  return bits.join(' · ') + '.';
+}
+
+async function rxPreviewFormulaPaste() {
+  const text = (document.getElementById('rxBpPasteText') || {}).value || '';
+  const msg = document.getElementById('rxBpPasteMsg');
+  if (!text.trim()) { if (msg) msg.textContent = 'Paste something first.'; return; }
+  if (msg) msg.textContent = 'Reading…';
+  try {
+    const d = (await apiSend('POST', '/api/reactions/formulas/paste/preview', { name: '', text })) || {};
+    const nameEl = document.getElementById('rxBpPasteName');
+    if (nameEl && !nameEl.value.trim() && d.suggested_name) nameEl.value = d.suggested_name;
+    if (msg) msg.textContent = (d.prints ? 'Will declare ' : 'Nothing to declare — ') + _rxPasteSummary(d);
+  } catch (e) { if (msg) msg.textContent = String(e.message || e); }
+}
+
+async function rxImportFormulaPaste() {
+  const name = (document.getElementById('rxBpPasteName') || {}).value || '';
+  const text = (document.getElementById('rxBpPasteText') || {}).value || '';
+  const msg = document.getElementById('rxBpPasteMsg');
+  if (!text.trim()) { if (msg) msg.textContent = 'Paste something first.'; return; }
+  if (msg) msg.textContent = 'Importing…';
+  let d = null;
+  try {
+    d = (await apiSend('POST', '/api/reactions/formulas/paste', { name, text })) || {};
+  } catch (e) { if (msg) msg.textContent = String(e.message || e); return; }
+  const r = d.imported || {};
+  await rxLoadFormulaLibrary();      // repaints the panel, so the note is written after it
+  const m2 = document.getElementById('rxBpPasteMsg');
+  if (m2) {
+    m2.textContent = r.error === 'empty' ? 'Nothing readable in that paste.'
+      : r.error === 'unrecognized' ? "Couldn't match any formula names. " + _rxPasteSummary(r)
+        : `Imported "${r.name}" — ` + _rxPasteSummary(r);
+  }
+  // A declared formula moves the per-formula job cap and what the plan says you must acquire.
+  _rxLastDashboardData = null;
+  if (typeof indLoadManualBps === 'function') indLoadManualBps();
+}
+
+async function rxDeleteFormulaBatch(batch) {
+  try { await apiSend('DELETE', '/api/reactions/formulas/batches/' + encodeURIComponent(batch)); } catch (e) {}
+  rxLoadFormulaLibrary();
+  if (typeof indLoadManualBps === 'function') indLoadManualBps();
+}
+
 // ── Login cadence, on the surface it shapes ───────────────────────────────────────────────────
 // *"I'd prefer to be able to schedule my jobs on a Saturday and handle the next stage a week later
 // on a Saturday when I have time to play."* The setting is `max_reaction_job_days` and it already
 // existed — Build rules → "Longest reaction job", on the Industry tab. This is the SAME value on
-// the surface it actually shapes, not a second one: both read and write `/api/industry/build-setup`,
-// so whichever you touch last is what both show.
+// the surface it actually shapes, not a second one: one stored row, so whichever you touch last is
+// what both show.
+//
+// It now reads and writes `/api/reactions/cadence` rather than `/api/industry/build-setup`. Same
+// number, same row — but the Industry endpoint's `job_length` section is gated on
+// `industry_job_length_policy`, so the tool's headline setting was invisible to anyone who had not
+// been given a Manufacturing flag. Reactions owns its own door to it now (`reactions_cadence`).
 let _rxCadenceDays = null;      // null until loaded; '' or a number after
 let _rxCadenceAvail = false;
 
 async function _rxLoadCadence() {
   try {
-    const r = await api('/api/industry/build-setup');
-    _rxCadenceAvail = !!(r.available && r.available.job_length);
-    const d = ((r.account || r).job_length || {}).max_reaction_job_days;
+    const r = await api('/api/reactions/cadence');
+    _rxCadenceAvail = !!r.available;
+    const d = r.max_reaction_job_days;
     _rxCadenceDays = (d == null) ? '' : d;
   } catch (e) {
     _rxCadenceAvail = false;                 // the flag is off, or the surface 403'd — show nothing
   }
+  _rxSyncWizardCadence();                    // the wizard's dropdown is a VIEW of this same number
 }
 
 function _rxCadenceHtml() {
@@ -483,14 +600,59 @@ function _rxSaveCadence(value) {
   const raw = String(value).trim();
   const days = raw === '' ? null : parseFloat(raw);
   if (days !== null && (!isFinite(days) || days < 0)) { toastError(new Error('Days must be 0 or more')); return; }
-  apiSend('POST', '/api/industry/build-setup', { job_length: { max_reaction_job_days: days } })
+  apiSend('POST', '/api/reactions/cadence', { max_reaction_job_days: days })
     .then(() => {
       _rxCadenceDays = days == null ? '' : days;
+      _rxSyncWizardCadence();
       // The cadence reshapes the plan on the next read, so re-fetch rather than re-render what we
       // already have — the run counts on screen are exactly what just changed.
       _rxLastDashboardData = null;
       _loadReactionsDashboard();
     })
+    .catch(e => toastError(e, 'Could not save the cadence'));
+}
+
+// ── The wizard's "Run on a..." IS the cadence row ─────────────────────────────────────────────
+// They were two controls for one concept, asked twice, in two units, with only one remembered: the
+// dropdown defaulted to Weekly every time the wizard opened and was never persisted, while the
+// ceiling that reshapes the very plan it produces sat unset on the card below. The normal path was
+// therefore "pick Weekly, plan a week, then have the leveller re-shape it with no ceiling at all".
+//
+// One number now. The dropdown is SEEDED from the stored cadence and WRITES BACK when changed, so
+// there is nothing to reconcile. When the account has no cadence flag the dropdown still works
+// exactly as it did — a per-run choice that shapes this suggestion and is not saved.
+const _RX_CADENCE_PRESETS = [24, 168, 336, 720];
+
+function _rxSyncWizardCadence() {
+  const sel = document.getElementById('wizRCadence');
+  if (!sel) return;
+  const days = (_rxCadenceDays === '' || _rxCadenceDays == null) ? 0 : Number(_rxCadenceDays);
+  // A cadence the presets cannot express (2.5 days, say) is still the account's real answer, so it
+  // becomes an option rather than being rounded onto one — silently changing the rhythm the plan is
+  // built around is exactly the disagreement this merge exists to end.
+  const custom = sel.querySelector('option[data-rx-custom]');
+  if (custom) custom.remove();
+  if (!(days > 0)) return;
+  const hours = days * 24;
+  if (_RX_CADENCE_PRESETS.indexOf(hours) === -1) {
+    const o = document.createElement('option');
+    o.value = String(hours);
+    o.setAttribute('data-rx-custom', '1');
+    o.textContent = `Every ${days} day${days === 1 ? '' : 's'}`;
+    sel.appendChild(o);
+  }
+  sel.value = String(hours);
+}
+
+// Changing it in the wizard sets the account's cadence — the same write the card's number field
+// does, because it is the same setting. Without a cadence flag the pick stays local to this run.
+function _rxWizCadenceChanged(value) {
+  const hours = parseFloat(value);
+  if (!_rxCadenceAvail || !isFinite(hours) || hours <= 0) return;
+  const days = hours / 24;
+  if (Number(_rxCadenceDays) === days) return;
+  apiSend('POST', '/api/reactions/cadence', { max_reaction_job_days: days })
+    .then(() => { _rxCadenceDays = days; _rxLastDashboardData = null; })
     .catch(e => toastError(e, 'Could not save the cadence'));
 }
 
@@ -1697,6 +1859,9 @@ function wizRStart() {
   document.getElementById('rxWizard').style.display = '';
   wizRGo(1);
   _wizRIskLive();
+  // The dropdown shows the account's stored cadence, not a fresh "Weekly" every time. If the
+  // dashboard has not fetched it yet (wizard opened first), fetch it now — it seeds on arrival.
+  if (_rxCadenceDays === null) _rxLoadCadence(); else _rxSyncWizardCadence();
   _loadRxMaterialFilter();
 }
 

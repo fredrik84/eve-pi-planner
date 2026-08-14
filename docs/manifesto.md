@@ -122,11 +122,21 @@ adds a knob belongs in the second list only if a real player judgement lives beh
    lines and two of its four sections are pointers elsewhere. That is a gap in *this* discipline,
    not just in prose: there is no written statement of what the advisor will and will not decide, so
    the boundary above is stated here for the first time.
-2. **The standalone-business framing is not visible in the product.** Most of the recent reaction
-   work landed as *Industry* features (reaction policy, formulas as a concurrency cap, reaction
-   goods priced inside a build). If Reactions is a business in its own right, the tool should be
-   answerable without ever opening Manufacturing — and that claim has not been tested against the
-   current UI.
+2. **The standalone-business framing was not visible in the product — tested, and closed
+   2026-08-14.** Most of the recent reaction work had landed as *Industry* features (reaction
+   policy, formulas as a concurrency cap, reaction goods priced inside a build), and the claim that
+   the tool is answerable without ever opening Manufacturing had never been checked. It was, and it
+   failed on two structural counts: the **cadence** — the one number the whole plan is shaped
+   around — was gated on `industry_job_length_policy`, and `reactions_missing_formulas` was
+   **unreachable by construction**, because the only paste form that could make a formula library
+   complete sat behind `industry_manual_blueprints`. Both are fixed: Reactions has its own flag for
+   the cadence and its own route to the paste, reading and writing the same stored values Industry
+   does (`docs/reactions.md`, "Reactions owns its cadence and its paste"). **Sharing a stored value
+   is not the gap; sharing a gate was.** What remains, and is now stated in the UI rather than
+   silent, is that stock-sourced formula counts still read as "you own nothing" for an account with
+   no Industry features — the safe direction, since a cap that does not bind never refuses work.
+   The live rollout question that outlives it is `TODO.md` §32: not one Reactions flag defaults to
+   public, so the standalone tool is standalone for admins.
 3. **The pricing rule is right and load-bearing.** Instant-sell as the profit signal is correct and
    must survive every future feature; it is called out here because it is the single rule whose
    violation would make every number in the service dishonest.

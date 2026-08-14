@@ -296,8 +296,17 @@ def manual_blueprints(context_id: int, force: bool = False) -> dict[int, dict]:
     entry per physical print, a `quantity` row expanded), so the two merge without a second
     vocabulary. `prefer` is the product-level BPO-vs-BPC choice (see `_apply_kind_preference`).
 
-    Empty unless the feature is on — `force=True` is for the admin/test path that wants the rows
-    whatever the flag says.
+    Empty unless `industry_manual_blueprints` is on, which is the right default for every Industry
+    caller: with the flag off, a plan must be byte-for-byte what shipped before declarations existed.
+
+    **`force=True` reads the rows whatever the flag says, and it has a real caller now** — not only
+    the admin/test path it was written for. `app.reactions.library.held_formula_products` uses it
+    because Reactions has its own paste route (`POST /api/reactions/formulas/paste`, 2026-08-14) and
+    therefore its own declarations, made by users who may have no Industry flag at all. Telling such
+    a user to go and buy a formula they had just finished declaring is the one direction that report
+    must never point. Safe because that call is a pure read used *only* to say what is MISSING, so a
+    wider answer can only ever withdraw a "buy this", never plan work. **Anything else reaching for
+    `force=True` should say here why it is not the flag's business.**
     """
     if not force and not _manual_enabled(context_id):
         return {}

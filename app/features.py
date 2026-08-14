@@ -282,6 +282,17 @@ FEATURE_REGISTRY = [
                     "character can reach it. Set the job length on the Reactions card to decide "
                     "how long a batch runs; the surplus from rounding up is stock.",
      "default": False},
+    {"key": "reactions_cadence", "label": "Reactions: plan around your own login rhythm",
+     "group": "Reactions",
+     "description": "Say how often you come back — 'nothing longer than N days' — and the plan is "
+                    "built around it: no reaction job is planned longer than that window, a stage "
+                    "lands in one go, and the wizard's 'Run on a...' picks up the same number "
+                    "instead of asking you twice in different units. Reactions owns this now; it "
+                    "used to be reachable only through a Manufacturing setting, so a reactions-only "
+                    "account could not set the one thing the whole plan is shaped around. It is the "
+                    "SAME stored value the Industry scheduler reads (Build rules → 'Longest "
+                    "reaction job'), written from either side — one number, never two.",
+     "default": False},
     {"key": "reactions_ease_cost", "label": "Reactions: say what an easy plan costs, and how to get it back",
      "group": "Reactions",
      "description": "The plan spends real ISK to save you clicks — it rounds run counts up so a "

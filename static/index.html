@@ -669,8 +669,12 @@
                 <label class="pp-label" for="wizRDepth" title="How many reaction tiers deep a suggested product's chain is allowed to be, counting from raw moon goo">Max chain depth</label>
                 <input type="number" id="wizRDepth" class="pp-num-input" style="width:70px" value="2" min="1" max="10">
 
-                <label class="pp-label" for="wizRCadence" title="How long you want each batch to run before you check back in and start the next one">Run on a...</label>
-                <select id="wizRCadence" class="pp-select">
+                <!-- This IS the "Come back every N days" setting on the Reactions card, not a
+                     second one: it is seeded from the stored cadence and writes back when changed
+                     (_rxSyncWizardCadence / _rxWizCadenceChanged). Two controls for one rhythm, in
+                     two units, with only one remembered, is what this replaced. -->
+                <label class="pp-label" for="wizRCadence" title="How often you come back to install the next stage. This is the same setting as 'Come back every N days' on the Reactions card — changing it here changes it there.">Run on a...</label>
+                <select id="wizRCadence" class="pp-select" onchange="_rxWizCadenceChanged(this.value)">
                   <option value="24">Daily basis</option>
                   <option value="168" selected>Weekly basis</option>
                   <option value="336">Every 2 weeks</option>
@@ -688,8 +692,10 @@
                 the final product — a shallower chain is simpler to keep running (fewer separate reaction types to
                 manage), a deeper one can be more profitable but is more to keep track of. "Run on a..." targets how
                 long each batch should take — a big batch will use several reaction slots at once (not just one) so
-                it still finishes on that schedule, instead of monopolizing a single slot for weeks. How many runs
-                each suggestion needs is worked out automatically from your ISK budget.
+                it still finishes on that schedule, instead of monopolizing a single slot for weeks. It is the same
+                setting as "Come back every N days" on the Reactions card, so the plan you get here and the plan you
+                come back to are built around one rhythm. How many runs each suggestion needs is worked out
+                automatically from your ISK budget.
               </div>
 
               <details id="rxMaterialFilter" open style="margin-top:10px">
@@ -1233,6 +1239,16 @@ PVF-N9    3         95                 60             80                  100   
               <div class="settings-subsec-hint">Prints ESI cannot see. Give the product, its ME &amp; TE and how many you hold — leave <b>runs</b> blank for an original — or paste a whole industry window.</div>
               <div class="settings-note"><span>What you declare here <b>replaces</b> what ESI read for that product, so list every print of it you will use.</span></div>
               <div id="indManualBps"></div>
+            </div>
+            <!-- Reaction formulas, pasted from the Reactions side. The SAME store and the same
+                 batches the panel above uses — this is a second door to it, not a second list,
+                 because the panel above is behind a Manufacturing flag and pasting the window is
+                 the only thing that makes "formulas you need to acquire" able to report anything.
+                 Ungated: it is a route to an existing feature, not a new one. -->
+            <div id="rxFormulaSubsec" class="settings-subsec">
+              <div class="settings-subsec-title">Reaction formulas — paste your industry window</div>
+              <div class="settings-subsec-hint">Until you paste, a formula we have never seen is <b>unknown</b>, and unknown never refuses work. Once you have pasted, absence means you don't own it — which is what lets the plan tell you which formulas to go and buy before it sends you to a structure.</div>
+              <div id="rxFormulaLibrary"></div>
             </div>
             <div class="settings-subsec">
               <div class="settings-subsec-title">Stock on hand — materials <b>and reaction formulas</b></div>

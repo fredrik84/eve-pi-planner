@@ -95,13 +95,23 @@ def held_formula_products(context_id: int) -> set[int]:
     """
     def _build():
         try:
-            from app.industry.blueprints import formula_print_floor, owned_blueprints
+            from app.industry.blueprints import (formula_print_floor, manual_blueprints,
+                                                 owned_blueprints)
             owned = owned_blueprints(context_id)
             floor = formula_print_floor(context_id, owned)
+            # ...and what the account DECLARED, whatever the Industry flag says. `owned_blueprints`
+            # folds declarations in only when `industry_manual_blueprints` is on, which was fine
+            # while the paste form lived on the Industry tab and nowhere else. Reactions has its own
+            # paste route now (`/api/reactions/formulas/paste`), and a user who pastes their whole
+            # window through it must not then be told to go and buy every formula in it — that is
+            # the completeness rule pointed the one direction it must never point. `force=True` is
+            # the store's own documented "the rows, whatever the flag says" read; nothing about
+            # Industry planning changes, because this set is only ever used to say what is MISSING.
+            declared = manual_blueprints(context_id, force=True)
         except Exception:
             return set()              # evidence unavailable is evidence absent — see library_state
         rx, _ = _reaction_index()
-        return (set(owned) | set(floor)) & set(rx)
+        return (set(owned) | set(floor) | set(declared)) & set(rx)
 
     # Reads every character's blueprint JSON, the asset table and every observed job — and an order
     # report asks for it twice over (here and in `formula_concurrency_caps`). Once per request.
@@ -118,16 +128,22 @@ def _library_state(context_id: int) -> dict:
 
     `{complete, formulas_declared, batches, unresolved: [{name, batch_name}]}`.
 
-    Complete means: the hand-declaration feature is on, and at least one PASTED batch (batch <> '',
-    so never a row typed in one at a time) names at least one reaction formula. A paste is a
-    statement about a whole window; typing in three formulas is a statement about three formulas.
+    Complete means: at least one PASTED batch (batch <> '', so never a row typed in one at a time)
+    names at least one reaction formula. A paste is a statement about a whole window; typing in
+    three formulas is a statement about three formulas.
+
+    **It used to also require `industry_manual_blueprints`**, and that made the whole
+    `reactions_missing_formulas` feature unreachable by construction: the only paste form on the
+    site sat inside `#indManualBpSubsec`, hidden behind that same Manufacturing flag, so a
+    Reactions-group flag could not fire for anybody who had not been given an Industry one. The
+    evidence is the paste itself — rows in `pp_industry_blueprints` with a batch — and a row is
+    there or it is not; a flag on another tab was never what made it true. The report this feeds is
+    still gated, on its own flag, in `missing_formulas`.
     """
     out = {"complete": False, "formulas_declared": 0, "batches": 0, "unresolved": []}
     try:
         from app.industry.blueprints import (
-            ensure_manual_blueprints_table, paste_unresolved_names, _manual_enabled)
-        if not _manual_enabled(context_id):
-            return out
+            ensure_manual_blueprints_table, paste_unresolved_names)
         ensure_manual_blueprints_table()
         out["unresolved"] = paste_unresolved_names(context_id)
     except Exception:
@@ -243,6 +259,77 @@ def reactions_missing_formulas(req: MissingFormulaRequest,
     the step list server-side and a second round trip would only add a way for the two to disagree.
     """
     return missing_formulas(context_id, wanted_from_sequence(req.items))
+
+
+# ── Reactions' own route to the paste ────────────────────────────────────────────────────────────
+# The completeness rule above is *"a paste says so, nothing else does"*, and until now the only
+# paste form in the product was `_indBpPasteFormHtml` inside `#indManualBpSubsec` — hidden unless
+# `industry_manual_blueprints` is on. So the one thing that could make this module report anything
+# was reachable only through Manufacturing. That is the manifesto's standalone claim failing in the
+# most literal way available: the tool could not be answered without opening the other tab.
+#
+# These two endpoints are a ROUTE, not a feature (no flag of their own): the same parse, the same
+# store, the same batch semantics, called through Reactions. Shared helpers, two thin endpoints —
+# CLAUDE.md rule 4, and specifically not an `if source == "reactions"` branch bolted onto the
+# Industry one.
+class FormulaPaste(BaseModel):
+    """A copied industry window. Same fields as Industry's `BlueprintPaste` and deliberately so —
+    it is the same paste, filed in the same store under the same batch-name rule (re-pasting a name
+    replaces that batch and leaves the others alone)."""
+    name: str = ""
+    text: str
+    structure: str = ""
+    container: str = ""
+
+
+@router.post("/api/reactions/formulas/paste/preview")
+def reactions_preview_formula_paste(req: FormulaPaste,
+                                    context_id: int = Depends(require_context)):
+    """What this paste WOULD declare. Nothing is written — same parse the import runs, so the
+    preview can never promise a different import."""
+    from app.industry.blueprints import parse_blueprint_paste
+    return parse_blueprint_paste(req.text)
+
+
+@router.post("/api/reactions/formulas/paste")
+def reactions_import_formula_paste(req: FormulaPaste,
+                                   context_id: int = Depends(require_context)):
+    """Import a pasted industry window as one named batch, and report what the library now says.
+
+    The `library` block is the point: pasting is the act that turns "unknown" into "not owned", so
+    the form can say straight away whether the account is now complete and how many formulas it
+    read — rather than leaving the user to guess why a report is still empty.
+    """
+    from app.industry.blueprints import replace_blueprint_batch
+    res = replace_blueprint_batch(context_id, req.name, req.text, req.structure, req.container)
+    # `_library_state`, not the memoised `library_state`: the paste it just wrote is exactly what
+    # this answer is about, and a memo taken before the write would report the library as it was.
+    return {"imported": res, "library": _library_state(context_id)}
+
+
+@router.get("/api/reactions/formulas/library")
+def reactions_formula_library(context_id: int = Depends(require_context)):
+    """Whether this account's formula library reads as complete, and the pasted batches behind it.
+
+    `enabled` says whether the missing-formula REPORT is switched on for this account; `complete`
+    says whether the evidence is there. They are different questions and the UI has to be able to
+    tell a user "you have not pasted yet" apart from "this is not turned on for you".
+    """
+    from app.industry.blueprints import list_blueprint_batches
+    try:
+        batches = list_blueprint_batches(context_id)
+    except Exception:
+        batches = []
+    return {"enabled": _feature_on(context_id), **_library_state(context_id), "batches_list": batches}
+
+
+@router.delete("/api/reactions/formulas/batches/{batch}")
+def reactions_delete_formula_batch(batch: str, context_id: int = Depends(require_context)):
+    """Drop one pasted batch. Ungated for the same reason Industry's delete is: removing a statement
+    must stay possible even for an account the paste route is later taken away from."""
+    from app.industry.blueprints import delete_blueprint_batch
+    delete_blueprint_batch(context_id, batch)
+    return reactions_formula_library(context_id)
 
 
 @router.get("/api/reactions/formula-prices")

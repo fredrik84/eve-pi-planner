@@ -1304,16 +1304,23 @@ def _reaction_skill_mult(context_id: int) -> float:
 def _reaction_cadence_hours(context_id: int) -> float:
     """The longest one reaction job may run, in hours — 0 when the account has set no cadence.
 
-    One setting, shared with the Industry scheduler (`max_reaction_job_days`, Build rules →
-    "Longest reaction job"), rather than a second Reactions-owned number meaning almost the same
-    thing. Industry has read it since it existed; this side did not, which is why a Reactions plan
-    could quote a fortnight on one reactor while the ceiling sat right there unused.
+    **One STORED number, two owners.** The value is `max_reaction_job_days` in
+    `pp_industry_settings` — the same row Build rules → "Longest reaction job" writes and
+    `app/industry/graph.py:1177` reads. That sharing is right and stays: the cadence is a fact about
+    the player's week, not about a tab, and duplicating the storage is how two surfaces come to
+    disagree about the same rhythm.
 
-    Behind the same flag Industry gates it with, and 0 when unset — a plan built before anyone chose
-    a cadence must not be resized by one.
+    What was wrong was the GATE, not the storage. This read `industry_job_length_policy` alone, so
+    the headline requirement of the Reactions tool — *"schedule my jobs on a Saturday and handle the
+    next stage a week later"* — was switched off by a decision taken about Manufacturing, and a
+    reactions-only account could not reach it at all. `reactions_cadence` is this side's own key to
+    the same setting; either flag opens it, neither one owns the number.
+
+    Still 0 when unset — a plan built before anyone chose a cadence must not be resized by one.
     """
     try:
-        if not flag_on("industry_job_length_policy", context_id):
+        if not (flag_on("reactions_cadence", context_id)
+                or flag_on("industry_job_length_policy", context_id)):
             return 0.0
         from app.industry.settings import get_max_reaction_job_days
         return max(0.0, float(get_max_reaction_job_days(context_id) or 0.0)) * 24.0
