@@ -14,63 +14,6 @@ Reviewed 2026-08-05.
 
 ---
 
-## 32. Roll Reactions out, or write down why not (2026-08-14) — DECIDE
-
-**Held by the user (2026-08-14): they will set flags public when they judge the
-service ready. Do not propose a rollout again; keep the recommendations current.**
-
-§14's forcing question, for Reactions, and with more force: the manifesto calls this service
-standalone and public-facing, and as of today it is standalone **for admins**. A normal logged-in
-user gets no orders, no formula cap (so plans schedule parallel jobs off one formula), no tidy runs,
-no stock subtraction, no parallel-stage slot reuse, no levelled run counts, no cadence, no ease-cost
-line and no missing-formula report. **The good behaviour is the exception.** The last month of work
-exists to replace exactly the tool the default user is getting.
-
-Registry defaults as of 2026-08-14, **15 Reactions flags, none public** (live prod state is not
-readable from a dev session and the DB row wins once created — these are code defaults only, so
-check Admin → Features before acting on any row):
-
-| flag | registry default | recommendation |
-| --- | --- | --- |
-| `reactions_formula_cap` | admin | **public, and then retire.** A formula is one reaction at a time — a game rule, not a preference. Off, plans schedule parallel jobs off a single formula, i.e. work that cannot be installed. "Would we ever turn this off again?" is no. |
-| `reactions_tidy_runs` | admin | **public.** Bounded rounding (15%, `_TIDY_BUDGET`) of intermediate runs only; end products untouched. Now that the ease-cost line reports what the rounding costs and how to get it back, its price is visible rather than quiet. |
-| `reactions_use_stock` | admin | **public.** Not subtracting what you already hold is the tool telling you to buy things in your own hangar. Fails soft to empty, so the risk is one-directional. |
-| `reactions_parallel_stages` | admin | **public.** Its own description says it never changes what is suggested, what it costs or what it earns — only how many reactors do the work. A pure correctness fix to the slot count. |
-| `reactions_level_runs` | admin | **public — but only now.** Promoting it before the 2026-08-14 cadence repair (archived) would have shipped the collapsed ceiling (a 7-day cadence answering 11.7 days) and the invisible surplus to everyone. Both are fixed and pinned; this is the one to watch on the way out. |
-| `reactions_cadence` | admin | **testers first, then public.** New on 2026-08-14 and the newest code in the set. It is also the flag with the strongest claim to `public` eventually: the cadence is the tool's headline setting and gating it means gating the product. |
-| `reactions_ease_cost` | admin | **testers.** New surface, and the number it reports (`surplus_isk` / `recoverable_isk`) wants a real account's eyes on it before it is stated to everyone as fact. |
-| `reactions_missing_formulas` | admin | **testers.** Only reachable at all since 2026-08-14, so it has effectively never run for anyone. Its failure mode is confidently telling a user to buy a formula they hold; watch the unresolved-name reports for a round before widening. |
-| `reactions_assign_guard` | testers | **public, and then retire.** It refuses to book more reaction slots than a character has. A guard against an impossible plan is not a preview feature. |
-| `reactions_pack_hosts` | testers | **public.** Places an order on the fewest characters worth a login. Measured (7 characters → 3, ~1 day on a 12-day order) and squarely the effort constraint the manifesto names. |
-| `reactions_stage_pipeline` | testers | **public.** Presentation only — the same jobs, run counts and stage order as the table it replaces, drawn the way Industry already draws a build. Keeping two renderings alive is the cost of leaving it. |
-| `reactions_manual_done` | testers | **public.** An escape hatch for when ESI cannot tell us (5-minute stale cache, a job installed under a different product). A mark can only ever bring a stage forward and is never counted as ISK earned. |
-| `reaction_orders` | admin | **reconsider — the gap that held it is closed.** This read "hold, §28b (slot reservation) is still open against it"; §28b was verified done on 2026-08-14 (later stages no longer reserve slots they cannot use, and an order is paced at quote time). What remains is a judgement, not a defect: customer orders are a second product surface rather than a refinement of the first, so decide it on its own merits rather than on a blocker that no longer exists. |
-| `local_market` | admin | **hold.** Following an alliance/structure market needs a connected character and a market to follow; it is the one item here that does nothing at all for a user who has not set it up, so `public` would put an empty card in front of everybody. Reconsider once the setup card is reachable in two clicks. |
-| `local_sell_hint` | admin | **hold, with `local_market`.** It is that feature's alert half and cannot be evaluated separately. |
-
-**The decision this needs from the user is one line:** is the ladder being climbed, or is there a
-known gap holding the gate? If it is the former, the twelve rows above marked public/testers move,
-the three `hold` rows stay put with their reason on record, and the two `retire` candidates
-(`reactions_formula_cap`, `reactions_assign_guard`) lose their flag entirely — delete the entry and its
-`feature_enabled` / `_featureActive` call sites, per the registry's own rule at the top of
-`app/features.py`). If it is the latter, name the gap here — that is then the next thing to build.
-
-**Not for an implementing agent to do unilaterally.** Rolling a flag out is a product decision and
-this entry is a recommendation, not a change. First step: pick one.
-
-**Two things the decision should know, both found in verification rather than by design:**
-
-* **Reactions-pasted formulas are Industry declarations in waiting.** The Reactions paste route is
-  ungated by design (it is a route to an existing feature, not a new one) and writes to
-  `pp_industry_blueprints`. It is invisible to Industry today — proved with `industry_manual_blueprints`
-  off, where Industry's `manual_blueprints()` and `owned_blueprints()` both come back empty while the
-  Reactions side sees the formulas. But an admin who later turns that flag on for the same user will
-  find declarations on the Industry tab that the user never pasted there. Defensible — they are the
-  user's own statements about their own prints — but it should be a decision, not a surprise.
-* **`industry_reaction_policy` is not in the table above and that is deliberate.** It is
-  reaction-*named* but sits in the Industry group and governs Industry's behaviour, so it rolls out
-  with Industry (§14), not with this. Noted because a reader will go looking for it.
-
 ## 18. Is all of this too complicated? — storage shape and precomputation (2026-08-05, LARGE)
 
 **Priority: soonish** (user, 2026-08-14) — not urgent, but not to be left to drift either.
@@ -131,25 +74,6 @@ Worth noting as evidence for the audit rather than as separate items: the schema
 accretion — `pp_baskets_old`, `pp_profiles_new`, `pp_session` alongside `pp_sessions`,
 `pp_characters_context`, and two pairs of near-identically-named settings tables. Whatever the
 verdict on the blob, that is worth a pass on its own.
-
-## 14. Roll Industry out, or write down why not (2026-08-05)
-
-**Held by the user (2026-08-14): they will set flags public when they judge the
-service ready. Do not propose a rollout again; keep the recommendations current.**
-
-The audit's headline finding, and the one that reframes the rest. **All 15 Industry flags sit at
-`testers` on prod; none is public — including `industry` itself.** Against that, the PI side is 14
-of 17 public and Reactions is mixed. So the audience the manifesto names — any EVE player, casual to
-serious — has never used this service, and every casual-user property it was built to have (the
-facility presets that cost a build correctly, the wizard that can always be completed, the nudge
-instead of a gate) has only ever been verified against the builders who asked for the features.
-
-This is not a request to flip the flags. It is a request to decide which it is: a **known gap**
-holding the gate — and then name it, because it is the next thing to build — or **inertia**, in
-which case the ladder exists to be climbed and `industry` goes to `public` while the rest follow on
-their own merits.
-
-First step: pick one. Everything else in the Industry backlog is second-order to it.
 
 ## 17. Stock sources have four surfaces (2026-08-05, low)
 
