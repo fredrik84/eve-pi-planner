@@ -82,3 +82,4 @@ was worth.
 | 22 | The general shopping list double-counts every chain | General shopping list no longer double-counts a chain | 08-07 |
 | 20 | The two Reactions "clear" paths disagree about customer orders | The two Reactions 'clear' paths agree about customer orders | 08-07 |
 | 16 | Remove the dead Industry surface | Dead Industry surface removed | 08-07 |
+| 33 | Two Reactions knobs for numbers the app can work out | Both done. `reaction_system` is derived when unset (behind `reactions_default_system`), reusing Industry's resolver and naming its basis, because a blank system meant profit overstated by the whole install fee once profit was netted against a full cost. `max_chain_depth` moved off the wizard front page and its default raised 2 → 5: measured first, and at 2 a depth-4 chain ranking SECOND overall was invisible, while the candidate set saturates at 18 by depth 5 — a search limiter, not a preference | 08-14 |

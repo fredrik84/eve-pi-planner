@@ -666,8 +666,14 @@
                   <span id="wizRIskFmt" class="pp-card-hint" style="flex:0 0 auto"></span>
                 </div>
 
-                <label class="pp-label" for="wizRDepth" title="How many reaction tiers deep a suggested product's chain is allowed to be, counting from raw moon goo">Max chain depth</label>
-                <input type="number" id="wizRDepth" class="pp-num-input" style="width:70px" value="2" min="1" max="10">
+                <!-- Off the front page 2026-08-14, kept as a hidden input so the request shape and
+                     wizRSuggest() are unchanged. It was a SEARCH limiter wearing a knob: the tool
+                     ranks by profit anyway, so capping the search at 2 only hid deep chains rather
+                     than expressing a preference. Measured on real data the day it was moved: at
+                     the old default of 2 the candidate set was 10, and a depth-4 chain that ranks
+                     SECOND overall was invisible. The set saturates at 18 by depth 5, so searching
+                     the whole space costs nothing worth a control. CLAUDE.md rule 3. -->
+                <input type="hidden" id="wizRDepth" value="5">
 
                 <!-- This IS the "Come back every N days" setting on the Reactions card, not a
                      second one: it is seeded from the stored cadence and writes back when changed

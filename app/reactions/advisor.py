@@ -695,7 +695,12 @@ def _suggest_reactions(context_id: int, isk_budget: float, max_chain_depth: int,
 
 class SuggestRequest(BaseModel):
     isk_budget: float
-    max_chain_depth: int = 2
+    # 5, not 2 (2026-08-14). This FILTERS the search; it was never a statement of taste, and the
+    # ranking already discounts depth (`_chain_windows`), so a deep chain has to earn its place.
+    # Measured before changing it: at 2 the candidate set was 10 and a depth-4 chain ranking SECOND
+    # overall could not be seen at all; the set saturates at 18 by depth 5, so the deeper search is
+    # free. The field stays on the request so a caller can still narrow it.
+    max_chain_depth: int = 5
     # How long a batch runs before you come back. **Omitted means "use the account's cadence"** —
     # the stored `max_reaction_job_days` the Reactions card and Build rules both write, which is the
     # ceiling `level_product_runs` will reshape this very plan against on the next dashboard read.

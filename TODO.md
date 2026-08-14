@@ -16,6 +16,9 @@ Reviewed 2026-08-05.
 
 ## 32. Roll Reactions out, or write down why not (2026-08-14) — DECIDE
 
+**Held by the user (2026-08-14): they will set flags public when they judge the
+service ready. Do not propose a rollout again; keep the recommendations current.**
+
 §14's forcing question, for Reactions, and with more force: the manifesto calls this service
 standalone and public-facing, and as of today it is standalone **for admins**. A normal logged-in
 user gets no orders, no formula cap (so plans schedule parallel jobs off one formula), no tidy runs,
@@ -67,33 +70,6 @@ this entry is a recommendation, not a change. First step: pick one.
 * **`industry_reaction_policy` is not in the table above and that is deliberate.** It is
   reaction-*named* but sits in the Industry group and governs Industry's behaviour, so it rolls out
   with Industry (§14), not with this. Noted because a reader will go looking for it.
-
-## 33. `max_chain_depth` is a search limiter, not a player judgement (2026-08-14, low)
-
-A CLAUDE.md rule-3 failure — a knob where a computed answer belongs — and it does not appear on the
-manifesto's list of what Reactions *deliberately* leaves to the user (run vs sell, risk tolerance,
-corp politics).
-
-**`reaction_system` was the other half of this entry and is DONE (2026-08-14).** Recorded here
-because the reasoning is worth keeping: it was declined twice, by two agents, on the grounds that
-deriving it would silently start charging job install fees on accounts that pay zero today — a
-repricing, not a cleanup. The user's ruling settled it: *if the displayed cost is inaccurate to the
-final profit and costs, it should be done.* It was, once profit began to be netted against a full
-cost base, so a blank system meant profit overstated by the whole fee. Shipped behind
-`reactions_default_system`, reusing Industry's `account_build_defaults` so the two services cannot
-quote one job at two fees, and the settings card always names the basis — `configured` /
-`structure` / `reference` / `none` — so an inference never reads as something the user stated.
-
-**`max_chain_depth` (wizard page 1, default 2).** A search-space limiter, not a player judgement —
-the tool ranks by profit anyway, so the honest version is to search deeper and let the ranking
-decide. Two things stop this being a one-liner: the 2026-08-14 finding (archived) that the wizard's rate is overstated
-in proportion to chain depth (`profit_per_day` divides by one cadence window while tiers run
-sequentially) means a deeper search would *preferentially* surface the rows whose numbers are least
-trustworthy, and depth genuinely costs runtime in the LP. First step is not to remove the control
-but to check, on a real account, whether raising the default from 2 changes the top of the ranking
-at all now that WS1's per-day fix has landed. If it does not, move it behind the wizard's front page.
-
----
 
 ## 21d. Pipelining a chain's stages (2026-08-07, open)
 
@@ -177,16 +153,30 @@ shape above and are load-bearing:
 that does exist is `max_reaction_job_days` (`app/industry/settings.py`, Industry settings, behind
 `industry_job_length_policy`): a ceiling in DAYS on one reaction job, default `None` — deliberately,
 since guessing a cadence for somebody splits their batches into jobs they never asked for. It is
-read by the Industry planner (`graph.py` → `params.max_reaction_job_hours`) and **not** by the
-Reactions customer-order allocator, so an order still has no cadence at all — which is exactly the
-gap 28b item 2 names, and it is still open.
+read by the Industry planner (`graph.py` → `params.max_reaction_job_hours`). **Corrected 2026-08-14:
+the Reactions order allocator now reads it too** — `_allocate_and_insert` takes the cadence at quote
+time, and Reactions owns the setting behind `reactions_cadence` rather than borrowing an Industry
+flag. The gap 28b item 2 named is closed.
 
-**Still open — two chains on ONE character sharing a job.** The output is fungible and lands in one
-hangar, so two chains each holding a 60-run job of the same product should be one 120-run job. That
-means a row belonging to more than one chain, i.e. the `chain_id` rework item 22 also wanted.
-Everything else in the priority list is done.
+**Compliance against the four priorities, as of 2026-08-14: 1, 2 and 3 are met; 4 is met by
+construction (it is last, and the ceiling exists to stop it winning).** One gap remains, and it is
+the only thing standing between the current behaviour and the stated target:
+
+**Two chains on ONE character should share a job.** The output is fungible and lands in one hangar,
+so two chains each holding a 60-run job of the same product ought to be a single 120-run job. Today
+they are two rows, which costs a reactor and shows the player two numbers where one would do — a
+direct hit on priority (1) *and* (2). It is not a scoring bug: `level_product_runs` cannot merge them
+because a row belongs to exactly one chain, and `chain_stage_state` reads readiness per chain, so
+merging without the model change would make a chain call a stage ready while another chain's jobs
+were still running.
+
+**The fix is the `chain_id` rework** — a row that can belong to more than one chain — which item 22
+also wanted before it shipped around the problem. That is the next thing to build here, and it is
+the honest answer to "how close are we": close, with one structural change left.
 
 ## 18. Is all of this too complicated? — storage shape and precomputation (2026-08-05, LARGE)
+
+**Priority: soonish** (user, 2026-08-14) — not urgent, but not to be left to drift either.
 
 A step back from feature work: **have we ended up doing this the hard way?** Two halves, and they
 are related only in that both are about paying repeatedly for something that could be paid for once.
@@ -247,6 +237,9 @@ verdict on the blob, that is worth a pass on its own.
 
 ## 14. Roll Industry out, or write down why not (2026-08-05)
 
+**Held by the user (2026-08-14): they will set flags public when they judge the
+service ready. Do not propose a rollout again; keep the recommendations current.**
+
 The audit's headline finding, and the one that reframes the rest. **All 15 Industry flags sit at
 `testers` on prod; none is public — including `industry` itself.** Against that, the PI side is 14
 of 17 public and Reactions is mixed. So the audience the manifesto names — any EVE player, casual to
@@ -303,10 +296,18 @@ cannot open the tab is work in the wrong order. Pick the rung first.
 
 Per-order planning shipped (see Shipped below) and these three are what it deliberately left:
 
-1. **Container as job OUTPUT.** The point of the whole exercise, and still not modelled: an order
+1. **Container as PLAN output.** The point of the whole exercise, and still not modelled: an order
    names the box its materials come from, and the output belongs in the same one. Every scheduled
    job now carries `order_id`, which is the hook. Needs a UI answer for "no container bound" — corp
    hangars need the Director role and not everyone has one.
+
+   **Design settled by the user (2026-08-14): the container is a property of the PLAN — a reaction
+   plan or a manufacturing plan — not of a job.** That is the whole answer to the modelling question
+   this item has been sitting on. One box per plan, chosen once, inherited by every job in it;
+   nothing is configured per job, and the "shared batch has nowhere to deliver" problem disappears
+   because the batch belongs to one plan by construction. It also means the setting is one control
+   on the plan, not a column on `pp_industry_schedule` rows, and it applies to both services rather
+   than being an Industry-only concept.
 2. **Print locking ACROSS orders.** Per-order copy RUNS are consumed correctly, but two orders
    sharing one BPO each see it and may each schedule a concurrent job off it. Fixing it properly
    means making the print a scheduling resource rather than a per-plan cap — bigger than it looks,
@@ -320,25 +321,6 @@ flag (`industry_per_order_plans`) exists *because* of #1 — a job outputs to ex
 so a shared batch has nowhere to deliver — which means the flag currently ships the half that costs
 ISK without the half that justifies it. Do them together, or neither; see item 15 for the rung
 decision in the meantime.
-
-## 2e-residual. No browser tests for any frontend behaviour (2026-08-03)
-
-`test_nav_gating.py` (17 assertions) is entirely string matching against CSS and JS — weak by
-construction (renaming a class breaks it, an overridden rule passes it) and the only guard on nav
-gating. It is a proxy, not a proof. The `lint-js` CI job is the first real step; a browser harness
-is still absent, and introducing one was **dismissed** for `api()`/`toast()` specifically (see
-Closed) on the grounds that manual testing catches the residual breakages at the expected rate.
-
-Reopen this if that stops being true — a second UI regression that a browser test would have caught
-is the evidence to act on.
-
-## 3. Hand-built / custom colony layouts
-
-Hybrid-colony detection shipped. Broader tracking of player-designed layouts (colonies that don't
-match any template we generate) is still unscoped.
-
-- **First step:** decide what the feature would actually *do* for the user before building anything
-  — detection alone has no action attached to it today.
 
 ---
 
