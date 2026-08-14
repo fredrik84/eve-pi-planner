@@ -33,6 +33,7 @@ Find a section: `grep -n '^## ' docs/reactions.md` and read from that line — t
 - **The stage list is Manufacturing's pipeline (`reactions_stage_pipeline`)** — why the two tabs share a grid, and why rows are characters
 - **Pricing: a sell-order price is not achievable profit** — the pricing rule that governs every profit figure shown for reaction goods
 - **Reactions owns its cadence and its paste (`reactions_cadence`)** — the two places Manufacturing flags used to decide what a Reactions user could reach, and the one stored rhythm behind both cadence controls
+- **Idea, not backlog: pipelining a chain's stages** — why stage 2 cannot start early, and what a real fix would have to change
 - **Idea, not backlog: make the ranking aware of what you already hold** — why the LP ignores your surplus, why it is not simply a bug, and what a fix would have to touch
 - **Where the rest lives** — pointers to reaction content that belongs to another service
 
@@ -458,7 +459,35 @@ above each (`_level_options`). An option is discarded if it needs more reactors 
 or if it overshoots that requirement by more than **50%**. What is left is scored by
 `_choose_stage_layout`, searching over target
 DURATIONS rather than run counts — which is what makes alignment expressible — in the user's stated
-priority order (TODO 28):
+priority order.
+
+**The priority order itself, stated by the user on 2026-08-08. This GOVERNS: optimise strictly in
+this sequence, and never trade a higher one away for a lower one.**
+
+1. **Even distribution of job runs per slot per product.** Every job of a product carries the SAME
+   run count — one number to read and type, wherever it is installed.
+2. **Slot efficiency.** Use the reactors that are free. Idle capacity while a step drags on is the
+   failure mode, not a saving.
+3. **Aligned end time.** The jobs of a stage should land together, so one login collects them.
+4. **Shortest total run time.** Last. Makespan is not worth breaking any of the three above.
+
+Three attempts on 2026-08-08 failed by optimising these out of order, and the shape of each failure
+is worth keeping: the even per-host split (reverted) chased (1) across characters and ignored (2),
+giving a 2-slot character the same 250 runs as a 10-slot one and a single step of **14 days**; the
+uniform per-host job layout (reverted with it) chased (1) by capping every host to the smallest
+host's slots, sacrificing (2) harder. `level_product_runs` satisfies all four by solving for a
+target duration per STAGE across the slots actually available, rather than per host.
+
+**Closed by the user 2026-08-14 — two chains on one character deliberately do NOT share a job.**
+Where two chains each run 60 runs of the same product on one character, the output is fungible and
+would merge into one 120-run job, saving a reactor. **It is kept as two.** The reason is tracking,
+not arithmetic: the user follows jobs against the chain they belong to, and colocating two chains'
+output in one job makes a plan they cannot keep straight — *"it's too messy to keep track of it if
+we combine them."* Effort is the constraint the whole tool optimises inside, and a reactor is the
+cheaper thing to spend. **Do not "fix" this by merging;** it would also require a row to belong to
+more than one chain, which `chain_stage_state`'s per-chain readiness read cannot express.
+
+The scoring inside a stage, then, is:
 
 1. does the stage **land together** (every job finishing within 10% of the last)? A layout that
    lands wins outright, whatever it overshoots;
@@ -1086,6 +1115,28 @@ own nothing" — the safe direction (a cap that does not bind never blocks a pla
 formula panel says so rather than leaving a user to wonder why their cap never binds. That is a UI
 note, deliberately, not a rewrite: making those reads standalone is a much larger change with no
 reported cost behind it.
+
+## Idea, not backlog: pipelining a chain's stages
+
+**Not planned. Parked by the user 2026-08-14: "keep it per stage for now."** Recorded here rather
+than in TODO.md so the reasoning survives without costing a backlog read.
+
+**The premise correction first, so nobody re-derives it:** within ONE chain, stage 2 cannot start
+before stage 1 finishes — EVE requires the materials to exist at install time, and stage 1's output
+IS stage 2's input. That is not our sequencing choice, and it is why `_concurrent_load` counts the
+worst tier rather than summing rows.
+
+**The idea.** Split stage 1 into N batches; when the first batch completes, start stage 2 on that
+output while batches 2..N are still running. It is the honest version of "run stages at the same
+time" and it is real throughput, not a presentation change.
+
+**Why it is parked.** It needs partial-output tracking and it changes what an assignment row means —
+today a row is a whole stage's work for a chain, and pipelining makes it a fraction of one. The
+cheaper parts of the same complaint already shipped (one slot model behind `reactions_parallel_stages`,
+widening into idle reactors, and held intermediates consumed via `reactions_use_stock`), and those
+are what the stage-at-a-time model buys. Only revisit this if per-stage scheduling stops satisfying
+the original complaint — *"we should run multiple stages at the same time if we have slots to spare"*
+— which it currently does.
 
 ## Idea, not backlog: make the ranking aware of what you already hold
 

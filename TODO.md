@@ -71,109 +71,6 @@ this entry is a recommendation, not a change. First step: pick one.
   reaction-*named* but sits in the Industry group and governs Industry's behaviour, so it rolls out
   with Industry (§14), not with this. Noted because a reader will go looking for it.
 
-## 21d. Pipelining a chain's stages (2026-08-07, open)
-
-**The premise correction first, so nobody re-derives it:** within ONE chain, stage 2 cannot start
-before stage 1 finishes — EVE requires the materials to exist at install time, and stage 1's output
-IS stage 2's input. That is not our sequencing choice, and it is why `_concurrent_load` counts the
-worst tier rather than summing rows.
-
-21a-c all shipped 2026-08-07 (one slot model behind `reactions_parallel_stages`, widening into idle
-reactors, and held intermediates consumed via `reactions_use_stock`) — detail in
-`docs/reactions.md`, `test_parallel_stages.py` and `test_reaction_stock.py`. **Known edge, accepted:**
-no reservation ledger, so two separate planning runs can promise the same stock twice; within one
-plan they cannot.
-
-**What is left.** Split stage 1 into N batches; when the first completes, start stage 2 on that
-output while batches 2..N still run. The honest version of "run stages at the same time", and real
-throughput — but it needs partial-output tracking and changes what an assignment row means.
-**Only worth doing if 21a-c have not satisfied the original complaint** — check that first.
-
-## 28. Reaction job layout — the priority order, stated by the user (2026-08-08)
-
-**This ordering governs. Optimise strictly in this sequence, and do not trade a higher one away for
-a lower one:**
-
-1. **Even distribution of job runs per slot per product.** Every job of a product carries the SAME
-   run count — one number to read and type, wherever it is installed.
-2. **Slot efficiency.** Use the reactors that are free. Idle capacity while a step drags on is the
-   failure mode, not a saving.
-3. **Aligned end time.** The jobs of a stage should land together, so one login collects them.
-4. **Shortest total run time.** Last. Makespan is not worth breaking any of the three above.
-
-Three attempts on 2026-08-08 all failed by optimising these out of order, and the shape of each
-failure is worth keeping:
-
-- `level_stage_runs` (kept) gives one run count per product per stage **within a character** — (1),
-  but only locally, so numbers still differ across characters.
-- The even per-host split (**reverted**) chased (1) across characters by giving every host the same
-  runs. It ignored (2): a 2-slot character got the same 250 runs as a 10-slot one and a single step
-  hit **14 days**.
-- The uniform per-host job layout (**reverted with it**) chased (1) again by capping every host to
-  the smallest host's slots — (2) sacrificed even harder.
-
-**The shape that satisfies all four, and what to build next.** Solve for a target duration `D` per
-STAGE across the slots actually available, rather than per host:
-
-    jobs_i   = ceil(total_runs_i * cycle_i / D)      # per product in the stage
-    runs_i   = ceil(total_runs_i / jobs_i)           # every job of product i carries this — (1)
-    choose the smallest D with sum(jobs_i) <= slots_available   # fills the slots — (2)
-
-Every product's jobs are then equal (1), the whole slot pool is used (2), every job in the stage
-ends at ~D (3), and D is minimised last (4). `tidy_runs` rounds `runs_i` at the end.
-
-**The one real constraint to respect:** a chain's intermediate feeds the stage above it ON THE SAME
-CHARACTER — this package does not model shipping half-finished goods between hangars — so the
-per-stage solve distributes JOBS across characters but a chain's stages must stay together. That is
-also what makes the "one number everywhere" goal reachable: the run count is a property of the
-product, the character only decides where the jobs sit.
-
-**BUILT 2026-08-08 as `level_product_runs` (`reactions_level_runs`).** The D-per-stage solve above,
-with the per-chain floor made explicit: a candidate run count `r` costs chain *g* `ceil(T_g / r)`
-jobs, and only counts if every chain's character has the reactors for it, the product overshoots by
-no more than 50%, and no single chain is handed more than 3x what it asked for. Scored spread → slots → surplus → typeable, searching over target
-durations. On the reported plan (375 / 360 / 360 / 300 of Carbon Fiber split 3/4/4/4) it lands on
-**125 runs everywhere in 12 jobs** instead of 125/90/90/75 in 15. Two things were added to the
-shape above and are load-bearing:
-
-* **a ceiling: no job may run longer than the longest job already in that stage.** Minimising slots
-  with no ceiling always ends at "one enormous job per character" — here four jobs of 375 runs, 3×
-  the runtime, eleven reactors idle. (4) is last in the list, not absent.
-* **surplus is spent to LAND a stage or take a reactor back, and for nothing else** — the user's
-  own rule, *"it's fine to build a bit too much if it doesn't line up."* A 15% budget could not buy
-  one number for a small product at all (Oxy-Organic Solvents stayed at 35 and 18 runs), and
-  scoring raw spread instead of a landed/not-landed flag bought a little alignment for a lot of goo.
-* **the top row of a chain is never touched**, and a chain never loses its last row of a product —
-  `chain_stage_state` reads readiness per chain, so a chain that stopped mentioning a product it is
-  waiting on would call the stage above ready while those jobs ran.
-
-**Job length is the player's call — but check what actually exists before building on it
-(corrected 2026-08-13).** This entry described `pp_reaction_job_target` / `get_job_target` /
-`/api/reactions/job-target` with `days`/`runs`/`auto`. **None of that is in the code.** The setting
-that does exist is `max_reaction_job_days` (`app/industry/settings.py`, Industry settings, behind
-`industry_job_length_policy`): a ceiling in DAYS on one reaction job, default `None` — deliberately,
-since guessing a cadence for somebody splits their batches into jobs they never asked for. It is
-read by the Industry planner (`graph.py` → `params.max_reaction_job_hours`). **Corrected 2026-08-14:
-the Reactions order allocator now reads it too** — `_allocate_and_insert` takes the cadence at quote
-time, and Reactions owns the setting behind `reactions_cadence` rather than borrowing an Industry
-flag. The gap 28b item 2 named is closed.
-
-**Compliance against the four priorities, as of 2026-08-14: 1, 2 and 3 are met; 4 is met by
-construction (it is last, and the ceiling exists to stop it winning).** One gap remains, and it is
-the only thing standing between the current behaviour and the stated target:
-
-**Two chains on ONE character should share a job.** The output is fungible and lands in one hangar,
-so two chains each holding a 60-run job of the same product ought to be a single 120-run job. Today
-they are two rows, which costs a reactor and shows the player two numbers where one would do — a
-direct hit on priority (1) *and* (2). It is not a scoring bug: `level_product_runs` cannot merge them
-because a row belongs to exactly one chain, and `chain_stage_state` reads readiness per chain, so
-merging without the model change would make a chain call a stage ready while another chain's jobs
-were still running.
-
-**The fix is the `chain_id` rework** — a row that can belong to more than one chain — which item 22
-also wanted before it shipped around the problem. That is the next thing to build here, and it is
-the honest answer to "how close are we": close, with one structural change left.
-
 ## 18. Is all of this too complicated? — storage shape and precomputation (2026-08-05, LARGE)
 
 **Priority: soonish** (user, 2026-08-14) — not urgent, but not to be left to drift either.
@@ -289,8 +186,12 @@ findings: **nothing in the product states the path.** The How-it-works page is P
 only (one mention of "Planetary Industry", none of manufacturing or reactions), and the Industry
 onboarding covers setup and stops. Steps 1-9 exist nowhere a user can read them.
 
-Blocked behind item 14 rather than open: writing the tab's workflow into a page for an audience that
-cannot open the tab is work in the wrong order. Pick the rung first.
+**Unblocked and approved by the user 2026-08-14: build How-it-works pages for Manufacturing and
+Reactions, the way Planetary Industry already has one.** It was previously held behind item 14 on
+the grounds that writing a tab's workflow for an audience that cannot open the tab is work in the
+wrong order; the user is handling feature access separately, so that objection no longer holds. The
+source material exists — steps 1-9 are already written in `docs/industry-workflow-user.md`; what is
+missing is a place in the PRODUCT to read them.
 
 ## 2f-residual. A job's output container, and prints across orders (2026-08-05)
 
