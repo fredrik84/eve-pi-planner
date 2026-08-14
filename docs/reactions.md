@@ -610,22 +610,36 @@ On the reported stage (Carbon Fiber 1045, Thermosetting Polymer 1100, Oxy-Organi
 cannot reach the shared count keeps its own — one number is a preference, not a rule — and
 `_stage_affordable` plus `_level_options`' budget still bound the goo any of it spends.
 
-**Landing under a whole day, not just past one.** Reported as a small matter and treated as one:
-a job of 7d07h is worse than one of 6d23h, because the player comes back on a whole-day rhythm,
-finds it unfinished, and slips a few more hours every cycle. `_cadence_drift` scores a duration 0
-when it lands on or within `_CADENCE_GRACE` (3h) under a day boundary and 1 otherwise, ranked after
-`numbers` and before the surplus — a usability property like the shared count is.
+**Which login you collect it on (`_collection_slot`).** Reported as a small matter: a job of 7d07h
+is worse than one of 6d23h, because the player comes back on a whole-day rhythm, finds it
+unfinished, and slips a few more hours every cycle. What a run count really costs in time is
+therefore not its duration but the SESSION it lands in — `ceil((hours - _CADENCE_GRACE) / 24)`,
+where the 3h grace is the slack a player who is not punctual to the minute already absorbs. Ranked
+after `numbers` and before the surplus, and scored ascending: collected sooner wins.
 
-It needs `_seed_cadence_counts` to fire at all. A product only ever proposes `ceil(total/j)` and the
-tidy rounding above it, so Carbon Fiber offers 105 and 110 and nothing between; at 1.53 h/run that is
-7d00h18m with no 6d23h alternative in the set. The seeder adds, for each candidate, the largest count
-that costs the SAME jobs and still lands under a boundary — searching down only as far as
-`ceil(total/j)`, so coverage never drops.
+**The first cut of this was a 0/1 flag, and it cost real goo (fixed 2026-08-14).** `_cadence_drift`
+scored a duration 0 when it landed within the grace UNDER a day boundary and 1 otherwise — so
+7d00h18m scored exactly as badly as 7d16h, and the scorer, ranking that ahead of surplus, would pay
+to escape the 1. Measured over 630 layouts it moved the pick in **81** of them at a median **4.2%**
+and worst **14.1%** extra surplus; the sharpest case bought **90 extra runs of goo to stretch a job
+from 7d00h18m to 7d23h** — the same login, so the goo bought nothing at all. And surplus here is not
+free stock: it is intermediate material that cannot be sold against a customer order, so it comes
+straight off the margin.
 
-**It is ranked below the job count, so it will not always fire, and that is deliberate.** On the
-reported stage it cannot: Thermosetting Polymer needs 1100 runs over 10 jobs, `ceil(1100/10)` is
-exactly 110, and 109 × 10 = 1090 does not cover it — so landing under 7 days there costs an
-eleventh job. A reactor is worth more than 18 minutes of drift.
+The session model has no such cliff to escape. 7d00h18m and 6d23h are one number, and once two run
+counts share a session the term is equal and **surplus decides**. The same 630 layouts now differ
+from the pure-cheapest pick in **6** cases, none of which costs an extra job, none of which is
+collected later, and none of which spends a single extra unit of goo — the rhythm preference now
+only fires where it is free.
+
+`_seed_cadence_counts` went with it. It existed to manufacture a run count just under a boundary
+(109 where a product proposed only 105 and 110), which is only worth doing if stretching to a
+boundary is worth paying for. Under the session model the cheapest count at a given job count is
+already collected no later than any larger one, so every count it could add was dominated on both
+axes before it was scored.
+
+**It is still ranked below the job count, so it will not always fire, and that is deliberate.** A
+reactor is worth more than a few hours of waiting.
 
 **The cadence is a real ceiling, and it is the setting you already had.** Reported: *"I'd prefer to
 be able to schedule my jobs on a Saturday and handle the next stage a week later on a Saturday."*

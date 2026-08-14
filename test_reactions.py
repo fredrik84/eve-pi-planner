@@ -429,26 +429,27 @@ def test_a_stage_settles_on_one_run_count_across_its_products() -> bool:
         ok &= check(o["jobs"] * o["runs"] - need <= need * 0.5,
                     f"{k}'s overshoot stays inside the levelling budget")
 
-    # A job that lands 7d07h is worse than one at 6d23h: the player comes back on a whole-day
-    # rhythm, finds it unfinished, and slips further every cycle. Preferred, but ranked below the
-    # job count — it is not worth an extra reactor.
-    from app.reactions.jobs import _cadence_drift, _seed_cadence_counts
-    ok &= check(_cadence_drift(168) == 0 and _cadence_drift(165) == 0,
-                "landing on or just under a whole day is what we want")
-    ok &= check(_cadence_drift(175) == 1, "and 7 hours past a boundary is what we don't")
-    ok &= check(_cadence_drift(0) == 0, "a zero-length job is not a drift")
+    # A job is collected on a login, and logins fall on a day rhythm — so what a run count costs in
+    # time is the SESSION it lands in, not its raw duration. 7d07h is not collected until day 8;
+    # 6d23h is collected on day 7. Preferred, but ranked below the job count — it is not worth an
+    # extra reactor.
+    from app.reactions.jobs import _collection_slot
+    ok &= check(_collection_slot(165) == 7 and _collection_slot(168) == 7,
+                "6d23h and 7d00h are collected on the same login")
+    ok &= check(_collection_slot(175) == 8, "and 7 hours past it is not collected until the next")
+    ok &= check(_collection_slot(0) == 0, "a zero-length job is collected at once")
 
-    # The preference can only fire if such a count is a CANDIDATE, and it never is on its own: a
-    # product proposes ceil(total/j) and the tidy rounding above it, so 110 is offered and 109 is
-    # not. At 1.53 h/run that is the difference between 7d00h18m and 6d23h.
-    seeded = _seed_cadence_counts(
-        {"X": {"cycle": 1.53, "total": 1045,
-               "options": _level_options(1045, cap=11, max_runs=100000)}}, ["X"])
-    runs = {o["runs"] for o in seeded["X"]["options"]}
-    ok &= check(109 in runs, "the same-jobs count that lands under a day boundary is seeded in")
-    for o in seeded["X"]["options"]:
-        ok &= check(o["jobs"] * o["runs"] >= 1045,
-                    f"seeded count {o['runs']} x {o['jobs']} still covers the requirement")
+    # The regression this shape exists to prevent (2026-08-14). The old 0/1 flag read 7d00h18m as
+    # no better than 7d16h, so a stage would buy 90 runs of surplus goo to stretch a job from
+    # 7d00h18m to 7d23h — both collected on the SAME login, so the goo bought nothing but stock the
+    # account cannot sell against an order.
+    ok &= check(_collection_slot(168.3) == _collection_slot(168.0),
+                "18 minutes past a boundary is still that day's login, not the next")
+    stretch = _choose_stage_layout(
+        {"X": {"cycle": 1.53, "total": 640, "options": _level_options(640, cap=8, max_runs=125)}},
+        prefer_tidy=True)["X"]
+    ok &= check(stretch["runs"] == 110,
+                f"a stage takes the cheaper count inside the session it is collected on (got {stretch['runs']})")
 
     # A product that genuinely cannot reach the shared number keeps its own count rather than
     # being dragged to one it cannot afford — one number is a preference, not a rule.
@@ -537,7 +538,7 @@ def test_the_cadence_ceiling_is_measured_in_real_time_not_sde_time() -> bool:
     common factor cancels. The cadence ceiling was the first ABSOLUTE consumer of those durations, and
     a common factor does not cancel against seven days: at 3.00 SDE hours against a real 1.4039, the
     ceiling allowed 56 runs where the truth is 119."""
-    from app.reactions.jobs import _level_options, _cadence_drift
+    from app.reactions.jobs import _level_options, _collection_slot
 
     RAW, REAL = 3.00, 1.40389
     MULT, CAD = REAL / RAW, 7 * 24.0
@@ -556,9 +557,9 @@ def test_the_cadence_ceiling_is_measured_in_real_time_not_sde_time() -> bool:
     hi = min(_level_options(1045, cap=30, max_runs=after), key=lambda o: o["jobs"])["jobs"]
     ok &= check(lo == 19 and hi == 9, f"which halves the jobs for one product ({lo} -> {hi})")
 
-    # The day-boundary preference has to measure REAL time too, or it lands on the wrong boundary.
-    ok &= check(_cadence_drift(119 * RAW * MULT) == 0,
-                "a 119-run job scores as landing under a whole day in REAL hours")
+    # The collection rhythm has to measure REAL time too, or it counts the wrong login.
+    ok &= check(_collection_slot(119 * RAW * MULT) == 7,
+                "a 119-run job is collected on day 7 in REAL hours")
     # A brand new account has never reacted, so there is nothing to measure — and the first
     # suggestion is the one that matters. Deriving the bonus instead has over-claimed every time it
     # was tried, so the answer is skills alone rather than a number that cannot be proved.
@@ -585,7 +586,7 @@ def test_the_cadence_ceiling_is_measured_in_real_time_not_sde_time() -> bool:
     # ...and the two measurements genuinely disagree — a run count that lands under a boundary in
     # real hours frequently does not in SDE hours, which is a different job being preferred.
     disagree = [r for r in range(20, 200)
-                if _cadence_drift(r * RAW * MULT) != _cadence_drift(r * RAW)]
+                if _collection_slot(r * RAW * MULT) != _collection_slot(r * RAW)]
     ok &= check(len(disagree) > 40,
                 f"real and SDE hours pick different jobs for {len(disagree)} of 180 run counts")
     return ok

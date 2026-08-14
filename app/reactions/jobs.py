@@ -955,17 +955,24 @@ def _level_options(total: int, cap: int, max_runs: int, budget: float = _LEVEL_B
 
 
 
-def _cadence_drift(hours: float) -> int:
-    """0 when a job lands on, or just under, a whole-day boundary — 1 otherwise.
+def _collection_slot(hours: float) -> int:
+    """Which whole-day session the player actually COLLECTS this job in.
 
-    `slack` is how long after the job finishes the next boundary falls: 0 means it lands exactly on
-    one, a small number means just under it, and a large one means it stepped past the last boundary
-    and the player is waiting most of a day for nothing. 6d23h scores 0; 7d07h scores 1.
+    A job is collected on a login and logins fall on a day rhythm, so what a run count really costs
+    in time is not its duration but the session it lands in. 6d23h and 7d00h18m are both collected
+    on day 7 — `_CADENCE_GRACE` is the slack a player who is not punctual to the minute already
+    absorbs — while 7d07h is not collected until day 8 and the reactor idles until then.
+
+    Scored ascending: a layout collected in an earlier session wins.
+
+    **The point is as much what it does NOT do.** This replaced a 0/1 "does it land just under a
+    boundary" flag (2026-08-14), which read 7d00h18m as no better than 7d16h and would then pay to
+    stretch a job from 7d00h to 7d23h to score the point — real goo for a job collected on the same
+    login. Once two counts share a session, this is equal and the surplus term below decides.
     """
     if hours <= 0:
         return 0
-    slack = (_CADENCE_H - (hours % _CADENCE_H)) % _CADENCE_H
-    return 0 if slack <= _CADENCE_GRACE else 1
+    return math.ceil(max(0.0, hours - _CADENCE_GRACE) / _CADENCE_H)
 
 
 
@@ -1145,43 +1152,6 @@ def _reaction_cadence_hours(context_id: int) -> float:
         return 0.0
 
 
-def _seed_cadence_counts(products: dict, keys: list, time_mult: float = 1.0) -> dict:
-    """Offer, alongside each candidate, the largest run count that costs the SAME jobs and still
-    lands under a whole-day boundary.
-
-    Without this the cadence preference can never fire. A product's candidates come from its own
-    requirement — `ceil(total/j)` and the tidy rounding above each — so Carbon Fiber offers 105 and
-    110 and nothing between. At 1.53 h/run, 110 runs is 7 days and 18 minutes: a player on a
-    whole-day rhythm comes back to an unfinished job and slips a little further every cycle. 109 is
-    6 days 23 hours, costs the same ten jobs, and needs only to be a candidate to be chosen.
-
-    Never lowers the job count's coverage: `r'` is searched down only as far as `ceil(total/j)`, so
-    the same number of jobs still covers the requirement.
-    """
-    out = dict(products)
-    for k in keys:
-        p = products[k]
-        cyc, total = p.get("cycle") or 0.0, int(p.get("total") or 0)
-        if cyc <= 0 or total <= 0:
-            continue
-        extra, seen = [], {o["runs"] for o in p["options"]}
-        for o in p["options"]:
-            if _cadence_drift(o["runs"] * cyc * time_mult) == 0:
-                continue                       # already lands where we want it
-            floor = max(1, -(-total // max(1, o["jobs"])))
-            for r in range(int(o["runs"]) - 1, floor - 1, -1):
-                if _cadence_drift(r * cyc * time_mult) == 0:
-                    if r not in seen and -(-total // r) == o["jobs"]:
-                        made = o["jobs"] * r
-                        extra.append({"runs": r, "jobs": o["jobs"], "surplus": made - total,
-                                      "tidy": _typeable(r)})
-                        seen.add(r)
-                    break
-        if extra:
-            out[k] = {**p, "options": sorted(p["options"] + extra, key=lambda o: o["runs"])}
-    return out
-
-
 def _choose_stage_layout(products: dict, prefer_tidy: bool = False,
                           time_mult: float = 1.0) -> dict:
     """Pick one run count per product so the whole STAGE lands together.
@@ -1211,7 +1181,6 @@ def _choose_stage_layout(products: dict, prefer_tidy: bool = False,
     keys = [k for k, p in products.items() if p.get("options")]
     if not keys:
         return {}
-    products = _seed_cadence_counts(products, keys, time_mult)
     targets = sorted({o["runs"] * products[k]["cycle"] for k in keys for o in products[k]["options"]})
     # ONE run count for the whole stage, offered as a candidate layout in its own right rather than
     # left to fall out of the per-product picks — because it never does. Each product picks the
@@ -1256,11 +1225,12 @@ def _choose_stage_layout(products: dict, prefer_tidy: bool = False,
         # stage. Fewer, fuller jobs is still the whole point ("save slots, lower login cadence") and
         # the budget above bounds the surplus any of this can spend. Ranking the goo first is the
         # trap; docs/reactions.md has what it cost.
-        # Cadence fit sits after the numbers you type and before the goo: it is a usability
-        # property like `numbers` is, and the same budget bounds what it can spend.
-        drift = max(_cadence_drift(d_ * time_mult) for d_ in durs)
-        score = ((landed, jobs, numbers, drift, untidy, surplus, spread) if prefer_tidy
-                 else (landed, jobs, numbers, drift, surplus, untidy, spread))
+        # Which login the stage is collected on — after the numbers you type, before the goo. A
+        # session earlier is worth surplus; a longer job inside the SAME session is not, which is
+        # why this is the collected slot and not the raw duration.
+        slot = max(_collection_slot(d_ * time_mult) for d_ in durs)
+        score = ((landed, jobs, numbers, slot, untidy, surplus, spread) if prefer_tidy
+                 else (landed, jobs, numbers, slot, surplus, untidy, spread))
         if best_score is None or score < best_score:
             best_score, best_pick = score, pick
 
@@ -1286,11 +1256,12 @@ def _choose_stage_layout(products: dict, prefer_tidy: bool = False,
         untidy = sum(0 if pick[k]["tidy"] else 1 for k in keys)
         landed = 0 if spread <= _ALIGN_TOL * max(durs) else 1
         numbers = len({pick[k]["runs"] for k in keys})
-        # Cadence fit sits after the numbers you type and before the goo: it is a usability
-        # property like `numbers` is, and the same budget bounds what it can spend.
-        drift = max(_cadence_drift(d_ * time_mult) for d_ in durs)
-        score = ((landed, jobs, numbers, drift, untidy, surplus, spread) if prefer_tidy
-                 else (landed, jobs, numbers, drift, surplus, untidy, spread))
+        # Which login the stage is collected on — after the numbers you type, before the goo. A
+        # session earlier is worth surplus; a longer job inside the SAME session is not, which is
+        # why this is the collected slot and not the raw duration.
+        slot = max(_collection_slot(d_ * time_mult) for d_ in durs)
+        score = ((landed, jobs, numbers, slot, untidy, surplus, spread) if prefer_tidy
+                 else (landed, jobs, numbers, slot, surplus, untidy, spread))
         if best_score is None or score < best_score:
             best_score, best_pick = score, pick
 
