@@ -1041,11 +1041,11 @@ def _reaction_time_mult(context_id: int, _derive: bool = True) -> float:
     #   * `build_structures()[].rx_bonus.te` is the structure's BEST case, "what it gives a job its
     #     rigs actually cover" (app/markets.py) — 67% on a Tatara whose Carbon Fiber jobs get 44.9%.
     #     It would have allowed 199-run jobs: 11.6 real days against a 7-day ceiling.
-    # The honest source is `app.industry.structures.route_job`, resolved per PRODUCT against the
-    # produced type's rig group, the same way the rest of the app already prices a job. Until that
-    # is wired, skills alone: it under-claims, which makes jobs look longer, which allows fewer runs
-    # and lands INSIDE the window. Too many short jobs is a bad suggestion; a job that overruns the
-    # cadence is a broken promise.
+    #   * routing per produced-type group through `app.industry.structures.route_job` — the call the
+    #     rest of the app prices a job with, and still 67% against that measured 44.9%.
+    # So skills alone: it under-claims, which makes jobs look longer, which allows fewer runs and
+    # lands INSIDE the window. Too many short jobs is a bad suggestion; a job that overruns the
+    # cadence is a broken promise. See `reaction_time_mult_for` for the full account.
     if not _derive:
         return 0.0                  # caller wants measurement only, and there is none
     return _reaction_skill_mult(context_id)
@@ -1087,74 +1087,30 @@ def _remember_time_mult(context_id: int, mult: float) -> None:
 
 
 
-def _routed_reaction_time_mult(context_id: int, type_id: int) -> float:
-    """The structure time multiplier a job making `type_id` would ACTUALLY get, 0.0 if unknowable.
-
-    This is the piece that makes a first suggestion right. A brand new account has never run a
-    reaction, so there is nothing to measure — and *"if they start jobs from the suggestion it'll be
-    either wrong, or they have done all the work manually."*
-
-    Two cruder sources were tried and both over-claimed, in the direction that overruns the cadence:
-    `struct_time_pct` is the MANUFACTURING facility's number (62% where reactions get 44.9%), and
-    `build_structures()[].rx_bonus.te` is the structure's BEST case over any rig it carries (67% on
-    a Tatara whose Carbon Fiber jobs get 44.9%) — that one would have allowed 199-run jobs, 11.6
-    real days against a 7-day ceiling.
-
-    `route_job` is the answer the rest of the app already uses to cost and time a job: it resolves
-    the rig bonus against the PRODUCED TYPE'S GROUP (`bonus_for` → `covers`), so a Composite rig
-    does nothing for a job it does not cover. Same call, same sites, same product — so this cannot
-    disagree with what the planner elsewhere says the job will take.
-    """
-    try:
-        from app.markets import build_structures
-        from app.industry.structures import BuildSite, route_job
-        con = get_connection()
-        try:
-            g = con.execute("SELECT group_id FROM types WHERE type_id=?", (int(type_id),)).fetchone()
-        finally:
-            con.close()
-        gid = int(g["group_id"]) if g and g["group_id"] is not None else None
-        sites = []
-        for st in (build_structures(context_id) or []):
-            if st.get("kind") != "structure" or not st.get("build_rx"):
-                continue
-            sites.append(BuildSite(
-                key=f"s:{st.get('id')}", name=st.get("name") or "", activity="reaction",
-                hull=st.get("hull"), security=st.get("security"),
-                me_rig=int(st.get("rx_me_rig") or 0), te_rig=int(st.get("rx_te_rig") or 0),
-                me_families=tuple(st.get("rx_me_rig_groups") or ()),
-                te_families=tuple(st.get("rx_te_rig_groups") or ()),
-                system_id=st.get("system_id")))
-        if not sites:
-            return 0.0
-        pick = route_job(sites, gid)
-        tm = float((pick or {}).get("time_mult") or 0.0)
-        return tm if 0.0 < tm <= 1.0 else 0.0
-    except Exception:
-        return 0.0
-
-
 def reaction_time_mult_for(context_id: int, type_id: int | None = None) -> float:
-    """The time multiplier for ONE product: measured if we have ever seen a job, otherwise routed.
+    """The time multiplier for ONE product: measured if we have ever seen a job, else skills alone.
 
-    Measurement still wins — it is the only source that cannot be wrong about the structure the
-    player really reacts in. Routing is what answers the account that has not reacted yet, and it
-    is per PRODUCT because the rig bonus is.
+    `type_id` is accepted because the bonus really is per PRODUCT — the rig covers a group, not a
+    hangar — but nothing here reads it yet: there is no per-product source that has survived being
+    checked against a measurement.
+
+    **Deriving the structure bonus has been tried three times and over-claimed every time**, always
+    in the direction that overruns the cadence: `struct_time_pct` is the MANUFACTURING facility's
+    number (62% where reactions get 44.9%); `build_structures()[].rx_bonus.te` is the structure's
+    best case over any rig it carries (67% on a Tatara whose Carbon Fiber jobs get 44.9%); and
+    routing through `app.industry.structures.route_job` per produced-type group — the same call the
+    planner costs a job with, so the most faithful of the three — returned that same 67% against a
+    measured 44.9%, which would size a 7-day job at 199 runs, i.e. 11.6 real days.
+
+    Whether the app or the account's saved rig config is wrong is not knowable from here, and the
+    asymmetry decides it: under-claiming costs a suggestion too many short jobs, over-claiming
+    quietly breaks the promise the cadence exists to make. So skills alone. Anything proposed here
+    has to be validated against `_reaction_time_mult` on an account that has really reacted BEFORE
+    it is wired in — that comparison is what retired the routed attempt (removed 2026-08-14).
     """
     measured = _reaction_time_mult(context_id, _derive=False)
     if measured:
         return measured
-    # **Routing is NOT used here, and the measurement is why.** `_routed_reaction_time_mult` is a
-    # faithful implementation of what the app believes the structure gives — it asks `route_job`
-    # exactly as the planner does elsewhere — and on the one account that can be checked it returns
-    # a 67% time reduction against a MEASURED 44.9%. That would size a 7-day job at 199 runs, i.e.
-    # 11.6 real days: the same 40% over-claim as the two cruder sources, arrived at more carefully.
-    #
-    # Whether the app or the account's saved rig config is wrong is not knowable from here, and the
-    # asymmetry decides it: under-claiming costs a suggestion too many short jobs, over-claiming
-    # quietly breaks the promise the cadence exists to make. So skills alone until a routed figure
-    # can be validated against a real measurement — which is now a one-line comparison for any
-    # account that has ever reacted (`reaction_time_mult` vs `_routed_reaction_time_mult`).
     return _reaction_skill_mult(context_id)
 
 

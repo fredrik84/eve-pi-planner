@@ -669,43 +669,36 @@ replaces it, so an idle account still plans at the rate it actually reacts at.
 wrong (2026-08-13).** The plan below was implemented and then backed out of the ceiling, because the
 acceptance test failed on the only account that can check it.
 
-`_routed_reaction_time_mult` asks `structures.route_job` the same question the planner asks when it
-costs and times a job, per product, resolving the rig against the produced type's group. It returns
-a **67%** time reduction for that account's Composite reactions; the same account's real ESI jobs
-measure **44.9%**. A 7-day ceiling built on 67% allows 199-run jobs — **11.6 real days** — which is
-the identical 40% over-claim as `struct_time_pct` and `rx_bonus.te`, arrived at more carefully.
+The routed attempt (`_routed_reaction_time_mult`, removed 2026-08-14 once it had made its point)
+asked `structures.route_job` the same question the planner asks when it costs and times a job, per
+product, resolving the rig against the produced type's group. That per-product resolution is exactly
+what the two cruder attempts got wrong — `struct_time_pct` is the MANUFACTURING facility's number
+(62% where reactions get 44.9%) and `rx_bonus.te` is the structure's best case over any rig it
+carries — so routing was expected to be the one that held.
+
+It did not. It returns a **67%** time reduction for that account's Composite reactions; the same
+account's real ESI jobs measure **44.9%**. A 7-day ceiling built on 67% allows 199-run jobs —
+**11.6 real days** — the identical 40% over-claim as the other two, arrived at more carefully.
 
 Whether the app's rig-coverage model or the account's saved structure config is wrong is not
-knowable from inside this function, and the asymmetry settles what to do meanwhile: under-claiming
+knowable from inside that function, and the asymmetry settles what to do meanwhile: under-claiming
 costs a suggestion too many short jobs, over-claiming quietly breaks the promise the cadence exists
 to make. So the unmeasured case stays on skills alone.
 
-**What the helper now buys is a check.** For any account that has ever reacted, comparing
-`_reaction_time_mult` (measured) with `_routed_reaction_time_mult` (modelled) is a one-line test of
-whether the structure model matches reality — and the first account it was pointed at disagrees by
-22 percentage points. That gap is worth understanding before the model is trusted to size a job,
-and it affects what the Industry planner quotes too, not just this.
+**The 22-point gap is the finding worth keeping, and it is not only this tool's problem** — the same
+`route_job` model is what the Industry planner quotes build times with. Anything that proposes to
+derive this bonus again has to be checked against `_reaction_time_mult` on an account that has
+really reacted BEFORE it is wired into the ceiling; that comparison is what retired the routed
+version, and re-implementing it is a few lines against a model that is already known to disagree.
 
-**The original plan, kept because the reasoning still holds:** Measurement cannot help
-a new account — *"if they start jobs from the suggestion it'll be either wrong, or they have done all
-the work manually"* — so with nothing measured the bonus is ROUTED:
-`reaction_time_mult_for(context_id, type_id)` asks `structures.route_job` the same question the rest
-of the app asks when it costs and times a job, and takes its `time_mult`. Per PRODUCT, because
-`bonus_for` resolves the rig against the produced type's group — a Composite rig does nothing for a
-job it does not cover, so one account-wide number would be wrong for everything outside the rig's
-families.
-
-That distinction is the whole reason the two earlier attempts failed, both by over-claiming:
-`struct_time_pct` is the MANUFACTURING facility's (62% where reactions get 44.9%), and
-`rx_bonus.te` is the structure's best case over any rig it carries (67% on a Tatara whose Carbon
-Fiber jobs get 44.9%) — that one would have allowed 199-run jobs, 11.6 real days against a 7-day
-ceiling. Routing cannot drift that way because it is the same call, the same sites and the same
-product the planner already uses.
-
+**The reasoning for wanting it still holds**, and is why the `type_id` parameter on
+`reaction_time_mult_for` survives: measurement cannot help a new account — *"if they start jobs from
+the suggestion it'll be either wrong, or they have done all the work manually"* — and any real
+answer has to be per PRODUCT, because a Composite rig does nothing for a job it does not cover.
 Measurement still wins where it exists: it is the only source that cannot be wrong about the
-structure the player really reacts in. Routing answers the account that has not reacted yet.
+structure the player really reacts in.
 
-With no structures configured either, it falls back to the skills multiplier alone, which under-claims the bonus on
+Unmeasured, it is the skills multiplier alone, which under-claims the bonus on
 purpose: a smaller claimed bonus means a bigger apparent job, fewer runs allowed, and a job that
 lands inside the ceiling. Over-claiming is the direction that breaks the promise the cadence makes.
 

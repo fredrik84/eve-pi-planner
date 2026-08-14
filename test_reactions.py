@@ -560,11 +560,9 @@ def test_the_cadence_ceiling_is_measured_in_real_time_not_sde_time() -> bool:
     ok &= check(_cadence_drift(119 * RAW * MULT) == 0,
                 "a 119-run job scores as landing under a whole day in REAL hours")
     # A brand new account has never reacted, so there is nothing to measure — and the first
-    # suggestion is the one that matters. `route_job` resolves the rig bonus against the PRODUCED
-    # TYPE'S group, which is why it can be right where the cruder sources were not.
+    # suggestion is the one that matters. Deriving the bonus instead has over-claimed every time it
+    # was tried, so the answer is skills alone rather than a number that cannot be proved.
     import app.reactions.jobs as _J0
-    ok &= check(_J0._routed_reaction_time_mult(777051, 16673) == 0.0,
-                "an account with no reaction structures routes to nothing and says so")
     ok &= check(_J0.reaction_time_mult_for(777051, 16673) <= 1.0,
                 "...and falls back to skills rather than claiming a bonus it cannot prove")
     ok &= check(_J0._reaction_time_mult(777051, _derive=False) == 0.0,
