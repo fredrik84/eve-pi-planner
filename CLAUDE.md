@@ -208,9 +208,11 @@ the file rather than the 404 it is.
 ## Access control
 
 The Planet DB (`pp_planets`) is a single **global, shared** table (no `context_id`). Reads
-(`GET /api/planets`, `/api/constellations`) are open; **writes require a login** —
-`POST /api/planets/import` and `DELETE /api/planets` use `Depends(require_context)`, which 401s
-without a valid `pp_session`. Everything else (`pp_characters`, `pp_profiles`, `pp_shares`,
+(`GET /api/planets`, `/api/constellations`) are open; **`POST /api/planets/import` requires a
+login** (`Depends(require_context)`, 401s without a valid `pp_session`) because the merge path never
+deletes. **`DELETE /api/planets` requires a SITE ADMIN** — it wipes the table for every user, and
+being gated on a mere session is what emptied it on 2026-08-15 (TODO §20). `test_planetdb_guard.py`
+fails on any unscoped global delete that is not admin-gated. Everything else (`pp_characters`, `pp_profiles`, `pp_shares`,
 `pp_plan_config`) is per-`context_id` and session-gated. Only admins write to `pp_planets`
 directly; everyone else goes through the
 [contribution review queue](docs/workflow.md#contribution-review-queue-pp_planet_submissions).

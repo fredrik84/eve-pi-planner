@@ -7,6 +7,20 @@
 // the moment you turned it on (still the same wide row, just wider). Extra dimensions instead
 // expand as a wrapped block BELOW a row when you click it — never adds table width.
 
+// One quiet line saying how the tiles above it were priced. Takes the parts, drops the empty ones
+// and renders nothing at all when none apply, so an account with no unpriced order and no extra
+// costs sees no footnote rather than an empty box.
+//
+// Why this exists: these used to be `.settings-note`, one amber ! box each, and a normal overview
+// stacked FOUR of them under the tiles — none of which the reader could act on, all of which
+// looked exactly like "no system set, so job fees are left out", which they must act on. Warnings
+// only stay legible if they are rare. Anything that is merely basis-of-a-number belongs here; if
+// the figure is WRONG until the reader does something, it is a `.settings-note` instead.
+function _rxFootnote(parts) {
+  const body = (parts || []).filter(p => p && String(p).trim()).join(' ');
+  return body ? `<div class="stat-footnote">${body}</div>` : '';
+}
+
 let _rxOpps = [];
 let _rxSortKey = 'net_profit_instant';
 let _rxSortDir = -1; // -1 = descending
@@ -1348,10 +1362,8 @@ function _renderReactionsDashboard(data) {
   // stand for a figure nobody has supplied.
   const unpriced = data.unpriced_orders || 0;
   const unpricedNote = unpriced
-    ? `<div class="settings-note"><span>${unpriced} order${unpriced === 1 ? '' : 's'} here
-       ${unpriced === 1 ? 'has' : 'have'} no agreed price, so ${unpriced === 1 ? 'it is' : 'they are'}
-       valued at <b>market</b> rather than at the invoice. Set the price on the order for the real
-       figure.</span></div>`
+    ? `${unpriced} order${unpriced === 1 ? '' : 's'} priced at <b>market</b>, not at the invoice —
+       set a price on ${unpriced === 1 ? 'it' : 'them'} for the real figure.`
     : '';
   // Two different costs, and the difference is the point. "Materials committed" is the priced
   // shopping list — what you go and buy — and it is NOT what profit is netted against; the full
@@ -1361,16 +1373,13 @@ function _renderReactionsDashboard(data) {
   // gap is made of rather than leaving a reader to wonder why two cost tiles disagree.
   const costExtras = (data.pending_total_cost || 0) - (data.pending_isk_committed || 0);
   const costNote = costExtras > 0
-    ? `<div class="settings-note"><span>Full cost adds <b>${_fmtIsk(data.pending_job_fees)}</b> job
-       install fees, <b>${_fmtIsk(data.pending_freight)}</b> freight and
-       <b>${_fmtIsk(data.pending_collateral)}</b> courier collateral to the shopping list. Profit is
-       netted against that, not against materials alone.</span></div>`
+    ? `Full cost adds <b>${_fmtIsk(data.pending_job_fees)}</b> fees,
+       <b>${_fmtIsk(data.pending_freight)}</b> freight, <b>${_fmtIsk(data.pending_collateral)}</b>
+       collateral.`
     : '';
   // Output and profit are quoted at BUY orders (instant sell) — what you can actually get today.
   // See CLAUDE.md: a reaction good's sell-order price is not achievable profit.
-  const sellCtx = (data.pending_sell_order_value || 0) > (data.pending_output_value || 0)
-    ? ` · ${_fmtIsk(data.pending_sell_order_value)} at sell orders`
-    : '';
+  const sellCtx = (data.pending_sell_order_value || 0) > (data.pending_output_value || 0);
   const overviewTiles = `<div class="an-stats">
       ${_dashTile(_fmtIsk(data.pending_isk_committed), 'Materials committed')}
       ${_dashTile(_fmtIsk(data.pending_total_cost), 'Full cost (incl. fees, freight, collateral)')}
@@ -1380,8 +1389,10 @@ function _renderReactionsDashboard(data) {
       ${_dashTile(`${usedSlots}<span class="an-of"> / ${data.total_slots}</span>`, 'Slots used')}
       ${_dashTile(String(pendingCount), 'Jobs to install', pendingCount > 0 ? 'an-warn' : '')}
       ${_dashTile(timeLeftVal, timeLeftLbl)}
-    </div>${sellCtx ? `<div class="settings-note"><span>Output is valued at what buy orders pay
-      today${sellCtx} if you list them and wait.</span></div>` : ''}${costNote}${unpricedNote}`;
+    </div>${_rxFootnote([
+      `Valued at <b>buy orders</b> — what you get today${sellCtx ? `; ${_fmtIsk(data.pending_sell_order_value)} at sell orders if you list and wait` : ''}.`,
+      costNote, unpricedNote,
+    ])}`;
 
   // Overall completion of everything currently running — a "total complete" bar under the tiles.
   const progressBar = data.running_progress_pct != null
@@ -1409,10 +1420,9 @@ function _renderReactionsDashboard(data) {
         ${_dashTile(_fmtIsk(_rxLifetime.net_profit), 'Lifetime net profit', 'an-ok')}
         ${_dashTile(_rxLifetime.jobs.toLocaleString(), 'Reactions completed')}
       </div>
-      <div class="settings-note"><span>Jobs that finished before 14 Aug 2026 are recorded at
-      sell-order prices and without freight or collateral; everything since is at buy orders
-      against the full cost. The ledger is forward-only — past entries cannot be repriced — so this
-      total is a mixture that settles as new jobs complete.</span></div>`;
+      ${_rxFootnote(['Mixed basis: jobs before 14 Aug 2026 at sell orders without freight or ' +
+        'collateral, since then at buy orders against full cost. Forward-only, so it settles as ' +
+        'new jobs complete.'])}`;
   }
   if (metricsEl) metricsEl.innerHTML = overviewTiles + progressBar + producedBtn + lifetimeTiles;
 

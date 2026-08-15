@@ -387,6 +387,18 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 }
 .settings-note::before { content: "!"; font-weight: 700; color: #d3bd6a; flex: 0 0 auto; }
 .settings-note b { color: #d8c98d; }
+
+/* How a number above was derived — NOT a warning. The distinction is whether the reader has
+   anything to do: `.settings-note` means the figure is wrong until you act on it ("no system set,
+   so fees are left out"); this means the figure is right and here is its basis. Four of these were
+   wearing the warning styling on the reactions overview, which taught the eye to skip the ! that
+   actually mattered. No icon, no fill, grey not amber — present for whoever asks "priced how?",
+   invisible to everyone else. */
+.stat-footnote {
+  font-size: 11.5px; line-height: 1.5; color: #5a6a88;
+  margin: 6px 0 0; padding: 0 2px;
+}
+.stat-footnote b { color: #7d8dab; font-weight: 600; }
 .settings-account-body { display: flex; flex-direction: column; gap: 14px; }
 .settings-account-hint { font-size: 13px; color: #6a7a9a; line-height: 1.6; margin: 0; }
 
