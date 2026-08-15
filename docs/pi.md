@@ -15,6 +15,7 @@ Find a section: `grep -n '^## ' docs/pi.md` and read from that line — this fil
 - **Shared alert engine (`app/alerts.py`) + configurable thresholds (`app/alert_settings.py`)** — one detection engine, per-kind muting, notification prefs
 - **Fill-factories meter (Dashboard)** — the dashboard meter
 - **Refill "empty pads" toggle** — the m³-capped refill split
+- **Refill to a deadline (`refill_deadline`)** — sizing the drop to a time the player picks, the four ceilings on it, and the two clocks
 - **Dashboard "Up next" agenda** — what needs doing next, at a glance
 - **Skill-ROI advisor (Setup Analysis)** — which skill buys the most output, and the already-enough case
 - **Shared plan links + rich previews (Open Graph)** — `/s/{id}` and how it unfurls in Discord
@@ -337,6 +338,49 @@ checkpoint). The Refill tool's **"Pads emptied at drop-off"** toggle (`_refillIg
 ON) ignores `input_m3` and fills to a clean 30,000 m³ (3 LP), matching the usual "empty the pads when
 you drop the next batch" workflow. Off = subtract the last-scan contents. m³/unit is 0.19 (verified);
 the under-fill people hit was the stale `input_m3`, not the volume constant.
+
+## Refill to a deadline (`refill_deadline`)
+
+"Fill it up" commits the next login to whenever a full pad happens to empty. **Run dry at…**
+(`_refillMode = 'deadline'`, flag `refill_deadline`) inverts that: the player names the time they
+want to come back and `_deadlineSplit` (`static/refill.js`) sizes each factory's drop to land
+there. Quantity = per-factory burn rate × time, then four ceilings, **in this order** — the order
+is the feature, and `test_refill_deadline.js` runs the real function to pin it:
+
+1. **What's already in the pads** (only when "Pads emptied at drop-off" is off) — split across a
+   factory's inputs in ITS burn ratio, since a pad stocked to be eaten together empties together.
+2. **Launchpad space** is a hard ceiling. A deadline that doesn't fit is answered with the soonest
+   one that DOES (`info.capped[].hours`), never with a quantity that won't fit.
+3. **The pasted P1**. With nothing pasted the requirement is shown in full — the question being
+   asked is "how much do I bring", and a table of zeroes doesn't answer it.
+4. **Whole runs** last, so no other ceiling can knock an amount off the step: floored to
+   `units_per_run`, with the time that rounding costs reported (`info.driftH`), never hidden. The
+   `1e-3` tolerance stops a deadline that lands a hair under a whole run from dropping a full one.
+
+A factory already stocked past the deadline is **"skip it, come back in X"** (`info.skip`), not a
+quiet 0 — it is not a refill you should make the trip for. When every factory is skipped the
+readout says so instead of quoting a drop.
+
+**The readout describes the table under it.** Summary hands every factory the *smallest* amount, so
+it runs dry sooner than the per-factory split — `info.uniformEndurance` vs `info.endurance`, picked
+by `_refillView` (which is why `_setRefillView` re-renders the readout too). The gap to the deadline
+is stated without attributing it; `info.roundDriftH` (measured against the post-cap target) is the
+part rounding is actually responsible for, and capacity/stock explain the rest in their own notes.
+
+**Per-factory rate, not plan-total ÷ factories.** `p1_inputs` carries `units_per_day` and
+`units_per_run` per factory (`_run_plan`, `derive_setup_plans`, `_run_fuelblock_plan`; `_p1_batch_sizes`
+in `planner.py` derives the run size — always the P1→P2 input quantity, 40, whatever the final tier,
+because P1→P2 is the first on-planet step). The combined "Current setup" plan sums `consumption`
+across products, so once two products share a P1 a plan total and a share can't be turned back into
+one factory's rate. Plans saved before this shipped fall back to plan-total × share, which is exact
+for a single-product plan. `test_refill_rates.py` pins both halves.
+
+**Two clocks, one stored.** The picker reads and writes **local** time and shows both
+(`Sat 14:00 local · 12:00 EVE` — EVE time is UTC, and a fleet op is quoted in it). What's stored is
+an **instant** (`refillDeadlineMs`, epoch ms): a stored local time silently means something else
+after a DST change. Today that store is `localStorage`, so the deadline doesn't follow the player
+across devices and nothing server-side (the Up-next agenda, `factory_refill` alerts) can quote it —
+see TODO §21b.
 
 ## Dashboard "Up next" agenda
 

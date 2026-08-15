@@ -118,6 +118,25 @@ def _effective_fph(type_id: int, pi_data, override: float | None = None) -> floa
     return sch.get("output_qty", 1) * 3600.0 / ct
 
 
+def _p1_batch_sizes(target_type_id: int, pi_data, out: dict | None = None) -> dict[int, int]:
+    """P1 units consumed per cycle of the basic factory that eats each P1, for the product's
+    whole chain. Whatever the final tier, the first on-planet step is always P1→P2, so this is
+    the granularity a delivered P1 is actually drawn down in — what the refill tool rounds a
+    deadline quantity to (a typeable number beats an exact one, cf. reactions_tidy_runs)."""
+    types, schematics = pi_data["types"], pi_data["schematics"]
+    out = {} if out is None else out
+    sch = schematics.get(target_type_id)
+    if not sch:
+        return out
+    for inp in sch["inputs"]:
+        pid = inp["type_id"]
+        if types.get(pid, {}).get("pi_tier") == 1:
+            out[pid] = max(out.get(pid, 0), int(inp["quantity"]))
+        else:
+            _p1_batch_sizes(pid, pi_data, out)
+    return out
+
+
 def _factory_refill_hours(products_per_day: float, p1_fracs: dict, factories: int) -> float | None:
     """Hours until a factory's 3-launchpad (30,000 m³) P1 input buffer empties at full
     consumption. None if there are no factories / no consumption."""
@@ -516,9 +535,15 @@ def _run_plan(req: PlanRequest, context_id: int) -> dict:
     _nfac = len(_fac_list)
     if _nfac:
         _prod_name = types.get(req.type_id, {}).get("name", "?")
+        # units_per_day/units_per_run are THIS factory's own burn rate and draw-down step — what a
+        # "refill until <deadline>" quantity is computed from. Per-factory rather than plan-total
+        # because a combined multi-product plan can't recover one from the other.
+        _batch = _p1_batch_sizes(req.type_id, pi_data)
         _p1_in = sorted(
             ({"p1_type_id": pid, "p1_name": types.get(pid, {}).get("name", "?"),
-              "share": 1.0 / _nfac, "share_pct": round(100.0 / _nfac)}
+              "share": 1.0 / _nfac, "share_pct": round(100.0 / _nfac),
+              "units_per_day": round(products_per_day * p1_fracs[pid] / _nfac),
+              "units_per_run": _batch.get(pid)}
              for pid in p1_fracs),
             key=lambda x: x["p1_name"])
         for f in _fac_list:

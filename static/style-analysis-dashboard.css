@@ -315,6 +315,14 @@
 .dist-view-btn:hover { background: #1c1630; color: #a888c8; }
 .dist-view-btn.on { background: #2a1c40; color: #c89ce8; }
 
+/* Refill-to-a-deadline: mode toggle + the local/EVE clock beside the picker. */
+.dist-deadline { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.dist-ctl input[type="datetime-local"] { background: #0d0f14; border: 1px solid var(--clr-border);
+  color: var(--clr-text); border-radius: 4px; font-size: 12px; padding: 3px 8px; outline: none;
+  color-scheme: dark; }
+.dist-ctl input[type="datetime-local"]:focus { border-color: var(--clr-focus); }
+.dist-deadline-clock { font-size: 11px; color: var(--clr-text-soft); white-space: nowrap; }
+
 /* ── Characters: per-character rescan + extractor time-left ───────────────────── */
 .pp-char-actions { margin-top: 10px; display: flex; justify-content: center; align-items: center; gap: 10px; flex-wrap: wrap; }
 .pp-char-rescan { background: #1a2a3a; border: 1px solid #2a4a6a; border-radius: 4px;

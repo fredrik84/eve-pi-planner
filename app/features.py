@@ -55,6 +55,11 @@ FEATURE_REGISTRY = [
      "description": "Show the Factory Layout tab — generates importable EVE PI templates for any "
                     "P1–P4 product.",
      "default": False},
+    {"key": "refill_deadline", "label": "Refill to a deadline", "group": "Planner",
+     "description": "On PI Planner → Refill a plan: a \"Run dry at…\" mode that sizes each factory's "
+                    "P1 drop to a time you pick (local, shown alongside EVE time) instead of filling "
+                    "the pads, so the next login lands on your schedule.",
+     "default": False},
     {"key": "redeploy_proximity", "label": "Overlapping extraction ranges", "group": "Setup Analysis",
      "description": "On Setup Analysis: flag when two colonies on the same planet have overlapping "
                     "reachable extraction areas for the same P0 — they compete for the same hotspots "

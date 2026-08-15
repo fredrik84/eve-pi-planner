@@ -19,7 +19,7 @@ from app.planner_store import ensure_profile_tables, _flagged_colonies
 from app.planner_recommendations import _P0_PLANET_TYPES, _p0_col
 from app.planner import (
     _char_footprint, _compute_p1_fracs, _effective_fph, _factory_refill_hours,
-    _p0_available_by_char_multi,
+    _p0_available_by_char_multi, _p1_batch_sizes,
 )
 
 router = APIRouter()
@@ -176,9 +176,15 @@ def derive_setup_plans(context_id: int) -> list[dict]:
         # share of every P1 pool. Attaching p1_inputs lets the Refill tool split a pasted P1
         # stash across these planets — same shape the saved-plan snapshots use.
         share = (1.0 / count) if count else 0.0
+        # Per-factory burn rate and draw-down step, carried per factory because the combined
+        # multi-product entry below sums `consumption` across products — a factory's own rate
+        # can't be recovered from a plan total and a share once two products share a P1.
+        batch = _p1_batch_sizes(tid, pi)
         fac_p1_inputs = [
-            {"p1_type_id": pid, "p1_name": types.get(pid, {}).get("name") or f"#{pid}", "share": share}
-            for pid in p1_fracs
+            {"p1_type_id": pid, "p1_name": types.get(pid, {}).get("name") or f"#{pid}", "share": share,
+             "units_per_day": round(products_per_day * frac / count) if count else 0,
+             "units_per_run": batch.get(pid)}
+            for pid, frac in p1_fracs.items()
         ]
         for f in g["factories"]:
             f["p1_inputs"] = fac_p1_inputs

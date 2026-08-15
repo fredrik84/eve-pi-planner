@@ -1543,7 +1543,10 @@ function _buildPlanSnapshot(data) {
         factories.push({
           loc: `${a.character_name} · ${f.system}${f.planet_num != null ? ' P' + f.planet_num : ''}`,
           product: f.product ? f.product.name : 'Factory',
-          p1_inputs: f.p1_inputs.map(p => ({ p1_type_id: p.p1_type_id, p1_name: p.p1_name, share: p.share })),
+          // units_per_day/units_per_run travel with the factory so a saved plan can still be
+          // refilled to a DEADLINE (this factory's own burn rate, and the step it eats P1 in).
+          p1_inputs: f.p1_inputs.map(p => ({ p1_type_id: p.p1_type_id, p1_name: p.p1_name, share: p.share,
+                                             units_per_day: p.units_per_day, units_per_run: p.units_per_run })),
         });
   if (!factories.length) return null;
   // Per-P1 daily consumption (units/day at full factory rate) so the refill tool can show how

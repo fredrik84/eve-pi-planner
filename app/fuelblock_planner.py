@@ -22,7 +22,7 @@ from app import fuelblocks
 from app.sde import load_pi_data, get_connection
 from app.market import fetch_prices
 from app.esi import require_context
-from app.planner import _build_p0_p1_maps
+from app.planner import _build_p0_p1_maps, _p1_batch_sizes
 from app.planner_algo import (
     _PLANET_P0_PER_DAY,
     _build_char_list,
@@ -781,10 +781,15 @@ def _run_fuelblock_plan(req: "FuelBlockPlanRequest", context_id: int) -> dict:
             demand = f.pop("_p1_demand", None)
             if not demand:
                 continue
+            # `share` splits a pooled stack; units_per_day/units_per_run are this planet's own
+            # burn rate and draw-down step, which a pooled share can't be turned back into —
+            # the refill tool's deadline mode sizes a drop from them.
+            _batch = _p1_batch_sizes((f.get("product") or {}).get("type_id"), pi_data)
             f["p1_inputs"] = sorted(
                 ({"p1_type_id": p1, "p1_name": types.get(p1, {}).get("name", "?"),
                   "share": (q / p1_pool[p1]) if p1_pool.get(p1) else 0.0,
-                  "share_pct": round(q / p1_pool[p1] * 100) if p1_pool.get(p1) else 0}
+                  "share_pct": round(q / p1_pool[p1] * 100) if p1_pool.get(p1) else 0,
+                  "units_per_day": round(q * 24), "units_per_run": _batch.get(p1)}
                  for p1, q in demand.items()),
                 key=lambda x: -x["share"])
 

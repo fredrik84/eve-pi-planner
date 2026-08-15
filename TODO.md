@@ -14,45 +14,18 @@ Reviewed 2026-08-05.
 
 ---
 
-## 21. Refill to a DEADLINE, not to "full" (2026-08-15, requested)
+## 21b. A deadline nothing but this browser knows (2026-08-15, residual of §21)
 
-On Refill a Plan, say **when** the colonies should run dry and let the tool work out how much P1 to
-distribute to each factory to land there. Today refilling is "fill it up", so the moment you top up
-on a Tuesday you have committed to your next login being whenever that happens to run out.
+§21 shipped behind `refill_deadline` (see docs/pi.md). The chosen deadline is stored as an instant
+in `localStorage` (`refillDeadlineMs`), which honours the "never store a local time" decision but
+keeps it in one browser: it doesn't follow the player to another device, and nothing server-side
+can quote it. That last part is the real gap — the Dashboard's "Up next" agenda and the
+`factory_refill` alert both answer "when should I log in" from a full-pad cadence, so a player who
+refilled to Saturday 14:00 is still told a different time by the rest of the app.
 
-**The real ask, in the user's words:** refilled on a weekday, wants the next empty to fall on
-Saturday around 14:00. The only ways to get that now are to wait until Saturday and refill from
-empty (having first fetched all the current P1), or to do the arithmetic by hand per factory.
-
-This is the same principle as §23c/§2g on the Industry side — a plan should land on the player's
-schedule rather than the player working around the plan's — applied to PI, where it has more bite
-because PI is the side whose whole promise is *minimize interactions with planets* (CLAUDE.md).
-
-**What makes it tractable:** the consumption side is already known. Each factory's input burn rate
-per hour is derivable from the schematic and the factory count that `renderPlanDistribution`
-(`static/refill.js`) already computes to fill them. Quantity for a deadline is
-`rate × hours_until(deadline)`, capped by storage capacity, floored at a whole number of runs.
-
-**The parts that need a decision, not just arithmetic:**
-
-* **A deadline shorter than the current contents is not a refill** — it is "don't refill this one
-  yet, and here is when to come back". Say that, rather than quietly suggesting 0.
-* **Capacity is a hard ceiling.** If the deadline needs more P1 than a factory can hold, the honest
-  answer is the soonest deadline it CAN reach, not a number that will not fit.
-* **Whose clock — DECIDED 2026-08-15 by the user.** The player picks and reads **local time**;
-  it is converted to UTC on the way into the database and back on the way out. Storage is one
-  timezone so anything comparing or sorting deadlines is trivial, and the player never does
-  arithmetic to answer "when should I log in". Show both on the deadline control (`Sat 14:00 local
-  · 12:00 EVE`) — a fleet op is quoted in EVE time, so the reader needs the translation in front of
-  them, not the assumption that they can do it. **Never store a local time**: the offset changes
-  under DST and a stored local timestamp silently means something different in October than it did
-  in July.
-* Round to whole runs, and report the drift that rounding causes, in the same spirit as
-  `reactions_tidy_runs` (§23b): a typeable number the player can actually enter beats an exact one
-  they cannot.
-
-**First step:** confirm the per-factory burn rate is already exposed where the refill table is
-built, or what it would take to surface it, before designing any UI.
+**First step:** decide whether the deadline belongs on the plan snapshot (`pp_plan_snapshots`, one
+per plan) or on the account (one "next login" for everything) — the alert side wants the second,
+the refill table wants the first. Store UTC either way.
 
 ## 19. Deep links that carry an ID — the one part of URL routing still open (2026-08-15)
 
