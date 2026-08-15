@@ -49,6 +49,36 @@ verdict column says what the evidence would have to be.
 
 ---
 
+## 20. Planet database wipe — CLOSED (2026-08-15, INCIDENT)
+
+**Restored and closed the same day.** Production's `pp_planets` was found with 0 rows: 5,302
+planets, the shared reference data the whole PI planner runs on. Reloaded from the 08-12 nightly
+dump — 5,302 rows back, id sequence realigned (it was still at 625 and would have collided on the
+next insert), Redis invalidated, verified live on `/api/planets`. The rung was then set deliberately
+by the user: **`planet_db` stays on admin**, which closes the last follow-up.
+
+**Cause, in order.** `planet_db` was a feature flag gating the Planet DB tab, sitting on the **admin
+rung** in production. `d916c92` (12-08 23:39) retired it along with 17 others on the stated premise
+that all eighteen had been "public since June" — that premise was not checked against the live
+`pp_features` rows and was wrong for this one. Retiring it published the tab, and with it a "Clear
+all" button wired to `DELETE /api/planets`, which was gated on `require_context` — any logged-in
+player — and deletes the table for everybody. The nightly dumps bracket the wipe to the ~3.5 hours
+between that deploy and the 13-08 03:00 backup.
+
+**Shipped in response:** the flag is back with its gate (`nav-feat-pdb`, CSS + pre-paint class);
+`clear_planets` requires an admin and records to the audit log; the button carries `.pp-admin-only`;
+`test_planetdb_guard.py` fails on any unscoped global delete that is not admin-gated, so the shape
+cannot come back quietly. `app/audit.py` + Admin → Audit record global deletes, account deletions,
+cleanups, privilege removals and refused access.
+
+**The two lessons worth keeping.** A flag's rung is a fact about PRODUCTION — read the live
+`pp_features` row before retiring one, because the registry default says nothing about where it
+actually sits. And a destructive control must not depend on a flag for its gating: the flag decides
+who SEES the page, `require_admin` decides who can wipe the table, and conflating those is what
+turned a visibility change into data loss.
+
+---
+
 ## Closed — do not reopen without new evidence
 
 | Item | Verdict |

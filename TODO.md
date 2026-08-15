@@ -54,35 +54,6 @@ per hour is derivable from the schematic and the factory count that `renderPlanD
 **First step:** confirm the per-factory burn rate is already exposed where the refill table is
 built, or what it would take to surface it, before designing any UI.
 
-## 20. Planet database wipe — RESTORED, one follow-up left (2026-08-15, INCIDENT)
-
-**Restored.** Production's `pp_planets` was found with 0 rows: 5,302 planets, the shared reference
-data the whole PI planner runs on. Reloaded from the 08-12 nightly dump — 5,302 rows back, id
-sequence realigned (it was still at 625 and would have collided on the next insert), Redis
-invalidated, verified live on `/api/planets`.
-
-**Cause, in order.** `planet_db` was a feature flag gating the Planet DB tab, sitting on the **admin
-rung** in production. `d916c92` (12-08 23:39) retired it along with 17 others on the stated premise
-that all eighteen had been "public since June" — that premise was not checked against the live
-`pp_features` rows and was wrong for this one. Retiring it published the tab, and with it a "Clear
-all" button wired to `DELETE /api/planets`, which was gated on `require_context` — any logged-in
-player — and deletes the table for everybody. The nightly dumps bracket the wipe to the ~3.5 hours
-between that deploy and the 13-08 03:00 backup.
-
-**Shipped since:** the flag is back with its gate (`nav-feat-pdb`, CSS + pre-paint class);
-`clear_planets` requires an admin and records to the audit log; the button carries `.pp-admin-only`;
-`test_planetdb_guard.py` fails on any unscoped global delete that is not admin-gated, so the shape
-cannot come back quietly. `app/audit.py` + Admin → Audit now record global deletes, account
-deletions, cleanups, privilege removals and refused access.
-
-**The follow-up: set the `planet_db` rung deliberately.** The registry default is `False` (admin),
-which is where it now sits, but that is the default asserting itself rather than a decision. If the
-tab should be visible to testers or the public, set the rung in Admin → Features — the destructive
-control on it is separately admin-gated now, so publishing the tab no longer publishes the wipe.
-
-**The lesson worth keeping:** a flag's rung is a fact about PRODUCTION. Read the live `pp_features`
-row before retiring one; the registry default says nothing about where it actually sits.
-
 ## 19. Deep links that carry an ID — the one part of URL routing still open (2026-08-15)
 
 Phases 1–3a shipped 2026-08-15. Every page has a URL, back/forward work, and the two pages that
@@ -107,7 +78,10 @@ segment, `routeForPath` already parses one, and `noteSubPage` is how a module te
 it is. An id segment is a third of the same shape.
 
 **The risk that has not gone away:** `test_routing_client.js` executes the router, but there is still
-no browser (§2e-residual), so nothing tests real clicking, rendering or focus.
+no browser (§2e-residual), so nothing tests real clicking, rendering or focus. The admin-nav
+regression that followed Phase 2 was fixed on a hypothesis the vm harness could not reproduce
+(a loader throwing inside `onAdminTabOpen` aborting the switch) and only **confirmed by the user in
+a live browser on 2026-08-15** — which is the shape of every routing bug here until there is one.
 
 ## 18b. Config export / import (2026-08-14, from §18's answer)
 
