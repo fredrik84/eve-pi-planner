@@ -769,7 +769,19 @@ def owned_quantities(context_id: int) -> dict[int, float]:
         return {}
     finally:
         con.close()
-    return {int(r["type_id"]): float(r["q"] or 0) for r in rows}
+    # Minus what is already promised to work assigned to a slot but not yet installed. Netted HERE
+    # rather than at each caller so every reader of stock sees the same free pool — see
+    # `app.industry.reservations`. A no-op until `stock_reservations` is on.
+    return _net_reserved(context_id, {int(r["type_id"]): float(r["q"] or 0) for r in rows})
+
+
+def _net_reserved(context_id: int, pool: dict[int, float]) -> dict[int, float]:
+    """Subtract outstanding claims. Imported lazily: `reservations` imports this module."""
+    try:
+        from app.industry.reservations import net_of_reservations
+        return net_of_reservations(context_id, pool)
+    except Exception:
+        return pool
 
 
 def source_quantities(context_id: int, key: str) -> dict[int, float]:
@@ -817,7 +829,7 @@ def source_quantities_multi(context_id: int, keys: list[str]) -> dict[int, float
         return {}
     finally:
         con.close()
-    return {int(r["type_id"]): float(r["q"] or 0) for r in rows}
+    return _net_reserved(context_id, {int(r["type_id"]): float(r["q"] or 0) for r in rows})
 
 
 def source_name(context_id: int, key: str) -> str | None:

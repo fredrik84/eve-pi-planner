@@ -293,6 +293,19 @@ FEATURE_REGISTRY = [
                     "SAME stored value the Industry scheduler reads (Build rules → 'Longest "
                     "reaction job'), written from either side — one number, never two.",
      "default": False},
+    {"key": "stock_reservations", "label": "Stock: don't promise the same units to two plans",
+     "group": "Industry",
+     "description": "What is in your hangar is not the same as what is FREE. Materials already "
+                    "assigned to a reactor — a job waiting to be installed — were still counted as "
+                    "spendable by the next plan and by the other tab, so two plans could each "
+                    "promise the same goo and the second one silently came up short. With this on, "
+                    "work that is assigned but not yet installed holds its inputs, and both "
+                    "Manufacturing and Reactions net them off the same pool. A job that is actually "
+                    "running claims nothing: its materials have already left the container, so the "
+                    "next asset scan reports that on its own. Derived from the assignments "
+                    "themselves rather than a stored ledger, so it cannot drift out of step with "
+                    "the work it describes.",
+     "default": False},
     {"key": "reactions_default_system", "label": "Reactions: work out where jobs are installed when no system is set",
      "group": "Reactions",
      "description": "Job install fees used to be left out of every estimate unless you typed a "

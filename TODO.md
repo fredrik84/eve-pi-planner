@@ -75,47 +75,6 @@ accretion — `pp_baskets_old`, `pp_profiles_new`, `pp_session` alongside `pp_se
 `pp_characters_context`, and two pairs of near-identically-named settings tables. Whatever the
 verdict on the blob, that is worth a pass on its own.
 
-## 17. Stock: reserve what a plan has claimed, then one pool is enough (2026-08-05, reframed 2026-08-14)
-
-**Reframed by the user 2026-08-14, and it turns the item inside out:** *"If we track what is
-assigned to slots I'm actually fine with doing account wide stock. Otherwise we should track it via
-the plans. I still want us to inventory containers if they choose it as a material source."*
-
-So the two ownership models are not really a taste question. **Per-plan boxes are doing a job that
-belongs to a reservation ledger** — stopping two plans from spending the same units — and they are
-doing it by partitioning the pool, which is a blunt instrument that also costs the user a decision
-per build.
-
-**What is actually true today** (verified 2026-08-14, not assumed):
-
-* `owned_quantities` / `source_quantities_multi` read `pp_asset_stock` raw. **Nothing anywhere
-  subtracts units already promised to a queued order or an installed job.** Reactions states the
-  same gap outright — *"there is no reservation ledger"* (`docs/reactions.md`, `graph.py`) — so this
-  is one missing mechanism, not two.
-* The gap is only between PLANNING and INSTALLING. Once a job is installed the materials physically
-  leave the container, so the next ESI scan is correct on its own. What can be double-promised is
-  the window in between.
-* **Containers picked as a material source ARE inventoried already.** The scan writes every source
-  it discovers into `pp_asset_sources` and its contents into `pp_asset_stock`; `enabled` only gates
-  the account-wide pool, and a per-plan read goes by key and ignores it. The user's requirement here
-  is met — no work needed, and do not "fix" `enabled` into the per-plan read.
-
-**The work, in order:**
-
-1. **A reservation ledger.** Units committed by a queued order or an uninstalled scheduled job are
-   subtracted from what the next plan may count. Keyed per (context, type), released when the order
-   is cleared or when the scan shows the materials gone. This is the piece that makes the rest
-   optional.
-2. **Then account-wide stock is safe**, and the per-build set stops being a correctness mechanism.
-   Keep it as a *tracking* convenience — the user's builders bind a can per build to track what they
-   have acquired, which is a real use even when the arithmetic no longer needs it — but it stops
-   being the thing standing between two builds and a double-spend.
-3. **Only then** collapse the surfaces: `plan_source_keys` exists solely to translate between the
-   two models per request and goes with the model it reconciles.
-
-**Do not start at step 3.** Retiring either ownership model before the ledger exists removes the only
-thing currently preventing a double-spend.
-
 ## Shipped and closed
 
 Moved to [TODO-archive.md](TODO-archive.md) — the one-line shipped list and the

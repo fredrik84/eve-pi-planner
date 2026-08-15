@@ -135,7 +135,7 @@ misjudges coverage by that whole factor; no graph means no trim). **The opportun
 stays stock-blind on purpose:** it is cached and its callers scale its tiers linearly, and stock
 coverage is not linear — so the trim happens at the point rows are created instead.
 
-**Known edge, accepted:** there is no reservation ledger. Two planning runs made back to back both
+**Closed 2026-08-14 — see `app/industry/reservations.py`.** It used to read: two planning runs made back to back both
 see the same units, so stock can be promised twice ACROSS plans (never within one). Reserving needs
 a commitment ledger this package doesn't have; until then the honest reading is "this is what you
 hold right now", which is also what the player sees in their hangar.

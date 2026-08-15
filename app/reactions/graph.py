@@ -765,12 +765,12 @@ def reaction_stock_pool(context_id: int) -> dict[int, float]:
     Empty unless `reactions_use_stock` is on, and empty on any failure: no stock is the behaviour
     this package had since it was written, so it is the safe direction.
 
-    **Known edge, accepted:** there is no reservation ledger. Two planning runs made back to back
-    both see the same units, so stock can be promised twice across separate plans. Within ONE plan
-    it cannot — the pool is threaded through the recursion and consumed. Reserving across plans
-    needs a commitment ledger this package does not have (Industry has one, per order); until then
-    the honest reading is "this is what you hold right now", which is also what the player sees when
-    they look in the hangar.
+    **Closed 2026-08-14 — there IS a reservation ledger now** (`app.industry.reservations`, behind
+    `stock_reservations`). Materials assigned to a reactor but not yet installed are netted off
+    inside `owned_quantities`, so a second planning run and the Manufacturing tab both see the same
+    free pool rather than re-promising units this service has already claimed. A job that is really
+    running claims nothing: its inputs have left the container, so the next asset scan reports that
+    on its own and reserving them again would subtract them twice.
     """
     def _build():
         try:
