@@ -39,8 +39,14 @@ per hour is derivable from the schematic and the factory count that `renderPlanD
   yet, and here is when to come back". Say that, rather than quietly suggesting 0.
 * **Capacity is a hard ceiling.** If the deadline needs more P1 than a factory can hold, the honest
   answer is the soonest deadline it CAN reach, not a number that will not fit.
-* **Whose clock.** EVE time (UTC) throughout, since "Saturday 14:00" is a fleet-op time — but state
-  it in the UI rather than assuming the reader knows.
+* **Whose clock — DECIDED 2026-08-15 by the user.** The player picks and reads **local time**;
+  it is converted to UTC on the way into the database and back on the way out. Storage is one
+  timezone so anything comparing or sorting deadlines is trivial, and the player never does
+  arithmetic to answer "when should I log in". Show both on the deadline control (`Sat 14:00 local
+  · 12:00 EVE`) — a fleet op is quoted in EVE time, so the reader needs the translation in front of
+  them, not the assumption that they can do it. **Never store a local time**: the offset changes
+  under DST and a stored local timestamp silently means something different in October than it did
+  in July.
 * Round to whole runs, and report the drift that rounding causes, in the same spirit as
   `reactions_tidy_runs` (§23b): a typeable number the player can actually enter beats an exact one
   they cannot.
