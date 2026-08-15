@@ -399,6 +399,23 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
   margin: 6px 0 0; padding: 0 2px;
 }
 .stat-footnote b { color: #7d8dab; font-weight: 600; }
+/* The one part of a footnote that is not just prose: it goes where the action is. Inherits the
+   footnote's size rather than setting its own (unlike .ind-link-btn, which is fixed at 12px) so it
+   sits IN the sentence instead of on top of it. */
+.stat-footnote-link {
+  background: none; border: 0; padding: 0; cursor: pointer;
+  font: inherit; color: var(--clr-accent);
+  text-decoration: underline; text-underline-offset: 2px;
+}
+.stat-footnote-link:hover { color: #fff; }
+
+/* An order with no agreed price, marked where the reader lands after following that footnote. */
+.rx-order-unpriced { border-left: 2px solid #6d5f2e; }
+.rx-order-noprice {
+  font-size: 10.5px; font-weight: 600; color: #d3bd6a;
+  background: #1b1a13; border-radius: 3px; padding: 1px 5px; margin-left: 4px;
+  white-space: nowrap;
+}
 .settings-account-body { display: flex; flex-direction: column; gap: 14px; }
 .settings-account-hint { font-size: 13px; color: #6a7a9a; line-height: 1.6; margin: 0; }
 

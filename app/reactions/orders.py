@@ -248,8 +248,12 @@ def list_reaction_orders(context_id: int = Depends(require_context)):
     con = get_connection()
     try:
         rows = con.execute(
+            # `client_price` is here so the list can SAY which orders have no agreed price. The
+            # overview counts them ("1 order priced at market, not at the invoice") and then has to
+            # send the reader somewhere; without the price on the row, "somewhere" could only ever
+            # be the whole card, leaving them to open each order to find the one meant.
             "SELECT id, type_id, name, target_qty, top_level_runs, assigned_runs, client_name, notes, "
-            "status, created_at FROM pp_reaction_orders WHERE context_id=? "
+            "status, created_at, client_price FROM pp_reaction_orders WHERE context_id=? "
             "ORDER BY CASE WHEN status='open' THEN 0 ELSE 1 END, created_at DESC",
             (context_id,),
         ).fetchall()

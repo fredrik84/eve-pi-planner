@@ -1363,7 +1363,8 @@ function _renderReactionsDashboard(data) {
   const unpriced = data.unpriced_orders || 0;
   const unpricedNote = unpriced
     ? `${unpriced} order${unpriced === 1 ? '' : 's'} priced at <b>market</b>, not at the invoice —
-       set a price on ${unpriced === 1 ? 'it' : 'them'} for the real figure.`
+       <button type="button" class="stat-footnote-link" onclick="_rxGoToUnpricedOrder()">set
+       ${unpriced === 1 ? 'its price' : 'their prices'}</button> for the real figure.`
     : '';
   // Two different costs, and the difference is the point. "Materials committed" is the priced
   // shopping list — what you go and buy — and it is NOT what profit is netted against; the full
@@ -2791,6 +2792,34 @@ function _rxLoadOrders() {
     .catch(err => { el.innerHTML = `<div class="pp-empty">${_esc(err.message)}</div>`; });
 }
 
+// An order with no agreed price. Only OPEN orders count: a delivered order that was never priced
+// is history, and nagging about it is asking for an edit to a closed record.
+function _rxIsUnpriced(o) {
+  return o.status === 'open' && !(o.client_price > 0);
+}
+
+// Where "set a price on it" actually goes. One unpriced order is the common case and deserves the
+// direct route — its own detail modal, where the price field is — rather than dropping the reader
+// at a card to search. Several means there is no single destination, so it expands the orders card
+// and scrolls there, where the rows now say which ones.
+//
+// Orders may not be loaded yet (the overview renders before the card below it), so this fetches
+// first and then decides. Nothing here assumes the count in the footnote and the client-side list
+// agree — the footnote counts orders in the PLAN, this reads every order — so the single-order
+// shortcut is taken only when this list independently finds exactly one.
+function _rxGoToUnpricedOrder() {
+  const go = () => {
+    const unpriced = (_rxOrders || []).filter(_rxIsUnpriced);
+    if (unpriced.length === 1) { _rxOpenOrderDetail(unpriced[0].id); return; }
+    const det = document.getElementById('rxOrdersDetails');
+    const card = document.getElementById('rxOrdersCard');
+    if (det) det.open = true;
+    if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+  if ((_rxOrders || []).length) { go(); return; }
+  _rxLoadOrders().then(go).catch(go);   // a failed load still opens the card, which shows the error
+}
+
 function _rxOrderBarHtml(o) {
   const pct = o.top_level_runs > 0 ? Math.min(100, Math.round(100 * o.assigned_runs / o.top_level_runs)) : 0;
   return `<div class="rx-order-bar" title="${pct}% of runs assigned"><div class="rx-order-bar-fill" style="width:${pct}%"></div></div>`;
@@ -2806,10 +2835,13 @@ function _renderRxOrdersList(orders) {
   const det = document.getElementById('rxOrdersDetails');
   if (det) det.open = open.length > 0;
   if (!orders.length) { el.innerHTML = '<div class="pp-empty">No customer orders yet — "+ New order" to track one.</div>'; return; }
+  // "no price" is called out on the row itself, not just counted on the overview. Someone sent
+  // here by that footnote arrives looking for WHICH order it meant, and an unmarked list makes
+  // them open each one to find out — which is the same dead end as not linking at all.
   const row = o => `
-    <div class="rx-order-row" onclick="_rxOpenOrderDetail(${o.id})">
+    <div class="rx-order-row${_rxIsUnpriced(o) ? ' rx-order-unpriced' : ''}" onclick="_rxOpenOrderDetail(${o.id})">
       <div class="rx-order-info">
-        <div class="rx-order-name">${_esc(o.name)} <span class="pp-card-hint">× ${Math.round(o.target_qty).toLocaleString()} units</span></div>
+        <div class="rx-order-name">${_esc(o.name)} <span class="pp-card-hint">× ${Math.round(o.target_qty).toLocaleString()} units</span>${_rxIsUnpriced(o) ? ' <span class="rx-order-noprice">no price set</span>' : ''}</div>
         <div class="pp-card-hint">${o.client_name ? _esc(o.client_name) + ' · ' : ''}${o.assigned_runs.toLocaleString()} / ${o.top_level_runs.toLocaleString()} runs assigned${o.status !== 'open' ? ' · ' + _esc(o.status) : ''}</div>
       </div>
       ${_rxOrderBarHtml(o)}
@@ -3771,7 +3803,10 @@ function _rxMarketManagerHtml(d) {
   const structs = pricing.filter(m => m.kind === 'structure');
   const unreadable = structs.length && !d.connected;
   const warn = unreadable
-    ? `<div class="settings-note"><span>Your structure market${structs.length > 1 ? 's' : ''} can't be read, so pricing <b>falls back to Jita</b>. Connect a character that can dock there.</span></div>`
+    // Told the reader to connect a character but gave them no way to do it, while the branch
+    // BELOW — the one with less at stake — carries the button. A warning that names an action
+    // should be the shortest route to it.
+    ? `<div class="settings-note"><span>Your structure market${structs.length > 1 ? 's' : ''} can't be read, so pricing <b>falls back to Jita</b>. <button class="ind-link-btn" onclick="connectReactionsMarket()">Connect a character</button> that can dock there.</span></div>`
     : (d.connected ? '' : `<div class="pp-card-hint" style="margin:0 0 8px">Searching structures needs a `
         + `connected character — public regions work without one.`
         + ` <button class="ind-link-btn" onclick="connectReactionsMarket()">Connect one</button></div>`);

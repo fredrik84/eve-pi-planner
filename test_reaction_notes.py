@@ -112,6 +112,44 @@ def main() -> int:
         check("settings-note" in cls,
               f"...and {label} is still a warning, not a footnote (got {cls})")
 
+    print("\na note that names an action offers the action:")
+    # Telling a reader to "set the price on the order" from a page that does not contain orders
+    # leaves them to find the collapsed card themselves. Every note below names something to do, so
+    # each must carry the route to it.
+    m = re.search(r"priced at <b>market</b>.{0,300}", js, re.S)
+    check(bool(m and "_rxGoToUnpricedOrder()" in m.group(0)),
+          "the unpriced-order footnote links to the order")
+    check(bool(m and "stat-footnote-link" in m.group(0)),
+          "...styled as a link inside the footnote, not a stray button")
+    check("function _rxGoToUnpricedOrder(" in js, "_rxGoToUnpricedOrder exists")
+    check("function _rxIsUnpriced(" in js, "_rxIsUnpriced exists")
+    m = re.search(r"falls back to Jita</b>.{0,300}", js, re.S)
+    check(bool(m and "connectReactionsMarket()" in m.group(0)),
+          "the unreadable-market warning offers the connect it asks for")
+    check(bool(re.search(r"\.stat-footnote-link\s*\{", css)), ".stat-footnote-link is styled")
+
+    print("\nthe destination says which order was meant:")
+    check("rx-order-unpriced" in js and "no price set" in js,
+          "unpriced rows are marked in the orders list")
+    check(bool(re.search(r"\.rx-order-noprice\s*\{", css)), "...and the marker has a rule")
+    # THE coupling that fails silently: `_rxIsUnpriced` reads `o.client_price`, which only exists
+    # if the list endpoint selects it. Drop it from the query and every open order renders "no
+    # price set" — a page-wide false alarm with nothing in the JS to blame.
+    orders_py = open(os.path.join(HERE, "app", "reactions", "orders.py"), encoding="utf-8").read()
+    sel = re.search(r"SELECT id, type_id, name, target_qty.*?FROM pp_reaction_orders", orders_py, re.S)
+    check(bool(sel), "the order-list query is readable")
+    if sel:
+        check("client_price" in sel.group(0),
+              "the list endpoint returns client_price — without it EVERY order reads as unpriced")
+    # Scoped to the function, not the file: `o.status === 'open'` appears in the list renderer too,
+    # so a file-wide search passes even with the status check torn out of _rxIsUnpriced.
+    unp = re.search(r"function _rxIsUnpriced\(o\)\s*\{(.*?)\n\}", js, re.S)
+    check(bool(unp), "_rxIsUnpriced body is readable")
+    if unp:
+        check("status" in unp.group(1),
+              "only OPEN orders are nagged about — a delivered one is history, and editing a "
+              f"closed record is not the ask (got {unp.group(1).strip()})")
+
     print("\nan account with nothing to footnote gets no empty box:")
     fn = re.search(r"function _rxFootnote\(parts\)\s*\{(.*?)\n\}", js, re.S)
     check(bool(fn), "_rxFootnote body is readable")
