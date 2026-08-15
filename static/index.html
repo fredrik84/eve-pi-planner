@@ -543,7 +543,10 @@
             <div class="pp-card-title">Planet Database
               <span class="pp-card-hint">— paste from spreadsheet or add manually</span>
               <button class="pp-add-btn" id="ppImportBtn" onclick="showPlanetImport()">Import</button>
-              <button class="pp-add-btn pp-clear-btn" onclick="clearPlanets()">Clear all</button>
+              <!-- Admin only: this wipes the GLOBAL planet database for every user, not the
+                   caller's own data (see clear_planets in app/planetary.py). html.nav-adm is set
+                   before first paint by the <head> script, so it never flashes for a normal user. -->
+              <button class="pp-add-btn pp-clear-btn pp-admin-only" onclick="clearPlanets()">Clear all</button>
             </div>
             <div class="pp-planet-search-row">
               <input id="planetSearch" class="pp-planet-search" autocomplete="off"

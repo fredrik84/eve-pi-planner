@@ -53,6 +53,13 @@ function _applyAdminNavVisibility() {
 // `/admin/bugs`. switchTab calls adminSubPage for us, via TAB_SUBPAGES.
 function adminNavTo(key) {
   switchTab('admin', { sub: key });
+  // Belt AND braces, deliberately. switchTab applies the section itself (TAB_SUBPAGES), which is
+  // what keeps one click to one history entry — but routing the ONLY call through another file's
+  // mechanism meant anything going wrong in between left the click doing nothing at all, which is
+  // exactly what shipped on 2026-08-15. This second call is idempotent: the section is already
+  // showing, so it re-displays the same panel and `noteSubPage` finds the URL already correct and
+  // writes no history. Cheap, and it cannot be defeated from another file.
+  if (currentSubPage() !== key) adminSubPage(key);
 }
 
 function adminSubPage(key) {

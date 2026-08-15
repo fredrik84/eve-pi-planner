@@ -621,14 +621,33 @@ def reject_planet_submission(sub_id: int, _: int = Depends(require_admin)):
 
 
 @router.delete("/api/planets")
-def clear_planets(context_id: int = Depends(require_context)):
+def clear_planets(_: int = Depends(require_admin)):
+    """Wipe the planet database. **Site admin only, since 2026-08-15.**
+
+    `pp_planets` is GLOBAL — one shared table of community-contributed planet data behind every
+    user's PI planning. This was gated on `require_context`, i.e. any logged-in player, and the
+    "Clear all" button sat in plain sight on the Planet DB page next to Import. On 2026-08-15
+    production was found with 0 rows: every planet, for everybody, behind one confirm dialog.
+
+    Nothing about the endpoint said "global" — it reads like the per-account clears elsewhere in
+    this file, which is precisely the trap. `require_admin` and a name that says what it does.
+
+    The import path (`_write_planet_rows`) merges and never deletes, so imports stay open to
+    everyone; only the destructive direction is restricted.
+    """
     ensure_tables()
     con = get_connection()
-    con.execute("DELETE FROM pp_planets")
-    con.commit()
-    con.close()
+    try:
+        before = con.execute("SELECT COUNT(*) FROM pp_planets").fetchone()[0]
+        con.execute("DELETE FROM pp_planets")
+        con.commit()
+    finally:
+        con.close()
     _invalidate_planetdb_cache()
-    return {"cleared": True}
+    # Logged loudly: the next time this table is found empty, the answer to "did someone press the
+    # button, or did something else eat it" should be one grep away.
+    log.warning("planet database CLEARED by admin — %d rows deleted", before)
+    return {"cleared": True, "deleted": before}
 
 
 @router.get("/api/constellations")

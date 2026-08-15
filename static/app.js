@@ -643,19 +643,30 @@ function switchTab(name, opts) {
   // that redirects does not have to reason about it.
   _switching++;
   try {
-  if (name === 'dashboard' && typeof onDashboardTabOpen === 'function') onDashboardTabOpen();
-  if (name === 'planner' && typeof onPlannerTabOpen === 'function') onPlannerTabOpen();
-  if (name === 'planetary' && typeof onPlanetaryTabOpen === 'function') onPlanetaryTabOpen();
-  if (name === 'planetdb' && typeof onPlanetDbTabOpen === 'function') onPlanetDbTabOpen();
-  if (name === 'reactions' && typeof onReactionsTabOpen === 'function') onReactionsTabOpen();
-  if (name === 'industry' && typeof onIndustryTabOpen === 'function') onIndustryTabOpen();
-  if (name === 'layout' && typeof onLayoutTabOpen === 'function') onLayoutTabOpen();
-  if (name === 'characters' && typeof loadCharacters === 'function') loadCharacters();
-  if (name === 'analyze' && typeof onAnalyzeTabOpen === 'function') onAnalyzeTabOpen();
-  if (name === 'admin' && typeof onAdminTabOpen === 'function') onAdminTabOpen();
-  if (name === 'indhowitworks') loadHelpPanel(name);
+  // **A page's own loader must never be able to break NAVIGATION.** These hooks fetch and render;
+  // one of them throwing used to abort the whole switch, so the section was never applied and the
+  // URL was never written — the symptom being every Admin sub-nav click landing on `/admin` showing
+  // whichever section was last displayed, because `onAdminTabOpen` fires five loaders before it
+  // reaches `adminSubPage`. Reported live 2026-08-15.
+  //
+  // Isolated rather than fixed one loader at a time: which of them can throw is a moving target,
+  // and there is no version of "the page failed to load its data" that should also mean "the app
+  // will not let you leave this page".
+  const _hook = fn => { try { if (typeof fn === 'function') fn(); } catch (e) { console.error('tab open hook failed:', name, e); } };
+  if (name === 'dashboard') _hook(typeof onDashboardTabOpen === 'function' ? onDashboardTabOpen : null);
+  if (name === 'planner') _hook(typeof onPlannerTabOpen === 'function' ? onPlannerTabOpen : null);
+  if (name === 'planetary') _hook(typeof onPlanetaryTabOpen === 'function' ? onPlanetaryTabOpen : null);
+  if (name === 'planetdb') _hook(typeof onPlanetDbTabOpen === 'function' ? onPlanetDbTabOpen : null);
+  if (name === 'reactions') _hook(typeof onReactionsTabOpen === 'function' ? onReactionsTabOpen : null);
+  if (name === 'industry') _hook(typeof onIndustryTabOpen === 'function' ? onIndustryTabOpen : null);
+  if (name === 'layout') _hook(typeof onLayoutTabOpen === 'function' ? onLayoutTabOpen : null);
+  if (name === 'characters') _hook(typeof loadCharacters === 'function' ? loadCharacters : null);
+  if (name === 'analyze') _hook(typeof onAnalyzeTabOpen === 'function' ? onAnalyzeTabOpen : null);
+  if (name === 'admin') _hook(typeof onAdminTabOpen === 'function' ? onAdminTabOpen : null);
+  if (name === 'indhowitworks') _hook(() => loadHelpPanel(name));
   // A section named by the URL beats whatever the open hook just restored from storage — same rule
-  // as the page itself, for the same reason: a link asked for THIS section.
+  // as the page itself, for the same reason: a link asked for THIS section. Outside the isolation
+  // above on purpose: this one IS the navigation.
   if (opts && opts.sub && TAB_SUBPAGES[name]) TAB_SUBPAGES[name].apply(opts.sub);
   } finally { _switching--; }
   // **An open hook is allowed to send us somewhere else.** onAdminTabOpen bounces a confirmed

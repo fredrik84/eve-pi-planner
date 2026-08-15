@@ -178,6 +178,11 @@ html.nav-li .tab[data-pimode="build"] { display: flex; }
 html.nav-li #industryNavGroup { display: flex; }
 .nav-group-empty { display: none; }
 
+/* Controls that act on GLOBAL, shared data rather than the caller's own — hidden unless the caller
+   is a site admin. Hiding is the courtesy; `require_admin` on the endpoint is the enforcement. */
+.pp-admin-only { display: none; }
+html.nav-adm .pp-admin-only { display: inline-block; }
+
 html.nav-adm #adminNavGroup,
 html.nav-grpmgr #adminNavGroup { display: flex; }
 /* A pure group manager (not a site admin) only sees their own group's sub-nav items — the
