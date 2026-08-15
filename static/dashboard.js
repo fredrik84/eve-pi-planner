@@ -59,7 +59,7 @@ async function rescanAll() {
   }
   _rescanning = false;
   if (typeof loadCharacters === 'function') await loadCharacters();   // refresh _ppCharsData + header
-  if (localStorage.getItem('activeTab') === 'dashboard' && typeof onDashboardTabOpen === 'function') await onDashboardTabOpen();
+  if (currentTab() === 'dashboard' && typeof onDashboardTabOpen === 'function') await onDashboardTabOpen();
   if (typeof renderAnalysis === 'function' && _analyzeSnaps.length) renderAnalysis();
   _setRescanUI();
   if (failed.length) {

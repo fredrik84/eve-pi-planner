@@ -14,72 +14,31 @@ Reviewed 2026-08-05.
 
 ---
 
-## 19. Pages should live at URLs, so a link can be shared (2026-08-15, scoped)
+## 19. Deep links that carry an ID — the one part of URL routing still open (2026-08-15)
 
-Today every page is `/`. Which page you are on is a `localStorage` key, so a link to "the Reactions
-tab" cannot be sent to anyone, a refresh silently restores somebody's *last* page rather than the
-one they meant, and back/forward do nothing. Scoped 2026-08-15 — findings below are from the code,
-not an estimate off the top of the head.
+Phases 1–3a shipped 2026-08-15. Every page has a URL, back/forward work, and the two pages that
+are really several — Admin's eleven sections and the PI Planner's two modes — are addressable
+(`/admin/bugs`, `/planner/refill`). The guards that used to ask `localStorage` "which page am I on"
+now ask the router, which also fixed a bug nobody had reported: two browser tabs open on the site
+answered that question for each other.
 
-### What makes this cheaper than it looks
+**What is left is only the state identified by an ID** — `/industry/order/123`, a specific plan, a
+colony. It is deliberately not built, because it is not a mapping question:
 
-* **`switchTab(name)` is the single choke point.** Every nav button, every programmatic jump and the
-  boot restore all go through it (`static/app.js:453`). A `history.pushState` there is a few lines,
-  not a refactor.
-* **Path-based SPA routes already work.** `/s/{share_id}` and `/b/{share_id}` serve the app from a
-  real path today, with Open Graph tags injected so links unfurl in Discord. The mechanism, the
-  helper (`_page`) and the unfurl story all exist.
-* **Tabs are already declarative and 1:1** — 12 `data-tab` values against 12 `tab-<name>` panels, so
-  a path segment maps straight onto one with no new concept.
-* **There is precedent for a catch-all before the static mount** (`/api/{rest:path}`,
-  `app/main.py:352`), which is exactly the shape the SPA route needs.
+> **Privacy check before any deep link ships (rule 8):** an id in a path is visible to whoever the
+> link is sent to. `/industry/order/123` in a pasted link tells the recipient an order id exists;
+> anything beyond a page name needs the same scrutiny the share links already got.
 
-### What the work actually is
+**First step is a decision, not code:** for each id worth linking, what does the id itself disclose
+to someone who was sent the link but is not entitled to the record — and does the endpoint behind it
+already refuse them? The page-name routing shipped needs neither answer, which is why it went first.
 
-1. **A server catch-all that returns the SPA for a known page path** — and this is the riskiest
-   change in the whole item. `StaticFiles` is mounted at `/` (`app/main.py:364`), so anything
-   unmatched lands there. The route must be registered BEFORE the mount and must not shadow
-   `/api/*`, real asset paths, `/s/`, `/b/` or `/healthz`. Get the predicate wrong and a missing
-   `.js` returns HTML, which browsers report as a confusing parse error rather than a 404.
-2. **Eleven `localStorage.getItem('activeTab')` reads across four files, and most are not restores —
-   they are GUARDS**: *"am I on the dashboard right now?"* (`dashboard.js:62`, `planetary.js:186,
-   233, 275, 280, 330`). Each has to ask the router instead. This is the bulk of the mechanical work
-   and the main regression risk.
-3. **Page gating has to correct the URL, not just the view.** `_isPageRestricted` / `_firstAllowedPage`
-   currently bounce inside `switchTab`; with real URLs a blocked deep link must also rewrite the
-   address bar or it lies about where you are. Gating is resolved asynchronously (after `/api/me`),
-   so a deep link can arrive before it is known — the route has to resolve gating first, or it will
-   flash the wrong page or bounce a page the user may actually see.
-4. **Back/forward has never existed.** `popstate` means every `on*TabOpen` hook must be safe to
-   re-enter. They already re-run on every click, so this is probably free — but it is per-tab
-   checking, not an assumption.
-5. **The share flow overlaps.** Consuming a `/s/{id}` link ends with `history.replaceState(null, '', '/')`
-   (`planetary.js:1711`), which would wipe a real route. That interaction has to be reworked, not
-   left.
-6. **Mobile hides the heavy tabs** (`MOBILE_TABS`, `app.js:479`). A deep link to a desktop-only page
-   on a phone needs a decided answer rather than a blank screen.
+Mechanically the rest is cheap: `TAB_SUBPAGES` in `static/app.js` already carries a page's second
+segment, `routeForPath` already parses one, and `noteSubPage` is how a module tells the router where
+it is. An id segment is a third of the same shape.
 
-### How deep to go — decide before starting
-
-`/reactions` is worth much more than nothing; `/industry/order/123` is worth more again, and is where
-the cost balloons, because per-tab state lives in each tab's own module. **Recommendation: stop at
-the top level first** and treat deep state as a separate item once the URL exists at all.
-
-**Privacy check before any deep link ships (rule 8):** an id in a path is visible to whoever the
-link is sent to. `/industry/order/123` in a pasted link tells the recipient an order id exists;
-anything beyond a page name needs the same scrutiny the share links already got.
-
-### Effort
-
-* **Phase 1 — the top-level page in the URL, back/forward, deep-link entry, gating-aware.** One
-  focused session. This is the phase that delivers the actual ask: shareable links to 12 pages.
-* **Phase 2 — replace the eleven guards, rework the share-link interaction.** One session, and it is
-  the one that needs care rather than cleverness.
-* **Phase 3 — per-tab deep state.** Optional, open-ended, one tab at a time.
-
-**The risk that dominates all three:** there are no browser tests (§2e-residual), and this is
-*navigation* — the one thing source-scanning cannot verify. That argues for Phase 1 being kept small
-and walked through by hand in a browser before Phase 2 starts.
+**The risk that has not gone away:** `test_routing_client.js` executes the router, but there is still
+no browser (§2e-residual), so nothing tests real clicking, rendering or focus.
 
 ## 18b. Config export / import (2026-08-14, from §18's answer)
 

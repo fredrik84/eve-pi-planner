@@ -183,7 +183,7 @@ function _applyTabGates() {
     { key: 'factory_layout', storageKey: 'ppNavFeatLayout', cls: 'nav-feat-layout', tab: 'layout' },
     { key: 'industry',       storageKey: 'ppNavFeatIndustry', cls: 'nav-feat-industry', tab: 'industry' },
   ];
-  const cur = localStorage.getItem('activeTab');
+  const cur = currentTab();
   let needRedirect = false;
   gates.forEach(({ key, storageKey, cls, tab }) => {
     const show = _featureActive(key);
@@ -191,7 +191,10 @@ function _applyTabGates() {
     document.documentElement.classList.toggle(cls, show);
     if (!show && cur === tab) needRedirect = true;
   });
-  if (needRedirect && typeof switchTab === 'function') switchTab('dashboard');
+  // `corrected` — this is a bounce, not a navigation. The user asked for a page that turned out to
+  // be switched off, so the address bar must be REWRITTEN rather than gaining a history entry that
+  // sends them straight back to the page they cannot open.
+  if (needRedirect && typeof switchTab === 'function') switchTab('dashboard', { corrected: true });
 }
 
 // A nav group whose every item is hidden is worse than no group — it reads as a broken menu.
@@ -219,7 +222,10 @@ function _applyLoginGates() {
     // Documented intent of the boot path in app.js: "a logged-in player with no remembered tab
     // lands on the Dashboard". Nothing actually did that — boot only calls switchTab() when a tab
     // IS remembered, so they landed on whichever tab the markup marked active.
-    if (!localStorage.getItem('activeTab') && typeof switchTab === 'function') switchTab('dashboard');
+    // `currentTab()` is null only when boot chose nothing at all — no URL, no remembered tab —
+    // which is exactly that case. Asking storage instead would have bounced a deep link whose page
+    // this browser had simply never opened before.
+    if (!currentTab() && typeof switchTab === 'function') switchTab('dashboard');
     return;
   }
   // Tabs a logged-out visitor can't use. 'planner' (Find Buildables) and 'contribute' are in here
@@ -230,9 +236,18 @@ function _applyLoginGates() {
   // break a page a stranger is meant to reach.
   const AUTH_TABS = ['analyze', 'planetary', 'characters', 'planetdb',
                      'planner', 'contribute', 'reactions', 'industry'];
-  const cur = localStorage.getItem('activeTab');
-  if (AUTH_TABS.includes(cur) || cur === 'dashboard' || !cur) {
-    if (typeof switchTab === 'function') switchTab('howitworks');
+  const cur = currentTab();
+  // ...EXCEPT while a shared analysis is being read. `#s=` links are made by "Copy link" to be sent
+  // to anyone, and both endpoints behind them (`/api/share/{id}`, `/api/analyze`) are deliberately
+  // unauthenticated — so Setup Analysis is not a dead end for this visitor, it is the entire point
+  // of the link they followed. Bouncing them threw away the results already on screen along with
+  // the fragment needed to get them back.
+  const readingShare = cur === 'analyze' && location.hash.startsWith('#s=');
+  if (!readingShare && (AUTH_TABS.includes(cur) || cur === 'dashboard' || !cur)) {
+    // A bounce, so it REPLACES the URL: a stranger who was sent `/reactions` ends up on a page
+    // that reads `/how-it-works`, and pressing Back leaves the site rather than ping-ponging
+    // against a login wall.
+    if (typeof switchTab === 'function') switchTab('howitworks', { corrected: true });
   }
 }
 
@@ -268,16 +283,17 @@ async function loadCharacters() {
       renderCharacters(data.characters || [], _loggedIn);
       renderHeaderSession(_loggedIn, data.characters || [], data.session_character_id);
       _sessionLoaded = true;
-      // Tab-restore on boot runs before this resolves, so a saved "admin" tab opened with _isAdmin
-      // still false. Now that the real state is known, bounce a confirmed non-admin/non-manager off
-      // the admin tab to a mobile-visible tab (the old onAdminTabOpen bounce to the hidden planner
-      // shuffled phones).
-      if (!_isAdmin && !_isGroupManager && localStorage.getItem('activeTab') === 'admin' && typeof switchTab === 'function') switchTab('dashboard');
+      // Boot picks the page before this resolves — from the URL now, or from the remembered tab —
+      // so `/admin` opened with _isAdmin still false. That ordering is deliberate: bouncing BEFORE
+      // roles are known would throw an admin off their own deep link. Now that the real state is
+      // known, bounce a confirmed non-admin/non-manager off the admin tab to a mobile-visible tab
+      // (the old onAdminTabOpen bounce to the hidden planner shuffled phones).
+      if (!_isAdmin && !_isGroupManager && currentTab() === 'admin' && typeof switchTab === 'function') switchTab('dashboard', { corrected: true });
       // ...and conversely, an admin/manager who refreshed straight ONTO the admin tab had
       // onAdminTabOpen() run at boot with _isAdmin still false, so its sections (Features, etc.)
       // never loaded. Now that roles are known, re-invoke it so the page isn't blank until a
       // manual nav click.
-      else if ((_isAdmin || _isGroupManager) && localStorage.getItem('activeTab') === 'admin' && typeof onAdminTabOpen === 'function') onAdminTabOpen();
+      else if ((_isAdmin || _isGroupManager) && currentTab() === 'admin' && typeof onAdminTabOpen === 'function') onAdminTabOpen();
       _applyPageRestriction();
       await _loadFeatures();
       // Re-render: renderCharacters()/renderHeaderSession() above ran BEFORE _loadFeatures()
@@ -327,8 +343,10 @@ function _applyPageRestriction() {
   });
   // If the currently active tab just became restricted, bounce off it immediately rather than
   // leaving a blocked page on screen.
-  const active = localStorage.getItem('activeTab');
-  if (active && _isPageRestricted(active) && typeof switchTab === 'function') switchTab(_firstAllowedPage());
+  const active = currentTab();
+  if (active && _isPageRestricted(active) && typeof switchTab === 'function') {
+    switchTab(_firstAllowedPage(), { corrected: true });
+  }
 }
 
 function renderHeaderSession(loggedIn, chars, sessionCharId) {
@@ -379,7 +397,7 @@ function renderHeaderSession(loggedIn, chars, sessionCharId) {
   if (!_dashLanded) {
     _dashLanded = true;
     const isShare = window.__SHARE_ID__ || /^\/s\//.test(location.pathname);
-    if (!localStorage.getItem('activeTab') && !isShare && typeof switchTab === 'function') switchTab('dashboard');
+    if (!currentTab() && !isShare && typeof switchTab === 'function') switchTab('dashboard');
   }
   const mb = document.getElementById('manageBasketsBtn');
   if (mb) mb.style.display = loggedIn ? '' : 'none';

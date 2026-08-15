@@ -126,6 +126,10 @@ function setPiMode(mode) {
   document.querySelectorAll('.tab[data-pimode]').forEach(b =>
     b.classList.toggle('active', b.dataset.pimode === _piMode));
   try { localStorage.setItem('piMode', _piMode); } catch (e) {}
+  // The mode is the second half of the PI Planner's address (`/planner/refill`), so a link can name
+  // it. Reported from here rather than only from the nav click, because switching to Refill after a
+  // plan is built (below, and in refill.js's own entry points) never goes near a nav button.
+  if (typeof noteSubPage === 'function') noteSubPage('planner', _piMode);
   if (_piMode === 'refill') renderPlanDistribution();  // (re)build tables + sync from inventory
 }
 

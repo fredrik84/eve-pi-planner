@@ -50,6 +50,82 @@ def _rule_targets(css, selector_needle, decl_needle):
     return [s for s in out if selector_needle in s]
 
 
+def _selectors_for(css, needle, decl):
+    """INDIVIDUAL selectors mentioning `needle` from rules declaring `decl`.
+
+    Not `_rule_targets`: that joins a rule's whole comma-separated selector list into one string
+    and keeps the preceding comment with it. Both matter here — the html-class prefix has to be
+    read off the one selector that targets this element, and a leading `/* … */` would otherwise
+    make an `html.nav-li`-gated rule parse as unconditional (it did, on the first draft).
+    """
+    plain = re.sub(r"/\*.*?\*/", " ", css, flags=re.S)
+    # This flat parse cannot see an `@media` wrapper — it would match the inner rule and drop the
+    # condition, modelling a screen-width-scoped hide as unconditional. No nav rule lives in one
+    # today; if that changes, say so loudly instead of quietly answering the wrong question.
+    for block in re.findall(r"@media[^{]*\{(.*?)\n\}", plain, re.S):
+        if needle in block:
+            raise AssertionError(
+                f"{needle} is styled inside an @media block — _visible() models the cascade "
+                f"flatly and would ignore the media condition. Teach it, or stop using it here.")
+    out = []
+    for sels, body in re.findall(r"([^{}]+)\{([^{}]*)\}", plain):
+        if decl not in body.replace(" ", ""):
+            continue
+        out += [" ".join(s.split()) for s in sels.split(",") if needle in s]
+    return out
+
+
+def _required_classes(selector):
+    """The `html.` classes a selector demands, e.g. `html.nav-li.nav-feat-industry .tab[…]`."""
+    m = re.match(r"html((?:\.[\w-]+)*)", selector.strip())
+    return {c for c in m.group(1).split(".") if c} if m else set()
+
+
+def _visible(css, needle, active):
+    """Would an element matching `needle` be visible with exactly `active` set on <html>?
+
+    The stylesheet uses one shape throughout — hide unconditionally, then re-show under an
+    `html.<class>` prefix — so this is decidable without a browser: visible unless something hides
+    it, and visible again if any show-rule's required classes are all present.
+    """
+    # Only an UNCONDITIONAL hide counts as the baseline; a conditional one would need cascade
+    # ordering to resolve, which this model deliberately does not attempt.
+    if not any(not _required_classes(s) for s in _selectors_for(css, needle, "display:none")):
+        return True
+    return any(_required_classes(s) <= active
+               for s in _selectors_for(css, needle, "display:flex"))
+
+
+def _check_group_never_bare(html, css, group_id):
+    """No combination of states shows the group heading with every item under it hidden.
+
+    This replaces an assertion that the group's show-rule "also requires a feature class" — a proxy
+    for the real invariant that stopped being true when Reactions went from feature-gated to
+    login-gated. The group was still never bare (Reactions and the group's own How it works both
+    show for any logged-in user), but the proxy said otherwise, so it failed on correct code.
+    Assert the property itself instead: it survives an item changing which flag it sits behind.
+    """
+    m = re.search(r'id="%s"(.*?)</div>\s*<div class="nav-group' % group_id, html, re.S)
+    items = re.findall(r'data-tab="([\w-]+)"', m.group(1)) if m else []
+    check(len(items) >= 2, f"the {group_id} items were found in the markup ({items})")
+    if not items:
+        return
+    # Every class the <head> pre-paint script can set — the whole state space the nav has.
+    from itertools import combinations
+    flags = ["nav-li", "nav-adm", "nav-grpmgr", "nav-feat-layout", "nav-feat-industry"]
+    bare = []
+    for n in range(len(flags) + 1):
+        for combo in combinations(flags, n):
+            active = set(combo)
+            if not _visible(css, "#" + group_id, active):
+                continue
+            if not any(_visible(css, '.tab[data-tab="%s"]' % t, active) for t in items):
+                bare.append(sorted(active) or ["(no classes)"])
+    check(not bare,
+          f"the {group_id} heading is never drawn over an empty group "
+          f"(bare in these states: {bare[:3]})")
+
+
 def main():
     url = None
     argv = sys.argv[1:]
@@ -74,8 +150,7 @@ def main():
     check(bool(shown_ind), "#industryNavGroup has a rule that can show it")
     check(all("html.nav-li" in s for s in shown_ind),
           "every rule showing #industryNavGroup also requires html.nav-li")
-    check(any("nav-feat" in s for s in shown_ind),
-          "showing #industryNavGroup also requires a feature class, so it never appears bare")
+    _check_group_never_bare(html, css, "industryNavGroup")
     check(".nav-group-empty" in css, "the runtime empty-group class has a hiding rule")
     check("_hideEmptyNavGroups" in js, "the runtime empty-group sweep exists")
 
@@ -103,7 +178,10 @@ def main():
         check("layout" not in tabs, "'layout' does NOT bounce — it is public by design")
         check(bool(re.search(r"html\.nav-feat-layout\s+\.tab\[data-tab=\"layout\"\]", css)),
               "the layout nav rule still has no html.nav-li requirement")
-        check("switchTab('howitworks')" in js, "the bounce target is How it works")
+        # `corrected: true` since 2026-08-15: pages have URLs, so a bounce must REPLACE the address
+        # rather than push, or Back sends the visitor straight back into the login wall.
+        check("switchTab('howitworks', { corrected: true })" in js,
+              "the bounce target is How it works, and it corrects the URL")
 
     print()
     if failures:

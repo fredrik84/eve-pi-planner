@@ -185,6 +185,15 @@ separators as literal NULs:
 **A reaction good's sell-order price is not achievable profit** — use instant-sell (buy orders).
 See [docs/reactions.md](docs/reactions.md).
 
+**The page on screen is `currentTab()`, never `localStorage`.** A page is a URL (`TAB_SLUGS` /
+`TAB_SUBPAGES` in `static/app.js`); the stored `activeTab` answers only "what should a bare visit to
+`/` restore". Storage is shared across BROWSER TABS, so a guard reading it gets whichever page the
+*other* tab last opened. Adding an SPA page means four lists agreeing — the panel in `index.html`,
+`TAB_SLUGS`, `SPA_PAGES` in `app/main.py`, and the nav button — which `test_routing.py` checks.
+**Never register the page routes as `/{page}`**: `StaticFiles` is mounted at `/`, so a wildcard
+returns the SPA document for every missing asset, which a browser reports as a syntax error inside
+the file rather than the 404 it is.
+
 ---
 
 ## Key constants

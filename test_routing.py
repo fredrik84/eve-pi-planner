@@ -67,7 +67,12 @@ def main() -> int:
     slugs = dict(re.findall(r"(\w+):\s*'([^']+)'", block))
     panels = set(re.findall(r'id="tab-([a-z]+)"', html))
     spa_block = main_py[main_py.index("SPA_PAGES = ("):]
-    spa = set(re.findall(r'"([^"]+)"', spa_block[:spa_block.index(")")]))
+    # Cut at the tuple's own closing paren in column 0 — a `)` inside one of the comments in that
+    # block truncated the parse and silently reported half the routes as missing. Comment lines are
+    # then dropped outright, since a quoted phrase in prose is not a route.
+    spa_body = "\n".join(ln for ln in spa_block[:spa_block.index("\n)")].splitlines()
+                         if not ln.lstrip().startswith("#"))
+    spa = set(re.findall(r'"([^"]+)"', spa_body))
 
     print("\nevery page in the UI has a URL:")
     check(bool(slugs) and bool(panels) and bool(spa),
@@ -77,9 +82,23 @@ def main() -> int:
     extra = sorted(set(slugs) - panels)
     check(not extra, f"no slug points at a panel that does not exist (extra: {extra})")
 
+    # Sections within a page (`/admin/bugs`, `/planner/refill`) — a second segment under a tab's own
+    # slug. Parsed the same way and folded into the same set, because the server does not care which
+    # of the two kinds a path is: it either has a route or it 404s.
+    sub_block = js[js.index("const TAB_SUBPAGES = {"):]
+    sub_block = sub_block[:sub_block.index("\n};")]
+    sub_urls = set()
+    for tab, body in re.findall(r"(\w+):\s*\{(.*?)\n  \},", sub_block, re.S):
+        slug_part = body[body.index("slugs:"):] if "slugs:" in body else ""
+        base = slugs.get(tab, "")
+        for _key, sub in re.findall(r"(\w+):\s*'([^']+)'", slug_part):
+            sub_urls.add(("" if base == "/" else base) + "/" + sub)
+    check(bool(sub_urls), f"the sections were found ({len(sub_urls)})")
+    check(all(u.count("/") >= 1 for u in sub_urls), "every section hangs off its page's own slug")
+
     print("\n...and the server serves exactly those URLs:")
     # `/` is the dashboard and is registered separately, so it is not in SPA_PAGES by design.
-    want = {v.lstrip("/") for k, v in slugs.items() if v != "/"}
+    want = {v.lstrip("/") for k, v in slugs.items() if v != "/"} | {u.lstrip("/") for u in sub_urls}
     check(want == spa,
           f"the frontend's slugs and the server's routes are the same set "
           f"(only in JS: {sorted(want - spa)}; only in main.py: {sorted(spa - want)})")
@@ -109,6 +128,13 @@ def main() -> int:
         for path in ["/"] + sorted("/" + p for p in spa):
             check(_status(path) == 200, f"GET {path} -> 200")
 
+        print("\nlive: a typed trailing slash reaches the page instead of 404ing:")
+        # Starlette's own `redirect_slashes` never fires here — StaticFiles is mounted at `/`, so
+        # every path matches something and the router never reaches its no-match case. Without the
+        # explicit redirect routes, `/admin/` 404s while `/admin` works.
+        for path in ["/admin/", "/reactions/", "/planner/refill/", "/industry/how-it-works/"]:
+            check(_status(path) in (200, 308), f"GET {path} -> {_status(path)} (want 308 or 200)")
+
         print("\nlive: a non-page path is NOT swallowed by the page routes:")
         check(_status("/nope.js") == 404,
               "a missing asset still 404s rather than returning the SPA document")
@@ -121,9 +147,11 @@ def main() -> int:
         check(_status("/healthz") == 200, "healthz still answers")
 
     print("\nthe router honours the URL over the remembered tab:")
-    check("const routed = tabForPath(location.pathname);" in js
-          and js.index("const routed = tabForPath") < js.index("else if (isMobile)"),
+    check("const routed = routeForPath(location.pathname);" in js
+          and js.index("const routed = routeForPath") < js.index("else if (isMobile)"),
           "an explicit link is checked BEFORE the localStorage fallback")
+    check("switchTab(routed.tab, { fromHistory: true, sub: routed.sub })" in js,
+          "...and the SECTION in that link is honoured too, not just the page")
     check("addEventListener('popstate'" in js, "back/forward is handled")
     check("fromHistory" in js, "...without pushing the entry the browser just moved to")
     check("corrected: true" in js,

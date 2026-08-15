@@ -26,6 +26,11 @@ How to test, deploy, release and debug. The rules themselves are stated in
 
 Write proper test cases for new features and run them against the container before calling
 anything shipped. Add to these or create a new `test_*.py` in the same urllib/`--url` style.
+
+A passing test proves nothing on its own — **reintroduce the bug it claims to catch and watch it go
+red** before trusting it. Several tests in this table were green against a defect they were written
+for, and only the mutation showed it (see the guard notes in `test_settings_memo.py`,
+`test_print_locking.py` and `test_routing_client.js`).
 Assert *durable invariants*, not runtime state an admin can change (e.g. don't assert a flag's
 enabled value equals its code default — admins toggle it).
 
@@ -42,6 +47,8 @@ enabled value equals its code default — admins toggle it).
 | `test_delete_account.py` | `DELETE /api/me` — nothing keyed to the account survives, a second account is unaffected, bug reports are anonymised rather than deleted |
 | `test_epoch_precision.py` | the epoch round trip, idempotency and targeting (see the `double precision` rule in CLAUDE.md) |
 | `test_fresh_db_tables.py` | fresh-DB migration traps; fakes Postgres abort semantics — a SQLite-based test proves nothing here |
+| `test_routing.py` | that the four lists naming the pages agree (panels in `index.html`, `TAB_SLUGS`/`TAB_SUBPAGES` in `app.js`, `SPA_PAGES` in `main.py`), that every page URL serves and that a non-page path still 404s instead of being swallowed by a wildcard |
+| `test_routing_client.js` | **the one test that RUNS client code.** The routing region of `app.js` is executed in a `vm` context with stubbed `location`/`history`/`localStorage`, so history entries, back/forward and the multi-tab bug are checked behaviourally rather than by string match. Node is on the host but not in the web image, so this one runs **outside** the container: `node test_routing_client.js` |
 
 ### Local test runs (docker compose, not prod)
 

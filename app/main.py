@@ -379,12 +379,28 @@ def _api_not_found(rest: str):
 SPA_PAGES = (
     "setup-analysis", "planetary-planning", "planner", "factory-layout", "planet-db",
     "contribute", "how-it-works", "reactions", "manufacturing", "industry/how-it-works", "admin",
+    # Sections within a page (`TAB_SUBPAGES` in static/app.js). Admin is eleven pages behind one nav
+    # entry and PI Planner is two, so without these "look at the bug list" still could not be sent
+    # to anybody. Page NAMES only — nothing here identifies a record, so there is nothing for a
+    # recipient to learn from the path itself (CLAUDE.md rule 8).
+    "planner/find-buildables", "planner/refill",
+    "admin/stats", "admin/jobs", "admin/features", "admin/users", "admin/submissions",
+    "admin/bugs", "admin/baskets", "admin/groups", "admin/moon-goo", "admin/corp-wallet",
+    "admin/cleanup",
 )
 
 for _page_path in SPA_PAGES:
     def _spa_page(_p=_page_path):
         return HTMLResponse(_page("index.html"))
     app.add_api_route(f"/{_page_path}", _spa_page, methods=["GET"], include_in_schema=False)
+
+    # Starlette's own `redirect_slashes` never fires here: StaticFiles is mounted at `/`, so every
+    # path matches something and the router never reaches its no-match case. Without this, a typed
+    # `/admin/` 404s while `/admin` works — a difference nobody expects from an address bar.
+    def _spa_page_slash(_p=_page_path):
+        return RedirectResponse(f"/{_p}", status_code=308)
+    app.add_api_route(f"/{_page_path}/", _spa_page_slash, methods=["GET"],
+                      include_in_schema=False)
 
 
 app.mount("/", StaticFiles(directory="static", html=True), name="static")

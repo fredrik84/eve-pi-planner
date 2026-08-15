@@ -166,11 +166,15 @@ html.nav-li .tab[data-tab="contribute"],
 html.nav-li .tab[data-pimode="refill"],
 html.nav-li .tab[data-pimode="build"] { display: flex; }
 
-/* The Industry group header is only worth drawing when something sits under it. Both of its
-   items are feature-gated AND login-gated, so a logged-out visitor used to get a bare "Industry"
-   heading with nothing beneath it. Tie the group's own visibility to the same conditions as its
-   contents. (_hideEmptyNavGroups() in planetary.js covers the cases CSS can't see — a feature
-   switched off at runtime, or a group page-restriction hiding the last item.) */
+/* The Industry group header is only worth drawing when something sits under it: a logged-out
+   visitor used to get a bare "Industry" heading with everything beneath it hidden. Login is now
+   the weakest condition any item under here carries — Reactions and the group's own How it works
+   need only that, Manufacturing needs the feature flag too — so gating the heading on login alone
+   is exactly right, and stays right as items move between flags. `test_nav_gating.py` checks the
+   property (never drawn over an empty group) rather than this particular selector, because an
+   earlier version pinned the selector and failed when Reactions went from feature-gated to public.
+   (_hideEmptyNavGroups() in planetary.js covers the cases CSS can't see — a feature switched off
+   at runtime, or a group page-restriction hiding the last item.) */
 html.nav-li #industryNavGroup { display: flex; }
 .nav-group-empty { display: none; }
 

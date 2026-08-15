@@ -46,6 +46,20 @@ async function loadFromHash() {
     const data = await api('/api/share/' + hash.slice(3));
     document.getElementById('inv').value = data.inventory;
     analyze();
+    // ...and OPEN the page that analysis renders on. This filled the box and ran the analysis on
+    // whichever page the recipient's browser happened to restore, so the one thing the link was
+    // sent for was off screen. `fromHistory` because the URL is corrected below, in one step, and
+    // pushing here would drop the `#s=` fragment the link is made of.
+    if (typeof switchTab === 'function') switchTab('analyze', { fromHistory: true });
+    const slug = (typeof TAB_SLUGS === 'object' && TAB_SLUGS.analyze) || '';
+    // Only claim the page we actually landed on. Gating can refuse the switch — and rewriting the
+    // bar regardless would have it name Setup Analysis while How it works is on screen, AND drop
+    // the `#s=` fragment, making the share unrecoverable by reload. Checked rather than assumed.
+    if (slug && location.pathname !== slug && currentTab() === 'analyze') {
+      // Keep the fragment: it is still the share, so a refresh reloads the same analysis. Replace
+      // rather than push — arriving on a link is not a navigation the user can go "back" from.
+      try { history.replaceState(null, '', slug + location.hash); } catch (e) {}
+    }
   } catch (e) { console.error('Failed to load share:', e); }
 }
 
@@ -479,16 +493,118 @@ const TAB_SLUGS = {
 };
 const SLUG_TABS = Object.fromEntries(Object.entries(TAB_SLUGS).map(([t, u]) => [u, t]));
 
+// A second segment, for the two pages that are really several pages behind one nav entry: Admin
+// (eleven sections) and PI Planner (two modes). Both were `localStorage` in exactly the way the
+// top-level tab was, so "look at the bug list" or "use Refill" could not be sent to anybody.
+//
+// **These are the whole of the deep-linking work that is safe to do unasked.** Everything else
+// worth deep-linking — an order, a plan, a colony — is identified by an ID, and an ID in a path is
+// visible to whoever the link reaches (CLAUDE.md rule 8). That needs a decision about what an id
+// discloses, not a mapping, so it is deliberately not here.
+//
+// `apply` is how the URL reaches the module that owns the state; `slugs` maps the module's internal
+// key to what a person should see in the address bar. Same split, and same reason, as TAB_SLUGS.
+const TAB_SUBPAGES = {
+  admin: {
+    apply: k => { if (typeof adminSubPage === 'function') adminSubPage(k); },
+    slugs: {
+      stats: 'stats', jobs: 'jobs', features: 'features', users: 'users',
+      submissions: 'submissions', bugs: 'bugs', baskets: 'baskets', groups: 'groups',
+      moongoo: 'moon-goo', wallet: 'corp-wallet', cleanup: 'cleanup',
+    },
+  },
+  planner: {
+    apply: k => { if (typeof setPiMode === 'function') setPiMode(k); },
+    slugs: { build: 'find-buildables', refill: 'refill' },
+  },
+};
+
+function _subSlug(tab, key) {
+  const m = TAB_SUBPAGES[tab];
+  return (m && key && m.slugs[key]) || null;
+}
+function _subKey(tab, slug) {
+  const m = TAB_SUBPAGES[tab];
+  if (!m) return null;
+  return Object.keys(m.slugs).find(k => m.slugs[k] === slug) || null;
+}
+/** The full path for a page, including its section when it has one. */
+function _pathFor(tab, sub) {
+  const base = TAB_SLUGS[tab];
+  if (!base) return null;
+  const s = _subSlug(tab, sub);
+  if (!s) return base;
+  return (base === '/' ? '' : base) + '/' + s;
+}
+
+// **Which page is on screen right now**, as opposed to which page this browser saw last.
+//
+// The two used to be the same question, answered by reading `localStorage.activeTab` — a dozen
+// places did exactly that. They are not the same question, and `localStorage` is the wrong place to
+// ask either of them:
+//
+//   * it is shared across BROWSER TABS. Two tabs open on the site and the guards in one read
+//     whichever page the *other* one last opened, so a rescan finishing in a background tab could
+//     re-render the foreground one's Dashboard, or skip it;
+//   * it survives the page. Before boot has chosen anything it still answers, with last week's page;
+//   * and now that a URL names the page, a stored key is simply a second source of truth for
+//     something the address bar already states.
+//
+// So the live answer lives here, seeded from the URL at script-load time (before anything can ask)
+// and updated by `switchTab`, which is the only thing that moves a page onto the screen. `null`
+// means genuinely nothing has been chosen yet — the callers that care about that distinction want
+// it, and it is a distinction `localStorage` could not express.
+let _activeTab = tabForPath(location.pathname);
+let _activeSub = (routeForPath(location.pathname) || {}).sub || null;
+// Set while switchTab is running its open hooks. Those hooks restore a section, which would
+// otherwise write the URL a second time — and worse, write it while the address bar still holds the
+// PREVIOUS page, replacing that entry instead of pushing a new one. So they only record where they
+// are, and switchTab performs exactly one history operation at the end.
+let _switching = 0;
+
+/** The page currently on screen, or null before one has been chosen. Ask this, never storage. */
+function currentTab() { return _activeTab; }
+/** The section within it, for the two pages that have sections. */
+function currentSubPage() { return _activeSub; }
+
 /** The tab a path names, or null when the path is not one of ours (a share link, an asset). */
 function tabForPath(path) {
+  return (routeForPath(path) || {}).tab || null;
+}
+
+/** The {tab, sub} a path names, or null. */
+function routeForPath(path) {
   const clean = (path || '/').replace(/\/+$/, '') || '/';
-  return SLUG_TABS[clean] || null;
+  // Whole-path first: `/industry/how-it-works` is a two-segment slug for a TAB, and must not be
+  // read as the `how-it-works` section of an `industry` page.
+  if (SLUG_TABS[clean]) return { tab: SLUG_TABS[clean], sub: null };
+  const cut = clean.lastIndexOf('/');
+  if (cut < 0) return null;
+  const parent = clean.slice(0, cut) || '/';
+  const tab = SLUG_TABS[parent];
+  if (!tab || !TAB_SUBPAGES[tab]) return null;
+  const sub = _subKey(tab, clean.slice(cut + 1));
+  return sub ? { tab, sub } : null;
+}
+
+/** A section module reporting where it has just moved to.
+ *
+ *  Always a REPLACE. A deliberate click does not arrive here first — it goes through `switchTab`
+ *  with the section as `opts.sub`, which pushes exactly once (see `adminNavTo`). What reaches this
+ *  function is a module correcting its own state: a restore on open, or refill.js flipping to
+ *  Refill once a plan exists. Neither is a navigation the user should be able to go Back from, so
+ *  neither earns a history entry — it only earns an address bar that stops lying. */
+function noteSubPage(tab, key) {
+  if (_activeTab !== tab) return;          // it is restoring state for a page not on screen
+  _activeSub = key;
+  if (_switching) return;                  // switchTab will write the URL once, in a moment
+  _syncUrl(tab, true);
 }
 
 /** Put `name` in the address bar without navigating. `replace` for corrections, so a bounced
  *  deep link does not leave a back-button entry pointing at a page you may not open. */
 function _syncUrl(name, replace) {
-  const url = TAB_SLUGS[name];
+  const url = _pathFor(name, name === _activeTab ? _activeSub : null);
   if (!url) return;                       // a tab with no slug keeps whatever the URL already is
   // A share link is consumed by planetary.js, which clears it itself — do not fight it here.
   if (/^\/s\//.test(location.pathname) && name === 'planetary') return;
@@ -497,9 +613,9 @@ function _syncUrl(name, replace) {
 }
 
 function switchTab(name, opts) {
-  // Defense-in-depth: nav buttons for a restricted page are hidden (_applyPageRestriction), but
-  // a stale localStorage 'activeTab' or a direct call could still reach here — bounce to the
-  // first page the caller's group actually allows instead of rendering a blocked page.
+  // Defense-in-depth: nav buttons for a restricted page are hidden (_applyPageRestriction), but a
+  // pasted deep link or a direct call could still reach here — bounce to the first page the
+  // caller's group actually allows instead of rendering a blocked page.
   if (typeof _isPageRestricted === 'function' && _isPageRestricted(name)) {
     name = _firstAllowedPage();
     opts = { ...(opts || {}), corrected: true };
@@ -514,6 +630,19 @@ function switchTab(name, opts) {
     document.querySelectorAll('#adminNavGroup .admin-nav-item, #adminMobilePageNav .admin-mobile-page-btn')
       .forEach(b => b.classList.remove('active'));
   }
+  // Recorded BEFORE the open hooks run: a hook restoring a section calls back in through
+  // noteSubPage, which has to be able to tell "the page I belong to is on screen" from "something
+  // else is". Nothing between here and there reads the old value.
+  _activeTab = name;
+  _activeSub = (opts && opts.sub) || null;
+  // A COUNTER, not a flag: an open hook may call switchTab again (see the bounce below), and a
+  // boolean would let the inner call's `finally` clear the guard while the outer call is still
+  // running its hooks — turning it off for exactly the stretch it exists to cover. Defence in
+  // depth rather than a fix for something observable: with today's single re-entrant call site the
+  // outer call bails out anyway, so no test covers the difference. It is here so the next hook
+  // that redirects does not have to reason about it.
+  _switching++;
+  try {
   if (name === 'dashboard' && typeof onDashboardTabOpen === 'function') onDashboardTabOpen();
   if (name === 'planner' && typeof onPlannerTabOpen === 'function') onPlannerTabOpen();
   if (name === 'planetary' && typeof onPlanetaryTabOpen === 'function') onPlanetaryTabOpen();
@@ -525,11 +654,37 @@ function switchTab(name, opts) {
   if (name === 'analyze' && typeof onAnalyzeTabOpen === 'function') onAnalyzeTabOpen();
   if (name === 'admin' && typeof onAdminTabOpen === 'function') onAdminTabOpen();
   if (name === 'indhowitworks') loadHelpPanel(name);
+  // A section named by the URL beats whatever the open hook just restored from storage — same rule
+  // as the page itself, for the same reason: a link asked for THIS section.
+  if (opts && opts.sub && TAB_SUBPAGES[name]) TAB_SUBPAGES[name].apply(opts.sub);
+  } finally { _switching--; }
+  // **An open hook is allowed to send us somewhere else.** onAdminTabOpen bounces a confirmed
+  // non-admin by calling switchTab again, from inside this one. When that happens the inner call
+  // has already recorded, stored and addressed the page it chose, and everything below would
+  // overwrite all three with the page we were merely *asked* for — screen showing the Dashboard,
+  // address bar reading /admin, and two history entries for one click. So if the hooks moved us,
+  // the inner call is authoritative and this one is done.
+  if (_activeTab !== name) return;
+  // Still stored, but for ONE purpose only: what a bare visit to `/` should restore. Nothing asks
+  // it "where am I" any more — that is `currentTab()`, which cannot be stale or belong to another
+  // browser tab.
   localStorage.setItem('activeTab', name);
   // `fromHistory` = the browser moved us, so the URL is already right and pushing would add a
   // duplicate entry. `corrected` = gating sent us somewhere else than asked, so REPLACE rather than
   // push: the address bar must not keep claiming a page the user cannot open.
+  //
+  // The two can arrive TOGETHER, and `fromHistory` must not win then. A restricted deep link is
+  // exactly that case — arrived at by URL (so `fromHistory`) and then bounced (so `corrected`) —
+  // and suppressing the write left the bar naming the blocked page while another page was on
+  // screen, which is the one thing this whole mechanism exists to prevent.
+  //
+  // The remaining `fromHistory` write is not a correction but an omission: arriving at a bare
+  // `/admin`, the open hook restores a section, so the address is now less specific than the page
+  // it names. Replace it with the full path. Never a push — the browser's own entry stands.
   if (!(opts && opts.fromHistory)) _syncUrl(name, !!(opts && opts.corrected));
+  else if ((opts && opts.corrected) || _pathFor(name, _activeSub) !== location.pathname) {
+    _syncUrl(name, true);
+  }
 }
 
 function toggleSidebar() {
@@ -539,9 +694,11 @@ function toggleSidebar() {
 
 document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
-    switchTab(t.dataset.tab);
-    // PI Planner sub-items (Find Buildables / Refill a plan) carry a data-pimode.
-    if (t.dataset.pimode && typeof setPiMode === 'function') setPiMode(t.dataset.pimode);
+    // PI Planner sub-items (Find Buildables / Refill a plan) carry a data-pimode. Handed to
+    // switchTab as the section rather than applied afterwards, so one click leaves ONE history
+    // entry — setting it after the switch pushed `/planner` and then `/planner/refill`, and Back
+    // would have gone to a mode the user never chose.
+    switchTab(t.dataset.tab, t.dataset.pimode ? { sub: t.dataset.pimode } : undefined);
   }));
   if (localStorage.getItem('navCollapsed') === '1') document.body.classList.add('nav-collapsed');
   // A planetary share link (/s/<id> path or the id injected by the server route) is a
@@ -559,8 +716,8 @@ document.addEventListener('DOMContentLoaded', () => {
   // convenience for a bare visit to `/` — honouring the remembered one over an explicit link is the
   // whole reason a shared link was useless before. A routed deep link also beats the mobile
   // fallback: it is an explicit request, exactly as a share link is.
-  const routed = tabForPath(location.pathname);
-  if (routed) switchTab(routed, { fromHistory: true });
+  const routed = routeForPath(location.pathname);
+  if (routed) switchTab(routed.tab, { fromHistory: true, sub: routed.sub });
   else if (hasPlanetaryShare) switchTab('planetary');
   else if (isMobile) switchTab(saved && MOBILE_TABS.includes(saved) ? saved : 'dashboard');
   else if (saved) switchTab(saved);
@@ -569,8 +726,8 @@ document.addEventListener('DOMContentLoaded', () => {
   // is the same code path the user exercises constantly. `fromHistory` stops it pushing the entry
   // the browser just moved us to back onto the stack.
   window.addEventListener('popstate', () => {
-    const t = tabForPath(location.pathname);
-    if (t) switchTab(t, { fromHistory: true });
+    const r = routeForPath(location.pathname);
+    if (r) switchTab(r.tab, { fromHistory: true, sub: r.sub });
   });
   // Load session/character state on every page load so the header + Dashboard nav populate
   // (and a logged-in player with no remembered tab lands on the Dashboard).
@@ -651,7 +808,7 @@ function _applyAutoRefresh() {
 function _autoRefreshTick() {
   if (document.hidden || !_loggedIn) return;
   if (typeof _rescanning !== 'undefined' && _rescanning) return;  // don't fight a manual rescan
-  const tab = localStorage.getItem('activeTab');
+  const tab = currentTab();
   if (tab !== 'dashboard' && tab !== 'reactions') return;
   _lastAutoRefresh = Date.now();
   // Silent poll: re-render ONLY on a successful, still-logged-in response. A background poll can

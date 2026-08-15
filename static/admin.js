@@ -45,16 +45,28 @@ function _applyAdminNavVisibility() {
   });
 }
 
-// Admin sub-navigation: driven from the sidebar nav-group.
-// adminNavTo() is called by sidebar buttons; adminSubPage() handles the panel logic.
+// Admin sub-navigation: driven from the sidebar nav-group and the mobile page bar.
+// adminNavTo() is called by those buttons; adminSubPage() handles the panel logic.
+//
+// The section goes through switchTab as the route's second segment rather than being applied after
+// it, so one click produces one history entry (`/admin/bugs`) instead of `/admin` followed by
+// `/admin/bugs`. switchTab calls adminSubPage for us, via TAB_SUBPAGES.
 function adminNavTo(key) {
-  switchTab('admin');
-  adminSubPage(key);
+  switchTab('admin', { sub: key });
 }
 
 function adminSubPage(key) {
+  // A pure group manager has nothing to see on a site-admin-only section, and the check used to sit
+  // in onAdminTabOpen alone — which a URL reaches around. `/admin/bugs` typed or pasted opened the
+  // panel and fired its loader for them; so did pressing Back onto it, which no hook re-corrects.
+  // Here it covers every way in, because every way in comes through this function.
+  if (!_isAdmin && _isGroupManager && _SITE_ADMIN_ONLY_PAGES.has(key)) key = 'moongoo';
   _adminPage = key;
   try { localStorage.setItem('adminPage', key); } catch (e) {}
+  // Tell the router where we are, so `/admin/bugs` can be sent to somebody. Kept here rather than
+  // only in adminNavTo because this is the choke point — the boot restore and the group-manager
+  // fallback to 'moongoo' both land here without going through a click.
+  if (typeof noteSubPage === 'function') noteSubPage('admin', key);
   // Mark active item in the desktop sidebar nav-group.
   document.querySelectorAll('#adminNavGroup .admin-nav-item').forEach(b =>
     b.classList.toggle('active', b.dataset.page === key));
