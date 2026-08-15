@@ -530,7 +530,10 @@ function renderAnalysis() {
   const el = document.getElementById('analyzeContent');
   if (!statusEl || !el) return;
   if (!_analyzeSnaps.length) {
-    statusEl.innerHTML = `<div class="admin-hint">Nothing to compare against yet. Either <b>set a recipe on a factory</b> in-game (then <b>Rescan colonies</b> to get a "Current setup" demand profile), or build a plan in <b>Planetary Planning</b> and <b>Save plan</b>.</div>`;
+    // Both routes out of this empty state are one click from here — the rescan runs in place, the
+    // planner is a tab away. Naming them without offering them made the shorter of the two (the
+    // rescan) look like a trip to another page, which it is not.
+    statusEl.innerHTML = `<div class="admin-hint">Nothing to compare against yet. Either <b>set a recipe on a factory</b> in-game and <button type="button" class="ind-link-btn" onclick="rescanAll()">rescan colonies</button> to get a "Current setup" demand profile, or <button type="button" class="ind-link-btn" onclick="switchTab('planner')">build a plan</button> in Planetary Planning and save it.</div>`;
     el.innerHTML = '';
     return;
   }
@@ -1362,7 +1365,10 @@ function _staleSupplyNote(rows) {
   if (!stale.size) return '';
   const names = [...stale];
   const list = names.slice(0, 4).map(_esc).join(', ') + (names.length > 4 ? `, +${names.length - 4} more` : '');
-  return `<div class="an-stale-note">⚠ <b>Rescan for true numbers.</b> ${names.length} material${names.length > 1 ? 's' : ''} (${list}) ${names.length > 1 ? 'are' : 'is'} fed by colonies last scanned before extraction-limit tracking — their supply may read optimistically high. <b>Rescan colonies</b> in the Characters tab; a thin or over-large planet can show 100% now and drop once its real extraction is measured.</div>`;
+  // The rescan runs from here rather than sending the reader to the Characters tab to find the
+  // button: `rescanAll` is tab-independent and re-renders this page when it finishes, so the note
+  // that raised the problem is also the thing that clears it.
+  return `<div class="an-stale-note">⚠ <b>Rescan for true numbers.</b> ${names.length} material${names.length > 1 ? 's' : ''} (${list}) ${names.length > 1 ? 'are' : 'is'} fed by colonies last scanned before extraction-limit tracking — their supply may read optimistically high. <button type="button" class="ind-link-btn" onclick="rescanAll()">Rescan colonies</button> — a thin or over-large planet can show 100% now and drop once its real extraction is measured.</div>`;
 }
 
 // The "proper line" for surfacing a suggestion: a material earns one only when it's SHORT now, or its

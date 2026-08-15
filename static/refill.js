@@ -171,8 +171,11 @@ async function renderPlanDistribution() {
     && s.factories.some(f => !deployedLocs.has(f.loc));
   const opts = snaps.map(s =>
     `<option value="${s.id}"${String(s.id) === String(snap.id) ? ' selected' : ''}>${s.derived ? '◆ ' : ''}${_esc(s.name)}${_mismatch(s) ? ' ⚠ differs from deployed' : ''}${(!s.saved && !s.derived) ? ' · this browser (unsaved)' : ''}</option>`).join('');
+  // It already knew which plan to switch to, so it switches: `onPlanDistSelect` is the same handler
+  // the dropdown above fires, and naming the right option while making the reader go find it in a
+  // list is the gap this closes.
   const mismatchNote = _mismatch(snap)
-    ? `<div class="dist-mismatch">⚠ This plan's factories don't match your deployed setup, so the split may target planets you didn't build${derived.length ? ` — switch to <b>◆ ${_esc(derived[0].name)}</b> to refill what you actually run` : ''}.</div>`
+    ? `<div class="dist-mismatch">⚠ This plan's factories don't match your deployed setup, so the split may target planets you didn't build${derived.length ? ` — <button type="button" class="ind-link-btn" onclick="onPlanDistSelect('${_esc(String(derived[0].id))}')">switch to ◆ ${_esc(derived[0].name)}</button> to refill what you actually run` : ''}.</div>`
     : '';
   const delBtn = snap.saved
     ? `<button class="pp-profile-action-btn pp-profile-del-btn" onclick="deletePlanSnapshot(${snap.srvId})" title="Delete this saved plan">Delete</button>` : '';

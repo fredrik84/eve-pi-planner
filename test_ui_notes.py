@@ -16,8 +16,12 @@ What is pinned:
     worth anything, and the easy mistake is to demote them too;
   * `_rxFootnote` renders nothing when every part is empty, so a clean account gets no empty box.
 
-    docker compose cp test_reaction_notes.py web:/srv/app/ && \
-      docker compose exec web python3 test_reaction_notes.py
+The same rule is then checked across the other pages that state an action: Setup Analysis told the
+reader to rescan from the Characters tab when `rescanAll()` runs from anywhere, and Refill named the
+exact plan to switch to without switching it.
+
+    docker compose cp test_ui_notes.py web:/srv/app/ && \
+      docker compose exec web python3 test_ui_notes.py
 """
 import os
 import re
@@ -149,6 +153,36 @@ def main() -> int:
         check("status" in unp.group(1),
               "only OPEN orders are nagged about — a delivered one is history, and editing a "
               f"closed record is not the ask (got {unp.group(1).strip()})")
+
+    print("\nthe same rule on the other pages that name an action:")
+    ana = _strip_comments(
+        open(os.path.join(HERE, "static", "analysis.js"), encoding="utf-8").read())
+    ref = _strip_comments(
+        open(os.path.join(HERE, "static", "refill.js"), encoding="utf-8").read())
+
+    # "Rescan colonies in the Characters tab" — `rescanAll()` is tab-independent and re-renders this
+    # page when it finishes, so the trip was never needed. The note that raises the problem should
+    # be the thing that clears it.
+    m = re.search(r"Rescan for true numbers.{0,700}", ana, re.S)
+    check(bool(m), "the stale-supply note still exists")
+    if m:
+        check("rescanAll()" in m.group(0), "...and rescans from where it is raised")
+        check("in the Characters tab" not in m.group(0),
+              "...and no longer sends the reader to another tab to press a button")
+
+    # The empty state named two ways out and offered neither.
+    m = re.search(r"Nothing to compare against yet.{0,700}", ana, re.S)
+    check(bool(m), "the Setup Analysis empty state still exists")
+    if m:
+        check("rescanAll()" in m.group(0), "...and offers the rescan")
+        check("switchTab('planner')" in m.group(0), "...and links to the planner")
+
+    # Refill already knew WHICH plan was the right one.
+    m = re.search(r"factories don't match your deployed setup.{0,700}", ref, re.S)
+    check(bool(m), "the refill plan-mismatch warning still exists")
+    if m:
+        check("onPlanDistSelect(" in m.group(0),
+              "...and switches to the plan it names, rather than naming it and stopping")
 
     print("\nan account with nothing to footnote gets no empty box:")
     fn = re.search(r"function _rxFootnote\(parts\)\s*\{(.*?)\n\}", js, re.S)
