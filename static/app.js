@@ -432,7 +432,7 @@ function renderFactorySplit(plan) {
 // a fraction of visitors — so inlining it made every page load carry it. Fetched once per session
 // and cached in the DOM; a failure leaves a link rather than an empty card, because the content is
 // a plain file the user can open directly.
-const _HELP_SRC = {mfhowitworks: '/help/manufacturing.html', rxhowitworks: '/help/reactions.html'};
+const _HELP_SRC = {indhowitworks: '/help/industry.html'};
 const _helpLoaded = {};
 
 async function loadHelpPanel(name) {
@@ -475,7 +475,7 @@ function switchTab(name) {
   if (name === 'characters' && typeof loadCharacters === 'function') loadCharacters();
   if (name === 'analyze' && typeof onAnalyzeTabOpen === 'function') onAnalyzeTabOpen();
   if (name === 'admin' && typeof onAdminTabOpen === 'function') onAdminTabOpen();
-  if (name === 'mfhowitworks' || name === 'rxhowitworks') loadHelpPanel(name);
+  if (name === 'indhowitworks') loadHelpPanel(name);
   localStorage.setItem('activeTab', name);
 }
 

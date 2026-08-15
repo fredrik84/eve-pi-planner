@@ -63,8 +63,7 @@
           <div class="nav-group-hd"><span class="nav-ico">IN</span><span class="nav-lbl">Industry</span></div>
           <button class="tab tab-sub" data-tab="reactions"><span class="nav-ico">RX</span><span class="nav-lbl">Reactions</span></button>
           <button class="tab tab-sub" data-tab="industry"><span class="nav-ico">MF</span><span class="nav-lbl">Manufacturing</span></button>
-          <button class="tab tab-sub" data-tab="rxhowitworks"><span class="nav-ico">i</span><span class="nav-lbl">Reactions — how it works</span></button>
-          <button class="tab tab-sub" data-tab="mfhowitworks"><span class="nav-ico">i</span><span class="nav-lbl">Manufacturing — how it works</span></button>
+          <button class="tab tab-sub" data-tab="indhowitworks"><span class="nav-ico">i</span><span class="nav-lbl">How it works</span></button>
         </div>
         <div class="nav-group" id="adminNavGroup">
           <div class="nav-group-hd"><span class="nav-ico">AD</span><span class="nav-lbl">Admin</span></div>
@@ -185,39 +184,24 @@
       </div>
     </div><!-- /tab-howitworks -->
 
-    <!-- ── Tab: Manufacturing — how it works (static help) ─────────────────── -->
-    <div id="tab-mfhowitworks" class="tab-panel" style="display:none">
+    <!-- ── Tab: Industry — how it works (static help) ─────────────────────────
+         ONE page for both services, not one per tab: two prefixed entries sitting
+         next to each other in the menu read as two products rather than two halves
+         of one. Body lives in static/help/industry.html and is fetched on first
+         open — help copy is documentation, and inlining it shipped every byte to
+         every visitor on every load. -->
+    <div id="tab-indhowitworks" class="tab-panel" style="display:none">
       <div class="pp-layout">
         <div class="pp-main" style="grid-column: 1 / -1; max-width: 100%;">
           <section class="pp-card">
-            <div class="pp-card-title">Manufacturing — how it works
-              <span class="pp-card-hint">— the order you actually use the tab in</span>
+            <div class="pp-card-title">How it works
+              <span class="pp-card-hint">— Reactions and Manufacturing, in the order you use them</span>
             </div>
-            <!-- Body lives in static/help/manufacturing.html, fetched on first open. Help copy does not
-                 belong in index.html: it is documentation, it is long, and every byte
-                 of it was being shipped to every visitor on every load. -->
-            <div id="tab-mfhowitworks-body"><div class="pp-loading"><span class="pp-spinner"></span> Loading…</div></div>
+            <div id="tab-indhowitworks-body"><div class="pp-loading"><span class="pp-spinner"></span> Loading…</div></div>
           </section>
         </div>
       </div>
-    </div><!-- /tab-mfhowitworks -->
-
-    <!-- ── Tab: Reactions — how it works (static help) ───────────────────────── -->
-    <div id="tab-rxhowitworks" class="tab-panel" style="display:none">
-      <div class="pp-layout">
-        <div class="pp-main" style="grid-column: 1 / -1; max-width: 100%;">
-          <section class="pp-card">
-            <div class="pp-card-title">Reactions — how it works
-              <span class="pp-card-hint">— what it decides for you, and what it leaves to you</span>
-            </div>
-            <!-- Body lives in static/help/reactions.html, fetched on first open. Help copy does not
-                 belong in index.html: it is documentation, it is long, and every byte
-                 of it was being shipped to every visitor on every load. -->
-            <div id="tab-rxhowitworks-body"><div class="pp-loading"><span class="pp-spinner"></span> Loading…</div></div>
-          </section>
-        </div>
-      </div>
-    </div><!-- /tab-rxhowitworks -->
+    </div><!-- /tab-indhowitworks -->
 
     <!-- ── Tab: PI Planner ─────────────────────────────────────────────────── -->
     <div id="tab-planner" class="tab-panel" style="display:none">
