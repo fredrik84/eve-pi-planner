@@ -450,11 +450,60 @@ async function loadHelpPanel(name) {
   }
 }
 
-function switchTab(name) {
+
+// ── Routing: a page is a URL, not a localStorage key ───────────────────────────────────────────
+//
+// Every page used to live at `/`, so a link to one could not be shared, a refresh restored whoever
+// had used the browser last rather than the page you meant, and back/forward did nothing.
+//
+// The slug is deliberately NOT the internal tab id: `indhowitworks` is fine in the DOM and awful in
+// something you paste to somebody. The map is the only place the two vocabularies meet, and
+// `test_routing.py` asserts it stays in step with both the panels in index.html and the server's
+// route list — three lists that must agree, checked rather than remembered.
+//
+// The DASHBOARD keeps `/`. It is the landing page, it is what an unrouted visit already showed, and
+// giving it a second address would mean two URLs for one page from day one.
+const TAB_SLUGS = {
+  dashboard: '/',
+  analyze: '/setup-analysis',
+  planetary: '/planetary-planning',
+  planner: '/planner',
+  layout: '/factory-layout',
+  planetdb: '/planet-db',
+  contribute: '/contribute',
+  howitworks: '/how-it-works',
+  reactions: '/reactions',
+  industry: '/manufacturing',
+  indhowitworks: '/industry/how-it-works',
+  admin: '/admin',
+};
+const SLUG_TABS = Object.fromEntries(Object.entries(TAB_SLUGS).map(([t, u]) => [u, t]));
+
+/** The tab a path names, or null when the path is not one of ours (a share link, an asset). */
+function tabForPath(path) {
+  const clean = (path || '/').replace(/\/+$/, '') || '/';
+  return SLUG_TABS[clean] || null;
+}
+
+/** Put `name` in the address bar without navigating. `replace` for corrections, so a bounced
+ *  deep link does not leave a back-button entry pointing at a page you may not open. */
+function _syncUrl(name, replace) {
+  const url = TAB_SLUGS[name];
+  if (!url) return;                       // a tab with no slug keeps whatever the URL already is
+  // A share link is consumed by planetary.js, which clears it itself — do not fight it here.
+  if (/^\/s\//.test(location.pathname) && name === 'planetary') return;
+  if (location.pathname === url) return;  // nothing to say
+  try { history[replace ? 'replaceState' : 'pushState']({ tab: name }, '', url); } catch (e) {}
+}
+
+function switchTab(name, opts) {
   // Defense-in-depth: nav buttons for a restricted page are hidden (_applyPageRestriction), but
   // a stale localStorage 'activeTab' or a direct call could still reach here — bounce to the
   // first page the caller's group actually allows instead of rendering a blocked page.
-  if (typeof _isPageRestricted === 'function' && _isPageRestricted(name)) name = _firstAllowedPage();
+  if (typeof _isPageRestricted === 'function' && _isPageRestricted(name)) {
+    name = _firstAllowedPage();
+    opts = { ...(opts || {}), corrected: true };
+  }
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
   document.querySelectorAll('.tab-panel').forEach(p => p.style.display = p.id === 'tab-' + name ? '' : 'none');
   // The Admin sub-nav (#adminNavGroup / mobile equivalent) tracks its own "which admin page" state
@@ -477,6 +526,10 @@ function switchTab(name) {
   if (name === 'admin' && typeof onAdminTabOpen === 'function') onAdminTabOpen();
   if (name === 'indhowitworks') loadHelpPanel(name);
   localStorage.setItem('activeTab', name);
+  // `fromHistory` = the browser moved us, so the URL is already right and pushing would add a
+  // duplicate entry. `corrected` = gating sent us somewhere else than asked, so REPLACE rather than
+  // push: the address bar must not keep claiming a page the user cannot open.
+  if (!(opts && opts.fromHistory)) _syncUrl(name, !!(opts && opts.corrected));
 }
 
 function toggleSidebar() {
@@ -502,9 +555,23 @@ document.addEventListener('DOMContentLoaded', () => {
   // plan link is still an explicit deep-link and opens the plan view regardless.
   const MOBILE_TABS = ['dashboard', 'analyze', 'howitworks', 'characters', 'admin'];
   const isMobile = window.matchMedia('(max-width: 760px)').matches;
-  if (hasPlanetaryShare) switchTab('planetary');
+  // **The URL wins.** Someone opening a link asked for THAT page, and the remembered tab is only a
+  // convenience for a bare visit to `/` — honouring the remembered one over an explicit link is the
+  // whole reason a shared link was useless before. A routed deep link also beats the mobile
+  // fallback: it is an explicit request, exactly as a share link is.
+  const routed = tabForPath(location.pathname);
+  if (routed) switchTab(routed, { fromHistory: true });
+  else if (hasPlanetaryShare) switchTab('planetary');
   else if (isMobile) switchTab(saved && MOBILE_TABS.includes(saved) ? saved : 'dashboard');
   else if (saved) switchTab(saved);
+
+  // Back/forward. Every on*TabOpen hook already re-runs on an ordinary click, so replaying one here
+  // is the same code path the user exercises constantly. `fromHistory` stops it pushing the entry
+  // the browser just moved us to back onto the stack.
+  window.addEventListener('popstate', () => {
+    const t = tabForPath(location.pathname);
+    if (t) switchTab(t, { fromHistory: true });
+  });
   // Load session/character state on every page load so the header + Dashboard nav populate
   // (and a logged-in player with no remembered tab lands on the Dashboard).
   if (typeof loadCharacters === 'function') loadCharacters();

@@ -361,4 +361,30 @@ def _api_not_found(rest: str):
     )
 
 
+# ── SPA page routes ────────────────────────────────────────────────────────────────────────────
+#
+# Every page used to live at `/`, so a link to one could not be shared and a refresh restored
+# whichever page the browser had last, not the one that was sent. These serve the same document; the
+# frontend reads `location.pathname` and opens the matching tab (`TAB_SLUGS` in static/app.js).
+#
+# **Registered EXPLICITLY, one route per page, and deliberately not as `/{page}`.** StaticFiles is
+# mounted at `/`, so a wildcard here would swallow every asset request that did not match an earlier
+# route — a missing `/app.js` would come back as this HTML document, which a browser reports as a
+# syntax error somewhere inside it rather than as the 404 it is. An explicit list cannot do that: a
+# path that is not a page falls through to the mount exactly as it always did.
+#
+# The Dashboard keeps `/` (see the index route above) rather than gaining a second address.
+#
+# `test_routing.py` asserts this list, `TAB_SLUGS` and the panels in index.html all agree.
+SPA_PAGES = (
+    "setup-analysis", "planetary-planning", "planner", "factory-layout", "planet-db",
+    "contribute", "how-it-works", "reactions", "manufacturing", "industry/how-it-works", "admin",
+)
+
+for _page_path in SPA_PAGES:
+    def _spa_page(_p=_page_path):
+        return HTMLResponse(_page("index.html"))
+    app.add_api_route(f"/{_page_path}", _spa_page, methods=["GET"], include_in_schema=False)
+
+
 app.mount("/", StaticFiles(directory="static", html=True), name="static")

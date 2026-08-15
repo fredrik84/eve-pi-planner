@@ -1708,7 +1708,12 @@ async function _tryRestoreFromHash() {
       // this session; the shareable URL was already copied to the clipboard on share.
       window.__SHARE_ID__ = '';
       if (location.pathname.startsWith('/s/') || location.hash.startsWith('#s=')) {
-        history.replaceState(null, '', '/');
+        // Rewrite to the PLANETARY page, not to `/`. Since pages have URLs (2026-08-15) `/` means
+        // the Dashboard, so stripping the share id to `/` would leave the address bar naming a page
+        // the user is not looking at. The share is still consumed — the id is gone, so a refresh
+        // no longer forces the plan — it just lands on the page actually on screen.
+        const back = (typeof TAB_SLUGS === 'object' && TAB_SLUGS.planetary) || '/';
+        history.replaceState(null, '', back);
       }
     }
   } catch (e) { console.error('Failed to load share:', e); }
