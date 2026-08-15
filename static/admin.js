@@ -8,7 +8,7 @@
 // Site-admin-only sub-pages — hidden from a pure group manager (manages a group's own data
 // without being a full site admin). Anything NOT in this set (moongoo, groups-mine — the
 // group-scoped ones) is visible to both.
-const _SITE_ADMIN_ONLY_PAGES = new Set(['stats', 'features', 'users', 'submissions', 'bugs', 'baskets', 'wallet', 'cleanup', 'groups']);
+const _SITE_ADMIN_ONLY_PAGES = new Set(['stats', 'features', 'users', 'submissions', 'bugs', 'baskets', 'wallet', 'cleanup', 'groups', 'audit']);
 
 let _adminPage = (() => { try { return localStorage.getItem('adminPage') || 'submissions'; } catch (e) { return 'submissions'; } })();
 function onAdminTabOpen() {
@@ -92,6 +92,44 @@ function adminSubPage(key) {
   if (key === 'groups' && typeof loadGroups === 'function') loadGroups();
   if (key === 'moongoo') loadMoonGoo();
   if (key === 'jobs') loadAdminJobs();
+  if (key === 'audit') loadAuditLog();
+}
+
+// ── Audit: who destroyed what ─────────────────────────────────────────────────
+// Read-only and deliberately plain. The value is entirely in the row existing at all — on
+// 2026-08-15 the shared planet database was emptied and the database could not say by whom, so the
+// window had to be bracketed by diffing eight nightly dumps and the cause found in git history.
+// A `global` entry is one that touched data belonging to everyone, and is called out in red.
+async function loadAuditLog() {
+  const el = document.getElementById('auditList');
+  if (!el) return;
+  el.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span>Loading…</div>';
+  let data;
+  try {
+    data = await api('/api/admin/audit');
+  } catch (e) {
+    el.innerHTML = '<div class="pp-empty">Could not load the audit log.</div>';
+    return;
+  }
+  const rows = (data && data.entries) || [];
+  if (!rows.length) {
+    el.innerHTML = '<div class="pp-empty">Nothing recorded yet. Destructive actions appear here as they happen.</div>';
+    return;
+  }
+  el.innerHTML = rows.map(r => {
+    const when = new Date((r.at || 0) * 1000).toLocaleString();
+    const who = r.character_name || (r.context_id ? ('context ' + r.context_id) : 'unknown');
+    const glob = r.scope === 'global';
+    return '<div class="admin-list-row' + (glob ? ' audit-global' : '') + '">'
+      + '<div class="audit-when">' + _esc(when) + '</div>'
+      + '<div class="audit-what"><strong>' + _esc(r.action || '') + '</strong>'
+      + (glob ? ' <span class="audit-badge">global</span>' : '')
+      + (r.affected ? ' <span class="audit-count">' + fmt(r.affected) + ' rows</span>' : '')
+      + '</div>'
+      + '<div class="audit-who">' + _esc(who) + '</div>'
+      + '<div class="audit-detail">' + _esc(r.detail || r.target || '') + '</div>'
+      + '</div>';
+  }).join('');
 }
 
 // Background job health. Scheduled work runs in every replica (guarded by a DB lease) and some of

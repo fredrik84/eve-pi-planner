@@ -621,7 +621,7 @@ def reject_planet_submission(sub_id: int, _: int = Depends(require_admin)):
 
 
 @router.delete("/api/planets")
-def clear_planets(_: int = Depends(require_admin)):
+def clear_planets(context_id: int = Depends(require_context), _: int = Depends(require_admin)):
     """Wipe the planet database. **Site admin only, since 2026-08-15.**
 
     `pp_planets` is GLOBAL — one shared table of community-contributed planet data behind every
@@ -644,9 +644,12 @@ def clear_planets(_: int = Depends(require_admin)):
     finally:
         con.close()
     _invalidate_planetdb_cache()
-    # Logged loudly: the next time this table is found empty, the answer to "did someone press the
-    # button, or did something else eat it" should be one grep away.
-    log.warning("planet database CLEARED by admin — %d rows deleted", before)
+    # Recorded, not just logged: reconstructing the 2026-08-15 wipe needed eight nightly dumps to
+    # bracket it to a DAY, and never did answer who. One row here answers both.
+    from app.audit import record, GLOBAL_SCOPE
+    record("planets.clear", scope=GLOBAL_SCOPE, context_id=context_id,
+           target="pp_planets", affected=before,
+           detail="cleared the shared planet database")
     return {"cleared": True, "deleted": before}
 
 

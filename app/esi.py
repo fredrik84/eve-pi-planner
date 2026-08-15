@@ -1284,6 +1284,13 @@ def delete_account(context_id: int = Depends(require_context)):
         cache_invalidate(charlist_key(context_id))
     except Exception:
         pass
+    # Recorded LAST, after the account rows are gone. `_actor_name` therefore resolves to "" — which
+    # is correct and is why the audit row stores a name rather than joining one: the context_id is
+    # all that is left, and a row saying "account 412 deleted itself" is the useful record.
+    from app.audit import record, ACCOUNT_SCOPE
+    record("account.delete", scope=ACCOUNT_SCOPE, context_id=context_id,
+           target=f"context {context_id}", affected=1,
+           detail="account deleted every table keyed to it")
     return {"deleted": True}
 
 
@@ -1351,6 +1358,17 @@ def require_admin(pp_session: str = Cookie(default=None)) -> int:
         admin_names = ADMIN_CHARACTERS | _db_admin_names()
         if any(n in admin_names for n in names):
             return sess[1]
+        # A LOGGED-IN account reaching for an admin endpoint is the interesting case, and the only
+        # one recorded: anonymous traffic probing the same paths is constant internet background
+        # noise that would bury it. Recorded after the check has already failed — this never
+        # decides anything, it only remembers.
+        try:
+            from app.audit import record_denied
+            record_denied("access.denied.admin", context_id=sess[1],
+                          target="admin endpoint",
+                          detail="logged-in non-admin was refused an admin-only endpoint")
+        except Exception:
+            pass
     raise HTTPException(status_code=403, detail="Admin access required")
 
 

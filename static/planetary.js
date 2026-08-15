@@ -182,6 +182,7 @@ function _applyTabGates() {
   const gates = [
     { key: 'factory_layout', storageKey: 'ppNavFeatLayout', cls: 'nav-feat-layout', tab: 'layout' },
     { key: 'industry',       storageKey: 'ppNavFeatIndustry', cls: 'nav-feat-industry', tab: 'industry' },
+    { key: 'planet_db',      storageKey: 'ppNavFeatPdb',     cls: 'nav-feat-pdb',     tab: 'planetdb' },
   ];
   const cur = currentTab();
   let needRedirect = false;

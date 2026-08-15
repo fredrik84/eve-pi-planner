@@ -510,7 +510,7 @@ const TAB_SUBPAGES = {
     slugs: {
       stats: 'stats', jobs: 'jobs', features: 'features', users: 'users',
       submissions: 'submissions', bugs: 'bugs', baskets: 'baskets', groups: 'groups',
-      moongoo: 'moon-goo', wallet: 'corp-wallet', cleanup: 'cleanup',
+      moongoo: 'moon-goo', wallet: 'corp-wallet', cleanup: 'cleanup', audit: 'audit',
     },
   },
   planner: {

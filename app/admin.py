@@ -342,6 +342,7 @@ def remove_admin(character_name: str, _: int = Depends(require_admin)):
     ensure_admin_table()
     con = get_connection()
     cur = con.execute("DELETE FROM pp_admins WHERE character_name=?", (character_name,))
+    _audit_priv("admins.remove", character_name, cur.rowcount)
     con.commit()
     changed = cur.rowcount
     con.close()
@@ -561,6 +562,31 @@ _STATS_TO_METRIC = {
 }
 
 
+@router.get("/api/admin/audit")
+def admin_audit(limit: int = 200, _: int = Depends(require_admin)):
+    """The destructive-action log, newest first (Admin → Audit).
+
+    Exists because on 2026-08-15 the database could not answer "who emptied the planet table"; the
+    window had to be bracketed by diffing eight nightly dumps and the cause found in git history.
+    """
+    from app.audit import recent
+    return {"entries": recent(max(1, min(int(limit or 200), 1000)))}
+
+
+def _audit_priv(action: str, who: str, changed: int) -> None:
+    """Record an admin/tester grant being revoked.
+
+    Not a data delete, but the same question in a different suit: privilege changes are the other
+    thing you want a timeline of when something has gone wrong and you are trying to work out who
+    could have done it.
+    """
+    if not changed:
+        return                      # nothing was removed; a no-op is not an event
+    from app.audit import record, GLOBAL_SCOPE
+    record(action, scope=GLOBAL_SCOPE, target=who, affected=changed,
+           detail=f"revoked {action.split('.')[0]} from {who}")
+
+
 def _cleanup_preview_data(con) -> dict:
     """Compute per-category preview counts without writing anything."""
     p = {}
@@ -748,6 +774,13 @@ def run_cleanup(req: CleanupRequest, _: int = Depends(require_admin)):
     finally:
         con.close()
 
+    # Global: this reaches across accounts (empty contexts, everyone's old sessions and shares).
+    from app.audit import record, GLOBAL_SCOPE
+    total = sum(deleted.values())
+    if total:
+        record("admin.cleanup", scope=GLOBAL_SCOPE, target=",".join(sorted(cats)),
+               affected=total,
+               detail="; ".join(f"{k}={v}" for k, v in sorted(deleted.items()) if v))
     return {"deleted": deleted}
 
 
@@ -924,6 +957,7 @@ def prometheus_metrics(request: Request):
 def remove_tester(character_name: str, _: int = Depends(require_admin)):
     con = get_connection()
     cur = con.execute("DELETE FROM pp_testers WHERE character_name=?", (character_name,))
+    _audit_priv("testers.remove", character_name, cur.rowcount)
     con.commit()
     changed = cur.rowcount
     con.close()

@@ -190,7 +190,10 @@ html.nav-grpmgr #adminNavGroup { display: flex; }
    CRUD) are hidden per-button by _applyAdminNavVisibility() in planetary.js, not by CSS, since
    which buttons qualify is a JS-side list, not a fixed selector. */
 html.nav-feat-layout .tab[data-tab="layout"] { display: flex; }
-html.nav-li .tab[data-tab="planetdb"] { display: flex; }
+/* Planet DB needs the feature flag AND a login. Restored 2026-08-15: this rule was
+   `html.nav-li` alone after the planet_db flag was retired, which published a tab that had been on
+   the admin rung — see the FEATURE_REGISTRY note in app/features.py. */
+html.nav-li.nav-feat-pdb .tab[data-tab="planetdb"] { display: flex; }
 html.nav-li .tab[data-tab="reactions"] { display: flex; }
 html.nav-li.nav-feat-industry .tab[data-tab="industry"] { display: flex; }
 
@@ -1690,3 +1693,16 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-rule-sugg-hit { text-align: left; border: 0; background: none; color: var(--clr-text);
                      cursor: pointer; padding: 5px 8px; font-size: 12px; border-radius: 5px; }
 .ind-rule-sugg-hit:hover { background: var(--clr-border); }
+
+/* ── Audit log (Admin → Audit) ────────────────────────────────────────────────
+   Four columns on desktop, stacked on a phone. A `global` entry touched data belonging to every
+   user — the one class of action that needed a name attached to it after 2026-08-15. */
+.admin-list-row.audit-global { border-left: 3px solid #d9534f; }
+.admin-list-row .audit-when { color: var(--muted, #8a8f98); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.admin-list-row .audit-who { color: var(--muted, #8a8f98); }
+.admin-list-row .audit-detail { color: var(--muted, #8a8f98); grid-column: 1 / -1; font-size: 0.92em; }
+.audit-badge { background: #d9534f; color: #fff; border-radius: 3px; padding: 0 5px; font-size: 0.78em; text-transform: uppercase; letter-spacing: .04em; }
+.audit-count { color: var(--muted, #8a8f98); font-variant-numeric: tabular-nums; }
+@media (min-width: 761px) {
+  .admin-list-row:has(.audit-when) { display: grid; grid-template-columns: 12em 1fr 12em; gap: .35rem .9rem; align-items: baseline; }
+}

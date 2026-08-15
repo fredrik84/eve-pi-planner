@@ -216,6 +216,14 @@ def require_page(page_key: str):
             return
         allowed = caller_allowed_pages(context_id)
         if allowed is not None and page_key not in allowed:
+            # The frontend hides a restricted page, so reaching its endpoint means the hiding was
+            # bypassed — a direct call, a stale deep link, or somebody looking around. Worth a row.
+            try:
+                from app.audit import record_denied
+                record_denied("access.denied.page", context_id=context_id, target=page_key,
+                              detail=f"group is not allowed the '{page_key}' page")
+            except Exception:
+                pass
             raise HTTPException(
                 status_code=403,
                 detail="Your group doesn't have access to this page.",

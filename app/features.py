@@ -36,6 +36,21 @@ router = APIRouter()
 # touched in two months is not insurance, it is a conditional you have to reason about every time
 # you read the code around it. Retire when the answer to "would we ever turn this off again?" is no.
 FEATURE_REGISTRY = [
+    # Restored 2026-08-15 after being retired in `d916c92` on the stated premise that it had been
+    # "public since June". It had NOT — it was on the admin rung, and retiring it published the tab,
+    # and with it the "Clear all" button that wipes the shared planet database. Production lost all
+    # 5,302 planets within hours; restored from the 08-12 dump.
+    #
+    # Two lessons, both worth more than the flag: a flag's rung is a fact about PRODUCTION, so read
+    # the live `pp_features` row before retiring one — the registry default says nothing about where
+    # it actually sits. And a gate is not access control: the delete behind this tab is now
+    # `require_admin` in its own right (`clear_planets`), so removing this flag again cannot repeat
+    # the incident.
+    {"key": "planet_db", "label": "Planet DB tab", "group": "Planet DB",
+     "description": "Show the Planet DB tab — the shared planet density database the planner uses; "
+                    "also lets users submit and browse planet data. The tab carries destructive "
+                    "controls that are separately admin-gated.",
+     "default": False},
     {"key": "factory_layout", "label": "Factory Layout tab", "group": "Planner",
      "description": "Show the Factory Layout tab — generates importable EVE PI templates for any "
                     "P1–P4 product.",

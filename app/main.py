@@ -64,7 +64,47 @@ async def _reactions_request_memo(request, call_next):
     """
     from app.cache import begin_request_memo
     begin_request_memo()
-    return await call_next(request)
+    response = await call_next(request)
+    _note_probe(request, response)
+    return response
+
+
+# Paths a normal session hits 404 on through no fault of the user — a stale cached asset, an icon
+# the browser guesses at. Recording these would be noise, and noise is how an audit log becomes
+# something nobody opens.
+_PROBE_IGNORE = _re.compile(
+    r"\.(js|css|map|png|jpg|jpeg|svg|ico|webp|woff2?|txt|json)$|^/(favicon|apple-touch|robots|sitemap)",
+    _re.I)
+
+
+def _note_probe(request, response) -> None:
+    """Record a LOGGED-IN session hitting a path that does not exist.
+
+    Deliberately narrow. The internet scans every host constantly, so 404s from anonymous traffic
+    are background radiation — logging them buries the one thing worth seeing, which is a known
+    account poking at URLs the UI never offers it. Anonymous requests are ignored outright, as are
+    asset-shaped paths, and `record_denied` de-duplicates the rest.
+
+    Wrapped so it can never affect the response: this is telemetry on the way out of a request that
+    has already been answered.
+    """
+    try:
+        if getattr(response, "status_code", 200) != 404:
+            return
+        path = request.url.path
+        if _PROBE_IGNORE.search(path):
+            return
+        from app.esi import session_context_id
+        ctx = session_context_id(request.cookies.get("pp_session"))
+        if ctx is None:
+            return
+        from app.audit import record_denied
+        record_denied("access.probe.404", context_id=ctx, target=path,
+                      detail="logged-in session requested a path that does not exist")
+    except Exception:
+        pass
+
+
 app.include_router(analyzer_router)          # the original Find-Buildables analyzer
 app.include_router(planetary_router)
 app.include_router(esi_router)
@@ -139,8 +179,11 @@ def _ensure_all_tables():
         settings as ind_settings, shares as ind_shares, assets as ind_assets
     from app.reactions import jobs as rx_jobs, settings as rx_settings
 
+    from app.audit import ensure_audit_table
+
     for fn in (
         ensure_char_tables, ensure_admin_table,
+        ensure_audit_table,
         planner_store.ensure_plan_tables, planner_store.ensure_share_table,
         planner_store.ensure_profile_tables, planner_store.ensure_plan_snapshot_table,
         planner_store.ensure_colony_flags_table,
@@ -386,7 +429,7 @@ SPA_PAGES = (
     "planner/find-buildables", "planner/refill",
     "admin/stats", "admin/jobs", "admin/features", "admin/users", "admin/submissions",
     "admin/bugs", "admin/baskets", "admin/groups", "admin/moon-goo", "admin/corp-wallet",
-    "admin/cleanup",
+    "admin/cleanup", "admin/audit",
 )
 
 for _page_path in SPA_PAGES:

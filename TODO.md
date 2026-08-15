@@ -14,6 +14,69 @@ Reviewed 2026-08-05.
 
 ---
 
+## 21. Refill to a DEADLINE, not to "full" (2026-08-15, requested)
+
+On Refill a Plan, say **when** the colonies should run dry and let the tool work out how much P1 to
+distribute to each factory to land there. Today refilling is "fill it up", so the moment you top up
+on a Tuesday you have committed to your next login being whenever that happens to run out.
+
+**The real ask, in the user's words:** refilled on a weekday, wants the next empty to fall on
+Saturday around 14:00. The only ways to get that now are to wait until Saturday and refill from
+empty (having first fetched all the current P1), or to do the arithmetic by hand per factory.
+
+This is the same principle as §23c/§2g on the Industry side — a plan should land on the player's
+schedule rather than the player working around the plan's — applied to PI, where it has more bite
+because PI is the side whose whole promise is *minimize interactions with planets* (CLAUDE.md).
+
+**What makes it tractable:** the consumption side is already known. Each factory's input burn rate
+per hour is derivable from the schematic and the factory count that `renderPlanDistribution`
+(`static/refill.js`) already computes to fill them. Quantity for a deadline is
+`rate × hours_until(deadline)`, capped by storage capacity, floored at a whole number of runs.
+
+**The parts that need a decision, not just arithmetic:**
+
+* **A deadline shorter than the current contents is not a refill** — it is "don't refill this one
+  yet, and here is when to come back". Say that, rather than quietly suggesting 0.
+* **Capacity is a hard ceiling.** If the deadline needs more P1 than a factory can hold, the honest
+  answer is the soonest deadline it CAN reach, not a number that will not fit.
+* **Whose clock.** EVE time (UTC) throughout, since "Saturday 14:00" is a fleet-op time — but state
+  it in the UI rather than assuming the reader knows.
+* Round to whole runs, and report the drift that rounding causes, in the same spirit as
+  `reactions_tidy_runs` (§23b): a typeable number the player can actually enter beats an exact one
+  they cannot.
+
+**First step:** confirm the per-factory burn rate is already exposed where the refill table is
+built, or what it would take to surface it, before designing any UI.
+
+## 20. Planet database wipe — RESTORED, one follow-up left (2026-08-15, INCIDENT)
+
+**Restored.** Production's `pp_planets` was found with 0 rows: 5,302 planets, the shared reference
+data the whole PI planner runs on. Reloaded from the 08-12 nightly dump — 5,302 rows back, id
+sequence realigned (it was still at 625 and would have collided on the next insert), Redis
+invalidated, verified live on `/api/planets`.
+
+**Cause, in order.** `planet_db` was a feature flag gating the Planet DB tab, sitting on the **admin
+rung** in production. `d916c92` (12-08 23:39) retired it along with 17 others on the stated premise
+that all eighteen had been "public since June" — that premise was not checked against the live
+`pp_features` rows and was wrong for this one. Retiring it published the tab, and with it a "Clear
+all" button wired to `DELETE /api/planets`, which was gated on `require_context` — any logged-in
+player — and deletes the table for everybody. The nightly dumps bracket the wipe to the ~3.5 hours
+between that deploy and the 13-08 03:00 backup.
+
+**Shipped since:** the flag is back with its gate (`nav-feat-pdb`, CSS + pre-paint class);
+`clear_planets` requires an admin and records to the audit log; the button carries `.pp-admin-only`;
+`test_planetdb_guard.py` fails on any unscoped global delete that is not admin-gated, so the shape
+cannot come back quietly. `app/audit.py` + Admin → Audit now record global deletes, account
+deletions, cleanups, privilege removals and refused access.
+
+**The follow-up: set the `planet_db` rung deliberately.** The registry default is `False` (admin),
+which is where it now sits, but that is the default asserting itself rather than a decision. If the
+tab should be visible to testers or the public, set the rung in Admin → Features — the destructive
+control on it is separately admin-gated now, so publishing the tab no longer publishes the wipe.
+
+**The lesson worth keeping:** a flag's rung is a fact about PRODUCTION. Read the live `pp_features`
+row before retiring one; the registry default says nothing about where it actually sits.
+
 ## 19. Deep links that carry an ID — the one part of URL routing still open (2026-08-15)
 
 Phases 1–3a shipped 2026-08-15. Every page has a URL, back/forward work, and the two pages that

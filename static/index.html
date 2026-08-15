@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <script>try{var _cl=document.documentElement.classList;if(localStorage.getItem('ppNavLoggedIn')==='1')_cl.add('nav-li');if(localStorage.getItem('ppNavIsAdmin')==='1')_cl.add('nav-adm');if(localStorage.getItem('ppNavIsGroupMgr')==='1')_cl.add('nav-grpmgr');if(localStorage.getItem('ppNavFeatLayout')==='1')_cl.add('nav-feat-layout');if(localStorage.getItem('ppNavFeatIndustry')==='1')_cl.add('nav-feat-industry');}catch(e){}</script>
+  <script>try{var _cl=document.documentElement.classList;if(localStorage.getItem('ppNavLoggedIn')==='1')_cl.add('nav-li');if(localStorage.getItem('ppNavIsAdmin')==='1')_cl.add('nav-adm');if(localStorage.getItem('ppNavIsGroupMgr')==='1')_cl.add('nav-grpmgr');if(localStorage.getItem('ppNavFeatLayout')==='1')_cl.add('nav-feat-layout');if(localStorage.getItem('ppNavFeatPdb')==='1')_cl.add('nav-feat-pdb');if(localStorage.getItem('ppNavFeatIndustry')==='1')_cl.add('nav-feat-industry');}catch(e){}</script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>EVE PI Planner</title>
@@ -78,6 +78,7 @@
           <button class="admin-nav-item" data-page="moongoo" onclick="adminNavTo('moongoo')"><span class="nav-ico">MG</span><span class="nav-lbl">Moon goo</span></button>
           <button class="admin-nav-item" data-page="wallet" onclick="adminNavTo('wallet')"><span class="nav-ico">WL</span><span class="nav-lbl">Corp wallet</span></button>
           <button class="admin-nav-item" data-page="cleanup" onclick="adminNavTo('cleanup')"><span class="nav-ico">CL</span><span class="nav-lbl">DB Cleanup</span></button>
+          <button class="admin-nav-item" data-page="audit" onclick="adminNavTo('audit')"><span class="nav-ico">AU</span><span class="nav-lbl">Audit</span></button>
         </div>
       </nav>
       <a href="https://discord.gg/nSKRc95q65" target="_blank" rel="noopener" class="sidebar-discord" title="Join the EVE PI Planner Discord community">
@@ -985,6 +986,7 @@ PVF-N9    3         95                 60             80                  100   
         <button class="admin-mobile-page-btn" data-page="moongoo"      onclick="adminNavTo('moongoo')">Moon goo</button>
         <button class="admin-mobile-page-btn" data-page="wallet"       onclick="adminNavTo('wallet')">Wallet</button>
         <button class="admin-mobile-page-btn" data-page="cleanup"      onclick="adminNavTo('cleanup')">Cleanup</button>
+        <button class="admin-mobile-page-btn" data-page="audit"        onclick="adminNavTo('audit')">Audit</button>
       </div>
       <div class="admin-page">
 
@@ -1137,6 +1139,20 @@ PVF-N9    3         95                 60             80                  100   
         </div>
 
       </div>
+
+        <div class="admin-subpage" data-page="audit" style="display:none">
+          <section class="pp-card admin-section">
+            <div class="pp-card-title">Audit
+              <button class="pp-add-btn" onclick="loadAuditLog()">Refresh</button>
+            </div>
+            <div class="admin-hint">Destructive actions, newest first — global wipes, account
+              deletions, DB cleanups and privilege removals. Added after the shared planet database
+              was emptied on 2026-08-15 and nothing in the database could say who did it: the window
+              had to be narrowed by diffing eight nightly backups. Entries are written after the
+              action succeeds and are never deleted by cleanup.</div>
+            <div id="auditList" class="admin-list"></div>
+          </section>
+        </div>
     </div><!-- /tab-admin -->
 
   </main>

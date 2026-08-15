@@ -72,8 +72,11 @@ def main() -> int:
     if clear is not None:
         check("require_admin" in clear,
               f"...and depends on require_admin (got {clear})")
-        check("require_context" not in clear,
-              "...and NOT on require_context, which is merely 'is logged in'")
+        # `require_context` may ALSO be present — it is how the audit row learns who pressed the
+        # button, and it grants nothing on its own. What must never happen is it being the only
+        # guard, which is the state that lost 5,302 planets.
+        check(clear != ["require_context"],
+              "...and require_context is never the only guard, which is what it was")
 
     print("\ncontributing planets is still open to any logged-in player:")
     imp = routes.get(("post", "/api/planets/import"))
