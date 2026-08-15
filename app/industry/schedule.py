@@ -1599,17 +1599,15 @@ def plan_queue_per_order(order_specs: list[dict], mfg: dict, rx: dict, prices: d
     # are NOT consumed (they run forever) — only copies are.
     owned_used: dict[int, int] = {}
 
-    # Concurrent PRINTS an earlier order has already claimed. A print is one item and it is locked
-    # while a job runs on it, so two orders cannot both plan jobs off the same original — but each
-    # order planned on its own saw the whole holding and did exactly that (2f-residual #2). Same
-    # first-come-first-served rule as the stock, the contracts and the copy-runs above, and for the
-    # same physical reason.
+    # How many physical prints exist per type, handed to `schedule()` so a blueprint is a
+    # TIME-SHARED resource: a job needs a free slot and a free print, and the print is released when
+    # the job ends. Two orders planned apart contend for the same item because the resource is keyed
+    # on the real `type_id`, which is not namespaced per order.
     #
-    # **This BOUNDS the over-booking, it does not model it.** A print freed when an earlier order's
-    # job ends is genuinely available to a later one, and expressing that needs the print to be a
-    # time-shared resource in `schedule()` rather than a per-plan cap. Until then the floor of 1
-    # below means N orders can still plan N concurrent jobs off one original — down from N x prints,
-    # which is what shipped before this.
+    # An earlier attempt subtracted each order's claim from the next order's cap. That only BOUNDED
+    # the over-booking — a claim is permanent while a print is merely busy — so it both over-
+    # serialised (a print freed at 1h was unavailable for the rest of the plan) and still allowed N
+    # orders one concurrent job each. It was deleted rather than kept alongside this.
     print_caps: dict[int, int] = {}
 
     def _pool_for(p: BuildParams) -> BuildParams:
@@ -1691,10 +1689,10 @@ def plan_queue_per_order(order_specs: list[dict], mfg: dict, rx: dict, prices: d
                     plan_out=o_plan, start_out=o_start)
         # Only prints that CANNOT be bought are contended: where more are purchasable the plan buys
         # them, and `spent_listings` above already stops two orders buying the same listing.
-        # How many physical prints exist for each type. Recorded once, from the first order that
-        # plans it — no earlier order has touched the count at that point, so it is the true holding.
-        # Only types whose prints CANNOT be bought are contended: where more are purchasable the plan
-        # buys them, and `spent_listings` already stops two orders buying the same listing.
+        # Recorded once, from the first order that plans the type — nothing has consumed it at that
+        # point, so it is the true holding and the result cannot depend on queue order. Only types
+        # whose prints CANNOT be bought are contended: where more are purchasable the plan buys them,
+        # and `spent_listings` already stops two orders buying the same listing.
         for t_, pl_ in o_plan.items():
             pr_ = pl_.get("prints")
             if pr_ is None or pl_.get("can_buy_prints") or t_ in print_caps:

@@ -104,8 +104,54 @@ def main() -> int:
     check(spans[1][0] == spans[0][1] and spans[2][0] == spans[1][1],
           f"each job starts exactly when the previous ended (got {[(s/3600, e/3600) for s, e in spans]})")
 
+    guard_the_wiring()
     print("\n" + ("FAILED: " + "; ".join(_fails) if _fails else "all checks passed"))
     return 1 if _fails else 0
+
+
+def guard_the_wiring() -> None:
+    """`plan_queue_per_order` must actually HAND the caps to the scheduler.
+
+    Everything above tests `schedule()` directly, which leaves the production wiring unpinned:
+    deleting `print_caps=print_caps` from the per-order planner reintroduces the whole defect and
+    every test in the repo stays green. Verified by doing exactly that. So this asserts the call
+    site — structurally, because a behavioural test would need a full account fixture to reach it.
+
+    It also pins that the caps are RECORDED, since a call passing a dict that is never filled would
+    satisfy the first check and do nothing.
+    """
+    import ast
+    import os
+    print("\nthe per-order planner really hands the caps to the scheduler:")
+    path = os.path.join("app", "industry", "schedule.py")
+    src = open(path, encoding="utf-8").read()
+    tree = ast.parse(src)
+    fn = next((n for n in ast.walk(tree)
+               if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+               and n.name == "plan_queue_per_order"), None)
+    check(fn is not None, "plan_queue_per_order still exists")
+    if fn is None:
+        return
+    body = "\n".join(src.splitlines()[fn.lineno - 1:(fn.end_lineno or fn.lineno)])
+    passes = any(
+        isinstance(n, ast.Call)
+        and (getattr(n.func, "id", None) == "schedule" or getattr(n.func, "attr", None) == "schedule")
+        and any(k.arg == "print_caps" for k in n.keywords)
+        for n in ast.walk(ast.parse(body.strip().replace("def plan_queue_per_order", "def _f", 1)))
+    ) if body else False
+    check(passes or "print_caps=print_caps" in body,
+          "it calls schedule(..., print_caps=...) — without this the cross-order fix is dead code")
+    check("print_caps[" in body,
+          "...and fills the caps from the plans, rather than handing over an empty dict")
+
+    # The aggregated path must NOT get them: one batch already caps concurrency inside itself, and
+    # passing caps there would be a behaviour change nobody asked for.
+    agg = next((n for n in ast.walk(tree)
+                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == "plan_queue"), None)
+    if agg is not None:
+        agg_body = "\n".join(src.splitlines()[agg.lineno - 1:(agg.end_lineno or agg.lineno)])
+        check("print_caps" not in agg_body,
+              "the aggregated plan is left exactly as it was")
 
 
 if __name__ == "__main__":

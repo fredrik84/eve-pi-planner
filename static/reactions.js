@@ -2607,6 +2607,11 @@ function _rxJobFeeNote(prefix, s) {
   el.innerHTML = _rxJobFeeNoteHtml(basis);
 }
 
+// **Direction check before editing the `reference` line below.** Jita is the TOP of the range for
+// manufacturing (0.1673, rank 1 of 5485) and the BOTTOM for reactions (0.0014, the floor, with 667
+// systems above it) — measured against live ESI on 2026-08-14. `fetch_system_cost_index` defaults to
+// activity "reaction" for this path, so the Industry reasoning about a conservative Jita quote does
+// NOT transfer here, and reading it across is exactly how this note got inverted once already.
 function _rxJobFeeNoteHtml(basis) {
   if (basis === 'configured') return '';   // they typed it in; the field speaks for itself
   if (basis === 'structure') {
@@ -2616,9 +2621,9 @@ function _rxJobFeeNoteHtml(basis) {
   }
   if (basis === 'reference') {
     return `<div class="settings-note">No system set and no structure on file, so install fees are
-      quoted against <b>Jita as a reference</b>, whose cost index sits at the top of the range — so
-      the fee reads <b>high</b> if you react somewhere quieter. Conservative on purpose; name a
-      system above for a real number.</div>`;
+      quoted against <b>Jita as a reference floor</b> — its REACTION cost index is the lowest there
+      is, so the fee reads <b>low</b> and the profit above it reads high. Name a system above for a
+      real number.</div>`;
   }
   return `<div class="settings-note">No system set, so <b>job install fees are left out</b> of
     every estimate, which overstates profit by the fee. Name a system above, or ask an admin for

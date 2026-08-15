@@ -151,6 +151,54 @@ def round_trip() -> None:
         check(up.get("source_keys") == ["hangar:x", "hangar:y"],
               f"...and the material set is untouched (got {up.get('source_keys')})")
 
+        print("\nOWNERSHIP is set by the UPDATE itself, not inherited from create:")
+        # An order created WITH source_keys already has sources_owned=1, so asserting it after an
+        # update proves nothing — removing the `sources_owned=?` write from update_order left the
+        # first version of this test green. This order is created bare, so only the update can set it.
+        bare = create_order(OrderCreate(product_type_id=tid, quantity=1), ctx=ctx)
+        bid = bare["id"]
+        with get_connection() as con:
+            r0 = dict(con.execute("SELECT sources_owned FROM pp_industry_orders WHERE id=?",
+                                  (bid,)).fetchone())
+        check(int(r0.get("sources_owned") or 0) == 0, "a bare order owns nothing to begin with")
+        update_order(bid, OrderUpdate(source_keys=["hangar:z"]), ctx=ctx)
+        with get_connection() as con:
+            r1 = dict(con.execute("SELECT sources_owned, source_keys FROM pp_industry_orders "
+                                  "WHERE id=?", (bid,)).fetchone())
+        check(int(r1.get("sources_owned") or 0) == 1,
+              f"binding a box through UPDATE takes ownership (got {r1.get('sources_owned')})")
+        update_order(bid, OrderUpdate(source_keys=[]), ctx=ctx)
+        with get_connection() as con:
+            r2 = dict(con.execute("SELECT sources_owned FROM pp_industry_orders WHERE id=?",
+                                  (bid,)).fetchone())
+        check(int(r2.get("sources_owned") or 0) == 0,
+              f"...and clearing every box hands it back to the account pool (got {r2.get('sources_owned')})")
+
+        print("\nthe output box resolves to a NAME, not a swallowed ImportError:")
+        # `output_source_name` was null on every order for a day because its import named the wrong
+        # module and a bare `except` ate the error. Nothing asserted it, so nothing noticed.
+        named = update_order(bid, OrderUpdate(output_source_key="hangar:z"), ctx=ctx)
+        check("output_source_name" in named,
+              "the field is present on the payload at all")
+        # Resolve the import the way the CODE writes it, not the way this test would like it. A
+        # bare `except` around that import means a wrong module is silent — `output_source_name` was
+        # null on every order for a day — so asserting "it imports cleanly from somewhere" proves
+        # nothing. This reads the actual import statement and checks that module really defines it.
+        import ast as _ast
+        import importlib as _il
+        _src = open("app/industry/orders.py", encoding="utf-8").read()
+        _mods = [n.module for n in _ast.walk(_ast.parse(_src))
+                 if isinstance(n, _ast.ImportFrom)
+                 and any(a.name == "source_name" for a in n.names)]
+        check(bool(_mods), f"orders.py imports source_name from somewhere (got {_mods})")
+        for _m in _mods:
+            _ok = False
+            try:
+                _ok = hasattr(_il.import_module(_m), "source_name")
+            except Exception:
+                _ok = False
+            check(_ok, f"...and `{_m}` actually defines it — a wrong module here is swallowed silently")
+
         print("\nclearing is distinguishable from never setting:")
         up = update_order(oid, OrderUpdate(output_source_key=""), ctx=ctx)
         check(up.get("output_source_basis") in ("inherited", "none"),
