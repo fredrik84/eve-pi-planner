@@ -113,6 +113,17 @@ def begin_request_memo() -> None:
     _REQUEST_MEMO.set({})
 
 
+def forget_memo(key) -> None:
+    """Drop one memoised answer, so a read after a write in the SAME request sees the write.
+
+    The memo is per request and most requests either read or write, so this is only needed where a
+    writer reads its own result back — but where that happens, a stale answer is silent and wrong,
+    which is worse than the read it saved."""
+    store = _REQUEST_MEMO.get()
+    if store is not None:
+        store.pop(key, None)
+
+
 def request_memo(key, build):
     """Compute `build()` once per request for `key`, or just call it when no scope is open."""
     store = _REQUEST_MEMO.get()

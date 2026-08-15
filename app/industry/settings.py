@@ -129,7 +129,33 @@ class IndustrySettings(BaseModel):
     facility_id: str | None = None
 
 
+def _forget_settings_memo(context_id: int) -> None:
+    """Called after every write to `pp_industry_settings`, so a read-back in the same request is
+    the row that was just written and not the one memoised before it."""
+    try:
+        from app.cache import forget_memo
+        forget_memo(_settings_memo_key(context_id))
+    except Exception:
+        pass
+
+
+def _settings_memo_key(context_id: int):
+    return ("industry_settings", int(context_id))
+
+
 def get_settings(context_id: int) -> dict:
+    """The account's Industry settings row, memoised for the life of ONE request.
+
+    Measured 2026-08-14: `account_setup` alone asked for this **six times** per call, each opening
+    its own pooled connection, for a row that cannot change while the request is in flight. Every
+    writer below drops the memo (`forget_memo`) so a write followed by a read in the same request
+    still sees the write — a stale answer there would be silent, which is worse than the read it
+    saved."""
+    from app.cache import request_memo
+    return request_memo(_settings_memo_key(context_id), lambda: _get_settings_uncached(context_id))
+
+
+def _get_settings_uncached(context_id: int) -> dict:
     ensure_industry_settings_table()
     con = get_connection()
     try:
@@ -233,6 +259,7 @@ def set_reaction_policy(context_id: int, build_reactions: bool, buy_categories: 
             "reaction_policy=excluded.reaction_policy, updated_at=excluded.updated_at",
             (context_id, json.dumps(policy), time.time()))
         con.commit()
+        _forget_settings_memo(context_id)
     finally:
         con.close()
     return policy
@@ -257,6 +284,7 @@ def set_per_order_plans(context_id: int, on: bool) -> bool:
             "per_order_plans=excluded.per_order_plans, updated_at=excluded.updated_at",
             (context_id, 1 if on else 0, time.time()))
         con.commit()
+        _forget_settings_memo(context_id)
     finally:
         con.close()
     return bool(on)
@@ -293,6 +321,7 @@ def set_max_reaction_job_days(context_id: int, days: float | None) -> float | No
             "max_reaction_job_days=excluded.max_reaction_job_days, updated_at=excluded.updated_at",
             (context_id, val or None, time.time()))
         con.commit()
+        _forget_settings_memo(context_id)
     finally:
         con.close()
     return val or None
@@ -336,6 +365,7 @@ def set_build_pins(context_id: int, pins: dict) -> dict[str, str]:
             "build_pins=excluded.build_pins, updated_at=excluded.updated_at",
             (context_id, json.dumps(clean), time.time()))
         con.commit()
+        _forget_settings_memo(context_id)
     finally:
         con.close()
     return clean
@@ -371,6 +401,7 @@ def set_component_rules(context_id: int, never: list[int], always: list[int]) ->
             "always_build_ids=excluded.always_build_ids, updated_at=excluded.updated_at",
             (context_id, json.dumps(n), json.dumps(a), time.time()))
         con.commit()
+        _forget_settings_memo(context_id)
     finally:
         con.close()
     return {"never_build_ids": n, "always_build_ids": a}
@@ -394,6 +425,7 @@ def set_blacklist(context_id: int, type_ids: list[int]) -> list[int]:
             "never_build_ids=excluded.never_build_ids, updated_at=excluded.updated_at",
             (context_id, json.dumps(ids), time.time()))
         con.commit()
+        _forget_settings_memo(context_id)
     finally:
         con.close()
     return ids
@@ -504,6 +536,7 @@ def save_settings(context_id: int, fields: dict) -> None:
             + ", updated_at=excluded.updated_at",
             (context_id, *[use[k] for k in keys], time.time()))
         con.commit()
+        _forget_settings_memo(context_id)
     finally:
         con.close()
 
@@ -532,6 +565,7 @@ def complete_onboarding(ctx: int = Depends(require_context)):
             "ON CONFLICT(context_id) DO UPDATE SET onboarded=1, updated_at=excluded.updated_at",
             (ctx, time.time()))
         con.commit()
+        _forget_settings_memo(ctx)
     finally:
         con.close()
     return {"onboarded": True}
@@ -555,6 +589,7 @@ def reset_onboarding(ctx: int = Depends(require_admin)):
             "ON CONFLICT(context_id) DO UPDATE SET onboarded=0, updated_at=excluded.updated_at",
             (ctx, time.time()))
         con.commit()
+        _forget_settings_memo(ctx)
     finally:
         con.close()
     return {"onboarded": False}
