@@ -86,6 +86,61 @@ function _indSlotPips(used, free, assigned, cls) {
 
 // `d` is the install block from the plan response. It's passed in rather than fetched: asking the
 // server for it meant re-planning the whole queue, which was the slowest thing on the page.
+// One line of the checklist: the product, how many installs and of what size, where it goes, and
+// how long it runs. Lifted out of the card builder because it is where all the reading happens —
+// the card around it is a header, two slot rows and this list.
+function _indInstallJobHtml(g) {
+  // Say exactly what to install. Neither "9× 165–166 runs each" nor a 1,486-run total tells you
+  // what to type — both hand the reader a division problem. One entry per distinct run count does:
+  // "8× 165 runs · 1× 166 runs" is nine installs, spelled out.
+  const each = `<span class="ind-do-runs" title="${g.count} job${g.count > 1 ? 's' : ''} · `
+    + `${g.totalRuns.toLocaleString()} runs in total">`
+    + g.buckets.map(b => (g.count > 1 ? `<b>${b.n}×</b> ${b.runs}` : `<b>${b.runs}</b>`)
+        + ` run${b.runs > 1 ? 's' : ''}`).join(' · ')
+    + `</span>`;
+  // Why this job is that long. "Everything else is 5h, why is this one 2h32m" has one answer —
+  // something needs it sooner — and it is unanswerable from the screen otherwise.
+  const w = g.why || {};
+  const why = w.bound_by === 'consumer' && w.needed_by_name
+    ? ` — held to this because ${_esc(w.needed_by_name)} needs it then`
+    : w.bound_by === 'pace' ? ` — matched to the plan's pace (${_fmtHours(w.pace_h)})`
+    : '';
+  const dur = `<span class="ind-do-dur" title="${w.runs_per_job || 1} run(s) per job${_esc(why)}">`
+    + `${_fmtHours(g.dur)}${why ? ' <span class="ind-do-why">?</span>' : ''}</span>`;
+  // Where to install it. With group-specific rigs the plan may spread a build over several
+  // structures, and "install 40 runs" without naming the building is half an instruction. A PINNED
+  // step says so: "I chose this building" and "the tool worked it out" are different facts about
+  // the same line, and only one of them is worth arguing with.
+  const where = g.site && _indIsMultiSite()
+    ? `<span class="ind-do-site${g.sitePinned ? ' ind-do-site-pin' : ''}" title="Install in `
+      + `${_esc(g.site)}${g.sitePinned ? ' — you pinned this family here' : ''}">`
+      + `@ ${_esc(g.site)}${g.sitePinned ? ' (pinned)' : ''}</span>` : '';
+  return `<li class="ind-do-job"><span class="ind-do-name">${_esc(g.name)}</span>${each}`
+    + where
+    + `<span class="ind-do-act ind-do-${g.activity}">${g.activity === 'reaction' ? 'reaction' : 'industry'}</span>`
+    + dur + `</li>`;
+}
+
+// One character's card: who, how many jobs, the slots it costs them, and the list above.
+function _indInstallCharHtml(c) {
+  const groups = _indGroupJobs(c.jobs);
+  const jobs = groups.map(_indInstallJobHtml).join('');
+  const mUsed = c.manufacturing_slots - c.manufacturing_free;
+  const rUsed = c.reaction_slots - c.reaction_free;
+  const mAss = c.jobs.filter(j => j.activity !== 'reaction').length;
+  const rAss = c.jobs.filter(j => j.activity === 'reaction').length;
+  return `<div class="ind-do-char">
+    <div class="ind-do-hd"><span class="ind-do-who">${c.is_placeholder ? '<span class="pp-char-dummy-badge" title="Placeholder character — not connected to ESI; its slots are the ones you declared">placeholder</span> ' : ''}${_esc(c.character_name)}</span>
+      <span class="ind-do-count">start ${c.assigned} job${c.assigned > 1 ? 's' : ''}`
+      + (groups.length < c.assigned ? ` · ${groups.length} product${groups.length > 1 ? 's' : ''}` : '')
+      + `</span></div>
+    <div class="ind-do-slots">
+      ${_indSlotRow('Industry', 'mfg', mUsed, c.manufacturing_free, mAss, c.manufacturing_slots)}
+      ${_indSlotRow('Reactions', 'rx', rUsed, c.reaction_free, rAss, c.reaction_slots)}
+    </div>
+    <ul class="ind-do-jobs">${jobs}</ul></div>`;
+}
+
 function indRenderInstall(d) {
   const el = document.getElementById('indInstall');
   if (!el) return;
@@ -94,54 +149,7 @@ function indRenderInstall(d) {
     if (d.empty || !d.ready || !d.ready.length) { el.innerHTML = ''; return; }
 
     const doers = (d.characters || []).filter(c => c.assigned > 0);
-    const cards = doers.map(c => {
-      const groups = _indGroupJobs(c.jobs);
-      const jobs = groups.map(g => {
-        // Say exactly what to install. Neither "9× 165–166 runs each" nor a 1,486-run total
-        // tells you what to type — both hand the reader a division problem. One entry per
-        // distinct run count does: "8× 165 runs · 1× 166 runs" is nine installs, spelled out.
-        const each = `<span class="ind-do-runs" title="${g.count} job${g.count > 1 ? 's' : ''} · `
-          + `${g.totalRuns.toLocaleString()} runs in total">`
-          + g.buckets.map(b => (g.count > 1 ? `<b>${b.n}×</b> ${b.runs}` : `<b>${b.runs}</b>`)
-              + ` run${b.runs > 1 ? 's' : ''}`).join(' · ')
-          + `</span>`;
-        // Why this job is that long. "Everything else is 5h, why is this one 2h32m" has one
-        // answer — something needs it sooner — and it is unanswerable from the screen otherwise.
-        const w = g.why || {};
-        const why = w.bound_by === 'consumer' && w.needed_by_name
-          ? ` — held to this because ${_esc(w.needed_by_name)} needs it then`
-          : w.bound_by === 'pace' ? ` — matched to the plan's pace (${_fmtHours(w.pace_h)})`
-          : '';
-        const dur = `<span class="ind-do-dur" title="${w.runs_per_job || 1} run(s) per job${_esc(why)}">`
-          + `${_fmtHours(g.dur)}${why ? ' <span class="ind-do-why">?</span>' : ''}</span>`;
-        // Where to install it. With group-specific rigs the plan may spread a build over several
-        // structures, and "install 40 runs" without naming the building is half an instruction.
-        // A PINNED step says so: "I chose this building" and "the tool worked it out" are different
-        // facts about the same line, and only one of them is worth arguing with.
-        const where = g.site && _indIsMultiSite()
-          ? `<span class="ind-do-site${g.sitePinned ? ' ind-do-site-pin' : ''}" title="Install in `
-            + `${_esc(g.site)}${g.sitePinned ? ' — you pinned this family here' : ''}">`
-            + `@ ${_esc(g.site)}${g.sitePinned ? ' (pinned)' : ''}</span>` : '';
-        return `<li class="ind-do-job"><span class="ind-do-name">${_esc(g.name)}</span>${each}`
-          + where
-          + `<span class="ind-do-act ind-do-${g.activity}">${g.activity === 'reaction' ? 'reaction' : 'industry'}</span>`
-          + dur + `</li>`;
-      }).join('');
-      const mUsed = c.manufacturing_slots - c.manufacturing_free;
-      const rUsed = c.reaction_slots - c.reaction_free;
-      const mAss = c.jobs.filter(j => j.activity !== 'reaction').length;
-      const rAss = c.jobs.filter(j => j.activity === 'reaction').length;
-      return `<div class="ind-do-char">
-        <div class="ind-do-hd"><span class="ind-do-who">${c.is_placeholder ? '<span class="pp-char-dummy-badge" title="Placeholder character — not connected to ESI; its slots are the ones you declared">placeholder</span> ' : ''}${_esc(c.character_name)}</span>
-          <span class="ind-do-count">start ${c.assigned} job${c.assigned > 1 ? 's' : ''}`
-          + (groups.length < c.assigned ? ` · ${groups.length} product${groups.length > 1 ? 's' : ''}` : '')
-          + `</span></div>
-        <div class="ind-do-slots">
-          ${_indSlotRow('Industry', 'mfg', mUsed, c.manufacturing_free, mAss, c.manufacturing_slots)}
-          ${_indSlotRow('Reactions', 'rx', rUsed, c.reaction_free, rAss, c.reaction_slots)}
-        </div>
-        <ul class="ind-do-jobs">${jobs}</ul></div>`;
-    }).join('');
+    const cards = doers.map(_indInstallCharHtml).join('');
 
     const blocked = (d.unassigned || []).length;
     const wait = blocked

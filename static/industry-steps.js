@@ -423,6 +423,68 @@ function _indStepsHtml(d, model) {
 // Hovering a card traces its whole chain in both directions.
 let _indPipeGraph = { inputsOf: {}, consumersOf: {} };
 
+// One card in the pipeline grid — the most-read surface in the tab. `prog` is the progress map
+// keyed by type; it is passed in rather than read here so a grid renders against one snapshot.
+function _indPipeBuildCard(e, prog) {
+  // The pipeline card is the most-read surface in the tab and the one where this went wrong:
+  // "2 runs" (the batch) sat directly beside a bare "BPC", which reads as a 2-run copy.
+  const owned = _indOwnedBpChip(e.owned, e.runs);
+  const runs = e.runs ? `<span class="ind-pipe-runs" id="pruns-${e.type_id}">${e.runs.toLocaleString()}&nbsp;run${e.runs > 1 ? 's' : ''}</span>` : '';
+  const qty = `×${Math.round(e.qty).toLocaleString()}`;
+  // Live state from real ESI jobs, when we have it — the pipeline doubles as a progress board.
+  // Three states you can read at a glance: done (green border), in the cooker (accent + glow),
+  // waiting (greyed back). Anything with no progress data at all keeps the neutral card.
+  const p = prog[e.type_id];
+  let state = '', cls = '';
+  if (p && p.required_runs) {
+    if (p.done_runs >= p.required_runs) {
+      state = '<span class="ind-pipe-state ind-st-done">✓ done</span>'; cls = ' ind-pipe-is-done';
+    } else if (p.running_runs > 0) {
+      state = `<span class="ind-pipe-state ind-st-run">${p.running_runs} cooking</span>`; cls = ' ind-pipe-is-run';
+      if (p.done_runs > 0) state += `<span class="ind-pipe-state ind-st-part">${p.done_runs}/${p.required_runs}</span>`;
+    } else if (p.done_runs > 0) {
+      state = `<span class="ind-pipe-state ind-st-part">${p.done_runs}/${p.required_runs}</span>`; cls = ' ind-pipe-is-run';
+    } else {
+      state = '<span class="ind-pipe-state ind-st-wait">waiting</span>'; cls = ' ind-pipe-is-wait';
+    }
+  }
+  // The card already IS the progress readout for this step, so it's also where you correct it:
+  // each click advances it one state, wrapping back round so a misclick costs clicks and not
+  // data. A tick tucked into the step-by-step chips was the first cut and too small to read,
+  // never mind aim at.
+  const markable = _featureActive('industry_manual_done') && p && p.required_runs;
+  const st = markable ? _indDoneState(p) : 'none';
+  const onclick = markable ? ` onclick="indCycleDone(${e.type_id})"` : '';
+  const nextTip = st === 'done' ? ' Click to set it back to not started.'
+    : st === 'running' ? ' Click when it has finished.'
+    : ' Click to say it is running.';
+  const tip = `${_esc(e.name)} — ${qty}${e.runs ? ', ' + e.runs + ' runs' : ''}. Hover to trace its chain.`
+    + (markable ? nextTip : '');
+  // The run count doubles as the way in to a partial mark when there's more than one run to
+  // split. One run can't be half done, so it stays plain text there.
+  const runsCell = (markable && p.required_runs > 1)
+    ? `<span class="ind-pipe-runs ind-pipe-runs-edit" id="pruns-${e.type_id}"`
+      + ` onclick="indEditDoneRuns(event, ${e.type_id}, ${p.required_runs}, ${p.done_runs})"`
+      + ` title="${p.done_runs} of ${p.required_runs} runs done \u2014 click to set how many, rather than the whole step">`
+      // Label stays the run count: how many are DONE is already on this card as its state
+      // badge, and the same number twice on a card this small reads as two different ones.
+      + `${p.required_runs.toLocaleString()}&nbsp;runs</span>`
+    : runs;
+  return `<div class="ind-pipe-card ind-pipe-build${cls}${markable ? ' ind-pipe-markable' : ''}"${onclick}`
+    + ` data-tid="${e.type_id}" title="${tip}">`
+    + `<span class="ind-pipe-name">${_esc(e.name)}</span>`
+    + `<span class="ind-pipe-meta"><span class="ind-pipe-qty">${qty}</span>${runsCell}${owned}${state}</span></div>`;
+}
+
+
+// The one card that stands for a whole stage's bought materials, rather than one card each.
+function _indPipeBuyCard(buys, t) {
+  const names = buys.slice(0, 25).map(b => b.name).join(', ') + (buys.length > 25 ? '…' : '');
+  const members = buys.map(b => b.type_id).join(',');
+  return `<div class="ind-pipe-card ind-pipe-buys" data-members="${members}" title="${_esc(names)} — click to jump to this stage's shopping list" onclick="_indJumpToStage(${t})"><span class="ind-pipe-name">Buy ${buys.length} material${buys.length > 1 ? 's' : ''}</span>`
+    + `<span class="ind-pipe-meta">in shopping list ↓</span></div>`;
+}
+
 function _indPipelineHtml(d, tiersData, model) {
   const roots = d.trees || (d.tree ? [d.tree] : []);
   if (!roots.length || !roots.some(t => (t.inputs || []).length)) return '';
@@ -446,62 +508,7 @@ function _indPipelineHtml(d, tiersData, model) {
   // No "build" tag on the card — the row it sits in already says Reactions vs Manufacturing, so
   // repeating it just costs width. Qty and runs are what actually differ per card.
   const prog = _indProgTypeMap();
-  const buildCard = e => {
-    // The pipeline card is the most-read surface in the tab and the one where this went wrong:
-    // "2 runs" (the batch) sat directly beside a bare "BPC", which reads as a 2-run copy.
-    const owned = _indOwnedBpChip(e.owned, e.runs);
-    const runs = e.runs ? `<span class="ind-pipe-runs" id="pruns-${e.type_id}">${e.runs.toLocaleString()}&nbsp;run${e.runs > 1 ? 's' : ''}</span>` : '';
-    const qty = `×${Math.round(e.qty).toLocaleString()}`;
-    // Live state from real ESI jobs, when we have it — the pipeline doubles as a progress board.
-    // Three states you can read at a glance: done (green border), in the cooker (accent + glow),
-    // waiting (greyed back). Anything with no progress data at all keeps the neutral card.
-    const p = prog[e.type_id];
-    let state = '', cls = '';
-    if (p && p.required_runs) {
-      if (p.done_runs >= p.required_runs) {
-        state = '<span class="ind-pipe-state ind-st-done">✓ done</span>'; cls = ' ind-pipe-is-done';
-      } else if (p.running_runs > 0) {
-        state = `<span class="ind-pipe-state ind-st-run">${p.running_runs} cooking</span>`; cls = ' ind-pipe-is-run';
-        if (p.done_runs > 0) state += `<span class="ind-pipe-state ind-st-part">${p.done_runs}/${p.required_runs}</span>`;
-      } else if (p.done_runs > 0) {
-        state = `<span class="ind-pipe-state ind-st-part">${p.done_runs}/${p.required_runs}</span>`; cls = ' ind-pipe-is-run';
-      } else {
-        state = '<span class="ind-pipe-state ind-st-wait">waiting</span>'; cls = ' ind-pipe-is-wait';
-      }
-    }
-    // The card already IS the progress readout for this step, so it's also where you correct it:
-    // each click advances it one state, wrapping back round so a misclick costs clicks and not
-    // data. A tick tucked into the step-by-step chips was the first cut and too small to read,
-    // never mind aim at.
-    const markable = _featureActive('industry_manual_done') && p && p.required_runs;
-    const st = markable ? _indDoneState(p) : 'none';
-    const onclick = markable ? ` onclick="indCycleDone(${e.type_id})"` : '';
-    const nextTip = st === 'done' ? ' Click to set it back to not started.'
-      : st === 'running' ? ' Click when it has finished.'
-      : ' Click to say it is running.';
-    const tip = `${_esc(e.name)} — ${qty}${e.runs ? ', ' + e.runs + ' runs' : ''}. Hover to trace its chain.`
-      + (markable ? nextTip : '');
-    // The run count doubles as the way in to a partial mark when there's more than one run to
-    // split. One run can't be half done, so it stays plain text there.
-    const runsCell = (markable && p.required_runs > 1)
-      ? `<span class="ind-pipe-runs ind-pipe-runs-edit" id="pruns-${e.type_id}"`
-        + ` onclick="indEditDoneRuns(event, ${e.type_id}, ${p.required_runs}, ${p.done_runs})"`
-        + ` title="${p.done_runs} of ${p.required_runs} runs done \u2014 click to set how many, rather than the whole step">`
-        // Label stays the run count: how many are DONE is already on this card as its state
-        // badge, and the same number twice on a card this small reads as two different ones.
-        + `${p.required_runs.toLocaleString()}&nbsp;runs</span>`
-      : runs;
-    return `<div class="ind-pipe-card ind-pipe-build${cls}${markable ? ' ind-pipe-markable' : ''}"${onclick}`
-      + ` data-tid="${e.type_id}" title="${tip}">`
-      + `<span class="ind-pipe-name">${_esc(e.name)}</span>`
-      + `<span class="ind-pipe-meta"><span class="ind-pipe-qty">${qty}</span>${runsCell}${owned}${state}</span></div>`;
-  };
-  const buyCard = (buys, t) => {
-    const names = buys.slice(0, 25).map(b => b.name).join(', ') + (buys.length > 25 ? '…' : '');
-    const members = buys.map(b => b.type_id).join(',');
-    return `<div class="ind-pipe-card ind-pipe-buys" data-members="${members}" title="${_esc(names)} — click to jump to this stage's shopping list" onclick="_indJumpToStage(${t})"><span class="ind-pipe-name">Buy ${buys.length} material${buys.length > 1 ? 's' : ''}</span>`
-      + `<span class="ind-pipe-meta">in shopping list ↓</span></div>`;
-  };
+  // The two card renderers live at top level (below) — this function is the grid.
 
   // Header row: empty corner over the building labels, then one label per stage.
   let html = `<div class="ind-pipe-corner"></div>`;
@@ -526,10 +533,10 @@ function _indPipelineHtml(d, tiersData, model) {
       let cards = '';
       if (mine.length) {
         if (r.key === 'buy') {
-          cards = buyCard(mine, col.t);
+          cards = _indPipeBuyCard(mine, col.t);
         } else {
           const sorted = mine.slice().sort((a, b) => (b.qty || 0) - (a.qty || 0));
-          cards = sorted.slice(0, 10).map(buildCard).join('');
+          cards = sorted.slice(0, 10).map(e => _indPipeBuildCard(e, prog)).join('');
           if (sorted.length > 10) cards += `<div class="ind-pipe-more">+${sorted.length - 10} more</div>`;
         }
       }
@@ -640,14 +647,24 @@ async function indMarkStageDone(stageIdx) {
 }
 
 // The stage model for the plan currently on screen, derived the same way the pipeline derives it.
+//
+// Memoised on the plan OBJECT, not a copy of it: the derivation is pure in `_indLastPlan`, and
+// `_indStepsHtml` asks for it once per stage while rendering — so a six-stage build walked the whole
+// recipe tree six times to answer a question it had already answered. A new plan is a new object and
+// misses the cache by identity, which is the only invalidation this needs.
+let _indStageModelPlan = null;      // the plan the memo below was derived from
+let _indStageModelMemo = null;
 function _indStageModelForPlan() {
   const d = _indLastPlan;
   if (!d) return { cols: [], stageOf: {} };
+  if (_indStageModelPlan === d) return _indStageModelMemo;
   const boughtIds = new Set((d.shopping_list || []).map(s => s.type_id));
   const roots = d.trees || d.tree;
   const tiersData = roots ? _indComputeTiers(roots, boughtIds)
     : { byType: {}, tiers: {}, maxT: 0, inputsOf: {}, consumersOf: {} };
-  return _indStageModel(tiersData);
+  _indStageModelPlan = d;
+  _indStageModelMemo = _indStageModel(tiersData);
+  return _indStageModelMemo;
 }
 
 // The BUILT steps a stage owns. `cols` is indexed by stage, and each column already carries the

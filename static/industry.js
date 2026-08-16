@@ -450,6 +450,58 @@ function _indPaintStatus(d, opts) {
   if (_indSourcingOpen !== null) indRenderSourcing();   // the card was just repainted under it
 }
 
+// One order, as the chip that names it in the queue line: position, who it is for, how far along,
+// when it lands, every override set on it, and the buttons that act on it. Lifted out of the
+// headline because the headline is four tiles and a row of these — all the reading was in here.
+// `byOrder` is the live progress keyed by order id, `tgt` the plan's targets keyed by type.
+function _indOrderChipHtml(o, byOrder, tgt) {
+  const op = byOrder[o.id];
+  const st = op ? op.status : 'waiting';
+  const lbl = op ? (st === 'complete' ? 'done'
+    : st === 'building' ? `${op.done_units}/${op.quantity}` : 'not started') : '';
+  const tag = (op && op.label) ? `<span class="ind-oc-for" title="This order is for ${_esc(op.label)}">${_esc(op.label)}</span>` : '';
+  const T = tgt[o.product_type_id];
+  const pos = T && T.rank != null
+    ? `<span class="ind-oc-pos" title="Position in line — first in line wins a contested slot">#${T.rank + 1}</span>` : '';
+  const eta = st === 'complete' ? ''
+    : (T && T.finish_hours ? `<span class="ind-oc-eta" title="Estimated finish for this order">${_fmtHours(T.finish_hours)}</span>` : '');
+  // Overrides persisted with the order. Shown because a component being built against the
+  // engine's own shortcut is a decision worth seeing — and worth being able to take back.
+  const fb = o.force_build || [];
+  const forced = fb.length
+    ? `<button class="ind-oc-forced" title="Building anyway: ${_esc(fb.map(f => f.name).join(', '))} — click to go back to buying them"`
+      + ` onclick="indClearOrderForced(${o.id})">⚒ ${fb.length}</button>` : '';
+  // Shown when it differs from what the planner would quote today — otherwise it's noise.
+  const mrg = (o.margin_pct != null && Math.abs(o.margin_pct - _indMarginPct()) > 0.01)
+    ? `<span class="ind-oc-mrgtag" title="Quoted to the customer at ${o.margin_pct}% over cost">+${o.margin_pct}%</span>` : '';
+  // An efficiency you set by hand drives every material figure for this order — show it on the
+  // chip rather than only inside the editor.
+  const ovMt = (o.me_te_overrides || {})[String(o.product_type_id)];
+  const mete = ovMt
+    ? `<span class="ind-oc-metetag" title="Planned against your own blueprint: ME ${ovMt[0]}, TE ${ovMt[1]}">`
+      + `ME ${ovMt[0]} · TE ${ovMt[1]}</span>` : '';
+  // This order makes its own reactions, against the account's standing rule. Same reasoning as
+  // the ⚒ tag beside it: an exception you can't see is one you forget you set.
+  const rxo = (o.build_reactions && _featureActive('industry_reaction_policy'))
+    ? `<span class="ind-oc-rxtag" title="This build makes its own reactions, whatever your account rule says">reacts</span>` : '';
+  const share = _featureActive('industry_share')
+    ? `<button class="ind-oc-share" title="Share a status link with the customer" onclick="indShareOrder(${o.id})">↗</button>` : '';
+  const src = _featureActive('industry_sourcing')
+    ? `<button class="ind-oc-src" title="Materials for this build: what's already in the box and what's still to buy"`
+      + ` onclick="indOpenSourcing(${o.id})">\u{1F4E6}</button>` : '';
+  return `<span class="ind-order-chip ind-oc-${st}" id="oc-${o.id}">${pos}${tag}<b>${o.quantity}×</b> ${_esc(o.name)}`
+    + (lbl ? `<span class="ind-oc-state">${lbl}</span>` : '') + eta + mrg + forced + mete + rxo
+    + `<button class="ind-oc-edit" title="Rename, change the quantity, margin or blueprint ME/TE" onclick="indEditOrder(${o.id})">✎</button>`
+    // The build rules for THIS order, in the same dialog the account's standing rules use. The
+    // inline knobs stay for the order's own identity (name, quantity); what a build is *costed
+    // against* is a different question and belongs beside the defaults it overrides.
+    + (_indRulesActive()
+        ? `<button class="ind-oc-edit" title="Build setup for this order — what it inherits and what it overrides"`
+          + ` onclick="indOpenRules(${o.id}, ${JSON.stringify(o.label || '')})">⚙</button>` : '')
+    + src + share
+    + `<button class="ind-oc-del" title="Remove from the build" onclick="indRemoveOrder(${o.id})">✕</button></span>`;
+}
+
 // The queue in the order the SCHEDULER put it in, which is the order everything showing position
 // must use: the status chips number the line, and the Reorder dialog opens on it. Two sorts is two
 // answers to "who is first", and the one the user drags is then not the one they were shown.
@@ -544,53 +596,7 @@ function _indStatusHeadline(d) {
   // aggregated into one target, so they legitimately share an ETA — don't imply otherwise.
   const tgt = {};
   (d.targets || []).forEach(t => { tgt[t.type_id] = t; });
-  const chips = _indOrdersByRank(d.targets).map(o => {
-    const op = byOrder[o.id];
-    const st = op ? op.status : 'waiting';
-    const lbl = op ? (st === 'complete' ? 'done'
-      : st === 'building' ? `${op.done_units}/${op.quantity}` : 'not started') : '';
-    const tag = (op && op.label) ? `<span class="ind-oc-for" title="This order is for ${_esc(op.label)}">${_esc(op.label)}</span>` : '';
-    const T = tgt[o.product_type_id];
-    const pos = T && T.rank != null
-      ? `<span class="ind-oc-pos" title="Position in line — first in line wins a contested slot">#${T.rank + 1}</span>` : '';
-    const eta = st === 'complete' ? ''
-      : (T && T.finish_hours ? `<span class="ind-oc-eta" title="Estimated finish for this order">${_fmtHours(T.finish_hours)}</span>` : '');
-    // Overrides persisted with the order. Shown because a component being built against the
-    // engine's own shortcut is a decision worth seeing — and worth being able to take back.
-    const fb = o.force_build || [];
-    const forced = fb.length
-      ? `<button class="ind-oc-forced" title="Building anyway: ${_esc(fb.map(f => f.name).join(', '))} — click to go back to buying them"`
-        + ` onclick="indClearOrderForced(${o.id})">⚒ ${fb.length}</button>` : '';
-    // Shown when it differs from what the planner would quote today — otherwise it's noise.
-    const mrg = (o.margin_pct != null && Math.abs(o.margin_pct - _indMarginPct()) > 0.01)
-      ? `<span class="ind-oc-mrgtag" title="Quoted to the customer at ${o.margin_pct}% over cost">+${o.margin_pct}%</span>` : '';
-    // An efficiency you set by hand drives every material figure for this order — show it on the
-    // chip rather than only inside the editor.
-    const ovMt = (o.me_te_overrides || {})[String(o.product_type_id)];
-    const mete = ovMt
-      ? `<span class="ind-oc-metetag" title="Planned against your own blueprint: ME ${ovMt[0]}, TE ${ovMt[1]}">`
-        + `ME ${ovMt[0]} · TE ${ovMt[1]}</span>` : '';
-    // This order makes its own reactions, against the account's standing rule. Same reasoning as
-    // the ⚒ tag beside it: an exception you can't see is one you forget you set.
-    const rxo = (o.build_reactions && _featureActive('industry_reaction_policy'))
-      ? `<span class="ind-oc-rxtag" title="This build makes its own reactions, whatever your account rule says">reacts</span>` : '';
-    const share = _featureActive('industry_share')
-      ? `<button class="ind-oc-share" title="Share a status link with the customer" onclick="indShareOrder(${o.id})">↗</button>` : '';
-    const src = _featureActive('industry_sourcing')
-      ? `<button class="ind-oc-src" title="Materials for this build: what's already in the box and what's still to buy"`
-        + ` onclick="indOpenSourcing(${o.id})">\u{1F4E6}</button>` : '';
-    return `<span class="ind-order-chip ind-oc-${st}" id="oc-${o.id}">${pos}${tag}<b>${o.quantity}×</b> ${_esc(o.name)}`
-      + (lbl ? `<span class="ind-oc-state">${lbl}</span>` : '') + eta + mrg + forced + mete + rxo
-      + `<button class="ind-oc-edit" title="Rename, change the quantity, margin or blueprint ME/TE" onclick="indEditOrder(${o.id})">✎</button>`
-      // The build rules for THIS order, in the same dialog the account's standing rules use. The
-      // inline knobs stay for the order's own identity (name, quantity); what a build is *costed
-      // against* is a different question and belongs beside the defaults it overrides.
-      + (_indRulesActive()
-          ? `<button class="ind-oc-edit" title="Build setup for this order — what it inherits and what it overrides"`
-            + ` onclick="indOpenRules(${o.id}, ${JSON.stringify(o.label || '')})">⚙</button>` : '')
-      + src + share
-      + `<button class="ind-oc-del" title="Remove from the build" onclick="indRemoveOrder(${o.id})">✕</button></span>`;
-  }).join('');
+  const chips = _indOrdersByRank(d.targets).map(o => _indOrderChipHtml(o, byOrder, tgt)).join('');
   return sim
     + `<div class="ind-status-head"><div class="ind-order-chips">${chips}</div>`
     + `<button class="ind-primary-btn" onclick="indOpenPlanner()">Plan a new build</button>`

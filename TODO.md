@@ -63,9 +63,50 @@ out at ~1,500 and has more than doubled — and `static/reactions.js` is 3,936. 
 argument, different service. Do Industry first; if the seams generalise, open a sibling item rather
 than widening this one.
 
+## 35. Take two controls off the Reactions card (2026-08-16)
+
+**What.** Two things the card offers that the user does not want offered there:
+
+1. **"Come back every N days"** — `_rxCadenceHtml` in `static/reactions.js` (~L598). Remove the
+   control from the card. The number itself stays: it is one stored setting
+   (`/api/reactions/cadence`, `app/reactions/settings.py:426-445`) and the first-run wizard's
+   `wizRCadence` dropdown is already a view of it (`static/index.html:702-707` says so in a
+   comment). **User's words:** *"That configuration is set in the settings and just duplicates and
+   adds a knob the user doesn't need."*
+2. **"Advanced: full opportunity list"** — the fold-out at `static/index.html:659`. **Hide it**, not
+   delete it: *"that is not a thing i want to offer the users right now."* The
+   `/api/reactions/opportunities` endpoint and everything behind it stays.
+
+**Why it's open.** Both are rule 3 (the best UI is read-only) applied to a surface that grew knobs.
+Neither is a math change — the cadence ceiling still applies to planning, it just stops being
+adjustable from the card.
+
+**First concrete step.** Confirm removing the card's input leaves a way to reach the number for an
+account past onboarding — if the wizard is the only other home, the setting needs a home in
+Settings before the card's copy comes out, or the value becomes unreachable. That question decides
+whether this is one commit or two. Check what `_rxSyncWizardCadence` keeps in step before cutting.
+
+## 36. The Industry shopping list should count the customer orders, not sit beside them (2026-08-16)
+
+**What.** With nothing queued but a customer order, the shopping list still shows a list —
+apparently of something other than what the user actually has to build. **It should include the
+customer orders by default, with a control to turn them OFF**, rather than the list being something
+separate that can be hidden.
+
+**Why it's open.** Reported from live use, 2026-08-16. A shopping list that does not answer "what do
+I buy for the work in front of me" is worse than none: the builder has to work out which of it is
+real. Default-on with an opt-out is the rule-3 shape — the common case needs no click.
+
+**First concrete step.** Reproduce first and say what the list is currently made of: run a plan with
+one customer order queued and nothing else, and read what `_indShoppingSections` /
+`_indShopStageData` (`static/industry-shopping.js`) were handed. The bug may be that the list is
+built from the ACCOUNT's plan rather than the order's — that shape is already known on the
+`_indLastPlan` path (see the note under §34's follow-ups). Do not add the toggle until the
+default-on list is correct; a control over a wrong list is two problems.
+
 ## Nothing else open
 
-The rest of the backlog is empty as of 2026-08-16. §18b (config export/import) and §19 (URL routing,
+The rest of the backlog is §34, §35 and §36 as of 2026-08-16. §18b (config export/import) and §19 (URL routing,
 including the deep links that carry an id) both closed that day — §19's last piece, deep-linking a
 colony, was closed as **won't build** rather than shipped, and the reasoning is in the archive.
 
