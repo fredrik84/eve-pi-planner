@@ -48,6 +48,13 @@ body.nav-collapsed .admin-nav-item .nav-lbl { display: none; }
 .admin-feature-group-h:hover { background: rgba(90, 160, 230, 0.05); }
 .admin-feature-group-count { color: var(--clr-text-dim); font-weight: 600; text-transform: none; letter-spacing: 0; }
 .admin-feature-group .admin-feature-list { padding: 0 9px 9px; }
+/* Bulk rung for a whole group, in the fold header. Same buttons as a row so the two read as one
+   control at two scopes; `mixed` says the group is not on a single rung, which is why no bulk
+   button is highlighted. */
+.afs-group-bulk { margin-left: auto; }
+.afs-mixed { margin-left: auto; font-size: 10px; font-weight: 600; letter-spacing: 0.3px;
+  text-transform: none; color: var(--clr-text-dim); }
+.afs-mixed + .afs-group-bulk { margin-left: 8px; }
 .admin-feature-list { display: flex; flex-direction: column; gap: 4px; }
 .admin-feature-row { padding: 9px 11px; border: 1px solid #1c2030; border-radius: 7px;
   background: #11151f; }

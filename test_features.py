@@ -86,6 +86,52 @@ def test_feature_toggle_gated(base: str) -> bool:
     return check(code == 403, f"anonymous toggle rejected (got HTTP {code})")
 
 
+def test_feature_group_toggle_gated(base: str) -> bool:
+    """Setting a whole GROUP's rung is admin-only, and the gate runs before any validation.
+
+    This endpoint can publish a dozen flags in one request, so an anonymous caller must be
+    refused for an unknown group and an invalid state too — a 404 or 400 here would confirm
+    which groups exist to somebody with no session.
+    """
+    print(f"\n{'='*60}\n  POST /api/features/group/<group> is admin-gated\n{'='*60}")
+    ok = True
+    for path, what in (("Reactions", "real group"),
+                       ("Notifications%20%26%20Alerts", "group name with spaces and &"),
+                       ("DefinitelyNotAGroup", "unknown group")):
+        code = post_status(f"{base}/api/features/group/{path}", {"state": "public"})
+        ok &= check(code == 403, f"anonymous group set rejected, {what} (got HTTP {code})")
+    code = post_status(f"{base}/api/features/group/Reactions", {"state": "bogus"})
+    ok &= check(code == 403, f"anonymous group set rejected before state validation (got HTTP {code})")
+    return ok
+
+
+def test_group_names_the_ui_renders_are_the_ones_the_bulk_control_can_set(base: str) -> bool:
+    """The group name `/api/features` reports must be the one `_keys_in_group` resolves.
+
+    The bulk rung control sends back exactly the group name the Admin tab rendered, so these two
+    have to agree on every name — including the 'Other' fallback for a feature nobody filed under
+    a group, which each side spells out separately. If either drifts, the bulk button 404s on
+    precisely the flags the drift covers. Asserted against the LIVE endpoint, because that payload
+    is what the UI reads. Deliberately no assertion that every group is in GROUP_ORDER: a group
+    missing from it is legal and sorts last (app/features.py), so pinning that would fail on
+    supported code.
+    """
+    print(f"\n{'='*60}\n  rendered group names resolve to the same keys\n{'='*60}")
+    from app.features import _keys_in_group
+
+    ok = True
+    status, data = get(f"{base}/api/features")
+    ok &= check(status == 200, "200 OK")
+    api_groups: dict[str, list[str]] = {}
+    for f in data.get("features", []):
+        api_groups.setdefault(f.get("group") or "Other", []).append(f["key"])
+    ok &= check(bool(api_groups), "the endpoint reports at least one group")
+    for group, keys in sorted(api_groups.items()):
+        ok &= check(_keys_in_group(group) == keys,
+                    f"group '{group}': {len(keys)} rendered keys resolve identically server-side")
+    return ok
+
+
 def test_skill_roi_anon(base: str) -> bool:
     print(f"\n{'='*60}\n  GET /api/skill-roi (no session)\n{'='*60}")
     ok = True
@@ -369,6 +415,8 @@ def main():
     results = [
         test_features(base),
         test_feature_toggle_gated(base),
+        test_feature_group_toggle_gated(base),
+        test_group_names_the_ui_renders_are_the_ones_the_bulk_control_can_set(base),
         test_skill_roi_anon(base),
         test_backend_gates_respect_the_whole_ladder(base),
         test_corp_wallet_gated(base),

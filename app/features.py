@@ -516,6 +516,49 @@ class FeatureStateUpdate(BaseModel):
     state: str
 
 
+def _keys_in_group(group: str) -> list[str]:
+    """Every registry key filed under `group`, in registry order. The group name is the one the
+    registry states (`GROUP_ORDER` orders them); a feature with no `group` is filed under 'Other',
+    matching what `/api/features` reports, so the Admin UI can send back exactly what it rendered."""
+    return [f["key"] for f in FEATURE_REGISTRY if (f.get("group") or "Other") == group]
+
+
+@router.post("/api/features/group/{group}")
+def set_feature_group(group: str, req: FeatureStateUpdate, _: int = Depends(require_admin)):
+    """Move a whole GROUP to one rung in a single call.
+
+    Rolling a service out meant clicking through every flag it owns one at a time — 15 for
+    Industry, 14 for Reactions — which is both tedious and the shape of mistake that leaves one
+    flag behind on a rung nobody meant it to sit on. The write is per-key and identical to
+    `set_feature`, so nothing about the ladder changes; only the number of requests does.
+
+    Registered ABOVE `/api/features/{key}` for readability only — the paths differ in segment
+    count, so they cannot collide. Returns the keys it moved, which is what the caller shows.
+    """
+    if req.state not in VALID_STATES:
+        raise HTTPException(status_code=400, detail=f"Invalid state — must be one of: {', '.join(sorted(VALID_STATES))}")
+    keys = _keys_in_group(group)
+    if not keys:
+        raise HTTPException(status_code=404, detail="Unknown feature group")
+    ensure_features_table()
+    now = datetime.now(timezone.utc).isoformat()
+    con = get_connection()
+    # try/finally, unlike its single-key neighbour below: this holds the connection across N
+    # statements, so a raise partway through the loop would leak the pool slot for the life of the
+    # process rather than for one statement.
+    try:
+        for key in keys:
+            con.execute(
+                "INSERT INTO pp_features (key, enabled, state, updated_at) VALUES (?,?,?,?) "
+                "ON CONFLICT(key) DO UPDATE SET enabled=excluded.enabled, state=excluded.state, updated_at=excluded.updated_at",
+                (key, 1 if req.state == "public" else 0, req.state, now),
+            )
+        con.commit()
+    finally:
+        con.close()
+    return {"ok": True, "group": group, "state": req.state, "keys": keys, "count": len(keys)}
+
+
 @router.post("/api/features/{key}")
 def set_feature(key: str, req: FeatureStateUpdate, _: int = Depends(require_admin)):
     if key not in _DEFAULTS:

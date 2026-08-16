@@ -266,8 +266,21 @@ async function loadAdminFeatures() {
       </div>`;
     }).join('');
     const open = !collapsed.has(group);
+    // Bulk rung for the whole group. Active only when every flag in it already sits on that rung —
+    // a mixed group shows no active button and says so, so "all public" is never implied by a
+    // highlight that only some of the flags earned.
+    const groupStates = new Set(byGroup[group].map(f => f.state || (f.enabled ? 'public' : 'admin')));
+    const uniform = groupStates.size === 1 ? [...groupStates][0] : null;
+    const gbtns = _FEATURE_STATES.map(s =>
+      `<button class="afs-btn${uniform === s.key ? ' afs-active afs-' + s.key : ''}"
+         title="Set all ${byGroup[group].length} ${_esc(group)} features to: ${s.title.toLowerCase()}"
+         onclick="event.preventDefault();event.stopPropagation();setFeatureGroupState('${_esc(group)}','${s.key}')">${s.label}</button>`
+    ).join('');
     return `<details class="admin-feature-group"${open ? ' open' : ''} ontoggle="_toggleFeatureGroup('${_esc(group)}', this.open)">
-        <summary class="admin-feature-group-h">${_esc(group)} <span class="admin-feature-group-count">${byGroup[group].length}</span></summary>
+        <summary class="admin-feature-group-h">${_esc(group)} <span class="admin-feature-group-count">${byGroup[group].length}</span>
+          ${uniform ? '' : '<span class="afs-mixed">mixed</span>'}
+          <span class="afs-group afs-group-bulk">${gbtns}</span>
+        </summary>
         <div class="admin-feature-list">${rows}</div>
       </details>`;
   }).join('');
@@ -280,6 +293,28 @@ async function setFeatureState(key, state) {
     loadAdminFeatures();
     _applyTabGates();
   } catch (e) { toastError(e, 'Failed to update feature'); }
+}
+
+// Moving a whole group at once is the rollout action ("Reactions goes to testers"), so it asks
+// first: it can publish a dozen flags, and `public` is the one rung that reaches people who did
+// not opt in. Confirmed against the count, which is also the check that you picked the group you
+// meant.
+async function setFeatureGroupState(group, state) {
+  const n = Object.values(_features).filter(f => (f.group || 'Other') === group).length;
+  const label = (_FEATURE_STATES.find(s => s.key === state) || { label: state }).label;
+  const ok = await ppConfirm(
+    `Set all ${n} ${group} features to ${label}?`,
+    { okLabel: `Set ${n} to ${label}`, danger: state === 'public' });
+  if (!ok) return;
+  try {
+    const r = await apiSend('POST', '/api/features/group/' + encodeURIComponent(group), { state });
+    (r.keys || []).forEach(k => {
+      if (_features[k]) { _features[k].state = state; _features[k].enabled = state === 'public'; }
+    });
+    toast(`${group}: ${r.count} features set to ${label}`);
+    loadAdminFeatures();
+    _applyTabGates();
+  } catch (e) { toastError(e, 'Failed to update feature group'); }
 }
 
 // ── Tester management ─────────────────────────────────────────────────────────
