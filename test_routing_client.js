@@ -442,14 +442,23 @@ console.log('\nthe real section modules report to the router:');
 // disclosure lives. These four are the properties a stub cannot notice going missing.
 console.log('\nthe real record modules keep their half of the bargain:');
 {
+  // `file` may name one file or a `*` prefix pattern — the Industry frontend is several files
+  // (TODO 34) and which one holds a function is not a property worth pinning here.
   const body = (file, fnName) => {
-    const src = fs.readFileSync(path.join(ROOT, 'static', file), 'utf8');
-    const at = src.indexOf(`function ${fnName}(`);
-    if (at < 0) return '';
-    const end = src.indexOf('\n}\n', at);
-    return end < 0 ? '' : src.slice(at, end);
+    const names = file.includes('*')
+      ? fs.readdirSync(path.join(ROOT, 'static')).filter(f => f.startsWith(file.split('*')[0])
+                                                             && f.endsWith(file.split('*')[1]))
+      : [file];
+    for (const name of names.sort()) {
+      const src = fs.readFileSync(path.join(ROOT, 'static', name), 'utf8');
+      const at = src.indexOf(`function ${fnName}(`);
+      if (at < 0) continue;
+      const end = src.indexOf('\n}\n', at);
+      if (end >= 0) return src.slice(at, end);
+    }
+    return '';
   };
-  const link = body('industry.js', 'indOpenOrderLink');
+  const link = body('industry*.js', 'indOpenOrderLink');
   check(link.length > 0, 'indOpenOrderLink was found');
   // THE disclosure property: the row is loaded before anything is shown. Reversing these two shows
   // the dialog — titled with the order id — to somebody who is then bounced, which tells them the
@@ -461,7 +470,7 @@ console.log('\nthe real record modules keep their half of the bargain:');
         'and answers false rather than throwing, which is what the router bounces on');
   check(/_indRulesActive\(\)/.test(link),
         'a link is gated exactly as the button is — a URL is not the way round a feature flag');
-  const close = body('industry.js', 'indCloseRules');
+  const close = body('industry*.js', 'indCloseRules');
   check(/noteRecord\('industry'/.test(close),
         'closing the dialog takes the order back out of the address bar');
   const full = body('refill.js', 'openSavedPlanFull');

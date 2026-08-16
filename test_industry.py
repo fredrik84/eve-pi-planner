@@ -10,6 +10,8 @@ Run: python3 test_industry.py
 import json
 import math
 import inspect
+import glob
+import os
 import sqlite3
 import time
 from app.db import get_connection
@@ -34,6 +36,19 @@ from app.industry.schedule import (order_ranks,
 NAMES = {100: "Widget", 101: "Gadget", 102: "Sprocket", 200: "MineralA", 201: "MineralB", 202: "Goo"}
 SELL = {200: 100.0, 201: 50.0, 202: 20.0, 101: 1000.0, 102: 500.0, 100: 100000.0}
 ADJ = {200: 100.0, 201: 50.0, 202: 20.0, 101: 1000.0, 102: 500.0, 100: 90000.0}
+
+
+def _industry_js() -> str:
+    """The Industry frontend as one string, however many files it is split across.
+
+    The source-level checks below match on function bodies and substrings; none of them cares which
+    file a function sits in, and pinning a filename is what would make a later move look like a
+    regression. Joined with a newline so a file that ends without one cannot fuse its last line to
+    the next file's first and break a `\\n}\\n` terminator.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    return "\n".join(open(f, encoding="utf-8").read()
+                     for f in sorted(glob.glob(os.path.join(here, "static", "industry*.js"))))
 
 
 def _seed_con() -> sqlite3.Connection:
@@ -215,7 +230,7 @@ def test_completing_a_step_re_plans_so_the_checklist_moves_on():
     `/api/industry/to-install` precisely so the checklist could only ever come from a computed plan,
     which rules out rebuilding it in the browser: a completing mark gives up the fast path instead."""
     print("test_completing_a_step_re_plans_so_the_checklist_moves_on")
-    js = open("static/industry.js").read()
+    js = _industry_js()
 
     post = js[js.index("async function _indPostDone("):]
     post = post[:post.index("\n// Apply a mark")]
@@ -267,7 +282,7 @@ def test_build_rules_has_one_home_and_the_strip_stops_being_a_control():
     is not: with the surface ON there must be exactly ONE place to change a rule. Two ways to set the
     same thing is how the config came to be spread over eight strips nobody recognised as settings."""
     print("test_build_rules_has_one_home_and_the_strip_stops_being_a_control")
-    js = open("static/industry.js").read()
+    js = _industry_js()
     pj = open("static/planetary.js").read()
     html = open("static/index.html").read()
 
@@ -4114,7 +4129,7 @@ def test_a_skill_blocker_is_shown_while_building_not_only_while_planning():
     """
     print("test_a_skill_blocker_is_shown_while_building_not_only_while_planning")
     import inspect
-    js = open("static/industry.js").read()
+    js = _industry_js()
 
     body = js[js.index("function _indRenderPlanBody"):]
     body = body[:body.index("\n}\n")]
@@ -4149,7 +4164,6 @@ def test_the_step_by_step_parts_account_for_the_whole():
     never be "make the steps add up".
     """
     print("test_the_step_by_step_parts_account_for_the_whole")
-    import os
     import re
     H = 3600
     # One short component stage feeding one very long final job — the Phoenix shape.
@@ -4187,8 +4201,7 @@ def test_the_step_by_step_parts_account_for_the_whole():
     check("summing the start offsets is NOT the build's length",
           sum(s["start"] for s in stages.values()) < makespan * 0.2)
 
-    src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                            "static", "industry.js"), encoding="utf-8").read()
+    src = _industry_js()
     body = src[src.index("function _indStepsHtml("):]
     body = body[:body.index("\nfunction ", 1)]
     check("the step collapse tracks when a stage has landed", re.search(r"\bs\.end\s*=", body))
@@ -4892,7 +4905,7 @@ def test_the_reaction_category_registry_is_the_single_source():
     check("and starts on the testers rung", _default_state(f[0]) == "testers")
 
     # The UI reads the labels rather than carrying its own copy.
-    js = open("static/industry.js").read()
+    js = _industry_js()
     check("the frontend fetches the registry", "/api/industry/reaction-policy" in js)
     for label in (c["label"] for c in reg):
         check(f"and does not hardcode “{label}”", label not in js)
@@ -5533,7 +5546,7 @@ def test_a_pinned_step_reads_as_a_choice_not_an_inference():
           '"pinned"' in inspect.getsource(sched_mod._sites_used))
     check("unapplied pins are reported on both plan paths",
           src.count('"build_pins_unapplied"') == 2)
-    js = open("static/industry.js").read()
+    js = _industry_js()
     check("the checklist marks a pinned step", "sitePinned" in js and "(pinned)" in js)
     check("and the notice bar says when a pin was not applied",
           "_indPinNote" in js and "build_pins_unapplied" in js)
