@@ -149,13 +149,9 @@ let _indOrderDraft = [];
 function indOpenOrder() {
   const m = document.getElementById('indOrderModal');
   if (!m) return;
-  // Start from the order the status view shows, which is already rank-sorted.
-  const tgt = {};
-  ((_indLastPlan && _indLastPlan.targets) || []).forEach(t => { tgt[t.type_id] = t; });
-  _indOrderDraft = (_indOrders || []).slice().sort((a, b) => {
-    const ra = (tgt[a.product_type_id] || {}).rank, rb = (tgt[b.product_type_id] || {}).rank;
-    return (ra === undefined ? 99 : ra) - (rb === undefined ? 99 : rb) || a.id - b.id;
-  });
+  // Start from the order the status view shows — the same sort, so the line the user drags is the
+  // line they were just looking at.
+  _indOrderDraft = _indOrdersByRank(_indLastPlan && _indLastPlan.targets);
   m.style.display = '';
   _indRenderOrderList();
 }

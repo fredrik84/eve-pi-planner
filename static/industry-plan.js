@@ -365,14 +365,10 @@ let _indForcedTypes = new Map();
 
 function _indForceIds() { return [..._indForcedTypes.keys()]; }
 
-// Build this component anyway. The plan re-runs (and the slider curve is re-fetched) because
-// forcing one component changes the batch every other decision was weighed against.
-function indForceBuildType(typeId, name) {
-  _indForcedTypes.set(typeId, name || String(typeId));
-  _indSweep = null; _indSweepFailed = null;
-  return indRunPlan();      // returned so a caller can await the repaint (see _indKeepScroll)
-}
-
+// Un-force a component. There is no single-component counterpart: every "build it anyway" path —
+// one chip or the whole strip — goes through `_indForceBuildMany`, which sets the overrides and
+// replans ONCE. A one-at-a-time version replanned per component, so it was only ever correct for
+// the case that already had a caller.
 function indUnforceBuildType(typeId) {
   _indForcedTypes.delete(typeId);
   _indSweep = null; _indSweepFailed = null;

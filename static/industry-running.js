@@ -329,8 +329,7 @@ async function indRemoveBoundSource(btn) {
 // server this plan owns its stock from now on — so what the checklist measures and what the plan is
 // allowed to count can never drift apart.
 async function indBindSources() {
-  const keys = _indExpandSets(_indPickedSources('indBoundSrcRows'),
-                              _indSourceValues('indBoundSrcRows'));
+  const keys = _indSourceKeys('indBoundSrcRows');
   const body = _featureActive('industry_plan_sources')
     ? { source_keys: keys } : { source_key: keys[0] || '' };
   try { await apiSend('PATCH', `/api/industry/orders/${_indSourcingOpen}`, body); }
@@ -342,8 +341,7 @@ async function indBindSources() {
 }
 
 async function indSaveSourceSet() {
-  const keys = _indExpandSets(_indPickedSources('indBoundSrcRows'),
-                              _indSourceValues('indBoundSrcRows'));
+  const keys = _indSourceKeys('indBoundSrcRows');
   if (!keys.length) return;
   const name = window.prompt('Name this set of containers — e.g. "Reaction stock"');
   if (!name || !name.trim()) return;

@@ -158,10 +158,7 @@ function _indSourceRowHtml(srcs, selected, onchange, opts) {
 
 // Every value currently picked in a rows container, minus the blanks and the pseudo-options.
 function _indPickedSources(containerId) {
-  const el = document.getElementById(containerId);
-  if (!el) return [];
-  return Array.from(el.querySelectorAll('select'))
-    .map(s => s.value)
+  return _indSourceValues(containerId)
     .filter(v => v && v !== '__paste' && v.slice(0, 4) !== 'set:');
 }
 
@@ -176,6 +173,14 @@ function _indExpandSets(keys, picked) {
     (st ? st.keys : []).forEach(k => out.push(k));
   });
   return out.filter((k, i) => k && out.indexOf(k) === i);
+}
+
+// What a rows container is bound to: the boxes picked in it, with any saved set expanded. Every
+// reader of a picker goes through this one function — the plan preview, the queued order and a
+// saved set are three views of the same choice, and a picker read three ways is three chances for
+// them to disagree about which stock a build may count on.
+function _indSourceKeys(containerId) {
+  return _indExpandSets(_indPickedSources(containerId), _indSourceValues(containerId));
 }
 
 // Which box this build's materials come from, chosen while planning it — because "which container
@@ -269,11 +274,11 @@ function indRemovePlanSource(btn) {
   if (row) row.remove();
 }
 
-// The boxes the plan modal currently has picked, saved sets expanded. Used for BOTH the preview and
-// the queued order, so the two cannot be costed against different stock — a preview that promises a
-// shopping list the queued build then contradicts is the bug this shares one function to avoid.
+// The boxes the plan modal currently has picked. Used for BOTH the preview and the queued order, so
+// the two cannot be costed against different stock — a preview that promises a shopping list the
+// queued build then contradicts is the bug reading the picker in one place avoids.
 function _indPlanSourceKeys() {
-  return _indExpandSets(_indPickedSources('indPlanSrcRows'), _indSourceValues('indPlanSrcRows'));
+  return _indSourceKeys('indPlanSrcRows');
 }
 
 function _indSourceValues(containerId) {
@@ -451,6 +456,20 @@ function _indPaintStatus(d, opts) {
   if (_indSourcingOpen !== null) indRenderSourcing();   // the card was just repainted under it
 }
 
+// The queue in the order the SCHEDULER put it in, which is the order everything showing position
+// must use: the status chips number the line, and the Reorder dialog opens on it. Two sorts is two
+// answers to "who is first", and the one the user drags is then not the one they were shown.
+// An order whose product isn't among the plan's targets sorts last, ties break on id.
+function _indOrdersByRank(targets) {
+  const tgt = {};
+  (targets || []).forEach(t => { tgt[t.type_id] = t; });
+  const rank = o => {
+    const r = (tgt[o.product_type_id] || {}).rank;
+    return r === undefined ? 99 : r;
+  };
+  return (_indOrders || []).slice().sort((a, b) => rank(a) - rank(b) || a.id - b.id);
+}
+
 // One-line answer to "where am I": overall progress, what's in the cooker, what to do next.
 function _indStatusHeadline(d) {
   const p = _indProgress;
@@ -531,11 +550,7 @@ function _indStatusHeadline(d) {
   // aggregated into one target, so they legitimately share an ETA — don't imply otherwise.
   const tgt = {};
   (d.targets || []).forEach(t => { tgt[t.type_id] = t; });
-  const ordered = (_indOrders || []).slice().sort((a, b) => {
-    const ra = (tgt[a.product_type_id] || {}).rank, rb = (tgt[b.product_type_id] || {}).rank;
-    return (ra === undefined ? 99 : ra) - (rb === undefined ? 99 : rb) || a.id - b.id;
-  });
-  const chips = ordered.map(o => {
+  const chips = _indOrdersByRank(d.targets).map(o => {
     const op = byOrder[o.id];
     const st = op ? op.status : 'waiting';
     const lbl = op ? (st === 'complete' ? 'done'
