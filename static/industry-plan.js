@@ -29,14 +29,22 @@ function indOnSearchKey(ev) {
   if (first) first.click();
 }
 
+// The rows under a product search box, or the empty state. Shared with the hand-declared blueprint
+// picker: both search the same endpoint over the same buildable types, and a product that is
+// findable in one box but not the other would be a difference with no reason a user could name.
+// `pick` is the global the row calls with the chosen type — the only thing that differs.
+function _indSearchRowsHtml(results, pick) {
+  if (!results || !results.length) return '<div class="ind-search-empty">No buildable match</div>';
+  return results.map(x =>
+    `<div class="ind-search-row" onclick="${pick}(${x.type_id}, '${_esc(x.name).replace(/'/g, "\\'")}')">${_esc(x.name)}</div>`
+  ).join('');
+}
+
 async function _indSearch(q) {
   try {
     const d = await api('/api/industry/search?q=' + encodeURIComponent(q));
     const box = document.getElementById('indSearchResults');
-    if (!d.results || !d.results.length) { box.innerHTML = '<div class="ind-search-empty">No buildable match</div>'; box.style.display = ''; return; }
-    box.innerHTML = d.results.map(x =>
-      `<div class="ind-search-row" onclick="indPick(${x.type_id}, '${_esc(x.name).replace(/'/g, "\\'")}')">${_esc(x.name)}</div>`
-    ).join('');
+    box.innerHTML = _indSearchRowsHtml(d.results, 'indPick');
     box.style.display = '';
   } catch (e) {}
 }
@@ -231,6 +239,31 @@ async function _indApplySavedSettings() {
   check('indPrioSpeed', d.prioritize_speed);
 }
 
+// Restore a numeric control from what this browser last used. Both sliders are the same three
+// moves: read, refuse anything that doesn't parse, then fire the control's OWN input handler so the
+// label and the live reprice follow the value — a restore that set `.value` and stopped left the
+// number and the sentence under it disagreeing.
+function _indRestoreNum(elId, storageKey, onInput) {
+  const el = document.getElementById(elId);
+  if (!el) return;
+  let v = null;
+  try { v = localStorage.getItem(storageKey); } catch (e) {}
+  if (v !== null && !isNaN(parseFloat(v))) el.value = parseFloat(v);
+  onInput();
+}
+
+// Seed all three plan controls, with saving suppressed for the duration. Every restore fires a
+// handler and every one of those handlers saves, so without the guard merely opening the planner
+// writes this browser's remembered knobs back over the account's. Kept as one function because the
+// guard is the point: it is not optional, and a fourth control added without it would look fine.
+function _indRestoreControls() {
+  _indRestoringSettings = true;
+  _indRestoreNum('indMarginal', 'indMarginalPct', indOnMarginalInput);
+  indRestoreForceBuild();
+  _indRestoreNum('indMargin', 'indMarginPct', indOnMarginInput);
+  _indRestoringSettings = false;
+}
+
 function indRestoreForceBuild() {
   const el = document.getElementById('indForceBuild');
   if (!el) return;
@@ -260,15 +293,6 @@ function indOnMarginalChange() {
   if (_indPicked && document.getElementById('indResult').innerHTML.trim()) indRunPlan();
   if (_indStatusVisible()) indRefreshStatus();
 }
-function indRestoreMarginal() {
-  const el = document.getElementById('indMarginal');
-  if (!el) return;
-  let v = null;
-  try { v = localStorage.getItem('indMarginalPct'); } catch (e) {}
-  if (v !== null && !isNaN(parseFloat(v))) el.value = parseFloat(v);
-  indOnMarginalInput();
-}
-
 // What to charge over cost. The one number the tool genuinely cannot work out for the user — it's
 // their business, their customer, their risk — so it's a knob with a sane default.
 const IND_MARGIN_DEFAULT = 10;
@@ -288,15 +312,6 @@ function indOnMarginChange() {
   // Margin changes the price, not the build — no re-plan needed, just re-price what's on screen.
   if (_indLastPlan && _indLastPlan.metrics) _indRepriceRendered();
 }
-function indRestoreMargin() {
-  const el = document.getElementById('indMargin');
-  if (!el) return;
-  let v = null;
-  try { v = localStorage.getItem('indMarginPct'); } catch (e) {}
-  if (v !== null && !isNaN(parseFloat(v))) el.value = parseFloat(v);
-  indOnMarginInput();
-}
-
 // The price for the plan currently on screen, at the slider's current position. Recomputed client
 // side because margin is pure arithmetic on a cost the server already returned — re-planning a
 // capital to multiply by 1.1 would be absurd.

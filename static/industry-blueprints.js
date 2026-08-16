@@ -294,13 +294,7 @@ async function indManualBpSearch(q) {
   if (!q || q.trim().length < 2) { box.style.display = 'none'; return; }
   try {
     const d = await api('/api/industry/search?q=' + encodeURIComponent(q.trim()));
-    if (!d.results || !d.results.length) {
-      box.innerHTML = '<div class="ind-search-empty">No buildable match</div>';
-      box.style.display = ''; return;
-    }
-    box.innerHTML = d.results.map(x =>
-      `<div class="ind-search-row" onclick="indManualBpPick(${x.type_id}, '${_esc(x.name).replace(/'/g, "\\'")}')">${_esc(x.name)}</div>`
-    ).join('');
+    box.innerHTML = _indSearchRowsHtml(d.results, 'indManualBpPick');
     box.style.display = '';
   } catch (e) { box.style.display = 'none'; }
 }

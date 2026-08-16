@@ -198,12 +198,12 @@ function _indReauthHtml(names) {
     + `<button class="ind-bp-btn ind-bp-connect" onclick="indReauthAssets()">Reconnect a character</button></div>`;
 }
 
-// One SSO popup for every industry scope: /auth/login?industry=1 requests the unified scope set, so
-// a single login brings the character up to date on assets, blueprints and jobs at once. `then` runs
-// when the popup reports back; the listener removes itself either way so repeated connects don't
-// stack up handlers that re-fire on the next login.
-function indEsiConnect(then) {
-  const w = window.open('/auth/login?industry=1', 'EVE SSO', 'width=800,height=900');
+// The SSO popup, waiting for the login to report back. `then` runs when it does; the listener
+// removes itself either way, so repeated connects don't stack up handlers that all re-fire on the
+// next login. WHICH scopes are asked for is the caller's decision and travels in the URL — it is
+// not a mode this function branches on.
+function _indSsoPopup(url, then) {
+  const w = window.open(url, 'EVE SSO', 'width=800,height=900');
   window.addEventListener('message', function handler(e) {
     if (e.data === 'esi-done') {
       window.removeEventListener('message', handler);
@@ -213,6 +213,12 @@ function indEsiConnect(then) {
   });
 }
 
+// One login for every industry scope: /auth/login?industry=1 requests the unified scope set, so a
+// single connect brings the character up to date on assets, blueprints and jobs at once.
+function indEsiConnect(then) {
+  _indSsoPopup('/auth/login?industry=1', then);
+}
+
 function indReauthAssets() {
   indEsiConnect(() => { indLoadAssets(); indLoadSetupSummary(); });
 }
@@ -220,17 +226,9 @@ function indReauthAssets() {
 // The director connect is its OWN flow, and deliberately not the one every other button uses: it
 // asks for corporation-wide read access, which EVE gates behind the Director role and which nobody
 // else can use. Only someone who has just clicked "connect a director" should ever be shown those
-// lines on the consent screen.
+// lines on the consent screen — which is why it names its own URL rather than taking a flag.
 function indConnectDirector() {
-  const w = window.open('/auth/login?director=1', 'EVE SSO', 'width=800,height=900');
-  window.addEventListener('message', function handler(e) {
-    if (e.data === 'esi-done') {
-      window.removeEventListener('message', handler);
-      if (w && !w.closed) w.close();
-      indLoadAssets();
-      indLoadSetupSummary();
-    }
-  });
+  _indSsoPopup('/auth/login?director=1', () => { indLoadAssets(); indLoadSetupSummary(); });
 }
 
 async function indLoadAssets() {

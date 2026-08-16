@@ -26,10 +26,8 @@ async function onIndustryTabOpen() {
   indApplyBuildRulesGate();     // the way in to the standing rules, if this account has the surface
   _indRestoringSettings = true;
   await _indApplySavedSettings();
-  indRestoreMarginal();
-  indRestoreForceBuild();
-  indRestoreMargin();
   _indRestoringSettings = false;
+  _indRestoreControls();
   // Nothing has ever saved these — seed the account from what this browser has been using. Without
   // it, a plan run on the user's behalf (a customer's share link, the checklist) keeps using library
   // defaults until they happen to touch a knob, which is not a step anyone knows to take: the share
@@ -87,11 +85,7 @@ function indOpenPlanner() {
   const m = document.getElementById('indPlanModal');
   if (!m) return;
   m.style.display = '';
-  _indRestoringSettings = true;
-  indRestoreMarginal();
-  indRestoreForceBuild();
-  indRestoreMargin();
-  _indRestoringSettings = false;
+  _indRestoreControls();
   _indSyncOptsVisible();
   indLoadPlanSources();
   const s = document.getElementById('indSearch');
