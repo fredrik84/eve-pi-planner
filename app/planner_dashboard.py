@@ -18,7 +18,7 @@ from app.market import fetch_prices
 from app.esi import session_context_id, ensure_char_tables
 from app.alert_settings import get_alert_settings
 from app.alerts import compute_alerts, _extractor_program_lengths
-from app.planner import _compute_p1_fracs, _effective_fph
+from app.planner import _compute_p1_fracs, _effective_fph, factory_drain
 from app.planner_advisor import _expansion_capacity
 
 router = APIRouter()
@@ -81,7 +81,7 @@ def dashboard(pp_session: str = Cookie(default=None)):
         SELECT c.character_name AS ch, c.character_id AS cid, cp.planet_id AS planet_id,
                cp.planet_num AS pn, s.name AS system,
                cp.is_extractor AS is_ext, cp.products AS products,
-               cp.pad_inputs AS pad_inputs, cp.pad_contents AS pad_contents,
+               cp.pad_inputs AS pad_inputs, cp.pad_contents AS pad_contents, cp.drain AS drain,
                cp.issues AS issues, cp.sim_state AS sim_state,
                cp.scanned_at AS scanned_at, cp.checkpoint_at AS checkpoint_at, cp.storage AS storage
         FROM pp_char_planets cp
@@ -116,6 +116,9 @@ def dashboard(pp_session: str = Cookie(default=None)):
     soonest_h = None
     refill_fac_h = None; refill_fac_loc = None  # tightest from-full factory input buffer (refill cadence)
     refill_due_h = None; refill_due_loc = None  # soonest factory to run its inputs dry (refill deadline)
+    refill_due_at = None                       # ...as an INSTANT (epoch s), so the client shows a clock
+    refill_due_src = None                      # "pins" (real consumption) or "model" (planner average)
+    refill_due_ckpt = None                     # checkpoint it was read from — how old the reading is
     cur_units_by_prod: dict[str, float] = {}   # current units/day by product (for the expansion estimate)
     produced_by_tid: dict[int, float] = {}     # product made since checkpoint (projected up)
     for (r, prods, inputs, pads) in parsed:
@@ -126,33 +129,31 @@ def dashboard(pp_session: str = Cookie(default=None)):
         fracs = _compute_p1_fracs(tid, pi)
         if not fracs:
             continue
+        try:
+            drain = _json.loads(r["drain"] or "null")
+        except Exception:
+            drain = None
         fph24 = _effective_fph(tid, pi) * 24.0            # products/day for one factory
-        # Project the launchpad buffer forward: the factory keeps eating P1 between ESI updates,
-        # so subtract consumption since the colony CHECKPOINT (last_cycle_start — what the reported
-        # contents are actually "as of", not our fetch time), floored at 0. Makes fill % and
-        # runtime tick down live instead of freezing on the last snapshot.
+        # Drain the launchpad buffer forward: the factory keeps eating P1 between ESI updates, so
+        # subtract consumption since the colony CHECKPOINT (last_cycle_start — what the reported
+        # contents are actually "as of", not our fetch time). `factory_drain` owns that arithmetic
+        # for everyone; it prefers the planet's real pin rates and falls back to the modelled ones.
         anchor = r["checkpoint_at"] or r["scanned_at"]
-        elapsed_h = max(0.0, (now - anchor) / 3600.0) if anchor else 0.0
-        snap = {it["type_id"]: it.get("amount", 0) for it in inputs}
-        onhand = {pid: max(0.0, snap.get(pid, 0) - fph24 * frac / 24.0 * elapsed_h) for pid, frac in fracs.items()}
-        tte_h = tte_snap_h = None                         # runtime now / runtime from the checkpoint
-        for pid, frac in fracs.items():
-            need_per_h = fph24 * frac / 24.0
-            if need_per_h <= 0:
-                continue
-            h = onhand.get(pid, 0) / need_per_h
-            tte_h = h if tte_h is None else min(tte_h, h)
-            hs = snap.get(pid, 0) / need_per_h
-            tte_snap_h = hs if tte_snap_h is None else min(tte_snap_h, hs)
-        tte_h = tte_h or 0.0
+        dr = factory_drain(tid, inputs, anchor, drain=drain, now=now)
+        if not dr:
+            continue
+        onhand, tte_h = dr["onhand"], dr["tte_h"]
+        elapsed_h = max(0.0, (now - dr["t0"]) / 3600.0)
         # Product made since the checkpoint = rate × hours the factory was actually fed (it stops
         # once an input runs out). Feeds the rising "In pads now" so value flows inputs → product.
-        prod_h = min(elapsed_h, tte_snap_h) if tte_snap_h is not None else 0.0
+        prod_h = max(0.0, min(elapsed_h, (dr["runs_dry_at"] - dr["t0"]) / 3600.0))
         produced = fph24 * prod_h / 24.0 if prod_h > 0 else 0.0
         if produced > 0:
             produced_by_tid[tid] = produced_by_tid.get(tid, 0.0) + produced
-        in_m3 = sum(onhand.get(pid, 0) * VOL for pid in fracs)
-        makeable = min((onhand.get(pid, 0) / frac for pid, frac in fracs.items()), default=0)
+        # Over the drain's OWN input set, not the modelled P1 list — a hybrid planet importing a
+        # P2 has real inputs `fracs` never mentions, and summing over `fracs` would read it empty.
+        in_m3 = sum(v * VOL for v in onhand.values())
+        makeable = tte_h * fph24 / 24.0        # what the inputs on hand can still make
         price = prices.get(tid, 0.0)
         run_value = makeable * price
         vpd = fph24 * price
@@ -169,13 +170,14 @@ def dashboard(pp_session: str = Cookie(default=None)):
         loc = f"{r['ch']} · {r['system'] or '?'}" + (f" P{r['pn']}" if r["pn"] is not None else "")
         # Refill cadence = how long a FULL P1 input buffer (3 launchpads) lasts at this factory's
         # consumption — the interval you must top it up on. Keep the tightest (fastest-draining).
-        day_in_m3 = fph24 * sum(fracs.values()) * VOL
+        day_in_m3 = sum(dr["rate_h"].values()) * 24.0 * VOL
         if day_in_m3 > 0:
             rc_h = LP_M3 / day_in_m3 * 24.0
             if refill_fac_h is None or rc_h < refill_fac_h:
                 refill_fac_h, refill_fac_loc = rc_h, loc
         if refill_due_h is None or tte_h < refill_due_h:    # soonest factory to empty = refill deadline
             refill_due_h, refill_due_loc = tte_h, loc
+            refill_due_at, refill_due_src, refill_due_ckpt = dr["runs_dry_at"], dr["source"], dr["t0"]
         factories.append({
             "loc": loc, "product": prod.get("name") or f"#{tid}",
             "tier": types.get(tid, {}).get("pi_tier") or 0,
@@ -453,6 +455,11 @@ def dashboard(pp_session: str = Cookie(default=None)):
             "empty_pads_loc": empty_pads_loc,
             "refill_due_hours": round(refill_due_h, 1) if refill_due_h is not None else None,
             "refill_due_loc": refill_due_loc,
+            # The deadline as an instant, plus where it came from. Derived from the last scan, so
+            # it needs no client-side store and the server can quote the same time the page does.
+            "refill_due_at": round(refill_due_at) if refill_due_at is not None else None,
+            "refill_due_source": refill_due_src,
+            "refill_due_checkpoint": round(refill_due_ckpt) if refill_due_ckpt is not None else None,
             "refill_factories_hours": round(refill_fac_h, 1) if refill_fac_h is not None else None,
             "refill_factories_loc": refill_fac_loc,
             "reactions_tracked": reactions_tracked,

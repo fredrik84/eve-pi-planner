@@ -148,31 +148,74 @@ def _factory_refill_hours(products_per_day: float, p1_fracs: dict, factories: in
     return round((_FACTORY_LAUNCHPADS * 10_000) / (p1_m3_per_factory_day / 24), 1)
 
 
-def project_factory_pad(product_tid: int, inputs: list, base_product: float, t0, now: float | None = None) -> float:
+def factory_drain(product_tid: int | None, inputs: list, t0, drain=None,
+                  now: float | None = None) -> dict | None:
+    """**The** answer to "how much input does this factory have left, and when does it run dry" —
+    one definition, shared by the dashboard tile, the Up-next agenda, the `factory_refill` alert
+    and `project_factory_pad`. Returns
+      {"onhand": {tid: units now}, "rate_h": {tid: units/hr}, "tte_h", "runs_dry_at",
+       "binding", "t0", "source"}
+    or None when there's nothing to drain.
+
+    Two sources, and which one answered matters enough to report:
+    - `"pins"` — the stored `drain` state, read off the planet's REAL factory pins at scan time
+      (constant `quantity / cycle_time`). Deterministic; this is what a rescan buys you.
+    - `"model"` — the planner's own per-product average (`_effective_fph × _compute_p1_fracs`),
+      for rows scanned before drain states existed. Right for a plan, approximate for a colony:
+      a P4 planet's 0.5/hr is a whole-chain stand-in, not a pin count.
+
+    Time runs from the colony CHECKPOINT (`last_cycle_start` — what the reported contents are
+    actually "as of"), never from our fetch time."""
+    from app.pi_sim import drain_runs_dry
+    state = None
+    if isinstance(drain, dict) and drain.get("inputs"):
+        state = {"t0": drain.get("t0") or t0,
+                 "inputs": [{"type_id": i["type_id"], "onhand": i.get("onhand", 0) or 0,
+                             "rate": i.get("rate", 0) or 0} for i in drain["inputs"]]}
+        source = "pins"
+    elif product_tid and t0:
+        pi = load_pi_data()
+        fracs = _compute_p1_fracs(product_tid, pi)
+        rate_hr = _effective_fph(product_tid, pi)          # products/hr (P4 → 0.5)
+        if not fracs or rate_hr <= 0:
+            return None
+        snap = {it.get("type_id"): (it.get("amount", 0) or 0) for it in (inputs or [])}
+        state = {"t0": t0,
+                 "inputs": [{"type_id": pid, "onhand": snap.get(pid, 0),
+                             "rate": rate_hr * frac / 3600.0} for pid, frac in fracs.items()]}
+        source = "model"
+    if not state:
+        return None
+    res = drain_runs_dry(state, now)
+    if not res:
+        return None
+    return {"onhand": res["onhand"], "tte_h": max(0.0, res["hours"]),
+            "runs_dry_at": res["at"], "binding": res["binding"], "t0": state["t0"],
+            "rate_h": {i["type_id"]: i["rate"] * 3600.0 for i in state["inputs"]},
+            "source": source}
+
+
+def project_factory_pad(product_tid: int, inputs: list, base_product: float, t0, now: float | None = None,
+                        drain=None) -> float:
     """Projected FINAL product in a factory's launchpad NOW = checkpoint amount + what it made since the
     checkpoint, at the effective product rate (a P4 is throttled to 0.5/hr), capped at when the imported
     P1 would run dry (the factory stops feeding then). Factory planets have no extractor sim_state — the
     on-planet P1→P2→P3→P4 chain can't be line-simmed (the intermediates don't accrue in the launchpad) —
     so without this the Characters tab freezes on a days-old ESI checkpoint. Mirrors the dashboard's
-    'In pads now' projection so the two agree."""
+    'In pads now' projection so the two agree — both get the runs-dry cap from `factory_drain`."""
     import time as _t
     if now is None:
         now = _t.time()
     pi = load_pi_data()
-    fracs = _compute_p1_fracs(product_tid, pi)
     rate_hr = _effective_fph(product_tid, pi)          # products/hr (P4 → 0.5)
-    if not fracs or rate_hr <= 0 or not t0:
+    if rate_hr <= 0 or not t0:
         return base_product
-    elapsed_h = max(0.0, (now - t0) / 3600.0)
-    snap = {it.get("type_id"): (it.get("amount", 0) or 0) for it in (inputs or [])}
-    tte_h = None                                        # hours until the first P1 input runs dry
-    for pid, frac in fracs.items():
-        need_per_h = rate_hr * frac                     # P1 consumed/hr (frac = P1 per product)
-        if need_per_h <= 0:
-            continue
-        h = snap.get(pid, 0) / need_per_h
-        tte_h = h if tte_h is None else min(tte_h, h)
-    fed_h = min(elapsed_h, tte_h) if tte_h is not None else elapsed_h
+    dr = factory_drain(product_tid, inputs, t0, drain=drain, now=now)
+    if not dr:
+        return base_product
+    elapsed_h = max(0.0, (now - dr["t0"]) / 3600.0)
+    # Fed only until the binding input ran out — production stops there, so the pad stops rising.
+    fed_h = max(0.0, min(elapsed_h, (dr["runs_dry_at"] - dr["t0"]) / 3600.0))
     return base_product + rate_hr * fed_h
 
 

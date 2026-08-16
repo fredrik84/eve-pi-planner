@@ -320,7 +320,7 @@ def ensure_char_tables():
             pass
 
     _add_col("pp_char_planets", "planet_num INTEGER")
-    for _col in ("products TEXT", "pad_contents TEXT", "pad_inputs TEXT", "sim_state TEXT", "issues TEXT", "scanned_at REAL", "checkpoint_at REAL", "storage TEXT", "esi_modified REAL", "esi_expires REAL"):  # JSON cols + scan/checkpoint epochs + fullest-container fill state + ESI data vintage (Last-Modified) + next-refresh time (Expires)
+    for _col in ("products TEXT", "pad_contents TEXT", "pad_inputs TEXT", "sim_state TEXT", "drain TEXT", "issues TEXT", "scanned_at REAL", "checkpoint_at REAL", "storage TEXT", "esi_modified REAL", "esi_expires REAL"):  # JSON cols + scan/checkpoint epochs + fullest-container fill state + ESI data vintage (Last-Modified) + next-refresh time (Expires)
         _add_col("pp_char_planets", _col)
     # Hand-built ("hybrid") colonies run extraction + a chained P1->P2+ factory together on one
     # planet — a shape our own generated templates never produce. `products` above is deliberately
@@ -812,6 +812,18 @@ def _fetch_planets(character_id: int, access_token: str, only_planet_id: int | N
                     except Exception:
                         _sim = None
                         sim_state_json = None
+                # Drain state — per-imported-input consumption read off the planet's real factory
+                # pins (constant quantity/cycle_time, no decay), so "when does this colony run dry"
+                # is arithmetic rather than the modelled per-product average. The refill deadline,
+                # the Up-next agenda and the factory_refill alert all answer from this.
+                drain_json = None
+                if _detail:
+                    try:
+                        from app.pi_sim import colony_drain_state
+                        _drain = colony_drain_state(_detail, _pi)
+                        drain_json = _json.dumps(_drain) if _drain else None
+                    except Exception:
+                        drain_json = None
                 storage_json = None       # fullest launchpad/storage fill state (% + rate to full)
                 try:
                     if _detail:
@@ -852,8 +864,8 @@ def _fetch_planets(character_id: int, access_token: str, only_planet_id: int | N
                     INSERT INTO pp_char_planets
                         (character_id, planet_id, planet_type, solar_system_id,
                          upgrade_level, num_pins, is_extractor, p0_type_id, p0_name,
-                         planet_num, products, pad_contents, pad_inputs, sim_state, issues, scanned_at, checkpoint_at, storage, esi_modified, esi_expires, product_chain, is_hybrid, ext_heads)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                         planet_num, products, pad_contents, pad_inputs, sim_state, drain, issues, scanned_at, checkpoint_at, storage, esi_modified, esi_expires, product_chain, is_hybrid, ext_heads)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     ON CONFLICT (character_id, planet_id) DO UPDATE SET
                       planet_type=EXCLUDED.planet_type, solar_system_id=EXCLUDED.solar_system_id,
                       upgrade_level=EXCLUDED.upgrade_level, num_pins=EXCLUDED.num_pins,
@@ -861,14 +873,14 @@ def _fetch_planets(character_id: int, access_token: str, only_planet_id: int | N
                       p0_name=EXCLUDED.p0_name, planet_num=EXCLUDED.planet_num,
                       products=EXCLUDED.products, pad_contents=EXCLUDED.pad_contents,
                       pad_inputs=EXCLUDED.pad_inputs, sim_state=EXCLUDED.sim_state,
-                      issues=EXCLUDED.issues, scanned_at=EXCLUDED.scanned_at,
+                      drain=EXCLUDED.drain, issues=EXCLUDED.issues, scanned_at=EXCLUDED.scanned_at,
                       checkpoint_at=EXCLUDED.checkpoint_at, storage=EXCLUDED.storage,
                       esi_modified=EXCLUDED.esi_modified, esi_expires=EXCLUDED.esi_expires,
                       product_chain=EXCLUDED.product_chain, is_hybrid=EXCLUDED.is_hybrid,
                       ext_heads=EXCLUDED.ext_heads
                 """, (character_id, planet_id, planet_type, solar_system_id,
                       upgrade_level, num_pins, is_extractor, p0_type_id, p0_name,
-                      planet_num, products_json, pads_json, pad_inputs_json, sim_state_json, issues_json, _scan_ts, checkpoint_at, storage_json, esi_modified, esi_expires, product_chain_json, is_hybrid, ext_heads_json))
+                      planet_num, products_json, pads_json, pad_inputs_json, sim_state_json, drain_json, issues_json, _scan_ts, checkpoint_at, storage_json, esi_modified, esi_expires, product_chain_json, is_hybrid, ext_heads_json))
 
                 if is_extractor and _sim:      # log a per-program yield sample for the trend/burn-down
                     _record_yield_sample(con, character_id, planet_id, _sim, _scan_ts,

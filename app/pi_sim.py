@@ -12,8 +12,14 @@ with an aggregate flow model (good enough to match the game within a few %):
   amount(now) = checkpoint contents + rate × (min(now, program expiry) − checkpoint time)
 
 It covers EXTRACTOR planets (ECU → basic facilities → P1, or pure ECU → P0). Factory planets
-that import P1 can't be simulated (the import schedule is unknown) → caller falls back to the
-raw checkpoint contents.
+that import P1 can't have their OUTPUT simulated past the point their inputs run out (the import
+schedule is unknown) → caller falls back to the raw checkpoint contents.
+
+Their INPUT side, though, is fully determined: `colony_drain_state` reads the planet's real
+factory pins and reports what each imported input is consumed at (units/sec) and how much of it
+was on the planet at the checkpoint. Consumption is a fixed `quantity / cycle_time` per pin — no
+decay, no noise — so "when does this colony run dry" is arithmetic, not an estimate. That is what
+the refill deadline, the Up-next agenda and the `factory_refill` alert answer from.
 """
 from __future__ import annotations
 
@@ -200,6 +206,104 @@ def colony_sim_state(detail: dict, pi_data: dict) -> dict | None:
     peak_p0_day = sum(ext_rate.values()) * 86400.0
     return {"t0": t0, "expiry": expiry, "install": install, "program_days": program_days,
             "peak_p0_day": peak_p0_day, "outputs": outputs}
+
+
+def colony_drain_state(detail: dict, pi_data: dict) -> dict | None:
+    """Per-input CONSUMPTION for a planet that imports its inputs, read off its real factory pins,
+    or None if nothing on it imports anything (a pure extractor, or a self-contained chain).
+
+    This is the deterministic half of a colony. A factory pin eats `quantity` of each input every
+    `cycle_time` seconds — a constant, unlike extraction, which decays. So the drain rate here is
+    the planet's TRUE burn, not the modelled `_effective_fph × frac` the planner uses when sizing a
+    plan (which is a per-product average and, for P4, a deliberate 0.5/hr approximation of a whole
+    on-planet chain). Run-dry time = onhand ÷ rate, exact to the pin.
+
+    Only IMPORTED inputs are counted: a P2 the planet makes itself to feed its own P3 line is not
+    something the player delivers, so it can't be what the colony runs dry of. Shape:
+      {"t0": <checkpoint epoch>, "product": <end-product type_id|None>,
+       "inputs": [{"type_id", "name", "tier", "onhand": <at checkpoint>, "rate": <units/sec>}]}"""
+    pins = detail.get("pins", [])
+    types = pi_data["types"]
+    schematics = pi_data["schematics"]
+    sch_by_id = {v["schematic_id"]: out for out, v in schematics.items()}
+
+    rate: dict[int, float] = {}        # input type_id -> units consumed/sec across every pin eating it
+    produced: set[int] = set()         # what this planet makes for itself
+    out_rate: dict[int, float] = {}    # output type_id -> units/sec (to pick the end product)
+    t0 = 0.0
+    for pin in pins:
+        sid = pin.get("schematic_id") or (pin.get("factory_details") or {}).get("schematic_id")
+        if not sid:
+            continue
+        out = sch_by_id.get(sid)
+        if out is None:
+            continue
+        sch = schematics.get(out) or {}
+        ct = sch.get("cycle_time") or 3600
+        if ct <= 0:
+            continue
+        produced.add(out)
+        out_rate[out] = out_rate.get(out, 0.0) + sch.get("output_qty", 1) / ct
+        for inp in (sch.get("inputs") or []):
+            tid, qty = inp.get("type_id"), inp.get("quantity", 0) or 0
+            if tid and qty > 0:
+                rate[tid] = rate.get(tid, 0.0) + qty / ct
+        lcs = _epoch(pin.get("last_cycle_start"))
+        if lcs:
+            t0 = max(t0, lcs)
+
+    imported = {tid: r for tid, r in rate.items() if tid not in produced and r > 0}
+    if not imported or t0 <= 0:
+        return None
+
+    onhand: dict[int, float] = {}      # every container on the planet, not just launchpads — a pin
+    for pin in pins:                   # buffering its own input still feeds the line
+        for c in (pin.get("contents") or []):
+            tid, amt = c.get("type_id"), c.get("amount", 0) or 0
+            if tid in imported and amt:
+                onhand[tid] = onhand.get(tid, 0.0) + amt
+
+    # The end product is what nothing else on the planet eats — the thing hauled off it.
+    ends = [t for t in produced if t not in rate]
+    product = max(ends, key=lambda t: types.get(t, {}).get("pi_tier") or 0) if ends else None
+    return {"t0": t0, "product": product,
+            "inputs": sorted(
+                [{"type_id": tid, "name": types.get(tid, {}).get("name") or f"#{tid}",
+                  "tier": types.get(tid, {}).get("pi_tier") or 1,
+                  "onhand": onhand.get(tid, 0.0), "rate": r}
+                 for tid, r in imported.items()], key=lambda x: x["type_id"]),
+            "product_rate": out_rate.get(product, 0.0) if product else 0.0}
+
+
+def drain_runs_dry(state: dict, now_ts: float | None = None) -> dict | None:
+    """When does a drain state run dry → {"hours": <from now, may be negative>, "at": <epoch>,
+    "binding": <type_id>, "onhand": {type_id: units now}}. None if it never does.
+
+    The binding input is the one that empties FIRST — a factory stops on its scarcest input, so
+    that, not the average or the total, is the deadline. Negative hours mean it already ran dry
+    (and the checkpoint stopped advancing when it did, which is why the number stays honest)."""
+    if not state or not state.get("inputs"):
+        return None
+    if now_ts is None:
+        now_ts = datetime.now(timezone.utc).timestamp()
+    t0 = state.get("t0") or now_ts
+    dt = max(0.0, now_ts - t0)
+    dry_at = None
+    binding = None
+    onhand_now: dict[int, float] = {}
+    for it in state["inputs"]:
+        r = it.get("rate", 0) or 0
+        base = it.get("onhand", 0) or 0
+        onhand_now[it["type_id"]] = max(0.0, base - r * dt)
+        if r <= 0:
+            continue
+        at = t0 + base / r
+        if dry_at is None or at < dry_at:
+            dry_at, binding = at, it["type_id"]
+    if dry_at is None:
+        return None
+    return {"hours": (dry_at - now_ts) / 3600.0, "at": dry_at,
+            "binding": binding, "onhand": onhand_now}
 
 
 def project(state: dict, now_ts: float | None = None) -> list[dict]:

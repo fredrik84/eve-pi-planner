@@ -195,7 +195,7 @@ def list_characters(pp_session: str = Cookie(default=None)):
         try:
             planet_rows = con.execute("""
                 SELECT cp.character_id, cp.planet_id, cp.planet_type, cp.is_extractor, cp.p0_name, cp.upgrade_level,
-                       cp.planet_num, cp.num_pins, cp.products, cp.pad_contents, cp.pad_inputs, cp.checkpoint_at,
+                       cp.planet_num, cp.num_pins, cp.products, cp.pad_contents, cp.pad_inputs, cp.drain, cp.checkpoint_at,
                        cp.sim_state, cp.esi_modified, cp.esi_expires, COALESCE(cp.is_hybrid, 0) AS is_hybrid,
                        cp.ext_heads, COALESCE(ss.name, '') AS system_name
                 FROM pp_char_planets cp
@@ -206,7 +206,7 @@ def list_characters(pp_session: str = Cookie(default=None)):
         except Exception:  # no geo table → no system names
             planet_rows = con.execute("""
                 SELECT cp.character_id, cp.planet_id, cp.planet_type, cp.is_extractor, cp.p0_name, cp.upgrade_level,
-                       cp.planet_num, cp.num_pins, cp.products, cp.pad_contents, cp.pad_inputs, cp.checkpoint_at,
+                       cp.planet_num, cp.num_pins, cp.products, cp.pad_contents, cp.pad_inputs, cp.drain, cp.checkpoint_at,
                        cp.sim_state, cp.esi_modified, cp.esi_expires, COALESCE(cp.is_hybrid, 0) AS is_hybrid,
                        cp.ext_heads, '' AS system_name
                 FROM pp_char_planets cp
@@ -335,7 +335,8 @@ def list_characters(pp_session: str = Cookie(default=None)):
                     from app.planner import project_factory_pad
                     _tid = products[0]["type_id"]
                     _base = next((it.get("amount", 0) or 0 for it in pads if it.get("type_id") == _tid), 0)
-                    _proj = project_factory_pad(_tid, _json.loads(p["pad_inputs"] or "[]"), _base, p["checkpoint_at"])
+                    _proj = project_factory_pad(_tid, _json.loads(p["pad_inputs"] or "[]"), _base, p["checkpoint_at"],
+                                                drain=_json.loads(p["drain"] or "null"))
                     pads = [it for it in pads if it.get("type_id") != _tid]
                     if round(_proj) >= 1:
                         pads.insert(0, {"type_id": _tid, "name": products[0].get("name"), "amount": int(round(_proj))})
