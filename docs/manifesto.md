@@ -180,9 +180,20 @@ own all keep changing. The standing properties to hold:
    casual to serious", has never used Industry: every casual-user property it was built to have has
    been verified only against the builders who asked for the features. The feature set keeps growing
    at a rung the audience cannot reach, and that — not any individual feature — is the gap.
-2. **Marking materials in is modelled; marking output out is not.** Containers are bound as an input
-   record and nothing says where a job's output lands (TODO 2f-residual #1). It is the stated point
-   of the exercise and still the hole in it.
+2. **Output has a stated destination, but nothing checks it arrived there** (re-verified
+   2026-08-16; the old wording — "nothing says where a job's output lands" — closed with 2f #1 on
+   2026-08-14 and was stale). What shipped: the destination is a property of the PLAN, not the job
+   (the user's ruling — one box per plan, inherited by every job, which is what made the
+   shared-batch case answerable), stored as `pp_industry_orders.output_source_key`, falling back to
+   the first bound input box and **saying which of the two it did** — `stated` / `inherited` /
+   `none`, on the same show-your-basis contract as job fees and ME/TE. `none` is a legitimate
+   answer: output then lands where the job is installed, and a corp hangar needs the Director role,
+   so a box can never be required. What is still a gap is narrower: **that key is a declaration
+   nothing downstream reads.** Its only consumers are the order's own API shape
+   (`orders.py::order_output_source_key`) and the plan form. Delivery is detected pool-wide instead
+   — `assets.owned_quantities` sums every ENABLED source, and the completion ledgers know what was
+   built — so the app can tell you a type is done, but not that it landed in the box you named, and
+   a builder running several boxes gets no per-box answer.
 3. **One 4,705-line frontend file against 22 backend modules totalling 11,954 lines**
    (measured 2026-08-16; the largest are `schedule.py` 2,056, `blueprints.py` 1,517, `graph.py`
    1,383). The backend split; `static/industry.js` did not, and it has grown ~30% since this gap
