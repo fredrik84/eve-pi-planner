@@ -671,7 +671,7 @@ is correct there. Covered by `test_queue_price_uses_each_orders_own_margin`.
 ## The build page's notice stack (trimmed 2026-08-04)
 
 The page had accumulated a column of coloured banners above the plan. They are now ONE block
-(`_indNotices` in `static/industry.js`, `.ind-notes`), and the bar for being in it is: **does this
+(`_indNotices` in `static/industry-render.js`, `.ind-notes`), and the bar for being in it is: **does this
 change what the builder DOES or what they SPEND, or correct a number they would otherwise
 believe?** A notice a reader will not act on is not worth its space, however true it is. What the
 user objects to is **the plan narrating its own reasoning** — the three panels cut on their

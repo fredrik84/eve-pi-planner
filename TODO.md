@@ -16,52 +16,66 @@ Reviewed 2026-08-16.
 
 ## 34. Industry is too big to read — split it and simplify it (2026-08-16)
 
-**What.** Industry has outgrown the shape it can be reasoned about in. Measured 2026-08-16:
+**Frontend: SHIPPED 2026-08-16.** `static/industry.js` (4,705 lines) is now ten files of 327-679,
+split along [docs/industry-workflow.md](docs/industry-workflow.md)'s steps rather than by size:
+`industry.js` (tab shell, source pickers, status card + plan cache), `-setup` (step 0, assets,
+stock, slots), `-blueprints`, `-plan` (step 2 inputs), `-shopping` (tier/stage model + buy side),
+`-steps` (build tree, done state, step list, pipeline), `-render` (the two plan renderers + notice
+stack), `-queue` (steps 3 + 8), `-running` (steps 5-7), `-rules` (Build rules).
 
-| | Lines | Note |
-|---|---|---|
-| `static/industry.js` | **4,705** | one file. The manifesto's "3.6k-line frontend file" is stale — it has grown ~30% since |
-| `app/industry/` | **11,954** over 22 modules | `schedule.py` 2,056, `blueprints.py` 1,517, `graph.py` 1,383, `assets.py` 1,004, `orders.py` 1,003 |
+How it was done, because the method is the reusable part: the split was written down and reviewed
+by two agents BEFORE a line moved, which is what caught the two defects worth catching — a line
+range claimed by two files (the `DOMContentLoaded` block, which would have double-bound the speed
+toggle and fired two plan requests per flip) and three boundaries that would have orphaned a
+comment from the function it documents. The move itself was mechanical and verified as a pure move:
+every line lands in exactly one file, byte-identical to its source range.
 
-**Why it's open.** This is honest-gap #3 in [docs/manifesto.md](docs/manifesto.md), stated there as
-a risk and never given an item. The frontend is the sharp end: the backend split into 22 modules
-and `industry.js` did not follow, so the one file spans onboarding, plan rendering, the notice
-stack, the marginal strip, the queue, the build page, sourcing, install, progress, quoting and
-shares — and the only guard over it is a `no-undef` lint. Every rule this repo has about reading
-before editing (`scripts/symbols.sh`, index-then-partial-read) exists because files this size cost
-a fortune to work in, and it is the file most likely to be edited next, since Industry is the
-service still moving.
+Then the simplification pass, all behaviour-preserving: deleted `indForceBuildType` (no caller in
+JS, HTML or tests — superseded by `_indForceBuildMany`); one reader each for the source picker
+(`_indSourceKeys`) and the queue's order (`_indOrdersByRank`), closing two "two readers can drift"
+holes; `_indRestoreControls` / `_indRestoreNum`, `_indSearchRowsHtml`, `_indSsoPopup` for the
+duplicated trios; the inner builders of the four biggest renderers lifted to top level
+(`_indOrderChipHtml`, `_indPipeBuildCard`/`_indPipeBuyCard`, `_indInstallJobHtml`/`_indInstallCharHtml`);
+and `_indStageModelForPlan` memoised on plan identity, which stops `_indStepsHtml` walking the whole
+recipe tree once per stage.
 
-**This is a refactor, and the bar is that nothing changes.** No feature work rides along, no flag —
-rule 2 is about NEW features and this ships none. Behaviour-preserving means the same DOM, the same
-endpoints in the same order, and the same plan out of the same request.
+Verified per commit: `test_industry.py` (1055 checks), `test_routing.py`, `test_routing_client.js`,
+`node scripts/lint_js.mjs`, `node --check`, zero NUL bytes, and — for each renderer lift — a
+literal-by-literal diff of the emitted HTML against the pre-refactor function. **Note for anyone
+running these locally: `static/` is NOT bind-mounted into the container, so
+`docker compose cp static web:/srv/app/` first or the source-level checks read the image's baked
+copy and pass against the old file.**
 
-**First concrete step** (do these in order, one commit each, verified between):
+**Still open — the backend's three.** `schedule.py` 2,056, `blueprints.py` 1,517, `graph.py` 1,383.
+`schedule.py` is I/O-free and the cleanest to cut; `blueprints.py` and `graph.py` carry the evidence
+layer Reactions imports (`formula_print_floor`), so any move has to keep the import graph acyclic —
+that constraint is documented in [docs/reactions.md](docs/reactions.md) and is real, not a
+preference. Same bar as the frontend half: nothing changes, one commit per cut, tests between.
 
-1. **Measure before cutting.** `scripts/symbols.sh static/industry.js` for the real function map,
-   then group functions by the step of the workflow they serve
-   ([docs/industry-workflow.md](docs/industry-workflow.md) is already that taxonomy — steps 0-9).
-   Write the proposed split down before moving a line.
-2. **Split the frontend along the workflow, not along size.** Likely seams: setup/onboarding, plan
-   render, queue + build page, sourcing/install/progress, quote/share. Load order and the globals
-   the lint scrapes are the risk — `scripts/lint_js.mjs` must stay clean, and every `onclick=`
-   handler in `index.html` must still resolve.
-3. **Then the backend's three biggest.** `schedule.py` is already I/O-free and is the cleanest to
-   cut; `blueprints.py` and `graph.py` carry the evidence layer that Reactions imports
-   (`formula_print_floor`), so any move has to keep the import graph acyclic — that constraint is
-   documented in [docs/reactions.md](docs/reactions.md) and is a real one, not a preference.
-4. **Simplify while in there, but log it.** Dead paths and reuse-by-conditional are fair game (rule
-   4); anything that changes behaviour comes out of this item and gets its own.
+**Adjacent, deliberately not in scope.** `app/reactions/jobs.py` is **3,920 lines** and
+`static/reactions.js` is 3,936 — same shape, same argument, different service. The frontend seams
+above did generalise, so a sibling item for Reactions is now a reasonable thing to open; do not
+widen this one into it.
 
-**How it's verified.** `test_industry*.py` before and after each commit, plus a live plan for the
-same product/quantity before and after, compared field by field — a refactor that changes a number
-has failed. `python3 -c "print(open('static/industry.js','rb').read().count(b'\x00'))"` on every
-touched JS file (the NUL-byte trap).
+### 34a. Three things the review found that a refactor may not fix
 
-**Adjacent, deliberately not in scope.** `app/reactions/jobs.py` is **3,920 lines** — it was split
-out at ~1,500 and has more than doubled — and `static/reactions.js` is 3,936. Same shape, same
-argument, different service. Do Industry first; if the seams generalise, open a sibling item rather
-than widening this one.
+Each changes behaviour, so each is its own item rather than a rider on the one above.
+
+1. **`indPrioSpeed` is double-wired.** `static/index.html:1673` has `onchange="indOnPrioSpeed()"`
+   AND `industry-plan.js` adds a `change` listener on the same element; both call `indRunPlan()`.
+   Flipping the speed toggle with a plan on screen fires **two `POST /api/industry/plan`**, racing
+   over which response paints. Fix: drop one. Behaviour-visible, hence not done under §34.
+2. **The preview modal never sets `_indLastPlan`.** It is assigned in exactly two places, both on
+   the queue path. So `_indStageModelForPlan()` — called from `_indStepsHtml` during a *preview*
+   render — reasons about the QUEUE's plan. With an empty queue it returns empty cols and no
+   stage-mark button appears, which is probably why nobody noticed; after a queue plan has
+   rendered, the preview's "mark stage done" buttons are gated on the wrong plan's stages.
+   **Reproduce before fixing** — this is the shape §36's shopping-list report may also be.
+3. **`_indStepsHtml` is still 100 lines** and its natural cut (the stage-aggregation loop) is
+   blocked by `test_industry.py`, which slices the function body up to the next `\nfunction ` and
+   asserts three assignments are inside it. Splitting it needs those assertions rewritten to follow
+   the code — a test change, which §34 forbade itself. Worth doing, with the mutation check
+   (reintroduce the bug, watch it go red) that the assertions were written for.
 
 ## 35. Take two controls off the Reactions card (2026-08-16)
 

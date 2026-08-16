@@ -194,14 +194,15 @@ own all keep changing. The standing properties to hold:
    — `assets.owned_quantities` sums every ENABLED source, and the completion ledgers know what was
    built — so the app can tell you a type is done, but not that it landed in the box you named, and
    a builder running several boxes gets no per-box answer.
-3. **One 4,705-line frontend file against 22 backend modules totalling 11,954 lines**
-   (measured 2026-08-16; the largest are `schedule.py` 2,056, `blueprints.py` 1,517, `graph.py`
-   1,383). The backend split; `static/industry.js` did not, and it has grown ~30% since this gap
-   was first written at "3.6k" — which is the point: it is the file most likely to be edited next,
-   because Industry is the service still moving. It is the highest-risk file in the repo and the
-   only guard over it is a `no-undef` lint. **Now an item — TODO §34**, scoped as a
-   behaviour-preserving split along the nine workflow steps. (The old pointer here was
-   §2e-residual, a browser test, closed won't-build 2026-08-16.)
+3. **The frontend half of this gap is closed** (2026-08-16, TODO §34). `static/industry.js` had
+   reached 4,705 lines against 22 backend modules totalling 11,954; it is now ten files of 327-679
+   lines split along the nine workflow steps, verified as a pure move plus a simplification pass.
+   **What remains is the backend's own three:** `schedule.py` 2,056, `blueprints.py` 1,517,
+   `graph.py` 1,383 — and, out of scope by the item's own terms, `app/reactions/jobs.py` at 3,920
+   and `static/reactions.js` at 3,936, which are the same shape in the other service. The guard is
+   still only a `no-undef` lint, so size is still the risk it was; there is just less of it where
+   the editing happens. (The old pointer here was §2e-residual, a browser test, closed won't-build
+   2026-08-16.)
 4. **Two endpoints exist with no UI on purpose and two did with no UI by accident**
    (`queue-plan/compare` and `per-order-plans` deliberately; `skill-coverage` and `to-install` read
    as residue and were removed 2026-08-07, TODO 16, along with the whole unrendered skill advisor).

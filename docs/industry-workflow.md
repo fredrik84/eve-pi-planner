@@ -10,6 +10,10 @@ Written 2026-08-05 from a read of `app/industry/` (22 modules, ~9.2k lines) and
 `static/industry.js` (~3.6k lines). It describes what is there, without judgement; the one
 judgement-bearing section is fenced at the bottom under **Observations**.
 
+**Updated 2026-08-16:** the frontend is now ten files (`static/industry.js` plus
+`industry-{setup,blueprints,plan,shopping,steps,render,queue,running,rules}.js`), split along the
+nine steps below — so the step you are reading names the file to open. TODO §34.
+
 Find a section: `grep -n '^## ' docs/industry-workflow.md`.
 
 ---
@@ -316,7 +320,7 @@ gates one step of the path above.
 `test_industry.py` is the main suite. Adjacent: `test_required_skills.py`,
 `test_skill_time_mults.py`, `test_cost_basis.py`, `test_job_summary.py`,
 `test_group_structures.py`. Frontend behaviour has no browser harness (TODO 2e-residual);
-`scripts/lint_js.mjs` / the `lint-js` CI job is the only automated guard over `static/industry.js`.
+`scripts/lint_js.mjs` / the `lint-js` CI job is the only automated guard over `static/industry*.js`.
 
 ---
 
@@ -364,6 +368,9 @@ gates one step of the path above.
    (one mention of "Planetary Industry", no mention of manufacturing or reactions); the industry
    onboarding covers setup and stops. Steps 1–9 exist nowhere the user can read them — which is
    what the companion user-facing doc is for, and why it has no home in the UI yet.
-10. **`static/industry.js` is one 3.6k-line file** carrying the planner modal, the build page, the
-    checklist, sourcing, shares, the order modal and the setup modal. The backend split into 22
-    modules; the frontend did not.
+10. **The frontend was one 3.6k-line file** carrying the planner modal, the build page, the
+    checklist, sourcing, shares, the order modal and the setup modal, against 22 backend modules.
+    Closed 2026-08-16 (TODO §34): it is now ten `static/industry*.js` files split along the steps
+    above — `industry.js` (shell + status), `-setup`, `-blueprints`, `-plan`, `-shopping`, `-steps`,
+    `-render`, `-queue`, `-running`, `-rules`. Which file a function is in is not pinned by any
+    test; the source-level guards read them as one string (`_industry_js()` in `test_industry.py`).

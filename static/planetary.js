@@ -2926,7 +2926,8 @@ function settingsSection(name, doLoad) {
   if (name === 'markets') _loadMarketsSettings();
   // Same "always load" reasoning as markets: openSettingsModal passes doLoad=false, and the
   // Manufacturing/Reactions pointers jump straight here — without this both panels stay empty.
-  // The loaders live in industry.js and paint into #indBlueprints / #indAssets, which now sit in
+  // The loaders live in industry-blueprints.js / industry-setup.js and paint into #indBlueprints /
+  // #indAssets, which now sit in
   // this section rather than the Job slots modal.
   if (name === 'blueprints') _loadBlueprintsSettings();
   if (name === 'general') _loadGeneralSettings();
@@ -2977,7 +2978,7 @@ function _loadMarketsSettings() {
 
 // Blueprints & formulas settings — the ESI blueprint/formula read and the stock-source list,
 // relocated here from Manufacturing's Setup & slots modal so Reactions can reach them too (the
-// reaction concurrency cap reads exactly this stock). Reuses the industry.js loaders unchanged —
+// reaction concurrency cap reads exactly this stock). Reuses the industry-*.js loaders unchanged —
 // they render into #indBlueprints / #indAssets, which now live in this section.
 function _loadBlueprintsSettings() {
   if (typeof indLoadBlueprints === 'function') indLoadBlueprints();
