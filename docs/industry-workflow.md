@@ -96,7 +96,7 @@ Post-onboarding, `indApplyGate` degrades to a dismissible nudge (`localStorage.i
 ## Step 1 — Tab open
 
 `onIndustryTabOpen`, in order: `indPopulateFacility` → restore saved settings
-(`_indApplySavedSettings`, `indRestoreMarginal/ForceBuild/Margin`) → seed the account row if nothing
+(`_indApplySavedSettings`, then `_indRestoreControls` — all three knobs, with saving suppressed) → seed the account row if nothing
 has ever saved it → `indApplyGate` → `indLoadSetupSummary` + `indLoadLifetime` (fire-and-forget) →
 `await indLoadBlacklist` and `await indLoadReactionPolicy` (awaited: the shopping list and decision
 strip render from them) → `await indRefreshStatus` → `indRefreshStaleCaches` after the paint.

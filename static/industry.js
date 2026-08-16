@@ -393,6 +393,10 @@ function _indQueueSig(orders) {
   // The running BUILD is part of the key. Without it a deploy that changes how plans are computed
   // — how jobs are split across slots, say — would still be served the pre-deploy plan from this
   // cache for up to fifteen minutes, and the user would reasonably conclude the change didn't ship.
+  // Matches THIS file's tag, and only because no sibling filename ends in `industry.js` — the tab
+  // is ten scripts now. A new one named `…industry.js` would silently take over this lookup; every
+  // one of them carries the same `?v=`, so the value would still be right, but the coupling is not
+  // obvious from here.
   const src = (document.querySelector('script[src*="industry.js"]') || {}).src || '';
   const build = (src.match(/[?&]v=([a-z0-9]+)/) || [])[1] || '';
   return JSON.stringify([build, (orders || []).map(o => [o.id, o.quantity, o.product_type_id,

@@ -508,7 +508,7 @@ function _indPipelineHtml(d, tiersData, model) {
   // No "build" tag on the card — the row it sits in already says Reactions vs Manufacturing, so
   // repeating it just costs width. Qty and runs are what actually differ per card.
   const prog = _indProgTypeMap();
-  // The two card renderers live at top level (below) — this function is the grid.
+  // The two card renderers are top-level functions above this one; this function is the grid.
 
   // Header row: empty corner over the building labels, then one label per stage.
   let html = `<div class="ind-pipe-corner"></div>`;
