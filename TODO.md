@@ -14,38 +14,17 @@ Reviewed 2026-08-16.
 
 ---
 
-## 19c. A colony has no page to deep-link TO — decide whether to build one (2026-08-16)
+## Nothing open
 
-**The rest of §19 shipped** (phase 3b, 2026-08-16 — see TODO-archive.md). An order and a saved plan
-are now addressable: `/manufacturing/order/123`, `/planetary-planning/plan/12`,
-`/planner/refill/plan/12`. The privacy question that gated the whole entry was answered per record
-and the answer was the same both times — **the endpoint behind the id already refuses a stranger
-without confirming the id exists**, so a link that reaches somebody not entitled to it lands them on
-the plain page in silence, which is what a mistyped id gives them too.
+The backlog is empty as of 2026-08-16. §18b (config export/import) and §19 (URL routing, including
+the deep links that carry an id) both closed that day — §19's last piece, deep-linking a colony, was
+closed as **won't build** rather than shipped, and the reasoning is in the archive.
 
-**A colony was asked for and is NOT built, for a reason worth stating rather than working around.**
-There is no single-colony view to land on. A colony appears as rows across Setup Analysis, the
-Characters list and the plan — never as a thing you open — so a deep link to one has nothing to
-open, and the honest first step is a product decision, not a route:
-
-* **Is a colony detail view worth having at all?** It would be a new page in a tool whose whole PI
-  principle is *fewer* interactions (CLAUDE.md). If the answer is no, this closes and §19 is done.
-* **If yes, its id is the problem.** A colony is identified by character + planet, which is exactly
-  the "character names, systems, planets, or any locatable data" rule 8 names. The two shipped
-  records got a free pass because their ids are opaque integers whose endpoints already refuse a
-  stranger; `/planetary-planning/colony/<character>/<planet>` discloses in the PATH, before any
-  endpoint is asked. That needs a token like the plan shares have, not an id — a different
-  mechanism, and a bigger piece of work than the routing it looks like.
-
-**First step:** answer the first bullet. The mechanism only has to be designed if it is yes.
-
-**The risk that has not gone away:** `test_routing_client.js` executes the router — including, now,
-the record layer and its bounce — but there is still no browser (§2e-residual), so nothing tests
-real clicking, rendering or focus. The record openers are stubbed in that harness, so what is NOT
-pinned is the real dialog appearing, and `openSavedPlanFull` actually restoring a plan. The
-admin-nav regression that followed Phase 2 was fixed on a hypothesis the vm harness could not
-reproduce and only **confirmed by the user in a live browser on 2026-08-15** — which is the shape of
-every routing bug here until there is one.
+**Standing residual, deliberately not an item:** there is still no browser test (§2e-residual).
+`test_routing_client.js` runs the router for real, but nothing exercises clicking, rendering or
+focus, and the record openers are stubbed there — so the real dialog appearing and a saved plan
+actually restoring are pinned only by source-level checks. Every routing bug in this repo so far has
+been found by the user in a live browser, and that is still the shape to expect.
 
 ## Shipped and closed
 

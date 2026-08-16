@@ -192,7 +192,9 @@ See [docs/reactions.md](docs/reactions.md).
 `TAB_SLUGS`, `SPA_PAGES` in `app/main.py`, and the nav button — which `test_routing.py` checks. A
 URL may also name a ROW (`/manufacturing/order/123` — `TAB_RECORDS` + `SPA_RECORDS`): **that route
 must look nothing up**, so a recipient learns nothing from it answering, and a record the caller may
-not open is dropped from the address bar with a REPLACE rather than explained (rule 8, TODO §19c).
+not open is dropped from the address bar with a REPLACE rather than explained (rule 8). **A record
+whose id is locatable data does not get a route at all** — it would need an unguessable token like
+the plan shares have; that is why a colony has none (TODO-archive, §19c).
 **Never register the page routes as `/{page}`**: `StaticFiles` is mounted at `/`, so a wildcard
 returns the SPA document for every missing asset, which a browser reports as a syntax error inside
 the file rather than the 404 it is.

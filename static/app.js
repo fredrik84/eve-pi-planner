@@ -532,10 +532,14 @@ const TAB_SUBPAGES = {
 // So a link that reaches somebody not entitled to the record lands them on the plain page, in
 // silence — the same page a mistyped id gives, because telling the two apart IS the disclosure.
 //
-// **A colony is deliberately absent.** There is no single-colony view to land on — colonies appear
-// as rows across Setup Analysis and the Characters list — so linking one means inventing the page
-// first, and its natural id (character + planet) is precisely the locatable data rule 8 names. That
-// is a product decision, not a routing one.
+// **A colony is deliberately absent, and that is settled** — asked for, then closed as won't-build
+// on 2026-08-16 (TODO-archive §19c). Two reasons, and the second is the one that generalises: there
+// is no single-colony view to land on, colonies being rows across Setup Analysis and the Characters
+// list rather than a page you open; and its natural id is character + planet, which is precisely the
+// locatable data rule 8 names — it discloses in the PATH, before any endpoint is asked, so no
+// "does the endpoint already refuse them?" answer could have made it safe. **A record whose id is
+// itself locatable does not belong in this map at all; it needs an unguessable token, like the plan
+// shares.**
 //
 // `open(id)` resolves falsy (or rejects) when the record could not be opened, and the router then
 // drops it from the address bar with a REPLACE, so a bounced link leaves no back-button entry
