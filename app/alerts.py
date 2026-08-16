@@ -208,11 +208,16 @@ def _stage_ready_alerts(context_id: int, muted: set, now: float) -> list[dict]:
 
 
 def _fetch_colony_rows(context_id: int):
+    from app.esi import ensure_char_tables   # local import: keeps app.esi off this module's import
+    ensure_char_tables()                     # path. The notification scheduler reaches compute_alerts
+                                             # without ever touching a scan or the dashboard, so it can
+                                             # be the FIRST caller after a deploy that adds a column.
     con = get_connection()
     rows = con.execute("""
         SELECT c.character_name AS ch, c.character_id AS cid, cp.planet_id AS planet_id,
                cp.planet_num AS pn, s.name AS system,
                cp.is_extractor AS is_ext, cp.issues AS issues, cp.sim_state AS sim_state,
+               cp.products AS products, cp.pad_inputs AS pad_inputs, cp.drain AS drain,
                cp.scanned_at AS scanned_at, cp.checkpoint_at AS checkpoint_at, cp.storage AS storage
         FROM pp_char_planets cp
         JOIN pp_characters c ON c.character_id = cp.character_id
@@ -223,9 +228,39 @@ def _fetch_colony_rows(context_id: int):
     return rows
 
 
+def _factory_runs_dry_hours(r, now: float) -> float | None:
+    """Hours until THIS factory planet actually runs its imported inputs dry, from what the scan
+    saw on it — `factory_drain` over the planet's real pin consumption (or the modelled rate for
+    rows scanned before drain states existed). None when the row can't answer.
+
+    This replaced a cadence: the alert used to take a full 3-launchpad buffer from the saved plan
+    and anchor it to `scanned_at`, which assumed every colony was topped up to full at the instant
+    we last polled ESI. A player who dropped half a load, or dropped it a day before the scan, was
+    told the wrong time — and told a different one than the Dashboard's agenda, which had already
+    moved to the observed number. The cadence survives only as `_fetch_factory_refill_hours`, the
+    fallback for a planet with nothing scanned."""
+    from app.planner import factory_drain
+    prods = _json.loads(r["products"] or "[]")
+    if not prods:
+        return None
+    anchor = r["checkpoint_at"] or r["scanned_at"]
+    if not anchor:
+        return None
+    try:
+        drain = _json.loads(r["drain"] or "null")
+    except Exception:
+        drain = None
+    dr = factory_drain(prods[0].get("type_id"), _json.loads(r["pad_inputs"] or "[]"),
+                       anchor, drain=drain, now=now)
+    if not dr:
+        return None
+    return (dr["runs_dry_at"] - now) / 3600.0     # signed: negative = already dry
+
+
 def _fetch_factory_refill_hours(context_id: int) -> float | None:
-    """Cadence from the most recent saved plan snapshot — same field the Dashboard's
-    "Maintenance routine" card already uses (see planner.py's `_factory_refill_hours`)."""
+    """Cadence from the most recent saved plan snapshot — the FALLBACK for a factory planet whose
+    scan can't say when it runs dry (see `_factory_runs_dry_hours`, which is preferred whenever the
+    row can answer). Same field the Dashboard's "Maintenance routine" card uses."""
     con = get_connection()
     row = con.execute(
         "SELECT snapshot FROM pp_plan_snapshots WHERE context_id=? ORDER BY created_at DESC LIMIT 1",
@@ -359,15 +394,19 @@ def compute_alerts(context_id: int, rows=None, now: float | None = None) -> list
                             "planet_id": planet_id, "location": loc, "hours_left": ttf,
                             "pct": round(pct),
                         })
-        elif refill_hours and r["scanned_at"]:
+        elif "factory_refill" not in muted:
             # Factory refill: no dedicated threshold field exists (or is asked for) yet, so this
             # deliberately reuses expiring_hours as "how far ahead to flag" (same "warn me about
             # things due soon" idea as extraction expiry) and storage_high_ttf_hours as the
             # warn→high cutoff (same "imminent" idea as storage) rather than adding two more
             # number fields for a single kind.
-            due = r["scanned_at"] + refill_hours * 3600.0
-            hours_left = (due - now) / 3600.0
-            if hours_left <= _alert["expiring_hours"]:
+            #
+            # Prefer what the colony ACTUALLY has left over the plan's from-full cadence — the
+            # cadence only knows how long a full buffer lasts, not how full this one is.
+            hours_left = _factory_runs_dry_hours(r, now)
+            if hours_left is None and refill_hours and r["scanned_at"]:
+                hours_left = (r["scanned_at"] + refill_hours * 3600.0 - now) / 3600.0
+            if hours_left is not None and hours_left <= _alert["expiring_hours"]:
                 sev = "high" if (hours_left < 0 or hours_left < _alert["storage_high_ttf_hours"]) else "warn"
                 alerts.append({
                     "kind": "factory_refill", "severity": sev,

@@ -10,12 +10,13 @@ Find a section: `grep -n '^## ' docs/pi.md` and read from that line — this fil
 - **Planning Algorithm** — extractor slot distribution, overproduction, factory rates, supply-limited throughput, scarce planets
 - **Region / constellation filtering** — how a plan is scoped to space the player actually flies
 - **PI colony forward-simulation (`app/pi_sim.py`)** — the two rates per output, projecting pads forward from a checkpoint
+- **When a factory colony runs dry (`colony_drain_state` / `factory_drain`)** — the deterministic half: consumption read off real pins, and the one deadline the whole app quotes
 - **Setup Analysis tab + "Current setup" demand (`/api/my-setup-plan`)** — the endpoint behind the tab
 - **Setup Analysis: what the advice must do** — sustain-the-cycle policy, the fix ladder, refining-limited detection, redeploy candidates — read before changing any advice
 - **Shared alert engine (`app/alerts.py`) + configurable thresholds (`app/alert_settings.py`)** — one detection engine, per-kind muting, notification prefs
 - **Fill-factories meter (Dashboard)** — the dashboard meter
 - **Refill "empty pads" toggle** — the m³-capped refill split
-- **Refill to a deadline (`refill_deadline`)** — sizing the drop to a time the player picks, the four ceilings on it, and the two clocks
+- **Refill to a deadline (`refill_deadline`)** — sizing the drop to a time the player picks, and the four ceilings on it
 - **Dashboard "Up next" agenda** — what needs doing next, at a glance
 - **Skill-ROI advisor (Setup Analysis)** — which skill buys the most output, and the already-enough case
 - **Shared plan links + rich previews (Open Graph)** — `/s/{id}` and how it unfurls in Discord
@@ -179,6 +180,38 @@ checkpoint. Checkpoint tag before this: `checkpoint-before-pi-sim`.
   factor (tried via CCP's `1/(1+0.012·t)` curve, dogma attrs 1683/1687) under-counted every
   factory-limited colony and contradicted the in-game numbers — reverted.
 
+## When a factory colony runs dry (`colony_drain_state` / `factory_drain`)
+
+The extractor side of a colony is an estimate — extraction decays and the sim is a few % high. The
+**factory side is not**: a factory pin eats `quantity` of each input every `cycle_time` seconds, a
+constant. So "when does this colony run dry" is arithmetic, and it is the number the refill
+deadline, the Dashboard's "Up next" agenda and the `factory_refill` alert all answer from.
+
+`pi_sim.colony_drain_state(detail, pi_data)` reads it off the planet's real pins at scan time and
+stores it in `pp_char_planets.drain`:
+
+- **rate per input** = Σ over the pins eating it of `quantity / cycle_time`. Twice the factory
+  units means twice the burn — something a per-product average can't express.
+- **only IMPORTED inputs count.** A P2 the planet makes to feed its own P3 line is not something
+  the player delivers, so it can't be what the colony runs dry of. Chained planets drain on their
+  P1 only.
+- **`t0`** = the pins' `last_cycle_start`, i.e. what the reported contents are actually "as of".
+  When a colony DOES run dry its cycles stop and `t0` freezes there — so the same formula then
+  reports *when* it ran dry instead of drifting.
+
+`planner.factory_drain(...)` is the single consumer-facing entry point — onhand now, hours to
+empty, the run-dry instant, and the **binding** input (a factory stops on its scarcest input, so
+that, not the average, is the deadline). It reports its `source`:
+
+- `"pins"` — the stored drain state. Deterministic. This is what a rescan buys.
+- `"model"` — `_effective_fph × _compute_p1_fracs`, for rows scanned before drain states existed.
+  Right for sizing a plan, approximate for a colony: a P4 planet's 0.5/hr is a whole-chain
+  stand-in, not a pin count.
+
+**Do not re-derive this arithmetic anywhere.** It used to exist in three places (the dashboard
+loop, `project_factory_pad`, and — wrongly — the alert); `test_factory_drain.py` pins the shared
+one, including that the run-dry *instant* doesn't move as time passes, only the countdown to it.
+
 ## Setup Analysis tab + "Current setup" demand (`/api/my-setup-plan`)
 
 The **Setup Analysis** tab compares **supply** (each colony's extractor `production`, P1/day from
@@ -285,7 +318,16 @@ folded into the same flat list so they inherit the mute/severity/dashboard/push 
 last pair is why the module is `app/alerts.py` and not `colony_alerts.py`. `factory_refill` has no
 dedicated threshold fields of its own — deliberately reuses `expiring_hours` as "how far ahead to
 flag" and `storage_high_ttf_hours` as the warn→high cutoff (same ideas as extraction expiry and
-storage already use) rather than adding two more number fields for one kind. `dashboard()` passes
+storage already use) rather than adding two more number fields for one kind.
+
+**`factory_refill` reads the colony, not a cadence** (fixed 2026-08-16, TODO §21b).
+`_factory_runs_dry_hours(row, now)` answers from what the scan actually saw on that planet, via
+`factory_drain`. It previously took a full 3-launchpad buffer from the saved plan snapshot and
+anchored it to `scanned_at` — i.e. it assumed every colony was topped up to full at the instant we
+last polled ESI, so a player who dropped half a load, or dropped it a day before the scan, was
+given the wrong time *and* a different one than the Dashboard agenda, which had already moved to
+the observed number. `_fetch_factory_refill_hours` survives only as the fallback for a planet whose
+scan can't answer. `test_factory_drain.py` part 4 pins the anchor bug specifically. `dashboard()` passes
 its own already-fetched `pp_char_planets` rows in via `rows=` to avoid a second query; the
 scheduler (iterating many contexts) leaves it `None` and the function does its own fetch.
 `dashboard()` re-groups the flat list into its existing display cards (per-character correctness
@@ -331,10 +373,11 @@ fill factories") + a "Fill factories from pads" card with the binding statement 
 
 ## Refill "empty pads" toggle
 
-Factory launchpad contents come from the last ESI scan and are **not** simulated forward (only
-extractors are), so the scanned "P1 already in the pad" goes stale and over-reports (ESI returns the
-last-checkpoint contents, from before the factory drew them down — a rescan re-reads the same stale
-checkpoint). The Refill tool's **"Pads emptied at drop-off"** toggle (`_refillIgnorePads`, default
+Factory launchpad contents come from the last ESI scan. The RAW number over-reports (ESI returns
+the last-checkpoint contents, from before the factory drew them down), but that is no longer what
+anything reads: `factory_drain` subtracts consumption since the checkpoint, so the depleted figure
+is live. What the toggle answers is a different question — whether the player is going to empty the
+pads by hand when they drop the next batch, which no scan can know. The Refill tool's **"Pads emptied at drop-off"** toggle (`_refillIgnorePads`, default
 ON) ignores `input_m3` and fills to a clean 30,000 m³ (3 LP), matching the usual "empty the pads when
 you drop the next batch" workflow. Off = subtract the last-scan contents. m³/unit is 0.19 (verified);
 the under-fill people hit was the stale `input_m3`, not the volume constant.
@@ -375,17 +418,28 @@ across products, so once two products share a P1 a plan total and a share can't 
 one factory's rate. Plans saved before this shipped fall back to plan-total × share, which is exact
 for a single-product plan. `test_refill_rates.py` pins both halves.
 
-**Two clocks, one stored.** The picker reads and writes **local** time and shows both
-(`Sat 14:00 local · 12:00 EVE` — EVE time is UTC, and a fleet op is quoted in it). What's stored is
-an **instant** (`refillDeadlineMs`, epoch ms): a stored local time silently means something else
-after a DST change. Today that store is `localStorage`, so the deadline doesn't follow the player
-across devices and nothing server-side (the Up-next agenda, `factory_refill` alerts) can quote it —
-see TODO §21b.
+**Two clocks, and nothing stored.** The picker reads and writes **local** time and shows both
+(`Sat 14:00 local · 12:00 EVE` — EVE time is UTC, and a fleet op is quoted in it). What it holds is
+an **instant** (`_refillDeadline`, epoch ms): a local time silently means something else after a
+DST change.
+
+It is **not persisted** (TODO §21b, closed 2026-08-16). It used to live in `localStorage`, which
+pinned the one number the whole app answers "when should I log in" from inside a single browser.
+The deadline is now DERIVED — `/api/dashboard` → `totals.refill_due_at`, the soonest factory to run
+dry per `factory_drain` — so it follows the player to any device and the server quotes the same
+instant the page does. `_defaultDeadline()` opens on it, falling back to the plan's from-full
+cadence only when no scan can answer.
+
+What survives in the picker is a **sizing input**: "how much do I bring so it lasts until X" is a
+question the player asks, not state worth saving. A deadline they type sets `_deadlineTyped`, so
+the derived default never overwrites a deliberate choice.
 
 ## Dashboard "Up next" agenda
 
 Account-level sorted list of the next maintenance tasks (Restart extractors / Haul extractor P1 /
 Refill factories) with countdown + absolute clock time, on the Dashboard under Maintenance routine.
+The refill line is `refill_due_hours` — what the colonies actually have left (`factory_drain`) —
+with the from-full cadence `refill_factories_hours` only as fallback.
 `_renderTimelineCard(t)` reuses the existing dashboard `*_due_hours` totals (no extra request).
 **Deliberately NOT a single-cycle line** — extractor and factory cadences desync badly (several
 extractor restarts per factory refill), so a "you are here on one timeline" viz is misleading; a

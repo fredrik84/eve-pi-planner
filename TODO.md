@@ -10,22 +10,9 @@ up cold. Numbers are stable ids, not an order — CLAUDE.md refers to them.
 **Don't read this file whole** — `grep -n '^## ' TODO.md` for the item you want, then read that
 range.
 
-Reviewed 2026-08-05.
+Reviewed 2026-08-16.
 
 ---
-
-## 21b. A deadline nothing but this browser knows (2026-08-15, residual of §21)
-
-§21 shipped behind `refill_deadline` (see docs/pi.md). The chosen deadline is stored as an instant
-in `localStorage` (`refillDeadlineMs`), which honours the "never store a local time" decision but
-keeps it in one browser: it doesn't follow the player to another device, and nothing server-side
-can quote it. That last part is the real gap — the Dashboard's "Up next" agenda and the
-`factory_refill` alert both answer "when should I log in" from a full-pad cadence, so a player who
-refilled to Saturday 14:00 is still told a different time by the rest of the app.
-
-**First step:** decide whether the deadline belongs on the plan snapshot (`pp_plan_snapshots`, one
-per plan) or on the account (one "next login" for everything) — the alert side wants the second,
-the refill table wants the first. Store UTC either way.
 
 ## 19. Deep links that carry an ID — the one part of URL routing still open (2026-08-15)
 

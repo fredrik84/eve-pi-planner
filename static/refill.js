@@ -26,7 +26,16 @@ let _refillUserPicked = false;   // true once the user deliberately chose a plan
 let _refillMode = (() => { try { return localStorage.getItem('refillMode') === 'deadline' ? 'deadline' : 'full'; } catch (e) { return 'full'; } })();
 // Epoch ms — an INSTANT, never a local wall-clock string: the picker reads and writes local time,
 // but a stored local time silently means something else after a DST change.
-let _refillDeadline = (() => { try { return Number(localStorage.getItem('refillDeadlineMs')) || 0; } catch (e) { return 0; } })();
+//
+// NOT persisted. It used to live in localStorage, which pinned the one number the whole app
+// answers "when should I log in" from inside a single browser — it didn't follow the player to
+// another device and nothing server-side could quote it. The real deadline is now DERIVED from the
+// last scan (`/api/dashboard` → `totals.refill_due_at`: what the colonies actually have left, at
+// their real pin consumption), so there is nothing to store. What survives here is a sizing input:
+// "how much do I bring so it lasts until X", which is a question, not saved state.
+let _refillDeadline = 0;
+let _deadlineTyped = false;   // did the user pick this, or is it the derived default?
+let _derivedDueAt = null;     // epoch ms the soonest factory runs dry, per the last scan
 let _deadlineInfo = null;   // {hours, capped[], skip[], driftH, shortfall[], endurance} from the last split
 const _PLAN_SNAP_KEY = 'ppPlanSnapshots';
 
@@ -205,13 +214,10 @@ async function renderPlanDistribution() {
                 unitLabel: snap.unit_label || 'units',
                 count: snap.factories_count || (snap.factories ? snap.factories.length : 1),
                 refillHours: snap.factory_refill_hours || 0 };
-  // A stored deadline has passed by the time the player comes back, and a tool that opens saying
-  // "that deadline has passed" is a dead tool — roll a stale one forward to the default. A past
-  // deadline the user TYPES is still called out, because that one they can act on.
-  if (_refillDeadline && _refillDeadline < Date.now()) {
-    _refillDeadline = _defaultDeadline();
-    try { localStorage.setItem('refillDeadlineMs', String(_refillDeadline)); } catch (e) {}
-  }
+  // A deadline that has passed while the page sat open makes the tool open saying "that deadline
+  // has passed", which is a dead tool — roll a stale DEFAULT forward. A past deadline the user
+  // TYPED is still called out, because that one they can act on.
+  if (_refillDeadline && !_deadlineTyped && _refillDeadline < Date.now()) _refillDeadline = _defaultDeadline();
 
   // Build a render model: one group per product, each with its P1 columns and factory rows
   // (parsed character + per-P1 share). The split math (updateP1Distribution) runs over this model
@@ -333,16 +339,36 @@ function _toLocalInput(ms) {
   return d.toISOString().slice(0, 16);
 }
 
-// Opening default: as far out as a full pad would actually carry this plan, floored to the hour —
-// a deadline that's reachable on the first paint, rather than one the tool has to argue with.
+// Opening default: a deadline that's reachable on the first paint, rather than one the tool has to
+// argue with. The default deadline is the one the colonies themselves imply: when the soonest factory runs its
+// inputs dry, from the last scan. Falling back to the plan's from-full cadence only when no scan can
+// say — that number assumes every pad was topped to full, which is the assumption this replaced.
 function _defaultDeadline() {
+  if (_derivedDueAt && _derivedDueAt > Date.now()) return Math.floor(_derivedDueAt / 60000) * 60000;
   const h = (_planMeta && _planMeta.refillHours) || 48;
   return Math.floor((Date.now() + h * 3600000) / 3600000) * 3600000;
+}
+
+// Pull the derived run-dry instant off the dashboard payload — reusing the one already fetched if
+// the Dashboard has been opened this session, else one request. Re-renders if it moves the default.
+async function _ensureDerivedDeadline() {
+  if (_derivedDueAt !== null) return;
+  let t = (typeof _dashData !== 'undefined' && _dashData && _dashData.totals) ? _dashData.totals : null;
+  if (!t) {
+    try { const d = await api('/api/dashboard'); t = (d && d.totals) || null; } catch (e) {}
+  }
+  _derivedDueAt = (t && t.refill_due_at) ? t.refill_due_at * 1000 : 0;
+  if (_derivedDueAt && !_deadlineTyped) {
+    _refillDeadline = _defaultDeadline();
+    _renderRefillControls();
+    updateP1Distribution();
+  }
 }
 
 function _renderDeadlineCtl() {
   if (!_featureActive('refill_deadline')) return '';
   const on = _refillMode === 'deadline';
+  if (on) _ensureDerivedDeadline();     // fire-and-forget; re-renders itself if it moves the default
   const ms = _refillDeadline || _defaultDeadline();
   // The picker is always in the DOM, only hidden — rendering it on demand reflowed the row and
   // moved the two buttons out from under the cursor that had just pressed one.
@@ -361,10 +387,8 @@ function _renderDeadlineCtl() {
 function _setRefillMode(m) {
   _refillMode = (m === 'deadline') ? 'deadline' : 'full';
   if (_refillMode === 'deadline' && !_refillDeadline) _refillDeadline = _defaultDeadline();
-  try {
-    localStorage.setItem('refillMode', _refillMode);
-    localStorage.setItem('refillDeadlineMs', String(_refillDeadline));
-  } catch (e) {}
+  try { localStorage.setItem('refillMode', _refillMode); } catch (e) {}
+  if (_refillMode === 'deadline') _ensureDerivedDeadline();
   _renderRefillControls();
   updateP1Distribution();
 }
@@ -373,7 +397,7 @@ function _setRefillDeadline(v) {
   const ms = v ? new Date(v).getTime() : 0;   // datetime-local text is LOCAL; store the instant
   if (!ms) return;
   _refillDeadline = ms;
-  try { localStorage.setItem('refillDeadlineMs', String(ms)); } catch (e) {}
+  _deadlineTyped = true;
   _renderRefillControls();
   updateP1Distribution();
 }

@@ -238,15 +238,23 @@ console.log('\nthe refusals:');
         'and "Fill up" mode is still the old fill-to-full behaviour');
 }
 
-// ── The stored deadline is an instant, never a wall clock ─────────────────────────────────────
-console.log('\nthe deadline is stored as an instant (a stored local time means something else after DST):');
+// ── The deadline is an instant, and it is NOT persisted ───────────────────────────────────────
+// The picker reads and writes local wall-clock text; what it holds must be the instant that text
+// named, or a DST change silently moves it. And it must not be written to localStorage: that store
+// pinned the one number the whole app answers "when should I log in" from inside a single browser
+// (TODO §21b). The real deadline is derived from the last scan — see test_factory_drain.py.
+console.log('\nthe deadline is an instant, held in memory rather than stored (TODO §21b):');
 {
   const t = load({ deadlineH: 48 });
   vm.runInContext("_setRefillDeadline('2026-08-22T14:00')", t.sandbox);
-  const stored = vm.runInContext("localStorage.getItem('refillDeadlineMs')", t.sandbox);
-  check(/^\d+$/.test(String(stored)), 'localStorage holds epoch ms, not the picker text (got ' + stored + ')');
-  check(new Date(Number(stored)).getTime() === new Date('2026-08-22T14:00').getTime(),
+  const held = vm.runInContext('_refillDeadline', t.sandbox);
+  check(typeof held === 'number' && held > 0, 'the deadline is epoch ms, not the picker text (got ' + held + ')');
+  check(new Date(held).getTime() === new Date('2026-08-22T14:00').getTime(),
         'and it is the instant the LOCAL wall clock named');
+  check(vm.runInContext("localStorage.getItem('refillDeadlineMs')", t.sandbox) == null,
+        'and nothing is written to localStorage — the deadline is derived, not stored');
+  check(vm.runInContext('_deadlineTyped', t.sandbox) === true,
+        'a deadline the user typed is flagged, so the derived default cannot overwrite it');
 }
 
 // ── The readout renders ───────────────────────────────────────────────────────────────────────
