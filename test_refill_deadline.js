@@ -265,6 +265,13 @@ console.log('\nthe controls and the readout render, and say both clocks:');
   check(/datetime-local/.test(ctl), 'the deadline picker is rendered');
   check(/local ·/.test(ctl) && /EVE/.test(ctl), '...with the local and EVE clocks side by side');
   check(/Run dry at/.test(ctl), '...and the mode toggle names the mode');
+  // Pressing a mode button must not move the buttons: the picker is hidden, never unmounted.
+  const els3 = {};
+  const off = load({ mode: 'full', dom: id => (els3[id] = els3[id] || { innerHTML: '', dataset: {}, value: '' }) });
+  vm.runInContext('_renderRefillControls();', off.sandbox);
+  const offCtl = (els3.refillControls || {}).innerHTML || '';
+  check(/datetime-local/.test(offCtl) && /dist-deadline-pick off/.test(offCtl),
+        'in Fill up mode the picker is still in the DOM, only hidden — so the toggle does not reflow');
   check(/runs dry/.test(days), 'the readout says when the factories run dry');
   const els2 = {};
   const skipped = load({
@@ -277,7 +284,7 @@ console.log('\nthe controls and the readout render, and say both clocks:');
         'and when every factory is skipped it does not tell you to drop anything');
   check(/skip/.test((els2.refillTables || {}).innerHTML || ''),
         '...the Summary row says skip too, not a dash');
-  check(/whole factory runs/.test((els.refillHint || {}).innerHTML || ''), 'and the hint describes deadline mode, not fill-up');
+  check(/whole runs/.test((els.refillHint || {}).innerHTML || ''), 'and the hint describes deadline mode, not fill-up');
 }
 
 console.log('\n' + (fails.length ? 'FAILED: ' + fails.join('; ') : 'all checks passed'));

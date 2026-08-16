@@ -315,8 +315,11 @@
 .dist-view-btn:hover { background: #1c1630; color: #a888c8; }
 .dist-view-btn.on { background: #2a1c40; color: #c89ce8; }
 
-/* Refill-to-a-deadline: mode toggle + the local/EVE clock beside the picker. */
-.dist-deadline { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+/* Refill-to-a-deadline: mode toggle + the local/EVE clock beside the picker. Its own full-width
+   row with the picker's space always reserved (`.off` hides it, never unmounts it) — the buttons
+   must not move when one of them is pressed. */
+.dist-deadline { flex-basis: 100%; display: flex; align-items: center; gap: 10px; min-height: 28px; }
+.dist-deadline-pick.off { visibility: hidden; }
 .dist-ctl input[type="datetime-local"] { background: #0d0f14; border: 1px solid var(--clr-border);
   color: var(--clr-text); border-radius: 4px; font-size: 12px; padding: 3px 8px; outline: none;
   color-scheme: dark; }

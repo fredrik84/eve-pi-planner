@@ -303,8 +303,8 @@ function _renderRefillHint() {
   const el = document.getElementById('refillHint');
   if (!el) return;
   el.innerHTML = _refillMode === 'deadline' && _featureActive('refill_deadline')
-    ? `Drops only as much P1 as each factory burns before the time you pick, so they all run dry then — <b>counting the P1 already in the pads</b> and floored to whole factory runs. Capped by launchpad space (3 LP ≈ 30,000 m³) and by the P1 in your <b>inventory above</b>. Click a number to copy.`
-    : `Tops up each factory's launchpads toward full (3 LP ≈ 30,000 m³) in recipe ratio, <b>counting the P1 already in them</b> — so you never overflow. <b>Summary</b> = one drop that fits every factory; <b>All planets</b> = each topped to its own free space. Limited by the P1 in your <b>inventory above</b>. Click a number to copy.`;
+    ? `What each factory needs to last until the time you pick, rounded down to whole runs. Click a number to copy.`
+    : `Tops each factory's launchpads up to full (3 LP ≈ 30,000 m³) in recipe ratio. Click a number to copy.`;
 }
 
 // ── Refill to a deadline ──────────────────────────────────────────────────────
@@ -344,15 +344,17 @@ function _renderDeadlineCtl() {
   if (!_featureActive('refill_deadline')) return '';
   const on = _refillMode === 'deadline';
   const ms = _refillDeadline || _defaultDeadline();
+  // The picker is always in the DOM, only hidden — rendering it on demand reflowed the row and
+  // moved the two buttons out from under the cursor that had just pressed one.
   return `<div class="dist-deadline">
       <div class="dist-view-toggle">
         <button class="dist-view-btn${on ? '' : ' on'}" onclick="_setRefillMode('full')" title="Top the launchpads up as far as they go">Fill up</button>
         <button class="dist-view-btn${on ? ' on' : ''}" onclick="_setRefillMode('deadline')" title="Drop only what runs out at the time you pick">Run dry at…</button>
       </div>
-      ${on ? `<label class="dist-ctl">
-        <input type="datetime-local" value="${_toLocalInput(ms)}" onchange="_setRefillDeadline(this.value)">
+      <label class="dist-ctl dist-deadline-pick${on ? '' : ' off'}">
+        <input type="datetime-local" value="${_toLocalInput(ms)}" onchange="_setRefillDeadline(this.value)"${on ? '' : ' tabindex="-1"'}>
         <span class="dist-deadline-clock">${_esc(_fmtDeadlineBoth(ms))}</span>
-      </label>` : ''}
+      </label>
     </div>`;
 }
 
