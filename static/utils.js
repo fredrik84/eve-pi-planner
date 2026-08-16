@@ -12,10 +12,16 @@
 // Callers that genuinely want to ignore a failure still catch it — the difference is that
 // ignoring is now a deliberate `catch`, not the default.
 class ApiError extends Error {
-  constructor(message, status) {
+  constructor(message, status, detail) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
+    // The server's `detail` as it actually came back. `message` cannot carry it: FastAPI's detail is
+    // sometimes an OBJECT (a validator answering with every problem at once), and `Error` stringifies
+    // whatever it is given — so a caller reading `e.message` for a structured body got the literal
+    // text "[object Object]". Kept beside it rather than instead of it, so `toastError` and the
+    // dozens of callers that want one line still get one.
+    this.detail = detail;
   }
 }
 
@@ -24,7 +30,8 @@ async function api(path, opts) {
   if (!resp.ok) {
     let detail = '';
     try { detail = ((await resp.json()) || {}).detail || ''; } catch (e) { /* non-JSON body */ }
-    throw new ApiError(detail || `HTTP ${resp.status}`, resp.status);
+    const text = (detail && typeof detail === 'object') ? `HTTP ${resp.status}` : detail;
+    throw new ApiError(text || `HTTP ${resp.status}`, resp.status, detail);
   }
   if (resp.status === 204) return null;
   return resp.json().catch(() => null);   // some endpoints legitimately return an empty body

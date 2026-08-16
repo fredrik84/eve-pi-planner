@@ -76,6 +76,10 @@ function makeTab(pathname, store) {
     document: { querySelectorAll: () => [] },
     loadHelpPanel: () => {},
     console,
+    // A record opener is asynchronous, so the sandbox needs real timers — without them a stub that
+    // defers throws inside its own promise executor, the router treats that as a refusal, and the
+    // slow-answer case this file claims to cover never runs at all.
+    setTimeout, clearTimeout,
     _opened: [],
   };
   sandbox.onReactionsTabOpen = () => sandbox._opened.push('reactions');
@@ -433,5 +437,199 @@ console.log('\nthe real section modules report to the router:');
         'and only from there, so every route into the section is covered by one call');
 }
 
+// The same gap, for RECORDS. Everything in `records()` below stubs the openers, so it pins the
+// ROUTER's half of the contract and nothing about the modules — and the module half is where the
+// disclosure lives. These four are the properties a stub cannot notice going missing.
+console.log('\nthe real record modules keep their half of the bargain:');
+{
+  const body = (file, fnName) => {
+    const src = fs.readFileSync(path.join(ROOT, 'static', file), 'utf8');
+    const at = src.indexOf(`function ${fnName}(`);
+    if (at < 0) return '';
+    const end = src.indexOf('\n}\n', at);
+    return end < 0 ? '' : src.slice(at, end);
+  };
+  const link = body('industry.js', 'indOpenOrderLink');
+  check(link.length > 0, 'indOpenOrderLink was found');
+  // THE disclosure property: the row is loaded before anything is shown. Reversing these two shows
+  // the dialog — titled with the order id — to somebody who is then bounced, which tells them the
+  // id exists. Nothing behavioural can see it, because a stub has nothing to show.
+  check(link.indexOf('await _indLoadRules') > 0
+        && link.indexOf('await _indLoadRules') < link.indexOf('_indRulesShow'),
+        'it LOADS before it shows — a bounced link must not flash a dialog naming the order');
+  check(/return false/.test(link),
+        'and answers false rather than throwing, which is what the router bounces on');
+  check(/_indRulesActive\(\)/.test(link),
+        'a link is gated exactly as the button is — a URL is not the way round a feature flag');
+  const close = body('industry.js', 'indCloseRules');
+  check(/noteRecord\('industry'/.test(close),
+        'closing the dialog takes the order back out of the address bar');
+  const full = body('refill.js', 'openSavedPlanFull');
+  const refill = body('refill.js', 'openSavedPlanRefill');
+  check(/opts && opts\.silent/.test(full) && /opts && opts\.silent/.test(refill),
+        'both plan openers have a silent path for the router to use');
+  check(full.indexOf('if (!silent)') < full.indexOf('toast('),
+        'and the toast on failure is behind it — a bounce says nothing out loud');
+}
+
+// ── Records: the URL names one ROW ────────────────────────────────────────────────────────────
+// The part of §19 that needed a privacy answer before it needed code. What is checked here is the
+// behaviour that answer turns into: a record the module refuses to open must leave NOTHING in the
+// address bar naming it, and must do it with a REPLACE, so a link somebody was sent does not even
+// leave them a back-button entry pointing at a row they cannot see.
+//
+// Asynchronous, because opening a row is: `_openRecord` resolves a promise before it touches the
+// URL. Awaiting a microtask turn is what makes that visible to a test rather than a race.
+async function records() {
+  const flush = () => new Promise(r => setTimeout(r, 0));
+
+  console.log('\nthe URL can name a record, and parses back to one:');
+  {
+    const t = makeTab('/manufacturing/order/123');
+    const r = t.run("routeForPath('/manufacturing/order/123')");
+    check(r && r.tab === 'industry' && r.kind === 'order' && r.id === '123',
+          `/manufacturing/order/123 -> industry + order 123 (got ${JSON.stringify(r)})`);
+    const withSub = t.run("routeForPath('/planner/refill/plan/abc')");
+    check(withSub && withSub.tab === 'planner' && withSub.sub === 'refill'
+          && withSub.kind === 'plan' && withSub.id === 'abc',
+          `a section AND a record parse together (got ${JSON.stringify(withSub)})`);
+    check(t.run("routeForPath('/manufacturing/order/1/extra')") === null,
+          'a fourth segment is not a route');
+    check(t.run("routeForPath('/manufacturing/nonsense/1')") === null,
+          'an unknown record kind is not a route');
+    check(t.run("routeForPath('/nope/app.js')") === null,
+          'and a path that is not ours still falls through to the static mount');
+    check(t.run("routeForPath('/industry/how-it-works')").tab === 'indhowitworks',
+          'the two-segment TAB slug still wins over a record reading of the same path');
+  }
+
+  console.log('\na record that opens is named in the address bar:');
+  {
+    const t = makeTab('/manufacturing/order/123');
+    t.run("indOpenOrderLink = id => { _opened.push('order:' + id); return true; };");
+    t.run("switchTab('industry', { fromHistory: true, sub: null, record: routeForPath('/manufacturing/order/123') })");
+    await flush();
+    check(t.sandbox._opened.includes('order:123'), 'the module was asked to open the row');
+    check(t.loc.pathname === '/manufacturing/order/123',
+          `the address still names it (got ${t.loc.pathname})`);
+  }
+
+  console.log('\na record that is REFUSED leaves nothing behind — no name, no history entry:');
+  {
+    const t = makeTab('/manufacturing/order/999');
+    t.run("indOpenOrderLink = () => false;");
+    t.run("switchTab('industry', { fromHistory: true, sub: null, record: routeForPath('/manufacturing/order/999') })");
+    await flush();
+    check(t.loc.pathname === '/manufacturing',
+          `the bar drops back to the plain page (got ${t.loc.pathname})`);
+    check(t.calls.every(c => c[0] === 'replace'),
+          `and does it by REPLACE, so Back does not return to it (got ${JSON.stringify(t.calls)})`);
+    check(t.run('currentRecord()') === null, 'nothing claims to be on screen');
+  }
+
+  console.log('\n...and a module that THROWS is the same thing, not an unhandled rejection:');
+  {
+    const t = makeTab('/manufacturing/order/999');
+    t.run("indOpenOrderLink = () => { throw new Error('boom'); };");
+    t.run("switchTab('industry', { fromHistory: true, sub: null, record: routeForPath('/manufacturing/order/999') })");
+    await flush();
+    check(t.loc.pathname === '/manufacturing', `same bounce (got ${t.loc.pathname})`);
+    const t2 = makeTab('/manufacturing/order/999');
+    t2.run("indOpenOrderLink = () => Promise.reject(new Error('boom'));");
+    t2.run("switchTab('industry', { fromHistory: true, sub: null, record: routeForPath('/manufacturing/order/999') })");
+    await flush();
+    check(t2.loc.pathname === '/manufacturing', `a rejected promise bounces too (got ${t2.loc.pathname})`);
+  }
+
+  console.log('\nleaving the page closes the record it was showing:');
+  {
+    const t = makeTab('/manufacturing/order/123');
+    t.run("indOpenOrderLink = () => true; indCloseRules = () => { _opened.push('closed'); };");
+    t.run("switchTab('industry', { fromHistory: true, sub: null, record: routeForPath('/manufacturing/order/123') })");
+    await flush();
+    t.run("switchTab('reactions')");
+    check(t.sandbox._opened.includes('closed'), 'the module was told to close it');
+    check(t.loc.pathname === '/reactions',
+          `and the new page's URL carries no trace of it (got ${t.loc.pathname})`);
+    check(t.run('currentRecord()') === null, 'nor does the router');
+  }
+
+  console.log('\nBack out of a record closes it without reloading anything else:');
+  {
+    const t = makeTab('/manufacturing/order/123');
+    t.run("indOpenOrderLink = () => true; indCloseRules = () => { _opened.push('closed'); };");
+    t.run("switchTab('industry', { fromHistory: true, sub: null, record: routeForPath('/manufacturing/order/123') })");
+    await flush();
+    // What popstate does when the browser moves back to the plain page.
+    t.loc.pathname = '/manufacturing';
+    t.run("switchTab('industry', { fromHistory: true, sub: null, record: routeForPath('/manufacturing') })");
+    check(t.sandbox._opened.includes('closed'), 'the dialog is closed by going Back');
+    check(t.loc.pathname === '/manufacturing', 'and the address is the plain page');
+  }
+
+  console.log('\na record is never written into another page’s URL:');
+  {
+    const t = makeTab('/reactions');
+    t.run("switchTab('reactions')");
+    t.run("noteRecord('industry', 'order', 7)");   // a loader finishing late for a page we have left
+    check(t.loc.pathname === '/reactions',
+          `a late report for another page is ignored (got ${t.loc.pathname})`);
+  }
+
+  console.log('\nthe FIRST of two overlapping opens does not win:');
+  {
+    const t = makeTab('/manufacturing/order/1');
+    // Order 1 is slow; order 2 is asked for while it is still loading. The slow answer arrives
+    // last, and used to revert both the address bar and the dialog to order 1 — the order a Save
+    // would then have written to.
+    t.run(`indOpenOrderLink = id => (id === '1'
+      ? new Promise(r => setTimeout(() => r(true), 20)) : true);`);
+    t.run("switchTab('industry', { fromHistory: true, sub: null, record: routeForPath('/manufacturing/order/1') })");
+    t.run("switchTab('industry', { sub: null, record: routeForPath('/manufacturing/order/2') })");
+    await new Promise(r => setTimeout(r, 60));
+    check(t.loc.pathname === '/manufacturing/order/2',
+          `the order actually asked for last is the one named (got ${t.loc.pathname})`);
+    check(t.run('currentRecord()').id === '2',
+          `and the one the router believes is on screen (got ${JSON.stringify(t.run('currentRecord()'))})`);
+  }
+
+  console.log('\na page you may not open refuses everything under it too:');
+  {
+    const t = makeTab('/planner/plan/12');
+    t.run("_isPageRestricted = n => n === 'planner'; _firstAllowedPage = () => 'planetary';");
+    t.run("openSavedPlanFull = id => { _opened.push('full:' + id); return true; };");
+    t.run("switchTab('planner', { fromHistory: true, sub: null, record: routeForPath('/planner/plan/12') })");
+    await flush();
+    // `planner` and `planetary` BOTH declare a `plan` record, so carrying it across the bounce
+    // would open the row on a page the user never asked for, reached by being refused the one
+    // they did.
+    check(!t.sandbox._opened.some(x => String(x).startsWith('full:')),
+          `the record did not follow the bounce (opened: ${JSON.stringify(t.sandbox._opened)})`);
+    check(t.loc.pathname === '/planetary-planning',
+          `and the bounce target's URL names no record (got ${t.loc.pathname})`);
+  }
+
+  console.log('\narriving on a record link writes the address ONCE, record and all:');
+  {
+    // `/planner/plan/12` with no section: the open hook RESTORES `refill`, so the address the page
+    // ends up at is not the one it arrived on and the switch has to write it. That write used to
+    // compose from `_activeRecord` — still null, because the row has not been opened yet — so it
+    // published `/planner/refill`, and `_openRecord` put the record back a moment later. Two
+    // history operations for one link, and in between them a refresh loses the record entirely.
+    const t = makeTab('/planner/plan/12', { piMode: 'refill' });
+    t.run("openSavedPlanRefill = () => true;");
+    t.run("switchTab('planner', { fromHistory: true, sub: null, record: routeForPath('/planner/plan/12') })");
+    await flush();
+    check(t.loc.pathname === '/planner/refill/plan/12',
+          `the section is filled in and the record kept (got ${t.loc.pathname})`);
+    check(t.calls.length === 1,
+          `and it took exactly one history operation (got ${JSON.stringify(t.calls)})`);
+    check(t.calls.every(c => c[0] === 'replace'),
+          'a correction to an address the browser already holds is a replace');
+  }
+}
+
+records().then(() => {
 console.log('\n' + (fails.length ? 'FAILED: ' + fails.join('; ') : 'all checks passed'));
-process.exit(fails.length ? 1 : 0);
+  process.exit(fails.length ? 1 : 0);
+});

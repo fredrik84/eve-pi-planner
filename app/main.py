@@ -48,6 +48,7 @@ from app.reactions import router as reactions_router
 from app.industry import router as industry_router, public_router as industry_public_router
 from app.groups import router as groups_router
 from app.markets import router as markets_router
+from app.config_io import router as config_io_router
 
 app = FastAPI(title="EVE PI Planner")
 
@@ -126,6 +127,7 @@ app.include_router(industry_router)
 app.include_router(industry_public_router)   # ungated: the customer build-status link
 app.include_router(groups_router)
 app.include_router(markets_router)
+app.include_router(config_io_router)   # config export/import (TODO 18b)
 
 _scheduler = None
 
@@ -431,6 +433,45 @@ SPA_PAGES = (
     "admin/bugs", "admin/baskets", "admin/groups", "admin/moon-goo", "admin/corp-wallet",
     "admin/cleanup", "admin/audit",
 )
+
+# ── Pages that can name a RECORD ───────────────────────────────────────────────────────────────
+#
+# `/manufacturing/order/123`. One entry per (page, record kind); the id is a path parameter, and
+# these mirror `TAB_RECORDS` in static/app.js — `test_routing.py` asserts the two agree.
+#
+# **These routes look nothing up.** They serve the same document every other page does, with no
+# database access and no notion of whether that id exists — so the SERVER tells a recipient nothing
+# the URL did not already say. Whether the record can be opened is asked afterwards, by the client,
+# against an endpoint that is already scoped to the caller (`_order_row`, `GET
+# /api/plan-snapshots/{id}`), each of which answers a stranger and a missing row identically. A
+# link that reaches somebody not entitled to the record leaves them on the plain page, in silence,
+# which is CLAUDE.md rule 8 applied to a path segment: an id in a URL must disclose nothing.
+#
+# Still explicit prefixes, never `/{page}/{kind}/{id}` — same reason as SPA_PAGES. A wildcard here
+# would swallow `/static/img/foo.png`-shaped requests and answer them with this HTML document.
+SPA_RECORDS = (
+    ("manufacturing", "order"),
+    ("planetary-planning", "plan"),
+    ("planner", "plan"),
+    # …and under each of the PI Planner's two modes, so the mode a link was sent from survives it.
+    ("planner/find-buildables", "plan"),
+    ("planner/refill", "plan"),
+)
+
+for _rec_page, _rec_kind in SPA_RECORDS:
+    def _spa_record(record_id: str, _p=_rec_page):
+        return HTMLResponse(_page("index.html"))
+    app.add_api_route(f"/{_rec_page}/{_rec_kind}/{{record_id}}", _spa_record,
+                      methods=["GET"], include_in_schema=False)
+
+    # …and the same trailing-slash redirect every page gets, for the same reason: Starlette's own
+    # `redirect_slashes` never fires behind the StaticFiles mount, so without this a pasted
+    # `/manufacturing/order/123/` 404s while `/manufacturing/order/123` works.
+    def _spa_record_slash(record_id: str, _p=_rec_page, _k=_rec_kind):
+        return RedirectResponse(f"/{_p}/{_k}/{record_id}", status_code=308)
+    app.add_api_route(f"/{_rec_page}/{_rec_kind}/{{record_id}}/", _spa_record_slash,
+                      methods=["GET"], include_in_schema=False)
+
 
 for _page_path in SPA_PAGES:
     def _spa_page(_p=_page_path):

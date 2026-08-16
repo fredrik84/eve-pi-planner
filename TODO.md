@@ -14,55 +14,38 @@ Reviewed 2026-08-16.
 
 ---
 
-## 19. Deep links that carry an ID — the one part of URL routing still open (2026-08-15)
+## 19c. A colony has no page to deep-link TO — decide whether to build one (2026-08-16)
 
-Phases 1–3a shipped 2026-08-15. Every page has a URL, back/forward work, and the two pages that
-are really several — Admin's eleven sections and the PI Planner's two modes — are addressable
-(`/admin/bugs`, `/planner/refill`). The guards that used to ask `localStorage` "which page am I on"
-now ask the router, which also fixed a bug nobody had reported: two browser tabs open on the site
-answered that question for each other.
+**The rest of §19 shipped** (phase 3b, 2026-08-16 — see TODO-archive.md). An order and a saved plan
+are now addressable: `/manufacturing/order/123`, `/planetary-planning/plan/12`,
+`/planner/refill/plan/12`. The privacy question that gated the whole entry was answered per record
+and the answer was the same both times — **the endpoint behind the id already refuses a stranger
+without confirming the id exists**, so a link that reaches somebody not entitled to it lands them on
+the plain page in silence, which is what a mistyped id gives them too.
 
-**What is left is only the state identified by an ID** — `/industry/order/123`, a specific plan, a
-colony. It is deliberately not built, because it is not a mapping question:
+**A colony was asked for and is NOT built, for a reason worth stating rather than working around.**
+There is no single-colony view to land on. A colony appears as rows across Setup Analysis, the
+Characters list and the plan — never as a thing you open — so a deep link to one has nothing to
+open, and the honest first step is a product decision, not a route:
 
-> **Privacy check before any deep link ships (rule 8):** an id in a path is visible to whoever the
-> link is sent to. `/industry/order/123` in a pasted link tells the recipient an order id exists;
-> anything beyond a page name needs the same scrutiny the share links already got.
+* **Is a colony detail view worth having at all?** It would be a new page in a tool whose whole PI
+  principle is *fewer* interactions (CLAUDE.md). If the answer is no, this closes and §19 is done.
+* **If yes, its id is the problem.** A colony is identified by character + planet, which is exactly
+  the "character names, systems, planets, or any locatable data" rule 8 names. The two shipped
+  records got a free pass because their ids are opaque integers whose endpoints already refuse a
+  stranger; `/planetary-planning/colony/<character>/<planet>` discloses in the PATH, before any
+  endpoint is asked. That needs a token like the plan shares have, not an id — a different
+  mechanism, and a bigger piece of work than the routing it looks like.
 
-**First step is a decision, not code:** for each id worth linking, what does the id itself disclose
-to someone who was sent the link but is not entitled to the record — and does the endpoint behind it
-already refuse them? The page-name routing shipped needs neither answer, which is why it went first.
+**First step:** answer the first bullet. The mechanism only has to be designed if it is yes.
 
-Mechanically the rest is cheap: `TAB_SUBPAGES` in `static/app.js` already carries a page's second
-segment, `routeForPath` already parses one, and `noteSubPage` is how a module tells the router where
-it is. An id segment is a third of the same shape.
-
-**The risk that has not gone away:** `test_routing_client.js` executes the router, but there is still
-no browser (§2e-residual), so nothing tests real clicking, rendering or focus. The admin-nav
-regression that followed Phase 2 was fixed on a hypothesis the vm harness could not reproduce
-(a loader throwing inside `onAdminTabOpen` aborting the switch) and only **confirmed by the user in
-a live browser on 2026-08-15** — which is the shape of every routing bug here until there is one.
-
-## 18b. Config export / import (2026-08-14, from §18's answer)
-
-**All that survives of §18** — the rest was answered and closed; see `TODO-archive.md` and
-`docs/config-shape-2026-08.md` for the measurements.
-
-A tester supplied a real ravworks config export: one flat keyed JSON object carrying structures,
-rigs, declared slots and skills, per-category allocation, job-length settings, blacklists and tax,
-with a version field, shared alliance-wide. Export/import is wanted (T13), and it was the strongest
-of the three arguments for reshaping storage into a blob.
-
-**It does not need the reshape.** A serialiser over the readers and writers that already exist
-produces the same portable object without touching a single table — `get_settings`,
-`_policy_payload`, `_pins_payload`, `effective_reaction_settings` and the source sets are already
-the whole surface. Storage shape and portability turned out to be independent questions, which is
-why §18's storage half is closed and this is not.
-
-**First step:** write down what an export must contain and what it must NOT (anything identifying —
-character names, structure IDs a stranger could locate), since it is meant to be shared. Then one
-`GET /api/config/export` and one `POST /api/config/import` over the existing readers, versioned,
-with import validating before it writes anything.
+**The risk that has not gone away:** `test_routing_client.js` executes the router — including, now,
+the record layer and its bounce — but there is still no browser (§2e-residual), so nothing tests
+real clicking, rendering or focus. The record openers are stubbed in that harness, so what is NOT
+pinned is the real dialog appearing, and `openSavedPlanFull` actually restoring a plan. The
+admin-nav regression that followed Phase 2 was fixed on a hypothesis the vm harness could not
+reproduce and only **confirmed by the user in a live browser on 2026-08-15** — which is the shape of
+every routing bug here until there is one.
 
 ## Shipped and closed
 

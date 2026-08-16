@@ -83,7 +83,7 @@ async function renderSavedPlansBar() {
         <span class="pp-saved-meta">${meta}</span>
         <span class="pp-saved-actions">
           ${open}
-          <button class="pp-profile-action-btn" onclick="openSavedPlanRefill('${s.id}')">Refill</button>
+          <button class="pp-profile-action-btn" onclick="openSavedPlanRefill('${s.id}', { srvId: '${s.srvId || ''}' })">Refill</button>
           ${del}
         </span>
       </div>`;
@@ -93,27 +93,74 @@ async function renderSavedPlansBar() {
 
 // Reopen a saved plan as the full allocation view (Planetary Planning → Plan step). Pulls the
 // stored v2 payload and restores it the same way a share link does.
-async function openSavedPlanFull(srvId) {
-  if (!srvId) return;
+//
+// `opts.silent` is the URL asking rather than a button: the endpoint answers `{payload: null}` for
+// a snapshot that is not this account's AND for one that does not exist, so a link that reaches
+// somebody not entitled to it must simply leave them on the plain page — a toast explaining why
+// would be the disclosure (CLAUDE.md rule 8). Returns whether the plan actually opened, which is
+// what the router bounces on.
+async function openSavedPlanFull(srvId, opts) {
+  if (!srvId) return false;
+  const silent = !!(opts && opts.silent);
   let payload = null;
-  try { payload = (await api(`/api/plan-snapshots/${srvId}`)).payload; } catch (e) {}
+  // ENCODED, because this id can now come off the address bar rather than out of a rendered list:
+  // `/planetary-planning/plan/..%2Fsomething` would otherwise build a request path that resolves
+  // somewhere else entirely before it ever reaches the endpoint this is asking.
+  try { payload = (await api(`/api/plan-snapshots/${encodeURIComponent(srvId)}`)).payload; } catch (e) {}
   if (!payload || !payload.plan) {
-    toast('This saved plan has no stored plan view — re-save it (Save plan) to enable Open.', 'error', 7000);
-    return;
+    if (!silent) {
+      toast('This saved plan has no stored plan view — re-save it (Save plan) to enable Open.', 'error', 7000);
+    }
+    return false;
   }
   if (typeof closeSettingsModal === 'function') closeSettingsModal();
-  if (typeof switchTab === 'function') switchTab('planetary');
+  // The router has already put the page on screen when it is the one asking; switching again from
+  // inside its own open would be a second navigation for one link.
+  if (!silent && typeof switchTab === 'function') switchTab('planetary');
   await _restoreFromPayload(payload, false, true);   // explicit open → navigate to the plan
+  if (!silent && typeof noteRecord === 'function') noteRecord('planetary', 'plan', srvId);
+  return true;
 }
 
 // Open a saved plan straight in the refill tool (PI Planner → Refill a plan, that plan selected).
-function openSavedPlanRefill(id) {
+//
+// **Two id vocabularies meet here, and mixing them selects the wrong plan in silence.** The picker
+// matches `dataset.sel` against a snapshot's LOCAL id (`srv:12`, or a browser-local key); a URL can
+// only carry the SERVER id (`12`), because that is the only one that means anything to somebody
+// else. Accepting either and storing it unresolved is what made `/planner/plan/12` pass its
+// entitlement check, fail the picker's match, silently fall back to `snaps[0]` — a different plan —
+// and still report success, leaving the address bar naming a plan that was not on screen. So a URL
+// id is RESOLVED to a snapshot here, and only the snapshot's own id is stored.
+//
+// `opts.silent` means the URL asked (so nothing may be said out loud, and the page is already on
+// screen). `opts.srvId` is the click path handing over the server id it already has, so this stays
+// synchronous for a button press and only the link path pays for a lookup.
+async function openSavedPlanRefill(id, opts) {
+  if (!id) return false;
+  const silent = !!(opts && opts.silent);
+  let sel = id;
+  let srvId = (opts && opts.srvId) || '';
+  if (silent) {
+    let snaps = [];
+    try { snaps = await _fetchAllSnapshots(); } catch (e) { return false; }
+    // Matched on the SERVER id first — that is what a link carries. The local id is accepted too so
+    // a link made before this existed still opens, rather than quietly opening something else.
+    const snap = snaps.find(s => String(s.srvId || '') === String(id))
+      || snaps.find(s => String(s.id) === String(id));
+    if (!snap) return false;          // not this account's plan, or gone — bounce, in silence
+    sel = snap.id;
+    srvId = snap.srvId || '';
+  }
   const sect = document.getElementById('planDistSection');
-  if (sect) sect.dataset.sel = id;
+  if (sect) sect.dataset.sel = sel;
   _refillUserPicked = true;       // they explicitly opened THIS plan to refill — keep it selected
   if (typeof closeSettingsModal === 'function') closeSettingsModal();
-  if (typeof switchTab === 'function') switchTab('planner');
+  if (!silent && typeof switchTab === 'function') switchTab('planner');
   if (typeof setPiMode === 'function') setPiMode('refill');
+  // Only a plan the SERVER knows about can be linked: a browser-local snapshot exists nowhere else,
+  // so naming it in the address bar would produce a link that works for exactly one browser.
+  if (!silent && srvId && typeof noteRecord === 'function') noteRecord('planner', 'plan', srvId);
+  return true;
 }
 
 async function deleteSavedPlan(id, srvId) {

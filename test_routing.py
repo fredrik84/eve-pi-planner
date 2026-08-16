@@ -150,8 +150,84 @@ def main() -> int:
     check("const routed = routeForPath(location.pathname);" in js
           and js.index("const routed = routeForPath") < js.index("else if (isMobile)"),
           "an explicit link is checked BEFORE the localStorage fallback")
-    check("switchTab(routed.tab, { fromHistory: true, sub: routed.sub })" in js,
-          "...and the SECTION in that link is honoured too, not just the page")
+    check("switchTab(routed.tab, { fromHistory: true, sub: routed.sub, record: routed })" in js,
+          "...and the SECTION and RECORD in that link are honoured too, not just the page")
+
+    _records(js, main_py, spa, slugs)
+    return _finish(js)
+
+
+def _records(js: str, main_py: str, spa: set, slugs: dict) -> None:
+    """A page that can name a RECORD — `/manufacturing/order/123` — is a fourth list that has to
+    agree with the other three: `TAB_RECORDS` in app.js and `SPA_RECORDS` in main.py.
+
+    The id is the part of a URL that can disclose something (CLAUDE.md rule 8), so two things are
+    asserted about it beyond the mapping: the server route must look NOTHING up — it serves the same
+    document as every other page, so a recipient learns nothing from the fact that it answered — and
+    a path that is not one of ours must still fall through rather than be swallowed."""
+    print("\nthe pages that can name a record agree, front and back:")
+    rec_block = js[js.index("const TAB_RECORDS = {"):]
+    rec_block = rec_block[:rec_block.index("\n};")]
+    # {tab: {kind, …}} — the kinds are the keys one level in, each followed by `open:`.
+    js_records = set()
+    for tab, body in re.findall(r"^  (\w+): \{(.*?)^  \},", rec_block + "\n  },", re.S | re.M):
+        for kind in re.findall(r"^    (\w+): \{", body, re.M):
+            js_records.add((tab, kind))
+
+    srec_block = main_py[main_py.index("SPA_RECORDS = ("):]
+    srec_body = "\n".join(ln for ln in srec_block[:srec_block.index("\n)")].splitlines()
+                          if not ln.lstrip().startswith("#"))
+    py_records = set(re.findall(r'\("([^"]+)",\s*"([^"]+)"\)', srec_body))
+
+    check(bool(js_records) and bool(py_records),
+          f"both lists were found ({len(js_records)} in app.js, {len(py_records)} in main.py)")
+    # PAGE BY PAGE, not just the set of kind names. Comparing the names alone let `SPA_RECORDS` name
+    # a different page than `TAB_RECORDS` does and still pass — `("reactions", "order")` instead of
+    # `("manufacturing", "order")` — while `/manufacturing/order/123` 404s on refresh. The JS side is
+    # keyed by TAB and the server side by that tab's SLUG, so the tabs are translated first, and a
+    # server entry under one of the page's own SECTIONS counts as that page.
+    slug_of = {t: v.lstrip("/") for t, v in slugs.items()}
+    want = {(slug_of.get(tab, tab), kind) for tab, kind in js_records}
+    got = {(page.split("/")[0] if page.split("/")[0] in set(slug_of.values()) else page, kind)
+           for page, kind in py_records}
+    check(want == got,
+          f"every page offers the SAME record kinds on both sides "
+          f"(only in JS: {sorted(want - got)}; only in main.py: {sorted(got - want)})")
+    # Every page a record route hangs off must itself be a page, or the URL below it is unreachable.
+    for page, _kind in sorted(py_records):
+        check(page in spa, f"`{page}` is a real page, so `/{page}/…` can be reached")
+
+    try:
+        from app.main import app as _app
+        paths = {getattr(r, "path", "") for r in _app.routes}
+        for page, kind in sorted(py_records):
+            check(f"/{page}/{kind}/{{record_id}}" in paths,
+                  f"/{page}/{kind}/{{record_id}} is registered")
+    except Exception as e:
+        check(False, f"could not inspect the route table: {type(e).__name__}: {e}")
+
+    src = main_py[main_py.index("SPA_RECORDS = ("):main_py.index('app.mount("/", StaticFiles')]
+    body = src[src.index("def _spa_record"):]
+    body = body[:body.index("app.add_api_route")]
+    check("get_connection" not in body and "api(" not in body and "_order_row" not in body,
+          "the record route looks nothing up — it cannot confirm an id exists (rule 8)")
+
+    if _status("/") == 0:
+        print("  SKIP live record checks — the app is not answering on 127.0.0.1:8000")
+        return
+    print("\nlive: a record URL serves the app, and says nothing about the record:")
+    for page, kind in sorted(py_records):
+        # A plainly nonexistent id. It must answer exactly as a real one would — the SERVER must not
+        # be the thing that tells a recipient whether the row is there.
+        check(_status(f"/{page}/{kind}/999999999") == 200,
+              f"GET /{page}/{kind}/999999999 -> 200 (the same page a real id gets)")
+    check(_status("/manufacturing/order/1/extra") != 200,
+          "a fourth segment is not a route — the record grammar stops at the id")
+    check(_status("/manufacturing/nonsense/1") != 200,
+          "an unknown record kind is not a route")
+
+
+def _finish(js: str) -> int:
     check("addEventListener('popstate'" in js, "back/forward is handled")
     check("fromHistory" in js, "...without pushing the entry the browser just moved to")
     check("corrected: true" in js,

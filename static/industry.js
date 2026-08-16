@@ -4474,19 +4474,58 @@ async function _loadBuildRulesSettings() {
 }
 
 // ── Order mode: the dialog ────────────────────────────────────────────────────────────────────
-async function indOpenRules(orderId, label) {
+
+// Which open is the current one. A link's load and a click can be in flight together, and the
+// link's answer arriving second used to repaint the dialog as the OTHER order and leave
+// `_indRulesOrderId` pointing at it — so the next Save wrote to an order nobody was looking at.
+let _indRulesSeq = 0;
+
+/** Put the dialog on screen for `orderId`, titled and empty. Shared by the click path and the link
+ *  path, which differ only in WHEN this runs relative to the load — see indOpenOrderLink. */
+function _indRulesShow(orderId, label) {
   const m = document.getElementById('indRulesModal');
-  if (!m) return;
+  if (!m) return false;
+  _indRulesSeq++;
   _indRulesMode = orderId == null ? 'account' : 'order';
   _indRulesOrderId = orderId;
   m.style.display = 'flex';
   document.getElementById('indRulesTitle').firstChild.textContent =
     orderId == null ? 'Build setup ' : `Build setup — ${label || ('order #' + orderId)} `;
   document.getElementById('indRulesBody').innerHTML = `<div class="ind-loading">Loading…</div>`;
+  return true;
+}
+
+async function indOpenRules(orderId, label) {
+  if (!_indRulesShow(orderId, label)) return;
   try { await _indLoadRules(orderId); }
   catch (e) { document.getElementById('indRulesBody').innerHTML =
     `<div class="ind-src-meta">Could not load build rules.</div>`; return; }
   _indRulesPaint();
+  // The order is now what this page is showing, so the address bar should say so — one click, one
+  // copyable link. Replace, never push: see noteRecord in app.js.
+  if (orderId != null && typeof noteRecord === 'function') noteRecord('industry', 'order', orderId);
+}
+
+/** The URL asked for this order. **Loads BEFORE it shows anything**, which is the whole difference
+ *  from the click path: a click has already told the user which order they meant, so a spinner that
+ *  turns into an error is fine, while a link may name an order that is gone or was never this
+ *  account's — and flashing an empty dialog at somebody before bouncing them tells them the id
+ *  exists. Returns false so the router silently drops it from the address bar (CLAUDE.md rule 8). */
+async function indOpenOrderLink(orderId) {
+  const id = Number(orderId);
+  if (!Number.isFinite(id)) return false;
+  // Gated exactly as the ⚙ button is. A flag decides whether a feature exists for an account, and a
+  // URL must not be the way round it — the button being hidden is not the gate (CLAUDE.md rule 2).
+  if (!_indRulesActive()) return false;
+  const seq = _indRulesSeq;
+  try { await _indLoadRules(id); } catch (e) { return false; }
+  // Somebody opened another order while this one was loading — theirs is the one on screen, and
+  // painting over it with this would leave the dialog showing an order the URL no longer names.
+  if (seq !== _indRulesSeq) return false;
+  const label = ((_indRules || {}).order || {}).label || '';
+  if (!_indRulesShow(id, label)) return false;
+  _indRulesPaint();
+  return true;
 }
 
 function _indRulesPaint() {
@@ -4504,6 +4543,10 @@ function _indRulesPaint() {
 function indCloseRules() {
   const m = document.getElementById('indRulesModal');
   if (m) m.style.display = 'none';
+  // The page is no longer showing an order, so the URL must stop naming one — otherwise a copied
+  // link reopens a dialog the sender had already closed.
+  if (_indRulesOrderId != null && typeof noteRecord === 'function') noteRecord('industry', null, null);
+  _indRulesOrderId = null;
 }
 
 // ── Save. Account mode writes the consolidated patch; order mode PATCHes the order, because an

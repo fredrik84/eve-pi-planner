@@ -497,10 +497,8 @@ const SLUG_TABS = Object.fromEntries(Object.entries(TAB_SLUGS).map(([t, u]) => [
 // (eleven sections) and PI Planner (two modes). Both were `localStorage` in exactly the way the
 // top-level tab was, so "look at the bug list" or "use Refill" could not be sent to anybody.
 //
-// **These are the whole of the deep-linking work that is safe to do unasked.** Everything else
-// worth deep-linking — an order, a plan, a colony — is identified by an ID, and an ID in a path is
-// visible to whoever the link reaches (CLAUDE.md rule 8). That needs a decision about what an id
-// discloses, not a mapping, so it is deliberately not here.
+// The records a page can NAME are a third segment — see TAB_RECORDS below, and the privacy answer
+// that had to come before it.
 //
 // `apply` is how the URL reaches the module that owns the state; `slugs` maps the module's internal
 // key to what a person should see in the address bar. Same split, and same reason, as TAB_SLUGS.
@@ -519,6 +517,54 @@ const TAB_SUBPAGES = {
   },
 };
 
+// ── Records: the URL names one ROW, not just a page ───────────────────────────────────────────
+//
+// `/manufacturing/order/123`. An id in a path is visible to whoever the link is sent to, so this
+// needed an answer about disclosure before it needed a mapping (CLAUDE.md rule 8). The answer, per
+// record, is that **the endpoint behind it cannot tell a stranger anything the id alone did not**:
+//
+//   * an order is read through `_order_row`, a single query keyed on (id, context_id) that raises
+//     one 404 for "not yours" and "does not exist" alike;
+//   * a saved plan is read through `GET /api/plan-snapshots/{id}`, which answers `{payload: null}`
+//     for a stranger and for a missing row with the same body.
+//
+// Neither confirms that the id exists, which is the only thing a recipient could otherwise learn.
+// So a link that reaches somebody not entitled to the record lands them on the plain page, in
+// silence — the same page a mistyped id gives, because telling the two apart IS the disclosure.
+//
+// **A colony is deliberately absent.** There is no single-colony view to land on — colonies appear
+// as rows across Setup Analysis and the Characters list — so linking one means inventing the page
+// first, and its natural id (character + planet) is precisely the locatable data rule 8 names. That
+// is a product decision, not a routing one.
+//
+// `open(id)` resolves falsy (or rejects) when the record could not be opened, and the router then
+// drops it from the address bar with a REPLACE, so a bounced link leaves no back-button entry
+// pointing at a record you cannot open. `close()` is how Back out of a record puts the page back.
+const TAB_RECORDS = {
+  industry: {
+    order: {
+      open: id => (typeof indOpenOrderLink === 'function' ? indOpenOrderLink(id) : false),
+      close: () => { if (typeof indCloseRules === 'function') indCloseRules(); },
+    },
+  },
+  planetary: {
+    plan: {
+      open: id => (typeof openSavedPlanFull === 'function'
+        ? openSavedPlanFull(id, { silent: true }) : false),
+    },
+  },
+  planner: {
+    plan: {
+      open: id => (typeof openSavedPlanRefill === 'function'
+        ? openSavedPlanRefill(id, { silent: true }) : false),
+    },
+  },
+};
+
+function _recordFor(tab, kind) {
+  return (TAB_RECORDS[tab] || {})[kind] || null;
+}
+
 function _subSlug(tab, key) {
   const m = TAB_SUBPAGES[tab];
   return (m && key && m.slugs[key]) || null;
@@ -528,13 +574,27 @@ function _subKey(tab, slug) {
   if (!m) return null;
   return Object.keys(m.slugs).find(k => m.slugs[k] === slug) || null;
 }
-/** The full path for a page, including its section when it has one. */
-function _pathFor(tab, sub) {
+/** The full path for a page, including its section and the record it is showing, when it has them.
+ *
+ *  One grammar, read left to right: `<page>[/<section>][/<kind>/<id>]`. The record is last because
+ *  it is the most specific thing on screen, and because that keeps a page's URL a prefix of every
+ *  URL below it — `/planner`, `/planner/refill`, `/planner/refill/plan/12` are the same page
+ *  narrowing, which is what makes a truncated link still land somewhere sensible. */
+function _pathFor(tab, sub, rec) {
   const base = TAB_SLUGS[tab];
   if (!base) return null;
+  let path = base === '/' ? '' : base;
   const s = _subSlug(tab, sub);
-  if (!s) return base;
-  return (base === '/' ? '' : base) + '/' + s;
+  if (s) path += '/' + s;
+  // A slash in an id cannot be expressed here. `%2F` looks right and is not: uvicorn decodes the
+  // path before Starlette routes it, so the link 404s forever — worse than no link at all, because
+  // it is a link somebody can copy. No id today contains one; this is what keeps that true when one
+  // does, by leaving the record off the URL rather than minting a dead address.
+  if (rec && rec.kind && rec.id != null && rec.id !== '' && _recordFor(tab, rec.kind)
+      && !String(rec.id).includes('/')) {
+    path += '/' + rec.kind + '/' + encodeURIComponent(rec.id);
+  }
+  return path || '/';
 }
 
 // **Which page is on screen right now**, as opposed to which page this browser saw last.
@@ -556,6 +616,18 @@ function _pathFor(tab, sub) {
 // it, and it is a distinction `localStorage` could not express.
 let _activeTab = tabForPath(location.pathname);
 let _activeSub = (routeForPath(location.pathname) || {}).sub || null;
+// The record on screen, `{kind, id}` or null. NOT seeded from the URL the way the two above are:
+// they are answers the router knows on its own, and this one is only true once the module has
+// actually opened the row — which can fail, and must then leave the address bar saying nothing
+// rather than naming a record that is not on screen.
+let _activeRecord = null;
+// Bumped by every navigation and every record that reports itself. Opening a row is the one part of
+// a route that takes a network round trip, so two of them can be in flight at once — land on
+// `/manufacturing/order/1`, click the gear for order 2 before it answers, and the FIRST answer used
+// to arrive last and win: the address bar reverted to order 1 and the dialog repainted itself as
+// order 1, which is the order a Save would then have written to. Tab identity cannot see that; both
+// answers are about the same tab. A generation can.
+let _recordSeq = 0;
 // Set while switchTab is running its open hooks. Those hooks restore a section, which would
 // otherwise write the URL a second time — and worse, write it while the address bar still holds the
 // PREVIOUS page, replacing that entry instead of pushing a new one. So they only record where they
@@ -566,25 +638,49 @@ let _switching = 0;
 function currentTab() { return _activeTab; }
 /** The section within it, for the two pages that have sections. */
 function currentSubPage() { return _activeSub; }
+/** The record on screen within it, `{kind, id}` or null. */
+function currentRecord() { return _activeRecord; }
 
 /** The tab a path names, or null when the path is not one of ours (a share link, an asset). */
 function tabForPath(path) {
   return (routeForPath(path) || {}).tab || null;
 }
 
-/** The {tab, sub} a path names, or null. */
+/** The {tab, sub, kind, id} a path names, or null when the path is not one of ours.
+ *
+ *  The LONGEST prefix that is a page wins, which is what keeps `/industry/how-it-works` a
+ *  two-segment TAB slug rather than the `how-it-works` section of an `industry` page. Everything
+ *  after that prefix has to parse completely — a leftover segment means this is not our path at
+ *  all, and answering `null` is what sends `/nope/app.js` to the static mount instead of the SPA. */
 function routeForPath(path) {
   const clean = (path || '/').replace(/\/+$/, '') || '/';
-  // Whole-path first: `/industry/how-it-works` is a two-segment slug for a TAB, and must not be
-  // read as the `how-it-works` section of an `industry` page.
-  if (SLUG_TABS[clean]) return { tab: SLUG_TABS[clean], sub: null };
-  const cut = clean.lastIndexOf('/');
-  if (cut < 0) return null;
-  const parent = clean.slice(0, cut) || '/';
-  const tab = SLUG_TABS[parent];
-  if (!tab || !TAB_SUBPAGES[tab]) return null;
-  const sub = _subKey(tab, clean.slice(cut + 1));
-  return sub ? { tab, sub } : null;
+  const parts = clean.split('/').filter(Boolean);
+  for (let n = parts.length; n >= 0; n--) {
+    const base = n === 0 ? '/' : '/' + parts.slice(0, n).join('/');
+    const tab = SLUG_TABS[base];
+    if (!tab) continue;
+    const route = _routeRest(tab, parts.slice(n));
+    if (route) return route;
+  }
+  return null;
+}
+
+/** What is left of a path once its page has been taken off the front: nothing, a section, a record,
+ *  or a section and a record. Anything else is not a route. */
+function _routeRest(tab, rest) {
+  let sub = null;
+  if (rest.length && TAB_SUBPAGES[tab]) {
+    const key = _subKey(tab, rest[0]);
+    if (key) { sub = key; rest = rest.slice(1); }
+  }
+  if (!rest.length) return { tab, sub, kind: null, id: null };
+  // A record is exactly two segments, `<kind>/<id>`, and the kind must be one this page declares —
+  // an unknown kind is not a route we can serve, and guessing at it is how a mistyped path comes
+  // back as a page instead of a 404.
+  if (rest.length !== 2 || !rest[1] || !_recordFor(tab, rest[0])) return null;
+  let id;
+  try { id = decodeURIComponent(rest[1]); } catch (e) { return null; }
+  return { tab, sub, kind: rest[0], id };
 }
 
 /** A section module reporting where it has just moved to.
@@ -601,15 +697,72 @@ function noteSubPage(tab, key) {
   _syncUrl(tab, true);
 }
 
+/** A module reporting which RECORD it has just put on screen, or `null` for none.
+ *
+ *  Always a REPLACE, for the same reason `noteSubPage` is and one more. The same reason: what
+ *  reaches here is a module stating where it already is, not a navigation. The extra one: a record
+ *  here is a modal or a restored view, and a PUSH would make Back close it — which sounds like a
+ *  feature until you notice that Back also re-enters `switchTab` and re-runs the page's open hooks,
+ *  so closing a dialog would reload the page underneath it. The address bar stops lying; the back
+ *  button keeps meaning "the page before this one".
+ *
+ *  Ignored when the page it belongs to is not the one on screen — a loader finishing late for a tab
+ *  the user has already left must not write that tab's record into another page's URL. */
+function noteRecord(tab, kind, id) {
+  if (_activeTab !== tab) return;
+  _recordSeq++;                            // this is now the current answer; older ones are stale
+  _activeRecord = (kind && id != null && id !== '' && _recordFor(tab, kind)) ? { kind, id: String(id) } : null;
+  if (_switching) return;                  // switchTab will write the URL once, in a moment
+  _syncUrl(tab, true);
+}
+
 /** Put `name` in the address bar without navigating. `replace` for corrections, so a bounced
- *  deep link does not leave a back-button entry pointing at a page you may not open. */
-function _syncUrl(name, replace) {
-  const url = _pathFor(name, name === _activeTab ? _activeSub : null);
+ *  deep link does not leave a back-button entry pointing at a page you may not open.
+ *
+ *  `rec` overrides the record to write. Passed only by the one caller that knows something this
+ *  function cannot: `switchTab` arriving on a record link, where the row is about to be opened but
+ *  has not been yet, so `_activeRecord` is legitimately still null and composing from it would
+ *  write the record straight back out of the URL. */
+function _syncUrl(name, replace, rec) {
+  const own = name === _activeTab;
+  const url = _pathFor(name, own ? _activeSub : null,
+                       rec !== undefined ? rec : (own ? _activeRecord : null));
   if (!url) return;                       // a tab with no slug keeps whatever the URL already is
   // A share link is consumed by planetary.js, which clears it itself — do not fight it here.
   if (/^\/s\//.test(location.pathname) && name === 'planetary') return;
   if (location.pathname === url) return;  // nothing to say
   try { history[replace ? 'replaceState' : 'pushState']({ tab: name }, '', url); } catch (e) {}
+}
+
+/** Open the record a URL named, and put it in the address bar only if it really opened.
+ *
+ *  A link that reaches somebody not entitled to the row lands them on the plain page in silence —
+ *  the same thing a mistyped id gives them, because telling those two apart is the disclosure the
+ *  whole design avoids (CLAUDE.md rule 8). No toast, no message, no console noise: the page they
+ *  asked for is simply the page they get. */
+function _openRecord(tab, rec) {
+  const spec = _recordFor(tab, rec.kind);
+  if (!spec || typeof spec.open !== 'function') return;
+  // Captured BEFORE the call: anything that navigates or opens another record from here on makes
+  // this answer stale, and a stale answer must not touch the URL or claim the screen — see
+  // `_recordSeq`. Tab identity is not enough; the competing answer is usually the same tab.
+  const seq = ++_recordSeq;
+  const stale = () => _activeTab !== tab || _recordSeq !== seq;
+  let result;
+  try { result = spec.open(rec.id); } catch (e) { result = false; }
+  Promise.resolve(result).then(ok => {
+    if (stale()) return;
+    if (ok === false || ok === null || ok === undefined) {
+      _activeRecord = null;
+      _syncUrl(tab, true);                 // REPLACE: no back-button entry for a record you can't open
+    } else {
+      noteRecord(tab, rec.kind, rec.id);
+    }
+  }, () => {
+    if (stale()) return;
+    _activeRecord = null;
+    _syncUrl(tab, true);
+  });
 }
 
 function switchTab(name, opts) {
@@ -618,7 +771,11 @@ function switchTab(name, opts) {
   // caller's group actually allows instead of rendering a blocked page.
   if (typeof _isPageRestricted === 'function' && _isPageRestricted(name)) {
     name = _firstAllowedPage();
-    opts = { ...(opts || {}), corrected: true };
+    // **The record does NOT come along.** Two pages can declare the same record kind (`planner` and
+    // `planetary` both have `plan`), so carrying it would open the row on a page the user never
+    // asked for, reached by being refused the one they did — and write its address as if they had.
+    // A refused page refuses everything under it.
+    opts = { ...(opts || {}), corrected: true, record: null, sub: null };
   }
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
   document.querySelectorAll('.tab-panel').forEach(p => p.style.display = p.id === 'tab-' + name ? '' : 'none');
@@ -633,8 +790,23 @@ function switchTab(name, opts) {
   // Recorded BEFORE the open hooks run: a hook restoring a section calls back in through
   // noteSubPage, which has to be able to tell "the page I belong to is on screen" from "something
   // else is". Nothing between here and there reads the old value.
+  // Leaving a page closes whatever record it was showing. Without this, navigating away from an
+  // open order and back again would find `_activeRecord` still set and write the old record into
+  // the new page's URL — and the dialog itself would still be on screen over a page that no longer
+  // owns it.
+  const leaving = _activeRecord;
+  if (leaving && (name !== _activeTab || !(opts && opts.record && opts.record.kind === leaving.kind
+                                           && opts.record.id === String(leaving.id)))) {
+    const spec = _recordFor(_activeTab, leaving.kind);
+    // Inside the guard: a close handler reports itself through `noteRecord`, which would otherwise
+    // write the OLD page's address in the middle of navigating away from it. One history operation
+    // per switch, at the end, is the rule the whole of this function is built on.
+    _switching++;
+    try { if (spec && typeof spec.close === 'function') spec.close(); } catch (e) {} finally { _switching--; }
+  }
   _activeTab = name;
   _activeSub = (opts && opts.sub) || null;
+  _activeRecord = null;                    // set only once the module confirms it opened the row
   // A COUNTER, not a flag: an open hook may call switchTab again (see the bounce below), and a
   // boolean would let the inner call's `finally` clear the guard while the outer call is still
   // running its hooks — turning it off for exactly the stretch it exists to cover. Defence in
@@ -692,11 +864,29 @@ function switchTab(name, opts) {
   // The remaining `fromHistory` write is not a correction but an omission: arriving at a bare
   // `/admin`, the open hook restores a section, so the address is now less specific than the page
   // it names. Replace it with the full path. Never a push — the browser's own entry stands.
+  // The record this URL asked for has not been opened yet — that happens below, because it is the
+  // one part of a route that can be refused. So the "is the address already right?" question has to
+  // be asked about the address we are ON THE WAY to, not the one that is true this instant.
+  // Otherwise arriving on `/manufacturing/order/123` rewrites the bar to `/manufacturing` and then
+  // back again, which is two history operations for one link, a visible flicker, and — the part
+  // that matters — a URL that has already forgotten the record if the page is refreshed mid-load.
+  const pending = (opts && opts.record && opts.record.kind && _recordFor(name, opts.record.kind))
+    ? { kind: opts.record.kind, id: opts.record.id } : null;
   if (!(opts && opts.fromHistory)) _syncUrl(name, !!(opts && opts.corrected));
-  else if ((opts && opts.corrected) || _pathFor(name, _activeSub) !== location.pathname) {
-    _syncUrl(name, true);
+  else if ((opts && opts.corrected) || _pathFor(name, _activeSub, pending) !== location.pathname) {
+    // `pending` again, and this time as the value WRITTEN: composing from `_activeRecord` here
+    // would drop the record the URL is carrying, then `_openRecord` would put it back a moment
+    // later — two history operations for one link, and a refresh in between losing the record.
+    _syncUrl(name, true, pending);
   }
+  // The record the URL asked for, opened LAST — after the page is on screen, its hooks have run and
+  // its address is written. It is the only part of a route that can be refused (the row may be gone,
+  // or never have been this account's), so it is also the only part that has to be able to take
+  // itself back out of the address bar, which it can only do once there is a correct address to
+  // fall back to. Asynchronous and deliberately not awaited: navigation is finished either way.
+  if (opts && opts.record && opts.record.kind) _openRecord(name, opts.record);
 }
+
 
 function toggleSidebar() {
   const collapsed = document.body.classList.toggle('nav-collapsed');
@@ -728,7 +918,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // whole reason a shared link was useless before. A routed deep link also beats the mobile
   // fallback: it is an explicit request, exactly as a share link is.
   const routed = routeForPath(location.pathname);
-  if (routed) switchTab(routed.tab, { fromHistory: true, sub: routed.sub });
+  if (routed) switchTab(routed.tab, { fromHistory: true, sub: routed.sub, record: routed });
   else if (hasPlanetaryShare) switchTab('planetary');
   else if (isMobile) switchTab(saved && MOBILE_TABS.includes(saved) ? saved : 'dashboard');
   else if (saved) switchTab(saved);
@@ -738,7 +928,9 @@ document.addEventListener('DOMContentLoaded', () => {
   // the browser just moved us to back onto the stack.
   window.addEventListener('popstate', () => {
     const r = routeForPath(location.pathname);
-    if (r) switchTab(r.tab, { fromHistory: true, sub: r.sub });
+    // `record` rides along both ways: Back INTO a record re-opens it, and Back OUT of one
+    // arrives with no record, which is what closes the one still on screen (see switchTab).
+    if (r) switchTab(r.tab, { fromHistory: true, sub: r.sub, record: r });
   });
   // Load session/character state on every page load so the header + Dashboard nav populate
   // (and a logged-in player with no remembered tab lands on the Dashboard).

@@ -186,10 +186,13 @@ separators as literal NULs:
 See [docs/reactions.md](docs/reactions.md).
 
 **The page on screen is `currentTab()`, never `localStorage`.** A page is a URL (`TAB_SLUGS` /
-`TAB_SUBPAGES` in `static/app.js`); the stored `activeTab` answers only "what should a bare visit to
+`TAB_SUBPAGES` / `TAB_RECORDS` in `static/app.js`); the stored `activeTab` answers only "what should a bare visit to
 `/` restore". Storage is shared across BROWSER TABS, so a guard reading it gets whichever page the
 *other* tab last opened. Adding an SPA page means four lists agreeing — the panel in `index.html`,
-`TAB_SLUGS`, `SPA_PAGES` in `app/main.py`, and the nav button — which `test_routing.py` checks.
+`TAB_SLUGS`, `SPA_PAGES` in `app/main.py`, and the nav button — which `test_routing.py` checks. A
+URL may also name a ROW (`/manufacturing/order/123` — `TAB_RECORDS` + `SPA_RECORDS`): **that route
+must look nothing up**, so a recipient learns nothing from it answering, and a record the caller may
+not open is dropped from the address bar with a REPLACE rather than explained (rule 8, TODO §19c).
 **Never register the page routes as `/{page}`**: `StaticFiles` is mounted at `/`, so a wildcard
 returns the SPA document for every missing asset, which a browser reports as a syntax error inside
 the file rather than the 404 it is.
