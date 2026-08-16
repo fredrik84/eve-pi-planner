@@ -183,9 +183,14 @@ own all keep changing. The standing properties to hold:
 2. **Marking materials in is modelled; marking output out is not.** Containers are bound as an input
    record and nothing says where a job's output lands (TODO 2f-residual #1). It is the stated point
    of the exercise and still the hole in it.
-3. **One 3.6k-line frontend file against 22 backend modules.** The backend split; `static/industry.js`
-   did not. It is the highest-risk file in the repo and the only guard over it is a `no-undef` lint
-   (TODO 2e-residual).
+3. **One 4,705-line frontend file against 22 backend modules totalling 11,954 lines**
+   (measured 2026-08-16; the largest are `schedule.py` 2,056, `blueprints.py` 1,517, `graph.py`
+   1,383). The backend split; `static/industry.js` did not, and it has grown ~30% since this gap
+   was first written at "3.6k" — which is the point: it is the file most likely to be edited next,
+   because Industry is the service still moving. It is the highest-risk file in the repo and the
+   only guard over it is a `no-undef` lint. **Now an item — TODO §34**, scoped as a
+   behaviour-preserving split along the nine workflow steps. (The old pointer here was
+   §2e-residual, a browser test, closed won't-build 2026-08-16.)
 4. **Two endpoints exist with no UI on purpose and two did with no UI by accident**
    (`queue-plan/compare` and `per-order-plans` deliberately; `skill-coverage` and `to-install` read
    as residue and were removed 2026-08-07, TODO 16, along with the whole unrendered skill advisor).
