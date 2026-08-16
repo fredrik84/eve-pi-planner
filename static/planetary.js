@@ -2874,6 +2874,10 @@ function openSettingsModal(section) {
   if (brNav) brNav.style.display = (_loggedIn && _featureActive('industry_build_setup')) ? '' : 'none';
   const acctNav = document.getElementById('settingsNavAccount');
   if (acctNav) acctNav.style.display = _loggedIn ? '' : 'none';
+  // Backup & transfer: exports and imports the account's whole configuration, so it needs a login
+  // and its own flag (see configio.js).
+  const backupNav = document.getElementById('settingsNavBackup');
+  if (backupNav) backupNav.style.display = (_loggedIn && _featureActive('config_export_import')) ? '' : 'none';
   // Structures & Markets (shared by Reactions + Manufacturing) — build structures, freight rates
   // and followed markets are account-wide, so show it to any logged-in user.
   const mktNav = document.getElementById('settingsNavMarkets');
@@ -2890,6 +2894,7 @@ function openSettingsModal(section) {
   if (section === 'alerts' && !_loggedIn) section = 'characters';
   if (section === 'account' && !_loggedIn) section = 'characters';
   if (section === 'buildrules' && !(_loggedIn && _featureActive('industry_build_setup'))) section = 'characters';
+  if (section === 'backup' && !(_loggedIn && _featureActive('config_export_import'))) section = 'characters';
   modal.style.display = 'flex';
   _settingsOpen = true;
   settingsSection(section, false);
@@ -2927,6 +2932,8 @@ function settingsSection(name, doLoad) {
   if (name === 'general') _loadGeneralSettings();
   // Always load, same reasoning as markets/blueprints: every jump-in passes doLoad=false.
   if (name === 'buildrules') _loadBuildRulesSettings();
+  // Always load, same reasoning as the sections above: every jump-in passes doLoad=false.
+  if (name === 'backup' && typeof _loadBackupSettings === 'function') _loadBackupSettings();
 }
 
 // Structures & Markets settings — the shared build-structure list, market-follow list and

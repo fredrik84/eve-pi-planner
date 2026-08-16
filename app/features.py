@@ -326,6 +326,18 @@ FEATURE_REGISTRY = [
                     "themselves rather than a stored ledger, so it cannot drift out of step with "
                     "the work it describes.",
      "default": False},
+    {"key": "config_export_import", "label": "Settings: export and import your configuration",
+     "group": "Industry",
+     "description": "In Settings → Backup & transfer: download your whole build configuration as one "
+                    "JSON file — structures and their rigs, build rules, freight rates and tax, "
+                    "component overrules, stock sources, placeholder slots — and load one back. "
+                    "Meant for moving to another account, keeping a backup before a big change, and "
+                    "handing a working setup to somebody starting out. An import always previews "
+                    "what it would change before it writes, and validates the whole file first, so a "
+                    "bad file changes nothing rather than half-applying. The file identifies you: it "
+                    "carries your structures' names and locations and your placeholder characters' "
+                    "names, and the download says so.",
+     "default": False},
     {"key": "reactions_default_system", "label": "Reactions: work out where jobs are installed when no system is set",
      "group": "Reactions",
      "description": "Job install fees used to be left out of every estimate unless you typed a "

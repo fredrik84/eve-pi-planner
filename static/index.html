@@ -1235,6 +1235,10 @@ PVF-N9    3         95                 60             80                  100   
             <span class="settings-nav-ico">BR</span>
             <span class="settings-nav-lbl">Build rules</span>
           </button>
+          <button class="settings-nav-item" id="settingsNavBackup" onclick="settingsSection('backup')" style="display:none">
+            <span class="settings-nav-ico">BT</span>
+            <span class="settings-nav-lbl">Backup &amp; transfer</span>
+          </button>
           <button class="settings-nav-item" id="settingsNavAccount" onclick="settingsSection('account')" style="display:none">
             <span class="settings-nav-ico">AC</span>
             <span class="settings-nav-lbl">Account</span>
@@ -1262,6 +1266,15 @@ PVF-N9    3         95                 60             80                  100   
           <!-- Build rules: every standing rule that shapes a build, in the one place the Job slots
                modal already tells people account-wide settings live. The same renderer serves the
                per-order override dialog (indSetupModal's sibling) — see _indRulesSectionsHtml. -->
+          <!-- Backup & transfer: the whole configuration as one file (TODO §18b). Deliberately its
+               own section rather than a strip inside Build rules — what it exports spans Build
+               rules, Structures & Markets and the freight rates, so hanging it off any one of them
+               would understate what the file contains, and this file is meant to be sent to people. -->
+          <div id="settingsSecBackup" class="settings-section" style="display:none">
+            <div class="settings-sec-hdr"><h3 class="settings-sec-title">Backup &amp; transfer</h3></div>
+            <div class="settings-subsec-hint">Your whole build configuration as one file — structures and their rigs, build rules, freight rates and tax, component overrules, stock sources, placeholder slots. Move to another account, keep a backup before a big change, or hand a working setup to somebody starting out.</div>
+            <div id="settingsSecBackupBody"><div class="pp-empty">Loading…</div></div>
+          </div>
           <div id="settingsSecBuildrules" class="settings-section" style="display:none">
             <div class="settings-sec-hdr"><h3 class="settings-sec-title">Build rules</h3></div>
             <div class="settings-subsec-hint">The standing rules every build follows: where you build, what's worth building rather than buying, which reactions you run, and which boxes a build may spend. A single order can override any of them without changing what's here.</div>
@@ -1838,5 +1851,6 @@ PVF-N9    3         95                 60             80                  100   
   <script src="/layout.js?v=dev"></script>
   <script src="/reactions.js?v=dev"></script>
   <script src="/industry.js?v=dev"></script>
+  <script src="/configio.js?v=dev"></script>
 </body>
 </html>

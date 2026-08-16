@@ -10,6 +10,7 @@ the entry it came from partly reopened a "Won't do" and deserved evidence rather
 - **Half B — precomputation** — where a page load's time really goes
 - **What was changed** — the one real repeat, and its guard
 - **What survives** — config export/import, which turned out to be a separate question
+- **Export/import, as shipped** — what the file carries, what it cannot carry, and why
 
 ## Half A — storage shape: **not worth doing**
 
@@ -67,3 +68,54 @@ someone who has not read this file.
 ## What survives
 
 **Config export/import** — TODO §18b. Independent of storage shape, which is the whole finding here.
+
+## Export/import, as shipped (2026-08-16)
+
+`app/config_io.py`, behind `config_export_import`. Two endpoints, `GET /api/config/export` and
+`POST /api/config/import`, under Settings → **Backup & transfer** (`static/configio.js`).
+
+**It confirmed the finding rather than testing it.** The serialiser reads through `account_setup`,
+`_list_markets` and `_account_reaction_settings_override` and writes back through `apply_patch`,
+`_upsert_settings` and the markets insert — no new table, no migration, no column touched. A blob
+storage format would have bought this nothing it did not already have.
+
+### What the file carries
+
+The account's whole build configuration: the build-rules sections, the account's structures with
+their rigs and families, the personal freight/tax/reaction-system override, the stock-source ticks
+and named sets, and the placeholder characters' declared slots. **It identifies you** — structure
+names, locations and system ids, and character names — which was a deliberate choice of full
+fidelity over a scrubbed file, so the download warning is rendered from `EXPORT_DISCLOSES`, the list
+the exporter itself fills.
+
+### The two ids that are not portable
+
+* **Build pins** are stored as `s:<pp_markets row id>`, the account's own primary key. They travel
+  as the structure's `location_id` and are re-resolved against the importing account's rows. A pin
+  written through verbatim would name whatever row happens to hold that id — a plan silently
+  installing jobs in the wrong building, and the failure `test_config_io.py` exists for.
+* **Stock-source keys** name containers this account has scanned. Any key the importing account does
+  not have is dropped and counted, never written as a pointer to nothing.
+
+### What an import will not do
+
+Validate-then-write, never halfway: every problem in the document is reported at once and nothing is
+written until all of them are gone. **`_validate` therefore carries checks that look like a writer's
+job** — that a settings value is a scalar and not a nested object, that a solar system resolves,
+that a structure has a name and a known kind, that no location appears twice. It has to: the writes
+span four stores and cannot be one transaction, so anything a later writer would reject has to be
+caught before the first one commits. What survives that is bounded by every section being
+idempotent — re-importing the same file finishes an interrupted run rather than doubling it.
+
+**`replace_structures` means structures.** `pp_markets` holds two different things — the account's
+structures and its followed REGION markets, which are the pricing chain. Regions are not in the
+file, so a merge that considered them would find them unmentioned: a self-backup restored with the
+box ticked would have emptied the pricing chain. Both the match and the delete are scoped to
+`kind='structure'`. A section whose feature flag is off is reported as skipped by
+name rather than 403ing the whole import (which is what `apply_patch` alone would do) or being
+dropped in silence. Structures match on location and placeholders on name, so importing twice is the
+same statement made twice rather than a doubled roster. Deleting is opt-in: `replace_structures`
+removes what the file does not mention, and the preview says how many BEFORE the button that does it.
+
+Real characters' skills are absent by design — those are measured from ESI, and writing them from a
+file would be inventing capacity (`app/industry/slots.py`).
