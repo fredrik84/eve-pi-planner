@@ -62,8 +62,26 @@ def check(cond, msg):
 _real_enabled = bp._manual_enabled
 
 
+def _flag_holders():
+    """Every module object that BINDS `_manual_enabled`, package included.
+
+    `blueprints` is a package now (TODO 34), and each submodule that uses this name imported it into
+    its own globals — so setting the package attribute alone patches nobody, and the gate silently
+    falls through to the real (default-off) feature flag. Discovered exactly that way: three checks
+    went red on the split. Iterating the loaded submodules keeps this working through the next move
+    as well, rather than naming today's two.
+    """
+    import sys
+    mods = [bp]
+    for name, mod in list(sys.modules.items()):
+        if name.startswith("app.industry.blueprints.") and hasattr(mod, "_manual_enabled"):
+            mods.append(mod)
+    return mods
+
+
 def _force_flag(on: bool):
-    bp._manual_enabled = (lambda ctx: on)
+    for m in _flag_holders():
+        m._manual_enabled = (lambda ctx: on)
 
 
 def _reset(con):
@@ -369,7 +387,8 @@ def main():
     finally:
         _reset(con)
         con.close()
-        bp._manual_enabled = _real_enabled
+        for _m in _flag_holders():
+            _m._manual_enabled = _real_enabled
 
     print()
     if failures:

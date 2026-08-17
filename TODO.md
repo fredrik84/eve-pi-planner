@@ -46,11 +46,67 @@ running these locally: `static/` is NOT bind-mounted into the container, so
 `docker compose cp static web:/srv/app/` first or the source-level checks read the image's baked
 copy and pass against the old file.**
 
-**Still open — the backend's three.** `schedule.py` 2,056, `blueprints.py` 1,517, `graph.py` 1,383.
-`schedule.py` is I/O-free and the cleanest to cut; `blueprints.py` and `graph.py` carry the evidence
-layer Reactions imports (`formula_print_floor`), so any move has to keep the import graph acyclic —
-that constraint is documented in [docs/reactions.md](docs/reactions.md) and is real, not a
-preference. Same bar as the frontend half: nothing changes, one commit per cut, tests between.
+**Backend: SHIPPED 2026-08-17.** All three are packages now, largest module 547 lines:
+
+| Was | Now |
+|---|---|
+| `schedule.py` 2,056 | `schedule/` — `demand` 192, `splitting` 349, `tasks` 347, `scheduler` 183, `plan` 502, `per_order` 547 |
+| `graph.py` 1,383 | `graph/` — `params` 323, `sde` 133, `costs` 257, `options` 258, `resolve` 332, `routes` 140 |
+| `blueprints.py` 1,517 | `blueprints/` — `esi` 143, `manual` 507, `observed` 263, `paste` 493, `routes` 204 |
+
+Each `__init__.py` re-exports **every** name the package defines, private ones included, so no
+import anywhere changed — `app/reactions/graph.py` still imports `_fallback_build_system` and the
+tests still reach for `_built_deps`, `_batch_key`, `_apply_kind_preference`.
+
+**The cross-module imports were derived from the AST, not hand-listed** (the splitter is at
+`/home/fredrik/.claude/jobs/*/tmp/pysplit.py`, worth rewriting if this is done again): each module
+gets exactly the sibling names its code references, and the script refuses to emit a module that
+needs something defined later. That is what makes "no import cycles" a checked property rather than
+a claim.
+
+**One genuine cycle had to be broken first, in its own commit:** `manual`'s
+`_migrate_location_batches` called `_batch_key`, which lived beside the paste parser that imports
+four names back from `manual`. `_batch_key` + `_PASTE_BATCH_DEFAULT` moved up into `esi`.
+
+### What the split exposed — three tests that were not testing what they claimed
+
+Each was passing before and would have kept passing wrongly:
+
+1. **`_patch_db(B)` patched a package attribute nobody reads.** Four tests set
+   `blueprints.get_connection` and then ran code whose submodules had imported `get_connection`
+   into their own globals — so every call went to the REAL database and the tests still passed,
+   exercising container state instead of their own fixture. `_patch_db` now walks a package's
+   loaded submodules. `_patch_db_all` had documented this exact hazard for sibling modules; nothing
+   had applied it to packages.
+2. **`bp._manual_enabled` monkeypatching went inert** — three checks in
+   `test_manual_blueprints.py` went red, which is the good outcome. The helper now patches every
+   module binding the name, discovered by walking `sys.modules` rather than naming today's two.
+3. **`G._default_system_on` / `_fallback_build_system`** — same shape in `test_cost_basis.py`;
+   all three of its scenarios would have collapsed into one. Retargeted at `graph.options`.
+
+Also: `inspect.getsource(<module>)` returns only `__init__.py` for a package, so
+`test_industry.py`'s pin on `"build_pins_unapplied"` appearing twice became `0 != 2` and failed
+loudly. Replaced with `_module_source`, the package-aware sibling of `_industry_js`.
+
+**And one promise that was only ever a docstring is now checked:** `test_the_scheduler_stays_io_free`
+asserts no `schedule/` submodule reaches for `get_connection`, `app.markets` or `@router`.
+
+**Two review findings did NOT survive checking**, recorded so they are not re-raised: `blueprints.py`
+was said to use `log` 36 times and use it **zero** times (the logger is defined and dead), and the
+`graph/params.py` boundary correction to line 36 was right — that one was real, and cutting at 48
+would have dropped `@dataclass` off `BuildParams` plus two constants Reactions imports.
+
+**Verified:** 1,090 checks in `test_industry.py` plus `test_blueprint_paste`, `test_manual_blueprints`,
+`test_manual_structures`, `test_reactions`, `test_features`, `test_routing`, `test_cost_basis` — all
+green; every chunk proven verbatim against its source range; the app boots and serves, with
+`/api/industry/plan`, `/api/industry/search`, `/api/industry/manual-blueprints` and
+`/api/industry/blueprints/refresh` all answering 401 (route present, auth required) rather than 404.
+
+**Note for the next reader:** `scripts/symbols.sh app/industry/schedule.py` no longer resolves — use
+the DIRECTORY (`scripts/symbols.sh app/industry/schedule`), which maps the whole package.
+
+**Still open:** `orders.py` is 1,057 and `assets.py` 1,004 — under the bar that opened this item, but
+they are the next two if it comes back.
 
 **Adjacent, deliberately not in scope.** `app/reactions/jobs.py` is **3,920 lines** and
 `static/reactions.js` is 3,936 — same shape, same argument, different service. The frontend seams

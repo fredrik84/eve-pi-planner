@@ -141,15 +141,33 @@ class _KeepOpen:
 
 
 def _patch_db(module):
-    """Point one module's `get_connection` at a private in-memory DB. Returns (con, restore)."""
+    """Point a module's `get_connection` at a private in-memory DB. Returns (con, restore).
+
+    **A PACKAGE is patched through to its submodules.** Since TODO 34 `app.industry.blueprints` is a
+    package, and each submodule imported `get_connection` into its own globals — so patching the
+    package alone left every call going to the real database. The tests still PASSED, which is the
+    bad way to find out: they were exercising container state instead of the fixture they set up.
+    Same hazard `_patch_db_all` documents for sibling modules; handled here so a caller cannot
+    forget it.
+    """
+    import sys
     con = sqlite3.connect(":memory:")
     con.row_factory = sqlite3.Row
     keeper = _KeepOpen(con)
-    real = module.get_connection
-    module.get_connection = lambda: keeper
+    # A package's `__init__` re-exports the module's own names, not its imports, so it may have no
+    # `get_connection` of its own — the submodules are the real targets.
+    targets = [module] if hasattr(module, "get_connection") else []
+    if hasattr(module, "__path__"):
+        targets += [m for name, m in list(sys.modules.items())
+                    if name.startswith(module.__name__ + ".") and hasattr(m, "get_connection")]
+    saved = [(m, m.get_connection) for m in targets]
+    assert targets, f"{module.__name__} has no get_connection to patch"
+    for m in targets:
+        m.get_connection = lambda _k=keeper: _k
 
     def restore():
-        module.get_connection = real
+        for m, real in saved:
+            m.get_connection = real
         con.close()
 
     return con, restore
