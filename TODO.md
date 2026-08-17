@@ -233,9 +233,42 @@ actually being APPLIED each fail the suite when broken. `test_alerts.py`, `test_
   nodes and not worth a mechanism today, but it is the one way the never-query-before-`Expires`
   rule could be broken without a code change.
 
+## 38. Bug 3 — "Characters missing at setup stage of planning" (filed 2026-07-14)
+
+**The report, verbatim:** *"Went into planning mode and I only see the production target and
+constellation filter parts of the setup page. The character part is missing."*
+Open in `pp_bugs` since 2026-07-14 — how to read them:
+[docs/workflow.md](docs/workflow.md#reading-bug-reports).
+
+**What a first look says, and why it is not yet a diagnosis.** The character section is on the page:
+`<section class="pp-card">` → **Character Roles** (`static/index.html:480`), between Manufacturing
+Efficiency and the Constellation Filter the reporter DID see. Its body carries
+`class="pp-collapsible-body collapsed"` (`:484`), so by default it renders as a title bar reading
+*"Character Roles — defaults applied ▼"* and nothing else. A user looking for "the character part"
+would plausibly not recognise that as it.
+
+So the likely shape is **discoverability, not a missing element** — which, if true, is a rule-3
+problem (the setup page hiding the thing a new user most needs to check) rather than a rendering
+bug. But it is a hypothesis from reading the markup, and the report is a month old.
+
+**First concrete step — reproduce before believing any of the above.** Load the planner setup page
+on an account with characters and one without, and answer three things:
+1. Is the Character Roles card visible at all, or does something hide the whole `<section>`?
+2. Is `#ppRolesList` populated? An empty list inside a collapsed card would look identical from
+   outside, and would be a real bug rather than a UI-affordance one.
+3. Does anything auto-expand it on first visit? `ppToggleRoles` (`static/planetary.js:1383`) only
+   toggles; nothing was found that opens it.
+
+If it is discoverability: expand by default when the list is non-empty, or move the summary into
+the title so a collapsed card still says *"3 characters · defaults applied"* — the hint currently
+says "defaults applied" whether or not there are any characters to apply them to.
+
+**Then close the report** with `POST /api/bugs/{id}/status` (or the Admin tab), not a hand-written
+UPDATE.
+
 ## Nothing else open
 
-The rest of the backlog is §34 (backend half), §35, §36 and §37 as of 2026-08-17. §18b (config export/import) and §19 (URL routing,
+The rest of the backlog is §34 (backend: blueprints.py still to split), §37a and §38 as of 2026-08-17. §18b (config export/import) and §19 (URL routing,
 including the deep links that carry an id) both closed that day — §19's last piece, deep-linking a
 colony, was closed as **won't build** rather than shipped, and the reasoning is in the archive.
 

@@ -12,6 +12,7 @@ How to test, deploy, release and debug. The rules themselves are stated in
 | [Local test runs](#local-test-runs-docker-compose-not-prod) | a test fails locally — check here before calling it a regression |
 | [Debug endpoint](#debug-endpoint) | exercising the planner end to end |
 | [Inspecting the database](#inspecting-the-database) | reading profiles/config out of a container |
+| [Reading bug reports](#reading-bug-reports) | a user filed one, or you are triaging the backlog |
 | [Running the planner directly](#running-the-planner-directly) | reproducing a plan in-process |
 | [Debugging prod in-process](#debugging-prod-in-process) | a user reports the planner doing something odd |
 | [Deploying](#deploying-main-vs-dev) | any push — especially deciding `main` vs `dev` |
@@ -115,6 +116,47 @@ for r in con.execute('SELECT * FROM pp_plan_config WHERE product_type_id=2872'):
     print(dict(r))
 "
 ```
+
+## Reading bug reports
+
+Reports go to `pp_bugs` (see [platform.md](platform.md) for the model). There is an admin UI — the
+Admin tab's bug list — but from a terminal the quickest read is straight off the production pod.
+The endpoints (`GET /api/bugs?status=open`) are `require_admin`, so curling them needs an admin
+session cookie; the DB does not.
+
+```bash
+# Write the query to a file first. Inlining it as `python3 -c "..."` through two levels of shell
+# quoting (ssh -> kubectl exec) is what makes this fail; piping to a bare `python3` avoids the
+# escaping entirely.
+cat > /tmp/readbugs.py <<'EOF'
+from app.db import get_connection
+con = get_connection()
+for r in con.execute("SELECT id, title, description, created_at FROM pp_bugs "
+                     "WHERE status='open' ORDER BY id"):
+    print(r["id"], r["created_at"], "|", r["title"])
+    print(r["description"])
+EOF
+
+POD=$(ssh -o BatchMode=yes node03.failed.name \
+  "sudo k3s kubectl -n production get pods -l app=eve-pi-planner -o name | head -1 | cut -d/ -f2")
+ssh -o BatchMode=yes node03.failed.name \
+  "sudo k3s kubectl -n production exec -i $POD -- python3" < /tmp/readbugs.py
+```
+
+Notes that will otherwise cost you a few minutes:
+
+* **Use `node03`.** `node01` has always warned about a changed host key, and `node02` now does too.
+  Do not edit `known_hosts` to silence it.
+* The pod has two containers (`web` + a `wait-postgres` init); `kubectl exec` defaults to `web`,
+  which is the one you want. The "Defaulted container" line on stderr is not an error.
+* Status is one of `open` / `complete` / `ignored`. Triage from the Admin tab, or
+  `POST /api/bugs/{id}/status` — **do not UPDATE the row by hand**, the endpoint is the only path
+  that is admin-gated.
+* A report carries no reproduction steps beyond what the reporter typed, and reporters describe
+  symptoms, not causes. Reproduce before believing the title: bug 3 is called "characters missing"
+  and the element turns out to be present, but collapsed.
+
+---
 
 ## Running the planner directly
 
