@@ -57,25 +57,37 @@ preference. Same bar as the frontend half: nothing changes, one commit per cut, 
 above did generalise, so a sibling item for Reactions is now a reasonable thing to open; do not
 widen this one into it.
 
-### 34a. Three things the review found that a refactor may not fix
+### 34a. The three the refactor could not fix — CLOSED 2026-08-17
 
-Each changes behaviour, so each is its own item rather than a rider on the one above.
+1. **`indPrioSpeed` fired two plan requests per flip — FIXED.** The checkbox carried
+   `onchange="indOnPrioSpeed()"` in `index.html` AND a `change` listener added in a
+   `DOMContentLoaded` block, both calling `indRunPlan()` under the same condition, racing over
+   which response painted the card. The listener was the strict subset (the handler also saves the
+   setting, refreshes the status card, and loads the sweep when no plan is on screen), so the
+   listener went and the inline handler stayed.
 
-1. **`indPrioSpeed` is double-wired.** `static/index.html:1673` has `onchange="indOnPrioSpeed()"`
-   AND `industry-plan.js` adds a `change` listener on the same element; both call `indRunPlan()`.
-   Flipping the speed toggle with a plan on screen fires **two `POST /api/industry/plan`**, racing
-   over which response paints. Fix: drop one. Behaviour-visible, hence not done under §34.
-2. **The preview modal never sets `_indLastPlan`.** It is assigned in exactly two places, both on
-   the queue path. So `_indStageModelForPlan()` — called from `_indStepsHtml` during a *preview*
-   render — reasons about the QUEUE's plan. With an empty queue it returns empty cols and no
-   stage-mark button appears, which is probably why nobody noticed; after a queue plan has
-   rendered, the preview's "mark stage done" buttons are gated on the wrong plan's stages.
-   **Reproduce before fixing** — this is the shape §36's shopping-list report may also be.
-3. **`_indStepsHtml` is still 100 lines** and its natural cut (the stage-aggregation loop) is
-   blocked by `test_industry.py`, which slices the function body up to the next `\nfunction ` and
-   asserts three assignments are inside it. Splitting it needs those assertions rewritten to follow
-   the code — a test change, which §34 forbade itself. Worth doing, with the mutation check
-   (reintroduce the bug, watch it go red) that the assertions were written for.
+2. **The preview modal DOES set `_indLastPlan` — the finding was wrong.** Verified rather than
+   taken on trust: it is assigned in three places, and `indRunPlan` (`static/industry-plan.js:125`)
+   is one of them, immediately before `_indRenderPlan`. Every build-page repaint likewise assigns
+   it first (`industry.js:360`, `:374`) or passes `_indLastPlan` itself
+   (`industry-steps.js:186`, `:192`). So `_indStageModelForPlan()` always reasons about the plan on
+   screen, and there is nothing to fix. **Do not reopen without a reproduction** — the original
+   report came from reading a 4,700-line file and missing an assignment in the middle of a long
+   function.
+
+3. **`_indStepsHtml` split — DONE, and the test that blocked it was vacuous.** The stage
+   aggregation is now `_indStepStages(d, model)`; the renderer is handed the stages. The blocking
+   assertions were rewritten to pin each half at its real home rather than requiring both to live
+   in one function.
+
+   **The part worth remembering:** mutating the header back to the bare start offset did NOT turn
+   the old assertion red. It matched `s.longest` anywhere after the first `html +=` — and both
+   numbers also appear in that span's `title`, so the check could never tell "renders it" from
+   "mentions it in a tooltip". It was green against the exact defect it was written for. It now
+   asserts on the element's TEXT, after the attributes, and fails when the header is reverted.
+
+**Verified:** `test_industry.py` 1,069 checks, `test_routing_client.js`, lint; plus mutation runs
+for both halves of the rewritten assertion.
 
 ## 35. Take two controls off the Reactions card — SHIPPED 2026-08-17
 

@@ -4281,12 +4281,31 @@ def test_the_step_by_step_parts_account_for_the_whole():
           sum(s["start"] for s in stages.values()) < makespan * 0.2)
 
     src = _industry_js()
-    body = src[src.index("function _indStepsHtml("):]
-    body = body[:body.index("\nfunction ", 1)]
-    check("the step collapse tracks when a stage has landed", re.search(r"\bs\.end\s*=", body))
-    check("and the longest job inside it", re.search(r"\bs\.longest\s*=", body))
-    check("a step header renders that job length, not only its start offset",
-          "s.longest" in body.split("html +=", 1)[1] and "s.end" in body.split("html +=", 1)[1])
+
+    def _fn(name):
+        at = src.index(f"function {name}(")
+        return src[at:src.index("\nfunction ", at + 1)]
+
+    # Pinned in two halves at their real homes, so lifting the aggregation out of the renderer is a
+    # refactor rather than a regression (TODO 34a). What must remain true is unchanged: something
+    # COMPUTES when a stage lands and its longest job, and the header RENDERS both rather than only
+    # the start offset — which is the shape that read "≈ +14h 34m" above "built in ≈ 13d 12h".
+    agg = _fn("_indStepStages")
+    check("the step collapse tracks when a stage has landed", re.search(r"\bs\.end\s*=", agg))
+    check("and the longest job inside it", re.search(r"\bs\.longest\s*=", agg))
+    body = _fn("_indStepsHtml")
+    check("the renderer is handed those stages rather than re-deriving them",
+          "_indStepStages(" in body)
+    # Deliberately NOT a search of the whole render body: both numbers also appear in that span's
+    # `title`, so "is the string present" passed even with the visible header rewritten back to the
+    # bare start offset — proven by mutating it. Assert on the element's TEXT, after the attributes.
+    runs_line = body[body.index("const runs ="):]
+    runs_line = runs_line[:runs_line.index("\n")]
+    shown = runs_line[runs_line.rindex('">') + 2:]
+    check("a step header SHOWS that job length, not only its start offset",
+          "s.longest" in shown and "s.end" in shown)
+    check("...and the tooltip explains both numbers", "s.longest" in runs_line.split('title="', 1)[1]
+          and "s.end" in runs_line.split('title="', 1)[1])
     # The total has to say what it measures. Left bare, it reads as the sum of the steps above it.
     done = body[body.index("ind-step-done"):]
     check("the total says it is wall clock, not a sum of the steps",

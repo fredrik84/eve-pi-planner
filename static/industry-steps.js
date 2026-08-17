@@ -322,11 +322,19 @@ function _indStepItems(g, open) {
     + `<div class="ind-wave-jobs">${_indJobChips(g)}</div></details>`;
 }
 
-function _indStepsHtml(d, model) {
+// The schedule collapsed onto STAGES, sorted by when each starts.
+//
+// A wave is a scheduler artifact — jobs unlocking as slots free — so a 20-wave plan rendered 20
+// "steps", which is noise: you do not do 20 different things, you work through a handful of stages
+// and refill slots as they open. This turns waves into one entry per stage, carrying what the
+// header has to be able to say: when it starts, when it has fully LANDED, the longest single job
+// inside it, how many batches it was split into, and who installs each type.
+//
+// Split out of `_indStepsHtml` so the aggregation and the rendering can each be read on their own —
+// the function was 100 lines of both. The two halves are pinned separately by
+// `test_the_step_by_step_parts_account_for_the_whole`.
+function _indStepStages(d, model) {
   const waves = (d.schedule && d.schedule.waves) || [];
-  if (!waves.length) return '';
-  const shop = d.shopping_list || [];
-
   // Collapse the schedule onto STAGES. A wave is a scheduler artifact — jobs unlocking as slots
   // free — so a 20-wave plan used to render 20 "steps", which is noise: you don't do 20 different
   // things, you work through a handful of stages and refill slots as they open. One step per stage,
@@ -363,7 +371,15 @@ function _indStepsHtml(d, model) {
       }
     });
   });
-  const stages = Object.values(byStage).sort((a, b) => a.start - b.start);
+  return Object.values(byStage).sort((a, b) => a.start - b.start);
+}
+
+function _indStepsHtml(d, model) {
+  const waves = (d.schedule && d.schedule.waves) || [];
+  if (!waves.length) return '';
+  const shop = d.shopping_list || [];
+
+  const stages = _indStepStages(d, model);
   if (!stages.length) return '';
 
   let n = 0;

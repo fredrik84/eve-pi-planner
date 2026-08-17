@@ -561,7 +561,9 @@ document.addEventListener('DOMContentLoaded', () => {
     s.addEventListener('keydown', indOnSearchKey);
     s.addEventListener('blur', () => setTimeout(_indHideResults, 150));
   }
-  const ps = document.getElementById('indPrioSpeed');
-  // Re-run the current plan when the speed priority flips, so the effect is immediate.
-  if (ps) ps.addEventListener('change', () => { if (_indPicked && document.getElementById('indResult').innerHTML.trim()) indRunPlan(); });
+  // The speed toggle is NOT wired here. It carries `onchange="indOnPrioSpeed()"` in index.html,
+  // and that handler already re-runs the plan under exactly this condition — plus saves the
+  // setting, refreshes the status card, and loads the sweep when no plan is on screen. A second
+  // listener doing a subset of it meant every flip fired TWO `POST /api/industry/plan` requests
+  // that raced over which response painted the card.
 });
