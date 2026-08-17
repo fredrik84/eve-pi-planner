@@ -475,6 +475,10 @@ def plan_source_keys(ctx: int, orders) -> list[str] | None:
     return list(dict.fromkeys(keys))
 
 
+# What the builder has typed into the sourcing panel counts as stock the plan may spend.
+SOURCED_COUNTS_FEATURE = "industry_sourced_counts"
+
+
 def _stock_for(ctx: int, targets, orders=None) -> dict[int, float]:
     """Owned quantities to net off the demand, EXCLUDING the products being ordered. Owning a
     Revelation must not make an order to build one plan zero jobs — you asked to build it. Only
@@ -482,9 +486,24 @@ def _stock_for(ctx: int, targets, orders=None) -> dict[int, float]:
     from app.industry.assets import owned_quantities, source_quantities_multi
     keys = plan_source_keys(ctx, orders)
     stock = owned_quantities(ctx) if keys is None else source_quantities_multi(ctx, keys)
+    _add_noted_stock(ctx, stock, orders)
     for tid, _ in targets:
         stock.pop(tid, None)
     return stock
+
+
+def _add_noted_stock(ctx: int, stock: dict, orders) -> None:
+    """Fold in what the builder has marked as already sourced, in place.
+
+    Gated: it changes what a plan buys, which is the number everything else on the page derives
+    from. With the flag off the pool is exactly what it was.
+    """
+    from app.features import feature_enabled_for
+    if not feature_enabled_for(SOURCED_COUNTS_FEATURE, ctx):
+        return
+    from app.industry.sourcing import noted_stock_excess
+    for tid, qty in noted_stock_excess(ctx, orders).items():
+        stock[tid] = stock.get(tid, 0.0) + qty
 
 
 def _order_stock(ctx: int, targets, order_rows) -> dict[int, list]:
@@ -507,10 +526,44 @@ def _order_stock(ctx: int, targets, order_rows) -> dict[int, list]:
             if pool is None:
                 pool = owned_quantities(ctx)
             stock = dict(pool)
+        # Planned apart, an order counts its OWN notes and nobody else's — the same reasoning that
+        # gives a curated order its own boxes and nothing else.
+        _add_noted_stock(ctx, stock, [o])
         for tid, _ in targets:
             stock.pop(tid, None)
         out[o["id"]] = stock
     return out
+
+
+def _mark_already_held(ctx: int, res: dict, on_hand) -> None:
+    """Say, per shopping-list row, how much of it the builder already holds.
+
+    The gap this closes: `aggregate_demand` nets stock off BUILT types only (`schedule.py`, the
+    `for tid in built` loop) — a component you hold is not rebuilt. Nothing has ever netted it off
+    BOUGHT ones, so a raw material sitting in the container bound to the order, or ticked off in
+    the sourcing panel, was still listed as something to go and buy. That is the tool arguing with
+    something the user told it.
+
+    **Quantities change, money does not.** `to_buy` is what is left to purchase; `qty` and
+    `line_cost` stay the full requirement, because the material is still consumed by the build and
+    a quote that silently dropped every time the builder happened to have stock would understate
+    what the job actually costs to run. This is the same split the sourcing panel already makes —
+    it reports a shortfall and its cost, and refuses to price anything else, precisely so two
+    lists cannot show two different numbers for one item.
+    """
+    from app.features import feature_enabled_for
+    if not feature_enabled_for(SOURCED_COUNTS_FEATURE, ctx):
+        return
+    pool = dict(on_hand or {})
+    if not pool:
+        return
+    for row in (res.get("shopping_list") or []):
+        have = float(pool.get(int(row["type_id"]), 0.0))
+        if have <= 0:
+            continue
+        qty = float(row.get("qty") or 0.0)
+        row["have"] = min(have, qty)
+        row["to_buy"] = max(0.0, qty - have)
 
 
 def _blend_margin(res: dict, order_margins: list, default_pct: float) -> None:
@@ -637,6 +690,7 @@ def _run_queue_plan(ctx: int, req: QueuePlanRequest, want_full: bool = False) ->
         on_hand = _stock_for(ctx, targets, order_rows) if req.use_stock else None
         res = plan_queue(targets, inp.mfg, inp.rx, inp.prices, inp.adjusted, inp.params, inp.names,
                          inp.pools, on_hand=on_hand)
+    _mark_already_held(ctx, res, on_hand)
     # Progress measures against the FULL requirement, so it needs the same queue planned with no
     # stock netted off. Computed HERE, off inputs already resolved, rather than in a second request
     # that would repeat every DB read in prepare_plan_inputs — the graph, the names, the blueprints,

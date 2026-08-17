@@ -113,12 +113,31 @@ function _indShopRowHtml(s) {
   const rxp = s.reaction_policy
     ? ` <span class="ind-never-badge ind-rxp-badge" title="Bought because your builds don't run this`
       + ` kind of reaction. Change that in the strip above the plan.">not reacted</span>` : '';
-  return `<tr><td>${_esc(s.name)}`
+  // What is left to BUY, when the plan knows you already hold some of it — from the container
+  // bound to the order or from the sourcing panel's own ticks. The cost column deliberately does
+  // NOT move: the material is still consumed by the build, and a quote that quietly shrank
+  // whenever you happened to have stock would understate what the job costs to run.
+  const held = _indHeld(s);
+  const qtyCell = held > 0
+    ? (_indToBuy(s) <= 0
+        ? `<span class="ind-shop-covered" title="You already hold all ${Math.round(s.qty).toLocaleString()} of these — nothing to buy">have all ${Math.round(s.qty).toLocaleString()}</span>`
+        : `${Math.round(_indToBuy(s)).toLocaleString()}`
+          + ` <span class="ind-shop-have" title="Required ${Math.round(s.qty).toLocaleString()}, and you already hold ${Math.round(held).toLocaleString()}">of ${Math.round(s.qty).toLocaleString()}</span>`)
+    : Math.round(s.qty).toLocaleString();
+  return `<tr class="${_indToBuy(s) <= 0 && held > 0 ? 'ind-shop-row-covered' : ''}"><td>${_esc(s.name)}`
     + `${s.bought_for_speed ? ' <span class="ind-speed-badge" title="Bought instead of built to save time">for speed</span>' : ''}`
     + `${never}${rxp}${marginal}</td>`
-    + `<td class="ind-num">${Math.round(s.qty).toLocaleString()}</td>`
+    + `<td class="ind-num">${qtyCell}</td>`
     + `<td class="ind-src">${s.source ? _esc(s.source) : '<span class="pp-warn">no price</span>'}</td>`
     + `<td class="ind-num">${s.line_cost != null ? fmtIsk(s.line_cost) : '—'}</td></tr>`;
+}
+
+// How much of a shopping row the builder already holds, and what is therefore left to buy. Absent
+// on every row until `industry_sourced_counts` is on, so both fall back to the old meaning: you
+// hold nothing the plan knows about, and the whole quantity is to be bought.
+function _indHeld(s) { return Number(s.have) > 0 ? Number(s.have) : 0; }
+function _indToBuy(s) {
+  return (s.to_buy === undefined || s.to_buy === null) ? Number(s.qty) || 0 : Number(s.to_buy);
 }
 
 // ── Always-buy blacklist ────────────────────────────────────────────────────────────────────
@@ -424,7 +443,7 @@ function _indShoppingSections(d, model, allowForce) {
     const rows = col.buys.map(e => byId[e.type_id]).filter(Boolean);
     if (!rows.length) return;
     listed += rows.length;
-    _indShopStageData[col.t] = rows.map(r => ({ name: r.name, qty: r.qty }));
+    _indShopStageData[col.t] = rows.map(r => ({ name: r.name, qty: _indToBuy(r) }));
     const stageCost = rows.reduce((a, s) => a + (s.line_cost || 0), 0);
     sections += `<div class="ind-shop-stage" id="ind-shop-stage-${col.t}">`
       + `<div class="ind-shop-stage-hd"><span>For ${_esc(col.shopLabel || col.label)} — ${rows.length} item${rows.length > 1 ? 's' : ''} · ${fmtIsk(stageCost)}</span>`
@@ -435,22 +454,30 @@ function _indShoppingSections(d, model, allowForce) {
   const placed = new Set(model.cols.flatMap(c => c.buys.map(e => e.type_id)));
   const rest = list.filter(s => !placed.has(s.type_id));
   if (rest.length) {
-    _indShopStageData['other'] = rest.map(r => ({ name: r.name, qty: r.qty }));
+    _indShopStageData['other'] = rest.map(r => ({ name: r.name, qty: _indToBuy(r) }));
     sections += `<div class="ind-shop-stage" id="ind-shop-stage-other">`
       + `<div class="ind-shop-stage-hd"><span title="Not linked to a build stage — please report this">Not tied to a stage — ${rest.length} item${rest.length > 1 ? 's' : ''}</span>`
       + `<button class="ind-copy-btn ind-copy-sm" onclick="indCopyMultibuy('other')">Copy this stage</button></div>`
       + `<table class="ind-table"><thead><tr><th>Material</th><th class="ind-num">Qty</th><th>Source</th><th class="ind-num">Cost</th></tr></thead><tbody>${rest.map(_indShopRowHtml).join('')}</tbody></table></div>`;
   }
   const totalCost = list.reduce((a, s) => a + (s.line_cost || 0), 0);
+  // Two counts when they differ: what the build needs, and what you still have to go and get.
+  // The second is the one you act on, so it leads.
+  const toBuyCount = list.filter(s => _indToBuy(s) > 0).length;
+  const countTxt = toBuyCount === list.length
+    ? `${list.length} items`
+    : `${toBuyCount} to buy <span class="ind-shop-have">of ${list.length}</span>`;
   return `<div class="ind-shop-bar"><button class="ind-copy-btn" onclick="indCopyMultibuy()">Copy everything</button>`
-    + `<span class="ind-shop-tot">${list.length} items · ${fmtIsk(totalCost)}</span></div>`
+    + `<span class="ind-shop-tot">${countTxt} · ${fmtIsk(totalCost)}</span></div>`
     + (allowForce ? _indForcedChipsHtml() : '') + _indBlacklistChipsHtml() + sections;
 }
 
 // Copy a shopping list (or one stage of it, if `stage` is given) in EVE's Multibuy paste format
 // ("Item Name<tab>qty" per line) so it can be pasted straight into the in-game Multibuy window.
 function indCopyMultibuy(stage) {
-  const list = (stage !== undefined && _indShopStageData[stage]) ? _indShopStageData[stage] : ((_indLastPlan && _indLastPlan.shopping_list) || []);
+  const list = (stage !== undefined && _indShopStageData[stage])
+    ? _indShopStageData[stage]
+    : ((_indLastPlan && _indLastPlan.shopping_list) || []).map(s => ({ name: s.name, qty: _indToBuy(s) }));
   if (!list.length) return;
   _indCopyText(list.map(s => `${s.name}\t${Math.ceil(s.qty)}`).join('\n'));
 }

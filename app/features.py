@@ -255,6 +255,16 @@ FEATURE_REGISTRY = [
                     "A pasted hangar wins for the formulas it names. Concurrency only — neither an "
                     "asset row nor a job states ME, TE or runs.",
      "default": False},
+    {"key": "industry_sourced_counts",
+     "label": "Industry: what you've marked as sourced counts as stock",
+     "group": "Industry",
+     "description": "On the Industry build page: material you have ticked or pasted as already "
+                    "sourced for an order stops appearing on the shopping list. Until now those "
+                    "notes were only a checklist for you — the plan never read them, so anything "
+                    "you were holding outside a bound container was still listed as something to "
+                    "buy. A note and a bound box are two answers to the same question, so the "
+                    "higher one wins rather than both being counted.",
+     "default": False},
     {"key": "alert_rescan_backoff", "label": "Alerts: check before nagging, and nag less each time",
      "group": "Notifications",
      "description": "Two changes to how colony alerts repeat. Before an alert is sent, the one "

@@ -221,6 +221,40 @@ def _order_requirement(ctx: int, order) -> list[dict]:
     return res.get("shopping_list") or []
 
 
+def noted_stock_excess(ctx: int, order_rows) -> dict[int, float]:
+    """{type_id: qty} — what the builder has SAID they hold that the plan is not already counting.
+
+    "Marked as sourced" was a note to self and nothing more: the queue plan nets off your enabled
+    stock and each curated order's bound boxes, but never the notes, so material you had already
+    told the app you were holding kept appearing on the shopping list. That is the one place the
+    tool argued with something the user had explicitly told it.
+
+    The double-count is the whole difficulty, and the rule is the panel's own (`_item_row`): a note
+    and a box are two answers to the same question, so take the better one, never the sum. The box
+    is already in the pool, so only the EXCESS of the note over it is new information — a note of
+    500 against a box holding 400 adds 100, and a note of 300 against the same box adds nothing.
+
+    Orders are summed because the aggregated queue plan spends one pool. An order with no notes
+    contributes nothing, so this is a no-op for anyone who has never used the sourcing panel.
+    """
+    from app.industry.assets import source_quantities_multi
+    from app.industry.orders import order_source_keys
+
+    out: dict[int, float] = {}
+    for o in (order_rows or []):
+        row = dict(o)
+        noted = _manual(ctx, row["id"])
+        if not noted:
+            continue
+        keys = order_source_keys(row) if int(row.get("sources_owned") or 0) else []
+        held = source_quantities_multi(ctx, keys) if keys else {}
+        for tid, qty in noted.items():
+            excess = float(qty or 0.0) - float(held.get(tid, 0.0))
+            if excess > 0:
+                out[tid] = out.get(tid, 0.0) + excess
+    return out
+
+
 def _item_row(s: dict, in_source: dict[int, float], manual: dict[int, float]) -> dict:
     """One material's sourcing state, from its shopping-list row plus the two "have" signals.
 

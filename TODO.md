@@ -103,23 +103,46 @@ green; the served page carries both changes.
 and then not built — "start building" landed mid-discussion of §37 and was taken to mean §37 alone.
 The item sat complete-looking in the backlog with the decision recorded and no code behind it.
 
-## 36. The Industry shopping list should count the customer orders, not sit beside them (2026-08-16)
+## 36. The shopping list listed things you already had — SHIPPED 2026-08-17
 
-**What.** With nothing queued but a customer order, the shopping list still shows a list —
-apparently of something other than what the user actually has to build. **It should include the
-customer orders by default, with a control to turn them OFF**, rather than the list being something
-separate that can be hidden.
+Behind `industry_sourced_counts` (default off).
 
-**Why it's open.** Reported from live use, 2026-08-16. A shopping list that does not answer "what do
-I buy for the work in front of me" is worse than none: the builder has to work out which of it is
-real. Default-on with an opt-out is the rule-3 shape — the common case needs no click.
+**What was actually wrong**, after reproducing it in the code rather than from the report: the
+premise in the original write-up was mistaken. Nothing ever excluded customer orders — every order
+with `status='queued'` is planned together, labelled or not, and there was no toggle to find. Two
+real gaps instead, and the user confirmed the second was what they were seeing:
 
-**First concrete step.** Reproduce first and say what the list is currently made of: run a plan with
-one customer order queued and nothing else, and read what `_indShoppingSections` /
-`_indShopStageData` (`static/industry-shopping.js`) were handed. The bug may be that the list is
-built from the ACCOUNT's plan rather than the order's — that shape is already known on the
-`_indLastPlan` path (see the note under §34's follow-ups). Do not add the toggle until the
-default-on list is correct; a control over a wrong list is two problems.
+1. **Notes were never read by the planner.** `pp_industry_sourced` — the ticks and pastes in the
+   sourcing panel — was a checklist for the user and nothing else. Bound containers WERE already
+   netted off (`plan_source_keys` / `_stock_for`); the notes were not.
+2. **Stock never reduced anything you BUY.** `aggregate_demand` applies `on_hand` inside the
+   `for tid in built` loop only (`schedule.py`) — it stops you re-building a component you hold,
+   and has never touched a bought material. So half the fix could not come from the stock pool at
+   all, which is why part 1 alone would not have closed the report.
+
+**The fix, in two halves.** `noted_stock_excess` folds notes into the pool so the plan stops
+BUILDING what you hold, and `_mark_already_held` annotates each shopping row with `have`/`to_buy`
+so the list stops telling you to BUY it. The frontend shows what is left, marks a fully-covered row,
+and — the part that actually matters — **multibuy copies the shortfall**, not the requirement.
+
+**Two rules worth not breaking:**
+
+* **A note and a box are two answers to one question: take the better, never the sum.** That is the
+  sourcing panel's own rule (`_item_row`: `min(need, max(held, noted))`). Summing them would make
+  the plan believe it had twice what it has and under-buy — the expensive direction.
+* **Quantities change, money does not.** `qty` and `line_cost` stay the full requirement. The
+  material is still consumed by the build, and a quote that quietly shrank whenever the builder
+  happened to have stock would understate what the job costs to run. `sourcing.py` already says
+  only one of these two lists may talk about money; this keeps it that way.
+
+**Verified:** `test_industry.py` 1067 checks including a six-case table for the double-count rule
+and a five-case one for the annotation, plus two mutation runs (drop the cap, sum instead of taking
+the better) that each turn the suite red. `test_reactions.py`, `test_features.py`, `test_routing.py`,
+`test_routing_client.js`, lint green.
+
+**Still open:** the per-order plans path annotates from the queue-wide pool, so with
+`per_order_plans` on the `have` figure is the queue's view rather than each order's. Correct for the
+combined list that is actually rendered; revisit if per-order shopping lists ever get their own UI.
 
 ## 37. We alert too often, and the worst case is an alert the user cannot act on (2026-08-17)
 

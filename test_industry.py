@@ -1923,6 +1923,84 @@ def test_per_order_stock_is_first_come_first_served():
           sep["per_order"][0]["net_cost"] < sep["per_order"][1]["net_cost"])
 
 
+def test_what_you_marked_as_sourced_stops_being_something_to_buy():
+    """TODO 36. The sourcing panel's ticks and pastes were a checklist for the user and nothing
+    more — the plan never read them, so material the builder had already told the app they were
+    holding kept coming back on the shopping list. Reported live 2026-08-17.
+
+    The whole difficulty is the DOUBLE COUNT: a bound container's contents are already in the pool,
+    so adding a note about the same material on top would make the plan think it had twice what it
+    has and under-buy. The rule is the sourcing panel's own — a note and a box are two answers to
+    one question, take the better, never the sum.
+    """
+    print("test_what_you_marked_as_sourced_stops_being_something_to_buy")
+    from app.industry import sourcing as SRC
+
+    real_manual, real_boxes = SRC._manual, None
+    import app.industry.assets as A
+    real_boxes = A.source_quantities_multi
+
+    def _run(noted, held, owned=True):
+        SRC._manual = lambda ctx, oid: dict(noted)
+        A.source_quantities_multi = lambda ctx, keys: dict(held)
+        rows = [{"id": 1, "sources_owned": 1 if owned else 0, "source_keys": "box:1",
+                 "source_key": "box:1"}]
+        try:
+            return SRC.noted_stock_excess(1, rows)
+        finally:
+            SRC._manual, A.source_quantities_multi = real_manual, real_boxes
+
+    check("a note with no box behind it is new information",
+          _run({201: 500.0}, {}) == {201: 500.0})
+    check("a note the box already covers adds NOTHING — the box is already in the pool",
+          _run({201: 300.0}, {201: 400.0}) == {})
+    check("a note LARGER than the box adds only the difference",
+          _run({201: 500.0}, {201: 400.0}) == {201: 100.0})
+    check("an exactly-matching note adds nothing",
+          _run({201: 400.0}, {201: 400.0}) == {})
+    check("no notes at all is a no-op, so nobody who ignores the panel is affected",
+          _run({}, {201: 400.0}) == {})
+    # An order that has NOT curated its boxes draws on the account pool, so its note cannot be
+    # netted against a box set it does not own — the whole note is new information.
+    check("an uncurated order's note counts in full",
+          _run({201: 250.0}, {201: 400.0}, owned=False) == {201: 250.0})
+
+    # And the list says what is actually left to buy. `aggregate_demand` nets stock off BUILT
+    # types only (the `for tid in built` loop in schedule.py) — bought materials were never
+    # reduced by stock at all, which is the half of the bug the pool alone cannot fix.
+    from app.industry.orders import _mark_already_held
+    import app.features as F
+    real_flag = F.feature_enabled_for
+    F.feature_enabled_for = lambda key, ctx: True
+    try:
+        res = {"shopping_list": [
+            {"type_id": 200, "name": "MineralA", "qty": 100.0, "line_cost": 10000.0},
+            {"type_id": 201, "name": "MineralB", "qty": 50.0, "line_cost": 2500.0},
+            {"type_id": 202, "name": "Goo", "qty": 10.0, "line_cost": 200.0},
+        ]}
+        _mark_already_held(1, res, {200: 40.0, 201: 999.0})
+        by = {r["type_id"]: r for r in res["shopping_list"]}
+        check("a partly-held material says how many are left to buy",
+              by[200].get("to_buy") == 60.0 and by[200].get("have") == 40.0)
+        check("holding more than the build needs is capped at the requirement",
+              by[201].get("have") == 50.0 and by[201].get("to_buy") == 0.0)
+        check("a material you hold none of is untouched, so the old shape survives",
+              "to_buy" not in by[202] and "have" not in by[202])
+        # THE property that keeps two lists from disagreeing about money.
+        check("the cost of the line does NOT move — the build still consumes the material",
+              by[200]["line_cost"] == 10000.0 and by[201]["line_cost"] == 2500.0)
+        check("and neither does the required quantity", by[200]["qty"] == 100.0)
+
+        F.feature_enabled_for = lambda key, ctx: False
+        off = {"shopping_list": [{"type_id": 200, "name": "MineralA", "qty": 100.0,
+                                  "line_cost": 10000.0}]}
+        _mark_already_held(1, off, {200: 40.0})
+        check("with the flag off nothing is annotated at all",
+              "to_buy" not in off["shopping_list"][0])
+    finally:
+        F.feature_enabled_for = real_flag
+
+
 def test_two_orders_cannot_buy_the_same_contract_twice():
     """A blueprint copy on contract is ONE item. Planned apart, each order prices the market from
     scratch — so both would take the cheapest listing and the split would look CHEAPER on
@@ -2993,6 +3071,7 @@ def main():
     test_per_order_plans_build_a_shared_component_once_per_order()
     test_one_orders_jobs_can_never_satisfy_anothers()
     test_per_order_stock_is_first_come_first_served()
+    test_what_you_marked_as_sourced_stops_being_something_to_buy()
     test_two_orders_cannot_buy_the_same_contract_twice()
     test_two_orders_cannot_spend_the_same_owned_copy()
     test_per_order_plans_price_off_each_orders_real_cost()
