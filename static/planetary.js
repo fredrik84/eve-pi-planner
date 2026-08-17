@@ -3003,6 +3003,17 @@ function _loadBlueprintsSettings() {
 function _loadGeneralSettings() {
   const el = document.getElementById('genAutoRefresh');
   if (el) el.value = (typeof _autoRefreshSeconds === 'function') ? _autoRefreshSeconds() : 300;
+  // The reaction cadence lives here now (TODO 35). Settings can be opened without ever visiting
+  // the Reactions tab, so this section cannot assume the number has been loaded — fetch it once,
+  // then paint. `_rxPaintCadenceSetting` hides the whole subsection when the account has no
+  // cadence surface, so an account without it sees nothing rather than a dead control.
+  if (typeof _rxPaintCadenceSetting !== 'function') return;
+  if (typeof _rxCadenceDays !== 'undefined' && _rxCadenceDays === null
+      && typeof _rxLoadCadence === 'function') {
+    _rxLoadCadence();                       // paints on completion
+  } else {
+    _rxPaintCadenceSetting();
+  }
 }
 function _saveGeneralSettings() {
   const el = document.getElementById('genAutoRefresh');

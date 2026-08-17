@@ -77,33 +77,31 @@ Each changes behaviour, so each is its own item rather than a rider on the one a
    the code — a test change, which §34 forbade itself. Worth doing, with the mutation check
    (reintroduce the bug, watch it go red) that the assertions were written for.
 
-## 35. Take two controls off the Reactions card (2026-08-16)
+## 35. Take two controls off the Reactions card — SHIPPED 2026-08-17
 
-**What.** Two things the card offers that the user does not want offered there:
+**Both done, no flag** (rule 2 is about NEW features; this removes surface from existing ones).
 
-1. **"Come back every N days"** — `_rxCadenceHtml` in `static/reactions.js` (~L598). Remove the
-   control from the card. The number itself stays: it is one stored setting
-   (`/api/reactions/cadence`, `app/reactions/settings.py:426-445`) and the first-run wizard's
-   `wizRCadence` dropdown is already a view of it (`static/index.html:702-707` says so in a
-   comment). **User's words:** *"That configuration is set in the settings and just duplicates and
-   adds a knob the user doesn't need."*
-2. **"Advanced: full opportunity list"** — the fold-out at `static/index.html:659`. **Hide it**, not
-   delete it: *"that is not a thing i want to offer the users right now."* The
-   `/api/reactions/opportunities` endpoint and everything behind it stays.
+1. **"Come back every N days" is off the card.** The number now lives in exactly two places, which
+   is what the user asked for: *"I don't mind it being on the onboarding wizard and then in
+   settings. It's a logical (familiar at least) place for a setting."* Settings → General →
+   "Reactions — how often you play" (`#genCadenceSubsec`), and the first-run wizard's "Run on a…".
+   `_rxPaintCadenceSetting` replaces `_rxCadenceHtml`, and both writers (`_rxSaveCadence`,
+   `_rxLoadCadence`) keep the Settings row and the wizard dropdown in step the way the wizard
+   already was. The Settings section fetches the value itself if the Reactions tab was never
+   opened, and hides the whole subsection when the account has no cadence surface — so nobody sees
+   a dead control. Dead `.rx-cadence` CSS removed with it.
+2. **"Advanced: full opportunity list" is hidden**, not deleted — one `style="display:none"` on
+   `#rxAdvancedCard`, with a comment saying so. `/api/reactions/opportunities`,
+   `_onRxAdvancedToggle` and `_rxLoadAdvancedTable` are untouched, so bringing it back is deleting
+   an attribute. Free side effect: the fold-out was lazy (it only computed when open), so hiding it
+   also removes the tab's single most expensive computation from every account that had expanded it.
 
-**Why it's open.** Both are rule 3 (the best UI is read-only) applied to a surface that grew knobs.
-Neither is a math change — the cadence ceiling still applies to planning, it just stops being
-adjustable from the card.
+**Verified:** `test_reactions.py`, `test_routing.py`, `test_routing_client.js` and the JS lint all
+green; the served page carries both changes.
 
-**Where the number lives — settled 2026-08-17 by the user:** *"I don't mind it being on the
-onboarding wizard and then in settings. It's a logical (familiar at least) place for a setting."*
-So: **wizard + Settings, and nowhere else.** The card's copy comes out.
-
-**First concrete step.** Give it a Settings home BEFORE removing the card's input, or an account
-past onboarding loses all access to the value (the wizard is a first-run surface). Reactions
-settings sections already exist — put it with the ones it belongs beside, not in a new section of
-its own. Then delete `_rxCadenceHtml` and its call site, and check what `_rxSyncWizardCadence`
-keeps in step: with the card gone it has one fewer view to sync, and may reduce to nothing.
+**Where the delay came from, since it is worth not repeating:** this was written up on 2026-08-16
+and then not built — "start building" landed mid-discussion of §37 and was taken to mean §37 alone.
+The item sat complete-looking in the backlog with the decision recorded and no code behind it.
 
 ## 36. The Industry shopping list should count the customer orders, not sit beside them (2026-08-16)
 

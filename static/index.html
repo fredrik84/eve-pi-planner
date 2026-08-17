@@ -654,7 +654,10 @@
               </details>
             </section>
 
-            <section class="pp-card">
+            <!-- Hidden 2026-08-17 (TODO 35): not a surface we want to offer users right now. The
+                 fold-out, /api/reactions/opportunities and _onRxAdvancedToggle are all untouched —
+                 deleting this style attribute brings it back exactly as it was. -->
+            <section class="pp-card" id="rxAdvancedCard" style="display:none">
               <details id="rxAdvancedDetails" ontoggle="_onRxAdvancedToggle(this)">
                 <summary class="pp-card-title rx-fold-summary"><span class="rx-fold-caret">▸</span>Advanced: full opportunity list
                   <span class="pp-card-hint">— every reachable reaction chain, ranked by profit</span>
@@ -1510,6 +1513,17 @@ PVF-N9    3         95                 60             80                  100   
                 </div>
               </div>
               <span id="genSettingsStatus" class="bug-status-msg"></span>
+            </div>
+            <div class="settings-subsec" id="genCadenceSubsec" style="display:none">
+              <div class="settings-subsec-title">Reactions — how often you play</div>
+              <div class="settings-subsec-hint">No reaction job is planned to run longer than this, so a stage always finishes inside the window you set — the plan is built around your rhythm rather than the other way round. Blank or 0 means no ceiling. This is the same number the first-run wizard's "Run on a…" asks for.</div>
+              <div class="settings-field-list">
+                <div class="settings-field-row">
+                  <span class="settings-field-label">Come back every</span>
+                  <span class="settings-field-control"><input type="number" id="genRxCadence" min="0" step="0.5" class="settings-field-input" onchange="_rxSaveCadence(this.value)"> days</span>
+                </div>
+              </div>
+              <span id="genCadenceHint" class="pp-sub"></span>
             </div>
           </div>
 

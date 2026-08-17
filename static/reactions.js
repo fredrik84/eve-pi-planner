@@ -593,21 +593,27 @@ async function _rxLoadCadence() {
     _rxCadenceAvail = false;                 // the flag is off, or the surface 403'd — show nothing
   }
   _rxSyncWizardCadence();                    // the wizard's dropdown is a VIEW of this same number
+  _rxPaintCadenceSetting();                  // ...and so is the Settings row
 }
 
-function _rxCadenceHtml() {
-  if (!_rxCadenceAvail) return '';
+// The cadence lives in Settings and in the first-run wizard, and nowhere else (TODO 35). It used to
+// sit on the Reactions card too, which made three surfaces for one number — and a card is where you
+// read what the tool decided, not where you configure it. Settings is the place people already look
+// for a setting; the wizard is where it is first asked. This paints the Settings copy.
+function _rxPaintCadenceSetting() {
+  const wrap = document.getElementById('genCadenceSubsec');
+  const el = document.getElementById('genRxCadence');
+  if (!wrap || !el) return;
+  wrap.style.display = _rxCadenceAvail ? '' : 'none';
+  if (!_rxCadenceAvail) return;
   const v = _rxCadenceDays == null ? '' : _rxCadenceDays;
-  const set = v !== '' && Number(v) > 0;
-  return `<div class="rx-cadence">
-      <label for="rxCadence">Come back every</label>
-      <input type="number" id="rxCadence" min="0" step="0.5" value="${_esc(String(v))}"
-             onchange="_rxSaveCadence(this.value)" title="No reaction job will be planned longer than this, so a stage lands inside the window you set. Blank or 0 = no ceiling.">
-      <span>days</span>
-      <span class="rx-cadence-note">${set
-        ? 'No job is planned longer than this, so a stage finishes inside the window — it costs reactors when the work does not fit.'
-        : 'No ceiling: a batch can sit in one reactor for as long as the work takes. Set a number to plan around a fixed play day.'}</span>
-    </div>`;
+  el.value = v === '' ? '' : String(v);
+  const hint = document.getElementById('genCadenceHint');
+  if (hint) {
+    hint.textContent = (v !== '' && Number(v) > 0)
+      ? 'A stage is planned to finish inside this window — which costs reactors when the work does not fit.'
+      : 'No ceiling: a batch can sit in one reactor for as long as the work takes.';
+  }
 }
 
 function _rxSaveCadence(value) {
@@ -618,6 +624,7 @@ function _rxSaveCadence(value) {
     .then(() => {
       _rxCadenceDays = days == null ? '' : days;
       _rxSyncWizardCadence();
+      _rxPaintCadenceSetting();
       // The cadence reshapes the plan on the next read, so re-fetch rather than re-render what we
       // already have — the run counts on screen are exactly what just changed.
       _rxLastDashboardData = null;
@@ -1456,7 +1463,7 @@ function _renderReactionsDashboard(data) {
     + _rxMissingFormulaWarn(data.missing_formulas)
     // Under the cadence row it is about, and above the checklist it would change — the remedy is
     // "type more numbers", so it belongs where the numbers are about to be read.
-    + _rxCadenceHtml() + _rxEaseCostLine(data) + todoListHtml + rows + untrackedNote;
+    + _rxEaseCostLine(data) + todoListHtml + rows + untrackedNote;
 }
 
 function _rxCancelAssignment(assignmentId) {
