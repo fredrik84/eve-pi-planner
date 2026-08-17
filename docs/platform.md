@@ -222,8 +222,31 @@ silently paused. A successful hand rescan clears it (`_clear_scan_failure`), so 
 "Rescan to check now" is true — the job alone could never clear it for a character that no longer
 has a due alert, which would have left healthy characters amber forever.
 
-**Not covered:** the `reaction_*` kinds carry no `planet_id` — they read industry jobs, a different
-ESI path — so they are deliberately outside this first cut and keep their old cadence.
+**Measuring it.** `_log_send` only ever runs on a real send, which left the feature's two defining
+outcomes with no trace at all — and unlike the backoff rung (recoverable from send timestamps
+whenever you care to look) they cannot be reconstructed after the fact. So `_log_rescan_outcomes`
+writes them into `pp_notification_log` under statuses no send ever uses:
+
+| `status` | Meaning |
+|---|---|
+| `prevented` | Due, re-read, found already fixed — never sent. **The benefit.** |
+| `suppressed:no_token` | Held back: the character needs re-authorising |
+| `suppressed:retry_brake` | Held back: a read failed recently and is not being retried yet |
+| `suppressed:scan_failed` | Held back: this tick's read failed |
+| `suppressed:over_budget` | Held back: more colonies were due than one tick will read |
+
+Same table because every column already fits and every reader filters `status='ok'`
+(`_recently_notified`, `_consecutive_cooldown_h`, `resend-last`); `/api/notifications/log` was the
+one that did not and now excludes them via `_SENDS_ONLY_SQL`, because the user's log is a list of
+things that were sent. Rows are deduped per cause per `_OUTCOME_LOG_WINDOW_H` — an unresolved
+problem is due on all 96 ticks of the day, and 96 identical rows say nothing 1 does not.
+`prevented` is deliberately not deduped: a problem found fixed does not recur next tick, so a second
+row is a second real occurrence. To read it:
+
+```sql
+SELECT status, COUNT(*) FROM pp_notification_log
+ WHERE sent_at > '2026-08-18' AND status <> 'ok' GROUP BY status ORDER BY 2 DESC;
+```
 
 ## Local / alliance market pricing (`app/markets.py`, `local_market` flag)
 

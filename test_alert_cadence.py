@@ -227,13 +227,14 @@ def test_only_colonies_worth_a_call_are_scanned() -> bool:
     _seed_character(FAKE_CID, refresh_token="")
     targets, unver = _rescan_targets(con, FAKE_CTX, {"expired": [_alert(FAKE_CID, PLANET_A)]})
     ok &= check(targets == [], "a character whose refresh token is dead is never called for")
-    ok &= check(unver == [(FAKE_CID, PLANET_A)],
-                "...and its alert is held back rather than sent off data we could not check")
+    ok &= check(unver == [((FAKE_CID, PLANET_A), "no_token")],
+                "...and its alert is held back rather than sent off data we could not check, "
+                "with the reason recorded so the log can tell a dead token from a busy tick")
 
     # A recent unattended failure backs off instead of retrying every tick.
     _seed_character(FAKE_CID, refresh_token="live-token", scan_failed_at=time.time() - 60)
     targets, unver = _rescan_targets(con, FAKE_CTX, {"expired": [_alert(FAKE_CID, PLANET_A)]})
-    ok &= check(targets == [] and unver == [(FAKE_CID, PLANET_A)],
+    ok &= check(targets == [] and unver == [((FAKE_CID, PLANET_A), "retry_brake")],
                 "a scan that just failed is not retried on the next tick, and is not reported either")
     _seed_character(FAKE_CID, refresh_token="live-token",
                     scan_failed_at=time.time() - (_SCAN_RETRY_AFTER_H * 3600 + 60))
@@ -524,8 +525,8 @@ def test_the_whole_path_end_to_end() -> bool:
                 f"flag ON: a colony we could NOT read produces no notification (sent {sent})")
 
     con = get_connection()
-    row = con.execute("SELECT COUNT(*) AS c FROM pp_notification_log WHERE context_id=?",
-                      (FAKE_CTX,)).fetchone()
+    row = con.execute("SELECT COUNT(*) AS c FROM pp_notification_log "
+                      "WHERE context_id=? AND status='ok'", (FAKE_CTX,)).fetchone()
     ok &= check(row["c"] == 0, "and nothing is logged as sent, so no cooldown is started for it")
     con.execute("DELETE FROM pp_notification_settings WHERE context_id=?", (FAKE_CTX,))
     con.commit()
@@ -575,6 +576,95 @@ def test_a_scan_that_read_nothing_is_not_a_success() -> bool:
     return ok
 
 
+def _outcome_rows():
+    con = get_connection()
+    rows = [dict(r) for r in con.execute(
+        "SELECT event, character, planet_id, status FROM pp_notification_log "
+        "WHERE context_id=? AND status <> 'ok' ORDER BY sent_at", (FAKE_CTX,))]
+    con.close()
+    return rows
+
+
+def test_the_alerts_that_never_became_a_send_are_recorded() -> bool:
+    """§37a: the rescan's two outcomes were invisible, and unlike the backoff rung they cannot be
+    reconstructed afterwards — `_log_send` only ever runs on a real send. An alert PREVENTED is the
+    entire benefit of the feature; an alert SUPPRESSED is its entire cost. Both now leave a row."""
+    print(f"\n{'='*60}\n  the rescan records what it prevented and what it suppressed\n{'='*60}")
+    ok = True
+    import json
+    import app.notifications as N
+
+    # PREVENTED: the scan succeeds AND finds the problem fixed — so it writes fresh colony data,
+    # exactly as a real scan does, and the second _due_alerts pass comes back empty.
+    def _fix_the_colony(cid, pid):
+        con = get_connection()
+        con.execute("UPDATE pp_char_planets SET sim_state=? WHERE character_id=? AND planet_id=?",
+                    (json.dumps({"expiry": time.time() + 86400}), cid, pid))
+        con.commit()
+        con.close()
+        return True
+
+    _seed_due_expired_alert()
+    real_flag, real_scan, real_notifier = N.feature_enabled_for, N._default_scan, N.make_notifier
+    N.feature_enabled_for = lambda key, ctx: True
+    N._default_scan = _fix_the_colony
+    N.make_notifier = lambda ch, cfg: (_ for _ in ()).throw(
+        AssertionError("a prevented alert must never reach a notifier"))
+    N._scan_budget_left = _SCAN_BUDGET_PER_TICK
+    con = get_connection()
+    try:
+        N._process_context(con, FAKE_CTX)
+        con.commit()
+    finally:
+        N.feature_enabled_for, N._default_scan, N.make_notifier = real_flag, real_scan, real_notifier
+        con.close()
+
+    rows = _outcome_rows()
+    ok &= check([r["status"] for r in rows] == ["prevented"],
+                f"a problem the user had already fixed is logged as prevented (got {rows})")
+    ok &= check(bool(rows) and rows[0]["event"] == "expired" and rows[0]["planet_id"] == PLANET_A,
+                "...against the kind and the colony it was about, so it can be attributed")
+
+    # SUPPRESSED: the scan fails, the alert is still true, and nothing is sent. The reason is on
+    # the row — "we are over budget" and "this token has been dead a week" want opposite responses.
+    _seed_due_expired_alert()
+    sent, scans = _run_process_context(flag_on=True, scan_result=False)
+    ok &= check(sent == [], "a colony we could not read still sends nothing")
+    rows = _outcome_rows()
+    ok &= check([r["status"] for r in rows] == ["suppressed:scan_failed"],
+                f"...and the suppression is logged WITH its cause (got {rows})")
+
+    # An unresolved problem keeps the alert due on all 96 ticks of the day. One row per cause per
+    # window, not 96. The failed scan above has since armed the retry brake, which is a DIFFERENT
+    # cause and gets its own row — after that the count must stop moving.
+    before = len(_outcome_rows())
+    for _ in range(3):
+        _run_process_context(flag_on=True, scan_result=False)
+    mid = _outcome_rows()
+    ok &= check([r["status"] for r in mid[before:]] == ["suppressed:retry_brake"],
+                f"the retry brake is logged once as its own cause (got {mid[before:]})")
+    for _ in range(3):
+        _run_process_context(flag_on=True, scan_result=False)
+    ok &= check(len(_outcome_rows()) == len(mid),
+                f"and further ticks add nothing at all (was {len(mid)}, "
+                f"now {len(_outcome_rows())})")
+
+    # None of this may reach the readers that treat the log as a list of sends.
+    con = get_connection()
+    N._log_send(con, FAKE_CTX, "discord", "expired", "Toon", PLANET_A, "ok")
+    con.commit()
+    ok &= check(N._consecutive_cooldown_h(con, FAKE_CTX, "expired", PLANET_A, 2.0) == 2.0,
+                "the outcome rows do not count as sends in the backoff chain")
+    ok &= check(N._recently_notified(con, FAKE_CTX, "expired", PLANET_A, 2.0) is True,
+                "...and a real send is still found by the cooldown check")
+    con.close()
+
+    log = N.get_notification_log(ctx=FAKE_CTX)["log"]
+    ok &= check(log and all(not N._is_outcome_status(r["status"]) for r in log),
+                f"the user's notification log still lists only things that were sent (got {log})")
+    return ok
+
+
 def main() -> int:
     _cleanup()
     try:
@@ -591,6 +681,7 @@ def main() -> int:
             test_the_budget_is_for_the_whole_tick_not_each_account(),
             test_the_whole_path_end_to_end(),
             test_a_scan_that_read_nothing_is_not_a_success(),
+            test_the_alerts_that_never_became_a_send_are_recorded(),
         ]
     finally:
         _cleanup()

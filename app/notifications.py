@@ -145,6 +145,58 @@ def _log_send(con, context_id: int, channel: str, event: str, character: str | N
     )
 
 
+# ── Recording the alerts that never became a send ─────────────────────────────
+#
+# `_log_send` runs inside the channel loop, so it only ever fires on a real send. That made the two
+# outcomes the rescan exists to produce completely invisible: an alert it PREVENTED (re-read the
+# colony, found the problem already fixed, sent nothing) and an alert it SUPPRESSED because nothing
+# could be verified. The first is the whole benefit, the second is the whole cost, and neither is
+# recoverable after the fact — unlike the backoff rung, which `_consecutive_cooldown_h` derives from
+# the timestamps of sends that did happen.
+#
+# They go in `pp_notification_log` rather than a table of their own because every column already
+# fits and the readers all filter on `status='ok'` (`_recently_notified`, `_consecutive_cooldown_h`,
+# `resend-last`), so a new status value is invisible to them by construction. `/api/notifications/log`
+# was the one reader without such a filter and now has one — the user's log is a list of things that
+# were sent, and must stay that.
+_OUTCOME_CHANNEL = "-"        # no channel was involved; the column is NOT NULL
+_OUTCOME_STATUSES = ("prevented",)          # exact matches
+_OUTCOME_PREFIXES = ("suppressed:",)        # `suppressed:<reason>`
+# A dead token keeps its alert due on all 96 ticks of the day, so an unguarded suppressed row is 96
+# rows a day per alert, forever. One row per window says the same thing. `prevented` needs no such
+# guard: an alert that was found fixed does not come back on the next tick, and if it genuinely
+# recurs later that IS a second occurrence worth its own row.
+_OUTCOME_LOG_WINDOW_H = 12.0
+
+
+# The WHERE fragment that keeps sends and drops instrumentation, derived from the two tuples above
+# so a new outcome status cannot be added without the user's log excluding it. Literal-safe: every
+# value is a constant in this file, never anything from a request.
+_SENDS_ONLY_SQL = " AND ".join(
+    [f"COALESCE(status,'') <> '{s}'" for s in _OUTCOME_STATUSES]
+    + [f"COALESCE(status,'') NOT LIKE '{p}%'" for p in _OUTCOME_PREFIXES]
+)
+
+
+def _is_outcome_status(status: str | None) -> bool:
+    return bool(status) and (status in _OUTCOME_STATUSES
+                             or status.startswith(_OUTCOME_PREFIXES))
+
+
+def _log_outcome(con, context_id: int, event: str, character: str | None, key,
+                 status: str, dedupe_h: float = 0.0):
+    if dedupe_h and key is not None:
+        cutoff = datetime.fromtimestamp(time.time() - dedupe_h * 3600, tz=timezone.utc).isoformat()
+        seen = con.execute(
+            "SELECT 1 FROM pp_notification_log "
+            "WHERE context_id=? AND event=? AND planet_id=? AND status=? AND sent_at > ?",
+            (context_id, event, key, status, cutoff),
+        ).fetchone()
+        if seen:
+            return
+    _log_send(con, context_id, _OUTCOME_CHANNEL, event, character, key, status)
+
+
 # ── Background job ────────────────────────────────────────────────────────────
 
 # Next in the sequence after build_sde.py (918_273_645) / populate_geo.py (918_273_646).
@@ -317,12 +369,21 @@ class _ScanOutcome:
     alerts are held back rather than sent: the user's call, and the right one — a colony we failed
     to read is a colony we have nothing current to say about, and the character page already shows
     a dead token as the thing to fix.
+
+    `reasons` maps the same pairs to WHY, for the log. Four suppressions with four different causes
+    read as one number otherwise, and "we are over budget every tick" and "this account's token has
+    been dead for a week" call for opposite responses.
     """
-    __slots__ = ("scanned", "suppressed")
+    __slots__ = ("scanned", "suppressed", "reasons")
 
     def __init__(self):
         self.scanned: set = set()
         self.suppressed: set = set()
+        self.reasons: dict = {}
+
+    def suppress(self, pair, reason: str):
+        self.suppressed.add(pair)
+        self.reasons.setdefault(pair, reason)
 
 
 # One ESI call per colony, and only for a colony an alert is actually about. The blanket
@@ -347,6 +408,8 @@ _SCAN_RETRY_AFTER_H = 1.0
 
 def _rescan_targets(con, context_id: int, by_kind: dict) -> tuple[list, list]:
     """(character_id, planet_id) worth an ESI read this tick, in a stable order.
+
+    Returns `(targets, unverifiable)`, where each unverifiable entry is `(pair, reason)`.
 
     Filters, in the order they cost least: alerts that name no colony, then colonies whose data is
     already as fresh as ESI will give (`esi_expires` in the future — a read before it is refused by
@@ -399,14 +462,14 @@ def _rescan_targets(con, context_id: int, by_kind: dict) -> tuple[list, list]:
             # A token the user must re-add. We cannot check, so we do not tell them about it —
             # the red dot on the character page is the thing to act on, not a colony report we
             # have no current evidence for.
-            unverifiable.append((cid, pid))
+            unverifiable.append(((cid, pid), "no_token"))
             continue
         failed_at = c["scan_failed_at"] or 0
         if failed_at and now - failed_at < _SCAN_RETRY_AFTER_H * 3600:
             # Inside the retry brake after a transient failure — still unchecked, so still not
             # something to report. Sending here would be reporting off exactly the stale data the
             # feature exists to stop trusting.
-            unverifiable.append((cid, pid))
+            unverifiable.append(((cid, pid), "retry_brake"))
             continue
         out.append((cid, pid))
     return out, unverifiable
@@ -436,7 +499,8 @@ def _rescan_for_due_alerts(con, context_id: int, by_kind: dict, scan=None) -> _S
     scan = scan or _default_scan
     outcome = _ScanOutcome()
     targets, unverifiable = _rescan_targets(con, context_id, by_kind)
-    outcome.suppressed.update(unverifiable)
+    for pair, reason in unverifiable:
+        outcome.suppress(pair, reason)
     budget = max(0, _scan_budget_left)
     for cid, pid in targets[:budget]:
         try:
@@ -448,7 +512,7 @@ def _rescan_for_due_alerts(con, context_id: int, by_kind: dict, scan=None) -> _S
             outcome.scanned.add((cid, pid))
             con.execute("UPDATE pp_characters SET scan_failed_at=NULL WHERE character_id=?", (cid,))
         else:
-            outcome.suppressed.add((cid, pid))
+            outcome.suppress((cid, pid), "scan_failed")
             con.execute("UPDATE pp_characters SET scan_failed_at=? WHERE character_id=?",
                         (time.time(), cid))
             # The character list is Redis-cached for 5 minutes and now carries this field. Without
@@ -464,7 +528,7 @@ def _rescan_for_due_alerts(con, context_id: int, by_kind: dict, scan=None) -> _S
     # nothing like that in practice, because a read only happens when an alert is actually sent.
     _scan_budget_left = budget - len(targets[:budget])
     for cid, pid in targets[budget:]:
-        outcome.suppressed.add((cid, pid))
+        outcome.suppress((cid, pid), "over_budget")
     con.commit()
     return outcome
 
@@ -480,6 +544,30 @@ def _drop_unverified(by_kind: dict, suppressed: set) -> dict:
         if keep:
             out[kind] = keep
     return out
+
+
+def _log_rescan_outcomes(con, context_id: int, before: dict, after: dict, outcome: _ScanOutcome):
+    """Record the alerts the rescan pass stopped from being sent, and why.
+
+    `before` is what was due off the stored data, `after` what is still due once the colonies have
+    been re-read and the unverifiable ones dropped. An alert in the first and not the second either
+    stopped being true (the rescan PREVENTED it) or could not be checked (SUPPRESSED). An alert that
+    simply resolved between the two passes without any scan touching it is neither, and is logged as
+    neither — crediting the feature for that would be the easiest way to make this measurement lie.
+    """
+    kept = {(kind, a.get("_dedupe_key")) for kind, evs in after.items() for a in evs}
+    for kind, evs in before.items():
+        for a in evs:
+            key = a.get("_dedupe_key")
+            if (kind, key) in kept:
+                continue
+            pair = (a.get("character_id"), a.get("planet_id"))
+            reason = outcome.reasons.get(pair)
+            if reason:
+                _log_outcome(con, context_id, kind, a.get("character_name"), key,
+                             f"suppressed:{reason}", dedupe_h=_OUTCOME_LOG_WINDOW_H)
+            elif pair in outcome.scanned:
+                _log_outcome(con, context_id, kind, a.get("character_name"), key, "prevented")
 
 
 def _process_context(con, context_id: int):
@@ -506,8 +594,10 @@ def _process_context(con, context_id: int):
         # does not survive a fresh read was never worth sending.
         outcome = _rescan_for_due_alerts(con, context_id, by_kind)
         if outcome.scanned or outcome.suppressed:
+            before = by_kind
             by_kind = _due_alerts(con, context_id, notify_kinds, min_severity, smart)
             by_kind = _drop_unverified(by_kind, outcome.suppressed)
+            _log_rescan_outcomes(con, context_id, before, by_kind, outcome)
 
     for kind, evs in by_kind.items():
         title, body = _format_batch(kind, evs)
@@ -927,7 +1017,8 @@ def get_notification_log(ctx: int = Depends(require_context)):
     con = get_connection()
     rows = con.execute(
         "SELECT channel, event, character, planet_id, sent_at, status "
-        "FROM pp_notification_log WHERE context_id=? ORDER BY sent_at DESC LIMIT 40",
+        f"FROM pp_notification_log WHERE context_id=? AND {_SENDS_ONLY_SQL} "
+        "ORDER BY sent_at DESC LIMIT 40",
         (ctx,),
     ).fetchall()
     con.close()
