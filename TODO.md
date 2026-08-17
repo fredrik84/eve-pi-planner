@@ -272,10 +272,18 @@ actually being APPLIED each fail the suite when broken. `test_alerts.py`, `test_
 - **The `reaction_*` kinds keep the old cadence.** They carry no `planet_id` and read industry jobs,
   a different ESI path. Same argument applies to them; it is a second cut, not a widening of this
   one.
-- **Nothing measures the win yet.** The rung a send went out on is derivable from the log but not
-  recorded, so "how many alerts were merely stale" cannot be answered from the data. Worth adding
-  before re-tuning the curve — backing off aggressively on an alert now known to be TRUE is a
-  different trade from backing off on a probable ghost.
+- **Nothing measures the win, and the part that matters is not recoverable later.** Correcting an
+  earlier note here: the RUNG is fine — it is derived from `pp_notification_log` timestamps by
+  `_consecutive_cooldown_h`, so it can be computed retrospectively for any past send. What leaves
+  no trace at all is everything that did NOT become a send:
+  * an alert the rescan **prevented** (checked, found fixed, never sent) — the entire point of the
+    feature, and today it is silent;
+  * an alert **suppressed unverified** (dead token, failed read, over budget) — the cost side.
+  `_log_send` only ever runs on a real send (`app/notifications.py:531`), so both are invisible.
+  Every tick that runs uninstrumented is a tick nobody can learn from, which makes this the one
+  item with a closing window now the flag is on. A row in `pp_notification_log` with a distinct
+  status (`prevented` / `suppressed`) would cover both without a new table — but check it does not
+  disturb `_recently_notified` or `_consecutive_cooldown_h`, which both filter `status='ok'`.
 - **Watch the first week on the rung**, specifically: whether any character sits amber for long
   (transient scan failures that never recover would silently pause its alerts), and whether the
   per-tick budget is ever actually reached.
