@@ -27,6 +27,7 @@ from app.esi import require_context, session_context_id
 from app.notifiers import make_notifier, CHANNEL_LABELS
 from app.alert_settings import ALERT_KINDS
 from app.alerts import compute_alerts
+from app.features import feature_enabled_for
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -170,6 +171,56 @@ _COOLDOWN_HOURS = {
     "reaction_stage_ready": 12.0,
 }
 
+# ── Backing off on an alert nobody is acting on ───────────────────────────────────────────────
+#
+# The cooldowns above are the FIRST repeat's interval, not every repeat's. An alert that has been
+# sent five times and not acted on is not made more useful by a sixth: five pings did not move the
+# user, and the sixth costs the credibility of every other alert. So the interval doubles per
+# consecutive send, capped.
+#
+# Why the cap is 12h: the user's own framing — an alert that fires while they are asleep or AFK is
+# read whenever they next look, so the value of a repeat is in it being there at all, not in it
+# being prompt. Two a day is enough to keep a real problem in view.
+#
+# **The first send is never delayed by any of this** — `_recently_notified` only suppresses a send
+# when one already went out inside the window, so a newly-detected problem always fires at once.
+# Backing off changes repeats and nothing else.
+_BACKOFF_CAP_H = 12.0
+# The scheduler ticks every 15 min and sends on the first tick AFTER the cooldown elapses, so a gap
+# legitimately runs up to one tick long. Anything beyond this slack means no tick found the alert
+# present — i.e. it had resolved and later came back, which starts a fresh chain.
+_BACKOFF_SLACK_H = 0.5
+_BACKOFF_MAX_ROWS = 24        # far past the cap; bounds the per-alert query
+
+
+def _consecutive_cooldown_h(con, context_id: int, event: str, planet_id, base_h: float) -> float:
+    """How long to wait before repeating THIS alert, given how many times it has already repeated.
+
+    Derived from `pp_notification_log` rather than stored: the log already records every send, and a
+    counter column would be a second source of truth that drifts the first time a send fails or a
+    row is pruned. The chain is read oldest-to-newest, and a gap longer than the interval then in
+    force means the alert stopped being true in between — so it resets, and a problem that genuinely
+    recurs is never quietly demoted to the slowest rung.
+    """
+    rows = con.execute(
+        "SELECT sent_at FROM pp_notification_log "
+        "WHERE context_id=? AND event=? AND planet_id=? AND status='ok' "
+        "ORDER BY sent_at DESC LIMIT ?",
+        (context_id, event, planet_id, _BACKOFF_MAX_ROWS),
+    ).fetchall()
+    stamps = []
+    for r in reversed(rows):                       # oldest first
+        try:
+            stamps.append(datetime.fromisoformat(r["sent_at"]).timestamp())
+        except Exception:
+            continue                               # an unparseable row breaks no chain it isn't in
+    rung = 0
+    for i in range(1, len(stamps)):
+        expected = min(base_h * (2 ** rung), _BACKOFF_CAP_H)
+        gap_h = (stamps[i] - stamps[i - 1]) / 3600.0
+        rung = 0 if gap_h > expected + _BACKOFF_SLACK_H else rung + 1
+    return min(base_h * (2 ** rung), _BACKOFF_CAP_H)
+
 
 def check_and_send_notifications():
     """Run every 15 minutes. Pure DB math — no ESI calls.
@@ -213,6 +264,168 @@ def check_and_send_notifications():
         con.close()
 
 
+def _due_alerts(con, context_id: int, notify_kinds: set, min_severity: str,
+                smart: bool) -> dict[str, list[dict]]:
+    """The alerts that are true right now AND out of cooldown, grouped by kind.
+
+    Run twice per tick when the rescan is on — once to decide what is worth an ESI call, once
+    against the refreshed data to decide what is worth sending.
+    """
+    by_kind: dict[str, list[dict]] = {}
+    for a in compute_alerts(context_id):
+        if a["kind"] not in notify_kinds:
+            continue
+        if min_severity == "high" and a["severity"] != "high":
+            continue
+        base_h = _COOLDOWN_HOURS.get(a["kind"], 2.0)
+        # What identifies THIS occurrence for cooldown purposes. A colony alert is about a planet;
+        # a reactions alert is not, and used to fall through with no key at all — so every kind
+        # with `planet_id: None` re-sent on all six schedulers' 15-minute ticks, forever. An alert
+        # may now name its own key (`dedupe_id`), and only a genuinely keyless alert skips the
+        # check.
+        key = a.get("dedupe_id", a.get("planet_id"))
+        cooldown_h = (_consecutive_cooldown_h(con, context_id, a["kind"], key, base_h)
+                      if (smart and key is not None) else base_h)
+        if key is not None and _recently_notified(con, context_id, a["kind"], key, cooldown_h):
+            continue
+        a["_dedupe_key"] = key
+        by_kind.setdefault(a["kind"], []).append(a)
+    return by_kind
+
+
+class _ScanOutcome:
+    """What the rescan pass did, so the second alert pass knows what it may trust.
+
+    `suppressed` holds (character_id, planet_id) pairs whose data could NOT be refreshed. Those
+    alerts are held back rather than sent: the user's call, and the right one — a colony we failed
+    to read is a colony we have nothing current to say about, and the character page already shows
+    a dead token as the thing to fix.
+    """
+    __slots__ = ("scanned", "suppressed")
+
+    def __init__(self):
+        self.scanned: set = set()
+        self.suppressed: set = set()
+
+
+# One ESI call per colony, and only for a colony an alert is actually about. The blanket
+# alternative — scan every character on a timer — costs ~96 scans per character per day; this costs
+# one per alert SEND, and sends back off geometrically, so an ignored problem is scanned about four
+# times on day one and twice a day after. The budget below is the guarantee that does not depend on
+# that estimate being right.
+_SCAN_BUDGET_PER_TICK = 20
+# A transient ESI failure (timeout, 5xx) leaves the token in place and tells us nothing, so retrying
+# it every 15 minutes is the one way this could still hammer the API for no result.
+_SCAN_RETRY_AFTER_H = 1.0
+
+
+def _rescan_targets(con, context_id: int, by_kind: dict) -> list[tuple[int, int]]:
+    """(character_id, planet_id) worth an ESI read this tick, in a stable order.
+
+    Filters, in the order they cost least: alerts that name no colony, then colonies whose data is
+    already as fresh as ESI will give (`esi_expires` in the future — a read before it is refused by
+    the rule in CLAUDE.md and would tell us nothing anyway), then characters with a dead refresh
+    token (`token_ok` false — a known-dead token is never worth a request), then characters whose
+    last automatic scan failed recently.
+    """
+    wanted: list[tuple[int, int]] = []
+    seen = set()
+    for evs in by_kind.values():
+        for a in evs:
+            cid, pid = a.get("character_id"), a.get("planet_id")
+            # Reaction kinds carry no planet — they read industry jobs, a different ESI path, and
+            # are deliberately not in this first cut.
+            if not cid or not pid or (cid, pid) in seen:
+                continue
+            seen.add((cid, pid))
+            wanted.append((cid, pid))
+    if not wanted:
+        return []
+
+    now = time.time()
+    fresh_by_planet = {
+        (r["character_id"], r["planet_id"]): r["esi_expires"]
+        for r in con.execute(
+            "SELECT character_id, planet_id, esi_expires FROM pp_char_planets "
+            "WHERE character_id IN (SELECT character_id FROM pp_characters WHERE context_id=?)",
+            (context_id,),
+        )
+    }
+    chars = {
+        r["character_id"]: r
+        for r in con.execute(
+            "SELECT character_id, refresh_token, is_dummy, scan_failed_at "
+            "FROM pp_characters WHERE context_id=?",
+            (context_id,),
+        )
+    }
+    out = []
+    for cid, pid in wanted:
+        exp = fresh_by_planet.get((cid, pid))
+        if exp and exp > now:
+            continue                       # ESI has nothing newer; not stale, so not our problem
+        c = chars.get(cid)
+        if not c or c["is_dummy"] or not c["refresh_token"]:
+            continue                       # placeholder, or a token the user must re-add first
+        failed_at = c["scan_failed_at"] or 0
+        if failed_at and now - failed_at < _SCAN_RETRY_AFTER_H * 3600:
+            continue
+        out.append((cid, pid))
+    return out
+
+
+def _default_scan(character_id: int, planet_id: int) -> bool:
+    """Refresh one colony. True if the read succeeded and the DB now holds current data."""
+    from app.esi import _get_valid_token, _fetch_planets
+    token = _get_valid_token(character_id)
+    if not token:
+        return False
+    _fetch_planets(character_id, token, only_planet_id=planet_id)
+    return True
+
+
+def _rescan_for_due_alerts(con, context_id: int, by_kind: dict, scan=None) -> _ScanOutcome:
+    """Refresh the colonies the due alerts are about, so the alert is judged on current data.
+
+    `scan` is injectable so the tests can exercise every branch of this without ESI.
+    """
+    scan = scan or _default_scan
+    outcome = _ScanOutcome()
+    targets = _rescan_targets(con, context_id, by_kind)
+    for cid, pid in targets[:_SCAN_BUDGET_PER_TICK]:
+        try:
+            ok = scan(cid, pid)
+        except Exception:
+            log.warning("Alert rescan failed for character %s planet %s", cid, pid, exc_info=True)
+            ok = False
+        if ok:
+            outcome.scanned.add((cid, pid))
+            con.execute("UPDATE pp_characters SET scan_failed_at=NULL WHERE character_id=?", (cid,))
+        else:
+            outcome.suppressed.add((cid, pid))
+            con.execute("UPDATE pp_characters SET scan_failed_at=? WHERE character_id=?",
+                        (time.time(), cid))
+    # Over budget is not a failure, but it IS unverified — hold those back and let the next tick
+    # scan them. At 20 a tick that is ~1,900 colonies a day, so this is a brake, not a queue.
+    for cid, pid in targets[_SCAN_BUDGET_PER_TICK:]:
+        outcome.suppressed.add((cid, pid))
+    con.commit()
+    return outcome
+
+
+def _drop_unverified(by_kind: dict, suppressed: set) -> dict:
+    """Remove alerts about a colony we could not read. A kind left with no events disappears."""
+    if not suppressed:
+        return by_kind
+    out = {}
+    for kind, evs in by_kind.items():
+        keep = [a for a in evs
+                if (a.get("character_id"), a.get("planet_id")) not in suppressed]
+        if keep:
+            out[kind] = keep
+    return out
+
+
 def _process_context(con, context_id: int):
     prefs = _get_prefs(con, context_id)
     notify_kinds = set(prefs["notify_kinds"])
@@ -228,23 +441,17 @@ def _process_context(con, context_id: int):
     if not settings:
         return
 
-    by_kind: dict[str, list[dict]] = {}
-    for a in compute_alerts(context_id):
-        if a["kind"] not in notify_kinds:
-            continue
-        if min_severity == "high" and a["severity"] != "high":
-            continue
-        cooldown_h = _COOLDOWN_HOURS.get(a["kind"], 2.0)
-        # What identifies THIS occurrence for cooldown purposes. A colony alert is about a planet;
-        # a reactions alert is not, and used to fall through with no key at all — so every kind
-        # with `planet_id: None` re-sent on all six schedulers' 15-minute ticks, forever. An alert
-        # may now name its own key (`dedupe_id`), and only a genuinely keyless alert skips the
-        # check.
-        key = a.get("dedupe_id", a.get("planet_id"))
-        if key is not None and _recently_notified(con, context_id, a["kind"], key, cooldown_h):
-            continue
-        a["_dedupe_key"] = key
-        by_kind.setdefault(a["kind"], []).append(a)
+    smart = feature_enabled_for("alert_rescan_backoff", context_id)
+    by_kind = _due_alerts(con, context_id, notify_kinds, min_severity, smart)
+
+    if smart and by_kind:
+        # Everything above is a judgement about data the user may already have made stale by fixing
+        # the problem in-game. Refresh what the due alerts are about, then ask again — an alert that
+        # does not survive a fresh read was never worth sending.
+        outcome = _rescan_for_due_alerts(con, context_id, by_kind)
+        if outcome.scanned or outcome.suppressed:
+            by_kind = _due_alerts(con, context_id, notify_kinds, min_severity, smart)
+            by_kind = _drop_unverified(by_kind, outcome.suppressed)
 
     for kind, evs in by_kind.items():
         title, body = _format_batch(kind, evs)

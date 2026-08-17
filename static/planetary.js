@@ -592,9 +592,17 @@ function renderCharacters(chars, loggedIn) {
       list.appendChild(row);
       return;
     }
-    const tokenDot = c.token_ok
-      ? '<span title="Token valid" style="color:#5ecf80;font-size:10px">●</span>'
-      : '<span title="Token expired — re-add character" style="color:#e06060;font-size:10px">●</span>';
+    // Three states, not two. An automatic alert rescan that failed on something OTHER than a dead
+    // token (a timeout, an ESI 5xx) leaves the token valid, so the green dot is honest and still
+    // hides the thing the user needs to know: alerts for this character are being held back until
+    // a read succeeds. Amber says "we could not check", which is neither "fine" nor "re-add me".
+    const tokenDot = !c.token_ok
+      ? '<span title="Token expired — re-add character" style="color:#e06060;font-size:10px">●</span>'
+      : c.scan_failed_at
+      ? '<span title="Token is valid, but the last automatic refresh of this character failed — '
+        + 'alerts for it are paused until one succeeds. Rescan to check now."'
+        + ' style="color:#e0b060;font-size:10px">●</span>'
+      : '<span title="Token valid" style="color:#5ecf80;font-size:10px">●</span>';
     const planets    = c.planets || [];
     const extractors = planets.filter(p => p.is_extractor);
     const factories  = planets.filter(p => !p.is_extractor);

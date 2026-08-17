@@ -255,6 +255,18 @@ FEATURE_REGISTRY = [
                     "A pasted hangar wins for the formulas it names. Concurrency only — neither an "
                     "asset row nor a job states ME, TE or runs.",
      "default": False},
+    {"key": "alert_rescan_backoff", "label": "Alerts: check before nagging, and nag less each time",
+     "group": "Notifications",
+     "description": "Two changes to how colony alerts repeat. Before an alert is sent, the one "
+                    "colony it is about is re-read from ESI — so restarting your extractors in "
+                    "game silences the alert without you having to open the app and rescan, and an "
+                    "alert that is no longer true is never sent. And each repeat of an alert you "
+                    "have not acted on waits twice as long as the last, up to twice a day, instead "
+                    "of every two hours forever. The FIRST alert is never delayed by either. A "
+                    "colony we cannot re-read (dead token, ESI down) is held back rather than "
+                    "reported off stale data — the character page shows the token that needs "
+                    "re-authorising.",
+     "default": False},
     {"key": "reactions_formula_cap", "label": "Reactions: a formula is one reaction at a time",
      "group": "Reactions",
      "description": "On Reactions: cap how many jobs of a product the wizard and customer orders "

@@ -422,6 +422,13 @@ def ensure_char_tables():
     for col, tbl in [("context_id", "pp_characters"), ("context_id", "pp_sessions")]:
         _add_col(tbl, f"{col} INTEGER")
     _add_col("pp_characters", "scopes TEXT DEFAULT ''")
+    # When an UNATTENDED scan (the alert-driven rescan in app/notifications.py) last failed for a
+    # reason that isn't a dead token — a timeout or a 5xx, which leave the refresh token in place
+    # and so are invisible to `token_ok`. Without it, an ESI outage means every alerting colony is
+    # retried on every 15-minute tick, which is the one way that feature could hammer the API for
+    # no result. Cleared on the next success. Epoch seconds → double precision, per the rule in
+    # CLAUDE.md; `_EPOCH_COLUMNS` in app/db.py carries the entry.
+    _add_col("pp_characters", "scan_failed_at DOUBLE PRECISION")
     # Migrate existing characters/sessions to context 1
     unscoped = con.execute(
         "SELECT COUNT(*) FROM pp_characters WHERE context_id IS NULL"

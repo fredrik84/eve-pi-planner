@@ -180,7 +180,7 @@ def list_characters(pp_session: str = Cookie(default=None)):
                    COALESCE(advanced_mass_production, 0) AS advanced_mass_production,
                    COALESCE(dummy_mfg_slots, 0) AS dummy_mfg_slots,
                    COALESCE(dummy_rx_slots, 0) AS dummy_rx_slots,
-                   COALESCE(scopes, '') AS scopes
+                   COALESCE(scopes, '') AS scopes, scan_failed_at
             FROM pp_characters WHERE context_id=?
         """, (context_id,)).fetchall()
         # Natural sort (SQL COLLATE NOCASE is plain lexicographic — "alt 10" sorts before
@@ -443,6 +443,11 @@ def list_characters(pp_session: str = Cookie(default=None)):
             "character_id":   r["character_id"],
             "name":           r["character_name"],
             "token_ok":       token_ok,
+            # When an UNATTENDED alert rescan last failed on something that isn't a dead token —
+            # a timeout or an ESI 5xx, which leave `token_ok` green. Surfaced because alerts for
+            # this character are being held back while it is set, and a page that shows nothing
+            # would make that silence unexplainable.
+            "scan_failed_at": r["scan_failed_at"],
             "is_dummy":       is_dummy,
             "wallet_only":    wallet_only,
             "max_planets":    1 + r["interplanetary_consolidation"],

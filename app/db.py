@@ -79,7 +79,7 @@ def add_columns(con, table: str, *coldefs: str) -> None:
 _EPOCH_COLUMNS = [
     ("pp_char_planets", "scanned_at"), ("pp_char_planets", "checkpoint_at"),
     ("pp_char_planets", "esi_modified"), ("pp_char_planets", "esi_expires"),
-    ("pp_characters", "skills_expires"),
+    ("pp_characters", "skills_expires"), ("pp_characters", "scan_failed_at"),
     ("pp_colony_flags", "created_at"),
     ("pp_colony_yield", "install_ts"), ("pp_colony_yield", "scanned_ts"),
     ("pp_asset_sources", "updated_at"),

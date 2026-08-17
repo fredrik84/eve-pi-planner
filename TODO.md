@@ -159,7 +159,7 @@ user learns to ignore also costs every other alert its credibility.
 
 **First concrete step.** Reproduce and confirm which kind actually fires — `expired` (2h) is the
 likely one, but `storage_full` (2h) and `schedule_sync` (24h) are candidates for the same
-staleness, and the fix differs. Read `pp_notify_log` for a real account to see what has actually
+staleness, and the fix differs. Read `pp_notification_log` for a real account to see what has actually
 been sent on repeat, rather than reasoning from the table. **Whichever way this goes, an alert
 should say how old the data behind it is** — "expired as of your last scan, 3 days ago" is
 actionable in a way "expired" is not, and that line is worth shipping even if fix 1 lands.
