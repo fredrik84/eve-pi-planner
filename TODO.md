@@ -289,38 +289,35 @@ actually being APPLIED each fail the suite when broken. `test_alerts.py`, `test_
   nodes and not worth a mechanism today, but it is the one way the never-query-before-`Expires`
   rule could be broken without a code change.
 
-## 38. Bug 3 — "Characters missing at setup stage of planning" (filed 2026-07-14)
+## 38. Bug 3 — "Characters missing at setup stage of planning" — FIXED 2026-08-17
 
-**The report, verbatim:** *"Went into planning mode and I only see the production target and
-constellation filter parts of the setup page. The character part is missing."*
-Open in `pp_bugs` since 2026-07-14 — how to read them:
-[docs/workflow.md](docs/workflow.md#reading-bug-reports).
+**The report, verbatim** (filed 2026-07-14): *"Went into planning mode and I only see the production
+target and constellation filter parts of the setup page. The character part is missing."*
 
-**What a first look says, and why it is not yet a diagnosis.** The character section is on the page:
-`<section class="pp-card">` → **Character Roles** (`static/index.html:480`), between Manufacturing
-Efficiency and the Constellation Filter the reporter DID see. Its body carries
-`class="pp-collapsible-body collapsed"` (`:484`), so by default it renders as a title bar reading
-*"Character Roles — defaults applied ▼"* and nothing else. A user looking for "the character part"
-would plausibly not recognise that as it.
+**It was missing, and my first guess at why was wrong.** The initial read of the markup said the
+Character Roles card was merely collapsed. It was not: `#ppRolesCard` shipped with
+`style="display:none"` and was revealed only by `_loadProductConfig`, which runs when a typed
+product resolves to a type id. So on a fresh setup page the card was absent — and `onProductChange`
+put it *back* to `display:none` on any product that failed to resolve, so the character section
+also vanished mid-edit after a typo. Meanwhile the Constellation Filter reveals itself from the
+Planet DB load, independent of any product, which is exactly why the reporter saw that one and not
+this one. Reproducing beat reading the markup, as the item said it would.
 
-So the likely shape is **discoverability, not a missing element** — which, if true, is a rule-3
-problem (the setup page hiding the thing a new user most needs to check) rather than a rendering
-bug. But it is a hypothesis from reading the markup, and the report is a month old.
+**The fix.** The card is present from the first paint and says what it is waiting for. The rows
+genuinely cannot be built without a product — per-character planet counts are stored per product —
+but that is a sentence, not a reason to disappear. The hint lives on the TITLE line because the body
+is collapsed by default, so the answer is visible without a click. `_ppRolesWaiting()` is the single
+writer of that state, so the first paint and a cleared product cannot drift apart.
 
-**First concrete step — reproduce before believing any of the above.** Load the planner setup page
-on an account with characters and one without, and answer three things:
-1. Is the Character Roles card visible at all, or does something hide the whole `<section>`?
-2. Is `#ppRolesList` populated? An empty list inside a collapsed card would look identical from
-   outside, and would be a real bug rather than a UI-affordance one.
-3. Does anything auto-expand it on first visit? `ppToggleRoles` (`static/planetary.js:1383`) only
-   toggles; nothing was found that opens it.
+**The rule this leaves behind**, in `test_setup_page.py`: a section of the setup page may explain
+that it is waiting for something, and may not disappear. A card may ship hidden only when something
+outside the user's control makes it meaningless — `#ppLocationCard` may, because the Planet DB can
+genuinely hold no constellations; `#ppRolesCard` may not, because characters are the planner's main
+input. Both directions are asserted, and both mutations (ship it hidden again; hide it again on an
+unresolved product) turn the suite red.
 
-If it is discoverability: expand by default when the list is non-empty, or move the summary into
-the title so a collapsed card still says *"3 characters · defaults applied"* — the hint currently
-says "defaults applied" whether or not there are any characters to apply them to.
-
-**Then close the report** with `POST /api/bugs/{id}/status` (or the Admin tab), not a hand-written
-UPDATE.
+**Still to do: close the report.** `POST /api/bugs/{id}/status` with `complete`, or the Admin tab —
+it needs an admin session, so it is the user's to do. Do not UPDATE `pp_bugs` by hand.
 
 ## Nothing else open
 

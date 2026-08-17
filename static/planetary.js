@@ -1356,9 +1356,11 @@ async function renderBasketToggles() {
 async function onProductChange() {
   const name = document.getElementById('targetProduct').value.trim();
   const typeId = _productTypeId(name);
-  const card = document.getElementById('ppRolesCard');
   if (!typeId) {
-    card.style.display = 'none';
+    // The card STAYS — it just says what it is waiting for. Hiding it is what made the section look
+    // missing (bug 3), and it happened not only on a fresh page but on any typo that failed to
+    // resolve to a product: the character section would silently vanish mid-edit.
+    _ppRolesWaiting();
     document.getElementById('ppBasketCard').style.display = 'none';
     _wiz.typeId = null; _wiz.fuelblock = false; _wiz.basketId = null; _wiz.inlineBasket = null;
     return;
@@ -1398,6 +1400,20 @@ function _ppRolesSummary(configs, fb) {
     str += ` · CC ${lv.size === 1 ? [...lv][0] : 'mixed'}`;
   }
   return str;
+}
+
+// Put the card back into its "no product yet" state. One function so the first paint and a cleared
+// product cannot drift into saying two different things.
+const _PP_ROLES_WAITING = '— pick a production target first';
+function _ppRolesWaiting() {
+  const hint = document.getElementById('ppRolesHint');
+  if (hint) hint.textContent = _PP_ROLES_WAITING;
+  const list = document.getElementById('ppRolesList');
+  if (list) {
+    list.innerHTML = '<div class="pp-sub" id="ppRolesEmpty">How many planets each character plans '
+      + 'for is remembered per product, so choose a production target above and your characters '
+      + 'appear here.</div>';
+  }
 }
 
 function renderRoles(configs, typeId) {

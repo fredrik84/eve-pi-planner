@@ -476,13 +476,19 @@
             </div>
           </section>
 
-          <section class="pp-card" id="ppRolesCard" style="display:none">
+          <!-- Present from the first paint, NOT revealed by picking a product (bug 3, 2026-07-14:
+               "I only see the production target and constellation filter parts of the setup page.
+               The character part is missing"). The per-character rows genuinely cannot be built
+               until a product is chosen — they are stored per product — but a section that
+               disappears reads as broken, so the card stays and its hint says what it is waiting
+               for. The hint is on the TITLE line because the body is collapsed by default. -->
+          <section class="pp-card" id="ppRolesCard">
             <div class="pp-card-title" onclick="ppToggleRoles()" style="cursor:pointer">Character Roles
-              <span class="pp-card-hint" id="ppRolesHint">— defaults applied</span>
+              <span class="pp-card-hint" id="ppRolesHint">— pick a production target first</span>
               <span class="pp-collapse-toggle" id="ppRolesToggle">▼</span>
             </div>
             <div id="ppRolesBody" class="pp-collapsible-body collapsed">
-              <div id="ppRolesList" class="pp-roles-list"></div>
+              <div id="ppRolesList" class="pp-roles-list"><div class="pp-sub" id="ppRolesEmpty">How many planets each character plans for is remembered per product, so choose a production target above and your characters appear here.</div></div>
             </div>
           </section>
 
