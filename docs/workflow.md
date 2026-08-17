@@ -39,6 +39,7 @@ enabled value equals its code default — admins toggle it).
 | `test_distribution.py` | planner correctness; needs `DEBUG_PI`/`DEBUG_CONTEXT_ID` |
 | `test_features.py` | feature flags + skill-roi public surface |
 | `test_optimizer.py` | LP-solver correctness for `/api/optimize` — synthetic hand-computable cases + a live smoke test. Run the in-process cases **inside the container**, not the bare host: `highspy`/`numpy` are only installed there |
+| `test_alert_cadence.py` | TODO §37's two behaviours: the backoff on repeats (including that the FIRST send is never delayed, and that a resolved-then-recurring alert resets rather than staying on the slow rung) and the alert-triggered rescan (every filter that stops an ESI call being made, suppression when a read fails, and the per-tick budget). The scan function is injected, so it needs no ESI and no network. In-process, run in the container |
 | `test_alerts.py` | the shared alert engine + notification prefs migration. Seeds fake `pp_char_planets` rows and a fabricated `pp_sessions` cookie to exercise the real `/api/dashboard` without a live ESI login |
 | `test_min_cc.py` | layout CPU/PG fitting: the FIT_HEADROOM promise, `min_cc`, the head-drop fallback. Pure in-process layout math — run in the container |
 | `test_skill_enough.py` | the "already enough skill" half of `/api/skill-roi`; seeded rows + fabricated cookie |

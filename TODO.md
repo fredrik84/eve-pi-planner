@@ -125,44 +125,50 @@ default-on list is correct; a control over a wrong list is two problems.
 
 ## 37. We alert too often, and the worst case is an alert the user cannot act on (2026-08-17)
 
-**What.** Restart your PI extractors in-game, don't rescan, and the Discord notification for the
-now-stale `expired` state fires **every 2 hours, forever** — the app is nagging about a problem the
-user already fixed, because its data predates the fix. Reported from live use 2026-08-17: *"if i
-don't rescan after i restarted my PI the discord notification fires every 2 hours."*
+**SHIPPED 2026-08-17 behind `alert_rescan_backoff`** (default off — roll out from Admin → Features).
+Full design and the reasoning behind each guard:
+[docs/platform.md](docs/platform.md#check-before-nagging-and-nag-less-each-time-alert_rescan_backoff).
 
-**Why it's open.** This is the worst shape an alert can have: it is both wrong and unactionable.
-The only way to silence it is to open the app and rescan — which is exactly the manual trip the PI
-side of this tool exists to remove (CLAUDE.md, "minimize interactions with planets"). An alert the
-user learns to ignore also costs every other alert its credibility.
+The reported bug: restart your PI in game, don't rescan, and the Discord alert fires every 2h
+forever. What shipped:
 
-**Two fixes, and the first is better if it can be done.**
+1. **A due alert triggers a rescan of the one colony it is about**, then the alert is recomputed and
+   only what survives is sent. Fix the problem in game and the alert simply never arrives.
+2. **Repeats back off** — the kind's base interval doubles per consecutive send, capped at 12h,
+   derived from `pp_notification_log` and reset when the alert resolves. The **first** send is never
+   delayed; only repeats are.
+3. **A colony that could not be read is held back rather than reported off stale data** (user's
+   call), with an amber dot on the character card for the transient case, distinct from the red
+   "re-add this character".
 
-1. **Rescan on the user's behalf.** The blocker is not tokens: `_get_valid_token(character_id)`
-   (`app/esi.py:444`) refreshes from the stored `refresh_token`, so the server can already scan
-   without the user present — `_fetch_planets` (`app/esi.py:597`) needs only a character id and a
-   token. It would be a new lease-guarded entry in `KNOWN_JOBS` (`app/jobs.py:36`), beside
-   `notify_check`, running before it so the alert reasons about fresh data.
-   **The hard constraint, read it before writing a line:** CLAUDE.md's *"Never add an ESI
-   force-refresh bypass"* — querying before `Expires` risks an ESI ban that would take down the
-   whole app. A scheduled scan is only allowed if it respects `esi_expires` per planet
-   (`pp_char_planets`, ~10 min for colony detail). **Do NOT reuse `refresh_one_planet`
-   (`app/esi_data.py:748`) — it deliberately force-fetches and bypasses the cache-skip**, which is
-   fine for a button a human pressed and is precisely the thing that must not run on a timer.
-   Also settle the volume question honestly: scanning every character every N minutes is a
-   permanent, unattended ESI load this app has never had. Scoping it to characters that currently
-   have an unresolved alert is the version worth building.
-2. **Failing that, lengthen the cooldown.** `_COOLDOWN_HOURS` (`app/notifications.py:155`) has
-   `expired` and `expiring` at 2.0h. The user's suggestion is **12h** for the restart case. Note
-   the table already distinguishes decaying states (2-4h) from persistent structural ones (24h) —
-   a stale `expired` is arguably the second kind, so this is a re-classification with a reason,
-   not a number tweak.
+**Keeping ESI load low was the binding constraint** (*"bashing them won't help me"*): single-planet
+reads, an `esi_expires` gate, a dead-token filter, and a hard per-tick budget. One read per alert
+SEND, and sends back off — about four reads on day one for an ignored problem, two a day after,
+against ~96 per character per day for the blanket-timer design that was rejected.
 
-**First concrete step.** Reproduce and confirm which kind actually fires — `expired` (2h) is the
-likely one, but `storage_full` (2h) and `schedule_sync` (24h) are candidates for the same
-staleness, and the fix differs. Read `pp_notification_log` for a real account to see what has actually
-been sent on repeat, rather than reasoning from the table. **Whichever way this goes, an alert
-should say how old the data behind it is** — "expired as of your last scan, 3 days ago" is
-actionable in a way "expired" is not, and that line is worth shipping even if fix 1 lands.
+**Found and fixed on the way, as its own commit:** `_refresh_token` wrote `NULL` into
+`pp_characters.refresh_token`, which is `TEXT NOT NULL` — the IntegrityError was swallowed by its
+own outer `except`, so a revoked character was never marked dead and kept a green dot forever. The
+docstring above the code claimed this had been fixed; it had not. It was a prerequisite here,
+because the dead-token filter has nothing to filter on until a dead token is recorded as dead.
+
+**Verified:** `test_alert_cadence.py` (23 checks, no ESI — the scan function is injected), plus
+three mutation runs confirming the tests fail when the chain-reset, the suppress-on-failure and the
+two ESI guards are each broken in turn. `test_alerts.py`, `test_features.py` and
+`test_epoch_precision.py` still green.
+
+### 37a. Still open
+
+- **The `reaction_*` kinds keep the old cadence.** They carry no `planet_id` and read industry jobs,
+  a different ESI path. Same argument applies to them; it is a second cut, not a widening of this
+  one.
+- **Nothing measures the win yet.** The rung a send went out on is derivable from the log but not
+  recorded, so "how many alerts were merely stale" cannot be answered from the data. Worth adding
+  before re-tuning the curve — backing off aggressively on an alert now known to be TRUE is a
+  different trade from backing off on a probable ghost.
+- **Watch the first week on the rung**, specifically: whether any character sits amber for long
+  (transient scan failures that never recover would silently pause its alerts), and whether the
+  per-tick budget is ever actually reached.
 
 ## Nothing else open
 

@@ -12,6 +12,7 @@ Find a section: `grep -n '^## ' docs/platform.md` and read from that line — th
 - **Admin sub-navigation** — how the admin tab is split up
 - **Admin → Corp wallet (donations)** — donation tracking off the corp wallet
 - **Notifications (`app/notifications.py`, `app/notifiers.py`)** — delivery channels and per-kind prefs
+  - **Check before nagging (`alert_rescan_backoff`)** — the rescan an alert triggers, the four guards that keep it cheap, and why repeats back off
 - **Local / alliance market pricing (`app/markets.py`, `local_market` flag)** — pricing against a local or alliance market instead of Jita
 - **Disconnecting a character (`DELETE /api/characters/{id}`)** — every per-character table that must be cleared — a retained row keeps a live refresh token
 - **Deleting an account (`DELETE /api/me`)** — the two owned-table lists, and what is anonymised rather than deleted
@@ -110,9 +111,14 @@ Gating test in `test_features.py` (`test_corp_wallet_gated` → 403 for anonymou
 ## Notifications (`app/notifications.py`, `app/notifiers.py`)
 
 Push alerts for any of the 11 alert kinds (`app.alert_settings.ALERT_KINDS`), checked by an
-APScheduler job every 15 minutes (`make_scheduler`, `check_and_send_notifications`) — pure DB
-math, no ESI calls, so it runs freely between rescans. Settings/prefs/log are per-`context_id` in
-`pp_notification_settings`, `pp_notification_prefs`, `pp_notification_log`.
+APScheduler job every 15 minutes (`make_scheduler`, `check_and_send_notifications`).
+Settings/prefs/log are per-`context_id` in `pp_notification_settings`, `pp_notification_prefs`,
+`pp_notification_log`.
+
+**Since `alert_rescan_backoff` (2026-08-17, TODO §37) this job is no longer pure DB math** — it
+makes a bounded number of ESI reads. See "Check before nagging" below; everything above that
+heading describes the path taken when the flag is off, which is still the whole behaviour for
+anyone not on the rung.
 
 - **Event detection is not this module's job.** `_process_context` calls
   `app.alerts.compute_alerts(context_id)` — the same function `dashboard()` uses —
@@ -156,6 +162,51 @@ math, no ESI calls, so it runs freely between rescans. Settings/prefs/log are pe
   countdown (`hours_left` isn't meaningful for a replay); just character + planet.
 - **`POST /api/notifications/test`** sends a one-off "channel is working" ping when adding a new
   channel — separate from resend-last, which replays real event data.
+
+### Check before nagging, and nag less each time (`alert_rescan_backoff`)
+
+The reported bug: restart your extractors in game, don't rescan, and the `expired` alert fires
+every two hours forever — the app nagging about a problem the user already fixed, off data that
+predates the fix. Two changes, one flag.
+
+**Rescan before sending.** Once an alert is due (true, and out of cooldown), the ONE colony it is
+about is re-read from ESI, the alerts are recomputed, and only what survives is sent. A colony the
+user already fixed produces no message at all.
+
+Why this is cheap, and the four guards that keep it that way — the design constraint was explicitly
+*"keep the amount of ESI requests low, because bashing them won't help me"*:
+
+| Guard | What it does |
+|---|---|
+| Single-planet reads | `_fetch_planets(..., only_planet_id=)` — one call per colony, not the ~7 a full character rescan costs |
+| `esi_expires` gate | Skip anything ESI will not have regenerated yet. This is also what keeps the feature on the right side of the never-query-before-`Expires` rule in CLAUDE.md — **note that the single-planet path deliberately does NOT self-check the cache** (`_cached_expiry` is only built when `only_planet_id is None`), which is correct for the button a human presses and is why the check is explicit here |
+| Dead-token filter | A character whose `refresh_token` is falsy is never called for. This is why the NOT NULL bug in `_refresh_token` had to be fixed first — until it was, no token was ever *marked* dead |
+| `_SCAN_BUDGET_PER_TICK` | Hard cap per 15-min tick. Over-budget colonies are held back, not sent unverified — a brake that does not depend on any estimate of volume being right |
+
+Because a scan happens per *send*, and sends back off (below), an ignored problem costs about four
+reads on day one and two a day after — against ~96 per character per day for the blanket-timer
+alternative that was rejected.
+
+**Backoff on repeats.** `_consecutive_cooldown_h` doubles the kind's base interval per consecutive
+send, capped at `_BACKOFF_CAP_H` (12h). Derived from `pp_notification_log` rather than stored: the
+log already records every send, and a counter column would be a second source of truth that drifts
+the first time a send fails. A gap longer than the interval then in force means the alert stopped
+being true in between, so the chain resets — **which is the property that matters**, because
+without it a problem that genuinely recurs weekly would be permanently demoted to the slowest rung.
+
+**The first send is never delayed by any of this.** `_recently_notified` only suppresses a send when
+one already went out inside the window, so a newly-detected problem always fires at once. That is
+what makes a 12h cap safe, and `test_alert_cadence.py` asserts it directly rather than assuming it.
+
+**A colony that could not be read is held back, not reported.** User's call, 2026-08-17: an alert we
+cannot verify is not sent. The transient case (timeout, 5xx — which leave the token valid) is
+recorded in `pp_characters.scan_failed_at`, which both backs the retry off by
+`_SCAN_RETRY_AFTER_H` and drives an **amber** dot on the character card, distinct from the red
+"re-add this character". Without that third state a valid-token character whose reads keep failing
+would show green while its alerts were silently paused.
+
+**Not covered:** the `reaction_*` kinds carry no `planet_id` — they read industry jobs, a different
+ESI path — so they are deliberately outside this first cut and keep their old cadence.
 
 ## Local / alliance market pricing (`app/markets.py`, `local_market` flag)
 
