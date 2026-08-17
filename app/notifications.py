@@ -73,6 +73,21 @@ def ensure_notification_tables():
         )
     """)
     con.commit()
+    # AFTER the commit above, never in the same transaction as the CREATE TABLEs. `CREATE INDEX IF
+    # NOT EXISTS` has a known duplicate-key race when several workers start together, and the
+    # Postgres cursor wrapper rolls the connection back on a failed statement — sharing the
+    # transaction would let that race undo the table creation on a fresh DB while `@ensure_once`
+    # recorded the module as initialised.
+    #
+    # Why the index: `_recently_notified`, `_consecutive_cooldown_h` and `_log_outcome`'s dedupe
+    # each look up (context, event, key) ordered by time, once per due alert per 15-minute tick,
+    # against a table nothing used to prune. That was a sequential scan on every one of them.
+    try:
+        con.execute("CREATE INDEX IF NOT EXISTS idx_notif_log_lookup "
+                    "ON pp_notification_log (context_id, event, planet_id, sent_at)")
+        con.commit()
+    except Exception:
+        pass
     for col, ddl in (("notify_kinds", "TEXT"), ("min_severity", "TEXT")):
         try:
             con.execute(f"ALTER TABLE pp_notification_prefs ADD COLUMN {col} {ddl}")
@@ -167,6 +182,45 @@ _OUTCOME_PREFIXES = ("suppressed:",)        # `suppressed:<reason>`
 # guard: an alert that was found fixed does not come back on the next tick, and if it genuinely
 # recurs later that IS a second occurrence worth its own row.
 _OUTCOME_LOG_WINDOW_H = 12.0
+# These rows are instrumentation, not history: nothing in the app reads them back and the user's
+# log never shows them, so they are answered by "what happened last month", not "what happened in
+# 2026". Sends are NOT pruned — `_consecutive_cooldown_h` reads them and they are the user's own
+# record. Without this the outcome rows are the only part of this table that grows forever.
+_OUTCOME_RETENTION_DAYS = 45
+
+
+_last_prune_at = 0.0
+
+
+def _prune_outcome_rows():
+    """Delete instrumentation rows past the retention window. OWN CONNECTION, deliberately.
+
+    Everything the tick sent is uncommitted until the single commit at the end of
+    `check_and_send_notifications` — `_process_context` never commits — and the Postgres cursor
+    wrapper rolls the connection back on any statement failure. Sharing the connection would mean
+    a timeout on this DELETE (its predicate is on `sent_at` alone, which no index serves, so it is
+    the likeliest statement in the tick to hit one) discarding the whole tick's send log AFTER the
+    pushes had already gone out — and the next tick, finding nothing in the log, would send every
+    alert for every account again. A pruning convenience must not be able to cause a duplicate
+    notification storm.
+    """
+    # At most twice a day, not on all 96 ticks: a scan that deletes nothing 95 times out of 96 is
+    # pure cost. Set only after the DELETE succeeds, so a failure is retried rather than hidden.
+    global _last_prune_at
+    if time.time() - _last_prune_at < 12 * 3600:
+        return
+    cutoff = datetime.fromtimestamp(
+        time.time() - _OUTCOME_RETENTION_DAYS * 86400, tz=timezone.utc).isoformat()
+    con = get_connection()
+    try:
+        con.execute(f"DELETE FROM pp_notification_log WHERE sent_at < ? AND NOT ({_SENDS_ONLY_SQL})",
+                    (cutoff,))
+        con.commit()
+        _last_prune_at = time.time()
+    except Exception:
+        log.warning("Pruning notification outcome rows failed", exc_info=True)
+    finally:
+        con.close()
 
 
 # The WHERE fragment that keeps sends and drops instrumentation, derived from the two tuples above
@@ -323,6 +377,7 @@ def check_and_send_notifications():
                 except Exception:
                     log.exception("Notification error for context %s", ctx)
             con.commit()
+            _prune_outcome_rows()      # after the commit, and on its own connection — see there
         finally:
             if _IS_POSTGRES:
                 con.execute("SELECT pg_advisory_unlock(?)", (_NOTIFY_ADVISORY_LOCK_KEY,))
@@ -406,25 +461,37 @@ _scan_budget_left = _SCAN_BUDGET_PER_TICK
 _SCAN_RETRY_AFTER_H = 1.0
 
 
-def _rescan_targets(con, context_id: int, by_kind: dict) -> tuple[list, list]:
+def _rescan_targets(con, context_id: int, by_kind: dict,
+                    with_reactions: bool = False) -> tuple[list, list]:
     """(character_id, planet_id) worth an ESI read this tick, in a stable order.
 
     Returns `(targets, unverifiable)`, where each unverifiable entry is `(pair, reason)`.
 
-    Filters, in the order they cost least: alerts that name no colony, then colonies whose data is
+    Filters, in the order they cost least: alerts that name nothing readable, then data that is
     already as fresh as ESI will give (`esi_expires` in the future — a read before it is refused by
     the rule in CLAUDE.md and would tell us nothing anyway), then characters with a dead refresh
-    token (`token_ok` false — a known-dead token is never worth a request), then characters whose
-    last automatic scan failed recently.
+    token (a known-dead token is never worth a request), then characters whose last automatic scan
+    failed recently.
+
+    A `planet_id` of None is a REACTION target: the `reaction_*` kinds are about a character's
+    industry jobs, not a colony, so the thing to re-read is that character's job list. Gated by
+    `with_reactions` — a different ESI endpoint and a second flag's worth of new traffic.
     """
-    wanted: list[tuple[int, int]] = []
+    wanted: list[tuple[int, int | None]] = []
     seen = set()
-    for evs in by_kind.values():
+    for kind, evs in by_kind.items():
         for a in evs:
             cid, pid = a.get("character_id"), a.get("planet_id")
-            # Reaction kinds carry no planet — they read industry jobs, a different ESI path, and
-            # are deliberately not in this first cut.
-            if not cid or not pid or (cid, pid) in seen:
+            if not cid:
+                continue
+            if pid is None:
+                # Keyed on the KIND, not on the missing planet: other keyless kinds may exist and
+                # a jobs read would tell us nothing about them.
+                if not with_reactions or not kind.startswith("reaction_"):
+                    continue
+            elif not pid:
+                continue           # falsy-but-not-None was skipped before this; keep it skipped
+            if (cid, pid) in seen:
                 continue
             seen.add((cid, pid))
             wanted.append((cid, pid))
@@ -440,24 +507,55 @@ def _rescan_targets(con, context_id: int, by_kind: dict) -> tuple[list, list]:
             (context_id,),
         )
     }
+    # The jobs endpoint's own cache window, so the reaction targets get the same "ESI has nothing
+    # newer" free pass the colonies get from `esi_expires`. Read once, and only if it can matter.
+    jobs_fetched_at: dict[int, float] = {}
+    jobs_cache_ttl = 0.0            # 0 = no free pass, i.e. read it — the safe way to be wrong
+    if any(pid is None for _c, pid in wanted):
+        try:
+            from app.reactions.jobs import _JOBS_CACHE_TTL
+            jobs_cache_ttl = _JOBS_CACHE_TTL
+            jobs_fetched_at = {r["character_id"]: (r["fetched_at"] or 0) for r in con.execute(
+                "SELECT character_id, fetched_at FROM pp_char_industry_jobs "
+                "WHERE character_id IN (SELECT character_id FROM pp_characters WHERE context_id=?)",
+                (context_id,),
+            )}
+        except Exception:
+            jobs_fetched_at = {}    # table may not exist yet — never break the colony alerts
     chars = {
         r["character_id"]: r
         for r in con.execute(
-            "SELECT character_id, refresh_token, is_dummy, scan_failed_at "
+            "SELECT character_id, refresh_token, is_dummy, scan_failed_at, scopes "
             "FROM pp_characters WHERE context_id=?",
             (context_id,),
         )
     }
     out, unverifiable = [], []
     for cid, pid in wanted:
-        exp = fresh_by_planet.get((cid, pid))
-        if exp and exp > now:
-            # Not stale: ESI has nothing newer to give, so the data behind this alert is already
-            # as current as it can be. Verified WITHOUT a request — the cheapest good outcome.
-            continue
+        if pid is None:
+            fetched = jobs_fetched_at.get(cid, 0)
+            if fetched and now - fetched < jobs_cache_ttl:
+                continue        # inside ESI's own cache window — same free pass as `esi_expires`
+        else:
+            exp = fresh_by_planet.get((cid, pid))
+            if exp and exp > now:
+                # Not stale: ESI has nothing newer to give, so the data behind this alert is
+                # already as current as it can be. Verified WITHOUT a request — the cheapest good
+                # outcome.
+                continue
         c = chars.get(cid)
         if not c or c["is_dummy"]:
             continue                       # a placeholder character has no ESI data to refresh
+        if pid is None and "read_character_jobs" not in (c["scopes"] or ""):
+            # The jobs scope is opt-in (`?reactions=1` login) and this character never granted it —
+            # or dropped it by re-authorising through the normal login. There is no request that
+            # could check this alert, so it is SKIPPED, not held back: holding it back would
+            # silence an alert that is being delivered fine today, permanently and with nothing on
+            # any page explaining why. That is the opposite of what this feature is for. The dead
+            # -token case is held back because the character card's red dot names the fix; until
+            # there is an equivalent for the jobs scope, turning the flag on must not take a
+            # working alert away. (TODO §37a.)
+            continue
         if not c["refresh_token"]:
             # A token the user must re-add. We cannot check, so we do not tell them about it —
             # the red dot on the character page is the thing to act on, not a colony report we
@@ -475,13 +573,21 @@ def _rescan_targets(con, context_id: int, by_kind: dict) -> tuple[list, list]:
     return out, unverifiable
 
 
-def _default_scan(character_id: int, planet_id: int) -> bool:
-    """Refresh one colony. True only if the colony was actually re-read.
+def _default_scan(character_id: int, planet_id: int | None) -> bool:
+    """Refresh what one alert is about. True only if it was actually re-read.
 
-    `fetched` counts planets ATTEMPTED, not planets that came back — it is incremented before the
-    detail request — so it cannot stand in for success on its own. `failed` is the honest signal,
-    and treating a failed read as a success is what would let the retry brake never engage.
+    `planet_id is None` means a `reaction_*` alert, which is about the character's industry jobs
+    rather than a colony — a different endpoint, so a different read, but the same contract: the
+    return value must be honest about whether anything was verified.
+
+    For a colony, `fetched` counts planets ATTEMPTED, not planets that came back — it is
+    incremented before the detail request — so it cannot stand in for success on its own. `failed`
+    is the honest signal, and treating a failed read as a success is what would let the retry brake
+    never engage.
     """
+    if planet_id is None:
+        from app.reactions.jobs import refresh_character_jobs
+        return refresh_character_jobs(character_id)
     from app.esi import _get_valid_token, _fetch_planets
     token = _get_valid_token(character_id)
     if not token:
@@ -490,7 +596,8 @@ def _default_scan(character_id: int, planet_id: int) -> bool:
     return res.get("failed", 0) == 0 and (res.get("fetched", 0) + res.get("skipped", 0)) >= 1
 
 
-def _rescan_for_due_alerts(con, context_id: int, by_kind: dict, scan=None) -> _ScanOutcome:
+def _rescan_for_due_alerts(con, context_id: int, by_kind: dict, scan=None,
+                           with_reactions: bool = False) -> _ScanOutcome:
     """Refresh the colonies the due alerts are about, so the alert is judged on current data.
 
     `scan` is injectable so the tests can exercise every branch of this without ESI.
@@ -498,7 +605,7 @@ def _rescan_for_due_alerts(con, context_id: int, by_kind: dict, scan=None) -> _S
     global _scan_budget_left
     scan = scan or _default_scan
     outcome = _ScanOutcome()
-    targets, unverifiable = _rescan_targets(con, context_id, by_kind)
+    targets, unverifiable = _rescan_targets(con, context_id, by_kind, with_reactions)
     for pair, reason in unverifiable:
         outcome.suppress(pair, reason)
     budget = max(0, _scan_budget_left)
@@ -556,6 +663,16 @@ def _log_rescan_outcomes(con, context_id: int, before: dict, after: dict, outcom
     neither — crediting the feature for that would be the easiest way to make this measurement lie.
     """
     kept = {(kind, a.get("_dedupe_key")) for kind, evs in after.items() for a in evs}
+    # `prevented` additionally requires that NOTHING about that colony (or that character's jobs)
+    # survived. An alert can vanish from `before` because it ESCALATED, not because it was fixed:
+    # `expiring` and `expired` are two kinds on one planet_id, and `reaction_finishing_soon` and
+    # `reaction_completed` are two kinds on one character — a re-read that discovers the deadline
+    # has passed swaps one for the other and still sends. Crediting that as prevented would inflate
+    # the exact number the feature is judged on. Requiring the whole target to be clear undercounts
+    # instead (a colony with one fixed problem and one real one credits neither), which is the
+    # direction a measurement should err in.
+    kept_targets = {(a.get("character_id"), a.get("planet_id"))
+                    for evs in after.values() for a in evs}
     for kind, evs in before.items():
         for a in evs:
             key = a.get("_dedupe_key")
@@ -566,7 +683,7 @@ def _log_rescan_outcomes(con, context_id: int, before: dict, after: dict, outcom
             if reason:
                 _log_outcome(con, context_id, kind, a.get("character_name"), key,
                              f"suppressed:{reason}", dedupe_h=_OUTCOME_LOG_WINDOW_H)
-            elif pair in outcome.scanned:
+            elif pair in outcome.scanned and pair not in kept_targets:
                 _log_outcome(con, context_id, kind, a.get("character_name"), key, "prevented")
 
 
@@ -592,7 +709,9 @@ def _process_context(con, context_id: int):
         # Everything above is a judgement about data the user may already have made stale by fixing
         # the problem in-game. Refresh what the due alerts are about, then ask again — an alert that
         # does not survive a fresh read was never worth sending.
-        outcome = _rescan_for_due_alerts(con, context_id, by_kind)
+        outcome = _rescan_for_due_alerts(
+            con, context_id, by_kind,
+            with_reactions=feature_enabled_for("alert_rescan_reactions", context_id))
         if outcome.scanned or outcome.suppressed:
             before = by_kind
             by_kind = _due_alerts(con, context_id, notify_kinds, min_severity, smart)

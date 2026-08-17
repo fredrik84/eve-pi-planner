@@ -12,7 +12,8 @@ Find a section: `grep -n '^## ' docs/platform.md` and read from that line — th
 - **Admin sub-navigation** — how the admin tab is split up
 - **Admin → Corp wallet (donations)** — donation tracking off the corp wallet
 - **Notifications (`app/notifications.py`, `app/notifiers.py`)** — delivery channels and per-kind prefs
-  - **Check before nagging (`alert_rescan_backoff`)** — the rescan an alert triggers, the four guards that keep it cheap, and why repeats back off
+  - **Check before nagging (`alert_rescan_backoff`)** — the rescan an alert triggers, the four guards that keep it cheap, why repeats back off, and how the outcome is measured
+  - **Reaction alerts (`alert_rescan_reactions`)** — the same rule for the three job-based kinds, and the honest ESI cost of it
 - **Local / alliance market pricing (`app/markets.py`, `local_market` flag)** — pricing against a local or alliance market instead of Jita
 - **Disconnecting a character (`DELETE /api/characters/{id}`)** — every per-character table that must be cleared — a retained row keeps a live refresh token
 - **Deleting an account (`DELETE /api/me`)** — the two owned-table lists, and what is anonymised rather than deleted
@@ -235,6 +236,13 @@ writes them into `pp_notification_log` under statuses no send ever uses:
 | `suppressed:scan_failed` | Held back: this tick's read failed |
 | `suppressed:over_budget` | Held back: more colonies were due than one tick will read |
 
+`prevented` is only credited when NOTHING about that colony (or that character's jobs) survived the
+re-read. An alert can leave the due set because it ESCALATED rather than because it was fixed —
+`expiring`→`expired` on one planet, `reaction_finishing_soon`→`reaction_completed` on one character
+— and a notification still goes out. Requiring the whole target to be clear undercounts instead (a
+colony with one fixed problem and one real one credits neither), which is the direction a number the
+feature is judged on should err in.
+
 Same table because every column already fits and every reader filters `status='ok'`
 (`_recently_notified`, `_consecutive_cooldown_h`, `resend-last`); `/api/notifications/log` was the
 one that did not and now excludes them via `_SENDS_ONLY_SQL`, because the user's log is a list of
@@ -247,6 +255,48 @@ row is a second real occurrence. To read it:
 SELECT status, COUNT(*) FROM pp_notification_log
  WHERE sent_at > '2026-08-18' AND status <> 'ok' GROUP BY status ORDER BY 2 DESC;
 ```
+
+### Reaction alerts get the same treatment (`alert_rescan_reactions`)
+
+The three `reaction_*` kinds carry no `planet_id` — they are about a character's industry jobs, a
+different ESI endpoint — so the first cut left them out entirely and they went on nagging off a
+snapshot only a manual Reactions-tab refresh ever updated. `alert_rescan_reactions` closes that
+with the same machinery, and the same rules:
+
+- **The read is per CHARACTER, not per alert.** One `characters/{id}/industry/jobs/` answers for
+  all three kinds at once, so a character with a finishing job, a completed job and a ready stage
+  costs one job-list read, not three — cheaper *per alert* than the colony case.
+  **What "one read" does not count**, and should not be quoted as if it did: the SSO token refresh
+  when the access token has lapsed; one `universe/structures/{id}/` per facility not yet in
+  `_structure_name_cache` (a per-PROCESS dict, so warm in steady state and cold again after every
+  deploy, in each of the 6 workers); and, for a character with the corp scope, the whole-corp job
+  queue. Honest steady-state figures: **1 request for a personal-only character, 2 for a corp
+  one**, plus the cold-cache structure names.
+- **`characters/{id}/` is cached until its own `Expires`** (`_corporation_of`). ESI caches that
+  answer for a day and this path asks every 15 minutes; re-asking inside the window is the
+  "querying before `Expires`" that CLAUDE.md says can get the whole app banned, so the header is
+  honoured rather than approximated with a TTL of our own.
+- **`fetched_at` against `_JOBS_CACHE_TTL` (5 min) is the `esi_expires` equivalent.** Inside that
+  window ESI returns the same bytes, so the alert is verified without a request and still sent.
+- **The industry-jobs scope is opt-in** (`?reactions=1` login), and a character without it is
+  **skipped, not held back** — its alerts keep behaving exactly as they do today. Holding them
+  back would be defensible only if some page said "re-authorise with reactions enabled"; nothing
+  does, so turning this flag on would silently and permanently remove an alert that works. The
+  dead-token case is held back precisely because the character card's red dot names the fix.
+- **Both reads are strict on this path, with one exception.** `read_industry_jobs` /
+  `read_corp_industry_jobs` raise where `fetch_industry_jobs` / `fetch_corp_industry_jobs` return
+  `[]`, because an empty list is exactly what a *resolved* completed-reaction alert looks like —
+  storing one from a failed read would delete the snapshot, report the problem as fixed, and leave
+  the next tick computing from the truncation (the §37 colony-wipe trap, one endpoint over). A
+  corp-installed reaction never appears in the personal read, so the corp half has to be strict
+  too. The **one** tolerated failure is `CorpJobsForbidden` — a 401/403 on the corp queue, which
+  means the character granted the scope but does not hold Factory_Manager/Director. That is
+  permanent, so `[]` is the true answer rather than a gap in one, and failing on it would silence
+  the character's reaction alerts forever. The tab-open path keeps the tolerant wrappers: it only
+  displays what it got, and never decides whether to stay silent on the strength of it.
+
+`scan_failed_at` and the tick budget are shared with the colony path — one character, one "ESI
+reads for this are failing" marker, one amber dot.
 
 ## Local / alliance market pricing (`app/markets.py`, `local_market` flag)
 

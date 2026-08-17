@@ -7,7 +7,7 @@ import json as _json
 import logging
 import math
 import time as _time
-from datetime import datetime
+from datetime import datetime, timezone
 
 log = logging.getLogger(__name__)
 
@@ -90,47 +90,101 @@ def _name_facilities(jobs: list[dict], access_token: str) -> list[dict]:
     return jobs
 
 
+def read_industry_jobs(character_id: int, access_token: str) -> list[dict]:
+    """This character's reaction jobs (activity_id 9) from ESI, facilities named. RAISES on any
+    ESI failure.
+
+    Split out from the best-effort wrapper below because `[]` means two different things to two
+    different callers: to a tab refresh it means "nothing running, show an empty list", and to the
+    alert rescan it would mean "the jobs you were alerted about are gone" — which is what a
+    completed-reaction alert being *resolved* looks like. Storing an empty list from a failed read
+    would therefore delete the snapshot the alert was computed from and report the problem as
+    fixed. Exactly the trap that wiped colony rows in §37; a caller that acts on the ANSWER has to
+    be able to tell it from the failure."""
+    resp = esi_http.get(f"characters/{character_id}/industry/jobs/",
+                        token=access_token, timeout=10)
+    resp.raise_for_status()
+    reaction_jobs = [j for j in resp.json() if j.get("activity_id") == REACTION_ACTIVITY_ID]
+    return _name_facilities(reaction_jobs, access_token)
+
+
 def fetch_industry_jobs(character_id: int, access_token: str) -> list[dict]:
-    """Fetch this character's reaction jobs (activity_id 9) from ESI, resolving each distinct
-    facility to a readable name. Best-effort: returns [] on any failure rather than raising —
-    a refresh failing for one character must not block the others."""
+    """Best-effort `read_industry_jobs`: returns [] on any failure rather than raising — a refresh
+    failing for one character must not block the others."""
     try:
-        resp = esi_http.get(f"characters/{character_id}/industry/jobs/",
-                            token=access_token, timeout=10)
-        resp.raise_for_status()
-        jobs = resp.json()
+        return read_industry_jobs(character_id, access_token)
     except Exception:
         return []
 
-    reaction_jobs = [j for j in jobs if j.get("activity_id") == REACTION_ACTIVITY_ID]
+
+# A character's corporation, cached until ESI's own `Expires` says the answer may have changed.
+# `characters/{id}/` is cached for a day at ESI's end, and the alert rescan asks for it every 15
+# minutes — re-asking inside that window is the "querying before Expires" that CLAUDE.md says can
+# get the whole app banned, so the window is honoured rather than approximated by a TTL of our own.
+_corp_id_cache: dict[int, tuple[int | None, float]] = {}
+
+
+def _corporation_of(character_id: int, client=None) -> int | None:
+    hit = _corp_id_cache.get(character_id)
+    if hit and hit[1] > _time.time():
+        return hit[0]
+    resp = esi_http.get(f"characters/{character_id}/", client=client)
+    # ESI answers an error with a JSON body, so reading `corporation_id` off an unchecked response
+    # yields None — which `read_corp_industry_jobs` would read as "no corp", return [] for, and a
+    # caller would then store as a verified personal-only snapshot. The same trap the strict read
+    # exists to close, one call earlier. Raise, and cache only a real answer.
+    resp.raise_for_status()
+    corp_id = resp.json().get("corporation_id")
+    expires = 0.0
+    try:
+        expires = datetime.strptime(resp.headers["expires"],
+                                    "%a, %d %b %Y %H:%M:%S %Z").replace(
+            tzinfo=timezone.utc).timestamp()
+    except Exception:
+        pass                      # no parseable Expires — ask again next time rather than guess
+    _corp_id_cache[character_id] = (corp_id, expires)
+    return corp_id
+
+
+class CorpJobsForbidden(Exception):
+    """ESI refused the corp job queue — the character granted the scope but does not hold
+    Factory_Manager/Director. A stable, expected answer, and NOT a failed read: for this character
+    the corp queue is simply not visible, today or ever, so `[]` is the true answer rather than a
+    gap in one."""
+
+
+def read_corp_industry_jobs(character_id: int, access_token: str) -> list[dict]:
+    """This character's reaction jobs installed FOR CORPORATION, RAISING on failure.
+
+    Raises `CorpJobsForbidden` for the missing-role case specifically, so a caller that needs to
+    know whether it saw the whole picture can tell "you may not look at this" (permanent, and the
+    empty list is correct) from "I could not look right now" (transient, and the empty list is a
+    lie). Filtered to `installer_id == character_id` — this reads the WHOLE corp's job queue over
+    ESI, but only this character's own installs are what a "my jobs" view should show."""
+    with esi_http.client(timeout=10) as client:
+        corp_id = _corporation_of(character_id, client=client)
+        if not corp_id:
+            return []
+        resp = esi_http.get(f"corporations/{corp_id}/industry/jobs/",
+                            client=client, token=access_token)
+        if resp.status_code in (401, 403):
+            raise CorpJobsForbidden(f"character {character_id} may not read corp industry jobs")
+        resp.raise_for_status()
+        jobs = resp.json()
+
+    reaction_jobs = [j for j in jobs if j.get("activity_id") == REACTION_ACTIVITY_ID and j.get("installer_id") == character_id]
     return _name_facilities(reaction_jobs, access_token)
 
 
 def fetch_corp_industry_jobs(character_id: int, access_token: str) -> list[dict]:
-    """This character's reaction jobs installed FOR CORPORATION (a shared corp hangar/reactor,
-    not the character's personal jobs) — a real, confirmed gap: these never appear via the
-    per-character endpoint fetch_industry_jobs uses, only via the corp one, and only when the
-    character holds Factory_Manager/Director. Best-effort like the rest of this module: any
-    failure (missing role, no corp, network) returns [] rather than raising — one character's
-    corp-jobs lookup failing must never block their own personal jobs or any other character's
-    refresh. Filtered to `installer_id == character_id` — this reads the WHOLE corp's job queue
-    over ESI, but only this specific character's own installs are what a "my jobs" view should
-    show, not every corpmate's."""
+    """Best-effort `read_corp_industry_jobs`: any failure (missing role, no corp, network) returns
+    [] rather than raising — one character's corp-jobs lookup failing must never block their own
+    personal jobs or any other character's refresh. Right for a tab refresh, which only displays
+    what it got; a caller that VERIFIES an alert against the result wants the strict one."""
     try:
-        with esi_http.client(timeout=10) as client:
-            pub = esi_http.get(f"characters/{character_id}/", client=client).json()
-            corp_id = pub.get("corporation_id")
-            if not corp_id:
-                return []
-            resp = esi_http.get(f"corporations/{corp_id}/industry/jobs/",
-                                client=client, token=access_token)
-            resp.raise_for_status()
-            jobs = resp.json()
+        return read_corp_industry_jobs(character_id, access_token)
     except Exception:
         return []
-
-    reaction_jobs = [j for j in jobs if j.get("activity_id") == REACTION_ACTIVITY_ID and j.get("installer_id") == character_id]
-    return _name_facilities(reaction_jobs, access_token)
 
 
 # ESI's industry-jobs endpoint caches ~5 min; a plain tab-open refresh must not re-hit ESI more
@@ -204,6 +258,70 @@ def refresh_industry_jobs(force: int = 0, context_id: int = Depends(require_cont
     if refreshed:
         cache_invalidate(charlist_key(context_id))
     return {"ok": True, "characters_refreshed": refreshed, "characters_skipped": skipped}
+
+
+def refresh_character_jobs(character_id: int) -> bool:
+    """Re-read ONE character's reaction jobs from ESI and store them. True only if ESI answered.
+
+    The alert rescan's entry point (`app.notifications._default_scan`), and the reason it is a
+    function rather than a call to the endpoint above: that endpoint sweeps a whole account and
+    batches its writes, which is right for a tab-open and wrong for "verify the one character this
+    alert is about before nagging them". Both go through the same fetch helpers, so they cannot
+    disagree about what a reaction job is.
+
+    Deliberately ignores `_JOBS_CACHE_TTL` — the caller has already checked `fetched_at` against
+    it, and unlike a tab-open there is no second chance: a skip here would send an alert off data
+    the feature exists to stop trusting.
+    """
+    ensure_industry_jobs_table()
+    con = get_connection()
+    try:
+        row = con.execute(
+            "SELECT context_id, scopes FROM pp_characters WHERE character_id=?",
+            (character_id,),
+        ).fetchone()
+    finally:
+        con.close()
+    scopes = (row["scopes"] if row else "") or ""
+    if not row or "read_character_jobs" not in scopes:
+        return False        # never granted — there is no ESI path to verify this character with
+    token = _get_valid_token(character_id)
+    if not token:
+        return False
+    try:
+        jobs = read_industry_jobs(character_id, token)
+    except Exception:
+        log.warning("Reaction-job rescan failed for character %s", character_id, exc_info=True)
+        return False
+    # The corp half has to be strict too, with ONE exception. A corp-installed reaction is a real
+    # source of alerts and never appears in the personal read, so a corp read that failed and
+    # returned [] would store a truncated snapshot — the finished job vanishes, the alert is
+    # reported as one the user had already fixed, and the next tick computes from the truncation.
+    # The same trap as the personal read, one endpoint over. The exception is the missing-role
+    # 403: that is permanent and means the corp queue is not visible to this character at all, so
+    # [] is the true answer and failing on it would silence them forever.
+    if "read_corporation_jobs" in scopes:
+        try:
+            jobs = jobs + read_corp_industry_jobs(character_id, token)
+        except CorpJobsForbidden:
+            pass
+        except Exception:
+            log.warning("Corp reaction-job rescan failed for character %s",
+                        character_id, exc_info=True)
+            return False
+    con = get_connection()
+    try:
+        con.execute(
+            "INSERT INTO pp_char_industry_jobs (character_id, jobs_json, fetched_at) VALUES (?,?,?) "
+            "ON CONFLICT (character_id) DO UPDATE SET jobs_json=excluded.jobs_json, "
+            "fetched_at=excluded.fetched_at",
+            (character_id, _json.dumps(jobs), _time.time()),
+        )
+        con.commit()
+    finally:
+        con.close()
+    cache_invalidate(charlist_key(row["context_id"]))
+    return True
 
 
 def reaction_slots(character_row: dict) -> int:

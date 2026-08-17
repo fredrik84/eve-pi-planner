@@ -278,6 +278,18 @@ FEATURE_REGISTRY = [
                     "stale data, so a character with a dead token goes quiet until it is "
                     "re-authorised on the characters page.",
      "default": False},
+    {"key": "alert_rescan_reactions", "label": "Alerts: check reaction jobs before nagging too",
+     "group": "Notifications",
+     "description": "Extends the check-before-nagging rule above to the three reaction alerts, "
+                    "which are about your industry jobs rather than a colony and so were left out "
+                    "of the first cut. Before one is sent, that character's job list is re-read "
+                    "from ESI — so collecting a finished reaction in game silences the alert "
+                    "without you opening the Reactions tab and hitting Refresh. One job-list read "
+                    "per character rather than one per alert, and skipped entirely inside ESI's "
+                    "own five-minute cache window. A character that never granted the "
+                    "industry-jobs scope cannot be checked at all, and keeps its alerts exactly "
+                    "as they are today rather than losing them.",
+     "default": False},
     {"key": "reactions_formula_cap", "label": "Reactions: a formula is one reaction at a time",
      "group": "Reactions",
      "description": "On Reactions: cap how many jobs of a product the wizard and customer orders "

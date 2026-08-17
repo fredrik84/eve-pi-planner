@@ -47,6 +47,7 @@ def _cleanup():
     con = get_connection()
     for cid in (FAKE_CID, FAKE_CID2):
         con.execute("DELETE FROM pp_char_planets WHERE character_id=?", (cid,))
+        con.execute("DELETE FROM pp_char_industry_jobs WHERE character_id=?", (cid,))
         con.execute("DELETE FROM pp_characters WHERE character_id=?", (cid,))
     con.execute("DELETE FROM pp_notification_log WHERE context_id=?", (FAKE_CTX,))
     con.execute("DELETE FROM pp_notification_settings WHERE context_id=?", (FAKE_CTX,))
@@ -55,16 +56,17 @@ def _cleanup():
     con.close()
 
 
-def _seed_character(cid=FAKE_CID, refresh_token="live-token", is_dummy=0, scan_failed_at=None):
+def _seed_character(cid=FAKE_CID, refresh_token="live-token", is_dummy=0, scan_failed_at=None,
+                    scopes=""):
     con = get_connection()
     try:
         con.execute(
             "INSERT INTO pp_characters (character_id, character_name, context_id, refresh_token, "
-            "is_dummy, scan_failed_at) VALUES (?,?,?,?,?,?) "
+            "is_dummy, scan_failed_at, scopes) VALUES (?,?,?,?,?,?,?) "
             "ON CONFLICT (character_id) DO UPDATE SET context_id=excluded.context_id, "
             "refresh_token=excluded.refresh_token, is_dummy=excluded.is_dummy, "
-            "scan_failed_at=excluded.scan_failed_at",
-        (cid, f"Toon {cid}", FAKE_CTX, refresh_token, is_dummy, scan_failed_at),
+            "scan_failed_at=excluded.scan_failed_at, scopes=excluded.scopes",
+        (cid, f"Toon {cid}", FAKE_CTX, refresh_token, is_dummy, scan_failed_at, scopes),
         )
         con.commit()
     finally:
@@ -576,6 +578,332 @@ def test_a_scan_that_read_nothing_is_not_a_success() -> bool:
     return ok
 
 
+JOBS_SCOPE = "esi-industry.read_character_jobs.v1"
+
+
+def _reaction_alert(cid=FAKE_CID, kind="reaction_completed"):
+    """The shape the reaction kinds actually carry: a character, no planet, their own dedupe key."""
+    return {"kind": kind, "severity": "warn", "character_id": cid, "planet_id": None,
+            "character_name": "Toon", "dedupe_id": cid}
+
+
+def _seed_jobs_row(cid=FAKE_CID, fetched_at=None):
+    con = get_connection()
+    con.execute("DELETE FROM pp_char_industry_jobs WHERE character_id=?", (cid,))
+    con.execute("INSERT INTO pp_char_industry_jobs (character_id, jobs_json, fetched_at) "
+                "VALUES (?,?,?)", (cid, "[]", fetched_at))
+    con.commit()
+    con.close()
+
+
+def test_reaction_alerts_are_checked_against_their_jobs() -> bool:
+    """§37a: the `reaction_*` kinds are about a character's industry jobs, not a colony, so the
+    first cut skipped them entirely and they kept nagging off a snapshot nobody had refreshed.
+    They now get the same treatment through the same machinery — one read per CHARACTER, behind
+    its own flag because it is a second ESI endpoint's worth of new traffic."""
+    print(f"\n{'='*60}\n  reaction alerts are re-read before they nag\n{'='*60}")
+    ok = True
+    from app.reactions.jobs import _JOBS_CACHE_TTL
+    _seed_character(FAKE_CID, refresh_token="live-token", scopes=JOBS_SCOPE)
+    _seed_jobs_row(FAKE_CID, fetched_at=None)
+    con = get_connection()
+    by_kind = {"reaction_completed": [_reaction_alert()]}
+
+    targets, unver = _rescan_targets(con, FAKE_CTX, by_kind)
+    ok &= check(targets == [] and unver == [],
+                "with the flag off a reaction alert is neither read nor held back — "
+                "exactly the behaviour it had before")
+
+    targets, unver = _rescan_targets(con, FAKE_CTX, by_kind, with_reactions=True)
+    ok &= check(targets == [(FAKE_CID, None)],
+                f"with the flag on, the character's job list is the read (got {targets})")
+
+    # Two reaction alerts about the same character are ONE read — the jobs endpoint answers for
+    # all of them at once, which is what makes this cheaper than the per-colony case.
+    targets, _u = _rescan_targets(con, FAKE_CTX, {
+        "reaction_completed": [_reaction_alert()],
+        "reaction_finishing_soon": [_reaction_alert(kind="reaction_finishing_soon")],
+        "reaction_stage_ready": [_reaction_alert(kind="reaction_stage_ready")],
+    }, with_reactions=True)
+    ok &= check(targets == [(FAKE_CID, None)],
+                f"three reaction alerts for one character are a single read (got {targets})")
+
+    # ESI's own cache window on the jobs endpoint — the same free pass `esi_expires` gives colonies.
+    _seed_jobs_row(FAKE_CID, fetched_at=time.time() - 10)
+    targets, unver = _rescan_targets(con, FAKE_CTX, by_kind, with_reactions=True)
+    ok &= check(targets == [] and unver == [],
+                "a job list read seconds ago is not re-read — and IS still reported, because "
+                "ESI would return the same bytes")
+    _seed_jobs_row(FAKE_CID, fetched_at=time.time() - (_JOBS_CACHE_TTL + 60))
+    targets, _u = _rescan_targets(con, FAKE_CTX, by_kind, with_reactions=True)
+    ok &= check(targets == [(FAKE_CID, None)], "...and is re-read once that window has passed")
+
+    # The scope is opt-in. Without it there is no request that could check the alert — so the
+    # alert is left EXACTLY as it behaves today rather than held back. Holding it back would
+    # permanently remove a working alert, with nothing on any page explaining why; the dead-token
+    # case is held back only because the character card's red dot names the fix.
+    _seed_character(FAKE_CID, refresh_token="live-token", scopes="esi-planets.manage_planets.v1")
+    targets, unver = _rescan_targets(con, FAKE_CTX, by_kind, with_reactions=True)
+    ok &= check(targets == [] and unver == [],
+                f"a character without the industry-jobs scope is neither called for nor silenced "
+                f"(got {targets}, {unver})")
+
+    # A colony alert in the same batch is unaffected by any of this.
+    _seed_character(FAKE_CID, refresh_token="live-token", scopes=JOBS_SCOPE)
+    _seed_planet(FAKE_CID, PLANET_A, esi_expires=None)
+    _seed_jobs_row(FAKE_CID, fetched_at=None)
+    targets, _u = _rescan_targets(con, FAKE_CTX, {
+        "expired": [_alert(FAKE_CID, PLANET_A)],
+        "reaction_completed": [_reaction_alert()],
+    }, with_reactions=True)
+    ok &= check(sorted(targets, key=lambda t: (t[1] is not None, t[1] or 0))
+                == [(FAKE_CID, None), (FAKE_CID, PLANET_A)],
+                f"a colony and a job list are two separate reads for one character (got {targets})")
+
+    # A keyless alert that is NOT a reaction kind must never become a jobs read — the jobs
+    # endpoint would say nothing about it.
+    targets, unver = _rescan_targets(con, FAKE_CTX, {
+        "schedule_sync": [dict(_reaction_alert(), kind="schedule_sync")]}, with_reactions=True)
+    ok &= check(targets == [] and unver == [],
+                "a keyless alert of some other kind is not turned into a jobs read")
+    con.close()
+    return ok
+
+
+def test_the_reaction_scan_dispatches_to_the_jobs_endpoint() -> bool:
+    """`planet_id is None` is the whole signal, so `_default_scan` has to branch on it — and a
+    failed jobs read has to come back False, or the retry brake never engages and a failure is
+    reported to the user as a problem they fixed."""
+    print(f"\n{'='*60}\n  a reaction target reads jobs, and an honest answer about it\n{'='*60}")
+    ok = True
+    import app.notifications as N
+    import app.reactions.jobs as J
+
+    seen = []
+    real = J.refresh_character_jobs
+    J.refresh_character_jobs = lambda cid: (seen.append(cid), True)[1]
+    try:
+        got = N._default_scan(FAKE_CID, None)
+    finally:
+        J.refresh_character_jobs = real
+    ok &= check(seen == [FAKE_CID] and got is True,
+                "a target with no planet is read from the industry-jobs endpoint")
+
+    # And the honesty contract on the read itself: a character that cannot be read is False, never
+    # an empty job list written over the snapshot the alert came from.
+    _seed_character(FAKE_CID, refresh_token="live-token", scopes="")
+    ok &= check(J.refresh_character_jobs(FAKE_CID) is False,
+                "a character without the jobs scope reports failure rather than storing []")
+
+    _seed_character(FAKE_CID, refresh_token="live-token", scopes=JOBS_SCOPE)
+    _seed_jobs_row(FAKE_CID, fetched_at=time.time() - 9999)
+    real_token, real_read = J._get_valid_token, J.read_industry_jobs
+    J._get_valid_token = lambda cid: "tok"
+    J.read_industry_jobs = lambda cid, tok: (_ for _ in ()).throw(RuntimeError("ESI 503"))
+    try:
+        got = J.refresh_character_jobs(FAKE_CID)
+    finally:
+        J._get_valid_token, J.read_industry_jobs = real_token, real_read
+    con = get_connection()
+    row = con.execute("SELECT jobs_json, fetched_at FROM pp_char_industry_jobs WHERE character_id=?",
+                      (FAKE_CID,)).fetchone()
+    con.close()
+    ok &= check(got is False, "an ESI failure is False, not a successful read of nothing")
+    ok &= check(row is not None and row["jobs_json"] == "[]" and row["fetched_at"] < time.time() - 9000,
+                "...and the stored snapshot is left exactly as it was, not overwritten")
+    return ok
+
+
+def test_an_escalated_alert_is_not_credited_as_prevented() -> bool:
+    """`expiring` and `expired` are two KINDS on one planet, and `reaction_finishing_soon` and
+    `reaction_completed` are two kinds on one character. A re-read that discovers the deadline has
+    passed swaps one for the other — and still sends. Counting the disappearing half as
+    "prevented" would inflate the one number the feature is judged on with alerts it did not
+    prevent, and the escalating case is exactly what a re-read is most likely to find."""
+    print(f"\n{'='*60}\n  an alert that escalated was not prevented\n{'='*60}")
+    ok = True
+    import app.notifications as N
+
+    class _Outcome:
+        scanned = {(FAKE_CID, PLANET_A), (FAKE_CID, None)}
+        suppressed: set = set()
+        reasons: dict = {}
+
+    con = get_connection()
+    con.execute("DELETE FROM pp_notification_log WHERE context_id=?", (FAKE_CTX,))
+    con.commit()
+
+    before = {"expiring": [dict(_alert(FAKE_CID, PLANET_A, "expiring"), _dedupe_key=PLANET_A)]}
+    after = {"expired": [dict(_alert(FAKE_CID, PLANET_A, "expired"), _dedupe_key=PLANET_A)]}
+    N._log_rescan_outcomes(con, FAKE_CTX, before, after, _Outcome())
+    con.commit()
+    ok &= check(_outcome_rows() == [],
+                f"expiring -> expired on one planet credits nothing (got {_outcome_rows()})")
+
+    # Same shape one endpoint over: the reaction kinds share a character and a dedupe key.
+    b = {"reaction_finishing_soon": [dict(_reaction_alert(kind="reaction_finishing_soon"),
+                                          _dedupe_key=FAKE_CID)]}
+    a = {"reaction_completed": [dict(_reaction_alert(), _dedupe_key=FAKE_CID)]}
+    N._log_rescan_outcomes(con, FAKE_CTX, b, a, _Outcome())
+    con.commit()
+    ok &= check(_outcome_rows() == [],
+                f"finishing_soon -> completed on one character credits nothing "
+                f"(got {_outcome_rows()})")
+
+    # And the genuine case still counts, or the fix would have removed the measurement.
+    N._log_rescan_outcomes(con, FAKE_CTX, before, {}, _Outcome())
+    con.commit()
+    ok &= check([r["status"] for r in _outcome_rows()] == ["prevented"],
+                f"a colony left with nothing due IS credited (got {_outcome_rows()})")
+    con.execute("DELETE FROM pp_notification_log WHERE context_id=?", (FAKE_CTX,))
+    con.commit()
+    con.close()
+    return ok
+
+
+def test_a_failed_corp_read_never_looks_like_a_verified_one() -> bool:
+    """A corp-installed reaction never appears in the personal read. If the corp half fails and
+    returns [], the stored snapshot loses that job, the alert vanishes, and the user is told
+    nothing — while the log records it as a problem they had already fixed. Same trap as the
+    personal read, one endpoint over. The ONE tolerated failure is the missing-role 403, which is
+    permanent and makes the empty list true rather than incomplete."""
+    print(f"\n{'='*60}\n  a corp read that failed is not a verification\n{'='*60}")
+    ok = True
+    import app.reactions.jobs as J
+    scopes = JOBS_SCOPE + " esi-industry.read_corporation_jobs.v1"
+    _seed_character(FAKE_CID, refresh_token="live-token", scopes=scopes)
+
+    real_token, real_read, real_corp = J._get_valid_token, J.read_industry_jobs, J.read_corp_industry_jobs
+    J._get_valid_token = lambda cid: "tok"
+    J.read_industry_jobs = lambda cid, tok: [{"job_id": 1, "activity_id": 9}]
+    try:
+        _seed_jobs_row(FAKE_CID, fetched_at=1.0)
+        J.read_corp_industry_jobs = lambda cid, tok: (_ for _ in ()).throw(RuntimeError("timeout"))
+        got = J.refresh_character_jobs(FAKE_CID)
+        con = get_connection()
+        row = con.execute("SELECT jobs_json, fetched_at FROM pp_char_industry_jobs "
+                          "WHERE character_id=?", (FAKE_CID,)).fetchone()
+        con.close()
+        ok &= check(got is False, "a transient corp failure is not a successful verification")
+        ok &= check(row["jobs_json"] == "[]" and row["fetched_at"] == 1.0,
+                    "...and the snapshot is left alone rather than written personal-only")
+
+        _seed_jobs_row(FAKE_CID, fetched_at=1.0)
+        J.read_corp_industry_jobs = lambda cid, tok: (_ for _ in ()).throw(
+            J.CorpJobsForbidden("no role"))
+        got = J.refresh_character_jobs(FAKE_CID)
+        con = get_connection()
+        row = con.execute("SELECT jobs_json FROM pp_char_industry_jobs WHERE character_id=?",
+                          (FAKE_CID,)).fetchone()
+        con.close()
+        ok &= check(got is True,
+                    "a 403 IS a verification — the corp queue is not visible to this character, "
+                    "today or ever, so an empty corp half is the true answer")
+        ok &= check('"job_id": 1' in row["jobs_json"], "...and the personal jobs are stored")
+    finally:
+        J._get_valid_token, J.read_industry_jobs = real_token, real_read
+        J.read_corp_industry_jobs = real_corp
+    return ok
+
+
+def test_pruning_cannot_take_the_tick_down_with_it() -> bool:
+    """The prune runs during a tick whose ENTIRE send log is still uncommitted — `_process_context`
+    never commits, only `check_and_send_notifications` does at the end. The Postgres cursor wrapper
+    rolls the connection back on any failed statement, so a prune sharing that connection could
+    discard every send row for the tick AFTER the pushes had gone out, and the next tick would send
+    the lot again. Hence: its own connection, after the commit, and only instrumentation rows."""
+    print(f"\n{'='*60}\n  pruning is isolated from the tick it runs in\n{'='*60}")
+    ok = True
+    import inspect
+    import app.notifications as N
+
+    ok &= check(list(inspect.signature(N._prune_outcome_rows).parameters) == [],
+                "the prune takes no connection — it cannot be handed the tick's transaction")
+    src = inspect.getsource(N.check_and_send_notifications)
+    at_commit, at_prune = src.index("con.commit()"), src.index("_prune_outcome_rows()")
+    ok &= check(at_commit < at_prune, "...and is called after the tick's own commit, not before")
+
+    con = get_connection()
+    con.execute("DELETE FROM pp_notification_log WHERE context_id=?", (FAKE_CTX,))
+    old = (datetime.now(timezone.utc) - timedelta(days=N._OUTCOME_RETENTION_DAYS + 5)).isoformat()
+    recent = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    for stamp, status in ((old, "ok"), (old, "error: boom"), (old, None),
+                          (old, "prevented"), (old, "suppressed:no_token"),
+                          (recent, "prevented")):
+        con.execute("INSERT INTO pp_notification_log (context_id, channel, event, character, "
+                    "planet_id, sent_at, status) VALUES (?,?,?,?,?,?,?)",
+                    (FAKE_CTX, "-", "expired", "Toon", PLANET_A, stamp, status))
+    con.commit()
+    con.close()
+
+    N._last_prune_at = 0.0
+    N._prune_outcome_rows()
+
+    con = get_connection()
+    left = [(r["status"], r["sent_at"]) for r in con.execute(
+        "SELECT status, sent_at FROM pp_notification_log WHERE context_id=?", (FAKE_CTX,))]
+    con.close()
+    statuses = sorted((s or "NULL") for s, _t in left)
+    ok &= check(statuses == ["NULL", "error: boom", "ok", "prevented"],
+                f"only aged instrumentation rows go; sends, errors and NULL status stay "
+                f"(left {statuses})")
+    ok &= check(all(t == recent for s, t in left if s == "prevented"),
+                "and the surviving 'prevented' is the one inside the retention window")
+
+    N._last_prune_at = time.time()
+    con = get_connection()
+    con.execute("INSERT INTO pp_notification_log (context_id, channel, event, character, "
+                "planet_id, sent_at, status) VALUES (?,?,?,?,?,?,?)",
+                (FAKE_CTX, "-", "expired", "Toon", PLANET_A, old, "prevented"))
+    con.commit()
+    con.close()
+    N._prune_outcome_rows()
+    con = get_connection()
+    n = con.execute("SELECT COUNT(*) AS c FROM pp_notification_log WHERE context_id=? "
+                    "AND status='prevented'", (FAKE_CTX,)).fetchone()["c"]
+    con.execute("DELETE FROM pp_notification_log WHERE context_id=?", (FAKE_CTX,))
+    con.commit()
+    con.close()
+    ok &= check(n == 2, f"a second call inside the 12h window does no work at all (got {n} rows)")
+    return ok
+
+
+def test_an_esi_error_is_never_read_as_a_missing_corporation() -> bool:
+    """ESI answers an error with a JSON body, so reading `corporation_id` off an unchecked
+    response yields None — which reads as "this character has no corp", returns [] without
+    raising, and gets stored as a verified personal-only snapshot. The strict corp read's whole
+    point, one call earlier."""
+    print(f"\n{'='*60}\n  an ESI error is not a character with no corporation\n{'='*60}")
+    ok = True
+    import app.reactions.jobs as J
+
+    class _Resp:
+        status_code = 500
+        headers: dict = {}
+
+        def raise_for_status(self):
+            raise RuntimeError("500 Server Error")
+
+        def json(self):
+            return {"error": "internal error"}
+
+    J._corp_id_cache.pop(FAKE_CID, None)
+    real_get = J.esi_http.get
+    J.esi_http.get = lambda *a, **kw: _Resp()
+    try:
+        raised = False
+        try:
+            J._corporation_of(FAKE_CID)
+        except Exception:
+            raised = True
+        ok &= check(raised, "a 500 raises rather than reporting 'no corporation'")
+        ok &= check(FAKE_CID not in J._corp_id_cache,
+                    "...and nothing is cached, so the next tick asks again")
+    finally:
+        J.esi_http.get = real_get
+    return ok
+
+
 def _outcome_rows():
     con = get_connection()
     rows = [dict(r) for r in con.execute(
@@ -682,6 +1010,12 @@ def main() -> int:
             test_the_whole_path_end_to_end(),
             test_a_scan_that_read_nothing_is_not_a_success(),
             test_the_alerts_that_never_became_a_send_are_recorded(),
+            test_reaction_alerts_are_checked_against_their_jobs(),
+            test_the_reaction_scan_dispatches_to_the_jobs_endpoint(),
+            test_an_escalated_alert_is_not_credited_as_prevented(),
+            test_a_failed_corp_read_never_looks_like_a_verified_one(),
+            test_pruning_cannot_take_the_tick_down_with_it(),
+            test_an_esi_error_is_never_read_as_a_missing_corporation(),
         ]
     finally:
         _cleanup()

@@ -269,24 +269,36 @@ actually being APPLIED each fail the suite when broken. `test_alerts.py`, `test_
 
 ### 37a. Still open
 
-- **The `reaction_*` kinds keep the old cadence.** They carry no `planet_id` and read industry jobs,
-  a different ESI path. Same argument applies to them; it is a second cut, not a widening of this
-  one.
-- **Nothing measures the win, and the part that matters is not recoverable later.** Correcting an
-  earlier note here: the RUNG is fine — it is derived from `pp_notification_log` timestamps by
-  `_consecutive_cooldown_h`, so it can be computed retrospectively for any past send. What leaves
-  no trace at all is everything that did NOT become a send:
-  * an alert the rescan **prevented** (checked, found fixed, never sent) — the entire point of the
-    feature, and today it is silent;
-  * an alert **suppressed unverified** (dead token, failed read, over budget) — the cost side.
-  `_log_send` only ever runs on a real send (`app/notifications.py:531`), so both are invisible.
-  Every tick that runs uninstrumented is a tick nobody can learn from, which makes this the one
-  item with a closing window now the flag is on. A row in `pp_notification_log` with a distinct
-  status (`prevented` / `suppressed`) would cover both without a new table — but check it does not
-  disturb `_recently_notified` or `_consecutive_cooldown_h`, which both filter `status='ok'`.
+- ~~**The `reaction_*` kinds keep the old cadence.**~~ **DONE 2026-08-17** (`alert_rescan_reactions`).
+  Precisely: the BACKOFF already covered them (they carry `dedupe_id`, which is all
+  `_consecutive_cooldown_h` needs) — what they were missing was the rescan. Now one
+  `characters/{id}/industry/jobs/` read per CHARACTER, answering for all three kinds at once, with
+  `fetched_at`/`_JOBS_CACHE_TTL` as the `esi_expires` equivalent and the opt-in jobs scope as a
+  a skip (not a suppression) for a character that never granted the opt-in jobs scope. The
+  personal read had to be made strict (`read_industry_jobs` raises
+  where `fetch_industry_jobs` returns `[]`) because an empty job list is exactly what a *resolved*
+  completed-reaction alert looks like — the §37 colony-wipe trap, one endpoint over. The corp read
+  is strict too, with one exception: a 403 means the character granted the scope but does not hold
+  the corp role, which is permanent and makes `[]` the true answer rather than a gap in one.
+  **Left open by this:** a character that dropped the jobs scope keeps nagging off a frozen
+  snapshot, because suppressing it would silently remove a working alert and no page explains the
+  fix. Worth surfacing "re-authorise with reactions enabled" next to the reaction alerts; once it
+  exists, suppression becomes the right answer and the skip in `_rescan_targets` should become a
+  `suppressed:no_jobs_scope`.
+- ~~**Nothing measures the win.**~~ **DONE 2026-08-17.** `_log_rescan_outcomes` writes the two
+  outcomes that never became a send into `pp_notification_log` under statuses no send uses:
+  `prevented` (the benefit) and `suppressed:<no_token|retry_brake|scan_failed|over_budget>`
+  (the cost). Every existing reader filters `status='ok'` and so ignores them;
+  `/api/notifications/log` was the one that did not and now excludes them via `_SENDS_ONLY_SQL`,
+  because the user's log is a list of things that were sent. Suppressions are deduped per cause per
+  12h — an unresolved problem is due on all 96 ticks of the day. `prevented` is not deduped, because
+  a problem found fixed does not recur next tick. Query in `docs/platform.md`.
+  *(The RUNG was never at risk: `_consecutive_cooldown_h` derives it from send timestamps whenever
+  you care to look.)*
 - **Watch the first week on the rung**, specifically: whether any character sits amber for long
   (transient scan failures that never recover would silently pause its alerts), and whether the
-  per-tick budget is ever actually reached.
+  per-tick budget is ever actually reached. Now answerable from the log rather than by eye —
+  `suppressed:retry_brake` and `suppressed:over_budget` are exactly those two questions.
 - **The scan budget is per PROCESS, not per app.** Prod runs 6 (2 replicas x 3 workers), each with
   its own module global. The advisory lock serializes them and `_recently_notified` empties the
   second runner's alert list before it reaches a scan, so the real spend stays near the ceiling of
