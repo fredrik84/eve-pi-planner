@@ -152,7 +152,7 @@ own outer `except`, so a revoked character was never marked dead and kept a gree
 docstring above the code claimed this had been fixed; it had not. It was a prerequisite here,
 because the dead-token filter has nothing to filter on until a dead token is recorded as dead.
 
-**Verified:** `test_alert_cadence.py` (36 checks, no ESI — the scan function is injected, and
+**Verified:** `test_alert_cadence.py` (44 checks, no ESI — the scan function is injected, and
 `_process_context` itself is driven end to end with a fake notifier), plus five mutation runs: the
 chain reset, suppress-on-failure, the two ESI guards, the feature-flag gate and the suppression
 actually being APPLIED each fail the suite when broken. `test_alerts.py`, `test_features.py`,
@@ -190,6 +190,11 @@ actually being APPLIED each fail the suite when broken. `test_alerts.py`, `test_
 - **Watch the first week on the rung**, specifically: whether any character sits amber for long
   (transient scan failures that never recover would silently pause its alerts), and whether the
   per-tick budget is ever actually reached.
+- **The scan budget is per PROCESS, not per app.** Prod runs 6 (2 replicas x 3 workers), each with
+  its own module global. The advisory lock serializes them and `_recently_notified` empties the
+  second runner's alert list before it reaches a scan, so the real spend stays near the ceiling of
+  one process — but the constant's own guarantee is 20 per process. If that ever needs to be a
+  true app-wide cap it has to move into the DB alongside the job lease.
 - **Clock skew is unguarded.** The `esi_expires` gate compares ESI's absolute `Expires` against
   local `time.time()`, so a pod whose clock runs fast buys premature requests. Low risk on NTP'd
   nodes and not worth a mechanism today, but it is the one way the never-query-before-`Expires`

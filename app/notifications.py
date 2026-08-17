@@ -331,8 +331,13 @@ class _ScanOutcome:
 # times on day one and twice a day after. The budget below is the guarantee that does not depend on
 # that estimate being right.
 # Whole-TICK, not per context: `_process_context` runs once per context in a loop, so a per-context
-# cap would silently multiply by the number of accounts with notifications on. `check_and_send_
-# notifications` resets this at the top of each run.
+# cap would silently multiply by the number of accounts with notifications on.
+# `check_and_send_notifications` resets this at the top of each run.
+#
+# Honest about the scope: this is a module global, so the ceiling is per PROCESS, and prod runs 6
+# (2 replicas x 3 workers). The advisory lock serializes them and `_recently_notified` empties the
+# second runner's alert list before it reaches a scan, so the real spend stays near 20 — but the
+# guarantee this constant makes on its own is 20 per process, not 20 per app.
 _SCAN_BUDGET_PER_TICK = 20
 _scan_budget_left = _SCAN_BUDGET_PER_TICK
 # A transient ESI failure (timeout, 5xx) leaves the token in place and tells us nothing, so retrying
@@ -340,7 +345,7 @@ _scan_budget_left = _SCAN_BUDGET_PER_TICK
 _SCAN_RETRY_AFTER_H = 1.0
 
 
-def _rescan_targets(con, context_id: int, by_kind: dict) -> list[tuple[int, int]]:
+def _rescan_targets(con, context_id: int, by_kind: dict) -> tuple[list, list]:
     """(character_id, planet_id) worth an ESI read this tick, in a stable order.
 
     Filters, in the order they cost least: alerts that name no colony, then colonies whose data is
@@ -446,8 +451,16 @@ def _rescan_for_due_alerts(con, context_id: int, by_kind: dict, scan=None) -> _S
             outcome.suppressed.add((cid, pid))
             con.execute("UPDATE pp_characters SET scan_failed_at=? WHERE character_id=?",
                         (time.time(), cid))
+            # The character list is Redis-cached for 5 minutes and now carries this field. Without
+            # the invalidation the amber dot lags behind the silence it exists to explain.
+            try:
+                from app.cache import cache_invalidate
+                from app.esi_data import charlist_key
+                cache_invalidate(charlist_key(context_id))
+            except Exception:
+                pass
     # Over budget is not a failure, but it IS unverified — hold those back and let the next tick
-    # scan them. 20 a tick across the whole app is ~1,900 colony reads a day at the ceiling, and
+    # scan them. 20 a tick is ~1,900 colony reads a day at the per-process ceiling, and
     # nothing like that in practice, because a read only happens when an alert is actually sent.
     _scan_budget_left = budget - len(targets[:budget])
     for cid, pid in targets[budget:]:

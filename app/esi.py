@@ -731,7 +731,6 @@ def _fetch_planets(character_id: int, access_token: str, only_planet_id: int | N
                     _skipped += 1
                     continue
 
-                _fetched += 1
                 planet_type     = planet.get("planet_type", "").capitalize()
                 solar_system_id = planet.get("solar_system_id")
                 upgrade_level   = planet.get("upgrade_level", 0)
@@ -800,6 +799,10 @@ def _fetch_planets(character_id: int, access_token: str, only_planet_id: int | N
                 if _detail is None:
                     _failed += 1
                     continue
+                # Counted here, not before the read: `fetched` is reported to the user as
+                # "planets re-scanned", and counting attempts made a scan that read nothing look
+                # like a success on screen.
+                _fetched += 1
 
                 # Capture ALL tiers present (uncollapsed) before the highest-tier-only collapse
                 # below discards the evidence — this is what lets a hybrid (extraction + chained

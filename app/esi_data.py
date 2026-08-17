@@ -758,7 +758,12 @@ def _clear_scan_failure(character_id: int, scan: dict) -> None:
     runs for characters that still have a due alert — so a user who fixed the problem kept the
     warning forever, under a tooltip that told them to rescan.
     """
-    if (scan or {}).get("failed", 0):
+    # The SAME predicate `_default_scan` uses, and for the same reason: `_fetch_planets`'s outer
+    # except returns all-zeros, so a scan that died before the per-planet loop (the list call timed
+    # out, the token refresh failed) reports `failed == 0` while having read nothing. Testing only
+    # `failed` would clear the marker on precisely the scans that should set it.
+    scan = scan or {}
+    if scan.get("failed", 0) or (scan.get("fetched", 0) + scan.get("skipped", 0)) < 1:
         return
     con = get_connection()
     try:

@@ -533,6 +533,48 @@ def test_the_whole_path_end_to_end() -> bool:
     return ok
 
 
+def test_a_scan_that_read_nothing_is_not_a_success() -> bool:
+    """The trap that bit twice, in two functions: `_fetch_planets` reports `fetched` as planets
+    ATTEMPTED, and its outer except returns all-zeros — so `failed == 0` does NOT mean a scan
+    worked. Both the alert job's success test and the hand-rescan's flag-clearing have to reject a
+    scan that read nothing, or a total failure reads as a clean bill of health."""
+    print(f"\n{'='*60}\n  a scan that read nothing never counts as a success\n{'='*60}")
+    ok = True
+    import app.esi as E
+    import app.notifications as N
+    from app.esi_data import _clear_scan_failure
+
+    cases = [
+        ({"fetched": 1, "skipped": 0, "failed": 0}, True,  "a colony actually re-read"),
+        ({"fetched": 0, "skipped": 1, "failed": 0}, True,  "a colony ESI had nothing newer for"),
+        ({"fetched": 0, "skipped": 0, "failed": 1}, False, "a detail read that failed"),
+        ({"fetched": 0, "skipped": 0, "failed": 0}, False,
+         "the all-zeros the outer except returns when the scan died before the loop"),
+    ]
+    real_token, real_fetch = E._get_valid_token, E._fetch_planets
+    E._get_valid_token = lambda cid: "tok"
+    try:
+        for res, want, label in cases:
+            E._fetch_planets = lambda c, t, only_planet_id=None, _r=res: _r
+            got = N._default_scan(FAKE_CID, PLANET_A)
+            ok &= check(got is want, f"_default_scan: {label} -> {want}")
+    finally:
+        E._get_valid_token, E._fetch_planets = real_token, real_fetch
+
+    # And the same predicate on the hand-rescan path, which clears the amber dot.
+    for res, should_clear, label in [(c[0], c[1], c[2]) for c in cases]:
+        _seed_character(FAKE_CID, refresh_token="live-token", scan_failed_at=time.time() - 10)
+        _clear_scan_failure(FAKE_CID, res)
+        con = get_connection()
+        row = con.execute("SELECT scan_failed_at FROM pp_characters WHERE character_id=?",
+                          (FAKE_CID,)).fetchone()
+        con.close()
+        cleared = row["scan_failed_at"] is None
+        ok &= check(cleared is should_clear,
+                    f"_clear_scan_failure: {label} -> {'clears' if should_clear else 'keeps'} the marker")
+    return ok
+
+
 def main() -> int:
     _cleanup()
     try:
@@ -548,6 +590,7 @@ def main() -> int:
             test_the_budget_is_a_brake_not_a_queue(),
             test_the_budget_is_for_the_whole_tick_not_each_account(),
             test_the_whole_path_end_to_end(),
+            test_a_scan_that_read_nothing_is_not_a_success(),
         ]
     finally:
         _cleanup()
