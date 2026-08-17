@@ -89,27 +89,32 @@ def main():
     check(rx_rate_set > 0, f"configured, the rate is real ({rx_rate_set:.4f})")
 
     print("a defaulted system says it is a default:")
+    # Patch the module that actually RESOLVES these names, not the package that re-exports them.
+    # `account_build_defaults` lives beside them in `graph.options`, so it reads that module's
+    # globals — setting `app.industry.graph._default_system_on` is inert, and all three scenarios
+    # below would silently collapse into one (TODO 34).
     import app.industry.graph as G
-    real_flag, real_fb = G._default_system_on, G._fallback_build_system
+    O = G.options
+    real_flag, real_fb = O._default_system_on, O._fallback_build_system
     try:
         # Flag off: nothing is assumed, exactly as before the default existed.
-        G._default_system_on = lambda ctx: False
+        O._default_system_on = lambda ctx: False
         sid, tax, basis = G.account_build_defaults(-1, with_basis=True)
         check(sid is None and basis in ("none", "configured"),
               "with the flag off an unconfigured account still has no system")
         # Flag on, and the account has described a building: use ITS system and ITS tax.
-        G._default_system_on = lambda ctx: True
-        G._fallback_build_system = lambda ctx, tax: (30000001, 2.5, "structure")
+        O._default_system_on = lambda ctx: True
+        O._fallback_build_system = lambda ctx, tax: (30000001, 2.5, "structure")
         sid, tax, basis = G.account_build_defaults(-1, with_basis=True)
         check(basis == "structure" and sid == 30000001 and tax == 2.5,
               "a structure the account builds in supplies the system and its own tax")
         # ...and with nothing at all, the labelled reference.
-        G._fallback_build_system = real_fb
+        O._fallback_build_system = real_fb
         sid, tax, basis = G.account_build_defaults(-1, with_basis=True)
         check(basis == "reference" and sid == JITA,
               "knowing nothing falls back to Jita, labelled as a reference")
     finally:
-        G._default_system_on, G._fallback_build_system = real_flag, real_fb
+        O._default_system_on, O._fallback_build_system = real_flag, real_fb
 
     p3 = BuildParams(build_system_id=JITA, mfg_cost_index=jm, build_system_basis="reference")
     check(_cost_basis(p3)["basis"] == "reference",
