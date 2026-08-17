@@ -10,7 +10,7 @@ up cold. Numbers are stable ids, not an order — CLAUDE.md refers to them.
 **Don't read this file whole** — `grep -n '^## ' TODO.md` for the item you want, then read that
 range.
 
-Reviewed 2026-08-16.
+Reviewed 2026-08-17.
 
 ---
 
@@ -95,10 +95,15 @@ Each changes behaviour, so each is its own item rather than a rider on the one a
 Neither is a math change — the cadence ceiling still applies to planning, it just stops being
 adjustable from the card.
 
-**First concrete step.** Confirm removing the card's input leaves a way to reach the number for an
-account past onboarding — if the wizard is the only other home, the setting needs a home in
-Settings before the card's copy comes out, or the value becomes unreachable. That question decides
-whether this is one commit or two. Check what `_rxSyncWizardCadence` keeps in step before cutting.
+**Where the number lives — settled 2026-08-17 by the user:** *"I don't mind it being on the
+onboarding wizard and then in settings. It's a logical (familiar at least) place for a setting."*
+So: **wizard + Settings, and nowhere else.** The card's copy comes out.
+
+**First concrete step.** Give it a Settings home BEFORE removing the card's input, or an account
+past onboarding loses all access to the value (the wizard is a first-run surface). Reactions
+settings sections already exist — put it with the ones it belongs beside, not in a new section of
+its own. Then delete `_rxCadenceHtml` and its call site, and check what `_rxSyncWizardCadence`
+keeps in step: with the card gone it has one fewer view to sync, and may reduce to nothing.
 
 ## 36. The Industry shopping list should count the customer orders, not sit beside them (2026-08-16)
 
@@ -118,9 +123,50 @@ built from the ACCOUNT's plan rather than the order's — that shape is already 
 `_indLastPlan` path (see the note under §34's follow-ups). Do not add the toggle until the
 default-on list is correct; a control over a wrong list is two problems.
 
+## 37. We alert too often, and the worst case is an alert the user cannot act on (2026-08-17)
+
+**What.** Restart your PI extractors in-game, don't rescan, and the Discord notification for the
+now-stale `expired` state fires **every 2 hours, forever** — the app is nagging about a problem the
+user already fixed, because its data predates the fix. Reported from live use 2026-08-17: *"if i
+don't rescan after i restarted my PI the discord notification fires every 2 hours."*
+
+**Why it's open.** This is the worst shape an alert can have: it is both wrong and unactionable.
+The only way to silence it is to open the app and rescan — which is exactly the manual trip the PI
+side of this tool exists to remove (CLAUDE.md, "minimize interactions with planets"). An alert the
+user learns to ignore also costs every other alert its credibility.
+
+**Two fixes, and the first is better if it can be done.**
+
+1. **Rescan on the user's behalf.** The blocker is not tokens: `_get_valid_token(character_id)`
+   (`app/esi.py:444`) refreshes from the stored `refresh_token`, so the server can already scan
+   without the user present — `_fetch_planets` (`app/esi.py:597`) needs only a character id and a
+   token. It would be a new lease-guarded entry in `KNOWN_JOBS` (`app/jobs.py:36`), beside
+   `notify_check`, running before it so the alert reasons about fresh data.
+   **The hard constraint, read it before writing a line:** CLAUDE.md's *"Never add an ESI
+   force-refresh bypass"* — querying before `Expires` risks an ESI ban that would take down the
+   whole app. A scheduled scan is only allowed if it respects `esi_expires` per planet
+   (`pp_char_planets`, ~10 min for colony detail). **Do NOT reuse `refresh_one_planet`
+   (`app/esi_data.py:748`) — it deliberately force-fetches and bypasses the cache-skip**, which is
+   fine for a button a human pressed and is precisely the thing that must not run on a timer.
+   Also settle the volume question honestly: scanning every character every N minutes is a
+   permanent, unattended ESI load this app has never had. Scoping it to characters that currently
+   have an unresolved alert is the version worth building.
+2. **Failing that, lengthen the cooldown.** `_COOLDOWN_HOURS` (`app/notifications.py:155`) has
+   `expired` and `expiring` at 2.0h. The user's suggestion is **12h** for the restart case. Note
+   the table already distinguishes decaying states (2-4h) from persistent structural ones (24h) —
+   a stale `expired` is arguably the second kind, so this is a re-classification with a reason,
+   not a number tweak.
+
+**First concrete step.** Reproduce and confirm which kind actually fires — `expired` (2h) is the
+likely one, but `storage_full` (2h) and `schedule_sync` (24h) are candidates for the same
+staleness, and the fix differs. Read `pp_notify_log` for a real account to see what has actually
+been sent on repeat, rather than reasoning from the table. **Whichever way this goes, an alert
+should say how old the data behind it is** — "expired as of your last scan, 3 days ago" is
+actionable in a way "expired" is not, and that line is worth shipping even if fix 1 lands.
+
 ## Nothing else open
 
-The rest of the backlog is §34, §35 and §36 as of 2026-08-16. §18b (config export/import) and §19 (URL routing,
+The rest of the backlog is §34 (backend half), §35, §36 and §37 as of 2026-08-17. §18b (config export/import) and §19 (URL routing,
 including the deep links that carry an id) both closed that day — §19's last piece, deep-linking a
 colony, was closed as **won't build** rather than shipped, and the reasoning is in the archive.
 
