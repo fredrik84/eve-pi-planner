@@ -1536,8 +1536,15 @@ def _refresh_token(character_id: int, refresh_token: str) -> str | None:
             )
         if resp.status_code == 400:
             con = get_connection()
+            # EMPTY STRING, not NULL: the column is `TEXT NOT NULL DEFAULT ''` (see the CREATE
+            # above), so writing NULL raised IntegrityError, was swallowed by this function's outer
+            # `except Exception`, and left the dead token in place — which is precisely the bug the
+            # docstring above says was fixed. It was not: `token_ok` stayed green for every
+            # permanently dead character, and the red dot never caught up after all. Both readers
+            # (`token_ok` in app/esi_data.py, the alert rescan's filter in app/notifications.py)
+            # test falsiness, so '' and NULL mean the same thing to everything that asks.
             con.execute(
-                "UPDATE pp_characters SET refresh_token=NULL WHERE character_id=?",
+                "UPDATE pp_characters SET refresh_token='' WHERE character_id=?",
                 (character_id,),
             )
             con.commit()
