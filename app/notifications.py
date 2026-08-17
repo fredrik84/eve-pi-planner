@@ -10,9 +10,10 @@ module is purely a consumer (kind/severity filtering, cooldown, batching, sendin
 implement its own detection, so a push notification and what's shown on the Dashboard can never
 drift apart.
 
-The scheduler runs check_and_send_notifications() every 15 minutes. It uses
-only data already in the DB (no ESI calls), so it works between rescans and
-adds no EVE API load.
+The scheduler runs check_and_send_notifications() every 15 minutes. With `alert_rescan_backoff`
+off it uses only data already in the DB and adds no EVE API load; with it on, a due alert first
+triggers a re-read of the one colony it is about, bounded by a whole-tick budget — see
+docs/platform.md, "Check before nagging".
 """
 import json as _json
 import logging
@@ -190,7 +191,14 @@ _BACKOFF_CAP_H = 12.0
 # legitimately runs up to one tick long. Anything beyond this slack means no tick found the alert
 # present — i.e. it had resolved and later came back, which starts a fresh chain.
 _BACKOFF_SLACK_H = 0.5
-_BACKOFF_MAX_ROWS = 24        # far past the cap; bounds the per-alert query
+_BACKOFF_MAX_ROWS = 72        # far past the cap even at several channels; bounds the query
+# One send writes one log row PER ENABLED CHANNEL (`_log_send` is inside the channel loop), and
+# those rows land microseconds apart. Counted naively, a user with three channels reached the 12h
+# cap after their SECOND send and could never reset the chain, because a gap of microseconds is
+# never longer than any interval. Rows this close together are one send, by construction — nothing
+# real repeats inside a minute when the shortest base interval is two hours. (`resend-last` groups
+# by the minute for the same reason.)
+_SAME_SEND_WINDOW_S = 60
 
 
 def _consecutive_cooldown_h(con, context_id: int, event: str, planet_id, base_h: float) -> float:
@@ -211,9 +219,12 @@ def _consecutive_cooldown_h(con, context_id: int, event: str, planet_id, base_h:
     stamps = []
     for r in reversed(rows):                       # oldest first
         try:
-            stamps.append(datetime.fromisoformat(r["sent_at"]).timestamp())
+            ts = datetime.fromisoformat(r["sent_at"]).timestamp()
         except Exception:
             continue                               # an unparseable row breaks no chain it isn't in
+        if stamps and ts - stamps[-1] < _SAME_SEND_WINDOW_S:
+            continue                               # same send, another channel
+        stamps.append(ts)
     rung = 0
     for i in range(1, len(stamps)):
         expected = min(base_h * (2 ** rung), _BACKOFF_CAP_H)
@@ -223,7 +234,11 @@ def _consecutive_cooldown_h(con, context_id: int, event: str, planet_id, base_h:
 
 
 def check_and_send_notifications():
-    """Run every 15 minutes. Pure DB math — no ESI calls.
+    """Run every 15 minutes.
+
+    NOT pure DB math since `alert_rescan_backoff`: a due alert triggers a bounded re-read of the one
+    colony it is about (see `_rescan_for_due_alerts`). With the flag off it makes no ESI calls at
+    all, which is what it always did.
 
     Guarded by a Postgres advisory lock (same pattern as scripts/build_sde.py /
     populate_geo.py). Every uvicorn worker in every pod replica runs its own APScheduler on its
@@ -243,6 +258,8 @@ def check_and_send_notifications():
             con.execute("SELECT pg_advisory_lock(?)", (_NOTIFY_ADVISORY_LOCK_KEY,))
         try:
             ensure_notification_tables()
+            global _scan_budget_left
+            _scan_budget_left = _SCAN_BUDGET_PER_TICK
             # Contexts with at least one enabled notification setting.
             ctx_rows = con.execute(
                 "SELECT DISTINCT context_id FROM pp_notification_settings WHERE enabled=1"
@@ -313,7 +330,11 @@ class _ScanOutcome:
 # one per alert SEND, and sends back off geometrically, so an ignored problem is scanned about four
 # times on day one and twice a day after. The budget below is the guarantee that does not depend on
 # that estimate being right.
+# Whole-TICK, not per context: `_process_context` runs once per context in a loop, so a per-context
+# cap would silently multiply by the number of accounts with notifications on. `check_and_send_
+# notifications` resets this at the top of each run.
 _SCAN_BUDGET_PER_TICK = 20
+_scan_budget_left = _SCAN_BUDGET_PER_TICK
 # A transient ESI failure (timeout, 5xx) leaves the token in place and tells us nothing, so retrying
 # it every 15 minutes is the one way this could still hammer the API for no result.
 _SCAN_RETRY_AFTER_H = 1.0
@@ -340,7 +361,7 @@ def _rescan_targets(con, context_id: int, by_kind: dict) -> list[tuple[int, int]
             seen.add((cid, pid))
             wanted.append((cid, pid))
     if not wanted:
-        return []
+        return [], []
 
     now = time.time()
     fresh_by_planet = {
@@ -359,29 +380,46 @@ def _rescan_targets(con, context_id: int, by_kind: dict) -> list[tuple[int, int]
             (context_id,),
         )
     }
-    out = []
+    out, unverifiable = [], []
     for cid, pid in wanted:
         exp = fresh_by_planet.get((cid, pid))
         if exp and exp > now:
-            continue                       # ESI has nothing newer; not stale, so not our problem
+            # Not stale: ESI has nothing newer to give, so the data behind this alert is already
+            # as current as it can be. Verified WITHOUT a request — the cheapest good outcome.
+            continue
         c = chars.get(cid)
-        if not c or c["is_dummy"] or not c["refresh_token"]:
-            continue                       # placeholder, or a token the user must re-add first
+        if not c or c["is_dummy"]:
+            continue                       # a placeholder character has no ESI data to refresh
+        if not c["refresh_token"]:
+            # A token the user must re-add. We cannot check, so we do not tell them about it —
+            # the red dot on the character page is the thing to act on, not a colony report we
+            # have no current evidence for.
+            unverifiable.append((cid, pid))
+            continue
         failed_at = c["scan_failed_at"] or 0
         if failed_at and now - failed_at < _SCAN_RETRY_AFTER_H * 3600:
+            # Inside the retry brake after a transient failure — still unchecked, so still not
+            # something to report. Sending here would be reporting off exactly the stale data the
+            # feature exists to stop trusting.
+            unverifiable.append((cid, pid))
             continue
         out.append((cid, pid))
-    return out
+    return out, unverifiable
 
 
 def _default_scan(character_id: int, planet_id: int) -> bool:
-    """Refresh one colony. True if the read succeeded and the DB now holds current data."""
+    """Refresh one colony. True only if the colony was actually re-read.
+
+    `fetched` counts planets ATTEMPTED, not planets that came back — it is incremented before the
+    detail request — so it cannot stand in for success on its own. `failed` is the honest signal,
+    and treating a failed read as a success is what would let the retry brake never engage.
+    """
     from app.esi import _get_valid_token, _fetch_planets
     token = _get_valid_token(character_id)
     if not token:
         return False
-    _fetch_planets(character_id, token, only_planet_id=planet_id)
-    return True
+    res = _fetch_planets(character_id, token, only_planet_id=planet_id) or {}
+    return res.get("failed", 0) == 0 and (res.get("fetched", 0) + res.get("skipped", 0)) >= 1
 
 
 def _rescan_for_due_alerts(con, context_id: int, by_kind: dict, scan=None) -> _ScanOutcome:
@@ -389,10 +427,13 @@ def _rescan_for_due_alerts(con, context_id: int, by_kind: dict, scan=None) -> _S
 
     `scan` is injectable so the tests can exercise every branch of this without ESI.
     """
+    global _scan_budget_left
     scan = scan or _default_scan
     outcome = _ScanOutcome()
-    targets = _rescan_targets(con, context_id, by_kind)
-    for cid, pid in targets[:_SCAN_BUDGET_PER_TICK]:
+    targets, unverifiable = _rescan_targets(con, context_id, by_kind)
+    outcome.suppressed.update(unverifiable)
+    budget = max(0, _scan_budget_left)
+    for cid, pid in targets[:budget]:
         try:
             ok = scan(cid, pid)
         except Exception:
@@ -406,8 +447,10 @@ def _rescan_for_due_alerts(con, context_id: int, by_kind: dict, scan=None) -> _S
             con.execute("UPDATE pp_characters SET scan_failed_at=? WHERE character_id=?",
                         (time.time(), cid))
     # Over budget is not a failure, but it IS unverified — hold those back and let the next tick
-    # scan them. At 20 a tick that is ~1,900 colonies a day, so this is a brake, not a queue.
-    for cid, pid in targets[_SCAN_BUDGET_PER_TICK:]:
+    # scan them. 20 a tick across the whole app is ~1,900 colony reads a day at the ceiling, and
+    # nothing like that in practice, because a read only happens when an alert is actually sent.
+    _scan_budget_left = budget - len(targets[:budget])
+    for cid, pid in targets[budget:]:
         outcome.suppressed.add((cid, pid))
     con.commit()
     return outcome

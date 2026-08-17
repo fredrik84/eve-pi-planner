@@ -152,10 +152,31 @@ own outer `except`, so a revoked character was never marked dead and kept a gree
 docstring above the code claimed this had been fixed; it had not. It was a prerequisite here,
 because the dead-token filter has nothing to filter on until a dead token is recorded as dead.
 
-**Verified:** `test_alert_cadence.py` (23 checks, no ESI — the scan function is injected), plus
-three mutation runs confirming the tests fail when the chain-reset, the suppress-on-failure and the
-two ESI guards are each broken in turn. `test_alerts.py`, `test_features.py` and
-`test_epoch_precision.py` still green.
+**Verified:** `test_alert_cadence.py` (36 checks, no ESI — the scan function is injected, and
+`_process_context` itself is driven end to end with a fake notifier), plus five mutation runs: the
+chain reset, suppress-on-failure, the two ESI guards, the feature-flag gate and the suppression
+actually being APPLIED each fail the suite when broken. `test_alerts.py`, `test_features.py`,
+`test_routing.py` and `test_epoch_precision.py` green; app boots and serves.
+
+**A pre-ship review caught four things worth recording, because three of them were mine:**
+
+1. **A failed colony detail read used to WIPE the colony row.** `_fetch_planets` swallowed the
+   exception and fell through to an UPSERT that wrote `is_extractor=0` and NULLs over products,
+   pads, sim state, storage and `esi_expires`, with a fresh `scanned_at`. Pre-existing — the hand
+   rescan button has always done this — but this feature would have made it automatic and
+   unattended. A failed read now writes nothing and is reported as `failed` in the return value.
+   **This is also why `_default_scan` cannot key off `fetched`:** that counter increments BEFORE
+   the detail request, so it counts attempts, not successes.
+2. **The backoff counted log ROWS, and one send writes one row per channel.** A user with three
+   channels hit the 12h cap on their second alert and could never reset the chain, because a gap of
+   microseconds is never longer than any interval. Rows within `_SAME_SEND_WINDOW_S` are now one
+   send.
+3. **The scan budget was per context, not per tick** — it multiplied by the number of accounts.
+   Now a module-level counter reset once per run.
+4. **The cost per colony was 4 ESI requests, not 1**, because `universe/names/` and
+   `universe/planets/{pid}/` were unconditional. Both answers are immutable, so both are now
+   skipped when the DB already has them: 2 requests in the steady state, 40 per tick for the whole
+   app at the ceiling. The hand rescan got the same saving for free.
 
 ### 37a. Still open
 
@@ -169,6 +190,10 @@ two ESI guards are each broken in turn. `test_alerts.py`, `test_features.py` and
 - **Watch the first week on the rung**, specifically: whether any character sits amber for long
   (transient scan failures that never recover would silently pause its alerts), and whether the
   per-tick budget is ever actually reached.
+- **Clock skew is unguarded.** The `esi_expires` gate compares ESI's absolute `Expires` against
+  local `time.time()`, so a pod whose clock runs fast buys premature requests. Low risk on NTP'd
+  nodes and not worth a mechanism today, but it is the one way the never-query-before-`Expires`
+  rule could be broken without a code change.
 
 ## Nothing else open
 

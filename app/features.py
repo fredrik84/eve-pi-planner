@@ -263,9 +263,10 @@ FEATURE_REGISTRY = [
                     "alert that is no longer true is never sent. And each repeat of an alert you "
                     "have not acted on waits twice as long as the last, up to twice a day, instead "
                     "of every two hours forever. The FIRST alert is never delayed by either. A "
-                    "colony we cannot re-read (dead token, ESI down) is held back rather than "
-                    "reported off stale data — the character page shows the token that needs "
-                    "re-authorising.",
+                    "colony we could not check — a dead token, an ESI failure, or more colonies "
+                    "due at once than one tick will read — is held back rather than reported off "
+                    "stale data, so a character with a dead token goes quiet until it is "
+                    "re-authorised on the characters page.",
      "default": False},
     {"key": "reactions_formula_cap", "label": "Reactions: a formula is one reaction at a time",
      "group": "Reactions",

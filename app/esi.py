@@ -601,6 +601,10 @@ def _record_yield_sample(con, character_id: int, planet_id: int, sim: dict | Non
         pass
 
 
+class _AlreadyKnown(Exception):
+    """Sentinel: this lookup's answer is already in the DB, so skip the request."""
+
+
 def _fetch_planets(character_id: int, access_token: str, only_planet_id: int | None = None) -> dict:
     """Fetch planet list + pin details from ESI, store in pp_char_planets.
 
@@ -615,7 +619,7 @@ def _fetch_planets(character_id: int, access_token: str, only_planet_id: int | N
                  # connection out of the (tiny, 8-per-pod) pool on any exception anywhere in this
                  # long function (many sequential ESI calls) previously required a full pod
                  # restart to recover, since the pool never got the connection back.
-    _fetched, _skipped = 0, 0
+    _fetched, _skipped, _failed = 0, 0, 0
     try:
         resp = esi_http.get(f"characters/{character_id}/planets/", token=access_token, timeout=10)
         resp.raise_for_status()
@@ -624,8 +628,25 @@ def _fetch_planets(character_id: int, access_token: str, only_planet_id: int | N
         if only_planet_id is not None:
             planet_list = [p for p in planet_list if p.get("planet_id") == only_planet_id]
 
-        # Resolve any new solar_system_id → name via ESI universe/names
+        # Resolve any new solar_system_id → name via ESI universe/names.
+        # Only the ones we do not already have: a system's name is static, so asking again buys
+        # nothing. This was an unconditional POST on every scan, which is a third of the request
+        # cost of a single-colony rescan (the alert-driven path in app/notifications.py does one of
+        # those per alert sent), spent re-learning names already in the table.
         sys_ids = list({p.get("solar_system_id") for p in planet_list if p.get("solar_system_id")})
+        if sys_ids:
+            try:
+                _known_con = get_connection()
+                try:
+                    _qs = ",".join("?" for _ in sys_ids)
+                    _known = {r["system_id"] for r in _known_con.execute(
+                        f"SELECT system_id FROM solar_systems WHERE system_id IN ({_qs})",
+                        tuple(sys_ids))}
+                finally:
+                    _known_con.close()
+                sys_ids = [i for i in sys_ids if i not in _known]
+            except Exception:
+                pass                       # fail safe: ask ESI, exactly as before
         if sys_ids:
             try:
                 nr = esi_http.post(
@@ -688,6 +709,13 @@ def _fetch_planets(character_id: int, access_token: str, only_planet_id: int | N
             )
         } if (_skip_cached and only_planet_id is None) else {}
         _now = time.time()
+        _known_planet_num = {
+            r["planet_id"]: r["planet_num"]
+            for r in con.execute(
+                "SELECT planet_id, planet_num FROM pp_char_planets WHERE character_id=?",
+                (character_id,),
+            ) if r["planet_num"] is not None
+        }
 
         _scan_ts = time.time()        # anchor for projecting buffer depletion between scans
 
@@ -760,7 +788,18 @@ def _fetch_planets(character_id: int, access_token: str, only_planet_id: int | N
                             if tid and amt:
                                 pads[tid] = pads.get(tid, 0) + amt
                 except Exception:
-                    pass
+                    _detail = None
+
+                # A detail read that failed writes NOTHING. The UPSERT below always ran, so a
+                # timeout or a 5xx on this one endpoint overwrote a perfectly good colony with
+                # `is_extractor=0` and NULLs for products, pads, sim state, storage and — the one
+                # that compounds — `esi_expires`, while stamping a FRESH `scanned_at`. The planner,
+                # the dashboard and Setup Analysis then read a blank colony rather than a stale one,
+                # and with the expiry gone every caller believed it was due for a re-read. Losing
+                # this scan is always better than destroying the last good one.
+                if _detail is None:
+                    _failed += 1
+                    continue
 
                 # Capture ALL tiers present (uncollapsed) before the highest-tier-only collapse
                 # below discards the evidence — this is what lets a hybrid (extraction + chained
@@ -857,13 +896,21 @@ def _fetch_planets(character_id: int, access_token: str, only_planet_id: int | N
                 except Exception:
                     checkpoint_at = None
 
-                # Fetch planet name to derive in-system ordinal (e.g. "01B-88 VIII" → 8)
+                # Fetch planet name to derive in-system ordinal (e.g. "01B-88 VIII" → 8).
+                # Skipped when we already worked it out: a planet's position in its system does not
+                # change, so this is a once-per-planet lookup that was being repeated on every
+                # scan — the other unconditional request the alert-driven rescan pays for.
+                planet_num = _known_planet_num.get(planet_id)
                 try:
+                    if planet_num is not None:
+                        raise _AlreadyKnown
                     pinfo = esi_http.get(f"universe/planets/{planet_id}/", client=client)
                     pinfo.raise_for_status()
                     pname = pinfo.json().get("name", "")
                     last_word = pname.strip().split()[-1] if pname.strip() else ""
                     planet_num = _roman_to_int(last_word)
+                except _AlreadyKnown:
+                    pass
                 except Exception:
                     pass
 
@@ -895,10 +942,11 @@ def _fetch_planets(character_id: int, access_token: str, only_planet_id: int | N
 
         con.commit()
         if _skip_cached:
-            log.info("planet scan char=%s fetched=%d skipped(cached)=%d", character_id, _fetched, _skipped)
-        return {"fetched": _fetched, "skipped": _skipped}
+            log.info("planet scan char=%s fetched=%d skipped(cached)=%d failed=%d",
+                     character_id, _fetched, _skipped, _failed)
+        return {"fetched": _fetched, "skipped": _skipped, "failed": _failed}
     except Exception:
-        return {"fetched": _fetched, "skipped": _skipped}
+        return {"fetched": _fetched, "skipped": _skipped, "failed": _failed}
     finally:
         if con is not None:
             con.close()

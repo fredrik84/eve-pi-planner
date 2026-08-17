@@ -745,9 +745,30 @@ def refresh_char_planets(character_id: int, context_id: int = Depends(require_co
         finally:
             con.close()
     scan = _fetch_planets(character_id, token)
+    _clear_scan_failure(character_id, scan)
     cache_invalidate(charlist_key(context_id))
     return {"ok": True, "skills_updated": bool(skills),
             "planets_fetched": scan["fetched"], "planets_skipped_cached": scan["skipped"]}
+
+
+def _clear_scan_failure(character_id: int, scan: dict) -> None:
+    """A successful hand rescan clears the unattended-scan failure marker.
+
+    Without this the amber dot is permanent: only the alert job ever cleared the flag, and it only
+    runs for characters that still have a due alert — so a user who fixed the problem kept the
+    warning forever, under a tooltip that told them to rescan.
+    """
+    if (scan or {}).get("failed", 0):
+        return
+    con = get_connection()
+    try:
+        con.execute("UPDATE pp_characters SET scan_failed_at=NULL WHERE character_id=?",
+                    (character_id,))
+        con.commit()
+    except Exception:
+        pass
+    finally:
+        con.close()
 
 
 @router.post("/api/characters/{character_id}/refresh-planet/{planet_id}")
@@ -767,5 +788,6 @@ def refresh_one_planet(character_id: int, planet_id: int, context_id: int = Depe
     if not token:
         raise HTTPException(status_code=400, detail="No valid token for character")
     scan = _fetch_planets(character_id, token, only_planet_id=planet_id)
+    _clear_scan_failure(character_id, scan)
     cache_invalidate(charlist_key(context_id))
     return {"ok": True, "planets_fetched": scan["fetched"], "planets_skipped_cached": scan["skipped"]}

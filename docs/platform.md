@@ -178,10 +178,18 @@ Why this is cheap, and the four guards that keep it that way — the design cons
 
 | Guard | What it does |
 |---|---|
-| Single-planet reads | `_fetch_planets(..., only_planet_id=)` — one call per colony, not the ~7 a full character rescan costs |
-| `esi_expires` gate | Skip anything ESI will not have regenerated yet. This is also what keeps the feature on the right side of the never-query-before-`Expires` rule in CLAUDE.md — **note that the single-planet path deliberately does NOT self-check the cache** (`_cached_expiry` is only built when `only_planet_id is None`), which is correct for the button a human presses and is why the check is explicit here |
+| Single-planet reads | `_fetch_planets(..., only_planet_id=)` — scoped to the one colony, not the whole character |
+| `esi_expires` gate | Skip anything ESI will not have regenerated yet. This is what keeps the feature on the right side of the never-query-before-`Expires` rule in CLAUDE.md — **note the single-planet path deliberately does NOT self-check the cache** (`_cached_expiry` is only built when `only_planet_id is None`), which is correct for the button a human presses and is exactly why the check has to be explicit here |
 | Dead-token filter | A character whose `refresh_token` is falsy is never called for. This is why the NOT NULL bug in `_refresh_token` had to be fixed first — until it was, no token was ever *marked* dead |
-| `_SCAN_BUDGET_PER_TICK` | Hard cap per 15-min tick. Over-budget colonies are held back, not sent unverified — a brake that does not depend on any estimate of volume being right |
+| `_SCAN_BUDGET_PER_TICK` | Hard cap for the **whole tick**, not per context — `_process_context` runs once per account, so a per-context cap would silently multiply by the number of accounts. Reset at the top of `check_and_send_notifications`; over-budget colonies are held back, not sent unverified |
+
+**Count the requests honestly.** One target is **two** ESI requests in the steady state, not one:
+`characters/{cid}/planets/` (the list, always) and `characters/{cid}/planets/{pid}/` (the detail).
+It was four until the two static lookups were made conditional — `universe/names/` is now skipped
+when the system is already in `solar_systems`, and `universe/planets/{pid}/` when the planet's
+in-system ordinal is already stored. Both answers are immutable, so this is pure caching; both also
+speed up the hand rescan. **Worst case is therefore 20 targets x 2 = 40 requests per 15-minute tick
+for the entire app**, whatever the number of accounts.
 
 Because a scan happens per *send*, and sends back off (below), an ignored problem costs about four
 reads on day one and two a day after — against ~96 per character per day for the blanket-timer
@@ -198,12 +206,21 @@ without it a problem that genuinely recurs weekly would be permanently demoted t
 one already went out inside the window, so a newly-detected problem always fires at once. That is
 what makes a 12h cap safe, and `test_alert_cadence.py` asserts it directly rather than assuming it.
 
-**A colony that could not be read is held back, not reported.** User's call, 2026-08-17: an alert we
-cannot verify is not sent. The transient case (timeout, 5xx — which leave the token valid) is
-recorded in `pp_characters.scan_failed_at`, which both backs the retry off by
-`_SCAN_RETRY_AFTER_H` and drives an **amber** dot on the character card, distinct from the red
-"re-add this character". Without that third state a valid-token character whose reads keep failing
-would show green while its alerts were silently paused.
+**A colony that could not be CHECKED is held back, not reported.** User's call, 2026-08-17: an
+alert we cannot verify is not sent. That covers all four ways a check does not happen — a failed
+read, a dead token, the retry brake after a transient failure, and running out of tick budget —
+because in every one of them the only thing left to report from is the stale data the feature
+exists to stop trusting. The one case that is NOT held back is a colony inside its `esi_expires`
+window: ESI has nothing newer to give, so that data is current by definition and the alert is sent
+having been verified without a request.
+
+The transient case (timeout, 5xx — which leave the token valid) is recorded in
+`pp_characters.scan_failed_at`, which both backs the retry off by `_SCAN_RETRY_AFTER_H` and drives
+an **amber** dot on the character card, distinct from the red "re-add this character". Without that
+third state a valid-token character whose reads keep failing would show green while its alerts were
+silently paused. A successful hand rescan clears it (`_clear_scan_failure`), so the dot's own
+"Rescan to check now" is true — the job alone could never clear it for a character that no longer
+has a due alert, which would have left healthy characters amber forever.
 
 **Not covered:** the `reaction_*` kinds carry no `planet_id` — they read industry jobs, a different
 ESI path — so they are deliberately outside this first cut and keep their old cadence.
