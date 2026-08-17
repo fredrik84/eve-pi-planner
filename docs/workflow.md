@@ -65,6 +65,20 @@ These failures are *not* regressions:
   so basket BOM demand resolves to 0 upstream of any planet placement. They pass on prod.
 - `test_reactions.py` must run *inside* the container
   (`docker compose cp test_reactions.py web:/srv/app/`).
+- **The container layout: `/srv/app` is the project root, the package is `/srv/app/app`.** The
+  working dir is `/srv/app`, so a test copied to `web:/srv/app/` runs with `docker compose exec -T
+  web python3 test_x.py` and no `PYTHONPATH`. Application code goes one level deeper —
+  `docker compose cp app/notifications.py web:/srv/app/app/notifications.py`, or
+  `docker compose cp app web:/srv/app/` for the whole tree, which merges into `/srv/app/app`.
+  Copying `app` to `web:/srv/` instead silently creates a SECOND package that shadows the real one
+  under some invocations, and the tests then pass against a tree that is half stale.
+- **The image can be older than your working tree.** Nothing is bind-mounted, so a test that fails
+  on an `ImportError` for a symbol you can see in the file is telling you the container has an
+  older copy — sync the tree (above) before believing any failure. `docker compose restart web` is
+  needed for anything the RUNNING server serves (feature registry, endpoints); a test that only
+  imports modules does not need it.
+- If the container ends up in a crash loop after a bad copy, `docker compose up -d --force-recreate
+  web` restores it from the image; `restart` alone will not, since the filesystem changes persist.
 - Local `pp_planets` lacks the `diameter` column that prod has.
 - `scripts/seed_hybrid_fixture.py` can hit a UNIQUE violation on reseed when orphaned
   `pp_char_planets` rows survive a context-scoped wipe — delete by `character_id` directly.
