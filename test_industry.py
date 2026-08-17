@@ -51,6 +51,23 @@ def _industry_js() -> str:
                      for f in sorted(glob.glob(os.path.join(here, "static", "industry*.js"))))
 
 
+def _module_source(mod) -> str:
+    """A module's source — or a PACKAGE's, joined across its submodules.
+
+    `inspect.getsource` on a package returns `__init__.py` alone, which after the TODO-34 split is
+    thirty lines of re-exports. An assertion counting occurrences across the module would then be
+    measuring the wrong file: `== 2` fails loudly, but `not in` would have passed vacuously. Same
+    problem `_industry_js` solves for the frontend, same answer.
+    """
+    import inspect
+    import os as _os
+    if not hasattr(mod, "__path__"):
+        return inspect.getsource(mod)
+    d = list(mod.__path__)[0]
+    return "\n".join(open(_os.path.join(d, f), encoding="utf-8").read()
+                     for f in sorted(_os.listdir(d)) if f.endswith(".py"))
+
+
 def _seed_con() -> sqlite3.Connection:
     # The recipe graphs are cached per process now, so a test seeding its own synthetic SDE must
     # drop that cache or it silently plans against whatever the previous test loaded.
@@ -2001,6 +2018,23 @@ def test_what_you_marked_as_sourced_stops_being_something_to_buy():
         F.feature_enabled_for = real_flag
 
 
+def test_the_scheduler_stays_io_free():
+    """`app/industry/schedule` is documented as pure: prebuilt graphs and params in, jobs and a
+    schedule out, owning no endpoint, DB handle or market lookup. That was a promise in a docstring
+    and nothing else — and splitting it into six modules is exactly when a stray `get_connection`
+    would slip into one of them unnoticed. Now it is checked."""
+    print("test_the_scheduler_stays_io_free")
+    import os
+    from app.industry import schedule as sched_mod
+    d = list(sched_mod.__path__)[0]
+    for f in sorted(os.listdir(d)):
+        if not f.endswith(".py"):
+            continue
+        src = open(os.path.join(d, f), encoding="utf-8").read()
+        for banned in ("get_connection", "app.markets", "@router"):
+            check(f"{f} does not reach for {banned}", banned not in src)
+
+
 def test_two_orders_cannot_buy_the_same_contract_twice():
     """A blueprint copy on contract is ONE item. Planned apart, each order prices the market from
     scratch — so both would take the cheapest listing and the split would look CHEAPER on
@@ -3072,6 +3106,7 @@ def main():
     test_one_orders_jobs_can_never_satisfy_anothers()
     test_per_order_stock_is_first_come_first_served()
     test_what_you_marked_as_sourced_stops_being_something_to_buy()
+    test_the_scheduler_stays_io_free()
     test_two_orders_cannot_buy_the_same_contract_twice()
     test_two_orders_cannot_spend_the_same_owned_copy()
     test_per_order_plans_price_off_each_orders_real_cost()
@@ -5638,7 +5673,7 @@ def test_a_pinned_step_reads_as_a_choice_not_an_inference():
     print("test_a_pinned_step_reads_as_a_choice_not_an_inference")
     import inspect
     from app.industry import schedule as sched_mod
-    src = inspect.getsource(sched_mod)
+    src = _module_source(sched_mod)
     check("a pinned job carries the fact to the frontend", 't["site_pinned"] = site["pinned"]' in src)
     check("and the structure list says which of them you chose",
           '"pinned"' in inspect.getsource(sched_mod._sites_used))
