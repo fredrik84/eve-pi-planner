@@ -387,8 +387,13 @@ function _indCopyText(text) {
 async function indLoadRunning() {
   const el = document.getElementById('indRunning');
   if (!el) return;
+  // TODO §41: this section is now a fold (`#indRunningDetails`, industry.js). The job count used
+  // to live in an <h3> only visible once expanded — moved to a badge on the fold's own <summary>
+  // instead, so "how many jobs are running" still shows up collapsed.
+  const badge = document.getElementById('indRunningBadge');
   try {
     const d = await api('/api/industry/jobs');
+    if (badge) { const n = (d.jobs || []).length; badge.style.display = n > 0 ? '' : 'none'; badge.textContent = n > 0 ? String(n) : ''; }
     if (!d.jobs || !d.jobs.length) { el.innerHTML = ''; return; }
     const rows = d.jobs.map(j => {
       const ends = j.end_date ? new Date(j.end_date) : null;
@@ -398,6 +403,6 @@ async function indLoadRunning() {
         + `<span class="ind-run-char">${_esc(j.character_name)}</span> `
         + `<span class="ind-tree-cost">${left != null ? (left > 0 ? _fmtHours(left) + ' left' : 'ready') : _esc(j.status)}</span></div>`;
     }).join('');
-    el.innerHTML = `<h3 class="ind-install-title">In progress — ${d.jobs.length} job(s)</h3>${rows}`;
-  } catch (e) { el.innerHTML = ''; }
+    el.innerHTML = rows;
+  } catch (e) { el.innerHTML = ''; if (badge) badge.style.display = 'none'; }
 }

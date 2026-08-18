@@ -12,7 +12,28 @@
 let _indPicked = null;        // {type_id, name} currently selected in the picker
 let _indSearchTimer = null;
 
+// Status view vs Build Pipeline (TODO §41, docs/page-layout-2026-08.md) — same idea as the PI
+// Planner's setPiMode. Both panels render from the SAME fetched plan (_indPaintStatus calls both
+// _indRenderPlanBody and _indRenderPipelineBody off one `d`), so switching mode never re-plans.
+let _indMode = (() => { try { return localStorage.getItem('indMode') || 'status'; } catch (e) { return 'status'; } })();
+
+function setIndustryMode(mode) {
+  _indMode = (mode === 'pipeline') ? 'pipeline' : 'status';
+  const status = document.getElementById('indModeStatus');
+  const pipeline = document.getElementById('indModePipeline');
+  if (status) status.style.display = _indMode === 'status' ? '' : 'none';
+  if (pipeline) pipeline.style.display = _indMode === 'pipeline' ? '' : 'none';
+  document.querySelectorAll('.tab[data-tab="industry"][data-submode]').forEach(b =>
+    b.classList.toggle('active', b.dataset.submode === _indMode));
+  try { localStorage.setItem('indMode', _indMode); } catch (e) {}
+  if (typeof noteSubPage === 'function') noteSubPage('industry', _indMode);
+  // Nothing to repaint here — _indPaintStatus already writes BOTH modes' containers on every plan
+  // update regardless of which is visible (it's a pure-JS tree walk either way, not a fetch), so
+  // switching mode is a plain CSS toggle with no risk of showing a stale pipeline.
+}
+
 async function onIndustryTabOpen() {
+  setIndustryMode(_indMode);   // re-apply on every tab-open, same as onPlannerTabOpen -> setPiMode
   const tag = document.getElementById('indPreviewTag');
   if (tag) {
     const pub = typeof _features !== 'undefined' && _features.industry && _features.industry.enabled;
@@ -440,9 +461,18 @@ function _indPaintStatus(d, opts) {
   body.innerHTML = _indStatusHeadline(d)
     + `<div id="indInstall" class="ind-install"></div>`
     + _indRenderPlanBody(d)
-    + `<div id="indRunning" class="ind-install"></div>`;
+    // Folded (TODO §41) — "what's already cooking" is checked often but not on every visit, and
+    // costs nothing to reach collapsed since indLoadRunning fills in its own badge count below.
+    + `<details class="ind-details" id="indRunningDetails"><summary class="pp-card-title rx-fold-summary" style="font-size:14px">`
+    + `<span class="rx-fold-caret">▸</span>Currently running<span id="indRunningBadge" class="pp-fold-badge" style="display:none"></span></summary>`
+    + `<div id="indRunning" class="ind-install" style="margin-top:8px"></div></details>`;
   indRenderInstall(d.install);   // "do this now" — comes with the plan, no second round trip
   indMargCutLabel();             // the bulk control's live readout starts filled in, not blank
+  // The Build Pipeline is a different view of the SAME plan (TODO §41), painted here alongside the
+  // status body rather than lazily on switch — it's a pure-JS tree walk, not a fetch, so there is
+  // nothing to save by skipping it while the other mode is showing, and painting it here means
+  // switching modes is never the moment that shows stale content.
+  _indPaintPipeline(d);
   if (keep) {
     const run = document.getElementById('indRunning');
     if (run) run.innerHTML = keep.running;
@@ -452,6 +482,12 @@ function _indPaintStatus(d, opts) {
   }
   indLoadRunning();          // what's already cooking goes under the pipeline
   if (_indSourcingOpen !== null) indRenderSourcing();   // the card was just repainted under it
+}
+
+function _indPaintPipeline(d) {
+  const el = document.getElementById('indPipelineBody');
+  if (!el || !d) return;
+  el.innerHTML = _indRenderPipelineBody(d);
 }
 
 // One order, as the chip that names it in the queue line: position, who it is for, how far along,

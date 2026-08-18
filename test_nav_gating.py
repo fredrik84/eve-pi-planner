@@ -139,7 +139,7 @@ def main():
     print("logged-out visitors are not shown account-only tabs:")
     hidden = " ".join(_rule_targets(css, "", "display:none"))
     shown_li = " ".join(_rule_targets(css, "html.nav-li", "display:flex"))
-    for sel, label in [('.tab[data-pimode="build"]', "Find Buildables"),
+    for sel, label in [('.tab[data-tab="planner"][data-submode="build"]', "Find Buildables"),
                        ('.tab[data-tab="contribute"]', "Contribute")]:
         check(sel in hidden, f"{label} is hidden by default")
         check(sel in shown_li, f"{label} is restored only for html.nav-li (logged in)")
@@ -155,7 +155,7 @@ def main():
     check("_hideEmptyNavGroups" in js, "the runtime empty-group sweep exists")
 
     print("How it works is the default landing page, not Find Buildables:")
-    fb = re.search(r'<button[^>]*data-pimode="build"[^>]*>', html)
+    fb = re.search(r'<button[^>]*data-tab="planner"[^>]*data-submode="build"[^>]*>', html)
     hiw = re.search(r'<button[^>]*data-tab="howitworks"[^>]*>', html)
     check(bool(fb) and "active" not in fb.group(0), "the Find Buildables nav button is not active")
     check(bool(hiw) and "active" in hiw.group(0), "the How it works nav button is active")

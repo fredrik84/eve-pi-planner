@@ -187,8 +187,8 @@ function setPiMode(mode) {
   if (build) build.style.display = _piMode === 'build' ? '' : 'none';
   if (refill) refill.style.display = _piMode === 'refill' ? '' : 'none';
   // Highlight the active sidebar sub-item (both share data-tab="planner").
-  document.querySelectorAll('.tab[data-pimode]').forEach(b =>
-    b.classList.toggle('active', b.dataset.pimode === _piMode));
+  document.querySelectorAll('.tab[data-tab="planner"][data-submode]').forEach(b =>
+    b.classList.toggle('active', b.dataset.submode === _piMode));
   try { localStorage.setItem('piMode', _piMode); } catch (e) {}
   // The mode is the second half of the PI Planner's address (`/planner/refill`), so a link can name
   // it. Reported from here rather than only from the nav click, because switching to Refill after a
