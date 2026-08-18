@@ -92,12 +92,19 @@ three-kind pattern rather than leaving it as three independent folds:
 
 - **Landing dashboard**: `rxMetricsContent` + `rxDashboardContent` (the pending-jobs / stage list) —
   unchanged, already the always-open pair.
-- **Fold: "Formulas & shopping"** — merges the missing-formulas report (`reactions_missing_formulas`
-  — the direct equivalent of Manufacturing's missing-blueprint warning) into the Shopping list fold,
-  same badge-on-`<summary>` rule as Manufacturing's blueprints fold. Today the missing-formulas
-  report lives inside the shopping list's own "formulas to acquire" section already (docs/
-  reactions.md) — this is mostly a labelling/badge change, not a new data path.
-- **Fold: "Orders"** and **Fold: "Currently running / adopt orphans"** — unchanged, already folds.
+- **Fold: "Shopping list"** now also carries the missing-formulas report
+  (`reactions_missing_formulas` — the direct equivalent of Manufacturing's missing-blueprint
+  warning). **Correction, built 2026-08-18:** this doc originally assumed the report already lived
+  inside the shopping list's own "formulas to acquire" section — it didn't. `_rxMissingFormulaWarn`
+  rendered unconditionally in `rxDashboardContent`, on every visit whether or not anything was
+  missing, competing with the landing dashboard for attention. Moved into `_loadRxShoppingList`
+  (sourced from the dashboard's own cached `missing_formulas`, since the shopping-list fetch itself
+  doesn't carry it) with a count badge (`#rxShopMissingBadge`, `.pp-fold-badge`) on the fold's
+  `<summary>` — badge logic lives in `_rxUpdateShopMissingBadge`, run on every dashboard render
+  regardless of whether the fold has ever been opened, so the count is never stale even collapsed.
+- **Fold: "Orders"** — unchanged, already a fold. **No separate "Currently running" fold exists on
+  Reactions** — running jobs are rendered inline in `rxDashboardContent` as part of the landing
+  dashboard itself, not a distinct section; this doc's first draft listed one in error.
 - **Its own view?** — Reactions has no Build-Pipeline equivalent on the dashboard itself; the closest
   candidate is the Advanced/opportunities table (`rxAdvancedCard`), which is already the single most
   expensive computation on the page (per `_OPPS_CACHE_TTL`'s own comment) and already collapsed. It
@@ -115,9 +122,10 @@ under the same convention Manufacturing gets, not a structural rebuild.
 - **Neither page becomes tabs-only.** A landing dashboard + folds is still one page for the common
   case; only the pipeline view (Manufacturing) becomes a real navigation, because it's the one
   section that's genuinely a different task rather than more detail on the same one.
-- **No new badge/alert component.** "Alert if missing" is a count badge on a `<details><summary>` —
-  reuse whatever the admin-preview tag or the skill-gap warning already use for a small colored
-  count, not a new pattern.
+- **One new, small, shared badge class.** Neither the admin-preview tag nor the skill-gap warning
+  turned out to be a fold-summary count pill on closer look, so `.pp-fold-badge`
+  (`static/style-layout-admin.css`) is genuinely new — but it's one class, styled once, used by both
+  pages' folds (Reactions' shopping-list fold is the first caller). Not a per-page copy.
 - **Routing cost is real and bounded.** Only Manufacturing gains one route
   (`/manufacturing/pipeline` or similar sub-page, alongside the existing `TAB_SUBPAGES` model PI
   Planner already uses for Find Buildables / Refill). Reactions gains no new route at all under this
