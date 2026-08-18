@@ -905,6 +905,19 @@ document.addEventListener('DOMContentLoaded', () => {
     // would have gone to a mode the user never chose.
     switchTab(t.dataset.tab, t.dataset.pimode ? { sub: t.dataset.pimode } : undefined);
   }));
+  // Warm the Reactions dashboard's server-side cache (_DASHBOARD_CACHE_TTL, app/reactions/jobs.py)
+  // the moment the cursor lands on its nav button — that endpoint repairs and re-prices the whole
+  // plan, the single slowest fetch onReactionsTabOpen makes, so most of a mouse-driven click's
+  // hover-to-click gap is spent warming the cache instead of on the click itself. Fire-and-forget,
+  // once per page load: a miss just means the click pays the normal (now-cached-for-everyone-else)
+  // cost, never a regression.
+  let _rxPrefetched = false;
+  const rxNavBtn = document.querySelector('.tab[data-tab="reactions"]');
+  if (rxNavBtn) rxNavBtn.addEventListener('mouseenter', () => {
+    if (_rxPrefetched) return;
+    _rxPrefetched = true;
+    api('/api/reactions/jobs').catch(() => {});
+  });
   if (localStorage.getItem('navCollapsed') === '1') document.body.classList.add('nav-collapsed');
   // A planetary share link (/s/<id> path or the id injected by the server route) is a
   // one-shot "open this plan" intent → land on the plan once. _tryRestoreFromHash then

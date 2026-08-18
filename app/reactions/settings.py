@@ -11,8 +11,15 @@ from pydantic import BaseModel
 from app.sde import get_connection, ensure_once
 from app.esi import require_context
 from app.groups import member_group, is_group_manager
+from app.cache import cache_invalidate
 
 from app.reactions._router import router
+
+# Same Redis key jobs.py's _dashboard_cache_key builds — duplicated as a plain string rather than
+# imported, since jobs.py imports THIS module (settings must stay import-cycle-free, see module
+# docstring) and every setting here feeds the dashboard's pricing, so a save has to bust it too.
+def _dashboard_cache_key(context_id: int) -> str:
+    return f"rx:dash:{context_id}"
 
 # Group-configurable shipping/collateral rates — these are alliance-wide assumptions (courier
 # rates, insurance terms) that vary per alliance ("I doubt everyone has the same values"), so
@@ -362,6 +369,10 @@ def api_update_reaction_settings(req: ReactionSettingsUpdate, ctx: int = Depends
     ensure_reaction_settings_table()
     _upsert_settings("pp_reaction_settings", "group_id", group["id"], req)
     _invalidate_reaction_settings_cache()  # a group default affects every member — clear all
+    # Not busting rx:dash:* here: unlike the account-scoped settings above, this changes every
+    # member's dashboard at once and there's no per-group index of member context_ids to walk.
+    # A manager edit here is rare, so the dashboard's own _DASHBOARD_CACHE_TTL (20s) is the
+    # backstop — same "TTL is enough" tradeoff as _OPPS_CACHE_TTL.
     return get_reaction_settings(group["id"])
 
 
@@ -388,6 +399,7 @@ def api_update_account_reaction_settings(req: ReactionSettingsUpdate, ctx: int =
     ensure_account_reaction_settings_table()
     _upsert_settings("pp_account_reaction_settings", "context_id", ctx, req)
     _invalidate_reaction_settings_cache(ctx)
+    cache_invalidate(_dashboard_cache_key(ctx))
     return {"ok": True}
 
 
@@ -446,6 +458,7 @@ def api_set_reaction_cadence(req: ReactionCadenceUpdate, ctx: int = Depends(requ
         raise HTTPException(status_code=400, detail="Days must be 0 or more")
     from app.industry.settings import set_max_reaction_job_days
     set_max_reaction_job_days(ctx, days if (days or 0) > 0 else None)
+    cache_invalidate(_dashboard_cache_key(ctx))
     return _cadence_payload(ctx)
 
 
@@ -460,4 +473,5 @@ def api_reset_account_reaction_settings(ctx: int = Depends(require_context)):
     finally:
         con.close()
     _invalidate_reaction_settings_cache(ctx)
+    cache_invalidate(_dashboard_cache_key(ctx))
     return _group_defaults(ctx)

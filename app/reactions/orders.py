@@ -19,7 +19,7 @@ from app.reactions.graph import (
 from app.reactions.jobs import (
     _character_capacities, ensure_reaction_orders_table, ensure_reaction_assignments_table,
     _allocate_and_insert, formula_concurrency_caps, _cap_jobs, give_back_order_runs,
-    live_reaction_runs,
+    live_reaction_runs, _invalidate_dashboard_cache,
 )
 
 
@@ -361,6 +361,7 @@ def assign_reaction_order(order_id: int, req: OrderAssignRequest, context_id: in
         order = _order_row(con, order_id)
     finally:
         con.close()
+    _invalidate_dashboard_cache(context_id)
     return {"order": order, "runs_assigned": result["runs_assigned"], "characters": result["characters"]}
 
 
@@ -395,6 +396,7 @@ def clear_reaction_order_assignments(order_id: int, context_id: int = Depends(re
             # endpoint exists to make recoverable. Reset it so the order can move again.
             con.execute("UPDATE pp_reaction_orders SET assigned_runs=0 WHERE id=?", (order_id,))
             con.commit()
+            _invalidate_dashboard_cache(context_id)
             return {"ok": True, "cleared": 0, "runs_returned": order["assigned_runs"] or 0,
                     "running_cleared": 0, "order": _order_row(con, order_id)}
         _release_order_slots(con, order_id, context_id)
@@ -403,6 +405,7 @@ def clear_reaction_order_assignments(order_id: int, context_id: int = Depends(re
         after = _order_row(con, order_id)
     finally:
         con.close()
+    _invalidate_dashboard_cache(context_id)
     returned = (order["assigned_runs"] or 0) - (after["assigned_runs"] or 0)
     return {"ok": True, "cleared": len(rows), "runs_returned": returned,
             "running_cleared": _running_rows_among(context_id, rows), "order": after}
@@ -465,6 +468,7 @@ def set_reaction_order_price(order_id: int, req: OrderPriceRequest,
         order = _order_row(con, order_id)
     finally:
         con.close()
+    _invalidate_dashboard_cache(context_id)
     return {"order": order, **_order_report(context_id, order)}
 
 
@@ -494,6 +498,7 @@ def set_reaction_order_status(order_id: int, req: OrderStatusRequest, context_id
         order = _order_row(con, order_id)
     finally:
         con.close()
+    _invalidate_dashboard_cache(context_id)
     return {"order": order, "freed_slots": freed}
 
 

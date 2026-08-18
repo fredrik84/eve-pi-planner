@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from app.sde import get_connection, load_pi_data, ensure_once
 from app.db import add_columns
 from app.markets import resolve_market_data
-from app.cache import cache_invalidate, charlist_key
+from app.cache import cache_invalidate, charlist_key, cache_get_json, cache_set_json
 from app.esi import require_context, _get_valid_token
 from app import completions
 
@@ -257,6 +257,7 @@ def refresh_industry_jobs(force: int = 0, context_id: int = Depends(require_cont
     # bust that cache or the tab keeps showing stale/absent jobs until the next colony rescan.
     if refreshed:
         cache_invalidate(charlist_key(context_id))
+        _invalidate_dashboard_cache(context_id)
     return {"ok": True, "characters_refreshed": refreshed, "characters_skipped": skipped}
 
 
@@ -867,6 +868,7 @@ def mark_reaction(req: ReactionMarkRequest, context_id: int = Depends(require_co
     _assert_owns_character(context_id, req.character_id)
     set_reaction_manual(context_id, req.character_id, req.type_id, req.tier_order,
                         req.jobs, req.state)
+    _invalidate_dashboard_cache(context_id)
     return {"ok": True}
 
 
@@ -2642,6 +2644,7 @@ def assign_reaction(req: AssignRequest, context_id: int = Depends(require_contex
         con.commit()
     finally:
         con.close()
+    _invalidate_dashboard_cache(context_id)
     # `stock_covered` is why the plan may hold fewer stages than the caller asked for — returned so
     # the UI can say so rather than leaving a stage to vanish silently.
     return {"ok": True, "replaced": replaced, "stock_covered": stock_covered}
@@ -2718,6 +2721,7 @@ def adopt_orphan_job(req: AdoptOrphanRequest, context_id: int = Depends(require_
         con.commit()
     finally:
         con.close()
+    _invalidate_dashboard_cache(context_id)
     return {"ok": True}
 
 
@@ -2737,6 +2741,7 @@ def unassign_reaction(assignment_id: int, context_id: int = Depends(require_cont
         con.commit()
     finally:
         con.close()
+    _invalidate_dashboard_cache(context_id)
     return {"ok": True}
 
 
@@ -2785,6 +2790,7 @@ def unassign_all_reactions(context_id: int = Depends(require_context)):
             con.commit()
     finally:
         con.close()
+    _invalidate_dashboard_cache(context_id)
     return {"ok": True, "cleared": cleared, "orders_reset": orders_reset}
 
 
@@ -3104,8 +3110,41 @@ def _unplanned_running_totals(context_id: int, unplanned_running: list[tuple[int
     return totals
 
 
+_DASHBOARD_CACHE_TTL = 20  # short-lived Redis cache for the whole /api/reactions/jobs payload.
+# This endpoint was the slowest thing on tab-open: it repairs the plan (restage + level + split,
+# each its own pass over every assignment row), then re-reads it and prices it live off today's
+# market — all synchronously, on every plain tab-open/tab-switch, even when nothing had changed
+# since the last read. The repair passes are idempotent (re-running them against an already-tidy
+# plan is a no-op), so skipping them for a few seconds costs nothing but the redundant work.
+# Every endpoint that can change the plan's shape or its inputs (assign/unassign/mark/adopt-orphan,
+# order actions, cadence and settings saves, a jobs refresh that actually pulled something new)
+# invalidates this key explicitly via _invalidate_dashboard_cache — the TTL is only a safety net
+# for the rare write path that doesn't, same "TTL is enough" convention as _OPPS_CACHE_TTL.
+
+
+def _dashboard_cache_key(context_id: int) -> str:
+    return f"rx:dash:{context_id}"
+
+
+def _invalidate_dashboard_cache(context_id: int) -> None:
+    cache_invalidate(_dashboard_cache_key(context_id))
+
+
 @router.get("/api/reactions/jobs")
 def get_industry_jobs(context_id: int = Depends(require_context)):
+    """Personal reaction-job status for the Reactions wizard's dashboard page — see
+    `_get_industry_jobs_uncached` for the payload shape. Cached for `_DASHBOARD_CACHE_TTL`
+    seconds, invalidated on every write that can change it (see `_invalidate_dashboard_cache`)."""
+    cache_key = _dashboard_cache_key(context_id)
+    cached = cache_get_json(cache_key)
+    if cached is not None:
+        return cached
+    result = _get_industry_jobs_uncached(context_id)
+    cache_set_json(cache_key, result, ttl=_DASHBOARD_CACHE_TTL)
+    return result
+
+
+def _get_industry_jobs_uncached(context_id: int) -> dict:
     """Personal reaction-job status for the Reactions wizard's dashboard page: currently
     running jobs (from the last refresh), a capacity summary (free slots right now, across
     every character that's opted into tracking), the per-character opt-in breakdown so the UI
