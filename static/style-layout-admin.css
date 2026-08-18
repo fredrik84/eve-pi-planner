@@ -800,6 +800,15 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .rx-fold-caret.rx-fold-caret-open { transform: rotate(90deg); }
 
+/* A small count badge on a folded <summary> — TODO §41 (docs/page-layout-2026-08.md): a fold that
+   collapses something the user genuinely needs to know about (missing blueprints/formulas) must
+   still say so without opening it. Not "rx-" prefixed like the fold classes above even though
+   Reactions uses it first — this one is meant for Manufacturing's equivalent fold too, so it isn't
+   scoped to one page by name. */
+.pp-fold-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 18px;
+  height: 18px; padding: 0 5px; margin: 0 6px; border-radius: 9px; font-size: 11px; font-weight: 600;
+  background: var(--clr-red); color: #fff; }
+
 /* Full opportunity list: click a row to fold out the secondary dimensions (steps, job cost,
    sell-order price, ISK/m³, market depth) as a wrapped block below it, instead of cramming them
    in as more table columns — the table only ever has the 6 core columns, so it never overflows
