@@ -80,11 +80,66 @@ The bug is **fixed** (archive). The report row is still open: `POST /api/bugs/{i
 `complete`, or the Admin tab. It needs an admin session, so it is the user's to do. **Do not UPDATE
 `pp_bugs` by hand.**
 
-## Nothing else open
+## 39. Build pipeline stages a node by its distance from the root, not by what it needs
 
-That is the whole backlog as of 2026-08-18: two "if it comes back" notes, one measurement to read
-in a few days, two recorded-not-scheduled risks, and a bug row to close. **No open item is a
-build.** Everything else is in
+Reported live (2026-08-18): the pipeline puts Pressurized Oxidizers and Reinforced Carbon Fiber in
+Stage 3 — correctly, they need Stage 2 output — but groups Rolled Tungsten Alloy, Dysporite,
+Caesarium Cadmide and Promethium Mercurite into the same Stage 3, even though those four need
+nothing but fuel blocks and could run as early as Stage 1.
+
+**Likely cause, not yet fixed:** `_indComputeTiers` (`static/industry-shopping.js:14-46`) walks the
+build tree from the root and sets `e.tier = Math.max(e.tier, depth)`, where `depth` is how many
+hops the walk took to REACH that node from the root — not how many build layers sit BELOW it. A
+simple item consumed directly near the root gets a shallow depth (⇒ a late stage number) regardless
+of how few steps its own recipe needs. This is the same category of bug reactions.md already named
+and fixed for the reactions side — "[a stage is a DEPTH, not a position in a
+list](docs/reactions.md)" (`chain_stage_state`/`level_stage_runs` compute a chain's stage from its
+OWN inputs, recursively; the pipeline instead reads it off tree position).
+
+**First step:** replace the pre-order "depth when first reached" with a post-order pass — for each
+build node, `stage = 0` if it has no build children, else `1 + max(stage(child) for child in
+inputs if child.decision === 'build')`. Verify against the live report: the four fuel-block-only
+reactions should land at the same stage as whatever else builds straight off fuel blocks, one stage
+earlier than Pressurized Oxidizers/Reinforced Carbon Fiber.
+
+## 40. Manufacturing tab-open: same cache/prefetch treatment as Reactions
+
+Reactions' dashboard fetch (`GET /api/reactions/jobs`) was slow on every tab-open — it repaired and
+re-priced the whole plan synchronously every time, even flipping back to a tab you'd just left.
+Fixed 2026-08-18 (commit `be4e467`): a 20s Redis cache on the response, invalidated explicitly on
+every write that can change it, plus a hover-prefetch on the nav button.
+
+User asked for the Manufacturing/Industry tab to get the same treatment; not yet measured there.
+
+**First step:** find Industry's equivalent tab-open fetch (`onIndustryTabOpen`, `static/industry.js`
+— likely the queue/plan endpoint in `app/industry/orders.py` or `sourcing.py`) and check whether it
+re-plans/re-prices synchronously on every open the way Reactions did. If so, apply the same
+pattern: a short TTL Redis cache plus `cache_invalidate` calls on the write endpoints that touch the
+queue, orders, or settings it depends on.
+
+## 41. Manufacturing page is one long scroll — split it like the user described
+
+The page has grown to carry Do This Now, the metrics tiles, missing blueprints, the shopping list,
+and the build pipeline all on one continuous scroll, and it now reads as too much to take in at
+once.
+
+User's proposed split (2026-08-18): **Do This Now + metrics** as the landing dashboard; **Missing
+Blueprints + Shopping List** combined into one section (with an alert badge when blueprints are
+missing, since that's the thing that actually blocks a build); **Build Pipeline** broken out as its
+own view.
+
+**First step:** this needs an actual IA proposal before any code — which pieces become tabs/sub-nav
+vs. collapsible sections on one page, and how that fits the existing `TAB_SUBPAGES`/nav model in
+`static/app.js` (CLAUDE.md: adding an SPA page means `index.html`, `TAB_SLUGS`, `SPA_PAGES` in
+`app/main.py`, and the nav button all agree, checked by `test_routing.py`). Reactions doesn't have
+a directly reusable layout to copy — it's deliberately kept single-page — so this is a design pass,
+not a mechanical split.
+
+## Nothing else open beyond the above
+
+That is the whole backlog as of 2026-08-18: three fresh items just opened (§39-41), two "if it comes
+back" notes, one measurement to read in a few days, two recorded-not-scheduled risks, and a bug row
+to close. Everything else is in
 [TODO-archive.md](TODO-archive.md) — the one-line shipped list, the detail worth keeping, and the
 closed-with-reasoning verdicts. **Read it before reopening anything.**
 
