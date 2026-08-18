@@ -80,20 +80,39 @@ The bug is **fixed** (archive). The report row is still open: `POST /api/bugs/{i
 `complete`, or the Admin tab. It needs an admin session, so it is the user's to do. **Do not UPDATE
 `pp_bugs` by hand.**
 
-## 40. Manufacturing tab-open: same cache/prefetch treatment as Reactions
+## 40. Manufacturing's queue-plan is uncached server-side — investigated, deliberately NOT built yet
 
-Reactions' dashboard fetch (`GET /api/reactions/jobs`) was slow on every tab-open — it repaired and
-re-priced the whole plan synchronously every time, even flipping back to a tab you'd just left.
-Fixed 2026-08-18 (commit `be4e467`): a 20s Redis cache on the response, invalidated explicitly on
-every write that can change it, plus a hover-prefetch on the nav button.
+Investigated 2026-08-18. **The felt-latency symptom Reactions had is not actually present here**,
+which changes the shape of this item:
 
-User asked for the Manufacturing/Industry tab to get the same treatment; not yet measured there.
+- `onIndustryTabOpen` → `indRefreshStatus` (`static/industry.js:335`) already paints instantly from
+  a localStorage cache (`_indReadPlanCache`, keyed on the queue signature + the deployed JS
+  version, 15-minute max age) and only THEN calls `POST /api/industry/queue-plan` in the background
+  to check it and repaint if anything changed. That's a stale-while-revalidate pattern Reactions
+  never had — the queue status view does not block on the network the way the Reactions dashboard
+  did before §39's sibling fix.
+- The single-product preview modal (`indRunPlan` → `POST /api/industry/plan`,
+  `static/industry-plan.js:104`) is deliberately always-live, no cache — it's an interactive
+  what-if tool (drag a knob, see the new plan), so caching it would be wrong, not slow.
+- `_run_queue_plan` (`app/industry/orders.py:605`) — the shared core both endpoints call — IS
+  genuinely expensive and uncached server-side: full recipe-graph resolution, live market pricing,
+  a `build_plan` tree walk per queued product, skill/character assignment. So there's a real
+  server-load argument for caching it, same as Reactions — just not a user-facing latency one.
 
-**First step:** find Industry's equivalent tab-open fetch (`onIndustryTabOpen`, `static/industry.js`
-— likely the queue/plan endpoint in `app/industry/orders.py` or `sourcing.py`) and check whether it
-re-plans/re-prices synchronously on every open the way Reactions did. If so, apply the same
-pattern: a short TTL Redis cache plus `cache_invalidate` calls on the write endpoints that touch the
-queue, orders, or settings it depends on.
+**Why this wasn't just built the way §39/Reactions' cache was:** Reactions' cache had maybe eight
+write endpoints across three files to invalidate correctly. Manufacturing's plan depends on order
+CRUD, build-rule settings, ME/TE overrides, the always-buy blacklist, the reaction policy, structure
+and rig configuration, and sourcing/stock ticks — spread across `app/industry/orders.py`,
+`settings.py`, `structures.py`, `blueprints/*.py`, and more. Missing one of those invalidation paths
+means silently serving a stale cost/schedule in a tool whose entire job is telling a builder what to
+buy and what it costs — the one place in this app where "quietly wrong" is worse than "quietly
+slow." That's a correctness call, not a mechanical port of the Reactions pattern, so it wasn't made
+solo.
+
+**Left for a real decision:** either (a) a genuine reduction-in-server-load pass — enumerate every
+write path above and wire `cache_invalidate` the way Reactions got it, accepting the larger surface
+and testing it thoroughly; or (b) leave it alone — the felt-latency problem this item was opened to
+fix already has a working answer, and the remaining cost is server CPU, not user-facing lag.
 
 ## 41. Manufacturing AND Reactions are both one long scroll — split BOTH to one shared pattern
 
