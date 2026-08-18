@@ -447,8 +447,15 @@ function _indPaintStatus(d, opts) {
   // §41) — painted here alongside the status body rather than lazily on tab-switch, since both are
   // a pure-JS pass over `d`, not a fetch: nothing is saved by skipping the ones not currently
   // showing, and painting all of them up front means switching tabs never shows stale content.
-  _indPaintBlueprints(d);
-  _indPaintPipeline(d);
+  // Viewing one order alone (_indViewOrderId, below) is sticky across a repaint — a background
+  // refresh (mark-done, add-to-queue) must not silently snap the reader back to the combined view.
+  if (_indViewOrderId && (_indOrders || []).some(o => o.id === _indViewOrderId)) {
+    _indSetViewOrder(_indViewOrderId);
+  } else {
+    _indViewOrderId = null;   // the order it was showing is gone (delivered/cancelled) — fall back
+    _indPaintBlueprints(d);
+    _indPaintPipeline(d);
+  }
   if (local) {
     const src = document.getElementById('indSourcing');
     if (src) src.innerHTML = keepSourcing;
@@ -461,7 +468,7 @@ function _indPaintStatus(d, opts) {
 function _indPaintBlueprints(d) {
   const el = document.getElementById('indBlueprintsBody');
   if (!el || !d) return;
-  el.innerHTML = _indRenderPlanBody(d);
+  el.innerHTML = _indOrderViewSelector() + _indRenderPlanBody(d);
   const badge = document.getElementById('indBlueprintsTabBadge');
   if (badge) {
     const n = _indBlueprintBadgeCount(d);
@@ -473,7 +480,70 @@ function _indPaintBlueprints(d) {
 function _indPaintPipeline(d) {
   const el = document.getElementById('indPipelineBody');
   if (!el || !d) return;
-  el.innerHTML = _indRenderPipelineBody(d);
+  el.innerHTML = _indOrderViewSelector() + _indRenderPipelineBody(d);
+}
+
+// ── Viewing one order alone ─────────────────────────────────────────────────────────────────
+// The queue plan is one combined batch — two orders wanting the same product share ONE build, so
+// there is no way to isolate "just this order's materials" out of it after the fact. Reported live
+// (2026-08-18): with several orders queued their pipelines/shopping lists read as one intermixed
+// blob, which is the right default for "just start building" but wrong for "let me look at ONE in
+// particular." Answered by re-planning that ONE order alone through the existing single-product
+// endpoint (`POST /api/industry/plan` — the same one the picker/preview modal already uses), with
+// that order's own saved overrides, rather than by requiring `industry_per_order_plans` (which
+// still reports combined materials/notices even when it schedules per order — see
+// `plan_queue_per_order`'s own docstring) or building a second planning endpoint.
+let _indViewOrderId = null;   // null = the combined queue view
+
+function _indOrderViewSelector() {
+  const orders = _indOrders || [];
+  if (orders.length < 2) return '';   // nothing to pick between with 0 or 1 orders queued
+  const opts = [`<option value=""${_indViewOrderId ? '' : ' selected'}>All orders (combined)</option>`]
+    .concat(orders.map(o => `<option value="${o.id}"${_indViewOrderId === o.id ? ' selected' : ''}>`
+      + `${_esc(o.name)}${o.quantity > 1 ? ' ×' + o.quantity.toLocaleString() : ''}</option>`));
+  return `<div class="ind-order-view"><label>Viewing: <select onchange="_indSetViewOrder(this.value ? Number(this.value) : null)">`
+    + opts.join('') + `</select></label></div>`;
+}
+
+async function _indSetViewOrder(orderId) {
+  _indViewOrderId = orderId || null;
+  if (!_indViewOrderId) {
+    // Back to the combined plan already in hand — no fetch, same instant repaint as any other tab.
+    if (_indLastPlan) { _indPaintBlueprints(_indLastPlan); _indPaintPipeline(_indLastPlan); }
+    return;
+  }
+  const o = (_indOrders || []).find(x => x.id === _indViewOrderId);
+  if (!o) return;
+  const bpEl = document.getElementById('indBlueprintsBody');
+  const pipeEl = document.getElementById('indPipelineBody');
+  const loading = _indOrderViewSelector() + _indLoadingHtml('Planning this order…', 'Same cost engine, just this one alone.');
+  if (bpEl) bpEl.innerHTML = loading;
+  if (pipeEl) pipeEl.innerHTML = loading;
+  let d;
+  try {
+    d = await apiSend('POST', '/api/industry/plan', {
+      type_id: o.product_type_id, quantity: o.quantity,
+      prioritize_speed: _indPrioSpeed(), marginal_pct: _indMarginalPct(),
+      force_build_ids: o.force_build_ids || [], me_te_overrides: o.me_te_overrides || {},
+      margin_pct: o.margin_pct != null ? o.margin_pct : _indMarginPct(),
+      build_reactions_anyway: !!o.build_reactions,
+      // A plan owns its own sources so the materials shown match what the queued build would
+      // actually count — same rule the preview modal follows (industry-plan.js:113).
+      ...(_featureActive('industry_plan_sources') && (o.source_keys || []).length
+            ? { source_keys: o.source_keys } : {}),
+      ..._indFacilityBonus(),
+    });
+  } catch (e) {
+    const err = `<div class="pp-empty">${_esc(e.message || 'Plan failed')}</div>`;
+    if (bpEl) bpEl.innerHTML = _indOrderViewSelector() + err;
+    if (pipeEl) pipeEl.innerHTML = '';
+    return;
+  }
+  // Only paint if the reader hasn't already switched to a different order (or back to combined)
+  // while this was in flight.
+  if (_indViewOrderId !== o.id) return;
+  _indPaintBlueprints(d);
+  _indPaintPipeline(d);
 }
 
 // One order, as the chip that names it in the queue line: position, who it is for, how far along,

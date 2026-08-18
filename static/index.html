@@ -788,22 +788,27 @@
       <div class="pp-card" id="indStatusCard" style="display:none">
         <h2 class="pp-card-title">Your build</h2>
         <div class="ind-body">
-          <div class="ind-setup-bar">
-            <div id="indSetupSummary" class="ind-setup-summary"></div>
-            <button class="ind-secondary-btn" onclick="indOpenSetup()">Job slots</button>
-          </div>
           <div id="indConnectReminder" class="ind-connect-reminder" style="display:none"></div>
           <div id="indShareBox" class="ind-share-box" style="display:none"></div>
           <!-- Four sections of one build, as tabs rather than a long scroll or a second page —
                TODO §41, docs/page-layout-2026-08.md (ppSelectTab/ppRestoreTab, utils.js). All four
-               render from the SAME fetched plan, so switching tabs never re-plans. -->
+               render from the SAME fetched plan, so switching tabs never re-plans. The job-slot /
+               blueprint summary bar used to sit ABOVE this strip — reported live (2026-08-18) as
+               two toolbars stacked on top of each other — so it now lives inside the Status tab's
+               own content instead of pinned over every tab. -->
           <div class="pp-tabstrip" data-tabgroup="ind">
             <button class="pp-tab-btn" data-tabgroup="ind" data-tabkey="status" onclick="ppSelectTab('ind','status')">Status</button>
             <button class="pp-tab-btn" data-tabgroup="ind" data-tabkey="blueprints" onclick="ppSelectTab('ind','blueprints')">Blueprints &amp; materials<span id="indBlueprintsTabBadge" class="pp-fold-badge" style="display:none"></span></button>
             <button class="pp-tab-btn" data-tabgroup="ind" data-tabkey="pipeline" onclick="ppSelectTab('ind','pipeline')">Build Pipeline</button>
             <button class="pp-tab-btn" data-tabgroup="ind" data-tabkey="running" onclick="ppSelectTab('ind','running')">Currently running<span id="indRunningTabBadge" class="pp-fold-badge" style="display:none"></span></button>
           </div>
-          <div data-tabpanel="ind" data-tabkey="status" id="indStatusBody"></div>
+          <div data-tabpanel="ind" data-tabkey="status">
+            <div class="ind-setup-bar">
+              <div id="indSetupSummary" class="ind-setup-summary"></div>
+              <button class="ind-secondary-btn" onclick="indOpenSetup()">Job slots</button>
+            </div>
+            <div id="indStatusBody"></div>
+          </div>
           <div data-tabpanel="ind" data-tabkey="blueprints" id="indBlueprintsBody" style="display:none"></div>
           <div data-tabpanel="ind" data-tabkey="pipeline" id="indPipelineBody" style="display:none">
             <p class="pp-empty">Nothing queued yet — add a build to see its pipeline.</p>

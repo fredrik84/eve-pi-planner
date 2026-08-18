@@ -1081,6 +1081,12 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-setup-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 4px 0 12px; flex-wrap: wrap; }
 .ind-setup-summary { font-size: 13px; color: var(--clr-text-soft); }
 .ind-setup-summary b { color: #fff; }
+
+/* "Viewing: [order picker]" atop Blueprints & materials / Build Pipeline — reported live
+   (2026-08-18): several queued orders read as one intermixed plan, which is right for "just start
+   building" but wrong for looking at one order in particular. */
+.ind-order-view { margin-bottom: 10px; font-size: 13px; color: var(--clr-text-soft); }
+.ind-order-view select { margin-left: 4px; }
 .ind-connect-reminder { font-size: 12px; color: #d8b46a; background: #241f14; border: 1px solid #3a3322; border-radius: 6px; padding: 7px 12px; margin-bottom: 12px; }
 .ind-link-btn { background: none; border: none; color: var(--clr-accent); cursor: pointer; font-size: 12px; padding: 0; text-decoration: underline; text-underline-offset: 2px; }
 .ind-modal-section { margin-top: 16px; }
