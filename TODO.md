@@ -117,23 +117,37 @@ re-plans/re-prices synchronously on every open the way Reactions did. If so, app
 pattern: a short TTL Redis cache plus `cache_invalidate` calls on the write endpoints that touch the
 queue, orders, or settings it depends on.
 
-## 41. Manufacturing page is one long scroll — split it like the user described
+## 41. Manufacturing AND Reactions are both one long scroll — split BOTH to one shared pattern
 
-The page has grown to carry Do This Now, the metrics tiles, missing blueprints, the shopping list,
-and the build pipeline all on one continuous scroll, and it now reads as too much to take in at
-once.
+Manufacturing has grown to carry Do This Now, the metrics tiles, missing blueprints, the shopping
+list, and the build pipeline all on one continuous scroll — too much to take in at once. Reactions
+has the same shape of problem (dashboard + metrics + shopping list + orders + the advanced
+opportunity table all on one page), softened today only by `<details>` folds on the heavier
+sections (`rxShoppingCard`, `rxOrdersCard`, `rxAdvancedCard` — collapsed by default, see
+`static/index.html` ~592-680).
 
-User's proposed split (2026-08-18): **Do This Now + metrics** as the landing dashboard; **Missing
-Blueprints + Shopping List** combined into one section (with an alert badge when blueprints are
-missing, since that's the thing that actually blocks a build); **Build Pipeline** broken out as its
-own view.
+**Explicitly one item, not two** (2026-08-18, user): design the split ONCE and apply it to both
+pages, so Manufacturing and Reactions don't end up with two different navigation/section idioms for
+the same underlying problem (landing dashboard vs. drill-down detail). Reactions' existing
+`<details>` folds are the closer-to-shipped half of a pattern already — worth treating as the
+starting draft for the shared design rather than starting from a blank page, but they're folds on
+ONE page, not the tabs/sub-nav split Manufacturing needs, so the two aren't automatically the same
+thing yet.
 
-**First step:** this needs an actual IA proposal before any code — which pieces become tabs/sub-nav
-vs. collapsible sections on one page, and how that fits the existing `TAB_SUBPAGES`/nav model in
+User's proposed split for Manufacturing (2026-08-18): **Do This Now + metrics** as the landing
+dashboard; **Missing Blueprints + Shopping List** combined into one section (with an alert badge
+when blueprints are missing, since that's the thing that actually blocks a build); **Build
+Pipeline** broken out as its own view. Reactions' equivalent grouping is not yet proposed — do that
+as part of the same design pass, not as an afterthought once Manufacturing's shape is already
+locked in.
+
+**First step:** a single IA proposal covering both pages before any code — which pieces become
+tabs/sub-nav vs. collapsible sections, and how that fits the existing `TAB_SUBPAGES`/nav model in
 `static/app.js` (CLAUDE.md: adding an SPA page means `index.html`, `TAB_SLUGS`, `SPA_PAGES` in
-`app/main.py`, and the nav button all agree, checked by `test_routing.py`). Reactions doesn't have
-a directly reusable layout to copy — it's deliberately kept single-page — so this is a design pass,
-not a mechanical split.
+`app/main.py`, and the nav button all agree, checked by `test_routing.py`). Write the pattern down
+(section boundaries, when something is a fold vs. a separate tab, badge/alert convention) before
+touching either page's markup, and apply it to Manufacturing and Reactions in the same pass so
+neither is left as the odd one out.
 
 ## Nothing else open beyond the above
 
