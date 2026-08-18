@@ -116,37 +116,20 @@ fix already has a working answer, and the remaining cost is server CPU, not user
 
 ## 41. Manufacturing AND Reactions are both one long scroll — split BOTH to one shared pattern
 
-Manufacturing has grown to carry Do This Now, the metrics tiles, missing blueprints, the shopping
-list, and the build pipeline all on one continuous scroll — too much to take in at once. Reactions
-has the same shape of problem (dashboard + metrics + shopping list + orders + the advanced
-opportunity table all on one page), softened today only by `<details>` folds on the heavier
-sections (`rxShoppingCard`, `rxOrdersCard`, `rxAdvancedCard` — collapsed by default, see
-`static/index.html` ~592-680).
+**Built as a horizontal tab strip, on `dev`, pending the user's look before it ships to `main`.**
+[docs/page-layout-2026-08.md](docs/page-layout-2026-08.md) has the shape as actually shipped —
+`ppSelectTab`/`ppRestoreTab` (`static/utils.js`), four tabs on Manufacturing's status card, four on
+Reactions' dashboard.
 
-**Explicitly one item, not two** (2026-08-18, user): design the split ONCE and apply it to both
-pages, so Manufacturing and Reactions don't end up with two different navigation/section idioms for
-the same underlying problem (landing dashboard vs. drill-down detail). Reactions' existing
-`<details>` folds are the closer-to-shipped half of a pattern already — worth treating as the
-starting draft for the shared design rather than starting from a blank page, but they're folds on
-ONE page, not the tabs/sub-nav split Manufacturing needs, so the two aren't automatically the same
-thing yet.
-
-User's proposed split for Manufacturing (2026-08-18): **Do This Now + metrics** as the landing
-dashboard; **Missing Blueprints + Shopping List** combined into one section (with an alert badge
-when blueprints are missing, since that's the thing that actually blocks a build); **Build
-Pipeline** broken out as its own view. Reactions' equivalent grouping is not yet proposed — do that
-as part of the same design pass, not as an afterthought once Manufacturing's shape is already
-locked in.
-
-**Proposal written, not yet built:** [docs/page-layout-2026-08.md](docs/page-layout-2026-08.md).
-Three kinds of section (landing dashboard / fold with a count badge / its own view), a concrete
-assignment of every existing section on both pages into one of the three, and why Reactions turns
-out to need less change than Manufacturing (two of its three fold candidates already exist). Needs a
-read and a go/no-go before any markup moves — this is the kind of call the user wanted made
-deliberately, not one to lock in solo while they're away. **Next step once approved:** Reactions
-first (smaller, mostly labelling — the missing-formulas badge and folding orders/running under the
-shared convention), THEN Manufacturing's larger move (the new Build Pipeline sub-page and its
-routing), per the proposal's own ordering rationale.
+**One real correction along the way, worth keeping in mind for the next page like this:** the first
+build used `<details>` folds for the secondary sections and gave Manufacturing's Build Pipeline its
+own route (`/manufacturing/pipeline`, a new sidebar sub-item, the full `TAB_SUBPAGES`/`SPA_PAGES`
+routing machinery) — tested, working, and the wrong shape. The user's actual intent was a tab strip
+within the page, nothing folded, nothing on its own address; only surfaced once they saw the built
+result, not from the written proposal alone. Rebuilt same day; the routing detour left no trace in
+the final diff (the `data-pimode`→`data-submode` generalization it needed was reverted
+byte-for-byte). **Lesson, not just a note:** for a UI-shape decision like this, a written proposal
+is necessary but not sufficient — build the smallest piece and show it before the second page.
 
 ## Nothing else open beyond the above
 
