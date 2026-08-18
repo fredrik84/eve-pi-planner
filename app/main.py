@@ -432,6 +432,9 @@ SPA_PAGES = (
     "admin/stats", "admin/jobs", "admin/features", "admin/users", "admin/submissions",
     "admin/bugs", "admin/baskets", "admin/groups", "admin/moon-goo", "admin/corp-wallet",
     "admin/cleanup", "admin/audit",
+    # Manufacturing's two modes (TODO §41, docs/page-layout-2026-08.md): the status view and the
+    # Build Pipeline are different tasks sharing one plan fetch, not one page's whole scroll.
+    "manufacturing/status", "manufacturing/pipeline",
 )
 
 # ── Pages that can name a RECORD ───────────────────────────────────────────────────────────────

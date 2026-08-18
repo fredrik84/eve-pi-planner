@@ -344,6 +344,15 @@ async function indLoadBpcPrices(inst, ids, miss) {
   });
 }
 
+// How many things in the fold below actually BLOCK a build — missing prints and copies short of
+// runs. Not the marginal-savings strip (a choice, not a blocker) and not the pin note
+// (informational): the badge is for "something needs your attention", not "there is detail here".
+function _indBlueprintBadgeCount(d) {
+  const short = (d.requirements || []).filter(r => (r.runs_short || 0) > 0).length;
+  const missing = ((d.metrics && d.metrics.missing_blueprints) || []).length;
+  return short + missing;
+}
+
 function _indRenderPlanBody(d) {
   _indReqMeTe = {};
   (d.requirements || []).forEach(r => { _indReqMeTe[r.type_id] = { me: r.me, te: r.te, me_source: r.me_source }; });
@@ -353,18 +362,45 @@ function _indRenderPlanBody(d) {
   const tiersData = roots ? _indComputeTiers(roots, new Set((d.shopping_list || []).map(x => x.type_id)))
     : { byType: {}, tiers: {}, maxT: 0, inputsOf: {}, consumersOf: {} };
   const stageModel = _indStageModel(tiersData);
-  // Skill blockers belong HERE, not only in the preview modal. `_indSkillWarn` now says nothing
-  // unless a step is genuinely blocked, so this adds a line to the build page exactly when nobody
-  // on the account can install one of the jobs it is telling you to start — which is the one moment
-  // it is worth the space. The queue plan has always carried `skill_gaps` (_run_queue_plan); it was
-  // simply never rendered, so the blocker was visible while planning and invisible while building.
-  return _indNotices(d, true)
+  // TODO §41 (docs/page-layout-2026-08.md): the notices (missing prints, copies short, the pin
+  // note, skill blockers) and the shopping list used to sit in the main scroll unconditionally —
+  // moved into one "Blueprints & materials" fold, badged with the blocker count above so a build
+  // that can't actually be installed is never silently hidden just because the fold is collapsed.
+  // Skill blockers stay here (not duplicated into the pipeline view too): `_indMissingBpWarn`
+  // fires a background contract-price fetch keyed by a render-instance id, and rendering the whole
+  // notice stack twice per plan update would fire it twice for nothing.
+  const badgeN = _indBlueprintBadgeCount(d);
+  const badge = badgeN > 0 ? `<span class="pp-fold-badge">${badgeN}</span>` : '';
+  return `<details class="ind-details" id="indBlueprintsDetails"><summary class="pp-card-title rx-fold-summary" style="font-size:14px">`
+    + `<span class="rx-fold-caret">▸</span>Blueprints &amp; materials${badge}</summary>`
+    + `<div style="margin-top:8px">`
+    + _indNotices(d, true)
     + _indMarginalBar(d)
-    + _indReactionPolicyBar(d)
-    + _indPipelineHtml(d, tiersData, stageModel)
-    + _indStepsHtml(d, stageModel)
-    + `<details class="ind-details"><summary>Shopping list (${(d.shopping_list || []).length})</summary>`
-    + _indShoppingSections(d, stageModel) + `</details>`;
+    + `<details class="ind-details" open><summary>Shopping list (${(d.shopping_list || []).length})</summary>`
+    + _indShoppingSections(d, stageModel) + `</details>`
+    + `</div></details>`;
+}
+
+// The Build Pipeline, as its OWN view (TODO §41) — a different way of reading the same plan
+// (a visualization, not a checklist), long enough and computed heavily enough to want its own
+// scroll position rather than competing with "Do this now" for the top of the status page.
+// Recomputes tiersData/stageModel independently of _indRenderPlanBody — a duplicate pure-JS tree
+// walk, not a fetch, and simpler than threading shared state between two render paths triggered
+// from the same call site but reasoned about separately.
+function _indRenderPipelineBody(d) {
+  const roots = d.trees || d.tree;
+  const tiersData = roots ? _indComputeTiers(roots, new Set((d.shopping_list || []).map(x => x.type_id)))
+    : { byType: {}, tiers: {}, maxT: 0, inputsOf: {}, consumersOf: {} };
+  const stageModel = _indStageModel(tiersData);
+  // _indPipelineHtml already returns '' when there is nothing buildable in the tree — this is just
+  // the friendlier empty state for the WHOLE view (matching #indPipelineBody's own placeholder in
+  // index.html) rather than a blank card.
+  const pipeline = _indPipelineHtml(d, tiersData, stageModel);
+  if (!pipeline) return '<p class="pp-empty">Nothing queued yet — add a build to see its pipeline.</p>';
+  // The reaction-policy bar is a control over what THIS view schedules (react in-house vs. buy the
+  // output), not over what to buy — it belongs beside the pipeline it changes, not the shopping
+  // list. `_indStepsHtml` is the step-through checklist for the same stages the pipeline draws.
+  return _indReactionPolicyBar(d) + pipeline + _indStepsHtml(d, stageModel);
 }
 
 // Task waves only carry type_id; keep a name cache from the last plan's shopping/tree so waves read nicely.

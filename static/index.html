@@ -52,8 +52,8 @@
           <div class="nav-group-hd"><span class="nav-ico">PI</span><span class="nav-lbl">Planetary Industry</span></div>
           <button class="tab tab-sub" data-tab="analyze"><span class="nav-ico">AN</span><span class="nav-lbl">Setup Analysis</span></button>
           <button class="tab tab-sub" data-tab="planetary"><span class="nav-ico">PP</span><span class="nav-lbl">Planetary Planning</span></button>
-          <button class="tab tab-sub" data-tab="planner" data-pimode="refill"><span class="nav-ico">RF</span><span class="nav-lbl">Refill a plan</span></button>
-          <button class="tab tab-sub" data-tab="planner" data-pimode="build"><span class="nav-ico">FB</span><span class="nav-lbl">Find Buildables</span></button>
+          <button class="tab tab-sub" data-tab="planner" data-submode="refill"><span class="nav-ico">RF</span><span class="nav-lbl">Refill a plan</span></button>
+          <button class="tab tab-sub" data-tab="planner" data-submode="build"><span class="nav-ico">FB</span><span class="nav-lbl">Find Buildables</span></button>
           <button class="tab tab-sub" data-tab="layout"><span class="nav-ico">FL</span><span class="nav-lbl">Factory Layout</span></button>
           <button class="tab tab-sub" data-tab="planetdb"><span class="nav-ico">DB</span><span class="nav-lbl">Planet DB</span></button>
           <button class="tab tab-sub" data-tab="contribute"><span class="nav-ico">?</span><span class="nav-lbl">Contribute</span></button>
@@ -62,7 +62,8 @@
         <div class="nav-group nav-group-tabs" id="industryNavGroup">
           <div class="nav-group-hd"><span class="nav-ico">IN</span><span class="nav-lbl">Industry</span></div>
           <button class="tab tab-sub" data-tab="reactions"><span class="nav-ico">RX</span><span class="nav-lbl">Reactions</span></button>
-          <button class="tab tab-sub" data-tab="industry"><span class="nav-ico">MF</span><span class="nav-lbl">Manufacturing</span></button>
+          <button class="tab tab-sub" data-tab="industry" data-submode="status"><span class="nav-ico">MF</span><span class="nav-lbl">Manufacturing</span></button>
+          <button class="tab tab-sub" data-tab="industry" data-submode="pipeline"><span class="nav-ico">BP</span><span class="nav-lbl">Build Pipeline</span></button>
           <button class="tab tab-sub" data-tab="indhowitworks"><span class="nav-ico">i</span><span class="nav-lbl">How it works</span></button>
         </div>
         <div class="nav-group" id="adminNavGroup">
@@ -774,6 +775,12 @@
     <div id="tab-industry" class="tab-panel" style="display:none">
       <div id="indGate" style="display:none"></div>
       <div id="indContent">
+      <!-- Two modes, same idea as the PI Planner's Find Buildables / Refill split (setPiMode):
+           the status view (what's cooking, what to buy, right now) and the Build Pipeline (the
+           stage-by-stage visualization of the same plan) are different tasks, not more detail on
+           one page — TODO §41, docs/page-layout-2026-08.md. Both render from the same fetched
+           plan (`_indPaintStatus`/`_indRenderPipelineBody`), so switching mode never re-plans. -->
+      <div id="indModeStatus">
       <!-- Status first: if something is cooking you want to check on it, not start another build. -->
       <div class="pp-card" id="indStatusCard" style="display:none">
         <h2 class="pp-card-title">Your build</h2>
@@ -801,6 +808,18 @@
           <button class="ind-primary-btn ind-big-btn" onclick="indOpenPlanner()">Plan a new build</button>
         </div>
       </div>
+      </div><!-- /indModeStatus -->
+
+      <div id="indModePipeline" style="display:none">
+        <div class="pp-card" id="indPipelineCard">
+          <h2 class="pp-card-title">Build Pipeline</h2>
+          <div class="ind-body">
+            <div id="indPipelineBody">
+              <p class="pp-empty">Nothing queued yet — add a build to see its pipeline.</p>
+            </div>
+          </div>
+        </div>
+      </div><!-- /indModePipeline -->
       </div><!-- /indContent -->
     </div><!-- /tab-industry -->
 
