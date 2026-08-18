@@ -344,9 +344,10 @@ async function indLoadBpcPrices(inst, ids, miss) {
   });
 }
 
-// How many things in the fold below actually BLOCK a build — missing prints and copies short of
-// runs. Not the marginal-savings strip (a choice, not a blocker) and not the pin note
-// (informational): the badge is for "something needs your attention", not "there is detail here".
+// How many things on the Blueprints & materials tab actually BLOCK a build — missing prints and
+// copies short of runs. Not the marginal-savings strip (a choice, not a blocker) and not the pin
+// note (informational): the badge is for "something needs your attention", not "there is detail
+// here". Drives the tab button's own badge (`#indBlueprintsTabBadge`, set in _indPaintBlueprints).
 function _indBlueprintBadgeCount(d) {
   const short = (d.requirements || []).filter(r => (r.runs_short || 0) > 0).length;
   const missing = ((d.metrics && d.metrics.missing_blueprints) || []).length;
@@ -364,21 +365,16 @@ function _indRenderPlanBody(d) {
   const stageModel = _indStageModel(tiersData);
   // TODO §41 (docs/page-layout-2026-08.md): the notices (missing prints, copies short, the pin
   // note, skill blockers) and the shopping list used to sit in the main scroll unconditionally —
-  // moved into one "Blueprints & materials" fold, badged with the blocker count above so a build
-  // that can't actually be installed is never silently hidden just because the fold is collapsed.
-  // Skill blockers stay here (not duplicated into the pipeline view too): `_indMissingBpWarn`
-  // fires a background contract-price fetch keyed by a render-instance id, and rendering the whole
-  // notice stack twice per plan update would fire it twice for nothing.
-  const badgeN = _indBlueprintBadgeCount(d);
-  const badge = badgeN > 0 ? `<span class="pp-fold-badge">${badgeN}</span>` : '';
-  return `<details class="ind-details" id="indBlueprintsDetails"><summary class="pp-card-title rx-fold-summary" style="font-size:14px">`
-    + `<span class="rx-fold-caret">▸</span>Blueprints &amp; materials${badge}</summary>`
-    + `<div style="margin-top:8px">`
-    + _indNotices(d, true)
+  // this is now the content of the "Blueprints & materials" TAB (see index.html's tab strip),
+  // badged on the tab button with the blocker count so a build that can't actually be installed is
+  // never silently missed just because that tab isn't the one showing. Skill blockers stay here
+  // (not duplicated into the pipeline tab too): `_indMissingBpWarn` fires a background
+  // contract-price fetch keyed by a render-instance id, and rendering the whole notice stack twice
+  // per plan update would fire it twice for nothing.
+  return _indNotices(d, true)
     + _indMarginalBar(d)
     + `<details class="ind-details" open><summary>Shopping list (${(d.shopping_list || []).length})</summary>`
-    + _indShoppingSections(d, stageModel) + `</details>`
-    + `</div></details>`;
+    + _indShoppingSections(d, stageModel) + `</details>`;
 }
 
 // The Build Pipeline, as its OWN view (TODO §41) — a different way of reading the same plan

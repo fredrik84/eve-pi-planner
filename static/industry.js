@@ -12,28 +12,11 @@
 let _indPicked = null;        // {type_id, name} currently selected in the picker
 let _indSearchTimer = null;
 
-// Status view vs Build Pipeline (TODO §41, docs/page-layout-2026-08.md) — same idea as the PI
-// Planner's setPiMode. Both panels render from the SAME fetched plan (_indPaintStatus calls both
-// _indRenderPlanBody and _indRenderPipelineBody off one `d`), so switching mode never re-plans.
-let _indMode = (() => { try { return localStorage.getItem('indMode') || 'status'; } catch (e) { return 'status'; } })();
-
-function setIndustryMode(mode) {
-  _indMode = (mode === 'pipeline') ? 'pipeline' : 'status';
-  const status = document.getElementById('indModeStatus');
-  const pipeline = document.getElementById('indModePipeline');
-  if (status) status.style.display = _indMode === 'status' ? '' : 'none';
-  if (pipeline) pipeline.style.display = _indMode === 'pipeline' ? '' : 'none';
-  document.querySelectorAll('.tab[data-tab="industry"][data-submode]').forEach(b =>
-    b.classList.toggle('active', b.dataset.submode === _indMode));
-  try { localStorage.setItem('indMode', _indMode); } catch (e) {}
-  if (typeof noteSubPage === 'function') noteSubPage('industry', _indMode);
-  // Nothing to repaint here — _indPaintStatus already writes BOTH modes' containers on every plan
-  // update regardless of which is visible (it's a pure-JS tree walk either way, not a fetch), so
-  // switching mode is a plain CSS toggle with no risk of showing a stale pipeline.
-}
-
 async function onIndustryTabOpen() {
-  setIndustryMode(_indMode);   // re-apply on every tab-open, same as onPlannerTabOpen -> setPiMode
+  // Four sections of one build, as tabs (TODO §41, docs/page-layout-2026-08.md) — restores
+  // whichever was last read, same convenience a URL gives a real page, without one: this is a
+  // section of the Manufacturing page, not a separate address.
+  ppRestoreTab('ind', 'status');
   const tag = document.getElementById('indPreviewTag');
   if (tag) {
     const pub = typeof _features !== 'undefined' && _features.industry && _features.industry.enabled;
@@ -451,37 +434,40 @@ function _indPaintStatus(d, opts) {
   const body = document.getElementById('indStatusBody');
   if (!body || !d) return;
   const local = !!(opts && opts.local);
-  // The running-jobs list and the sourcing panel are separate fetches, and a hand mark can't change
-  // either of them — so a local repaint carries their current markup across instead of paying for
-  // two more round trips (the sourcing one plans an order from scratch) to redraw the same thing.
-  const keep = local ? {
-    running: (document.getElementById('indRunning') || {}).innerHTML || '',
-    sourcing: (document.getElementById('indSourcing') || {}).innerHTML || '',
-  } : null;
-  body.innerHTML = _indStatusHeadline(d)
-    + `<div id="indInstall" class="ind-install"></div>`
-    + _indRenderPlanBody(d)
-    // Folded (TODO §41) — "what's already cooking" is checked often but not on every visit, and
-    // costs nothing to reach collapsed since indLoadRunning fills in its own badge count below.
-    + `<details class="ind-details" id="indRunningDetails"><summary class="pp-card-title rx-fold-summary" style="font-size:14px">`
-    + `<span class="rx-fold-caret">▸</span>Currently running<span id="indRunningBadge" class="pp-fold-badge" style="display:none"></span></summary>`
-    + `<div id="indRunning" class="ind-install" style="margin-top:8px"></div></details>`;
+  // The sourcing panel is nested inside the headline (order chips) and a hand mark can't change
+  // it, so a local repaint carries its current markup across instead of paying for another round
+  // trip (it plans an order from scratch) to redraw the same thing. Currently-running jobs are now
+  // a separate tab panel (TODO §41, `#indRunning` — a sibling in index.html, not part of this
+  // innerHTML) that this repaint never touches at all, so there is nothing left to preserve for it.
+  const keepSourcing = local ? ((document.getElementById('indSourcing') || {}).innerHTML || '') : null;
+  body.innerHTML = _indStatusHeadline(d) + `<div id="indInstall" class="ind-install"></div>`;
   indRenderInstall(d.install);   // "do this now" — comes with the plan, no second round trip
   indMargCutLabel();             // the bulk control's live readout starts filled in, not blank
-  // The Build Pipeline is a different view of the SAME plan (TODO §41), painted here alongside the
-  // status body rather than lazily on switch — it's a pure-JS tree walk, not a fetch, so there is
-  // nothing to save by skipping it while the other mode is showing, and painting it here means
-  // switching modes is never the moment that shows stale content.
+  // Blueprints & materials and the Build Pipeline are the other two tabs of the same build (TODO
+  // §41) — painted here alongside the status body rather than lazily on tab-switch, since both are
+  // a pure-JS pass over `d`, not a fetch: nothing is saved by skipping the ones not currently
+  // showing, and painting all of them up front means switching tabs never shows stale content.
+  _indPaintBlueprints(d);
   _indPaintPipeline(d);
-  if (keep) {
-    const run = document.getElementById('indRunning');
-    if (run) run.innerHTML = keep.running;
+  if (local) {
     const src = document.getElementById('indSourcing');
-    if (src) src.innerHTML = keep.sourcing;
+    if (src) src.innerHTML = keepSourcing;
     return;
   }
-  indLoadRunning();          // what's already cooking goes under the pipeline
+  indLoadRunning();          // what's already cooking, in its own tab
   if (_indSourcingOpen !== null) indRenderSourcing();   // the card was just repainted under it
+}
+
+function _indPaintBlueprints(d) {
+  const el = document.getElementById('indBlueprintsBody');
+  if (!el || !d) return;
+  el.innerHTML = _indRenderPlanBody(d);
+  const badge = document.getElementById('indBlueprintsTabBadge');
+  if (badge) {
+    const n = _indBlueprintBadgeCount(d);
+    badge.style.display = n > 0 ? '' : 'none';
+    badge.textContent = n > 0 ? String(n) : '';
+  }
 }
 
 function _indPaintPipeline(d) {

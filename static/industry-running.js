@@ -387,10 +387,10 @@ function _indCopyText(text) {
 async function indLoadRunning() {
   const el = document.getElementById('indRunning');
   if (!el) return;
-  // TODO §41: this section is now a fold (`#indRunningDetails`, industry.js). The job count used
-  // to live in an <h3> only visible once expanded — moved to a badge on the fold's own <summary>
-  // instead, so "how many jobs are running" still shows up collapsed.
-  const badge = document.getElementById('indRunningBadge');
+  // TODO §41: this section is now its own tab (`#indRunning`, index.html). The job count used to
+  // live in an <h3> only visible once that tab was open — moved to a badge on the TAB BUTTON
+  // instead, so "how many jobs are running" is visible from whichever tab you're actually on.
+  const badge = document.getElementById('indRunningTabBadge');
   try {
     const d = await api('/api/industry/jobs');
     if (badge) { const n = (d.jobs || []).length; badge.style.display = n > 0 ? '' : 'none'; badge.textContent = n > 0 ? String(n) : ''; }

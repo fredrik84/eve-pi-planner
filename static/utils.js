@@ -248,3 +248,35 @@ function _connectScopeNote() {
     + ' remembers the last permissions you granted, so anything narrower would strip what your'
     + ' character already had.';
 }
+
+// ── Horizontal tab strip ────────────────────────────────────────────────────────────────
+// A row of tabs over a set of panels within ONE page — TODO §41 (docs/page-layout-2026-08.md):
+// Manufacturing and Reactions each had a long vertical scroll of sections, and the fix is a
+// shared in-page tab strip, not a fold-per-section or a separate page/route per section. Deliberately
+// NOT wired into the router: these are sections of one page, not addresses — `TAB_SUBPAGES` is for
+// the few pages that are genuinely several pages behind one nav entry (Admin, PI Planner). Persisted
+// per GROUP to localStorage so a reload keeps you on the tab you were reading, same convenience the
+// URL gives a real page without needing a URL.
+//
+// Markup convention: `data-tabgroup="<group>"` on both the strip's buttons and (redundantly, so a
+// panel can be selected with the exact same selector shape) is NOT required on panels — panels use
+// `data-tabpanel="<group>"` instead, so a panel and a button are never confused by a shared
+// attribute name. `data-tabkey` names which tab a button selects / a panel belongs to.
+function ppSelectTab(group, key) {
+  document.querySelectorAll(`[data-tabgroup="${group}"]`).forEach(btn =>
+    btn.classList.toggle('pp-tab-active', btn.dataset.tabkey === key));
+  document.querySelectorAll(`[data-tabpanel="${group}"]`).forEach(panel =>
+    panel.style.display = panel.dataset.tabkey === key ? '' : 'none');
+  try { localStorage.setItem(`ppTab:${group}`, key); } catch (e) {}
+}
+
+// Called once when a page/tab opens, to land on whichever tab was last read (or `fallback` on a
+// first visit). Safe to call every time the page opens, cheap either way. Returns the resolved
+// key so a caller whose tabs lazy-load (Reactions' Shopping list / Advanced) can trigger that
+// load for whichever tab is now showing, without reaching into localStorage a second time itself.
+function ppRestoreTab(group, fallback) {
+  let key = fallback;
+  try { key = localStorage.getItem(`ppTab:${group}`) || fallback; } catch (e) {}
+  ppSelectTab(group, key);
+  return key;
+}

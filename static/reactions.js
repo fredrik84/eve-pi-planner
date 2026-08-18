@@ -113,12 +113,18 @@ async function onReactionsTabOpen() {
   // and saved. Returns true when the gate is showing, in which case we skip loading the dashboard.
   if (await _rxApplyGate()) return;
 
-  // Lazy, same idea as the shopping list fold: the Advanced table is collapsed by default and
-  // its opportunity list is the single most expensive thing this tab can compute (full reaction
-  // graph walk + a market fetch per candidate + job-cost ESI lookups) — only recompute it when
-  // it's actually visible, not on every tab-open/post-assign refresh.
-  const advDetails = document.getElementById('rxAdvancedDetails');
-  if (advDetails && advDetails.open) _rxLoadAdvancedTable(true);
+  // Four sections of one dashboard, as tabs (TODO §41, docs/page-layout-2026-08.md) — restores
+  // whichever was last read, so this call is safe on every re-invocation of this function, not
+  // just a real tab-open: ppSelectTab already wrote the user's last CLICK to storage, so restoring
+  // it again here is a no-op read that keeps them on the same tab through a post-assign refresh.
+  // Shopping list and Advanced are lazy — their own fetch is the single most expensive/slowest
+  // thing this tab can compute (Advanced: a full reaction-graph walk + a market fetch per
+  // candidate; Shopping: market-price lookups) — so only load them here if that IS the tab now
+  // showing, not on every refresh regardless of which tab the user is reading.
+  const activeTab = ppRestoreTab('rx', 'overview');
+  if (activeTab === 'advanced') _rxLoadAdvancedTable(true);
+  if (activeTab === 'shopping') _loadRxShoppingList();
+
   _loadReactionsDashboard();
   _rxStructureRecommend();
   // Pull live job status from ESI in the background (respects ESI's ~5min cache server-side, so
@@ -126,32 +132,23 @@ async function onReactionsTabOpen() {
   // GET above only reads our cached job table — without this, a job you just installed in-game
   // never appears, since nothing else triggers the ESI fetch.
   _rxRefreshJobs(false);
-  // Lazy: the shopping list is folded by default (see #rxShoppingDetails) and only worth
-  // computing when actually visible — market-price lookups behind it can take a moment, and
-  // most tab-opens/refreshes don't need this data recomputed at all. _onRxShoppingToggle
-  // fetches it the first time it's unfolded; here we only re-fetch if it's ALREADY open (e.g.
-  // this is a post-assign/cancel refresh and the user had it expanded), not on every tab open.
-  const shopDetails = document.getElementById('rxShoppingDetails');
-  if (shopDetails && shopDetails.open) _loadRxShoppingList();
 
-  const ordersCard = document.getElementById('rxOrdersCard');
-  if (ordersCard) {
+  const ordersTab = document.getElementById('rxOrdersTab');
+  if (ordersTab) {
     // Wait for the feature flags to be loaded before deciding — on a fresh page load _features
     // isn't populated yet, so _featureActive('reaction_orders') (an admin-preview flag) returns
-    // false and the card stayed hidden until the tab was re-opened. Awaiting fixes that race.
+    // false and the tab stayed hidden until the page was re-opened. Awaiting fixes that race.
+    // Orders is NOT lazy like Shopping/Advanced above — it has no lazy-load history to preserve,
+    // it was always loaded unconditionally once the flag confirmed the feature is on.
     Promise.resolve(typeof _loadFeatures === 'function' ? _loadFeatures() : null).then(() => {
       const show = typeof _featureActive === 'function' && _featureActive('reaction_orders');
-      ordersCard.style.display = show ? '' : 'none';
+      ordersTab.style.display = show ? '' : 'none';
       if (show) _rxLoadOrders();
     });
   }
-  // Same flag race as the orders card above — the job-length row is gated on an admin-preview
+  // Same flag race as the orders tab above — the job-length row is gated on an admin-preview
   // flag, so it has to wait for the flags to land or it stays hidden until the tab is re-opened.
   Promise.resolve(typeof _loadFeatures === 'function' ? _loadFeatures() : null)
-}
-
-function _onRxAdvancedToggle(el) {
-  if (el.open) _rxLoadAdvancedTable(true);
 }
 
 function _rxLoadAdvancedTable(force) {
@@ -161,10 +158,6 @@ function _rxLoadAdvancedTable(force) {
   _rxLoadOpportunities(force)
     .then(() => _renderReactions())
     .catch(err => { el.innerHTML = `<div class="pp-empty">${_esc(err.message)}</div>`; });
-}
-
-function _onRxShoppingToggle(el) {
-  if (el.open) _loadRxShoppingList();
 }
 
 let _rxLastShoppingList = [];
@@ -2841,24 +2834,23 @@ function _rxIsUnpriced(o) {
 
 // Where "set a price on it" actually goes. One unpriced order is the common case and deserves the
 // direct route — its own detail modal, where the price field is — rather than dropping the reader
-// at a card to search. Several means there is no single destination, so it expands the orders card
-// and scrolls there, where the rows now say which ones.
+// at a tab to search. Several means there is no single destination, so it switches to the Customer
+// orders tab, where the rows now say which ones.
 //
-// Orders may not be loaded yet (the overview renders before the card below it), so this fetches
-// first and then decides. Nothing here assumes the count in the footnote and the client-side list
-// agree — the footnote counts orders in the PLAN, this reads every order — so the single-order
-// shortcut is taken only when this list independently finds exactly one.
+// Orders may not be loaded yet (the overview tab renders before Orders' own tab is ever selected),
+// so this fetches first and then decides. Nothing here assumes the count in the footnote and the
+// client-side list agree — the footnote counts orders in the PLAN, this reads every order — so the
+// single-order shortcut is taken only when this list independently finds exactly one.
 function _rxGoToUnpricedOrder() {
   const go = () => {
     const unpriced = (_rxOrders || []).filter(_rxIsUnpriced);
     if (unpriced.length === 1) { _rxOpenOrderDetail(unpriced[0].id); return; }
-    const det = document.getElementById('rxOrdersDetails');
-    const card = document.getElementById('rxOrdersCard');
-    if (det) det.open = true;
-    if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    ppSelectTab('rx', 'orders');
+    const panel = document.getElementById('rxOrdersPanel');
+    if (panel) panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
   if ((_rxOrders || []).length) { go(); return; }
-  _rxLoadOrders().then(go).catch(go);   // a failed load still opens the card, which shows the error
+  _rxLoadOrders().then(go).catch(go);   // a failed load still switches tabs, which then shows the error
 }
 
 function _rxOrderBarHtml(o) {
@@ -2871,10 +2863,6 @@ function _renderRxOrdersList(orders) {
   if (!el) return;
   const open = orders.filter(o => o.status === 'open');
   const history = orders.filter(o => o.status !== 'open');
-  // Default fold state: collapsed when there's nothing open to act on, expanded when there is.
-  // Only sets the default (on tab-open / after an order mutation) — the user can still fold/unfold.
-  const det = document.getElementById('rxOrdersDetails');
-  if (det) det.open = open.length > 0;
   if (!orders.length) { el.innerHTML = '<div class="pp-empty">No customer orders yet — "+ New order" to track one.</div>'; return; }
   // "no price" is called out on the row itself, not just counted on the overview. Someone sent
   // here by that footnote arrives looking for WHICH order it meant, and an unmarked list makes

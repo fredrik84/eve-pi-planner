@@ -515,10 +515,6 @@ const TAB_SUBPAGES = {
     apply: k => { if (typeof setPiMode === 'function') setPiMode(k); },
     slugs: { build: 'find-buildables', refill: 'refill' },
   },
-  industry: {
-    apply: k => { if (typeof setIndustryMode === 'function') setIndustryMode(k); },
-    slugs: { status: 'status', pipeline: 'pipeline' },
-  },
 };
 
 // ── Records: the URL names one ROW, not just a page ───────────────────────────────────────────
@@ -903,12 +899,11 @@ function toggleSidebar() {
 
 document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
-    // A tab with more than one mode (PI Planner's Find Buildables / Refill; Manufacturing's
-    // status view / Build Pipeline) carries a data-submode. Handed to switchTab as the section
-    // rather than applied afterwards, so one click leaves ONE history entry — setting it after
-    // the switch pushed `/planner` and then `/planner/refill`, and Back would have gone to a mode
-    // the user never chose.
-    switchTab(t.dataset.tab, t.dataset.submode ? { sub: t.dataset.submode } : undefined);
+    // PI Planner sub-items (Find Buildables / Refill a plan) carry a data-pimode. Handed to
+    // switchTab as the section rather than applied afterwards, so one click leaves ONE history
+    // entry — setting it after the switch pushed `/planner` and then `/planner/refill`, and Back
+    // would have gone to a mode the user never chose.
+    switchTab(t.dataset.tab, t.dataset.pimode ? { sub: t.dataset.pimode } : undefined);
   }));
   // Warm the Reactions dashboard's server-side cache (_DASHBOARD_CACHE_TTL, app/reactions/jobs.py)
   // the moment the cursor lands on its nav button — that endpoint repairs and re-prices the whole

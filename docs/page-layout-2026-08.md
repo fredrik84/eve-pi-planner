@@ -1,160 +1,120 @@
-# One page-split pattern for Manufacturing and Reactions — proposal, 2026-08-18
+# One page-split pattern for Manufacturing and Reactions — built 2026-08-18
 
 TODO §41 asked for both pages to stop being one long scroll, and explicitly asked that the split be
 designed ONCE and applied to both, so they don't end up with two different navigation idioms for the
-same underlying problem. This is that proposal, written up for review before either page's markup
-moved, per §41's own first step. **Both halves built 2026-08-18**, on `dev` pending review — the
-Manufacturing/Reactions sections below carry the corrections found while building each one.
+same underlying problem. **Built and on `dev`.**
+
+The mechanism is a **horizontal tab strip within the page** — not an accordion fold per section, and
+not a separate route per section. Both of those were tried first and corrected: an earlier draft of
+this doc proposed `<details>` folds for secondary sections and a real sub-page/route for
+Manufacturing's Build Pipeline, both were built, and the user's actual intent — a tab strip, nothing
+folded, nothing on its own address — only surfaced once they saw the result. Rebuilt to match. The
+folds/own-page draft is gone from history below; this describes the shipped shape only.
 
 ## Contents
 
-- **What's actually on each page today** — the real section inventory, read from the code
-- **The pattern** — three kinds of section, and the rule for sorting a thing into one of them
-- **Manufacturing's split**
-- **Reactions' split**
+- **The mechanism** — `ppSelectTab`/`ppRestoreTab` (`static/utils.js`), the one shared piece
+- **Manufacturing's tabs**
+- **Reactions' tabs**
 - **What does NOT change**
-- **Implementation notes** — routing, the one shared helper, order of work
+- **Why not folds, why not a route** — the two things this correctly avoided
 
-## What's actually on each page today
+## The mechanism
 
-**Manufacturing's queue status view** (`_indPaintStatus`, `static/industry.js:429` +
-`_indRenderPlanBody`, `static/industry-render.js:347`) renders nine things in one vertical stack,
-none of them foldable except the last:
+One small shared primitive, `static/utils.js`:
 
-1. Headline/metrics tiles (`_indStatusHeadline`)
-2. **Do This Now** (`indRenderInstall`)
-3. Notices — blueprint-copy-runs-short, **missing-blueprint warning**, a pinned-structure note,
-   skill-gap blockers (`_indNotices`, `static/industry-render.js:99`)
-4. The marginal-savings strip ("worth building instead?")
-5. The reaction-policy bar
-6. **Build Pipeline** (the stage grid — `_indPipelineHtml`, just corrected by §39)
-7. Steps (`_indStepsHtml`)
-8. **Shopping list** — the one section already behind a `<details>` fold
-9. Currently running jobs (`indLoadRunning`)
+- `ppSelectTab(group, key)` — shows the panel whose `data-tabpanel="<group>"` +
+  `data-tabkey="<key>"` matches, hides the rest, marks the matching button (`data-tabgroup`
+  matching, `data-tabkey` matching) `.pp-tab-active`, and remembers the choice
+  (`localStorage['ppTab:<group>']`).
+- `ppRestoreTab(group, fallback)` — call once when a page/tab opens; selects whichever tab was last
+  read (or `fallback` on a first visit) and **returns the resolved key**, so a caller whose tabs
+  lazy-load (Reactions' Shopping list / Advanced) can trigger that load for whichever tab is now
+  showing without reading `localStorage` a second time itself.
 
-**Reactions' dashboard** (`static/index.html:592-680`) is already closer to split: a metrics card
-and a dashboard-content card sit open on the page, and three heavier sections are already behind
-`<details>` folds — Shopping list, Orders (feature-gated), and the Advanced opportunity table. So
-Reactions' problem is smaller (three things already fold), but it's still one page, and the folds
-aren't the tabs/sub-nav split Manufacturing needs — see "What does NOT change" below for why folds
-alone aren't proposed as the whole answer for either page.
+Deliberately NOT wired into the router (`TAB_SUBPAGES`/`SPA_PAGES`): these are sections of ONE
+page, not addresses. `TAB_SUBPAGES` stays reserved for pages that are genuinely several pages behind
+one nav entry (Admin's eleven sections, PI Planner's two modes) — a tab a user checks by clicking,
+not one anybody would paste as a link.
 
-## The pattern
+Styling: `.pp-tabstrip` / `.pp-tab-btn` / `.pp-tab-btn.pp-tab-active`
+(`static/style-layout-admin.css`), new and shared — the underline-on-active convention doesn't
+otherwise exist in this app (the sidebar's own tabs are a vertical list, not this shape). The
+`.pp-fold-badge` count-badge class from the earlier fold draft survived unchanged: it now sits
+inside a tab BUTTON instead of a fold's `<summary>`, same look, same job — "something here needs
+your attention," visible whichever tab is actually showing.
 
-Three kinds of section, sorted by one question: **does the user need this on every visit, or only
-when something is actually happening in it?**
+## Manufacturing's tabs
 
-- **Landing dashboard** — always the thing you see first. Metrics/headline + the action list ("Do
-  This Now" / the pending-jobs dashboard). Nothing else earns a permanent place here: it's the one
-  section both pages agree is read on every single visit, so it's the one section that gets to cost
-  nothing to reach.
-- **A fold, not a tab** — detail that's read often but not on every visit, and is cheap to render
-  once open. Shopping list, Orders, currently-running jobs, the Advanced/opportunities table. Stays
-  a `<details>` on the SAME page as the dashboard — a tab click for something you check most visits
-  anyway is a cost with no payoff.
-- **Its own view** — content that is genuinely a different task, not detail on the same one, and is
-  either expensive to compute or long enough to want its own scroll position and its own back-button
-  entry. Build Pipeline is the one clear case on either page today: it's a different way of looking
-  at the SAME plan (a visualization, not a checklist), it's long (one column per stage, one row per
-  building), and jumping to it from a pipeline card already exists (`_indJumpToStage`) — a real
-  cross-reference, which is exactly what a same-page anchor should be, and exactly what a materially
-  different tab still supports via `?stage=`.
+`#indStatusCard`'s body (`static/index.html`), one tab strip (`data-tabgroup="ind"`), four tabs, all
+painted from the same fetched plan on every update (`_indPaintStatus` calls
+`_indPaintBlueprints`/`_indPaintPipeline` unconditionally, not lazily on switch — both are a
+pure-JS pass over the plan already in hand, not a fetch, so nothing is saved by skipping the ones
+not currently showing, and painting all four up front means switching tabs never shows stale
+content):
 
-**Alerts are a property of the fold, not a section of their own.** A "missing blueprints" callout
-belongs on whichever fold it blocks, as a badge on the collapsed `<summary>` — not a fourth kind of
-section. That's what makes "Missing Blueprints + Shopping List, with an alert if we're missing BPs"
-(the user's own phrasing) fall out of the pattern rather than needing a special case.
+- **Status** (default) — headline/metrics tiles + Do This Now (`_indStatusHeadline` +
+  `indRenderInstall`), unchanged from before any of this started.
+- **Blueprints & materials** (`_indRenderPlanBody` → `#indBlueprintsBody`) — the notices (missing
+  prints, copies short of runs, the pin note, skill blockers — `_indNotices`), the marginal-savings
+  strip, and the Shopping list. Badged (`#indBlueprintsTabBadge`) with the count of things that
+  actually BLOCK a build (`_indBlueprintBadgeCount` — missing prints + copies short; NOT the
+  marginal-savings count, a choice rather than a blocker).
+- **Build Pipeline** (`_indRenderPipelineBody` → `#indPipelineBody`) — the reaction-policy bar (a
+  control over what THIS view schedules, not over what to buy) + `_indPipelineHtml` (the stage
+  grid, corrected by §39) + `_indStepsHtml` (the step-through checklist).
+- **Currently running** (`#indRunning`, `indLoadRunning`) — badged (`#indRunningTabBadge`) with the
+  live job count, moved off an `<h3>` that used to be visible only once this section was open.
 
-## Manufacturing's split — built 2026-08-18
+Skill-gap blockers live in Blueprints & materials only, not duplicated into Build Pipeline:
+`_indMissingBpWarn` fires a background contract-price fetch keyed by a render-instance id, and
+rendering the whole notice stack in two tabs per plan update would fire it twice for nothing.
 
-- **Landing dashboard**: headline/metrics tiles + Do This Now. Nothing else — the marginal-savings
-  strip and the reaction-policy bar are controls, not information, and belong with the section they
-  control (see below).
-- **Fold: "Blueprints & materials"** (`_indRenderPlanBody`) — merges the missing-blueprint /
-  blueprint-copy-runs-short notices, the marginal-savings strip, and the Shopping list.
-  `#indBlueprintsDetails`'s `<summary>` carries `.pp-fold-badge` with the count of things that
-  actually BLOCK a build (missing prints + copies short of runs — `_indBlueprintBadgeCount`), not
-  the marginal-savings count (a choice, not a blocker): collapsed-but-flagged is the whole point,
-  so a blocked build is never silently hidden.
-- **Fold: "Currently running"** (`#indRunningDetails`) — `indLoadRunning`'s own count moved from an
-  `<h3>` (only visible expanded) to a `.pp-fold-badge` on the fold's `<summary>`.
-- **Its own view: "Build Pipeline"** (`_indRenderPipelineBody`, `#indModePipeline`,
-  `/manufacturing/pipeline`) — the reaction-policy bar + `_indPipelineHtml` + `_indStepsHtml`.
-  Reached via a new sidebar sub-item under Manufacturing (`setIndustryMode`, mirroring the PI
-  Planner's `setPiMode`); `data-pimode` was renamed to the page-agnostic `data-submode` since it now
-  drives two tabs, not one. Both views paint from the SAME fetched plan on every update
-  (`_indPaintStatus` calls both renderers unconditionally) rather than lazily on switch — the
-  pipeline's tree walk is pure JS, not a fetch, so there's nothing to save by skipping it, and
-  painting both up front means a mode switch can never show stale content.
-- **Correction against the original plan:** skill-gap blockers stay in the Blueprints fold ONLY,
-  not duplicated into the pipeline view. `_indMissingBpWarn` fires a background contract-price
-  fetch keyed by a render-instance id (`_indBpcSeq`) — rendering the full notice stack in both views
-  per plan update would have fired that fetch twice for nothing. A build blocked on a skill gap is
-  still one fold away, just not repeated in a second place.
+## Reactions' tabs
 
-## Reactions' split
+`static/index.html`'s Reactions panel, one tab strip (`data-tabgroup="rx"`), four tabs — Orders and
+Advanced hide their TAB BUTTON entirely when gated off (feature flag / TODO 35), same as their whole
+card used to hide:
 
-Reactions already has the shape half-built; this is the delta to bring it in line with the same
-three-kind pattern rather than leaving it as three independent folds:
-
-- **Landing dashboard**: `rxMetricsContent` + `rxDashboardContent` (the pending-jobs / stage list) —
-  unchanged, already the always-open pair.
-- **Fold: "Shopping list"** now also carries the missing-formulas report
-  (`reactions_missing_formulas` — the direct equivalent of Manufacturing's missing-blueprint
-  warning). **Correction, built 2026-08-18:** this doc originally assumed the report already lived
-  inside the shopping list's own "formulas to acquire" section — it didn't. `_rxMissingFormulaWarn`
-  rendered unconditionally in `rxDashboardContent`, on every visit whether or not anything was
-  missing, competing with the landing dashboard for attention. Moved into `_loadRxShoppingList`
-  (sourced from the dashboard's own cached `missing_formulas`, since the shopping-list fetch itself
-  doesn't carry it) with a count badge (`#rxShopMissingBadge`, `.pp-fold-badge`) on the fold's
-  `<summary>` — badge logic lives in `_rxUpdateShopMissingBadge`, run on every dashboard render
-  regardless of whether the fold has ever been opened, so the count is never stale even collapsed.
-- **Fold: "Orders"** — unchanged, already a fold. **No separate "Currently running" fold exists on
-  Reactions** — running jobs are rendered inline in `rxDashboardContent` as part of the landing
-  dashboard itself, not a distinct section; this doc's first draft listed one in error.
-- **Its own view?** — Reactions has no Build-Pipeline equivalent on the dashboard itself; the closest
-  candidate is the Advanced/opportunities table (`rxAdvancedCard`), which is already the single most
-  expensive computation on the page (per `_OPPS_CACHE_TTL`'s own comment) and already collapsed. It
-  stays a fold, not its own view — unlike the pipeline, it's not a different way of reading the SAME
-  plan, it's a distinct planning tool (browse-and-suggest vs. status-and-act), and it's not something
-  read on most visits, so the extra cost of a real navigation isn't earning anything a fold doesn't
-  already give it.
-
-**Net result: Reactions changes less** — it already had the right shape for two of the three fold
-candidates. The concrete work is the missing-formulas badge and folding the orders/running sections
-under the same convention Manufacturing gets, not a structural rebuild.
+- **Overview** (default) — the Metrics card + the Reactions status card (pending jobs, stage
+  banners, running-job list), unchanged content, just now one tab instead of two always-open cards.
+- **Shopping list** (`_loadRxShoppingList` → `#rxShoppingListContent`) — lazy: fetched on first
+  select and on every re-select (matching its prior "fetch again each time the fold opens"
+  behavior), not on every dashboard refresh. Carries the missing-formulas report
+  (`_rxMissingFormulaWarn`) and a badge (`#rxShopMissingBadge`,
+  `_rxUpdateShopMissingBadge`) — the badge updates from the Overview tab's own fetched data on
+  EVERY dashboard render regardless of whether Shopping list has ever been opened, so the count is
+  never stale even unselected. The nested "Paste what you've received" diff tool stays a `<details>`
+  fold — it's fine-grained detail INSIDE one tab's content, not a top-level page section, and that
+  distinction is exactly what folds are still right for.
+- **Customer orders** (`_rxLoadOrders` → `#rxOrdersContent`) — NOT lazy like Shopping/Advanced; it
+  loads unconditionally once the `reaction_orders` feature flag confirms it's on, matching its prior
+  behavior (it was never behind a fold, just a feature gate).
+- **Advanced** (`_rxLoadAdvancedTable` → `#reactionsContent`) — lazy, force-reloaded on every
+  select (mirrors the prior "reload every time the fold opens" behavior; the 90s server-side cache,
+  `_OPPS_CACHE_TTL`, absorbs a re-select within that window).
 
 ## What does NOT change
 
-- **Neither page becomes tabs-only.** A landing dashboard + folds is still one page for the common
-  case; only the pipeline view (Manufacturing) becomes a real navigation, because it's the one
-  section that's genuinely a different task rather than more detail on the same one.
-- **One new, small, shared badge class.** Neither the admin-preview tag nor the skill-gap warning
-  turned out to be a fold-summary count pill on closer look, so `.pp-fold-badge`
-  (`static/style-layout-admin.css`) is genuinely new — but it's one class, styled once, used by both
-  pages' folds (Reactions' shopping-list fold is the first caller). Not a per-page copy.
-- **Routing cost is real and bounded.** Only Manufacturing gains one route
-  (`/manufacturing/pipeline` or similar sub-page, alongside the existing `TAB_SUBPAGES` model PI
-  Planner already uses for Find Buildables / Refill). Reactions gains no new route at all under this
-  proposal — everything it needed was already a fold.
+- **Nothing gains a URL.** No new `SPA_PAGES` entries, no new sidebar nav items — `data-pimode`
+  (the PI Planner's Find Buildables / Refill mechanism) was briefly generalized to `data-submode`
+  for a routed Manufacturing mode and then reverted byte-for-byte once the design changed; the
+  final diff carries no trace of that detour.
+- **The fold convention isn't gone, just demoted to what it's actually for.** `.rx-fold-summary` /
+  `.rx-fold-caret` still exist and are still used — for detail nested INSIDE a tab (Reactions'
+  "Paste what you've received"), never again for a top-level page section.
 
-## Implementation notes
+## Why not folds, why not a route
 
-- **Routing, as built**: `index.html`'s two new panels (`#indModeStatus`/`#indModePipeline`),
-  `TAB_SUBPAGES.industry` + `SPA_PAGES`'s `manufacturing/status`/`manufacturing/pipeline` in
-  `app/main.py`, the new sidebar sub-item, and `test_routing.py`'s four-list check — all green,
-  including `test_routing_client.js` (which runs the router for real) and `test_nav_gating.py`
-  (which needed a fix: `data-pimode` renamed to `data-submode` since it now drives two tabs, and
-  one CSS selector + one test regex were still written against the old name). Reactions needed none
-  of this — confirmed, not just predicted.
-- **One shared badge CLASS, not a shared render function.** `.pp-fold-badge` is the one thing
-  actually shared — each page still builds its own `<summary>` HTML inline (Reactions in
-  `_rxUpdateShopMissingBadge`/`_loadRxShoppingList`, Manufacturing in `_indRenderPlanBody`). A
-  `_pp_foldSummary(...)` render helper was considered and dropped: the two pages' fold markup
-  differs enough (Reactions updates a badge independently of the fold's content load; Manufacturing
-  builds the whole `<details>` inline every render) that forcing one function would have been the
-  "reuse-by-conditional" CLAUDE.md rule 4 warns against, for a few lines saved per call site.
-- **Order of work, as built**: Reactions first (smaller, mostly labelling), then Manufacturing.
-  Confirmed worth doing in that order — Reactions surfaced the "the report didn't actually live
-  where this doc assumed" correction while the change was still small, before Manufacturing's larger
-  move (new mode, new route) added its own moving parts on top.
+Both were tried and are worth naming so nobody re-derives them from scratch:
+
+- **A fold hides a top-level section behind an extra click AND changes the page's height under
+  the reader's cursor** — every fold that opens pushes everything below it down, which a tab strip
+  never does (the strip's own height is fixed; only the panel content swaps). For sections read
+  almost every visit (Blueprints & materials, Shopping list), that's a worse trade than a tab.
+- **A route (`/manufacturing/pipeline`) is for something somebody would deep-link or expect Back
+  to return to as its own step.** None of these sections are that — they're views of the SAME
+  build/plan a user is already looking at, selected via a click, not typed as an address. The
+  routing scaffolding (`TAB_SUBPAGES`, `SPA_PAGES`, a sidebar sub-item, `test_routing.py`'s
+  four-list check) is real, tested, working machinery for the few pages that ARE several pages —
+  Admin, PI Planner — and reaching for it here was solving a problem this split didn't have.
