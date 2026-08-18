@@ -50,8 +50,99 @@ verdict column says what the evidence would have to be.
 | 19c | **A URL can name one ROW**, not just a page (§19 phase 3b): `/manufacturing/order/123`, `/planetary-planning/plan/12`, `/planner/refill/plan/12`. The privacy question that gated the whole entry, answered per record: the endpoint behind each id already refuses a stranger *without confirming the id exists* (`_order_row` raises one 404 for "not yours" and "no such row" alike; `GET /api/plan-snapshots/{id}` answers `{payload: null}` for both), so a link that reaches somebody not entitled to it lands them on the plain page **in silence** — the same thing a mistyped id gives them, because telling those two apart IS the disclosure. The server route looks NOTHING up: it serves the same document every page does, so a recipient learns nothing from the fact that it answered. A refused record is dropped from the address bar with a REPLACE, so it does not even leave a back-button entry. `TAB_RECORDS` in `app.js` and `SPA_RECORDS` in `main.py` are a fourth list `test_routing.py` holds in step with the other three; the bounce, the throw, the leave-the-page close, the late-loader case, two overlapping opens (the slow answer must not win — it used to repaint the dialog as the other order, which is the order a Save would then have written to) and a restricted page refusing the record under it all run for real in `test_routing_client.js`, with source-level backstops for the four properties a stubbed opener cannot notice going missing. **A COLONY was asked for and deliberately not built** — closed the same day as won't-build (see the verdict below): there is no single-colony view to land on, and its natural id is locatable data. §19 is done | 08-16 |
 | 18b | **Config export/import** (`config_export_import`): the whole build configuration as one portable JSON file — build rules, structures with their rigs and families, freight rates and tax, component overrules, stock sources, placeholder slots — under Settings → Backup & transfer. A serialiser over the readers and writers that already existed, no new table and no migration, which is what §18's storage half predicted. Two ids are NOT portable and are remapped rather than written through: a build pin travels as the structure's `location_id` (the stored `s:<row id>` is the account's own key — verbatim it names somebody else's building), and a stock-source key the importing account never scanned is dropped and counted. Import validates the whole document first and reports every problem at once, so a bad file changes nothing rather than half-applying; a section whose flag is off is skipped BY NAME rather than 403ing the import or vanishing; importing twice is idempotent (structures match on location, placeholders on name); deleting is opt-in and previewed. The file identifies you and the download says so, from the list the exporter itself fills. `app/config_io.py`, `static/configio.js`, `test_config_io.py` (mutation-verified), `docs/config-shape-2026-08.md` | 08-16 |
 | 21b | The refill deadline is DERIVED, not stored. `pi_sim.colony_drain_state` reads each factory colony's per-input consumption off its real pins (constant `quantity / cycle_time` — deterministic, unlike extraction) into `pp_char_planets.drain`; `planner.factory_drain` is the one place that drains it forward from the colony checkpoint. The `factory_refill` alert had been taking a full 3-launchpad buffer from the plan snapshot and anchoring it to `scanned_at` — assuming every colony was topped to full the instant we last polled ESI — so it contradicted the Dashboard agenda, which already used the observed number. `localStorage.refillDeadlineMs` is gone: the deadline follows the player to any device and the server quotes the same instant the page does. `test_factory_drain.py`, `test_refill_deadline.js` | 08-16 |
+| 34 | **Industry split into readable modules.** `static/industry.js` 4,705 → ten files of 327-679, split along `docs/industry-workflow.md`'s steps rather than by size; `schedule.py` 2,056, `graph.py` 1,383 and `blueprints.py` 1,517 → three packages, largest module 547. Every `__init__.py` re-exports **every** name the package defines, privates included, so no import anywhere changed. Cross-module imports were **derived from the AST**, not hand-listed, which makes "no import cycles" a checked property rather than a claim; one real cycle (`manual` → `paste`) was broken first, in its own commit. The split was written up and reviewed by two agents BEFORE a line moved — that is what caught a line range claimed by two files (which would have double-bound a toggle and fired two plan requests per flip) and three boundaries that would have orphaned a comment from its function. Plus a behaviour-preserving simplification pass: dead `indForceBuildType`, one reader each where two could drift, the four biggest renderers' inner builders lifted, `_indStageModelForPlan` memoised. **What it exposed is below — three tests that were not testing what they claimed** | 08-16, 08-17 |
+| 34a | The three §34 could not fix. **`indPrioSpeed` fired two plan requests per flip** — an inline `onchange` AND a `DOMContentLoaded` listener, both calling `indRunPlan()`, racing over which response painted the card; the listener was the strict subset, so it went. **"The preview modal never sets `_indLastPlan`" was WRONG** — verified rather than taken on trust (`industry-plan.js:125` is one of three assignments); do not reopen without a reproduction, the report came from reading a 4,700-line file and missing an assignment mid-function. **`_indStepsHtml` split**, and the assertion that had blocked it was vacuous: mutating the header back did not turn it red, because it matched `s.longest` anywhere after the first `html +=` and both numbers also appear in a `title` attribute. It now asserts on the element's TEXT | 08-17 |
+| 35 | Two controls off the Reactions card. "Come back every N days" now lives in exactly two places — Settings → General and the first-run wizard — instead of duplicating a setting onto the front page; the Settings row fetches the value itself if the Reactions tab was never opened, and hides when the account has no cadence surface, so nobody sees a dead control. "Advanced: full opportunity list" is **hidden, not deleted** (one `display:none`, commented), so restoring it is deleting an attribute — and since the fold-out computed lazily, hiding it also removed the tab's single most expensive computation for anyone who had expanded it. **Where the delay came from:** written up 08-16 and then not built — "start building" landed mid-discussion of §37 and was read as §37 alone, so the item sat complete-looking with the decision recorded and no code behind it | 08-17 |
+| 36 | The shopping list stopped listing things you already had (`industry_sourced_counts`). **The report's premise was mistaken** and reproducing it in the code beat trusting it: nothing ever excluded customer orders. Two real gaps instead — `pp_industry_sourced` (the sourcing panel's ticks and pastes) was never read by the planner, and stock has never reduced anything you BUY, because `aggregate_demand` applies `on_hand` inside the `for tid in built` loop only. So `noted_stock_excess` stops the plan BUILDING what you hold and `_mark_already_held` stops the list telling you to BUY it, with multibuy copying the shortfall rather than the requirement. Two rules not to break: **a note and a bound box are two answers to one question — take the better, never the sum** (summing makes the plan believe it has twice what it has, and under-buy); and **quantities change, money does not** — `qty`/`line_cost` stay the full requirement, or a quote would quietly shrink whenever the builder happened to hold stock | 08-17 |
+| 37 | **Alerts check before they nag, and nag less each time** (`alert_rescan_backoff`). Restart your PI in game without rescanning and the Discord alert used to fire every 2h forever. Now a due alert triggers a re-read of the one colony it is about and only what survives is sent; repeats double the kind's base interval up to 12h, derived from `pp_notification_log` and reset when the alert resolves, with the FIRST send never delayed; and a colony that could not be READ is held back rather than reported off stale data, with an amber character dot for the transient case, distinct from the red "re-add this character". Keeping ESI load low was the binding constraint (*"bashing them won't help me"*) — single-planet reads, an `esi_expires` gate, a dead-token filter and a hard per-tick budget give ~4 reads on day one for an ignored problem and 2/day after, against ~96 per character per day for the blanket-timer design that was rejected. Design in `docs/platform.md`. **The review findings are below — of nine defects across two rounds, six were mine** | 08-17 |
+| 37b | **The same rule for the reaction alerts** (`alert_rescan_reactions`), plus instrumentation for both. `_log_rescan_outcomes` records the alerts that never became a send — `prevented` (the benefit) and `suppressed:<cause>` (the cost) — in `pp_notification_log` under statuses no send uses, because unlike the backoff rung those cannot be reconstructed afterwards. The `reaction_*` kinds already had the backoff (they carry `dedupe_id`); what they lacked was the rescan, now one `characters/{id}/industry/jobs/` read per CHARACTER answering for all three kinds, with `fetched_at`/`_JOBS_CACHE_TTL` as the `esi_expires` equivalent. `pp_notification_log` also finally got an index and a 45-day prune of the instrumentation rows only | 08-18 |
+| 38 | **Bug 3, "characters missing at the setup stage".** `#ppRolesCard` shipped with `display:none` and was revealed only by `_loadProductConfig`, so it was absent on a fresh page and `onProductChange` put it BACK to hidden after a typo — while the Constellation Filter reveals itself from the Planet DB load, which is exactly why the reporter saw one and not the other. My first read of the markup said "merely collapsed" and was wrong; reproducing beat reading. The rule it leaves behind, asserted both ways in `test_setup_page.py`: **a section of the setup page may explain that it is waiting for something, and may not disappear** — a card may ship hidden only when something outside the user's control makes it meaningless | 08-17 |
 
 ---
+
+## 34 detail — what the split exposed: three tests that were not testing what they claimed
+
+Each was passing before, and would have kept passing wrongly. This is the reusable part of §34.
+
+1. **`_patch_db(B)` patched a package attribute nobody reads.** Four tests set
+   `blueprints.get_connection` and then ran code whose submodules had imported `get_connection`
+   into their own globals — so every call went to the REAL database and the tests still passed,
+   exercising container state instead of their own fixture. `_patch_db` now walks a package's
+   loaded submodules. `_patch_db_all` had documented this exact hazard for sibling modules; nothing
+   had applied it to packages.
+2. **`bp._manual_enabled` monkeypatching went inert** — three checks in
+   `test_manual_blueprints.py` went red, which is the good outcome. The helper now patches every
+   module binding the name, discovered by walking `sys.modules` rather than naming today's two.
+3. **`G._default_system_on` / `_fallback_build_system`** — same shape in `test_cost_basis.py`; all
+   three of its scenarios would have collapsed into one. Retargeted at `graph.options`.
+
+Also: `inspect.getsource(<module>)` returns only `__init__.py` for a package, so `test_industry.py`'s
+pin on `"build_pins_unapplied"` appearing twice became `0 != 2` and failed loudly. Replaced with
+`_module_source`, the package-aware sibling of `_industry_js`.
+
+**One promise that was only ever a docstring is now checked:** `test_the_scheduler_stays_io_free`
+asserts no `schedule/` submodule reaches for `get_connection`, `app.markets` or `@router`.
+
+**Two review findings did NOT survive checking**, recorded so they are not re-raised: `blueprints.py`
+was said to use `log` 36 times and uses it **zero** times (the logger is defined and dead); and the
+`graph/params.py` boundary correction to line 36 was right — cutting at 48 would have dropped
+`@dataclass` off `BuildParams` plus two constants Reactions imports.
+
+**Note for the next reader:** `scripts/symbols.sh app/industry/schedule.py` no longer resolves — use
+the DIRECTORY (`scripts/symbols.sh app/industry/schedule`), which maps the whole package.
+
+## 37 detail — nine defects two review rounds caught, six of them mine
+
+Kept because the shapes recur, not because the code is interesting. The feature's own design is in
+[docs/platform.md](platform.md).
+
+**Round one, before §37 shipped:**
+
+1. **A failed colony detail read used to WIPE the colony row.** `_fetch_planets` swallowed the
+   exception and fell through to an UPSERT that wrote `is_extractor=0` and NULLs over products,
+   pads, sim state, storage and `esi_expires`, with a fresh `scanned_at`. Pre-existing — the hand
+   rescan has always done this — but this feature would have made it automatic and unattended.
+   **This is also why `_default_scan` cannot key off `fetched`:** that counter increments BEFORE
+   the detail request, so it counts attempts, not successes.
+2. **The backoff counted log ROWS, and one send writes one row per channel.** A user with three
+   channels hit the 12h cap on their second alert and could never reset the chain, because a gap of
+   microseconds is never longer than any interval.
+3. **The scan budget was per context, not per tick** — it multiplied by the number of accounts.
+4. **The cost per colony was 4 ESI requests, not 1**, because `universe/names/` and
+   `universe/planets/{pid}/` were unconditional. Both answers are immutable, so both are now
+   skipped when the DB already has them. The hand rescan got the same saving for free.
+5. **`_refresh_token` wrote `NULL` into `pp_characters.refresh_token`, which is `TEXT NOT NULL`.**
+   The IntegrityError was swallowed by its own outer `except`, so a revoked character was never
+   marked dead and kept a green dot forever — and the docstring above the code claimed this had
+   already been fixed. A prerequisite, since the dead-token filter has nothing to filter on until a
+   dead token is recorded as dead. Own commit.
+
+**Round two, on §37b:**
+
+6. **`prevented` was credited when an alert merely ESCALATED.** `expiring`→`expired` on one planet
+   and `reaction_finishing_soon`→`reaction_completed` on one character are two kinds sharing a
+   dedupe target: the first disappears, a notification still goes out, and the measurement counted
+   it as a save. Credit now requires the whole target to be clear, which undercounts instead — the
+   direction a number the feature is judged on should err in.
+7. **A failed corp jobs read stored a truncated snapshot and reported success.** A corp-installed
+   reaction never appears in the personal read, so `[]` from a failed corp fetch deletes the
+   finished job, reports the problem as fixed, and leaves the next tick computing from the
+   truncation. The §37-round-one trap, one endpoint over. Both reads are strict on the alert path
+   now; the ONE tolerated failure is a 401/403 on the corp queue, which means the character granted
+   the scope without holding the role — permanent, so the empty answer is true rather than partial.
+8. **A "querying before `Expires`" violation I introduced.** The corp path re-fetched
+   `characters/{id}/` — which ESI caches for a day — every 15 minutes. Now cached until the
+   response's own `Expires` header. CLAUDE.md's rule is absolute for a reason; a TTL of our own
+   choosing would not have satisfied it.
+9. **A prune I added could have caused a duplicate-notification storm.** It ran on the tick's own
+   connection, whose entire send log is uncommitted until the end (`_process_context` never
+   commits) and which the Postgres cursor wrapper rolls back on any statement failure — so a
+   timeout on that DELETE would have discarded every send row for the tick AFTER the pushes went
+   out, and the next tick would have sent the lot again. Own connection, after the commit.
+
+**The method that found them:** written proposal → two adversarial review agents → execute →
+mutation-verify each new assertion → re-review. Round two found four defects in round one's fixes,
+which is the argument for re-reviewing a fix rather than trusting it.
 
 ## 20. Planet database wipe — CLOSED (2026-08-15, INCIDENT)
 

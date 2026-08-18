@@ -1,4 +1,4 @@
-"""Tests for TODO §37: alerts that check before they nag, and nag less each time.
+"""Tests for TODO §37 and §37b: alerts that check before they nag, and nag less each time.
 
 Two behaviours, both in app/notifications.py, both behind `alert_rescan_backoff`:
 
@@ -597,7 +597,7 @@ def _seed_jobs_row(cid=FAKE_CID, fetched_at=None):
 
 
 def test_reaction_alerts_are_checked_against_their_jobs() -> bool:
-    """§37a: the `reaction_*` kinds are about a character's industry jobs, not a colony, so the
+    """§37b: the `reaction_*` kinds are about a character's industry jobs, not a colony, so the
     first cut skipped them entirely and they kept nagging off a snapshot nobody had refreshed.
     They now get the same treatment through the same machinery — one read per CHARACTER, behind
     its own flag because it is a second ESI endpoint's worth of new traffic."""
@@ -914,7 +914,7 @@ def _outcome_rows():
 
 
 def test_the_alerts_that_never_became_a_send_are_recorded() -> bool:
-    """§37a: the rescan's two outcomes were invisible, and unlike the backoff rung they cannot be
+    """§37b: the rescan's two outcomes were invisible, and unlike the backoff rung they cannot be
     reconstructed afterwards — `_log_send` only ever runs on a real send. An alert PREVENTED is the
     entire benefit of the feature; an alert SUPPRESSED is its entire cost. Both now leave a row."""
     print(f"\n{'='*60}\n  the rescan records what it prevented and what it suppressed\n{'='*60}")
