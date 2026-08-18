@@ -41,10 +41,12 @@ visible.
 
 ## 37a. Alert cadence — what is left
 
-§37 (check before nagging, back off on repeats) and §37b (the same for reaction jobs, plus
-instrumentation) both shipped — archive, and the design is in
+§37 (check before nagging, back off on repeats), §37b (the same for reaction jobs, plus
+instrumentation) and §37c (the lapsed-jobs-scope prompt, which turned the last `continue` into a
+real `suppressed:no_jobs_scope`) have all shipped — archive, and the design is in
 [docs/platform.md](docs/platform.md#check-before-nagging-and-nag-less-each-time-alert_rescan_backoff).
-Only one item below is a build, and it is waiting on evidence.
+**Nothing here is a build any more.** What is left is one measurement to read and two things
+recorded so they are not rediscovered as surprises.
 
 - **Watch the first week, now that it is measurable.** Two questions, one query:
 
@@ -57,16 +59,8 @@ Only one item below is a build, and it is waiting on evidence.
   character is sitting amber with its alerts silently paused — the failure mode worth catching.
   `suppressed:over_budget` means the per-tick scan cap is genuinely being hit. Needs a few days of
   real ticks with `alert_rescan_backoff` and `alert_rescan_reactions` on before it says anything.
-
-- **A character that dropped the industry-jobs scope keeps nagging off a frozen snapshot.** The
-  scope is opt-in (`?reactions=1`), and re-authorising through the normal login drops it; the
-  stored jobs then never update, so its reaction alerts are computed from data nothing can refresh.
-  `_rescan_targets` deliberately **skips** rather than suppresses those characters, because
-  suppressing would silently and permanently remove an alert that works today, with nothing on any
-  page explaining the fix — the dead-token case is held back only because the red character dot
-  names its fix. **The build:** surface "re-authorise with reactions enabled" next to the reaction
-  alerts. Once it exists, suppression becomes the right answer and that `continue` should become a
-  `suppressed:no_jobs_scope`.
+  `suppressed:no_jobs_scope` (§37c) is the one to read as a to-do rather than a statistic: each one
+  is a character whose reaction jobs are frozen, and the page now says exactly how to fix it.
 
 - **The scan budget is per PROCESS, not per app.** Prod runs 6 (2 replicas × 3 workers), each with
   its own module global. The advisory lock serialises them and `_recently_notified` empties the
@@ -89,7 +83,8 @@ The bug is **fixed** (archive). The report row is still open: `POST /api/bugs/{i
 ## Nothing else open
 
 That is the whole backlog as of 2026-08-18: two "if it comes back" notes, one measurement to read
-in a few days, one small build waiting on it, and a bug row to close. Everything else is in
+in a few days, two recorded-not-scheduled risks, and a bug row to close. **No open item is a
+build.** Everything else is in
 [TODO-archive.md](TODO-archive.md) — the one-line shipped list, the detail worth keeping, and the
 closed-with-reasoning verdicts. **Read it before reopening anything.**
 
