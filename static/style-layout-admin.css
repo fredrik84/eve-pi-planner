@@ -155,16 +155,16 @@ a.plan-action-btn { text-decoration: none; display: inline-block; }
 .tab[data-tab="reactions"],
 .tab[data-tab="industry"],
 .tab[data-tab="contribute"],
-.tab[data-tab="planner"][data-submode="refill"],
-.tab[data-tab="planner"][data-submode="build"] { display: none; }
+.tab[data-pimode="refill"],
+.tab[data-pimode="build"] { display: none; }
 
 html.nav-li #dashboardNavTab,
 html.nav-li .tab[data-tab="analyze"],
 html.nav-li .tab[data-tab="planetary"],
 html.nav-li .tab[data-tab="characters"],
 html.nav-li .tab[data-tab="contribute"],
-html.nav-li .tab[data-tab="planner"][data-submode="refill"],
-html.nav-li .tab[data-tab="planner"][data-submode="build"] { display: flex; }
+html.nav-li .tab[data-pimode="refill"],
+html.nav-li .tab[data-pimode="build"] { display: flex; }
 
 /* The Industry group header is only worth drawing when something sits under it: a logged-out
    visitor used to get a bare "Industry" heading with everything beneath it hidden. Login is now
@@ -808,6 +808,18 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .pp-fold-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 18px;
   height: 18px; padding: 0 5px; margin: 0 6px; border-radius: 9px; font-size: 11px; font-weight: 600;
   background: var(--clr-red); color: #fff; }
+
+/* A horizontal tab strip over a set of panels on ONE page (ppSelectTab/ppRestoreTab, utils.js) —
+   TODO §41's actual shape, corrected from an earlier fold-per-section / own-page draft: Manufacturing
+   and Reactions each had a long scroll of sections, and the fix the user wanted was tabs within the
+   page, not accordions or a second route per section. `.pp-fold-badge` still does the "something
+   needs attention" count, just inside a tab button instead of a fold's <summary>. */
+.pp-tabstrip { display: flex; flex-wrap: wrap; gap: 2px; border-bottom: 1px solid var(--clr-border);
+  margin-bottom: 10px; }
+.pp-tab-btn { background: none; border: none; border-bottom: 2px solid transparent; padding: 8px 12px;
+  font-size: 13px; font-weight: 600; color: var(--clr-text-dim); cursor: pointer; }
+.pp-tab-btn:hover { color: var(--clr-text); }
+.pp-tab-btn.pp-tab-active { color: var(--clr-text-bright); border-bottom-color: var(--clr-accent); }
 
 /* Full opportunity list: click a row to fold out the secondary dimensions (steps, job cost,
    sell-order price, ISK/m³, market depth) as a wrapped block below it, instead of cramming them

@@ -52,8 +52,8 @@
           <div class="nav-group-hd"><span class="nav-ico">PI</span><span class="nav-lbl">Planetary Industry</span></div>
           <button class="tab tab-sub" data-tab="analyze"><span class="nav-ico">AN</span><span class="nav-lbl">Setup Analysis</span></button>
           <button class="tab tab-sub" data-tab="planetary"><span class="nav-ico">PP</span><span class="nav-lbl">Planetary Planning</span></button>
-          <button class="tab tab-sub" data-tab="planner" data-submode="refill"><span class="nav-ico">RF</span><span class="nav-lbl">Refill a plan</span></button>
-          <button class="tab tab-sub" data-tab="planner" data-submode="build"><span class="nav-ico">FB</span><span class="nav-lbl">Find Buildables</span></button>
+          <button class="tab tab-sub" data-tab="planner" data-pimode="refill"><span class="nav-ico">RF</span><span class="nav-lbl">Refill a plan</span></button>
+          <button class="tab tab-sub" data-tab="planner" data-pimode="build"><span class="nav-ico">FB</span><span class="nav-lbl">Find Buildables</span></button>
           <button class="tab tab-sub" data-tab="layout"><span class="nav-ico">FL</span><span class="nav-lbl">Factory Layout</span></button>
           <button class="tab tab-sub" data-tab="planetdb"><span class="nav-ico">DB</span><span class="nav-lbl">Planet DB</span></button>
           <button class="tab tab-sub" data-tab="contribute"><span class="nav-ico">?</span><span class="nav-lbl">Contribute</span></button>
@@ -62,8 +62,7 @@
         <div class="nav-group nav-group-tabs" id="industryNavGroup">
           <div class="nav-group-hd"><span class="nav-ico">IN</span><span class="nav-lbl">Industry</span></div>
           <button class="tab tab-sub" data-tab="reactions"><span class="nav-ico">RX</span><span class="nav-lbl">Reactions</span></button>
-          <button class="tab tab-sub" data-tab="industry" data-submode="status"><span class="nav-ico">MF</span><span class="nav-lbl">Manufacturing</span></button>
-          <button class="tab tab-sub" data-tab="industry" data-submode="pipeline"><span class="nav-ico">BP</span><span class="nav-lbl">Build Pipeline</span></button>
+          <button class="tab tab-sub" data-tab="industry"><span class="nav-ico">MF</span><span class="nav-lbl">Manufacturing</span></button>
           <button class="tab tab-sub" data-tab="indhowitworks"><span class="nav-ico">i</span><span class="nav-lbl">How it works</span></button>
         </div>
         <div class="nav-group" id="adminNavGroup">
@@ -596,85 +595,95 @@
         <div class="pp-layout">
           <div class="pp-main" style="grid-column: 1 / -1; max-width: 100%;">
 
-            <section class="pp-card">
-              <div class="pp-card-title">Metrics
-                <span class="pp-card-hint">— what's currently committed, at a glance</span>
-              </div>
-              <div id="rxMetricsContent" class="pp-card-body">
-                <div class="pp-loading"><span class="pp-spinner"></span> Loading…</div>
-              </div>
-            </section>
-
             <div class="rx-suggest-cta">
               <button onclick="wizRStart()">Suggest Reaction Products</button>
               <span class="pp-card-hint">— let the optimizer pick profitable products for your budget, cadence and free slots. Prefer a specific product instead? Click any empty <b>+</b> slot below.</span>
             </div>
 
-            <section class="pp-card">
-              <div class="pp-card-title">Reactions
-                <span class="pp-card-hint">— your reaction capacity and currently-running jobs</span>
-                <button class="pp-add-btn" onclick="_rxRefreshJobs(true, this)" title="Pull the latest job status from ESI now (bypasses the ~5min cache)">↻ Refresh jobs</button>
-                <button class="pp-add-btn" onclick="openSettingsModal('markets')">⚙ Settings</button>
-                <button class="pp-add-btn" id="rxConnectBtn" onclick="connectReactionsTracking()" style="display:none">Connect a character</button>
-                <!-- ppConfirm, not native confirm(): a browser that has been offered "prevent this
-                     page from creating additional dialogs" makes confirm() return false silently,
-                     and the button then does nothing at all. See the comment on ppConfirm in
-                     utils.js — this was the last native confirm() in the app, and it produced the
-                     same silent no-op that had already been reported once against Cancel order. -->
-                <button class="pp-add-btn" onclick="ppConfirm('Clear every planned assignment, including slots committed to customer orders? Those orders go back to unassigned so you can re-assign them.').then(ok =&gt; { if (ok) _rxClearAllAssignments(); })">Clear all</button>
-              </div>
-              <div id="rxDashboardContent" class="pp-card-body">
-                <div class="pp-loading"><span class="pp-spinner"></span> Loading…</div>
-              </div>
-            </section>
+            <!-- Four sections of one dashboard, as tabs rather than a long scroll of folds —
+                 TODO §41, docs/page-layout-2026-08.md (ppSelectTab/ppRestoreTab, utils.js). Orders
+                 and Advanced stay hidden entirely (feature-gated / TODO 35) exactly as their cards
+                 did before. -->
+            <div class="pp-tabstrip" data-tabgroup="rx">
+              <button class="pp-tab-btn" data-tabgroup="rx" data-tabkey="overview" onclick="ppSelectTab('rx','overview')">Overview</button>
+              <button class="pp-tab-btn" data-tabgroup="rx" data-tabkey="shopping" onclick="ppSelectTab('rx','shopping'); _loadRxShoppingList();">Shopping list<span id="rxShopMissingBadge" class="pp-fold-badge" style="display:none" title="Formulas the current plan needs that you don't hold"></span></button>
+              <button class="pp-tab-btn" data-tabgroup="rx" data-tabkey="orders" id="rxOrdersTab" onclick="ppSelectTab('rx','orders')" style="display:none">Customer orders</button>
+              <button class="pp-tab-btn" data-tabgroup="rx" data-tabkey="advanced" id="rxAdvancedTab" onclick="ppSelectTab('rx','advanced'); _rxLoadAdvancedTable(true);" style="display:none">Advanced</button>
+            </div>
 
-            <section class="pp-card" id="rxShoppingCard">
-              <details id="rxShoppingDetails" ontoggle="_onRxShoppingToggle(this)">
-                <summary class="pp-card-title rx-fold-summary"><span class="rx-fold-caret">▸</span>Shopping list
-                  <span id="rxShopMissingBadge" class="pp-fold-badge" style="display:none" title="Formulas the current plan needs that you don't hold"></span>
-                  <span class="pp-card-hint">— total materials needed for everything currently assigned</span>
-                </summary>
-                <div style="margin-top:8px">
-                  <button class="pp-add-btn" onclick="_rxCopyShoppingList(this)">Copy for Janice</button>
-                  <div id="rxShoppingListContent" class="pp-card-body"></div>
-                  <details style="margin-top:10px">
-                    <summary class="pp-card-title rx-fold-summary" style="font-size:13px"><span class="rx-fold-caret">▸</span>Paste what you've received
-                      <span class="pp-card-hint">— diff a partial contract/delivery against this list</span>
-                    </summary>
-                    <div style="margin-top:8px">
-                      <textarea id="rxReceivedPaste" class="bug-textarea" style="min-height:80px" placeholder="Paste your received/contract items here, e.g.&#10;Chromium&#9;174553&#10;Platinum&#9;136921" oninput="_renderRxReceivedDiff()"></textarea>
-                      <div id="rxReceivedDiff" class="pp-card-body" style="margin-top:8px"></div>
-                    </div>
-                  </details>
+            <div data-tabpanel="rx" data-tabkey="overview" id="rxOverviewPanel">
+              <section class="pp-card">
+                <div class="pp-card-title">Metrics
+                  <span class="pp-card-hint">— what's currently committed, at a glance</span>
                 </div>
-              </details>
-            </section>
-
-            <section class="pp-card" id="rxOrdersCard" style="display:none">
-              <details id="rxOrdersDetails">
-                <summary class="pp-card-title rx-fold-summary"><span class="rx-fold-caret">▸</span>Customer orders
-                  <span class="pp-card-hint">— track a fixed-unit job for another player: runs needed, materials to import, cost, and a rough timeline</span>
-                  <button class="pp-add-btn" onclick="event.stopPropagation();_rxOpenNewOrderModal()">+ New order</button>
-                </summary>
-                <div id="rxOrdersContent" class="pp-card-body" style="margin-top:8px">
+                <div id="rxMetricsContent" class="pp-card-body">
                   <div class="pp-loading"><span class="pp-spinner"></span> Loading…</div>
                 </div>
-              </details>
-            </section>
+              </section>
+
+              <section class="pp-card">
+                <div class="pp-card-title">Reactions
+                  <span class="pp-card-hint">— your reaction capacity and currently-running jobs</span>
+                  <button class="pp-add-btn" onclick="_rxRefreshJobs(true, this)" title="Pull the latest job status from ESI now (bypasses the ~5min cache)">↻ Refresh jobs</button>
+                  <button class="pp-add-btn" onclick="openSettingsModal('markets')">⚙ Settings</button>
+                  <button class="pp-add-btn" id="rxConnectBtn" onclick="connectReactionsTracking()" style="display:none">Connect a character</button>
+                  <!-- ppConfirm, not native confirm(): a browser that has been offered "prevent this
+                       page from creating additional dialogs" makes confirm() return false silently,
+                       and the button then does nothing at all. See the comment on ppConfirm in
+                       utils.js — this was the last native confirm() in the app, and it produced the
+                       same silent no-op that had already been reported once against Cancel order. -->
+                  <button class="pp-add-btn" onclick="ppConfirm('Clear every planned assignment, including slots committed to customer orders? Those orders go back to unassigned so you can re-assign them.').then(ok =&gt; { if (ok) _rxClearAllAssignments(); })">Clear all</button>
+                </div>
+                <div id="rxDashboardContent" class="pp-card-body">
+                  <div class="pp-loading"><span class="pp-spinner"></span> Loading…</div>
+                </div>
+              </section>
+            </div>
+
+            <div data-tabpanel="rx" data-tabkey="shopping" id="rxShoppingPanel" style="display:none">
+              <section class="pp-card">
+                <div class="pp-card-title">Shopping list
+                  <span class="pp-card-hint">— total materials needed for everything currently assigned</span>
+                  <button class="pp-add-btn" onclick="_rxCopyShoppingList(this)">Copy for Janice</button>
+                </div>
+                <div id="rxShoppingListContent" class="pp-card-body"></div>
+                <details style="margin-top:10px">
+                  <summary class="pp-card-title rx-fold-summary" style="font-size:13px"><span class="rx-fold-caret">▸</span>Paste what you've received
+                    <span class="pp-card-hint">— diff a partial contract/delivery against this list</span>
+                  </summary>
+                  <div style="margin-top:8px">
+                    <textarea id="rxReceivedPaste" class="bug-textarea" style="min-height:80px" placeholder="Paste your received/contract items here, e.g.&#10;Chromium&#9;174553&#10;Platinum&#9;136921" oninput="_renderRxReceivedDiff()"></textarea>
+                    <div id="rxReceivedDiff" class="pp-card-body" style="margin-top:8px"></div>
+                  </div>
+                </details>
+              </section>
+            </div>
+
+            <div data-tabpanel="rx" data-tabkey="orders" id="rxOrdersPanel" style="display:none">
+              <section class="pp-card">
+                <div class="pp-card-title">Customer orders
+                  <span class="pp-card-hint">— track a fixed-unit job for another player: runs needed, materials to import, cost, and a rough timeline</span>
+                  <button class="pp-add-btn" onclick="_rxOpenNewOrderModal()">+ New order</button>
+                </div>
+                <div id="rxOrdersContent" class="pp-card-body">
+                  <div class="pp-loading"><span class="pp-spinner"></span> Loading…</div>
+                </div>
+              </section>
+            </div>
 
             <!-- Hidden 2026-08-17 (TODO 35): not a surface we want to offer users right now. The
-                 fold-out, /api/reactions/opportunities and _onRxAdvancedToggle are all untouched —
-                 deleting this style attribute brings it back exactly as it was. -->
-            <section class="pp-card" id="rxAdvancedCard" style="display:none">
-              <details id="rxAdvancedDetails" ontoggle="_onRxAdvancedToggle(this)">
-                <summary class="pp-card-title rx-fold-summary"><span class="rx-fold-caret">▸</span>Advanced: full opportunity list
+                 panel, /api/reactions/opportunities and _rxLoadAdvancedTable are all untouched —
+                 showing the tab button (`#rxAdvancedTab`) brings it back exactly as it was. -->
+            <div data-tabpanel="rx" data-tabkey="advanced" id="rxAdvancedPanel" style="display:none">
+              <section class="pp-card">
+                <div class="pp-card-title">Advanced: full opportunity list
                   <span class="pp-card-hint">— every reachable reaction chain, ranked by profit</span>
-                </summary>
+                </div>
                 <div id="reactionsContent" class="pp-card-body">
                   <div class="pp-loading"><span class="pp-spinner"></span> Loading…</div>
                 </div>
-              </details>
-            </section>
+              </section>
+            </div>
 
           </div>
         </div>
@@ -775,12 +784,6 @@
     <div id="tab-industry" class="tab-panel" style="display:none">
       <div id="indGate" style="display:none"></div>
       <div id="indContent">
-      <!-- Two modes, same idea as the PI Planner's Find Buildables / Refill split (setPiMode):
-           the status view (what's cooking, what to buy, right now) and the Build Pipeline (the
-           stage-by-stage visualization of the same plan) are different tasks, not more detail on
-           one page — TODO §41, docs/page-layout-2026-08.md. Both render from the same fetched
-           plan (`_indPaintStatus`/`_indRenderPipelineBody`), so switching mode never re-plans. -->
-      <div id="indModeStatus">
       <!-- Status first: if something is cooking you want to check on it, not start another build. -->
       <div class="pp-card" id="indStatusCard" style="display:none">
         <h2 class="pp-card-title">Your build</h2>
@@ -791,7 +794,21 @@
           </div>
           <div id="indConnectReminder" class="ind-connect-reminder" style="display:none"></div>
           <div id="indShareBox" class="ind-share-box" style="display:none"></div>
-          <div id="indStatusBody"></div>
+          <!-- Four sections of one build, as tabs rather than a long scroll or a second page —
+               TODO §41, docs/page-layout-2026-08.md (ppSelectTab/ppRestoreTab, utils.js). All four
+               render from the SAME fetched plan, so switching tabs never re-plans. -->
+          <div class="pp-tabstrip" data-tabgroup="ind">
+            <button class="pp-tab-btn" data-tabgroup="ind" data-tabkey="status" onclick="ppSelectTab('ind','status')">Status</button>
+            <button class="pp-tab-btn" data-tabgroup="ind" data-tabkey="blueprints" onclick="ppSelectTab('ind','blueprints')">Blueprints &amp; materials<span id="indBlueprintsTabBadge" class="pp-fold-badge" style="display:none"></span></button>
+            <button class="pp-tab-btn" data-tabgroup="ind" data-tabkey="pipeline" onclick="ppSelectTab('ind','pipeline')">Build Pipeline</button>
+            <button class="pp-tab-btn" data-tabgroup="ind" data-tabkey="running" onclick="ppSelectTab('ind','running')">Currently running<span id="indRunningTabBadge" class="pp-fold-badge" style="display:none"></span></button>
+          </div>
+          <div data-tabpanel="ind" data-tabkey="status" id="indStatusBody"></div>
+          <div data-tabpanel="ind" data-tabkey="blueprints" id="indBlueprintsBody" style="display:none"></div>
+          <div data-tabpanel="ind" data-tabkey="pipeline" id="indPipelineBody" style="display:none">
+            <p class="pp-empty">Nothing queued yet — add a build to see its pipeline.</p>
+          </div>
+          <div data-tabpanel="ind" data-tabkey="running" id="indRunning" style="display:none"></div>
         </div>
       </div>
 
@@ -808,18 +825,6 @@
           <button class="ind-primary-btn ind-big-btn" onclick="indOpenPlanner()">Plan a new build</button>
         </div>
       </div>
-      </div><!-- /indModeStatus -->
-
-      <div id="indModePipeline" style="display:none">
-        <div class="pp-card" id="indPipelineCard">
-          <h2 class="pp-card-title">Build Pipeline</h2>
-          <div class="ind-body">
-            <div id="indPipelineBody">
-              <p class="pp-empty">Nothing queued yet — add a build to see its pipeline.</p>
-            </div>
-          </div>
-        </div>
-      </div><!-- /indModePipeline -->
       </div><!-- /indContent -->
     </div><!-- /tab-industry -->
 
