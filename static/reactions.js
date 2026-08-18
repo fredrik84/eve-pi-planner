@@ -228,6 +228,10 @@ function _loadRxShoppingList() {
   const el = document.getElementById('rxShoppingListContent');
   if (!el) return;
   el.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Loading shopping list…</div>';
+  // The plan's missing-formula report, not this fetch's own data (`/api/reactions/shopping-list`
+  // doesn't carry it) — the dashboard load already has it cached, and runs independently of
+  // whether this fold has ever been opened. See _rxUpdateShopMissingBadge for the fold's badge.
+  const missingWarn = _rxMissingFormulaWarn((_rxLastDashboardData || {}).missing_formulas);
   api('/api/reactions/shopping-list?include_orders=' + (_rxShoppingIncludeOrders ? 'true' : 'false'))
     .catch(() => ({ materials: [] }))
     .then(d => {
@@ -239,7 +243,7 @@ function _loadRxShoppingList() {
         // situations and used to render identically — the second one told a player with four
         // live assignments that they had none.
         const orders = d.order_count || 0;
-        el.innerHTML = formulaSection + (orders > 0
+        el.innerHTML = missingWarn + formulaSection + (orders > 0
           ? `<div class="pp-empty">No speculative assignments — but ${orders} assignment${orders === 1 ? ' is' : 's are'}
              committed to customer orders, each with its own materials report on the order itself.
              <button class="pp-btn-link" onclick="_toggleRxShoppingOrders()">Include customer orders</button></div>`
@@ -285,7 +289,7 @@ function _loadRxShoppingList() {
            <button class="pp-btn-link" onclick="_toggleRxShoppingOrders()">Speculative only</button></div>`
         : `<div class="pp-card-hint" style="margin-bottom:8px">Speculative assignments only — ${d.order_count} more ${d.order_count === 1 ? 'is' : 'are'} committed to customer orders.
            <button class="pp-btn-link" onclick="_toggleRxShoppingOrders()">Include customer orders</button></div>`);
-      el.innerHTML = scope
+      el.innerHTML = missingWarn + scope
         + formulaSection
         + section('Fetch from your alliance', group)
         + section('Buy on the market (fuel blocks, or cheaper right now than your sheet)', market);
@@ -1471,11 +1475,29 @@ function _renderReactionsDashboard(data) {
     <div class="rx-stage-ready">✅ <b>Stage ${readyNow[0].stage} is ready to start${readyNow.length > 1 ? ' on several characters' : ` on ${_esc(readyNow[0].character)}`}</b>
       — everything it waits on has finished. Install ${readyNow.map(r => r.names.map(_esc).join(', ')).join(' · ')}.</div>`;
 
+  // TODO §41 (docs/page-layout-2026-08.md): missing formulas used to render inline here, on every
+  // visit whether or not anything was actually missing — moved into the Shopping list fold (the
+  // section it actually blocks) with a count badge on the fold's own <summary>, so it's still
+  // never silently hidden, just no longer competing with "Do this now" for the top of the page.
+  _rxUpdateShopMissingBadge(data.missing_formulas);
   el.innerHTML = scopeLostNote + reconnectNote + _rxUnderProductionWarn(data.under_production) + readyBanner
-    + _rxMissingFormulaWarn(data.missing_formulas)
     // Under the cadence row it is about, and above the checklist it would change — the remedy is
     // "type more numbers", so it belongs where the numbers are about to be read.
     + _rxEaseCostLine(data) + todoListHtml + rows + untrackedNote;
+}
+
+// The Shopping list fold's count badge — set from the dashboard's own `missing_formulas` (the
+// shopping-list fetch is separate and lazy, so this runs independently of whether the fold has
+// ever been opened). Mirrors `_rxMissingFormulaWarn`'s own "anything to show" rule: a non-empty
+// `unresolved` list on a complete paste counts even with zero missing rows.
+function _rxUpdateShopMissingBadge(rep) {
+  const el = document.getElementById('rxShopMissingBadge');
+  if (!el) return;
+  const rows = (rep && rep.formulas) || [];
+  const unresolved = (rep && rep.unresolved) || [];
+  const n = rows.length || (rep && rep.complete && unresolved.length ? unresolved.length : 0);
+  el.style.display = n > 0 ? '' : 'none';
+  el.textContent = n > 0 ? String(n) : '';
 }
 
 function _rxCancelAssignment(assignmentId) {
