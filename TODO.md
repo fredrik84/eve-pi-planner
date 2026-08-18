@@ -80,28 +80,6 @@ The bug is **fixed** (archive). The report row is still open: `POST /api/bugs/{i
 `complete`, or the Admin tab. It needs an admin session, so it is the user's to do. **Do not UPDATE
 `pp_bugs` by hand.**
 
-## 39. Build pipeline stages a node by its distance from the root, not by what it needs
-
-Reported live (2026-08-18): the pipeline puts Pressurized Oxidizers and Reinforced Carbon Fiber in
-Stage 3 — correctly, they need Stage 2 output — but groups Rolled Tungsten Alloy, Dysporite,
-Caesarium Cadmide and Promethium Mercurite into the same Stage 3, even though those four need
-nothing but fuel blocks and could run as early as Stage 1.
-
-**Likely cause, not yet fixed:** `_indComputeTiers` (`static/industry-shopping.js:14-46`) walks the
-build tree from the root and sets `e.tier = Math.max(e.tier, depth)`, where `depth` is how many
-hops the walk took to REACH that node from the root — not how many build layers sit BELOW it. A
-simple item consumed directly near the root gets a shallow depth (⇒ a late stage number) regardless
-of how few steps its own recipe needs. This is the same category of bug reactions.md already named
-and fixed for the reactions side — "[a stage is a DEPTH, not a position in a
-list](docs/reactions.md)" (`chain_stage_state`/`level_stage_runs` compute a chain's stage from its
-OWN inputs, recursively; the pipeline instead reads it off tree position).
-
-**First step:** replace the pre-order "depth when first reached" with a post-order pass — for each
-build node, `stage = 0` if it has no build children, else `1 + max(stage(child) for child in
-inputs if child.decision === 'build')`. Verify against the live report: the four fuel-block-only
-reactions should land at the same stage as whatever else builds straight off fuel blocks, one stage
-earlier than Pressurized Oxidizers/Reinforced Carbon Fiber.
-
 ## 40. Manufacturing tab-open: same cache/prefetch treatment as Reactions
 
 Reactions' dashboard fetch (`GET /api/reactions/jobs`) was slow on every tab-open — it repaired and
@@ -151,9 +129,9 @@ neither is left as the odd one out.
 
 ## Nothing else open beyond the above
 
-That is the whole backlog as of 2026-08-18: three fresh items just opened (§39-41), two "if it comes
-back" notes, one measurement to read in a few days, two recorded-not-scheduled risks, and a bug row
-to close. Everything else is in
+That is the whole backlog as of 2026-08-18: §39 shipped (archive), two fresh items still open
+(§40-41), two "if it comes back" notes, one measurement to read in a few days, two
+recorded-not-scheduled risks, and a bug row to close. Everything else is in
 [TODO-archive.md](TODO-archive.md) — the one-line shipped list, the detail worth keeping, and the
 closed-with-reasoning verdicts. **Read it before reopening anything.**
 
