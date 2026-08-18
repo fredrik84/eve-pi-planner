@@ -537,7 +537,7 @@ function _indPipelineHtml(d, tiersData, model) {
       col.builds.forEach(b => { const p = prog[b.type_id]; if (p) { need += p.required_runs; did += p.done_runs; } });
       if (need) count = `<span class="${did >= need ? 'ind-hd-done' : ''}" title="${did} of ${need} jobs done in this stage">${did}/${need}</span>`;
     }
-    html += `<div class="ind-pipe-hd${col.t === 0 ? ' ind-pipe-hd-final' : ''}${i < cols.length - 1 ? ' ind-pipe-hd-flow' : ''}">${col.label}${count}</div>`;
+    html += `<div class="ind-pipe-hd${col.index === cols.length - 1 ? ' ind-pipe-hd-final' : ''}${i < cols.length - 1 ? ' ind-pipe-hd-flow' : ''}">${col.label}${count}</div>`;
   });
 
   // One grid row per building; empty cells keep every stage aligned across the rows.
@@ -556,7 +556,7 @@ function _indPipelineHtml(d, tiersData, model) {
           if (sorted.length > 10) cards += `<div class="ind-pipe-more">+${sorted.length - 10} more</div>`;
         }
       }
-      html += `<div class="ind-pipe-cell ind-row-${r.key}${col.t === 0 ? ' ind-pipe-final' : ''}">${cards}</div>`;
+      html += `<div class="ind-pipe-cell ind-row-${r.key}${col.index === cols.length - 1 ? ' ind-pipe-final' : ''}">${cards}</div>`;
     });
   });
 

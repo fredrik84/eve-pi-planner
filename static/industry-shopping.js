@@ -19,12 +19,13 @@ function _indComputeTiers(tree, bought) {
   const byType = {};
   const inputsOf = {};      // type_id -> Set of type_ids it consumes
   const consumersOf = {};   // type_id -> Set of type_ids that consume it
-  const walk = ((n, depth) => {
+  const rootIds = new Set();
+  const walk = ((n, depth, isRoot) => {
     if (!n) return;
     const isBought = buys.has(n.type_id) && depth > 0;   // the root is always built
-    const e = byType[n.type_id] || (byType[n.type_id] = { type_id: n.type_id, name: n.name, decision: n.decision, activity: n.activity, owned: n.owned, qty: 0, runs: 0, tier: depth });
+    const e = byType[n.type_id] || (byType[n.type_id] = { type_id: n.type_id, name: n.name, decision: n.decision, activity: n.activity, owned: n.owned, qty: 0, runs: 0, tier: 0 });
     e.qty += n.qty || 0;
-    e.tier = Math.max(e.tier, depth);
+    if (isRoot) rootIds.add(n.type_id);
     if (isBought) {
       e.decision = 'buy';
       e.runs = 0;
@@ -35,10 +36,58 @@ function _indComputeTiers(tree, bought) {
     (n.inputs || []).forEach(c => {
       (inputsOf[n.type_id] || (inputsOf[n.type_id] = new Set())).add(c.type_id);
       (consumersOf[c.type_id] || (consumersOf[c.type_id] = new Set())).add(n.type_id);
-      walk(c, depth + 1);
+      walk(c, depth + 1, false);
     });
   });
-  roots.forEach(r => walk(r, 0));
+  roots.forEach(r => walk(r, 0, true));
+
+  // A BUILD node's stage is how many build layers sit BELOW it — its OWN inputs — not how far the
+  // walk above was from the root when it first reached the node. TODO §39 (reported live,
+  // 2026-08-18): the old model set a node's tier from tree POSITION (`Math.max` over every depth
+  // it was reached at), so a simple reaction needing nothing but fuel blocks landed a stage late
+  // whenever it also happened to be a direct root ingredient — the walk reached it near the root,
+  // and near-the-root read as "late stage" regardless of how few production steps it actually
+  // needs. Computed bottom-up and memoized instead: the same type_id can be reached from several
+  // parents at different tree positions, but its stage must depend only on its own recipe, not on
+  // which parent the walk happened to visit first.
+  const tierMemo = {};
+  const computing = new Set();          // cycle guard — a BOM should never cycle, but never hang if one does
+  function buildTier(tid) {
+    if (tid in tierMemo) return tierMemo[tid];
+    if (computing.has(tid)) return 0;   // defensive only; not a shape real recipe data takes
+    computing.add(tid);
+    const e = byType[tid];
+    let tier = 0;
+    if (e && e.decision === 'build') {
+      let maxChild = -1;
+      (inputsOf[tid] || []).forEach(cid => {
+        const c = byType[cid];
+        if (c && c.decision === 'build') maxChild = Math.max(maxChild, buildTier(cid));
+      });
+      tier = maxChild + 1;                // 0 if every input is bought — builds straight off the shelf
+    }
+    computing.delete(tid);
+    tierMemo[tid] = tier;
+    return tier;
+  }
+  let maxNonRootTier = -1;
+  Object.keys(byType).forEach(tidStr => {
+    const tid = Number(tidStr);
+    if (byType[tid].decision !== 'build') return;
+    byType[tid].tier = buildTier(tid);
+    if (!rootIds.has(tid)) maxNonRootTier = Math.max(maxNonRootTier, byType[tid].tier);
+  });
+  // The root(s) — the actual queued target(s) — always finish the plan, however shallow their own
+  // recipe: pinned to one shared terminal stage so a queue of several products still converges on
+  // one "Finished" column instead of scattering across whichever tier each one's own depth lands
+  // on. `Math.max` with the node's own computed tier rather than a flat overwrite, so a root that
+  // is ALSO consumed as an ingredient elsewhere in the same queue (unusual, but the tree doesn't
+  // forbid it) is never pinned EARLIER than what its own dependents require.
+  rootIds.forEach(tid => {
+    const e = byType[tid];
+    if (e && e.decision === 'build') e.tier = Math.max(e.tier, maxNonRootTier + 1);
+  });
+
   const tiers = {};
   Object.values(byType).forEach(e => (tiers[e.tier] = tiers[e.tier] || []).push(e));
   const maxT = Object.keys(tiers).length ? Math.max(...Object.keys(tiers).map(Number)) : 0;
@@ -51,17 +100,18 @@ function _indComputeTiers(tree, bought) {
 // Only BUILDS define a stage — buying isn't a step in the production chain, it's a prerequisite of
 // one. Bought materials therefore don't get columns of their own (which spread the pipeline out
 // with a leading "Stage 0" that was nothing but purchases); each one is filed under the stage that
-// actually consumes it. A material needed by several stages is filed under the EARLIEST one
-// (deepest tier), so the list reads "buy this before you start stage N".
+// actually consumes it. A material needed by several stages is filed under the EARLIEST one (the
+// lowest tier among its build consumers), so the list reads "buy this before you start stage N".
 function _indStageModel(tiersData) {
   const { byType, tiers, consumersOf } = tiersData;
   const buildTiers = Object.keys(tiers)
     .map(Number)
     .filter(t => (tiers[t] || []).some(e => e.decision === 'build'))
-    .sort((a, b) => b - a);                       // deepest first = left to right
+    .sort((a, b) => a - b);            // 0 = built straight off purchases = Stage 1, left to right
   if (!buildTiers.length) return { cols: [], stageOf: {} };
 
-  const deepest = buildTiers[0];
+  const earliest = buildTiers[0];
+  const finished = buildTiers[buildTiers.length - 1];   // always a root's tier — see _indComputeTiers
   const stageOf = {};                             // bought type_id -> stage tier it belongs to
   Object.values(byType).forEach(e => {
     if (e.decision === 'build') return;
@@ -69,18 +119,18 @@ function _indStageModel(tiersData) {
     (consumersOf[e.type_id] || []).forEach(cid => {
       const c = byType[cid];
       if (!c || c.decision !== 'build') return;
-      if (best === null || c.tier > best) best = c.tier;   // earliest consuming stage
+      if (best === null || c.tier < best) best = c.tier;   // earliest consuming stage
     });
     // No build consumer (shouldn't happen — bought nodes are leaves): park it at the first stage.
-    stageOf[e.type_id] = best === null ? deepest : best;
+    stageOf[e.type_id] = best === null ? earliest : best;
   });
 
   const cols = buildTiers.map((t, i) => ({
     t,
     index: i,
-    label: t === 0 ? 'Finished' : `Stage ${i + 1}`,
+    label: t === finished ? 'Finished' : `Stage ${i + 1}`,
     // "For Finished" reads wrong in the shopping list — name the act, not the column.
-    shopLabel: t === 0 ? 'the final build' : `Stage ${i + 1}`,
+    shopLabel: t === finished ? 'the final build' : `Stage ${i + 1}`,
     builds: (tiers[t] || []).filter(e => e.decision === 'build'),
     buys: Object.values(byType).filter(e => e.decision !== 'build' && stageOf[e.type_id] === t),
   }));
