@@ -2,8 +2,9 @@
 
 TODO §41 asked for both pages to stop being one long scroll, and explicitly asked that the split be
 designed ONCE and applied to both, so they don't end up with two different navigation idioms for the
-same underlying problem. This is that proposal. **Not implemented** — written up for review before
-either page's markup moves, per §41's own first step.
+same underlying problem. This is that proposal, written up for review before either page's markup
+moved, per §41's own first step. **Both halves built 2026-08-18**, on `dev` pending review — the
+Manufacturing/Reactions sections below carry the corrections found while building each one.
 
 ## Contents
 
@@ -64,26 +65,32 @@ belongs on whichever fold it blocks, as a badge on the collapsed `<summary>` —
 section. That's what makes "Missing Blueprints + Shopping List, with an alert if we're missing BPs"
 (the user's own phrasing) fall out of the pattern rather than needing a special case.
 
-## Manufacturing's split
+## Manufacturing's split — built 2026-08-18
 
 - **Landing dashboard**: headline/metrics tiles + Do This Now. Nothing else — the marginal-savings
   strip and the reaction-policy bar are controls, not information, and belong with the section they
   control (see below).
-- **Fold: "Blueprints & materials"** — merges the missing-blueprint / blueprint-copy-runs-short
-  notices with the Shopping list, exactly as the user described for Reactions' equivalent. The
-  `<summary>` carries a red badge with the missing count whenever `_indMissingBpWarn`/blueprint-short
-  would have rendered anything — collapsed-but-flagged is the whole point, so a blocked build is
-  never silently hidden behind a fold. The marginal-savings strip moves inside this fold too: it's a
-  make-or-buy control over the same list.
-- **Fold: "Currently running"** — `indLoadRunning`, unchanged, just folded instead of always-open.
-- **Its own view: "Build Pipeline"** — `_indPipelineHtml` + `_indStepsHtml` + the reaction-policy bar
-  (it's a control over what the pipeline schedules, not over what to buy). Reached via a sub-nav
-  entry under Manufacturing, same idea as `industry_manual_done`'s step-through already gives each
-  stage its own interaction; a pipeline card's "jump to this stage" continues to work as a same-page
-  anchor when you're already on that view, and as a real navigation (`?stage=N`) when you're not.
-- Skill-gap blockers stay in Notices, rendered wherever the plan is shown (both the pipeline view
-  and the blueprints fold read them off the same `d.skill_gaps`) — a blocker that stops a stage
-  needs to be visible from whichever section the user actually opened.
+- **Fold: "Blueprints & materials"** (`_indRenderPlanBody`) — merges the missing-blueprint /
+  blueprint-copy-runs-short notices, the marginal-savings strip, and the Shopping list.
+  `#indBlueprintsDetails`'s `<summary>` carries `.pp-fold-badge` with the count of things that
+  actually BLOCK a build (missing prints + copies short of runs — `_indBlueprintBadgeCount`), not
+  the marginal-savings count (a choice, not a blocker): collapsed-but-flagged is the whole point,
+  so a blocked build is never silently hidden.
+- **Fold: "Currently running"** (`#indRunningDetails`) — `indLoadRunning`'s own count moved from an
+  `<h3>` (only visible expanded) to a `.pp-fold-badge` on the fold's `<summary>`.
+- **Its own view: "Build Pipeline"** (`_indRenderPipelineBody`, `#indModePipeline`,
+  `/manufacturing/pipeline`) — the reaction-policy bar + `_indPipelineHtml` + `_indStepsHtml`.
+  Reached via a new sidebar sub-item under Manufacturing (`setIndustryMode`, mirroring the PI
+  Planner's `setPiMode`); `data-pimode` was renamed to the page-agnostic `data-submode` since it now
+  drives two tabs, not one. Both views paint from the SAME fetched plan on every update
+  (`_indPaintStatus` calls both renderers unconditionally) rather than lazily on switch — the
+  pipeline's tree walk is pure JS, not a fetch, so there's nothing to save by skipping it, and
+  painting both up front means a mode switch can never show stale content.
+- **Correction against the original plan:** skill-gap blockers stay in the Blueprints fold ONLY,
+  not duplicated into the pipeline view. `_indMissingBpWarn` fires a background contract-price
+  fetch keyed by a render-instance id (`_indBpcSeq`) — rendering the full notice stack in both views
+  per plan update would have fired that fetch twice for nothing. A build blocked on a skill gap is
+  still one fold away, just not repeated in a second place.
 
 ## Reactions' split
 
@@ -133,14 +140,21 @@ under the same convention Manufacturing gets, not a structural rebuild.
 
 ## Implementation notes
 
-- **Routing**: CLAUDE.md's checklist applies — `index.html`'s panel, `TAB_SLUGS`/`SPA_PAGES` in
-  `app/main.py`, the nav button, and `test_routing.py`'s four-list check, for the one new
-  Manufacturing sub-page. Reactions needs none of this.
-- **One shared helper, not two copies**: the "fold with a count badge on the summary" idiom should
-  be a single small function (`_pp_foldSummary(title, count, itemNoun)` or similar) used by both
-  pages' JS, so a future third page inherits the same look instead of a third copy drifting from the
-  first two. This is the one piece of shared code this proposal actually calls for — everything else
-  is a per-page rearrangement of sections that already exist.
-- **Order of work, if this is approved**: Reactions first (smaller, mostly labelling), to prove the
-  shared fold-badge helper before Manufacturing's larger move (the new pipeline route). Doing the
-  bigger one first would mean debugging the shared helper and the new route at the same time.
+- **Routing, as built**: `index.html`'s two new panels (`#indModeStatus`/`#indModePipeline`),
+  `TAB_SUBPAGES.industry` + `SPA_PAGES`'s `manufacturing/status`/`manufacturing/pipeline` in
+  `app/main.py`, the new sidebar sub-item, and `test_routing.py`'s four-list check — all green,
+  including `test_routing_client.js` (which runs the router for real) and `test_nav_gating.py`
+  (which needed a fix: `data-pimode` renamed to `data-submode` since it now drives two tabs, and
+  one CSS selector + one test regex were still written against the old name). Reactions needed none
+  of this — confirmed, not just predicted.
+- **One shared badge CLASS, not a shared render function.** `.pp-fold-badge` is the one thing
+  actually shared — each page still builds its own `<summary>` HTML inline (Reactions in
+  `_rxUpdateShopMissingBadge`/`_loadRxShoppingList`, Manufacturing in `_indRenderPlanBody`). A
+  `_pp_foldSummary(...)` render helper was considered and dropped: the two pages' fold markup
+  differs enough (Reactions updates a badge independently of the fold's content load; Manufacturing
+  builds the whole `<details>` inline every render) that forcing one function would have been the
+  "reuse-by-conditional" CLAUDE.md rule 4 warns against, for a few lines saved per call site.
+- **Order of work, as built**: Reactions first (smaller, mostly labelling), then Manufacturing.
+  Confirmed worth doing in that order — Reactions surfaced the "the report didn't actually live
+  where this doc assumed" correction while the change was still small, before Manufacturing's larger
+  move (new mode, new route) added its own moving parts on top.
