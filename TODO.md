@@ -138,13 +138,15 @@ Pipeline** broken out as its own view. Reactions' equivalent grouping is not yet
 as part of the same design pass, not as an afterthought once Manufacturing's shape is already
 locked in.
 
-**First step:** a single IA proposal covering both pages before any code — which pieces become
-tabs/sub-nav vs. collapsible sections, and how that fits the existing `TAB_SUBPAGES`/nav model in
-`static/app.js` (CLAUDE.md: adding an SPA page means `index.html`, `TAB_SLUGS`, `SPA_PAGES` in
-`app/main.py`, and the nav button all agree, checked by `test_routing.py`). Write the pattern down
-(section boundaries, when something is a fold vs. a separate tab, badge/alert convention) before
-touching either page's markup, and apply it to Manufacturing and Reactions in the same pass so
-neither is left as the odd one out.
+**Proposal written, not yet built:** [docs/page-layout-2026-08.md](docs/page-layout-2026-08.md).
+Three kinds of section (landing dashboard / fold with a count badge / its own view), a concrete
+assignment of every existing section on both pages into one of the three, and why Reactions turns
+out to need less change than Manufacturing (two of its three fold candidates already exist). Needs a
+read and a go/no-go before any markup moves — this is the kind of call the user wanted made
+deliberately, not one to lock in solo while they're away. **Next step once approved:** Reactions
+first (smaller, mostly labelling — the missing-formulas badge and folding orders/running under the
+shared convention), THEN Manufacturing's larger move (the new Build Pipeline sub-page and its
+routing), per the proposal's own ordering rationale.
 
 ## Nothing else open beyond the above
 
