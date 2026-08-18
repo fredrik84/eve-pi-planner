@@ -1058,8 +1058,18 @@ function _renderReactionsDashboard(data) {
     connectBtn.textContent = `Connect ${data.tracked ? 'another' : 'a'} character`;
   }
 
+  // Characters we still hold jobs for whose token no longer carries the jobs scope — re-authorising
+  // through the normal login silently drops the opt-in one. Their snapshot is frozen and their
+  // reaction alerts are held back, so this has to be said wherever the reaction data is read; it is
+  // computed before the "nothing tracked" exit below, which is the case it matters most in (the
+  // last tracked character losing its scope reads as "you never connected one" otherwise).
+  const scopeLost = (data.characters || []).filter(c => !c.tracked && c.scope_lost);
+  const scopeLostNote = scopeLost.length
+    ? `<div class="rx-reconnect-note">⚠ Job tracking was disconnected for <b>${scopeLost.map(c => _esc(c.character_name)).join(', ')}</b> — the jobs shown are frozen at the last read and their alerts are paused. <button type="button" class="rx-reconnect-btn" onclick="connectReactionsTracking()">Re-authorise with reactions enabled</button> to resume.</div>`
+    : '';
+
   if (!data.tracked) {
-    el.innerHTML = '<div class="pp-empty">No characters are tracking reaction jobs yet — use "Connect a character" above.</div>';
+    el.innerHTML = scopeLostNote + '<div class="pp-empty">No characters are tracking reaction jobs yet — use "Connect a character" above.</div>';
     if (metricsEl) metricsEl.innerHTML = '<div class="pp-empty">Nothing to show yet.</div>';
     return;
   }
@@ -1069,7 +1079,9 @@ function _renderReactionsDashboard(data) {
   // hasn't trained anything and can't meaningfully react. Applies to both the "not yet tracked"
   // nudge list and the loadout itself — no point highlighting a character that can't do this.
   const HAS_SKILL = c => c.slots > 1;
-  const untracked = (data.characters || []).filter(c => !c.tracked && HAS_SKILL(c))
+  // `scope_lost` characters are excluded — "not yet tracked" is the wrong story for one that was
+  // tracked until its token changed, and scopeLostNote above already names them with the fix.
+  const untracked = (data.characters || []).filter(c => !c.tracked && !c.scope_lost && HAS_SKILL(c))
     .sort((a, b) => b.slots - a.slots);
   const untrackedNote = untracked.length
     ? `<div class="pp-card-hint" style="margin-bottom:8px">Not yet tracked: ${untracked.map(c => _esc(c.character_name)).join(', ')}</div>`
@@ -1082,7 +1094,7 @@ function _renderReactionsDashboard(data) {
   const tracked = (data.characters || []).filter(c => c.tracked && HAS_SKILL(c))
     .sort((a, b) => b.slots - a.slots);
   if (!tracked.length) {
-    el.innerHTML = '<div class="pp-empty">No tracked characters have trained Mass Reactions skills yet — a bare base slot isn\'t enough to be worth showing.</div>' + untrackedNote;
+    el.innerHTML = scopeLostNote + '<div class="pp-empty">No tracked characters have trained Mass Reactions skills yet — a bare base slot isn\'t enough to be worth showing.</div>' + untrackedNote;
     if (metricsEl) metricsEl.innerHTML = '<div class="pp-empty">Nothing to show yet.</div>';
     return;
   }
@@ -1459,7 +1471,7 @@ function _renderReactionsDashboard(data) {
     <div class="rx-stage-ready">✅ <b>Stage ${readyNow[0].stage} is ready to start${readyNow.length > 1 ? ' on several characters' : ` on ${_esc(readyNow[0].character)}`}</b>
       — everything it waits on has finished. Install ${readyNow.map(r => r.names.map(_esc).join(', ')).join(' · ')}.</div>`;
 
-  el.innerHTML = reconnectNote + _rxUnderProductionWarn(data.under_production) + readyBanner
+  el.innerHTML = scopeLostNote + reconnectNote + _rxUnderProductionWarn(data.under_production) + readyBanner
     + _rxMissingFormulaWarn(data.missing_formulas)
     // Under the cadence row it is about, and above the checklist it would change — the remedy is
     // "type more numbers", so it belongs where the numbers are about to be read.

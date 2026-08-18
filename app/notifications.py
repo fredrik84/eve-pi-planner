@@ -547,14 +547,21 @@ def _rescan_targets(con, context_id: int, by_kind: dict,
         if not c or c["is_dummy"]:
             continue                       # a placeholder character has no ESI data to refresh
         if pid is None and "read_character_jobs" not in (c["scopes"] or ""):
-            # The jobs scope is opt-in (`?reactions=1` login) and this character never granted it —
-            # or dropped it by re-authorising through the normal login. There is no request that
-            # could check this alert, so it is SKIPPED, not held back: holding it back would
-            # silence an alert that is being delivered fine today, permanently and with nothing on
-            # any page explaining why. That is the opposite of what this feature is for. The dead
-            # -token case is held back because the character card's red dot names the fix; until
-            # there is an equivalent for the jobs scope, turning the flag on must not take a
-            # working alert away. (TODO §37a.)
+            # The jobs scope is opt-in (`?reactions=1` login) and this character either never
+            # granted it or dropped it by re-authorising through the normal login. No request can
+            # check this alert either way; what differs is whether the user has been told.
+            #
+            # A character we hold a jobs SNAPSHOT for is one that WAS tracked, so the Characters
+            # card and the Reactions tab both now say "job tracking disconnected" and offer the
+            # re-authorise (`reactions_scope_lost`). Held back, like a dead token: the page names
+            # the fix, and every alert about that snapshot is computed from data frozen at whatever
+            # the last successful read saw.
+            #
+            # No snapshot means nothing was ever tracked — nothing on any page would explain the
+            # silence, so it is SKIPPED and delivered exactly as it is today. (`jobs_fetched_at`
+            # empties on a read failure, which lands here too: the safe direction.)
+            if cid in jobs_fetched_at:
+                unverifiable.append(((cid, pid), "no_jobs_scope"))
             continue
         if not c["refresh_token"]:
             # A token the user must re-add. We cannot check, so we do not tell them about it —

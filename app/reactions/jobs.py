@@ -3277,7 +3277,17 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
         slots = reaction_slots(c)
         if not opted_in:
             characters.append({"character_name": c["character_name"], "tracked": False,
-                               "slots": slots, "reason": why_not})
+                               "slots": slots, "reason": why_not,
+                               # Held a jobs snapshot, then lost the SCOPE — re-authorising through
+                               # the normal login drops the opt-in one. Different from "never
+                               # connected": there is stale data on the page to explain, and the
+                               # alert rescan is holding this character's reaction alerts back.
+                               # The scope has to be tested explicitly: `opted_in` is also false for
+                               # a scope-holding character with no reaction skill trained, and that
+                               # one is tracked fine — flagging it would be a permanent warning
+                               # about nothing, which re-authorising could never clear.
+                               "scope_lost": ("read_character_jobs" not in (c["scopes"] or "")
+                                              and c["character_id"] in cached)})
             continue
         tracked_any = True
         total_slots += slots

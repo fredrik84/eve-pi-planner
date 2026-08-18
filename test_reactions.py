@@ -981,6 +981,76 @@ def test_it_warns_when_installed_jobs_will_come_up_short() -> bool:
         con.commit(); con.close()
 
 
+def test_a_character_that_lost_the_jobs_scope_says_so() -> bool:
+    """TODO §37a. Re-authorising a character through the NORMAL login silently drops the opt-in
+    industry-jobs scope. Its `pp_char_industry_jobs` row then freezes at the last successful read —
+    the Reactions tab and all three reaction alerts keep computing off data nothing can refresh.
+
+    Before this, that character simply fell into "not yet tracked", indistinguishable from one that
+    was never connected. `scope_lost` is what separates the two, and the alert rescan holds a
+    frozen character's alerts back only BECAUSE this flag makes the page say what to do about it —
+    so the two must agree on who is in that state."""
+    import time as _t, json as _json
+    from app.db import get_connection
+    import app.reactions.jobs as J
+
+    CTX, CID, TID = 777097, 9940002, 16673
+    J.ensure_industry_jobs_table()
+
+    def setup(scopes, with_jobs_row, skills=(5, 4)):
+        con = get_connection()
+        con.execute("DELETE FROM pp_characters WHERE character_id=?", (CID,))
+        con.execute("INSERT INTO pp_characters (context_id,character_id,character_name,"
+                    "mass_reactions,advanced_mass_reactions,scopes) VALUES (?,?,?,?,?,?)",
+                    (CTX, CID, "Lapsed", skills[0], skills[1], scopes))
+        con.execute("DELETE FROM pp_char_industry_jobs WHERE character_id=?", (CID,))
+        if with_jobs_row:
+            jobs = [{"product_type_id": TID, "runs": 10, "status": "active", "activity_id": 9,
+                     "duration": 3 * 3600}]
+            con.execute("INSERT INTO pp_char_industry_jobs (character_id,jobs_json,fetched_at) "
+                        "VALUES (?,?,?)", (CID, _json.dumps(jobs), _t.time()))
+        con.commit(); con.close()
+
+    def _row():
+        chars = J.get_industry_jobs(context_id=CTX).get("characters") or []
+        return next((c for c in chars if c["character_name"] == "Lapsed"), None)
+
+    try:
+        # Tracked until its token changed: the snapshot is still here, the scope is not.
+        setup("esi-planets.manage_planets.v1", with_jobs_row=True)
+        r = _row()
+        ok = check(r is not None and r.get("tracked") is False and r.get("scope_lost") is True,
+                   f"a character holding a jobs snapshot with no jobs scope is flagged scope_lost (got {r})")
+
+        # Never connected — no snapshot, so nothing is frozen and there is nothing to explain.
+        # Saying "job tracking was disconnected" here would be a warning about nothing.
+        setup("esi-planets.manage_planets.v1", with_jobs_row=False)
+        r = _row()
+        ok &= check(r is not None and r.get("scope_lost") is False,
+                    f"a character that never tracked jobs is NOT flagged (got {r})")
+
+        # Still connected: it is tracked, and the prompt would be plain wrong.
+        setup("esi-industry.read_character_jobs.v1", with_jobs_row=True)
+        r = _row()
+        ok &= check(r is not None and r.get("tracked") is True and not r.get("scope_lost"),
+                    f"a still-connected character is tracked and unflagged (got {r})")
+
+        # The trap: `tracked` is false for TWO reasons — no scope, or no reaction skill trained.
+        # A scope-holding character with no Mass Reactions still gets a jobs row written for it, so
+        # a flag that only asks "is there a row?" warns that a perfectly working character was
+        # disconnected — permanently, since re-authorising cannot clear it.
+        setup("esi-industry.read_character_jobs.v1", with_jobs_row=True, skills=(0, 0))
+        r = _row()
+        ok &= check(r is not None and r.get("tracked") is False and r.get("scope_lost") is False,
+                    f"an untrained character that still HOLDS the scope is not flagged (got {r})")
+        return ok
+    finally:
+        con = get_connection()
+        con.execute("DELETE FROM pp_char_industry_jobs WHERE character_id=?", (CID,))
+        con.execute("DELETE FROM pp_characters WHERE character_id=?", (CID,))
+        con.commit(); con.close()
+
+
 def test_a_reaction_can_be_marked_running_or_done_by_hand() -> bool:
     """ESI is the signal for what is running and what has landed, and it is right nearly always —
     but the job cache is up to five minutes stale, a job installed under a different product than
@@ -1155,6 +1225,7 @@ def run_unit_tests() -> bool:
         test_the_leveller_does_not_reach_for_a_character_the_assign_left_out(),
         test_the_leveller_consolidates_a_stray_host_off_the_plan(),
         test_it_warns_when_installed_jobs_will_come_up_short(),
+        test_a_character_that_lost_the_jobs_scope_says_so(),
         test_the_cadence_ceiling_is_measured_in_real_time_not_sde_time(),
         test_the_cadence_reaches_an_orders_own_top_row(),
         test_a_reaction_can_be_marked_running_or_done_by_hand(),

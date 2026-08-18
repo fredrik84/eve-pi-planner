@@ -235,6 +235,7 @@ writes them into `pp_notification_log` under statuses no send ever uses:
 | `suppressed:retry_brake` | Held back: a read failed recently and is not being retried yet |
 | `suppressed:scan_failed` | Held back: this tick's read failed |
 | `suppressed:over_budget` | Held back: more colonies were due than one tick will read |
+| `suppressed:no_jobs_scope` | Held back: the character's reaction-job snapshot can no longer be refreshed |
 
 `prevented` is only credited when NOTHING about that colony (or that character's jobs) survived the
 re-read. An alert can leave the due set because it ESCALATED rather than because it was fixed —
@@ -278,11 +279,20 @@ with the same machinery, and the same rules:
   honoured rather than approximated with a TTL of our own.
 - **`fetched_at` against `_JOBS_CACHE_TTL` (5 min) is the `esi_expires` equivalent.** Inside that
   window ESI returns the same bytes, so the alert is verified without a request and still sent.
-- **The industry-jobs scope is opt-in** (`?reactions=1` login), and a character without it is
-  **skipped, not held back** — its alerts keep behaving exactly as they do today. Holding them
-  back would be defensible only if some page said "re-authorise with reactions enabled"; nothing
-  does, so turning this flag on would silently and permanently remove an alert that works. The
-  dead-token case is held back precisely because the character card's red dot names the fix.
+- **The industry-jobs scope is opt-in** (`?reactions=1` login), and what happens to a character
+  without it turns on **whether a jobs snapshot exists**, because that is what decides whether the
+  user has been told:
+  - **A snapshot and no scope** = a character that WAS tracked and lost it — re-authorising through
+    the normal login drops the opt-in scope, silently. `pp_char_industry_jobs` then freezes at the
+    last successful read, and every reaction alert about it is computed from that frozen data. So
+    it is **held back**, like a dead token, and for the same reason: the page names the fix.
+    `reactions_scope_lost` (`list_characters`) and `scope_lost` (the Reactions dashboard) drive a
+    "job tracking disconnected — re-authorise with reactions enabled" prompt on the Characters card
+    and above the Reactions dashboard, including in its "no characters tracked" empty state, which
+    is exactly the case a lone tracked character losing its scope produces.
+  - **No snapshot** = never tracked, and all three `reaction_*` kinds read from that table, so
+    there is nothing to alert about anyway. **Skipped, not held back** — nothing would explain the
+    silence. The lookup empties on a read failure, which lands here too: the safe direction.
 - **Both reads are strict on this path, with one exception.** `read_industry_jobs` /
   `read_corp_industry_jobs` raise where `fetch_industry_jobs` / `fetch_corp_industry_jobs` return
   `[]`, because an empty list is exactly what a *resolved* completed-reaction alert looks like —

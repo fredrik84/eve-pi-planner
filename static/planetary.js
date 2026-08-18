@@ -583,7 +583,8 @@ function renderCharacters(chars, loggedIn) {
           <span class="pp-char-name"><span class="pp-char-dummy-badge" title="Connected only to read the corp wallet — not used for Planetary Industry">wallet</span> ${_esc(c.name)}</span>
           <button class="pp-char-del" title="Disconnect wallet character" data-id="${c.character_id}">✕</button>
         </div>
-        <div class="pp-char-meta"><span style="color:#6a7390;font-size:12px">Corp-wallet viewer · see Admin → Corp wallet</span></div>`;
+        <div class="pp-char-meta"><span style="color:#6a7390;font-size:12px">Corp-wallet viewer · see Admin → Corp wallet</span></div>
+        ${c.reactions_scope_lost ? `<div class="pp-char-rx-reconnect">⚠ This character's reaction jobs are frozen and its reaction alerts are paused — <button type="button" class="pp-char-rx-reconnect-btn" onclick="connectReactionsTracking()">re-authorise with reactions enabled</button> to resume them.</div>` : ''}`;
       row.querySelector('.pp-char-del').addEventListener('click', async () => {
         try { await apiSend('DELETE', `/api/characters/${c.character_id}`); }
         catch (e) { toastError(e, 'Could not remove that character'); }
@@ -603,6 +604,14 @@ function renderCharacters(chars, loggedIn) {
         + 'alerts for it are paused until one succeeds. Rescan to check now."'
         + ' style="color:#e0b060;font-size:10px">●</span>'
       : '<span title="Token valid" style="color:#5ecf80;font-size:10px">●</span>';
+    // In the SUMMARY, not just the body: the fold is closed by default, and holding a character's
+    // reaction alerts back is only fair while the fix is visible without hunting for it — which is
+    // exactly why the dead-token dot sits here rather than inside.
+    const rxLostMark = c.reactions_scope_lost
+      ? ' <span title="Reaction job tracking was disconnected — the jobs shown are frozen and this'
+        + ' character\'s reaction alerts are paused until it is re-authorised with reactions enabled."'
+        + ' style="color:#e0b060;font-size:11px">⚠</span>'
+      : '';
     const planets    = c.planets || [];
     const extractors = planets.filter(p => p.is_extractor);
     const factories  = planets.filter(p => !p.is_extractor);
@@ -718,7 +727,16 @@ function renderCharacters(chars, loggedIn) {
     const rxReconnect = (c.reactions_needs_structures && rxJobs.length)
       ? `<div class="pp-char-rx-reconnect">⚠ Facility names can't load — <button type="button" class="pp-char-rx-reconnect-btn" onclick="connectReactionsTracking()">reconnect this character</button> to show them.</div>`
       : '';
-    const rxBlock = c.reactions_opted_in
+    // Opted in once, not any more: we still hold this character's reaction jobs but nothing can
+    // refresh them, so the list below is frozen and its alerts are being held back. Rendered as its
+    // own block because `reactions_opted_in` is false here — without this the whole Reactions
+    // section silently disappears and the stale data has nowhere to explain itself.
+    const rxBlock = c.reactions_scope_lost
+      ? `<div class="pp-char-rx">
+           <div class="pp-char-rx-title">Reactions · job tracking disconnected</div>
+           <div class="pp-char-rx-reconnect">⚠ This character's reaction jobs can no longer be read, so what we last saw is frozen and its reaction alerts are paused — <button type="button" class="pp-char-rx-reconnect-btn" onclick="connectReactionsTracking()">re-authorise with reactions enabled</button> to resume them.</div>
+         </div>`
+      : c.reactions_opted_in
       ? `<div class="pp-char-rx">
            <div class="pp-char-rx-title">Reactions · ${rxJobs.length}/${c.reaction_slots} slot${c.reaction_slots !== 1 ? 's' : ''} running</div>
            ${rxJobs.length
@@ -741,7 +759,7 @@ function renderCharacters(chars, loggedIn) {
     row.innerHTML = `
       <details class="pp-char-fold">
         <summary class="pp-char-header">
-          <span class="pp-char-name">${tokenDot} ${_esc(c.name)}</span>
+          <span class="pp-char-name">${tokenDot} ${_esc(c.name)}${rxLostMark}</span>
           <span class="pp-char-summary">${used} pl · ${extractors.length} ext · ${factories.length} fac</span>
           ${delHtml}
         </summary>

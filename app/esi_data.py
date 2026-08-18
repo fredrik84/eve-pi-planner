@@ -245,15 +245,30 @@ def list_characters(pp_session: str = Cookie(default=None)):
     # only after a jobs refresh has populated the table — absent otherwise, not an error. Same DB as
     # the SDE `types` table, so product names resolve in one connection.
     reaction_jobs_by_char: dict[int, list] = {}
+    # Every character we hold a jobs SNAPSHOT for, whether or not it still has anything running.
+    # Row presence — not job presence — is what says "this data exists and something has to keep it
+    # current"; a character that dropped the scope can no longer refresh it (see
+    # `reactions_scope_lost` below).
+    # Read (and turned into row presence) BEFORE the formatting block below, and not cleared by its
+    # handler: the notification side suppresses this character's reaction alerts on the strength of
+    # the same rows, so a type-lookup or malformed-job failure here must not be able to take the
+    # prompt away while the alerts stay silent.
+    _jobs_row_chars: set[int] = set()
+    _job_rows: list = []
     try:
-        _raw_jobs: list[tuple] = []   # (character_id, job dict) for active reaction jobs
-        _needed_type_ids: set[int] = set()
-        for j in (con.execute("""
+        _job_rows = con.execute("""
             SELECT ij.character_id, ij.jobs_json
             FROM pp_char_industry_jobs ij
             JOIN pp_characters ch ON ch.character_id = ij.character_id
             WHERE ch.context_id=?
-        """, (context_id,)).fetchall() if context_id else []):
+        """, (context_id,)).fetchall() if context_id else []
+        _jobs_row_chars = {j["character_id"] for j in _job_rows}
+    except Exception:
+        _job_rows, _jobs_row_chars = [], set()
+    try:
+        _raw_jobs: list[tuple] = []   # (character_id, job dict) for active reaction jobs
+        _needed_type_ids: set[int] = set()
+        for j in _job_rows:
             try:
                 jobs = _json.loads(j["jobs_json"]) if j["jobs_json"] else []
             except Exception:
@@ -476,6 +491,13 @@ def list_characters(pp_session: str = Cookie(default=None)):
             # structure-read scope — so facility names can't resolve and show as "Structure #<id>".
             # The UI nudges these characters to re-authorise (see esi.STRUCTURES_SCOPE's note).
             "reactions_needs_structures": ("read_character_jobs" in sc) and ("universe.read_structures" not in sc),
+            # We hold a reaction-job snapshot for this character but its token no longer carries the
+            # jobs scope — re-authorising through the NORMAL login drops the opt-in one, and nothing
+            # says so. The snapshot then never updates again, so the Reactions tab and the reaction
+            # alerts are both reading data frozen at whatever the last successful refresh saw. The
+            # UI turns this into a one-click re-authorise, and the alert rescan holds those alerts
+            # back only BECAUSE this prompt exists to name the fix (TODO §37a).
+            "reactions_scope_lost": ("read_character_jobs" not in sc) and (r["character_id"] in _jobs_row_chars),
             "reaction_jobs":      reaction_jobs_by_char.get(r["character_id"], []),
         })
     _admin, _tester = admin_and_tester_status_for_context(context_id)

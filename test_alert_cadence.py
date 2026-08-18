@@ -596,6 +596,13 @@ def _seed_jobs_row(cid=FAKE_CID, fetched_at=None):
     con.close()
 
 
+def _drop_jobs_row(cid=FAKE_CID):
+    con = get_connection()
+    con.execute("DELETE FROM pp_char_industry_jobs WHERE character_id=?", (cid,))
+    con.commit()
+    con.close()
+
+
 def test_reaction_alerts_are_checked_against_their_jobs() -> bool:
     """§37b: the `reaction_*` kinds are about a character's industry jobs, not a colony, so the
     first cut skipped them entirely and they kept nagging off a snapshot nobody had refreshed.
@@ -638,14 +645,24 @@ def test_reaction_alerts_are_checked_against_their_jobs() -> bool:
     targets, _u = _rescan_targets(con, FAKE_CTX, by_kind, with_reactions=True)
     ok &= check(targets == [(FAKE_CID, None)], "...and is re-read once that window has passed")
 
-    # The scope is opt-in. Without it there is no request that could check the alert — so the
-    # alert is left EXACTLY as it behaves today rather than held back. Holding it back would
-    # permanently remove a working alert, with nothing on any page explaining why; the dead-token
-    # case is held back only because the character card's red dot names the fix.
+    # The scope is opt-in, and what happens without it turns on whether a jobs SNAPSHOT exists —
+    # because that is what decides whether the user has been told. A snapshot means the character
+    # was tracked and then lost the scope (re-authorising through the normal login drops it), so
+    # the Characters card and the Reactions tab both show the re-authorise prompt, and every alert
+    # about that snapshot is computed off data frozen at the last successful read.
     _seed_character(FAKE_CID, refresh_token="live-token", scopes="esi-planets.manage_planets.v1")
     targets, unver = _rescan_targets(con, FAKE_CTX, by_kind, with_reactions=True)
+    ok &= check(targets == [] and unver == [((FAKE_CID, None), "no_jobs_scope")],
+                f"a character that lost the industry-jobs scope is held back, not called for "
+                f"(got {targets}, {unver})")
+
+    # No snapshot means nothing was ever tracked, and all three reaction kinds read from that same
+    # table — so there is nothing to alert about anyway, and nothing on any page that would explain
+    # a silence. Skipped, exactly as it behaves today.
+    _drop_jobs_row(FAKE_CID)
+    targets, unver = _rescan_targets(con, FAKE_CTX, by_kind, with_reactions=True)
     ok &= check(targets == [] and unver == [],
-                f"a character without the industry-jobs scope is neither called for nor silenced "
+                f"a character that never tracked jobs at all is neither called for nor silenced "
                 f"(got {targets}, {unver})")
 
     # A colony alert in the same batch is unaffected by any of this.
