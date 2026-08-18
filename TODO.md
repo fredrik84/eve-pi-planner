@@ -341,7 +341,9 @@ it needs an admin session, so it is the user's to do. Do not UPDATE `pp_bugs` by
 
 ## Nothing else open
 
-The rest of the backlog is §34 (backend: blueprints.py still to split), §37a and §38 as of 2026-08-17. §18b (config export/import) and §19 (URL routing,
+The rest of the backlog is §37a as of 2026-08-18 — and all that is left there is watching, plus two
+documented limitations nobody has to act on. §34 closed 2026-08-17 (all three backend packages
+split); §38 is fixed and only needs the bug row closed from the Admin tab. §18b (config export/import) and §19 (URL routing,
 including the deep links that carry an id) both closed that day — §19's last piece, deep-linking a
 colony, was closed as **won't build** rather than shipped, and the reasoning is in the archive.
 
