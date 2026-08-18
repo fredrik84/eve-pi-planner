@@ -38,9 +38,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '24'
       - name: Syntax-check every frontend file
         run: for f in static/*.js; do node --check "$f"; done
       - name: no-undef
