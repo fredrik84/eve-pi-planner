@@ -646,6 +646,7 @@
                   <span class="pp-card-hint">— total materials needed for everything currently assigned</span>
                   <button class="pp-add-btn" onclick="_rxCopyShoppingList(this)">Copy for Janice</button>
                   <button class="pp-add-btn" onclick="_rxOpenSuggestForDeadline()" title="Opens Suggest Reaction Products with the 'finish by' field ready — it already picks profitable products for you, sized to a date instead of a day-count rhythm">Plan to a deadline</button>
+                  <button class="pp-add-btn" onclick="_rxOpenRecurringDeadline()" title="Sizes what you already have queued (speculative work + open customer orders) to a date — how many runs to start and what to buy for them, instead of a new product">Scale to a deadline</button>
                 </div>
                 <div id="rxShoppingListContent" class="pp-card-body"></div>
                 <details style="margin-top:10px">
@@ -1886,6 +1887,18 @@ PVF-N9    3         95                 60             80                  100   
         <button class="pp-modal-close" onclick="_rxCloseJobDetail()">✕</button>
       </div>
       <div id="rxJobDetailContent"><div class="pp-empty">Loading…</div></div>
+    </div>
+  </div>
+
+  <!-- "Scale to a deadline": what's ALREADY queued (speculative + open orders), sized to a date —
+       distinct from "Plan to a deadline" (wizRDeadline), which picks NEW products. See
+       _rxOpenRecurringDeadline in reactions.js. -->
+  <div id="rxRecurringDeadlineModal" class="pp-modal" style="display:none">
+    <div class="pp-modal-box pp-modal-box-wide" style="overflow-y:auto">
+      <div class="pp-modal-title">Scale your current plan to a deadline
+        <button class="pp-modal-close" onclick="_rxCloseRecurringDeadline()">✕</button>
+      </div>
+      <div id="rxRecurringDeadlineContent"><div class="pp-empty">Loading…</div></div>
     </div>
   </div>
 

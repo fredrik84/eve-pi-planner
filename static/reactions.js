@@ -2359,6 +2359,13 @@ function _rxRunSteps(title, steps) {
 function _rxCloseSteps() {
   if (_rxStepsBusy) return;    // there is nothing to close while it is still running
   document.getElementById('rxStepsModal').style.display = 'none';
+  // Reported live (2026-08-19): a failed "Assign all" leaves this as a full-screen overlay (see
+  // _rxRunSteps) sitting ON TOP of the wizard, so its own Cancel/Done button is unclickable behind
+  // it — closing the failure report from inside the wizard has to also leave the wizard, or the
+  // caller is stuck on a stale step-2 suggestions page with no way back that doesn't go through
+  // here again.
+  const wiz = document.getElementById('rxWizard');
+  if (wiz && getComputedStyle(wiz).display !== 'none') wizRCancel();
 }
 
 // The plan re-read every commit ends with: it is what levels the run counts and re-splits the
@@ -3491,6 +3498,132 @@ function _rxAssignOrderBatch(orderId, runs) {
       if (status) status.textContent = err.message;
       if (btn) { btn.disabled = false; btn.textContent = 'Retry'; }
     });
+}
+
+// ── "Scale to a deadline" — everything already queued, sized to a date ─────────────────────────
+// Reported live (2026-08-19): the "Plan to a deadline" flow above answers "what NEW product should
+// I make by this date", but the real ask was different — "I already have recurring work queued
+// (suggested, hand-added, or a customer order still short of its target); tell me how many runs
+// of THAT to start and what to buy, so I don't end up with more materials bought than used."
+// Reuses whatever /api/reactions/recurring-products reports as the account's real queue instead
+// of asking the user to pick a product again, and reuses `_rxFindMaxQtyByDeadline`/
+// `_rxDeadlinePreview` per product — same search, same server-side oracle, no new backend math.
+let _rxRecurringDeadlineMs = 0;
+let _rxRecurringCandidates = null;
+let _rxLastRecurringDeadlineMaterials = [];
+
+function _rxOpenRecurringDeadline() {
+  document.getElementById('rxRecurringDeadlineModal').style.display = '';
+  const days = (_rxCadenceDays && _rxCadenceDays > 0) ? _rxCadenceDays : 7;
+  _rxRecurringDeadlineMs = Math.floor((Date.now() + days * 86400000) / 3600000) * 3600000;
+  const content = document.getElementById('rxRecurringDeadlineContent');
+  content.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Loading…</div>';
+  api('/api/reactions/recurring-products')
+    .then(d => { _rxRecurringCandidates = d; _renderRxRecurringDeadlinePicker(); })
+    .catch(err => { content.innerHTML = `<div class="pp-empty">${_esc(err.message || 'Failed to load.')}</div>`; });
+}
+
+function _rxCloseRecurringDeadline() {
+  document.getElementById('rxRecurringDeadlineModal').style.display = 'none';
+}
+
+function _renderRxRecurringDeadlinePicker() {
+  const content = document.getElementById('rxRecurringDeadlineContent');
+  const d = _rxRecurringCandidates;
+  const products = (d.speculative || []).concat(d.orders || []);
+  if (!products.length) {
+    content.innerHTML = '<div class="pp-empty">Nothing currently queued — no speculative assignments, and no open customer order still needs runs. "Plan to a deadline" sizes a NEW product instead.</div>';
+    return;
+  }
+  const listHtml = products.map(p => `<li>${_esc(p.name)}${p.client_name ? ` <span class="pp-card-hint">— ${_esc(p.client_name)}</span>` : ''} <span class="pp-card-hint">(${p.assigned_runs.toLocaleString()} run${p.assigned_runs === 1 ? '' : 's'} assigned)</span></li>`).join('');
+  content.innerHTML = `
+    <div class="pp-card-hint">Sizes each of these to one date — how many runs to start and what they need, so you buy for exactly enough and no more.</div>
+    <ul style="margin:10px 0 10px 20px;padding:0">${listHtml}</ul>
+    <div class="pp-card-hint">Done by</div>
+    <input type="datetime-local" id="rxRecurringDeadlineInput" value="${_toLocalInput(_rxRecurringDeadlineMs)}"
+           onchange="_rxRecurringDeadlineChanged(this.value)">
+    <div id="rxRecurringDeadlineClock" class="pp-card-hint" style="margin-top:4px">${_esc(_fmtDeadlineBoth(_rxRecurringDeadlineMs))}</div>
+    <div id="rxRecurringDeadlineResult" style="margin-top:10px"></div>
+    <div class="pp-modal-actions" style="margin-top:14px">
+      <button class="pp-cancel-btn" onclick="_rxCloseRecurringDeadline()">Close</button>
+    </div>`;
+  _rxRunRecurringDeadlineCalc();
+}
+
+function _rxRecurringDeadlineChanged(v) {
+  _rxRecurringDeadlineMs = v ? new Date(v).getTime() : 0;
+  const clock = document.getElementById('rxRecurringDeadlineClock');
+  if (clock) clock.textContent = _rxRecurringDeadlineMs ? _fmtDeadlineBoth(_rxRecurringDeadlineMs) : '';
+  _rxRunRecurringDeadlineCalc();
+}
+
+async function _rxRunRecurringDeadlineCalc() {
+  const result = document.getElementById('rxRecurringDeadlineResult');
+  if (!result || !_rxRecurringCandidates) return;
+  if (!_rxRecurringDeadlineMs) { result.innerHTML = ''; return; }
+  const availableHours = (_rxRecurringDeadlineMs - Date.now()) / 3600000;
+  if (availableHours <= 0) { result.innerHTML = '<div class="pp-empty">That time has already passed.</div>'; return; }
+  result.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Sizing each product to that date…</div>';
+  const products = (_rxRecurringCandidates.speculative || []).concat(_rxRecurringCandidates.orders || []);
+  const rows = [];
+  for (const p of products) {
+    try {
+      rows.push({ p, found: await _rxFindMaxQtyByDeadline(p.type_id, availableHours) });
+    } catch (e) {
+      rows.push({ p, error: (e && e.message) || 'Could not calculate that.' });
+    }
+  }
+  // Still the active deadline? A slow multi-product search can finish after the user has already
+  // changed the date or closed the modal — a stale result painted over a newer pick would be wrong.
+  if (!document.getElementById('rxRecurringDeadlineResult')) return;
+  _renderRxRecurringDeadlineResult(rows, availableHours);
+}
+
+function _renderRxRecurringDeadlineResult(rows, availableHours) {
+  const result = document.getElementById('rxRecurringDeadlineResult');
+  if (!result) return;
+  // Each product's max-by-deadline is found independently, against its own free-slot read at the
+  // time of that call — the same approximation the per-order "…sized to a deadline" flow already
+  // makes (_rxRunOrderDeadlineCalc). Materials are then summed across products, which means two
+  // products sharing a raw material can each assume the full account stock offset once — a real
+  // gap, but the one already accepted for the single-product version of this search.
+  const totals = new Map();  // type_id -> {name, quantity, volume_m3}
+  const productRows = rows.map(({ p, found, error }) => {
+    if (error) return `<div class="pp-empty">${_esc(p.name)}: ${_esc(error)}</div>`;
+    if (!found.fits) return `<div class="pp-card-hint"><b>${_esc(p.name)}</b> — not enough time for even one more run by then.</div>`;
+    (found.report.materials || []).forEach(m => {
+      const t = totals.get(m.type_id) || { name: m.name, quantity: 0 };
+      t.quantity += m.quantity;
+      totals.set(m.type_id, t);
+    });
+    const runs = found.report.order.top_level_runs;
+    const already = p.assigned_runs || 0;
+    const more = Math.max(0, runs - already);
+    const assignBtn = p.order_id
+      ? ` <button class="pp-add-btn" onclick="_rxAssignOrderBatch(${p.order_id}, ${runs})">Assign ${runs.toLocaleString()} run${runs === 1 ? '' : 's'}</button>`
+      : '';
+    return `<div style="margin-top:6px"><b>${_esc(p.name)}</b>${p.client_name ? ` <span class="pp-card-hint">— ${_esc(p.client_name)}</span>` : ''}: `
+      + `<b>${runs.toLocaleString()}</b> run${runs === 1 ? '' : 's'} total by then`
+      + (already ? ` (${already.toLocaleString()} already assigned — ${more.toLocaleString()} more to start)` : '')
+      + `${assignBtn}</div>`;
+  }).join('');
+  const materials = [...totals.values()];
+  _rxLastRecurringDeadlineMaterials = materials;
+  const materialsHtml = !materials.length ? '' : `
+    <div class="pp-card-title" style="margin-top:14px;font-size:14px">Combined shopping list
+      <button class="pp-add-btn" onclick="_rxCopyRecurringDeadlineList(this)">Copy for Janice</button>
+    </div>
+    <div style="overflow-x:auto">
+      <table class="pp-card-table" style="width:100%">
+        <thead><tr><th>Material</th><th>Quantity</th></tr></thead>
+        <tbody>${materials.map(m => `<tr><td>${_esc(m.name)}</td><td>${_rxCopyQtyCell(m.quantity)}</td></tr>`).join('')}</tbody>
+      </table>
+    </div>`;
+  result.innerHTML = `<div class="pp-card-hint">~${_fmtHours(availableHours)} until then.</div>${productRows}${materialsHtml}`;
+}
+
+function _rxCopyRecurringDeadlineList(btn) {
+  _rxCopyText(_rxLastRecurringDeadlineMaterials.map(m => `${m.name}\t${Math.round(m.quantity)}`).join('\n'), btn);
 }
 
 function _rxSetOrderStatus(orderId, newStatus) {

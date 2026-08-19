@@ -1183,3 +1183,59 @@ def reactions_shopping_list(include_orders: bool = False,
     formulas = missing_formulas(context_id, wanted_from_sequence(assignments),
                                 jobs=jobs_from_sequence(assignments))
     return {"materials": _materials_report(totals, reached, types), "formulas": formulas, **counts}
+
+
+@router.get("/api/reactions/recurring-products")
+def reactions_recurring_products(context_id: int = Depends(require_context)):
+    """The distinct top-level products currently in play — either a speculative (non-order) chain
+    already assigned, or an open customer order still short of its target — for the Shopping
+    list's "scale to a deadline" feature (see `_rxOpenRecurringDeadline` in reactions.js). Reported
+    live (2026-08-19): the only way to buy for a deadline was to wait for the day and see what's
+    short, or hand-figure it from the cadence setting — this reuses whatever the account already
+    has queued instead of asking the user to pick a product all over again, since that product list
+    already exists as the current plan.
+
+    `assigned_runs` is in the same top_level_runs unit `POST /api/reactions/orders/preview`
+    reports back, so a caller can search that endpoint for "max qty by this deadline" and compare
+    its `order.top_level_runs` against this number directly to say how many MORE runs to start."""
+    from app.reactions.jobs import ensure_reaction_assignments_table, ensure_reaction_orders_table
+    ensure_reaction_assignments_table()
+    ensure_reaction_orders_table()
+    con = get_connection()
+    try:
+        char_ids = [r["character_id"] for r in con.execute(
+            "SELECT character_id FROM pp_characters WHERE context_id=? AND COALESCE(is_dummy,0)=0",
+            (context_id,),
+        )]
+        rows: list[dict] = []
+        if char_ids:
+            placeholders = ",".join("?" * len(char_ids))
+            rows = [dict(r) for r in con.execute(
+                f"SELECT character_id, type_id, name, runs, order_id, created_at, "
+                f"COALESCE(tier_order,0) AS tier_order FROM pp_reaction_assignments "
+                f"WHERE character_id IN ({placeholders}) AND order_id IS NULL",
+                char_ids,
+            )]
+        orders = [dict(r) for r in con.execute(
+            "SELECT id, type_id, name, top_level_runs, COALESCE(assigned_runs,0) AS assigned_runs, "
+            "client_name FROM pp_reaction_orders WHERE context_id=? AND status='open'",
+            (context_id,),
+        )]
+    finally:
+        con.close()
+
+    # Only the top row of each chain stands for the batch — see `_shopping_roots`, whose one other
+    # caller has the same "count each queued batch once, not once per intermediate" need.
+    speculative: dict[int, dict] = {}
+    for r in _shopping_roots(rows):
+        p = speculative.setdefault(r["type_id"], {"type_id": r["type_id"], "name": r["name"], "assigned_runs": 0})
+        p["assigned_runs"] += r["runs"]
+
+    order_products = [
+        {"type_id": o["type_id"], "name": o["name"], "order_id": o["id"], "client_name": o["client_name"],
+         "assigned_runs": o["assigned_runs"], "top_level_runs": o["top_level_runs"],
+         "remaining_runs": o["top_level_runs"] - o["assigned_runs"]}
+        for o in orders if o["top_level_runs"] - o["assigned_runs"] > 0
+    ]
+
+    return {"speculative": list(speculative.values()), "orders": order_products}
