@@ -3224,115 +3224,17 @@ function _rxOrderReportBody(data) {
 // Reported live (2026-08-19): the only way to align a reaction batch to a real date was to wait
 // until the day and see what's left, or hand-compute run counts against the cadence setting —
 // which routinely over-bought materials for runs that were never going to finish before the date
-// anyway. A standalone calculator, deliberately NOT touching the live plan or the account's
-// cadence (asked and answered before building): pick a product and a "done by" instant, and it
-// finds the LARGEST quantity your free reaction slots can finish by then, by SEARCHING over
-// quantity through the same endpoint the customer-order preview already uses
-// (`POST /api/reactions/orders/preview`) rather than a new sizing algorithm — that endpoint
-// already answers "how long for N units", so this just asks it at several N and keeps the biggest
-// that still fits, then renders the result with `_rxOrderReportBody`, the exact same report body
-// the New Order review uses. Same two-clock picker as PI Refill's "Run dry at…"
-// (`_toLocalInput`/`_fmtDeadlineBoth`, refill.js) — reused directly, not re-implemented, since
-// both ask "what instant did you mean" and answer it the same way.
-let _rxDeadlineMs = 0;
-let _rxDeadlineProductDropdownList = [];
-let _rxDeadlineProductDropdownIdx = -1;
-
-function _rxOpenDeadlineModal() {
-  document.getElementById('rxDeadlineProduct').value = '';
-  document.getElementById('rxDeadlineResult').innerHTML = '';
-  document.getElementById('rxDeadlineStatus').textContent = '';
-  _rxDeadlineHideProductDropdown();
-  // Default: the account's own cadence if it has one (the rhythm the player already thinks in),
-  // else a week out. Not derived from anything live the way PI Refill's default is — reactions has
-  // no single "when do I next run dry" signal the way a colony's pads do.
-  const days = (_rxCadenceDays && _rxCadenceDays > 0) ? _rxCadenceDays : 7;
-  _rxDeadlineMs = Math.floor((Date.now() + days * 86400000) / 3600000) * 3600000;
-  const input = document.getElementById('rxDeadlineInput');
-  if (input) input.value = _toLocalInput(_rxDeadlineMs);
-  const clock = document.getElementById('rxDeadlineClock');
-  if (clock) clock.textContent = _fmtDeadlineBoth(_rxDeadlineMs);
-  document.getElementById('rxDeadlineModal').style.display = '';
-  if (!_rxOppsLoaded) {
-    document.getElementById('rxDeadlineStatus').textContent = 'Loading the product list…';
-    _rxLoadOpportunities().then(() => {
-      document.getElementById('rxDeadlineStatus').textContent = '';
-      // If the reader already focused the product field while this was loading, the dropdown is
-      // showing the "Loading products…" placeholder it was given at the time — nothing else was
-      // re-rendering it once the real list landed, so it just sat there forever. Refresh it now,
-      // but only if it's actually open (no point painting a hidden dropdown).
-      const dd = document.getElementById('rxDeadlineProductDropdown');
-      if (dd && dd.style.display !== 'none') _rxDeadlineProductDropdownFilter();
-    }).catch(err => { document.getElementById('rxDeadlineStatus').textContent = err.message; });
-  }
-}
-
-function _rxCloseDeadlineModal() {
-  document.getElementById('rxDeadlineModal').style.display = 'none';
-  _rxDeadlineHideProductDropdown();
-}
-
-function _rxSetDeadline(v) {
-  _rxDeadlineMs = v ? new Date(v).getTime() : 0;
-  const clock = document.getElementById('rxDeadlineClock');
-  if (clock) clock.textContent = _rxDeadlineMs ? _fmtDeadlineBoth(_rxDeadlineMs) : '';
-}
-
-// A separate small product-search combobox from the manual-assign and New Order ones above (own
-// element ids), same datalist-search pattern, reusing the already-loaded _rxOpps list.
-function _rxDeadlineProductMatch() {
-  const name = document.getElementById('rxDeadlineProduct').value.trim();
-  return _rxOpps.find(o => o.name === name) || null;
-}
-
-function _rxDeadlineProductDropdownFilter() {
-  const input = document.getElementById('rxDeadlineProduct');
-  const dd = document.getElementById('rxDeadlineProductDropdown');
-  if (!input || !dd) return;
-  const q = input.value.trim().toLowerCase();
-  const all = [..._rxOpps].sort((a, b) => a.name.localeCompare(b.name));
-  _rxDeadlineProductDropdownList = (q ? all.filter(o => o.name.toLowerCase().includes(q)) : all).slice(0, 200);
-  _rxDeadlineProductDropdownIdx = -1;
-  if (!_rxDeadlineProductDropdownList.length) {
-    dd.innerHTML = `<div class="rx-man-product-empty">${_rxOpps.length ? 'No matching product.' : 'Loading products…'}</div>`;
-  } else {
-    dd.innerHTML = _rxDeadlineProductDropdownList.map((o, i) => `
-      <div class="rx-man-product-row" data-idx="${i}" onmousedown="event.preventDefault();_rxDeadlineSelectProduct(${i})">
-        <img src="https://images.evetech.net/types/${o.type_id}/icon?size=32" alt="" onerror="this.style.visibility='hidden'">
-        ${_esc(o.name)}
-      </div>`).join('');
-  }
-  dd.style.display = '';
-}
-
-function _rxDeadlineSelectProduct(idx) {
-  const o = _rxDeadlineProductDropdownList[idx];
-  if (!o) return;
-  document.getElementById('rxDeadlineProduct').value = o.name;
-  _rxDeadlineHideProductDropdown();
-}
-
-function _rxDeadlineHideProductDropdown() {
-  const dd = document.getElementById('rxDeadlineProductDropdown');
-  if (dd) dd.style.display = 'none';
-  _rxDeadlineProductDropdownIdx = -1;
-}
-
-function _rxDeadlineProductDropdownKey(event) {
-  const dd = document.getElementById('rxDeadlineProductDropdown');
-  if (!dd || dd.style.display === 'none') return;
-  if (event.key === 'Escape') { event.stopPropagation(); _rxDeadlineHideProductDropdown(); return; }
-  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-    event.preventDefault();
-    if (!_rxDeadlineProductDropdownList.length) return;
-    const dir = event.key === 'ArrowDown' ? 1 : -1;
-    _rxDeadlineProductDropdownIdx = (_rxDeadlineProductDropdownIdx + dir + _rxDeadlineProductDropdownList.length) % _rxDeadlineProductDropdownList.length;
-    [...dd.children].forEach((el, i) => el.classList.toggle('rx-man-product-active', i === _rxDeadlineProductDropdownIdx));
-    dd.children[_rxDeadlineProductDropdownIdx].scrollIntoView({ block: 'nearest' });
-  } else if (event.key === 'Enter') {
-    event.preventDefault();
-    _rxDeadlineSelectProduct(_rxDeadlineProductDropdownIdx >= 0 ? _rxDeadlineProductDropdownIdx : 0);
-  }
+// anyway. First built as a standalone product-picker calculator here; the user then pushed back
+// on picking a product by hand at all — the Suggest wizard already picks profitable products FOR
+// you, so once IT grew its own "finish by" (below, and see wizRSuggest), a second picker asking
+// the same question here was redundant. This button now just opens that wizard with the deadline
+// field in focus — see `_rxOpenSuggestForDeadline`. `_rxFindMaxQtyByDeadline`/`_rxDeadlinePreview`
+// survive because the customer-order "…sized to a deadline" flow (below) still needs them: an
+// order's product is already fixed, so THAT one genuinely has no product to pick.
+function _rxOpenSuggestForDeadline() {
+  wizRStart();
+  const input = document.getElementById('wizRDeadline');
+  if (input) input.focus();
 }
 
 // One preview call for a candidate quantity — the same request the New Order modal's Review
@@ -3369,41 +3271,6 @@ async function _rxFindMaxQtyByDeadline(typeId, availableHours) {
     else { hi = mid; }
   }
   return { fits: true, qty: lo, report: loReport };
-}
-
-async function _rxRunDeadlineCalc() {
-  const status = document.getElementById('rxDeadlineStatus');
-  const result = document.getElementById('rxDeadlineResult');
-  const o = _rxDeadlineProductMatch();
-  if (!o) { status.textContent = 'Pick a product from the list.'; return; }
-  if (!_rxDeadlineMs) { status.textContent = 'Pick a done-by date and time.'; return; }
-  const availableHours = (_rxDeadlineMs - Date.now()) / 3600000;
-  if (availableHours <= 0) { status.textContent = 'That time has already passed.'; return; }
-  status.textContent = '';
-  result.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Finding the largest batch that fits…</div>';
-  const btn = document.getElementById('rxDeadlineCalcBtn');
-  if (btn) btn.disabled = true;
-  let found;
-  try {
-    found = await _rxFindMaxQtyByDeadline(o.type_id, availableHours);
-  } catch (e) {
-    result.innerHTML = '';
-    status.textContent = e.message || 'Could not calculate that.';
-    if (btn) btn.disabled = false;
-    return;
-  }
-  if (btn) btn.disabled = false;
-  if (!found.fits) {
-    const cav = (found.report.time && found.report.time.caveat) || '';
-    result.innerHTML = `<div class="pp-empty">Not enough time for even one run of ${_esc(o.name)} before then`
-      + `${cav ? ` — ${_esc(cav)}` : '.'} Pick a later time, or free up a reaction slot.</div>`;
-    return;
-  }
-  const slack = availableHours - (found.report.time.estimated_hours || 0);
-  result.innerHTML = `<div class="pp-card-hint" style="margin-top:12px">Largest batch that finishes in time — `
-    + `<b>${found.qty.toLocaleString()}</b> unit${found.qty === 1 ? '' : 's'} of <b>${_esc(o.name)}</b>, `
-    + `${_fmtHours(found.report.time.estimated_hours)} of the ${_fmtHours(availableHours)} you have `
-    + `(${_fmtHours(slack)} to spare).</div>${_rxOrderReportBody(found.report)}`;
 }
 
 function _renderRxOrderDetail(data) {

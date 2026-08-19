@@ -645,7 +645,7 @@
                 <div class="pp-card-title">Shopping list
                   <span class="pp-card-hint">— total materials needed for everything currently assigned</span>
                   <button class="pp-add-btn" onclick="_rxCopyShoppingList(this)">Copy for Janice</button>
-                  <button class="pp-add-btn" onclick="_rxOpenDeadlineModal()" title="Pick a product and a done-by time — finds the largest batch your free slots can finish in time, so you buy exactly what you'll use">Plan to a deadline</button>
+                  <button class="pp-add-btn" onclick="_rxOpenSuggestForDeadline()" title="Opens Suggest Reaction Products with the 'finish by' field ready — it already picks profitable products for you, sized to a date instead of a day-count rhythm">Plan to a deadline</button>
                 </div>
                 <div id="rxShoppingListContent" class="pp-card-body"></div>
                 <details style="margin-top:10px">
@@ -1866,40 +1866,6 @@ PVF-N9    3         95                 60             80                  100   
         <button id="rxOrderCreateBtn" onclick="_rxCreateOrder()" style="display:none">Create order</button>
         <button class="pp-cancel-btn" onclick="_rxCloseNewOrderModal()">Cancel</button>
         <span id="rxOrderCreateStatus" class="bug-status-msg"></span>
-      </div>
-    </div>
-  </div>
-
-  <!-- Reactions: plan a batch to a deadline — a calculator, not an order. Finds the largest
-       quantity that fits before a picked instant; never touches a reaction slot. -->
-  <div id="rxDeadlineModal" class="pp-modal" style="display:none">
-    <div class="pp-modal-box pp-modal-box-wide" style="overflow-y:auto">
-      <div class="pp-modal-title">Plan to a deadline
-        <button class="pp-modal-close" onclick="_rxCloseDeadlineModal()">✕</button>
-      </div>
-      <div class="pp-modal-hint">Pick a product and when you need it ready — this works out the largest batch your free reaction slots can finish by then, so you buy exactly what you'll use instead of guessing. Nothing here is assigned to a reactor; it's a calculator.</div>
-
-      <div class="pp-target-form">
-        <label class="pp-label" for="rxDeadlineProduct">Product</label>
-        <div class="rx-man-product-wrap">
-          <input type="text" id="rxDeadlineProduct" class="pp-text-input" style="border-radius:4px;padding:5px 10px;font-size:13px;width:100%" placeholder="Search or click to browse…" autocomplete="off"
-            oninput="_rxDeadlineProductDropdownFilter()" onfocus="_rxDeadlineProductDropdownFilter()" onkeydown="_rxDeadlineProductDropdownKey(event)" onblur="_rxDeadlineHideProductDropdown()">
-          <div id="rxDeadlineProductDropdown" class="rx-man-product-dropdown" style="display:none"></div>
-        </div>
-
-        <label class="pp-label" for="rxDeadlineInput">Done by</label>
-        <div>
-          <input type="datetime-local" id="rxDeadlineInput" onchange="_rxSetDeadline(this.value)">
-          <div id="rxDeadlineClock" class="pp-card-hint" style="margin-top:4px"></div>
-        </div>
-      </div>
-
-      <div id="rxDeadlineResult" style="max-height:44vh;overflow-y:auto"></div>
-
-      <div class="pp-modal-actions">
-        <button id="rxDeadlineCalcBtn" onclick="_rxRunDeadlineCalc()">Calculate</button>
-        <button class="pp-cancel-btn" onclick="_rxCloseDeadlineModal()">Close</button>
-        <span id="rxDeadlineStatus" class="bug-status-msg"></span>
       </div>
     </div>
   </div>
