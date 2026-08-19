@@ -515,6 +515,14 @@ let _indViewOrderId = null;   // null = the combined queue view
 // (.ind-search-wrap/.ind-search-results/.ind-search-row, industry-plan.js's picker) so it matches
 // and stays findable at any queue size. `scope` ('status'/'blueprints'/'pipeline') keeps the three
 // copies — one per tab that offers this — from colliding on element ids.
+//
+// The input's OWN value doubles as the display label for whatever is currently selected (so it
+// reads "Revelation" rather than sitting blank once picked) — reported live (2026-08-19): that
+// same leftover text was also being read as the search query on the NEXT focus, so re-opening the
+// list after picking Revelation filtered everything down to rows matching "revelation", hiding
+// "All orders (combined)" and every other order. `onfocus` now selects the text (so typing
+// replaces it, the normal combobox affordance) and explicitly filters on an EMPTY query — the
+// list always opens full, never pre-filtered by whatever it happened to be showing before.
 function _indOrderViewSelector(scope) {
   const orders = _indOrders || [];
   if (orders.length < 2) return '';   // nothing to pick between with 0 or 1 orders queued
@@ -525,22 +533,37 @@ function _indOrderViewSelector(scope) {
       <input type="text" id="indOrderView-${scope}-input" class="ind-order-view-input" autocomplete="off"
              placeholder="All orders (combined)" value="${_esc(label)}"
              oninput="_indOrderViewFilter('${scope}', this.value)"
-             onfocus="_indOrderViewFilter('${scope}', this.value)"
+             onfocus="this.select(); _indOrderViewFilter('${scope}', '')"
              onblur="setTimeout(() => _indOrderViewHideList('${scope}'), 150)">
       <div class="ind-search-results" id="indOrderView-${scope}-results" style="display:none"></div>
     </div>
   </div>`;
 }
 
+// `_indOrders` already arrives in queue order (server: `ORDER BY priority ASC, created_at ASC`),
+// so the array position IS the position in line — no separate rank lookup needed, unlike the chip
+// row's `#N` (which reads the PLAN's computed rank, `T.rank`, since a chip is about when that
+// product actually finishes, not just where its order sits in the list).
+//
+// Reported live (2026-08-19): two orders of the same product (e.g. two Revelations) are otherwise
+// indistinguishable in the list — `label` exists on the order for exactly this ("a customer name,
+// a contract, a fleet", see ensure_industry_orders_table's own comment), so it's surfaced here, and
+// the position number gives a second, always-present way to tell them apart even with no label set.
+// Both are searchable, same as the name.
 function _indOrderViewRowsHtml(scope, q) {
   const orders = _indOrders || [];
   const needle = (q || '').trim().toLowerCase();
   const matchAll = !needle || 'all orders (combined)'.includes(needle);
-  const rows = orders.filter(o => !needle || o.name.toLowerCase().includes(needle));
+  const rows = orders
+    .map((o, i) => ({ o, pos: i + 1 }))
+    .filter(({ o }) => !needle || o.name.toLowerCase().includes(needle)
+      || (o.label || '').toLowerCase().includes(needle));
   if (!matchAll && !rows.length) return '<div class="ind-search-empty">No matching order</div>';
   return (matchAll ? `<div class="ind-search-row" onclick="_indOrderViewPick('${scope}', null, '')">All orders (combined)</div>` : '')
-    + rows.map(o => `<div class="ind-search-row" onclick="_indOrderViewPick('${scope}', ${o.id}, '${_esc(o.name).replace(/'/g, "\\'")}')">`
-        + `${_esc(o.name)}${o.quantity > 1 ? ` <span class="pp-card-hint">×${o.quantity.toLocaleString()}</span>` : ''}</div>`).join('');
+    + rows.map(({ o, pos }) => `<div class="ind-search-row" onclick="_indOrderViewPick('${scope}', ${o.id}, '${_esc(o.name).replace(/'/g, "\\'")}')">`
+        + `<span class="pp-card-hint">#${pos}</span> ${_esc(o.name)}`
+        + `${o.quantity > 1 ? ` <span class="pp-card-hint">×${o.quantity.toLocaleString()}</span>` : ''}`
+        + `${o.label ? ` <span class="pp-card-hint">— ${_esc(o.label)}</span>` : ''}</div>`).join('');
 }
 
 function _indOrderViewFilter(scope, q) {
