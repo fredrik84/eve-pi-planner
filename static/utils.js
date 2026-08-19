@@ -122,18 +122,25 @@ function ppConfirm(message, { okLabel = 'Confirm', danger = true } = {}) {
   });
 }
 
+// Sign handled by taking the magnitude first — every threshold below used to compare the SIGNED
+// value (`n >= 1e6`), which is always false for a negative n regardless of size, so a losing
+// figure (a negative "expected profit/day" etc.) fell through to the raw, unabbreviated branch
+// while a positive figure of the same magnitude got "M"/"B" — reported live (2026-08-19) as
+// Reactions' profit tile looking like it used a different number format from its neighbours.
 function fmtIsk(n) {
-  if (n >= 1e9) return (n / 1e9).toFixed(2) + ' B';
-  if (n >= 1e6) return (n / 1e6).toFixed(2) + ' M';
-  if (n >= 1e3) return (n / 1e3).toFixed(1) + ' K';
-  return n.toFixed(0);
+  const sign = n < 0 ? '-' : '';
+  const v = Math.abs(n);
+  if (v >= 1e9) return sign + (v / 1e9).toFixed(2) + ' B';
+  if (v >= 1e6) return sign + (v / 1e6).toFixed(2) + ' M';
+  if (v >= 1e3) return sign + (v / 1e3).toFixed(1) + ' K';
+  return sign + v.toFixed(0);
 }
 
 // Spaced ISK style ("12.3 K") — the B/M/K logic lives once in fmtIsk above; only the
 // sub-1k branch differs (keeps separators). NB: _iskFmt (planetary.js) is a DIFFERENT
 // compact style ("12k", no space, signed) used by the Factory Layout cards.
 function _fmtIsk(v) {
-  return v >= 1e3 ? fmtIsk(v) : v.toLocaleString();
+  return Math.abs(v) >= 1e3 ? fmtIsk(v) : v.toLocaleString();
 }
 
 // Readable duration, FLOORED so it never overstates a "time left" (1d → days + hours, 12–24h →
@@ -247,4 +254,36 @@ function _connectScopeNote() {
   return 'One login grants markets, blueprints, industry jobs, assets, skills and planets — EVE only'
     + ' remembers the last permissions you granted, so anything narrower would strip what your'
     + ' character already had.';
+}
+
+// ── Horizontal tab strip ────────────────────────────────────────────────────────────────
+// A row of tabs over a set of panels within ONE page — TODO §41 (docs/page-layout-2026-08.md):
+// Manufacturing and Reactions each had a long vertical scroll of sections, and the fix is a
+// shared in-page tab strip, not a fold-per-section or a separate page/route per section. Deliberately
+// NOT wired into the router: these are sections of one page, not addresses — `TAB_SUBPAGES` is for
+// the few pages that are genuinely several pages behind one nav entry (Admin, PI Planner). Persisted
+// per GROUP to localStorage so a reload keeps you on the tab you were reading, same convenience the
+// URL gives a real page without needing a URL.
+//
+// Markup convention: `data-tabgroup="<group>"` on both the strip's buttons and (redundantly, so a
+// panel can be selected with the exact same selector shape) is NOT required on panels — panels use
+// `data-tabpanel="<group>"` instead, so a panel and a button are never confused by a shared
+// attribute name. `data-tabkey` names which tab a button selects / a panel belongs to.
+function ppSelectTab(group, key) {
+  document.querySelectorAll(`[data-tabgroup="${group}"]`).forEach(btn =>
+    btn.classList.toggle('pp-tab-active', btn.dataset.tabkey === key));
+  document.querySelectorAll(`[data-tabpanel="${group}"]`).forEach(panel =>
+    panel.style.display = panel.dataset.tabkey === key ? '' : 'none');
+  try { localStorage.setItem(`ppTab:${group}`, key); } catch (e) {}
+}
+
+// Called once when a page/tab opens, to land on whichever tab was last read (or `fallback` on a
+// first visit). Safe to call every time the page opens, cheap either way. Returns the resolved
+// key so a caller whose tabs lazy-load (Reactions' Shopping list / Advanced) can trigger that
+// load for whichever tab is now showing, without reaching into localStorage a second time itself.
+function ppRestoreTab(group, fallback) {
+  let key = fallback;
+  try { key = localStorage.getItem(`ppTab:${group}`) || fallback; } catch (e) {}
+  ppSelectTab(group, key);
+  return key;
 }

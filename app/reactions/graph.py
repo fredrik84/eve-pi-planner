@@ -417,12 +417,6 @@ def _load_goo_and_reached_uncached(context_id: int, allowed_material_ids: set[in
 
     con = get_connection()
     try:
-        # The reference catalog of "known moon materials" is the UNION across every group's
-        # sheet (not just the caller's own) — this is what makes a type_id count as a "moon
-        # material" reachable via the market-priced path at all for a non-member; a group's
-        # OWN priced rows (queried separately below) are what actually get the below-market
-        # sheet price.
-        all_goo_rows = con.execute("SELECT DISTINCT type_id FROM pp_moon_goo_prices").fetchall()
         own_goo_rows = (con.execute(
             "SELECT type_id, sell_price, stock FROM pp_moon_goo_prices WHERE group_id=?", (group["id"],)
         ).fetchall() if group else [])
@@ -430,15 +424,25 @@ def _load_goo_and_reached_uncached(context_id: int, allowed_material_ids: set[in
     finally:
         con.close()
 
+    pi = load_pi_data()
+    types = pi["types"]
+
+    # The reference catalog of "known moon materials" — derived from the SDE reaction graph itself
+    # (see moon_material_type_ids), NOT from whether any group has ever pasted a price sheet.
+    # Reported live (2026-08-19): with pp_moon_goo_prices completely empty (no group anywhere had
+    # priced anything yet), this used to return None for EVERY product — "No priced materials to
+    # cost this reaction" — even though every raw material could still be market-priced fine below;
+    # the sheet is only ever a below-market BONUS on top of that (see `goo`), never the thing that
+    # makes a material reachable at all.
+    moon_material_ids = moon_material_type_ids(inputs_by_reaction, reactions_by_output, types)
     # Advanced filter: restrict which raw moon materials are actually available to this player
     # (e.g. a Gas type their group doesn't stock, or they simply can't reliably buy) — any
     # chain that would need an excluded material is never reachable in the first place. None/
-    # empty = no restriction (every priced material is assumed available, the original behavior).
-    moon_material_ids = {r["type_id"] for r in all_goo_rows}
+    # empty = no restriction (every known material is assumed available, the original behavior).
     if allowed_material_ids:
         moon_material_ids &= set(allowed_material_ids)
     if not moon_material_ids:
-        return None  # no group has priced any moon material at all — nothing to react from
+        return None  # the filter excluded every moon material there is — nothing left to react from
 
     # Stock 0 on the sheet = "alliance is out": the material is dropped from `goo` entirely so it
     # falls back to the open-market price (source becomes "market"). Market is the always-available
@@ -451,9 +455,6 @@ def _load_goo_and_reached_uncached(context_id: int, allowed_material_ids: set[in
         for r in own_goo_rows
         if r["type_id"] in moon_material_ids and (r["stock"] or 0) > 0
     }
-
-    pi = load_pi_data()
-    types = pi["types"]
 
     # Every reaction input that isn't itself a reaction product (fuel blocks, and other named
     # materials most formulas need alongside moon goo) PLUS every moon material, regardless of
@@ -730,6 +731,18 @@ def _fuel_block_ids(inputs_by_reaction: dict, reactions_by_output: dict, types: 
         for tid in all_input_ids
         if tid not in reactions_by_output and "Fuel Block" in (types.get(tid, {}).get("name") or "")
     }
+
+
+def moon_material_type_ids(inputs_by_reaction: dict, reactions_by_output: dict, types: dict) -> set[int]:
+    """Canonical set of raw moon materials — reaction INPUTS that aren't themselves reaction
+    products and aren't fuel blocks. Shared by the pricing/reachability walk (`_load_goo_and_reached`)
+    and the group price-sheet editor's "add material" picker (`app.moon_goo.list_moon_materials`) —
+    one derivation, so the two can't drift into disagreeing about what counts as moon goo. Purely
+    graph-derived (SDE reaction recipes), never touches pp_moon_goo_prices — that table only ever
+    supplies an optional cheaper PRICE for materials this function already knows about."""
+    all_input_ids = {inp["type_id"] for inputs in inputs_by_reaction.values() for inp in inputs}
+    fuel_ids = set(_fuel_block_ids(inputs_by_reaction, reactions_by_output, types))
+    return {tid for tid in all_input_ids if tid not in reactions_by_output and tid not in fuel_ids}
 
 
 @router.get("/api/reactions/fuel-blocks")
@@ -1183,3 +1196,59 @@ def reactions_shopping_list(include_orders: bool = False,
     formulas = missing_formulas(context_id, wanted_from_sequence(assignments),
                                 jobs=jobs_from_sequence(assignments))
     return {"materials": _materials_report(totals, reached, types), "formulas": formulas, **counts}
+
+
+@router.get("/api/reactions/recurring-products")
+def reactions_recurring_products(context_id: int = Depends(require_context)):
+    """The distinct top-level products currently in play — either a speculative (non-order) chain
+    already assigned, or an open customer order still short of its target — for the Shopping
+    list's "scale to a deadline" feature (see `_rxOpenRecurringDeadline` in reactions.js). Reported
+    live (2026-08-19): the only way to buy for a deadline was to wait for the day and see what's
+    short, or hand-figure it from the cadence setting — this reuses whatever the account already
+    has queued instead of asking the user to pick a product all over again, since that product list
+    already exists as the current plan.
+
+    `assigned_runs` is in the same top_level_runs unit `POST /api/reactions/orders/preview`
+    reports back, so a caller can search that endpoint for "max qty by this deadline" and compare
+    its `order.top_level_runs` against this number directly to say how many MORE runs to start."""
+    from app.reactions.jobs import ensure_reaction_assignments_table, ensure_reaction_orders_table
+    ensure_reaction_assignments_table()
+    ensure_reaction_orders_table()
+    con = get_connection()
+    try:
+        char_ids = [r["character_id"] for r in con.execute(
+            "SELECT character_id FROM pp_characters WHERE context_id=? AND COALESCE(is_dummy,0)=0",
+            (context_id,),
+        )]
+        rows: list[dict] = []
+        if char_ids:
+            placeholders = ",".join("?" * len(char_ids))
+            rows = [dict(r) for r in con.execute(
+                f"SELECT character_id, type_id, name, runs, order_id, created_at, "
+                f"COALESCE(tier_order,0) AS tier_order FROM pp_reaction_assignments "
+                f"WHERE character_id IN ({placeholders}) AND order_id IS NULL",
+                char_ids,
+            )]
+        orders = [dict(r) for r in con.execute(
+            "SELECT id, type_id, name, top_level_runs, COALESCE(assigned_runs,0) AS assigned_runs, "
+            "client_name FROM pp_reaction_orders WHERE context_id=? AND status='open'",
+            (context_id,),
+        )]
+    finally:
+        con.close()
+
+    # Only the top row of each chain stands for the batch — see `_shopping_roots`, whose one other
+    # caller has the same "count each queued batch once, not once per intermediate" need.
+    speculative: dict[int, dict] = {}
+    for r in _shopping_roots(rows):
+        p = speculative.setdefault(r["type_id"], {"type_id": r["type_id"], "name": r["name"], "assigned_runs": 0})
+        p["assigned_runs"] += r["runs"]
+
+    order_products = [
+        {"type_id": o["type_id"], "name": o["name"], "order_id": o["id"], "client_name": o["client_name"],
+         "assigned_runs": o["assigned_runs"], "top_level_runs": o["top_level_runs"],
+         "remaining_runs": o["top_level_runs"] - o["assigned_runs"]}
+        for o in orders if o["top_level_runs"] - o["assigned_runs"] > 0
+    ]
+
+    return {"speculative": list(speculative.values()), "orders": order_products}

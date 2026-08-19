@@ -595,84 +595,98 @@
         <div class="pp-layout">
           <div class="pp-main" style="grid-column: 1 / -1; max-width: 100%;">
 
-            <section class="pp-card">
-              <div class="pp-card-title">Metrics
-                <span class="pp-card-hint">— what's currently committed, at a glance</span>
-              </div>
-              <div id="rxMetricsContent" class="pp-card-body">
-                <div class="pp-loading"><span class="pp-spinner"></span> Loading…</div>
-              </div>
-            </section>
-
             <div class="rx-suggest-cta">
               <button onclick="wizRStart()">Suggest Reaction Products</button>
               <span class="pp-card-hint">— let the optimizer pick profitable products for your budget, cadence and free slots. Prefer a specific product instead? Click any empty <b>+</b> slot below.</span>
             </div>
 
-            <section class="pp-card">
-              <div class="pp-card-title">Reactions
-                <span class="pp-card-hint">— your reaction capacity and currently-running jobs</span>
-                <button class="pp-add-btn" onclick="_rxRefreshJobs(true, this)" title="Pull the latest job status from ESI now (bypasses the ~5min cache)">↻ Refresh jobs</button>
-                <button class="pp-add-btn" onclick="openSettingsModal('markets')">⚙ Settings</button>
-                <button class="pp-add-btn" id="rxConnectBtn" onclick="connectReactionsTracking()" style="display:none">Connect a character</button>
-                <!-- ppConfirm, not native confirm(): a browser that has been offered "prevent this
-                     page from creating additional dialogs" makes confirm() return false silently,
-                     and the button then does nothing at all. See the comment on ppConfirm in
-                     utils.js — this was the last native confirm() in the app, and it produced the
-                     same silent no-op that had already been reported once against Cancel order. -->
-                <button class="pp-add-btn" onclick="ppConfirm('Clear every planned assignment, including slots committed to customer orders? Those orders go back to unassigned so you can re-assign them.').then(ok =&gt; { if (ok) _rxClearAllAssignments(); })">Clear all</button>
-              </div>
-              <div id="rxDashboardContent" class="pp-card-body">
-                <div class="pp-loading"><span class="pp-spinner"></span> Loading…</div>
-              </div>
-            </section>
+            <!-- Four sections of one dashboard, as tabs rather than a long scroll of folds —
+                 TODO §41, docs/page-layout-2026-08.md (ppSelectTab/ppRestoreTab, utils.js). Orders
+                 and Advanced stay hidden entirely (feature-gated / TODO 35) exactly as their cards
+                 did before. -->
+            <div class="pp-tabstrip" data-tabgroup="rx">
+              <button class="pp-tab-btn" data-tabgroup="rx" data-tabkey="overview" onclick="ppSelectTab('rx','overview')">Overview</button>
+              <button class="pp-tab-btn" data-tabgroup="rx" data-tabkey="shopping" onclick="ppSelectTab('rx','shopping'); _loadRxShoppingList();">Shopping list<span id="rxShopMissingBadge" class="pp-fold-badge" style="display:none" title="Formulas the current plan needs that you don't hold"></span></button>
+              <button class="pp-tab-btn" data-tabgroup="rx" data-tabkey="orders" id="rxOrdersTab" onclick="ppSelectTab('rx','orders')" style="display:none">Customer orders</button>
+              <button class="pp-tab-btn" data-tabgroup="rx" data-tabkey="advanced" id="rxAdvancedTab" onclick="ppSelectTab('rx','advanced'); _rxLoadAdvancedTable(true);" style="display:none">Advanced</button>
+            </div>
 
-            <section class="pp-card" id="rxShoppingCard">
-              <details id="rxShoppingDetails" ontoggle="_onRxShoppingToggle(this)">
-                <summary class="pp-card-title rx-fold-summary"><span class="rx-fold-caret">▸</span>Shopping list
-                  <span class="pp-card-hint">— total materials needed for everything currently assigned</span>
-                </summary>
-                <div style="margin-top:8px">
-                  <button class="pp-add-btn" onclick="_rxCopyShoppingList(this)">Copy for Janice</button>
-                  <div id="rxShoppingListContent" class="pp-card-body"></div>
-                  <details style="margin-top:10px">
-                    <summary class="pp-card-title rx-fold-summary" style="font-size:13px"><span class="rx-fold-caret">▸</span>Paste what you've received
-                      <span class="pp-card-hint">— diff a partial contract/delivery against this list</span>
-                    </summary>
-                    <div style="margin-top:8px">
-                      <textarea id="rxReceivedPaste" class="bug-textarea" style="min-height:80px" placeholder="Paste your received/contract items here, e.g.&#10;Chromium&#9;174553&#10;Platinum&#9;136921" oninput="_renderRxReceivedDiff()"></textarea>
-                      <div id="rxReceivedDiff" class="pp-card-body" style="margin-top:8px"></div>
-                    </div>
-                  </details>
+            <div data-tabpanel="rx" data-tabkey="overview" id="rxOverviewPanel">
+              <section class="pp-card">
+                <div class="pp-card-title">Metrics
+                  <span class="pp-card-hint">— what's currently committed, at a glance</span>
                 </div>
-              </details>
-            </section>
-
-            <section class="pp-card" id="rxOrdersCard" style="display:none">
-              <details id="rxOrdersDetails">
-                <summary class="pp-card-title rx-fold-summary"><span class="rx-fold-caret">▸</span>Customer orders
-                  <span class="pp-card-hint">— track a fixed-unit job for another player: runs needed, materials to import, cost, and a rough timeline</span>
-                  <button class="pp-add-btn" onclick="event.stopPropagation();_rxOpenNewOrderModal()">+ New order</button>
-                </summary>
-                <div id="rxOrdersContent" class="pp-card-body" style="margin-top:8px">
+                <div id="rxMetricsContent" class="pp-card-body">
                   <div class="pp-loading"><span class="pp-spinner"></span> Loading…</div>
                 </div>
-              </details>
-            </section>
+              </section>
+
+              <section class="pp-card">
+                <div class="pp-card-title">Reactions
+                  <span class="pp-card-hint">— your reaction capacity and currently-running jobs</span>
+                  <button class="pp-add-btn" onclick="_rxRefreshJobs(true, this)" title="Pull the latest job status from ESI now (bypasses the ~5min cache)">↻ Refresh jobs</button>
+                  <button class="pp-add-btn" onclick="openSettingsModal('markets')">⚙ Settings</button>
+                  <button class="pp-add-btn" id="rxConnectBtn" onclick="connectReactionsTracking()" style="display:none">Connect a character</button>
+                  <button class="pp-add-btn" id="rxAdoptAllBtn" onclick="_rxAdoptAllOrphans(this)" title="Add every running job that isn't in your plan yet, so they all recur next cycle" style="display:none">⊕ Adopt all</button>
+                  <!-- ppConfirm, not native confirm(): a browser that has been offered "prevent this
+                       page from creating additional dialogs" makes confirm() return false silently,
+                       and the button then does nothing at all. See the comment on ppConfirm in
+                       utils.js — this was the last native confirm() in the app, and it produced the
+                       same silent no-op that had already been reported once against Cancel order. -->
+                  <button class="pp-add-btn" onclick="ppConfirm('Clear every planned assignment, including slots committed to customer orders? Those orders go back to unassigned so you can re-assign them.').then(ok =&gt; { if (ok) _rxClearAllAssignments(); })">Clear all</button>
+                </div>
+                <div id="rxDashboardContent" class="pp-card-body">
+                  <div class="pp-loading"><span class="pp-spinner"></span> Loading…</div>
+                </div>
+              </section>
+            </div>
+
+            <div data-tabpanel="rx" data-tabkey="shopping" id="rxShoppingPanel" style="display:none">
+              <section class="pp-card">
+                <div class="pp-card-title">Shopping list
+                  <span class="pp-card-hint">— total materials needed for everything currently assigned</span>
+                  <button class="pp-add-btn" onclick="_rxCopyShoppingList(this)">Copy for Janice</button>
+                  <button class="pp-add-btn" onclick="_rxOpenSuggestForDeadline()" title="Opens Suggest Reaction Products with the 'finish by' field ready — it already picks profitable products for you, sized to a date instead of a day-count rhythm">Plan to a deadline</button>
+                  <button class="pp-add-btn" onclick="_rxOpenRecurringDeadline()" title="Sizes what you already have queued (speculative work + open customer orders) to a date — how many runs to start and what to buy for them, instead of a new product">Scale to a deadline</button>
+                </div>
+                <div id="rxShoppingListContent" class="pp-card-body"></div>
+                <details style="margin-top:10px">
+                  <summary class="pp-card-title rx-fold-summary" style="font-size:13px"><span class="rx-fold-caret">▸</span>Paste what you've received
+                    <span class="pp-card-hint">— diff a partial contract/delivery against this list</span>
+                  </summary>
+                  <div style="margin-top:8px">
+                    <textarea id="rxReceivedPaste" class="bug-textarea" style="min-height:80px" placeholder="Paste your received/contract items here, e.g.&#10;Chromium&#9;174553&#10;Platinum&#9;136921" oninput="_renderRxReceivedDiff()"></textarea>
+                    <div id="rxReceivedDiff" class="pp-card-body" style="margin-top:8px"></div>
+                  </div>
+                </details>
+              </section>
+            </div>
+
+            <div data-tabpanel="rx" data-tabkey="orders" id="rxOrdersPanel" style="display:none">
+              <section class="pp-card">
+                <div class="pp-card-title">Customer orders
+                  <span class="pp-card-hint">— track a fixed-unit job for another player: runs needed, materials to import, cost, and a rough timeline</span>
+                  <button class="pp-add-btn" onclick="_rxOpenNewOrderModal()">+ New order</button>
+                </div>
+                <div id="rxOrdersContent" class="pp-card-body">
+                  <div class="pp-loading"><span class="pp-spinner"></span> Loading…</div>
+                </div>
+              </section>
+            </div>
 
             <!-- Hidden 2026-08-17 (TODO 35): not a surface we want to offer users right now. The
-                 fold-out, /api/reactions/opportunities and _onRxAdvancedToggle are all untouched —
-                 deleting this style attribute brings it back exactly as it was. -->
-            <section class="pp-card" id="rxAdvancedCard" style="display:none">
-              <details id="rxAdvancedDetails" ontoggle="_onRxAdvancedToggle(this)">
-                <summary class="pp-card-title rx-fold-summary"><span class="rx-fold-caret">▸</span>Advanced: full opportunity list
+                 panel, /api/reactions/opportunities and _rxLoadAdvancedTable are all untouched —
+                 showing the tab button (`#rxAdvancedTab`) brings it back exactly as it was. -->
+            <div data-tabpanel="rx" data-tabkey="advanced" id="rxAdvancedPanel" style="display:none">
+              <section class="pp-card">
+                <div class="pp-card-title">Advanced: full opportunity list
                   <span class="pp-card-hint">— every reachable reaction chain, ranked by profit</span>
-                </summary>
+                </div>
                 <div id="reactionsContent" class="pp-card-body">
                   <div class="pp-loading"><span class="pp-spinner"></span> Loading…</div>
                 </div>
-              </details>
-            </section>
+              </section>
+            </div>
 
           </div>
         </div>
@@ -719,6 +733,18 @@
                   <option value="336">Every 2 weeks</option>
                   <option value="720">Monthly basis</option>
                 </select>
+
+                <!-- A ONE-OFF override for this suggestion run only — reported live (2026-08-19):
+                     the day-count rhythm above routinely lands a batch finishing mid-workday, when
+                     nothing can actually be done about it. Does NOT touch the saved cadence
+                     (_rxWizCadenceChanged does that; this deliberately doesn't call it) — picking a
+                     time here just changes what THIS "Suggest reactions" click sends. -->
+                <label class="pp-label" for="wizRDeadline" title="Size this suggestion to finish by a specific time instead of the rhythm above — one-off, doesn't change your saved cadence.">...or finish by, just this once</label>
+                <div>
+                  <input type="datetime-local" id="wizRDeadline" onchange="_rxWizDeadlineChanged(this.value)">
+                  <div id="wizRDeadlineClock" class="pp-card-hint" style="margin-top:4px"></div>
+                  <button class="pp-btn-link" id="wizRDeadlineClear" onclick="_rxWizDeadlineClear()" style="display:none">Use the rhythm above instead</button>
+                </div>
 
                 <label class="pp-label" for="wizRFill" title="What share of the product's own market trade volume (over your run period) a suggested batch is allowed to be. Higher = bigger batches, but you sell into deeper, cheaper demand and can move the price; lower = safer prices, smaller batches. Sizing uses real daily traded volume where available.">Market fill</label>
                 <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
@@ -777,13 +803,32 @@
       <div class="pp-card" id="indStatusCard" style="display:none">
         <h2 class="pp-card-title">Your build</h2>
         <div class="ind-body">
-          <div class="ind-setup-bar">
-            <div id="indSetupSummary" class="ind-setup-summary"></div>
-            <button class="ind-secondary-btn" onclick="indOpenSetup()">Job slots</button>
-          </div>
           <div id="indConnectReminder" class="ind-connect-reminder" style="display:none"></div>
           <div id="indShareBox" class="ind-share-box" style="display:none"></div>
-          <div id="indStatusBody"></div>
+          <!-- Four sections of one build, as tabs rather than a long scroll or a second page —
+               TODO §41, docs/page-layout-2026-08.md (ppSelectTab/ppRestoreTab, utils.js). All four
+               render from the SAME fetched plan, so switching tabs never re-plans. The job-slot /
+               blueprint summary bar used to sit ABOVE this strip — reported live (2026-08-18) as
+               two toolbars stacked on top of each other — so it now lives inside the Status tab's
+               own content instead of pinned over every tab. -->
+          <div class="pp-tabstrip" data-tabgroup="ind">
+            <button class="pp-tab-btn" data-tabgroup="ind" data-tabkey="status" onclick="ppSelectTab('ind','status')">Status</button>
+            <button class="pp-tab-btn" data-tabgroup="ind" data-tabkey="blueprints" onclick="ppSelectTab('ind','blueprints')">Blueprints &amp; materials<span id="indBlueprintsTabBadge" class="pp-fold-badge" style="display:none"></span></button>
+            <button class="pp-tab-btn" data-tabgroup="ind" data-tabkey="pipeline" onclick="ppSelectTab('ind','pipeline')">Build Pipeline</button>
+            <button class="pp-tab-btn" data-tabgroup="ind" data-tabkey="running" onclick="ppSelectTab('ind','running')">Currently running<span id="indRunningTabBadge" class="pp-fold-badge" style="display:none"></span></button>
+          </div>
+          <div data-tabpanel="ind" data-tabkey="status">
+            <div class="ind-setup-bar">
+              <div id="indSetupSummary" class="ind-setup-summary"></div>
+              <button class="ind-secondary-btn" onclick="indOpenSetup()">Job slots</button>
+            </div>
+            <div id="indStatusBody"></div>
+          </div>
+          <div data-tabpanel="ind" data-tabkey="blueprints" id="indBlueprintsBody" style="display:none"></div>
+          <div data-tabpanel="ind" data-tabkey="pipeline" id="indPipelineBody" style="display:none">
+            <p class="pp-empty">Nothing queued yet — add a build to see its pipeline.</p>
+          </div>
+          <div data-tabpanel="ind" data-tabkey="running" id="indRunning" style="display:none"></div>
         </div>
       </div>
 
@@ -1843,6 +1888,18 @@ PVF-N9    3         95                 60             80                  100   
         <button class="pp-modal-close" onclick="_rxCloseJobDetail()">✕</button>
       </div>
       <div id="rxJobDetailContent"><div class="pp-empty">Loading…</div></div>
+    </div>
+  </div>
+
+  <!-- "Scale to a deadline": what's ALREADY queued (speculative + open orders), sized to a date —
+       distinct from "Plan to a deadline" (wizRDeadline), which picks NEW products. See
+       _rxOpenRecurringDeadline in reactions.js. -->
+  <div id="rxRecurringDeadlineModal" class="pp-modal" style="display:none">
+    <div class="pp-modal-box pp-modal-box-wide" style="overflow-y:auto">
+      <div class="pp-modal-title">Scale your current plan to a deadline
+        <button class="pp-modal-close" onclick="_rxCloseRecurringDeadline()">✕</button>
+      </div>
+      <div id="rxRecurringDeadlineContent"><div class="pp-empty">Loading…</div></div>
     </div>
   </div>
 

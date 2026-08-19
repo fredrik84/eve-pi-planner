@@ -13,6 +13,10 @@ let _indPicked = null;        // {type_id, name} currently selected in the picke
 let _indSearchTimer = null;
 
 async function onIndustryTabOpen() {
+  // Four sections of one build, as tabs (TODO §41, docs/page-layout-2026-08.md) — restores
+  // whichever was last read, same convenience a URL gives a real page, without one: this is a
+  // section of the Manufacturing page, not a separate address.
+  ppRestoreTab('ind', 'status');
   const tag = document.getElementById('indPreviewTag');
   if (tag) {
     const pub = typeof _features !== 'undefined' && _features.industry && _features.industry.enabled;
@@ -427,31 +431,203 @@ function _indWritePlanCache(sig, plan) {
 // only the progress read off it. Re-planning the whole queue to repaint a tick was seconds of wait
 // for an answer already in hand.
 function _indPaintStatus(d, opts) {
+  if (!d) return;
+  const local = !!(opts && opts.local);
+  // The order it was showing may have been delivered/cancelled since — fall back rather than
+  // spin on a fetch for an id that no longer exists.
+  if (_indViewOrderId && !(_indOrders || []).some(o => o.id === _indViewOrderId)) _indViewOrderId = null;
+  // The sourcing panel is nested inside the (combined) headline and a hand mark can't change it,
+  // so a local repaint carries its current markup across instead of paying for another round trip
+  // (it plans an order from scratch) to redraw the same thing. Only meaningful for the combined
+  // view — while viewing one order the fetch below is async anyway, so there is nothing to "keep"
+  // synchronously the way there is for a plain repaint.
+  const keepSourcing = (local && !_indViewOrderId)
+    ? ((document.getElementById('indSourcing') || {}).innerHTML || '') : null;
+  if (_indViewOrderId) {
+    // Sticky across this repaint (TODO §41 follow-up, 2026-08-19) — a background refresh
+    // (mark-done, add-to-queue) must not silently snap the reader back to the combined view.
+    _indSetViewOrder(_indViewOrderId);
+  } else {
+    // Status/Blueprints & materials/Build Pipeline are three tabs of the same build (TODO §41) —
+    // painted here alongside each other rather than lazily on tab-switch, since all three are a
+    // pure-JS pass over `d`, not a fetch: nothing is saved by skipping the ones not currently
+    // showing, and painting all of them up front means switching tabs never shows stale content.
+    _indPaintStatusHeadline(d);
+    _indPaintBlueprints(d);
+    _indPaintPipeline(d);
+    if (local) {
+      const src = document.getElementById('indSourcing');
+      if (src) src.innerHTML = keepSourcing;
+      return;
+    }
+  }
+  indLoadRunning();          // what's already cooking, in its own tab — unaffected by order-view
+  if (_indSourcingOpen !== null) indRenderSourcing();   // the card was just repainted under it
+}
+
+function _indPaintStatusHeadline(d) {
   const body = document.getElementById('indStatusBody');
   if (!body || !d) return;
-  const local = !!(opts && opts.local);
-  // The running-jobs list and the sourcing panel are separate fetches, and a hand mark can't change
-  // either of them — so a local repaint carries their current markup across instead of paying for
-  // two more round trips (the sourcing one plans an order from scratch) to redraw the same thing.
-  const keep = local ? {
-    running: (document.getElementById('indRunning') || {}).innerHTML || '',
-    sourcing: (document.getElementById('indSourcing') || {}).innerHTML || '',
-  } : null;
-  body.innerHTML = _indStatusHeadline(d)
-    + `<div id="indInstall" class="ind-install"></div>`
-    + _indRenderPlanBody(d)
-    + `<div id="indRunning" class="ind-install"></div>`;
-  indRenderInstall(d.install);   // "do this now" — comes with the plan, no second round trip
+  body.innerHTML = _indOrderViewSelector('status') + _indStatusHeadline(d, _indViewOrderId)
+    + `<div id="indInstall" class="ind-install"></div>`;
+  // "Do this now" used to come back blank while viewing one order (2026-08-19) — only the
+  // whole-queue endpoint (queue-plan) called install_block, so the single-order endpoint
+  // (POST /api/industry/plan, see _indSetViewOrder) never had a slot checklist to show. It now
+  // computes the same thing for that one build, so both views carry `install` the same way.
+  indRenderInstall(d.install);
   indMargCutLabel();             // the bulk control's live readout starts filled in, not blank
-  if (keep) {
-    const run = document.getElementById('indRunning');
-    if (run) run.innerHTML = keep.running;
-    const src = document.getElementById('indSourcing');
-    if (src) src.innerHTML = keep.sourcing;
+}
+
+function _indPaintBlueprints(d) {
+  const el = document.getElementById('indBlueprintsBody');
+  if (!el || !d) return;
+  el.innerHTML = _indOrderViewSelector('blueprints') + _indRenderPlanBody(d);
+  const badge = document.getElementById('indBlueprintsTabBadge');
+  if (badge) {
+    const n = _indBlueprintBadgeCount(d);
+    badge.style.display = n > 0 ? '' : 'none';
+    badge.textContent = n > 0 ? String(n) : '';
+  }
+}
+
+function _indPaintPipeline(d) {
+  const el = document.getElementById('indPipelineBody');
+  if (!el || !d) return;
+  el.innerHTML = _indOrderViewSelector('pipeline') + _indRenderPipelineBody(d);
+}
+
+// ── Viewing one order alone ─────────────────────────────────────────────────────────────────
+// The queue plan is one combined batch — two orders wanting the same product share ONE build, so
+// there is no way to isolate "just this order's materials" out of it after the fact. Reported live
+// (2026-08-18): with several orders queued, Status/Blueprints/Pipeline all read as one intermixed
+// plan, which is the right default for "just start building" but wrong for "let me look at ONE in
+// particular." Answered by re-planning that ONE order alone through the existing single-product
+// endpoint (`POST /api/industry/plan` — the same one the picker/preview modal already uses), with
+// that order's own saved overrides, rather than by requiring `industry_per_order_plans` (which
+// still reports combined materials/notices even when it schedules per order — see
+// `plan_queue_per_order`'s own docstring) or building a second planning endpoint. NOT on Currently
+// running — that tab is what ESI reports installed, which has no "per order" meaning of its own.
+let _indViewOrderId = null;   // null = the combined queue view
+
+// A type-to-filter picker, not a bare <select> (unstyled and out of place) and not a row of order
+// CARDS (the preferred look, but it doesn't scale — ten queued orders would overflow and make the
+// one you want hard to find). Reuses the app's existing product-search look
+// (.ind-search-wrap/.ind-search-results/.ind-search-row, industry-plan.js's picker) so it matches
+// and stays findable at any queue size. `scope` ('status'/'blueprints'/'pipeline') keeps the three
+// copies — one per tab that offers this — from colliding on element ids.
+//
+// The input's OWN value doubles as the display label for whatever is currently selected (so it
+// reads "Revelation" rather than sitting blank once picked) — reported live (2026-08-19): that
+// same leftover text was also being read as the search query on the NEXT focus, so re-opening the
+// list after picking Revelation filtered everything down to rows matching "revelation", hiding
+// "All orders (combined)" and every other order. `onfocus` now selects the text (so typing
+// replaces it, the normal combobox affordance) and explicitly filters on an EMPTY query — the
+// list always opens full, never pre-filtered by whatever it happened to be showing before.
+function _indOrderViewSelector(scope) {
+  const orders = _indOrders || [];
+  if (orders.length < 2) return '';   // nothing to pick between with 0 or 1 orders queued
+  const current = _indViewOrderId ? orders.find(o => o.id === _indViewOrderId) : null;
+  const label = current ? current.name : '';
+  return `<div class="ind-order-view">
+    <div class="ind-search-wrap">
+      <input type="text" id="indOrderView-${scope}-input" class="ind-order-view-input" autocomplete="off"
+             placeholder="All orders (combined)" value="${_esc(label)}"
+             oninput="_indOrderViewFilter('${scope}', this.value)"
+             onfocus="this.select(); _indOrderViewFilter('${scope}', '')"
+             onblur="setTimeout(() => _indOrderViewHideList('${scope}'), 150)">
+      <div class="ind-search-results" id="indOrderView-${scope}-results" style="display:none"></div>
+    </div>
+  </div>`;
+}
+
+// `_indOrders` already arrives in queue order (server: `ORDER BY priority ASC, created_at ASC`),
+// so the array position IS the position in line — no separate rank lookup needed, unlike the chip
+// row's `#N` (which reads the PLAN's computed rank, `T.rank`, since a chip is about when that
+// product actually finishes, not just where its order sits in the list).
+//
+// Reported live (2026-08-19): two orders of the same product (e.g. two Revelations) are otherwise
+// indistinguishable in the list — `label` exists on the order for exactly this ("a customer name,
+// a contract, a fleet", see ensure_industry_orders_table's own comment), so it's surfaced here, and
+// the position number gives a second, always-present way to tell them apart even with no label set.
+// Both are searchable, same as the name.
+function _indOrderViewRowsHtml(scope, q) {
+  const orders = _indOrders || [];
+  const needle = (q || '').trim().toLowerCase();
+  const matchAll = !needle || 'all orders (combined)'.includes(needle);
+  const rows = orders
+    .map((o, i) => ({ o, pos: i + 1 }))
+    .filter(({ o }) => !needle || o.name.toLowerCase().includes(needle)
+      || (o.label || '').toLowerCase().includes(needle));
+  if (!matchAll && !rows.length) return '<div class="ind-search-empty">No matching order</div>';
+  return (matchAll ? `<div class="ind-search-row" onclick="_indOrderViewPick('${scope}', null, '')">All orders (combined)</div>` : '')
+    + rows.map(({ o, pos }) => `<div class="ind-search-row" onclick="_indOrderViewPick('${scope}', ${o.id}, '${_esc(o.name).replace(/'/g, "\\'")}')">`
+        + `<span class="pp-card-hint">#${pos}</span> ${_esc(o.name)}`
+        + `${o.quantity > 1 ? ` <span class="pp-card-hint">×${o.quantity.toLocaleString()}</span>` : ''}`
+        + `${o.label ? ` <span class="pp-card-hint">— ${_esc(o.label)}</span>` : ''}</div>`).join('');
+}
+
+function _indOrderViewFilter(scope, q) {
+  const box = document.getElementById(`indOrderView-${scope}-results`);
+  if (!box) return;
+  box.innerHTML = _indOrderViewRowsHtml(scope, q);
+  box.style.display = '';
+}
+
+function _indOrderViewHideList(scope) {
+  const box = document.getElementById(`indOrderView-${scope}-results`);
+  if (box) box.style.display = 'none';
+}
+
+function _indOrderViewPick(scope, orderId, name) {
+  const input = document.getElementById(`indOrderView-${scope}-input`);
+  if (input) input.value = name || '';
+  _indOrderViewHideList(scope);
+  _indSetViewOrder(orderId || null);
+}
+
+async function _indSetViewOrder(orderId) {
+  _indViewOrderId = orderId || null;
+  if (!_indViewOrderId) {
+    // Back to the combined plan already in hand — no fetch, same instant repaint as any other tab.
+    if (_indLastPlan) { _indPaintStatusHeadline(_indLastPlan); _indPaintBlueprints(_indLastPlan); _indPaintPipeline(_indLastPlan); }
     return;
   }
-  indLoadRunning();          // what's already cooking goes under the pipeline
-  if (_indSourcingOpen !== null) indRenderSourcing();   // the card was just repainted under it
+  const o = (_indOrders || []).find(x => x.id === _indViewOrderId);
+  if (!o) return;
+  const statusEl = document.getElementById('indStatusBody');
+  const bpEl = document.getElementById('indBlueprintsBody');
+  const pipeEl = document.getElementById('indPipelineBody');
+  const loading = scope => _indOrderViewSelector(scope) + _indLoadingHtml('Planning this order…', 'Same cost engine, just this one alone.');
+  if (statusEl) statusEl.innerHTML = loading('status');
+  if (bpEl) bpEl.innerHTML = loading('blueprints');
+  if (pipeEl) pipeEl.innerHTML = loading('pipeline');
+  let d;
+  try {
+    d = await apiSend('POST', '/api/industry/plan', {
+      type_id: o.product_type_id, quantity: o.quantity,
+      prioritize_speed: _indPrioSpeed(), marginal_pct: _indMarginalPct(),
+      force_build_ids: o.force_build_ids || [], me_te_overrides: o.me_te_overrides || {},
+      margin_pct: o.margin_pct != null ? o.margin_pct : _indMarginPct(),
+      build_reactions_anyway: !!o.build_reactions,
+      // A plan owns its own sources so the materials shown match what the queued build would
+      // actually count — same rule the preview modal follows (industry-plan.js:113).
+      ...(_featureActive('industry_plan_sources') && (o.source_keys || []).length
+            ? { source_keys: o.source_keys } : {}),
+      ..._indFacilityBonus(),
+    });
+  } catch (e) {
+    const err = `<div class="pp-empty">${_esc(e.message || 'Plan failed')}</div>`;
+    if (statusEl) statusEl.innerHTML = _indOrderViewSelector('status') + err;
+    if (bpEl) bpEl.innerHTML = _indOrderViewSelector('blueprints') + err;
+    if (pipeEl) pipeEl.innerHTML = '';
+    return;
+  }
+  // Only paint if the reader hasn't already switched to a different order (or back to combined)
+  // while this was in flight.
+  if (_indViewOrderId !== o.id) return;
+  _indPaintStatusHeadline(d);
+  _indPaintBlueprints(d);
+  _indPaintPipeline(d);
 }
 
 // One order, as the chip that names it in the queue line: position, who it is for, how far along,
@@ -521,8 +697,12 @@ function _indOrdersByRank(targets) {
 }
 
 // One-line answer to "where am I": overall progress, what's in the cooker, what to do next.
-function _indStatusHeadline(d) {
-  const p = _indProgress;
+// `viewOrderId` (TODO §41 follow-up, 2026-08-19): while viewing one order's own plan alone, the
+// account-wide progress bar and run counters (_indProgress — a separate fetch that has no
+// per-order breakdown of its own) don't apply, so they're skipped rather than shown wrong; the
+// order-chip row narrows to just that order instead of every queued one.
+function _indStatusHeadline(d, viewOrderId) {
+  const p = viewOrderId ? null : _indProgress;
   const sim = p && p.simulated
     ? '<div class="ind-sim-banner">Preview mode — this progress is made up so you can see the layout. Nothing here is real.</div>' : '';
   const t = (p && p.totals) || null;
@@ -600,11 +780,15 @@ function _indStatusHeadline(d) {
   // aggregated into one target, so they legitimately share an ETA — don't imply otherwise.
   const tgt = {};
   (d.targets || []).forEach(t => { tgt[t.type_id] = t; });
-  const chips = _indOrdersByRank(d.targets).map(o => _indOrderChipHtml(o, byOrder, tgt)).join('');
+  // Just the one order's own chip while viewing it alone — showing every queued order's chip under
+  // a view that claims to be about ONE of them is exactly the intermixing this feature answers.
+  const chips = viewOrderId
+    ? ((o => o ? _indOrderChipHtml(o, byOrder, tgt) : '')((_indOrders || []).find(o => o.id === viewOrderId)))
+    : _indOrdersByRank(d.targets).map(o => _indOrderChipHtml(o, byOrder, tgt)).join('');
   return sim
     + `<div class="ind-status-head"><div class="ind-order-chips">${chips}</div>`
     + `<button class="ind-primary-btn" onclick="indOpenPlanner()">Plan a new build</button>`
-    + ((_indOrders || []).length > 1
+    + (!viewOrderId && (_indOrders || []).length > 1
         ? `<button class="ind-secondary-btn" onclick="indOpenOrder()">Reorder</button>` : '')
     + `<button class="ind-secondary-btn" onclick="indRefreshJobs()" title="Pull job status from EVE and re-plan">Refresh</button></div>`
     + `<div class="an-stats">` + tiles.map(([l, v, tip]) =>

@@ -34,7 +34,7 @@ scripts/symbols.sh app static                # a whole tree
 | [docs/industry-audit-2026-08.md](docs/industry-audit-2026-08.md) | the Industry feature set scored against the manifesto — verdicts, removal candidates, live flag states |
 | [docs/config-shape-2026-08.md](docs/config-shape-2026-08.md) | **is the config stored the hard way?** — the 2026-08-14 measurements behind closing §18: 13 settings rows across 10 tables, and the one read that was repeated six times a request |
 | [docs/test-protocol-2026-08.md](docs/test-protocol-2026-08.md) | what to test and where, for the 2026-08-05/06 round |
-| [docs/page-layout-2026-08.md](docs/page-layout-2026-08.md) | **TODO §41's page-split proposal** — one landing-dashboard/fold/own-view pattern for both Manufacturing and Reactions, not yet implemented |
+| [docs/page-layout-2026-08.md](docs/page-layout-2026-08.md) | **TODO §41, built** — Manufacturing and Reactions each split into a horizontal tab strip (`ppSelectTab`/`ppRestoreTab`), not folds or a separate route |
 | [docs/industry-planner-spec.md](docs/industry-planner-spec.md) | the Industry planner's original spec |
 | [docs/platform.md](docs/platform.md) | admin, accounts, notifications, market pricing, mobile |
 | [TODO.md](TODO.md) | **source of truth for open work** — read before proposing anything. Closed verdicts are in [TODO-archive.md](TODO-archive.md) |

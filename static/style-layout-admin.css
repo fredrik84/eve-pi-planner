@@ -800,6 +800,33 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .rx-fold-caret.rx-fold-caret-open { transform: rotate(90deg); }
 
+/* A small count badge on a folded <summary> — TODO §41 (docs/page-layout-2026-08.md): a fold that
+   collapses something the user genuinely needs to know about (missing blueprints/formulas) must
+   still say so without opening it. Not "rx-" prefixed like the fold classes above even though
+   Reactions uses it first — this one is meant for Manufacturing's equivalent fold too, so it isn't
+   scoped to one page by name. */
+.pp-fold-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 18px;
+  height: 18px; padding: 0 5px; margin: 0 6px; border-radius: 9px; font-size: 11px; font-weight: 600;
+  background: var(--clr-red); color: #fff; }
+
+/* A horizontal tab strip over a set of panels on ONE page (ppSelectTab/ppRestoreTab, utils.js) —
+   TODO §41's actual shape, corrected from an earlier fold-per-section / own-page draft: Manufacturing
+   and Reactions each had a long scroll of sections, and the fix the user wanted was tabs within the
+   page, not accordions or a second route per section. `.pp-fold-badge` still does the "something
+   needs attention" count, just inside a tab button instead of a fold's <summary>. */
+.pp-tabstrip { display: flex; flex-wrap: wrap; gap: 2px; border-bottom: 1px solid var(--clr-border);
+  margin-bottom: 10px; }
+.pp-tab-btn { background: none; border: none; border-bottom: 2px solid transparent; padding: 8px 12px;
+  font-size: 13px; font-weight: 600; color: var(--clr-text-dim); cursor: pointer; }
+.pp-tab-btn:hover { color: var(--clr-text); }
+.pp-tab-btn.pp-tab-active { color: var(--clr-text-bright); border-bottom-color: var(--clr-accent); }
+/* A tab panel holding several stacked .pp-card sections used to inherit .pp-main's own
+   `gap: 16px` (they were its direct children before TODO §41 wrapped each tab's content in its
+   own panel div) — reported live (2026-08-19) as the Reactions Overview tab's Metrics and
+   Reactions cards touching with no gap between them. Same fix belongs on every multi-card panel,
+   not just that one. */
+[data-tabpanel] { display: flex; flex-direction: column; gap: 16px; }
+
 /* Full opportunity list: click a row to fold out the secondary dimensions (steps, job cost,
    sell-order price, ISK/m³, market depth) as a wrapped block below it, instead of cramming them
    in as more table columns — the table only ever has the 6 core columns, so it never overflows
@@ -1060,6 +1087,20 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-setup-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 4px 0 12px; flex-wrap: wrap; }
 .ind-setup-summary { font-size: 13px; color: var(--clr-text-soft); }
 .ind-setup-summary b { color: #fff; }
+
+/* "Viewing: [order picker]" atop Status / Blueprints & materials / Build Pipeline — reported live
+   (2026-08-18): several queued orders read as one intermixed plan, which is right for "just start
+   building" but wrong for looking at one order in particular. A plain unstyled <select> was the
+   first pass and read as visibly out of place; a row of order CARDS (matching .ind-order-chip) was
+   the preference but does not scale past a handful of orders — reuses the existing type-to-filter
+   search pattern (.ind-search-wrap/.ind-search-results/.ind-search-row, industry-plan.js's product
+   picker) instead, so it stays findable at any queue size and looks like the rest of the app. */
+.ind-order-view { margin-bottom: 10px; max-width: 360px; }
+.ind-order-view-input {
+  background: #141720; color: var(--clr-text); border: 1px solid var(--clr-border);
+  border-radius: 5px; padding: 8px 10px; font-size: 13px; width: 100%; box-sizing: border-box;
+}
+.ind-order-view-input:focus { outline: none; border-color: var(--clr-accent); }
 .ind-connect-reminder { font-size: 12px; color: #d8b46a; background: #241f14; border: 1px solid #3a3322; border-radius: 6px; padding: 7px 12px; margin-bottom: 12px; }
 .ind-link-btn { background: none; border: none; color: var(--clr-accent); cursor: pointer; font-size: 12px; padding: 0; text-decoration: underline; text-underline-offset: 2px; }
 .ind-modal-section { margin-top: 16px; }

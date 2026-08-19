@@ -113,12 +113,18 @@ async function onReactionsTabOpen() {
   // and saved. Returns true when the gate is showing, in which case we skip loading the dashboard.
   if (await _rxApplyGate()) return;
 
-  // Lazy, same idea as the shopping list fold: the Advanced table is collapsed by default and
-  // its opportunity list is the single most expensive thing this tab can compute (full reaction
-  // graph walk + a market fetch per candidate + job-cost ESI lookups) — only recompute it when
-  // it's actually visible, not on every tab-open/post-assign refresh.
-  const advDetails = document.getElementById('rxAdvancedDetails');
-  if (advDetails && advDetails.open) _rxLoadAdvancedTable(true);
+  // Four sections of one dashboard, as tabs (TODO §41, docs/page-layout-2026-08.md) — restores
+  // whichever was last read, so this call is safe on every re-invocation of this function, not
+  // just a real tab-open: ppSelectTab already wrote the user's last CLICK to storage, so restoring
+  // it again here is a no-op read that keeps them on the same tab through a post-assign refresh.
+  // Shopping list and Advanced are lazy — their own fetch is the single most expensive/slowest
+  // thing this tab can compute (Advanced: a full reaction-graph walk + a market fetch per
+  // candidate; Shopping: market-price lookups) — so only load them here if that IS the tab now
+  // showing, not on every refresh regardless of which tab the user is reading.
+  const activeTab = ppRestoreTab('rx', 'overview');
+  if (activeTab === 'advanced') _rxLoadAdvancedTable(true);
+  if (activeTab === 'shopping') _loadRxShoppingList();
+
   _loadReactionsDashboard();
   _rxStructureRecommend();
   // Pull live job status from ESI in the background (respects ESI's ~5min cache server-side, so
@@ -126,32 +132,23 @@ async function onReactionsTabOpen() {
   // GET above only reads our cached job table — without this, a job you just installed in-game
   // never appears, since nothing else triggers the ESI fetch.
   _rxRefreshJobs(false);
-  // Lazy: the shopping list is folded by default (see #rxShoppingDetails) and only worth
-  // computing when actually visible — market-price lookups behind it can take a moment, and
-  // most tab-opens/refreshes don't need this data recomputed at all. _onRxShoppingToggle
-  // fetches it the first time it's unfolded; here we only re-fetch if it's ALREADY open (e.g.
-  // this is a post-assign/cancel refresh and the user had it expanded), not on every tab open.
-  const shopDetails = document.getElementById('rxShoppingDetails');
-  if (shopDetails && shopDetails.open) _loadRxShoppingList();
 
-  const ordersCard = document.getElementById('rxOrdersCard');
-  if (ordersCard) {
+  const ordersTab = document.getElementById('rxOrdersTab');
+  if (ordersTab) {
     // Wait for the feature flags to be loaded before deciding — on a fresh page load _features
     // isn't populated yet, so _featureActive('reaction_orders') (an admin-preview flag) returns
-    // false and the card stayed hidden until the tab was re-opened. Awaiting fixes that race.
+    // false and the tab stayed hidden until the page was re-opened. Awaiting fixes that race.
+    // Orders is NOT lazy like Shopping/Advanced above — it has no lazy-load history to preserve,
+    // it was always loaded unconditionally once the flag confirmed the feature is on.
     Promise.resolve(typeof _loadFeatures === 'function' ? _loadFeatures() : null).then(() => {
       const show = typeof _featureActive === 'function' && _featureActive('reaction_orders');
-      ordersCard.style.display = show ? '' : 'none';
+      ordersTab.style.display = show ? '' : 'none';
       if (show) _rxLoadOrders();
     });
   }
-  // Same flag race as the orders card above — the job-length row is gated on an admin-preview
+  // Same flag race as the orders tab above — the job-length row is gated on an admin-preview
   // flag, so it has to wait for the flags to land or it stays hidden until the tab is re-opened.
   Promise.resolve(typeof _loadFeatures === 'function' ? _loadFeatures() : null)
-}
-
-function _onRxAdvancedToggle(el) {
-  if (el.open) _rxLoadAdvancedTable(true);
 }
 
 function _rxLoadAdvancedTable(force) {
@@ -161,10 +158,6 @@ function _rxLoadAdvancedTable(force) {
   _rxLoadOpportunities(force)
     .then(() => _renderReactions())
     .catch(err => { el.innerHTML = `<div class="pp-empty">${_esc(err.message)}</div>`; });
-}
-
-function _onRxShoppingToggle(el) {
-  if (el.open) _loadRxShoppingList();
 }
 
 let _rxLastShoppingList = [];
@@ -228,6 +221,10 @@ function _loadRxShoppingList() {
   const el = document.getElementById('rxShoppingListContent');
   if (!el) return;
   el.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Loading shopping list…</div>';
+  // The plan's missing-formula report, not this fetch's own data (`/api/reactions/shopping-list`
+  // doesn't carry it) — the dashboard load already has it cached, and runs independently of
+  // whether this fold has ever been opened. See _rxUpdateShopMissingBadge for the fold's badge.
+  const missingWarn = _rxMissingFormulaWarn((_rxLastDashboardData || {}).missing_formulas);
   api('/api/reactions/shopping-list?include_orders=' + (_rxShoppingIncludeOrders ? 'true' : 'false'))
     .catch(() => ({ materials: [] }))
     .then(d => {
@@ -239,7 +236,7 @@ function _loadRxShoppingList() {
         // situations and used to render identically — the second one told a player with four
         // live assignments that they had none.
         const orders = d.order_count || 0;
-        el.innerHTML = formulaSection + (orders > 0
+        el.innerHTML = missingWarn + formulaSection + (orders > 0
           ? `<div class="pp-empty">No speculative assignments — but ${orders} assignment${orders === 1 ? ' is' : 's are'}
              committed to customer orders, each with its own materials report on the order itself.
              <button class="pp-btn-link" onclick="_toggleRxShoppingOrders()">Include customer orders</button></div>`
@@ -285,7 +282,7 @@ function _loadRxShoppingList() {
            <button class="pp-btn-link" onclick="_toggleRxShoppingOrders()">Speculative only</button></div>`
         : `<div class="pp-card-hint" style="margin-bottom:8px">Speculative assignments only — ${d.order_count} more ${d.order_count === 1 ? 'is' : 'are'} committed to customer orders.
            <button class="pp-btn-link" onclick="_toggleRxShoppingOrders()">Include customer orders</button></div>`);
-      el.innerHTML = scope
+      el.innerHTML = missingWarn + scope
         + formulaSection
         + section('Fetch from your alliance', group)
         + section('Buy on the market (fuel blocks, or cheaper right now than your sheet)', market);
@@ -1034,11 +1031,55 @@ function _rxRefreshJobs(force, btn) {
 // server costs it from the SDE recipe and creates the plan rows, after which it counts as planned
 // (covers the running job now, reappears as "to install" and joins the shopping list next cycle).
 function _rxAdoptOrphan(characterId, typeId, runs, btn) {
-  if (btn) { btn.textContent = '…'; btn.style.pointerEvents = 'none'; }
+  // Reported live (2026-08-19): even after the fix that stopped blanking the card to a spinner
+  // first, waiting for `_loadReactionsDashboard` to come back before showing anything still
+  // flashed and took a while to clear — the account-wide recompute it triggers is real work
+  // (restage + re-level + re-price every assigned product), but the one thing this click asked
+  // for — stop calling this job an orphan — doesn't need to wait on any of that. Marked adopted
+  // in the DOM immediately instead; the real numbers (shopping list, metrics) catch up silently
+  // in the background, with no repaint tied to this click at all.
+  const slot = btn ? btn.closest('.rx-slot') : null;
+  const origTitle = slot ? slot.title : '';
+  if (slot) {
+    slot.classList.remove('rx-slot-orphan');
+    slot.title = origTitle.replace(' — NOT in your plan (orphan)', '');
+  }
+  if (btn) btn.remove();
   apiSend('POST', '/api/reactions/adopt-orphan',
           { character_id: Number(characterId), type_id: Number(typeId), runs: Number(runs) })
-    .then(() => { _rxLastDashboardData = null; _loadReactionsDashboard(); })
-    .catch(err => { toastError(err); if (btn) { btn.textContent = '⊕ plan'; btn.style.pointerEvents = ''; } });
+    .then(() => {
+      // The cache was just invalidated server-side — refetch it so the NEXT natural repaint
+      // (tab-switch, another action) has fresh numbers, but never force a visible swap now.
+      _rxLastDashboardData = null;
+      api('/api/reactions/jobs').then(d => { _rxLastDashboardData = d; }).catch(() => {});
+    })
+    .catch(err => {
+      toastError(err);
+      // The adopt did not actually happen — put the orphan badge back rather than leave the UI
+      // claiming something the server refused.
+      if (slot) {
+        slot.classList.add('rx-slot-orphan');
+        slot.title = origTitle;
+        if (!slot.querySelector('.rx-slot-orphan-badge')) {
+          slot.insertAdjacentHTML('beforeend',
+            `<span class="rx-slot-orphan-badge" data-character-id="${characterId}" data-type-id="${typeId}" data-runs="${runs}" title="Not in your plan — click to add it so it recurs next cycle" onclick="event.stopPropagation();_rxAdoptOrphan(${characterId}, ${typeId}, ${runs}, this)">⊕ plan</span>`);
+        }
+      }
+    });
+}
+
+// "Adopt all" — reported live (2026-08-19), right after the per-job "⊕ plan" button: with several
+// orphans running at once, clicking each individually is needless repetition when the ask is just
+// "make everything running count as planned." Reuses _rxAdoptOrphan per badge currently on screen
+// — same instant DOM update, same rollback-on-failure — rather than a second code path.
+function _rxAdoptAllOrphans(btn) {
+  const badges = [...document.querySelectorAll('.rx-slot-orphan-badge')];
+  if (!badges.length) return;
+  if (btn) btn.style.display = 'none';   // optimistic — each badge that fails puts itself back
+  badges.forEach(b => {
+    const { characterId, typeId, runs } = b.dataset;
+    _rxAdoptOrphan(Number(characterId), Number(typeId), Number(runs), b);
+  });
 }
 
 function _renderReactionsDashboard(data) {
@@ -1056,6 +1097,15 @@ function _renderReactionsDashboard(data) {
   if (connectBtn) {
     connectBtn.style.display = '';
     connectBtn.textContent = `Connect ${data.tracked ? 'another' : 'a'} character`;
+  }
+
+  // "Adopt all" next to it — computed off THIS load's own running-job list (a fresh count every
+  // repaint), not left to whatever a previous render's bulk click optimistically hid.
+  const orphanCount = (data.running || []).filter(j => j.orphan).length;
+  const adoptAllBtn = document.getElementById('rxAdoptAllBtn');
+  if (adoptAllBtn) {
+    adoptAllBtn.style.display = orphanCount ? '' : 'none';
+    adoptAllBtn.textContent = `⊕ Adopt all (${orphanCount})`;
   }
 
   // Characters we still hold jobs for whose token no longer carries the jobs scope — re-authorising
@@ -1136,7 +1186,7 @@ function _renderReactionsDashboard(data) {
       const nm = _jobName(j);
       const tip = `${nm} — ${runsLabel ? runsLabel + ' runs — ' : ''}finished in ${timer}${j.facility_name ? ' — ' + j.facility_name : ''}${j.orphan ? ' — NOT in your plan (orphan)' : ''} — click for details`;
       const orphanBadge = j.orphan
-        ? `<span class="rx-slot-orphan-badge" title="Not in your plan — click to add it so it recurs next cycle" onclick="event.stopPropagation();_rxAdoptOrphan(${j.character_id}, ${j.product_type_id}, ${j.runs || 0}, this)">⊕ plan</span>`
+        ? `<span class="rx-slot-orphan-badge" data-character-id="${j.character_id}" data-type-id="${j.product_type_id}" data-runs="${j.runs || 0}" title="Not in your plan — click to add it so it recurs next cycle" onclick="event.stopPropagation();_rxAdoptOrphan(${j.character_id}, ${j.product_type_id}, ${j.runs || 0}, this)">⊕ plan</span>`
         : '';
       return `
         <div class="rx-slot rx-slot-filled${j.orphan ? ' rx-slot-orphan' : ''}" title="${_esc(tip)}" onclick="_rxOpenJobDetail(${j.product_type_id}, ${j.runs || 1}, ${j.progress_pct != null ? j.progress_pct : 'null'})">
@@ -1471,11 +1521,29 @@ function _renderReactionsDashboard(data) {
     <div class="rx-stage-ready">✅ <b>Stage ${readyNow[0].stage} is ready to start${readyNow.length > 1 ? ' on several characters' : ` on ${_esc(readyNow[0].character)}`}</b>
       — everything it waits on has finished. Install ${readyNow.map(r => r.names.map(_esc).join(', ')).join(' · ')}.</div>`;
 
+  // TODO §41 (docs/page-layout-2026-08.md): missing formulas used to render inline here, on every
+  // visit whether or not anything was actually missing — moved into the Shopping list fold (the
+  // section it actually blocks) with a count badge on the fold's own <summary>, so it's still
+  // never silently hidden, just no longer competing with "Do this now" for the top of the page.
+  _rxUpdateShopMissingBadge(data.missing_formulas);
   el.innerHTML = scopeLostNote + reconnectNote + _rxUnderProductionWarn(data.under_production) + readyBanner
-    + _rxMissingFormulaWarn(data.missing_formulas)
     // Under the cadence row it is about, and above the checklist it would change — the remedy is
     // "type more numbers", so it belongs where the numbers are about to be read.
     + _rxEaseCostLine(data) + todoListHtml + rows + untrackedNote;
+}
+
+// The Shopping list fold's count badge — set from the dashboard's own `missing_formulas` (the
+// shopping-list fetch is separate and lazy, so this runs independently of whether the fold has
+// ever been opened). Mirrors `_rxMissingFormulaWarn`'s own "anything to show" rule: a non-empty
+// `unresolved` list on a complete paste counts even with zero missing rows.
+function _rxUpdateShopMissingBadge(rep) {
+  const el = document.getElementById('rxShopMissingBadge');
+  if (!el) return;
+  const rows = (rep && rep.formulas) || [];
+  const unresolved = (rep && rep.unresolved) || [];
+  const n = rows.length || (rep && rep.complete && unresolved.length ? unresolved.length : 0);
+  el.style.display = n > 0 ? '' : 'none';
+  el.textContent = n > 0 ? String(n) : '';
 }
 
 function _rxCancelAssignment(assignmentId) {
@@ -1893,6 +1961,37 @@ function wizRStart() {
   // dashboard has not fetched it yet (wizard opened first), fetch it now — it seeds on arrival.
   if (_rxCadenceDays === null) _rxLoadCadence(); else _rxSyncWizardCadence();
   _loadRxMaterialFilter();
+  // A one-off "finish by" from a previous visit must not silently carry over — it's a per-run
+  // override, not a preference, so each fresh wizard opens back on the saved rhythm.
+  const dl = document.getElementById('wizRDeadline');
+  if (dl) dl.value = '';
+  _rxWizDeadlineChanged('');
+}
+
+// A ONE-OFF override for a single "Suggest reactions" run — reported live (2026-08-19): the
+// day-count rhythm (`wizRCadence`, persisted) routinely lands a batch finishing mid-workday, which
+// nobody can act on until they're home anyway. Deliberately NOT persisted like `wizRCadence` is
+// (_rxWizCadenceChanged writes the account's cadence; this never calls it) — the user asked for a
+// picked-each-time window, not a saved availability pattern. `wizRSuggest` just reads
+// `_rxWizDeadlineMs` at submit time in place of the dropdown's value when one is set.
+let _rxWizDeadlineMs = 0;
+
+function _rxWizDeadlineChanged(v) {
+  _rxWizDeadlineMs = v ? new Date(v).getTime() : 0;
+  const clock = document.getElementById('wizRDeadlineClock');
+  if (clock) clock.textContent = _rxWizDeadlineMs ? _fmtDeadlineBoth(_rxWizDeadlineMs) : '';
+  const clearBtn = document.getElementById('wizRDeadlineClear');
+  if (clearBtn) clearBtn.style.display = _rxWizDeadlineMs ? '' : 'none';
+  // Grey the rhythm dropdown while a one-off deadline is active, so it's visually clear which of
+  // the two actually governs the next "Suggest reactions" click.
+  const sel = document.getElementById('wizRCadence');
+  if (sel) sel.disabled = !!_rxWizDeadlineMs;
+}
+
+function _rxWizDeadlineClear() {
+  const input = document.getElementById('wizRDeadline');
+  if (input) input.value = '';
+  _rxWizDeadlineChanged('');
 }
 
 function _loadRxMaterialFilter() {
@@ -2001,7 +2100,11 @@ function _wizRFillLive() {
 function wizRSuggest() {
   const isk = parseFloat(document.getElementById('wizRIsk').value) || 0;
   const depth = parseInt(document.getElementById('wizRDepth').value, 10) || 2;
-  const cadence = parseFloat(document.getElementById('wizRCadence').value) || 168;
+  // A one-off "finish by" wins over the saved rhythm for just this click, so the batch is sized to
+  // land in a window the player can actually act on rather than mid-workday.
+  const cadence = _rxWizDeadlineMs
+    ? Math.max(0.1, (_rxWizDeadlineMs - Date.now()) / 3600000)
+    : (parseFloat(document.getElementById('wizRCadence').value) || 168);
   const fillEl = document.getElementById('wizRFill');
   const absorbFraction = fillEl ? (parseFloat(fillEl.value) || 50) / 100 : null;
   const materialIds = _rxSelectedMaterialIds();
@@ -2309,6 +2412,13 @@ function _rxRunSteps(title, steps) {
 function _rxCloseSteps() {
   if (_rxStepsBusy) return;    // there is nothing to close while it is still running
   document.getElementById('rxStepsModal').style.display = 'none';
+  // Reported live (2026-08-19): a failed "Assign all" leaves this as a full-screen overlay (see
+  // _rxRunSteps) sitting ON TOP of the wizard, so its own Cancel/Done button is unclickable behind
+  // it — closing the failure report from inside the wizard has to also leave the wizard, or the
+  // caller is stuck on a stale step-2 suggestions page with no way back that doesn't go through
+  // here again.
+  const wiz = document.getElementById('rxWizard');
+  if (wiz && getComputedStyle(wiz).display !== 'none') wizRCancel();
 }
 
 // The plan re-read every commit ends with: it is what levels the run counts and re-splits the
@@ -2819,24 +2929,23 @@ function _rxIsUnpriced(o) {
 
 // Where "set a price on it" actually goes. One unpriced order is the common case and deserves the
 // direct route — its own detail modal, where the price field is — rather than dropping the reader
-// at a card to search. Several means there is no single destination, so it expands the orders card
-// and scrolls there, where the rows now say which ones.
+// at a tab to search. Several means there is no single destination, so it switches to the Customer
+// orders tab, where the rows now say which ones.
 //
-// Orders may not be loaded yet (the overview renders before the card below it), so this fetches
-// first and then decides. Nothing here assumes the count in the footnote and the client-side list
-// agree — the footnote counts orders in the PLAN, this reads every order — so the single-order
-// shortcut is taken only when this list independently finds exactly one.
+// Orders may not be loaded yet (the overview tab renders before Orders' own tab is ever selected),
+// so this fetches first and then decides. Nothing here assumes the count in the footnote and the
+// client-side list agree — the footnote counts orders in the PLAN, this reads every order — so the
+// single-order shortcut is taken only when this list independently finds exactly one.
 function _rxGoToUnpricedOrder() {
   const go = () => {
     const unpriced = (_rxOrders || []).filter(_rxIsUnpriced);
     if (unpriced.length === 1) { _rxOpenOrderDetail(unpriced[0].id); return; }
-    const det = document.getElementById('rxOrdersDetails');
-    const card = document.getElementById('rxOrdersCard');
-    if (det) det.open = true;
-    if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    ppSelectTab('rx', 'orders');
+    const panel = document.getElementById('rxOrdersPanel');
+    if (panel) panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
   if ((_rxOrders || []).length) { go(); return; }
-  _rxLoadOrders().then(go).catch(go);   // a failed load still opens the card, which shows the error
+  _rxLoadOrders().then(go).catch(go);   // a failed load still switches tabs, which then shows the error
 }
 
 function _rxOrderBarHtml(o) {
@@ -2849,10 +2958,6 @@ function _renderRxOrdersList(orders) {
   if (!el) return;
   const open = orders.filter(o => o.status === 'open');
   const history = orders.filter(o => o.status !== 'open');
-  // Default fold state: collapsed when there's nothing open to act on, expanded when there is.
-  // Only sets the default (on tab-open / after an order mutation) — the user can still fold/unfold.
-  const det = document.getElementById('rxOrdersDetails');
-  if (det) det.open = open.length > 0;
   if (!orders.length) { el.innerHTML = '<div class="pp-empty">No customer orders yet — "+ New order" to track one.</div>'; return; }
   // "no price" is called out on the row itself, not just counted on the overview. Someone sent
   // here by that footnote arrives looking for WHICH order it meant, and an unmarked list makes
@@ -3175,6 +3280,59 @@ function _rxOrderReportBody(data) {
     </details>`;
 }
 
+// ── Plan to a deadline ──────────────────────────────────────────────────────────────────────
+// Reported live (2026-08-19): the only way to align a reaction batch to a real date was to wait
+// until the day and see what's left, or hand-compute run counts against the cadence setting —
+// which routinely over-bought materials for runs that were never going to finish before the date
+// anyway. First built as a standalone product-picker calculator here; the user then pushed back
+// on picking a product by hand at all — the Suggest wizard already picks profitable products FOR
+// you, so once IT grew its own "finish by" (below, and see wizRSuggest), a second picker asking
+// the same question here was redundant. This button now just opens that wizard with the deadline
+// field in focus — see `_rxOpenSuggestForDeadline`. `_rxFindMaxQtyByDeadline`/`_rxDeadlinePreview`
+// survive because the customer-order "…sized to a deadline" flow (below) still needs them: an
+// order's product is already fixed, so THAT one genuinely has no product to pick.
+function _rxOpenSuggestForDeadline() {
+  wizRStart();
+  const input = document.getElementById('wizRDeadline');
+  if (input) input.focus();
+}
+
+// One preview call for a candidate quantity — the same request the New Order modal's Review
+// button sends, just called repeatedly here to SEARCH for the largest quantity that fits rather
+// than reporting on one the user already chose.
+function _rxDeadlinePreview(typeId, qty) {
+  return apiSend('POST', '/api/reactions/orders/preview', { type_id: typeId, target_qty: qty });
+}
+
+// Finds the largest integer quantity whose estimated_hours fits within `availableHours`: doubling
+// to find an upper bound that overshoots, then binary-searching down to the boundary.
+// `estimated_hours` is monotonically non-decreasing in quantity (more runs never finish sooner),
+// which is what makes a binary search valid here — capped at 25 requests so a pathological account
+// (a huge free-slot count against a trivial cycle time) can't loop indefinitely.
+async function _rxFindMaxQtyByDeadline(typeId, availableHours) {
+  let iterations = 0;
+  let hi = 1;
+  let hiReport = await _rxDeadlinePreview(typeId, hi);
+  iterations++;
+  if (hiReport.time.estimated_hours == null) return { fits: false, report: hiReport };   // no free slots at all
+  if (hiReport.time.estimated_hours > availableHours) return { fits: false, report: hiReport };   // not even 1 unit fits
+  let lo = 1, loReport = hiReport;
+  while (hiReport.time.estimated_hours <= availableHours && iterations < 25) {
+    lo = hi; loReport = hiReport;
+    hi *= 2;
+    hiReport = await _rxDeadlinePreview(typeId, hi);
+    iterations++;
+  }
+  while (hi - lo > 1 && iterations < 25) {
+    const mid = Math.floor((lo + hi) / 2);
+    const midReport = await _rxDeadlinePreview(typeId, mid);
+    iterations++;
+    if (midReport.time.estimated_hours != null && midReport.time.estimated_hours <= availableHours) { lo = mid; loReport = midReport; }
+    else { hi = mid; }
+  }
+  return { fits: true, qty: lo, report: loReport };
+}
+
 function _renderRxOrderDetail(data) {
   const o = data.order;
   const el = document.getElementById('rxOrderDetailContent');
@@ -3184,6 +3342,7 @@ function _renderRxOrderDetail(data) {
 
   const actionButtons = o.status === 'open' ? `
       ${remaining > 0 ? `<button id="rxOrderAssignBtn" onclick="_rxAssignOrderBatch(${o.id})">Assign next batch (${remaining.toLocaleString()} run${remaining === 1 ? '' : 's'} left)</button>` : '<span class="pp-card-hint">Every run has been assigned.</span>'}
+      ${remaining > 0 ? `<button class="pp-add-btn" onclick="_rxToggleOrderDeadline(${o.id}, ${o.type_id})">…sized to a deadline</button>` : ''}
       ${o.assigned_runs > 0 ? `<button class="pp-add-btn" onclick="_rxClearOrderAssignments(${o.id})" title="Free every slot this order holds and hand its runs back, so you can assign it again from scratch. The order itself is kept.">Clear its jobs</button>` : ''}
       <button class="pp-add-btn" onclick="_rxCompleteOrder(${o.id})">Mark completed</button>
       <button class="pp-danger-btn" onclick="_rxCancelOrder(${o.id})">Cancel order</button>
@@ -3203,7 +3362,71 @@ function _renderRxOrderDetail(data) {
       ${actionButtons}
       <button class="pp-cancel-btn" onclick="_rxCloseOrderDetail()">Close</button>
       <span id="rxOrderDetailStatus" class="bug-status-msg"></span>
-    </div>`;
+    </div>
+    <div id="rxOrderDeadlineBox" style="display:none;margin-top:10px"></div>`;
+}
+
+// ── "Assign next batch, sized to a deadline" ────────────────────────────────────────────────
+// Reported live (2026-08-19): the plain "Assign next batch" claims every remaining run at once —
+// right for "just start it", wrong when the batch would land mid-workday with nobody free to
+// install the next stage. Reuses the SAME search as the standalone "Plan to a deadline" tool
+// (`_rxFindMaxQtyByDeadline`/`_rxDeadlinePreview`, both non-committing `orders/preview` calls) to
+// find the largest quantity that fits, reads its `top_level_runs` back as the run count to send,
+// and ONLY THEN calls the real, slot-claiming assign endpoint — with a confirm step in between,
+// since assigning is real and not easily undone (unlike a preview call).
+function _rxToggleOrderDeadline(orderId, typeId) {
+  const box = document.getElementById('rxOrderDeadlineBox');
+  if (!box) return;
+  if (box.style.display !== 'none') { box.style.display = 'none'; box.innerHTML = ''; return; }
+  const days = (_rxCadenceDays && _rxCadenceDays > 0) ? _rxCadenceDays : 7;
+  const ms = Math.floor((Date.now() + days * 86400000) / 3600000) * 3600000;
+  box.innerHTML = `<div class="pp-card-hint">Done by</div>
+    <input type="datetime-local" id="rxOrderDeadlineInput" value="${_toLocalInput(ms)}"
+           onchange="_rxOrderDeadlineChanged(${orderId}, ${typeId}, this.value)">
+    <div id="rxOrderDeadlineClock" class="pp-card-hint" style="margin-top:4px">${_esc(_fmtDeadlineBoth(ms))}</div>
+    <div id="rxOrderDeadlineResult" style="margin-top:8px"></div>`;
+  box.style.display = '';
+  _rxOrderDeadlineMs = ms;
+  _rxOrderDeadlineChanged(orderId, typeId, _toLocalInput(ms));
+}
+
+let _rxOrderDeadlineMs = 0;
+let _rxOrderDeadlineFound = null;   // {qty, report} from the last successful search, for the confirm step
+
+function _rxOrderDeadlineChanged(orderId, typeId, v) {
+  _rxOrderDeadlineMs = v ? new Date(v).getTime() : 0;
+  const clock = document.getElementById('rxOrderDeadlineClock');
+  if (clock) clock.textContent = _rxOrderDeadlineMs ? _fmtDeadlineBoth(_rxOrderDeadlineMs) : '';
+  _rxRunOrderDeadlineCalc(orderId, typeId);
+}
+
+async function _rxRunOrderDeadlineCalc(orderId, typeId) {
+  const result = document.getElementById('rxOrderDeadlineResult');
+  if (!result) return;
+  _rxOrderDeadlineFound = null;
+  if (!_rxOrderDeadlineMs) { result.innerHTML = ''; return; }
+  const availableHours = (_rxOrderDeadlineMs - Date.now()) / 3600000;
+  if (availableHours <= 0) { result.innerHTML = '<div class="pp-empty">That time has already passed.</div>'; return; }
+  result.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Finding the largest batch that fits…</div>';
+  let found;
+  try {
+    found = await _rxFindMaxQtyByDeadline(typeId, availableHours);
+  } catch (e) {
+    result.innerHTML = `<div class="pp-empty">${_esc(e.message || 'Could not calculate that.')}</div>`;
+    return;
+  }
+  if (!found.fits) {
+    const cav = (found.report.time && found.report.time.caveat) || '';
+    result.innerHTML = `<div class="pp-empty">Not enough time for even one more run before then`
+      + `${cav ? ` — ${_esc(cav)}` : '.'}</div>`;
+    return;
+  }
+  _rxOrderDeadlineFound = found;
+  const runs = found.report.order.top_level_runs;
+  result.innerHTML = `<div class="pp-card-hint"><b>${runs.toLocaleString()}</b> run${runs === 1 ? '' : 's'} `
+    + `(${found.qty.toLocaleString()} unit${found.qty === 1 ? '' : 's'}) fit by then, `
+    + `~${_fmtHours(found.report.time.estimated_hours)} of the ${_fmtHours(availableHours)} you have.</div>`
+    + `<button id="rxOrderDeadlineAssignBtn" style="margin-top:6px" onclick="_rxAssignOrderBatch(${orderId}, ${runs})">Assign ${runs.toLocaleString()} run${runs === 1 ? '' : 's'}</button>`;
 }
 
 // ── Running-job detail modal — a running slot never showed WHAT it's making beyond a countdown;
@@ -3301,16 +3524,19 @@ function _renderRxJobDetail(d) {
     </div>`;
 }
 
-function _rxAssignOrderBatch(orderId) {
+// `runs`, when given (the "…sized to a deadline" flow above), assigns exactly that many top-level
+// runs instead of everything remaining — the server clamps it to what's actually left either way
+// (`assign_reaction_order`), so this can never over-claim.
+function _rxAssignOrderBatch(orderId, runs) {
   const status = document.getElementById('rxOrderDetailStatus');
-  const btn = document.getElementById('rxOrderAssignBtn');
+  const btn = runs ? document.getElementById('rxOrderDeadlineAssignBtn') : document.getElementById('rxOrderAssignBtn');
   if (btn) { btn.disabled = true; btn.textContent = 'Assigning…'; }
   // Assigning an order is the slowest thing on this page — it plans the whole chain, checks
   // formulas and slots per character, writes the rows, and is then followed by three refreshes.
   // Say what is happening at each step: a silent minute reads as a hang, and the page suddenly
   // filling in afterwards reads as a bug.
   if (status) status.textContent = 'Planning the chain and claiming reaction slots…';
-  apiSend('POST', `/api/reactions/orders/${orderId}/assign`, {})
+  apiSend('POST', `/api/reactions/orders/${orderId}/assign`, runs ? { runs } : {})
     .then(async data => {
       const where = data.characters.map(c => c.character_name).join(', ');
       if (status) status.textContent = `Assigned ${data.runs_assigned.toLocaleString()} run${data.runs_assigned === 1 ? '' : 's'} to ${where} — refreshing…`;
@@ -3325,6 +3551,132 @@ function _rxAssignOrderBatch(orderId) {
       if (status) status.textContent = err.message;
       if (btn) { btn.disabled = false; btn.textContent = 'Retry'; }
     });
+}
+
+// ── "Scale to a deadline" — everything already queued, sized to a date ─────────────────────────
+// Reported live (2026-08-19): the "Plan to a deadline" flow above answers "what NEW product should
+// I make by this date", but the real ask was different — "I already have recurring work queued
+// (suggested, hand-added, or a customer order still short of its target); tell me how many runs
+// of THAT to start and what to buy, so I don't end up with more materials bought than used."
+// Reuses whatever /api/reactions/recurring-products reports as the account's real queue instead
+// of asking the user to pick a product again, and reuses `_rxFindMaxQtyByDeadline`/
+// `_rxDeadlinePreview` per product — same search, same server-side oracle, no new backend math.
+let _rxRecurringDeadlineMs = 0;
+let _rxRecurringCandidates = null;
+let _rxLastRecurringDeadlineMaterials = [];
+
+function _rxOpenRecurringDeadline() {
+  document.getElementById('rxRecurringDeadlineModal').style.display = '';
+  const days = (_rxCadenceDays && _rxCadenceDays > 0) ? _rxCadenceDays : 7;
+  _rxRecurringDeadlineMs = Math.floor((Date.now() + days * 86400000) / 3600000) * 3600000;
+  const content = document.getElementById('rxRecurringDeadlineContent');
+  content.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Loading…</div>';
+  api('/api/reactions/recurring-products')
+    .then(d => { _rxRecurringCandidates = d; _renderRxRecurringDeadlinePicker(); })
+    .catch(err => { content.innerHTML = `<div class="pp-empty">${_esc(err.message || 'Failed to load.')}</div>`; });
+}
+
+function _rxCloseRecurringDeadline() {
+  document.getElementById('rxRecurringDeadlineModal').style.display = 'none';
+}
+
+function _renderRxRecurringDeadlinePicker() {
+  const content = document.getElementById('rxRecurringDeadlineContent');
+  const d = _rxRecurringCandidates;
+  const products = (d.speculative || []).concat(d.orders || []);
+  if (!products.length) {
+    content.innerHTML = '<div class="pp-empty">Nothing currently queued — no speculative assignments, and no open customer order still needs runs. "Plan to a deadline" sizes a NEW product instead.</div>';
+    return;
+  }
+  const listHtml = products.map(p => `<li>${_esc(p.name)}${p.client_name ? ` <span class="pp-card-hint">— ${_esc(p.client_name)}</span>` : ''} <span class="pp-card-hint">(${p.assigned_runs.toLocaleString()} run${p.assigned_runs === 1 ? '' : 's'} assigned)</span></li>`).join('');
+  content.innerHTML = `
+    <div class="pp-card-hint">Sizes each of these to one date — how many runs to start and what they need, so you buy for exactly enough and no more.</div>
+    <ul style="margin:10px 0 10px 20px;padding:0">${listHtml}</ul>
+    <div class="pp-card-hint">Done by</div>
+    <input type="datetime-local" id="rxRecurringDeadlineInput" value="${_toLocalInput(_rxRecurringDeadlineMs)}"
+           onchange="_rxRecurringDeadlineChanged(this.value)">
+    <div id="rxRecurringDeadlineClock" class="pp-card-hint" style="margin-top:4px">${_esc(_fmtDeadlineBoth(_rxRecurringDeadlineMs))}</div>
+    <div id="rxRecurringDeadlineResult" style="margin-top:10px"></div>
+    <div class="pp-modal-actions" style="margin-top:14px">
+      <button class="pp-cancel-btn" onclick="_rxCloseRecurringDeadline()">Close</button>
+    </div>`;
+  _rxRunRecurringDeadlineCalc();
+}
+
+function _rxRecurringDeadlineChanged(v) {
+  _rxRecurringDeadlineMs = v ? new Date(v).getTime() : 0;
+  const clock = document.getElementById('rxRecurringDeadlineClock');
+  if (clock) clock.textContent = _rxRecurringDeadlineMs ? _fmtDeadlineBoth(_rxRecurringDeadlineMs) : '';
+  _rxRunRecurringDeadlineCalc();
+}
+
+async function _rxRunRecurringDeadlineCalc() {
+  const result = document.getElementById('rxRecurringDeadlineResult');
+  if (!result || !_rxRecurringCandidates) return;
+  if (!_rxRecurringDeadlineMs) { result.innerHTML = ''; return; }
+  const availableHours = (_rxRecurringDeadlineMs - Date.now()) / 3600000;
+  if (availableHours <= 0) { result.innerHTML = '<div class="pp-empty">That time has already passed.</div>'; return; }
+  result.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Sizing each product to that date…</div>';
+  const products = (_rxRecurringCandidates.speculative || []).concat(_rxRecurringCandidates.orders || []);
+  const rows = [];
+  for (const p of products) {
+    try {
+      rows.push({ p, found: await _rxFindMaxQtyByDeadline(p.type_id, availableHours) });
+    } catch (e) {
+      rows.push({ p, error: (e && e.message) || 'Could not calculate that.' });
+    }
+  }
+  // Still the active deadline? A slow multi-product search can finish after the user has already
+  // changed the date or closed the modal — a stale result painted over a newer pick would be wrong.
+  if (!document.getElementById('rxRecurringDeadlineResult')) return;
+  _renderRxRecurringDeadlineResult(rows, availableHours);
+}
+
+function _renderRxRecurringDeadlineResult(rows, availableHours) {
+  const result = document.getElementById('rxRecurringDeadlineResult');
+  if (!result) return;
+  // Each product's max-by-deadline is found independently, against its own free-slot read at the
+  // time of that call — the same approximation the per-order "…sized to a deadline" flow already
+  // makes (_rxRunOrderDeadlineCalc). Materials are then summed across products, which means two
+  // products sharing a raw material can each assume the full account stock offset once — a real
+  // gap, but the one already accepted for the single-product version of this search.
+  const totals = new Map();  // type_id -> {name, quantity, volume_m3}
+  const productRows = rows.map(({ p, found, error }) => {
+    if (error) return `<div class="pp-empty">${_esc(p.name)}: ${_esc(error)}</div>`;
+    if (!found.fits) return `<div class="pp-card-hint"><b>${_esc(p.name)}</b> — not enough time for even one more run by then.</div>`;
+    (found.report.materials || []).forEach(m => {
+      const t = totals.get(m.type_id) || { name: m.name, quantity: 0 };
+      t.quantity += m.quantity;
+      totals.set(m.type_id, t);
+    });
+    const runs = found.report.order.top_level_runs;
+    const already = p.assigned_runs || 0;
+    const more = Math.max(0, runs - already);
+    const assignBtn = p.order_id
+      ? ` <button class="pp-add-btn" onclick="_rxAssignOrderBatch(${p.order_id}, ${runs})">Assign ${runs.toLocaleString()} run${runs === 1 ? '' : 's'}</button>`
+      : '';
+    return `<div style="margin-top:6px"><b>${_esc(p.name)}</b>${p.client_name ? ` <span class="pp-card-hint">— ${_esc(p.client_name)}</span>` : ''}: `
+      + `<b>${runs.toLocaleString()}</b> run${runs === 1 ? '' : 's'} total by then`
+      + (already ? ` (${already.toLocaleString()} already assigned — ${more.toLocaleString()} more to start)` : '')
+      + `${assignBtn}</div>`;
+  }).join('');
+  const materials = [...totals.values()];
+  _rxLastRecurringDeadlineMaterials = materials;
+  const materialsHtml = !materials.length ? '' : `
+    <div class="pp-card-title" style="margin-top:14px;font-size:14px">Combined shopping list
+      <button class="pp-add-btn" onclick="_rxCopyRecurringDeadlineList(this)">Copy for Janice</button>
+    </div>
+    <div style="overflow-x:auto">
+      <table class="pp-card-table" style="width:100%">
+        <thead><tr><th>Material</th><th>Quantity</th></tr></thead>
+        <tbody>${materials.map(m => `<tr><td>${_esc(m.name)}</td><td>${_rxCopyQtyCell(m.quantity)}</td></tr>`).join('')}</tbody>
+      </table>
+    </div>`;
+  result.innerHTML = `<div class="pp-card-hint">~${_fmtHours(availableHours)} until then.</div>${productRows}${materialsHtml}`;
+}
+
+function _rxCopyRecurringDeadlineList(btn) {
+  _rxCopyText(_rxLastRecurringDeadlineMaterials.map(m => `${m.name}\t${Math.round(m.quantity)}`).join('\n'), btn);
 }
 
 function _rxSetOrderStatus(orderId, newStatus) {
