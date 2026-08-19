@@ -1034,7 +1034,13 @@ function _rxAdoptOrphan(characterId, typeId, runs, btn) {
   if (btn) { btn.textContent = '…'; btn.style.pointerEvents = 'none'; }
   apiSend('POST', '/api/reactions/adopt-orphan',
           { character_id: Number(characterId), type_id: Number(typeId), runs: Number(runs) })
-    .then(() => { _rxLastDashboardData = null; _loadReactionsDashboard(); })
+    // Reported live (2026-08-19) as "reloads the entire page" and "horribly slow" — it never did
+    // either, but clearing _rxLastDashboardData first made _loadReactionsDashboard blank the whole
+    // Reactions card to a spinner (see its own `if (!_rxLastDashboardData)` loading-flash guard)
+    // for as long as the account's full plan recompute takes, which LOOKS exactly like a reload.
+    // Leaving the current view in place while the fresh fetch runs (still forced — the cache was
+    // just invalidated server-side) swaps content in once it lands instead of blanking first.
+    .then(() => { _loadReactionsDashboard(); })
     .catch(err => { toastError(err); if (btn) { btn.textContent = '⊕ plan'; btn.style.pointerEvents = ''; } });
 }
 

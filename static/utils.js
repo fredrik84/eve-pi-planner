@@ -122,18 +122,25 @@ function ppConfirm(message, { okLabel = 'Confirm', danger = true } = {}) {
   });
 }
 
+// Sign handled by taking the magnitude first — every threshold below used to compare the SIGNED
+// value (`n >= 1e6`), which is always false for a negative n regardless of size, so a losing
+// figure (a negative "expected profit/day" etc.) fell through to the raw, unabbreviated branch
+// while a positive figure of the same magnitude got "M"/"B" — reported live (2026-08-19) as
+// Reactions' profit tile looking like it used a different number format from its neighbours.
 function fmtIsk(n) {
-  if (n >= 1e9) return (n / 1e9).toFixed(2) + ' B';
-  if (n >= 1e6) return (n / 1e6).toFixed(2) + ' M';
-  if (n >= 1e3) return (n / 1e3).toFixed(1) + ' K';
-  return n.toFixed(0);
+  const sign = n < 0 ? '-' : '';
+  const v = Math.abs(n);
+  if (v >= 1e9) return sign + (v / 1e9).toFixed(2) + ' B';
+  if (v >= 1e6) return sign + (v / 1e6).toFixed(2) + ' M';
+  if (v >= 1e3) return sign + (v / 1e3).toFixed(1) + ' K';
+  return sign + v.toFixed(0);
 }
 
 // Spaced ISK style ("12.3 K") — the B/M/K logic lives once in fmtIsk above; only the
 // sub-1k branch differs (keeps separators). NB: _iskFmt (planetary.js) is a DIFFERENT
 // compact style ("12k", no space, signed) used by the Factory Layout cards.
 function _fmtIsk(v) {
-  return v >= 1e3 ? fmtIsk(v) : v.toLocaleString();
+  return Math.abs(v) >= 1e3 ? fmtIsk(v) : v.toLocaleString();
 }
 
 // Readable duration, FLOORED so it never overstates a "time left" (1d → days + hours, 12–24h →

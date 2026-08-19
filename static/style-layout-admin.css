@@ -820,6 +820,12 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
   font-size: 13px; font-weight: 600; color: var(--clr-text-dim); cursor: pointer; }
 .pp-tab-btn:hover { color: var(--clr-text); }
 .pp-tab-btn.pp-tab-active { color: var(--clr-text-bright); border-bottom-color: var(--clr-accent); }
+/* A tab panel holding several stacked .pp-card sections used to inherit .pp-main's own
+   `gap: 16px` (they were its direct children before TODO §41 wrapped each tab's content in its
+   own panel div) — reported live (2026-08-19) as the Reactions Overview tab's Metrics and
+   Reactions cards touching with no gap between them. Same fix belongs on every multi-card panel,
+   not just that one. */
+[data-tabpanel] { display: flex; flex-direction: column; gap: 16px; }
 
 /* Full opportunity list: click a row to fold out the secondary dimensions (steps, job cost,
    sell-order price, ISK/m³, market depth) as a wrapped block below it, instead of cramming them
