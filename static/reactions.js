@@ -1031,17 +1031,41 @@ function _rxRefreshJobs(force, btn) {
 // server costs it from the SDE recipe and creates the plan rows, after which it counts as planned
 // (covers the running job now, reappears as "to install" and joins the shopping list next cycle).
 function _rxAdoptOrphan(characterId, typeId, runs, btn) {
-  if (btn) { btn.textContent = '…'; btn.style.pointerEvents = 'none'; }
+  // Reported live (2026-08-19): even after the fix that stopped blanking the card to a spinner
+  // first, waiting for `_loadReactionsDashboard` to come back before showing anything still
+  // flashed and took a while to clear — the account-wide recompute it triggers is real work
+  // (restage + re-level + re-price every assigned product), but the one thing this click asked
+  // for — stop calling this job an orphan — doesn't need to wait on any of that. Marked adopted
+  // in the DOM immediately instead; the real numbers (shopping list, metrics) catch up silently
+  // in the background, with no repaint tied to this click at all.
+  const slot = btn ? btn.closest('.rx-slot') : null;
+  const origTitle = slot ? slot.title : '';
+  if (slot) {
+    slot.classList.remove('rx-slot-orphan');
+    slot.title = origTitle.replace(' — NOT in your plan (orphan)', '');
+  }
+  if (btn) btn.remove();
   apiSend('POST', '/api/reactions/adopt-orphan',
           { character_id: Number(characterId), type_id: Number(typeId), runs: Number(runs) })
-    // Reported live (2026-08-19) as "reloads the entire page" and "horribly slow" — it never did
-    // either, but clearing _rxLastDashboardData first made _loadReactionsDashboard blank the whole
-    // Reactions card to a spinner (see its own `if (!_rxLastDashboardData)` loading-flash guard)
-    // for as long as the account's full plan recompute takes, which LOOKS exactly like a reload.
-    // Leaving the current view in place while the fresh fetch runs (still forced — the cache was
-    // just invalidated server-side) swaps content in once it lands instead of blanking first.
-    .then(() => { _loadReactionsDashboard(); })
-    .catch(err => { toastError(err); if (btn) { btn.textContent = '⊕ plan'; btn.style.pointerEvents = ''; } });
+    .then(() => {
+      // The cache was just invalidated server-side — refetch it so the NEXT natural repaint
+      // (tab-switch, another action) has fresh numbers, but never force a visible swap now.
+      _rxLastDashboardData = null;
+      api('/api/reactions/jobs').then(d => { _rxLastDashboardData = d; }).catch(() => {});
+    })
+    .catch(err => {
+      toastError(err);
+      // The adopt did not actually happen — put the orphan badge back rather than leave the UI
+      // claiming something the server refused.
+      if (slot) {
+        slot.classList.add('rx-slot-orphan');
+        slot.title = origTitle;
+        if (!slot.querySelector('.rx-slot-orphan-badge')) {
+          slot.insertAdjacentHTML('beforeend',
+            `<span class="rx-slot-orphan-badge" title="Not in your plan — click to add it so it recurs next cycle" onclick="event.stopPropagation();_rxAdoptOrphan(${characterId}, ${typeId}, ${runs}, this)">⊕ plan</span>`);
+        }
+      }
+    });
 }
 
 function _renderReactionsDashboard(data) {
