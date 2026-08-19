@@ -3220,8 +3220,15 @@ function _rxOpenDeadlineModal() {
   document.getElementById('rxDeadlineModal').style.display = '';
   if (!_rxOppsLoaded) {
     document.getElementById('rxDeadlineStatus').textContent = 'Loading the product list…';
-    _rxLoadOpportunities().then(() => { document.getElementById('rxDeadlineStatus').textContent = ''; })
-      .catch(err => { document.getElementById('rxDeadlineStatus').textContent = err.message; });
+    _rxLoadOpportunities().then(() => {
+      document.getElementById('rxDeadlineStatus').textContent = '';
+      // If the reader already focused the product field while this was loading, the dropdown is
+      // showing the "Loading products…" placeholder it was given at the time — nothing else was
+      // re-rendering it once the real list landed, so it just sat there forever. Refresh it now,
+      // but only if it's actually open (no point painting a hidden dropdown).
+      const dd = document.getElementById('rxDeadlineProductDropdown');
+      if (dd && dd.style.display !== 'none') _rxDeadlineProductDropdownFilter();
+    }).catch(err => { document.getElementById('rxDeadlineStatus').textContent = err.message; });
   }
 }
 
