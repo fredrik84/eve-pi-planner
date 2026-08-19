@@ -470,11 +470,11 @@ function _indPaintStatusHeadline(d) {
   if (!body || !d) return;
   body.innerHTML = _indOrderViewSelector('status') + _indStatusHeadline(d, _indViewOrderId)
     + `<div id="indInstall" class="ind-install"></div>`;
-  // "Do this now" is account-wide job-slot assignment, which the single-order plan endpoint
-  // doesn't compute (only the whole-queue endpoint calls install_block) — comes back empty while
-  // viewing one order rather than showing a stale/wrong list. indRenderInstall already renders
-  // nothing for a missing/empty `install`, so this is silent, not broken.
-  indRenderInstall(_indViewOrderId ? null : d.install);
+  // "Do this now" used to come back blank while viewing one order (2026-08-19) — only the
+  // whole-queue endpoint (queue-plan) called install_block, so the single-order endpoint
+  // (POST /api/industry/plan, see _indSetViewOrder) never had a slot checklist to show. It now
+  // computes the same thing for that one build, so both views carry `install` the same way.
+  indRenderInstall(d.install);
   indMargCutLabel();             // the bulk control's live readout starts filled in, not blank
 }
 

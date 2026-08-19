@@ -111,6 +111,16 @@ def industry_plan(req: IndustryPlanRequest, ctx: int = Depends(require_context))
     # the same shape either way, so without this the user cannot tell a measurement from a guess.
     result["skill_time_basis"] = inp.params.skill_time_basis
     result["cost_basis"] = _cost_basis(inp.params)
+    # "Do this now" — reported live (2026-08-19): viewing a single order (Manufacturing's per-order
+    # view, TODO §41 follow-up) showed this blank, because only the whole-queue endpoint used to call
+    # install_block. This plan already has everything that function reads (waves with characters
+    # assigned, the same skill eligibility, makespan) — it was never computed for a single product,
+    # not never computable. Local import: install_block lives in app.industry.orders, which imports
+    # this package at module load, so importing it back at module scope would cycle.
+    from app.industry.orders import install_block
+    result["_eligibility"] = (sk or {}).get("eligibility")
+    result["install"] = install_block(ctx, result)
+    result.pop("_eligibility", None)
     return result
 
 
