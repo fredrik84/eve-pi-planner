@@ -732,6 +732,18 @@
                   <option value="720">Monthly basis</option>
                 </select>
 
+                <!-- A ONE-OFF override for this suggestion run only — reported live (2026-08-19):
+                     the day-count rhythm above routinely lands a batch finishing mid-workday, when
+                     nothing can actually be done about it. Does NOT touch the saved cadence
+                     (_rxWizCadenceChanged does that; this deliberately doesn't call it) — picking a
+                     time here just changes what THIS "Suggest reactions" click sends. -->
+                <label class="pp-label" for="wizRDeadline" title="Size this suggestion to finish by a specific time instead of the rhythm above — one-off, doesn't change your saved cadence.">...or finish by, just this once</label>
+                <div>
+                  <input type="datetime-local" id="wizRDeadline" onchange="_rxWizDeadlineChanged(this.value)">
+                  <div id="wizRDeadlineClock" class="pp-card-hint" style="margin-top:4px"></div>
+                  <button class="pp-btn-link" id="wizRDeadlineClear" onclick="_rxWizDeadlineClear()" style="display:none">Use the rhythm above instead</button>
+                </div>
+
                 <label class="pp-label" for="wizRFill" title="What share of the product's own market trade volume (over your run period) a suggested batch is allowed to be. Higher = bigger batches, but you sell into deeper, cheaper demand and can move the price; lower = safer prices, smaller batches. Sizing uses real daily traded volume where available.">Market fill</label>
                 <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
                   <input type="range" id="wizRFill" min="5" max="100" step="5" value="50" style="width:180px" oninput="_wizRFillLive()">

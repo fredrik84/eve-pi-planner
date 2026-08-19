@@ -1908,6 +1908,37 @@ function wizRStart() {
   // dashboard has not fetched it yet (wizard opened first), fetch it now — it seeds on arrival.
   if (_rxCadenceDays === null) _rxLoadCadence(); else _rxSyncWizardCadence();
   _loadRxMaterialFilter();
+  // A one-off "finish by" from a previous visit must not silently carry over — it's a per-run
+  // override, not a preference, so each fresh wizard opens back on the saved rhythm.
+  const dl = document.getElementById('wizRDeadline');
+  if (dl) dl.value = '';
+  _rxWizDeadlineChanged('');
+}
+
+// A ONE-OFF override for a single "Suggest reactions" run — reported live (2026-08-19): the
+// day-count rhythm (`wizRCadence`, persisted) routinely lands a batch finishing mid-workday, which
+// nobody can act on until they're home anyway. Deliberately NOT persisted like `wizRCadence` is
+// (_rxWizCadenceChanged writes the account's cadence; this never calls it) — the user asked for a
+// picked-each-time window, not a saved availability pattern. `wizRSuggest` just reads
+// `_rxWizDeadlineMs` at submit time in place of the dropdown's value when one is set.
+let _rxWizDeadlineMs = 0;
+
+function _rxWizDeadlineChanged(v) {
+  _rxWizDeadlineMs = v ? new Date(v).getTime() : 0;
+  const clock = document.getElementById('wizRDeadlineClock');
+  if (clock) clock.textContent = _rxWizDeadlineMs ? _fmtDeadlineBoth(_rxWizDeadlineMs) : '';
+  const clearBtn = document.getElementById('wizRDeadlineClear');
+  if (clearBtn) clearBtn.style.display = _rxWizDeadlineMs ? '' : 'none';
+  // Grey the rhythm dropdown while a one-off deadline is active, so it's visually clear which of
+  // the two actually governs the next "Suggest reactions" click.
+  const sel = document.getElementById('wizRCadence');
+  if (sel) sel.disabled = !!_rxWizDeadlineMs;
+}
+
+function _rxWizDeadlineClear() {
+  const input = document.getElementById('wizRDeadline');
+  if (input) input.value = '';
+  _rxWizDeadlineChanged('');
 }
 
 function _loadRxMaterialFilter() {
@@ -2016,7 +2047,11 @@ function _wizRFillLive() {
 function wizRSuggest() {
   const isk = parseFloat(document.getElementById('wizRIsk').value) || 0;
   const depth = parseInt(document.getElementById('wizRDepth').value, 10) || 2;
-  const cadence = parseFloat(document.getElementById('wizRCadence').value) || 168;
+  // A one-off "finish by" wins over the saved rhythm for just this click, so the batch is sized to
+  // land in a window the player can actually act on rather than mid-workday.
+  const cadence = _rxWizDeadlineMs
+    ? Math.max(0.1, (_rxWizDeadlineMs - Date.now()) / 3600000)
+    : (parseFloat(document.getElementById('wizRCadence').value) || 168);
   const fillEl = document.getElementById('wizRFill');
   const absorbFraction = fillEl ? (parseFloat(fillEl.value) || 50) / 100 : null;
   const materialIds = _rxSelectedMaterialIds();
@@ -3380,6 +3415,7 @@ function _renderRxOrderDetail(data) {
 
   const actionButtons = o.status === 'open' ? `
       ${remaining > 0 ? `<button id="rxOrderAssignBtn" onclick="_rxAssignOrderBatch(${o.id})">Assign next batch (${remaining.toLocaleString()} run${remaining === 1 ? '' : 's'} left)</button>` : '<span class="pp-card-hint">Every run has been assigned.</span>'}
+      ${remaining > 0 ? `<button class="pp-add-btn" onclick="_rxToggleOrderDeadline(${o.id}, ${o.type_id})">…sized to a deadline</button>` : ''}
       ${o.assigned_runs > 0 ? `<button class="pp-add-btn" onclick="_rxClearOrderAssignments(${o.id})" title="Free every slot this order holds and hand its runs back, so you can assign it again from scratch. The order itself is kept.">Clear its jobs</button>` : ''}
       <button class="pp-add-btn" onclick="_rxCompleteOrder(${o.id})">Mark completed</button>
       <button class="pp-danger-btn" onclick="_rxCancelOrder(${o.id})">Cancel order</button>
@@ -3399,7 +3435,71 @@ function _renderRxOrderDetail(data) {
       ${actionButtons}
       <button class="pp-cancel-btn" onclick="_rxCloseOrderDetail()">Close</button>
       <span id="rxOrderDetailStatus" class="bug-status-msg"></span>
-    </div>`;
+    </div>
+    <div id="rxOrderDeadlineBox" style="display:none;margin-top:10px"></div>`;
+}
+
+// ── "Assign next batch, sized to a deadline" ────────────────────────────────────────────────
+// Reported live (2026-08-19): the plain "Assign next batch" claims every remaining run at once —
+// right for "just start it", wrong when the batch would land mid-workday with nobody free to
+// install the next stage. Reuses the SAME search as the standalone "Plan to a deadline" tool
+// (`_rxFindMaxQtyByDeadline`/`_rxDeadlinePreview`, both non-committing `orders/preview` calls) to
+// find the largest quantity that fits, reads its `top_level_runs` back as the run count to send,
+// and ONLY THEN calls the real, slot-claiming assign endpoint — with a confirm step in between,
+// since assigning is real and not easily undone (unlike a preview call).
+function _rxToggleOrderDeadline(orderId, typeId) {
+  const box = document.getElementById('rxOrderDeadlineBox');
+  if (!box) return;
+  if (box.style.display !== 'none') { box.style.display = 'none'; box.innerHTML = ''; return; }
+  const days = (_rxCadenceDays && _rxCadenceDays > 0) ? _rxCadenceDays : 7;
+  const ms = Math.floor((Date.now() + days * 86400000) / 3600000) * 3600000;
+  box.innerHTML = `<div class="pp-card-hint">Done by</div>
+    <input type="datetime-local" id="rxOrderDeadlineInput" value="${_toLocalInput(ms)}"
+           onchange="_rxOrderDeadlineChanged(${orderId}, ${typeId}, this.value)">
+    <div id="rxOrderDeadlineClock" class="pp-card-hint" style="margin-top:4px">${_esc(_fmtDeadlineBoth(ms))}</div>
+    <div id="rxOrderDeadlineResult" style="margin-top:8px"></div>`;
+  box.style.display = '';
+  _rxOrderDeadlineMs = ms;
+  _rxOrderDeadlineChanged(orderId, typeId, _toLocalInput(ms));
+}
+
+let _rxOrderDeadlineMs = 0;
+let _rxOrderDeadlineFound = null;   // {qty, report} from the last successful search, for the confirm step
+
+function _rxOrderDeadlineChanged(orderId, typeId, v) {
+  _rxOrderDeadlineMs = v ? new Date(v).getTime() : 0;
+  const clock = document.getElementById('rxOrderDeadlineClock');
+  if (clock) clock.textContent = _rxOrderDeadlineMs ? _fmtDeadlineBoth(_rxOrderDeadlineMs) : '';
+  _rxRunOrderDeadlineCalc(orderId, typeId);
+}
+
+async function _rxRunOrderDeadlineCalc(orderId, typeId) {
+  const result = document.getElementById('rxOrderDeadlineResult');
+  if (!result) return;
+  _rxOrderDeadlineFound = null;
+  if (!_rxOrderDeadlineMs) { result.innerHTML = ''; return; }
+  const availableHours = (_rxOrderDeadlineMs - Date.now()) / 3600000;
+  if (availableHours <= 0) { result.innerHTML = '<div class="pp-empty">That time has already passed.</div>'; return; }
+  result.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Finding the largest batch that fits…</div>';
+  let found;
+  try {
+    found = await _rxFindMaxQtyByDeadline(typeId, availableHours);
+  } catch (e) {
+    result.innerHTML = `<div class="pp-empty">${_esc(e.message || 'Could not calculate that.')}</div>`;
+    return;
+  }
+  if (!found.fits) {
+    const cav = (found.report.time && found.report.time.caveat) || '';
+    result.innerHTML = `<div class="pp-empty">Not enough time for even one more run before then`
+      + `${cav ? ` — ${_esc(cav)}` : '.'}</div>`;
+    return;
+  }
+  _rxOrderDeadlineFound = found;
+  const runs = found.report.order.top_level_runs;
+  result.innerHTML = `<div class="pp-card-hint"><b>${runs.toLocaleString()}</b> run${runs === 1 ? '' : 's'} `
+    + `(${found.qty.toLocaleString()} unit${found.qty === 1 ? '' : 's'}) fit by then, `
+    + `~${_fmtHours(found.report.time.estimated_hours)} of the ${_fmtHours(availableHours)} you have.</div>`
+    + `<button id="rxOrderDeadlineAssignBtn" style="margin-top:6px" onclick="_rxAssignOrderBatch(${orderId}, ${runs})">Assign ${runs.toLocaleString()} run${runs === 1 ? '' : 's'}</button>`;
 }
 
 // ── Running-job detail modal — a running slot never showed WHAT it's making beyond a countdown;
@@ -3497,16 +3597,19 @@ function _renderRxJobDetail(d) {
     </div>`;
 }
 
-function _rxAssignOrderBatch(orderId) {
+// `runs`, when given (the "…sized to a deadline" flow above), assigns exactly that many top-level
+// runs instead of everything remaining — the server clamps it to what's actually left either way
+// (`assign_reaction_order`), so this can never over-claim.
+function _rxAssignOrderBatch(orderId, runs) {
   const status = document.getElementById('rxOrderDetailStatus');
-  const btn = document.getElementById('rxOrderAssignBtn');
+  const btn = runs ? document.getElementById('rxOrderDeadlineAssignBtn') : document.getElementById('rxOrderAssignBtn');
   if (btn) { btn.disabled = true; btn.textContent = 'Assigning…'; }
   // Assigning an order is the slowest thing on this page — it plans the whole chain, checks
   // formulas and slots per character, writes the rows, and is then followed by three refreshes.
   // Say what is happening at each step: a silent minute reads as a hang, and the page suddenly
   // filling in afterwards reads as a bug.
   if (status) status.textContent = 'Planning the chain and claiming reaction slots…';
-  apiSend('POST', `/api/reactions/orders/${orderId}/assign`, {})
+  apiSend('POST', `/api/reactions/orders/${orderId}/assign`, runs ? { runs } : {})
     .then(async data => {
       const where = data.characters.map(c => c.character_name).join(', ');
       if (status) status.textContent = `Assigned ${data.runs_assigned.toLocaleString()} run${data.runs_assigned === 1 ? '' : 's'} to ${where} — refreshing…`;
