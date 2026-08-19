@@ -627,6 +627,7 @@
                   <button class="pp-add-btn" onclick="_rxRefreshJobs(true, this)" title="Pull the latest job status from ESI now (bypasses the ~5min cache)">↻ Refresh jobs</button>
                   <button class="pp-add-btn" onclick="openSettingsModal('markets')">⚙ Settings</button>
                   <button class="pp-add-btn" id="rxConnectBtn" onclick="connectReactionsTracking()" style="display:none">Connect a character</button>
+                  <button class="pp-add-btn" id="rxAdoptAllBtn" onclick="_rxAdoptAllOrphans(this)" title="Add every running job that isn't in your plan yet, so they all recur next cycle" style="display:none">⊕ Adopt all</button>
                   <!-- ppConfirm, not native confirm(): a browser that has been offered "prevent this
                        page from creating additional dialogs" makes confirm() return false silently,
                        and the button then does nothing at all. See the comment on ppConfirm in

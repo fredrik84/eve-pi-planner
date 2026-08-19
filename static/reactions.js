@@ -1062,10 +1062,24 @@ function _rxAdoptOrphan(characterId, typeId, runs, btn) {
         slot.title = origTitle;
         if (!slot.querySelector('.rx-slot-orphan-badge')) {
           slot.insertAdjacentHTML('beforeend',
-            `<span class="rx-slot-orphan-badge" title="Not in your plan — click to add it so it recurs next cycle" onclick="event.stopPropagation();_rxAdoptOrphan(${characterId}, ${typeId}, ${runs}, this)">⊕ plan</span>`);
+            `<span class="rx-slot-orphan-badge" data-character-id="${characterId}" data-type-id="${typeId}" data-runs="${runs}" title="Not in your plan — click to add it so it recurs next cycle" onclick="event.stopPropagation();_rxAdoptOrphan(${characterId}, ${typeId}, ${runs}, this)">⊕ plan</span>`);
         }
       }
     });
+}
+
+// "Adopt all" — reported live (2026-08-19), right after the per-job "⊕ plan" button: with several
+// orphans running at once, clicking each individually is needless repetition when the ask is just
+// "make everything running count as planned." Reuses _rxAdoptOrphan per badge currently on screen
+// — same instant DOM update, same rollback-on-failure — rather than a second code path.
+function _rxAdoptAllOrphans(btn) {
+  const badges = [...document.querySelectorAll('.rx-slot-orphan-badge')];
+  if (!badges.length) return;
+  if (btn) btn.style.display = 'none';   // optimistic — each badge that fails puts itself back
+  badges.forEach(b => {
+    const { characterId, typeId, runs } = b.dataset;
+    _rxAdoptOrphan(Number(characterId), Number(typeId), Number(runs), b);
+  });
 }
 
 function _renderReactionsDashboard(data) {
@@ -1083,6 +1097,15 @@ function _renderReactionsDashboard(data) {
   if (connectBtn) {
     connectBtn.style.display = '';
     connectBtn.textContent = `Connect ${data.tracked ? 'another' : 'a'} character`;
+  }
+
+  // "Adopt all" next to it — computed off THIS load's own running-job list (a fresh count every
+  // repaint), not left to whatever a previous render's bulk click optimistically hid.
+  const orphanCount = (data.running || []).filter(j => j.orphan).length;
+  const adoptAllBtn = document.getElementById('rxAdoptAllBtn');
+  if (adoptAllBtn) {
+    adoptAllBtn.style.display = orphanCount ? '' : 'none';
+    adoptAllBtn.textContent = `⊕ Adopt all (${orphanCount})`;
   }
 
   // Characters we still hold jobs for whose token no longer carries the jobs scope — re-authorising
@@ -1163,7 +1186,7 @@ function _renderReactionsDashboard(data) {
       const nm = _jobName(j);
       const tip = `${nm} — ${runsLabel ? runsLabel + ' runs — ' : ''}finished in ${timer}${j.facility_name ? ' — ' + j.facility_name : ''}${j.orphan ? ' — NOT in your plan (orphan)' : ''} — click for details`;
       const orphanBadge = j.orphan
-        ? `<span class="rx-slot-orphan-badge" title="Not in your plan — click to add it so it recurs next cycle" onclick="event.stopPropagation();_rxAdoptOrphan(${j.character_id}, ${j.product_type_id}, ${j.runs || 0}, this)">⊕ plan</span>`
+        ? `<span class="rx-slot-orphan-badge" data-character-id="${j.character_id}" data-type-id="${j.product_type_id}" data-runs="${j.runs || 0}" title="Not in your plan — click to add it so it recurs next cycle" onclick="event.stopPropagation();_rxAdoptOrphan(${j.character_id}, ${j.product_type_id}, ${j.runs || 0}, this)">⊕ plan</span>`
         : '';
       return `
         <div class="rx-slot rx-slot-filled${j.orphan ? ' rx-slot-orphan' : ''}" title="${_esc(tip)}" onclick="_rxOpenJobDetail(${j.product_type_id}, ${j.runs || 1}, ${j.progress_pct != null ? j.progress_pct : 'null'})">
