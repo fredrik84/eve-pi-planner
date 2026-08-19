@@ -180,16 +180,14 @@ def list_moon_materials(ctx: int = Depends(require_context)):
     price-sheet editor so a manager picks a name instead of typing a raw type ID. Derived from the
     reaction graph (deferred import to avoid a package cycle), not a hardcoded id list, so it stays
     correct if the SDE's reaction set ever changes."""
-    from app.reactions.graph import _load_reaction_graph, _fuel_block_ids
+    from app.reactions.graph import _load_reaction_graph, moon_material_type_ids
     types = load_pi_data()["types"]
     con = get_connection()
     try:
         reactions_by_output, inputs_by_reaction = _load_reaction_graph(con)
     finally:
         con.close()
-    all_input_ids = {inp["type_id"] for inputs in inputs_by_reaction.values() for inp in inputs}
-    fuel_ids = set(_fuel_block_ids(inputs_by_reaction, reactions_by_output, types))
-    material_ids = {tid for tid in all_input_ids if tid not in reactions_by_output and tid not in fuel_ids}
+    material_ids = moon_material_type_ids(inputs_by_reaction, reactions_by_output, types)
     materials = sorted(
         ({"type_id": tid, "name": types.get(tid, {}).get("name", str(tid))} for tid in material_ids),
         key=lambda m: m["name"],
