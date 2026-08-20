@@ -128,17 +128,19 @@ def _resolve_reachable(goo: dict[int, dict], purchasable: dict[int, float],
         if g["sell_price"] > 0:
             reached[tid] = {"unit_cost": g["sell_price"], "max_qty": _PURCHASABLE_MAX_QTY,
                              "reaction_count": 0, "depth": 0, "via": None, "source": "group",
-                             "job_cost": 0.0, "alt_cost": None, "alt_source": None}
+                             "job_cost": 0.0, "own_job_cost_per_run": 0.0,
+                             "alt_cost": None, "alt_source": None}
     for tid, buy_price in purchasable.items():
         if buy_price <= 0:
             continue
         if tid not in reached:
             reached[tid] = {"unit_cost": buy_price, "max_qty": _PURCHASABLE_MAX_QTY, "source": "market",
                              "reaction_count": 0, "depth": 0, "via": None, "job_cost": 0.0,
-                             "alt_cost": None, "alt_source": None}
+                             "own_job_cost_per_run": 0.0, "alt_cost": None, "alt_source": None}
         elif buy_price < reached[tid]["unit_cost"]:
             reached[tid] = {"unit_cost": buy_price, "max_qty": _PURCHASABLE_MAX_QTY, "source": "market",
                              "reaction_count": 0, "depth": 0, "via": None, "job_cost": 0.0,
+                             "own_job_cost_per_run": 0.0,
                              "alt_cost": reached[tid]["unit_cost"], "alt_source": "group"}
         else:
             reached[tid]["alt_cost"] = buy_price
@@ -184,6 +186,11 @@ def _resolve_reachable(goo: dict[int, dict], purchasable: dict[int, float],
                 candidate = {
                     "unit_cost": cost_per_run / f["output_qty"],
                     "job_cost": job_cost_per_run / f["output_qty"],
+                    # This formula's OWN per-run fee only (no children rolled in) — `job_cost`
+                    # above is the whole-subtree total and double-counts once a caller also has a
+                    # separate row for every intermediate tier (a real installed plan does). Kept
+                    # per RUN, not per unit, because a plan row's own unit is a run count.
+                    "own_job_cost_per_run": own_eiv_per_run * job_cost_rate,
                     "max_qty": int(runs) * f["output_qty"],
                     "reaction_count": reaction_count,
                     "depth": depth,

@@ -49,32 +49,6 @@ def _order_report(context_id: int, order: dict) -> dict:
     top_level_runs = order["top_level_runs"]
     target_qty = order["target_qty"]
 
-    # An order report is pure PRODUCTION cost (materials + job install) — no shipping/collateral and
-    # no markup (the user decides what to charge), so it uses _value_reaction_batch with empty
-    # settings: fixed_costs then reduces to material + job.
-    v = _value_reaction_batch(node, top_level_runs * output_qty, sell_price=0.0, volume=0.0, settings={})
-    total_cost = v["fixed_costs"]
-    cost = {
-        "material_cost": round(v["input_cost"], 2), "job_cost": round(v["job_cost"], 2),
-        "total_cost": round(total_cost, 2),
-        "cost_per_unit": round(total_cost / target_qty, 2) if target_qty else 0.0,
-    }
-
-    # What the job is WORTH, which for an order is whatever the client agreed to pay — the one
-    # figure nothing here can derive. Absent a price the answer is "not known", never 0: the
-    # dashboard used to report an unpriced order as zero profit, which reads as "this earns
-    # nothing" rather than "nobody has said". `None` all the way through keeps the two apart.
-    price = order.get("client_price")
-    price = float(price) if price not in (None, "") else None
-    profit = {
-        "client_price": price,
-        "price_per_unit": round(price / target_qty, 2) if (price and target_qty) else None,
-        "profit": round(price - total_cost, 2) if price is not None else None,
-        # Margin on the PRICE (what fraction of the invoice is yours to keep), not markup on cost —
-        # it is the number that compares against a market sale, which is also a share of revenue.
-        "margin_pct": round((price - total_cost) / price * 100, 1) if price else None,
-    }
-
     # Two SEPARATE pools off the same holding, on purpose: the materials list and the stage list
     # answer different questions about the same order ("what must I buy" / "what must I react"),
     # and each must spend the holding once. Sharing one consumed pool between them would let the
@@ -107,6 +81,45 @@ def _order_report(context_id: int, order: dict) -> dict:
         _explode_shopping_list(order["type_id"], target_qty, reached, totals,
                                dict(reaction_stock_pool(context_id)))
     materials = _materials_report(totals, reached, types)
+
+    # An order report is pure PRODUCTION cost (materials + job install) — no shipping/collateral and
+    # no markup (the user decides what to charge), so it uses _value_reaction_batch with empty
+    # settings: fixed_costs then reduces to material + job.
+    v = _value_reaction_batch(node, top_level_runs * output_qty, sell_price=0.0, volume=0.0, settings={})
+    if plan_rows:
+        # Same rounding gap the materials fix above closes, applied to the OTHER half of "cost to
+        # produce": `v["input_cost"]`/`v["job_cost"]` are idealized off `top_level_runs` and never
+        # see the levelling pass's real, padded job counts. `materials` already carries the real
+        # total for goo — reuse it rather than a second walk. Job-install fees need their own sum:
+        # `own_job_cost_per_run` is a row's OWN fee only, never rolled up into its children's (each
+        # tier already has its own plan row, so rolling children in here would double-count them).
+        material_cost = sum(m["unit_cost"] * m["quantity"] for m in materials)
+        job_cost = sum(int(r["runs"] or 0) * reached[int(r["type_id"])].get("own_job_cost_per_run", 0.0)
+                       for r in plan_rows if reached.get(int(r["type_id"])))
+    else:
+        material_cost = v["input_cost"]
+        job_cost = v["job_cost"]
+    total_cost = material_cost + job_cost
+    cost = {
+        "material_cost": round(material_cost, 2), "job_cost": round(job_cost, 2),
+        "total_cost": round(total_cost, 2),
+        "cost_per_unit": round(total_cost / target_qty, 2) if target_qty else 0.0,
+    }
+
+    # What the job is WORTH, which for an order is whatever the client agreed to pay — the one
+    # figure nothing here can derive. Absent a price the answer is "not known", never 0: the
+    # dashboard used to report an unpriced order as zero profit, which reads as "this earns
+    # nothing" rather than "nobody has said". `None` all the way through keeps the two apart.
+    price = order.get("client_price")
+    price = float(price) if price not in (None, "") else None
+    profit = {
+        "client_price": price,
+        "price_per_unit": round(price / target_qty, 2) if (price and target_qty) else None,
+        "profit": round(price - total_cost, 2) if price is not None else None,
+        # Margin on the PRICE (what fraction of the invoice is yours to keep), not markup on cost —
+        # it is the number that compares against a market sale, which is also a share of revenue.
+        "margin_pct": round((price - total_cost) / price * 100, 1) if price else None,
+    }
 
     stock_covered: dict[int, dict] = {}
     ordered_tiers = _ordered_chain_tiers(formula["inputs"], top_level_runs, reached,
