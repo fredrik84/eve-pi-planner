@@ -1120,6 +1120,9 @@ def _materials_report(totals: dict[int, float], reached: dict, types: dict) -> l
     return materials
 
 
+_EMPTY_SHOPPING_COST = {"materials_cost": 0.0, "job_cost": 0.0, "total_cost": 0.0}
+
+
 @router.get("/api/reactions/shopping-list")
 def reactions_shopping_list(include_orders: bool = False,
                             context_id: int = Depends(require_context)):
@@ -1154,7 +1157,7 @@ def reactions_shopping_list(include_orders: bool = False,
         )]
         if not char_ids:
             return {"materials": [], "formulas": {"complete": False, "formulas": [], "unresolved": []},
-                    "speculative_count": 0, "order_count": 0}
+                    "cost": _EMPTY_SHOPPING_COST, "speculative_count": 0, "order_count": 0}
         placeholders = ",".join("?" * len(char_ids))
         rows = [dict(r) for r in con.execute(
             f"SELECT character_id, type_id, runs, order_id, created_at, "
@@ -1175,11 +1178,12 @@ def reactions_shopping_list(include_orders: bool = False,
 
     if not assignments:
         return {"materials": [], "formulas": {"complete": False, "formulas": [], "unresolved": []},
-                **counts}
+                "cost": _EMPTY_SHOPPING_COST, **counts}
 
     loaded = _load_goo_and_reached(context_id)
     if loaded is None:
         return {"materials": [], "formulas": {"complete": False, "formulas": [], "unresolved": []},
+                "cost": _EMPTY_SHOPPING_COST,
                 **counts}
     goo, reached, _, _, types = loaded
 
@@ -1202,7 +1206,18 @@ def reactions_shopping_list(include_orders: bool = False,
     # plan needs at once — see `missing_formulas`' `jobs`.
     formulas = missing_formulas(context_id, wanted_from_sequence(assignments),
                                 jobs=jobs_from_sequence(assignments))
-    return {"materials": _materials_report(totals, reached, types), "formulas": formulas, **counts}
+    materials = _materials_report(totals, reached, types)
+    # A cost total this list did not have before: the materials side is just `materials`' own
+    # rows, already real (per-job, stock-netted). Job-install fees need their own row-by-row sum
+    # — `own_job_cost_per_run` is a row's OWN fee only, never rolled up into a child's, because
+    # every intermediate tier is already its own row in `assignments` (see the order-report fix
+    # this mirrors, `app/reactions/orders.py::_order_report`).
+    materials_cost = sum(m["unit_cost"] * m["quantity"] for m in materials)
+    job_cost = sum(int(r["runs"] or 0) * reached[int(r["type_id"])].get("own_job_cost_per_run", 0.0)
+                   for r in assignments if reached.get(int(r["type_id"])))
+    cost = {"materials_cost": round(materials_cost, 2), "job_cost": round(job_cost, 2),
+            "total_cost": round(materials_cost + job_cost, 2)}
+    return {"materials": materials, "formulas": formulas, "cost": cost, **counts}
 
 
 @router.get("/api/reactions/recurring-products")

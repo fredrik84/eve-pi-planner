@@ -282,7 +282,15 @@ function _loadRxShoppingList() {
            <button class="pp-btn-link" onclick="_toggleRxShoppingOrders()">Speculative only</button></div>`
         : `<div class="pp-card-hint" style="margin-bottom:8px">Speculative assignments only — ${d.order_count} more ${d.order_count === 1 ? 'is' : 'are'} committed to customer orders.
            <button class="pp-btn-link" onclick="_toggleRxShoppingOrders()">Include customer orders</button></div>`);
+      const c = d.cost || {};
+      const costSummary = `
+        <div class="rx-manual-preview" style="margin-bottom:10px">
+          <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Materials</span><b>${_fmtIsk(c.materials_cost)}</b></div>
+          ${c.job_cost ? `<div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Job install fees</span><b>${_fmtIsk(c.job_cost)}</b></div>` : ''}
+          <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Total</span><b>${_fmtIsk(c.total_cost)}</b></div>
+        </div>`;
       el.innerHTML = missingWarn + scope
+        + costSummary
         + formulaSection
         + section('Fetch from your alliance', group)
         + section('Buy on the market (fuel blocks, or cheaper right now than your sheet)', market);
