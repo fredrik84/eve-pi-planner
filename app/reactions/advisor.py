@@ -919,7 +919,7 @@ def _build_advisor(context_id: int, isk_budget: float, max_chain_depth: int, cad
     return {"budget_hint": budget_hint, "align_hints": align_hints, "fuel_block_hints": fuel_block_hints}
 
 
-_DEFAULT_CADENCE_H = 168.0        # weekly — the historical wizard default, kept as the fallback
+_DEFAULT_CADENCE_H = 168.0        # weekly — shared with the saved setting and leveller fallback
 
 
 def _resolve_cadence_hours(context_id: int, sent: float | None) -> float:

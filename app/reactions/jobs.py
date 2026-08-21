@@ -1431,7 +1431,7 @@ def _reaction_skill_mult(context_id: int) -> float:
 
 
 def _reaction_cadence_hours(context_id: int) -> float:
-    """The longest one reaction job may run, in hours — 0 when the account has set no cadence.
+    """The longest one reaction job should run, in hours — weekly when no value was saved.
 
     **One STORED number, two owners.** The value is `max_reaction_job_days` in
     `pp_industry_settings` — the same row Build rules → "Longest reaction job" writes and
@@ -1445,14 +1445,17 @@ def _reaction_cadence_hours(context_id: int) -> float:
     reactions-only account could not reach it at all. `reactions_cadence` is this side's own key to
     the same setting; either flag opens it, neither one owns the number.
 
-    Still 0 when unset — a plan built before anyone chose a cadence must not be resized by one.
+    The suggestion engine already falls back to weekly. The leveller must use that same fallback or
+    the first dashboard read changes a weekly plan into longer jobs.
     """
     try:
         if not (flag_on("reactions_cadence", context_id)
                 or flag_on("industry_job_length_policy", context_id)):
             return 0.0
-        from app.industry.settings import get_max_reaction_job_days
-        return max(0.0, float(get_max_reaction_job_days(context_id) or 0.0)) * 24.0
+        from app.industry.settings import (DEFAULT_REACTION_JOB_DAYS,
+                                           get_max_reaction_job_days)
+        return max(0.0, float(get_max_reaction_job_days(context_id)
+                              or DEFAULT_REACTION_JOB_DAYS)) * 24.0
     except Exception:
         return 0.0
 

@@ -195,8 +195,8 @@ function _indRulesJobLength(a) {
   if (!_indRules.available.job_length || _indRulesMode === 'order') return '';
   const d = (a.job_length || {}).max_reaction_job_days;
   return _indRuleRow('Longest reaction job',
-    `<input type="number" id="ir-joblen" min="0" step="0.5" style="width:80px" value="${d == null ? '' : d}"> days`,
-    'Blank or 0 = no ceiling. A reaction has no per-job run cap, so a big batch will otherwise sit in one slot for weeks.');
+    `<input type="number" id="ir-joblen" min="0.5" step="0.5" style="width:80px" value="${d == null ? 7 : d}"> days`,
+    'Defaults to 7 days. Blank or 0 resets to weekly; increase it only when you prefer fewer, longer jobs.');
 }
 
 function _indRulesSources(a) {

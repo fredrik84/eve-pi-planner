@@ -626,9 +626,7 @@ function _rxPaintCadenceSetting() {
   el.value = v === '' ? '' : String(v);
   const hint = document.getElementById('genCadenceHint');
   if (hint) {
-    hint.textContent = (v !== '' && Number(v) > 0)
-      ? 'A stage is planned to finish inside this window — which costs reactors when the work does not fit.'
-      : 'No ceiling: a batch can sit in one reactor for as long as the work takes.';
+    hint.textContent = 'A stage is planned to finish inside this window — which costs reactors when the work does not fit.';
   }
 }
 
@@ -637,8 +635,8 @@ function _rxSaveCadence(value) {
   const days = raw === '' ? null : parseFloat(raw);
   if (days !== null && (!isFinite(days) || days < 0)) { toastError(new Error('Days must be 0 or more')); return; }
   apiSend('POST', '/api/reactions/cadence', { max_reaction_job_days: days })
-    .then(() => {
-      _rxCadenceDays = days == null ? '' : days;
+    .then(saved => {
+      _rxCadenceDays = saved.max_reaction_job_days;
       _rxSyncWizardCadence();
       _rxPaintCadenceSetting();
       // The cadence reshapes the plan on the next read, so re-fetch rather than re-render what we

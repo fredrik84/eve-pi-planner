@@ -1326,6 +1326,24 @@ def test_local_sell_hint() -> bool:
     return ok
 
 
+def test_an_unset_cadence_is_weekly_everywhere() -> bool:
+    """The wizard and the post-assignment leveller must not resolve an empty setting differently."""
+    import app.reactions.jobs as J
+    from app.industry import settings as S
+
+    real_flag, real_get = J.flag_on, S.get_max_reaction_job_days
+    try:
+        J.flag_on = lambda key, ctx: key == "reactions_cadence"
+        S.get_max_reaction_job_days = lambda ctx: None
+        ok = check(J._reaction_cadence_hours(1) == 168.0,
+                   "an unset saved cadence still levels assigned jobs to seven days")
+        ok &= check(S.DEFAULT_REACTION_JOB_DAYS == 7.0,
+                    "Reactions and Manufacturing share the same weekly default")
+        return ok
+    finally:
+        J.flag_on, S.get_max_reaction_job_days = real_flag, real_get
+
+
 def run_unit_tests() -> bool:
     print("Unit tests (pure functions, no network/DB):")
     results = [
@@ -1341,6 +1359,7 @@ def run_unit_tests() -> bool:
         test_it_warns_when_installed_jobs_will_come_up_short(),
         test_a_character_that_lost_the_jobs_scope_says_so(),
         test_the_cadence_ceiling_is_measured_in_real_time_not_sde_time(),
+        test_an_unset_cadence_is_weekly_everywhere(),
         test_the_cadence_reaches_an_orders_own_top_row(),
         test_a_reaction_can_be_marked_running_or_done_by_hand(),
         test_assigning_twice_does_not_book_it_twice(),

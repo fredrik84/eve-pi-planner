@@ -431,7 +431,7 @@ def _cadence_available(context_id: int) -> bool:
 
 class ReactionCadenceUpdate(BaseModel):
     # Days, not hours: this is the unit the player thinks in and the unit the store holds. None or 0
-    # means no ceiling, which is the documented default and not an error.
+    # resets to the shared weekly default rather than disabling the rhythm behind the plan.
     max_reaction_job_days: float | None = None
 
 

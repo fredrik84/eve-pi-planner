@@ -5381,8 +5381,8 @@ def test_the_reaction_job_ceiling_reaches_plans_run_without_a_browser():
             1, BuildOptions(max_reaction_job_days=1.0))
         check("an explicitly sent ceiling still wins", explicit.max_reaction_job_days == 1.0)
         ind_settings.get_settings = lambda ctx: {}
-        check("and an account that never set one sends nothing",
-              ind_settings.apply_account_build_options(1, BuildOptions()).max_reaction_job_days is None)
+        check("and an account that never set one inherits the shared weekly default",
+              ind_settings.apply_account_build_options(1, BuildOptions()).max_reaction_job_days == 7.0)
     finally:
         ind_settings.get_settings = real_get
 

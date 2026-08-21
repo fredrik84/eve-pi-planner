@@ -290,20 +290,25 @@ def set_per_order_plans(context_id: int, on: bool) -> bool:
     return bool(on)
 
 
-def get_max_reaction_job_days(context_id: int) -> float | None:
-    """The longest one reaction job may run, in days — or None when the account has set no ceiling.
+DEFAULT_REACTION_JOB_DAYS = 7.0
 
-    Default None, and deliberately so: a ceiling is a statement about how this builder wants to
-    operate ("never park a reactor for a fortnight"), and guessing one for somebody would split
-    their batches into jobs they never asked to install.
+
+def get_max_reaction_job_days(context_id: int) -> float:
+    """The longest one reaction job should run, in days; weekly until the account changes it.
+
+    The advisor has always used seven days when this column is empty. Returning ``None`` here made
+    the post-assignment leveller use *no* cadence for that same plan, so a weekly suggestion could
+    turn into a nine-day job on the first dashboard refresh. One effective default keeps every
+    caller — Reactions, Manufacturing, shares and background planning — on the same rhythm.
     """
-    return get_settings(context_id).get("max_reaction_job_days")
+    return float(get_settings(context_id).get("max_reaction_job_days")
+                 or DEFAULT_REACTION_JOB_DAYS)
 
 
 def set_max_reaction_job_days(context_id: int, days: float | None) -> float | None:
     """Its own write path, for the same reason `set_per_order_plans` has one: the settings PUT is a
     debounced save of the plan form, and a slider moving must not carry a stale ceiling along and
-    silently re-split every reaction in the queue. 0 / None clears it."""
+    silently re-split every reaction in the queue. 0 / None resets to the weekly default."""
     ensure_industry_settings_table()
     try:
         val = float(days) if days is not None else 0.0
@@ -324,7 +329,7 @@ def set_max_reaction_job_days(context_id: int, days: float | None) -> float | No
         _forget_settings_memo(context_id)
     finally:
         con.close()
-    return val or None
+    return val or DEFAULT_REACTION_JOB_DAYS
 
 
 def _parse_build_pins(value) -> dict[str, str]:
@@ -439,8 +444,6 @@ def apply_account_build_options(context_id: int, opts):
     override what the user saved — which is the bug this module exists to end.
     """
     saved = get_settings(context_id)
-    if not saved:
-        return opts
     sent = getattr(opts, "model_fields_set", set())
     update = {}
     for field in ("struct_material_pct", "struct_time_pct", "marginal_pct", "margin_pct"):
@@ -484,8 +487,9 @@ def apply_account_build_options(context_id: int, opts):
     # link or the start-now checklist that missed it would hand the builder a different list of jobs
     # from the one on their screen — exactly the class of bug this module exists to end. Whether it
     # is honoured at all is the feature flag's call, made once in `prepare_plan_inputs`.
-    if "max_reaction_job_days" not in sent and saved.get("max_reaction_job_days"):
-        update["max_reaction_job_days"] = float(saved["max_reaction_job_days"])
+    if "max_reaction_job_days" not in sent:
+        update["max_reaction_job_days"] = float(
+            saved.get("max_reaction_job_days") or DEFAULT_REACTION_JOB_DAYS)
     # …and so are the build pins. They decide WHERE each job is installed, so a checklist or a share
     # link that missed them would tell the builder to install jobs in a different building from the
     # one their own screen named — the same class of bug as every other option here.
@@ -663,7 +667,7 @@ def edit_per_order_plans(req: PerOrderPlansEdit, ctx: int = Depends(require_cont
 
 
 class JobLengthPolicyEdit(BaseModel):
-    """Days. `None` (or 0) clears the ceiling."""
+    """Days. `None` (or 0) resets to the weekly default."""
     max_reaction_job_days: float | None = None
 
 

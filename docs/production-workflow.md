@@ -13,6 +13,9 @@ share a conditional planner that conceals genuine differences between formulas a
   `total`, `available`, and `committed`; old flat fields remain only as migration compatibility.
 - Automatic work reports a capacity shortfall instead of silently dropping work. Manual management
   remains an escape hatch, not the normal path.
+- Reaction-job cadence has one effective value across both tools. An unset/cleared value is the
+  seven-day default; the advisor and every post-assignment/background planning pass use that same
+  value, so a weekly preview cannot turn into longer jobs when Overview refreshes.
 
 ## Intentional differences
 
