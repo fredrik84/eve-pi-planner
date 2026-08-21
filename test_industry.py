@@ -3104,6 +3104,12 @@ def test_manufacturing_phase1_is_task_first():
     check("capacity stays visible while setup, reorder and refresh sit under More",
           'id="indSetupSummary"' in page and 'class="ind-action-menu"' in headline
           and 'Job slots &amp; setup' in headline and 'Refresh ESI jobs' in headline)
+    check("both More menus close after actions and whenever Manufacturing refreshes",
+          'indCloseActionMenus();indOpenSetup()' in page
+          and 'indCloseActionMenus();indOpenSetup()' in headline
+          and 'indCloseActionMenus();indOpenOrder()' in headline
+          and 'indCloseActionMenus();indRefreshJobs()' in headline
+          and 'async function indRefreshStatus() {\n  indCloseActionMenus();' in js)
     check("adding a build closes the planner and returns directly to Overview",
           'indClosePlanner();' in add_flow and "ppSelectTab('ind', 'status')" in add_flow
           and "toast('Build added." in add_flow)

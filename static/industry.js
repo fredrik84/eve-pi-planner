@@ -12,7 +12,14 @@
 let _indPicked = null;        // {type_id, name} currently selected in the picker
 let _indSearchTimer = null;
 
+function indCloseActionMenus() {
+  document.querySelectorAll('.ind-action-menu[open]').forEach(menu => menu.removeAttribute('open'));
+}
+
 async function onIndustryTabOpen() {
+  // The browser may restore native <details> state across a reload. "More" is an ephemeral action
+  // picker, not saved page state, so a fresh Manufacturing paint always begins with it closed.
+  indCloseActionMenus();
   // Four sections of one build, as tabs (TODO §41, docs/page-layout-2026-08.md) — restores
   // whichever was last read, same convenience a URL gives a real page, without one: this is a
   // section of the Manufacturing page, not a separate address.
@@ -337,6 +344,7 @@ function _indQueueBody() {
 }
 
 async function indRefreshStatus() {
+  indCloseActionMenus();
   const card = document.getElementById('indStatusCard');
   const body = document.getElementById('indStatusBody');
   if (!card || !body) return;
@@ -791,10 +799,10 @@ function _indStatusHeadline(d, viewOrderId) {
     + `<div class="ind-status-head"><div class="ind-order-chips">${chips}</div>`
     + `<button class="ind-primary-btn" onclick="indOpenPlanner()">Add manufacturing work</button>`
     + `<details class="ind-action-menu"><summary class="ind-secondary-btn">More</summary>`
-    + `<div class="ind-action-menu-pop"><button class="ind-secondary-btn" onclick="indOpenSetup()">Job slots &amp; setup</button>`
+    + `<div class="ind-action-menu-pop"><button class="ind-secondary-btn" onclick="indCloseActionMenus();indOpenSetup()">Job slots &amp; setup</button>`
     + (!viewOrderId && (_indOrders || []).length > 1
-        ? `<button class="ind-secondary-btn" onclick="indOpenOrder()">Reorder builds</button>` : '')
-    + `<button class="ind-secondary-btn" onclick="indRefreshJobs()" title="Pull job status from EVE and re-plan">Refresh ESI jobs</button></div></details></div>`
+        ? `<button class="ind-secondary-btn" onclick="indCloseActionMenus();indOpenOrder()">Reorder builds</button>` : '')
+    + `<button class="ind-secondary-btn" onclick="indCloseActionMenus();indRefreshJobs()" title="Pull job status from EVE and re-plan">Refresh ESI jobs</button></div></details></div>`
     + `<div id="indInstall" class="ind-install"></div>`
     // Opened from an order chip; empty until then, and re-rendered in place so the panel survives
     // the status card's own refreshes.
