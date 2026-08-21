@@ -471,6 +471,17 @@ def ensure_reaction_orders_table():
                     "source_message TEXT")
         con.execute("CREATE INDEX IF NOT EXISTS idx_rx_orders_source "
                     "ON pp_reaction_orders (context_id, source_kind, source_ref, type_id)")
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS pp_reaction_order_sources (
+                reaction_order_id      INTEGER NOT NULL,
+                context_id             INTEGER NOT NULL,
+                manufacturing_order_id INTEGER NOT NULL,
+                runs                    INTEGER NOT NULL,
+                PRIMARY KEY (reaction_order_id, manufacturing_order_id)
+            )
+        """)
+        con.execute("CREATE INDEX IF NOT EXISTS idx_rx_order_sources_mfg "
+                    "ON pp_reaction_order_sources (context_id, manufacturing_order_id)")
         con.commit()
     finally:
         con.close()

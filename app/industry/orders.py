@@ -612,6 +612,50 @@ def _blend_margin(res: dict, order_margins: list, default_pct: float) -> None:
         round((price / net - 1) * 100.0, 2) if net else 0.0)
 
 
+def _reaction_owner_weights(trees: list[dict], order_rows: list[dict]) -> dict[int, dict[int, float]]:
+    """Reaction type -> Manufacturing order -> demand weight, without unsharing the batch."""
+    by_product: dict[int, list[dict]] = {}
+    for order in order_rows:
+        by_product.setdefault(int(order["product_type_id"]), []).append(order)
+    out: dict[int, dict[int, float]] = {}
+
+    def walk(node: dict, found: dict[int, float]) -> None:
+        if node.get("decision") == "build" and node.get("activity") == "reaction":
+            tid = int(node["type_id"])
+            found[tid] = found.get(tid, 0.0) + float(node.get("runs") or 0)
+        for child in node.get("inputs") or []:
+            walk(child, found)
+
+    for tree in trees:
+        owners = by_product.get(int(tree.get("type_id") or 0)) or []
+        total_qty = sum(max(0, int(o["quantity"])) for o in owners)
+        if not owners or total_qty <= 0:
+            continue
+        found: dict[int, float] = {}
+        walk(tree, found)
+        for tid, runs in found.items():
+            weights = out.setdefault(tid, {})
+            for order in owners:
+                oid = int(order["id"])
+                weights[oid] = weights.get(oid, 0.0) + runs * int(order["quantity"]) / total_qty
+    return out
+
+
+def _allocate_owner_runs(total_runs: int, weights: dict[int, float]) -> list[dict]:
+    """Largest-remainder attribution: shares add up exactly to the one physical batch."""
+    if total_runs <= 0 or not weights:
+        return []
+    scale = sum(max(0.0, w) for w in weights.values())
+    if scale <= 0:
+        return []
+    exact = {oid: total_runs * max(0.0, w) / scale for oid, w in weights.items()}
+    shares = {oid: int(v) for oid, v in exact.items()}
+    left = total_runs - sum(shares.values())
+    for oid in sorted(exact, key=lambda i: (-(exact[i] - shares[i]), i))[:left]:
+        shares[oid] += 1
+    return [{"order_id": oid, "runs": runs} for oid, runs in sorted(shares.items()) if runs > 0]
+
+
 def _run_queue_plan(ctx: int, req: QueuePlanRequest, want_full: bool = False) -> dict:
     """Shared core of the whole-queue plan: aggregate every queued order's demand and schedule it.
     Returns the plan_queue result, or {"empty": True} when the queue is empty. Used by both the
@@ -732,6 +776,7 @@ def _run_queue_plan(ctx: int, req: QueuePlanRequest, want_full: bool = False) ->
         res["trees"] = [build_plan(t, q, inp.mfg, inp.rx, inp.prices, inp.adjusted, inp.params,
                                    inp.names)["tree"]
                         for t, q in targets]
+    res["_reaction_owner_weights"] = _reaction_owner_weights(res["trees"], order_rows)
     # Who installs what, across the whole schedule. to-install still answers "right now" off the
     # FREE slots; this answers "and then who does the rest", which every later stage lacked.
     from app.industry.schedule import assign_characters
@@ -743,11 +788,12 @@ def _run_queue_plan(ctx: int, req: QueuePlanRequest, want_full: bool = False) ->
     assign_characters(res["schedule"]["waves"], _slot_pool(ctx).get("characters") or [],
                       (sk or {}).get("eligibility"))
     priorities = {int(o["id"]): int(o.get("priority") or 0) for o in order_rows}
+    queue_priority = max(priorities.values(), default=0)
     queue_ref = "queue:" + ",".join(str(int(o["id"])) for o in order_rows)
     sole_order_id = int(order_rows[0]["id"]) if len(order_rows) == 1 else 0
     for wave in res["schedule"]["waves"]:
         for task in wave.get("tasks") or []:
-            task["order_priority"] = priorities.get(int(task.get("order_id") or 0), 0)
+            task["order_priority"] = priorities.get(int(task.get("order_id") or 0), queue_priority)
             task["handoff_ref"] = (f"order:{int(task['order_id'])}" if task.get("order_id")
                                    else (f"order:{sole_order_id}" if sole_order_id else queue_ref))
             task["handoff_order_id"] = int(task.get("order_id") or sole_order_id)
@@ -780,7 +826,8 @@ def queue_plan(req: QueuePlanRequest, ctx: int = Depends(require_context)):
     full = res.pop("_full", None)
     if not res.get("empty"):
         res["install"] = install_block(ctx, res)
-        res["reaction_handoff"] = _handoff_ready_reactions(ctx, res["install"])
+        res["reaction_handoff"] = _handoff_ready_reactions(
+            ctx, res["install"], res.get("_reaction_owner_weights") or {})
         # Progress rides along for the same reason the checklist does: it is a view OF THIS PLAN.
         # The page fetching it separately meant planning the whole queue a second time.
         try:
@@ -791,6 +838,7 @@ def queue_plan(req: QueuePlanRequest, ctx: int = Depends(require_context)):
     # Internal only, and it must not reach a browser: sets of character ids, which don't serialise
     # and are nobody's business but the planner's. Popped after `install_block`, its one consumer.
     res.pop("_eligibility", None)
+    res.pop("_reaction_owner_weights", None)
     return res
 
 
@@ -953,18 +1001,15 @@ def install_block(ctx: int, res: dict) -> dict:
     }
 
 
-def _handoff_ready_reactions(ctx: int, install: dict) -> dict | None:
+def _handoff_ready_reactions(ctx: int, install: dict,
+                             owner_weights: dict[int, dict[int, float]] | None = None) -> dict | None:
     """Give ready reaction batches to Reactions; later Manufacturing waves stay unreserved."""
     from app.features import feature_enabled_for
     if not feature_enabled_for("industry_reaction_handoff", ctx):
         return None
     grouped: dict[tuple[int, int], dict] = {}
-    ambiguous = []
     for task in install.get("ready") or []:
         if task.get("activity") != "reaction" or not task.get("fits_now"):
-            continue
-        if str(task.get("handoff_ref") or "").startswith("queue:"):
-            ambiguous.append(task)
             continue
         key = (str(task.get("handoff_ref") or f"order:{int(task.get('order_id') or 0)}"),
                int(task["type_id"]))
@@ -975,14 +1020,17 @@ def _handoff_ready_reactions(ctx: int, install: dict) -> dict | None:
                                        "priority": int(task.get("order_priority") or 0)})
         row["runs"] += int(task.get("runs") or 0)
     if not grouped:
-        if ambiguous:
-            return {"created": [], "assigned": [], "shortfalls": [], "conflicts": [{
-                "order_id": 0,
-                "detail": "Ready reactions are shared by several aggregated Manufacturing orders. "
-                          "Switch Build setup to per-order plans before reserving them, so completed "
-                          "work can be returned to the correct build.",
-            }]}
         return None
+    for row in grouped.values():
+        if row["source_ref"].startswith("order:") and row["order_id"]:
+            row["owners"] = [{"order_id": row["order_id"], "runs": row["runs"]}]
+        else:
+            row["owners"] = _allocate_owner_runs(
+                row["runs"], (owner_weights or {}).get(row["type_id"], {}))
+        if row["owners"]:
+            ids = ",".join(str(o["order_id"]) for o in row["owners"])
+            row["source_ref"] = f"shared:{row['type_id']}:{ids}"
+            row["order_id"] = row["owners"][0]["order_id"] if len(row["owners"]) == 1 else 0
     from app.reactions.orders import sync_manufacturing_reaction_orders
     return sync_manufacturing_reaction_orders(ctx, list(grouped.values()))
 

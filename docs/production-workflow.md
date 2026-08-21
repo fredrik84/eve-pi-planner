@@ -22,6 +22,9 @@ share a conditional planner that conceals genuine differences between formulas a
 - Linked demand follows safe lifecycle rules: quantity changes reconcile down only as far as work
   already committed, terminal Manufacturing orders release pending reservations, and an ESI-running
   reaction is preserved with a visible decision instead of being silently orphaned.
+- Aggregated Manufacturing keeps its shared-batch savings. The build trees attribute each ready
+  reaction's runs across the orders that consume it in `pp_reaction_order_sources`; Reactions still
+  receives one physical order, while resize/cancel can remove one owner's share without guessing.
 
 ## Intentional differences
 

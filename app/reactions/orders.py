@@ -407,6 +407,17 @@ def _linked_quantity_decision(desired: int, committed: int, current: int) -> str
     return "resize" if desired >= committed else "conflict"
 
 
+def _active_linked_top_runs(con, order_id: int) -> int:
+    """Top-tier runs still reserved now; unlike assigned_runs, completed history is excluded."""
+    tier = con.execute("SELECT MAX(COALESCE(tier_order,0)) AS tier FROM pp_reaction_assignments "
+                       "WHERE order_id=?", (order_id,)).fetchone()
+    if not tier or tier["tier"] is None:
+        return 0
+    row = con.execute("SELECT COALESCE(SUM(runs),0) AS runs FROM pp_reaction_assignments "
+                      "WHERE order_id=? AND COALESCE(tier_order,0)=?", (order_id, tier["tier"])).fetchone()
+    return int((row and row["runs"]) or 0)
+
+
 def sync_manufacturing_reaction_orders(context_id: int, demands: list[dict]) -> dict:
     """Publish ready Manufacturing demand once, then let Reactions own its execution."""
     ensure_reaction_orders_table()
@@ -430,27 +441,49 @@ def sync_manufacturing_reaction_orders(context_id: int, demands: list[dict]) -> 
         for demand, request, name, top_runs in resolved:
             source_order_id = int(demand.get("order_id") or 0)
             source_ref = str(demand.get("source_ref") or f"order:{source_order_id}")
+            owners = [{"order_id": int(o["order_id"]), "runs": int(o["runs"])}
+                      for o in (demand.get("owners") or []) if int(o.get("runs") or 0) > 0]
             type_id = int(demand["type_id"])
             existing = con.execute(
                 "SELECT * FROM pp_reaction_orders WHERE context_id=? AND source_kind='manufacturing' "
                 "AND source_ref=? AND type_id=? AND status='open' LIMIT 1",
                 (context_id, source_ref, type_id)).fetchone()
+            # A shared batch survives one owner leaving or joining. Find it through the bridge and
+            # move its canonical ref instead of creating a second physical reaction order.
+            if not existing and owners:
+                owner_ids = [o["order_id"] for o in owners]
+                marks = ",".join("?" * len(owner_ids))
+                existing = con.execute(
+                    "SELECT o.* FROM pp_reaction_orders o JOIN pp_reaction_order_sources s "
+                    "ON s.reaction_order_id=o.id WHERE o.context_id=? AND o.source_kind='manufacturing' "
+                    "AND o.type_id=? AND o.status='open' AND s.manufacturing_order_id IN (" + marks + ") "
+                    "ORDER BY o.id LIMIT 1", (context_id, type_id, *owner_ids)).fetchone()
             if existing:
                 existing = dict(existing)
+                con.execute("UPDATE pp_reaction_orders SET source_ref=?, source_order_id=? WHERE id=?",
+                            (source_ref, source_order_id or None, existing["id"]))
                 desired = int(top_runs)
-                committed = int(existing.get("assigned_runs") or 0)
+                committed = _active_linked_top_runs(con, int(existing["id"]))
                 current = int(existing.get("top_level_runs") or 0)
                 decision = _linked_quantity_decision(desired, committed, current)
                 if decision == "resize":
+                    historical = min(int(existing.get("assigned_runs") or 0), desired)
                     con.execute("UPDATE pp_reaction_orders SET target_qty=?, top_level_runs=?, "
-                                "source_state=NULL, source_message=NULL WHERE id=?",
-                                (request.target_qty, desired, existing["id"]))
+                                "assigned_runs=?, source_state=NULL, source_message=NULL WHERE id=?",
+                                (request.target_qty, desired, historical, existing["id"]))
                 elif decision == "conflict":
                     msg = (f"Manufacturing now needs {desired} runs, but {committed} are already "
                            "committed. Keep the surplus or clear/replan this reaction order.")
                     con.execute("UPDATE pp_reaction_orders SET source_state='quantity_conflict', "
                                 "source_message=? WHERE id=?", (msg, existing["id"]))
                     conflicts.append({"order_id": int(existing["id"]), "detail": msg})
+                con.execute("DELETE FROM pp_reaction_order_sources WHERE reaction_order_id=?",
+                            (existing["id"],))
+                for owner in owners:
+                    con.execute("INSERT INTO pp_reaction_order_sources "
+                                "(reaction_order_id,context_id,manufacturing_order_id,runs) "
+                                "VALUES (?,?,?,?)", (existing["id"], context_id,
+                                                     owner["order_id"], owner["runs"]))
                 continue
             now = _time.time()
             order_id = con.execute(
@@ -461,6 +494,10 @@ def sync_manufacturing_reaction_orders(context_id: int, demands: list[dict]) -> 
                  "Ready work from Manufacturing", now, int(demand.get("priority") or 0),
                  source_order_id or None, source_ref)).fetchone()[0]
             created.append(int(order_id))
+            for owner in owners:
+                con.execute("INSERT INTO pp_reaction_order_sources "
+                            "(reaction_order_id,context_id,manufacturing_order_id,runs) VALUES (?,?,?,?)",
+                            (order_id, context_id, owner["order_id"], owner["runs"]))
         con.commit()
     finally:
         con.close()
@@ -487,10 +524,10 @@ def sync_manufacturing_reaction_orders(context_id: int, demands: list[dict]) -> 
 
 def finish_manufacturing_reaction_orders(context_id: int, manufacturing_order_id: int,
                                          status: str) -> dict:
-    """Finish exact per-order links without silently orphaning an ESI-running reaction.
+    """Remove one Manufacturing owner's share without orphaning an ESI-running reaction.
 
-    Aggregated links (`queue:1,2`) are intentionally left alone: one removed build does not prove
-    that the shared reaction batch is no longer needed by the others.
+    A shared batch remains open for its other owners and shrinks only to its active reservation
+    floor. The physical reaction order closes when its final owner leaves.
     """
     ensure_reaction_orders_table()
     ensure_reaction_assignments_table()
@@ -498,13 +535,48 @@ def finish_manufacturing_reaction_orders(context_id: int, manufacturing_order_id
     con = get_connection()
     try:
         linked = [dict(r) for r in con.execute(
-            "SELECT * FROM pp_reaction_orders WHERE context_id=? AND source_kind='manufacturing' "
-            "AND source_ref=? AND status='open'", (context_id, source_ref)).fetchall()]
+            "SELECT DISTINCT o.* FROM pp_reaction_orders o LEFT JOIN pp_reaction_order_sources s "
+            "ON s.reaction_order_id=o.id WHERE o.context_id=? AND o.source_kind='manufacturing' "
+            "AND o.status='open' AND (o.source_ref=? OR s.manufacturing_order_id=?)",
+            (context_id, source_ref, manufacturing_order_id)).fetchall()]
     finally:
         con.close()
     finished, preserved = [], []
     terminal = "completed" if status == "done" else "cancelled"
     for order in linked:
+        con = get_connection()
+        try:
+            con.execute("DELETE FROM pp_reaction_order_sources WHERE reaction_order_id=? "
+                        "AND manufacturing_order_id=?", (order["id"], manufacturing_order_id))
+            remaining = [dict(r) for r in con.execute(
+                "SELECT manufacturing_order_id,runs FROM pp_reaction_order_sources "
+                "WHERE reaction_order_id=? ORDER BY manufacturing_order_id", (order["id"],)).fetchall()]
+            if remaining:
+                desired = sum(int(r["runs"]) for r in remaining)
+                committed = _active_linked_top_runs(con, int(order["id"]))
+                ids = ",".join(str(int(r["manufacturing_order_id"])) for r in remaining)
+                new_ref = f"shared:{int(order['type_id'])}:{ids}"
+                if desired >= committed:
+                    recipe = con.execute("SELECT output_qty FROM reactions WHERE output_type_id=?",
+                                         (order["type_id"],)).fetchone()
+                    output_qty = float(recipe["output_qty"] if recipe else 1)
+                    historical = min(int(order.get("assigned_runs") or 0), desired)
+                    con.execute("UPDATE pp_reaction_orders SET source_ref=?, source_order_id=NULL, "
+                                "target_qty=?, top_level_runs=?, assigned_runs=?, source_state=NULL, "
+                                "source_message=NULL WHERE id=?",
+                                (new_ref, desired * output_qty, desired, historical, order["id"]))
+                else:
+                    msg = (f"A Manufacturing owner left this shared batch, but {committed} runs are "
+                           f"already committed and the remaining builds need {desired}. Keep the "
+                           "surplus or clear/replan this reaction order.")
+                    con.execute("UPDATE pp_reaction_orders SET source_ref=?, source_order_id=NULL, "
+                                "source_state='quantity_conflict', source_message=? WHERE id=?",
+                                (new_ref, msg, order["id"]))
+                con.commit()
+                continue
+            con.commit()
+        finally:
+            con.close()
         con = get_connection()
         try:
             rows = [dict(r) for r in con.execute(
@@ -579,7 +651,7 @@ def _heal_stranded_counter(order: dict, context_id: int) -> dict:
     Runs on the ASSIGN path rather than on read: this is a repair, and a repair belongs to a
     deliberate action the player took, not to a GET that happened to load the page.
     """
-    if not order.get("assigned_runs"):
+    if not order.get("assigned_runs") or order.get("source_kind") == "manufacturing":
         return order
     con = get_connection()
     try:
@@ -870,6 +942,8 @@ def delete_reaction_order(order_id: int, context_id: int = Depends(require_conte
         if order["assigned_runs"] > 0:
             raise HTTPException(status_code=400,
                                  detail="Runs have already been assigned to this order — cancel it instead of deleting")
+        con.execute("DELETE FROM pp_reaction_order_sources WHERE reaction_order_id=? AND context_id=?",
+                    (order_id, context_id))
         con.execute("DELETE FROM pp_reaction_orders WHERE id=?", (order_id,))
         con.commit()
     finally:

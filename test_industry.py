@@ -3151,24 +3151,31 @@ def test_ready_reactions_cross_as_one_durable_order():
             side_effect=lambda _ctx, demands: captured.extend(demands) or {"created": [1]}):
         result = _handoff_ready_reactions(42, install)
     check("split jobs become one reaction-engine demand",
-          captured == [{"source_ref": "order:7", "order_id": 7, "type_id": 9,
-                        "runs": 10, "priority": 3}])
+          captured == [{"source_ref": "shared:9:7", "order_id": 7, "type_id": 9,
+                        "runs": 10, "priority": 3,
+                        "owners": [{"order_id": 7, "runs": 10}]}])
     check("the handoff result is returned for shortage feedback", result == {"created": [1]})
     with patch("app.features.feature_enabled_for", return_value=False):
         check("the new behavior stays behind its rollout gate",
               _handoff_ready_reactions(42, install) is None)
     shared = {"ready": [{"activity": "reaction", "fits_now": True, "type_id": 9,
                           "runs": 10, "handoff_ref": "queue:7,8"}]}
-    with patch("app.features.feature_enabled_for", return_value=True):
-        blocked = _handoff_ready_reactions(42, shared)
-    check("an aggregated multi-order batch is not given false ownership",
-          blocked["conflicts"] and "per-order plans" in blocked["conflicts"][0]["detail"])
+    captured.clear()
+    with patch("app.features.feature_enabled_for", return_value=True), patch(
+            "app.reactions.orders.sync_manufacturing_reaction_orders",
+            side_effect=lambda _ctx, demands: captured.extend(demands) or {"created": [2]}):
+        _handoff_ready_reactions(42, shared, {9: {7: 6.0, 8: 4.0}})
+    check("an aggregated batch keeps one physical order with attributed owners",
+          captured[0]["owners"] == [{"order_id": 7, "runs": 6}, {"order_id": 8, "runs": 4}]
+          and captured[0]["source_ref"] == "shared:9:7,8")
 
 
 def test_linked_reaction_lifecycle_keeps_committed_work_safe():
     print("test_linked_reaction_lifecycle_keeps_committed_work_safe")
     import inspect
-    from app.reactions.orders import _linked_quantity_decision, finish_manufacturing_reaction_orders
+    from app.reactions.orders import (
+        _linked_quantity_decision, finish_manufacturing_reaction_orders, _heal_stranded_counter,
+    )
     check("unchanged demand is idempotent", _linked_quantity_decision(10, 6, 10) == "keep")
     check("demand may grow after assignment", _linked_quantity_decision(14, 6, 10) == "resize")
     check("demand may shrink to the committed boundary",
@@ -3180,6 +3187,31 @@ def test_linked_reaction_lifecycle_keeps_committed_work_safe():
           "_running_rows_among" in src and "running_after_finish" in src and "preserved.append" in src)
     check("but pending linked reservations are released and closed",
           "_release_order_slots" in src and 'terminal = "completed"' in src)
+    heal = inspect.getsource(_heal_stranded_counter)
+    check("completed Manufacturing history is not reset and assigned a second time",
+          'source_kind") == "manufacturing"' in heal)
+
+
+def test_aggregated_reaction_ownership_comes_from_the_build_trees():
+    print("test_aggregated_reaction_ownership_comes_from_the_build_trees")
+    from app.industry.orders import _reaction_owner_weights, _allocate_owner_runs
+    trees = [
+        {"type_id": 100, "decision": "build", "inputs": [
+            {"type_id": 9, "decision": "build", "activity": "reaction", "runs": 6, "inputs": []}]},
+        {"type_id": 200, "decision": "build", "inputs": [
+            {"type_id": 9, "decision": "build", "activity": "reaction", "runs": 4, "inputs": []}]},
+    ]
+    orders = [{"id": 1, "product_type_id": 100, "quantity": 1},
+              {"id": 2, "product_type_id": 100, "quantity": 2},
+              {"id": 3, "product_type_id": 200, "quantity": 1}]
+    weights = _reaction_owner_weights(trees, orders)
+    check("duplicate end products divide their branch by ordered quantity",
+          weights[9] == {1: 2.0, 2: 4.0, 3: 4.0})
+    shares = _allocate_owner_runs(7, weights[9])
+    check("shared rounding preserves the physical batch exactly",
+          sum(x["runs"] for x in shares) == 7 and shares == [
+              {"order_id": 1, "runs": 1}, {"order_id": 2, "runs": 3},
+              {"order_id": 3, "runs": 3}])
 
 
 def main():
@@ -3195,6 +3227,7 @@ def main():
     test_manufacturing_phase1_is_task_first()
     test_ready_reactions_cross_as_one_durable_order()
     test_linked_reaction_lifecycle_keeps_committed_work_safe()
+    test_aggregated_reaction_ownership_comes_from_the_build_trees()
     test_reaction_policy_is_gated_by_its_own_feature()
     test_build_everything_also_reacts()
     test_quantity_scales_and_excess()
