@@ -641,9 +641,10 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .rx-queued-items .rx-slot-pending-label { margin: 0; max-width: 54px; }
 .rx-queued-items .rx-slot-timer-corner,
 .rx-queued-items .rx-slot-runs { display: none; }
-.rx-queued-items .rx-slot-pending-badge { top: 6px; right: 3px; }
+.rx-queued-items .rx-slot-pending-badge { top: -5px; right: -5px; }
+.rx-queued-items .rx-slot-mark-badge { top: -5px; right: 14px; }
 .rx-queued-items .rx-slot-stage { bottom: -5px; left: -4px; }
-.rx-queued-items .rx-slot-more { top: -5px; left: auto; right: 17px; }
+.rx-queued-items .rx-slot-more { top: auto; bottom: -5px; left: auto; right: -5px; }
 .rx-slot {
   width: 70px; height: 70px; flex: 0 0 auto; position: relative;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
