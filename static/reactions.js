@@ -3131,6 +3131,15 @@ function _rxCreateOrder() {
   const clientName = document.getElementById('rxOrderClient').value.trim();
   const notes = document.getElementById('rxOrderNotes').value.trim();
   const price = parseFloat(document.getElementById('rxOrderPrice').value);
+  // Review and Create are separate function calls: values read in `_rxReviewOrder` are not in
+  // scope here. Referencing those locals used to throw immediately after painting "Creating…",
+  // before the POST was even sent, leaving the modal stuck forever with no server log at all.
+  const recurring = document.getElementById('rxOrderRecurring').checked;
+  const recurringDays = parseFloat(document.getElementById('rxOrderRecurringDays').value);
+  if (recurring && (!(recurringDays > 0) || recurringDays > 365)) {
+    status.textContent = 'Enter a recurring cadence between 0.25 and 365 days.';
+    return;
+  }
   status.textContent = 'Creating…';
   apiSend('POST', '/api/reactions/orders',
           { type_id: o.type_id, target_qty: qty, client_name: clientName || null, notes: notes || null,
