@@ -1558,14 +1558,12 @@ function _renderReactionsDashboard(data) {
     <div class="rx-stage-ready">✅ <b>Stage ${readyNow[0].stage} is ready to start${readyNow.length > 1 ? ' on several characters' : ` on ${_esc(readyNow[0].character)}`}</b>
       — everything it waits on has finished. Install ${readyNow.map(r => r.names.map(_esc).join(', ')).join(' · ')}.</div>`;
 
-  // The action list is the normal workflow. The physical slot board remains available for
-  // capacity checks, editing, and manual assignment, but no longer competes with the instruction
-  // the user came here for. When there is nothing to install, open it automatically so running
-  // work is still the useful default state rather than an empty task card.
-  const capacityHtml = `<details class="rx-capacity-fold"${todoRows.length ? '' : ' open'}>
-    <summary>Characters &amp; capacity <span class="pp-card-hint">${usedSlots} of ${data.total_slots} slots in use</span></summary>
+  // Tasks remain first, but the character board is operational context rather than an occasional
+  // manual escape hatch: it shows who owns each current job and where the remaining capacity is.
+  const capacityHtml = `<div class="rx-capacity-section">
+    <div class="rx-capacity-title">Characters &amp; capacity <span class="pp-card-hint">${usedSlots} of ${data.total_slots} slots in use</span></div>
     <div class="rx-capacity-body">${rows}</div>
-  </details>`;
+  </div>`;
 
   // TODO §41 (docs/page-layout-2026-08.md): missing formulas used to render inline here, on every
   // visit whether or not anything was actually missing — moved into the Shopping list fold (the
@@ -3178,15 +3176,20 @@ function _rxCreateOrder() {
             recurring_interval_days: recurring ? recurringDays : null })
     .then(data => {
       _rxCloseNewOrderModal();
+      ppSelectTab('rx', 'overview');
       _rxLoadOrders();
       // A recurring order claims slots inside the create request. The Orders list was refreshed,
       // but the Overview task cards were left on their pre-create snapshot, making a successful
       // assignment look like it had done nothing until the next page refresh.
       _rxReloadPlan();
-      document.getElementById('rxOrderDetailModal').style.display = '';
-      _renderRxOrderDetail(data);
-      if (data.auto_assigned && data.auto_assigned.runs_assigned > 0) {
+      const overview = document.getElementById('rxOverviewPanel');
+      if (overview) overview.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      if (data.auto_assign_error) {
+        toast(data.auto_assign_error + ' The order is saved and waiting on the Overview.', 'warning');
+      } else if (data.auto_assigned && data.auto_assigned.runs_assigned > 0) {
         toast(`Assigned ${data.auto_assigned.runs_assigned.toLocaleString()} runs to the reaction queue`, 'success');
+      } else {
+        toast('Customer order created. It is ready to plan from the Overview.', 'success');
       }
     })
     .catch(err => { status.textContent = err.message; });

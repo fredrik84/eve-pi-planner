@@ -619,14 +619,12 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
   box-shadow: 0 10px 24px rgba(0,0,0,.35);
 }
 .rx-action-menu-pop button { width: 100%; text-align: left; }
-.rx-metrics-fold { padding: 0; }
-.rx-metrics-fold > summary { padding: 13px 16px; }
-.rx-metrics-fold[open] > summary { border-bottom: 1px solid var(--clr-border); }
+.rx-metrics-card { padding: 0; }
 .rx-wiz-schedule { display: flex; align-items: center; gap: 7px; color: #cbd6e6; font-size: 12px; }
 .rx-wiz-advanced { max-width: 760px; }
-.rx-capacity-fold { margin-top: 12px; border-top: 1px solid var(--clr-border); padding-top: 9px; }
-.rx-capacity-fold > summary { cursor: pointer; color: #8da8ce; font-size: 12px; font-weight: 600; }
-.rx-capacity-fold > summary .pp-card-hint { margin-left: 5px; font-weight: 400; }
+.rx-capacity-section { margin-top: 12px; border-top: 1px solid var(--clr-border); padding-top: 9px; }
+.rx-capacity-title { color: #8da8ce; font-size: 12px; font-weight: 600; }
+.rx-capacity-title .pp-card-hint { margin-left: 5px; font-weight: 400; }
 .rx-capacity-body { margin-top: 9px; }
 
 .rx-reconnect-note {

@@ -348,8 +348,16 @@ def test_reactions_phase1_is_task_first() -> bool:
                 "Shopping is an output, not a second planning launcher")
     ok &= check('class="rx-action-menu"' in page and 'Clear planned work' in page,
                 "rare and destructive queue actions are grouped behind More")
-    ok &= check('class="rx-capacity-fold"' in js and "todoRows.length ? '' : ' open'" in js,
-                "slot management is secondary when tasks exist and opens automatically otherwise")
+    ok &= check('class="rx-capacity-section"' in js and 'rx-capacity-fold' not in js,
+                "character and slot capacity stays visible under the task list")
+    ok &= check('class="pp-card rx-metrics-card"' in page and 'rx-metrics-fold' not in page,
+                "current-task metrics stay visible on Overview")
+    create_start = js.index('function _rxCreateOrder()')
+    create_end = js.index('// What the order EARNS', create_start)
+    create_flow = js[create_start:create_end]
+    ok &= check("ppSelectTab('rx', 'overview')" in create_flow
+                and "rxOrderDetailModal').style.display = ''" not in create_flow,
+                "creating an order closes the modal and returns directly to Overview")
     return ok
 
 

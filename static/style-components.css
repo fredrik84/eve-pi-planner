@@ -263,6 +263,7 @@ tr:hover td { background: #181d2a; }
 .toast-error   { border-left: 3px solid var(--clr-red); }
 .toast-success { border-left: 3px solid var(--clr-green); }
 .toast-info    { border-left: 3px solid var(--clr-accent); }
+.toast-warning { border-left: 3px solid var(--clr-amber); }
 .toast-out { opacity: 0; transform: translateY(4px); transition: opacity .25s, transform .25s; }
 @keyframes toast-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 
