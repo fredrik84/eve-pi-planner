@@ -3078,6 +3078,36 @@ def test_an_existing_single_key_order_keeps_planning_identically():
         restore()
 
 
+def test_manufacturing_phase1_is_task_first():
+    """The common build workflow stays prominent while occasional controls remain available."""
+    print("test_manufacturing_phase1_is_task_first")
+    here = os.path.dirname(os.path.abspath(__file__))
+    html = open(os.path.join(here, "static", "index.html"), encoding="utf-8").read()
+    js = _industry_js()
+    start = html.index('id="tab-industry"')
+    end = html.index('id="tab-contribute"', start)
+    page = html[start:end]
+    headline_start = js.index('function _indStatusHeadline')
+    headline_end = js.index('// A NUDGE', headline_start)
+    headline = js[headline_start:headline_end]
+    add_start = js.index('async function indAddToQueue()')
+    add_end = js.index('// Live queue progress', add_start)
+    add_flow = js[add_start:add_end]
+    check("Manufacturing uses the same Overview language as Reactions",
+          '>Overview</button>' in page and '>Materials &amp; blueprints<' in page
+          and '>Running jobs<' in page)
+    check("the primary action says what it adds",
+          page.count('Add manufacturing work') >= 1 and 'Add manufacturing work' in headline)
+    check("the next jobs appear before the always-visible task metrics",
+          headline.index('id="indInstall"') < headline.index('class="an-stats"'))
+    check("capacity stays visible while setup, reorder and refresh sit under More",
+          'id="indSetupSummary"' in page and 'class="ind-action-menu"' in headline
+          and 'Job slots &amp; setup' in headline and 'Refresh ESI jobs' in headline)
+    check("adding a build closes the planner and returns directly to Overview",
+          'indClosePlanner();' in add_flow and "ppSelectTab('ind', 'status')" in add_flow
+          and "toast('Build added." in add_flow)
+
+
 def main():
     test_material_formula()
     test_graph_loaders()
@@ -3088,6 +3118,7 @@ def main():
     test_completing_a_step_re_plans_so_the_checklist_moves_on()
     test_build_rules_has_one_home_and_the_strip_stops_being_a_control()
     test_build_setup_is_one_surface_over_the_stores_that_already_own_each_field()
+    test_manufacturing_phase1_is_task_first()
     test_reaction_policy_is_gated_by_its_own_feature()
     test_build_everything_also_reacts()
     test_quantity_scales_and_excess()

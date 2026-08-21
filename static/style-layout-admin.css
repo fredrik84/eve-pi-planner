@@ -1153,6 +1153,16 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-setup-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 4px 0 12px; flex-wrap: wrap; }
 .ind-setup-summary { font-size: 13px; color: var(--clr-text-soft); }
 .ind-setup-summary b { color: #fff; }
+.ind-action-menu { position: relative; margin-left: auto; }
+.ind-action-menu > summary { list-style: none; cursor: pointer; }
+.ind-action-menu > summary::-webkit-details-marker { display: none; }
+.ind-action-menu-pop {
+  position: absolute; z-index: 20; top: calc(100% + 5px); right: 0; width: 210px;
+  display: flex; flex-direction: column; align-items: stretch; gap: 5px; padding: 8px;
+  border: 1px solid var(--clr-border); border-radius: 7px; background: #151a25;
+  box-shadow: 0 10px 24px rgba(0,0,0,.35);
+}
+.ind-action-menu-pop button { width: 100%; text-align: left; }
 
 /* "Viewing: [order picker]" atop Status / Blueprints & materials / Build Pipeline — reported live
    (2026-08-18): several queued orders read as one intermixed plan, which is right for "just start

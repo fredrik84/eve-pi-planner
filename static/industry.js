@@ -468,8 +468,7 @@ function _indPaintStatus(d, opts) {
 function _indPaintStatusHeadline(d) {
   const body = document.getElementById('indStatusBody');
   if (!body || !d) return;
-  body.innerHTML = _indOrderViewSelector('status') + _indStatusHeadline(d, _indViewOrderId)
-    + `<div id="indInstall" class="ind-install"></div>`;
+  body.innerHTML = _indOrderViewSelector('status') + _indStatusHeadline(d, _indViewOrderId);
   // "Do this now" used to come back blank while viewing one order (2026-08-19) — only the
   // whole-queue endpoint (queue-plan) called install_block, so the single-order endpoint
   // (POST /api/industry/plan, see _indSetViewOrder) never had a slot checklist to show. It now
@@ -787,10 +786,13 @@ function _indStatusHeadline(d, viewOrderId) {
     : _indOrdersByRank(d.targets).map(o => _indOrderChipHtml(o, byOrder, tgt)).join('');
   return sim
     + `<div class="ind-status-head"><div class="ind-order-chips">${chips}</div>`
-    + `<button class="ind-primary-btn" onclick="indOpenPlanner()">Plan a new build</button>`
+    + `<button class="ind-primary-btn" onclick="indOpenPlanner()">Add manufacturing work</button>`
+    + `<details class="ind-action-menu"><summary class="ind-secondary-btn">More</summary>`
+    + `<div class="ind-action-menu-pop"><button class="ind-secondary-btn" onclick="indOpenSetup()">Job slots &amp; setup</button>`
     + (!viewOrderId && (_indOrders || []).length > 1
-        ? `<button class="ind-secondary-btn" onclick="indOpenOrder()">Reorder</button>` : '')
-    + `<button class="ind-secondary-btn" onclick="indRefreshJobs()" title="Pull job status from EVE and re-plan">Refresh</button></div>`
+        ? `<button class="ind-secondary-btn" onclick="indOpenOrder()">Reorder builds</button>` : '')
+    + `<button class="ind-secondary-btn" onclick="indRefreshJobs()" title="Pull job status from EVE and re-plan">Refresh ESI jobs</button></div></details></div>`
+    + `<div id="indInstall" class="ind-install"></div>`
     + `<div class="an-stats">` + tiles.map(([l, v, tip]) =>
         `<div class="an-stat" title="${_esc(tip)}"><div class="an-stat-lbl">${l}</div><div class="an-stat-val">${v}</div></div>`).join('')
     + `</div>`

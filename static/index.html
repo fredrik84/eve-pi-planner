@@ -796,15 +796,14 @@
                two toolbars stacked on top of each other — so it now lives inside the Status tab's
                own content instead of pinned over every tab. -->
           <div class="pp-tabstrip" data-tabgroup="ind">
-            <button class="pp-tab-btn" data-tabgroup="ind" data-tabkey="status" onclick="ppSelectTab('ind','status')">Status</button>
-            <button class="pp-tab-btn" data-tabgroup="ind" data-tabkey="blueprints" onclick="ppSelectTab('ind','blueprints')">Blueprints &amp; materials<span id="indBlueprintsTabBadge" class="pp-fold-badge" style="display:none"></span></button>
-            <button class="pp-tab-btn" data-tabgroup="ind" data-tabkey="pipeline" onclick="ppSelectTab('ind','pipeline')">Build Pipeline</button>
-            <button class="pp-tab-btn" data-tabgroup="ind" data-tabkey="running" onclick="ppSelectTab('ind','running')">Currently running<span id="indRunningTabBadge" class="pp-fold-badge" style="display:none"></span></button>
+            <button class="pp-tab-btn" data-tabgroup="ind" data-tabkey="status" onclick="ppSelectTab('ind','status')">Overview</button>
+            <button class="pp-tab-btn" data-tabgroup="ind" data-tabkey="blueprints" onclick="ppSelectTab('ind','blueprints')">Materials &amp; blueprints<span id="indBlueprintsTabBadge" class="pp-fold-badge" style="display:none"></span></button>
+            <button class="pp-tab-btn" data-tabgroup="ind" data-tabkey="pipeline" onclick="ppSelectTab('ind','pipeline')">Pipeline</button>
+            <button class="pp-tab-btn" data-tabgroup="ind" data-tabkey="running" onclick="ppSelectTab('ind','running')">Running jobs<span id="indRunningTabBadge" class="pp-fold-badge" style="display:none"></span></button>
           </div>
           <div data-tabpanel="ind" data-tabkey="status">
             <div class="ind-setup-bar">
               <div id="indSetupSummary" class="ind-setup-summary"></div>
-              <button class="ind-secondary-btn" onclick="indOpenSetup()">Job slots</button>
             </div>
             <div id="indStatusBody"></div>
           </div>
@@ -821,12 +820,14 @@
         <div class="ind-body">
           <div class="ind-setup-bar" id="indSetupBarIdle">
             <div id="indSetupSummaryIdle" class="ind-setup-summary"></div>
-            <button class="ind-secondary-btn" onclick="indOpenSetup()">Job slots</button>
+            <details class="ind-action-menu">
+              <summary class="ind-secondary-btn">More</summary>
+              <div class="ind-action-menu-pop"><button class="ind-secondary-btn" onclick="indOpenSetup()">Job slots &amp; setup</button></div>
+            </details>
           </div>
           <div id="indLifetime" class="ind-lifetime"></div>
-          <p class="pp-sub">Nothing building yet. Plan a product to see what it costs, what it needs
-            and how long it takes — then add it to your build.</p>
-          <button class="ind-primary-btn ind-big-btn" onclick="indOpenPlanner()">Plan a new build</button>
+          <p class="pp-sub">Nothing building yet. Choose a product and quantity; the planner handles cost, materials, scheduling, and available characters.</p>
+          <button class="ind-primary-btn ind-big-btn" onclick="indOpenPlanner()">Add manufacturing work</button>
         </div>
       </div>
       </div><!-- /indContent -->
